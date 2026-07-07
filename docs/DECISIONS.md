@@ -160,7 +160,7 @@ surface actually needs them.
 
 ## D013 - Value-Flow Calls As Preferred Call Style
 
-Status: accepted
+Status: implemented
 Date: 2026-07-07
 
 SLang adopts `value -> function` as the preferred call style when a primary
@@ -192,10 +192,10 @@ Function type notation should use the same left-to-right direction:
 print: Text -> Io<Unit>
 ```
 
-Implementation is pending. The first implementation should parse the unary
-value-flow form and lower it to the same call AST shape used by the existing
-parenthesized call so LLVM output and executable size stay unchanged for the
-first `print` program.
+The parser implements unary value-flow calls by lowering them to the same call
+AST shape used by the existing parenthesized call. Chained value-flow calls are
+parsed left-to-right. LLVM output stays unchanged for equivalent calls because
+the semantic and backend stages receive the same `CallExpression` shape.
 
 ## D014 - Initial Integer Addition And Scalar Interpolation
 
@@ -217,7 +217,7 @@ numbers, suffixes, and final overflow policy syntax are not decided yet.
 String interpolation can display integer bindings:
 
 ```slang
-print("Hello, {name}. 20 + 22 = {sum}")
+"Hello, {name}. 20 + 22 = {sum}" -> print
 ```
 
 This keeps the LLVM backend unchanged for the current size-first prototype:

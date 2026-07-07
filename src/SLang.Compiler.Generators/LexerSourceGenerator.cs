@@ -213,6 +213,10 @@ internal static class LexerEmitter
         var literalRules = spec.Tokens
             .Where(static rule => rule.Pattern.StartsWith("\"", StringComparison.Ordinal) && rule.Pattern.EndsWith("\"", StringComparison.Ordinal))
             .ToArray();
+        var literalRulesByFirstCharacter = literalRules
+            .Select(static rule => new LiteralTokenRule(rule.Name, Unquote(rule.Pattern)))
+            .GroupBy(static rule => rule.Literal[0])
+            .ToArray();
         var hasWhitespaceSkip = spec.Skips.Any(static rule => rule.Pattern == "whitespace");
         var hasNewLine = spec.Tokens.Any(static rule => rule.Pattern == "newline");
         var hasString = spec.Tokens.Any(static rule => rule.Pattern == "quoted_string");
@@ -258,16 +262,13 @@ internal static class LexerEmitter
             builder.AppendLine("                    break;");
         }
 
-        foreach (var rule in literalRules)
+        foreach (var group in literalRulesByFirstCharacter)
         {
-            var literal = Unquote(rule.Pattern);
-            if (literal.Length != 1)
-            {
-                throw new InvalidOperationException("Only one-character literal token rules are supported by the current SLang lexer generator.");
-            }
-
-            builder.Append("                case '").Append(EscapeChar(literal[0])).AppendLine("':");
-            builder.Append("                    AddSingle(TokenKind.").Append(rule.Name).AppendLine(");");
+            var orderedRules = group
+                .OrderByDescending(static rule => rule.Literal.Length)
+                .ToArray();
+            builder.Append("                case '").Append(EscapeChar(group.Key)).AppendLine("':");
+            EmitLiteralTokenCase(builder, orderedRules);
             builder.AppendLine("                    break;");
         }
 
@@ -324,6 +325,41 @@ internal static class LexerEmitter
         builder.AppendLine("    {");
         builder.AppendLine("        _tokens.Add(new Token(kind, Current.ToString(), _line, _column));");
         builder.AppendLine("        Advance();");
+        builder.AppendLine("    }");
+        builder.AppendLine();
+        builder.AppendLine("    private void AddLiteral(string literal, TokenKind kind)");
+        builder.AppendLine("    {");
+        builder.AppendLine("        var line = _line;");
+        builder.AppendLine("        var column = _column;");
+        builder.AppendLine("        for (var i = 0; i < literal.Length; i++)");
+        builder.AppendLine("        {");
+        builder.AppendLine("            if (IsAtEnd || Current != literal[i])");
+        builder.AppendLine("            {");
+        builder.AppendLine("                throw ErrorAt(line, column, $\"expected '{literal}'\");");
+        builder.AppendLine("            }");
+        builder.AppendLine();
+        builder.AppendLine("            Advance();");
+        builder.AppendLine("        }");
+        builder.AppendLine();
+        builder.AppendLine("        _tokens.Add(new Token(kind, literal, line, column));");
+        builder.AppendLine("    }");
+        builder.AppendLine();
+        builder.AppendLine("    private bool MatchesLiteral(string literal)");
+        builder.AppendLine("    {");
+        builder.AppendLine("        if (_index + literal.Length > source.Length)");
+        builder.AppendLine("        {");
+        builder.AppendLine("            return false;");
+        builder.AppendLine("        }");
+        builder.AppendLine();
+        builder.AppendLine("        for (var i = 0; i < literal.Length; i++)");
+        builder.AppendLine("        {");
+        builder.AppendLine("            if (source[_index + i] != literal[i])");
+        builder.AppendLine("            {");
+        builder.AppendLine("                return false;");
+        builder.AppendLine("            }");
+        builder.AppendLine("        }");
+        builder.AppendLine();
+        builder.AppendLine("        return true;");
         builder.AppendLine("    }");
         builder.AppendLine();
         builder.AppendLine("    private void LexNewLine()");
@@ -453,6 +489,42 @@ internal static class LexerEmitter
         builder.AppendLine("}");
     }
 
+    private static void EmitLiteralTokenCase(StringBuilder builder, LiteralTokenRule[] orderedRules)
+    {
+        if (orderedRules.Length == 1 && orderedRules[0].Literal.Length == 1)
+        {
+            builder.Append("                    AddSingle(TokenKind.").Append(orderedRules[0].Name).AppendLine(");");
+            return;
+        }
+
+        for (var i = 0; i < orderedRules.Length; i++)
+        {
+            var rule = orderedRules[i];
+            if (i == orderedRules.Length - 1)
+            {
+                builder.Append("                    AddLiteral(\"")
+                    .Append(EscapeString(rule.Literal))
+                    .Append("\", TokenKind.")
+                    .Append(rule.Name)
+                    .AppendLine(");");
+                return;
+            }
+
+            builder.Append("                    if (MatchesLiteral(\"")
+                .Append(EscapeString(rule.Literal))
+                .AppendLine("\"))");
+            builder.AppendLine("                    {");
+            builder.Append("                        AddLiteral(\"")
+                .Append(EscapeString(rule.Literal))
+                .Append("\", TokenKind.")
+                .Append(rule.Name)
+                .AppendLine(");");
+            builder.AppendLine("                        break;");
+            builder.AppendLine("                    }");
+            builder.AppendLine();
+        }
+    }
+
     private static string Unquote(string value)
     {
         return value.Length >= 2 && value[0] == '"' && value[value.Length - 1] == '"'
@@ -472,4 +544,25 @@ internal static class LexerEmitter
             _ => c.ToString()
         };
     }
+
+    private static string EscapeString(string value)
+    {
+        var builder = new StringBuilder(value.Length);
+        foreach (var c in value)
+        {
+            builder.Append(c switch
+            {
+                '\\' => "\\\\",
+                '"' => "\\\"",
+                '\n' => "\\n",
+                '\r' => "\\r",
+                '\t' => "\\t",
+                _ => c.ToString()
+            });
+        }
+
+        return builder.ToString();
+    }
 }
+
+internal sealed record LiteralTokenRule(string Name, string Literal);

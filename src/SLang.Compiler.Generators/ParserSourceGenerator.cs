@@ -58,6 +58,7 @@ internal sealed record GrammarSpec(
         "ExpressionStatement",
         "StatementEnd",
         "Expression",
+        "FlowExpression",
         "AdditiveExpression",
         "PrimaryExpression",
         "CallExpression",
@@ -311,8 +312,22 @@ internal static class ParserEmitter
         builder.AppendLine();
         builder.AppendLine("    private Expression ParseExpression()");
         builder.AppendLine("    {");
-        builder.AppendLine("        // Expression = AdditiveExpression");
-        builder.AppendLine("        return ParseAdditiveExpression();");
+        builder.AppendLine("        // Expression = FlowExpression");
+        builder.AppendLine("        return ParseFlowExpression();");
+        builder.AppendLine("    }");
+        builder.AppendLine();
+        builder.AppendLine("    private Expression ParseFlowExpression()");
+        builder.AppendLine("    {");
+        builder.AppendLine("        // FlowExpression = AdditiveExpression (Arrow Path)*");
+        builder.AppendLine("        var expression = ParseAdditiveExpression();");
+        builder.AppendLine("        while (Match(TokenKind.Arrow, out _))");
+        builder.AppendLine("        {");
+        builder.AppendLine("            var target = ExpectIdentifier();");
+        builder.AppendLine("            var path = ParsePathAfterFirstIdentifier(target);");
+        builder.AppendLine("            expression = new CallExpression(path, new List<Expression> { expression }, target.Line, target.Column);");
+        builder.AppendLine("        }");
+        builder.AppendLine();
+        builder.AppendLine("        return expression;");
         builder.AppendLine("    }");
         builder.AppendLine();
         builder.AppendLine("    private Expression ParseAdditiveExpression()");
@@ -352,12 +367,7 @@ internal static class ParserEmitter
         builder.AppendLine("    private Expression ParsePathStartingWith(Token identifier)");
         builder.AppendLine("    {");
         builder.AppendLine("        // Path = Identifier (Dot Identifier)*");
-        builder.AppendLine("        var path = new List<string> { identifier.Text };");
-        builder.AppendLine("        while (Match(TokenKind.Dot, out _))");
-        builder.AppendLine("        {");
-        builder.AppendLine("            path.Add(ExpectIdentifier().Text);");
-        builder.AppendLine("        }");
-        builder.AppendLine();
+        builder.AppendLine("        var path = ParsePathAfterFirstIdentifier(identifier);");
         builder.AppendLine("        if (Match(TokenKind.LeftParen, out _))");
         builder.AppendLine("        {");
         builder.AppendLine("            return ParseCallExpression(identifier, path);");
@@ -369,6 +379,18 @@ internal static class ParserEmitter
         builder.AppendLine("        }");
         builder.AppendLine();
         builder.AppendLine("        return new NameExpression(identifier.Text, identifier.Line, identifier.Column);");
+        builder.AppendLine("    }");
+        builder.AppendLine();
+        builder.AppendLine("    private IReadOnlyList<string> ParsePathAfterFirstIdentifier(Token identifier)");
+        builder.AppendLine("    {");
+        builder.AppendLine("        // Path = Identifier (Dot Identifier)*");
+        builder.AppendLine("        var path = new List<string> { identifier.Text };");
+        builder.AppendLine("        while (Match(TokenKind.Dot, out _))");
+        builder.AppendLine("        {");
+        builder.AppendLine("            path.Add(ExpectIdentifier().Text);");
+        builder.AppendLine("        }");
+        builder.AppendLine();
+        builder.AppendLine("        return path;");
         builder.AppendLine("    }");
         builder.AppendLine();
         builder.AppendLine("    private CallExpression ParseCallExpression(Token start, IReadOnlyList<string> path)");

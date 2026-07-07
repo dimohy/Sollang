@@ -17,12 +17,11 @@ The implementation boundary is intentionally narrow:
 - integer bindings with decimal integer literals
 - left-associative integer `+`
 - simple string interpolation with `{name}`
-- `print(...)`
+- value-flow calls with `value -> function`
+- parenthesized calls with `function(value)`
 - Windows x64 native executable output through LLVM
 
 Anything beyond that remains specification work until explicitly approved.
-The value-flow call syntax `value -> function` is an accepted language direction
-but is not implemented in the current compiler slice yet.
 
 ## Core Goals
 
@@ -90,7 +89,7 @@ The current extended example is:
 main {
     name = "dimohy"
     sum = 20 + 22
-    print("Hello, {name}. 20 + 22 = {sum}")
+    "Hello, {name}. 20 + 22 = {sum}" -> print
 }
 ```
 
@@ -109,7 +108,7 @@ declaration. Local bindings do not use `let`, `var`, or a declaration keyword:
 main {
     name = "dimohy"
     sum = 20 + 22
-    print("Hello, {name}. 20 + 22 = {sum}")
+    "Hello, {name}. 20 + 22 = {sum}" -> print
 }
 ```
 
@@ -120,6 +119,7 @@ Rationale:
 - `"Hello, {name}"` keeps string interpolation direct and familiar.
 - `20 + 22` introduces the smallest numeric expression without deciding the
   final numeric tower.
+- `"..." -> print` makes the primary data flow visible at the call site.
 - The executable entry point is still explicit.
 - The parser can recognize the first complete program with a tiny grammar.
 - The syntax leaves room for full functions, modules, and effects later.
@@ -137,7 +137,8 @@ statement    := binding_statement | expression_statement
 binding_statement := identifier "=" expression statement_end
 expression_statement := expression statement_end
 statement_end := newline+ | "}" lookahead
-expression   := additive_expression
+expression   := flow_expression
+flow_expression := additive_expression ("->" path)*
 additive_expression := primary ("+" primary)*
 call         := path "(" argument_list? ")"
 argument_list := expression ("," expression)*
@@ -156,6 +157,7 @@ Notes:
 - Braces are the only block delimiters.
 - `identifier = expression` introduces a local binding in the current block.
 - `+` is initially defined only for integer addition.
+- `value -> function` lowers to a unary call with `value` as the first argument.
 - Function declarations are intentionally not specified yet.
 
 ## Bindings
@@ -212,7 +214,7 @@ Initial token categories:
 - identifiers
 - string literals, including interpolation markers inside string mode
 - decimal integer literals
-- punctuation: `{`, `}`, `(`, `)`, `.`, `,`, `+`, `=`
+- punctuation: `{`, `}`, `(`, `)`, `.`, `,`, `+`, `->`, `=`
 - newlines
 - trivia: spaces, tabs, comments when comments are specified
 - end of file
@@ -248,8 +250,14 @@ Interpolation rules:
 
 ## `print` Surface Semantics
 
-`print` is available in the initial prelude. Source code sees it as a simple
-function-like call:
+`print` is available in the initial prelude. The preferred source form is a
+value-flow call:
+
+```slang
+"Hello, {name}. 20 + 22 = {sum}" -> print
+```
+
+The parenthesized form remains valid and equivalent:
 
 ```slang
 print("Hello, {name}. 20 + 22 = {sum}")
@@ -302,7 +310,7 @@ print: Text -> Io<Unit>
 stdout.write: Bytes -> Io<Int>
 ```
 
-The first parser implementation for this feature should lower:
+The current parser lowers:
 
 ```slang
 value -> function
@@ -314,8 +322,8 @@ to the same AST shape as:
 function(value)
 ```
 
-for unary calls. Extended forms such as additional named arguments remain future
-syntax work.
+for unary calls. Chained value-flow calls are parsed left-to-right. Extended
+forms such as additional named arguments remain future syntax work.
 
 Initial constraints:
 
@@ -390,7 +398,7 @@ For the initial program:
 main {
     name = "dimohy"
     sum = 20 + 22
-    print("Hello, {name}. 20 + 22 = {sum}")
+    "Hello, {name}. 20 + 22 = {sum}" -> print
 }
 ```
 
@@ -404,7 +412,7 @@ native entry function
 -> bind name to static string slice
 -> evaluate integer addition
 -> evaluate interpolated string expression with integer display
--> call selected core.io.print backend with output bytes
+-> lower value-flow print call to selected core.io.print backend with output bytes
 -> return process exit code
 ```
 
@@ -414,8 +422,8 @@ Optimization requirements:
 - `(ptr, len)` should be passed without copying.
 - Interpolated strings should avoid heap allocation when all parts are known
   static strings.
-- `print("Hello, {name}. 20 + 22 = {sum}")` may lower to a single static output
-  buffer when the interpolated value is compile-time known.
+- `"Hello, {name}. 20 + 22 = {sum}" -> print` may lower to a single static
+  output buffer when the interpolated value is compile-time known.
 - Otherwise, printing segmented string parts directly is preferred over building
   a temporary heap string.
 - Platform output calls should be direct and inlinable when practical.
@@ -424,16 +432,6 @@ Optimization requirements:
 ## Current Implementation Slice
 
 The current compiler supports:
-
-```slang
-main {
-    name = "dimohy"
-    sum = 20 + 22
-    print("Hello, {name}. 20 + 22 = {sum}")
-}
-```
-
-Accepted but not yet implemented:
 
 ```slang
 main {
@@ -453,6 +451,8 @@ Current backend:
   generator
 - semantics: string and integer bindings, checked integer `+`, and scalar
   interpolation are folded to output bytes for the current slice
+- value-flow calls: `value -> function` is parsed and lowered to the existing
+  call AST shape
 - IR output: immutable UTF-8 global bytes
 - entry point: `slang_start`
 - imports: `GetStdHandle`, `WriteFile`

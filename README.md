@@ -10,7 +10,7 @@ language slice, lowers it to LLVM IR, and links a minimal Windows x64 executable
 main {
     name = "dimohy"
     sum = 20 + 22
-    print("Hello, {name}. 20 + 22 = {sum}")
+    "Hello, {name}. 20 + 22 = {sum}" -> print
 }
 ```
 
@@ -20,21 +20,11 @@ The verified output is:
 Hello, dimohy. 20 + 22 = 42
 ```
 
-The current generated executable is **768 bytes**.
-
-Accepted next syntax direction:
-
-```slang
-main {
-    name = "dimohy"
-    sum = 20 + 22
-    "Hello, {name}. 20 + 22 = {sum}" -> print
-}
-```
-
 The `value -> function` form is the preferred SLang call style for making data
-flow explicit. It is accepted in the specification but not implemented in the
-current compiler slice yet.
+flow explicit. Parenthesized calls such as `print(...)` remain valid as a
+compatibility form.
+
+The current generated executable is **768 bytes**.
 
 ## Status
 
@@ -49,7 +39,8 @@ What works today:
 - left-associative integer `+`
 - string interpolation with `"Hello, {name}"`
 - interpolation of string and integer bindings
-- `print(...)`
+- value-flow calls with `value -> function`
+- parenthesized calls with `function(value)`
 - source-generated lexing from `syntax/slang.lexer`
 - source-generated parsing from `syntax/slang.grammar`
 - LLVM IR generation
@@ -90,6 +81,7 @@ token Number = number
 token LeftBrace = "{"
 token RightBrace = "}"
 token Plus = "+"
+token Arrow = "->"
 token Equal = "="
 token NewLine = newline
 token End = end
@@ -107,7 +99,8 @@ Parser rules are also written in a compact DSL:
 rule SourceFile = NewLine* MainBlock NewLine* End
 rule MainBlock = Identifier("main") LeftBrace NewLine* Statement* RightBrace
 rule BindingStatement = Identifier Equal Expression StatementEnd
-rule Expression = AdditiveExpression
+rule Expression = FlowExpression
+rule FlowExpression = AdditiveExpression (Arrow Path)*
 rule AdditiveExpression = PrimaryExpression (Plus PrimaryExpression)*
 rule PrimaryExpression = CallExpression | StringExpression | NumberExpression | NameExpression
 ```
