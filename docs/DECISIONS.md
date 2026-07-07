@@ -1,0 +1,138 @@
+# SLang Decision Log
+
+This file records accepted or working decisions so the language design can
+evolve without losing context.
+
+## D001 - Specification Before Implementation
+
+Status: accepted
+Date: 2026-07-07
+
+SLang remains in specification mode until the user explicitly asks for
+implementation. No compiler, parser, LLVM backend, runtime, or build
+infrastructure should be created before that.
+
+## D002 - Compiler Implementation Stack
+
+Status: accepted
+Date: 2026-07-07
+
+When implementation begins, the compiler should use the latest .NET and latest
+C# Preview features unless a later constraint requires otherwise. Actual SDK,
+C# language, and LLVM versions must be verified against official sources before
+implementation starts.
+
+## D003 - Native LLVM Output
+
+Status: accepted
+Date: 2026-07-07
+
+SLang compiles through LLVM and ultimately produces highly optimized native
+executables. The language and compiler pipeline should be designed around
+efficient LLVM lowering rather than treating LLVM as an afterthought.
+
+## D004 - First Program Syntax
+
+Status: working decision
+Date: 2026-07-07
+
+The first complete SLang program is:
+
+```slang
+main {
+    name = "dimohy"
+    print("Hello, {name}")
+}
+```
+
+The `main` block is explicit, short, and parser-friendly. `name = value` is the
+initial local binding form. Full function syntax is not decided yet.
+
+## D005 - `print` As Platform-Bound Primitive
+
+Status: working decision
+Date: 2026-07-07
+
+`print` appears as a simple prelude call in source code, but resolves internally
+to `core.io.print` and lowers to a platform-specific stdout backend selected by
+the target triple.
+
+The design must preserve:
+
+- simple source syntax
+- cross-platform correctness
+- Unicode-correct Windows console behavior
+- efficient static string output
+- no silent fallback for unsupported targets
+- explicit handling of output failure
+
+## D006 - Bindings Without Declaration Keywords
+
+Status: working decision
+Date: 2026-07-07
+
+Local variables are introduced with the smallest readable form:
+
+```slang
+name = "dimohy"
+```
+
+There is no `let`, `var`, or declaration keyword in the initial syntax. For now,
+the first `name = expression` in a block introduces a binding, and reusing the
+same name in the same scope is a compile-time error. Reassignment and mutability
+remain open design questions.
+
+## D007 - Minimal String Interpolation
+
+Status: working decision
+Date: 2026-07-07
+
+Double-quoted strings support simple binding/path interpolation:
+
+```slang
+"Hello, {name}"
+```
+
+The initial interpolation form accepts names and reserved path syntax only, not
+arbitrary expressions. This keeps tokenization, parsing, semantic analysis, and
+LLVM lowering simple while still making the first useful program expressive.
+
+## D008 - Local LLVM Bootstrap
+
+Status: accepted
+Date: 2026-07-07
+
+LLVM binaries must not be committed to the repository. The build script
+downloads LLVM 22.1.8 into `.tools` when missing and uses that local toolchain
+for native code generation. `.tools`, `artifacts`, and build outputs are ignored
+by Git.
+
+## D009 - First Native Backend
+
+Status: working decision
+Date: 2026-07-07
+
+The first native backend targets Windows x64 and links with `lld-link` without
+the C runtime. The generated executable imports only `GetStdHandle` and
+`WriteFile` from `kernel32.dll` for the first `print` program. The verified
+first executable size is 752 bytes.
+
+## D010 - Modular Compiler Source Layout
+
+Status: accepted
+Date: 2026-07-07
+
+Even small requests should keep the compiler modular. The compiler source is
+split by responsibility into CLI, Lexing, Parsing, Syntax, Semantics, CodeGen,
+and Tooling modules. `Program.cs` must stay as a minimal entry point, not a
+container for lexer/parser/codegen/linker implementation.
+
+## D011 - Lexer Source Generation From SLang Rules
+
+Status: accepted
+Date: 2026-07-07
+
+SLang lexer rules are expressed in `syntax/slang.lexer`. A Roslyn incremental
+source generator in `src/SLang.Compiler.Generators` reads that rules file and
+generates `TokenKind` and `Lexer` during compiler build. This keeps the language
+surface concise and regular while producing deterministic C# tokenization code.
