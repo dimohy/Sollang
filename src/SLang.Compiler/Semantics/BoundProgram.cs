@@ -9,6 +9,7 @@ internal sealed record BoundProgram(
 
 internal sealed record BoundFunction(
     string Name,
+    BoundType? InputType,
     BoundType ReturnType,
     Expression Body,
     int Line,

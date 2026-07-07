@@ -13,12 +13,12 @@ SLang implementation has started for the smallest approved language slice.
 The implementation boundary is intentionally narrow:
 
 - one `main` block
-- zero-argument expression functions
+- zero-argument and one-input expression functions
 - local string bindings with `name = value`
 - integer bindings with decimal integer literals
-- left-associative integer `+`
+- left-associative integer `+` and `*`
 - simple string interpolation with `{name}`
-- value-flow calls with `value -> function`
+- value-flow calls and result bindings with `value -> function -> name`
 - parenthesized calls with `function(value)`
 - Windows x64 native executable output through LLVM
 
@@ -37,7 +37,7 @@ Anything beyond that remains specification work until explicitly approved.
 
 ## Non-Goals For The Current Phase
 
-- No implementation.
+- No implementation beyond the explicitly approved current slice.
 - No final type system.
 - No final memory model.
 - No final module/package system.
@@ -91,21 +91,21 @@ getName: -> Text {
     "dimohy"
 }
 
-getNum: -> Int {
-    20 + 22
+square: Int -> Int {
+    it * it
 }
 
 main {
-    name = getName()
-    num = getNum()
-    "Hello, {name}. getNum() = {num}" -> print
+    getName -> name
+    7 -> square -> num
+    "Hello, {name}. square = {num}" -> print
 }
 ```
 
 Expected stdout bytes:
 
 ```text
-Hello, dimohy. getNum() = 42
+Hello, dimohy. square = 49
 ```
 
 ## Initial Syntax Direction
@@ -118,14 +118,14 @@ getName: -> Text {
     "dimohy"
 }
 
-getNum: -> Int {
-    20 + 22
+square: Int -> Int {
+    it * it
 }
 
 main {
-    name = getName()
-    num = getNum()
-    "Hello, {name}. getNum() = {num}" -> print
+    getName -> name
+    7 -> square -> num
+    "Hello, {name}. square = {num}" -> print
 }
 ```
 
@@ -134,10 +134,12 @@ Rationale:
 - `main { ... }` is shorter than `fn main() { ... }`.
 - `name = value` is the smallest readable binding form.
 - `"Hello, {name}"` keeps string interpolation direct and familiar.
-- `20 + 22` introduces the smallest numeric expression without deciding the
+- `it * it` introduces the smallest one-input numeric function without deciding the
   final numeric tower.
-- `getName: -> Text { ... }` and `getNum: -> Int { ... }` introduce the
-  smallest function declaration shape.
+- `getName: -> Text { ... }` and `square: Int -> Int { ... }` introduce the
+  smallest zero-input and one-input function declaration shapes.
+- `getName -> name` and `7 -> square -> num` make returned values bindable
+  without hiding the flow behind assignment syntax.
 - `"..." -> print` makes the primary data flow visible at the call site.
 - The executable entry point is still explicit.
 - The parser can recognize the first complete program with a tiny grammar.
@@ -150,7 +152,8 @@ The initial grammar is deliberately small:
 
 ```ebnf
 source_file  := trivia* function_declaration* main_block trivia* eof
-function_declaration := identifier ":" "->" type_name "{" expression "}"
+function_declaration := identifier ":" function_signature "{" expression "}"
+function_signature := "->" type_name | type_name "->" type_name
 main_block   := "main" block
 block        := "{" statement* "}"
 statement    := binding_statement | expression_statement
@@ -159,7 +162,8 @@ expression_statement := expression statement_end
 statement_end := newline+ | "}" lookahead
 expression   := flow_expression
 flow_expression := additive_expression ("->" path)*
-additive_expression := primary ("+" primary)*
+additive_expression := multiplicative_expression ("+" multiplicative_expression)*
+multiplicative_expression := primary ("*" primary)*
 call         := path "(" argument_list? ")"
 argument_list := expression ("," expression)*
 path         := identifier ("." identifier)*
@@ -178,9 +182,12 @@ Notes:
 - Braces are the only block delimiters.
 - `identifier = expression` introduces a local binding in the current block.
 - `+` is initially defined only for integer addition.
-- `value -> function` lowers to a unary call with `value` as the first argument.
-- Function declarations are currently zero-argument expression bodies with an
-  explicit return type.
+- `*` is initially defined only for integer multiplication.
+- `value -> function` is parsed as a flow expression with `value` as the source.
+- A final unknown single identifier in a statement-level flow binds the result:
+  `7 -> square -> num`.
+- Function declarations are currently expression bodies with either no input or
+  one implicit input binding named `it`.
 
 ## Bindings
 
@@ -218,7 +225,8 @@ Initial numeric rules:
 - Integer values are represented as signed 64-bit values in the current
   semantic evaluator.
 - `+` performs checked integer addition.
-- `+` is left-associative.
+- `*` performs checked integer multiplication.
+- `*` binds tighter than `+`; both operators are left-associative.
 - Mixing strings and integers with `+` is not part of the current language.
 - Integer bindings can be interpolated into strings using their invariant
   decimal display form.
@@ -236,7 +244,7 @@ Initial token categories:
 - identifiers
 - string literals, including interpolation markers inside string mode
 - decimal integer literals
-- punctuation: `{`, `}`, `(`, `)`, `.`, `,`, `+`, `->`, `:`, `=`
+- punctuation: `{`, `}`, `(`, `)`, `.`, `,`, `+`, `*`, `->`, `:`, `=`
 - newlines
 - trivia: spaces, tabs, comments when comments are specified
 - end of file
@@ -276,13 +284,13 @@ Interpolation rules:
 value-flow call:
 
 ```slang
-"Hello, {name}. getNum() = {num}" -> print
+"Hello, {name}. square = {num}" -> print
 ```
 
 The parenthesized form remains valid and equivalent:
 
 ```slang
-print("Hello, {name}. getNum() = {num}")
+print("Hello, {name}. square = {num}")
 ```
 
 Semantically, it resolves to:
@@ -298,9 +306,9 @@ input value should be visually explicit:
 
 ```slang
 main {
-    name = getName()
-    num = getNum()
-    "Hello, {name}. getNum() = {num}" -> print
+    getName -> name
+    7 -> square -> num
+    "Hello, {name}. square = {num}" -> print
 }
 ```
 
@@ -308,7 +316,7 @@ The expression on the left flows into the function or callable path on the
 right. The example above is semantically equivalent to:
 
 ```slang
-print("Hello, {name}. getNum() = {num}")
+print("Hello, {name}. square = {num}")
 ```
 
 This makes argument flow and return flow visible without discarding the familiar
@@ -316,12 +324,19 @@ parenthesized call form. Parenthesized calls remain valid as a compatibility and
 escape-hatch syntax, but the value-flow form is the preferred SLang style for
 single-primary-input operations.
 
-Return values are still bound with `=`:
+Return values can be bound at the end of a statement-level flow:
 
 ```slang
-message = name -> greeting
-bytes = message -> utf8.encode
-count = bytes -> stdout.write
+getName -> name
+7 -> square -> num
+name -> greeting -> message
+```
+
+The assignment form remains valid when it is clearer for a non-flowing
+expression:
+
+```slang
+num = square(7)
 ```
 
 The corresponding function type notation follows the same direction:
@@ -332,13 +347,15 @@ print: Text -> Io<Unit>
 stdout.write: Bytes -> Io<Int>
 ```
 
-The current parser lowers:
+The current parser preserves:
 
 ```slang
 value -> function
 ```
 
-to the same AST shape as:
+as a `FlowExpression`. Semantic analysis resolves each target as either a
+callable path, `print`, or a final flow binding. The executable lowering remains
+equivalent to:
 
 ```slang
 function(value)
@@ -421,14 +438,14 @@ getName: -> Text {
     "dimohy"
 }
 
-getNum: -> Int {
-    20 + 22
+square: Int -> Int {
+    it * it
 }
 
 main {
-    name = getName()
-    num = getNum()
-    "Hello, {name}. getNum() = {num}" -> print
+    getName -> name
+    7 -> square -> num
+    "Hello, {name}. square = {num}" -> print
 }
 ```
 
@@ -437,11 +454,11 @@ The intended lowering shape is:
 ```text
 static global utf8 bytes: "dimohy"
 function getName -> returns text slice
-function getNum -> evaluates 20 + 22 at runtime and returns i64
+function square -> accepts i64 %it, evaluates %it * %it at runtime, returns i64
 runtime decimal conversion helper for integer output
 native entry function
--> call getName and bind name to returned text slice
--> call getNum and bind num to returned integer
+-> call getName through flow source and bind name to returned text slice
+-> pass 7 to square through flow and bind num to returned integer
 -> write string literal segments directly
 -> write name as a text slice
 -> convert num to decimal bytes at runtime and write them
@@ -471,14 +488,14 @@ getName: -> Text {
     "dimohy"
 }
 
-getNum: -> Int {
-    20 + 22
+square: Int -> Int {
+    it * it
 }
 
 main {
-    name = getName()
-    num = getNum()
-    "Hello, {name}. getNum() = {num}" -> print
+    getName -> name
+    7 -> square -> num
+    "Hello, {name}. square = {num}" -> print
 }
 ```
 
@@ -490,13 +507,13 @@ Current backend:
   generator
 - parser: generated from `syntax/slang.grammar` by a Roslyn incremental source
   generator
-- semantics: zero-argument function declarations, string and integer bindings,
-  checked integer `+`, and scalar interpolation are type-checked for the current
-  slice
-- value-flow calls: `value -> function` is parsed and lowered to the existing
-  call AST shape
+- semantics: zero-argument and one-input function declarations, string and
+  integer bindings, checked integer `+` and `*`, scalar interpolation, and
+  statement-level value-flow binding are type-checked for the current slice
+- value-flow calls: `value -> function` is parsed as a flow AST and lowered by
+  semantic/codegen stages according to target position
 - IR output: immutable UTF-8 literal segments, runtime function calls, runtime
-  i64 addition, and runtime integer decimal output
+  i64 addition/multiplication, and runtime integer decimal output
 - entry point: `slang_start`
 - imports: `GetStdHandle`, `WriteFile`
 - linker: `lld-link`

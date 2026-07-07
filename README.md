@@ -11,21 +11,21 @@ getName: -> Text {
     "dimohy"
 }
 
-getNum: -> Int {
-    20 + 22
+square: Int -> Int {
+    it * it
 }
 
 main {
-    name = getName()
-    num = getNum()
-    "Hello, {name}. getNum() = {num}" -> print
+    getName -> name
+    7 -> square -> num
+    "Hello, {name}. square = {num}" -> print
 }
 ```
 
 The verified output is:
 
 ```text
-Hello, dimohy. getNum() = 42
+Hello, dimohy. square = 49
 ```
 
 The `value -> function` form is the preferred SLang call style for making data
@@ -43,9 +43,10 @@ What works today:
 
 - `main { ... }`
 - zero-argument functions with `getName: -> Text { ... }`
+- one-input functions with `square: Int -> Int { ... }`
 - local string bindings with `name = "value"`
-- integer bindings with `num = getNum()`
-- left-associative integer `+`
+- value-flow bindings with `getName -> name` and `7 -> square -> num`
+- left-associative integer `+` and `*`
 - string interpolation with `"Hello, {name}"`
 - interpolation of string and integer bindings
 - value-flow calls with `value -> function`
@@ -89,7 +90,12 @@ token String = quoted_string
 token Number = number
 token LeftBrace = "{"
 token RightBrace = "}"
+token LeftParen = "("
+token RightParen = ")"
+token Dot = "."
+token Comma = ","
 token Plus = "+"
+token Star = "*"
 token Arrow = "->"
 token Colon = ":"
 token Equal = "="
@@ -107,12 +113,14 @@ Parser rules are also written in a compact DSL:
 
 ```text
 rule SourceFile = NewLine* FunctionDeclaration* MainBlock NewLine* End
-rule FunctionDeclaration = Identifier Colon Arrow TypeName LeftBrace NewLine* Expression NewLine* RightBrace
+rule FunctionDeclaration = Identifier Colon FunctionSignature LeftBrace NewLine* Expression NewLine* RightBrace
+rule FunctionSignature = Arrow TypeName | TypeName Arrow TypeName
 rule MainBlock = Identifier("main") LeftBrace NewLine* Statement* RightBrace
 rule BindingStatement = Identifier Equal Expression StatementEnd
 rule Expression = FlowExpression
 rule FlowExpression = AdditiveExpression (Arrow Path)*
-rule AdditiveExpression = PrimaryExpression (Plus PrimaryExpression)*
+rule AdditiveExpression = MultiplicativeExpression (Plus MultiplicativeExpression)*
+rule MultiplicativeExpression = PrimaryExpression (Star PrimaryExpression)*
 rule PrimaryExpression = CallExpression | StringExpression | NumberExpression | NameExpression
 rule TypeName = Identifier
 ```

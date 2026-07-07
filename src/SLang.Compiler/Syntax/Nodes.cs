@@ -6,6 +6,7 @@ internal sealed record SlangProgram(
 
 internal sealed record FunctionDeclaration(
     string Name,
+    string? InputType,
     string ReturnType,
     Expression Body,
     int Line,
@@ -27,6 +28,16 @@ internal sealed record NumberExpression(string Text, int Line, int Column) : Exp
 internal sealed record NameExpression(string Name, int Line, int Column) : Expression(Line, Column);
 
 internal sealed record AddExpression(Expression Left, Expression Right, int Line, int Column)
+    : Expression(Line, Column);
+
+internal sealed record MultiplyExpression(Expression Left, Expression Right, int Line, int Column)
+    : Expression(Line, Column);
+
+internal sealed record FlowExpression(
+    Expression Source,
+    IReadOnlyList<IReadOnlyList<string>> Targets,
+    int Line,
+    int Column)
     : Expression(Line, Column);
 
 internal sealed record CallExpression(

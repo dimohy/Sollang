@@ -53,6 +53,7 @@ internal sealed record GrammarSpec(
     [
         "SourceFile",
         "FunctionDeclaration",
+        "FunctionSignature",
         "MainBlock",
         "Statement",
         "BindingStatement",
@@ -61,6 +62,7 @@ internal sealed record GrammarSpec(
         "Expression",
         "FlowExpression",
         "AdditiveExpression",
+        "MultiplicativeExpression",
         "PrimaryExpression",
         "CallExpression",
         "ArgumentList",
@@ -269,9 +271,10 @@ internal static class ParserEmitter
         builder.AppendLine();
         builder.AppendLine("    private FunctionDeclaration ParseFunctionDeclaration()");
         builder.AppendLine("    {");
-        builder.AppendLine("        // FunctionDeclaration = Identifier Colon Arrow TypeName LeftBrace NewLine* Expression NewLine* RightBrace");
+        builder.AppendLine("        // FunctionDeclaration = Identifier Colon FunctionSignature LeftBrace NewLine* Expression NewLine* RightBrace");
         builder.AppendLine("        var name = ExpectIdentifier();");
         builder.AppendLine("        Expect(TokenKind.Colon);");
+        builder.AppendLine("        var inputType = ParseOptionalInputType();");
         builder.AppendLine("        Expect(TokenKind.Arrow);");
         builder.AppendLine("        var returnType = ExpectIdentifier();");
         builder.AppendLine("        Expect(TokenKind.LeftBrace);");
@@ -279,7 +282,18 @@ internal static class ParserEmitter
         builder.AppendLine("        var body = ParseExpression();");
         builder.AppendLine("        SkipNewLines();");
         builder.AppendLine("        Expect(TokenKind.RightBrace);");
-        builder.AppendLine("        return new FunctionDeclaration(name.Text, returnType.Text, body, name.Line, name.Column);");
+        builder.AppendLine("        return new FunctionDeclaration(name.Text, inputType, returnType.Text, body, name.Line, name.Column);");
+        builder.AppendLine("    }");
+        builder.AppendLine();
+        builder.AppendLine("    private string? ParseOptionalInputType()");
+        builder.AppendLine("    {");
+        builder.AppendLine("        // FunctionSignature = Arrow TypeName | TypeName Arrow TypeName");
+        builder.AppendLine("        if (Check(TokenKind.Arrow))");
+        builder.AppendLine("        {");
+        builder.AppendLine("            return null;");
+        builder.AppendLine("        }");
+        builder.AppendLine();
+        builder.AppendLine("        return ExpectIdentifier().Text;");
         builder.AppendLine("    }");
         builder.AppendLine();
         builder.AppendLine("    private IReadOnlyList<Statement> ParseMainBlock()");
@@ -344,24 +358,41 @@ internal static class ParserEmitter
         builder.AppendLine("    {");
         builder.AppendLine("        // FlowExpression = AdditiveExpression (Arrow Path)*");
         builder.AppendLine("        var expression = ParseAdditiveExpression();");
+        builder.AppendLine("        List<IReadOnlyList<string>>? targets = null;");
         builder.AppendLine("        while (Match(TokenKind.Arrow, out _))");
         builder.AppendLine("        {");
         builder.AppendLine("            var target = ExpectIdentifier();");
         builder.AppendLine("            var path = ParsePathAfterFirstIdentifier(target);");
-        builder.AppendLine("            expression = new CallExpression(path, new List<Expression> { expression }, target.Line, target.Column);");
+        builder.AppendLine("            targets ??= [];");
+        builder.AppendLine("            targets.Add(path);");
+        builder.AppendLine("        }");
+        builder.AppendLine();
+        builder.AppendLine("        return targets is null");
+        builder.AppendLine("            ? expression");
+        builder.AppendLine("            : new FlowExpression(expression, targets, expression.Line, expression.Column);");
+        builder.AppendLine("    }");
+        builder.AppendLine();
+        builder.AppendLine("    private Expression ParseAdditiveExpression()");
+        builder.AppendLine("    {");
+        builder.AppendLine("        // AdditiveExpression = MultiplicativeExpression (Plus MultiplicativeExpression)*");
+        builder.AppendLine("        var expression = ParseMultiplicativeExpression();");
+        builder.AppendLine("        while (Match(TokenKind.Plus, out var plus))");
+        builder.AppendLine("        {");
+        builder.AppendLine("            var right = ParseMultiplicativeExpression();");
+        builder.AppendLine("            expression = new AddExpression(expression, right, plus.Line, plus.Column);");
         builder.AppendLine("        }");
         builder.AppendLine();
         builder.AppendLine("        return expression;");
         builder.AppendLine("    }");
         builder.AppendLine();
-        builder.AppendLine("    private Expression ParseAdditiveExpression()");
+        builder.AppendLine("    private Expression ParseMultiplicativeExpression()");
         builder.AppendLine("    {");
-        builder.AppendLine("        // AdditiveExpression = PrimaryExpression (Plus PrimaryExpression)*");
+        builder.AppendLine("        // MultiplicativeExpression = PrimaryExpression (Star PrimaryExpression)*");
         builder.AppendLine("        var expression = ParsePrimaryExpression();");
-        builder.AppendLine("        while (Match(TokenKind.Plus, out var plus))");
+        builder.AppendLine("        while (Match(TokenKind.Star, out var star))");
         builder.AppendLine("        {");
         builder.AppendLine("            var right = ParsePrimaryExpression();");
-        builder.AppendLine("            expression = new AddExpression(expression, right, plus.Line, plus.Column);");
+        builder.AppendLine("            expression = new MultiplyExpression(expression, right, star.Line, star.Column);");
         builder.AppendLine("        }");
         builder.AppendLine();
         builder.AppendLine("        return expression;");

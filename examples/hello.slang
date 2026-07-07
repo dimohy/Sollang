@@ -2,12 +2,12 @@ getName: -> Text {
     "dimohy"
 }
 
-getNum: -> Int {
-    20 + 22
+square: Int -> Int {
+    it * it
 }
 
 main {
-    name = getName()
-    num = getNum()
-    "Hello, {name}. getNum() = {num}" -> print
+    getName -> name
+    7 -> square -> num
+    "Hello, {name}. square = {num}" -> print
 }

@@ -160,7 +160,7 @@ surface actually needs them.
 
 ## D013 - Value-Flow Calls As Preferred Call Style
 
-Status: implemented
+Status: implemented, superseded in parser shape by D016
 Date: 2026-07-07
 
 SLang adopts `value -> function` as the preferred call style when a primary
@@ -192,10 +192,9 @@ Function type notation should use the same left-to-right direction:
 print: Text -> Io<Unit>
 ```
 
-The parser implements unary value-flow calls by lowering them to the same call
-AST shape used by the existing parenthesized call. Chained value-flow calls are
-parsed left-to-right. LLVM output stays unchanged for equivalent calls because
-the semantic and backend stages receive the same `CallExpression` shape.
+The first implementation lowered unary value-flow calls to the same call AST
+shape used by the existing parenthesized call. D016 keeps value-flow as its own
+AST node so a final target can bind the result.
 
 ## D014 - Initial Integer Addition And Scalar Interpolation
 
@@ -226,11 +225,11 @@ calls and runtime integer-to-decimal output instead.
 
 ## D015 - Runtime Function Sample
 
-Status: implemented
+Status: implemented, superseded as the current sample by D016
 Date: 2026-07-07
 
-The current sample should not be represented only as one compile-time output
-buffer. It uses zero-argument functions so the generated LLVM contains real
+The D015 sample should not be represented only as one compile-time output
+buffer. It used zero-argument functions so the generated LLVM contained real
 runtime calls:
 
 ```slang
@@ -249,9 +248,49 @@ main {
 }
 ```
 
-The current implementation parses `getName: -> Text { ... }` and
+The D015 implementation parsed `getName: -> Text { ... }` and
 `getNum: -> Int { ... }` as zero-argument expression functions. Semantic
 analysis type-checks the function bodies and main bindings. The Windows LLVM
 backend emits `@slang_fn_getName`, `@slang_fn_getNum`, runtime `i64` addition,
 segmented `WriteFile` output, and a runtime integer decimal conversion helper
-instead of one full static output string.
+instead of one full static output string. D016 is the current sample and
+supersedes the `getNum` naming.
+
+## D016 - Flow Binding And One-Input Square Function
+
+Status: implemented
+Date: 2026-07-07
+
+SLang adopts statement-level value-flow binding for the current sample:
+
+```slang
+getName: -> Text {
+    "dimohy"
+}
+
+square: Int -> Int {
+    it * it
+}
+
+main {
+    getName -> name
+    7 -> square -> num
+    "Hello, {name}. square = {num}" -> print
+}
+```
+
+`getName -> name` calls the zero-input function and binds its result to `name`.
+`7 -> square -> num` passes `7` into a one-input function, where the implicit
+input binding is named `it`, then binds the returned value to `num`.
+
+The parser now preserves value-flow as `FlowExpression` rather than immediately
+lowering it to `CallExpression`. Semantic analysis resolves each target as a
+known one-input function, `print`, or a final statement-level binding target.
+Unknown intermediate targets are compile-time errors, and flow expression
+statements must either end in `print` or bind their result.
+
+The current implementation adds the `*` token/operator, parses
+`square: Int -> Int { it * it }`, emits `@slang_fn_square(i64 %it)`, lowers the
+body to `mul nsw i64 %it, %it`, and calls it as `@slang_fn_square(i64 7)`.
+The verified output is `Hello, dimohy. square = 49`; the Windows x64 executable
+size remains 1,088 bytes.

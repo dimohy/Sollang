@@ -54,6 +54,11 @@ internal sealed class WindowsRuntimeLlvmEmitter(BoundProgram program)
 
     private void EmitTextFunction(BoundFunction function)
     {
+        if (function.InputType is not null)
+        {
+            throw new SlangException("Text-returning functions with input are not in the current runtime slice");
+        }
+
         var text = GetPlainText(function.Body, function.Line, function.Column);
         var global = AddGlobalString(text);
 
@@ -73,10 +78,24 @@ internal sealed class WindowsRuntimeLlvmEmitter(BoundProgram program)
     private void EmitIntFunction(BoundFunction function)
     {
         _locals.Clear();
+        var parameterList = function.InputType switch
+        {
+            null => "",
+            BoundType.Int => "i64 %it",
+            _ => throw new SlangException("only Int function input is supported in the current runtime slice")
+        };
+
         _functions.Append("define internal i64 ")
             .Append(SymbolForFunction(function.Name))
-            .AppendLine("() #0 {");
+            .Append('(')
+            .Append(parameterList)
+            .AppendLine(") #0 {");
         _functions.AppendLine("entry:");
+        if (function.InputType == BoundType.Int)
+        {
+            _locals.Add("it", new RuntimeInt("%it"));
+        }
+
         var value = EmitIntExpression(function.Body);
         _functions.Append("  ret i64 ").AppendLine(value.ValueName);
         _functions.AppendLine("}");
@@ -138,8 +157,8 @@ internal sealed class WindowsRuntimeLlvmEmitter(BoundProgram program)
                 case BindingStatement binding:
                     _locals.Add(binding.Name, EmitExpression(binding.Value));
                     break;
-                case ExpressionStatement { Expression: CallExpression call }:
-                    ok = EmitPrintCall(call, ok);
+                case ExpressionStatement expressionStatement:
+                    ok = EmitExpressionStatement(expressionStatement.Expression, ok);
                     break;
                 default:
                     throw new SlangException($"unsupported runtime statement {statement.GetType().Name}");
@@ -154,6 +173,33 @@ internal sealed class WindowsRuntimeLlvmEmitter(BoundProgram program)
         _functions.Append("  ret i32 ").AppendLine(CurrentTemp("exit"));
         _functions.AppendLine("}");
         _functions.AppendLine();
+    }
+
+    private string EmitExpressionStatement(Expression expression, string ok)
+    {
+        if (expression is CallExpression call)
+        {
+            return EmitPrintCall(call, ok);
+        }
+
+        if (expression is FlowExpression flow)
+        {
+            var result = EmitFlowExpression(flow, ok, allowBindingTarget: true);
+            if (result.Binding is { } binding)
+            {
+                _locals.Add(binding.Name, binding.Value);
+                return result.Ok;
+            }
+
+            if (result.Value is null)
+            {
+                return result.Ok;
+            }
+
+            throw new SlangException("value-flow expression statements must end in print or bind their result");
+        }
+
+        throw new SlangException($"unsupported runtime expression statement {expression.GetType().Name}");
     }
 
     private string EmitPrintCall(CallExpression call, string ok)
@@ -280,7 +326,9 @@ internal sealed class WindowsRuntimeLlvmEmitter(BoundProgram program)
             NumberExpression number => new RuntimeInt(ParseNumber(number).ToString(CultureInfo.InvariantCulture)),
             NameExpression name => ResolveLocal(name.Name),
             AddExpression add => EmitAddExpression(add),
+            MultiplyExpression multiply => EmitMultiplyExpression(multiply),
             CallExpression call => EmitFunctionCall(call),
+            FlowExpression flow => EmitFlowExpressionValue(flow),
             _ => throw new SlangException($"unsupported runtime expression {expression.GetType().Name}")
         };
     }
@@ -313,6 +361,93 @@ internal sealed class WindowsRuntimeLlvmEmitter(BoundProgram program)
         return new RuntimeInt(result);
     }
 
+    private RuntimeInt EmitMultiplyExpression(MultiplyExpression expression)
+    {
+        var left = EmitIntExpression(expression.Left);
+        var right = EmitIntExpression(expression.Right);
+        var result = NextTemp("mul");
+        _functions.Append("  ")
+            .Append(result)
+            .Append(" = mul nsw i64 ")
+            .Append(left.ValueName)
+            .Append(", ")
+            .AppendLine(right.ValueName);
+        return new RuntimeInt(result);
+    }
+
+    private RuntimeValue EmitFlowExpressionValue(FlowExpression expression)
+    {
+        var result = EmitFlowExpression(expression, ok: "true", allowBindingTarget: false);
+        return result.Value
+            ?? throw new SlangException("value-flow expression does not produce a runtime value");
+    }
+
+    private RuntimeFlowResult EmitFlowExpression(FlowExpression expression, string ok, bool allowBindingTarget)
+    {
+        if (expression.Targets.Count == 1 && IsPath(expression.Targets[0], "print"))
+        {
+            return new RuntimeFlowResult(
+                Value: null,
+                Binding: null,
+                Ok: EmitPrintArgument(expression.Source, ok));
+        }
+
+        var current = EmitFlowSource(expression.Source);
+        for (var i = 0; i < expression.Targets.Count; i++)
+        {
+            var target = expression.Targets[i];
+            var isLast = i == expression.Targets.Count - 1;
+            var path = string.Join('.', target);
+
+            if (path == "print")
+            {
+                if (!isLast)
+                {
+                    throw new SlangException("print must be the final value-flow target");
+                }
+
+                return new RuntimeFlowResult(
+                    Value: null,
+                    Binding: null,
+                    Ok: EmitWriteValue(current, ok));
+            }
+
+            if (program.Functions.TryGetValue(path, out var function))
+            {
+                current = EmitFlowFunctionCall(function, current);
+                continue;
+            }
+
+            if (allowBindingTarget && isLast && target.Count == 1)
+            {
+                return new RuntimeFlowResult(
+                    Value: null,
+                    Binding: new RuntimeFlowBinding(target[0], current),
+                    Ok: ok);
+            }
+
+            throw new SlangException($"unknown runtime value-flow target '{path}'");
+        }
+
+        return new RuntimeFlowResult(
+            Value: current,
+            Binding: null,
+            Ok: ok);
+    }
+
+    private RuntimeValue EmitFlowSource(Expression source)
+    {
+        if (source is NameExpression name
+            && !_locals.ContainsKey(name.Name)
+            && program.Functions.TryGetValue(name.Name, out var function)
+            && function.InputType is null)
+        {
+            return EmitFunctionCall(function, argument: null);
+        }
+
+        return EmitExpression(source);
+    }
+
     private RuntimeValue EmitFunctionCall(CallExpression expression)
     {
         var path = string.Join('.', expression.Path);
@@ -321,21 +456,56 @@ internal sealed class WindowsRuntimeLlvmEmitter(BoundProgram program)
             throw new SlangException($"unknown runtime function '{path}'");
         }
 
-        if (expression.Arguments.Count != 0)
+        RuntimeValue? argument = null;
+        if (function.InputType is null)
         {
-            throw new SlangException($"function '{path}' does not accept arguments in the current runtime slice");
+            if (expression.Arguments.Count != 0)
+            {
+                throw new SlangException($"function '{path}' does not accept arguments");
+            }
+        }
+        else
+        {
+            if (expression.Arguments.Count != 1)
+            {
+                throw new SlangException($"function '{path}' expects exactly one argument");
+            }
+
+            argument = EmitExpression(expression.Arguments[0]);
+            EnsureRuntimeType(argument, function.InputType.Value, path);
         }
 
+        return EmitFunctionCall(function, argument);
+    }
+
+    private RuntimeValue EmitFlowFunctionCall(BoundFunction function, RuntimeValue argument)
+    {
+        if (function.InputType is null)
+        {
+            throw new SlangException($"function '{function.Name}' does not accept a flowed input");
+        }
+
+        EnsureRuntimeType(argument, function.InputType.Value, function.Name);
+        return EmitFunctionCall(function, argument);
+    }
+
+    private RuntimeValue EmitFunctionCall(BoundFunction function, RuntimeValue? argument)
+    {
         return function.ReturnType switch
         {
-            BoundType.Text => EmitTextFunctionCall(function),
-            BoundType.Int => EmitIntFunctionCall(function),
+            BoundType.Text => EmitTextFunctionCall(function, argument),
+            BoundType.Int => EmitIntFunctionCall(function, argument),
             _ => throw new SlangException($"unsupported function return type {function.ReturnType}")
         };
     }
 
-    private RuntimeText EmitTextFunctionCall(BoundFunction function)
+    private RuntimeText EmitTextFunctionCall(BoundFunction function, RuntimeValue? argument)
     {
+        if (argument is not null)
+        {
+            throw new SlangException("Text-returning functions with input are not in the current runtime slice");
+        }
+
         var aggregate = NextTemp("text");
         _functions.Append("  ")
             .Append(aggregate)
@@ -360,15 +530,45 @@ internal sealed class WindowsRuntimeLlvmEmitter(BoundProgram program)
         return new RuntimeText(pointer, length);
     }
 
-    private RuntimeInt EmitIntFunctionCall(BoundFunction function)
+    private RuntimeInt EmitIntFunctionCall(BoundFunction function, RuntimeValue? argument)
     {
         var value = NextTemp("call");
         _functions.Append("  ")
             .Append(value)
             .Append(" = call i64 ")
             .Append(SymbolForFunction(function.Name))
-            .AppendLine("()");
+            .Append('(');
+
+        if (argument is null)
+        {
+            _functions.Append(')');
+        }
+        else if (argument is RuntimeInt integer)
+        {
+            _functions.Append("i64 ")
+                .Append(integer.ValueName)
+                .Append(')');
+        }
+        else
+        {
+            throw new SlangException($"function '{function.Name}' expects an integer argument");
+        }
+
+        _functions.AppendLine();
         return new RuntimeInt(value);
+    }
+
+    private static void EnsureRuntimeType(RuntimeValue value, BoundType expected, string path)
+    {
+        if (value.Type != expected)
+        {
+            throw new SlangException($"function '{path}' expects {expected} but received {value.Type}");
+        }
+    }
+
+    private static bool IsPath(IReadOnlyList<string> path, string name)
+    {
+        return path.Count == 1 && path[0] == name;
     }
 
     private RuntimeValue ResolveLocal(string name)
@@ -474,4 +674,8 @@ internal sealed class WindowsRuntimeLlvmEmitter(BoundProgram program)
     private sealed record RuntimeText(string PointerName, string LengthName) : RuntimeValue(BoundType.Text);
 
     private sealed record RuntimeInt(string ValueName) : RuntimeValue(BoundType.Int);
+
+    private sealed record RuntimeFlowBinding(string Name, RuntimeValue Value);
+
+    private sealed record RuntimeFlowResult(RuntimeValue? Value, RuntimeFlowBinding? Binding, string Ok);
 }
