@@ -21,6 +21,19 @@ Hello, dimohy
 
 The current generated executable is **752 bytes**.
 
+Accepted next syntax direction:
+
+```slang
+main {
+    name = "dimohy"
+    "Hello, {name}" -> print
+}
+```
+
+The `value -> function` form is the preferred SLang call style for making data
+flow explicit. It is accepted in the specification but not implemented in the
+current compiler slice yet.
+
 ## Status
 
 SLang is in an early compiler-building phase. The implementation is scoped to

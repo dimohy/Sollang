@@ -157,3 +157,42 @@ generation model.
 The first parser generator intentionally supports only the approved initial
 grammar shape. Broader grammar features should be added when the language
 surface actually needs them.
+
+## D013 - Value-Flow Calls As Preferred Call Style
+
+Status: accepted
+Date: 2026-07-07
+
+SLang adopts `value -> function` as the preferred call style when a primary
+input value flows into a function:
+
+```slang
+"Hello, {name}" -> print
+```
+
+This form makes data flow visually explicit. The expression on the left is the
+first input to the callable path on the right. For the initial unary case, it is
+semantically equivalent to:
+
+```slang
+print("Hello, {name}")
+```
+
+Parenthesized calls remain valid as a conventional compatibility syntax and for
+cases where the value-flow form is not expressive enough. The preferred SLang
+style is value-flow first:
+
+```slang
+result = value -> transform
+```
+
+Function type notation should use the same left-to-right direction:
+
+```slang
+print: Text -> Io<Unit>
+```
+
+Implementation is pending. The first implementation should parse the unary
+value-flow form and lower it to the same call AST shape used by the existing
+parenthesized call so LLVM output and executable size stay unchanged for the
+first `print` program.

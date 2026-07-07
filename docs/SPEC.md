@@ -19,6 +19,8 @@ The implementation boundary is intentionally narrow:
 - Windows x64 native executable output through LLVM
 
 Anything beyond that remains specification work until explicitly approved.
+The value-flow call syntax `value -> function` is an accepted language direction
+but is not implemented in the current compiler slice yet.
 
 ## Core Goals
 
@@ -211,6 +213,61 @@ Semantically, it resolves to:
 core.io.print(utf8_output_expression)
 ```
 
+## Value-Flow Calls
+
+SLang accepts `->` as the preferred direction for function calls where the
+input value should be visually explicit:
+
+```slang
+main {
+    name = "dimohy"
+    "Hello, {name}" -> print
+}
+```
+
+The expression on the left flows into the function or callable path on the
+right. The example above is semantically equivalent to:
+
+```slang
+print("Hello, {name}")
+```
+
+This makes argument flow and return flow visible without discarding the familiar
+parenthesized call form. Parenthesized calls remain valid as a compatibility and
+escape-hatch syntax, but the value-flow form is the preferred SLang style for
+single-primary-input operations.
+
+Return values are still bound with `=`:
+
+```slang
+message = name -> greeting
+bytes = message -> utf8.encode
+count = bytes -> stdout.write
+```
+
+The corresponding function type notation follows the same direction:
+
+```slang
+greeting: Text -> Text
+print: Text -> Io<Unit>
+stdout.write: Bytes -> Io<Int>
+```
+
+The first parser implementation for this feature should lower:
+
+```slang
+value -> function
+```
+
+to the same AST shape as:
+
+```slang
+function(value)
+```
+
+for unary calls. Extended forms such as additional named arguments remain future
+syntax work.
+
 Initial constraints:
 
 - The first supported argument is a string expression.
@@ -319,6 +376,15 @@ The current compiler supports:
 main {
     name = "dimohy"
     print("Hello, {name}")
+}
+```
+
+Accepted but not yet implemented:
+
+```slang
+main {
+    name = "dimohy"
+    "Hello, {name}" -> print
 }
 ```
 
