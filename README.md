@@ -7,24 +7,32 @@ The current implementation is intentionally small: it accepts the first approved
 language slice, lowers it to LLVM IR, and links a minimal Windows x64 executable.
 
 ```slang
+getName: -> Text {
+    "dimohy"
+}
+
+getNum: -> Int {
+    20 + 22
+}
+
 main {
-    name = "dimohy"
-    sum = 20 + 22
-    "Hello, {name}. 20 + 22 = {sum}" -> print
+    name = getName()
+    num = getNum()
+    "Hello, {name}. getNum() = {num}" -> print
 }
 ```
 
 The verified output is:
 
 ```text
-Hello, dimohy. 20 + 22 = 42
+Hello, dimohy. getNum() = 42
 ```
 
 The `value -> function` form is the preferred SLang call style for making data
 flow explicit. Parenthesized calls such as `print(...)` remain valid as a
 compatibility form.
 
-The current generated executable is **768 bytes**.
+The current generated executable is **1,088 bytes**.
 
 ## Status
 
@@ -34,8 +42,9 @@ the accepted language specification and decision log.
 What works today:
 
 - `main { ... }`
+- zero-argument functions with `getName: -> Text { ... }`
 - local string bindings with `name = "value"`
-- integer bindings with `sum = 20 + 22`
+- integer bindings with `num = getNum()`
 - left-associative integer `+`
 - string interpolation with `"Hello, {name}"`
 - interpolation of string and integer bindings
@@ -82,6 +91,7 @@ token LeftBrace = "{"
 token RightBrace = "}"
 token Plus = "+"
 token Arrow = "->"
+token Colon = ":"
 token Equal = "="
 token NewLine = newline
 token End = end
@@ -96,13 +106,15 @@ build.
 Parser rules are also written in a compact DSL:
 
 ```text
-rule SourceFile = NewLine* MainBlock NewLine* End
+rule SourceFile = NewLine* FunctionDeclaration* MainBlock NewLine* End
+rule FunctionDeclaration = Identifier Colon Arrow TypeName LeftBrace NewLine* Expression NewLine* RightBrace
 rule MainBlock = Identifier("main") LeftBrace NewLine* Statement* RightBrace
 rule BindingStatement = Identifier Equal Expression StatementEnd
 rule Expression = FlowExpression
 rule FlowExpression = AdditiveExpression (Arrow Path)*
 rule AdditiveExpression = PrimaryExpression (Plus PrimaryExpression)*
 rule PrimaryExpression = CallExpression | StringExpression | NumberExpression | NameExpression
+rule TypeName = Identifier
 ```
 
 The generator reads `syntax/slang.grammar` and emits the current recursive

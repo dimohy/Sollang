@@ -217,10 +217,41 @@ numbers, suffixes, and final overflow policy syntax are not decided yet.
 String interpolation can display integer bindings:
 
 ```slang
-"Hello, {name}. 20 + 22 = {sum}" -> print
+"Number: {sum}" -> print
 ```
 
-This keeps the LLVM backend unchanged for the current size-first prototype:
-numeric expressions are folded by the semantic stage, interpolation produces
-UTF-8 output bytes, and the Windows backend still emits one static output
-buffer and one `WriteFile` call.
+This first numeric step initially allowed the compiler to fold the whole sample
+to output bytes. D015 changes the current sample to exercise runtime function
+calls and runtime integer-to-decimal output instead.
+
+## D015 - Runtime Function Sample
+
+Status: implemented
+Date: 2026-07-07
+
+The current sample should not be represented only as one compile-time output
+buffer. It uses zero-argument functions so the generated LLVM contains real
+runtime calls:
+
+```slang
+getName: -> Text {
+    "dimohy"
+}
+
+getNum: -> Int {
+    20 + 22
+}
+
+main {
+    name = getName()
+    num = getNum()
+    "Hello, {name}. getNum() = {num}" -> print
+}
+```
+
+The current implementation parses `getName: -> Text { ... }` and
+`getNum: -> Int { ... }` as zero-argument expression functions. Semantic
+analysis type-checks the function bodies and main bindings. The Windows LLVM
+backend emits `@slang_fn_getName`, `@slang_fn_getNum`, runtime `i64` addition,
+segmented `WriteFile` output, and a runtime integer decimal conversion helper
+instead of one full static output string.

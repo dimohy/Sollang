@@ -1,5 +1,3 @@
-using System.Globalization;
-using System.Text;
 using SLang.Compiler.Diagnostics;
 using SLang.Compiler.Syntax;
 
@@ -7,11 +5,63 @@ namespace SLang.Compiler.Semantics;
 
 internal sealed class SemanticCompiler(SlangProgram program)
 {
-    public byte[] CompileToStdoutBytes()
+    public BoundProgram Compile()
     {
-        var bindings = new Dictionary<string, SemanticValue>(StringComparer.Ordinal);
-        var output = new StringBuilder();
+        var functions = BindFunctions();
+        var mainBindings = BindMain(functions);
+        return new BoundProgram(functions, program.Statements, mainBindings);
+    }
 
+    private IReadOnlyDictionary<string, BoundFunction> BindFunctions()
+    {
+        var functions = new Dictionary<string, BoundFunction>(StringComparer.Ordinal);
+        foreach (var function in program.Functions)
+        {
+            if (functions.ContainsKey(function.Name))
+            {
+                throw Error(function.Line, function.Column, $"function '{function.Name}' already exists");
+            }
+
+            if (function.Name == "main" || function.Name == "print")
+            {
+                throw Error(function.Line, function.Column, $"function name '{function.Name}' is reserved");
+            }
+
+            var returnType = ParseType(function.ReturnType, function.Line, function.Column);
+            functions.Add(function.Name, new BoundFunction(
+                function.Name,
+                returnType,
+                function.Body,
+                function.Line,
+                function.Column));
+        }
+
+        foreach (var function in functions.Values)
+        {
+            var bodyType = InferExpression(function.Body, functions, new Dictionary<string, BoundType>(), allowPrintCall: false);
+            if (bodyType != function.ReturnType)
+            {
+                throw Error(
+                    function.Line,
+                    function.Column,
+                    $"function '{function.Name}' returns {FormatType(bodyType)} but declares {FormatType(function.ReturnType)}");
+            }
+
+            if (function.ReturnType == BoundType.Text && !IsPlainStringLiteral(function.Body))
+            {
+                throw Error(
+                    function.Line,
+                    function.Column,
+                    "the first Text function body must be a plain string literal");
+            }
+        }
+
+        return functions;
+    }
+
+    private IReadOnlyDictionary<string, BoundType> BindMain(IReadOnlyDictionary<string, BoundFunction> functions)
+    {
+        var bindings = new Dictionary<string, BoundType>(StringComparer.Ordinal);
         foreach (var statement in program.Statements)
         {
             switch (statement)
@@ -22,135 +72,161 @@ internal sealed class SemanticCompiler(SlangProgram program)
                         throw Error(binding.Line, binding.Column, $"binding '{binding.Name}' already exists in this scope");
                     }
 
-                    bindings.Add(binding.Name, EvaluateValue(binding.Value, bindings));
+                    var valueType = InferExpression(binding.Value, functions, bindings, allowPrintCall: false);
+                    if (valueType == BoundType.Unit)
+                    {
+                        throw Error(binding.Line, binding.Column, "cannot bind a unit value");
+                    }
+
+                    bindings.Add(binding.Name, valueType);
                     break;
                 case ExpressionStatement expressionStatement:
-                    CompileExpressionStatement(expressionStatement.Expression, bindings, output);
+                    var expressionType = InferExpression(expressionStatement.Expression, functions, bindings, allowPrintCall: true);
+                    if (expressionType != BoundType.Unit)
+                    {
+                        throw Error(
+                            expressionStatement.Expression.Line,
+                            expressionStatement.Expression.Column,
+                            "only function calls with side effects are valid expression statements");
+                    }
+
                     break;
                 default:
                     throw new SlangException($"unsupported statement {statement.GetType().Name}");
             }
         }
 
-        return Encoding.UTF8.GetBytes(output.ToString());
+        return bindings;
     }
 
-    private static void CompileExpressionStatement(
+    private static BoundType InferExpression(
         Expression expression,
-        IReadOnlyDictionary<string, SemanticValue> bindings,
-        StringBuilder output)
-    {
-        if (expression is not CallExpression call)
-        {
-            throw Error(expression.Line, expression.Column, "only function calls are valid expression statements");
-        }
-
-        var path = string.Join('.', call.Path);
-        if (path != "print")
-        {
-            throw Error(call.Line, call.Column, $"unknown function '{path}'");
-        }
-
-        if (call.Arguments.Count != 1)
-        {
-            throw Error(call.Line, call.Column, "print expects exactly one argument");
-        }
-
-        output.Append(EvaluateValue(call.Arguments[0], bindings).ToDisplayString());
-    }
-
-    private static SemanticValue EvaluateValue(
-        Expression expression,
-        IReadOnlyDictionary<string, SemanticValue> bindings)
+        IReadOnlyDictionary<string, BoundFunction> functions,
+        IReadOnlyDictionary<string, BoundType> bindings,
+        bool allowPrintCall)
     {
         return expression switch
         {
-            StringExpression str => new TextValue(EvaluateStringLiteral(str, bindings)),
-            NumberExpression number => EvaluateNumber(number),
-            NameExpression name => ResolveName(name.Name, bindings, name.Line, name.Column),
-            AddExpression add => EvaluateAdd(add, bindings),
+            StringExpression str => InferStringExpression(str, bindings),
+            NumberExpression => BoundType.Int,
+            NameExpression name => ResolveBindingType(name.Name, bindings, name.Line, name.Column),
+            AddExpression add => InferAddExpression(add, functions, bindings),
+            CallExpression call => InferCallExpression(call, functions, bindings, allowPrintCall),
             _ => throw Error(expression.Line, expression.Column, "expected an expression value")
         };
     }
 
-    private static IntegerValue EvaluateNumber(NumberExpression expression)
+    private static BoundType InferStringExpression(
+        StringExpression expression,
+        IReadOnlyDictionary<string, BoundType> bindings)
     {
-        return long.TryParse(
-            expression.Text,
-            NumberStyles.None,
-            CultureInfo.InvariantCulture,
-            out var value)
-            ? new IntegerValue(value)
-            : throw Error(expression.Line, expression.Column, $"integer literal '{expression.Text}' is out of range");
+        foreach (var segment in expression.Segments)
+        {
+            if (segment is not InterpolationSegment interpolation)
+            {
+                continue;
+            }
+
+            if (interpolation.Path.Count != 1)
+            {
+                throw Error(expression.Line, expression.Column, "path interpolation is reserved until modules are specified");
+            }
+
+            _ = ResolveBindingType(interpolation.Path[0], bindings, expression.Line, expression.Column);
+        }
+
+        return BoundType.Text;
     }
 
-    private static IntegerValue EvaluateAdd(
+    private static BoundType InferAddExpression(
         AddExpression expression,
-        IReadOnlyDictionary<string, SemanticValue> bindings)
+        IReadOnlyDictionary<string, BoundFunction> functions,
+        IReadOnlyDictionary<string, BoundType> bindings)
     {
-        var left = EvaluateValue(expression.Left, bindings);
-        var right = EvaluateValue(expression.Right, bindings);
-        if (left is not IntegerValue leftInteger)
+        var left = InferExpression(expression.Left, functions, bindings, allowPrintCall: false);
+        var right = InferExpression(expression.Right, functions, bindings, allowPrintCall: false);
+        if (left != BoundType.Int)
         {
             throw Error(expression.Left.Line, expression.Left.Column, "left operand of '+' must be an integer");
         }
 
-        if (right is not IntegerValue rightInteger)
+        if (right != BoundType.Int)
         {
             throw Error(expression.Right.Line, expression.Right.Column, "right operand of '+' must be an integer");
         }
 
-        try
-        {
-            return new IntegerValue(checked(leftInteger.Value + rightInteger.Value));
-        }
-        catch (OverflowException)
-        {
-            throw Error(expression.Line, expression.Column, "integer addition overflow");
-        }
+        return BoundType.Int;
     }
 
-    private static string EvaluateStringLiteral(
-        StringExpression expression,
-        IReadOnlyDictionary<string, SemanticValue> bindings)
+    private static BoundType InferCallExpression(
+        CallExpression expression,
+        IReadOnlyDictionary<string, BoundFunction> functions,
+        IReadOnlyDictionary<string, BoundType> bindings,
+        bool allowPrintCall)
     {
-        var result = new StringBuilder();
-        foreach (var segment in expression.Segments)
+        var path = string.Join('.', expression.Path);
+        if (path == "print")
         {
-            switch (segment)
+            if (!allowPrintCall)
             {
-                case TextSegment text:
-                    result.Append(text.Text);
-                    break;
-                case InterpolationSegment interpolation:
-                    if (interpolation.Path.Count != 1)
-                    {
-                        throw Error(expression.Line, expression.Column, "path interpolation is reserved until modules are specified");
-                    }
-
-                    result.Append(ResolveName(
-                        interpolation.Path[0],
-                        bindings,
-                        expression.Line,
-                        expression.Column).ToDisplayString());
-                    break;
-                default:
-                    throw new SlangException($"unsupported string segment {segment.GetType().Name}");
+                throw Error(expression.Line, expression.Column, "print is only valid as an expression statement");
             }
+
+            if (expression.Arguments.Count != 1)
+            {
+                throw Error(expression.Line, expression.Column, "print expects exactly one argument");
+            }
+
+            _ = InferExpression(expression.Arguments[0], functions, bindings, allowPrintCall: false);
+            return BoundType.Unit;
         }
 
-        return result.ToString();
+        if (expression.Arguments.Count != 0)
+        {
+            throw Error(expression.Line, expression.Column, $"function '{path}' does not accept arguments in the current slice");
+        }
+
+        return functions.TryGetValue(path, out var function)
+            ? function.ReturnType
+            : throw Error(expression.Line, expression.Column, $"unknown function '{path}'");
     }
 
-    private static SemanticValue ResolveName(
+    private static BoundType ResolveBindingType(
         string name,
-        IReadOnlyDictionary<string, SemanticValue> bindings,
+        IReadOnlyDictionary<string, BoundType> bindings,
         int line,
         int column)
     {
-        return bindings.TryGetValue(name, out var value)
-            ? value
+        return bindings.TryGetValue(name, out var type)
+            ? type
             : throw Error(line, column, $"unknown binding '{name}'");
+    }
+
+    private static BoundType ParseType(string typeName, int line, int column)
+    {
+        return typeName switch
+        {
+            "Text" => BoundType.Text,
+            "Int" => BoundType.Int,
+            _ => throw Error(line, column, $"unknown type '{typeName}'")
+        };
+    }
+
+    private static string FormatType(BoundType type)
+    {
+        return type switch
+        {
+            BoundType.Unit => "Unit",
+            BoundType.Text => "Text",
+            BoundType.Int => "Int",
+            _ => type.ToString()
+        };
+    }
+
+    private static bool IsPlainStringLiteral(Expression expression)
+    {
+        return expression is StringExpression str
+            && str.Segments.All(static segment => segment is TextSegment);
     }
 
     private static SlangException Error(int line, int column, string message)

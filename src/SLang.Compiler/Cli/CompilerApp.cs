@@ -36,8 +36,8 @@ internal static class CompilerApp
         var sourceText = File.ReadAllText(options.SourcePath, Encoding.UTF8);
         var tokens = new Lexer(sourceText).Lex();
         var program = new Parser(tokens).Parse();
-        var outputBytes = new SemanticCompiler(program).CompileToStdoutBytes();
-        var llvmIr = LlvmIrGenerator.GenerateWindowsConsoleProgram(outputBytes);
+        var boundProgram = new SemanticCompiler(program).Compile();
+        var llvmIr = LlvmIrGenerator.GenerateWindowsConsoleProgram(boundProgram);
         var toolchain = LlvmToolchain.From(options.LlvmHome);
         var linker = new WindowsLinker(toolchain);
 

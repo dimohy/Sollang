@@ -52,6 +52,7 @@ internal sealed record GrammarSpec(
     private static readonly string[] RequiredRules =
     [
         "SourceFile",
+        "FunctionDeclaration",
         "MainBlock",
         "Statement",
         "BindingStatement",
@@ -64,6 +65,7 @@ internal sealed record GrammarSpec(
         "CallExpression",
         "ArgumentList",
         "Path",
+        "TypeName",
         "StringExpression",
         "NumberExpression",
         "NameExpression"
@@ -250,15 +252,37 @@ internal static class ParserEmitter
         builder.AppendLine();
         builder.AppendLine("    public SlangProgram Parse()");
         builder.AppendLine("    {");
-        builder.AppendLine("        // SourceFile = NewLine* MainBlock NewLine* End");
+        builder.AppendLine("        // SourceFile = NewLine* FunctionDeclaration* MainBlock NewLine* End");
+        builder.AppendLine("        var functions = new List<FunctionDeclaration>();");
         builder.AppendLine("        SkipNewLines();");
-        builder.AppendLine("        var program = ParseMainBlock();");
+        builder.AppendLine("        while (Check(TokenKind.Identifier) && CheckNext(TokenKind.Colon))");
+        builder.AppendLine("        {");
+        builder.AppendLine("            functions.Add(ParseFunctionDeclaration());");
+        builder.AppendLine("            SkipNewLines();");
+        builder.AppendLine("        }");
+        builder.AppendLine();
+        builder.AppendLine("        var statements = ParseMainBlock();");
         builder.AppendLine("        SkipNewLines();");
         builder.AppendLine("        Expect(TokenKind.End);");
-        builder.AppendLine("        return program;");
+        builder.AppendLine("        return new SlangProgram(functions, statements);");
         builder.AppendLine("    }");
         builder.AppendLine();
-        builder.AppendLine("    private SlangProgram ParseMainBlock()");
+        builder.AppendLine("    private FunctionDeclaration ParseFunctionDeclaration()");
+        builder.AppendLine("    {");
+        builder.AppendLine("        // FunctionDeclaration = Identifier Colon Arrow TypeName LeftBrace NewLine* Expression NewLine* RightBrace");
+        builder.AppendLine("        var name = ExpectIdentifier();");
+        builder.AppendLine("        Expect(TokenKind.Colon);");
+        builder.AppendLine("        Expect(TokenKind.Arrow);");
+        builder.AppendLine("        var returnType = ExpectIdentifier();");
+        builder.AppendLine("        Expect(TokenKind.LeftBrace);");
+        builder.AppendLine("        SkipNewLines();");
+        builder.AppendLine("        var body = ParseExpression();");
+        builder.AppendLine("        SkipNewLines();");
+        builder.AppendLine("        Expect(TokenKind.RightBrace);");
+        builder.AppendLine("        return new FunctionDeclaration(name.Text, returnType.Text, body, name.Line, name.Column);");
+        builder.AppendLine("    }");
+        builder.AppendLine();
+        builder.AppendLine("    private IReadOnlyList<Statement> ParseMainBlock()");
         builder.AppendLine("    {");
         builder.AppendLine("        // MainBlock = Identifier(\"main\") LeftBrace NewLine* Statement* RightBrace");
         builder.AppendLine("        var main = ExpectIdentifier(\"main\");");
@@ -278,7 +302,7 @@ internal static class ParserEmitter
         builder.AppendLine("        }");
         builder.AppendLine();
         builder.AppendLine("        Expect(TokenKind.RightBrace);");
-        builder.AppendLine("        return new SlangProgram(statements);");
+        builder.AppendLine("        return statements;");
         builder.AppendLine("    }");
         builder.AppendLine();
         builder.AppendLine("    private Statement ParseStatement()");

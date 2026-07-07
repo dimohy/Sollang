@@ -13,6 +13,7 @@ SLang implementation has started for the smallest approved language slice.
 The implementation boundary is intentionally narrow:
 
 - one `main` block
+- zero-argument expression functions
 - local string bindings with `name = value`
 - integer bindings with decimal integer literals
 - left-associative integer `+`
@@ -86,17 +87,25 @@ Hello, dimohy
 The current extended example is:
 
 ```slang
+getName: -> Text {
+    "dimohy"
+}
+
+getNum: -> Int {
+    20 + 22
+}
+
 main {
-    name = "dimohy"
-    sum = 20 + 22
-    "Hello, {name}. 20 + 22 = {sum}" -> print
+    name = getName()
+    num = getNum()
+    "Hello, {name}. getNum() = {num}" -> print
 }
 ```
 
 Expected stdout bytes:
 
 ```text
-Hello, dimohy. 20 + 22 = 42
+Hello, dimohy. getNum() = 42
 ```
 
 ## Initial Syntax Direction
@@ -105,10 +114,18 @@ SLang starts with an explicit `main` block instead of a fully general function
 declaration. Local bindings do not use `let`, `var`, or a declaration keyword:
 
 ```slang
+getName: -> Text {
+    "dimohy"
+}
+
+getNum: -> Int {
+    20 + 22
+}
+
 main {
-    name = "dimohy"
-    sum = 20 + 22
-    "Hello, {name}. 20 + 22 = {sum}" -> print
+    name = getName()
+    num = getNum()
+    "Hello, {name}. getNum() = {num}" -> print
 }
 ```
 
@@ -119,6 +136,8 @@ Rationale:
 - `"Hello, {name}"` keeps string interpolation direct and familiar.
 - `20 + 22` introduces the smallest numeric expression without deciding the
   final numeric tower.
+- `getName: -> Text { ... }` and `getNum: -> Int { ... }` introduce the
+  smallest function declaration shape.
 - `"..." -> print` makes the primary data flow visible at the call site.
 - The executable entry point is still explicit.
 - The parser can recognize the first complete program with a tiny grammar.
@@ -130,7 +149,8 @@ Rationale:
 The initial grammar is deliberately small:
 
 ```ebnf
-source_file  := trivia* main_block trivia* eof
+source_file  := trivia* function_declaration* main_block trivia* eof
+function_declaration := identifier ":" "->" type_name "{" expression "}"
 main_block   := "main" block
 block        := "{" statement* "}"
 statement    := binding_statement | expression_statement
@@ -143,6 +163,7 @@ additive_expression := primary ("+" primary)*
 call         := path "(" argument_list? ")"
 argument_list := expression ("," expression)*
 path         := identifier ("." identifier)*
+type_name    := identifier
 primary      := call | string_literal | number_literal | identifier
 number_literal := decimal_digit+
 string_literal := "\"" string_part* "\""
@@ -158,7 +179,8 @@ Notes:
 - `identifier = expression` introduces a local binding in the current block.
 - `+` is initially defined only for integer addition.
 - `value -> function` lowers to a unary call with `value` as the first argument.
-- Function declarations are intentionally not specified yet.
+- Function declarations are currently zero-argument expression bodies with an
+  explicit return type.
 
 ## Bindings
 
@@ -214,7 +236,7 @@ Initial token categories:
 - identifiers
 - string literals, including interpolation markers inside string mode
 - decimal integer literals
-- punctuation: `{`, `}`, `(`, `)`, `.`, `,`, `+`, `->`, `=`
+- punctuation: `{`, `}`, `(`, `)`, `.`, `,`, `+`, `->`, `:`, `=`
 - newlines
 - trivia: spaces, tabs, comments when comments are specified
 - end of file
@@ -254,13 +276,13 @@ Interpolation rules:
 value-flow call:
 
 ```slang
-"Hello, {name}. 20 + 22 = {sum}" -> print
+"Hello, {name}. getNum() = {num}" -> print
 ```
 
 The parenthesized form remains valid and equivalent:
 
 ```slang
-print("Hello, {name}. 20 + 22 = {sum}")
+print("Hello, {name}. getNum() = {num}")
 ```
 
 Semantically, it resolves to:
@@ -276,9 +298,9 @@ input value should be visually explicit:
 
 ```slang
 main {
-    name = "dimohy"
-    sum = 20 + 22
-    "Hello, {name}. 20 + 22 = {sum}" -> print
+    name = getName()
+    num = getNum()
+    "Hello, {name}. getNum() = {num}" -> print
 }
 ```
 
@@ -286,7 +308,7 @@ The expression on the left flows into the function or callable path on the
 right. The example above is semantically equivalent to:
 
 ```slang
-print("Hello, {name}. 20 + 22 = {sum}")
+print("Hello, {name}. getNum() = {num}")
 ```
 
 This makes argument flow and return flow visible without discarding the familiar
@@ -392,13 +414,21 @@ They must not silently fall back to another backend.
 
 ## LLVM Lowering Direction
 
-For the initial program:
+For the current runtime sample:
 
 ```slang
+getName: -> Text {
+    "dimohy"
+}
+
+getNum: -> Int {
+    20 + 22
+}
+
 main {
-    name = "dimohy"
-    sum = 20 + 22
-    "Hello, {name}. 20 + 22 = {sum}" -> print
+    name = getName()
+    num = getNum()
+    "Hello, {name}. getNum() = {num}" -> print
 }
 ```
 
@@ -406,12 +436,15 @@ The intended lowering shape is:
 
 ```text
 static global utf8 bytes: "dimohy"
-constant-folded integer: 42
-static global utf8 bytes: "Hello, dimohy. 20 + 22 = 42"
+function getName -> returns text slice
+function getNum -> evaluates 20 + 22 at runtime and returns i64
+runtime decimal conversion helper for integer output
 native entry function
--> bind name to static string slice
--> evaluate integer addition
--> evaluate interpolated string expression with integer display
+-> call getName and bind name to returned text slice
+-> call getNum and bind num to returned integer
+-> write string literal segments directly
+-> write name as a text slice
+-> convert num to decimal bytes at runtime and write them
 -> lower value-flow print call to selected core.io.print backend with output bytes
 -> return process exit code
 ```
@@ -422,10 +455,10 @@ Optimization requirements:
 - `(ptr, len)` should be passed without copying.
 - Interpolated strings should avoid heap allocation when all parts are known
   static strings.
-- `"Hello, {name}. 20 + 22 = {sum}" -> print` may lower to a single static
-  output buffer when the interpolated value is compile-time known.
-- Otherwise, printing segmented string parts directly is preferred over building
-  a temporary heap string.
+- Runtime function calls are emitted even when the current implementation could
+  theoretically constant-fold the sample.
+- Printing segmented string parts directly is preferred over building a
+  temporary heap string.
 - Platform output calls should be direct and inlinable when practical.
 - The final executable should be produced through LLVM's native target pipeline.
 
@@ -434,10 +467,18 @@ Optimization requirements:
 The current compiler supports:
 
 ```slang
+getName: -> Text {
+    "dimohy"
+}
+
+getNum: -> Int {
+    20 + 22
+}
+
 main {
-    name = "dimohy"
-    sum = 20 + 22
-    "Hello, {name}. 20 + 22 = {sum}" -> print
+    name = getName()
+    num = getNum()
+    "Hello, {name}. getNum() = {num}" -> print
 }
 ```
 
@@ -449,20 +490,23 @@ Current backend:
   generator
 - parser: generated from `syntax/slang.grammar` by a Roslyn incremental source
   generator
-- semantics: string and integer bindings, checked integer `+`, and scalar
-  interpolation are folded to output bytes for the current slice
+- semantics: zero-argument function declarations, string and integer bindings,
+  checked integer `+`, and scalar interpolation are type-checked for the current
+  slice
 - value-flow calls: `value -> function` is parsed and lowered to the existing
   call AST shape
-- IR output: immutable UTF-8 global bytes
+- IR output: immutable UTF-8 literal segments, runtime function calls, runtime
+  i64 addition, and runtime integer decimal output
 - entry point: `slang_start`
 - imports: `GetStdHandle`, `WriteFile`
 - linker: `lld-link`
 - CRT: none
-- current verified executable size: 768 bytes
+- current verified executable size: 1,088 bytes
 
-The current size-first backend emits one direct `WriteFile` call for the
-constant-folded output buffer and returns `0` or `1` from the native entry point
-based on API success.
+The current runtime backend emits direct `WriteFile` calls for text segments,
+calls generated SLang functions, converts integer output to decimal bytes at
+runtime, and returns `0` or `1` from the native entry point based on API
+success.
 
 ## Current Module Layout
 

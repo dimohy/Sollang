@@ -1,6 +1,15 @@
 namespace SLang.Compiler.Syntax;
 
-internal sealed record SlangProgram(IReadOnlyList<Statement> Statements);
+internal sealed record SlangProgram(
+    IReadOnlyList<FunctionDeclaration> Functions,
+    IReadOnlyList<Statement> Statements);
+
+internal sealed record FunctionDeclaration(
+    string Name,
+    string ReturnType,
+    Expression Body,
+    int Line,
+    int Column);
 
 internal abstract record Statement;
 
