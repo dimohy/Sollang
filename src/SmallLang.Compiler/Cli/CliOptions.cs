@@ -6,18 +6,20 @@ internal sealed record CliOptions(
     string SourcePath,
     string OutputPath,
     string? LlvmHome,
+    CompilationTarget Target,
     bool KeepTemps)
 {
     public static CliOptions Parse(string[] args)
     {
         if (args is not ["build", ..])
         {
-            throw new SmallLangException("usage: smalllang build <source.sl> -o <output.exe> [--llvm <dir>] [--keep-temps]");
+            throw new SmallLangException("usage: smalllang build <source.sl> -o <output> [--target windows-x64|linux-x64] [--llvm <dir>] [--keep-temps]");
         }
 
         string? source = null;
         string? output = null;
         string? llvmHome = null;
+        var target = CompilationTarget.WindowsX64;
         var keepTemps = false;
 
         for (var i = 1; i < args.Length; i++)
@@ -31,6 +33,9 @@ internal sealed record CliOptions(
                     break;
                 case "--llvm":
                     llvmHome = RequireValue(args, ref i, arg);
+                    break;
+                case "--target":
+                    target = ParseTarget(RequireValue(args, ref i, arg));
                     break;
                 case "--keep-temps":
                     keepTemps = true;
@@ -56,13 +61,28 @@ internal sealed record CliOptions(
             throw new SmallLangException("missing source file");
         }
 
-        output ??= Path.ChangeExtension(source, ".exe");
+        output ??= target == CompilationTarget.WindowsX64
+            ? Path.ChangeExtension(source, ".exe")
+            : Path.Combine(
+                Path.GetDirectoryName(source) ?? Directory.GetCurrentDirectory(),
+                Path.GetFileNameWithoutExtension(source));
 
         return new CliOptions(
             Path.GetFullPath(source),
             Path.GetFullPath(output),
             llvmHome is null ? null : Path.GetFullPath(llvmHome),
+            target,
             keepTemps);
+    }
+
+    private static CompilationTarget ParseTarget(string value)
+    {
+        return value switch
+        {
+            "windows-x64" => CompilationTarget.WindowsX64,
+            "linux-x64" => CompilationTarget.LinuxX64,
+            _ => throw new SmallLangException($"unknown target '{value}'")
+        };
     }
 
     private static string RequireValue(string[] args, ref int index, string option)

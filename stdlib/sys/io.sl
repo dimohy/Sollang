@@ -1,11 +1,15 @@
-sys.io.print value: Text -> Unit {
-    value -> sys.runtime.print
+namespace sys.io
+
+import sys.runtime as rt
+
+print value: Text -> Unit {
+    value -> rt.print()
 }
 
-sys.io.println value: Text -> Unit {
-    value -> sys.runtime.println
+println value: Text -> Unit {
+    value -> rt.println()
 }
 
-sys.io.readInt prompt: Text -> Int {
-    prompt -> sys.runtime.readInt
+readInt prompt: Text -> Int {
+    prompt -> rt.readInt()
 }

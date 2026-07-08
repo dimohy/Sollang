@@ -1,6 +1,8 @@
 param(
-    [string]$Source = "examples/hello.sl",
-    [string]$Output = "artifacts/hello.exe",
+    [string]$Source = "examples/01-function-basic-hello.sl",
+    [string]$Output = "artifacts/01-function-basic-hello.exe",
+    [ValidateSet("windows-x64", "linux-x64")]
+    [string]$Target = "windows-x64",
     [switch]$KeepTemps
 )
 
@@ -43,12 +45,17 @@ if (-not (Test-Path $clang)) {
 $env:SLANG_LLVM_HOME = $llvmDir
 
 dotnet build (Join-Path $repoRoot "src\SmallLang.Compiler\SmallLang.Compiler.csproj") -c Release --nologo
+if ($LASTEXITCODE -ne 0) {
+    exit $LASTEXITCODE
+}
 
 $compilerArgs = @(
     "build",
     (Join-Path $repoRoot $Source),
     "-o",
     (Join-Path $repoRoot $Output),
+    "--target",
+    $Target,
     "--llvm",
     $llvmDir
 )
@@ -58,4 +65,6 @@ if ($KeepTemps) {
 }
 
 dotnet run --project (Join-Path $repoRoot "src\SmallLang.Compiler\SmallLang.Compiler.csproj") -c Release --no-build -- @compilerArgs
-
+if ($LASTEXITCODE -ne 0) {
+    exit $LASTEXITCODE
+}

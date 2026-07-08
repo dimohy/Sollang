@@ -36,9 +36,8 @@ internal static class CompilerApp
     {
         var program = LoadProgram(options.SourcePath);
         var boundProgram = new SemanticCompiler(program).Compile();
-        var llvmIr = LlvmIrGenerator.GenerateWindowsConsoleProgram(boundProgram);
+        var llvmIr = LlvmIrGenerator.GenerateConsoleProgram(boundProgram, options.Target);
         var toolchain = LlvmToolchain.From(options.LlvmHome);
-        var linker = new WindowsLinker(toolchain);
 
         Directory.CreateDirectory(Path.GetDirectoryName(options.OutputPath)
             ?? Directory.GetCurrentDirectory());
@@ -59,7 +58,7 @@ internal static class CompilerApp
         {
             var llPath = Path.Combine(workDir, Path.GetFileNameWithoutExtension(options.OutputPath) + ".ll");
             File.WriteAllText(llPath, llvmIr, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
-            linker.LinkLlvmIr(llPath, options.OutputPath, workDir);
+            LinkLlvmIr(options, toolchain, llPath, workDir);
 
             if (options.KeepTemps)
             {
@@ -79,6 +78,21 @@ internal static class CompilerApp
         Console.WriteLine($"Wrote {exeInfo.FullName} ({exeInfo.Length.ToString("N0", CultureInfo.InvariantCulture)} bytes)");
     }
 
+    private static void LinkLlvmIr(CliOptions options, LlvmToolchain toolchain, string llPath, string workDir)
+    {
+        switch (options.Target)
+        {
+            case CompilationTarget.WindowsX64:
+                new WindowsLinker(toolchain).LinkLlvmIr(llPath, options.OutputPath, workDir);
+                break;
+            case CompilationTarget.LinuxX64:
+                new WslLinuxLinker(toolchain).LinkLlvmIr(llPath, options.OutputPath, workDir);
+                break;
+            default:
+                throw new SmallLangException($"unsupported target '{options.Target}'");
+        }
+    }
+
     private static SmallLangProgram LoadProgram(string sourcePath)
     {
         var standardLibrary = LoadStandardLibrary(sourcePath);
@@ -96,7 +110,9 @@ internal static class CompilerApp
         var paths = new[]
         {
             Path.Combine(root, "stdlib", "sys", "runtime.sl"),
-            Path.Combine(root, "stdlib", "sys", "io.sl")
+            Path.Combine(root, "stdlib", "sys", "io.sl"),
+            Path.Combine(root, "stdlib", "sys", "random.sl"),
+            Path.Combine(root, "stdlib", "sys", "file.sl")
         };
 
         foreach (var path in paths)

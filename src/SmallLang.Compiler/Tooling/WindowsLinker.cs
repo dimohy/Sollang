@@ -17,6 +17,7 @@ internal sealed class WindowsLinker(LlvmToolchain toolchain)
             "x86_64-pc-windows-msvc",
             "-Oz",
             "-fno-addrsig",
+            "-mno-stack-arg-probe",
             "-c",
             llPath,
             "-o",
@@ -33,8 +34,6 @@ internal sealed class WindowsLinker(LlvmToolchain toolchain)
             "/opt:ref",
             "/opt:icf",
             "/fixed",
-            "/align:16",
-            "/filealign:16",
             "/merge:.rdata=.text",
             "/merge:.pdata=.text",
             "/merge:.xdata=.text",
@@ -54,6 +53,10 @@ internal sealed class WindowsLinker(LlvmToolchain toolchain)
             GetStdHandle
             ReadFile
             WriteFile
+            CreateFileA
+            CloseHandle
+            SetFilePointerEx
+            GetFileSizeEx
             """, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
 
         Run(toolchain.LlvmLib,

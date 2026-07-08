@@ -218,6 +218,7 @@ internal static class LexerEmitter
             .GroupBy(static rule => rule.Literal[0])
             .ToArray();
         var hasWhitespaceSkip = spec.Skips.Any(static rule => rule.Pattern == "whitespace");
+        var hasLineCommentSkip = spec.Skips.Any(static rule => rule.Pattern == "line_comment");
         var hasNewLine = spec.Tokens.Any(static rule => rule.Pattern == "newline");
         var hasString = spec.Tokens.Any(static rule => rule.Pattern == "quoted_string");
         var hasIdentifier = spec.Tokens.Any(static rule => rule.Pattern == "identifier");
@@ -259,6 +260,13 @@ internal static class LexerEmitter
         {
             builder.AppendLine("                case '\\r' or '\\n':");
             builder.AppendLine("                    LexNewLine();");
+            builder.AppendLine("                    break;");
+        }
+
+        if (hasLineCommentSkip)
+        {
+            builder.AppendLine("                case '#':");
+            builder.AppendLine("                    SkipLineComment();");
             builder.AppendLine("                    break;");
         }
 
@@ -384,6 +392,18 @@ internal static class LexerEmitter
         builder.AppendLine("        _tokens.Add(new Token(TokenKind.NewLine, \"\\n\", line, column));");
         builder.AppendLine("    }");
         builder.AppendLine();
+        if (hasLineCommentSkip)
+        {
+            builder.AppendLine("    private void SkipLineComment()");
+            builder.AppendLine("    {");
+            builder.AppendLine("        while (!IsAtEnd && Current is not ('\\r' or '\\n'))");
+            builder.AppendLine("        {");
+            builder.AppendLine("            Advance();");
+            builder.AppendLine("        }");
+            builder.AppendLine("    }");
+            builder.AppendLine();
+        }
+
         builder.AppendLine("    private void LexIdentifier()");
         builder.AppendLine("    {");
         builder.AppendLine("        var line = _line;");

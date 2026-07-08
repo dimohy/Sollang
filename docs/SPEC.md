@@ -15,21 +15,41 @@ The implementation boundary is intentionally narrow:
 - explicit `main` block or omitted `main` with top-level executable statements
 - zero-argument and one-input expression functions with default `it` or an
   explicit input name
+- single-expression function bodies with `name: Input -> Output -> expression`
+- nested local function declarations scoped to their containing function
 - value-flow local bindings with `value -> name`
 - integer bindings with decimal integer literals
-- left-associative integer `+` and `*`
+- integer `+`, `-`, `*`, `/`, `%`, unary `-`, and parenthesized expressions
+- line comments with `#`
+- `Bool` values from `true`/`false` literals and integer comparison expressions
+- logical `and`, `or`, and `not`
 - simple string interpolation with `{name}`
-- value-flow calls and result bindings with `value -> function -> name`
+- value-flow calls and result bindings with `value -> function() -> name`
+- empty value-flow target-call syntax with `value -> function()`
+- flow-oriented conditionals with `condition -> if { ... } else { ... }`
+- multi-branch `when { condition { ... } else { ... } }` expressions
+- subject-value `when` with `value -> when { >= limit { ... } else { ... } }`
+- subject-value `when` range arms with `value -> when { start..end { ... } }`
+- compact `when` arms with `condition -> value`, including implicit `it` subject
+  inside one-input functions
 - parenthesized calls with `function(value)`
 - SmallLang standard library functions `sys.io.print`, `sys.io.println`, and
   `sys.io.readInt` through global import aliases `print`, `println`, and
   `readInt`
+- optional source-file `namespace` declaration and `import ... as ...` aliases
 - integer input with `readInt` or `sys.io.readInt`
 - line output with `println` or `sys.io.println`
-- block-function calls, with `each` as the first built-in block function
+- block-function calls, with `each` and `repeat` as the first built-ins
 - closed integer range loops with `start..end -> each item { ... }`
 - default loop item binding with `start..end -> each { ... }`, exposed as `it`
-- Windows x64 native executable output through LLVM
+- integer folds with `start..end -> fold initial acc, item { nextAcc }`
+- purpose-oriented pseudo-random integer generation with `seedRandom` and
+  `randomBelow`
+- binary sorted `Int` file writing with `openIntWriter`, `writeInt`, and
+  `closeIntWriter`
+- nearest-value lookup over a sorted binary `Int` file with `openIntReader`,
+  `closestInt`, and `closeIntReader`
+- Windows x64 and Linux x64 native executable output through LLVM
 
 Anything beyond that remains specification work until explicitly approved.
 
@@ -105,9 +125,9 @@ square: Int -> Int {
 }
 
 main {
-    getName -> name
-    7 -> square -> num
-    "Hello, {name}. square = {num}" -> print
+    getName() -> name
+    7 -> square() -> num
+    "Hello, {name}. square = {num}" -> print()
 }
 ```
 
@@ -129,11 +149,11 @@ The current cumulative input and loop example is:
 
 ```smalllang
 main {
-    "n = ? " -> readInt -> n
+    "n = ? " -> readInt() -> n
 
     1..9 -> each i {
         n * i -> value
-        "{n} x {i} = {value}" -> println
+        "{n} x {i} = {value}" -> println()
     }
 }
 ```
@@ -156,11 +176,11 @@ The same loop can omit the item name and use the default binding `it`:
 
 ```smalllang
 main {
-    "n = ? " -> readInt -> n
+    "n = ? " -> readInt() -> n
 
     1..9 -> each {
         n * it -> value
-        "{n} x {it} = {value}" -> println
+        "{n} x {it} = {value}" -> println()
     }
 }
 ```
@@ -169,20 +189,62 @@ The executable `main` wrapper can be omitted. These top-level statements are
 compiled as the main body:
 
 ```smalllang
-getName -> name
-7 -> square -> num
-"Hello, {name}. square = {num}" -> sys.io.print
+getName() -> name
+7 -> square() -> num
+"Hello, {name}. square = {num}" -> sys.io.print()
 ```
 
 The input and output functions can also be addressed by their canonical module
 path:
 
 ```smalllang
-"n = ? " -> sys.io.readInt -> n
+"n = ? " -> sys.io.readInt() -> n
 
 1..9 -> each i {
     n * i -> value
-    "{n} x {i} = {value}" -> sys.io.println
+    "{n} x {i} = {value}" -> sys.io.println()
+}
+```
+
+The current conditional form keeps the condition as the value flowing into a
+block function-like control expression:
+
+```smalllang
+"n = ? " -> readInt() -> n
+
+n < 1 or n > 9 -> if {
+    "n must be 1..9" -> println()
+} else {
+    1..9 -> each i {
+        n * i -> value
+        "{n} x {i} = {value}" -> println()
+    }
+}
+```
+
+For multi-branch value selection, `when` is an expression:
+
+```smalllang
+grade score: Int -> Text {
+    when {
+        score >= 90 { "A" }
+        score >= 80 { "B" }
+        score >= 70 { "C" }
+        else { "F" }
+    }
+}
+```
+
+When every arm compares the same value, the value can flow into `when` once:
+
+```smalllang
+grade score: Int -> Text {
+    score -> when {
+        >= 90 { "A" }
+        >= 80 { "B" }
+        >= 70 { "C" }
+        else { "F" }
+    }
 }
 ```
 
@@ -201,18 +263,18 @@ square: Int -> Int {
 }
 
 main {
-    getName -> name
-    7 -> square -> num
-    "Hello, {name}. square = {num}" -> print
+    getName() -> name
+    7 -> square() -> num
+    "Hello, {name}. square = {num}" -> print()
 }
 ```
 
 For short executable scripts, the `main` wrapper may be omitted:
 
 ```smalllang
-getName -> name
-7 -> square -> num
-"Hello, {name}. square = {num}" -> print
+getName() -> name
+7 -> square() -> num
+"Hello, {name}. square = {num}" -> print()
 ```
 
 Rationale:
@@ -226,7 +288,7 @@ Rationale:
 - `getName: -> Text { ... }`, `square: Int -> Int { ... }`, and
   `square n: Int -> Int { ... }` introduce the smallest zero-input and one-input
   function declaration shapes.
-- `getName -> name` and `7 -> square -> num` make returned values bindable
+- `getName() -> name` and `7 -> square() -> num` make returned values bindable
   without hiding the flow behind assignment syntax.
 - `"..." -> print` makes the primary data flow visible at the call site.
 - The executable entry point can be explicit with `main { ... }` or implicit
@@ -240,28 +302,50 @@ Rationale:
 The initial grammar is deliberately small:
 
 ```ebnf
-source_file  := trivia* function_declaration* (main_block | statement*) trivia* eof
-function_declaration := path identifier? ":" function_signature function_body
+source_file  := trivia* namespace_declaration? import_declaration* function_declaration* (main_block | statement*) trivia* eof
+namespace_declaration := "namespace" path statement_end
+import_declaration := "import" path ("as" identifier)? statement_end
+function_declaration := path identifier? ":" function_signature (block_function_body | function_body)
 function_signature := "->" type_name | type_name "->" type_name
-function_body := "{" expression "}" | "=" "intrinsic"
+block_function_body := "block" identifier ":" type_name "{" statement* "}"
+function_body := "{" function_declaration* expression "}" | "->" expression | "=" "intrinsic"
 main_block   := "main" block
 block        := "{" statement* "}"
 statement    := block_function_call | each_statement | binding_statement | expression_statement
-block_function_call := range_expression "->" path identifier? block
+block_function_call := range_or_logical_expression "->" path identifier? block
 each_statement := "each" identifier "in" range_expression block
 binding_statement := identifier "=" expression statement_end
 expression_statement := expression statement_end
 statement_end := newline+ | "}" lookahead
-range_expression := expression ".." expression
+range_expression := logical_or_expression ".." logical_or_expression
 expression   := flow_expression
-flow_expression := additive_expression ("->" path)*
-additive_expression := multiplicative_expression ("+" multiplicative_expression)*
-multiplicative_expression := primary ("*" primary)*
+flow_expression := range_or_logical_expression ("->" (path flow_target_call? | if_flow_target | when_flow_target | fold_flow_target))*
+flow_target_call := "(" ")"
+range_or_logical_expression := range_expression | logical_or_expression
+if_flow_target := "if" block_body ("else" block_body)?
+when_flow_target := "when" "{" subject_when_arm+ "else" when_arm_body "}"
+fold_flow_target := "fold" expression identifier "," identifier block_body
+when_expression := "when" "{" when_arm+ "else" when_arm_body "}"
+when_arm := when_condition when_arm_body
+when_condition := subject_when_condition | logical_or_expression
+subject_when_arm := subject_when_condition when_arm_body
+subject_when_condition := subject_comparison expression | range_expression
+subject_comparison := "==" | "!=" | "<" | "<=" | ">" | ">="
+when_arm_body := "->" expression | block_body
+block_body := "{" statement* expression? "}"
+logical_or_expression := logical_and_expression ("or" logical_and_expression)*
+logical_and_expression := equality_expression ("and" equality_expression)*
+equality_expression := comparison_expression (("==" | "!=") comparison_expression)*
+comparison_expression := additive_expression (("<" | "<=" | ">" | ">=") additive_expression)*
+additive_expression := multiplicative_expression (("+" | "-") multiplicative_expression)*
+multiplicative_expression := unary_expression (("*" | "/" | "%") unary_expression)*
+unary_expression := "not" unary_expression | "-" unary_expression | primary
 call         := path "(" argument_list? ")"
 argument_list := expression ("," expression)*
 path         := identifier ("." identifier)*
 type_name    := identifier
-primary      := call | string_literal | number_literal | identifier
+primary      := when_expression | call | "(" expression ")" | bool_literal | string_literal | number_literal | identifier
+bool_literal := "true" | "false"
 number_literal := decimal_digit+
 string_literal := "\"" string_part* "\""
 string_part  := string_text | interpolation
@@ -275,25 +359,62 @@ Notes:
 - Braces are the only block delimiters.
 - If `main { ... }` is omitted, remaining top-level statements after function
   declarations are treated as the executable main body.
+- A function whose body is a single expression may use `-> expression` instead
+  of an outer body block.
 - A final unknown single identifier in a statement-level flow introduces a local
   binding in the current block.
-- `range -> path item? { ... }` introduces a block-function call. The only
-  supported block-function target in the current slice is `each`.
-- `+` is initially defined only for integer addition.
-- `*` is initially defined only for integer multiplication.
-- `value -> function` is parsed as a flow expression with `value` as the source.
+- `source -> path item? { ... }` introduces a block-function call. The supported
+  block-function targets in the current slice are `each` and `repeat`. This is
+  the only function-like call form that intentionally omits `()` because the
+  following brace block is the code block argument.
+- `condition -> if { ... } else { ... }` introduces the current conditional
+  expression form. The value flowing into `if` must be `Bool`.
+- `when { condition { ... } else { ... } }` is the current multi-branch
+  conditional expression form.
+- `value -> when { >= limit { ... } else { ... } }` is the subject-value
+  shorthand for ordered comparisons against one value. The subject value is
+  evaluated once.
+- `value -> when { start..end { ... } else { ... } }` checks inclusive integer
+  ranges against the subject value.
+- `when { condition -> value else -> fallback }` is shorthand for single-value
+  arms. Block arms remain valid for multi-statement arm bodies.
+- In a one-input function using the default input binding `it`, a subject-style
+  `when` without an explicit subject uses `it` as the subject. Explicitly named
+  inputs should still use `input -> when { ... }`.
+- `range -> fold initial acc, item { nextAcc }` returns the final integer
+  accumulator value after direct loop lowering.
+- `+`, `-`, `*`, `/`, and `%` are initially defined only for integers.
+- Unary `-` is initially defined only for integers.
+- Parentheses group expressions.
+- `#` starts a line comment outside string literals.
+- comparison operators initially compare integers and return `Bool`.
+- `and` and `or` short-circuit and require `Bool` operands.
+- `not` requires a `Bool` operand.
+- `value -> function()` is parsed as a flow expression with `value` as the source.
+- `value -> function()` is accepted only in value-flow target position. The
+  parentheses take no arguments; the value on the left remains the function
+  input. This form is useful when the target should be visibly function-like.
 - A final unknown single identifier in a statement-level flow binds the result:
-  `7 -> square -> num`.
+  `7 -> square() -> num`.
 - `1..9 -> each i { ... }` iterates an inclusive integer range and introduces
   `i` only inside the loop body.
 - `1..9 -> each { ... }` uses `it` as the default loop item binding.
 - Function declarations are currently expression bodies with either no input or
   one input. A one-input function uses `it` when no input name is supplied, and
   uses the supplied name in `square n: Int -> Int { ... }`.
-- Path-qualified function declarations are currently used by the standard
-  library, such as `sys.io.print value: Text -> Unit { ... }`.
+- Path-qualified function declarations remain valid, such as
+  `sys.io.print value: Text -> Unit { ... }`, but standard library source now
+  prefers file-level `namespace` declarations.
 - `= intrinsic` declarations are reserved for the standard library's lower
   runtime boundary.
+- Function declarations may appear at the start of another function body. These
+  local functions are scoped to the containing function and nested functions
+  below it; they are not visible from `main` or unrelated functions.
+- A source file may declare one namespace before imports and function
+  declarations. Top-level single-segment function declarations in that file are
+  qualified by the namespace.
+- Imports may alias a path, such as `import sys.runtime as rt`. A path beginning
+  with the alias is resolved to the imported path before semantic analysis.
 
 ## Bindings
 
@@ -340,6 +461,30 @@ When the input name is supplied after the function name, the body receives the
 value through that binding. This mirrors `start..end -> each { ... }` and
 `start..end -> each item { ... }`.
 
+## Local Functions
+
+Functions may declare local helper functions before their final body expression:
+
+```smalllang
+scale n: Int -> Int {
+    double value: Int -> Int {
+        value * 2
+    }
+
+    addBase value: Int -> Int {
+        value + n
+    }
+
+    n -> double -> addBase
+}
+```
+
+Local functions use the same input naming rule as top-level functions. Their
+names are visible only inside the containing function and functions nested below
+it. They can read bindings from the containing function, such as `n` above. In
+the current backend, local functions are lowered by inlining at the call site;
+no global LLVM symbol is emitted for `double` or `addBase`.
+
 ## Block Functions
 
 SmallLang models executable blocks as values passed to block functions at the
@@ -348,35 +493,68 @@ semantic layer:
 ```smalllang
 1..9 -> each i {
     n * i -> value
-    "{n} x {i} = {value}" -> println
+    "{n} x {i} = {value}" -> println()
 }
 ```
 
-In the current slice, `each` is the only supported block-function target. The
-range expression flows into `each`, the optional identifier names the block input
-for each invocation, and the brace body is the executable block argument.
+In the current slice, `each` and `repeat` are the supported block-function
+targets. For `each`, the range expression flows into `each`, the optional
+identifier names the block input for each invocation, and the brace body is the
+executable block argument. For `repeat`, an integer count flows into `repeat` and
+the block receives repeat numbers from `1` through that count:
+
+```smalllang
+3 -> repeat turn {
+    "repeat turn {turn}" -> println()
+}
+```
+
+Because the code block is the argument, these forms are written
+`-> each i { ... }` and `-> repeat turn { ... }`, not `-> each() { ... }` or
+`-> repeat() { ... }`.
+
+Users can define block functions with a `block` parameter. The block-function
+body calls the passed executable block with `value -> yield()`:
+
+```smalllang
+runTimes count: Int -> Unit block turn: Int {
+    1..count -> each turn {
+        turn -> yield()
+    }
+}
+
+main {
+    3 -> runTimes step {
+        "custom block step {step}" -> println()
+    }
+}
+```
 
 The compiler is not required to lower this as a runtime closure. For built-in
 block functions such as `each`, the backend may specialize the call at compile
-time. The current Windows LLVM backend lowers `each` directly to basic blocks
-with an SSA phi value for the item binding, with no heap allocation, function
-pointer, closure object, or dynamic block dispatch.
+time. The current LLVM backends lower `each` directly to basic blocks with an
+SSA phi value for the item binding, with no heap allocation, function pointer,
+closure object, or dynamic block dispatch.
 
 ## Standard Library Imports And Aliases
 
 The current standard library implements the `sys.io` module in SmallLang:
 
 ```smalllang
-sys.io.print value: Text -> Unit {
-    value -> sys.runtime.print
+namespace sys.io
+
+import sys.runtime as rt
+
+print value: Text -> Unit {
+    value -> rt.print()
 }
 
-sys.io.println value: Text -> Unit {
-    value -> sys.runtime.println
+println value: Text -> Unit {
+    value -> rt.println()
 }
 
-sys.io.readInt prompt: Text -> Int {
-    prompt -> sys.runtime.readInt
+readInt prompt: Text -> Int {
+    prompt -> rt.readInt()
 }
 ```
 
@@ -384,9 +562,11 @@ The lower `sys.runtime` functions are intrinsic declarations owned by the
 standard library:
 
 ```smalllang
-sys.runtime.print value: Text -> Unit = intrinsic
-sys.runtime.println value: Text -> Unit = intrinsic
-sys.runtime.readInt prompt: Text -> Int = intrinsic
+namespace sys.runtime
+
+print value: Text -> Unit = intrinsic
+println value: Text -> Unit = intrinsic
+readInt prompt: Text -> Int = intrinsic
 ```
 
 The compiler loads the standard library before user code and globally imports
@@ -409,10 +589,10 @@ readInt -> sys.io.readInt
 Source code can use either spelling:
 
 ```smalllang
-"Hello" -> print
-"Hello" -> sys.io.print
-"n = ? " -> readInt -> n
-"n = ? " -> sys.io.readInt -> n
+"Hello" -> print()
+"Hello" -> sys.io.print()
+"n = ? " -> readInt() -> n
+"n = ? " -> sys.io.readInt() -> n
 ```
 
 These functions are resolved through the same function table as user functions.
@@ -420,6 +600,54 @@ They are not parsed as keywords or statement-specific built-ins. Their only
 current privilege is the global alias layer. The backend inlines the SmallLang
 `sys.io` wrappers and lowers the `sys.runtime` intrinsic boundary to the
 selected platform I/O implementation.
+
+The current purpose-oriented file and random libraries follow the same wrapper
+pattern:
+
+```smalllang
+seedRandom value: Int -> Unit
+randomBelow maxExclusive: Int -> Int
+
+openIntWriter path: Text -> Unit
+writeInt value: Int -> Unit
+closeIntWriter: -> Unit
+
+openIntReader path: Text -> Unit
+closestInt target: Int -> Int
+closeIntReader: -> Unit
+```
+
+The current `Int` file format is binary, little-endian, signed 64-bit records.
+`writeInt` appends to the current writer through an internal buffer. `closestInt`
+expects the current reader file to be sorted ascending and performs a binary
+search over fixed-width records. These APIs are intentionally current-file
+intrinsics for the first large-data workflow; general file handles and arbitrary
+binary/text formats remain future language work.
+
+The 100,000,000-record generator avoids a separate sort by dividing
+`1..1,000,000,000` into 100,000,000 10-wide buckets and choosing one
+pseudo-random value from each bucket in increasing bucket order:
+
+```smalllang
+main {
+    "artifacts/random-sorted-100m.i64" -> openIntWriter()
+    20260708 -> seedRandom
+
+    1..100000000 -> each bucket {
+        bucket - 1 -> zeroBased
+        zeroBased * 10 -> base
+        10 -> randomBelow() -> offset
+        base + offset + 1 -> value
+        value -> writeInt()
+    }
+
+    closeIntWriter()
+}
+```
+
+This produces sorted unique values with one pseudo-random choice per bucket. It
+is not a uniform sample over all possible 100,000,000-element subsets of
+`1..1,000,000,000`.
 
 ## Numeric Expressions
 
@@ -496,9 +724,9 @@ globally aliases them as `print` and `println` before user code is analyzed. The
 preferred source form is a value-flow call:
 
 ```smalllang
-"Hello, {name}. square = {num}" -> print
-"Hello, {name}. square = {num}" -> println
-"Hello, {name}. square = {num}" -> sys.io.print
+"Hello, {name}. square = {num}" -> print()
+"Hello, {name}. square = {num}" -> println()
+"Hello, {name}. square = {num}" -> sys.io.print()
 ```
 
 The parenthesized forms remain valid and equivalent:
@@ -526,8 +754,8 @@ library and globally aliased as `readInt`. The preferred form mirrors output
 value flow:
 
 ```smalllang
-"n = ? " -> readInt -> n
-"n = ? " -> sys.io.readInt -> n
+"n = ? " -> readInt() -> n
+"n = ? " -> sys.io.readInt() -> n
 ```
 
 The parenthesized form is also valid:
@@ -555,7 +783,7 @@ preferred explicit item form is:
 ```smalllang
 1..9 -> each i {
     n * i -> value
-    "{n} x {i} = {value}" -> println
+    "{n} x {i} = {value}" -> println()
 }
 ```
 
@@ -564,7 +792,7 @@ When the item name is omitted, SmallLang provides the default binding `it`:
 ```smalllang
 1..9 -> each {
     n * it -> value
-    "{n} x {it} = {value}" -> println
+    "{n} x {it} = {value}" -> println()
 }
 ```
 
@@ -573,7 +801,7 @@ The older compatibility spelling remains accepted:
 ```smalllang
 each i in 1..9 {
     n * i -> value
-    "{n} x {i} = {value}" -> println
+    "{n} x {i} = {value}" -> println()
 }
 ```
 
@@ -582,6 +810,110 @@ Bindings introduced inside the loop body are also scoped to that body. The
 current range direction is ascending only; if the start is greater than the end,
 the loop executes zero times.
 
+`fold` uses the same range input shape but returns a value:
+
+```smalllang
+1..100 -> fold 0 sum, i {
+    sum + i
+} -> total
+```
+
+The first expression after `fold` is the initial accumulator value. The first
+name is the accumulator binding inside the block and the second name is the
+range item binding. The block must return the next accumulator value. The
+current implementation supports integer accumulators and lowers the built-in
+directly to LLVM loop blocks with accumulator and item phi values.
+
+## Conditionals
+
+The current conditional syntax is flow-oriented:
+
+```smalllang
+condition -> if {
+    thenBody
+} else {
+    elseBody
+}
+```
+
+The expression on the left must be `Bool`. `if` may be used as a statement when
+both branches produce `Unit`; in that form the `else` branch may be omitted. When
+`if` is used as a value, `else` is required and both branches must produce the
+same type.
+
+```smalllang
+n == 9 -> if {
+    "nine"
+} else {
+    "other"
+} -> label
+```
+
+For multiple ordered conditions, `when` is preferred over chaining many nested
+`else if` branches:
+
+```smalllang
+when {
+    score >= 90 { "A" }
+    score >= 80 { "B" }
+    score >= 70 { "C" }
+    else { "F" }
+} -> grade
+```
+
+`when` checks arms in order. Each arm condition must be `Bool`; the `else` block
+is required in the current expression form; all branch values must have the same
+type. Branch-local bindings do not escape their branch body.
+
+When every arm compares the same value, the value can flow into `when` once and
+each arm can start with a comparison operator:
+
+```smalllang
+score -> when {
+    >= 90 -> "A"
+    >= 80 -> "B"
+    >= 70 -> "C"
+    else -> "F"
+} -> grade
+```
+
+This form is equivalent to the full-condition form for ordered integer
+comparisons, but the subject expression is evaluated once before the branch
+chain. The current shorthand supports `==`, `!=`, `<`, `<=`, `>`, and `>=`.
+It also supports inclusive range arms:
+
+```smalllang
+score -> when {
+    90..100 -> "A"
+    80..89 -> "B"
+    70..79 -> "C"
+    else -> "F"
+} -> grade
+```
+
+When a one-input function uses the default `it` input, the subject can be
+omitted entirely:
+
+```smalllang
+grade: Int -> Text -> when {
+    90..100 -> "A"
+    80..89 -> "B"
+    70..79 -> "C"
+    else -> "F"
+}
+```
+
+If the input is explicitly named, pass it explicitly into `when`:
+
+```smalllang
+grade score: Int -> Text -> score -> when {
+    >= 90 -> "A"
+    >= 80 -> "B"
+    >= 70 -> "C"
+    else -> "F"
+}
+```
+
 ## Value-Flow Calls
 
 SmallLang accepts `->` as the preferred direction for function calls where the
@@ -589,9 +921,9 @@ input value should be visually explicit:
 
 ```smalllang
 main {
-    getName -> name
-    7 -> square -> num
-    "Hello, {name}. square = {num}" -> print
+    getName() -> name
+    7 -> square() -> num
+    "Hello, {name}. square = {num}" -> print()
 }
 ```
 
@@ -610,10 +942,24 @@ single-primary-input operations.
 Return values can be bound at the end of a statement-level flow:
 
 ```smalllang
-getName -> name
-7 -> square -> num
-name -> greeting -> message
+getName() -> name
+7 -> square() -> num
+name -> greeting() -> message
 ```
+
+Function targets in a value-flow statement must use empty target-call syntax:
+
+```smalllang
+7 -> square() -> num
+"Hello, {name}. square = {num}" -> print()
+```
+
+This spelling is allowed only immediately after `->`. `square()` as a normal
+call still means a zero-argument parenthesized call, and `7 -> square(7)` is not
+valid because flow-target call syntax does not accept explicit arguments.
+When a function-like target receives a brace code block argument, the block
+argument is the call marker instead: `1..9 -> each { ... }` and
+`1..9 -> each i { ... }` remain valid without `each()`.
 
 The assignment form remains valid as a compatibility syntax, but the preferred
 SmallLang style is still flow-first:
@@ -634,12 +980,13 @@ stdout.write: Bytes -> Io<Int>
 The current parser preserves:
 
 ```smalllang
-value -> function
+value -> function()
 ```
 
-as a `FlowExpression`. Semantic analysis resolves each target as either a
-callable path, `print`, or a final flow binding. The executable lowering remains
-equivalent to:
+as a `FlowExpression`. The empty call marker prevents the target from being
+treated as a final binding target. Semantic analysis resolves each target as
+either a callable path with `()`, or a final flow binding without `()`. The
+executable lowering remains equivalent to:
 
 ```smalllang
 function(value)
@@ -671,19 +1018,20 @@ distinguishing a Windows console handle from redirected stdout.
 
 ### POSIX-like Targets
 
-For Linux, macOS, and other POSIX-like targets, initial lowering should target a
-minimal stdout write path equivalent to:
+For Linux, initial lowering targets a minimal stdin/stdout path equivalent to:
 
 ```text
 write(stdout_fd, ptr, len)
+read(stdin_fd, ptr, len)
 ```
 
 Requirements:
 
-- Handle short writes correctly.
-- Handle interruptible writes correctly where required by the platform.
+- Treat short writes as an output failure in the current runtime slice.
+- Treat read failure, EOF, or invalid integer text as input failure.
 - Avoid heap allocation for static string literals.
 - Keep the ABI boundary explicit.
+- Use `main` as the Linux executable entry point.
 
 ### Windows Targets
 
@@ -727,9 +1075,9 @@ square: Int -> Int {
 }
 
 main {
-    getName -> name
-    7 -> square -> num
-    "Hello, {name}. square = {num}" -> print
+    getName() -> name
+    7 -> square() -> num
+    "Hello, {name}. square = {num}" -> print()
 }
 ```
 
@@ -779,9 +1127,9 @@ square: Int -> Int {
 }
 
 main {
-    getName -> name
-    7 -> square -> num
-    "Hello, {name}. square = {num}" -> print
+    getName() -> name
+    7 -> square() -> num
+    "Hello, {name}. square = {num}" -> print()
 }
 ```
 
@@ -789,41 +1137,66 @@ and the cumulative input and loop sample shown above.
 
 Current backend:
 
-- target: Windows x64
+- targets: Windows x64 and Linux x64
 - LLVM toolchain: LLVM 22.1.8, downloaded under `.tools` by `scripts/smalllang.ps1`
 - lexer: generated from `syntax/smalllang.lexer` by a Roslyn incremental source
   generator
 - parser: generated from `syntax/smalllang.grammar` by a Roslyn incremental source
   generator
 - semantics: zero-argument and one-input function declarations, including
-  default `it` inputs and explicit input names, standard library loading,
-  global aliases for `sys.io`, built-in block-function calls, string and integer
-  bindings, checked integer `+` and `*`, scalar interpolation, and
+  default `it` inputs, explicit input names, local function scopes, standard
+  library loading, global aliases for `sys.io`, built-in block-function calls,
+  string, integer, and boolean bindings, checked integer `+`, `-`, `*`, `/`,
+  `%`, unary `-`, parenthesized expressions, integer comparisons, short-circuit
+  logical expressions, scalar interpolation, flow-oriented `if`,
+  full-condition `when`, subject-value `when`, range-arm `when`, `fold`, and
   statement-level value-flow binding are type-checked for the current slice
-- value-flow calls: `value -> function` is parsed as a flow AST and lowered by
-  semantic/codegen stages according to target position
+- value-flow calls: `value -> function()` and `value -> function()` are parsed as a
+  flow AST and lowered by semantic/codegen stages according to target position;
+  the empty parentheses form is valid only on flow targets and cannot introduce
+  a binding
 - input: `sys.io.readInt` and alias `readInt` lower to a selected stdin backend
   primitive and return an integer value
+- file/random workflow: `seedRandom` initializes a deterministic LCG state,
+  `randomBelow` returns a pseudo-random integer in `0..maxExclusive-1`,
+  `openIntWriter`/`writeInt`/`closeIntWriter` write buffered binary `Int`
+  records, and `openIntReader`/`closestInt`/`closeIntReader` query sorted binary
+  `Int` records
 - loops: `start..end -> each i { ... }` and `start..end -> each { ... }` are
   modeled as block-function calls and lower directly to LLVM basic blocks with
   an SSA phi value for the loop variable, without runtime closure allocation or
   dynamic block dispatch
+- folds: `start..end -> fold initial acc, item { nextAcc }` lowers directly to
+  LLVM basic blocks with SSA phi values for the item and accumulator, and returns
+  the final accumulator value without runtime closure allocation or dynamic
+  block dispatch
 - IR output: immutable UTF-8 literal segments, runtime function calls, runtime
-  i64 addition/multiplication, and runtime integer decimal output
-- entry point: `smalllang_start`
-- imports: `GetStdHandle`, `ReadFile`, `WriteFile`
-- linker: `lld-link`
-- CRT: none
-- current verified executable sizes: 1,104 bytes for `hello.sl`, 1,104 bytes
-  for `hello-named-arg.sl`, 1,104 bytes for `hello-top-level.sl`, 1,584 bytes
-  for `gugudan.sl`, 1,584 bytes for `gugudan-it.sl`, and 1,584 bytes for
-  `gugudan-sys-io.sl`
+  i64 arithmetic/comparison, i1 boolean values, one-evaluated subject values for
+  subject-value `when`, branch/phi conditional lowering, inlined local
+  functions, and runtime integer decimal output
+- common emitter: `ConsoleLlvmEmitter` owns function calls, bindings,
+  interpolation, local-function inlining, `each` lowering, integer decimal
+  output, and `readInt` parsing
+- platform runtime layer: `LlvmRuntimePlatform` owns the target triple, native
+  entry point name, external OS declarations, stdin/stdout handle setup, and
+  byte-level `smalllang_write`/`smalllang_read_stdin` primitives
+- Windows entry point: `smalllang_start`
+- Windows imports: `GetStdHandle`, `ReadFile`, `WriteFile`
+- Windows linker: `lld-link`
+- Windows CRT: none
+- Linux entry point: `main`
+- Linux imports: `read`, `write`
+- Linux linker: WSL `cc` after producing an ELF object with Windows LLVM `clang`
+- current representative Windows executable sizes: 1,536 bytes for `01-function-basic-hello.sl`
+  and `05-function-local.sl`, 2,048 bytes for `08-block-each-default-it.sl`, and 2,560
+  bytes for the sorted-int-file workflow samples
 
-The current runtime backend emits direct `WriteFile` calls for text segments,
-uses `ReadFile` for integer input on the selected Windows backend, calls
-generated user SmallLang functions, inlines standard library `sys.io` wrappers,
-converts integer output to decimal bytes at runtime, and returns `0` or `1` from
-the native entry point based on API success and input parse success.
+The current runtime backend keeps source-language lowering shared across
+targets. It calls generated user SmallLang functions, inlines standard library
+`sys.io` wrappers, converts integer output to decimal bytes at runtime, and
+parses `readInt` in common LLVM IR. Only target triple selection, native entry
+point setup, external OS declarations, byte writes, byte reads, and linker choice
+are platform-specific.
 
 ## Current Module Layout
 
@@ -834,9 +1207,11 @@ The compiler implementation is organized by responsibility:
 - `Parsing`: parser helpers; the token-to-AST parser is generated
 - `Syntax`: AST node definitions
 - `Semantics`: current binding/interpolation/I/O/loop lowering
-- `CodeGen`: LLVM IR generation
-- `Tooling`: LLVM and Windows linker integration
-- `stdlib/sys`: SmallLang standard library modules plus intrinsic boundary declarations
+- `CodeGen`: shared LLVM IR generation plus target runtime platform layers
+- `Tooling`: LLVM, Windows linker, and WSL Linux linker integration
+- `stdlib/sys`: SmallLang standard library modules for I/O, random, file
+  workflow wrappers, and intrinsic boundary declarations
+- `tests/SmallLang.ExampleTests`: executable sample expected stdout runner
 
 Lexer rules are expressed in the compact `syntax/smalllang.lexer` file. The source
 generator reads that file as an MSBuild `AdditionalFiles` input and emits
@@ -865,3 +1240,5 @@ stage.
 - What is the first official target matrix?
 - Which LLVM integration strategy will the .NET compiler use?
 - How much core library is required before the first executable?
+
+

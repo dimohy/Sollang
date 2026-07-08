@@ -12,23 +12,38 @@ internal sealed record BoundFunction(
     string? InputName,
     BoundType? InputType,
     BoundType ReturnType,
+    string? BlockInputName,
+    BoundType? BlockInputType,
+    IReadOnlyDictionary<string, BoundFunction> LocalFunctions,
     Expression? Body,
+    IReadOnlyList<Statement> BlockBody,
     int Line,
     int Column,
     BoundFunctionKind Kind,
-    bool IsStandardLibrary);
+    bool IsStandardLibrary,
+    bool IsLocal);
 
 internal enum BoundFunctionKind
 {
     User,
+    UserBlock,
     RuntimePrint,
     RuntimePrintLine,
-    RuntimeReadInt
+    RuntimeReadInt,
+    RuntimeSeedRandom,
+    RuntimeRandomBelow,
+    RuntimeOpenIntWriter,
+    RuntimeWriteInt,
+    RuntimeCloseIntWriter,
+    RuntimeOpenIntReader,
+    RuntimeClosestInt,
+    RuntimeCloseIntReader
 }
 
 internal enum BoundType
 {
     Unit,
     Text,
-    Int
+    Int,
+    Bool
 }

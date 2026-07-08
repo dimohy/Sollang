@@ -163,11 +163,11 @@ surface actually needs them.
 Status: implemented, superseded in parser shape by D016
 Date: 2026-07-07
 
-SmallLang adopts `value -> function` as the preferred call style when a primary
+SmallLang adopts `value -> function()` as the preferred call style when a primary
 input value flows into a function:
 
 ```smalllang
-"Hello, {name}" -> print
+"Hello, {name}" -> print()
 ```
 
 This form makes data flow visually explicit. The expression on the left is the
@@ -216,7 +216,7 @@ numbers, suffixes, and final overflow policy syntax are not decided yet.
 String interpolation can display integer bindings:
 
 ```smalllang
-"Number: {sum}" -> print
+"Number: {sum}" -> print()
 ```
 
 This first numeric step initially allowed the compiler to fold the whole sample
@@ -244,7 +244,7 @@ getNum: -> Int {
 main {
     name = getName()
     num = getNum()
-    "Hello, {name}. getNum() = {num}" -> print
+    "Hello, {name}. getNum() = {num}" -> print()
 }
 ```
 
@@ -258,7 +258,7 @@ supersedes the `getNum` naming.
 
 ## D016 - Flow Binding And One-Input Square Function
 
-Status: implemented
+Status: implemented, superseded by D036
 Date: 2026-07-07
 
 SmallLang adopts statement-level value-flow binding for the current sample:
@@ -273,14 +273,14 @@ square: Int -> Int {
 }
 
 main {
-    getName -> name
-    7 -> square -> num
-    "Hello, {name}. square = {num}" -> print
+    getName() -> name
+    7 -> square() -> num
+    "Hello, {name}. square = {num}" -> print()
 }
 ```
 
-`getName -> name` calls the zero-input function and binds its result to `name`.
-`7 -> square -> num` passes `7` into a one-input function, where the implicit
+`getName() -> name` calls the zero-input function and binds its result to `name`.
+`7 -> square() -> num` passes `7` into a one-input function, where the implicit
 input binding is named `it`, then binds the returned value to `num`.
 
 The parser now preserves value-flow as `FlowExpression` rather than immediately
@@ -301,18 +301,18 @@ Status: implemented, loop spelling superseded by D019
 Date: 2026-07-08
 
 SmallLang samples are cumulative. New samples should be added alongside earlier
-samples instead of replacing `examples/hello.sl`.
+samples instead of replacing `examples/01-function-basic-hello.sl`.
 
 The next implemented sample reads an integer and prints that multiplication
 table:
 
 ```smalllang
 main {
-    "n = ? " -> readInt -> n
+    "n = ? " -> readInt() -> n
 
     each i in 1..9 {
         n * i -> value
-        "{n} x {i} = {value}" -> println
+        "{n} x {i} = {value}" -> println()
     }
 }
 ```
@@ -343,8 +343,8 @@ the loop variable. Descending ranges are not specified yet; a range whose start
 is greater than its end executes zero times.
 
 After adding the input and loop runtime, the verified executable sizes are 1,104
-bytes for `examples/hello.sl` and 1,584 bytes for
-`examples/gugudan.sl`.
+bytes for `examples/01-function-basic-hello.sl` and 1,584 bytes for
+`examples/07-block-each-explicit-item.sl`.
 
 ## D018 - Arrow Binding As Preferred Assignment Direction
 
@@ -375,7 +375,7 @@ those entries as historical context.
 
 ## D019 - Arrow Range Loop With Optional Item Name
 
-Status: implemented
+Status: superseded by D036
 Date: 2026-07-08
 
 SmallLang's preferred range loop syntax is now flow-oriented:
@@ -383,7 +383,7 @@ SmallLang's preferred range loop syntax is now flow-oriented:
 ```smalllang
 1..9 -> each i {
     n * i -> value
-    "{n} x {i} = {value}" -> println
+    "{n} x {i} = {value}" -> println()
 }
 ```
 
@@ -394,7 +394,7 @@ names the current item. When the identifier is omitted, the loop item is bound a
 ```smalllang
 1..9 -> each {
     n * it -> value
-    "{n} x {it} = {value}" -> println
+    "{n} x {it} = {value}" -> println()
 }
 ```
 
@@ -458,7 +458,7 @@ only a hard-coded loop statement:
 ```smalllang
 1..9 -> each i {
     n * i -> value
-    "{n} x {i} = {value}" -> println
+    "{n} x {i} = {value}" -> println()
 }
 ```
 
@@ -469,7 +469,7 @@ The default item form follows the same rule:
 ```smalllang
 1..9 -> each {
     n * it -> value
-    "{n} x {it} = {value}" -> println
+    "{n} x {it} = {value}" -> println()
 }
 ```
 
@@ -505,16 +505,20 @@ readInt -> sys.io.readInt
 The actual `sys.io` module is implemented in SmallLang:
 
 ```smalllang
-sys.io.print value: Text -> Unit {
-    value -> sys.runtime.print
+namespace sys.io
+
+import sys.runtime as rt
+
+print value: Text -> Unit {
+    value -> rt.print()
 }
 
-sys.io.println value: Text -> Unit {
-    value -> sys.runtime.println
+println value: Text -> Unit {
+    value -> rt.println()
 }
 
-sys.io.readInt prompt: Text -> Int {
-    prompt -> sys.runtime.readInt
+readInt prompt: Text -> Int {
+    prompt -> rt.readInt()
 }
 ```
 
@@ -522,9 +526,11 @@ The lower runtime boundary is declared separately in the standard library with
 `= intrinsic`:
 
 ```smalllang
-sys.runtime.print value: Text -> Unit = intrinsic
-sys.runtime.println value: Text -> Unit = intrinsic
-sys.runtime.readInt prompt: Text -> Int = intrinsic
+namespace sys.runtime
+
+print value: Text -> Unit = intrinsic
+println value: Text -> Unit = intrinsic
+readInt prompt: Text -> Int = intrinsic
 ```
 
 This required two syntax additions for the current implementation slice:
@@ -533,6 +539,8 @@ This required two syntax additions for the current implementation slice:
   `sys.io.print value: Text -> Unit { ... }`
 - intrinsic declarations, such as
   `sys.runtime.print value: Text -> Unit = intrinsic`
+- namespace declarations and import aliases, such as `namespace sys.io` and
+  `import sys.runtime as rt`
 
 The compiler loads `stdlib/sys/runtime.sl` and `stdlib/sys/io.sl` before user
 source, then adds only alias entries for `print`, `println`, and `readInt`.
@@ -540,3 +548,612 @@ The semantic model resolves `sys.io` through the same function table as user
 functions. The Windows LLVM backend inlines standard library wrappers and lowers
 only the `sys.runtime` intrinsic boundary to direct `ReadFile`/`WriteFile`
 runtime code, so verified IR does not emit `sys.io` function calls.
+
+## D023 - Local Functions Inside Functions
+
+Status: implemented
+Date: 2026-07-08
+
+Function declarations may appear at the start of another function body:
+
+```smalllang
+scale n: Int -> Int {
+    double value: Int -> Int {
+        value * 2
+    }
+
+    addBase value: Int -> Int {
+        value + n
+    }
+
+    n -> double -> addBase
+}
+```
+
+Local functions use the same function input naming rules as top-level functions.
+Their names are scoped to the containing function and functions nested below it;
+they are not added to the global function table and cannot be called from
+`main` or unrelated functions.
+
+Local functions can read bindings from the containing function. In the sample
+above, `addBase` reads the outer input binding `n`. The current Windows LLVM
+backend lowers local functions by inlining their bodies at the call site, so no
+global LLVM symbol is emitted for `double` or `addBase`. Recursive local
+functions are not part of the current runtime slice.
+
+## D024 - Namespace And Import Aliases For Standard Library Modules
+
+Status: implemented
+Date: 2026-07-08
+
+Standard library files should not repeat their full namespace and dependency
+paths on every function declaration and runtime call. SmallLang now accepts an
+optional file-level namespace declaration followed by import declarations:
+
+```smalllang
+namespace sys.io
+
+import sys.runtime as rt
+```
+
+Within a namespaced file, top-level single-segment function declarations are
+qualified by that namespace:
+
+```smalllang
+print value: Text -> Unit {
+    value -> rt.print()
+}
+```
+
+This defines `sys.io.print`. The import alias rewrites `rt.print` to
+`sys.runtime.print` before semantic analysis, so the semantic model and LLVM
+lowering still work with fully qualified canonical names.
+
+The lower runtime boundary uses the same namespace rule:
+
+```smalllang
+namespace sys.runtime
+
+print value: Text -> Unit = intrinsic
+println value: Text -> Unit = intrinsic
+readInt prompt: Text -> Int = intrinsic
+```
+
+Local function declarations are not namespace-qualified. They keep the D023
+scope rule and remain visible only inside the containing function.
+
+## D025 - Linux x64 Target Through WSL
+
+Status: implemented
+Date: 2026-07-08
+
+SmallLang now supports a `linux-x64` compiler target in addition to the default
+`windows-x64` target:
+
+```powershell
+.\scripts\smalllang.ps1 -Source examples\01-function-basic-hello.sl -Output artifacts\01-function-basic-hello-linux -Target linux-x64 -KeepTemps
+```
+
+The compiler selects the LLVM target triple from the requested target. Windows
+continues to emit `x86_64-pc-windows-msvc`, import `GetStdHandle`/`ReadFile`/
+`WriteFile`, expose the native entry point as `smalllang_start`, and link with
+`lld-link` without the C runtime.
+
+Linux emits `x86_64-unknown-linux-gnu`, imports libc `read` and `write`, exposes
+the native entry point as `main`, and links through WSL. The link path uses the
+downloaded Windows LLVM `clang` to produce a Linux ELF object, then invokes WSL
+`cc` to produce the final executable. This keeps one Windows-hosted compiler
+bootstrap while still validating the final binary inside Linux.
+
+The Linux runtime backend lowers `sys.runtime.print`, `sys.runtime.println`, and
+`sys.runtime.readInt` to direct `write`/`read` calls. Standard library `sys.io`
+wrappers are still ordinary SmallLang functions and are inlined before the
+intrinsic runtime boundary is lowered.
+
+Verification on WSL produced ELF x86-64 executables for `01-function-basic-hello.sl`,
+`09-namespace-sys-io.sl`, and `05-function-local.sl`. The `01-function-basic-hello` sample printed
+`Hello, dimohy. square = 49`, and the `09-namespace-sys-io` sample accepted stdin
+`9` and printed the 9-times table.
+
+## D026 - Shared LLVM Emitter With Target Runtime Platforms
+
+Status: implemented
+Date: 2026-07-08
+
+Windows and Linux output must share the same source-language lowering wherever
+the semantics are identical. The compiler now routes target-specific LLVM
+runtime details through `LlvmRuntimePlatform` implementations instead of keeping
+Windows/Linux branches inside the main emitter.
+
+`ConsoleLlvmEmitter` owns the common lowering:
+
+- function calls and value-flow bindings
+- string interpolation
+- standard library `sys.io` wrapper inlining
+- local-function inlining
+- optimized `each` block-function lowering
+- runtime integer decimal output
+- `readInt` parsing and failure handling
+
+Platform runtime classes own only the target-specific boundary:
+
+- target triple
+- native entry point name
+- external OS declarations
+- stdin/stdout handle setup
+- byte-level `smalllang_write`
+- byte-level `smalllang_read_stdin`
+
+`WindowsLlvmRuntimePlatform` supplies `GetStdHandle`, `ReadFile`, and
+`WriteFile`. `LinuxLlvmRuntimePlatform` supplies libc `read` and `write`.
+The linker layer remains target-specific: `WindowsLinker` uses `lld-link`, and
+`WslLinuxLinker` uses Windows LLVM `clang` for the ELF object followed by WSL
+`cc` for the final Linux executable.
+
+## D027 - Flow-Oriented Conditionals And Bool Expressions
+
+Status: implemented
+Date: 2026-07-08
+
+SmallLang adopts conditionals that match the existing value-flow style instead
+of adding a separate parenthesized statement form:
+
+```smalllang
+condition -> if {
+    thenBody
+} else {
+    elseBody
+}
+```
+
+The left-side value must be `Bool`. When `if` is used only for effects, the
+`else` branch may be omitted if the then branch returns `Unit`. When `if`
+produces a value, both branches must be present and must produce the same type.
+Branch-local bindings stay scoped to the branch body.
+
+For ordered multi-branch value selection, SmallLang uses `when`:
+
+```smalllang
+when {
+    score >= 90 { "A" }
+    score >= 80 { "B" }
+    score >= 70 { "C" }
+    else { "F" }
+}
+```
+
+`when` evaluates arms in order, requires every arm condition to be `Bool`, and
+requires an `else` branch in the current expression form. All branch values must
+have the same type.
+
+The current `Bool` expression slice includes `true`, `false`, integer
+comparisons (`==`, `!=`, `<`, `<=`, `>`, `>=`), short-circuit `and`/`or`, and
+unary `not`. Code generation lowers comparisons to LLVM `icmp`, logical
+operators to direct control flow where needed, and `if`/`when` expressions to
+branches and phi nodes instead of runtime dispatch.
+
+## D028 - Subject-Value When Shorthand
+
+Status: implemented
+Date: 2026-07-08
+
+When every `when` arm compares the same value, repeating that value in each
+condition is unnecessary noise. SmallLang now supports a subject-value form that
+keeps the existing flow direction:
+
+```smalllang
+score -> when {
+    >= 90 { "A" }
+    >= 80 { "B" }
+    >= 70 { "C" }
+    else { "F" }
+} -> grade
+```
+
+This is the preferred style for ordered threshold checks. The full-condition
+form remains valid for cases where each arm has a different condition shape.
+
+The subject expression is evaluated once, then reused by each arm comparison.
+The current shorthand supports integer comparisons with `==`, `!=`, `<`, `<=`,
+`>`, and `>=`. Code generation emits one subject value followed by direct LLVM
+`icmp`/`br i1` branch checks and the same phi-based value join used by the full
+`when` form.
+
+## D029 - Expression Basics And Line Comments
+
+Status: implemented
+Date: 2026-07-08
+
+SmallLang now supports the expression basics needed before broader library and
+control-flow work:
+
+- parenthesized expressions
+- integer `+`, `-`, `*`, `/`, `%`
+- unary integer `-`
+- line comments beginning with `#`
+
+The parser keeps the usual precedence shape: parentheses, unary operators,
+multiplicative operators, additive operators, comparison, logical `and`, and
+logical `or`. The current arithmetic slice is integer-only. LLVM lowering emits
+`add`, `sub`, `mul`, `sdiv`, and `srem` for the new operations.
+
+`examples/06-expression-arithmetic-comments.sl` verifies parentheses, comments, division,
+modulo, and `not (...)` grouping.
+
+## D030 - Integer Fold Block Function
+
+Status: implemented
+Date: 2026-07-08
+
+`fold` is the second built-in block function and returns a value:
+
+```smalllang
+1..100 -> fold 0 sum, i {
+    sum + i
+} -> total
+```
+
+The first expression after `fold` is the initial accumulator value. The first
+name is the accumulator binding inside the block, and the second name is the
+range item binding. The block must return the next integer accumulator value.
+
+The backend specializes `fold` directly to LLVM loop basic blocks with phi
+values for both the current item and accumulator. It does not allocate a runtime
+closure, function pointer, or dynamic block-call dispatch. If the range is empty
+because the start is greater than the end, the fold expression returns the
+initial accumulator value.
+
+`examples/13-block-fold-sum.sl` verifies `1..100 -> fold 0 sum, i { sum + i }` and prints
+`sum = 5050`.
+
+## D031 - Subject When Range Arms
+
+Status: implemented
+Date: 2026-07-08
+
+Subject-value `when` can now use inclusive integer range arms:
+
+```smalllang
+score -> when {
+    90..100 { "A" }
+    80..89 { "B" }
+    70..79 { "C" }
+    else { "F" }
+} -> grade
+```
+
+This keeps threshold tables compact when a contiguous range is clearer than a
+single-sided comparison. The subject expression is still evaluated once. Each
+range arm lowers to two integer comparisons and an `and i1`, followed by the
+same `br i1` and phi-based value join used by existing `when`.
+
+`examples/17-condition-when-range.sl` verifies this form.
+
+## D032 - Expected Stdout Example Tests
+
+Status: implemented
+Date: 2026-07-08
+
+Executable samples now have a lightweight expected-output test runner. Expected
+fixtures live under `examples/expected` as:
+
+- `{sample}.stdout.txt`
+- optional `{sample}.stdin.txt`
+
+The runner is a no-dependency .NET console project at
+`tests/SmallLang.ExampleTests`. It compiles each listed sample through
+`scripts/smalllang.ps1`, executes the generated Windows binary sequentially, and
+compares normalized stdout exactly against the fixture.
+
+Current verified fixtures cover arithmetic/comments, subject `when`, range-arm
+`when`, `fold`, `08-block-each-default-it` input/default loop item behavior, and local
+functions. The runner is included in `SmallLang.slnx` and is invoked with:
+
+```powershell
+dotnet run --project tests\SmallLang.ExampleTests\SmallLang.ExampleTests.csproj --no-build
+```
+
+## D033 - Compact Function And When Expression Bodies
+
+Status: implemented
+Date: 2026-07-08
+
+To avoid nested braces for single-expression functions whose body is a `when`,
+SmallLang now allows expression-bodied function declarations:
+
+```smalllang
+grade: Int -> Text -> when {
+    90..100 -> "A"
+    80..89 -> "B"
+    70..79 -> "C"
+    else -> "F"
+}
+```
+
+This is equivalent to a braced function body with the same final expression.
+Local functions remain available only inside braced function bodies because
+there is no block in the expression-bodied form.
+
+`when` arms now support single-value shorthand:
+
+```smalllang
+condition -> value
+else -> fallback
+```
+
+Block arms remain valid when the arm needs statements before the final value.
+
+Subject-style `when` arms can also omit an explicit subject inside a one-input
+function that uses the default input binding `it`. Explicitly named inputs keep
+the subject visible:
+
+```smalllang
+grade score: Int -> Text -> score -> when {
+    >= 90 -> "A"
+    >= 80 -> "B"
+    >= 70 -> "C"
+    else -> "F"
+}
+```
+
+The semantic rule is intentionally narrow: subject-style arms without an
+explicit `value -> when` require an integer `it` binding in scope. This keeps the
+compact form beautiful for default-input functions while making named-input
+data flow explicit. Code generation still lowers `when` to direct comparisons,
+branches, and phi joins.
+
+`examples/18-condition-when-compact.sl` verifies both compact forms.
+
+## D034 - Purpose-Oriented Sorted Int File Workflow
+
+Status: implemented
+Date: 2026-07-08
+
+SmallLang now supports the first large-data workflow requested by the user:
+generate 100,000,000 pseudo-random numbers from `1..1,000,000,000`, store them
+sorted in a file, and query the value closest to `500,000,000`.
+
+The implementation deliberately avoids opening a general array/sort feature
+first. The generator uses a sorted bucket strategy:
+
+```smalllang
+1..100000000 -> each bucket {
+    bucket - 1 -> zeroBased
+    zeroBased * 10 -> base
+    10 -> randomBelow() -> offset
+    base + offset + 1 -> value
+    value -> writeInt()
+}
+```
+
+Each 10-wide bucket contributes one pseudo-random value, so output is sorted and
+unique as it is written. This is purpose-fit for the workflow but is not a
+uniform sample over all possible 100,000,000-element subsets.
+
+New standard-library surface:
+
+- `seedRandom: Int -> Unit`
+- `randomBelow: Int -> Int`
+- `openIntWriter: Text -> Unit`
+- `writeInt: Int -> Unit`
+- `closeIntWriter: -> Unit`
+- `openIntReader: Text -> Unit`
+- `closestInt: Int -> Int`
+- `closeIntReader: -> Unit`
+
+The file format is binary little-endian signed 64-bit records. `writeInt` uses a
+global 8,192-record buffer before calling the platform write primitive.
+`closestInt` assumes the current reader file is sorted ascending and performs a
+binary search through fixed-width random access reads.
+
+Runtime lowering remains split by responsibility:
+
+- common LLVM helper: deterministic LCG, buffered writer, path copy helper, and
+  sorted-file closest search
+- Windows platform layer: `CreateFileA`, `WriteFile`, `ReadFile`,
+  `SetFilePointerEx`, `GetFileSizeEx`, and `CloseHandle`
+- Linux platform layer: `open`, `write`, `read`, `lseek`, and `close`
+
+The Windows linker no longer uses the previous `/align:16` and `/filealign:16`
+settings because mutable data sections made those ultra-small PE settings fail
+at process launch. A no-op `__chkstk` symbol is emitted for this CRT-free
+runtime slice because generated stack frames remain intentionally small.
+
+Verification:
+
+- `examples/19-stdlib-random-file-demo-generate.sl` produced
+  `artifacts/random-sorted-demo.i64` with 1,000 records / 8,000 bytes.
+- `examples/20-stdlib-file-demo-query.sl` printed `closest = 4995`; independent
+  PowerShell binary-search verification matched.
+- `examples/21-stdlib-random-file-100m-generate.sl` produced
+  `artifacts/random-sorted-100m.i64` with 100,000,000 records / 800,000,000
+  bytes.
+- `examples/22-stdlib-file-100m-query.sl` printed `closest = 500000006`;
+  independent verification found candidates `499999991` and `500000006`, so
+  the closest difference is `6`.
+- The demo generator/query pair also compiled and ran on `linux-x64` through WSL,
+  with query output `closest = 4995`.
+- `dotnet build SmallLang.slnx` passed with 0 warnings and 0 errors.
+- `tests/SmallLang.ExampleTests` still passed all 7 existing expected-stdout
+  tests.
+
+## D035 - Empty Parentheses On Value-Flow Function Targets
+
+Status: implemented
+Date: 2026-07-08
+
+SmallLang accepted empty call syntax on value-flow function targets:
+
+```smalllang
+7 -> square() -> num
+"Hello, {name}. square = {num}" -> print()
+```
+
+This was only valid immediately after `->`. The parentheses do not carry
+arguments; the value on the left remains the argument to the target function.
+`7 -> square(7)` is rejected by the parser, and ordinary `square()` outside a
+flow target remains a normal zero-argument parenthesized call subject to the
+function signature.
+
+The parser records each flow target as a `FlowTarget` with `Path` and
+`UsesCallSyntax`. At the time of this decision, semantic analysis and code
+generation treated `-> square()` as the same function call as `-> square`, while
+a target with `UsesCallSyntax=true` could not become a final flow binding. D036
+later changed this so function targets must use `func()`.
+
+`examples/03-flow-call-parens.sl` verifies the accepted syntax. Verification:
+`dotnet build SmallLang.slnx` passed, `tests/SmallLang.ExampleTests` passed all
+8 expected-stdout samples, `7 -> square(7)` failed in parsing with an empty
+parentheses-only diagnostic, and `7 -> value()` failed semantically as an
+unknown function instead of becoming a binding.
+
+## D036 - Function Calls Require Parentheses In Flow Syntax
+
+Status: implemented
+Date: 2026-07-08
+
+D035 allowed `-> func()` but still accepted the older `-> func` function-call
+target. That left the function/binding distinction visually ambiguous. SmallLang
+now requires functions to be visibly called:
+
+```smalllang
+getName() -> name
+7 -> square() -> num
+"Hello, {name}. square = {num}" -> print()
+```
+
+The old flow-call spelling is now rejected:
+
+```smalllang
+7 -> square -> num
+```
+
+Semantic analysis resolves a target path that names a function only when
+`UsesCallSyntax=true`; otherwise it reports that the function target must use
+`func()`. A final bare single identifier without `()` remains a binding target,
+so `value -> name` still introduces a binding. Bare zero-input function names in
+expression/source position are no longer treated as implicit calls; use
+`getName()`.
+
+All `.sl` examples and standard-library wrappers were updated to use `func()` for
+function targets. Verification: all 19 example `.sl` files compiled, the 8
+expected-stdout samples passed, `7 -> square -> num` failed with the required
+`square()` diagnostic, and `getName -> name` failed as a missing function-call
+parentheses case.
+
+## D037 - Block Arguments Omit Empty Function Parentheses
+
+Status: implemented
+Date: 2026-07-08
+
+D036 requires ordinary function targets to use `func()` in value-flow syntax, but
+code block arguments are intentionally an exception. When the target is followed
+by a brace block, the block itself marks the target as a function-like call:
+
+```smalllang
+1..3 -> each {
+    it -> println()
+}
+
+1..9 -> each i {
+    "{i}" -> println()
+}
+```
+
+The parser handles `source -> path item? { ... }` before ordinary expression
+flows, so this form never becomes an ambiguous bare `-> func` call. At this
+decision point the semantic slice supported only the built-in block function
+`each`; D038 adds `repeat`. Ordinary flow targets such as `7 -> square -> num`
+continue to fail and must be written as `7 -> square() -> num`.
+
+## D038 - Repeat Block Function
+
+Status: implemented
+Date: 2026-07-08
+
+To make code-block arguments visible outside range iteration, SmallLang now
+supports a second built-in block function:
+
+```smalllang
+3 -> repeat turn {
+    "repeat turn {turn}" -> println()
+}
+```
+
+The integer on the left is the count argument, and the brace body is the code
+block argument. `repeat` invokes the block with `turn` values `1..count`; when no
+item name is given, the default binding is `it`. Counts less than or equal to
+zero execute the block zero times. This keeps the D037 rule: block-argument calls
+omit `()`, while ordinary value-flow function targets still require `func()`.
+
+## D039 - Grammar-Ordered Example Filenames
+
+Status: implemented
+Date: 2026-07-08
+
+Examples are now named with a two-digit order plus the leading grammar topic so
+ordinary filename sorting shows the intended learning/progression order:
+
+```text
+01-function-basic-hello.sl
+02-function-named-input.sl
+03-flow-call-parens.sl
+04-main-omitted-top-level.sl
+...
+22-stdlib-file-100m-query.sl
+```
+
+Expected stdout/stdin fixtures under `examples/expected` use the same basename as
+their source example. `scripts/smalllang.ps1` defaults to
+`examples/01-function-basic-hello.sl`. New cumulative examples should continue
+this naming style instead of appending unnumbered names.
+
+## D041 - User-Defined Block Functions
+
+Status: implemented
+Date: 2026-07-08
+
+Block functions are no longer limited to built-ins. A user-defined block function
+declares a normal input, a `Unit` return, and a block input:
+
+```smalllang
+runTimes count: Int -> Unit block turn: Int {
+    1..count -> each turn {
+        turn -> yield()
+    }
+}
+
+main {
+    3 -> runTimes step {
+        "custom block step {step}" -> println()
+    }
+}
+```
+
+The declaration body is inlined at the call site. Inside the declaration,
+`value -> yield()` invokes the executable block passed by the caller, binding the
+yielded value to the caller's block item name. `yield()` is valid only inside a
+user-defined block function and must be the final value-flow target.
+
+## D040 - VS Code Syntax Highlighting Extension
+
+Status: implemented
+Date: 2026-07-08
+
+SmallLang now includes a local declarative VS Code extension under
+`tools/vscode-smalllang`. It registers `.sl` as `smalllang`, contributes a
+TextMate grammar for comments, strings, interpolation, function declarations,
+flow calls, block-function calls, keywords, types, constants, numbers, and
+operators, and provides snippets for `main`, functions, flow calls, `each`,
+`repeat`, and `when`.
+
+Install locally with:
+
+```powershell
+Push-Location tools\vscode-smalllang
+npx --yes @vscode/vsce package --no-dependencies --allow-missing-repository
+code --install-extension .\smalllang-syntax-0.1.0.vsix
+Pop-Location
+```
+
+
