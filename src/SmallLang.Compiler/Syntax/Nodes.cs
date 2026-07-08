@@ -1,6 +1,6 @@
-namespace SLang.Compiler.Syntax;
+namespace SmallLang.Compiler.Syntax;
 
-internal sealed record SlangProgram(
+internal sealed record SmallLangProgram(
     IReadOnlyList<FunctionDeclaration> Functions,
     IReadOnlyList<Statement> Statements);
 

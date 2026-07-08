@@ -1,12 +1,12 @@
-# SLang
+# SmallLang
 
-SLang is a tiny native language experiment focused on simple syntax, fast
+SmallLang is a tiny native language experiment focused on simple syntax, fast
 compiler structure, and LLVM-backed executable generation.
 
 The current implementation is intentionally small: it accepts the first approved
 language slice, lowers it to LLVM IR, and links a minimal Windows x64 executable.
 
-```slang
+```smalllang
 getName: -> Text {
     "dimohy"
 }
@@ -28,7 +28,7 @@ The verified output is:
 Hello, dimohy. square = 49
 ```
 
-The `value -> function` form is the preferred SLang call style for making data
+The `value -> function` form is the preferred SmallLang call style for making data
 flow explicit. Parenthesized calls such as `print(...)` remain valid as a
 compatibility form.
 
@@ -36,7 +36,7 @@ The current generated executable is **1,088 bytes**.
 
 ## Status
 
-SLang is in an early compiler-building phase. The implementation is scoped to
+SmallLang is in an early compiler-building phase. The implementation is scoped to
 the accepted language specification and decision log.
 
 What works today:
@@ -51,15 +51,15 @@ What works today:
 - interpolation of string and integer bindings
 - value-flow calls with `value -> function`
 - parenthesized calls with `function(value)`
-- source-generated lexing from `syntax/slang.lexer`
-- source-generated parsing from `syntax/slang.grammar`
+- source-generated lexing from `syntax/smalllang.lexer`
+- source-generated parsing from `syntax/smalllang.grammar`
 - LLVM IR generation
 - Windows x64 executable linking through `clang` and `lld-link`
 
 ## Build
 
 ```powershell
-.\scripts\slang.ps1 -Source examples\hello.slang -Output artifacts\hello.exe -KeepTemps
+.\scripts\smalllang.ps1 -Source examples\hello.smalllang -Output artifacts\hello.exe -KeepTemps
 ```
 
 On first use, the script downloads LLVM 22.1.8 into `.tools`. LLVM binaries,
@@ -71,7 +71,7 @@ The compiler itself targets .NET 11 Preview and uses C# Preview.
 
 ```mermaid
 flowchart LR
-    Source[SLang source] --> Lexer[Generated lexer]
+    Source[SmallLang source] --> Lexer[Generated lexer]
     Lexer --> Parser[Generated parser]
     Parser --> AST[AST]
     AST --> Semantics[Semantic lowering]
@@ -103,7 +103,7 @@ token NewLine = newline
 token End = end
 ```
 
-`src/SLang.Compiler.Generators` reads `syntax/slang.lexer` as an MSBuild
+`src/SmallLang.Compiler.Generators` reads `syntax/smalllang.lexer` as an MSBuild
 `AdditionalFiles` input and generates `TokenKind` and `Lexer` during the C#
 build.
 
@@ -125,25 +125,25 @@ rule PrimaryExpression = CallExpression | StringExpression | NumberExpression | 
 rule TypeName = Identifier
 ```
 
-The generator reads `syntax/slang.grammar` and emits the current recursive
+The generator reads `syntax/smalllang.grammar` and emits the current recursive
 descent parser at compile time. The grammar generator is intentionally narrow
 for the first language slice; it validates the declared rules and produces the
 parser shape needed by the approved syntax.
 
 ## Repository Layout
 
-- `examples/hello.slang`: the current SLang sample
-- `scripts/slang.ps1`: local build/bootstrap script
-- `syntax/slang.lexer`: concise lexer rule source
-- `syntax/slang.grammar`: concise parser rule source
-- `src/SLang.Compiler.Generators`: Roslyn incremental source generator
-- `src/SLang.Compiler/Cli`: command line orchestration
-- `src/SLang.Compiler/Lexing`: token model; Lexer and TokenKind are generated
-- `src/SLang.Compiler/Parsing`: parser helpers; Parser is generated
-- `src/SLang.Compiler/Syntax`: AST nodes
-- `src/SLang.Compiler/Semantics`: current semantic lowering
-- `src/SLang.Compiler/CodeGen`: LLVM IR generation
-- `src/SLang.Compiler/Tooling`: LLVM/lld tool integration
+- `examples/hello.smalllang`: the current SmallLang sample
+- `scripts/smalllang.ps1`: local build/bootstrap script
+- `syntax/smalllang.lexer`: concise lexer rule source
+- `syntax/smalllang.grammar`: concise parser rule source
+- `src/SmallLang.Compiler.Generators`: Roslyn incremental source generator
+- `src/SmallLang.Compiler/Cli`: command line orchestration
+- `src/SmallLang.Compiler/Lexing`: token model; Lexer and TokenKind are generated
+- `src/SmallLang.Compiler/Parsing`: parser helpers; Parser is generated
+- `src/SmallLang.Compiler/Syntax`: AST nodes
+- `src/SmallLang.Compiler/Semantics`: current semantic lowering
+- `src/SmallLang.Compiler/CodeGen`: LLVM IR generation
+- `src/SmallLang.Compiler/Tooling`: LLVM/lld tool integration
 - `docs/SPEC.md`: living language specification
 - `docs/DECISIONS.md`: decision log
 
@@ -155,4 +155,4 @@ the language direction but are not implemented yet.
 
 ## License
 
-SLang is licensed under the [Apache License 2.0](LICENSE).
+SmallLang is licensed under the [Apache License 2.0](LICENSE).

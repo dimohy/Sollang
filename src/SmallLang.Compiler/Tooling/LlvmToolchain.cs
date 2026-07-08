@@ -1,6 +1,6 @@
-using SLang.Compiler.Diagnostics;
+using SmallLang.Compiler.Diagnostics;
 
-namespace SLang.Compiler.Tooling;
+namespace SmallLang.Compiler.Tooling;
 
 internal sealed record LlvmToolchain(string Home, string Clang, string LldLink, string LlvmLib)
 {
@@ -8,7 +8,7 @@ internal sealed record LlvmToolchain(string Home, string Clang, string LldLink, 
     {
         var home = llvmHome
             ?? Environment.GetEnvironmentVariable("SLANG_LLVM_HOME")
-            ?? throw new SlangException("LLVM toolchain not found. Run scripts\\slang.ps1 so LLVM is downloaded locally.");
+            ?? throw new SmallLangException("LLVM toolchain not found. Run scripts\\smalllang.ps1 so LLVM is downloaded locally.");
 
         var bin = Path.Combine(home, "bin");
         var clang = Path.Combine(bin, "clang.exe");
@@ -26,7 +26,7 @@ internal sealed record LlvmToolchain(string Home, string Clang, string LldLink, 
     {
         if (!File.Exists(path))
         {
-            throw new SlangException($"required LLVM tool '{name}' was not found at {path}");
+            throw new SmallLangException($"required LLVM tool '{name}' was not found at {path}");
         }
     }
 }

@@ -1,8 +1,8 @@
 using System.Diagnostics;
 using System.Text;
-using SLang.Compiler.Diagnostics;
+using SmallLang.Compiler.Diagnostics;
 
-namespace SLang.Compiler.Tooling;
+namespace SmallLang.Compiler.Tooling;
 
 internal sealed class WindowsLinker(LlvmToolchain toolchain)
 {
@@ -28,7 +28,7 @@ internal sealed class WindowsLinker(LlvmToolchain toolchain)
             "/nologo",
             "/machine:x64",
             "/subsystem:console",
-            "/entry:slang_start",
+            "/entry:smalllang_start",
             "/nodefaultlib",
             "/opt:ref",
             "/opt:icf",
@@ -81,7 +81,7 @@ internal sealed class WindowsLinker(LlvmToolchain toolchain)
         }
 
         using var process = Process.Start(psi)
-            ?? throw new SlangException($"failed to start {fileName}");
+            ?? throw new SmallLangException($"failed to start {fileName}");
 
         var stdout = process.StandardOutput.ReadToEnd();
         var stderr = process.StandardError.ReadToEnd();
@@ -101,7 +101,7 @@ internal sealed class WindowsLinker(LlvmToolchain toolchain)
                 message.AppendLine(stderr.TrimEnd());
             }
 
-            throw new SlangException(message.ToString().TrimEnd());
+            throw new SmallLangException(message.ToString().TrimEnd());
         }
     }
 }

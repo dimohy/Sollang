@@ -1,14 +1,14 @@
-# SLang Language Specification Draft
+# SmallLang Language Specification Draft
 
 Status: draft
 Date: 2026-07-07
 
-This document is the living specification for SLang. It records the language
+This document is the living specification for SmallLang. It records the language
 shape before implementation so design decisions do not get lost.
 
 ## Current Boundary
 
-SLang implementation has started for the smallest approved language slice.
+SmallLang implementation has started for the smallest approved language slice.
 
 The implementation boundary is intentionally narrow:
 
@@ -66,9 +66,9 @@ meaningfully better.
 
 ## First Program
 
-The first valid SLang program is:
+The first valid SmallLang program is:
 
-```slang
+```smalllang
 main {
     name = "dimohy"
     print("Hello, {name}")
@@ -86,7 +86,7 @@ Hello, dimohy
 
 The current extended example is:
 
-```slang
+```smalllang
 getName: -> Text {
     "dimohy"
 }
@@ -110,10 +110,10 @@ Hello, dimohy. square = 49
 
 ## Initial Syntax Direction
 
-SLang starts with an explicit `main` block instead of a fully general function
+SmallLang starts with an explicit `main` block instead of a fully general function
 declaration. Local bindings do not use `let`, `var`, or a declaration keyword:
 
-```slang
+```smalllang
 getName: -> Text {
     "dimohy"
 }
@@ -193,7 +193,7 @@ Notes:
 
 The initial binding syntax is:
 
-```slang
+```smalllang
 name = "dimohy"
 ```
 
@@ -215,7 +215,7 @@ semantics before the memory and value model are decided.
 
 The first numeric expression support is intentionally narrow:
 
-```slang
+```smalllang
 sum = 20 + 22
 ```
 
@@ -262,7 +262,7 @@ Lexing principles:
 The exact string escape set is not finalized. The first required string form is
 a double-quoted UTF-8 literal with optional identifier/path interpolation:
 
-```slang
+```smalllang
 "Hello World"
 "Hello, {name}"
 ```
@@ -283,13 +283,13 @@ Interpolation rules:
 `print` is available in the initial prelude. The preferred source form is a
 value-flow call:
 
-```slang
+```smalllang
 "Hello, {name}. square = {num}" -> print
 ```
 
 The parenthesized form remains valid and equivalent:
 
-```slang
+```smalllang
 print("Hello, {name}. square = {num}")
 ```
 
@@ -301,10 +301,10 @@ core.io.print(utf8_output_expression)
 
 ## Value-Flow Calls
 
-SLang accepts `->` as the preferred direction for function calls where the
+SmallLang accepts `->` as the preferred direction for function calls where the
 input value should be visually explicit:
 
-```slang
+```smalllang
 main {
     getName -> name
     7 -> square -> num
@@ -315,18 +315,18 @@ main {
 The expression on the left flows into the function or callable path on the
 right. The example above is semantically equivalent to:
 
-```slang
+```smalllang
 print("Hello, {name}. square = {num}")
 ```
 
 This makes argument flow and return flow visible without discarding the familiar
 parenthesized call form. Parenthesized calls remain valid as a compatibility and
-escape-hatch syntax, but the value-flow form is the preferred SLang style for
+escape-hatch syntax, but the value-flow form is the preferred SmallLang style for
 single-primary-input operations.
 
 Return values can be bound at the end of a statement-level flow:
 
-```slang
+```smalllang
 getName -> name
 7 -> square -> num
 name -> greeting -> message
@@ -335,13 +335,13 @@ name -> greeting -> message
 The assignment form remains valid when it is clearer for a non-flowing
 expression:
 
-```slang
+```smalllang
 num = square(7)
 ```
 
 The corresponding function type notation follows the same direction:
 
-```slang
+```smalllang
 greeting: Text -> Text
 print: Text -> Io<Unit>
 stdout.write: Bytes -> Io<Int>
@@ -349,7 +349,7 @@ stdout.write: Bytes -> Io<Int>
 
 The current parser preserves:
 
-```slang
+```smalllang
 value -> function
 ```
 
@@ -357,7 +357,7 @@ as a `FlowExpression`. Semantic analysis resolves each target as either a
 callable path, `print`, or a final flow binding. The executable lowering remains
 equivalent to:
 
-```slang
+```smalllang
 function(value)
 ```
 
@@ -433,7 +433,7 @@ They must not silently fall back to another backend.
 
 For the current runtime sample:
 
-```slang
+```smalllang
 getName: -> Text {
     "dimohy"
 }
@@ -483,7 +483,7 @@ Optimization requirements:
 
 The current compiler supports:
 
-```slang
+```smalllang
 getName: -> Text {
     "dimohy"
 }
@@ -502,10 +502,10 @@ main {
 Current backend:
 
 - target: Windows x64
-- LLVM toolchain: LLVM 22.1.8, downloaded under `.tools` by `scripts/slang.ps1`
-- lexer: generated from `syntax/slang.lexer` by a Roslyn incremental source
+- LLVM toolchain: LLVM 22.1.8, downloaded under `.tools` by `scripts/smalllang.ps1`
+- lexer: generated from `syntax/smalllang.lexer` by a Roslyn incremental source
   generator
-- parser: generated from `syntax/slang.grammar` by a Roslyn incremental source
+- parser: generated from `syntax/smalllang.grammar` by a Roslyn incremental source
   generator
 - semantics: zero-argument and one-input function declarations, string and
   integer bindings, checked integer `+` and `*`, scalar interpolation, and
@@ -514,14 +514,14 @@ Current backend:
   semantic/codegen stages according to target position
 - IR output: immutable UTF-8 literal segments, runtime function calls, runtime
   i64 addition/multiplication, and runtime integer decimal output
-- entry point: `slang_start`
+- entry point: `smalllang_start`
 - imports: `GetStdHandle`, `WriteFile`
 - linker: `lld-link`
 - CRT: none
 - current verified executable size: 1,088 bytes
 
 The current runtime backend emits direct `WriteFile` calls for text segments,
-calls generated SLang functions, converts integer output to decimal bytes at
+calls generated SmallLang functions, converts integer output to decimal bytes at
 runtime, and returns `0` or `1` from the native entry point based on API
 success.
 
@@ -537,11 +537,11 @@ The compiler implementation is organized by responsibility:
 - `CodeGen`: LLVM IR generation
 - `Tooling`: LLVM and Windows linker integration
 
-Lexer rules are expressed in the compact `syntax/slang.lexer` file. The source
+Lexer rules are expressed in the compact `syntax/smalllang.lexer` file. The source
 generator reads that file as an MSBuild `AdditionalFiles` input and emits
 `TokenKind` plus the deterministic lexer during C# compilation.
 
-Parser rules are expressed in the compact `syntax/slang.grammar` file. The
+Parser rules are expressed in the compact `syntax/smalllang.grammar` file. The
 source generator validates the first approved grammar slice and emits the
 recursive descent parser during C# compilation. This keeps the grammar visible
 without introducing a separate external parser generation toolchain at this

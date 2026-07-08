@@ -1,6 +1,6 @@
-using SLang.Compiler.Diagnostics;
+using SmallLang.Compiler.Diagnostics;
 
-namespace SLang.Compiler.Cli;
+namespace SmallLang.Compiler.Cli;
 
 internal sealed record CliOptions(
     string SourcePath,
@@ -12,7 +12,7 @@ internal sealed record CliOptions(
     {
         if (args is not ["build", ..])
         {
-            throw new SlangException("usage: slang build <source.slang> -o <output.exe> [--llvm <dir>] [--keep-temps]");
+            throw new SmallLangException("usage: smalllang build <source.smalllang> -o <output.exe> [--llvm <dir>] [--keep-temps]");
         }
 
         string? source = null;
@@ -38,12 +38,12 @@ internal sealed record CliOptions(
                 default:
                     if (arg.StartsWith("-", StringComparison.Ordinal))
                     {
-                        throw new SlangException($"unknown option '{arg}'");
+                        throw new SmallLangException($"unknown option '{arg}'");
                     }
 
                     if (source is not null)
                     {
-                        throw new SlangException($"multiple source files are not supported yet: '{source}' and '{arg}'");
+                        throw new SmallLangException($"multiple source files are not supported yet: '{source}' and '{arg}'");
                     }
 
                     source = arg;
@@ -53,7 +53,7 @@ internal sealed record CliOptions(
 
         if (source is null)
         {
-            throw new SlangException("missing source file");
+            throw new SmallLangException("missing source file");
         }
 
         output ??= Path.ChangeExtension(source, ".exe");
@@ -69,7 +69,7 @@ internal sealed record CliOptions(
     {
         if (index + 1 >= args.Length)
         {
-            throw new SlangException($"missing value for {option}");
+            throw new SmallLangException($"missing value for {option}");
         }
 
         index++;

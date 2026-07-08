@@ -1,9 +1,9 @@
-using SLang.Compiler.Diagnostics;
-using SLang.Compiler.Syntax;
+using SmallLang.Compiler.Diagnostics;
+using SmallLang.Compiler.Syntax;
 
-namespace SLang.Compiler.Semantics;
+namespace SmallLang.Compiler.Semantics;
 
-internal sealed class SemanticCompiler(SlangProgram program)
+internal sealed class SemanticCompiler(SmallLangProgram program)
 {
     public BoundProgram Compile()
     {
@@ -123,7 +123,7 @@ internal sealed class SemanticCompiler(SlangProgram program)
 
                     break;
                 default:
-                    throw new SlangException($"unsupported statement {statement.GetType().Name}");
+                    throw new SmallLangException($"unsupported statement {statement.GetType().Name}");
             }
         }
 
@@ -426,9 +426,9 @@ internal sealed class SemanticCompiler(SlangProgram program)
             && str.Segments.All(static segment => segment is TextSegment);
     }
 
-    private static SlangException Error(int line, int column, string message)
+    private static SmallLangException Error(int line, int column, string message)
     {
-        return new SlangException($"semantic error at {line}:{column}: {message}");
+        return new SmallLangException($"semantic error at {line}:{column}: {message}");
     }
 
     private sealed record FlowResult(BoundType Type, FlowEffect Effect);

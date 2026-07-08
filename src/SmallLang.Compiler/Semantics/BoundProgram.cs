@@ -1,6 +1,6 @@
-using SLang.Compiler.Syntax;
+using SmallLang.Compiler.Syntax;
 
-namespace SLang.Compiler.Semantics;
+namespace SmallLang.Compiler.Semantics;
 
 internal sealed record BoundProgram(
     IReadOnlyDictionary<string, BoundFunction> Functions,

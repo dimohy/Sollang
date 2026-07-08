@@ -1,5 +1,5 @@
 param(
-    [string]$Source = "examples/hello.slang",
+    [string]$Source = "examples/hello.smalllang",
     [string]$Output = "artifacts/hello.exe",
     [switch]$KeepTemps
 )
@@ -21,7 +21,7 @@ if (-not (Test-Path $clang)) {
 
     if (-not (Test-Path $archivePath)) {
         Write-Host "Downloading LLVM $llvmVersion..."
-        Invoke-WebRequest -Uri $url -OutFile $archivePath -Headers @{ "User-Agent" = "SLang-bootstrap" }
+        Invoke-WebRequest -Uri $url -OutFile $archivePath -Headers @{ "User-Agent" = "SmallLang-bootstrap" }
     }
 
     $extractTemp = Join-Path $toolsDir "llvm-$llvmVersion.extracting"
@@ -42,7 +42,7 @@ if (-not (Test-Path $clang)) {
 
 $env:SLANG_LLVM_HOME = $llvmDir
 
-dotnet build (Join-Path $repoRoot "src\SLang.Compiler\SLang.Compiler.csproj") -c Release --nologo
+dotnet build (Join-Path $repoRoot "src\SmallLang.Compiler\SmallLang.Compiler.csproj") -c Release --nologo
 
 $compilerArgs = @(
     "build",
@@ -57,5 +57,5 @@ if ($KeepTemps) {
     $compilerArgs += "--keep-temps"
 }
 
-dotnet run --project (Join-Path $repoRoot "src\SLang.Compiler\SLang.Compiler.csproj") -c Release --no-build -- @compilerArgs
+dotnet run --project (Join-Path $repoRoot "src\SmallLang.Compiler\SmallLang.Compiler.csproj") -c Release --no-build -- @compilerArgs
 

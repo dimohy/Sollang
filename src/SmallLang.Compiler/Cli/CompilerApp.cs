@@ -1,13 +1,13 @@
 using System.Globalization;
 using System.Text;
-using SLang.Compiler.CodeGen;
-using SLang.Compiler.Diagnostics;
-using SLang.Compiler.Lexing;
-using SLang.Compiler.Parsing;
-using SLang.Compiler.Semantics;
-using SLang.Compiler.Tooling;
+using SmallLang.Compiler.CodeGen;
+using SmallLang.Compiler.Diagnostics;
+using SmallLang.Compiler.Lexing;
+using SmallLang.Compiler.Parsing;
+using SmallLang.Compiler.Semantics;
+using SmallLang.Compiler.Tooling;
 
-namespace SLang.Compiler.Cli;
+namespace SmallLang.Compiler.Cli;
 
 internal static class CompilerApp
 {
@@ -19,14 +19,14 @@ internal static class CompilerApp
             Build(options);
             return 0;
         }
-        catch (SlangException ex)
+        catch (SmallLangException ex)
         {
-            Console.Error.WriteLine($"slang: {ex.Message}");
+            Console.Error.WriteLine($"smalllang: {ex.Message}");
             return 1;
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"slang: unexpected failure: {ex.Message}");
+            Console.Error.WriteLine($"smalllang: unexpected failure: {ex.Message}");
             return 1;
         }
     }
@@ -47,7 +47,7 @@ internal static class CompilerApp
         var workDir = Path.Combine(
             Path.GetDirectoryName(Path.GetFullPath(options.OutputPath))
                 ?? Directory.GetCurrentDirectory(),
-            Path.GetFileNameWithoutExtension(options.OutputPath) + ".slang-tmp");
+            Path.GetFileNameWithoutExtension(options.OutputPath) + ".smalllang-tmp");
 
         if (Directory.Exists(workDir))
         {

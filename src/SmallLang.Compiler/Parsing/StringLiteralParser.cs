@@ -1,8 +1,8 @@
-using SLang.Compiler.Diagnostics;
-using SLang.Compiler.Lexing;
-using SLang.Compiler.Syntax;
+using SmallLang.Compiler.Diagnostics;
+using SmallLang.Compiler.Lexing;
+using SmallLang.Compiler.Syntax;
 
-namespace SLang.Compiler.Parsing;
+namespace SmallLang.Compiler.Parsing;
 
 internal static class StringLiteralParser
 {
@@ -87,8 +87,8 @@ internal static class StringLiteralParser
         return true;
     }
 
-    private static SlangException ErrorAt(Token token, string message)
+    private static SmallLangException ErrorAt(Token token, string message)
     {
-        return new SlangException($"parse error at {token.Line}:{token.Column}: {message}");
+        return new SmallLangException($"parse error at {token.Line}:{token.Column}: {message}");
     }
 }

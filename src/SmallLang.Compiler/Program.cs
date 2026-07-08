@@ -1,3 +1,3 @@
-using SLang.Compiler.Cli;
+using SmallLang.Compiler.Cli;
 
 return CompilerApp.Run(args);

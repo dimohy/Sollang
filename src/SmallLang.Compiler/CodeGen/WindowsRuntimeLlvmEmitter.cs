@@ -1,10 +1,10 @@
 using System.Globalization;
 using System.Text;
-using SLang.Compiler.Diagnostics;
-using SLang.Compiler.Semantics;
-using SLang.Compiler.Syntax;
+using SmallLang.Compiler.Diagnostics;
+using SmallLang.Compiler.Semantics;
+using SmallLang.Compiler.Syntax;
 
-namespace SLang.Compiler.CodeGen;
+namespace SmallLang.Compiler.CodeGen;
 
 internal sealed class WindowsRuntimeLlvmEmitter(BoundProgram program)
 {
@@ -19,7 +19,7 @@ internal sealed class WindowsRuntimeLlvmEmitter(BoundProgram program)
         var header = new StringBuilder();
         header.AppendLine("target triple = \"x86_64-pc-windows-msvc\"");
         header.AppendLine();
-        header.AppendLine("%slang.text = type { ptr, i64 }");
+        header.AppendLine("%smalllang.text = type { ptr, i64 }");
         header.AppendLine();
 
         _functions.AppendLine("declare dllimport ptr @GetStdHandle(i32)");
@@ -47,7 +47,7 @@ internal sealed class WindowsRuntimeLlvmEmitter(BoundProgram program)
                     EmitIntFunction(function);
                     break;
                 default:
-                    throw new SlangException($"unsupported function return type {function.ReturnType}");
+                    throw new SmallLangException($"unsupported function return type {function.ReturnType}");
             }
         }
     }
@@ -56,17 +56,17 @@ internal sealed class WindowsRuntimeLlvmEmitter(BoundProgram program)
     {
         if (function.InputType is not null)
         {
-            throw new SlangException("Text-returning functions with input are not in the current runtime slice");
+            throw new SmallLangException("Text-returning functions with input are not in the current runtime slice");
         }
 
         var text = GetPlainText(function.Body, function.Line, function.Column);
         var global = AddGlobalString(text);
 
-        _functions.Append("define internal %slang.text ")
+        _functions.Append("define internal %smalllang.text ")
             .Append(SymbolForFunction(function.Name))
             .AppendLine("() #0 {");
         _functions.AppendLine("entry:");
-        _functions.Append("  ret %slang.text { ptr ")
+        _functions.Append("  ret %smalllang.text { ptr ")
             .Append(global.Name)
             .Append(", i64 ")
             .Append(global.Length.ToString(CultureInfo.InvariantCulture))
@@ -82,7 +82,7 @@ internal sealed class WindowsRuntimeLlvmEmitter(BoundProgram program)
         {
             null => "",
             BoundType.Int => "i64 %it",
-            _ => throw new SlangException("only Int function input is supported in the current runtime slice")
+            _ => throw new SmallLangException("only Int function input is supported in the current runtime slice")
         };
 
         _functions.Append("define internal i64 ")
@@ -105,14 +105,14 @@ internal sealed class WindowsRuntimeLlvmEmitter(BoundProgram program)
     private void EmitRuntimeHelpers()
     {
         _functions.AppendLine("""
-            define internal i32 @slang_write(ptr %stdout, ptr %data, i64 %len64, ptr %written) #0 {
+            define internal i32 @smalllang_write(ptr %stdout, ptr %data, i64 %len64, ptr %written) #0 {
             entry:
               %len = trunc i64 %len64 to i32
               %ok = call i32 @WriteFile(ptr %stdout, ptr %data, i32 %len, ptr %written, ptr null)
               ret i32 %ok
             }
 
-            define internal i32 @slang_write_u64(ptr %stdout, i64 %value, ptr %written) #0 {
+            define internal i32 @smalllang_write_u64(ptr %stdout, i64 %value, ptr %written) #0 {
             entry:
               %buf = alloca [20 x i8], align 1
               %end = getelementptr inbounds [20 x i8], ptr %buf, i64 0, i64 20
@@ -134,7 +134,7 @@ internal sealed class WindowsRuntimeLlvmEmitter(BoundProgram program)
               %start_int = ptrtoint ptr %next to i64
               %end_int = ptrtoint ptr %end to i64
               %len = sub i64 %end_int, %start_int
-              %ok = call i32 @slang_write(ptr %stdout, ptr %next, i64 %len, ptr %written)
+              %ok = call i32 @smalllang_write(ptr %stdout, ptr %next, i64 %len, ptr %written)
               ret i32 %ok
             }
 
@@ -144,7 +144,7 @@ internal sealed class WindowsRuntimeLlvmEmitter(BoundProgram program)
     private void EmitMain()
     {
         _locals.Clear();
-        _functions.AppendLine("define dso_local i32 @slang_start() local_unnamed_addr {");
+        _functions.AppendLine("define dso_local i32 @smalllang_start() local_unnamed_addr {");
         _functions.AppendLine("entry:");
         _functions.AppendLine("  %written = alloca i32, align 4");
         _functions.AppendLine("  %stdout = call ptr @GetStdHandle(i32 -11)");
@@ -161,7 +161,7 @@ internal sealed class WindowsRuntimeLlvmEmitter(BoundProgram program)
                     ok = EmitExpressionStatement(expressionStatement.Expression, ok);
                     break;
                 default:
-                    throw new SlangException($"unsupported runtime statement {statement.GetType().Name}");
+                    throw new SmallLangException($"unsupported runtime statement {statement.GetType().Name}");
             }
         }
 
@@ -196,10 +196,10 @@ internal sealed class WindowsRuntimeLlvmEmitter(BoundProgram program)
                 return result.Ok;
             }
 
-            throw new SlangException("value-flow expression statements must end in print or bind their result");
+            throw new SmallLangException("value-flow expression statements must end in print or bind their result");
         }
 
-        throw new SlangException($"unsupported runtime expression statement {expression.GetType().Name}");
+        throw new SmallLangException($"unsupported runtime expression statement {expression.GetType().Name}");
     }
 
     private string EmitPrintCall(CallExpression call, string ok)
@@ -207,7 +207,7 @@ internal sealed class WindowsRuntimeLlvmEmitter(BoundProgram program)
         var path = string.Join('.', call.Path);
         if (path != "print" || call.Arguments.Count != 1)
         {
-            throw new SlangException($"unsupported runtime call '{path}'");
+            throw new SmallLangException($"unsupported runtime call '{path}'");
         }
 
         return EmitPrintArgument(call.Arguments[0], ok);
@@ -223,7 +223,7 @@ internal sealed class WindowsRuntimeLlvmEmitter(BoundProgram program)
                 {
                     TextSegment text => EmitWriteText(text.Text, ok),
                     InterpolationSegment interpolation => EmitWriteInterpolation(interpolation, ok),
-                    _ => throw new SlangException($"unsupported string segment {segment.GetType().Name}")
+                    _ => throw new SmallLangException($"unsupported string segment {segment.GetType().Name}")
                 };
             }
 
@@ -238,12 +238,12 @@ internal sealed class WindowsRuntimeLlvmEmitter(BoundProgram program)
     {
         if (interpolation.Path.Count != 1)
         {
-            throw new SlangException("path interpolation is reserved until modules are specified");
+            throw new SmallLangException("path interpolation is reserved until modules are specified");
         }
 
         if (!_locals.TryGetValue(interpolation.Path[0], out var value))
         {
-            throw new SlangException($"unknown runtime binding '{interpolation.Path[0]}'");
+            throw new SmallLangException($"unknown runtime binding '{interpolation.Path[0]}'");
         }
 
         return EmitWriteValue(value, ok);
@@ -255,7 +255,7 @@ internal sealed class WindowsRuntimeLlvmEmitter(BoundProgram program)
         {
             RuntimeText text => EmitWriteTextValue(text, ok),
             RuntimeInt integer => EmitWriteIntegerValue(integer, ok),
-            _ => throw new SlangException($"unsupported runtime value {value.GetType().Name}")
+            _ => throw new SmallLangException($"unsupported runtime value {value.GetType().Name}")
         };
     }
 
@@ -275,7 +275,7 @@ internal sealed class WindowsRuntimeLlvmEmitter(BoundProgram program)
         var write = NextTemp("write");
         _functions.Append("  ")
             .Append(write)
-            .Append(" = call i32 @slang_write(ptr %stdout, ptr ")
+            .Append(" = call i32 @smalllang_write(ptr %stdout, ptr ")
             .Append(text.PointerName)
             .Append(", i64 ")
             .Append(text.LengthName)
@@ -288,7 +288,7 @@ internal sealed class WindowsRuntimeLlvmEmitter(BoundProgram program)
         var write = NextTemp("write");
         _functions.Append("  ")
             .Append(write)
-            .Append(" = call i32 @slang_write_u64(ptr %stdout, i64 ")
+            .Append(" = call i32 @smalllang_write_u64(ptr %stdout, i64 ")
             .Append(value.ValueName)
             .AppendLine(", ptr %written)");
         return CombineWriteOk(write, ok);
@@ -329,7 +329,7 @@ internal sealed class WindowsRuntimeLlvmEmitter(BoundProgram program)
             MultiplyExpression multiply => EmitMultiplyExpression(multiply),
             CallExpression call => EmitFunctionCall(call),
             FlowExpression flow => EmitFlowExpressionValue(flow),
-            _ => throw new SlangException($"unsupported runtime expression {expression.GetType().Name}")
+            _ => throw new SmallLangException($"unsupported runtime expression {expression.GetType().Name}")
         };
     }
 
@@ -344,7 +344,7 @@ internal sealed class WindowsRuntimeLlvmEmitter(BoundProgram program)
     {
         var value = EmitExpression(expression);
         return value as RuntimeInt
-            ?? throw new SlangException("expected runtime integer expression");
+            ?? throw new SmallLangException("expected runtime integer expression");
     }
 
     private RuntimeInt EmitAddExpression(AddExpression expression)
@@ -379,7 +379,7 @@ internal sealed class WindowsRuntimeLlvmEmitter(BoundProgram program)
     {
         var result = EmitFlowExpression(expression, ok: "true", allowBindingTarget: false);
         return result.Value
-            ?? throw new SlangException("value-flow expression does not produce a runtime value");
+            ?? throw new SmallLangException("value-flow expression does not produce a runtime value");
     }
 
     private RuntimeFlowResult EmitFlowExpression(FlowExpression expression, string ok, bool allowBindingTarget)
@@ -403,7 +403,7 @@ internal sealed class WindowsRuntimeLlvmEmitter(BoundProgram program)
             {
                 if (!isLast)
                 {
-                    throw new SlangException("print must be the final value-flow target");
+                    throw new SmallLangException("print must be the final value-flow target");
                 }
 
                 return new RuntimeFlowResult(
@@ -426,7 +426,7 @@ internal sealed class WindowsRuntimeLlvmEmitter(BoundProgram program)
                     Ok: ok);
             }
 
-            throw new SlangException($"unknown runtime value-flow target '{path}'");
+            throw new SmallLangException($"unknown runtime value-flow target '{path}'");
         }
 
         return new RuntimeFlowResult(
@@ -453,7 +453,7 @@ internal sealed class WindowsRuntimeLlvmEmitter(BoundProgram program)
         var path = string.Join('.', expression.Path);
         if (!program.Functions.TryGetValue(path, out var function))
         {
-            throw new SlangException($"unknown runtime function '{path}'");
+            throw new SmallLangException($"unknown runtime function '{path}'");
         }
 
         RuntimeValue? argument = null;
@@ -461,14 +461,14 @@ internal sealed class WindowsRuntimeLlvmEmitter(BoundProgram program)
         {
             if (expression.Arguments.Count != 0)
             {
-                throw new SlangException($"function '{path}' does not accept arguments");
+                throw new SmallLangException($"function '{path}' does not accept arguments");
             }
         }
         else
         {
             if (expression.Arguments.Count != 1)
             {
-                throw new SlangException($"function '{path}' expects exactly one argument");
+                throw new SmallLangException($"function '{path}' expects exactly one argument");
             }
 
             argument = EmitExpression(expression.Arguments[0]);
@@ -482,7 +482,7 @@ internal sealed class WindowsRuntimeLlvmEmitter(BoundProgram program)
     {
         if (function.InputType is null)
         {
-            throw new SlangException($"function '{function.Name}' does not accept a flowed input");
+            throw new SmallLangException($"function '{function.Name}' does not accept a flowed input");
         }
 
         EnsureRuntimeType(argument, function.InputType.Value, function.Name);
@@ -495,7 +495,7 @@ internal sealed class WindowsRuntimeLlvmEmitter(BoundProgram program)
         {
             BoundType.Text => EmitTextFunctionCall(function, argument),
             BoundType.Int => EmitIntFunctionCall(function, argument),
-            _ => throw new SlangException($"unsupported function return type {function.ReturnType}")
+            _ => throw new SmallLangException($"unsupported function return type {function.ReturnType}")
         };
     }
 
@@ -503,27 +503,27 @@ internal sealed class WindowsRuntimeLlvmEmitter(BoundProgram program)
     {
         if (argument is not null)
         {
-            throw new SlangException("Text-returning functions with input are not in the current runtime slice");
+            throw new SmallLangException("Text-returning functions with input are not in the current runtime slice");
         }
 
         var aggregate = NextTemp("text");
         _functions.Append("  ")
             .Append(aggregate)
-            .Append(" = call %slang.text ")
+            .Append(" = call %smalllang.text ")
             .Append(SymbolForFunction(function.Name))
             .AppendLine("()");
 
         var pointer = NextTemp("text_ptr");
         _functions.Append("  ")
             .Append(pointer)
-            .Append(" = extractvalue %slang.text ")
+            .Append(" = extractvalue %smalllang.text ")
             .Append(aggregate)
             .AppendLine(", 0");
 
         var length = NextTemp("text_len");
         _functions.Append("  ")
             .Append(length)
-            .Append(" = extractvalue %slang.text ")
+            .Append(" = extractvalue %smalllang.text ")
             .Append(aggregate)
             .AppendLine(", 1");
 
@@ -551,7 +551,7 @@ internal sealed class WindowsRuntimeLlvmEmitter(BoundProgram program)
         }
         else
         {
-            throw new SlangException($"function '{function.Name}' expects an integer argument");
+            throw new SmallLangException($"function '{function.Name}' expects an integer argument");
         }
 
         _functions.AppendLine();
@@ -562,7 +562,7 @@ internal sealed class WindowsRuntimeLlvmEmitter(BoundProgram program)
     {
         if (value.Type != expected)
         {
-            throw new SlangException($"function '{path}' expects {expected} but received {value.Type}");
+            throw new SmallLangException($"function '{path}' expects {expected} but received {value.Type}");
         }
     }
 
@@ -575,13 +575,13 @@ internal sealed class WindowsRuntimeLlvmEmitter(BoundProgram program)
     {
         return _locals.TryGetValue(name, out var value)
             ? value
-            : throw new SlangException($"unknown runtime binding '{name}'");
+            : throw new SmallLangException($"unknown runtime binding '{name}'");
     }
 
     private GlobalString AddGlobalString(string text)
     {
         var bytes = Encoding.UTF8.GetBytes(text);
-        var name = "@.slang.str." + _stringId.ToString(CultureInfo.InvariantCulture);
+        var name = "@.smalllang.str." + _stringId.ToString(CultureInfo.InvariantCulture);
         _stringId++;
         _globals.Append(name)
             .Append(" = private unnamed_addr constant [")
@@ -596,7 +596,7 @@ internal sealed class WindowsRuntimeLlvmEmitter(BoundProgram program)
     {
         if (expression is not StringExpression str)
         {
-            throw new SlangException($"codegen error at {line}:{column}: expected a string literal");
+            throw new SmallLangException($"codegen error at {line}:{column}: expected a string literal");
         }
 
         var builder = new StringBuilder();
@@ -608,7 +608,7 @@ internal sealed class WindowsRuntimeLlvmEmitter(BoundProgram program)
                 continue;
             }
 
-            throw new SlangException($"codegen error at {line}:{column}: expected a plain string literal");
+            throw new SmallLangException($"codegen error at {line}:{column}: expected a plain string literal");
         }
 
         return builder.ToString();
@@ -622,12 +622,12 @@ internal sealed class WindowsRuntimeLlvmEmitter(BoundProgram program)
             CultureInfo.InvariantCulture,
             out var value)
             ? value
-            : throw new SlangException($"codegen error at {expression.Line}:{expression.Column}: integer literal is out of range");
+            : throw new SmallLangException($"codegen error at {expression.Line}:{expression.Column}: integer literal is out of range");
     }
 
     private static string SymbolForFunction(string name)
     {
-        var builder = new StringBuilder("@slang_fn_");
+        var builder = new StringBuilder("@smalllang_fn_");
         foreach (var c in name)
         {
             builder.Append(char.IsLetterOrDigit(c) || c == '_' ? c : '_');

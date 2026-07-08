@@ -1,6 +1,6 @@
-using SLang.Compiler.Semantics;
+using SmallLang.Compiler.Semantics;
 
-namespace SLang.Compiler.CodeGen;
+namespace SmallLang.Compiler.CodeGen;
 
 internal static class LlvmIrGenerator
 {
