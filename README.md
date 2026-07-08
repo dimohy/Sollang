@@ -22,6 +22,14 @@ main {
 }
 ```
 
+The `main` wrapper can also be omitted for top-level executable statements:
+
+```smalllang
+getName -> name
+7 -> square -> num
+"Hello, {name}. square = {num}" -> sys.io.print
+```
+
 The verified output is:
 
 ```text
@@ -32,8 +40,9 @@ The `value -> function` form is the preferred SmallLang call style for making da
 flow explicit. Parenthesized calls such as `print(...)` remain valid as a
 compatibility form.
 
-The current `hello.sl` executable is **1,104 bytes**. The cumulative
-input and loop sample executable is **1,584 bytes**.
+The current `hello.sl`, `hello-named-arg.sl`, and `hello-top-level.sl`
+executables are **1,104 bytes**. The cumulative input and loop sample
+executables are **1,584 bytes**.
 
 ## Status
 
@@ -42,19 +51,23 @@ the accepted language specification and decision log.
 
 What works today:
 
-- `main { ... }`
+- `main { ... }` or omitted `main` with top-level executable statements
 - zero-argument functions with `getName: -> Text { ... }`
-- one-input functions with `square: Int -> Int { ... }`
-- local string bindings with `name = "value"`
-- value-flow bindings with `getName -> name` and `7 -> square -> num`
+- one-input functions with default `it` or an explicit input name:
+  `square: Int -> Int { ... }` and `square n: Int -> Int { ... }`
+- value-flow bindings with `"value" -> name`, `getName -> name`, and `7 -> square -> num`
 - left-associative integer `+` and `*`
 - string interpolation with `"Hello, {name}"`
 - interpolation of string and integer bindings
 - value-flow calls with `value -> function`
 - parenthesized calls with `function(value)`
-- integer input with `"n = ? " -> readInt -> n`
-- line output with `value -> println`
-- closed integer range loops with `each i in 1..9 { ... }`
+- SmallLang standard library functions `sys.io.print`, `sys.io.println`, and
+  `sys.io.readInt` with global `print`, `println`, and `readInt` aliases
+- integer input with `"n = ? " -> readInt -> n` or `"n = ? " -> sys.io.readInt -> n`
+- line output with `value -> println` or `value -> sys.io.println`
+- block-function calls with `range -> each item { ... }`
+- closed integer range loops with `1..9 -> each i { ... }`
+- default loop item binding with `1..9 -> each { ... }`, exposed as `it`
 - source-generated lexing from `syntax/smalllang.lexer`
 - source-generated parsing from `syntax/smalllang.grammar`
 - LLVM IR generation
@@ -70,6 +83,30 @@ The input and loop sample is cumulative; it does not replace `hello.sl`:
 
 ```powershell
 .\scripts\smalllang.ps1 -Source examples\gugudan.sl -Output artifacts\gugudan.exe -KeepTemps
+```
+
+The explicit function input-name sample is also cumulative:
+
+```powershell
+.\scripts\smalllang.ps1 -Source examples\hello-named-arg.sl -Output artifacts\hello-named-arg.exe -KeepTemps
+```
+
+The top-level and canonical `sys.io` sample is cumulative:
+
+```powershell
+.\scripts\smalllang.ps1 -Source examples\hello-top-level.sl -Output artifacts\hello-top-level.exe -KeepTemps
+```
+
+The same multiplication table can use the default loop item name:
+
+```powershell
+.\scripts\smalllang.ps1 -Source examples\gugudan-it.sl -Output artifacts\gugudan-it.exe -KeepTemps
+```
+
+The same input and output primitives can be addressed through `sys.io`:
+
+```powershell
+.\scripts\smalllang.ps1 -Source examples\gugudan-sys-io.sl -Output artifacts\gugudan-sys-io.exe -KeepTemps
 ```
 
 On first use, the script downloads LLVM 22.1.8 into `.tools`. LLVM binaries,
@@ -123,11 +160,13 @@ build.
 Parser rules are also written in a compact DSL:
 
 ```text
-rule SourceFile = NewLine* FunctionDeclaration* MainBlock NewLine* End
-rule FunctionDeclaration = Identifier Colon FunctionSignature LeftBrace NewLine* Expression NewLine* RightBrace
+rule SourceFile = NewLine* FunctionDeclaration* (MainBlock | Statement*) NewLine* End
+rule FunctionDeclaration = Path Identifier? Colon FunctionSignature FunctionBody
 rule FunctionSignature = Arrow TypeName | TypeName Arrow TypeName
+rule FunctionBody = LeftBrace NewLine* Expression NewLine* RightBrace | Equal Identifier("intrinsic")
 rule MainBlock = Identifier("main") LeftBrace NewLine* Statement* RightBrace
-rule Statement = EachStatement | BindingStatement | ExpressionStatement
+rule Statement = BlockFunctionCallStatement | EachStatement | BindingStatement | ExpressionStatement
+rule BlockFunctionCallStatement = RangeExpression Arrow Path Identifier? LeftBrace NewLine* Statement* RightBrace
 rule EachStatement = Identifier("each") Identifier Identifier("in") RangeExpression LeftBrace NewLine* Statement* RightBrace
 rule BindingStatement = Identifier Equal Expression StatementEnd
 rule RangeExpression = Expression Range Expression
@@ -140,14 +179,35 @@ rule TypeName = Identifier
 ```
 
 The generator reads `syntax/smalllang.grammar` and emits the current recursive
-descent parser at compile time. The grammar generator is intentionally narrow
-for the first language slice; it validates the declared rules and produces the
-parser shape needed by the approved syntax.
+descent parser at compile time. A final single identifier in a value-flow
+statement binds the flowing value, so `n * i -> value` is the preferred binding
+style for new samples. Range loops prefer `1..9 -> each i { ... }`; when the item
+name is omitted as `1..9 -> each { ... }`, the loop item is available as `it`.
+One-input functions follow the same naming shape: `square: Int -> Int` exposes
+the input as `it`, while `square n: Int -> Int` exposes it as `n`.
+`each` is modeled as the first built-in block function: `1..9 -> each i { ... }`
+means the range flows into `each` and the block is passed as its executable body.
+The current backend lowers this built-in directly to LLVM basic blocks rather
+than emitting a runtime closure, function pointer, or block-call dispatch.
+The `sys.io` module is implemented in SmallLang under `stdlib/sys/io.sl`.
+`stdlib/sys/runtime.sl` declares the lower `sys.runtime.*` intrinsic boundary.
+The compiler loads these standard library files before user code and globally
+aliases `print`, `println`, and `readInt` to `sys.io.print`, `sys.io.println`,
+and `sys.io.readInt`.
+The grammar generator is intentionally narrow for the first language slice; it
+validates the declared rules and produces the parser shape needed by the
+approved syntax.
 
 ## Repository Layout
 
 - `examples/hello.sl`: first runtime function and value-flow sample
+- `examples/hello-named-arg.sl`: cumulative explicit function input-name sample
+- `examples/hello-top-level.sl`: cumulative omitted-main and `sys.io.print` sample
 - `examples/gugudan.sl`: cumulative input plus range loop sample
+- `examples/gugudan-it.sl`: cumulative range loop sample with default `it`
+- `examples/gugudan-sys-io.sl`: cumulative `sys.io.readInt` and `sys.io.println` sample
+- `stdlib/sys/runtime.sl`: standard library intrinsic boundary declarations
+- `stdlib/sys/io.sl`: SmallLang implementation of `sys.io` wrappers
 - `scripts/smalllang.ps1`: local build/bootstrap script
 - `syntax/smalllang.lexer`: concise lexer rule source
 - `syntax/smalllang.grammar`: concise parser rule source

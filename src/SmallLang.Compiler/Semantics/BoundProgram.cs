@@ -9,11 +9,22 @@ internal sealed record BoundProgram(
 
 internal sealed record BoundFunction(
     string Name,
+    string? InputName,
     BoundType? InputType,
     BoundType ReturnType,
-    Expression Body,
+    Expression? Body,
     int Line,
-    int Column);
+    int Column,
+    BoundFunctionKind Kind,
+    bool IsStandardLibrary);
+
+internal enum BoundFunctionKind
+{
+    User,
+    RuntimePrint,
+    RuntimePrintLine,
+    RuntimeReadInt
+}
 
 internal enum BoundType
 {

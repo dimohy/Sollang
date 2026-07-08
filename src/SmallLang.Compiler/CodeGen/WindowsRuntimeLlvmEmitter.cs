@@ -41,8 +41,14 @@ internal sealed class WindowsRuntimeLlvmEmitter(BoundProgram program)
 
     private void EmitUserFunctions()
     {
+        var emitted = new HashSet<string>(StringComparer.Ordinal);
         foreach (var function in program.Functions.Values)
         {
+            if (function.Kind != BoundFunctionKind.User || function.IsStandardLibrary || !emitted.Add(function.Name))
+            {
+                continue;
+            }
+
             switch (function.ReturnType)
             {
                 case BoundType.Text:
@@ -64,6 +70,11 @@ internal sealed class WindowsRuntimeLlvmEmitter(BoundProgram program)
             throw new SmallLangException("Text-returning functions with input are not in the current runtime slice");
         }
 
+        if (function.Body is null)
+        {
+            throw new SmallLangException($"function '{function.Name}' has no body");
+        }
+
         var text = GetPlainText(function.Body, function.Line, function.Column);
         var global = AddGlobalString(text);
 
@@ -82,6 +93,11 @@ internal sealed class WindowsRuntimeLlvmEmitter(BoundProgram program)
 
     private void EmitIntFunction(BoundFunction function)
     {
+        if (function.Body is null)
+        {
+            throw new SmallLangException($"function '{function.Name}' has no body");
+        }
+
         _locals.Clear();
         var parameterList = function.InputType switch
         {
@@ -98,7 +114,7 @@ internal sealed class WindowsRuntimeLlvmEmitter(BoundProgram program)
         _functions.AppendLine("entry:");
         if (function.InputType == BoundType.Int)
         {
-            _locals.Add("it", new RuntimeInt("%it"));
+            _locals.Add(function.InputName ?? "it", new RuntimeInt("%it"));
         }
 
         var value = EmitIntExpression(function.Body);
@@ -288,8 +304,8 @@ internal sealed class WindowsRuntimeLlvmEmitter(BoundProgram program)
             case BindingStatement binding:
                 _locals.Add(binding.Name, EmitExpression(binding.Value));
                 break;
-            case EachStatement each:
-                EmitEachStatement(each);
+            case BlockFunctionCallStatement blockFunctionCall:
+                EmitBlockFunctionCall(blockFunctionCall);
                 break;
             case ExpressionStatement expressionStatement:
                 _mainOk = EmitExpressionStatement(expressionStatement.Expression, _mainOk);
@@ -299,10 +315,26 @@ internal sealed class WindowsRuntimeLlvmEmitter(BoundProgram program)
         }
     }
 
-    private void EmitEachStatement(EachStatement statement)
+    private void EmitBlockFunctionCall(BlockFunctionCallStatement statement)
     {
-        var start = EmitIntExpression(statement.Start);
-        var end = EmitIntExpression(statement.End);
+        var target = string.Join('.', statement.Target);
+        if (target != "each")
+        {
+            throw new SmallLangException($"unknown block function '{target}'");
+        }
+
+        if (statement.Source is not RangeExpression range)
+        {
+            throw new SmallLangException("each expects a range input");
+        }
+
+        EmitEachBlockFunctionCall(statement, range);
+    }
+
+    private void EmitEachBlockFunctionCall(BlockFunctionCallStatement statement, RangeExpression range)
+    {
+        var start = EmitIntExpression(range.Start);
+        var end = EmitIntExpression(range.End);
         var bodyLabel = NextLabel("each_body");
         var continueLabel = NextLabel("each_continue");
         var endLabel = NextLabel("each_end");
@@ -374,7 +406,13 @@ internal sealed class WindowsRuntimeLlvmEmitter(BoundProgram program)
     {
         if (expression is CallExpression call)
         {
-            return EmitPrintCall(call, ok);
+            var value = EmitFunctionCall(call);
+            if (value.Type != BoundType.Unit)
+            {
+                throw new SmallLangException("only function calls with side effects are valid expression statements");
+            }
+
+            return _mainOk;
         }
 
         if (expression is FlowExpression flow)
@@ -395,20 +433,6 @@ internal sealed class WindowsRuntimeLlvmEmitter(BoundProgram program)
         }
 
         throw new SmallLangException($"unsupported runtime expression statement {expression.GetType().Name}");
-    }
-
-    private string EmitPrintCall(CallExpression call, string ok)
-    {
-        var path = string.Join('.', call.Path);
-        if (path is not ("print" or "println") || call.Arguments.Count != 1)
-        {
-            throw new SmallLangException($"unsupported runtime call '{path}'");
-        }
-
-        ok = EmitPrintArgument(call.Arguments[0], ok);
-        return path == "println"
-            ? EmitWriteText("\n", ok)
-            : ok;
     }
 
     private string EmitPrintArgument(Expression expression, string ok)
@@ -528,6 +552,7 @@ internal sealed class WindowsRuntimeLlvmEmitter(BoundProgram program)
             NameExpression name => ResolveLocal(name.Name),
             AddExpression add => EmitAddExpression(add),
             MultiplyExpression multiply => EmitMultiplyExpression(multiply),
+            RangeExpression => throw new SmallLangException("range values are only valid as block-function input"),
             CallExpression call => EmitFunctionCall(call),
             FlowExpression flow => EmitFlowExpressionValue(flow),
             _ => throw new SmallLangException($"unsupported runtime expression {expression.GetType().Name}")
@@ -580,16 +605,17 @@ internal sealed class WindowsRuntimeLlvmEmitter(BoundProgram program)
     {
         var result = EmitFlowExpression(expression, ok: "true", allowBindingTarget: false);
         return result.Value
-            ?? throw new SmallLangException("value-flow expression does not produce a runtime value");
+            ?? RuntimeUnit.Instance;
     }
 
     private RuntimeFlowResult EmitFlowExpression(FlowExpression expression, string ok, bool allowBindingTarget)
     {
         if (expression.Targets.Count == 1
-            && (IsPath(expression.Targets[0], "print") || IsPath(expression.Targets[0], "println")))
+            && TryResolveFunction(expression.Targets[0], out var directFunction)
+            && TryGetRuntimePrinterKind(directFunction, out var directPrinterKind))
         {
-            ok = EmitPrintArgument(expression.Source, ok);
-            if (IsPath(expression.Targets[0], "println"))
+            ok = EmitPrintFlowSource(expression.Source, ok);
+            if (directPrinterKind == BoundFunctionKind.RuntimePrintLine)
             {
                 ok = EmitWriteText("\n", ok);
             }
@@ -607,37 +633,38 @@ internal sealed class WindowsRuntimeLlvmEmitter(BoundProgram program)
             var isLast = i == expression.Targets.Count - 1;
             var path = string.Join('.', target);
 
-            if (path is "print" or "println")
+            if (TryResolveFunction(target, out var function))
             {
-                if (!isLast)
+                switch (function.Kind)
                 {
-                    throw new SmallLangException($"{path} must be the final value-flow target");
+                    case BoundFunctionKind.RuntimePrint:
+                    case BoundFunctionKind.RuntimePrintLine:
+                        if (!isLast)
+                        {
+                            throw new SmallLangException($"{path} must be the final value-flow target");
+                        }
+
+                        ok = EmitWriteValue(current, ok);
+                        if (function.Kind == BoundFunctionKind.RuntimePrintLine)
+                        {
+                            ok = EmitWriteText("\n", ok);
+                        }
+
+                        return new RuntimeFlowResult(
+                            Value: null,
+                            Binding: null,
+                            Ok: ok);
+                    case BoundFunctionKind.RuntimeReadInt:
+                        EnsureRuntimeType(current, BoundType.Text, path);
+                        current = EmitReadIntPrompt(current);
+                        ok = _mainOk;
+                        continue;
+                    case BoundFunctionKind.User:
+                        current = EmitFlowFunctionCall(function, current);
+                        continue;
+                    default:
+                        throw new SmallLangException($"unsupported runtime function kind '{function.Kind}'");
                 }
-
-                ok = EmitWriteValue(current, ok);
-                if (path == "println")
-                {
-                    ok = EmitWriteText("\n", ok);
-                }
-
-                return new RuntimeFlowResult(
-                    Value: null,
-                    Binding: null,
-                    Ok: ok);
-            }
-
-            if (path == "readInt")
-            {
-                EnsureRuntimeType(current, BoundType.Text, path);
-                current = EmitReadIntPrompt(current);
-                ok = _mainOk;
-                continue;
-            }
-
-            if (program.Functions.TryGetValue(path, out var function))
-            {
-                current = EmitFlowFunctionCall(function, current);
-                continue;
             }
 
             if (allowBindingTarget && isLast && target.Count == 1)
@@ -662,6 +689,7 @@ internal sealed class WindowsRuntimeLlvmEmitter(BoundProgram program)
         if (source is NameExpression name
             && !_locals.ContainsKey(name.Name)
             && program.Functions.TryGetValue(name.Name, out var function)
+            && function.Kind == BoundFunctionKind.User
             && function.InputType is null)
         {
             return EmitFunctionCall(function, argument: null);
@@ -670,11 +698,32 @@ internal sealed class WindowsRuntimeLlvmEmitter(BoundProgram program)
         return EmitExpression(source);
     }
 
+    private string EmitPrintFlowSource(Expression expression, string ok)
+    {
+        if (expression is StringExpression str)
+        {
+            return EmitPrintArgument(str, ok);
+        }
+
+        var value = EmitFlowSource(expression);
+        return EmitWriteValue(value, ok);
+    }
+
     private RuntimeInt EmitReadIntPrompt(RuntimeValue prompt)
     {
-        EnsureRuntimeType(prompt, BoundType.Text, "readInt");
+        EnsureRuntimeType(prompt, BoundType.Text, "sys.io.readInt");
         _mainOk = EmitWriteValue(prompt, _mainOk);
+        return EmitReadIntAfterPrompt();
+    }
 
+    private RuntimeInt EmitReadIntPromptExpression(Expression prompt)
+    {
+        _mainOk = EmitPrintArgument(prompt, _mainOk);
+        return EmitReadIntAfterPrompt();
+    }
+
+    private RuntimeInt EmitReadIntAfterPrompt()
+    {
         var result = NextTemp("read_int");
         _functions.Append("  ")
             .Append(result)
@@ -726,11 +775,37 @@ internal sealed class WindowsRuntimeLlvmEmitter(BoundProgram program)
     private RuntimeValue EmitFunctionCall(CallExpression expression)
     {
         var path = string.Join('.', expression.Path);
-        if (path == "readInt")
+        if (!program.Functions.TryGetValue(path, out var function))
+        {
+            throw new SmallLangException($"unknown runtime function '{path}'");
+        }
+
+        if (TryGetRuntimeWrapperKind(function, out var wrapperKind))
+        {
+            return EmitRuntimeWrapperCall(expression, wrapperKind, path);
+        }
+
+        if (function.Kind is BoundFunctionKind.RuntimePrint or BoundFunctionKind.RuntimePrintLine)
         {
             if (expression.Arguments.Count != 1)
             {
-                throw new SmallLangException("readInt expects exactly one Text prompt");
+                throw new SmallLangException($"{path} expects exactly one argument");
+            }
+
+            _mainOk = EmitPrintArgument(expression.Arguments[0], _mainOk);
+            if (function.Kind == BoundFunctionKind.RuntimePrintLine)
+            {
+                _mainOk = EmitWriteText("\n", _mainOk);
+            }
+
+            return RuntimeUnit.Instance;
+        }
+
+        if (function.Kind == BoundFunctionKind.RuntimeReadInt)
+        {
+            if (expression.Arguments.Count != 1)
+            {
+                throw new SmallLangException($"{path} expects exactly one Text prompt");
             }
 
             var prompt = EmitExpression(expression.Arguments[0]);
@@ -738,9 +813,9 @@ internal sealed class WindowsRuntimeLlvmEmitter(BoundProgram program)
             return EmitReadIntPrompt(prompt);
         }
 
-        if (!program.Functions.TryGetValue(path, out var function))
+        if (function.Kind != BoundFunctionKind.User)
         {
-            throw new SmallLangException($"unknown runtime function '{path}'");
+            throw new SmallLangException($"unsupported runtime function kind '{function.Kind}'");
         }
 
         RuntimeValue? argument = null;
@@ -765,6 +840,36 @@ internal sealed class WindowsRuntimeLlvmEmitter(BoundProgram program)
         return EmitFunctionCall(function, argument);
     }
 
+    private RuntimeValue EmitRuntimeWrapperCall(
+        CallExpression expression,
+        BoundFunctionKind wrapperKind,
+        string path)
+    {
+        if (expression.Arguments.Count != 1)
+        {
+            throw new SmallLangException($"{path} expects exactly one argument");
+        }
+
+        return wrapperKind switch
+        {
+            BoundFunctionKind.RuntimePrint => EmitRuntimePrintCall(expression.Arguments[0], appendNewLine: false),
+            BoundFunctionKind.RuntimePrintLine => EmitRuntimePrintCall(expression.Arguments[0], appendNewLine: true),
+            BoundFunctionKind.RuntimeReadInt => EmitReadIntPromptExpression(expression.Arguments[0]),
+            _ => throw new SmallLangException($"unsupported runtime wrapper kind '{wrapperKind}'")
+        };
+    }
+
+    private RuntimeUnit EmitRuntimePrintCall(Expression argument, bool appendNewLine)
+    {
+        _mainOk = EmitPrintArgument(argument, _mainOk);
+        if (appendNewLine)
+        {
+            _mainOk = EmitWriteText("\n", _mainOk);
+        }
+
+        return RuntimeUnit.Instance;
+    }
+
     private RuntimeValue EmitFlowFunctionCall(BoundFunction function, RuntimeValue argument)
     {
         if (function.InputType is null)
@@ -776,8 +881,84 @@ internal sealed class WindowsRuntimeLlvmEmitter(BoundProgram program)
         return EmitFunctionCall(function, argument);
     }
 
+    private RuntimeValue EmitInlineFunctionCall(BoundFunction function, RuntimeValue? argument)
+    {
+        if (function.Body is null)
+        {
+            throw new SmallLangException($"function '{function.Name}' has no body");
+        }
+
+        var outerLocals = CaptureLocals();
+        try
+        {
+            if (function.InputType is null)
+            {
+                if (argument is not null)
+                {
+                    throw new SmallLangException($"function '{function.Name}' does not accept arguments");
+                }
+            }
+            else
+            {
+                if (argument is null)
+                {
+                    throw new SmallLangException($"function '{function.Name}' expects exactly one argument");
+                }
+
+                EnsureRuntimeType(argument, function.InputType.Value, function.Name);
+                _locals[function.InputName ?? "it"] = argument;
+            }
+
+            var value = EmitExpression(function.Body);
+            EnsureRuntimeType(value, function.ReturnType, function.Name);
+            return value;
+        }
+        finally
+        {
+            RestoreLocals(outerLocals);
+        }
+    }
+
     private RuntimeValue EmitFunctionCall(BoundFunction function, RuntimeValue? argument)
     {
+        if (function.Kind is BoundFunctionKind.RuntimePrint or BoundFunctionKind.RuntimePrintLine)
+        {
+            if (argument is null)
+            {
+                throw new SmallLangException($"{function.Name} expects exactly one Text value");
+            }
+
+            EnsureRuntimeType(argument, BoundType.Text, function.Name);
+            _mainOk = EmitWriteValue(argument, _mainOk);
+            if (function.Kind == BoundFunctionKind.RuntimePrintLine)
+            {
+                _mainOk = EmitWriteText("\n", _mainOk);
+            }
+
+            return RuntimeUnit.Instance;
+        }
+
+        if (function.Kind == BoundFunctionKind.RuntimeReadInt)
+        {
+            if (argument is null)
+            {
+                throw new SmallLangException($"{function.Name} expects exactly one Text prompt");
+            }
+
+            EnsureRuntimeType(argument, BoundType.Text, function.Name);
+            return EmitReadIntPrompt(argument);
+        }
+
+        if (function.Kind != BoundFunctionKind.User)
+        {
+            throw new SmallLangException($"function '{function.Name}' does not produce a runtime value");
+        }
+
+        if (function.IsStandardLibrary)
+        {
+            return EmitInlineFunctionCall(function, argument);
+        }
+
         return function.ReturnType switch
         {
             BoundType.Text => EmitTextFunctionCall(function, argument),
@@ -853,9 +1034,52 @@ internal sealed class WindowsRuntimeLlvmEmitter(BoundProgram program)
         }
     }
 
-    private static bool IsPath(IReadOnlyList<string> path, string name)
+    private bool TryGetRuntimePrinterKind(BoundFunction function, out BoundFunctionKind kind)
     {
-        return path.Count == 1 && path[0] == name;
+        if (function.Kind is BoundFunctionKind.RuntimePrint or BoundFunctionKind.RuntimePrintLine)
+        {
+            kind = function.Kind;
+            return true;
+        }
+
+        if (TryGetRuntimeWrapperKind(function, out kind)
+            && kind is BoundFunctionKind.RuntimePrint or BoundFunctionKind.RuntimePrintLine)
+        {
+            return true;
+        }
+
+        kind = default;
+        return false;
+    }
+
+    private bool TryGetRuntimeWrapperKind(BoundFunction function, out BoundFunctionKind kind)
+    {
+        if (!function.IsStandardLibrary
+            || function.Body is not FlowExpression flow
+            || flow.Source is not NameExpression name
+            || name.Name != (function.InputName ?? "it")
+            || flow.Targets.Count != 1
+            || !TryResolveFunction(flow.Targets[0], out var target))
+        {
+            kind = default;
+            return false;
+        }
+
+        if (target.Kind is BoundFunctionKind.RuntimePrint
+            or BoundFunctionKind.RuntimePrintLine
+            or BoundFunctionKind.RuntimeReadInt)
+        {
+            kind = target.Kind;
+            return true;
+        }
+
+        kind = default;
+        return false;
+    }
+
+    private bool TryResolveFunction(IReadOnlyList<string> path, out BoundFunction function)
+    {
+        return program.Functions.TryGetValue(string.Join('.', path), out function!);
     }
 
     private RuntimeValue ResolveLocal(string name)
@@ -982,6 +1206,11 @@ internal sealed class WindowsRuntimeLlvmEmitter(BoundProgram program)
     private sealed record RuntimeText(string PointerName, string LengthName) : RuntimeValue(BoundType.Text);
 
     private sealed record RuntimeInt(string ValueName) : RuntimeValue(BoundType.Int);
+
+    private sealed record RuntimeUnit() : RuntimeValue(BoundType.Unit)
+    {
+        public static RuntimeUnit Instance { get; } = new();
+    }
 
     private sealed record RuntimeFlowBinding(string Name, RuntimeValue Value);
 

@@ -2,11 +2,13 @@ parser SmallLang.Compiler.Parsing.Parser
 
 start SourceFile
 
-rule SourceFile = NewLine* FunctionDeclaration* MainBlock NewLine* End
-rule FunctionDeclaration = Identifier Colon FunctionSignature LeftBrace NewLine* Expression NewLine* RightBrace
+rule SourceFile = NewLine* FunctionDeclaration* (MainBlock | Statement*) NewLine* End
+rule FunctionDeclaration = Path Identifier? Colon FunctionSignature FunctionBody
 rule FunctionSignature = Arrow TypeName | TypeName Arrow TypeName
+rule FunctionBody = LeftBrace NewLine* Expression NewLine* RightBrace | Equal Identifier("intrinsic")
 rule MainBlock = Identifier("main") LeftBrace NewLine* Statement* RightBrace
-rule Statement = EachStatement | BindingStatement | ExpressionStatement
+rule Statement = BlockFunctionCallStatement | EachStatement | BindingStatement | ExpressionStatement
+rule BlockFunctionCallStatement = RangeExpression Arrow Path Identifier? LeftBrace NewLine* Statement* RightBrace
 rule EachStatement = Identifier("each") Identifier Identifier("in") RangeExpression LeftBrace NewLine* Statement* RightBrace
 rule BindingStatement = Identifier Equal Expression StatementEnd
 rule ExpressionStatement = Expression StatementEnd

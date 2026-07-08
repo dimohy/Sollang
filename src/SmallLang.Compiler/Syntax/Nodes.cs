@@ -6,23 +6,27 @@ internal sealed record SmallLangProgram(
 
 internal sealed record FunctionDeclaration(
     string Name,
+    string? InputName,
     string? InputType,
     string ReturnType,
-    Expression Body,
+    Expression? Body,
     int Line,
-    int Column);
+    int Column,
+    bool IsIntrinsic,
+    bool IsStandardLibrary);
 
 internal abstract record Statement;
 
 internal sealed record BindingStatement(string Name, Expression Value, int Line, int Column) : Statement;
 
-internal sealed record EachStatement(
+internal sealed record BlockFunctionCallStatement(
+    Expression Source,
+    IReadOnlyList<string> Target,
     string ItemName,
-    Expression Start,
-    Expression End,
     IReadOnlyList<Statement> Body,
     int Line,
-    int Column)
+    int Column,
+    bool UsesDefaultItemName)
     : Statement;
 
 internal sealed record ExpressionStatement(Expression Expression) : Statement;
@@ -40,6 +44,9 @@ internal sealed record AddExpression(Expression Left, Expression Right, int Line
     : Expression(Line, Column);
 
 internal sealed record MultiplyExpression(Expression Left, Expression Right, int Line, int Column)
+    : Expression(Line, Column);
+
+internal sealed record RangeExpression(Expression Start, Expression End, int Line, int Column)
     : Expression(Line, Column);
 
 internal sealed record FlowExpression(

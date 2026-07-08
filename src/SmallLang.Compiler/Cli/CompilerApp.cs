@@ -5,6 +5,7 @@ using SmallLang.Compiler.Diagnostics;
 using SmallLang.Compiler.Lexing;
 using SmallLang.Compiler.Parsing;
 using SmallLang.Compiler.Semantics;
+using SmallLang.Compiler.Syntax;
 using SmallLang.Compiler.Tooling;
 
 namespace SmallLang.Compiler.Cli;
@@ -33,9 +34,7 @@ internal static class CompilerApp
 
     private static void Build(CliOptions options)
     {
-        var sourceText = File.ReadAllText(options.SourcePath, Encoding.UTF8);
-        var tokens = new Lexer(sourceText).Lex();
-        var program = new Parser(tokens).Parse();
+        var program = LoadProgram(options.SourcePath);
         var boundProgram = new SemanticCompiler(program).Compile();
         var llvmIr = LlvmIrGenerator.GenerateWindowsConsoleProgram(boundProgram);
         var toolchain = LlvmToolchain.From(options.LlvmHome);
@@ -78,5 +77,70 @@ internal static class CompilerApp
 
         var exeInfo = new FileInfo(options.OutputPath);
         Console.WriteLine($"Wrote {exeInfo.FullName} ({exeInfo.Length.ToString("N0", CultureInfo.InvariantCulture)} bytes)");
+    }
+
+    private static SmallLangProgram LoadProgram(string sourcePath)
+    {
+        var standardLibrary = LoadStandardLibrary(sourcePath);
+        var sourceProgram = ParseSourceFile(sourcePath, isStandardLibrary: false);
+        return new SmallLangProgram(
+            standardLibrary.SelectMany(static program => program.Functions)
+                .Concat(sourceProgram.Functions)
+                .ToArray(),
+            sourceProgram.Statements);
+    }
+
+    private static IReadOnlyList<SmallLangProgram> LoadStandardLibrary(string sourcePath)
+    {
+        var root = FindRepositoryRoot(sourcePath);
+        var paths = new[]
+        {
+            Path.Combine(root, "stdlib", "sys", "runtime.sl"),
+            Path.Combine(root, "stdlib", "sys", "io.sl")
+        };
+
+        foreach (var path in paths)
+        {
+            if (!File.Exists(path))
+            {
+                throw new SmallLangException($"standard library file not found: {path}");
+            }
+        }
+
+        return paths
+            .Select(static path => ParseSourceFile(path, isStandardLibrary: true))
+            .ToArray();
+    }
+
+    private static string FindRepositoryRoot(string sourcePath)
+    {
+        foreach (var start in GetRootSearchStarts(sourcePath))
+        {
+            for (var current = new DirectoryInfo(start); current is not null; current = current.Parent)
+            {
+                if (File.Exists(Path.Combine(current.FullName, "SmallLang.slnx"))
+                    && Directory.Exists(Path.Combine(current.FullName, "stdlib")))
+                {
+                    return current.FullName;
+                }
+            }
+        }
+
+        throw new SmallLangException("could not locate the SmallLang standard library root");
+    }
+
+    private static IEnumerable<string> GetRootSearchStarts(string sourcePath)
+    {
+        var sourceFullPath = Path.GetFullPath(sourcePath);
+        yield return Path.GetDirectoryName(sourceFullPath) ?? Directory.GetCurrentDirectory();
+        yield return Directory.GetCurrentDirectory();
+        yield return AppContext.BaseDirectory;
+    }
+
+    private static SmallLangProgram ParseSourceFile(string path, bool isStandardLibrary)
+    {
+        var sourceText = File.ReadAllText(path, Encoding.UTF8);
+        var tokens = new Lexer(sourceText).Lex();
+        return new Parser(tokens, isStandardLibrary).Parse();
     }
 }

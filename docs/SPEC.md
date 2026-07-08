@@ -1,7 +1,7 @@
 # SmallLang Language Specification Draft
 
 Status: draft
-Date: 2026-07-07
+Date: 2026-07-08
 
 This document is the living specification for SmallLang. It records the language
 shape before implementation so design decisions do not get lost.
@@ -12,17 +12,23 @@ SmallLang implementation has started for the smallest approved language slice.
 
 The implementation boundary is intentionally narrow:
 
-- one `main` block
-- zero-argument and one-input expression functions
-- local string bindings with `name = value`
+- explicit `main` block or omitted `main` with top-level executable statements
+- zero-argument and one-input expression functions with default `it` or an
+  explicit input name
+- value-flow local bindings with `value -> name`
 - integer bindings with decimal integer literals
 - left-associative integer `+` and `*`
 - simple string interpolation with `{name}`
 - value-flow calls and result bindings with `value -> function -> name`
 - parenthesized calls with `function(value)`
-- integer input with `readInt`
-- line output with `println`
-- closed integer range loops with `each item in start..end { ... }`
+- SmallLang standard library functions `sys.io.print`, `sys.io.println`, and
+  `sys.io.readInt` through global import aliases `print`, `println`, and
+  `readInt`
+- integer input with `readInt` or `sys.io.readInt`
+- line output with `println` or `sys.io.println`
+- block-function calls, with `each` as the first built-in block function
+- closed integer range loops with `start..end -> each item { ... }`
+- default loop item binding with `start..end -> each { ... }`, exposed as `it`
 - Windows x64 native executable output through LLVM
 
 Anything beyond that remains specification work until explicitly approved.
@@ -73,7 +79,7 @@ The first valid SmallLang program is:
 
 ```smalllang
 main {
-    name = "dimohy"
+    "dimohy" -> name
     print("Hello, {name}")
 }
 ```
@@ -111,14 +117,22 @@ Expected stdout bytes:
 Hello, dimohy. square = 49
 ```
 
+The one-input function can also name its input explicitly:
+
+```smalllang
+square n: Int -> Int {
+    n * n
+}
+```
+
 The current cumulative input and loop example is:
 
 ```smalllang
 main {
     "n = ? " -> readInt -> n
 
-    each i in 1..9 {
-        value = n * i
+    1..9 -> each i {
+        n * i -> value
         "{n} x {i} = {value}" -> println
     }
 }
@@ -136,6 +150,40 @@ n = ? 9 x 1 = 9
 9 x 7 = 63
 9 x 8 = 72
 9 x 9 = 81
+```
+
+The same loop can omit the item name and use the default binding `it`:
+
+```smalllang
+main {
+    "n = ? " -> readInt -> n
+
+    1..9 -> each {
+        n * it -> value
+        "{n} x {it} = {value}" -> println
+    }
+}
+```
+
+The executable `main` wrapper can be omitted. These top-level statements are
+compiled as the main body:
+
+```smalllang
+getName -> name
+7 -> square -> num
+"Hello, {name}. square = {num}" -> sys.io.print
+```
+
+The input and output functions can also be addressed by their canonical module
+path:
+
+```smalllang
+"n = ? " -> sys.io.readInt -> n
+
+1..9 -> each i {
+    n * i -> value
+    "{n} x {i} = {value}" -> sys.io.println
+}
 ```
 
 ## Initial Syntax Direction
@@ -159,19 +207,30 @@ main {
 }
 ```
 
+For short executable scripts, the `main` wrapper may be omitted:
+
+```smalllang
+getName -> name
+7 -> square -> num
+"Hello, {name}. square = {num}" -> print
+```
+
 Rationale:
 
 - `main { ... }` is shorter than `fn main() { ... }`.
-- `name = value` is the smallest readable binding form.
+- `value -> name` keeps local binding aligned with the language's flow-first
+  direction.
 - `"Hello, {name}"` keeps string interpolation direct and familiar.
 - `it * it` introduces the smallest one-input numeric function without deciding the
   final numeric tower.
-- `getName: -> Text { ... }` and `square: Int -> Int { ... }` introduce the
-  smallest zero-input and one-input function declaration shapes.
+- `getName: -> Text { ... }`, `square: Int -> Int { ... }`, and
+  `square n: Int -> Int { ... }` introduce the smallest zero-input and one-input
+  function declaration shapes.
 - `getName -> name` and `7 -> square -> num` make returned values bindable
   without hiding the flow behind assignment syntax.
 - `"..." -> print` makes the primary data flow visible at the call site.
-- The executable entry point is still explicit.
+- The executable entry point can be explicit with `main { ... }` or implicit
+  when top-level executable statements are present.
 - The parser can recognize the first complete program with a tiny grammar.
 - The syntax leaves room for full functions, modules, and effects later.
 - Braces avoid indentation-sensitive block parsing.
@@ -181,12 +240,14 @@ Rationale:
 The initial grammar is deliberately small:
 
 ```ebnf
-source_file  := trivia* function_declaration* main_block trivia* eof
-function_declaration := identifier ":" function_signature "{" expression "}"
+source_file  := trivia* function_declaration* (main_block | statement*) trivia* eof
+function_declaration := path identifier? ":" function_signature function_body
 function_signature := "->" type_name | type_name "->" type_name
+function_body := "{" expression "}" | "=" "intrinsic"
 main_block   := "main" block
 block        := "{" statement* "}"
-statement    := each_statement | binding_statement | expression_statement
+statement    := block_function_call | each_statement | binding_statement | expression_statement
+block_function_call := range_expression "->" path identifier? block
 each_statement := "each" identifier "in" range_expression block
 binding_statement := identifier "=" expression statement_end
 expression_statement := expression statement_end
@@ -212,30 +273,45 @@ Notes:
 - Newline is a statement separator, not an indentation rule.
 - Semicolons are not part of the initial surface syntax.
 - Braces are the only block delimiters.
-- `identifier = expression` introduces a local binding in the current block.
+- If `main { ... }` is omitted, remaining top-level statements after function
+  declarations are treated as the executable main body.
+- A final unknown single identifier in a statement-level flow introduces a local
+  binding in the current block.
+- `range -> path item? { ... }` introduces a block-function call. The only
+  supported block-function target in the current slice is `each`.
 - `+` is initially defined only for integer addition.
 - `*` is initially defined only for integer multiplication.
 - `value -> function` is parsed as a flow expression with `value` as the source.
 - A final unknown single identifier in a statement-level flow binds the result:
   `7 -> square -> num`.
-- `each i in 1..9 { ... }` iterates an inclusive integer range and introduces
+- `1..9 -> each i { ... }` iterates an inclusive integer range and introduces
   `i` only inside the loop body.
+- `1..9 -> each { ... }` uses `it` as the default loop item binding.
 - Function declarations are currently expression bodies with either no input or
-  one implicit input binding named `it`.
+  one input. A one-input function uses `it` when no input name is supplied, and
+  uses the supplied name in `square n: Int -> Int { ... }`.
+- Path-qualified function declarations are currently used by the standard
+  library, such as `sys.io.print value: Text -> Unit { ... }`.
+- `= intrinsic` declarations are reserved for the standard library's lower
+  runtime boundary.
 
 ## Bindings
 
-The initial binding syntax is:
+The preferred binding syntax is:
 
 ```smalllang
-name = "dimohy"
+"dimohy" -> name
+n * i -> value
 ```
 
 There is no `let`, `var`, or declaration keyword.
 
 Initial binding rules:
 
-- The first `name = expression` in a block introduces `name`.
+- The first statement-level `expression -> name` in a block introduces `name`
+  when `name` is not a known intermediate flow target.
+- The older `name = expression` form remains accepted as a compatibility syntax,
+  but new samples should prefer `expression -> name`.
 - A binding is visible after its declaration statement.
 - Referencing a binding before declaration is a compile-time error.
 - Reusing the same name in the same scope is a compile-time error for now.
@@ -244,6 +320,106 @@ Initial binding rules:
 
 This keeps the smallest program easy to read while avoiding hidden mutation
 semantics before the memory and value model are decided.
+
+## Function Inputs
+
+One-input functions use the same naming idea as range loops:
+
+```smalllang
+square: Int -> Int {
+    it * it
+}
+
+square n: Int -> Int {
+    n * n
+}
+```
+
+When the input name is omitted, the function body receives the value as `it`.
+When the input name is supplied after the function name, the body receives the
+value through that binding. This mirrors `start..end -> each { ... }` and
+`start..end -> each item { ... }`.
+
+## Block Functions
+
+SmallLang models executable blocks as values passed to block functions at the
+semantic layer:
+
+```smalllang
+1..9 -> each i {
+    n * i -> value
+    "{n} x {i} = {value}" -> println
+}
+```
+
+In the current slice, `each` is the only supported block-function target. The
+range expression flows into `each`, the optional identifier names the block input
+for each invocation, and the brace body is the executable block argument.
+
+The compiler is not required to lower this as a runtime closure. For built-in
+block functions such as `each`, the backend may specialize the call at compile
+time. The current Windows LLVM backend lowers `each` directly to basic blocks
+with an SSA phi value for the item binding, with no heap allocation, function
+pointer, closure object, or dynamic block dispatch.
+
+## Standard Library Imports And Aliases
+
+The current standard library implements the `sys.io` module in SmallLang:
+
+```smalllang
+sys.io.print value: Text -> Unit {
+    value -> sys.runtime.print
+}
+
+sys.io.println value: Text -> Unit {
+    value -> sys.runtime.println
+}
+
+sys.io.readInt prompt: Text -> Int {
+    prompt -> sys.runtime.readInt
+}
+```
+
+The lower `sys.runtime` functions are intrinsic declarations owned by the
+standard library:
+
+```smalllang
+sys.runtime.print value: Text -> Unit = intrinsic
+sys.runtime.println value: Text -> Unit = intrinsic
+sys.runtime.readInt prompt: Text -> Int = intrinsic
+```
+
+The compiler loads the standard library before user code and globally imports
+the public `sys.io` functions:
+
+```text
+sys.io.print
+sys.io.println
+sys.io.readInt
+```
+
+The short names are aliases:
+
+```text
+print   -> sys.io.print
+println -> sys.io.println
+readInt -> sys.io.readInt
+```
+
+Source code can use either spelling:
+
+```smalllang
+"Hello" -> print
+"Hello" -> sys.io.print
+"n = ? " -> readInt -> n
+"n = ? " -> sys.io.readInt -> n
+```
+
+These functions are resolved through the same function table as user functions.
+They are not parsed as keywords or statement-specific built-ins. Their only
+current privilege is the global alias layer. The backend inlines the SmallLang
+`sys.io` wrappers and lowers the `sys.runtime` intrinsic boundary to the
+selected platform I/O implementation.
 
 ## Numeric Expressions
 
@@ -315,12 +491,14 @@ Interpolation rules:
 
 ## Output Surface Semantics
 
-`print` and `println` are available in the initial prelude. The preferred source
-form is a value-flow call:
+`sys.io.print` and `sys.io.println` are standard library functions. The compiler
+globally aliases them as `print` and `println` before user code is analyzed. The
+preferred source form is a value-flow call:
 
 ```smalllang
 "Hello, {name}. square = {num}" -> print
 "Hello, {name}. square = {num}" -> println
+"Hello, {name}. square = {num}" -> sys.io.print
 ```
 
 The parenthesized forms remain valid and equivalent:
@@ -328,13 +506,14 @@ The parenthesized forms remain valid and equivalent:
 ```smalllang
 print("Hello, {name}. square = {num}")
 println("Hello, {name}. square = {num}")
+sys.io.print("Hello, {name}. square = {num}")
 ```
 
 Semantically, it resolves to:
 
 ```text
-core.io.print(utf8_output_expression)
-core.io.println(utf8_output_expression)
+sys.io.print(utf8_output_expression)
+sys.io.println(utf8_output_expression)
 ```
 
 `print` emits exactly the requested bytes. `println` emits the requested bytes
@@ -342,23 +521,26 @@ followed by a single line-feed byte in the current runtime slice.
 
 ## Input Surface Semantics
 
-`readInt` is available as the first input primitive. The preferred form mirrors
-output value flow:
+`sys.io.readInt` is the first input function implemented through the standard
+library and globally aliased as `readInt`. The preferred form mirrors output
+value flow:
 
 ```smalllang
 "n = ? " -> readInt -> n
+"n = ? " -> sys.io.readInt -> n
 ```
 
 The parenthesized form is also valid:
 
 ```smalllang
 n = readInt("n = ? ")
+n = sys.io.readInt("n = ? ")
 ```
 
 Semantically, it resolves to:
 
 ```text
-core.io.readInt(prompt_text) -> Int
+sys.io.readInt(prompt_text) -> Int
 ```
 
 The current runtime accepts a decimal integer line from standard input. Input
@@ -367,11 +549,30 @@ silently fall back to an arbitrary value.
 
 ## Range Loops
 
-The first loop form is an inclusive integer range loop:
+The first loop form is implemented as the built-in block function `each`. The
+preferred explicit item form is:
+
+```smalllang
+1..9 -> each i {
+    n * i -> value
+    "{n} x {i} = {value}" -> println
+}
+```
+
+When the item name is omitted, SmallLang provides the default binding `it`:
+
+```smalllang
+1..9 -> each {
+    n * it -> value
+    "{n} x {it} = {value}" -> println
+}
+```
+
+The older compatibility spelling remains accepted:
 
 ```smalllang
 each i in 1..9 {
-    value = n * i
+    n * i -> value
     "{n} x {i} = {value}" -> println
 }
 ```
@@ -414,11 +615,12 @@ getName -> name
 name -> greeting -> message
 ```
 
-The assignment form remains valid when it is clearer for a non-flowing
-expression:
+The assignment form remains valid as a compatibility syntax, but the preferred
+SmallLang style is still flow-first:
 
 ```smalllang
 num = square(7)
+n * i -> value
 ```
 
 The corresponding function type notation follows the same direction:
@@ -544,7 +746,9 @@ native entry function
 -> write string literal segments directly
 -> write name as a text slice
 -> convert num to decimal bytes at runtime and write them
--> lower value-flow print call to selected core.io.print backend with output bytes
+-> resolve print as global alias for the SmallLang function sys.io.print
+-> inline sys.io.print to sys.runtime.print
+-> lower sys.runtime.print to selected backend output bytes
 -> return process exit code
 ```
 
@@ -591,29 +795,35 @@ Current backend:
   generator
 - parser: generated from `syntax/smalllang.grammar` by a Roslyn incremental source
   generator
-- semantics: zero-argument and one-input function declarations, string and
-  integer bindings, checked integer `+` and `*`, scalar interpolation, and
+- semantics: zero-argument and one-input function declarations, including
+  default `it` inputs and explicit input names, standard library loading,
+  global aliases for `sys.io`, built-in block-function calls, string and integer
+  bindings, checked integer `+` and `*`, scalar interpolation, and
   statement-level value-flow binding are type-checked for the current slice
 - value-flow calls: `value -> function` is parsed as a flow AST and lowered by
   semantic/codegen stages according to target position
-- input: `readInt` lowers to a selected stdin backend primitive and returns an
-  integer value
-- loops: `each i in start..end { ... }` lowers to LLVM basic blocks with an SSA
-  phi value for the loop variable
+- input: `sys.io.readInt` and alias `readInt` lower to a selected stdin backend
+  primitive and return an integer value
+- loops: `start..end -> each i { ... }` and `start..end -> each { ... }` are
+  modeled as block-function calls and lower directly to LLVM basic blocks with
+  an SSA phi value for the loop variable, without runtime closure allocation or
+  dynamic block dispatch
 - IR output: immutable UTF-8 literal segments, runtime function calls, runtime
   i64 addition/multiplication, and runtime integer decimal output
 - entry point: `smalllang_start`
 - imports: `GetStdHandle`, `ReadFile`, `WriteFile`
 - linker: `lld-link`
 - CRT: none
-- current verified executable sizes: 1,104 bytes for `hello.sl`, 1,584
-  bytes for `gugudan.sl`
+- current verified executable sizes: 1,104 bytes for `hello.sl`, 1,104 bytes
+  for `hello-named-arg.sl`, 1,104 bytes for `hello-top-level.sl`, 1,584 bytes
+  for `gugudan.sl`, 1,584 bytes for `gugudan-it.sl`, and 1,584 bytes for
+  `gugudan-sys-io.sl`
 
 The current runtime backend emits direct `WriteFile` calls for text segments,
 uses `ReadFile` for integer input on the selected Windows backend, calls
-generated SmallLang functions, converts integer output to decimal bytes at
-runtime, and returns `0` or `1` from the native entry point based on API success
-and input parse success.
+generated user SmallLang functions, inlines standard library `sys.io` wrappers,
+converts integer output to decimal bytes at runtime, and returns `0` or `1` from
+the native entry point based on API success and input parse success.
 
 ## Current Module Layout
 
@@ -626,6 +836,7 @@ The compiler implementation is organized by responsibility:
 - `Semantics`: current binding/interpolation/I/O/loop lowering
 - `CodeGen`: LLVM IR generation
 - `Tooling`: LLVM and Windows linker integration
+- `stdlib/sys`: SmallLang standard library modules plus intrinsic boundary declarations
 
 Lexer rules are expressed in the compact `syntax/smalllang.lexer` file. The source
 generator reads that file as an MSBuild `AdditionalFiles` input and emits
@@ -647,7 +858,8 @@ stage.
 - What escape sequences are allowed in string literals?
 - Should string interpolation later allow full expressions?
 - How should literal `{` and `}` be written inside strings?
-- What is the mutability/reassignment model for `name = value`?
+- What is the mutability/reassignment model after flow-first binding
+  introduction with `value -> name`?
 - What numeric types beyond the initial signed 64-bit integer should exist?
 - What comment syntax should be adopted?
 - What is the first official target matrix?

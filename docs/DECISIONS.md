@@ -297,7 +297,7 @@ x64 executable size at D016 time remained 1,088 bytes.
 
 ## D017 - Input Primitive And Inclusive Range Loop
 
-Status: implemented
+Status: implemented, loop spelling superseded by D019
 Date: 2026-07-08
 
 SmallLang samples are cumulative. New samples should be added alongside earlier
@@ -311,7 +311,7 @@ main {
     "n = ? " -> readInt -> n
 
     each i in 1..9 {
-        value = n * i
+        n * i -> value
         "{n} x {i} = {value}" -> println
     }
 }
@@ -345,3 +345,198 @@ is greater than its end executes zero times.
 After adding the input and loop runtime, the verified executable sizes are 1,104
 bytes for `examples/hello.sl` and 1,584 bytes for
 `examples/gugudan.sl`.
+
+## D018 - Arrow Binding As Preferred Assignment Direction
+
+Status: accepted
+Date: 2026-07-08
+
+SmallLang should prefer arrow-oriented binding even for local assignment-like
+introductions. New samples should use:
+
+```smalllang
+expression -> name
+n * i -> value
+```
+
+instead of leading with:
+
+```smalllang
+name = expression
+value = n * i
+```
+
+This keeps local binding aligned with the language's value-flow direction:
+values are written first, then flow into their binding target. The existing
+`name = expression` form remains accepted as a compatibility syntax for now, but
+it is no longer the preferred style for examples or documentation. This decision
+supersedes D004/D006 as the current surface-language direction while preserving
+those entries as historical context.
+
+## D019 - Arrow Range Loop With Optional Item Name
+
+Status: implemented
+Date: 2026-07-08
+
+SmallLang's preferred range loop syntax is now flow-oriented:
+
+```smalllang
+1..9 -> each i {
+    n * i -> value
+    "{n} x {i} = {value}" -> println
+}
+```
+
+The range expression flows into `each`, and the optional identifier after `each`
+names the current item. When the identifier is omitted, the loop item is bound as
+`it`:
+
+```smalllang
+1..9 -> each {
+    n * it -> value
+    "{n} x {it} = {value}" -> println
+}
+```
+
+This gives the language two final current forms:
+
+- `start..end -> each { ... }` for the default item binding `it`
+- `start..end -> each item { ... }` for an explicit item binding
+
+The older `each item in start..end { ... }` spelling remains accepted as a
+compatibility form, but new samples and documentation should prefer the
+flow-oriented loop syntax.
+
+## D020 - Optional Function Input Names
+
+Status: implemented
+Date: 2026-07-08
+
+SmallLang one-input functions now follow the same naming shape as `each`.
+
+When the input name is omitted, the function body receives the value as `it`:
+
+```smalllang
+square: Int -> Int {
+    it * it
+}
+```
+
+When the input name is supplied after the function name, the body receives the
+value through that binding:
+
+```smalllang
+square n: Int -> Int {
+    n * n
+}
+```
+
+This mirrors the loop forms:
+
+```smalllang
+1..9 -> each {
+    it
+}
+
+1..9 -> each i {
+    i
+}
+```
+
+The older `square: Int -> Int { it * it }` form remains valid and is the default
+input-binding form. The explicit form `square n: Int -> Int { n * n }` is
+available when naming the input improves readability.
+
+## D021 - Built-In Block Functions And Optimized `each`
+
+Status: implemented
+Date: 2026-07-08
+
+`each` should be understood as the first built-in block function rather than as
+only a hard-coded loop statement:
+
+```smalllang
+1..9 -> each i {
+    n * i -> value
+    "{n} x {i} = {value}" -> println
+}
+```
+
+Semantically, the range value flows into the block function `each`, `i` names the
+block invocation input, and the brace body is the executable block argument.
+The default item form follows the same rule:
+
+```smalllang
+1..9 -> each {
+    n * it -> value
+    "{n} x {it} = {value}" -> println
+}
+```
+
+The compiler now represents this preferred form as a generic block-function call
+AST. The current semantic layer only accepts `each` as a block-function target;
+future built-ins or user-defined block functions can build on the same model.
+
+This language model must not force inefficient runtime lowering. The Windows
+LLVM backend specializes the built-in `each` block function directly into loop
+basic blocks with an SSA phi value for the item binding. It does not allocate a
+closure, emit a function pointer, or perform dynamic block dispatch for the
+current built-in loop.
+
+The older `each item in start..end { ... }` spelling remains accepted as a
+compatibility syntax and is converted into the same internal block-function call
+shape before semantic analysis.
+
+## D022 - `sys.io` Is A SmallLang Standard Library Module
+
+Status: implemented
+Date: 2026-07-08
+
+`print`, `println`, and `readInt` should not be compiler-owned special functions
+under the `sys.io` name. They are ordinary functions provided by the standard
+library and imported globally through aliases:
+
+```text
+print   -> sys.io.print
+println -> sys.io.println
+readInt -> sys.io.readInt
+```
+
+The actual `sys.io` module is implemented in SmallLang:
+
+```smalllang
+sys.io.print value: Text -> Unit {
+    value -> sys.runtime.print
+}
+
+sys.io.println value: Text -> Unit {
+    value -> sys.runtime.println
+}
+
+sys.io.readInt prompt: Text -> Int {
+    prompt -> sys.runtime.readInt
+}
+```
+
+The lower runtime boundary is declared separately in the standard library with
+`= intrinsic`:
+
+```smalllang
+sys.runtime.print value: Text -> Unit = intrinsic
+sys.runtime.println value: Text -> Unit = intrinsic
+sys.runtime.readInt prompt: Text -> Int = intrinsic
+```
+
+This required two syntax additions for the current implementation slice:
+
+- path-qualified function declarations, such as
+  `sys.io.print value: Text -> Unit { ... }`
+- intrinsic declarations, such as
+  `sys.runtime.print value: Text -> Unit = intrinsic`
+
+The compiler loads `stdlib/sys/runtime.sl` and `stdlib/sys/io.sl` before user
+source, then adds only alias entries for `print`, `println`, and `readInt`.
+The semantic model resolves `sys.io` through the same function table as user
+functions. The Windows LLVM backend inlines standard library wrappers and lowers
+only the `sys.runtime` intrinsic boundary to direct `ReadFile`/`WriteFile`
+runtime code, so verified IR does not emit `sys.io` function calls.
