@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/smalllang-logo.svg" alt="SmallLang logo" width="160" />
+</p>
+
 # SmallLang
 
 SmallLang is a tiny native language experiment focused on simple syntax, fast

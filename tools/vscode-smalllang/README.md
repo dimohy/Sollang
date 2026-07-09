@@ -8,10 +8,11 @@ files.
 - Registers `.sl` as `smalllang`.
 - Highlights comments, strings, interpolation, function declarations, function
   calls, value-flow arrows, block-function calls, conditionals, types, numbers,
-  and operators.
+  namespaces, imports, block parameters, `fold` bindings, `yield()`, and
+  operators.
 - Adds indentation and bracket pairing for `{}`, `()`, and `"`.
 - Provides snippets for `main`, functions, flow calls, `each`, `repeat`, and
-  `when`.
+  `fold`, `when`, namespaces, and imports.
 
 ## Package And Install
 
@@ -19,7 +20,7 @@ From this folder:
 
 ```powershell
 npx --yes @vscode/vsce package --no-dependencies --allow-missing-repository
-code --install-extension .\smalllang-syntax-0.1.0.vsix
+code --install-extension .\smalllang-syntax-0.1.1.vsix
 ```
 
 For extension development, open this folder in VS Code and run the extension host
