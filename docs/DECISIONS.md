@@ -1135,13 +1135,13 @@ The declaration body is inlined at the call site. Inside the declaration,
 yielded value to the caller's block item name. `yield()` is valid only inside a
 user-defined block function and must be the final value-flow target.
 
-## D040 - VS Code Syntax Highlighting Extension
+## D040 - VS Code Language Support Extension
 
 Status: implemented
 Date: 2026-07-08
 
-SmallLang now includes a local declarative VS Code extension under
-`tools/vscode-smalllang`. It registers `.sl` as `smalllang`, contributes a
+SmallLang now includes a local declarative VS Code language support extension
+under `tools/vscode-smalllang`. It registers `.sl` as `smalllang`, contributes a
 TextMate grammar for comments, strings, interpolation, function declarations,
 flow calls, block-function calls, keywords, types, constants, numbers, and
 operators, and provides snippets for `main`, functions, flow calls, `each`,
@@ -1152,7 +1152,7 @@ Install locally with:
 ```powershell
 Push-Location tools\vscode-smalllang
 npx --yes @vscode/vsce package --no-dependencies --allow-missing-repository
-code --install-extension .\smalllang-syntax-0.1.0.vsix
+code --install-extension .\smalllang-language-support-0.1.2.vsix
 Pop-Location
 ```
 

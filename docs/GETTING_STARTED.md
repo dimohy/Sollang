@@ -140,12 +140,12 @@ The compiler itself targets .NET 11 Preview and uses C# Preview.
 
 ## VS Code Extension
 
-SmallLang includes a local VS Code syntax-highlighting extension:
+SmallLang includes a local VS Code language support extension:
 
 ```powershell
 Push-Location tools\vscode-smalllang
 npx --yes @vscode/vsce package --no-dependencies --allow-missing-repository
-code --install-extension .\smalllang-syntax-0.1.1.vsix
+code --install-extension .\smalllang-language-support-0.1.2.vsix
 Pop-Location
 ```
 

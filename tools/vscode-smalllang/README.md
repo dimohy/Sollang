@@ -1,7 +1,6 @@
-# SmallLang Syntax
+# SmallLang Language Support
 
-VS Code syntax highlighting and lightweight editor support for SmallLang `.sl`
-files.
+VS Code language support for SmallLang `.sl` files.
 
 ## Features
 
@@ -20,7 +19,7 @@ From this folder:
 
 ```powershell
 npx --yes @vscode/vsce package --no-dependencies --allow-missing-repository
-code --install-extension .\smalllang-syntax-0.1.1.vsix
+code --install-extension .\smalllang-language-support-0.1.2.vsix
 ```
 
 For extension development, open this folder in VS Code and run the extension host

@@ -93,7 +93,7 @@ build outputs, and generated executables are intentionally ignored by Git.
 - [Getting started and implementation guide](docs/GETTING_STARTED.md)
 - [Language specification](docs/SPEC.md)
 - [Decision log](docs/DECISIONS.md)
-- [VS Code syntax extension](tools/vscode-smalllang/README.md)
+- [VS Code language support extension](tools/vscode-smalllang/README.md)
 - [Example programs](examples)
 
 ## Repository Map
@@ -104,7 +104,7 @@ build outputs, and generated executables are intentionally ignored by Git.
 - `src/SmallLang.Compiler`: compiler CLI, semantic lowering, and LLVM codegen
 - `src/SmallLang.Compiler.Generators`: source generators for lexing/parsing
 - `tests/SmallLang.ExampleTests`: expected stdout test runner
-- `tools/vscode-smalllang`: local VS Code syntax-highlighting extension
+- `tools/vscode-smalllang`: local VS Code language support extension
 
 ## License
 
