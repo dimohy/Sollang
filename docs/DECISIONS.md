@@ -1156,4 +1156,45 @@ code --install-extension .\smalllang-language-support-0.1.2.vsix
 Pop-Location
 ```
 
+## D042 - Browser WebAssembly Target
+
+Status: implemented
+Date: 2026-07-09
+
+SmallLang now supports a browser WebAssembly target in addition to the native
+Windows and Linux targets:
+
+```powershell
+.\scripts\smalllang.ps1 -Source examples\23-webassembly-browser.sl -Output artifacts\23-webassembly-browser.wasm -Target wasm32-browser -KeepTemps
+python -m http.server 5080
+```
+
+The compiler emits LLVM IR with the `wasm32-unknown-unknown-wasm` target triple,
+uses the existing common LLVM lowering for functions, flow bindings,
+interpolation, conditionals, `fold`, and output calls, compiles the IR with
+Windows LLVM `clang`, and links the final `.wasm` with `wasm-ld`.
+
+The generated module exports `smalllang_start` and `memory`. It imports a single
+browser-hosted output boundary:
+
+```text
+env.smalllang_browser_write(ptr, len) -> i32
+```
+
+The static runner under `examples/browser` implements this import by reading
+UTF-8 bytes from exported linear memory and appending them to the page output.
+The current browser target intentionally supports stdout-style text output
+first. `readInt` and sorted-int file runtime primitives are present as explicit
+failure stubs for this target rather than silently mapping to browser prompts or
+storage.
+
+`examples/23-webassembly-browser.sl` is cumulative and also runs as a native
+example. Its expected output fixture verifies:
+
+```text
+Hello from SmallLang WebAssembly
+8 squared = 64
+1..5 sum = 15
+```
+
 

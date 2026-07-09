@@ -27,6 +27,7 @@ internal abstract class LlvmRuntimePlatform
         {
             CompilationTarget.WindowsX64 => new WindowsLlvmRuntimePlatform(),
             CompilationTarget.LinuxX64 => new LinuxLlvmRuntimePlatform(),
+            CompilationTarget.Wasm32Browser => new WasmBrowserLlvmRuntimePlatform(),
             _ => throw new SmallLangException($"unsupported target '{target}'")
         };
     }

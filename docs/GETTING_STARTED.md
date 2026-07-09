@@ -54,6 +54,7 @@ to the accepted language specification and decision log.
 - Windows x64 executable linking through `clang` and `lld-link`
 - Linux x64 executable linking through Windows LLVM object generation and WSL
   `cc`
+- browser WebAssembly module linking through `clang` and `wasm-ld`
 
 With the current Windows linker settings, representative executable sizes are
 **1,536 bytes** for `01-function-basic-hello.sl` and `05-function-local.sl`,
@@ -126,6 +127,17 @@ Linux x64 output is available through WSL:
 wsl --exec /mnt/p/MyWorks/SmallLang/artifacts/01-function-basic-hello-linux
 ```
 
+Browser WebAssembly output is available through the `wasm32-browser` target. The
+generated module exports `smalllang_start` and `memory`, and imports
+`env.smalllang_browser_write(ptr, len)` so the page can render stdout text:
+
+```powershell
+.\scripts\smalllang.ps1 -Source examples\23-webassembly-browser.sl -Output artifacts\23-webassembly-browser.wasm -Target wasm32-browser -KeepTemps
+python -m http.server 5080
+```
+
+Open `http://localhost:5080/examples/browser/`.
+
 On first use, the script downloads LLVM 22.1.8 into `.tools`. LLVM binaries,
 build outputs, and generated executables are intentionally ignored by Git.
 
@@ -165,8 +177,8 @@ flowchart LR
     Parser --> AST[AST]
     AST --> Semantics[Semantic lowering]
     Semantics --> LLVM[LLVM IR]
-    LLVM --> Object[COFF or ELF object]
-    Object --> Exe[Native executable]
+    LLVM --> Object[COFF, ELF, or WASM object]
+    Object --> Output[Native executable or WebAssembly module]
 ```
 
 ## Lexer Rules
@@ -343,6 +355,8 @@ approved syntax.
   integer binary-file generator
 - `examples/22-stdlib-file-100m-query.sl`: nearest-value query over the full
   generated integer file
+- `examples/23-webassembly-browser.sl`: browser WebAssembly stdout sample
+- `examples/browser`: static HTML/JS runner for the WebAssembly sample
 - `examples/expected`: expected stdout/stdin fixtures for executable samples
 - `stdlib/sys/runtime.sl`: standard library intrinsic boundary declarations
 - `stdlib/sys/io.sl`: SmallLang implementation of `sys.io` wrappers
@@ -372,5 +386,6 @@ approved syntax.
 ## Notes
 
 This repository does not commit LLVM binaries or generated executables. The
-current compiler backend supports Windows x64 and Linux x64. Linux linking uses
-WSL and requires a Linux `cc` in the WSL distribution.
+current compiler backend supports Windows x64, Linux x64, and browser
+WebAssembly. Linux linking uses WSL and requires a Linux `cc` in the WSL
+distribution.

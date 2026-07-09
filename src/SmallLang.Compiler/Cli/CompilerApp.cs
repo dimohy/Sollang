@@ -88,6 +88,9 @@ internal static class CompilerApp
             case CompilationTarget.LinuxX64:
                 new WslLinuxLinker(toolchain).LinkLlvmIr(llPath, options.OutputPath, workDir);
                 break;
+            case CompilationTarget.Wasm32Browser:
+                new WasmBrowserLinker(toolchain).LinkLlvmIr(llPath, options.OutputPath, workDir);
+                break;
             default:
                 throw new SmallLangException($"unsupported target '{options.Target}'");
         }

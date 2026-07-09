@@ -21,7 +21,7 @@ value flow with `value -> target` syntax.
 - flow-oriented `if` and `when` conditionals
 - a SmallLang standard library under `stdlib/sys`
 - source-generated lexer/parser code from compact grammar files
-- LLVM-backed Windows x64 and Linux x64 executable output
+- LLVM-backed Windows x64, Linux x64, and browser WebAssembly output
 
 ## Example
 
@@ -88,6 +88,16 @@ score -> when {
 On first use, the script downloads LLVM 22.1.8 into `.tools`. LLVM binaries,
 build outputs, and generated executables are intentionally ignored by Git.
 
+Build the browser WebAssembly sample and serve the repository root with any
+static file server:
+
+```powershell
+.\scripts\smalllang.ps1 -Source examples\23-webassembly-browser.sl -Output artifacts\23-webassembly-browser.wasm -Target wasm32-browser -KeepTemps
+python -m http.server 5080
+```
+
+Then open `http://localhost:5080/examples/browser/`.
+
 ## Documentation
 
 - [Getting started and implementation guide](docs/GETTING_STARTED.md)
@@ -99,6 +109,7 @@ build outputs, and generated executables are intentionally ignored by Git.
 ## Repository Map
 
 - `examples`: cumulative `.sl` programs that track the grammar progression
+- `examples/browser`: static browser runner for the WebAssembly sample
 - `stdlib/sys`: standard library modules written in SmallLang
 - `syntax`: lexer and grammar rule sources
 - `src/SmallLang.Compiler`: compiler CLI, semantic lowering, and LLVM codegen

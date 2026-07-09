@@ -2,7 +2,7 @@ using SmallLang.Compiler.Diagnostics;
 
 namespace SmallLang.Compiler.Tooling;
 
-internal sealed record LlvmToolchain(string Home, string Clang, string LldLink, string LlvmLib)
+internal sealed record LlvmToolchain(string Home, string Clang, string LldLink, string LlvmLib, string WasmLd)
 {
     public static LlvmToolchain From(string? llvmHome)
     {
@@ -14,12 +14,14 @@ internal sealed record LlvmToolchain(string Home, string Clang, string LldLink, 
         var clang = Path.Combine(bin, "clang.exe");
         var lldLink = Path.Combine(bin, "lld-link.exe");
         var llvmLib = Path.Combine(bin, "llvm-lib.exe");
+        var wasmLd = Path.Combine(bin, "wasm-ld.exe");
 
         RequireFile(clang, "clang.exe");
         RequireFile(lldLink, "lld-link.exe");
         RequireFile(llvmLib, "llvm-lib.exe");
+        RequireFile(wasmLd, "wasm-ld.exe");
 
-        return new LlvmToolchain(home, clang, lldLink, llvmLib);
+        return new LlvmToolchain(home, clang, lldLink, llvmLib, wasmLd);
     }
 
     private static void RequireFile(string path, string name)

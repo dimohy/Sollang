@@ -13,7 +13,7 @@ internal sealed record CliOptions(
     {
         if (args is not ["build", ..])
         {
-            throw new SmallLangException("usage: smalllang build <source.sl> -o <output> [--target windows-x64|linux-x64] [--llvm <dir>] [--keep-temps]");
+            throw new SmallLangException("usage: smalllang build <source.sl> -o <output> [--target windows-x64|linux-x64|wasm32-browser] [--llvm <dir>] [--keep-temps]");
         }
 
         string? source = null;
@@ -61,11 +61,15 @@ internal sealed record CliOptions(
             throw new SmallLangException("missing source file");
         }
 
-        output ??= target == CompilationTarget.WindowsX64
-            ? Path.ChangeExtension(source, ".exe")
-            : Path.Combine(
+        output ??= target switch
+        {
+            CompilationTarget.WindowsX64 => Path.ChangeExtension(source, ".exe"),
+            CompilationTarget.LinuxX64 => Path.Combine(
                 Path.GetDirectoryName(source) ?? Directory.GetCurrentDirectory(),
-                Path.GetFileNameWithoutExtension(source));
+                Path.GetFileNameWithoutExtension(source)),
+            CompilationTarget.Wasm32Browser => Path.ChangeExtension(source, ".wasm"),
+            _ => throw new SmallLangException($"unsupported target '{target}'")
+        };
 
         return new CliOptions(
             Path.GetFullPath(source),
@@ -81,6 +85,7 @@ internal sealed record CliOptions(
         {
             "windows-x64" => CompilationTarget.WindowsX64,
             "linux-x64" => CompilationTarget.LinuxX64,
+            "wasm32-browser" => CompilationTarget.Wasm32Browser,
             _ => throw new SmallLangException($"unknown target '{value}'")
         };
     }

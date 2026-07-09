@@ -1,7 +1,7 @@
 param(
     [string]$Source = "examples/01-function-basic-hello.sl",
-    [string]$Output = "artifacts/01-function-basic-hello.exe",
-    [ValidateSet("windows-x64", "linux-x64")]
+    [string]$Output,
+    [ValidateSet("windows-x64", "linux-x64", "wasm32-browser")]
     [string]$Target = "windows-x64",
     [switch]$KeepTemps
 )
@@ -9,6 +9,15 @@ param(
 $ErrorActionPreference = "Stop"
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
+$sourceName = [System.IO.Path]::GetFileNameWithoutExtension($Source)
+if ([string]::IsNullOrWhiteSpace($Output)) {
+    $Output = switch ($Target) {
+        "windows-x64" { "artifacts/$sourceName.exe" }
+        "linux-x64" { "artifacts/$sourceName" }
+        "wasm32-browser" { "artifacts/$sourceName.wasm" }
+    }
+}
+
 $llvmVersion = "22.1.8"
 $llvmDir = Join-Path $repoRoot ".tools\llvm-$llvmVersion"
 $clang = Join-Path $llvmDir "bin\clang.exe"
