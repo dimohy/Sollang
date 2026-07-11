@@ -2567,4 +2567,28 @@ the borrowed owner by value. Example 69 verifies fixed `Text`, dynamic
 copyable-struct, and dynamic owned-struct iteration without runtime type tables
 or vtables.
 
+## D083 - Swiss-Table Key And Value Iteration
+
+Status: implemented
+Date: 2026-07-12
+
+Dictionaries expose two fluent block iterators:
+
+```smalllang
+symbols -> eachKey key { ... }
+symbols -> eachValue value { ... }
+```
+
+Both scan the concrete table capacity and execute the block only for slots
+whose Swiss control byte is nonzero. `eachKey` binds K and `eachValue` binds V,
+using the specialization's exact offset, alignment, and LLVM load type. Table
+order is deterministic for a given hash implementation but is not insertion
+order and is not part of the source-level contract.
+
+Transitively owned keys or values are readonly per-slot borrows. Iterator block
+cleanup never drops them; the dictionary remains the sole owner and its final
+live-control-byte scan performs recursive destruction. Example 70 verifies
+`Text` keys, copyable struct values, and owned struct values. Diagnostics reject
+owned iterator-item copying and dictionary iterators on non-dictionary sources.
+
 

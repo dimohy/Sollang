@@ -1041,6 +1041,12 @@ internal sealed class SemanticCompiler
             case "each":
                 BindEachBlockFunctionCall(call, functions, bindings, mutableBindings, yieldInputType);
                 return;
+            case "eachKey":
+                BindDictionaryEachBlockFunctionCall(call, functions, bindings, mutableBindings, yieldInputType, bindKey: true);
+                return;
+            case "eachValue":
+                BindDictionaryEachBlockFunctionCall(call, functions, bindings, mutableBindings, yieldInputType, bindKey: false);
+                return;
             case "repeat":
                 BindRepeatBlockFunctionCall(call, functions, bindings, mutableBindings, yieldInputType);
                 return;
@@ -1187,6 +1193,60 @@ internal sealed class SemanticCompiler
             functions,
             bodyBindings,
             new HashSet<string>(mutableBindings, StringComparer.Ordinal),
+            allowContainerBindings: true);
+    }
+
+    private void BindDictionaryEachBlockFunctionCall(
+        BlockFunctionCallStatement call,
+        IReadOnlyDictionary<string, BoundFunction> functions,
+        Dictionary<string, BoundType> bindings,
+        HashSet<string> mutableBindings,
+        BoundType? yieldInputType,
+        bool bindKey)
+    {
+        if (!call.UsesDefaultItemName)
+        {
+            ValidateBindingName(call.ItemName, call.Line, call.Column);
+        }
+        if (bindings.ContainsKey(call.ItemName))
+        {
+            throw Error(call.Line, call.Column, $"binding '{call.ItemName}' already exists in this scope");
+        }
+
+        var sourceType = InferExpression(
+            call.Source,
+            functions,
+            bindings,
+            allowPrintCall: false,
+            allowReadIntCall: true,
+            allowFlowBindingTarget: false,
+            mutableBindings: mutableBindings);
+        BoundType itemType;
+        if (sourceType is BoundType.IntDictionary or BoundType.IntDictionaryView)
+        {
+            itemType = BoundType.Int;
+        }
+        else if (_types.IsDictionary(sourceType))
+        {
+            var dictionary = _types.GetDictionary(sourceType);
+            itemType = bindKey ? dictionary.KeyType : dictionary.ValueType;
+        }
+        else
+        {
+            throw Error(call.Source.Line, call.Source.Column,
+                $"{(bindKey ? "eachKey" : "eachValue")} expects a dictionary input");
+        }
+
+        var bodyBindings = new Dictionary<string, BoundType>(bindings, StringComparer.Ordinal)
+        {
+            [call.ItemName] = itemType
+        };
+        BindStatements(
+            call.Body,
+            functions,
+            bodyBindings,
+            new HashSet<string>(mutableBindings, StringComparer.Ordinal),
+            yieldInputType,
             allowContainerBindings: true);
     }
 

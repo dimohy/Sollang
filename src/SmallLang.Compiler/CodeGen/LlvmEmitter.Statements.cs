@@ -169,6 +169,12 @@ internal sealed partial class LlvmEmitter
 
                 EmitArrayEachBlockFunctionCall(statement);
                 return;
+            case "eachKey":
+                EmitDictionaryEachBlockFunctionCall(statement, bindKey: true);
+                return;
+            case "eachValue":
+                EmitDictionaryEachBlockFunctionCall(statement, bindKey: false);
+                return;
             case "repeat":
                 EmitRepeatBlockFunctionCall(statement);
                 return;
@@ -336,6 +342,99 @@ internal sealed partial class LlvmEmitter
             _currentFunctions = previousFunctions;
             RestoreLocals(callerLocals);
         }
+    }
+
+    private void EmitDictionaryEachBlockFunctionCall(
+        BlockFunctionCallStatement statement,
+        bool bindKey)
+    {
+        var sourceValue = EmitExpression(statement.Source);
+        RuntimeValue source = sourceValue is RuntimeIntDictionaryView view
+            ? new RuntimeIntDictionary(view.PointerName, view.LengthName, view.CapacityName)
+            : sourceValue;
+        var capacity = source switch
+        {
+            RuntimeIntDictionary dictionary => dictionary.CapacityName,
+            RuntimeInlineDictionary dictionary => dictionary.CapacityName,
+            _ => throw new SmallLangException($"{(bindKey ? "eachKey" : "eachValue")} expects a dictionary input")
+        };
+
+        var loopLabel = NextLabel("dictionary_each");
+        var bodyLabel = NextLabel("dictionary_each_body");
+        var continueLabel = NextLabel("dictionary_each_continue");
+        var endLabel = NextLabel("dictionary_each_end");
+        var entryLabel = _currentBlockLabel;
+        var next = NextTemp("dictionary_each_next");
+        var empty = NextTemp("dictionary_each_empty");
+        EmitCompare(empty, "eq", "i64", capacity, "0");
+        EmitConditionalBranch(empty, endLabel, loopLabel);
+        EmitFunctionLine();
+
+        EmitLabel(loopLabel);
+        _currentBlockLabel = loopLabel;
+        var slot = NextTemp("dictionary_each_slot");
+        EmitPhi(slot, "i64", ("0", entryLabel), (next, continueLabel));
+        var control = source switch
+        {
+            RuntimeIntDictionary dictionary => LoadDictionaryControl(dictionary, slot),
+            RuntimeInlineDictionary dictionary => LoadInlineDictionaryControl(dictionary, slot),
+            _ => throw new SmallLangException("dictionary iterator source was not lowered")
+        };
+        var occupied = NextTemp("dictionary_each_occupied");
+        EmitCompare(occupied, "ne", "i8", control, "0");
+        EmitConditionalBranch(occupied, bodyLabel, continueLabel);
+        EmitFunctionLine();
+
+        EmitLabel(bodyLabel);
+        _currentBlockLabel = bodyLabel;
+        RuntimeValue item;
+        if (source is RuntimeIntDictionary intDictionary)
+        {
+            item = bindKey
+                ? LoadDictionaryKey(intDictionary, slot)
+                : LoadDictionaryValue(intDictionary, slot);
+        }
+        else if (source is RuntimeInlineDictionary inlineDictionary)
+        {
+            var definition = _program.Types.GetDictionary(inlineDictionary.DictionaryType);
+            item = bindKey
+                ? LoadInlineDictionaryField(inlineDictionary, slot, definition.KeyType, 0,
+                    definition.KeyAlignment, "dictionary_each_key")
+                : LoadInlineDictionaryField(inlineDictionary, slot, definition.ValueType,
+                    definition.ValueOffset, definition.ValueAlignment, "dictionary_each_value");
+        }
+        else
+        {
+            throw new SmallLangException("dictionary iterator source was not lowered");
+        }
+
+        var outerLocals = CaptureLocals();
+        try
+        {
+            _locals[statement.ItemName] = item;
+            if (_program.Types.ContainsOwnedStorage(item.Type))
+            {
+                _borrowedOwnedLocals.Add(statement.ItemName);
+            }
+            EmitStatements(statement.Body);
+            DropOwnedLocalsCreatedSince(outerLocals, transferredOwnerName: null);
+        }
+        finally
+        {
+            RestoreLocals(outerLocals);
+        }
+        EmitBranch(continueLabel);
+        EmitFunctionLine();
+
+        EmitLabel(continueLabel);
+        _currentBlockLabel = continueLabel;
+        EmitBinary(next, "add", "i64", slot, "1");
+        var done = NextTemp("dictionary_each_done");
+        EmitCompare(done, "eq", "i64", next, capacity);
+        EmitConditionalBranch(done, endLabel, loopLabel);
+        EmitFunctionLine();
+        EmitLabel(endLabel);
+        _currentBlockLabel = endLabel;
     }
 
     private void EmitRepeatBlockFunctionCall(BlockFunctionCallStatement statement)

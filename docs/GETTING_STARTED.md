@@ -502,6 +502,8 @@ approved syntax.
   user-element array with final recursive drop coverage
 - `examples/69-generic-array-each.sl`: type-preserving `each` over fixed Text,
   dynamic user-value, and readonly-borrowed owned-element arrays
+- `examples/70-generic-dictionary-iteration.sl`: Swiss live-slot `eachKey` and
+  `eachValue` with Text keys, typed user values, and borrowed owned values
 - `examples/browser`: static HTML/JS runner for the WebAssembly sample
 - `examples/expected`: expected stdout/stdin fixtures for executable samples
 - `stdlib/sys/runtime.sl`: standard library intrinsic boundary declarations

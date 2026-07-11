@@ -778,6 +778,9 @@ Container rules in the current slice:
 - `array -> each item { ... }` binds `item` to the concrete element type for
   fixed and dynamic arrays. Owned elements are readonly borrows for one block
   invocation and are never dropped separately from their array owner.
+- `dictionary -> eachKey key { ... }` and `dictionary -> eachValue value {
+  ... }` scan occupied Swiss-table slots and bind the concrete K or V type.
+  Iteration order is unspecified. Owned items are readonly per-slot borrows.
 - `append` and `updated` consume a named source owner and return the moved owner.
   After the transform, the source binding is no longer live. The target may
   reuse the same name because the old owner is consumed before the new owner is
