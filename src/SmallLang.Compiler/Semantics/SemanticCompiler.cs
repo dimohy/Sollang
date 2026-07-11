@@ -14,6 +14,7 @@ internal sealed class SemanticCompiler
     private readonly HashSet<BoundFunction> _validatingGenericSpecializations = new(ReferenceEqualityComparer.Instance);
     private Dictionary<string, BoundFunction>? _boundFunctions;
     private string _currentModuleName = "";
+    private string? _currentTypeScopeName;
 
     public SemanticCompiler(SmallLangProgram program)
     {
@@ -260,6 +261,7 @@ internal sealed class SemanticCompiler
     private BoundFunction BindFunctionDeclaration(FunctionDeclaration function, bool isLocal)
     {
         _currentModuleName = function.ModuleName;
+        _currentTypeScopeName = ResolveFunctionTypeScope(function.Name);
         ValidateFunctionDeclaration(function, isLocal);
 
         if (function.GenericTraitBound is not null
@@ -498,6 +500,7 @@ internal sealed class SemanticCompiler
         IReadOnlyDictionary<string, BoundType> capturedBindings)
     {
         _currentModuleName = function.ModuleName;
+        _currentTypeScopeName = ResolveFunctionTypeScope(function.Name);
         if (function.Kind == BoundFunctionKind.UserBlock)
         {
             ValidateUserBlockFunction(function, parentFunctions, capturedBindings);
@@ -799,6 +802,7 @@ internal sealed class SemanticCompiler
     private IReadOnlyDictionary<string, BoundType> BindMain(IReadOnlyDictionary<string, BoundFunction> functions)
     {
         _currentModuleName = string.Join('.', _program.NamespacePath);
+        _currentTypeScopeName = null;
         var bindings = new Dictionary<string, BoundType>(StringComparer.Ordinal);
         var mutableBindings = new HashSet<string>(StringComparer.Ordinal);
         BindStatements(_program.Statements, functions, bindings, mutableBindings);
@@ -4071,7 +4075,8 @@ internal sealed class SemanticCompiler
                 declaration.Line,
                 declaration.Column,
                 declaration.ModuleName,
-                declaration.IsPublic));
+                declaration.IsPublic,
+                declaration.DeclaringTypeName));
         }
 
         var enums = new Dictionary<TypeId, BoundEnumDefinition>();
@@ -5145,6 +5150,15 @@ internal sealed class SemanticCompiler
         if (_types.IsStruct(type))
         {
             var definition = _types.GetStruct(type);
+            if (definition.DeclaringTypeName is not null
+                && !definition.IsPublic
+                && (_currentTypeScopeName is null
+                    || !(_currentTypeScopeName == definition.DeclaringTypeName
+                        || _currentTypeScopeName.StartsWith(definition.DeclaringTypeName + ".", StringComparison.Ordinal))))
+            {
+                throw Error(line, column,
+                    $"nested type '{definition.Name}' is private to struct '{definition.DeclaringTypeName}'");
+            }
             name = definition.Name;
             moduleName = definition.ModuleName;
             isPublic = definition.IsPublic;
@@ -5168,6 +5182,15 @@ internal sealed class SemanticCompiler
         }
 
         throw Error(line, column, $"type '{name}' is internal to module '{moduleName}'");
+    }
+
+    private string? ResolveFunctionTypeScope(string functionName)
+    {
+        return _types.Structs
+            .Where(type => functionName.StartsWith(type.Name + ".", StringComparison.Ordinal))
+            .OrderByDescending(type => type.Name.Length)
+            .Select(type => type.Name)
+            .FirstOrDefault();
     }
 
     private void EnsureTraitVisible(BoundTraitDefinition trait, int line, int column)

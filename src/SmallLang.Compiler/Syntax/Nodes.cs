@@ -19,7 +19,8 @@ internal sealed record StructDeclaration(
     int Line,
     int Column,
     string ModuleName = "",
-    bool IsPublic = false);
+    bool IsPublic = false,
+    string? DeclaringTypeName = null);
 
 internal sealed record StructFieldDeclaration(string Name, string TypeName, int Line, int Column);
 

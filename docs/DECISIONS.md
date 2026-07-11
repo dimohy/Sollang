@@ -2792,4 +2792,32 @@ Parentheses communicate that actual arguments follow. A fluent call still
 receives its left-hand value, so `value -> transform()` remains compatibility
 syntax for that one-input call; the preferred spelling is `value -> transform`.
 
+## D091 - Struct-Scoped Nested Structs
+
+Status: implemented
+Date: 2026-07-12
+
+A struct may declare a helper value type inside its body:
+
+```smalllang
+struct Lexer {
+    struct Cursor {
+        offset: Int
+        line: Int
+    }
+
+    cursor: Cursor
+}
+```
+
+The nested declaration has the collision-free nominal identity `Lexer.Cursor`,
+while fields and `impl Lexer` bodies may use the short name `Cursor`. It is
+private to `Lexer` by default, matching the intent that implementation helper
+types should not expand the surrounding module API. Writing `public struct`
+for the nested declaration explicitly exposes `Lexer.Cursor`.
+
+Nested structs participate in the ordinary exact-layout, move, recursive drop,
+cycle checking, field initialization, and LLVM lowering rules. They are not a
+runtime object or namespace wrapper.
+
 

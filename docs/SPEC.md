@@ -722,6 +722,27 @@ Numeric rules:
 - `Size` and `UIntSize` are reserved for a later target-pointer-width ABI slice;
   ordinary `Int` never changes width with the target.
 
+## Nested Structs
+
+Struct declarations may contain helper struct declarations:
+
+```smalllang
+struct Parser {
+    struct Cursor {
+        offset: Int
+    }
+
+    cursor: Cursor
+}
+```
+
+The nested type is nominally `Parser.Cursor` but `Parser` fields and
+`impl Parser` bodies resolve the short name `Cursor`. A nested struct is private
+to its declaring struct by default. Prefixing the nested declaration with
+`public` exposes the qualified name to other code. Layout, initialization,
+ownership, recursive drop, and value-cycle checks are identical to top-level
+structs.
+
 ## Containers
 
 Constant ranges and compile-time `each` expressions can construct collections:

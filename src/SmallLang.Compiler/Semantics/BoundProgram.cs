@@ -122,7 +122,8 @@ internal sealed record BoundStructDefinition(
     int Line,
     int Column,
     string ModuleName = "",
-    bool IsPublic = false)
+    bool IsPublic = false,
+    string? DeclaringTypeName = null)
 {
     public BoundStructField GetField(string name)
     {
