@@ -857,6 +857,8 @@ internal sealed partial class LlvmEmitter
 
         return argument switch
         {
+            RuntimeText text when function.InputType == BoundType.Text =>
+                $"%smalllang.text {{ ptr {text.PointerName}, i64 {text.LengthName} }}",
             RuntimeBool boolean when function.InputType == BoundType.Bool => $"i1 {boolean.ValueName}",
             RuntimeIntSlice slice when function.InputType == BoundType.IntSlice => BuildIntSliceArgument(slice.PointerName, slice.LengthName),
             RuntimeStaticIntArray array when function.InputType == BoundType.IntSlice => BuildStaticIntArraySliceArgument(array),

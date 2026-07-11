@@ -84,6 +84,12 @@ internal sealed partial class LlvmEmitter
             EmitLoad(loaded, LlvmStructType(value.Type), pointer, 8);
             return new RuntimeStruct(value.Type, loaded);
         }
+        if (_mutableScalarSlots.TryGetValue(name, out var scalarPointer))
+        {
+            var loaded = NextTemp("mutable_scalar");
+            EmitLoad(loaded, LlvmType(value.Type), scalarPointer, RuntimeAlignment(value.Type));
+            return DematerializeAggregateValue(value.Type, loaded);
+        }
 
         return LoadMutableContainer(name, value);
     }
@@ -384,12 +390,22 @@ internal sealed partial class LlvmEmitter
         _borrowedOwnedLocals.Remove(name);
         _mutableContainerSlots.Remove(name);
         _mutableStructSlots.Remove(name);
+        _mutableScalarSlots.Remove(name);
     }
 
     private void CreateMutableContainerSlot(BindingStatement binding, RuntimeValue value)
     {
         if (!RequiresHeapAllocation(value))
         {
+            if (value is not (RuntimeInt or RuntimeFloat or RuntimeBool or RuntimeText))
+            {
+                return;
+            }
+            var materialized = MaterializeAggregateValue(value);
+            var scalarPointer = NextTemp("mutable_scalar_slot");
+            EmitAlloca(scalarPointer, materialized.TypeName, RuntimeAlignment(value.Type));
+            EmitStore(materialized.TypeName, materialized.ValueName, scalarPointer, RuntimeAlignment(value.Type));
+            _mutableScalarSlots.Add(binding.Name, scalarPointer);
             return;
         }
 

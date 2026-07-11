@@ -490,6 +490,10 @@ internal sealed partial class LlvmEmitter
         {
             return $"{LlvmType(numericInput)} %it";
         }
+        if (function.InputType == BoundType.Text)
+        {
+            return "%smalllang.text %it";
+        }
 
         return function.InputType switch
         {
@@ -573,6 +577,15 @@ internal sealed partial class LlvmEmitter
         if (function.InputType is { } floatInput && IsFloatType(floatInput))
         {
             _locals.Add(function.InputName ?? "it", new RuntimeFloat(floatInput, "%it"));
+            return;
+        }
+        if (function.InputType == BoundType.Text)
+        {
+            var pointer = NextTemp("param_text_ptr");
+            EmitAssign(pointer, "extractvalue %smalllang.text %it, 0");
+            var length = NextTemp("param_text_len");
+            EmitAssign(length, "extractvalue %smalllang.text %it, 1");
+            _locals.Add(function.InputName ?? "it", new RuntimeText(pointer, length));
             return;
         }
 

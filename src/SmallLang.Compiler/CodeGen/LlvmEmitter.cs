@@ -22,6 +22,7 @@ internal sealed partial class LlvmEmitter
     private readonly HashSet<string> _borrowedOwnedLocals = new(StringComparer.Ordinal);
     private readonly Dictionary<string, MutableContainerSlot> _mutableContainerSlots = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> _mutableStructSlots = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, string> _mutableScalarSlots = new(StringComparer.Ordinal);
     private readonly List<BoundFunction> _inlineFunctionStack = [];
     private StackFramePlan _currentStackFramePlan = StackFramePlan.Empty;
     private RuntimeBlockInvocation? _currentBlockInvocation;

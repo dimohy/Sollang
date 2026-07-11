@@ -64,6 +64,16 @@ internal sealed partial class LlvmEmitter
             case BindingStatement binding:
                 var movedSourceName = GetMoveConsumingContainerSourceName(binding.Value);
                 var value = EmitExpression(binding.Value);
+                if (binding.IsMutable
+                    && _mutableScalarSlots.TryGetValue(binding.Name, out var reboundPointer))
+                {
+                    var previous = _locals[binding.Name];
+                    EnsureRuntimeType(value, previous.Type, binding.Name);
+                    var reboundValue = MaterializeAggregateValue(value);
+                    EmitStore(reboundValue.TypeName, reboundValue.ValueName, reboundPointer,
+                        RuntimeAlignment(value.Type));
+                    break;
+                }
                 if (RequiresHeapAllocation(value) && !_platform.SupportsHeapAllocation)
                 {
                     throw new SmallLangException("dynamic arrays and dictionaries require heap allocation; wasm32-browser does not support them yet");
@@ -196,6 +206,9 @@ internal sealed partial class LlvmEmitter
                 return;
             case "repeat":
                 EmitRepeatBlockFunctionCall(statement);
+                return;
+            case "while":
+                EmitWhileBlockFunctionCall(statement);
                 return;
             default:
                 if (TryResolveFunction(statement.Target, out var function)
@@ -370,6 +383,37 @@ internal sealed partial class LlvmEmitter
             _currentFunctions = previousFunctions;
             RestoreLocals(callerLocals);
         }
+    }
+
+    private void EmitWhileBlockFunctionCall(BlockFunctionCallStatement statement)
+    {
+        var conditionLabel = NextLabel("while_condition");
+        var bodyLabel = NextLabel("while_body");
+        var endLabel = NextLabel("while_end");
+        EmitBranch(conditionLabel);
+
+        EmitLabel(conditionLabel);
+        _currentBlockLabel = conditionLabel;
+        var condition = EmitExpression(statement.Source) as RuntimeBool
+            ?? throw new SmallLangException("while condition must be Bool");
+        EmitConditionalBranch(condition.ValueName, bodyLabel, endLabel);
+
+        EmitLabel(bodyLabel);
+        _currentBlockLabel = bodyLabel;
+        var outerLocals = CaptureLocals();
+        try
+        {
+            EmitStatements(statement.Body);
+            DropOwnedLocalsCreatedSince(outerLocals, transferredOwnerName: null);
+        }
+        finally
+        {
+            RestoreLocals(outerLocals);
+        }
+        EmitBranch(conditionLabel);
+
+        EmitLabel(endLabel);
+        _currentBlockLabel = endLabel;
     }
 
     private void EmitDictionaryEachBlockFunctionCall(

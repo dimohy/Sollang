@@ -937,9 +937,15 @@ internal sealed class SemanticCompiler
             {
                 case BindingStatement binding:
                     ValidateBindingName(binding.Name, binding.Line, binding.Column);
+                    var reboundType = default(BoundType);
+                    var isMutableRebind = binding.IsMutable
+                        && bindings.TryGetValue(binding.Name, out reboundType)
+                        && mutableBindings.Contains(binding.Name)
+                        && !IsContainerType(reboundType);
                     var movedSourceName = GetMoveConsumingContainerSourceName(binding.Value);
                     var consumedSourceNames = GetOwnedParameterConsumedSourceNames(binding.Value, functions, bindings);
                     if (bindings.ContainsKey(binding.Name)
+                        && !isMutableRebind
                         && !string.Equals(binding.Name, movedSourceName, StringComparison.Ordinal)
                         && !consumedSourceNames.Contains(binding.Name, StringComparer.Ordinal))
                     {
@@ -958,6 +964,11 @@ internal sealed class SemanticCompiler
                     if (valueType == BoundType.Unit)
                     {
                         throw Error(binding.Line, binding.Column, "cannot bind a unit value");
+                    }
+                    if (isMutableRebind && valueType != reboundType)
+                    {
+                        throw Error(binding.Line, binding.Column,
+                            $"mutable rebind of '{binding.Name}' requires {FormatType(reboundType)} but received {FormatType(valueType)}");
                     }
                     if (valueType == BoundType.MutableMappedBytes && !binding.IsMutable)
                     {
@@ -997,7 +1008,10 @@ internal sealed class SemanticCompiler
                         mutableBindings.Remove(consumedName);
                     }
 
-                    bindings.Add(binding.Name, valueType);
+                    if (!isMutableRebind)
+                    {
+                        bindings.Add(binding.Name, valueType);
+                    }
                     if (binding.IsMutable)
                     {
                         mutableBindings.Add(binding.Name);
@@ -1181,6 +1195,9 @@ internal sealed class SemanticCompiler
             case "repeat":
                 BindRepeatBlockFunctionCall(call, functions, bindings, mutableBindings, yieldInputType);
                 return;
+            case "while":
+                BindWhileBlockFunctionCall(call, functions, bindings, mutableBindings, yieldInputType);
+                return;
             default:
                 if (functions.TryGetValue(target, out var function)
                     && function.Kind == BoundFunctionKind.UserBlock)
@@ -1191,6 +1208,31 @@ internal sealed class SemanticCompiler
 
                 throw Error(call.Line, call.Column, $"unknown block function '{target}'");
         }
+    }
+
+    private void BindWhileBlockFunctionCall(
+        BlockFunctionCallStatement call,
+        IReadOnlyDictionary<string, BoundFunction> functions,
+        Dictionary<string, BoundType> bindings,
+        HashSet<string> mutableBindings,
+        BoundType? yieldInputType)
+    {
+        if (!call.UsesDefaultItemName)
+        {
+            throw Error(call.Line, call.Column, "while does not bind an iteration item");
+        }
+        var conditionType = InferExpression(call.Source, functions, bindings,
+            allowPrintCall: false, allowReadIntCall: true, allowFlowBindingTarget: false,
+            mutableBindings: mutableBindings);
+        if (conditionType != BoundType.Bool)
+        {
+            throw Error(call.Source.Line, call.Source.Column, "while condition must be Bool");
+        }
+        BindStatements(call.Body, functions,
+            new Dictionary<string, BoundType>(bindings, StringComparer.Ordinal),
+            new HashSet<string>(mutableBindings, StringComparer.Ordinal),
+            yieldInputType,
+            allowContainerBindings: true);
     }
 
     private void BindEachBlockFunctionCall(
@@ -1523,7 +1565,8 @@ internal sealed class SemanticCompiler
                 functions,
                 bindings,
                 allowReadIntCall,
-                allowedOwnedOuterResultName),
+                allowedOwnedOuterResultName,
+                mutableBindings),
             WhenExpression whenExpression => InferWhenExpression(
                 whenExpression,
                 functions,
@@ -2460,7 +2503,8 @@ internal sealed class SemanticCompiler
         IReadOnlyDictionary<string, BoundFunction> functions,
         IReadOnlyDictionary<string, BoundType> bindings,
         bool allowReadIntCall,
-        string? allowedOwnedOuterResultName = null)
+        string? allowedOwnedOuterResultName = null,
+        IReadOnlySet<string>? mutableBindings = null)
     {
         var condition = InferExpression(
             expression.Condition,
@@ -2479,7 +2523,8 @@ internal sealed class SemanticCompiler
             functions,
             bindings,
             allowReadIntCall,
-            allowedOwnedOuterResultName);
+            allowedOwnedOuterResultName,
+            mutableBindings);
         if (expression.Else is null)
         {
             if (thenType != BoundType.Unit)
@@ -2495,7 +2540,8 @@ internal sealed class SemanticCompiler
             functions,
             bindings,
             allowReadIntCall,
-            allowedOwnedOuterResultName);
+            allowedOwnedOuterResultName,
+            mutableBindings);
         if (thenType != elseType)
         {
             throw Error(
@@ -2874,10 +2920,13 @@ internal sealed class SemanticCompiler
         IReadOnlyDictionary<string, BoundFunction> functions,
         IReadOnlyDictionary<string, BoundType> bindings,
         bool allowReadIntCall,
-        string? allowedOwnedOuterResultName = null)
+        string? allowedOwnedOuterResultName = null,
+        IReadOnlySet<string>? mutableBindings = null)
     {
         var bodyBindings = new Dictionary<string, BoundType>(bindings, StringComparer.Ordinal);
-        var bodyMutableBindings = new HashSet<string>(StringComparer.Ordinal);
+        var bodyMutableBindings = mutableBindings is null
+            ? new HashSet<string>(StringComparer.Ordinal)
+            : new HashSet<string>(mutableBindings, StringComparer.Ordinal);
         BindStatements(body.Statements, functions, bodyBindings, bodyMutableBindings, allowContainerBindings: true);
         if (body.Value is null)
         {

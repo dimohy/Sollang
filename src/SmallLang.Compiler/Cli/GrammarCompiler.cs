@@ -303,6 +303,11 @@ internal static class GrammarCompiler
         builder.AppendLine("# 3 quoted string, 4 number, 5 newline, 6 end, 7 literal.");
         builder.AppendLine();
         EmitTextArrayFunction(builder, "tokenNames", grammar.TokenNames);
+        for (var tokenId = 0; tokenId < grammar.TokenNames.Count; tokenId++)
+        {
+            builder.AppendLine($"public tokenId{grammar.TokenNames[tokenId]}: -> Int => {tokenId.ToString(CultureInfo.InvariantCulture)}");
+        }
+        builder.AppendLine();
         EmitTextArrayFunction(builder, "lexerRuleNames", grammar.LexerRuleNames);
         EmitIntArrayFunction(builder, "lexerRuleKinds", grammar.LexerRuleKinds);
         EmitIntArrayFunction(builder, "lexerRuleTokens", grammar.LexerRuleTokens);

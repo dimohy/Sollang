@@ -11,6 +11,40 @@ namespace syntax.generated.smalllang
 
 public tokenNames: -> [Text; ~] => ["Identifier", "String", "Number", "LeftBrace", "RightBrace", "LeftBracket", "RightBracket", "LeftParen", "RightParen", "Range", "Tilde", "Dot", "Comma", "Semicolon", "Plus", "Minus", "Star", "Slash", "Percent", "Question", "Arrow", "FatArrow", "Colon", "EqualEqual", "BangEqual", "Bang", "LessEqual", "GreaterEqual", "Less", "Greater", "Equal", "NewLine", "End", ~]
 
+public tokenIdIdentifier: -> Int => 0
+public tokenIdString: -> Int => 1
+public tokenIdNumber: -> Int => 2
+public tokenIdLeftBrace: -> Int => 3
+public tokenIdRightBrace: -> Int => 4
+public tokenIdLeftBracket: -> Int => 5
+public tokenIdRightBracket: -> Int => 6
+public tokenIdLeftParen: -> Int => 7
+public tokenIdRightParen: -> Int => 8
+public tokenIdRange: -> Int => 9
+public tokenIdTilde: -> Int => 10
+public tokenIdDot: -> Int => 11
+public tokenIdComma: -> Int => 12
+public tokenIdSemicolon: -> Int => 13
+public tokenIdPlus: -> Int => 14
+public tokenIdMinus: -> Int => 15
+public tokenIdStar: -> Int => 16
+public tokenIdSlash: -> Int => 17
+public tokenIdPercent: -> Int => 18
+public tokenIdQuestion: -> Int => 19
+public tokenIdArrow: -> Int => 20
+public tokenIdFatArrow: -> Int => 21
+public tokenIdColon: -> Int => 22
+public tokenIdEqualEqual: -> Int => 23
+public tokenIdBangEqual: -> Int => 24
+public tokenIdBang: -> Int => 25
+public tokenIdLessEqual: -> Int => 26
+public tokenIdGreaterEqual: -> Int => 27
+public tokenIdLess: -> Int => 28
+public tokenIdGreater: -> Int => 29
+public tokenIdEqual: -> Int => 30
+public tokenIdNewLine: -> Int => 31
+public tokenIdEnd: -> Int => 32
+
 public lexerRuleNames: -> [Text; ~] => ["Whitespace", "Comment", "Identifier", "String", "Number", "LeftBrace", "RightBrace", "LeftBracket", "RightBracket", "LeftParen", "RightParen", "Range", "Tilde", "Dot", "Comma", "Semicolon", "Plus", "Minus", "Star", "Slash", "Percent", "Question", "Arrow", "FatArrow", "Colon", "EqualEqual", "BangEqual", "Bang", "LessEqual", "GreaterEqual", "Less", "Greater", "Equal", "NewLine", "End", ~]
 
 public lexerRuleKinds: -> [Int; ~] => [0, 1, 2, 3, 4, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 5, 6, ~]

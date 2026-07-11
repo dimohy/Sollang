@@ -1,0 +1,13 @@
+main {
+    0 => index!
+    0 => total!
+    index! < 5 -> while {
+        total! + index! => total!
+        index! + 1 => index!
+    }
+
+    total! => totalValue
+    index! => indexValue
+    "while total = $totalValue" -> println
+    "while index = $indexValue" -> println
+}
