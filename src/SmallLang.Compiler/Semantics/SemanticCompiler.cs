@@ -42,6 +42,7 @@ internal sealed class SemanticCompiler
         var traits = new Dictionary<string, BoundTraitDefinition>(StringComparer.Ordinal);
         foreach (var declaration in declarations)
         {
+            _currentModuleName = declaration.ModuleName;
             if (IsReservedName(declaration.Name))
             {
                 throw Error(declaration.Line, declaration.Column, $"trait name '{declaration.Name}' is reserved");
@@ -83,7 +84,9 @@ internal sealed class SemanticCompiler
                     declaration.Name,
                     methods,
                     declaration.Line,
-                    declaration.Column));
+                    declaration.Column,
+                    declaration.ModuleName,
+                    declaration.IsPublic));
         }
 
         return traits;
@@ -94,6 +97,7 @@ internal sealed class SemanticCompiler
         var implementations = new Dictionary<(string Trait, BoundType Type), HashSet<string>>();
         foreach (var function in functions.Values)
         {
+            _currentModuleName = function.ModuleName;
             if (function.TraitName is null)
             {
                 continue;
@@ -103,6 +107,7 @@ internal sealed class SemanticCompiler
             {
                 throw Error(function.Line, function.Column, $"unknown trait '{function.TraitName}'");
             }
+            EnsureTraitVisible(trait, function.Line, function.Column);
             if (function.InputType is not { } inputType
                 || (!_types.IsStruct(inputType) && !_types.IsEnum(inputType)))
             {
@@ -220,6 +225,7 @@ internal sealed class SemanticCompiler
 
     private BoundFunction BindFunctionDeclaration(FunctionDeclaration function, bool isLocal)
     {
+        _currentModuleName = function.ModuleName;
         ValidateFunctionDeclaration(function, isLocal);
 
         if (function.GenericTraitBound is not null
@@ -1456,6 +1462,7 @@ internal sealed class SemanticCompiler
         {
             throw Error(expression.Line, expression.Column, $"unknown struct type '{expression.TypeName}'");
         }
+        EnsureTypeVisible(type, expression.Line, expression.Column);
 
         var definition = _types.GetStruct(type);
         var initializers = new Dictionary<string, StructFieldInitializer>(StringComparer.Ordinal);
@@ -1520,6 +1527,7 @@ internal sealed class SemanticCompiler
             && _types.TryResolve(typeName.Name, out var enumType)
             && _types.IsEnum(enumType))
         {
+            EnsureTypeVisible(enumType, expression.Line, expression.Column);
             var enumeration = _types.GetEnum(enumType);
             var variant = enumeration.Variants.FirstOrDefault(candidate => candidate.Name == expression.FieldName)
                 ?? throw Error(
@@ -1542,6 +1550,7 @@ internal sealed class SemanticCompiler
             && _types.TryResolve(staticTypeName.Name, out var staticType)
             && _types.IsStruct(staticType))
         {
+            EnsureTypeVisible(staticType, expression.Line, expression.Column);
             var memberPath = staticTypeName.Name + "." + expression.FieldName;
             if (functions.TryGetValue(memberPath, out var associated) && associated.InputType is null)
             {
@@ -2975,19 +2984,21 @@ internal sealed class SemanticCompiler
         out BoundType type)
     {
         type = default;
-        if (expression.Path.Count != 2
-            || !_types.TryResolve(expression.Path[0], out type)
+        if (expression.Path.Count < 2
+            || !_types.TryResolve(string.Join('.', expression.Path.Take(expression.Path.Count - 1)), out type)
             || !_types.IsEnum(type))
         {
             return false;
         }
+        EnsureTypeVisible(type, expression.Line, expression.Column);
 
         var definition = _types.GetEnum(type);
-        var variant = definition.Variants.FirstOrDefault(candidate => candidate.Name == expression.Path[1])
+        var variantName = expression.Path[^1];
+        var variant = definition.Variants.FirstOrDefault(candidate => candidate.Name == variantName)
             ?? throw Error(
                 expression.Line,
                 expression.Column,
-                $"enum '{definition.Name}' has no variant '{expression.Path[1]}'");
+                $"enum '{definition.Name}' has no variant '{variantName}'");
         if (variant.PayloadType is null)
         {
             throw Error(
@@ -3093,9 +3104,10 @@ internal sealed class SemanticCompiler
         var typeName = _types.GetStruct(receiverType).Name;
         if (methodName.Contains('.', StringComparison.Ordinal))
         {
-            var parts = methodName.Split('.');
-            return parts.Length == 2
-                && functions.TryGetValue(parts[0] + "." + typeName + "." + parts[1], out function!)
+            var separator = methodName.LastIndexOf('.');
+            var traitName = methodName[..separator];
+            var memberName = methodName[(separator + 1)..];
+            return functions.TryGetValue(traitName + "." + typeName + "." + memberName, out function!)
                 && function.InputType == receiverType;
         }
 
@@ -3348,6 +3360,7 @@ internal sealed class SemanticCompiler
 
         foreach (var declaration in structDeclarations)
         {
+            _currentModuleName = declaration.ModuleName;
             if (IsReservedName(declaration.Name))
             {
                 throw Error(declaration.Line, declaration.Column, $"type name '{declaration.Name}' is reserved");
@@ -3364,6 +3377,7 @@ internal sealed class SemanticCompiler
 
         foreach (var declaration in enumDeclarations)
         {
+            _currentModuleName = declaration.ModuleName;
             if (IsReservedName(declaration.Name))
             {
                 throw Error(declaration.Line, declaration.Column, $"type name '{declaration.Name}' is reserved");
@@ -3395,6 +3409,7 @@ internal sealed class SemanticCompiler
         var structs = new Dictionary<TypeId, BoundStructDefinition>();
         foreach (var declaration in structDeclarations)
         {
+            _currentModuleName = declaration.ModuleName;
             var fields = new List<BoundStructField>(declaration.Fields.Count);
             var fieldNames = new HashSet<string>(StringComparer.Ordinal);
             for (var index = 0; index < declaration.Fields.Count; index++)
@@ -3433,12 +3448,15 @@ internal sealed class SemanticCompiler
                 declaration.Name,
                 fields,
                 declaration.Line,
-                declaration.Column));
+                declaration.Column,
+                declaration.ModuleName,
+                declaration.IsPublic));
         }
 
         var enums = new Dictionary<TypeId, BoundEnumDefinition>();
         foreach (var declaration in enumDeclarations)
         {
+            _currentModuleName = declaration.ModuleName;
             if (declaration.Variants.Count == 0)
             {
                 throw Error(declaration.Line, declaration.Column, $"enum '{declaration.Name}' requires at least one variant");
@@ -3496,7 +3514,9 @@ internal sealed class SemanticCompiler
                 variants,
                 PayloadWords: 0,
                 declaration.Line,
-                declaration.Column));
+                declaration.Column,
+                declaration.ModuleName,
+                declaration.IsPublic));
         }
 
         ValidateAcyclicValueTypes(structs, enums);
@@ -3640,9 +3660,13 @@ internal sealed class SemanticCompiler
 
     private BoundType ParseType(string typeName, int line, int column)
     {
-        return _types.TryResolve(typeName, out var type)
-            ? type
-            : throw Error(line, column, $"unknown type '{typeName}'");
+        if (!_types.TryResolve(typeName, out var type))
+        {
+            throw Error(line, column, $"unknown type '{typeName}'");
+        }
+
+        EnsureTypeVisible(type, line, column);
+        return type;
     }
 
     private BoundType ParseFunctionType(
@@ -4310,6 +4334,49 @@ internal sealed class SemanticCompiler
             line,
             column,
             $"function '{function.Name}' is internal to module '{function.ModuleName}'");
+    }
+
+    private void EnsureTypeVisible(TypeId type, int line, int column)
+    {
+        string? name = null;
+        string? moduleName = null;
+        var isPublic = true;
+        if (_types.IsStruct(type))
+        {
+            var definition = _types.GetStruct(type);
+            name = definition.Name;
+            moduleName = definition.ModuleName;
+            isPublic = definition.IsPublic;
+        }
+        else if (_types.IsEnum(type))
+        {
+            var definition = _types.GetEnum(type);
+            name = definition.Name;
+            moduleName = definition.ModuleName;
+            isPublic = definition.IsPublic;
+        }
+        else if (_types.IsBox(type))
+        {
+            EnsureTypeVisible(_types.GetBox(type).ElementType, line, column);
+            return;
+        }
+
+        if (name is null || isPublic || moduleName == _currentModuleName)
+        {
+            return;
+        }
+
+        throw Error(line, column, $"type '{name}' is internal to module '{moduleName}'");
+    }
+
+    private void EnsureTraitVisible(BoundTraitDefinition trait, int line, int column)
+    {
+        if (trait.IsPublic || trait.ModuleName == _currentModuleName)
+        {
+            return;
+        }
+
+        throw Error(line, column, $"trait '{trait.Name}' is internal to module '{trait.ModuleName}'");
     }
 
     private bool IsPlainStringLiteral(Expression expression)

@@ -2358,4 +2358,12 @@ visible through their bootstrap status. Example 52 marks `sample.math.double`
 public, while the module-internal-access diagnostic proves that importing a
 module does not expose its internal implementation functions.
 
+The same internal-by-default boundary now applies to nominal structs, enums,
+and traits. Their semantic identity is the module-qualified declaration name,
+so two modules may own same-spelled types without collapsing them into one
+type. Import aliases resolve in type annotations, `impl` headers, struct
+literals, enum constructors, and qualified trait calls. Cross-module use
+requires `public`; examples 53 and the internal-type/internal-trait diagnostics
+exercise both the exported and rejected paths.
+
 

@@ -151,8 +151,8 @@ dotnet run --project src/SmallLang.Compiler -- build `
 
 Supplying only the root file is sufficient when imported modules follow the
 dotted-path layout: `import sample.math` discovers `sample/math.sl`.
-Module functions are internal by default; prefix declarations with `public` to
-make them callable from an importing module.
+Module functions, structs, enums, and traits are internal by default; prefix
+declarations with `public` to make them usable from an importing module.
 
 ## License
 

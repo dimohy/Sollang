@@ -253,9 +253,10 @@ internal sealed partial class LlvmEmitter
         var typeName = _program.Types.GetStruct(receiverType).Name;
         if (methodName.Contains('.', StringComparison.Ordinal))
         {
-            var parts = methodName.Split('.');
-            return parts.Length == 2
-                && _currentFunctions.TryGetValue(parts[0] + "." + typeName + "." + parts[1], out function!)
+            var separator = methodName.LastIndexOf('.');
+            var traitName = methodName[..separator];
+            var memberName = methodName[(separator + 1)..];
+            return _currentFunctions.TryGetValue(traitName + "." + typeName + "." + memberName, out function!)
                 && function.InputType == receiverType;
         }
 

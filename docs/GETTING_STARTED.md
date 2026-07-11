@@ -214,7 +214,8 @@ Direct compiler use accepts the same files as positional arguments.
 When only the root file is supplied, each non-`sys` import is mapped from its
 dotted module path to a `.sl` file relative to the root directory. For example,
 `import sample.math as math` discovers `sample/math.sl` recursively.
-Imported module functions are internal unless explicitly exported:
+Imported module functions and nominal declarations are internal unless
+explicitly exported:
 
 ```smalllang
 namespace sample.math
@@ -223,6 +224,9 @@ public double value: Int -> Int {
     value * 2
 }
 ```
+
+The same rule applies to `public struct`, `public enum`, and `public trait`.
+Imported type paths use the import alias, for example `math.Counter`.
 
 The compiler itself targets .NET 11 Preview and uses C# Preview.
 

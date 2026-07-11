@@ -17,7 +17,9 @@ internal sealed record StructDeclaration(
     string Name,
     IReadOnlyList<StructFieldDeclaration> Fields,
     int Line,
-    int Column);
+    int Column,
+    string ModuleName = "",
+    bool IsPublic = false);
 
 internal sealed record StructFieldDeclaration(string Name, string TypeName, int Line, int Column);
 
@@ -25,7 +27,9 @@ internal sealed record EnumDeclaration(
     string Name,
     IReadOnlyList<EnumVariantDeclaration> Variants,
     int Line,
-    int Column);
+    int Column,
+    string ModuleName = "",
+    bool IsPublic = false);
 
 internal sealed record EnumVariantDeclaration(string Name, string? PayloadType, int Line, int Column);
 
@@ -33,7 +37,9 @@ internal sealed record TraitDeclaration(
     string Name,
     IReadOnlyList<TraitMethodDeclaration> Methods,
     int Line,
-    int Column);
+    int Column,
+    string ModuleName = "",
+    bool IsPublic = false);
 
 internal sealed record TraitMethodDeclaration(
     string Name,

@@ -49,7 +49,9 @@ internal sealed record BoundTraitDefinition(
     string Name,
     IReadOnlyList<BoundTraitMethod> Methods,
     int Line,
-    int Column);
+    int Column,
+    string ModuleName = "",
+    bool IsPublic = false);
 
 internal enum BoundFunctionInputOwnership
 {
@@ -98,7 +100,9 @@ internal sealed record BoundStructDefinition(
     string Name,
     IReadOnlyList<BoundStructField> Fields,
     int Line,
-    int Column)
+    int Column,
+    string ModuleName = "",
+    bool IsPublic = false)
 {
     public BoundStructField GetField(string name)
     {
@@ -115,7 +119,9 @@ internal sealed record BoundEnumDefinition(
     IReadOnlyList<BoundEnumVariant> Variants,
     int PayloadWords,
     int Line,
-    int Column);
+    int Column,
+    string ModuleName = "",
+    bool IsPublic = false);
 
 internal sealed record BoundBoxDefinition(TypeId Id, TypeId ElementType, int Size, int Alignment);
 

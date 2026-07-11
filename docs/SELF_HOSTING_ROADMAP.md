@@ -46,13 +46,13 @@ not lines of code.
 | Core syntax and control flow | 10 | 8 | 2 | 0 | 9.0 |
 | Types, traits, and generics | 12 | 6 | 3 | 3 | 7.5 |
 | Ownership and storage | 10 | 7 | 2 | 1 | 8.0 |
-| Modules, visibility, and builds | 8 | 3 | 3 | 2 | 4.5 |
+| Modules, visibility, and builds | 8 | 4 | 2 | 2 | 5.0 |
 | Compiler-construction primitives | 12 | 2 | 3 | 7 | 3.5 |
 | Standard library and tooling | 8 | 2 | 3 | 3 | 3.5 |
-| **Total** | **60** | **28** | **16** | **16** | **36.0 / 60** |
+| **Total** | **60** | **29** | **15** | **16** | **36.5 / 60** |
 
-Current count-based progress: **60.0% (36.0 of 60 equivalent gates)**.
-There are **24 equivalent gates remaining**. Because the missing compiler
+Current count-based progress: **60.8% (36.5 of 60 equivalent gates)**.
+There are **23.5 equivalent gates remaining**. Because the missing compiler
 primitives are harder than early syntax gates, this is not an elapsed-time
 estimate.
 
@@ -84,15 +84,15 @@ estimate.
 - Missing (1): a complete path-sensitive borrow checker for references returned
   from functions and stored in user values.
 
-### Modules, visibility, and builds — 4.5 / 8
+### Modules, visibility, and builds — 5.0 / 8
 
-- Complete (3): file namespaces/import aliases; multiple user source files in
+- Complete (4): file namespaces/import aliases; multiple user source files in
   one compilation unit; root imports recursively discover module files with
-  missing, cycle, namespace-mismatch, and duplicate-module diagnostics.
-- Partial (3): stdlib loading uses a fixed bootstrap list; one root file is
-  enforced by executable top-level statements rather than a module manifest;
-  functions are internal by default with explicit `public`, while type and
-  trait visibility still need the same module-aware rule.
+  missing, cycle, namespace-mismatch, and duplicate-module diagnostics;
+  functions, structs, enums, and traits are internal by default with explicit
+  `public` exports and module-qualified nominal identity.
+- Partial (2): stdlib loading uses a fixed bootstrap list; one root file is
+  enforced by executable top-level statements rather than a module manifest.
 - Missing (2): package manifest/dependency graph; module/interface cache.
 
 ### Compiler-construction primitives — 3.5 / 12
@@ -136,7 +136,7 @@ estimate.
 1. Multi-file compilation (implemented by example 52).
 2. Import-driven file discovery with cycle and duplicate-module diagnostics
    (implemented after example 52).
-3. Internal-by-default function visibility with explicit `public` exports
-   (implemented); extend the same rule to types and traits.
-4. Associated types, then generic collection element types.
+3. Internal-by-default visibility with explicit `public` exports for functions,
+   structs, enums, and traits (implemented).
+4. Associated types, then generic collection element types (next).
 5. `Option`/`Result` and compiler-grade byte/text/source-span libraries.
