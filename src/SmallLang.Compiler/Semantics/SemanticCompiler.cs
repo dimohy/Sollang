@@ -1073,6 +1073,7 @@ internal sealed class SemanticCompiler
             throw Error(call.Line, call.Column, $"binding '{call.ItemName}' already exists in this scope");
         }
 
+        var itemType = BoundType.Int;
         if (call.Source is RangeExpression range)
         {
             var startType = InferExpression(
@@ -1111,15 +1112,23 @@ internal sealed class SemanticCompiler
                 allowReadIntCall: true,
                 allowFlowBindingTarget: false,
                 mutableBindings: mutableBindings);
-            if (!IsReadonlyIntViewCompatible(sourceType))
+            itemType = sourceType switch
             {
-                throw Error(call.Source.Line, call.Source.Column, "each expects a range or Int array input");
+                BoundType.IntSlice or BoundType.StaticIntArray or BoundType.DynamicIntArray => BoundType.Int,
+                BoundType.StaticTextArray => BoundType.Text,
+                _ when _types.IsStaticArray(sourceType) => _types.GetStaticArray(sourceType).ElementType,
+                _ when _types.IsDynamicArray(sourceType) => _types.GetDynamicArray(sourceType).ElementType,
+                _ => BoundType.Unit
+            };
+            if (itemType == BoundType.Unit)
+            {
+                throw Error(call.Source.Line, call.Source.Column, "each expects a range or array input");
             }
         }
 
         var bodyBindings = new Dictionary<string, BoundType>(bindings, StringComparer.Ordinal)
         {
-            [call.ItemName] = BoundType.Int
+            [call.ItemName] = itemType
         };
         BindStatements(
             call.Body,

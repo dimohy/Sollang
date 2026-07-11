@@ -2549,4 +2549,22 @@ drop obligation. Example 67 verifies readonly/`mut`/`move` `[Text; ~]` calls and
 growth. Example 68 verifies that an owned user-element array survives a move
 round trip and recursively drops its elements exactly once at the final owner.
 
+## D082 - Type-Preserving Array Each
+
+Status: implemented for fixed and dynamic arrays
+Date: 2026-07-12
+
+The fluent block iterator `array -> each item { ... }` binds `item` to the
+concrete array element type rather than forcing `Int`. Fixed and dynamic
+`Text`, struct, enum, box, and other inline values use their typed LLVM load
+path on every iteration. Range iteration remains `Int`.
+
+An element that transitively owns storage is a readonly borrow from its array
+slot for one block invocation. Block cleanup does not drop that borrowed item;
+the array remains the sole owner and later performs its normal element-wise
+recursive destruction. Existing semantic copy restrictions prevent rebinding
+the borrowed owner by value. Example 69 verifies fixed `Text`, dynamic
+copyable-struct, and dynamic owned-struct iteration without runtime type tables
+or vtables.
+
 

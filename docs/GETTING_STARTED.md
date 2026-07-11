@@ -500,6 +500,8 @@ approved syntax.
   and `move` function contracts for `[Text; ~]`, including callee-side growth
 - `examples/68-owned-array-function-transfer.sl`: move-return of an owned
   user-element array with final recursive drop coverage
+- `examples/69-generic-array-each.sl`: type-preserving `each` over fixed Text,
+  dynamic user-value, and readonly-borrowed owned-element arrays
 - `examples/browser`: static HTML/JS runner for the WebAssembly sample
 - `examples/expected`: expected stdout/stdin fixtures for executable samples
 - `stdlib/sys/runtime.sl`: standard library intrinsic boundary declarations

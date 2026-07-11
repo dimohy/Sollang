@@ -47,12 +47,12 @@ not lines of code.
 | Types, traits, and generics | 12 | 8 | 2 | 2 | 9.0 |
 | Ownership and storage | 10 | 7 | 2 | 1 | 8.0 |
 | Modules, visibility, and builds | 8 | 4 | 2 | 2 | 5.0 |
-| Compiler-construction primitives | 12 | 2 | 3 | 7 | 3.5 |
+| Compiler-construction primitives | 12 | 2 | 4 | 6 | 4.0 |
 | Standard library and tooling | 8 | 2 | 3 | 3 | 3.5 |
-| **Total** | **60** | **31** | **14** | **15** | **38.0 / 60** |
+| **Total** | **60** | **31** | **15** | **14** | **38.5 / 60** |
 
-Current count-based progress: **63.3% (38.0 of 60 equivalent gates)**.
-There are **22 equivalent gates remaining**. Because the missing compiler
+Current count-based progress: **64.2% (38.5 of 60 equivalent gates)**.
+There are **21.5 equivalent gates remaining**. Because the missing compiler
 primitives are harder than early syntax gates, this is not an elapsed-time
 estimate.
 
@@ -73,8 +73,8 @@ estimate.
 - Partial (2): arrays and dictionaries preserve scalar/user-value layouts and
   recursively drop owned elements, and dictionary function contracts preserve
   concrete K/V types; dynamic-array function contracts preserve element types.
-  Owned-element move extraction, fixed-array generic contracts, iterators, and
-  user-defined `Hash`/`Eq` dispatch remain.
+  Owned-element move extraction, fixed-array generic contracts, dictionary
+  entry iteration, and user-defined `Hash`/`Eq` dispatch remain.
 - Missing (2): standard `Option[T]`/`Result[T, E]`, explicit `dyn Trait`.
 
 ### Ownership and storage — 8.0 / 10
@@ -98,17 +98,17 @@ estimate.
   enforced by executable top-level statements rather than a module manifest.
 - Missing (2): package manifest/dependency graph; module/interface cache.
 
-### Compiler-construction primitives — 3.5 / 12
+### Compiler-construction primitives — 4.0 / 12
 
 - Complete (2): Text values and deterministic native file I/O wrappers needed
   by the existing demos.
-- Partial (3): generic arrays/dictionaries now cover compiler-useful `Int`,
+- Partial (4): generic arrays/dictionaries now cover compiler-useful `Int`,
   `Text`, and user-value payloads, including dictionary function contracts, but
-  collection iterators remain; string processing is output-oriented; diagnostics have no reusable
-  source-span type.
-- Missing (7): byte buffers, Unicode/code-point iteration, collection iterators,
-  tagged error propagation, arena/bump allocation, command-line/environment
-  APIs, process execution.
+  iteration currently covers arrays but not dictionary entries; string
+  processing is output-oriented; diagnostics have no reusable source-span type.
+- Missing (6): byte buffers, Unicode/code-point iteration, tagged error
+  propagation, arena/bump allocation, command-line/environment APIs, process
+  execution.
 
 ### Standard library and tooling — 3.5 / 8
 
@@ -147,5 +147,6 @@ estimate.
 5. Multi-parameter generics (implemented by example 55).
 6. Generic collection element types and ownership/drop specialization
    (implemented for fixed/growable arrays and Swiss-table dictionaries by
-   examples 56-68; fixed-array generic contracts and iterators remain).
+   examples 56-69; fixed-array generic contracts and dictionary iteration
+   remain).
 7. `Option`/`Result` and compiler-grade byte/text/source-span libraries.

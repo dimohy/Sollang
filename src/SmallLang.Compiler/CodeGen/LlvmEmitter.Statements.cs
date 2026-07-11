@@ -229,12 +229,15 @@ internal sealed partial class LlvmEmitter
     private void EmitArrayEachBlockFunctionCall(BlockFunctionCallStatement statement)
     {
         var source = EmitExpression(statement.Source);
-        var (pointer, length, staticLength) = source switch
+        var length = source switch
         {
-            RuntimeIntSlice slice => (slice.PointerName, slice.LengthName, null),
-            RuntimeStaticIntArray array => (array.PointerName, array.LengthName, (int?)array.AllocatedLength),
-            RuntimeDynamicIntArray array => (array.PointerName, array.LengthName, null),
-            _ => throw new SmallLangException("each expects a range or Int array input")
+            RuntimeIntSlice slice => slice.LengthName,
+            RuntimeStaticIntArray array => array.LengthName,
+            RuntimeStaticTextArray array => array.LengthName,
+            RuntimeStaticInlineArray array => array.LengthName,
+            RuntimeDynamicIntArray array => array.LengthName,
+            RuntimeDynamicInlineArray array => array.LengthName,
+            _ => throw new SmallLangException("each expects a range or array input")
         };
 
         var bodyLabel = NextLabel("array_each_body");
@@ -252,24 +255,25 @@ internal sealed partial class LlvmEmitter
         var index = NextTemp("array_each_i");
         EmitPhi(index, "i64", ("0", entryLabel), (next, continueLabel));
 
-        RuntimeInt item;
-        if (staticLength is { } allocatedLength)
+        RuntimeValue item = source switch
         {
-            item = EmitStaticArrayLoad(new RuntimeStaticIntArray(pointer, length, allocatedLength), index);
-        }
-        else if (source is RuntimeIntSlice)
-        {
-            item = EmitIntSliceLoad(new RuntimeIntSlice(pointer, length), index);
-        }
-        else
-        {
-            item = EmitDynamicArrayLoad(new RuntimeDynamicIntArray(pointer, length, length), index);
-        }
+            RuntimeIntSlice slice => EmitIntSliceLoad(slice, index),
+            RuntimeStaticIntArray array => EmitStaticArrayLoad(array, index),
+            RuntimeStaticTextArray array => EmitStaticTextArrayLoad(array, index),
+            RuntimeStaticInlineArray array => EmitStaticInlineArrayLoad(array, index),
+            RuntimeDynamicIntArray array => EmitDynamicArrayLoad(array, index),
+            RuntimeDynamicInlineArray array => EmitDynamicInlineArrayLoad(array, index),
+            _ => throw new SmallLangException("each expects a range or array input")
+        };
 
         var outerLocals = CaptureLocals();
         try
         {
             _locals[statement.ItemName] = item;
+            if (_program.Types.ContainsOwnedStorage(item.Type))
+            {
+                _borrowedOwnedLocals.Add(statement.ItemName);
+            }
             EmitStatements(statement.Body);
             DropOwnedLocalsCreatedSince(outerLocals, transferredOwnerName: null);
         }

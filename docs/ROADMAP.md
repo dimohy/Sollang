@@ -48,6 +48,7 @@ ownership behavior is part of the feature.
 - [x] Parametric dictionaries with typed hash/equality, put/grow/index/drop
 - [x] Readonly, `mut`, and `move` function ABI for parametric dictionaries
 - [x] Readonly, `mut`, and `move` function ABI for parametric dynamic arrays
+- [x] Type-preserving `each` for fixed and dynamic parametric arrays
 - [x] Compile-time `Int` value generics, `[Int; N]` parameters, and specialization
 - [x] Monomorphization with deterministic ownership/drop behavior for inline values
 - [x] Associated types and equality constraints for container and iterator contracts

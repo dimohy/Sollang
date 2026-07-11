@@ -775,6 +775,9 @@ Container rules in the current slice:
   trap in the current runtime slice.
 - `push`, `put`, and indexed assignment require a named mutable owner binding
   created with `=> name!`.
+- `array -> each item { ... }` binds `item` to the concrete element type for
+  fixed and dynamic arrays. Owned elements are readonly borrows for one block
+  invocation and are never dropped separately from their array owner.
 - `append` and `updated` consume a named source owner and return the moved owner.
   After the transform, the source binding is no longer live. The target may
   reuse the same name because the old owner is consumed before the new owner is
