@@ -504,6 +504,8 @@ approved syntax.
   dynamic user-value, and readonly-borrowed owned-element arrays
 - `examples/70-generic-dictionary-iteration.sl`: Swiss live-slot `eachKey` and
   `eachValue` with Text keys, typed user values, and borrowed owned values
+- `examples/71-user-defined-dictionary-keys.sl`: copyable nominal keys with
+  statically dispatched `Hash.hash` and canonical `Eq.eq` implementations
 - `examples/browser`: static HTML/JS runner for the WebAssembly sample
 - `examples/expected`: expected stdout/stdin fixtures for executable samples
 - `stdlib/sys/runtime.sl`: standard library intrinsic boundary declarations

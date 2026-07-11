@@ -1564,9 +1564,10 @@ internal sealed class SemanticCompiler
                 allowPrintCall: false,
                 allowReadIntCall,
                 allowFlowBindingTarget: false);
-            if (keyType is not (BoundType.Int or BoundType.Text))
+            if (!IsSupportedDictionaryKeyType(keyType))
             {
-                throw Error(entry.Key.Line, entry.Key.Column, "dictionary keys must implement Hash and Eq; Int and Text are supported in the current slice");
+                throw Error(entry.Key.Line, entry.Key.Column,
+                    $"dictionary key type {FormatType(keyType)} must implement Hash.hash: self -> Int and Eq.eq: self -> Int");
             }
             if (inferredKeyType is { } expectedKey && keyType != expectedKey)
             {
@@ -1605,10 +1606,10 @@ internal sealed class SemanticCompiler
     {
         var keyType = ParseType(expression.KeyType, expression.Line, expression.Column);
         var valueType = ParseType(expression.ValueType, expression.Line, expression.Column);
-        if (keyType is not (BoundType.Int or BoundType.Text))
+        if (!IsSupportedDictionaryKeyType(keyType))
         {
             throw Error(expression.Line, expression.Column,
-                "dictionary keys must implement Hash and Eq; Int and Text are supported in the current slice");
+                $"dictionary key type {FormatType(keyType)} must implement Hash.hash: self -> Int and Eq.eq: self -> Int");
         }
         return keyType == BoundType.Int && valueType == BoundType.Int
             ? BoundType.IntDictionary
@@ -4001,10 +4002,10 @@ internal sealed class SemanticCompiler
                 var valueName = typeName[(separator + 1)..^1].Trim();
                 var keyType = ParseType(keyName, line, column);
                 var valueType = ParseType(valueName, line, column);
-                if (keyType is not (BoundType.Int or BoundType.Text))
+                if (!IsSupportedDictionaryKeyType(keyType))
                 {
                     throw Error(line, column,
-                        "dictionary keys must implement Hash and Eq; Int and Text are supported in the current slice");
+                        $"dictionary key type {FormatType(keyType)} must implement Hash.hash: self -> Int and Eq.eq: self -> Int");
                 }
                 return keyType == BoundType.Int && valueType == BoundType.Int
                     ? BoundType.IntDictionary
@@ -4110,6 +4111,38 @@ internal sealed class SemanticCompiler
             || _types.IsStaticArray(type)
             || _types.IsDynamicArray(type)
             || _types.IsDictionary(type);
+    }
+
+    private bool IsSupportedDictionaryKeyType(BoundType type)
+    {
+        if (type is BoundType.Int or BoundType.Text)
+        {
+            return true;
+        }
+        if (!_types.IsStruct(type) && !_types.IsEnum(type))
+        {
+            return false;
+        }
+        if (_types.ContainsOwnedStorage(type))
+        {
+            return false;
+        }
+
+        return HasDictionaryKeyTrait(type, "Hash", "hash")
+            && HasDictionaryKeyTrait(type, "Eq", "eq");
+    }
+
+    private bool HasDictionaryKeyTrait(BoundType type, string traitName, string methodName)
+    {
+        var typeName = _types.IsStruct(type)
+            ? _types.GetStruct(type).Name
+            : _types.GetEnum(type).Name;
+        return _program.Functions.Any(function =>
+            function.TraitName == traitName
+            && function.InputType == typeName
+            && function.Name.EndsWith('.' + methodName, StringComparison.Ordinal)
+            && function.ReturnType == "Int"
+            && function.InputOwnership == FunctionInputOwnership.Default);
     }
 
     private bool IsReadonlyIntViewCompatible(BoundType type)

@@ -130,6 +130,14 @@ internal sealed partial class LlvmEmitter
         {
             return EmitHashInt(integer.ValueName);
         }
+        if (key is RuntimeStruct or RuntimeEnum)
+        {
+            var hashFunction = FindDictionaryKeyTraitMethod(key.Type, "Hash", "hash");
+            var hashValue = EmitFunctionCall(hashFunction, key);
+            return hashValue is RuntimeInt hashResult
+                ? hashResult.ValueName
+                : throw new SmallLangException("Hash.hash must return Int");
+        }
         if (key is not RuntimeText text)
         {
             throw new SmallLangException($"dictionary key type {key.Type} has no Hash implementation");
@@ -176,6 +184,19 @@ internal sealed partial class LlvmEmitter
         {
             var equal = NextTemp("generic_dict_key_equal");
             EmitCompare(equal, "eq", "i64", leftInt.ValueName, rightInt.ValueName);
+            return equal;
+        }
+        if (left is RuntimeStruct or RuntimeEnum)
+        {
+            var eqFunction = FindDictionaryKeyTraitMethod(left.Type, "Eq", "eq");
+            var leftKey = EmitFunctionCall(eqFunction, left);
+            var rightKey = EmitFunctionCall(eqFunction, right);
+            if (leftKey is not RuntimeInt leftEq || rightKey is not RuntimeInt rightEq)
+            {
+                throw new SmallLangException("Eq.eq must return Int");
+            }
+            var equal = NextTemp("generic_dict_nominal_key_equal");
+            EmitCompare(equal, "eq", "i64", leftEq.ValueName, rightEq.ValueName);
             return equal;
         }
         if (left is not RuntimeText leftText || right is not RuntimeText rightText)
@@ -230,6 +251,16 @@ internal sealed partial class LlvmEmitter
         EmitPhi(result, "i1", ("true", match), ("false", mismatch));
         _currentBlockLabel = done;
         return result;
+    }
+
+    private BoundFunction FindDictionaryKeyTraitMethod(BoundType type, string traitName, string methodName)
+    {
+        return _program.Functions.Values.FirstOrDefault(function =>
+            function.TraitName == traitName
+            && function.InputType == type
+            && function.Name.EndsWith('.' + methodName, StringComparison.Ordinal))
+            ?? throw new SmallLangException(
+                $"dictionary key type {type} has no {traitName}.{methodName} implementation");
     }
 
     private RuntimeValue EmitInlineDictionaryLookup(RuntimeInlineDictionary dictionary, RuntimeValue key)

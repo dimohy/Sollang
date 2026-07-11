@@ -2591,4 +2591,31 @@ live-control-byte scan performs recursive destruction. Example 70 verifies
 `Text` keys, copyable struct values, and owned struct values. Diagnostics reject
 owned iterator-item copying and dictionary iterators on non-dictionary sources.
 
+## D084 - Static Hash And Equality-Key Dispatch
+
+Status: implemented for copyable nominal keys
+Date: 2026-07-12
+
+A copyable struct or enum may become a dictionary key by implementing two
+static traits with exact signatures:
+
+```smalllang
+trait Hash { hash: self -> Int }
+trait Eq { eq: self -> Int }
+```
+
+`Hash.hash` returns the table hash. `Eq.eq` returns a canonical integer for the
+key's equality class; two keys are equal exactly when those canonical integers
+match. Implementations must obey the usual hash law: equal keys return the same
+hash. This canonical-key form fits SL's current one-input function ABI. A later
+general multi-argument function slice may add the familiar
+`equals(self, other)` surface without changing dictionary storage.
+
+Dictionary specialization verifies both conformances at compile time. LLVM
+lookup, insertion, update, and rehash directly call the concrete impl functions;
+there is no type descriptor, interface object, or vtable. Owned nominal keys are
+rejected until temporary-key move/drop coverage is explicit. Example 71 verifies
+nominal-key insertion, equality-based replacement, lookup, growth, and static
+calls. Missing or incorrectly typed contracts are compile errors.
+
 

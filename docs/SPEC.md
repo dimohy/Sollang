@@ -781,6 +781,10 @@ Container rules in the current slice:
 - `dictionary -> eachKey key { ... }` and `dictionary -> eachValue value {
   ... }` scan occupied Swiss-table slots and bind the concrete K or V type.
   Iteration order is unspecified. Owned items are readonly per-slot borrows.
+- `Int` and `Text` have built-in dictionary hash/equality. A copyable nominal
+  key must implement `Hash.hash: self -> Int` and `Eq.eq: self -> Int`.
+  `Eq.eq` returns the canonical equality-class integer, and equal keys must
+  return the same hash. Dispatch is statically specialized with no vtable.
 - `append` and `updated` consume a named source owner and return the moved owner.
   After the transform, the source binding is no longer live. The target may
   reuse the same name because the old owner is consumed before the new owner is
