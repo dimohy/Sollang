@@ -2431,4 +2431,22 @@ types and recursively owned values will extend; it does not yet claim complete
 general `[T; N]` support. Example 56 verifies the `Text` layout, indexed value,
 length, and allocation/free pair.
 
+## D076 - Parametric Fixed Arrays For User Values
+
+Status: implemented for copyable inline user values
+Date: 2026-07-11
+
+`TypeDefinitionTable` now creates a stable fixed-array type definition per
+element `TypeId`. Each definition records element type, inline size, and
+alignment. Homogeneous arrays of copyable structs and enums therefore lower to
+typed LLVM aggregate GEP/store/load operations, and indexing recovers the exact
+element type for subsequent field access or enum matching. The backing buffer
+is an owned allocation released once at scope exit.
+
+An element type that transitively owns a box or another heap value is rejected
+for now. Accepting it without element-wise recursive drop would permit leaks or
+double frees, so this remains outside safe SL until the next slice. Example 57
+verifies distinct struct and payload-enum array layouts; the owned-element
+diagnostic verifies the safety boundary.
+
 

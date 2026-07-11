@@ -67,6 +67,37 @@ internal sealed partial class LlvmEmitter
         return ExtractTextAggregate(aggregate);
     }
 
+    private void StoreStaticInlineArrayElement(
+        string pointer,
+        BoundStaticArrayDefinition definition,
+        int index,
+        RuntimeValue value)
+    {
+        var llvmType = LlvmType(definition.ElementType);
+        var materialized = MaterializeAggregateValue(value);
+        var slot = NextTemp("inline_array_slot");
+        EmitAssign(
+            slot,
+            $"getelementptr {llvmType}, ptr {pointer}, i64 {index.ToString(CultureInfo.InvariantCulture)}");
+        EmitStore(llvmType, materialized.ValueName, slot, definition.ElementAlignment);
+    }
+
+    private RuntimeValue EmitStaticInlineArrayLoad(RuntimeStaticInlineArray array, string index)
+    {
+        var inBounds = NextTemp("inline_array_in_bounds");
+        EmitCompare(inBounds, "ult", "i64", index, array.LengthName);
+        EmitTrapUnless(inBounds, "inline_array_bounds");
+        var definition = _program.Types.GetStaticArray(array.ArrayType);
+        var llvmType = LlvmType(definition.ElementType);
+        var slot = NextTemp("inline_array_slot");
+        EmitAssign(slot, $"getelementptr {llvmType}, ptr {array.PointerName}, i64 {index}");
+        var value = NextTemp("inline_array_item");
+        EmitAssign(
+            value,
+            $"load {llvmType}, ptr {slot}, align {definition.ElementAlignment.ToString(CultureInfo.InvariantCulture)}");
+        return DematerializeAggregateValue(definition.ElementType, value);
+    }
+
     private void EmitStaticArrayAssign(RuntimeStaticIntArray array, string index, string value)
     {
         var inBounds = NextTemp("array_assign_in_bounds");

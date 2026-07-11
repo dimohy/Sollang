@@ -269,6 +269,9 @@ internal sealed partial class LlvmEmitter
             case RuntimeStaticTextArray { Storage: RuntimeContainerStorage.Heap } array:
                 EmitCall(target: null, "void", "smalllang_free", $"ptr {array.PointerName}");
                 break;
+            case RuntimeStaticInlineArray { Storage: RuntimeContainerStorage.Heap } array:
+                EmitCall(target: null, "void", "smalllang_free", $"ptr {array.PointerName}");
+                break;
             case RuntimeDynamicIntArray { Storage: RuntimeContainerStorage.Heap } array:
                 EmitCall(target: null, "void", "smalllang_free", $"ptr {array.PointerName}");
                 break;
@@ -284,6 +287,7 @@ internal sealed partial class LlvmEmitter
     {
         return value is RuntimeStaticIntArray { Storage: RuntimeContainerStorage.Heap }
             or RuntimeStaticTextArray { Storage: RuntimeContainerStorage.Heap }
+            or RuntimeStaticInlineArray { Storage: RuntimeContainerStorage.Heap }
             or RuntimeDynamicIntArray { Storage: RuntimeContainerStorage.Heap }
             or RuntimeIntDictionary { Storage: RuntimeContainerStorage.Heap }
             or RuntimeBox;
@@ -697,6 +701,15 @@ internal sealed partial class LlvmEmitter
         int AllocatedLength,
         RuntimeContainerStorage Storage = RuntimeContainerStorage.Heap)
         : RuntimeValue(BoundType.StaticTextArray);
+
+    private sealed record RuntimeStaticInlineArray(
+        BoundType ArrayType,
+        BoundType ElementType,
+        string PointerName,
+        string LengthName,
+        int AllocatedLength,
+        RuntimeContainerStorage Storage = RuntimeContainerStorage.Heap)
+        : RuntimeValue(ArrayType);
 
     private sealed record RuntimeDynamicIntArray(
         string PointerName,

@@ -201,6 +201,12 @@ internal sealed partial class LlvmEmitter
         {
             return EmitStaticTextArrayLiteral(expression, elements.Cast<RuntimeText>().ToArray());
         }
+        if (elements.Length > 0
+            && elements.All(value => value.Type == elements[0].Type)
+            && _program.Types.TryGetStaticArrayForElement(elements[0].Type, out var arrayType))
+        {
+            return EmitStaticInlineArrayLiteral(arrayType, elements);
+        }
 
         throw new SmallLangException("fixed array elements must have one supported runtime type");
     }
@@ -330,6 +336,28 @@ internal sealed partial class LlvmEmitter
             RuntimeContainerStorage.Heap);
     }
 
+    private RuntimeStaticInlineArray EmitStaticInlineArrayLiteral(
+        BoundType arrayType,
+        IReadOnlyList<RuntimeValue> elements)
+    {
+        var definition = _program.Types.GetStaticArray(arrayType);
+        var allocatedLength = Math.Max(elements.Count, 1);
+        var pointer = EmitHeapAllocate(
+            ((long)allocatedLength * definition.ElementSize).ToString(CultureInfo.InvariantCulture));
+        for (var i = 0; i < elements.Count; i++)
+        {
+            StoreStaticInlineArrayElement(pointer, definition, i, elements[i]);
+        }
+
+        return new RuntimeStaticInlineArray(
+            arrayType,
+            definition.ElementType,
+            pointer,
+            elements.Count.ToString(CultureInfo.InvariantCulture),
+            allocatedLength,
+            RuntimeContainerStorage.Heap);
+    }
+
     private RuntimeValue EmitTypedEmptyArray(TypedEmptyArrayExpression expression)
     {
         if (expression.ElementType != "Int")
@@ -397,6 +425,7 @@ internal sealed partial class LlvmEmitter
             RuntimeIntSlice slice => EmitIntSliceLoad(slice, index.ValueName),
             RuntimeStaticIntArray array => EmitStaticArrayLoad(array, index.ValueName),
             RuntimeStaticTextArray array => EmitStaticTextArrayLoad(array, index.ValueName),
+            RuntimeStaticInlineArray array => EmitStaticInlineArrayLoad(array, index.ValueName),
             RuntimeDynamicIntArray array => EmitDynamicArrayLoad(array, index.ValueName),
             RuntimeIntDictionaryView dictionary => EmitDictionaryLookup(
                 new RuntimeIntDictionary(dictionary.PointerName, dictionary.LengthName, dictionary.CapacityName),

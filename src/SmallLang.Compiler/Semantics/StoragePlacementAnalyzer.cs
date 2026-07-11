@@ -747,7 +747,7 @@ internal static class StoragePlacementAnalyzer
         switch (expression)
         {
             case ArrayLiteralExpression { Elements.Count: > 0 } array
-                when array.Elements.All(static element => element is not StringExpression):
+                when array.Elements.All(static element => element is not (StringExpression or StructLiteralExpression)):
                 kind = array.IsDynamic
                     ? PromotedOwnerKind.DynamicArray
                     : PromotedOwnerKind.StaticArray;

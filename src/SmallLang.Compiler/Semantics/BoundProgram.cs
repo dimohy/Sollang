@@ -136,12 +136,21 @@ internal sealed record BoundEnumDefinition(
 
 internal sealed record BoundBoxDefinition(TypeId Id, TypeId ElementType, int Size, int Alignment);
 
+internal sealed record BoundStaticArrayDefinition(
+    TypeId Id,
+    TypeId ElementType,
+    int ElementSize,
+    int ElementAlignment);
+
 internal sealed class TypeDefinitionTable
 {
-    private readonly IReadOnlyDictionary<string, TypeId> _names;
-    private readonly IReadOnlyDictionary<TypeId, BoundStructDefinition> _structs;
-    private readonly IReadOnlyDictionary<TypeId, BoundEnumDefinition> _enums;
-    private readonly IReadOnlyDictionary<TypeId, BoundBoxDefinition> _boxes;
+    private readonly Dictionary<string, TypeId> _names;
+    private readonly Dictionary<TypeId, BoundStructDefinition> _structs;
+    private readonly Dictionary<TypeId, BoundEnumDefinition> _enums;
+    private readonly Dictionary<TypeId, BoundBoxDefinition> _boxes;
+    private readonly Dictionary<TypeId, BoundStaticArrayDefinition> _staticArrays = [];
+    private readonly Dictionary<TypeId, TypeId> _staticArraysByElement = [];
+    private int _nextParametricTypeId;
 
     public TypeDefinitionTable(
         IReadOnlyDictionary<string, TypeId> names,
@@ -149,10 +158,15 @@ internal sealed class TypeDefinitionTable
         IReadOnlyDictionary<TypeId, BoundEnumDefinition> enums,
         IReadOnlyDictionary<TypeId, BoundBoxDefinition> boxes)
     {
-        _names = names;
-        _structs = structs;
-        _enums = enums;
-        _boxes = boxes;
+        _names = new Dictionary<string, TypeId>(names, StringComparer.Ordinal);
+        _structs = new Dictionary<TypeId, BoundStructDefinition>(structs);
+        _enums = new Dictionary<TypeId, BoundEnumDefinition>(enums);
+        _boxes = new Dictionary<TypeId, BoundBoxDefinition>(boxes);
+        _nextParametricTypeId = _names.Values
+            .Concat(_boxes.Keys)
+            .Select(static type => (int)type)
+            .DefaultIfEmpty((int)TypeId.FirstUserDefined)
+            .Max() + 1;
     }
 
     public IReadOnlyCollection<BoundStructDefinition> Structs => _structs.Values.ToArray();
@@ -160,6 +174,8 @@ internal sealed class TypeDefinitionTable
     public IReadOnlyCollection<BoundEnumDefinition> Enums => _enums.Values.ToArray();
 
     public IReadOnlyCollection<BoundBoxDefinition> Boxes => _boxes.Values.ToArray();
+
+    public IReadOnlyCollection<BoundStaticArrayDefinition> StaticArrays => _staticArrays.Values.ToArray();
 
     public bool TryResolve(string name, out TypeId type) => _names.TryGetValue(name, out type);
 
@@ -169,6 +185,26 @@ internal sealed class TypeDefinitionTable
 
     public bool IsBox(TypeId type) => _boxes.ContainsKey(type);
 
+    public bool IsStaticArray(TypeId type) => _staticArrays.ContainsKey(type);
+
+    public TypeId GetOrAddStaticArray(TypeId elementType)
+    {
+        if (_staticArraysByElement.TryGetValue(elementType, out var existing))
+        {
+            return existing;
+        }
+
+        var id = (TypeId)_nextParametricTypeId++;
+        var size = InlineSize(elementType);
+        var alignment = Math.Min(Math.Max(size, 1), 8);
+        _staticArrays.Add(id, new BoundStaticArrayDefinition(id, elementType, size, alignment));
+        _staticArraysByElement.Add(elementType, id);
+        return id;
+    }
+
+    public bool TryGetStaticArrayForElement(TypeId elementType, out TypeId arrayType) =>
+        _staticArraysByElement.TryGetValue(elementType, out arrayType);
+
     public bool ContainsOwnedStorage(TypeId type)
     {
         return ContainsOwnedStorage(type, new HashSet<TypeId>());
@@ -176,7 +212,7 @@ internal sealed class TypeDefinitionTable
 
     private bool ContainsOwnedStorage(TypeId type, HashSet<TypeId> visiting)
     {
-        if (type is TypeId.DynamicIntArray or TypeId.IntDictionary || IsBox(type))
+        if (type is TypeId.DynamicIntArray or TypeId.IntDictionary || IsBox(type) || IsStaticArray(type))
         {
             return true;
         }
@@ -225,4 +261,47 @@ internal sealed class TypeDefinitionTable
             ? definition
             : throw new KeyNotFoundException($"type id '{(int)type}' is not a box");
     }
+
+    public BoundStaticArrayDefinition GetStaticArray(TypeId type)
+    {
+        return _staticArrays.TryGetValue(type, out var definition)
+            ? definition
+            : throw new KeyNotFoundException($"type id '{(int)type}' is not a static array");
+    }
+
+    private int InlineSize(TypeId type)
+    {
+        if (_boxes.ContainsKey(type))
+        {
+            return 8;
+        }
+        if (_structs.TryGetValue(type, out var structure))
+        {
+            var offset = 0;
+            var maxAlignment = 1;
+            foreach (var field in structure.Fields)
+            {
+                var size = InlineSize(field.Type);
+                var alignment = Math.Min(Math.Max(size, 1), 8);
+                offset = AlignUp(offset, alignment);
+                offset += size;
+                maxAlignment = Math.Max(maxAlignment, alignment);
+            }
+            return AlignUp(offset, maxAlignment);
+        }
+        if (_enums.TryGetValue(type, out var enumeration))
+        {
+            return 8 + enumeration.PayloadWords * 8;
+        }
+        return type switch
+        {
+            TypeId.Bool => 1,
+            TypeId.Int => 8,
+            TypeId.Text => 16,
+            _ => throw new InvalidOperationException($"type {type} has no inline size")
+        };
+    }
+
+    private static int AlignUp(int value, int alignment) =>
+        checked((value + alignment - 1) / alignment * alignment);
 }

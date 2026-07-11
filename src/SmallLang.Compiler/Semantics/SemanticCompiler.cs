@@ -1393,9 +1393,23 @@ internal sealed class SemanticCompiler
                 allowPrintCall: false,
                 allowReadIntCall,
                 allowFlowBindingTarget: false);
-            if (elementType is not (BoundType.Int or BoundType.Text))
+            if (elementType == BoundType.Unit
+                || elementType is BoundType.IntSlice
+                    or BoundType.StaticIntArray
+                    or BoundType.StaticTextArray
+                    or BoundType.DynamicIntArray
+                    or BoundType.IntDictionaryView
+                    or BoundType.IntDictionary
+                || _types.IsStaticArray(elementType))
             {
-                throw Error(element.Line, element.Column, "array elements must currently be Int or Text");
+                throw Error(element.Line, element.Column, "fixed array elements must be inline scalar or user values");
+            }
+            if (_types.ContainsOwnedStorage(elementType))
+            {
+                throw Error(
+                    element.Line,
+                    element.Column,
+                    $"fixed array element type {FormatType(elementType)} owns storage; recursive element drop is not implemented yet");
             }
             if (inferredElementType is not null && inferredElementType != elementType)
             {
@@ -1416,9 +1430,12 @@ internal sealed class SemanticCompiler
             return BoundType.DynamicIntArray;
         }
 
-        return inferredElementType == BoundType.Text
-            ? BoundType.StaticTextArray
-            : BoundType.StaticIntArray;
+        return inferredElementType switch
+        {
+            null or BoundType.Int => BoundType.StaticIntArray,
+            BoundType.Text => BoundType.StaticTextArray,
+            _ => _types.GetOrAddStaticArray(inferredElementType.Value)
+        };
     }
 
     private BoundType InferArrayRepeatExpression(
@@ -1531,7 +1548,8 @@ internal sealed class SemanticCompiler
             or BoundType.StaticTextArray
             or BoundType.DynamicIntArray
             or BoundType.IntDictionaryView
-            or BoundType.IntDictionary))
+            or BoundType.IntDictionary)
+            && !_types.IsStaticArray(sourceType))
         {
             throw Error(expression.Source.Line, expression.Source.Column, "indexing expects an array or dictionary");
         }
@@ -1548,6 +1566,10 @@ internal sealed class SemanticCompiler
             throw Error(expression.Index.Line, expression.Index.Column, "index must be Int");
         }
 
+        if (_types.IsStaticArray(sourceType))
+        {
+            return _types.GetStaticArray(sourceType).ElementType;
+        }
         return sourceType == BoundType.StaticTextArray ? BoundType.Text : BoundType.Int;
     }
 
@@ -2590,7 +2612,8 @@ internal sealed class SemanticCompiler
                     or BoundType.StaticTextArray
                     or BoundType.DynamicIntArray
                     or BoundType.IntDictionaryView
-                    or BoundType.IntDictionary))
+                    or BoundType.IntDictionary)
+                    && !_types.IsStaticArray(currentType))
                 {
                     return false;
                 }
@@ -3855,6 +3878,10 @@ internal sealed class SemanticCompiler
         {
             return "box " + FormatType(_types.GetBox(type).ElementType);
         }
+        if (_types.IsStaticArray(type))
+        {
+            return $"[{FormatType(_types.GetStaticArray(type).ElementType)}; N]";
+        }
 
         return type switch
         {
@@ -3877,6 +3904,7 @@ internal sealed class SemanticCompiler
     private bool IsContainerType(BoundType type)
     {
         return type is BoundType.StaticIntArray or BoundType.StaticTextArray or BoundType.DynamicIntArray or BoundType.IntDictionary
+            || _types.IsStaticArray(type)
             || _types.ContainsOwnedStorage(type);
     }
 

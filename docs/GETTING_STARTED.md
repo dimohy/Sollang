@@ -476,6 +476,8 @@ approved syntax.
   separate `Int` and `Text` LLVM monomorphizations
 - `examples/56-generic-fixed-text-array.sl`: homogeneous fixed `Text` arrays
   with typed indexing and deterministic backing-storage cleanup
+- `examples/57-user-value-fixed-arrays.sl`: parametric fixed arrays of copyable
+  user structs and payload enums with exact LLVM aggregate layouts
 - `examples/browser`: static HTML/JS runner for the WebAssembly sample
 - `examples/expected`: expected stdout/stdin fixtures for executable samples
 - `stdlib/sys/runtime.sl`: standard library intrinsic boundary declarations

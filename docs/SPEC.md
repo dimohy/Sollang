@@ -1327,6 +1327,9 @@ Current backend:
 - fixed array literals preserve homogeneous element type for `Int` and `Text`;
   `Text` arrays use 16-byte `%smalllang.text` elements, checked indexing returns
   `Text`, and their backing storage is deterministically released
+- copyable user `struct` and `enum` elements receive an element-specific
+  parametric array type and use their exact LLVM aggregate layout; arrays of
+  recursively owned elements remain rejected until element-wise drop is emitted
 - value-flow calls: `value -> function` and compatibility spelling
   `value -> function()` are parsed as a flow AST and lowered by
   semantic/codegen stages according to target position; bare flow targets cannot
