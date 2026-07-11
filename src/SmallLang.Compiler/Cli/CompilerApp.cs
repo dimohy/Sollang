@@ -16,6 +16,11 @@ internal static class CompilerApp
     {
         try
         {
+            if (args.Length >= 2 && args[0] == "grammar" && args[1] == "build")
+            {
+                GrammarCompiler.Build(args[2..]);
+                return 0;
+            }
             var options = CliOptions.Parse(args);
             Build(options);
             return 0;

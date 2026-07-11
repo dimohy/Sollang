@@ -3081,4 +3081,29 @@ space, Hangul, exit code zero, and a missing-program spawn error on Windows and
 Linux. Two diagnostics cover the wasm boundary and non-Text argv. The complete
 suite has 151 passing examples/diagnostics with zero build warnings/errors.
 
+## D103 - Grammar Generation Produces Data, Not Parser Source Logic
+
+Status: first bootstrap slice implemented
+Date: 2026-07-12
+
+SmallLang will not copy C# source generators or introduce a Rust-style macro
+language merely to build its lexer and parser. The canonical lexer and EBNF
+files compile into an ordinary `.sl` module containing declarative lexer
+descriptors and a compact parser VM instruction stream. One reusable SL runtime
+will interpret that data and build a lossless CST; ordinary SL functions will
+lower the CST into the compiler AST.
+
+`smalllang grammar build lexer grammar -o generated.sl` now parses grouping,
+alternatives, `?`/`*`/`+`, keyword predicates, token lookahead, token/rule
+references, and all current lexer pattern kinds. It emits 33 tokens, 75 rules,
+lexer descriptors, keyword/literal pools, rule offsets, and a deterministic
+1,508-word parser program. A source SHA-256 is recorded in the generated file.
+
+The full runner regenerates the module and requires byte-identical output.
+Example 88 compiles the generated module together with a separate root module
+and accesses its public metadata, proving that the output is ordinary modular
+SL source. This is deliberately not counted as a completed lexer/parser gate
+until the SL VM produces token/CST snapshots equivalent to the bootstrap
+compiler.
+
 

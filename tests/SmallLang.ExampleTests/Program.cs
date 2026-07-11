@@ -42,6 +42,31 @@ if (!File.Exists(compilerDll))
     return 1;
 }
 
+var generatedGrammarPath = Path.Combine(artifactsDir, "smalllang_grammar.generated.sl");
+var grammarBuild = Run(
+    "dotnet",
+    [compilerDll, "grammar", "build",
+        Path.Combine(repoRoot, "syntax", "smalllang.lexer"),
+        Path.Combine(repoRoot, "syntax", "smalllang.grammar"),
+        "-o", generatedGrammarPath],
+    input: null,
+    repoRoot);
+if (grammarBuild.ExitCode != 0)
+{
+    Console.Error.WriteLine("FAIL grammar table generation");
+    Console.Error.WriteLine(grammarBuild.Stdout);
+    Console.Error.WriteLine(grammarBuild.Stderr);
+    return 1;
+}
+var checkedInGrammarPath = Path.Combine(repoRoot, "syntax", "generated", "smalllang_grammar.sl");
+if (!File.Exists(checkedInGrammarPath)
+    || !File.ReadAllBytes(checkedInGrammarPath).SequenceEqual(File.ReadAllBytes(generatedGrammarPath)))
+{
+    Console.Error.WriteLine("FAIL generated grammar table is stale; run `smalllang grammar build`");
+    return 1;
+}
+Console.WriteLine("PASS grammar/table-determinism");
+
 var expectedFiles = Directory
     .EnumerateFiles(expectedDir, "*.stdout.txt")
     .Order(StringComparer.Ordinal)

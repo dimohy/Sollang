@@ -72,6 +72,8 @@ ownership behavior is part of the feature.
 - [ ] Reusable byte-offset source spans and diagnostics
 - [x] Command-line argument and environment access
 - [x] Shell-free argv-based child-process execution with typed status/errors
+- [x] Deterministic lexer-descriptor/parser-bytecode generation into `.sl`
+- [ ] SL lexer/parser VM over generated grammar tables
 
 ## Design Direction
 
