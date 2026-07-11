@@ -1,0 +1,11 @@
+main {
+    [1..10] => numbers
+    [1..10 -> each { it + 1 }] => incremented
+    [1..3 -> each item { item * item }] => squares
+    {1..3 -> each { it: it * 10 }} => lookup
+
+    "range = $(numbers[0]), $(numbers[9])" -> println
+    "mapped = $(incremented[0]), $(incremented[9])" -> println
+    "named = $(squares[0]), $(squares[2])" -> println
+    "dictionary = $(lookup[1]), $(lookup[2]), $(lookup[3])" -> println
+}

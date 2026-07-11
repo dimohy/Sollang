@@ -2740,4 +2740,32 @@ Arithmetic and comparisons lower to the concrete LLVM integer or IEEE-754
 type. Example 74 covers scalar functions, structs, fixed arrays, signed and
 unsigned full-width values, floating-point arithmetic, and conversions.
 
+## D089 - Compile-Time Collection Expansion
+
+Status: implemented
+Date: 2026-07-12
+
+An inclusive constant integer range can initialize an array directly:
+
+```smalllang
+[1..10]
+[1..10 -> each { it + 1 }]
+[1..3 -> each item { item * item }]
+```
+
+The parser evaluates the bounds and pure integer selector expressions and
+rewrites them to ordinary array literal elements before semantic analysis and
+LLVM emission. Dictionaries use the corresponding `key: value` selector:
+
+```smalllang
+{1..3 -> each { it: it * 10 }}
+```
+
+No runtime range or `each` loop remains in generated LLVM. The first slice is
+deliberately strict: bounds and selector expressions must be compile-time
+integer expressions, arithmetic is checked, descending ranges are rejected,
+and one expansion is limited to 100,000 elements to bound compiler memory use.
+Future constant evaluation may admit immutable constants and pure functions
+without changing this collection syntax.
+
 

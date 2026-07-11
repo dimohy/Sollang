@@ -724,6 +724,20 @@ Numeric rules:
 
 ## Containers
 
+Constant ranges and compile-time `each` expressions can construct collections:
+
+```smalllang
+[1..10]
+[1..10 -> each { it + 1 }]
+{1..3 -> each { it: it * 10 }}
+```
+
+Ranges are inclusive. When their bounds and selector arithmetic are constant
+integers, the compiler expands these forms into ordinary array elements or
+dictionary entries before semantic analysis. An explicit item name may replace
+`it`, as in `[1..3 -> each item { item * item }]`. Nonconstant expressions are
+diagnosed; compile-time expansion currently has a 100,000-element limit.
+
 The first container implementation is intentionally `Int`-only. It proves the
 syntax, checked access, mutation surface, and deterministic native cleanup
 before generic containers and borrowing are added.

@@ -161,6 +161,15 @@ internal sealed record NotExpression(Expression Value, int Line, int Column)
 internal sealed record RangeExpression(Expression Start, Expression End, int Line, int Column)
     : Expression(Line, Column);
 
+internal sealed record CompileTimeEachExpression(
+    Expression Source,
+    string ItemName,
+    Expression Selector,
+    Expression? DictionaryValueSelector,
+    int Line,
+    int Column)
+    : Expression(Line, Column);
+
 internal sealed record FoldExpression(
     Expression Source,
     Expression Initial,
