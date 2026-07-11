@@ -182,11 +182,13 @@ full test runner checks byte-for-byte regeneration. The SL VM consumes those
 tables, emits compact backtracking-aware CST events, and materializes flat green
 nodes with parent/token/span metadata. Valid-source whitespace and comment
 trivia are retained without affecting grammar matching. Unknown bytes are
-preserved as invalid CST tokens and force rejection. Structured recovery,
+preserved as invalid CST tokens and force rejection. Panic-mode recovery now
+creates explicit green error nodes bounded by newline, right brace, or EOF
+while retaining the entire source envelope. Multi-error continuation,
 CST-to-AST lowering, and semantic diagnostics remain as
 described in [GRAMMAR_BOOTSTRAP.md](GRAMMAR_BOOTSTRAP.md). These additions
 complete the reusable source-span/diagnostic gate. The formal count is now
-**47.0 / 60 (78.3%)**; parser recovery remains.
+**47.0 / 60 (78.3%)**; multi-error parser continuation remains.
 
 ## Immediate Implementation Order
 

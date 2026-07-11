@@ -314,6 +314,37 @@ public parseEvents source: Text -> [ParseEvent; ~] {
         }
     }
 
+    not accepted! -> if {
+        firstInvalidToken! >= 0 -> if { firstInvalidToken! } else { furthestToken! } => recoveryStart
+        recoveryStart => recoveryEnd!
+        (recoveryEnd! < (tokens! -> len) and tokens![recoveryEnd!].kind != grammar.tokenIdNewLine and tokens![recoveryEnd!].kind != grammar.tokenIdRightBrace and tokens![recoveryEnd!].kind != grammar.tokenIdEnd) -> while {
+            recoveryEnd! + 1 => recoveryEnd!
+        }
+        ParseEvent { kind: 5, value: recoveryEnd!, tokenIndex: recoveryStart } => errorRangeEvent
+        eventDepth! < (events! -> len) -> if {
+            errorRangeEvent => events![eventDepth!]
+        } else {
+            events! -> push(errorRangeEvent)
+        }
+        eventDepth! + 1 => eventDepth!
+
+        recoveryEnd! => recoveryTailIndex!
+        recoveryTailIndex! < (tokens! -> len) -> while {
+            ParseEvent {
+                kind: 2
+                value: tokens![recoveryTailIndex!].kind
+                tokenIndex: recoveryTailIndex!
+            } => recoveryTailEvent
+            eventDepth! < (events! -> len) -> if {
+                recoveryTailEvent => events![eventDepth!]
+            } else {
+                events! -> push(recoveryTailEvent)
+            }
+            eventDepth! + 1 => eventDepth!
+            recoveryTailIndex! + 1 => recoveryTailIndex!
+        }
+    }
+
     ParseEvent {
         kind: 3
         value: accepted! -> if { 1 } else { 0 }

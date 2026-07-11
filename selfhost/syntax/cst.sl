@@ -2,6 +2,7 @@ namespace smalllang.compiler.cst
 
 import smalllang.compiler.lexer as lexer
 import smalllang.compiler.parser as parser
+import syntax.generated.smalllang as grammar
 
 # Flat green nodes use stable array indexes instead of pointers. Parent links
 # and token ranges make the tree traversable without per-node heap allocation.
@@ -66,9 +67,68 @@ public build source: Text -> [GreenNode; ~] {
                         current! => nodes![nodeIndex]
                         ancestor! + 1 => ancestor!
                     }
+                } else {
+                    event.kind == 5 -> if {
+                        event.value - event.tokenIndex => errorTokenCount
+                        source -> len => errorStart!
+                        UIntSize(0) => errorLength!
+                        event.tokenIndex < (tokens! -> len) -> if {
+                            tokens![event.tokenIndex].span.start => errorStart!
+                        }
+                        errorTokenCount > 0 -> if {
+                            tokens![event.value - 1] => lastErrorToken
+                            lastErrorToken.span.start + lastErrorToken.span.length - errorStart! => errorLength!
+                        }
+                        -1 => errorParent!
+                        stackDepth! > 0 -> if {
+                            nodeStack![stackDepth! - 1] => errorParent!
+                        } else {
+                            (nodes! -> len) > 0 -> if {
+                                0 => errorParent!
+                            }
+                        }
+                        GreenNode {
+                            ruleId: -1
+                            parent: errorParent!
+                            firstToken: event.tokenIndex
+                            tokenCount: errorTokenCount
+                            start: errorStart!
+                            length: errorLength!
+                        } => errorNode
+                        nodes! -> push(errorNode)
+
+                        false => rangeAlreadyCounted!
+                        errorTokenCount > 0 -> if {
+                            tokens![event.tokenIndex].kind == grammar.tokenIdInvalid -> if {
+                                true => rangeAlreadyCounted!
+                            }
+                        }
+                        (not rangeAlreadyCounted! and errorParent! >= 0) -> if {
+                            errorParent! => affectedNode!
+                            affectedNode! >= 0 -> while {
+                                affectedNode! => currentAffectedNode
+                                nodes![affectedNode!] => affected!
+                                affected!.tokenCount + errorTokenCount => affected!.tokenCount
+                                errorStart! + errorLength! - affected!.start => affected!.length
+                                affected!.parent => affectedNode!
+                                affected! => nodes![currentAffectedNode]
+                            }
+                        }
+                    }
                 }
             }
         }
+    }
+
+    # The root is the lossless file envelope even when parser recovery had to
+    # abandon nested rule events.
+    (nodes! -> len) > 0 -> if {
+        nodes![0] => root!
+        0 => root!.firstToken
+        tokens! -> len => root!.tokenCount
+        UIntSize(0) => root!.start
+        source -> len => root!.length
+        root! => nodes![0]
     }
 
     nodes!
