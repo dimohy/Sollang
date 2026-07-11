@@ -148,6 +148,12 @@ public lex source: Text -> [syntax.SyntaxToken; ~] {
                                         span: syntax.SourceSpan { fileId: 0, start: position!, length: width! }
                                     } => punctuationToken
                                     tokens! -> push(punctuationToken)
+                                } else {
+                                    syntax.SyntaxToken {
+                                        kind: grammar.tokenIdInvalid
+                                        span: syntax.SourceSpan { fileId: 0, start: position!, length: width! }
+                                    } => invalidToken
+                                    tokens! -> push(invalidToken)
                                 }
                                 position! + width! => position!
                             }

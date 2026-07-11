@@ -309,6 +309,7 @@ internal static class GrammarCompiler
         }
         builder.AppendLine($"public triviaIdWhitespace: -> Int => {grammar.TokenNames.Count.ToString(CultureInfo.InvariantCulture)}");
         builder.AppendLine($"public triviaIdComment: -> Int => {(grammar.TokenNames.Count + 1).ToString(CultureInfo.InvariantCulture)}");
+        builder.AppendLine($"public tokenIdInvalid: -> Int => {(grammar.TokenNames.Count + 2).ToString(CultureInfo.InvariantCulture)}");
         builder.AppendLine("public triviaTokenCount: -> Int => 2");
         builder.AppendLine();
         EmitTextArrayFunction(builder, "lexerRuleNames", grammar.LexerRuleNames);

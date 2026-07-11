@@ -95,8 +95,9 @@ formatter and language server, avoiding a second editor-only grammar.
    green nodes with stable indexes, parent links, token ranges, and UTF-8 byte
    spans. The lexer assigns generated trivia token ids to contiguous whitespace
    and line comments; the parser ignores them for grammar matching while
-   retaining them in CST events. Add invalid-token preservation, recovery, and
-   diagnostic parity to make malformed inputs lossless as well.
+   retaining them in CST events. Unknown bytes receive a generated `Invalid`
+   token id, remain in CST spans, and force a rejected parse. Add structured
+   recovery and diagnostic parity for other malformed token sequences.
 5. Write CST-to-AST lowering in ordinary SL modules.
 6. Reimplement `grammar build` itself in SL and require byte-identical output.
 7. Remove the C# source generators only after the SL compiler reproduces all

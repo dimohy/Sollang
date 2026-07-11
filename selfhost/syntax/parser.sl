@@ -36,6 +36,7 @@ public parseEvents source: Text -> [ParseEvent; ~] {
     0 => tokenIndex!
     true => running!
     false => accepted!
+    false => invalidSeen!
 
     ParseEvent { kind: 0, value: startRule, tokenIndex: tokenIndex! } => startEvent
     events! -> push(startEvent)
@@ -45,6 +46,9 @@ public parseEvents source: Text -> [ParseEvent; ~] {
     running! -> while {
         (tokenIndex! < (tokens! -> len) and tokens![tokenIndex!].kind >= grammar.triviaIdWhitespace) -> while {
             tokens![tokenIndex!].kind => triviaKind
+            triviaKind == grammar.tokenIdInvalid -> if {
+                true => invalidSeen!
+            }
             ParseEvent { kind: 2, value: triviaKind, tokenIndex: tokenIndex! } => triviaEvent
             eventDepth! < (events! -> len) -> if {
                 triviaEvent => events![eventDepth!]
@@ -69,7 +73,7 @@ public parseEvents source: Text -> [ParseEvent; ~] {
             eventDepth! + 1 => eventDepth!
             callDepth! == 0 -> if {
                 tokens! -> len => tokenCount
-                tokenIndex! == tokenCount => accepted!
+                tokenIndex! == tokenCount and not invalidSeen! => accepted!
                 false => running!
             } else {
                 callDepth! - 1 => callDepth!
