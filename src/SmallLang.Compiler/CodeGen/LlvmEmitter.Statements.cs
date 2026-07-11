@@ -137,6 +137,13 @@ internal sealed partial class LlvmEmitter
         }
 
         var target = ResolveLocal(assignment.Name);
+        if (target is RuntimeMappedBytes mapped)
+        {
+            var mappedValue = EmitIntExpression(assignment.Value);
+            EnsureRuntimeType(mappedValue, BoundType.UInt8, "mapped byte assignment");
+            EmitMappedStore(mapped, assignment.Index, mappedValue);
+            return;
+        }
         var index = EmitIntExpression(assignment.Index);
         var value = EmitIntExpression(assignment.Value);
         switch (target)
@@ -248,6 +255,7 @@ internal sealed partial class LlvmEmitter
             RuntimeStaticInlineArray array => array.LengthName,
             RuntimeDynamicIntArray array => array.LengthName,
             RuntimeDynamicInlineArray array => array.LengthName,
+            RuntimeMappedBytes mapped => mapped.LengthName,
             _ => throw new SmallLangException("each expects a range, Text, or array input")
         };
 
@@ -274,6 +282,7 @@ internal sealed partial class LlvmEmitter
             RuntimeStaticInlineArray array => EmitStaticInlineArrayLoad(array, index),
             RuntimeDynamicIntArray array => EmitDynamicArrayLoad(array, index),
             RuntimeDynamicInlineArray array => EmitDynamicInlineArrayLoad(array, index),
+            RuntimeMappedBytes mapped => EmitMappedLoad(mapped, index),
             _ => throw new SmallLangException("each expects a range, Text, or array input")
         };
 

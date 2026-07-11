@@ -12,6 +12,7 @@ internal sealed partial class LlvmEmitter
     {
         EmitPlatformFunctionBlock(_platform.EmitIoPrimitives);
         EmitPlatformFunctionBlock(_platform.EmitFilePrimitives);
+        EmitPlatformFunctionBlock(_platform.EmitMappedFilePrimitives);
         EmitPlatformFunctionBlock(_platform.EmitTimePrimitives);
         EmitPlatformFunctionBlock(_platform.EmitMemoryPrimitives);
         EmitFunctionBlock("""

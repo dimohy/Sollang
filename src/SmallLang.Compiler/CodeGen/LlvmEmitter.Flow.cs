@@ -218,6 +218,19 @@ internal sealed partial class LlvmEmitter
                 _locals[resetName] = reset;
                 result = new RuntimeFlowResult(RuntimeUnit.Instance, null, _mainOk);
                 return true;
+            case "flush" when current is RuntimeMappedBytes mapped:
+                if (!isLast || target.Arguments.Count != 0)
+                {
+                    throw new SmallLangException("flush must be final and takes no arguments");
+                }
+                RequireMutableContainerSource(source, "flush");
+                var flushOk = NextTemp("mapped_flush_ok");
+                EmitCall(flushOk, "i32", "smalllang_mapped_flush", $"ptr {mapped.BasePointerName}, i64 {mapped.MappedLengthName}");
+                var flushSucceeded = NextTemp("mapped_flush_succeeded");
+                EmitCompare(flushSucceeded, "ne", "i32", flushOk, "0");
+                EmitTrapUnless(flushSucceeded, "mapped_flush");
+                result = new RuntimeFlowResult(RuntimeUnit.Instance, null, _mainOk);
+                return true;
             case "len":
                 if (target.Arguments.Count != 0)
                 {
@@ -235,6 +248,8 @@ internal sealed partial class LlvmEmitter
                     RuntimeIntDictionaryView dictionaryView => new RuntimeFlowResult(EmitSizeAsInt(dictionaryView.LengthName, "dict_len_value"), null, _mainOk),
                     RuntimeIntDictionary intDictionary => new RuntimeFlowResult(EmitSizeAsInt(intDictionary.LengthName, "dict_len_value"), null, _mainOk),
                     RuntimeInlineDictionary inlineMap => new RuntimeFlowResult(EmitSizeAsInt(inlineMap.LengthName, "dict_len_value"), null, _mainOk),
+                    RuntimeMappedBytes mapped => new RuntimeFlowResult(
+                        new RuntimeInt(BoundType.UIntSize, EmitArenaResultSize(mapped.LengthName)), null, _mainOk),
                     _ => result
                 };
                 return result.Value is not null;

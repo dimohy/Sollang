@@ -2934,4 +2934,30 @@ boxes, while example 81 verifies arena alignment, growth, stable offsets,
 checked access, reset, mutable borrowing, move transfer, and final one-shot
 release.
 
+## D097 - Memory Mapping Is Native Syntax With Contextual Sizes
+
+Status: implemented
+Date: 2026-07-12
+
+Large-file access uses `map read` and `map write` expressions rather than a
+library object constructor. The result is an affine owned byte view, immutable
+for read mappings and mutable for write mappings. Checked indexing exposes
+`UInt8`, `len` exposes `UIntSize`, `each` streams over the view, `flush`
+requests synchronous writeback, and scope exit unmaps exactly once.
+
+Numeric literals use the meaning of their syntax position. `at` and `size`
+infer `UInt64`, because file offsets and file lengths must remain portable even
+on 32-bit targets. `for` and byte indices infer `UIntSize`, because they address
+the current process view. Thus `at 4_000_000_000` is equivalent to
+`at UInt64(4_000_000_000)` without requiring repetitive constructors; explicit
+constructors remain accepted. Nonliteral expressions stay strictly typed so a
+variable cannot silently change width.
+
+Windows lowering uses file mappings and compensates for allocation granularity;
+Linux lowering uses shared `mmap` views and page alignment. Handles/file
+descriptors are closed after the view is established, while the mapped base and
+aligned length are retained for flush/unmap. Example 82 verifies literal
+inference beyond signed 32-bit range, mutable indexed syntax, read/write
+lowering, iteration, writeback, and deterministic unmapping.
+
 

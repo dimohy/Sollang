@@ -470,6 +470,12 @@ internal static class StoragePlacementAnalyzer
             case TryExpression attempt:
                 IndexNestedScopes(attempt.Value, positions, ref next);
                 break;
+            case MapExpression map:
+                IndexNestedScopes(map.Path, positions, ref next);
+                if (map.Offset is not null) IndexNestedScopes(map.Offset, positions, ref next);
+                if (map.Length is not null) IndexNestedScopes(map.Length, positions, ref next);
+                if (map.FileSize is not null) IndexNestedScopes(map.FileSize, positions, ref next);
+                break;
         }
     }
 
@@ -647,6 +653,12 @@ internal static class StoragePlacementAnalyzer
                 break;
             case TryExpression attempt:
                 CollectNestedScopeCandidates(attempt.Value, functions, positions, candidates);
+                break;
+            case MapExpression map:
+                CollectNestedScopeCandidates(map.Path, functions, positions, candidates);
+                if (map.Offset is not null) CollectNestedScopeCandidates(map.Offset, functions, positions, candidates);
+                if (map.Length is not null) CollectNestedScopeCandidates(map.Length, functions, positions, candidates);
+                if (map.FileSize is not null) CollectNestedScopeCandidates(map.FileSize, functions, positions, candidates);
                 break;
         }
     }
@@ -980,6 +992,10 @@ internal static class StoragePlacementAnalyzer
                 UsesOwnerReadOnly(field.Value, ownerName, kind, functions)),
             BoxExpression box => UsesOwnerReadOnly(box.Value, ownerName, kind, functions),
             TryExpression attempt => UsesOwnerReadOnly(attempt.Value, ownerName, kind, functions),
+            MapExpression map => UsesOwnerReadOnly(map.Path, ownerName, kind, functions)
+                && (map.Offset is null || UsesOwnerReadOnly(map.Offset, ownerName, kind, functions))
+                && (map.Length is null || UsesOwnerReadOnly(map.Length, ownerName, kind, functions))
+                && (map.FileSize is null || UsesOwnerReadOnly(map.FileSize, ownerName, kind, functions)),
             FieldAccessExpression field => UsesOwnerReadOnly(field.Source, ownerName, kind, functions),
             _ => false
         };
@@ -1129,6 +1145,10 @@ internal static class StoragePlacementAnalyzer
                 ContainsOwner(entry.Key, ownerName) || ContainsOwner(entry.Value, ownerName)),
             IndexExpression index => ContainsOwner(index.Source, ownerName) || ContainsOwner(index.Index, ownerName),
             TryExpression attempt => ContainsOwner(attempt.Value, ownerName),
+            MapExpression map => ContainsOwner(map.Path, ownerName)
+                || (map.Offset is not null && ContainsOwner(map.Offset, ownerName))
+                || (map.Length is not null && ContainsOwner(map.Length, ownerName))
+                || (map.FileSize is not null && ContainsOwner(map.FileSize, ownerName)),
             _ => false
         };
     }

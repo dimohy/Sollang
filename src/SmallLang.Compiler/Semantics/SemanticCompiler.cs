@@ -856,6 +856,11 @@ internal sealed class SemanticCompiler
                     {
                         throw Error(binding.Line, binding.Column, "cannot bind a unit value");
                     }
+                    if (valueType == BoundType.MutableMappedBytes && !binding.IsMutable)
+                    {
+                        throw Error(binding.Line, binding.Column,
+                            "map write requires a mutable owner binding; use '=> name!'");
+                    }
 
                     if (IsContainerType(valueType))
                     {
@@ -1002,7 +1007,8 @@ internal sealed class SemanticCompiler
             throw Error(assignment.Line, assignment.Column, $"unknown binding '{assignment.Name}'");
         }
 
-        if (targetType is not (BoundType.StaticIntArray or BoundType.DynamicIntArray or BoundType.IntDictionary))
+        if (targetType is not (BoundType.StaticIntArray or BoundType.DynamicIntArray or BoundType.IntDictionary
+            or BoundType.MutableMappedBytes))
         {
             throw Error(assignment.Line, assignment.Column, "indexed assignment expects an array or dictionary owner");
         }
@@ -1015,7 +1021,9 @@ internal sealed class SemanticCompiler
                 $"indexed assignment requires a mutable owner binding; use '=> {assignment.Name.TrimEnd('!')}!'");
         }
 
-        var indexType = InferExpression(
+        var indexType = assignment.Index is NumberExpression && targetType == BoundType.MutableMappedBytes
+            ? BoundType.UIntSize
+            : InferExpression(
             assignment.Index,
             functions,
             bindings,
@@ -1024,9 +1032,11 @@ internal sealed class SemanticCompiler
             allowFlowBindingTarget: false,
             yieldInputType: yieldInputType,
             mutableBindings: mutableBindings);
-        if (indexType != BoundType.Int)
+        var expectedIndexType = targetType == BoundType.MutableMappedBytes ? BoundType.UIntSize : BoundType.Int;
+        if (indexType != expectedIndexType)
         {
-            throw Error(assignment.Index.Line, assignment.Index.Column, "indexed assignment index must be Int");
+            throw Error(assignment.Index.Line, assignment.Index.Column,
+                $"indexed assignment index must be {FormatType(expectedIndexType)}");
         }
 
         var valueType = InferExpression(
@@ -1038,9 +1048,11 @@ internal sealed class SemanticCompiler
             allowFlowBindingTarget: false,
             yieldInputType: yieldInputType,
             mutableBindings: mutableBindings);
-        if (valueType != BoundType.Int)
+        var expectedValueType = targetType == BoundType.MutableMappedBytes ? BoundType.UInt8 : BoundType.Int;
+        if (valueType != expectedValueType)
         {
-            throw Error(assignment.Value.Line, assignment.Value.Column, "indexed assignment value must be Int");
+            throw Error(assignment.Value.Line, assignment.Value.Column,
+                $"indexed assignment value must be {FormatType(expectedValueType)}");
         }
     }
 
@@ -1139,13 +1151,15 @@ internal sealed class SemanticCompiler
                 BoundType.IntSlice or BoundType.StaticIntArray or BoundType.DynamicIntArray => BoundType.Int,
                 BoundType.StaticTextArray => BoundType.Text,
                 BoundType.Text => BoundType.CodePoint,
+                BoundType.MappedBytes or BoundType.MutableMappedBytes => BoundType.UInt8,
                 _ when _types.IsStaticArray(sourceType) => _types.GetStaticArray(sourceType).ElementType,
                 _ when _types.IsDynamicArray(sourceType) => _types.GetDynamicArray(sourceType).ElementType,
                 _ => BoundType.Unit
             };
             if (itemType == BoundType.Unit)
             {
-                throw Error(call.Source.Line, call.Source.Column, "each expects a range, Text, or array input");
+                throw Error(call.Source.Line, call.Source.Column,
+                    "each expects a range, Text, array, or mapped byte view");
             }
         }
 
@@ -1388,6 +1402,7 @@ internal sealed class SemanticCompiler
             FieldAccessExpression field => InferFieldAccessExpression(field, functions, bindings, allowReadIntCall),
             TryExpression attempt => InferTryExpression(attempt, functions, bindings, allowReadIntCall),
             BoxExpression box => InferBoxExpression(box, functions, bindings, allowReadIntCall),
+            MapExpression mapping => InferMapExpression(mapping, functions, bindings, allowReadIntCall),
             AddExpression add => InferAddExpression(add, functions, bindings, allowReadIntCall),
             SubtractExpression subtract => InferSubtractExpression(subtract, functions, bindings, allowReadIntCall),
             MultiplyExpression multiply => InferMultiplyExpression(multiply, functions, bindings, allowReadIntCall),
@@ -1693,18 +1708,26 @@ internal sealed class SemanticCompiler
             or BoundType.StaticTextArray
             or BoundType.DynamicIntArray
             or BoundType.IntDictionaryView
-            or BoundType.IntDictionary)
+            or BoundType.IntDictionary
+            or BoundType.MappedBytes
+            or BoundType.MutableMappedBytes)
             && !_types.IsStaticArray(sourceType)
             && !_types.IsDynamicArray(sourceType)
             && !_types.IsDictionary(sourceType))
         {
-            throw Error(expression.Source.Line, expression.Source.Column, "indexing expects an array or dictionary");
+            throw Error(expression.Source.Line, expression.Source.Column,
+                "indexing expects an array, dictionary, or mapped byte view");
         }
 
-        var expectedIndexType = _types.IsDictionary(sourceType)
+        var expectedIndexType = sourceType is BoundType.MappedBytes or BoundType.MutableMappedBytes
+            ? BoundType.UIntSize
+            : _types.IsDictionary(sourceType)
             ? _types.GetDictionary(sourceType).KeyType
             : BoundType.Int;
-        var indexType = expression.Index is DictionaryLiteralExpression contextual
+        var indexType = expression.Index is NumberExpression
+                && sourceType is BoundType.MappedBytes or BoundType.MutableMappedBytes
+            ? BoundType.UIntSize
+            : expression.Index is DictionaryLiteralExpression contextual
             && _types.IsStruct(expectedIndexType)
                 ? InferContextualStructLiteral(contextual, expectedIndexType, functions, bindings, allowReadIntCall)
                 : InferExpression(
@@ -1731,6 +1754,10 @@ internal sealed class SemanticCompiler
                     $"indexing owned array element type {FormatType(elementType)} requires move extraction, which is not implemented yet");
             }
             return elementType;
+        }
+        if (sourceType is BoundType.MappedBytes or BoundType.MutableMappedBytes)
+        {
+            return BoundType.UInt8;
         }
         if (_types.IsDynamicArray(sourceType))
         {
@@ -2071,6 +2098,52 @@ internal sealed class SemanticCompiler
                 expression.Column,
                 $"type {FormatType(elementType)} cannot be boxed in this slice");
         return box.Id;
+    }
+
+    private BoundType InferMapExpression(
+        MapExpression expression,
+        IReadOnlyDictionary<string, BoundFunction> functions,
+        IReadOnlyDictionary<string, BoundType> bindings,
+        bool allowReadIntCall)
+    {
+        var pathType = InferExpression(expression.Path, functions, bindings,
+            allowPrintCall: false, allowReadIntCall, allowFlowBindingTarget: false);
+        if (pathType != BoundType.Text)
+        {
+            throw Error(expression.Path.Line, expression.Path.Column, "map path must be Text");
+        }
+        ValidateMapContextValue(expression.Offset, BoundType.UInt64, "map offset", functions, bindings, allowReadIntCall);
+        ValidateMapContextValue(expression.Length, BoundType.UIntSize, "map length", functions, bindings, allowReadIntCall);
+        ValidateMapContextValue(expression.FileSize, BoundType.UInt64, "mapped file size", functions, bindings, allowReadIntCall);
+        if (expression.Mode == MapAccessMode.Read && expression.FileSize is not null)
+        {
+            throw Error(expression.FileSize.Line, expression.FileSize.Column,
+                "map read does not accept a file size");
+        }
+        return expression.Mode == MapAccessMode.Write
+            ? BoundType.MutableMappedBytes
+            : BoundType.MappedBytes;
+    }
+
+    private void ValidateMapContextValue(
+        Expression? expression,
+        BoundType expectedType,
+        string role,
+        IReadOnlyDictionary<string, BoundFunction> functions,
+        IReadOnlyDictionary<string, BoundType> bindings,
+        bool allowReadIntCall)
+    {
+        if (expression is null || expression is NumberExpression)
+        {
+            return;
+        }
+        var actualType = InferExpression(expression, functions, bindings,
+            allowPrintCall: false, allowReadIntCall, allowFlowBindingTarget: false);
+        if (actualType != expectedType)
+        {
+            throw Error(expression.Line, expression.Column,
+                $"{role} must be {FormatType(expectedType)} or an integer literal");
+        }
     }
 
     private BoundType InferAddExpression(
@@ -2947,6 +3020,14 @@ internal sealed class SemanticCompiler
         result = new FlowResult(BoundType.Unit, FlowEffect.None);
         switch (path)
         {
+            case "flush" when currentType == BoundType.MutableMappedBytes:
+                if (!isLast || target.Arguments.Count != 0)
+                {
+                    throw Error(target.Line, target.Column, "flush must be final and takes no arguments");
+                }
+                EnsureMutableContainerSource(expression.Source, "flush", mutableBindings);
+                result = new FlowResult(BoundType.Unit, FlowEffect.None);
+                return true;
             case "used" when currentType == BoundType.Arena:
                 if (target.Arguments.Count != 0)
                 {
@@ -3030,7 +3111,9 @@ internal sealed class SemanticCompiler
                     or BoundType.StaticTextArray
                     or BoundType.DynamicIntArray
                     or BoundType.IntDictionaryView
-                    or BoundType.IntDictionary)
+                    or BoundType.IntDictionary
+                    or BoundType.MappedBytes
+                    or BoundType.MutableMappedBytes)
                     && !_types.IsStaticArray(currentType)
                     && !_types.IsDynamicArray(currentType)
                     && !_types.IsDictionary(currentType))
@@ -3038,7 +3121,11 @@ internal sealed class SemanticCompiler
                     return false;
                 }
 
-                result = new FlowResult(BoundType.Int, FlowEffect.None);
+                result = new FlowResult(
+                    currentType is BoundType.MappedBytes or BoundType.MutableMappedBytes
+                        ? BoundType.UIntSize
+                        : BoundType.Int,
+                    FlowEffect.None);
                 return true;
             case "capacity":
                 if (target.Arguments.Count != 0)
@@ -3057,7 +3144,9 @@ internal sealed class SemanticCompiler
                 }
 
                 result = new FlowResult(
-                    currentType == BoundType.Arena ? BoundType.UIntSize : BoundType.Int,
+                    currentType is BoundType.Arena or BoundType.MappedBytes or BoundType.MutableMappedBytes
+                        ? BoundType.UIntSize
+                        : BoundType.Int,
                     FlowEffect.None);
                 return true;
             case "push":
@@ -4176,6 +4265,8 @@ internal sealed class SemanticCompiler
             ["UIntSize"] = BoundType.UIntSize,
             ["CodePoint"] = BoundType.CodePoint,
             ["Arena"] = BoundType.Arena,
+            ["MappedBytes"] = BoundType.MappedBytes,
+            ["MutableMappedBytes"] = BoundType.MutableMappedBytes,
             ["Float"] = BoundType.Float32,
             ["Float32"] = BoundType.Float32,
             ["Float64"] = BoundType.Float64,
@@ -4487,6 +4578,7 @@ internal sealed class SemanticCompiler
             TypeId.Size or TypeId.UIntSize => _pointerBitWidth / 8,
             TypeId.Text => 16,
             TypeId.Arena => 24,
+            TypeId.MappedBytes or TypeId.MutableMappedBytes => 40,
             _ => throw new InvalidOperationException($"type {type} has no inline size")
         };
     }
@@ -4659,6 +4751,8 @@ internal sealed class SemanticCompiler
             BoundType.UIntSize => "UIntSize",
             BoundType.CodePoint => "CodePoint",
             BoundType.Arena => "Arena",
+            BoundType.MappedBytes => "MappedBytes",
+            BoundType.MutableMappedBytes => "MutableMappedBytes",
             BoundType.Float32 => "Float",
             BoundType.Float64 => "Double",
             BoundType.Bool => "Bool",
@@ -4753,6 +4847,7 @@ internal sealed class SemanticCompiler
             or DictionaryLiteralExpression
             or TypedEmptyDictionaryExpression
             or BoxExpression
+            or MapExpression
             or StructLiteralExpression
             or CallExpression
             or TryExpression

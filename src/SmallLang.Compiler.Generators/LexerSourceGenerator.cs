@@ -426,7 +426,7 @@ internal static class LexerEmitter
             builder.AppendLine("        var column = _column;");
             builder.AppendLine("        var start = _index;");
             builder.AppendLine();
-            builder.AppendLine("        while (!IsAtEnd && char.IsDigit(Current))");
+            builder.AppendLine("        while (!IsAtEnd && (char.IsDigit(Current) || (Current == '_' && _index + 1 < source.Length && char.IsDigit(source[_index + 1]))))");
             builder.AppendLine("        {");
             builder.AppendLine("            Advance();");
             builder.AppendLine("        }");
@@ -434,17 +434,17 @@ internal static class LexerEmitter
             builder.AppendLine("        if (!IsAtEnd && Current == '.' && _index + 1 < source.Length && char.IsDigit(source[_index + 1]))");
             builder.AppendLine("        {");
             builder.AppendLine("            Advance();");
-            builder.AppendLine("            while (!IsAtEnd && char.IsDigit(Current)) Advance();");
+            builder.AppendLine("            while (!IsAtEnd && (char.IsDigit(Current) || (Current == '_' && _index + 1 < source.Length && char.IsDigit(source[_index + 1])))) Advance();");
             builder.AppendLine("        }");
             builder.AppendLine();
             builder.AppendLine("        if (!IsAtEnd && (Current == 'e' || Current == 'E'))");
             builder.AppendLine("        {");
             builder.AppendLine("            Advance();");
             builder.AppendLine("            if (!IsAtEnd && (Current == '+' || Current == '-')) Advance();");
-            builder.AppendLine("            while (!IsAtEnd && char.IsDigit(Current)) Advance();");
+            builder.AppendLine("            while (!IsAtEnd && (char.IsDigit(Current) || (Current == '_' && _index + 1 < source.Length && char.IsDigit(source[_index + 1])))) Advance();");
             builder.AppendLine("        }");
             builder.AppendLine();
-            builder.AppendLine("        _tokens.Add(new Token(TokenKind.Number, source[start.._index], line, column));");
+            builder.AppendLine("        _tokens.Add(new Token(TokenKind.Number, source[start.._index].Replace(\"_\", \"\"), line, column));");
             builder.AppendLine("    }");
             builder.AppendLine();
         }

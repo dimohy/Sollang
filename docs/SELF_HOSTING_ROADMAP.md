@@ -38,6 +38,11 @@ The design deliberately combines a small set of compatible ideas:
   byte arena follows that lifetime model while exposing checked offsets instead
   of raw pointers. See Zig [Choosing an Allocator](https://ziglang.org/documentation/master/#Choosing-an-Allocator)
   and rustc [`rustc_arena`](https://doc.rust-lang.org/stable/nightly-rustc/rustc_arena/index.html).
+- Windows file mappings and POSIX `mmap` keep large files outside ordinary heap
+  allocation while exposing bounded views. SL wraps those views in affine
+  ownership and aligns hidden base mappings to the host granularity. See
+  Microsoft [Creating a View Within a File](https://learn.microsoft.com/en-us/windows/win32/memory/creating-a-file-view)
+  and Linux [`mmap(2)`](https://man7.org/linux/man-pages/man2/munmap.2.html).
 
 SL keeps its own expression-first `=>` binding and fluent `->` application
 syntax. It does not adopt class inheritance, implicit null, implicit garbage
@@ -120,7 +125,9 @@ estimate.
   growable `UInt8` byte buffers with typed push/index/iteration/drop, plus typed
   copyable/owned `Result<T, E>` propagation with deterministic cleanup, and an
   owned aligned byte arena with stable offsets, growth, reset, checked access,
-  move/mutable-borrow ABI, and one-shot backing-store release.
+  move/mutable-borrow ABI, and one-shot backing-store release. Native memory
+  mapping adds affine bounded `UInt8` views, 64-bit file offsets/sizes,
+  target-sized view lengths/indices, writeback, and deterministic unmapping.
 - Partial (3): generic arrays/dictionaries cover compiler-useful `Int`, `Text`,
   and user-value payloads plus function contracts; string processing is
   output-oriented; diagnostics have no reusable source-span type.

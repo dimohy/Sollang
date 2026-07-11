@@ -21,11 +21,15 @@ internal abstract class LlvmRuntimePlatform
 
     public abstract void EmitFilePrimitives(StringBuilder functions);
 
+    public abstract void EmitMappedFilePrimitives(StringBuilder functions);
+
     public abstract void EmitTimePrimitives(StringBuilder functions);
 
     public abstract void EmitEntryHandles(StringBuilder functions);
 
     public virtual bool SupportsHeapAllocation => true;
+
+    public virtual bool SupportsMemoryMapping => true;
 
     public abstract void EmitMemoryDeclarations(StringBuilder functions);
 

@@ -23,6 +23,11 @@ internal sealed class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
         functions.AppendLine("declare dllimport i32 @CloseHandle(ptr)");
         functions.AppendLine("declare dllimport i32 @SetFilePointerEx(ptr, i64, ptr, i32)");
         functions.AppendLine("declare dllimport i32 @GetFileSizeEx(ptr, ptr)");
+        functions.AppendLine("declare dllimport i32 @SetEndOfFile(ptr)");
+        functions.AppendLine("declare dllimport ptr @CreateFileMappingA(ptr, ptr, i32, i32, i32, ptr)");
+        functions.AppendLine("declare dllimport ptr @MapViewOfFile(ptr, i32, i32, i32, i64)");
+        functions.AppendLine("declare dllimport i32 @UnmapViewOfFile(ptr)");
+        functions.AppendLine("declare dllimport i32 @FlushViewOfFile(ptr, i64)");
         functions.AppendLine("declare dllimport ptr @GetProcessHeap()");
         functions.AppendLine("declare dllimport ptr @HeapAlloc(ptr, i32, i64)");
         functions.AppendLine("declare dllimport i32 @HeapFree(ptr, i32, ptr)");
@@ -266,6 +271,112 @@ internal sealed class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
 
             fail:
               ret i32 0
+            }
+
+            """);
+    }
+
+    public override void EmitMappedFilePrimitives(StringBuilder functions)
+    {
+        functions.AppendLine("""
+            define internal %smalllang.mapped_bytes @smalllang_map_file(ptr %path, i64 %path_len, i64 %offset, i64 %requested_len, i64 %requested_size, i1 %writable) #0 {
+            entry:
+              %buf = alloca [260 x i8], align 1
+              %buf_ptr = getelementptr inbounds [260 x i8], ptr %buf, i64 0, i64 0
+              %copy_ok = call i32 @smalllang_copy_text_to_c_path(ptr %path, i64 %path_len, ptr %buf_ptr)
+              %path_ok = icmp ne i32 %copy_ok, 0
+              br i1 %path_ok, label %open, label %fail
+
+            open:
+              %access = select i1 %writable, i32 -1073741824, i32 -2147483648
+              %creation = select i1 %writable, i32 4, i32 3
+              %file = call ptr @CreateFileA(ptr %buf_ptr, i32 %access, i32 1, ptr null, i32 %creation, i32 128, ptr null)
+              %file_int = ptrtoint ptr %file to i64
+              %file_ok = icmp ne i64 %file_int, -1
+              br i1 %file_ok, label %resize_check, label %fail
+
+            resize_check:
+              %has_requested_size = icmp ne i64 %requested_size, 0
+              %resize = and i1 %writable, %has_requested_size
+              br i1 %resize, label %resize_file, label %read_size
+
+            resize_file:
+              %seek_ok = call i32 @SetFilePointerEx(ptr %file, i64 %requested_size, ptr null, i32 0)
+              %end_ok = call i32 @SetEndOfFile(ptr %file)
+              %resize_ok = and i32 %seek_ok, %end_ok
+              %resize_valid = icmp ne i32 %resize_ok, 0
+              br i1 %resize_valid, label %read_size, label %close_fail
+
+            read_size:
+              %size_slot = alloca i64, align 8
+              %size_ok = call i32 @GetFileSizeEx(ptr %file, ptr %size_slot)
+              %size_valid = icmp ne i32 %size_ok, 0
+              br i1 %size_valid, label %bounds, label %close_fail
+
+            bounds:
+              %file_size = load i64, ptr %size_slot, align 8
+              %offset_ok = icmp ule i64 %offset, %file_size
+              %remaining = sub i64 %file_size, %offset
+              %whole = icmp eq i64 %requested_len, 0
+              %view_len = select i1 %whole, i64 %remaining, i64 %requested_len
+              %len_nonzero = icmp ne i64 %view_len, 0
+              %len_ok = icmp ule i64 %view_len, %remaining
+              %bounds1 = and i1 %offset_ok, %len_nonzero
+              %bounds_ok = and i1 %bounds1, %len_ok
+              br i1 %bounds_ok, label %mapping, label %close_fail
+
+            mapping:
+              %protect = select i1 %writable, i32 4, i32 2
+              %mapping_handle = call ptr @CreateFileMappingA(ptr %file, ptr null, i32 %protect, i32 0, i32 0, ptr null)
+              %mapping_ok = icmp ne ptr %mapping_handle, null
+              br i1 %mapping_ok, label %view, label %close_fail
+
+            view:
+              %aligned = and i64 %offset, -65536
+              %delta = sub i64 %offset, %aligned
+              %mapped_len = add i64 %delta, %view_len
+              %high64 = lshr i64 %aligned, 32
+              %high = trunc i64 %high64 to i32
+              %low = trunc i64 %aligned to i32
+              %desired = select i1 %writable, i32 2, i32 4
+              %base = call ptr @MapViewOfFile(ptr %mapping_handle, i32 %desired, i32 %high, i32 %low, i64 %mapped_len)
+              %base_ok = icmp ne ptr %base, null
+              br i1 %base_ok, label %success, label %mapping_close_fail
+
+            success:
+              %data = getelementptr i8, ptr %base, i64 %delta
+              %ignored_mapping = call i32 @CloseHandle(ptr %mapping_handle)
+              %ignored_file = call i32 @CloseHandle(ptr %file)
+              %r0 = insertvalue %smalllang.mapped_bytes poison, ptr %data, 0
+              %r1 = insertvalue %smalllang.mapped_bytes %r0, i64 %view_len, 1
+              %r2 = insertvalue %smalllang.mapped_bytes %r1, ptr %base, 2
+              %r3 = insertvalue %smalllang.mapped_bytes %r2, i64 %mapped_len, 3
+              %r4 = insertvalue %smalllang.mapped_bytes %r3, i1 %writable, 4
+              ret %smalllang.mapped_bytes %r4
+
+            mapping_close_fail:
+              %ignored_mapping_fail = call i32 @CloseHandle(ptr %mapping_handle)
+              br label %close_fail
+
+            close_fail:
+              %ignored_close = call i32 @CloseHandle(ptr %file)
+              br label %fail
+
+            fail:
+              %f0 = insertvalue %smalllang.mapped_bytes zeroinitializer, i1 %writable, 4
+              ret %smalllang.mapped_bytes %f0
+            }
+
+            define internal i32 @smalllang_mapped_flush(ptr %base, i64 %mapped_len) #0 {
+            entry:
+              %ok = call i32 @FlushViewOfFile(ptr %base, i64 %mapped_len)
+              ret i32 %ok
+            }
+
+            define internal void @smalllang_mapped_unmap(ptr %base, i64 %mapped_len) #0 {
+            entry:
+              %ignored = call i32 @UnmapViewOfFile(ptr %base)
+              ret void
             }
 
             """);

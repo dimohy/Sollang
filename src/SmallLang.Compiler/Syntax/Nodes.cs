@@ -272,6 +272,22 @@ internal sealed record TryExpression(Expression Value, int Line, int Column)
 internal sealed record BoxExpression(Expression Value, int Line, int Column)
     : Expression(Line, Column);
 
+internal enum MapAccessMode
+{
+    Read,
+    Write
+}
+
+internal sealed record MapExpression(
+    MapAccessMode Mode,
+    Expression Path,
+    Expression? Offset,
+    Expression? Length,
+    Expression? FileSize,
+    int Line,
+    int Column)
+    : Expression(Line, Column);
+
 internal sealed record EnumPatternExpression(
     string TypeName,
     string VariantName,

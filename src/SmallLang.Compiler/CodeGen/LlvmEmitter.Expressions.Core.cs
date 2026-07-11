@@ -172,6 +172,7 @@ internal sealed partial class LlvmEmitter
             FieldAccessExpression field => EmitFieldAccessExpression(field),
             TryExpression attempt => EmitTryExpression(attempt),
             BoxExpression box => EmitBoxExpression(box),
+            MapExpression mapping => EmitMapExpression(mapping),
             AddExpression add => EmitAddExpression(add),
             SubtractExpression subtract => EmitSubtractExpression(subtract),
             MultiplyExpression multiply => EmitMultiplyExpression(multiply),
@@ -593,6 +594,10 @@ internal sealed partial class LlvmEmitter
                     ? EmitContextualStructLiteral(contextual, inlineDictionary.KeyType)
                     : EmitExpression(expression.Index);
             return EmitInlineDictionaryLookup(inlineDictionary, key);
+        }
+        if (source is RuntimeMappedBytes mapped)
+        {
+            return EmitMappedLoad(mapped, expression.Index);
         }
         var index = EmitIntExpression(expression.Index);
         var indexSize = EmitIntAsSize(index, "index_size");

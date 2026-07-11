@@ -290,6 +290,10 @@ internal sealed partial class LlvmEmitter
             case RuntimeArena arena:
                 EmitCall(target: null, "void", "smalllang_free", $"ptr {arena.PointerName}");
                 break;
+            case RuntimeMappedBytes mapped:
+                EmitCall(target: null, "void", "smalllang_mapped_unmap",
+                    $"ptr {mapped.BasePointerName}, i64 {mapped.MappedLengthName}");
+                break;
         }
 
         EndMutableContainerSlotLifetime(name);
@@ -826,6 +830,14 @@ internal sealed partial class LlvmEmitter
 
     private sealed record RuntimeArena(string PointerName, string UsedName, string CapacityName)
         : RuntimeValue(BoundType.Arena);
+
+    private sealed record RuntimeMappedBytes(
+        BoundType MappedType,
+        string DataPointerName,
+        string LengthName,
+        string BasePointerName,
+        string MappedLengthName)
+        : RuntimeValue(MappedType);
 
     private sealed record RuntimeDynamicInlineArray(
         BoundType ArrayType,

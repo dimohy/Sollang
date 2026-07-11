@@ -49,6 +49,7 @@ internal sealed partial class LlvmEmitter
             %smalllang.read_int_result = type { i64, i32 }
             %smalllang.file_int_result = type { i64, i32 }
             %smalllang.file_count_result = type { i64, i32 }
+            %smalllang.mapped_bytes = type { ptr, i64, ptr, i64, i1 }
 
             """;
         header += EmitStructTypeDefinitions();

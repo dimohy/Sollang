@@ -57,6 +57,11 @@ internal sealed class WindowsLinker(LlvmToolchain toolchain)
             CloseHandle
             SetFilePointerEx
             GetFileSizeEx
+            SetEndOfFile
+            CreateFileMappingA
+            MapViewOfFile
+            FlushViewOfFile
+            UnmapViewOfFile
             GetTickCount64
             GetProcessHeap
             HeapAlloc

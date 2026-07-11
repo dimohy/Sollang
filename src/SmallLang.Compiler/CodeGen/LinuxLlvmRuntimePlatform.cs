@@ -21,6 +21,10 @@ internal sealed class LinuxLlvmRuntimePlatform : LlvmRuntimePlatform
         functions.AppendLine("declare i32 @open(ptr, i32, i32)");
         functions.AppendLine("declare i32 @close(i32)");
         functions.AppendLine("declare i64 @lseek(i32, i64, i32)");
+        functions.AppendLine("declare i32 @ftruncate(i32, i64)");
+        functions.AppendLine("declare ptr @mmap(ptr, i64, i32, i32, i32, i64)");
+        functions.AppendLine("declare i32 @munmap(ptr, i64)");
+        functions.AppendLine("declare i32 @msync(ptr, i64, i32)");
         functions.AppendLine("declare i32 @clock_gettime(i32, ptr)");
     }
 
@@ -260,6 +264,96 @@ internal sealed class LinuxLlvmRuntimePlatform : LlvmRuntimePlatform
 
             fail:
               ret i32 0
+            }
+
+            """);
+    }
+
+    public override void EmitMappedFilePrimitives(StringBuilder functions)
+    {
+        functions.AppendLine("""
+            define internal %smalllang.mapped_bytes @smalllang_map_file(ptr %path, i64 %path_len, i64 %offset, i64 %requested_len, i64 %requested_size, i1 %writable) #0 {
+            entry:
+              %buf = alloca [260 x i8], align 1
+              %buf_ptr = getelementptr inbounds [260 x i8], ptr %buf, i64 0, i64 0
+              %copy_ok = call i32 @smalllang_copy_text_to_c_path(ptr %path, i64 %path_len, ptr %buf_ptr)
+              %path_ok = icmp ne i32 %copy_ok, 0
+              br i1 %path_ok, label %open_file, label %fail
+
+            open_file:
+              %flags = select i1 %writable, i32 66, i32 0
+              %fd = call i32 @open(ptr %buf_ptr, i32 %flags, i32 420)
+              %fd_ok = icmp sge i32 %fd, 0
+              br i1 %fd_ok, label %resize_check, label %fail
+
+            resize_check:
+              %has_requested_size = icmp ne i64 %requested_size, 0
+              %resize = and i1 %writable, %has_requested_size
+              br i1 %resize, label %resize_file, label %read_size
+
+            resize_file:
+              %truncate_result = call i32 @ftruncate(i32 %fd, i64 %requested_size)
+              %truncate_ok = icmp eq i32 %truncate_result, 0
+              br i1 %truncate_ok, label %read_size, label %close_fail
+
+            read_size:
+              %file_size = call i64 @lseek(i32 %fd, i64 0, i32 2)
+              %size_ok = icmp sge i64 %file_size, 0
+              br i1 %size_ok, label %bounds, label %close_fail
+
+            bounds:
+              %offset_ok = icmp ule i64 %offset, %file_size
+              %remaining = sub i64 %file_size, %offset
+              %whole = icmp eq i64 %requested_len, 0
+              %view_len = select i1 %whole, i64 %remaining, i64 %requested_len
+              %len_nonzero = icmp ne i64 %view_len, 0
+              %len_ok = icmp ule i64 %view_len, %remaining
+              %bounds1 = and i1 %offset_ok, %len_nonzero
+              %bounds_ok = and i1 %bounds1, %len_ok
+              br i1 %bounds_ok, label %view, label %close_fail
+
+            view:
+              %aligned = and i64 %offset, -4096
+              %delta = sub i64 %offset, %aligned
+              %mapped_len = add i64 %delta, %view_len
+              %protect_extra = select i1 %writable, i32 2, i32 0
+              %protect = or i32 1, %protect_extra
+              %base = call ptr @mmap(ptr null, i64 %mapped_len, i32 %protect, i32 1, i32 %fd, i64 %aligned)
+              %base_int = ptrtoint ptr %base to i64
+              %base_ok = icmp ne i64 %base_int, -1
+              br i1 %base_ok, label %success, label %close_fail
+
+            success:
+              %data = getelementptr i8, ptr %base, i64 %delta
+              %ignored_close = call i32 @close(i32 %fd)
+              %r0 = insertvalue %smalllang.mapped_bytes poison, ptr %data, 0
+              %r1 = insertvalue %smalllang.mapped_bytes %r0, i64 %view_len, 1
+              %r2 = insertvalue %smalllang.mapped_bytes %r1, ptr %base, 2
+              %r3 = insertvalue %smalllang.mapped_bytes %r2, i64 %mapped_len, 3
+              %r4 = insertvalue %smalllang.mapped_bytes %r3, i1 %writable, 4
+              ret %smalllang.mapped_bytes %r4
+
+            close_fail:
+              %ignored_close_fail = call i32 @close(i32 %fd)
+              br label %fail
+
+            fail:
+              %f0 = insertvalue %smalllang.mapped_bytes zeroinitializer, i1 %writable, 4
+              ret %smalllang.mapped_bytes %f0
+            }
+
+            define internal i32 @smalllang_mapped_flush(ptr %base, i64 %mapped_len) #0 {
+            entry:
+              %result = call i32 @msync(ptr %base, i64 %mapped_len, i32 4)
+              %ok = icmp eq i32 %result, 0
+              %ok32 = zext i1 %ok to i32
+              ret i32 %ok32
+            }
+
+            define internal void @smalllang_mapped_unmap(ptr %base, i64 %mapped_len) #0 {
+            entry:
+              %ignored = call i32 @munmap(ptr %base, i64 %mapped_len)
+              ret void
             }
 
             """);

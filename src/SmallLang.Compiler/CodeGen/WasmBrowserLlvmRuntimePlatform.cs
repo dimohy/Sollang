@@ -12,6 +12,12 @@ internal sealed class WasmBrowserLlvmRuntimePlatform : LlvmRuntimePlatform
 
     public override bool SupportsHeapAllocation => false;
 
+    public override bool SupportsMemoryMapping => false;
+
+    public override void EmitMappedFilePrimitives(StringBuilder functions)
+    {
+    }
+
     public override void EmitExternalDeclarations(StringBuilder functions)
     {
         functions.AppendLine("declare i32 @smalllang_browser_write(ptr, i32)");

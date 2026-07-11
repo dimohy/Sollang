@@ -988,6 +988,33 @@ syntax! -> reset
 - The native targets currently support arenas. Browser wasm remains blocked by
   its existing no-heap runtime boundary.
 
+## Memory-Mapped Bytes
+
+Native SL programs can map a file directly as an owned byte view:
+
+```smalllang
+map read "huge.dat" at 4_000_000_000 for 64_000_000 => data
+map write "index.dat" size 10_000_000 => output!
+output![0] = UInt8(42)
+output! -> flush
+```
+
+- `map read` produces immutable `MappedBytes`; `map write` produces
+  `MutableMappedBytes` and therefore requires a mutable owner binding.
+- The `at` and `size` contexts infer integer literals as `UInt64`; `for` and
+  mapped indices infer literals as target-sized `UIntSize`. Explicit constructors
+  remain valid, and `_` may separate decimal digits.
+- `at ... for ...` maps a view without loading the whole file. The runtime
+  aligns the operating-system view down to its required granularity while the
+  language-visible view begins at the exact requested byte offset.
+- Indexing and assignment are bounds checked and yield/accept `UInt8`.
+  `len` returns `UIntSize`, `each` iterates bytes, and mutable `flush` requests
+  synchronous writeback.
+- A mapped view is affine. Leaving its owning scope unmaps the underlying view
+  exactly once; copying a mapped owner is not allowed.
+- Windows x64 and Linux x64 use their native mapping APIs. Browser wasm rejects
+  `map` because it has no corresponding host-file mapping primitive.
+
 The exact string escape set is not finalized. The first required string form is
 a double-quoted UTF-8 literal with optional identifier and expression
 interpolation:
