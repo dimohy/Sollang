@@ -26,6 +26,7 @@ foreach (var expectedFile in expectedFiles)
     var outputPath = Path.Combine(artifactsDir, name + ".exe");
     var llvmContainsPath = Path.Combine(expectedDir, name + ".llvm.contains.txt");
     var llvmNotContainsPath = Path.Combine(expectedDir, name + ".llvm.not-contains.txt");
+    var sourcesPath = Path.Combine(expectedDir, name + ".sources.txt");
     var verifyLlvm = File.Exists(llvmContainsPath) || File.Exists(llvmNotContainsPath);
 
     if (!File.Exists(sourcePath))
@@ -42,8 +43,10 @@ foreach (var expectedFile in expectedFiles)
         "Bypass",
         "-File",
         Path.Combine(repoRoot, "scripts", "smalllang.ps1"),
-        "-Source",
-        Path.Combine("examples", name + ".sl"),
+        File.Exists(sourcesPath) ? "-SourcesFile" : "-Source",
+        File.Exists(sourcesPath)
+            ? Path.Combine("examples", "expected", name + ".sources.txt")
+            : Path.Combine("examples", name + ".sl"),
         "-Output",
         Path.Combine("artifacts", "example-tests", name + ".exe"),
         "-Target",

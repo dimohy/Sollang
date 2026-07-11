@@ -3,7 +3,7 @@ using SmallLang.Compiler.Diagnostics;
 namespace SmallLang.Compiler.Cli;
 
 internal sealed record CliOptions(
-    string SourcePath,
+    IReadOnlyList<string> SourcePaths,
     string OutputPath,
     string? LlvmHome,
     CompilationTarget Target,
@@ -13,10 +13,10 @@ internal sealed record CliOptions(
     {
         if (args is not ["build", ..])
         {
-            throw new SmallLangException("usage: smalllang build <source.sl> -o <output> [--target windows-x64|linux-x64|wasm32-browser] [--llvm <dir>] [--keep-temps]");
+            throw new SmallLangException("usage: smalllang build <source.sl> [more-source.sl ...] -o <output> [--target windows-x64|linux-x64|wasm32-browser] [--llvm <dir>] [--keep-temps]");
         }
 
-        string? source = null;
+        var sources = new List<string>();
         string? output = null;
         string? llvmHome = null;
         var target = CompilationTarget.WindowsX64;
@@ -46,33 +46,28 @@ internal sealed record CliOptions(
                         throw new SmallLangException($"unknown option '{arg}'");
                     }
 
-                    if (source is not null)
-                    {
-                        throw new SmallLangException($"multiple source files are not supported yet: '{source}' and '{arg}'");
-                    }
-
-                    source = arg;
+                    sources.Add(arg);
                     break;
             }
         }
 
-        if (source is null)
+        if (sources.Count == 0)
         {
             throw new SmallLangException("missing source file");
         }
 
         output ??= target switch
         {
-            CompilationTarget.WindowsX64 => Path.ChangeExtension(source, ".exe"),
+            CompilationTarget.WindowsX64 => Path.ChangeExtension(sources[0], ".exe"),
             CompilationTarget.LinuxX64 => Path.Combine(
-                Path.GetDirectoryName(source) ?? Directory.GetCurrentDirectory(),
-                Path.GetFileNameWithoutExtension(source)),
-            CompilationTarget.Wasm32Browser => Path.ChangeExtension(source, ".wasm"),
+                Path.GetDirectoryName(sources[0]) ?? Directory.GetCurrentDirectory(),
+                Path.GetFileNameWithoutExtension(sources[0])),
+            CompilationTarget.Wasm32Browser => Path.ChangeExtension(sources[0], ".wasm"),
             _ => throw new SmallLangException($"unsupported target '{target}'")
         };
 
         return new CliOptions(
-            Path.GetFullPath(source),
+            sources.Select(Path.GetFullPath).ToArray(),
             Path.GetFullPath(output),
             llvmHome is null ? null : Path.GetFullPath(llvmHome),
             target,

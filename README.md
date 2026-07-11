@@ -123,6 +123,7 @@ Then open `http://localhost:5080/examples/browser/`.
 - [Getting started and implementation guide](docs/GETTING_STARTED.md)
 - [Language specification](docs/SPEC.md)
 - [Decision log](docs/DECISIONS.md)
+- [Self-hosting roadmap and measured progress](docs/SELF_HOSTING_ROADMAP.md)
 - [Array, dictionary, and ownership design](docs/ARRAYS.md)
 - [VS Code language support extension](tools/vscode-smalllang/README.md)
 - [Example programs](examples)
@@ -137,6 +138,16 @@ Then open `http://localhost:5080/examples/browser/`.
 - `src/SmallLang.Compiler.Generators`: source generators for lexing/parsing
 - `tests/SmallLang.ExampleTests`: expected stdout test runner
 - `tools/vscode-smalllang`: local VS Code language support extension
+
+Multiple user files can be compiled as one program. Library files contribute
+namespaced declarations, and exactly one root file may contain executable
+top-level statements:
+
+```powershell
+dotnet run --project src/SmallLang.Compiler -- build `
+  examples/modules/52-math.sl examples/52-multi-file-modules.sl `
+  -o artifacts/52-multi-file-modules.exe
+```
 
 ## License
 

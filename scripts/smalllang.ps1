@@ -1,5 +1,6 @@
 param(
     [string]$Source = "examples/01-function-basic-hello.sl",
+    [string]$SourcesFile,
     [string]$Output,
     [ValidateSet("windows-x64", "linux-x64", "wasm32-browser")]
     [string]$Target = "windows-x64",
@@ -9,7 +10,17 @@ param(
 $ErrorActionPreference = "Stop"
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
-$sourceName = [System.IO.Path]::GetFileNameWithoutExtension($Source)
+$sources = if ([string]::IsNullOrWhiteSpace($SourcesFile)) {
+    @($Source)
+} else {
+    Get-Content (Join-Path $repoRoot $SourcesFile) |
+        Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+        ForEach-Object { $_.Trim() }
+}
+if ($sources.Count -eq 0) {
+    throw "source list is empty"
+}
+$sourceName = [System.IO.Path]::GetFileNameWithoutExtension($sources[0])
 if ([string]::IsNullOrWhiteSpace($Output)) {
     $Output = switch ($Target) {
         "windows-x64" { "artifacts/$sourceName.exe" }
@@ -58,9 +69,11 @@ if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }
 
-$compilerArgs = @(
-    "build",
-    (Join-Path $repoRoot $Source),
+$compilerArgs = @("build")
+foreach ($sourcePath in $sources) {
+    $compilerArgs += (Join-Path $repoRoot $sourcePath)
+}
+$compilerArgs += @(
     "-o",
     (Join-Path $repoRoot $Output),
     "--target",

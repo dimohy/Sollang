@@ -199,6 +199,19 @@ Example stdout tests compile and run the samples listed under
 dotnet run --project tests\SmallLang.ExampleTests\SmallLang.ExampleTests.csproj --no-build
 ```
 
+Multiple user source files may form one compilation unit. Declarations from all
+files are merged after each file independently resolves its namespace and import
+aliases. Exactly one file may contain executable top-level statements:
+
+```powershell
+.\scripts\smalllang.ps1 `
+  -SourcesFile examples\expected\52-multi-file-modules.sources.txt `
+  -Output artifacts\52-multi-file-modules.exe
+```
+
+The source-list file contains one repository-relative `.sl` path per line.
+Direct compiler use accepts the same files as positional arguments.
+
 The compiler itself targets .NET 11 Preview and uses C# Preview.
 
 ## VS Code Extension

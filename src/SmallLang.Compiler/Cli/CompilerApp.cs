@@ -34,7 +34,7 @@ internal static class CompilerApp
 
     private static void Build(CliOptions options)
     {
-        var program = LoadProgram(options.SourcePath);
+        var program = LoadProgram(options.SourcePaths);
         var boundProgram = new SemanticCompiler(program).Compile();
         var llvmIr = LlvmIrGenerator.GenerateProgram(boundProgram, options.Target);
         var toolchain = LlvmToolchain.From(options.LlvmHome);
@@ -96,24 +96,32 @@ internal static class CompilerApp
         }
     }
 
-    private static SmallLangProgram LoadProgram(string sourcePath)
+    private static SmallLangProgram LoadProgram(IReadOnlyList<string> sourcePaths)
     {
-        var standardLibrary = LoadStandardLibrary(sourcePath);
-        var sourceProgram = ParseSourceFile(sourcePath, isStandardLibrary: false);
+        var standardLibrary = LoadStandardLibrary(sourcePaths[0]);
+        var sourcePrograms = sourcePaths
+            .Select(static path => ParseSourceFile(path, isStandardLibrary: false))
+            .ToArray();
+        var executableFiles = sourcePrograms.Count(static program => program.Statements.Count > 0);
+        if (executableFiles > 1)
+        {
+            throw new SmallLangException("multiple source files contain executable top-level statements; exactly one root file may define the program entry point");
+        }
+
         return new SmallLangProgram(
             standardLibrary.SelectMany(static program => program.Structs)
-                .Concat(sourceProgram.Structs)
+                .Concat(sourcePrograms.SelectMany(static program => program.Structs))
                 .ToArray(),
             standardLibrary.SelectMany(static program => program.Enums)
-                .Concat(sourceProgram.Enums)
+                .Concat(sourcePrograms.SelectMany(static program => program.Enums))
                 .ToArray(),
             standardLibrary.SelectMany(static program => program.Traits)
-                .Concat(sourceProgram.Traits)
+                .Concat(sourcePrograms.SelectMany(static program => program.Traits))
                 .ToArray(),
             standardLibrary.SelectMany(static program => program.Functions)
-                .Concat(sourceProgram.Functions)
+                .Concat(sourcePrograms.SelectMany(static program => program.Functions))
                 .ToArray(),
-            sourceProgram.Statements);
+            sourcePrograms.SelectMany(static program => program.Statements).ToArray());
     }
 
     private static IReadOnlyList<SmallLangProgram> LoadStandardLibrary(string sourcePath)

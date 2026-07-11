@@ -2328,4 +2328,22 @@ the explicit specialization value before emitting a call. A dynamic array or a
 fixed array with another length is rejected. Example 51 verifies the two valid
 specializations and a `3` versus `4` size-mismatch diagnostic.
 
+## D072 - Rooted Multi-File Compilation
+
+Status: implemented
+Date: 2026-07-11
+
+A compiler invocation may contain multiple user `.sl` files. Every file parses
+its own `namespace` and import aliases, then all declarations enter one semantic
+compilation unit. Exactly one user file may contain executable top-level
+statements; files without such statements are library modules. Example 52
+compiles a namespaced library file and a separate root file into one executable
+and verifies the direct namespaced LLVM call.
+
+This is the first module-system substrate, not the final package model. The
+next slice makes imports discover source files from a declared root-module
+dependency graph, then adds internal-by-default visibility and explicit public
+exports. The design follows Zig's explicit root-module graph and Swift's
+module/API boundary while retaining SL namespace and fluent-call syntax.
+
 
