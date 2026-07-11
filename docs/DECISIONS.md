@@ -2618,4 +2618,25 @@ rejected until temporary-key move/drop coverage is explicit. Example 71 verifies
 nominal-key insertion, equality-based replacement, lookup, growth, and static
 calls. Missing or incorrectly typed contracts are compile errors.
 
+## D085 - Contextual Nominal-Key Literals
+
+Status: implemented for dictionary indexing
+Date: 2026-07-12
+
+When a dictionary's key type K is a nominal struct, an index expression may
+omit the repeated type name:
+
+```smalllang
+symbols[{ scope: 1, id: 10 }]
+```
+
+The dictionary supplies the expected K type, so the brace expression is
+contextually interpreted as `K { scope: 1, id: 10 }`. Outside that expected
+struct-key position, brace syntax keeps its existing dictionary-literal
+meaning. Semantic analysis requires every K field exactly once, rejects unknown
+fields, and checks each value against the declared field type. LLVM constructs
+the same concrete aggregate as an explicitly named struct literal before the
+normal statically dispatched hash/equality lookup. Example 71 uses the concise
+form for all lookups; diagnostics cover missing and unknown fields.
+
 

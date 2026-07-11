@@ -491,7 +491,11 @@ internal sealed partial class LlvmEmitter
         var source = EmitExpression(expression.Source);
         if (source is RuntimeInlineDictionary inlineDictionary)
         {
-            return EmitInlineDictionaryLookup(inlineDictionary, EmitExpression(expression.Index));
+            var key = expression.Index is DictionaryLiteralExpression contextual
+                && _program.Types.IsStruct(inlineDictionary.KeyType)
+                    ? EmitContextualStructLiteral(contextual, inlineDictionary.KeyType)
+                    : EmitExpression(expression.Index);
+            return EmitInlineDictionaryLookup(inlineDictionary, key);
         }
         var index = EmitIntExpression(expression.Index);
         return source switch

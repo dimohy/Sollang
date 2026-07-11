@@ -1642,16 +1642,19 @@ internal sealed class SemanticCompiler
             throw Error(expression.Source.Line, expression.Source.Column, "indexing expects an array or dictionary");
         }
 
-        var indexType = InferExpression(
-            expression.Index,
-            functions,
-            bindings,
-            allowPrintCall: false,
-            allowReadIntCall,
-            allowFlowBindingTarget: false);
         var expectedIndexType = _types.IsDictionary(sourceType)
             ? _types.GetDictionary(sourceType).KeyType
             : BoundType.Int;
+        var indexType = expression.Index is DictionaryLiteralExpression contextual
+            && _types.IsStruct(expectedIndexType)
+                ? InferContextualStructLiteral(contextual, expectedIndexType, functions, bindings, allowReadIntCall)
+                : InferExpression(
+                    expression.Index,
+                    functions,
+                    bindings,
+                    allowPrintCall: false,
+                    allowReadIntCall,
+                    allowFlowBindingTarget: false);
         if (indexType != expectedIndexType)
         {
             throw Error(expression.Index.Line, expression.Index.Column,
@@ -1693,6 +1696,61 @@ internal sealed class SemanticCompiler
             return valueType;
         }
         return sourceType == BoundType.StaticTextArray ? BoundType.Text : BoundType.Int;
+    }
+
+    private BoundType InferContextualStructLiteral(
+        DictionaryLiteralExpression expression,
+        BoundType expectedType,
+        IReadOnlyDictionary<string, BoundFunction> functions,
+        IReadOnlyDictionary<string, BoundType> bindings,
+        bool allowReadIntCall)
+    {
+        var definition = _types.GetStruct(expectedType);
+        var initializers = new Dictionary<string, DictionaryEntryExpression>(StringComparer.Ordinal);
+        foreach (var entry in expression.Entries)
+        {
+            if (entry.Key is not NameExpression name)
+            {
+                throw Error(entry.Key.Line, entry.Key.Column,
+                    $"contextual {definition.Name} literal field name must be an identifier");
+            }
+            if (!initializers.TryAdd(name.Name, entry))
+            {
+                throw Error(name.Line, name.Column,
+                    $"field '{name.Name}' is initialized more than once");
+            }
+        }
+
+        foreach (var field in definition.Fields)
+        {
+            if (!initializers.TryGetValue(field.Name, out var initializer))
+            {
+                throw Error(expression.Line, expression.Column,
+                    $"contextual {definition.Name} literal is missing field '{field.Name}'");
+            }
+            var actualType = InferExpression(
+                initializer.Value,
+                functions,
+                bindings,
+                allowPrintCall: false,
+                allowReadIntCall,
+                allowFlowBindingTarget: false);
+            if (actualType != field.Type)
+            {
+                throw Error(initializer.Value.Line, initializer.Value.Column,
+                    $"field '{definition.Name}.{field.Name}' expects {FormatType(field.Type)}, got {FormatType(actualType)}");
+            }
+        }
+
+        var unknown = initializers.Keys.FirstOrDefault(name =>
+            !definition.Fields.Any(field => field.Name == name));
+        if (unknown is not null)
+        {
+            var entry = initializers[unknown];
+            throw Error(entry.Key.Line, entry.Key.Column,
+                $"struct '{definition.Name}' has no field '{unknown}'");
+        }
+        return expectedType;
     }
 
     private BoundType InferStructLiteralExpression(

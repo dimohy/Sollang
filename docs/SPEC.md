@@ -785,6 +785,10 @@ Container rules in the current slice:
   key must implement `Hash.hash: self -> Int` and `Eq.eq: self -> Int`.
   `Eq.eq` returns the canonical equality-class integer, and equal keys must
   return the same hash. Dispatch is statically specialized with no vtable.
+- When dictionary K is a struct, `dictionary[{ field: value, ... }]` is a
+  contextual K literal equivalent to `dictionary[K { field: value, ... }]`.
+  All fields remain required and type checked; elsewhere braces retain their
+  dictionary-literal meaning.
 - `append` and `updated` consume a named source owner and return the moved owner.
   After the transform, the source binding is no longer live. The target may
   reuse the same name because the old owner is consumed before the new owner is

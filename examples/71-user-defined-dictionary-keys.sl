@@ -24,9 +24,9 @@ main {
     symbols! -> put(SymbolKey { scope: 2, id: 10 }, "semantic")
     symbols! -> put(SymbolKey { scope: 1, id: 20 }, "syntax")
 
-    symbols![SymbolKey { scope: 1, id: 10 }] => lexer
-    symbols![SymbolKey { scope: 1, id: 20 }] => parser
-    symbols![SymbolKey { scope: 2, id: 10 }] => semantic
+    symbols![{ scope: 1, id: 10 }] => lexer
+    symbols![{ scope: 1, id: 20 }] => parser
+    symbols![{ scope: 2, id: 10 }] => semantic
     symbols! -> len => count
     "nominal lexer = $lexer" -> println
     "nominal parser = $parser" -> println

@@ -62,6 +62,28 @@ internal sealed partial class LlvmEmitter
         return new RuntimeStruct(type, aggregate);
     }
 
+    private RuntimeStruct EmitContextualStructLiteral(
+        DictionaryLiteralExpression expression,
+        BoundType type)
+    {
+        var definition = _program.Types.GetStruct(type);
+        var initializers = expression.Entries.ToDictionary(
+            entry => ((NameExpression)entry.Key).Name,
+            StringComparer.Ordinal);
+        var aggregate = "poison";
+        foreach (var field in definition.Fields)
+        {
+            var value = EmitExpression(initializers[field.Name].Value);
+            EnsureRuntimeType(value, field.Type, $"{definition.Name}.{field.Name}");
+            var materialized = MaterializeAggregateValue(value);
+            var next = NextTemp("contextual_struct_init");
+            EmitAssign(next,
+                $"insertvalue {LlvmStructType(type)} {aggregate}, {materialized.TypeName} {materialized.ValueName}, {field.Index.ToString(CultureInfo.InvariantCulture)}");
+            aggregate = next;
+        }
+        return new RuntimeStruct(type, aggregate);
+    }
+
     private RuntimeValue EmitFieldAccessExpression(FieldAccessExpression expression)
     {
         if (TryEmitPayloadlessEnumVariant(expression, out var enumValue))
