@@ -142,6 +142,12 @@ internal sealed record BoundStaticArrayDefinition(
     int ElementSize,
     int ElementAlignment);
 
+internal sealed record BoundDynamicArrayDefinition(
+    TypeId Id,
+    TypeId ElementType,
+    int ElementSize,
+    int ElementAlignment);
+
 internal sealed class TypeDefinitionTable
 {
     private readonly Dictionary<string, TypeId> _names;
@@ -150,6 +156,8 @@ internal sealed class TypeDefinitionTable
     private readonly Dictionary<TypeId, BoundBoxDefinition> _boxes;
     private readonly Dictionary<TypeId, BoundStaticArrayDefinition> _staticArrays = [];
     private readonly Dictionary<TypeId, TypeId> _staticArraysByElement = [];
+    private readonly Dictionary<TypeId, BoundDynamicArrayDefinition> _dynamicArrays = [];
+    private readonly Dictionary<TypeId, TypeId> _dynamicArraysByElement = [];
     private int _nextParametricTypeId;
 
     public TypeDefinitionTable(
@@ -177,6 +185,8 @@ internal sealed class TypeDefinitionTable
 
     public IReadOnlyCollection<BoundStaticArrayDefinition> StaticArrays => _staticArrays.Values.ToArray();
 
+    public IReadOnlyCollection<BoundDynamicArrayDefinition> DynamicArrays => _dynamicArrays.Values.ToArray();
+
     public bool TryResolve(string name, out TypeId type) => _names.TryGetValue(name, out type);
 
     public bool IsStruct(TypeId type) => _structs.ContainsKey(type);
@@ -186,6 +196,8 @@ internal sealed class TypeDefinitionTable
     public bool IsBox(TypeId type) => _boxes.ContainsKey(type);
 
     public bool IsStaticArray(TypeId type) => _staticArrays.ContainsKey(type);
+
+    public bool IsDynamicArray(TypeId type) => _dynamicArrays.ContainsKey(type);
 
     public TypeId GetOrAddStaticArray(TypeId elementType)
     {
@@ -205,6 +217,24 @@ internal sealed class TypeDefinitionTable
     public bool TryGetStaticArrayForElement(TypeId elementType, out TypeId arrayType) =>
         _staticArraysByElement.TryGetValue(elementType, out arrayType);
 
+    public TypeId GetOrAddDynamicArray(TypeId elementType)
+    {
+        if (_dynamicArraysByElement.TryGetValue(elementType, out var existing))
+        {
+            return existing;
+        }
+
+        var id = (TypeId)_nextParametricTypeId++;
+        var size = InlineSize(elementType);
+        var alignment = Math.Min(Math.Max(size, 1), 8);
+        _dynamicArrays.Add(id, new BoundDynamicArrayDefinition(id, elementType, size, alignment));
+        _dynamicArraysByElement.Add(elementType, id);
+        return id;
+    }
+
+    public bool TryGetDynamicArrayForElement(TypeId elementType, out TypeId arrayType) =>
+        _dynamicArraysByElement.TryGetValue(elementType, out arrayType);
+
     public bool ContainsOwnedStorage(TypeId type)
     {
         return ContainsOwnedStorage(type, new HashSet<TypeId>());
@@ -212,7 +242,8 @@ internal sealed class TypeDefinitionTable
 
     private bool ContainsOwnedStorage(TypeId type, HashSet<TypeId> visiting)
     {
-        if (type is TypeId.DynamicIntArray or TypeId.IntDictionary || IsBox(type) || IsStaticArray(type))
+        if (type is TypeId.DynamicIntArray or TypeId.IntDictionary
+            || IsBox(type) || IsStaticArray(type) || IsDynamicArray(type))
         {
             return true;
         }
@@ -267,6 +298,13 @@ internal sealed class TypeDefinitionTable
         return _staticArrays.TryGetValue(type, out var definition)
             ? definition
             : throw new KeyNotFoundException($"type id '{(int)type}' is not a static array");
+    }
+
+    public BoundDynamicArrayDefinition GetDynamicArray(TypeId type)
+    {
+        return _dynamicArrays.TryGetValue(type, out var definition)
+            ? definition
+            : throw new KeyNotFoundException($"type id '{(int)type}' is not a dynamic array");
     }
 
     private int InlineSize(TypeId type)

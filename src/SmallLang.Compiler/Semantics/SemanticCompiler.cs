@@ -1416,11 +1416,11 @@ internal sealed class SemanticCompiler
 
         if (expression.IsDynamic)
         {
-            if (inferredElementType is not (null or BoundType.Int))
+            return inferredElementType switch
             {
-                throw Error(expression.Line, expression.Column, "growable arrays currently require Int elements");
-            }
-            return BoundType.DynamicIntArray;
+                null or BoundType.Int => BoundType.DynamicIntArray,
+                var elementType => _types.GetOrAddDynamicArray(elementType.Value)
+            };
         }
 
         return inferredElementType switch
@@ -1463,15 +1463,17 @@ internal sealed class SemanticCompiler
 
     private BoundType InferTypedEmptyArrayExpression(TypedEmptyArrayExpression expression)
     {
-        if (expression.ElementType != "Int")
+        if (expression.ElementType == "Int")
         {
-            throw Error(
-                expression.Line,
-                expression.Column,
-                "typed empty growable arrays only support [Int; ~] or [Int; N~] in the current slice");
+            return BoundType.DynamicIntArray;
         }
-
-        return BoundType.DynamicIntArray;
+        var elementType = ParseType(expression.ElementType, expression.Line, expression.Column);
+        if (elementType == BoundType.Unit
+            || IsContainerType(elementType))
+        {
+            throw Error(expression.Line, expression.Column, "growable array elements must be inline scalar or user values");
+        }
+        return _types.GetOrAddDynamicArray(elementType);
     }
 
     private BoundType InferDictionaryLiteralExpression(
@@ -1542,7 +1544,8 @@ internal sealed class SemanticCompiler
             or BoundType.DynamicIntArray
             or BoundType.IntDictionaryView
             or BoundType.IntDictionary)
-            && !_types.IsStaticArray(sourceType))
+            && !_types.IsStaticArray(sourceType)
+            && !_types.IsDynamicArray(sourceType))
         {
             throw Error(expression.Source.Line, expression.Source.Column, "indexing expects an array or dictionary");
         }
@@ -1562,6 +1565,18 @@ internal sealed class SemanticCompiler
         if (_types.IsStaticArray(sourceType))
         {
             var elementType = _types.GetStaticArray(sourceType).ElementType;
+            if (_types.ContainsOwnedStorage(elementType))
+            {
+                throw Error(
+                    expression.Line,
+                    expression.Column,
+                    $"indexing owned array element type {FormatType(elementType)} requires move extraction, which is not implemented yet");
+            }
+            return elementType;
+        }
+        if (_types.IsDynamicArray(sourceType))
+        {
+            var elementType = _types.GetDynamicArray(sourceType).ElementType;
             if (_types.ContainsOwnedStorage(elementType))
             {
                 throw Error(
@@ -2614,7 +2629,8 @@ internal sealed class SemanticCompiler
                     or BoundType.DynamicIntArray
                     or BoundType.IntDictionaryView
                     or BoundType.IntDictionary)
-                    && !_types.IsStaticArray(currentType))
+                    && !_types.IsStaticArray(currentType)
+                    && !_types.IsDynamicArray(currentType))
                 {
                     return false;
                 }
@@ -2629,7 +2645,8 @@ internal sealed class SemanticCompiler
 
                 if (currentType is not (BoundType.DynamicIntArray
                     or BoundType.IntDictionaryView
-                    or BoundType.IntDictionary))
+                    or BoundType.IntDictionary)
+                    && !_types.IsDynamicArray(currentType))
                 {
                     return false;
                 }
@@ -2637,7 +2654,7 @@ internal sealed class SemanticCompiler
                 result = new FlowResult(BoundType.Int, FlowEffect.None);
                 return true;
             case "push":
-                if (currentType != BoundType.DynamicIntArray)
+                if (currentType != BoundType.DynamicIntArray && !_types.IsDynamicArray(currentType))
                 {
                     return false;
                 }
@@ -2651,7 +2668,7 @@ internal sealed class SemanticCompiler
 
                 if (target.Arguments.Count != 1)
                 {
-                    throw Error(target.Line, target.Column, "push expects exactly one Int argument");
+                    throw Error(target.Line, target.Column, "push expects exactly one argument");
                 }
 
                 var pushedType = InferExpression(
@@ -2661,9 +2678,23 @@ internal sealed class SemanticCompiler
                     allowPrintCall: false,
                     allowReadIntCall,
                     allowFlowBindingTarget: false);
-                if (pushedType != BoundType.Int)
+                var expectedPushedType = currentType == BoundType.DynamicIntArray
+                    ? BoundType.Int
+                    : _types.GetDynamicArray(currentType).ElementType;
+                if (pushedType != expectedPushedType)
                 {
-                    throw Error(target.Arguments[0].Line, target.Arguments[0].Column, "push expects an Int value");
+                    throw Error(
+                        target.Arguments[0].Line,
+                        target.Arguments[0].Column,
+                        $"push expects {FormatType(expectedPushedType)}, got {FormatType(pushedType)}");
+                }
+                if (_types.ContainsOwnedStorage(expectedPushedType)
+                    && target.Arguments[0] is NameExpression)
+                {
+                    throw Error(
+                        target.Arguments[0].Line,
+                        target.Arguments[0].Column,
+                        "pushing an owned element requires a freshly created value until explicit move arguments are implemented");
                 }
 
                 result = new FlowResult(BoundType.Unit, FlowEffect.None);
@@ -3883,6 +3914,10 @@ internal sealed class SemanticCompiler
         {
             return $"[{FormatType(_types.GetStaticArray(type).ElementType)}; N]";
         }
+        if (_types.IsDynamicArray(type))
+        {
+            return $"[{FormatType(_types.GetDynamicArray(type).ElementType)}; ~]";
+        }
 
         return type switch
         {
@@ -3906,6 +3941,7 @@ internal sealed class SemanticCompiler
     {
         return type is BoundType.StaticIntArray or BoundType.StaticTextArray or BoundType.DynamicIntArray or BoundType.IntDictionary
             || _types.IsStaticArray(type)
+            || _types.IsDynamicArray(type)
             || _types.ContainsOwnedStorage(type);
     }
 

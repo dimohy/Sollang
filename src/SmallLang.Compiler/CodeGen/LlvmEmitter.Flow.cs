@@ -175,6 +175,7 @@ internal sealed partial class LlvmEmitter
                     RuntimeStaticTextArray staticArray => new RuntimeFlowResult(new RuntimeInt(staticArray.LengthName), null, _mainOk),
                     RuntimeStaticInlineArray staticArray => new RuntimeFlowResult(new RuntimeInt(staticArray.LengthName), null, _mainOk),
                     RuntimeDynamicIntArray dynamicArray => new RuntimeFlowResult(new RuntimeInt(dynamicArray.LengthName), null, _mainOk),
+                    RuntimeDynamicInlineArray dynamicArray => new RuntimeFlowResult(new RuntimeInt(dynamicArray.LengthName), null, _mainOk),
                     RuntimeIntDictionaryView dictionaryView => new RuntimeFlowResult(new RuntimeInt(dictionaryView.LengthName), null, _mainOk),
                     RuntimeIntDictionary intDictionary => new RuntimeFlowResult(new RuntimeInt(intDictionary.LengthName), null, _mainOk),
                     _ => result
@@ -189,13 +190,14 @@ internal sealed partial class LlvmEmitter
                 result = current switch
                 {
                     RuntimeDynamicIntArray dynamicArray => new RuntimeFlowResult(new RuntimeInt(dynamicArray.CapacityName), null, _mainOk),
+                    RuntimeDynamicInlineArray dynamicArray => new RuntimeFlowResult(new RuntimeInt(dynamicArray.CapacityName), null, _mainOk),
                     RuntimeIntDictionaryView dictionaryView => new RuntimeFlowResult(new RuntimeInt(dictionaryView.CapacityName), null, _mainOk),
                     RuntimeIntDictionary intDictionary => new RuntimeFlowResult(new RuntimeInt(intDictionary.CapacityName), null, _mainOk),
                     _ => result
                 };
                 return result.Value is not null;
             case "push":
-                if (current is not RuntimeDynamicIntArray array)
+                if (current is not (RuntimeDynamicIntArray or RuntimeDynamicInlineArray))
                 {
                     return false;
                 }
@@ -211,8 +213,14 @@ internal sealed partial class LlvmEmitter
                 }
 
                 var arrayName = RequireMutableContainerSource(source, "push");
-                var pushed = EmitIntExpression(target.Arguments[0]);
-                var pushedArray = EmitDynamicArrayPush(array, pushed.ValueName);
+                var pushed = EmitExpression(target.Arguments[0]);
+                var pushedArray = current switch
+                {
+                    RuntimeDynamicIntArray array when pushed is RuntimeInt integer =>
+                        (RuntimeValue)EmitDynamicArrayPush(array, integer.ValueName),
+                    RuntimeDynamicInlineArray array => EmitDynamicInlineArrayPush(array, pushed),
+                    _ => throw new SmallLangException("push argument does not match array element type")
+                };
                 StoreMutableContainer(arrayName, pushedArray);
                 _locals[arrayName] = pushedArray;
                 result = new RuntimeFlowResult(null, null, _mainOk);

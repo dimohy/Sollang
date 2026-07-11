@@ -276,6 +276,10 @@ internal sealed partial class LlvmEmitter
             case RuntimeDynamicIntArray { Storage: RuntimeContainerStorage.Heap } array:
                 EmitCall(target: null, "void", "smalllang_free", $"ptr {array.PointerName}");
                 break;
+            case RuntimeDynamicInlineArray { Storage: RuntimeContainerStorage.Heap } array:
+                DropDynamicInlineArrayElements(array);
+                EmitCall(target: null, "void", "smalllang_free", $"ptr {array.PointerName}");
+                break;
             case RuntimeIntDictionary { Storage: RuntimeContainerStorage.Heap } dictionary:
                 EmitCall(target: null, "void", "smalllang_free", $"ptr {dictionary.PointerName}");
                 break;
@@ -305,19 +309,56 @@ internal sealed partial class LlvmEmitter
         }
     }
 
+    private void DropDynamicInlineArrayElements(RuntimeDynamicInlineArray array)
+    {
+        var definition = _program.Types.GetDynamicArray(array.ArrayType);
+        if (!_program.Types.ContainsOwnedStorage(definition.ElementType))
+        {
+            return;
+        }
+
+        var entryLabel = _currentBlockLabel;
+        var loopLabel = NextLabel("drop_dynamic_array");
+        var bodyLabel = NextLabel("drop_dynamic_array_body");
+        var doneLabel = NextLabel("drop_dynamic_array_done");
+        var nextIndex = NextTemp("drop_dynamic_array_next");
+        var llvmType = LlvmType(definition.ElementType);
+        EmitBranch(loopLabel);
+        EmitFunctionLine();
+        EmitLabel(loopLabel);
+        var index = NextTemp("drop_dynamic_array_index");
+        EmitPhi(index, "i64", ("0", entryLabel), (nextIndex, bodyLabel));
+        var active = NextTemp("drop_dynamic_array_active");
+        EmitCompare(active, "ult", "i64", index, array.LengthName);
+        EmitConditionalBranch(active, bodyLabel, doneLabel);
+        EmitFunctionLine();
+        EmitLabel(bodyLabel);
+        var slot = NextTemp("drop_dynamic_array_slot");
+        EmitAssign(slot, $"getelementptr {llvmType}, ptr {array.PointerName}, i64 {index}");
+        var value = NextTemp("drop_dynamic_array_value");
+        EmitLoad(value, llvmType, slot, definition.ElementAlignment);
+        EmitOwnedDropCall(definition.ElementType, value);
+        EmitBinary(nextIndex, "add", "i64", index, "1");
+        EmitBranch(loopLabel);
+        EmitFunctionLine();
+        EmitLabel(doneLabel);
+        _currentBlockLabel = doneLabel;
+    }
+
     private static bool RequiresHeapAllocation(RuntimeValue value)
     {
         return value is RuntimeStaticIntArray { Storage: RuntimeContainerStorage.Heap }
             or RuntimeStaticTextArray { Storage: RuntimeContainerStorage.Heap }
             or RuntimeStaticInlineArray { Storage: RuntimeContainerStorage.Heap }
             or RuntimeDynamicIntArray { Storage: RuntimeContainerStorage.Heap }
+            or RuntimeDynamicInlineArray { Storage: RuntimeContainerStorage.Heap }
             or RuntimeIntDictionary { Storage: RuntimeContainerStorage.Heap }
             or RuntimeBox;
     }
 
     private bool IsOwnedContainerRuntimeValue(RuntimeValue value)
     {
-        return value is RuntimeDynamicIntArray or RuntimeIntDictionary
+        return value is RuntimeDynamicIntArray or RuntimeDynamicInlineArray or RuntimeIntDictionary
             || _program.Types.ContainsOwnedStorage(value.Type);
     }
 
@@ -395,6 +436,12 @@ internal sealed partial class LlvmEmitter
         return value switch
         {
             RuntimeDynamicIntArray => new RuntimeDynamicIntArray(pointer, length, capacity),
+            RuntimeDynamicInlineArray array => array with
+            {
+                PointerName = pointer,
+                LengthName = length,
+                CapacityName = capacity
+            },
             RuntimeIntDictionary => new RuntimeIntDictionary(pointer, length, capacity),
             _ => value
         };
@@ -410,6 +457,11 @@ internal sealed partial class LlvmEmitter
         switch (value)
         {
             case RuntimeDynamicIntArray array:
+                EmitStore("ptr", array.PointerName, slot.PointerAddress, 8);
+                EmitStore("i64", array.LengthName, slot.LengthAddress, 8);
+                EmitStore("i64", array.CapacityName, slot.CapacityAddress, 8);
+                break;
+            case RuntimeDynamicInlineArray array:
                 EmitStore("ptr", array.PointerName, slot.PointerAddress, 8);
                 EmitStore("i64", array.LengthName, slot.LengthAddress, 8);
                 EmitStore("i64", array.CapacityName, slot.CapacityAddress, 8);
@@ -740,6 +792,15 @@ internal sealed partial class LlvmEmitter
         string CapacityName,
         RuntimeContainerStorage Storage = RuntimeContainerStorage.Heap)
         : RuntimeValue(BoundType.DynamicIntArray);
+
+    private sealed record RuntimeDynamicInlineArray(
+        BoundType ArrayType,
+        BoundType ElementType,
+        string PointerName,
+        string LengthName,
+        string CapacityName,
+        RuntimeContainerStorage Storage = RuntimeContainerStorage.Heap)
+        : RuntimeValue(ArrayType);
 
     private enum RuntimeContainerStorage
     {

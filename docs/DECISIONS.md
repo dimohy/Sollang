@@ -2466,4 +2466,23 @@ would create two owners and is therefore not admitted as a temporary shortcut.
 Example 58 verifies two element-drop calls followed by one backing free; copy
 and owned-index diagnostics verify the static ownership boundary.
 
+## D078 - Parametric Growable Arrays
+
+Status: implemented for scalar and user-value literals plus mutable `push`
+Date: 2026-07-11
+
+`TypeDefinitionTable` interns a dynamic-array definition per element `TypeId`,
+recording element size and alignment. Typed empty arrays such as `[Text; 2~]`
+and growable literals of `Text`, structs, enums, and owned user values retain
+their element type through indexing, `len`, and `capacity`.
+
+Mutable `push` checks the exact element type. Growth doubles capacity, allocates
+`capacity * elementSize`, copies initialized aggregates with typed LLVM
+load/store, frees the old backing buffer without dropping transferred elements,
+then stores the new element. Final destruction iterates over runtime length,
+calls recursive drop glue for owned elements, and frees the current backing
+buffer. A named owned value cannot be pushed by implicit copy; a fresh value is
+accepted as a direct ownership transfer until explicit move arguments exist.
+Examples 59-61 verify `Text`, copyable struct, and owned struct arrays.
+
 

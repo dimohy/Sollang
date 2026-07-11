@@ -186,7 +186,7 @@ internal sealed partial class LlvmEmitter
     private RuntimeValue EmitArrayLiteral(ArrayLiteralExpression expression)
     {
         return expression.IsDynamic
-            ? EmitDynamicIntArrayLiteral(expression)
+            ? EmitDynamicArrayLiteral(expression)
             : EmitStaticArrayLiteral(expression);
     }
 
@@ -283,7 +283,26 @@ internal sealed partial class LlvmEmitter
             storage);
     }
 
-    private RuntimeDynamicIntArray EmitDynamicIntArrayLiteral(ArrayLiteralExpression expression)
+    private RuntimeValue EmitDynamicArrayLiteral(ArrayLiteralExpression expression)
+    {
+        var elements = expression.Elements.Select(EmitExpression).ToArray();
+        if (elements.Length == 0 || elements.All(static value => value is RuntimeInt))
+        {
+            return EmitDynamicIntArrayLiteral(expression, elements.Cast<RuntimeInt>().ToArray());
+        }
+        if (elements.Length > 0
+            && elements.All(value => value.Type == elements[0].Type)
+            && _program.Types.TryGetDynamicArrayForElement(elements[0].Type, out var arrayType))
+        {
+            return EmitDynamicInlineArrayLiteral(arrayType, elements);
+        }
+
+        throw new SmallLangException("growable array elements must have one supported runtime type");
+    }
+
+    private RuntimeDynamicIntArray EmitDynamicIntArrayLiteral(
+        ArrayLiteralExpression expression,
+        IReadOnlyList<RuntimeInt> elements)
     {
         var length = expression.Elements.Count;
         var capacity = length;
@@ -304,9 +323,9 @@ internal sealed partial class LlvmEmitter
             pointer = EmitHeapAllocate((capacity * 8).ToString(CultureInfo.InvariantCulture));
         }
 
-        for (var i = 0; i < expression.Elements.Count; i++)
+        for (var i = 0; i < elements.Count; i++)
         {
-            var value = EmitIntExpression(expression.Elements[i]);
+            var value = elements[i];
             StoreDynamicArrayElement(pointer, i.ToString(CultureInfo.InvariantCulture), value.ValueName);
         }
 
@@ -315,6 +334,27 @@ internal sealed partial class LlvmEmitter
             length.ToString(CultureInfo.InvariantCulture),
             capacity.ToString(CultureInfo.InvariantCulture),
             storage);
+    }
+
+    private RuntimeDynamicInlineArray EmitDynamicInlineArrayLiteral(
+        BoundType arrayType,
+        IReadOnlyList<RuntimeValue> elements)
+    {
+        var definition = _program.Types.GetDynamicArray(arrayType);
+        var capacity = elements.Count;
+        var pointer = capacity == 0
+            ? "null"
+            : EmitHeapAllocate(((long)capacity * definition.ElementSize).ToString(CultureInfo.InvariantCulture));
+        for (var i = 0; i < elements.Count; i++)
+        {
+            StoreDynamicInlineArrayElement(pointer, definition, i.ToString(CultureInfo.InvariantCulture), elements[i]);
+        }
+        return new RuntimeDynamicInlineArray(
+            arrayType,
+            definition.ElementType,
+            pointer,
+            elements.Count.ToString(CultureInfo.InvariantCulture),
+            capacity.ToString(CultureInfo.InvariantCulture));
     }
 
     private RuntimeStaticTextArray EmitStaticTextArrayLiteral(
@@ -361,16 +401,30 @@ internal sealed partial class LlvmEmitter
 
     private RuntimeValue EmitTypedEmptyArray(TypedEmptyArrayExpression expression)
     {
-        if (expression.ElementType != "Int")
+        if (expression.ElementType == "Int")
         {
-            throw new SmallLangException("only [Int; ~] typed empty arrays are supported in the current runtime slice");
+            var intCapacity = expression.CapacityHint ?? 0;
+            var intPointer = intCapacity == 0
+                ? "null"
+                : EmitHeapAllocate(((long)intCapacity * 8).ToString(CultureInfo.InvariantCulture));
+            return new RuntimeDynamicIntArray(intPointer, "0", intCapacity.ToString(CultureInfo.InvariantCulture));
         }
-
+        if (!_program.Types.TryResolve(expression.ElementType, out var elementType)
+            || !_program.Types.TryGetDynamicArrayForElement(elementType, out var arrayType))
+        {
+            throw new SmallLangException($"unknown growable array element type '{expression.ElementType}'");
+        }
+        var definition = _program.Types.GetDynamicArray(arrayType);
         var capacity = expression.CapacityHint ?? 0;
         var pointer = capacity == 0
             ? "null"
-            : EmitHeapAllocate(((long)capacity * 8).ToString(CultureInfo.InvariantCulture));
-        return new RuntimeDynamicIntArray(pointer, "0", capacity.ToString(CultureInfo.InvariantCulture));
+            : EmitHeapAllocate(((long)capacity * definition.ElementSize).ToString(CultureInfo.InvariantCulture));
+        return new RuntimeDynamicInlineArray(
+            arrayType,
+            elementType,
+            pointer,
+            "0",
+            capacity.ToString(CultureInfo.InvariantCulture));
     }
 
     private RuntimeIntDictionary EmitDictionaryLiteral(DictionaryLiteralExpression expression)
@@ -428,6 +482,7 @@ internal sealed partial class LlvmEmitter
             RuntimeStaticTextArray array => EmitStaticTextArrayLoad(array, index.ValueName),
             RuntimeStaticInlineArray array => EmitStaticInlineArrayLoad(array, index.ValueName),
             RuntimeDynamicIntArray array => EmitDynamicArrayLoad(array, index.ValueName),
+            RuntimeDynamicInlineArray array => EmitDynamicInlineArrayLoad(array, index.ValueName),
             RuntimeIntDictionaryView dictionary => EmitDictionaryLookup(
                 new RuntimeIntDictionary(dictionary.PointerName, dictionary.LengthName, dictionary.CapacityName),
                 index.ValueName),

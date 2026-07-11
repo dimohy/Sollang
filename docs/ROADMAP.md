@@ -44,6 +44,7 @@ ownership behavior is part of the feature.
 - [x] Fixed arrays with distinct `Int` and `Text` element layouts
 - [x] Parametric fixed arrays for copyable user `struct` and `enum` values
 - [x] Element-wise recursive drop for owned fixed-array elements
+- [x] Parametric growable arrays with typed push/grow/index/drop
 - [x] Compile-time `Int` value generics, `[Int; N]` parameters, and specialization
 - [x] Monomorphization with deterministic ownership/drop behavior for inline values
 - [x] Associated types and equality constraints for container and iterator contracts

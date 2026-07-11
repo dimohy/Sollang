@@ -120,6 +120,33 @@ internal sealed partial class LlvmEmitter
         return LoadInt(slot, "array_item");
     }
 
+    private void StoreDynamicInlineArrayElement(
+        string pointer,
+        BoundDynamicArrayDefinition definition,
+        string index,
+        RuntimeValue value)
+    {
+        var llvmType = LlvmType(definition.ElementType);
+        var materialized = MaterializeAggregateValue(value);
+        var slot = NextTemp("dynamic_inline_slot");
+        EmitAssign(slot, $"getelementptr {llvmType}, ptr {pointer}, i64 {index}");
+        EmitStore(llvmType, materialized.ValueName, slot, definition.ElementAlignment);
+    }
+
+    private RuntimeValue EmitDynamicInlineArrayLoad(RuntimeDynamicInlineArray array, string index)
+    {
+        var inBounds = NextTemp("dynamic_inline_in_bounds");
+        EmitCompare(inBounds, "ult", "i64", index, array.LengthName);
+        EmitTrapUnless(inBounds, "dynamic_inline_bounds");
+        var definition = _program.Types.GetDynamicArray(array.ArrayType);
+        var llvmType = LlvmType(definition.ElementType);
+        var slot = NextTemp("dynamic_inline_slot");
+        EmitAssign(slot, $"getelementptr {llvmType}, ptr {array.PointerName}, i64 {index}");
+        var value = NextTemp("dynamic_inline_item");
+        EmitLoad(value, llvmType, slot, definition.ElementAlignment);
+        return DematerializeAggregateValue(definition.ElementType, value);
+    }
+
     private RuntimeInt EmitIntSliceLoad(RuntimeIntSlice slice, string index)
     {
         var inBounds = NextTemp("slice_in_bounds");

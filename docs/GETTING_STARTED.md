@@ -480,6 +480,12 @@ approved syntax.
   user structs and payload enums with exact LLVM aggregate layouts
 - `examples/58-owned-element-fixed-arrays.sl`: owned struct elements with one
   recursive drop per initialized slot followed by backing-buffer cleanup
+- `examples/59-generic-dynamic-text-array.sl`: typed empty `Text` array,
+  aggregate-aware growth, indexing, length, and capacity
+- `examples/60-generic-dynamic-user-array.sl`: copyable user-struct dynamic
+  array with typed push and growth copying
+- `examples/61-owned-generic-dynamic-array.sl`: move-only owned elements with
+  runtime-length recursive drop
 - `examples/browser`: static HTML/JS runner for the WebAssembly sample
 - `examples/expected`: expected stdout/stdin fixtures for executable samples
 - `stdlib/sys/runtime.sl`: standard library intrinsic boundary declarations

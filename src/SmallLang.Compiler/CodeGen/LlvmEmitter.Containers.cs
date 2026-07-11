@@ -138,6 +138,69 @@ internal sealed partial class LlvmEmitter
         return EmitDictionaryPut(dictionary, key, value);
     }
 
+    private RuntimeDynamicInlineArray EmitDynamicInlineArrayPush(
+        RuntimeDynamicInlineArray array,
+        RuntimeValue value)
+    {
+        var definition = _program.Types.GetDynamicArray(array.ArrayType);
+        var hasCapacity = NextTemp("generic_array_has_capacity");
+        EmitCompare(hasCapacity, "ult", "i64", array.LengthName, array.CapacityName);
+        var appendLabel = NextLabel("generic_array_push_append");
+        var growLabel = NextLabel("generic_array_push_grow");
+        var doneLabel = NextLabel("generic_array_push_done");
+        EmitConditionalBranch(hasCapacity, appendLabel, growLabel);
+        EmitFunctionLine();
+
+        EmitLabel(appendLabel);
+        _currentBlockLabel = appendLabel;
+        StoreDynamicInlineArrayElement(array.PointerName, definition, array.LengthName, value);
+        var appendNextLen = NextTemp("generic_array_next_len");
+        EmitBinary(appendNextLen, "add", "i64", array.LengthName, "1");
+        EmitBranch(doneLabel);
+        var appendEnd = appendLabel;
+        EmitFunctionLine();
+
+        EmitLabel(growLabel);
+        _currentBlockLabel = growLabel;
+        var empty = NextTemp("generic_array_empty");
+        EmitCompare(empty, "eq", "i64", array.CapacityName, "0");
+        var doubled = NextTemp("generic_array_doubled");
+        EmitBinary(doubled, "mul", "i64", array.CapacityName, "2");
+        var newCapacity = NextTemp("generic_array_new_capacity");
+        EmitSelect(newCapacity, empty, "i64 4", $"i64 {doubled}");
+        var newBytes = NextTemp("generic_array_new_bytes");
+        EmitBinary(
+            newBytes,
+            "mul",
+            "i64",
+            newCapacity,
+            definition.ElementSize.ToString(CultureInfo.InvariantCulture));
+        var newPointer = EmitHeapAllocate(newBytes);
+        EmitCopyInlineBuffer(array.PointerName, newPointer, array.LengthName, definition, "generic_array_copy");
+        EmitCall(target: null, "void", "smalllang_free", $"ptr {array.PointerName}");
+        StoreDynamicInlineArrayElement(newPointer, definition, array.LengthName, value);
+        var growNextLen = NextTemp("generic_array_next_len");
+        EmitBinary(growNextLen, "add", "i64", array.LengthName, "1");
+        EmitBranch(doneLabel);
+        var growEnd = _currentBlockLabel;
+        EmitFunctionLine();
+
+        EmitLabel(doneLabel);
+        _currentBlockLabel = doneLabel;
+        var resultPointer = NextTemp("generic_array_ptr");
+        EmitPhi(resultPointer, "ptr", (array.PointerName, appendEnd), (newPointer, growEnd));
+        var resultLength = NextTemp("generic_array_len");
+        EmitPhi(resultLength, "i64", (appendNextLen, appendEnd), (growNextLen, growEnd));
+        var resultCapacity = NextTemp("generic_array_capacity");
+        EmitPhi(resultCapacity, "i64", (array.CapacityName, appendEnd), (newCapacity, growEnd));
+        return array with
+        {
+            PointerName = resultPointer,
+            LengthName = resultLength,
+            CapacityName = resultCapacity
+        };
+    }
+
     private void EmitDictionaryAssignExisting(RuntimeIntDictionary dictionary, string key, string value)
     {
         var found = EmitDictionaryFindSlot(dictionary, key);
@@ -424,6 +487,43 @@ internal sealed partial class LlvmEmitter
         EmitAssign(targetSlot, $"getelementptr i64, ptr {targetPointer}, i64 {i}");
         var value = LoadInt(sourceSlot, prefix + "_value");
         EmitStore("i64", value.ValueName, targetSlot, 8);
+        EmitBinary(nextI, "add", "i64", i, "1");
+        EmitBranch(loopLabel);
+        EmitFunctionLine();
+        EmitLabel(doneLabel);
+        _currentBlockLabel = doneLabel;
+    }
+
+    private void EmitCopyInlineBuffer(
+        string sourcePointer,
+        string targetPointer,
+        string count,
+        BoundDynamicArrayDefinition definition,
+        string prefix)
+    {
+        var entryLabel = _currentBlockLabel;
+        var loopLabel = NextLabel(prefix);
+        var bodyLabel = NextLabel(prefix + "_body");
+        var doneLabel = NextLabel(prefix + "_done");
+        var nextI = NextTemp(prefix + "_next_i");
+        var llvmType = LlvmType(definition.ElementType);
+        EmitBranch(loopLabel);
+        EmitFunctionLine();
+        EmitLabel(loopLabel);
+        var i = NextTemp(prefix + "_i");
+        EmitPhi(i, "i64", ("0", entryLabel), (nextI, bodyLabel));
+        var active = NextTemp(prefix + "_active");
+        EmitCompare(active, "ult", "i64", i, count);
+        EmitConditionalBranch(active, bodyLabel, doneLabel);
+        EmitFunctionLine();
+        EmitLabel(bodyLabel);
+        var sourceSlot = NextTemp(prefix + "_src");
+        EmitAssign(sourceSlot, $"getelementptr {llvmType}, ptr {sourcePointer}, i64 {i}");
+        var targetSlot = NextTemp(prefix + "_dst");
+        EmitAssign(targetSlot, $"getelementptr {llvmType}, ptr {targetPointer}, i64 {i}");
+        var item = NextTemp(prefix + "_value");
+        EmitLoad(item, llvmType, sourceSlot, definition.ElementAlignment);
+        EmitStore(llvmType, item, targetSlot, definition.ElementAlignment);
         EmitBinary(nextI, "add", "i64", i, "1");
         EmitBranch(loopLabel);
         EmitFunctionLine();

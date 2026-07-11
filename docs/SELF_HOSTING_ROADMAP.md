@@ -70,10 +70,9 @@ estimate.
 - Complete (8): nominal structs, payload enums, exhaustive matching, impl
   methods, nominal traits/static dispatch, checked type/value specialization,
   associated types with equality constraints, two-parameter generic inference.
-- Partial (2): fixed arrays preserve scalar and user-value layouts and recursively
-  drop owned elements, but owned-element move extraction and general `[T; N]`
-  function contracts remain; growable arrays and dictionaries remain
-  `Int`-specialized.
+- Partial (2): fixed and growable arrays preserve scalar/user-value layouts and
+  recursively drop owned elements, but owned-element move extraction and general
+  collection function contracts remain; dictionaries are still `Int`-specialized.
 - Missing (2): standard `Option[T]`/`Result[T, E]`, explicit `dyn Trait`.
 
 ### Ownership and storage — 8.0 / 10
@@ -144,5 +143,6 @@ estimate.
 5. Multi-parameter generics (implemented by example 55).
 6. Generic collection element types and ownership/drop specialization
    (fixed `Text` and copyable user-value arrays are implemented by examples 56
-   through owned elements in examples 56-58; dynamic `Array[T]` is next).
+   through parametric growable arrays in examples 56-61; generic dictionaries
+   are next).
 7. `Option`/`Result` and compiler-grade byte/text/source-span libraries.

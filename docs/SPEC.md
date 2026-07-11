@@ -1332,6 +1332,9 @@ Current backend:
   recursively owned elements call static element drop glue for every initialized
   slot before freeing the backing buffer; owned-element indexing remains blocked
   until move extraction can transfer one slot without leaving a second owner
+- growable arrays preserve `Text` and user-value element layouts, support typed
+  empty capacity hints, checked indexing, `len`/`capacity`, type-checked mutable
+  `push`, aggregate-aware growth copying, and runtime-length recursive drop
 - value-flow calls: `value -> function` and compatibility spelling
   `value -> function()` are parsed as a flow AST and lowered by
   semantic/codegen stages according to target position; bare flow targets cannot

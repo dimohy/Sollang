@@ -13,6 +13,8 @@ internal sealed partial class LlvmEmitter
             || _program.Types.Structs.Any(definition => IsCustomOwnedType(definition.Id))
             || _program.Types.Enums.Any(definition => IsCustomOwnedType(definition.Id))
             || _program.Types.StaticArrays.Any(definition =>
+                _program.Types.ContainsOwnedStorage(definition.ElementType))
+            || _program.Types.DynamicArrays.Any(definition =>
                 _program.Types.ContainsOwnedStorage(definition.ElementType));
         if (!needsHelpers)
         {
