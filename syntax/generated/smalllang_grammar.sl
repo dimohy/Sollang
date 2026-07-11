@@ -44,6 +44,9 @@ public tokenIdGreater: -> Int => 29
 public tokenIdEqual: -> Int => 30
 public tokenIdNewLine: -> Int => 31
 public tokenIdEnd: -> Int => 32
+public triviaIdWhitespace: -> Int => 33
+public triviaIdComment: -> Int => 34
+public triviaTokenCount: -> Int => 2
 
 public lexerRuleNames: -> [Text; ~] => ["Whitespace", "Comment", "Identifier", "String", "Number", "LeftBrace", "RightBrace", "LeftBracket", "RightBracket", "LeftParen", "RightParen", "Range", "Tilde", "Dot", "Comma", "Semicolon", "Plus", "Minus", "Star", "Slash", "Percent", "Question", "Arrow", "FatArrow", "Colon", "EqualEqual", "BangEqual", "Bang", "LessEqual", "GreaterEqual", "Less", "Greater", "Equal", "NewLine", "End", ~]
 

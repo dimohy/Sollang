@@ -43,6 +43,17 @@ public parseEvents source: Text -> [ParseEvent; ~] {
     1 => eventDepth!
 
     running! -> while {
+        (tokenIndex! < (tokens! -> len) and tokens![tokenIndex!].kind >= grammar.triviaIdWhitespace) -> while {
+            tokens![tokenIndex!].kind => triviaKind
+            ParseEvent { kind: 2, value: triviaKind, tokenIndex: tokenIndex! } => triviaEvent
+            eventDepth! < (events! -> len) -> if {
+                triviaEvent => events![eventDepth!]
+            } else {
+                events! -> push(triviaEvent)
+            }
+            eventDepth! + 1 => eventDepth!
+            tokenIndex! + 1 => tokenIndex!
+        }
         program![pc!] => opcode
         opcode == 0 -> if {
             ParseEvent {

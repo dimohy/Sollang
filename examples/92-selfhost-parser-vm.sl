@@ -1,7 +1,7 @@
 import smalllang.compiler.parser as parser
 
 main {
-    parser.parseEvents("main { 42 -> println }") => validEvents!
+    parser.parseEvents("main { 42 -> println } # note") => validEvents!
     validEvents! -> len => validEventCount
     validEvents![validEventCount - 1].value => valid
     parser.parseEvents("main { -> }") => invalidEvents!

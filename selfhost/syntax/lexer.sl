@@ -59,13 +59,28 @@ public lex source: Text -> [syntax.SyntaxToken; ~] {
     position! < sourceLength -> while {
         source -> byte(position!) => current
         current -> isHorizontalWhitespace -> if {
+            position! => whitespaceStart
             position! + UIntSize(1) => position!
+            (position! < sourceLength and ((source -> byte(position!)) -> isHorizontalWhitespace)) -> while {
+                position! + UIntSize(1) => position!
+            }
+            syntax.SyntaxToken {
+                kind: grammar.triviaIdWhitespace
+                span: syntax.SourceSpan { fileId: 0, start: whitespaceStart, length: position! - whitespaceStart }
+            } => whitespaceToken
+            tokens! -> push(whitespaceToken)
         } else {
             current == UInt8(35) -> if {
+                position! => commentStart
                 position! + UIntSize(1) => position!
                 (position! < sourceLength and (source -> byte(position!)) != UInt8(10)) -> while {
                     position! + UIntSize(1) => position!
                 }
+                syntax.SyntaxToken {
+                    kind: grammar.triviaIdComment
+                    span: syntax.SourceSpan { fileId: 0, start: commentStart, length: position! - commentStart }
+                } => commentToken
+                tokens! -> push(commentToken)
             } else {
                 current == UInt8(10) -> if {
                     syntax.SyntaxToken {

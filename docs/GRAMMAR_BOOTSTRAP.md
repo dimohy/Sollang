@@ -93,8 +93,10 @@ formatter and language server, avoiding a second editor-only grammar.
    overwrites abandoned events before the result escapes.
 4. `selfhost/syntax/cst.sl` materializes the successful event stream into flat
    green nodes with stable indexes, parent links, token ranges, and UTF-8 byte
-   spans. Preserve whitespace/comment trivia, then add recovery and diagnostic
-   parity to make this CST fully lossless.
+   spans. The lexer assigns generated trivia token ids to contiguous whitespace
+   and line comments; the parser ignores them for grammar matching while
+   retaining them in CST events. Add invalid-token preservation, recovery, and
+   diagnostic parity to make malformed inputs lossless as well.
 5. Write CST-to-AST lowering in ordinary SL modules.
 6. Reimplement `grammar build` itself in SL and require byte-identical output.
 7. Remove the C# source generators only after the SL compiler reproduces all
