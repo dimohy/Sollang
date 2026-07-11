@@ -1,13 +1,46 @@
 namespace SmallLang.Compiler.Syntax;
 
 internal sealed record SmallLangProgram(
+    IReadOnlyList<StructDeclaration> Structs,
+    IReadOnlyList<EnumDeclaration> Enums,
+    IReadOnlyList<TraitDeclaration> Traits,
     IReadOnlyList<FunctionDeclaration> Functions,
     IReadOnlyList<Statement> Statements);
+
+internal sealed record StructDeclaration(
+    string Name,
+    IReadOnlyList<StructFieldDeclaration> Fields,
+    int Line,
+    int Column);
+
+internal sealed record StructFieldDeclaration(string Name, string TypeName, int Line, int Column);
+
+internal sealed record EnumDeclaration(
+    string Name,
+    IReadOnlyList<EnumVariantDeclaration> Variants,
+    int Line,
+    int Column);
+
+internal sealed record EnumVariantDeclaration(string Name, string? PayloadType, int Line, int Column);
+
+internal sealed record TraitDeclaration(
+    string Name,
+    IReadOnlyList<TraitMethodDeclaration> Methods,
+    int Line,
+    int Column);
+
+internal sealed record TraitMethodDeclaration(
+    string Name,
+    FunctionInputOwnership SelfOwnership,
+    string ReturnType,
+    int Line,
+    int Column);
 
 internal sealed record FunctionDeclaration(
     string Name,
     string? InputName,
     string? InputType,
+    FunctionInputOwnership InputOwnership,
     string ReturnType,
     string? BlockInputName,
     string? BlockInputType,
@@ -17,11 +50,32 @@ internal sealed record FunctionDeclaration(
     int Line,
     int Column,
     bool IsIntrinsic,
-    bool IsStandardLibrary);
+    bool IsStandardLibrary,
+    string? TraitName = null,
+    string? GenericParameterName = null,
+    string? GenericTraitBound = null);
+
+internal enum FunctionInputOwnership
+{
+    Default,
+    Move,
+    MutableBorrow
+}
 
 internal abstract record Statement;
 
 internal sealed record BindingStatement(string Name, Expression Value, int Line, int Column, bool IsMutable) : Statement;
+
+internal sealed record IndexAssignmentStatement(string Name, Expression Index, Expression Value, int Line, int Column)
+    : Statement;
+
+internal sealed record FieldAssignmentStatement(
+    string Name,
+    string FieldName,
+    Expression Value,
+    int Line,
+    int Column)
+    : Statement;
 
 internal sealed record BlockFunctionCallStatement(
     Expression Source,
@@ -141,15 +195,52 @@ internal sealed record ArrayLiteralExpression(
 internal sealed record ArrayRepeatExpression(Expression Value, int Count, int Line, int Column)
     : Expression(Line, Column);
 
+internal sealed record TypedEmptyArrayExpression(string ElementType, int? CapacityHint, int Line, int Column)
+    : Expression(Line, Column);
+
 internal sealed record DictionaryLiteralExpression(
     IReadOnlyList<DictionaryEntryExpression> Entries,
     int Line,
     int Column)
     : Expression(Line, Column);
 
+internal sealed record TypedEmptyDictionaryExpression(string KeyType, string ValueType, int? CapacityHint, int Line, int Column)
+    : Expression(Line, Column);
+
 internal sealed record DictionaryEntryExpression(Expression Key, Expression Value);
 
 internal sealed record IndexExpression(Expression Source, Expression Index, int Line, int Column)
+    : Expression(Line, Column);
+
+internal sealed record StructLiteralExpression(
+    string TypeName,
+    IReadOnlyList<StructFieldInitializer> Fields,
+    int Line,
+    int Column)
+    : Expression(Line, Column);
+
+internal sealed record StructFieldInitializer(string Name, Expression Value, int Line, int Column);
+
+internal sealed record FieldAccessExpression(Expression Source, string FieldName, int Line, int Column)
+    : Expression(Line, Column);
+
+internal sealed record BoxExpression(Expression Value, int Line, int Column)
+    : Expression(Line, Column);
+
+internal sealed record EnumPatternExpression(
+    string TypeName,
+    string VariantName,
+    string? BindingName,
+    int Line,
+    int Column)
+    : Expression(Line, Column);
+
+internal sealed record EnumMatchExpression(
+    Expression Subject,
+    IReadOnlyList<WhenArm> Arms,
+    BlockBody? Else,
+    int Line,
+    int Column)
     : Expression(Line, Column);
 
 internal sealed record BlockBody(IReadOnlyList<Statement> Statements, Expression? Value, int Line, int Column);

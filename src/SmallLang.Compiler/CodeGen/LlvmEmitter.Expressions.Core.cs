@@ -134,7 +134,7 @@ internal sealed partial class LlvmEmitter
 
     private RuntimeValue EmitExpression(Expression expression)
     {
-        return expression switch
+        var value = expression switch
         {
             StringExpression str => EmitTextLiteral(str),
             NumberExpression number => new RuntimeInt(ParseNumber(number).ToString(CultureInfo.InvariantCulture)),
@@ -142,8 +142,13 @@ internal sealed partial class LlvmEmitter
             NameExpression name => ResolveLocal(name.Name),
             ArrayLiteralExpression array => EmitArrayLiteral(array),
             ArrayRepeatExpression repeat => EmitArrayRepeat(repeat),
+            TypedEmptyArrayExpression typedArray => EmitTypedEmptyArray(typedArray),
             DictionaryLiteralExpression dictionary => EmitDictionaryLiteral(dictionary),
+            TypedEmptyDictionaryExpression typedDictionary => EmitTypedEmptyDictionary(typedDictionary),
             IndexExpression index => EmitIndexExpression(index),
+            StructLiteralExpression literal => EmitStructLiteralExpression(literal),
+            FieldAccessExpression field => EmitFieldAccessExpression(field),
+            BoxExpression box => EmitBoxExpression(box),
             AddExpression add => EmitAddExpression(add),
             SubtractExpression subtract => EmitSubtractExpression(subtract),
             MultiplyExpression multiply => EmitMultiplyExpression(multiply),
@@ -156,6 +161,8 @@ internal sealed partial class LlvmEmitter
             NotExpression not => EmitNotExpression(not),
             IfExpression conditional => EmitIfExpression(conditional),
             WhenExpression whenExpression => EmitWhenExpression(whenExpression),
+            EnumMatchExpression enumMatch => EmitEnumMatchExpression(enumMatch),
+            EnumPatternExpression => throw new SmallLangException("enum patterns are only valid inside enum when"),
             SubjectCompareExpression => throw new SmallLangException("subject comparison is only valid inside value-flow when"),
             SubjectRangeExpression => throw new SmallLangException("subject range is only valid inside value-flow when"),
             FoldExpression fold => EmitFoldExpression(fold),
@@ -164,6 +171,9 @@ internal sealed partial class LlvmEmitter
             FlowExpression flow => EmitFlowExpressionValue(flow),
             _ => throw new SmallLangException($"unsupported runtime expression {expression.GetType().Name}")
         };
+
+        EmitStackLifetimeEndsAfter(expression);
+        return value;
     }
 
     private RuntimeText EmitTextLiteral(StringExpression expression)
@@ -184,8 +194,18 @@ internal sealed partial class LlvmEmitter
     {
         var length = expression.Elements.Count;
         var allocatedLength = Math.Max(length, 1);
-        var pointer = NextTemp("array");
-        EmitAlloca(pointer, $"[{allocatedLength.ToString(CultureInfo.InvariantCulture)} x i64]", 8);
+        string pointer;
+        RuntimeContainerStorage storage;
+        if (_currentStackFramePlan.TryGetAllocation(expression, out _))
+        {
+            pointer = EmitStackLifetimeStart(expression);
+            storage = RuntimeContainerStorage.Stack;
+        }
+        else
+        {
+            pointer = EmitHeapAllocate(((long)allocatedLength * sizeof(long)).ToString(CultureInfo.InvariantCulture));
+            storage = RuntimeContainerStorage.Heap;
+        }
 
         for (var i = 0; i < expression.Elements.Count; i++)
         {
@@ -196,14 +216,25 @@ internal sealed partial class LlvmEmitter
         return new RuntimeStaticIntArray(
             pointer,
             length.ToString(CultureInfo.InvariantCulture),
-            allocatedLength);
+            allocatedLength,
+            storage);
     }
 
     private RuntimeStaticIntArray EmitArrayRepeat(ArrayRepeatExpression expression)
     {
         var allocatedLength = Math.Max(expression.Count, 1);
-        var pointer = NextTemp("array");
-        EmitAlloca(pointer, $"[{allocatedLength.ToString(CultureInfo.InvariantCulture)} x i64]", 8);
+        string pointer;
+        RuntimeContainerStorage storage;
+        if (_currentStackFramePlan.TryGetAllocation(expression, out _))
+        {
+            pointer = EmitStackLifetimeStart(expression);
+            storage = RuntimeContainerStorage.Stack;
+        }
+        else
+        {
+            pointer = EmitHeapAllocate(((long)allocatedLength * sizeof(long)).ToString(CultureInfo.InvariantCulture));
+            storage = RuntimeContainerStorage.Heap;
+        }
 
         var value = EmitIntExpression(expression.Value);
         for (var i = 0; i < expression.Count; i++)
@@ -214,16 +245,30 @@ internal sealed partial class LlvmEmitter
         return new RuntimeStaticIntArray(
             pointer,
             expression.Count.ToString(CultureInfo.InvariantCulture),
-            allocatedLength);
+            allocatedLength,
+            storage);
     }
 
     private RuntimeDynamicIntArray EmitDynamicIntArrayLiteral(ArrayLiteralExpression expression)
     {
         var length = expression.Elements.Count;
         var capacity = length;
-        var pointer = capacity == 0
-            ? "null"
-            : EmitHeapAllocate((capacity * 8).ToString(CultureInfo.InvariantCulture));
+        var storage = _currentStackFramePlan.TryGetAllocation(expression, out _)
+            ? RuntimeContainerStorage.Stack
+            : RuntimeContainerStorage.Heap;
+        string pointer;
+        if (capacity == 0)
+        {
+            pointer = "null";
+        }
+        else if (storage == RuntimeContainerStorage.Stack)
+        {
+            pointer = EmitStackLifetimeStart(expression);
+        }
+        else
+        {
+            pointer = EmitHeapAllocate((capacity * 8).ToString(CultureInfo.InvariantCulture));
+        }
 
         for (var i = 0; i < expression.Elements.Count; i++)
         {
@@ -234,17 +279,38 @@ internal sealed partial class LlvmEmitter
         return new RuntimeDynamicIntArray(
             pointer,
             length.ToString(CultureInfo.InvariantCulture),
-            capacity.ToString(CultureInfo.InvariantCulture));
+            capacity.ToString(CultureInfo.InvariantCulture),
+            storage);
+    }
+
+    private RuntimeValue EmitTypedEmptyArray(TypedEmptyArrayExpression expression)
+    {
+        if (expression.ElementType != "Int")
+        {
+            throw new SmallLangException("only [Int; ~] typed empty arrays are supported in the current runtime slice");
+        }
+
+        var capacity = expression.CapacityHint ?? 0;
+        var pointer = capacity == 0
+            ? "null"
+            : EmitHeapAllocate(((long)capacity * 8).ToString(CultureInfo.InvariantCulture));
+        return new RuntimeDynamicIntArray(pointer, "0", capacity.ToString(CultureInfo.InvariantCulture));
     }
 
     private RuntimeIntDictionary EmitDictionaryLiteral(DictionaryLiteralExpression expression)
     {
         var length = expression.Entries.Count;
         var capacity = DictionaryCapacityForLength(length);
+        var storage = _currentStackFramePlan.TryGetAllocation(expression, out _)
+            ? RuntimeContainerStorage.Stack
+            : RuntimeContainerStorage.Heap;
         var dictionary = new RuntimeIntDictionary(
-            EmitDictionaryAllocate(capacity.ToString(CultureInfo.InvariantCulture)),
+            storage == RuntimeContainerStorage.Stack
+                ? InitializeStackDictionary(EmitStackLifetimeStart(expression), capacity)
+                : EmitDictionaryAllocate(capacity.ToString(CultureInfo.InvariantCulture)),
             length.ToString(CultureInfo.InvariantCulture),
-            capacity.ToString(CultureInfo.InvariantCulture));
+            capacity.ToString(CultureInfo.InvariantCulture),
+            storage);
 
         foreach (var entry in expression.Entries)
         {
@@ -256,14 +322,37 @@ internal sealed partial class LlvmEmitter
         return dictionary;
     }
 
+    private RuntimeIntDictionary EmitTypedEmptyDictionary(TypedEmptyDictionaryExpression expression)
+    {
+        if (expression.KeyType != "Int" || expression.ValueType != "Int")
+        {
+            throw new SmallLangException("only {Int: Int} typed empty dictionaries are supported in the current runtime slice");
+        }
+
+        if (expression.CapacityHint is null)
+        {
+            return new RuntimeIntDictionary("null", "0", "0");
+        }
+
+        var capacity = DictionaryCapacityForLength(expression.CapacityHint.Value);
+        return new RuntimeIntDictionary(
+            EmitDictionaryAllocate(capacity.ToString(CultureInfo.InvariantCulture)),
+            "0",
+            capacity.ToString(CultureInfo.InvariantCulture));
+    }
+
     private RuntimeInt EmitIndexExpression(IndexExpression expression)
     {
         var source = EmitExpression(expression.Source);
         var index = EmitIntExpression(expression.Index);
         return source switch
         {
+            RuntimeIntSlice slice => EmitIntSliceLoad(slice, index.ValueName),
             RuntimeStaticIntArray array => EmitStaticArrayLoad(array, index.ValueName),
             RuntimeDynamicIntArray array => EmitDynamicArrayLoad(array, index.ValueName),
+            RuntimeIntDictionaryView dictionary => EmitDictionaryLookup(
+                new RuntimeIntDictionary(dictionary.PointerName, dictionary.LengthName, dictionary.CapacityName),
+                index.ValueName),
             RuntimeIntDictionary dictionary => EmitDictionaryLookup(dictionary, index.ValueName),
             _ => throw new SmallLangException("indexing expects an array or dictionary")
         };

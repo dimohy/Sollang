@@ -1210,7 +1210,7 @@ model rather than a garbage-collected reference model. The core split is:
 
 ```text
 [T; N]      owned fixed-size array
-[T; ..]     owned growable heap array
+[T; ~]      owned growable heap array
 &[T]        shared borrowed slice view
 &mut [T]    exclusive mutable borrowed slice view
 ```
@@ -1226,17 +1226,16 @@ Large fixed arrays can later use an explicit owned heap placement flow such as
 `[0; 1000000] -> heap() -> buffer`.
 
 Dynamic arrays use a Rust `Vec<T>`-like internal model, but the SmallLang source
-surface is `[T; ..]`. The value owns a heap buffer, length, and capacity. Moving
-a dynamic array moves ownership of the buffer. Dropping a dynamic array drops
-initialized elements and then deallocates the buffer. A dynamic array is not
-implicitly copied, reference-counted, or garbage-collected. A local dynamic
-array binding stores only the owner handle on the stack; the element buffer is
-heap-allocated whenever capacity is nonzero.
+surface is `[T; ~]`. The value owns payload storage, length, and capacity. Heap
+storage is the normal placement; D063 later permits proven local readonly
+literals to use stack storage. Moving a dynamic array moves ownership of the
+buffer. Dropping a dynamic array deallocates heap-placed storage only. A dynamic
+array is not implicitly copied, reference-counted, or garbage-collected.
 
 Dynamic array literals use an open tail marker:
 
 ```smalllang
-[1, 2, 3, ..] -> mut values
+[1, 2, 3, ~] => values!
 ```
 
 SmallLang should not use `{ ... }` for dynamic arrays. Braces already delimit
@@ -1269,15 +1268,15 @@ Leak prevention is based on deterministic ownership, not GC:
 Borrowed slices are the common parameter type for read-only array APIs. A
 function that only reads elements should prefer `&[T]` so it can accept a static
 array, dynamic array, or sub-slice without taking ownership. Mutating APIs that
-can change dynamic array length or capacity require `&mut [T; ..]`.
+can change dynamic array length or capacity require `&mut [T; ~]`.
 
 SmallLang should introduce explicit mutable bindings with the existing
 flow-first binding direction:
 
 ```smalllang
-[Int; ..].new() -> mut values
-values -> push(10)
-99 -> values[1]
+[Int; ~] => values!
+values! -> push(10)
+99 => values![1]
 ```
 
 Array support should also extend value-flow target calls to allow additional
@@ -1285,16 +1284,16 @@ arguments. The value on the left remains the primary first argument, and
 parentheses on the target may contain extra arguments:
 
 ```smalllang
-values -> push(10)
-values -> reserve(1024)
+values! -> push(10)
+values! -> reserve(1024)
 ```
 
 The callee signature decides whether the flowed value is moved, shared-borrowed,
 or mutably borrowed. For example, `len` can accept `&[T]`, while `push` accepts
-`&mut [T; ..], T`.
+`&mut [T; ~], T`.
 
 The first implementation slice should stay narrow: `Int` static arrays,
-read-only indexing, array `each`/`fold`, and `value -> mut name`. `[Int; ..]`,
+read-only indexing, array `each`/`fold`, and `value => name!`. `[Int; ~]`,
 mutable indexing, slice borrowing, and dynamic array growth can follow once the
 compiler has the basic ownership and borrow checks in place. `pop`, `get`, and
 fallible allocation APIs should wait until `Option` and `Result` exist.
@@ -1341,8 +1340,8 @@ values -> len => count
 Parentheses remain useful when additional arguments are present:
 
 ```smalllang
-values -> push(10)
-values -> reserve(1024)
+values! -> push(10)
+values! -> reserve(1024)
 ```
 
 This supersedes the design direction of D036 for future work. The important
@@ -1443,14 +1442,14 @@ SmallLang now has the first `Int` container slice:
 
 ```smalllang
 [1, 2, 3] => numbers
-[10, 20, ..] => mut values
-{ 1: 100, 2: 200 } => mut scores
+[10, 20, ~] => values!
+{ 1: 100, 2: 200 } => scores!
 ```
 
 The implemented surface includes fixed `Int` arrays, growable `Int` arrays,
 `{Int: Int}` dictionaries, checked indexing, `len`, `capacity`, dynamic-array
 `push(value)`, dictionary `put(key, value)`, array `each`, array `fold`, and
-`value => mut name` mutable bindings.
+`value => name!` mutable owner bindings.
 
 Heap-owning containers must be created directly at a binding site in this
 slice. This is intentionally strict: the compiler must know the owner so it can
@@ -1459,21 +1458,21 @@ targets lower dynamic arrays and dictionaries through explicit allocation/free
 runtime primitives. Browser WebAssembly rejects heap-owning containers until a
 linear-memory allocator exists for that target.
 
-The current implementation is not the final container model. Generic element
-types, typed empty dictionaries, slices, mutable indexing assignment, ownership
-moves, container parameters/returns, and full nested drop scopes remain future
-work.
+The D047 implementation was not the final container model. Generic element
+types, slices, ownership moves, container parameters/returns, and full nested
+drop scopes were left as future work at that point.
 
 ## D048 - Move-Consuming Container Transforms Return New Owners
 
 Status: implemented
 Date: 2026-07-09
 
-`mut` means an owning binding may be changed in place. It does not mean
-SmallLang objects are mutable by default. Immutable bindings remain the default:
+`!` on an owning binding name means that owner may be changed in place. It does
+not mean SmallLang objects are mutable by default. Immutable bindings remain the
+default:
 
 ```smalllang
-[1, 2, ..] => values
+[1, 2, ~] => values
 values -> append(3) => values
 values -> updated(0, 9) => values
 ```
@@ -1536,7 +1535,8 @@ Implemented optimization direction:
 
 Remaining future direction:
 
-- Preserve `push` and `put` as the explicit `=> mut` in-place mutation surface.
+- Preserve `push`, `put`, and indexed assignment as the explicit `=> name!`
+  in-place mutation surface.
 - Add builder/transient containers for efficient bulk construction while still
   producing immutable final owners.
 - If multiple immutable versions must remain alive and share storage, introduce
@@ -1621,5 +1621,673 @@ The class is intentionally split into partial files by responsibility:
 This is a structural refactor only. It does not change emitted IR semantics.
 Future emitter work should add code to the closest partial by behavior instead
 of growing one monolithic file again.
+
+## D052 - Bang-Suffixed Mutable Owners And Indexed Assignment
+
+Status: implemented
+Date: 2026-07-10
+
+Mutable owner bindings now use a `!` suffix on the local name:
+
+```smalllang
+[Int; ~] => values!
+values! -> push(10)
+99 => values![0]
+```
+
+The suffix is part of the binding name. That makes mutability visible at every
+use site, instead of requiring a reader to remember that an earlier declaration
+used a hidden modifier. The older modifier-before-name spelling is removed from
+the language surface rather than kept as compatibility syntax.
+
+The choice follows the broad convention used by Julia, Ruby, Scheme, and
+Clojure-family code where `!` marks destructive mutation or stateful change,
+but applies it to SmallLang's mutable owner name instead of ordinary function
+names. This avoids spending `!` on normal calls and keeps `-> push` readable as
+a receiver operation while the receiver itself carries the mutation signal.
+
+Indexed assignment is now implemented for current `Int` containers:
+
+```smalllang
+[1, 2, 3] => fixed!
+99 => fixed![1]
+
+[10, 20, ~] => values!
+77 => values![1]
+
+{ 1: 100, 2: 200 } => scores!
+250 => scores![2]
+```
+
+Array indexed assignment performs the same bounds check as indexed reads.
+Dictionary indexed assignment updates an existing key and traps if the key is
+missing; insertion remains the job of `put`, and owner-returning insert/update
+remains the job of `updated`.
+
+## D053 - Typed Empty Int Containers
+
+Status: implemented
+Date: 2026-07-10
+
+SmallLang now supports typed empty literals for the current `Int` container
+slice:
+
+```smalllang
+[Int; ~] => values!
+{Int: Int} => scores!
+```
+
+`[Int; ~]` creates an empty growable `Int` array owner with length and capacity
+zero. It gives the source surface a stable typed form before generic arrays
+arrive.
+
+`{Int: Int}` creates an empty `{Int: Int}` dictionary owner with the initial
+hash-table allocation. This removes the previous need to seed dictionaries with
+a dummy entry such as `{ 0: 0 }` before calling `put`.
+
+Only `Int` element/key/value types are accepted in this slice. Generic
+`[T; ~]` and `{K: V}` remain future work.
+
+## D054 - Tilde Growable Array Marker And Capacity Hints
+
+Status: implemented
+Date: 2026-07-10
+
+Growable arrays now use `~` instead of the earlier array-specific `..` marker:
+
+```smalllang
+[Int; ~] => values!
+[Int; 1024~] => buffered!
+[1, 2, ~] => seeded!
+{Int: Int; 1024~} => scores!
+```
+
+`~` means the container is open/growable. `N~` means the initial capacity should
+be at least `N` elements while the initial length remains zero for typed empty
+containers. The parser no longer accepts the previous bracket-dot-dot array
+forms. The `..` token remains reserved for inclusive ranges such as `1..9`.
+
+## D055 - Block-Local Drop Scopes For Owned Containers
+
+Status: implemented
+Date: 2026-07-10
+
+Heap-owning containers may now be created inside nested blocks. The compiler
+drops block-local growable arrays and dictionaries at the end of the block:
+
+```smalllang
+1..3 -> each i {
+    [Int; 2~] => row!
+    row! -> push(i)
+}
+```
+
+When the block's final expression returns a block-local owner, the block does
+not drop that owner. Ownership and the drop obligation move to the surrounding
+binding:
+
+```smalllang
+true -> if {
+    [Int; 2~] => values!
+    values! -> push(10)
+    values!
+} else {
+    [Int; 2~] => values!
+    values! -> push(20)
+    values!
+} => selected!
+```
+
+The implementation is intentionally conservative. A block result may move a
+growable array or dictionary created inside that block, or the result of a
+move-consuming transform from such a block-local owner. Moving an owner from an
+outer scope through an inner block result is rejected for now, because that
+would create an implicit alias unless broader move analysis consumes the outer
+binding. Static array block results are also rejected in this slice.
+
+## D056 - Owned Container Function Returns
+
+Status: implemented
+Date: 2026-07-10
+
+User functions may now return growable array and dictionary owners:
+
+```smalllang
+makeValues: -> [Int; ~] {
+    [Int; 4~] => values!
+    values! -> push(10)
+    values!
+}
+
+main {
+    makeValues() => values!
+}
+```
+
+The function body may contain statements before its final expression. If the
+final expression returns a heap-owning container, the function does not drop
+that owner; the drop obligation moves to the caller. The caller must bind the
+returned owner directly so the compiler has a deterministic drop point.
+
+The same rule applies to `{Int: Int}`. Function return values use small runtime
+handles containing pointer, length, and capacity. Anonymous use of a returned
+owned container as a flow source, such as `makeValues() -> len`, is rejected in
+this slice because no owner binding would exist to receive the drop obligation.
+
+## D057 - Owned Container Function Parameters
+
+Status: implemented
+Date: 2026-07-10
+
+User functions may now accept growable array and dictionary owners:
+
+```smalllang
+sumValues values: move [Int; ~] -> Int {
+    values -> fold 0 sum, value {
+        sum + value
+    }
+}
+
+main {
+    [1, 2, 3, ~] => values!
+    values! -> sumValues => total
+}
+```
+
+Passing `move [Int; ~]` or `move {Int: Int}` moves ownership into the callee.
+The caller's source binding is removed after the call, and the callee owns the
+drop obligation for that parameter. Both direct calls such as
+`sumValues(values!)` and value-flow calls such as `values! -> sumValues` are
+supported.
+
+This slice is intentionally move-only and explicit. A heap-owning container
+parameter without `move`, such as `[Int; ~]`, is rejected so ordinary parameter
+syntax remains available for readonly views.
+
+## D058 - Readonly Int View Function Parameters
+
+Status: implemented
+Date: 2026-07-10
+
+User functions may now accept `[Int]` as a non-owning readonly view:
+
+```smalllang
+sumValues values: [Int] -> Int {
+    values -> fold 0 sum, value {
+        sum + value
+    }
+}
+
+main {
+    [Int; 4~] => values!
+    values! -> push(10)
+    values! -> push(20)
+
+    values! -> sumValues => total
+    values! -> len => count
+}
+```
+
+`[Int]` does not own or drop storage. Static `Int` arrays and growable `Int`
+arrays can be passed as `[Int]` by lowering them to a small `{ptr, len}` view.
+The caller keeps ownership, so the source binding remains usable after the
+call. The callee can use indexing, `len`, `each`, and `fold`; mutation and
+owner-moving operations remain unavailable on the view.
+
+The view is deliberately limited to function input in this slice. Returning or
+storing `[Int]` is rejected until the compiler has a broader borrow-lifetime
+model that can prove the view cannot outlive its owner.
+
+## D059 - Mutable Growable Int Array Function Parameters
+
+Status: implemented
+Date: 2026-07-10
+
+User functions may now accept `mut [Int; ~]` as a non-owning mutable borrow:
+
+```smalllang
+addTail values: mut [Int; ~] -> Unit {
+    values -> push(30)
+}
+
+main {
+    [Int; 4~] => values!
+    values! -> push(10)
+    values! -> addTail
+    values! -> len => count
+}
+```
+
+The caller must pass a named mutable growable-array owner such as `values!`.
+The callee receives access to the caller's mutable owner handle, so operations
+such as `push` and indexed assignment update the original owner without moving
+ownership. The caller keeps the owner after the call.
+
+The implementation lowers the mutable borrow to a small runtime handle
+containing addresses of the caller's pointer, length, and capacity slots. The
+callee registers those addresses as its local mutable slot, and borrowed
+parameters are excluded from deterministic drop emission so the owner is still
+dropped exactly once by the caller.
+
+This initial slice supports mutable borrows only for `[Int; ~]`. D060 extends
+the same model to `{Int: Int}` dictionaries. Nested borrow conflict tracking and
+returning or storing mutable borrows remain future work.
+
+## D060 - Mutable Int Dictionary Function Parameters
+
+Status: implemented
+Date: 2026-07-10
+
+User functions may accept `mut {Int: Int}` as a non-owning mutable borrow:
+
+```smalllang
+addScore scores: mut {Int: Int} -> Unit {
+    scores -> put(3, 300)
+}
+
+main {
+    {Int: Int; 4~} => scores!
+    scores! -> put(1, 100)
+    scores! -> addScore
+    scores! -> len => count
+}
+```
+
+As with `mut [Int; ~]`, the caller must pass a named mutable owner and keeps
+ownership after the call. The callee may use `put` and indexed assignment, may
+observe the updated pointer, length, and capacity after hash-table growth, and
+never drops the borrowed dictionary.
+
+Both mutable container kinds use the same runtime handle containing addresses
+of the caller's pointer, length, and capacity slots. The bound parameter keeps
+its concrete container type, so array-only operations such as `push` and
+dictionary-only operations such as `put` remain statically separated.
+
+## D061 - Returning Consumed Container Parameters
+
+Status: implemented
+Date: 2026-07-10
+
+A function may return its own `move [Int; ~]` or `move {Int: Int}` input rather
+than dropping it at function exit:
+
+```smalllang
+appendTail values: move [Int; ~] -> [Int; ~] {
+    values -> append(30) => values
+    values
+}
+
+main {
+    [1, 2, ~] => values
+    values -> appendTail => values
+}
+```
+
+Direct return, same-name rebinding after `append` or `updated`, direct calls,
+and value-flow calls all transfer the drop obligation to the caller's result
+binding. The caller's source owner becomes unavailable as soon as the call
+consumes it. Ignoring an owned result remains a compile-time error.
+
+For `if` and `when` results, every return branch must transfer the same move
+input or no branch may transfer it. Mixed paths are rejected because an
+unconditional function-exit drop would otherwise either leak or double-drop.
+When all paths transfer the input, LLVM emission omits the parameter drop and
+returns the merged owner value; otherwise normal function-exit cleanup remains.
+
+## D062 - Readonly Dictionary Parameters And Handle-Only Calls
+
+Status: implemented
+Date: 2026-07-10
+
+An undecorated `{Int: Int}` function input is a readonly non-owning view:
+
+```smalllang
+findScore scores: {Int: Int} -> Int {
+    scores[2]
+}
+
+main {
+    { 1: 100, 2: 200 } => scores
+    scores -> findScore => score
+    scores[1] => stillOwnedHere
+}
+```
+
+This completes the parameter policy: undecorated input is readonly, `mut`
+grants mutation for the call, and `move` transfers ownership. A readonly
+dictionary parameter has its own semantic/runtime view type, so `put`, indexed
+assignment, `updated`, return, and storage are rejected without relying on
+conventions. The callee never emits a drop for the view.
+
+The ABI representation remains `%smalllang.int_dictionary = { ptr, i64, i64 }`.
+Only this three-word handle is passed by value; the Swiss-style table stays in
+its existing owner storage. D064 later permits proven local readonly literals
+to use stack storage. The call itself performs no dictionary copy, allocation,
+rehash, reference-count update, or free. LLVM is free to pass the handle words
+in registers or use stack slots according to the native ABI.
+
+The baseline placement policy is intentionally concrete: local `[Int; N]`
+storage is inline, while growable arrays and dictionaries normally keep only
+their owner handles in local state and allocate payloads on the heap. D063 and
+D064 later add automatic stack placement for proven local readonly literals.
+Moving heap-placed containers copies the handle, not the payload. Very large
+fixed arrays still need an explicit heap-placement feature or future compiler
+placement policy before they should be used as large local values.
+
+As part of D062, typed empty `{Int: Int}` values without a capacity hint now use
+the same lazy-allocation rule as `[Int; ~]`: `{ null, 0, 0 }` is stored in the
+owner handle, and the first `put` allocates capacity 4. An empty dictionary that
+is only inspected or passed as a readonly view therefore performs zero heap
+allocations. Explicit capacity syntax such as `{Int: Int; 1024~}` still
+preallocates because the programmer requested that tradeoff.
+
+## D063 - Automatic Stack Promotion For Readonly Dynamic Arrays
+
+Status: implemented
+Date: 2026-07-10
+
+Small dynamic-array literals keep their existing `[Int; ~]` source type and
+syntax, but their payload may be placed on the stack when the compiler proves
+that the owner remains local and readonly:
+
+```smalllang
+sumValues values: [Int] -> Int {
+    values -> fold 0 sum, value { sum + value }
+}
+
+main {
+    [10, 20, 30, ~] => values
+    values -> sumValues => total
+    values[1] => middle
+}
+```
+
+Placement analysis currently promotes a direct, nonempty dynamic-array literal
+bound to an immutable top-level local in `main` or a non-inline user function.
+Every later use must be checked indexing, `len`, `capacity`, `each`, `fold`, or
+a call through a readonly `[Int]` parameter. A mutable binding, `move`,
+`append`, `updated`, function-result escape, or any unrecognized owner use keeps
+the normal heap representation.
+
+The first implementation applies a cumulative 4096-byte payload budget per
+analyzed function frame. It intentionally excludes local/standard-library
+inline functions and block-function bodies, where call-site inlining or loop
+execution could otherwise place a dynamic `alloca` repeatedly in one frame.
+This is an optimizer placement policy, not a source-language fallback.
+
+LLVM lowering uses `alloca [N x i64]` for a promoted payload while preserving
+the dynamic-array `ptr`, `len`, and `capacity` interface used by indexing and
+readonly slices. Runtime values track whether payload storage is stack or heap;
+scope cleanup emits `smalllang_free` only for heap storage. Example 38 verifies
+both the program output and LLVM requirements: the stack allocation must be
+present, while calls to `smalllang_alloc` and `smalllang_free` must be absent.
+Because this path needs no allocator, the same example also compiles for the
+browser WebAssembly target.
+
+## D064 - Automatic Stack Promotion For Readonly Int Dictionaries
+
+Status: implemented
+Date: 2026-07-10
+
+Small nonempty `{Int: Int}` literals now join dynamic arrays in automatic
+storage placement analysis:
+
+```smalllang
+findScore scores: {Int: Int} -> Int {
+    scores[2]
+}
+
+main {
+    { 1: 100, 2: 200, 3: 300 } => scores
+    scores -> findScore => second
+    scores -> len => count
+}
+```
+
+The compiler promotes the literal only when it is bound to an immutable
+top-level local in `main` or a non-inline user function and every later owner
+use is checked lookup, `len`, `capacity`, or a call through a readonly
+`{Int: Int}` parameter. Mutable bindings, `put`, `updated`, `move`, function
+result escape, and unrecognized uses retain heap placement.
+
+The promoted Swiss table is one `alloca [N x i8]` aligned to 8 bytes. `N`
+includes control bytes, control-to-entry alignment padding, and 16 bytes for
+each key/value slot. The compiler zeroes only the control-byte region before
+inserting literal entries. Runtime dictionary values track stack versus heap
+storage, and deterministic drop emits `smalllang_free` only for heap storage.
+
+D063's 4096-byte function-frame budget is now shared by promoted dynamic-array
+and dictionary payloads. The dictionary's full table allocation, rather than
+only its live entry count, is charged to that budget. Example 39 checks the
+expected 72-byte and 136-byte stack blocks and rejects generated calls to
+`smalllang_alloc` or `smalllang_free`. It also compiles for browser WebAssembly
+without adding a linear-memory allocator.
+
+## D065 - Lifetime-Based Function Stack-Frame Planning
+
+Status: implemented
+Date: 2026-07-10
+
+Stack-promoted dynamic-array and dictionary payloads are no longer allocated at
+the source binding's current LLVM block. The semantic placement pass assigns
+each candidate a creation position, last-use position, size, and lifetime-end
+unit. A linear-scan frame allocator assigns non-overlapping intervals to the
+same physical slot and charges only the final slot sizes against the 4096-byte
+frame budget.
+
+Every physical slot is emitted once in the function `entry` block as an aligned
+`alloca [N x i8]`. Literal construction emits `llvm.lifetime.start`; the last
+statement or block-result expression that can use the owner emits
+`llvm.lifetime.end`. A loop-local literal therefore reuses the same entry slot
+on every iteration instead of executing a new `alloca` inside the loop.
+
+The analysis recursively indexes `if`, `when`, fold bodies, built-in block
+function bodies, and loop bodies. Branches occupy disjoint static position
+ranges, while an owner live across a complete control expression spans its
+nested ranges and prevents unsafe reuse. Storage placement remains conservative:
+any mutation, move, growth, owner escape, or unrecognized use retains heap
+placement.
+
+Example 40 proves that a 24-byte array, a later 72-byte Swiss dictionary, and a
+16-byte loop-local array all reuse `%stack_slot0 = alloca [72 x i8]`. Its LLVM
+fixture requires all three lifetime sizes and rejects `%stack_slot1`, allocator
+calls, and free calls. Local/standard-library inline function bodies, fixed
+arrays, and mutable-container handle slots remain separate follow-up work.
+
+Local functions and standard-library SmallLang wrappers are emitted inline and
+therefore have no independent runtime frame. Their placement plans are now
+merged into each containing non-inline function or `main` frame with dedicated
+slot ranges. Repeated inline calls restart and end lifetime on the same entry
+slot. If adding an inline plan would exceed the 4096-byte frame budget, its
+container candidates conservatively remain heap-placed. Example 41 verifies a
+local function called inside a loop with one 16-byte entry slot and repeated
+lifetime markers.
+
+Fixed arrays now participate in the same physical frame plan. Small literals
+and `[value; N]` repetitions use entry slots even when created in nested loops.
+If their complete inline byte size does not fit the remaining planned frame
+budget, lowering allocates owned heap storage instead and deterministic drop
+frees it. Example 42 verifies a 64-byte fixed array on the stack and a
+4,800-byte fixed array on the heap without an `alloca [600 x i64]`.
+
+Mutable dynamic-array and dictionary owners also reserve their three-word
+`ptr`/`len`/`capacity` metadata as one 24-byte planned entry slot. Scope drop or
+ownership transfer ends that slot's lifetime after the final metadata load.
+Example 30 verifies that loop-local mutable owners repeatedly reuse one metadata
+slot and that legacy `%mutable_ptr_addr` allocas are absent.
+
+## D066 - Nominal Inline Structs And Static Methods
+
+Status: implemented
+Date: 2026-07-10
+
+User-defined `struct` declarations are nominal value types. The semantic model
+assigns every declaration a stable compilation-local `TypeId` and stores field
+definitions in one type table. Struct literals must initialize every declared
+field exactly once; unknown, duplicate, missing, and incorrectly typed fields
+are compile errors. Inline recursive cycles are rejected until an explicit
+heap reference type can break the size cycle.
+
+```smalllang
+struct Point {
+    x: Int
+    y: Int
+}
+
+impl Point {
+    translated: self -> Self {
+        Point { x: self.x + 10, y: self.y + 20 }
+    }
+}
+```
+
+LLVM lowering uses named aggregate types such as
+`%smalllang.struct.1024 = type { i64, i64 }`. Literals use `insertvalue`, field
+reads use `extractvalue`, and user functions pass and return the aggregate
+directly. This representation introduces no object header, heap allocation,
+reference counting, garbage collection, or vtable.
+
+`impl` methods are registered as type-qualified functions and resolved from the
+receiver's nominal type. Both `point.translated` and `point -> translated`
+lower to direct statically selected function calls. Readonly `self` is the first
+implemented receiver mode; mutable and consuming receivers remain separate
+ownership slices. Example 43 verifies nested structs, `Text` fields, dot and
+flow method calls, output, LLVM aggregate shape, and absence of allocator/free
+calls. Diagnostic fixtures verify complete initialization, field typing, and
+recursive-size rejection.
+
+Generated functions use the `nounwind` attribute but no longer carry the
+prototype-era `noinline optnone` attributes. Windows `-O3` and Linux/WebAssembly
+`-Oz` compilation can therefore inline statically resolved methods, scalarize
+aggregate values, eliminate temporary copies, and devirtualize any later
+provably concrete dynamic calls.
+
+## D067 - Parenthesis-Free Queries And Payload Enums
+
+Status: implemented
+Date: 2026-07-10
+
+SmallLang avoids empty call parentheses. A readonly method with no additional
+arguments is a computed member and uses uniform member access:
+
+```smalllang
+point.translated
+point -> translated
+counter! -> increment
+```
+
+Stored fields and computed members share one namespace and cannot have the same
+name. Dot syntax is reserved for stored data and readonly query-like members;
+mutation and other actions use value-flow syntax. Parentheses remain available
+only when a call carries actual arguments. Calling a zero-argument method as
+`point.translated()` is a compile error with the canonical spelling in the
+diagnostic.
+
+This combines Scala's parameterless uniform-access rule, Swift-style computed
+properties, and SmallLang's existing flow calls. It keeps query expressions
+compact without hiding mutation or ownership transfer behind property syntax.
+
+User `enum` declarations are tagged unions with optional per-variant payloads.
+Payload constructors use `Reading.Value(42)`, while payload-free variants use
+`Reading.Missing` without empty parentheses. LLVM represents an enum as an
+inline tag plus an aligned maximum-size payload area; it has no object header,
+heap allocation, or vtable.
+
+Subject `when` supports variant patterns and payload bindings. Omitting `else`
+requires every variant exactly once; missing and duplicate variants are compile
+errors. An `else` arm is permitted only when explicit patterns do not already
+cover every variant. Example 44 verifies `Int`, empty, and `Text` variants,
+payload extraction, scalar/text phi results, runtime output, and no allocator
+calls.
+
+## D068 - Associated Members And Explicit Self Modes
+
+Status: implemented
+Date: 2026-07-10
+
+An `impl` member without `self` is statically associated with its type.
+Zero-argument constructors use computed type-member syntax, while constructors
+with an actual argument keep parentheses:
+
+```smalllang
+Point.origin
+Point.fromX(5)
+```
+
+Readonly `self` remains the default and uses an inline aggregate value. `mut
+self` receives an address to an explicitly mutable owner and can update fields
+with the normal assignment direction, for example `next => self.value`. Only
+mutable struct bindings become addressable stack values; immutable structs stay
+in SSA aggregate form. A call such as `counter! -> increment` passes the stack
+address directly and introduces no heap allocation.
+
+`move self` consumes the receiver. Inline user values are passed by value, the
+source binding is removed after the call, and any later use is a compile error.
+This preserves the language-wide rule that readonly is the default while
+mutation and ownership transfer are explicit at the declaration and call-flow
+boundaries. Example 45 verifies mutable field updates, pointer ABI, consuming
+self, use-after-move rejection, and absence of allocator/free calls.
+
+## D069 - Nominal Traits And Monomorphized Type Generics
+
+Status: implemented
+Date: 2026-07-10
+
+Traits declare nominal method contracts and are implemented explicitly:
+
+```smalllang
+trait Measure {
+    measure: self -> Int
+}
+
+impl Measure for Point {
+    measure: self -> Int { self.x + self.y }
+}
+```
+
+Trait conformance checks method presence, receiver ownership, and return type.
+An unambiguous `point.measure` or explicit `point -> Measure.measure` resolves to
+the concrete implementation function. No trait metadata, object header, fat
+pointer, or vtable is emitted for this static path.
+
+One checked type parameter and optional trait bound are supported on global
+functions:
+
+```smalllang
+identity[T] value: T -> T { value }
+measureOf[T: Measure] value: T -> Int { value -> Measure.measure }
+```
+
+Every used concrete type produces a separately checked specialization. Trait
+bounds are proven before specialization, and the specialized body is then
+type-checked with the concrete binding types. LLVM receives direct functions
+such as `identity$Point`, `identity$Int`, and `measureOf$Point`; calls do not use
+type erasure or runtime dispatch. Example 46 verifies direct trait dispatch and
+example 47 verifies multiple monomorphizations plus bound failure diagnostics.
+
+## D070 - Explicit Box And Recursive Drop Glue
+
+Status: implemented
+Date: 2026-07-10
+
+`box T` is an explicit owning heap reference. `box value` allocates exactly the
+inline size and alignment of `T`; ordinary structs and enums remain inline and
+do not acquire an object header. A boxed field or enum payload breaks recursive
+inline sizing, so definitions such as `enum Chain { End; More(box Chain) }` are
+finite and statically laid out.
+
+Owned values cannot be copied into a second binding. The default function input
+is a readonly borrow even when the value transitively contains a box, while
+`move box T` and `move` user values transfer ownership and invalidate the source
+binding. This keeps readonly access as the unadorned path and makes ownership
+transfer explicit.
+
+The compiler emits type-specific internal drop functions for reachable owned
+user types. Struct drop glue visits owned fields, enum drop glue switches on the
+active tag, and box drop glue recursively drops the pointee before calling
+`smalllang_free`. These helpers are statically selected by concrete type and do
+not use metadata or vtables. Examples 48 and 49 verify single-owner box transfer,
+readonly repeated access, recursive enum destruction, copy rejection, and
+use-after-move rejection.
 
 

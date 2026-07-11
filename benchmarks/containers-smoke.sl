@@ -2,22 +2,22 @@ main {
     10 => n
     nowMillis() => started
 
-    [..] => mut values
+    [Int; 10~] => values!
     1..10 -> each i {
-        values -> push(i)
+        values! -> push(i)
     }
 
-    values -> fold 0 total, value {
+    values! -> fold 0 total, value {
         total + value
     } => arraySum
 
-    { 0: 0 } => mut scores
+    {Int: Int; 10~} => scores!
     1..10 -> each i {
-        scores -> put(i, i * 2)
+        scores! -> put(i, i * 2)
     }
 
     1..10 -> fold 0 total, i {
-        scores[i] => value
+        scores![i] => value
         total + value
     } => dictSum
 

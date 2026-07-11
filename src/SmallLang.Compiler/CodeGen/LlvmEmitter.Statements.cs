@@ -10,13 +10,14 @@ internal sealed partial class LlvmEmitter
 {
     private void EmitMain()
     {
-        _locals.Clear();
-        _mutableLocals.Clear();
+        ClearLocalState();
         _currentFunctions = _program.Functions;
+        _currentStackFramePlan = _program.MainStackFrame;
         _mainOk = "true";
         _currentBlockLabel = "entry";
         EmitFunctionLine($"define dso_local i32 @{_platform.EntryPointName}() local_unnamed_addr {{");
         EmitLabel("entry");
+        EmitStackFrameAllocations();
         EmitAlloca("%written", "i32", 4);
         EmitAlloca("%read", "i32", 4);
         EmitAlloca("%ok_state", "i1", 1);
@@ -62,12 +63,28 @@ internal sealed partial class LlvmEmitter
                 }
 
                 _mutableContainerSlots.Remove(binding.Name);
+                _mutableStructSlots.Remove(binding.Name);
+                _borrowedMutableLocals.Remove(binding.Name);
+                _borrowedOwnedLocals.Remove(binding.Name);
                 _locals.Add(binding.Name, value);
                 if (binding.IsMutable)
                 {
                     _mutableLocals.Add(binding.Name);
-                    CreateMutableContainerSlot(binding.Name, value);
+                    if (value is RuntimeStruct structure)
+                    {
+                        CreateMutableStructSlot(binding.Name, structure);
+                    }
+                    else
+                    {
+                        CreateMutableContainerSlot(binding, value);
+                    }
                 }
+                break;
+            case IndexAssignmentStatement assignment:
+                EmitIndexAssignmentStatement(assignment);
+                break;
+            case FieldAssignmentStatement assignment:
+                EmitFieldAssignmentStatement(assignment);
                 break;
             case BlockFunctionCallStatement blockFunctionCall:
                 EmitBlockFunctionCall(blockFunctionCall);
@@ -77,6 +94,64 @@ internal sealed partial class LlvmEmitter
                 break;
             default:
                 throw new SmallLangException($"unsupported runtime statement {statement.GetType().Name}");
+        }
+
+        EmitStackLifetimeEndsAfter(statement);
+    }
+
+    private void CreateMutableStructSlot(string name, RuntimeStruct value)
+    {
+        var pointer = NextTemp("mutable_struct_slot");
+        var llvmType = LlvmStructType(value.Type);
+        EmitAlloca(pointer, llvmType, 8);
+        EmitStore(llvmType, value.ValueName, pointer, 8);
+        _mutableStructSlots.Add(name, pointer);
+    }
+
+    private void EmitFieldAssignmentStatement(FieldAssignmentStatement assignment)
+    {
+        if (!_mutableStructSlots.TryGetValue(assignment.Name, out var pointer))
+        {
+            throw new SmallLangException(
+                $"field assignment requires a mutable struct owner; use '{assignment.Name.TrimEnd('!')}!'");
+        }
+
+        var type = _locals[assignment.Name].Type;
+        var definition = _program.Types.GetStruct(type);
+        var field = definition.Fields.First(candidate => candidate.Name == assignment.FieldName);
+        var value = EmitExpression(assignment.Value);
+        EnsureRuntimeType(value, field.Type, $"{definition.Name}.{field.Name}");
+        var fieldAddress = NextTemp("field_addr");
+        EmitAssign(
+            fieldAddress,
+            $"getelementptr inbounds {LlvmStructType(type)}, ptr {pointer}, i32 0, i32 {field.Index.ToString(CultureInfo.InvariantCulture)}");
+        var materialized = MaterializeAggregateValue(value);
+        EmitStore(materialized.TypeName, materialized.ValueName, fieldAddress, RuntimeAlignment(field.Type));
+    }
+
+    private void EmitIndexAssignmentStatement(IndexAssignmentStatement assignment)
+    {
+        if (!_mutableLocals.Contains(assignment.Name))
+        {
+            throw new SmallLangException($"indexed assignment requires a mutable owner binding; use '=> {assignment.Name.TrimEnd('!')}!'");
+        }
+
+        var target = ResolveLocal(assignment.Name);
+        var index = EmitIntExpression(assignment.Index);
+        var value = EmitIntExpression(assignment.Value);
+        switch (target)
+        {
+            case RuntimeStaticIntArray array:
+                EmitStaticArrayAssign(array, index.ValueName, value.ValueName);
+                return;
+            case RuntimeDynamicIntArray array:
+                EmitDynamicArrayAssign(array, index.ValueName, value.ValueName);
+                return;
+            case RuntimeIntDictionary dictionary:
+                EmitDictionaryAssignExisting(dictionary, index.ValueName, value.ValueName);
+                return;
+            default:
+                throw new SmallLangException("indexed assignment expects an array or dictionary owner");
         }
     }
 
@@ -129,9 +204,16 @@ internal sealed partial class LlvmEmitter
         EmitPhi(item, "i64", (start.ValueName, entryLabel), (next, continueLabel));
 
         var outerLocals = CaptureLocals();
-        _locals[statement.ItemName] = new RuntimeInt(item);
-        EmitStatements(statement.Body);
-        RestoreLocals(outerLocals);
+        try
+        {
+            _locals[statement.ItemName] = new RuntimeInt(item);
+            EmitStatements(statement.Body);
+            DropOwnedLocalsCreatedSince(outerLocals, transferredOwnerName: null);
+        }
+        finally
+        {
+            RestoreLocals(outerLocals);
+        }
 
         EmitBranch(continueLabel);
         EmitLabel(continueLabel);
@@ -149,6 +231,7 @@ internal sealed partial class LlvmEmitter
         var source = EmitExpression(statement.Source);
         var (pointer, length, staticLength) = source switch
         {
+            RuntimeIntSlice slice => (slice.PointerName, slice.LengthName, null),
             RuntimeStaticIntArray array => (array.PointerName, array.LengthName, (int?)array.AllocatedLength),
             RuntimeDynamicIntArray array => (array.PointerName, array.LengthName, null),
             _ => throw new SmallLangException("each expects a range or Int array input")
@@ -174,15 +257,26 @@ internal sealed partial class LlvmEmitter
         {
             item = EmitStaticArrayLoad(new RuntimeStaticIntArray(pointer, length, allocatedLength), index);
         }
+        else if (source is RuntimeIntSlice)
+        {
+            item = EmitIntSliceLoad(new RuntimeIntSlice(pointer, length), index);
+        }
         else
         {
             item = EmitDynamicArrayLoad(new RuntimeDynamicIntArray(pointer, length, length), index);
         }
 
         var outerLocals = CaptureLocals();
-        _locals[statement.ItemName] = item;
-        EmitStatements(statement.Body);
-        RestoreLocals(outerLocals);
+        try
+        {
+            _locals[statement.ItemName] = item;
+            EmitStatements(statement.Body);
+            DropOwnedLocalsCreatedSince(outerLocals, transferredOwnerName: null);
+        }
+        finally
+        {
+            RestoreLocals(outerLocals);
+        }
 
         EmitBranch(continueLabel);
         EmitLabel(continueLabel);
@@ -215,7 +309,10 @@ internal sealed partial class LlvmEmitter
                 [function.InputName ?? "it"] = argument
             },
             new HashSet<string>(StringComparer.Ordinal),
-            new Dictionary<string, MutableContainerSlot>(StringComparer.Ordinal));
+            new HashSet<string>(StringComparer.Ordinal),
+            new HashSet<string>(StringComparer.Ordinal),
+            new Dictionary<string, MutableContainerSlot>(StringComparer.Ordinal),
+            new Dictionary<string, string>(StringComparer.Ordinal));
 
         _currentBlockInvocation = new RuntimeBlockInvocation(
             statement.ItemName,
@@ -227,6 +324,7 @@ internal sealed partial class LlvmEmitter
         try
         {
             EmitStatements(function.BlockBody);
+            DropOwnedLocalsCreatedSince(blockLocals, transferredOwnerName: null);
         }
         finally
         {
@@ -255,9 +353,16 @@ internal sealed partial class LlvmEmitter
         EmitPhi(item, "i64", ("1", entryLabel), (next, continueLabel));
 
         var outerLocals = CaptureLocals();
-        _locals[statement.ItemName] = new RuntimeInt(item);
-        EmitStatements(statement.Body);
-        RestoreLocals(outerLocals);
+        try
+        {
+            _locals[statement.ItemName] = new RuntimeInt(item);
+            EmitStatements(statement.Body);
+            DropOwnedLocalsCreatedSince(outerLocals, transferredOwnerName: null);
+        }
+        finally
+        {
+            RestoreLocals(outerLocals);
+        }
 
         EmitBranch(continueLabel);
         EmitLabel(continueLabel);

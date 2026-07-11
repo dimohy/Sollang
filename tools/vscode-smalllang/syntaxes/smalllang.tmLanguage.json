@@ -11,9 +11,12 @@
     { "include": "#function-declarations" },
     { "include": "#namespace-imports" },
     { "include": "#block-function-declarations" },
+    { "include": "#each-statements" },
     { "include": "#block-flow-calls" },
     { "include": "#when-arms" },
     { "include": "#yield-calls" },
+    { "include": "#bindings" },
+    { "include": "#legacy-bindings" },
     { "include": "#keywords" },
     { "include": "#types" },
     { "include": "#constants" },
@@ -28,7 +31,10 @@
       "patterns": [
         {
           "name": "comment.line.number-sign.smalllang",
-          "match": "#.*$"
+          "match": "(#).*$",
+          "captures": {
+            "1": { "name": "punctuation.definition.comment.smalllang" }
+          }
         }
       ]
     },
@@ -50,21 +56,40 @@
               "match": "\\\\[\\\\\"nrt]"
             },
             {
-              "name": "meta.interpolation.smalllang",
-              "begin": "\\{",
+              "name": "meta.interpolation.expression.smalllang",
+              "begin": "\\$\\(",
               "beginCaptures": {
-                "0": { "name": "punctuation.section.interpolation.begin.smalllang" }
+                "0": { "name": "punctuation.section.interpolation.begin.smalllang keyword.operator.interpolation.smalllang" }
               },
-              "end": "\\}",
+              "end": "\\)",
               "endCaptures": {
                 "0": { "name": "punctuation.section.interpolation.end.smalllang" }
               },
               "patterns": [
-                {
-                  "name": "variable.other.interpolation.smalllang",
-                  "match": "\\b[A-Za-z_][A-Za-z0-9_]*(?:\\.[A-Za-z_][A-Za-z0-9_]*)*\\b"
-                }
+                { "include": "#strings" },
+                { "include": "#each-statements" },
+                { "include": "#block-flow-calls" },
+                { "include": "#when-arms" },
+                { "include": "#yield-calls" },
+                { "include": "#bindings" },
+                { "include": "#legacy-bindings" },
+                { "include": "#keywords" },
+                { "include": "#types" },
+                { "include": "#constants" },
+                { "include": "#numbers" },
+                { "include": "#function-calls" },
+                { "include": "#operators" },
+                { "include": "#punctuation" },
+                { "include": "#identifiers" }
               ]
+            },
+            {
+              "name": "meta.interpolation.identifier.smalllang",
+              "match": "(\\$)([A-Za-z_][A-Za-z0-9_]*)",
+              "captures": {
+                "1": { "name": "punctuation.section.interpolation.begin.smalllang keyword.operator.interpolation.smalllang" },
+                "2": { "name": "variable.other.readwrite.interpolation.smalllang" }
+              }
             }
           ]
         }
@@ -77,7 +102,7 @@
           "match": "^\\s*([A-Za-z_][A-Za-z0-9_]*(?:\\.[A-Za-z_][A-Za-z0-9_]*)*)\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*(:)",
           "captures": {
             "1": { "name": "entity.name.function.smalllang" },
-            "2": { "name": "variable.parameter.smalllang" },
+            "2": { "name": "variable.parameter.function.smalllang" },
             "3": { "name": "punctuation.separator.type.smalllang" }
           }
         },
@@ -126,6 +151,19 @@
         }
       ]
     },
+    "each-statements": {
+      "patterns": [
+        {
+          "name": "meta.loop.each.in.smalllang",
+          "match": "\\b(each)\\s+([A-Za-z_][A-Za-z0-9_]*)\\s+(in)\\b",
+          "captures": {
+            "1": { "name": "keyword.control.loop.each.smalllang" },
+            "2": { "name": "variable.parameter.loop.smalllang" },
+            "3": { "name": "keyword.control.loop.in.smalllang" }
+          }
+        }
+      ]
+    },
     "block-flow-calls": {
       "patterns": [
         {
@@ -133,7 +171,7 @@
           "match": "(->)\\s*(fold)\\s+([^\\s{}]+)\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*(,)\\s*([A-Za-z_][A-Za-z0-9_]*)\\s*(?=\\{)",
           "captures": {
             "1": { "name": "keyword.operator.flow.smalllang" },
-            "2": { "name": "keyword.control.flow.smalllang" },
+            "2": { "name": "keyword.control.loop.fold.smalllang" },
             "3": { "name": "meta.fold.seed.smalllang" },
             "4": { "name": "variable.parameter.fold.accumulator.smalllang" },
             "5": { "name": "punctuation.separator.comma.smalllang" },
@@ -141,11 +179,19 @@
           }
         },
         {
-          "name": "meta.block-function-call.smalllang",
-          "match": "(->)\\s*(if|when|each|repeat)\\b(?:\\s+([A-Za-z_][A-Za-z0-9_]*))?\\s*(?=\\{)",
+          "name": "meta.block-function-call.conditional.smalllang",
+          "match": "(->)\\s*(if|when)\\b\\s*(?=\\{)",
           "captures": {
             "1": { "name": "keyword.operator.flow.smalllang" },
-            "2": { "name": "keyword.control.flow.smalllang" },
+            "2": { "name": "keyword.control.conditional.smalllang" }
+          }
+        },
+        {
+          "name": "meta.block-function-call.smalllang",
+          "match": "(->)\\s*(each|repeat)\\b(?:\\s+([A-Za-z_][A-Za-z0-9_]*))?\\s*(?=\\{)",
+          "captures": {
+            "1": { "name": "keyword.operator.flow.smalllang" },
+            "2": { "name": "keyword.control.loop.smalllang" },
             "3": { "name": "variable.parameter.block.smalllang" }
           }
         }
@@ -155,7 +201,7 @@
       "patterns": [
         {
           "name": "keyword.control.conditional.else.smalllang",
-          "match": "^\\s*(else)\\b(?=\\s*(?:->|\\{))",
+          "match": "^\\s*(else)\\b(?=\\s*(?:->|=>|\\{))",
           "captures": {
             "1": { "name": "keyword.control.conditional.else.smalllang" }
           }
@@ -166,6 +212,15 @@
           "captures": {
             "1": { "name": "keyword.operator.comparison.smalllang" }
           }
+        },
+        {
+          "name": "meta.when-arm.range.smalllang",
+          "match": "^\\s*(\\d+)\\s*(\\.\\.)\\s*(\\d+)\\s*(?=\\{|=>|->)",
+          "captures": {
+            "1": { "name": "constant.numeric.integer.decimal.smalllang" },
+            "2": { "name": "keyword.operator.range.smalllang" },
+            "3": { "name": "constant.numeric.integer.decimal.smalllang" }
+          }
         }
       ]
     },
@@ -175,8 +230,33 @@
           "name": "meta.yield-call.smalllang",
           "match": "\\b(yield)\\s*(\\(\\))",
           "captures": {
-            "1": { "name": "keyword.control.smalllang" },
+            "1": { "name": "keyword.control.flow.yield.smalllang" },
             "2": { "name": "punctuation.definition.call.empty.smalllang" }
+          }
+        }
+      ]
+    },
+    "bindings": {
+      "patterns": [
+        {
+          "name": "meta.binding.smalllang",
+          "match": "(=>)\\s*([A-Za-z_][A-Za-z0-9_]*)(!)?(?=\\s*(?:#.*)?$|\\s*[})\\]])",
+          "captures": {
+            "1": { "name": "keyword.operator.binding.smalllang" },
+            "2": { "name": "variable.other.readwrite.binding.smalllang" },
+            "3": { "name": "storage.modifier.mutable.smalllang punctuation.definition.mutable-owner.smalllang" }
+          }
+        }
+      ]
+    },
+    "legacy-bindings": {
+      "patterns": [
+        {
+          "name": "meta.binding.legacy-assignment.smalllang",
+          "match": "\\b([A-Za-z_][A-Za-z0-9_]*)\\s*(=)(?![=>])",
+          "captures": {
+            "1": { "name": "variable.other.readwrite.binding.smalllang" },
+            "2": { "name": "keyword.operator.assignment.smalllang" }
           }
         }
       ]
@@ -184,8 +264,32 @@
     "keywords": {
       "patterns": [
         {
-          "name": "keyword.control.smalllang",
-          "match": "\\b(main|else|when|if|fold|each|repeat|block|yield|namespace|import|as|intrinsic)\\b"
+          "name": "keyword.control.import.smalllang",
+          "match": "\\b(namespace|import|as|move|mut)\\b"
+        },
+        {
+          "name": "keyword.control.conditional.smalllang",
+          "match": "\\b(else|when|if)\\b"
+        },
+        {
+          "name": "keyword.control.loop.smalllang",
+          "match": "\\b(each|in|repeat|fold)\\b"
+        },
+        {
+          "name": "keyword.control.flow.yield.smalllang",
+          "match": "\\byield\\b"
+        },
+        {
+          "name": "keyword.control.main.smalllang",
+          "match": "\\bmain\\b"
+        },
+        {
+          "name": "keyword.control.declaration.block.smalllang",
+          "match": "\\bblock\\b"
+        },
+        {
+          "name": "keyword.other.intrinsic.smalllang",
+          "match": "\\bintrinsic\\b"
         },
         {
           "name": "keyword.operator.logical.smalllang",
@@ -196,7 +300,7 @@
     "types": {
       "patterns": [
         {
-          "name": "storage.type.smalllang",
+          "name": "storage.type.builtin.smalllang",
           "match": "\\b(Unit|Text|Int|Bool|Io)\\b"
         }
       ]
@@ -208,7 +312,7 @@
           "match": "\\b(true|false)\\b"
         },
         {
-          "name": "variable.language.smalllang",
+          "name": "variable.language.special.smalllang",
           "match": "\\bit\\b"
         }
       ]
@@ -216,7 +320,7 @@
     "numbers": {
       "patterns": [
         {
-          "name": "constant.numeric.integer.smalllang",
+          "name": "constant.numeric.integer.decimal.smalllang",
           "match": "\\b\\d+\\b"
         }
       ]
@@ -225,11 +329,10 @@
       "patterns": [
         {
           "name": "meta.function-call.flow.smalllang",
-          "match": "(->)\\s*([A-Za-z_][A-Za-z0-9_]*(?:\\.[A-Za-z_][A-Za-z0-9_]*)*)\\s*(\\(\\))",
+          "match": "(->)\\s*((?!(?:if|when|fold|each|repeat|Unit|Text|Int|Bool|Io|and|or|not|else|main|block|yield|namespace|import|as|move|mut|intrinsic|in)\\b)[A-Za-z_][A-Za-z0-9_]*(?:\\.[A-Za-z_][A-Za-z0-9_]*)*)\\b",
           "captures": {
             "1": { "name": "keyword.operator.flow.smalllang" },
-            "2": { "name": "entity.name.function.call.smalllang" },
-            "3": { "name": "punctuation.definition.call.empty.smalllang" }
+            "2": { "name": "entity.name.function.call.smalllang" }
           }
         },
         {
@@ -248,8 +351,16 @@
           "match": "->"
         },
         {
+          "name": "keyword.operator.binding.smalllang",
+          "match": "=>"
+        },
+        {
           "name": "keyword.operator.range.smalllang",
           "match": "\\.\\."
+        },
+        {
+          "name": "keyword.operator.growable.smalllang",
+          "match": "~"
         },
         {
           "name": "keyword.operator.comparison.smalllang",
@@ -257,7 +368,7 @@
         },
         {
           "name": "keyword.operator.assignment.smalllang",
-          "match": "="
+          "match": "(?<![=!<>])=(?![=>])"
         },
         {
           "name": "keyword.operator.arithmetic.smalllang",
@@ -268,23 +379,55 @@
     "punctuation": {
       "patterns": [
         {
+          "name": "punctuation.definition.dictionary.begin.smalllang",
+          "match": "\\{(?=\\s*[^}\\n]+\\s*:)"
+        },
+        {
+          "name": "punctuation.separator.dictionary.key-value.smalllang",
+          "match": ":"
+        },
+        {
           "name": "punctuation.section.block.smalllang",
           "match": "[{}]"
         },
         {
-          "name": "punctuation.section.group.smalllang",
-          "match": "[()]"
+          "name": "punctuation.section.group.begin.smalllang",
+          "match": "\\("
         },
         {
-          "name": "punctuation.separator.smalllang",
-          "match": "[,:.]"
+          "name": "punctuation.section.group.end.smalllang",
+          "match": "\\)"
+        },
+        {
+          "name": "punctuation.definition.sequence.begin.smalllang",
+          "match": "\\["
+        },
+        {
+          "name": "punctuation.definition.sequence.end.smalllang",
+          "match": "\\]"
+        },
+        {
+          "name": "punctuation.separator.comma.smalllang",
+          "match": ","
+        },
+        {
+          "name": "punctuation.terminator.statement.smalllang",
+          "match": ";"
+        },
+        {
+          "name": "punctuation.accessor.dot.smalllang",
+          "match": "\\."
+        },
+        {
+          "name": "punctuation.separator.type.smalllang",
+          "match": ":"
         }
       ]
     },
     "identifiers": {
       "patterns": [
         {
-          "name": "variable.other.smalllang",
+          "name": "variable.other.readwrite.smalllang",
           "match": "\\b[A-Za-z_][A-Za-z0-9_]*\\b"
         }
       ]

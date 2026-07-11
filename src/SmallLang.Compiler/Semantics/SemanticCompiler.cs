@@ -3,19 +3,155 @@ using SmallLang.Compiler.Syntax;
 
 namespace SmallLang.Compiler.Semantics;
 
-internal sealed class SemanticCompiler(SmallLangProgram program)
+internal sealed class SemanticCompiler
 {
+    private readonly SmallLangProgram _program;
+    private readonly TypeDefinitionTable _types;
+    private readonly IReadOnlyDictionary<string, BoundTraitDefinition> _traits;
+    private readonly Dictionary<object, BoundFunction> _resolvedGenericCalls = new(ReferenceEqualityComparer.Instance);
+    private readonly HashSet<BoundFunction> _validatingGenericSpecializations = new(ReferenceEqualityComparer.Instance);
+    private Dictionary<string, BoundFunction>? _boundFunctions;
+
+    public SemanticCompiler(SmallLangProgram program)
+    {
+        _program = program;
+        _types = BuildTypeDefinitions(program.Structs, program.Enums);
+        _traits = BindTraits(program.Traits);
+    }
+
     public BoundProgram Compile()
     {
         var functions = BindFunctions();
         var mainBindings = BindMain(functions);
-        return new BoundProgram(functions, program.Statements, mainBindings);
+        var storagePlacement = StoragePlacementAnalyzer.Analyze(_program, functions);
+        return new BoundProgram(
+            _types,
+            _traits,
+            functions,
+            _resolvedGenericCalls,
+            _program.Statements,
+            mainBindings,
+            storagePlacement.MainFrame,
+            storagePlacement.FunctionFrames);
+    }
+
+    private IReadOnlyDictionary<string, BoundTraitDefinition> BindTraits(
+        IReadOnlyList<TraitDeclaration> declarations)
+    {
+        var traits = new Dictionary<string, BoundTraitDefinition>(StringComparer.Ordinal);
+        foreach (var declaration in declarations)
+        {
+            if (IsReservedName(declaration.Name))
+            {
+                throw Error(declaration.Line, declaration.Column, $"trait name '{declaration.Name}' is reserved");
+            }
+            if (_types.TryResolve(declaration.Name, out _) || traits.ContainsKey(declaration.Name))
+            {
+                throw Error(declaration.Line, declaration.Column, $"trait '{declaration.Name}' already exists");
+            }
+
+            var methods = new List<BoundTraitMethod>(declaration.Methods.Count);
+            var methodNames = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var method in declaration.Methods)
+            {
+                if (!methodNames.Add(method.Name))
+                {
+                    throw Error(
+                        method.Line,
+                        method.Column,
+                        $"trait method '{declaration.Name}.{method.Name}' already exists");
+                }
+
+                methods.Add(new BoundTraitMethod(
+                    method.Name,
+                    method.SelfOwnership switch
+                    {
+                        FunctionInputOwnership.Default => BoundFunctionInputOwnership.Default,
+                        FunctionInputOwnership.Move => BoundFunctionInputOwnership.Move,
+                        FunctionInputOwnership.MutableBorrow => BoundFunctionInputOwnership.MutableBorrow,
+                        _ => throw new InvalidOperationException("unsupported trait receiver ownership")
+                    },
+                    ParseType(method.ReturnType, method.Line, method.Column),
+                    method.Line,
+                    method.Column));
+            }
+
+            traits.Add(
+                declaration.Name,
+                new BoundTraitDefinition(
+                    declaration.Name,
+                    methods,
+                    declaration.Line,
+                    declaration.Column));
+        }
+
+        return traits;
+    }
+
+    private void ValidateTraitImplementations(IReadOnlyDictionary<string, BoundFunction> functions)
+    {
+        var implementations = new Dictionary<(string Trait, BoundType Type), HashSet<string>>();
+        foreach (var function in functions.Values)
+        {
+            if (function.TraitName is null)
+            {
+                continue;
+            }
+
+            if (!_traits.TryGetValue(function.TraitName, out var trait))
+            {
+                throw Error(function.Line, function.Column, $"unknown trait '{function.TraitName}'");
+            }
+            if (function.InputType is not { } inputType
+                || (!_types.IsStruct(inputType) && !_types.IsEnum(inputType)))
+            {
+                throw Error(function.Line, function.Column, "trait methods require a user type self receiver");
+            }
+
+            var methodName = function.Name[(function.Name.LastIndexOf('.') + 1)..];
+            var requirement = trait.Methods.FirstOrDefault(method => method.Name == methodName)
+                ?? throw Error(
+                    function.Line,
+                    function.Column,
+                    $"trait '{trait.Name}' has no method '{methodName}'");
+            if (function.InputOwnership != requirement.SelfOwnership
+                || function.ReturnType != requirement.ReturnType)
+            {
+                throw Error(
+                    function.Line,
+                    function.Column,
+                    $"trait method '{trait.Name}.{methodName}' signature does not match its declaration");
+            }
+
+            var key = (trait.Name, inputType);
+            if (!implementations.TryGetValue(key, out var methods))
+            {
+                methods = new HashSet<string>(StringComparer.Ordinal);
+                implementations.Add(key, methods);
+            }
+            methods.Add(methodName);
+        }
+
+        foreach (var ((traitName, type), methods) in implementations)
+        {
+            var trait = _traits[traitName];
+            var missing = trait.Methods.FirstOrDefault(method => !methods.Contains(method.Name));
+            if (missing is not null)
+            {
+                var typeName = _types.IsStruct(type) ? _types.GetStruct(type).Name : _types.GetEnum(type).Name;
+                throw Error(
+                    trait.Line,
+                    trait.Column,
+                    $"impl {traitName} for {typeName} is missing method '{missing.Name}'");
+            }
+        }
     }
 
     private IReadOnlyDictionary<string, BoundFunction> BindFunctions()
     {
         var functions = new Dictionary<string, BoundFunction>(StringComparer.Ordinal);
-        foreach (var declaration in program.Functions)
+        _boundFunctions = functions;
+        foreach (var declaration in _program.Functions)
         {
             if (functions.ContainsKey(declaration.Name))
             {
@@ -26,12 +162,15 @@ internal sealed class SemanticCompiler(SmallLangProgram program)
             functions.Add(function.Name, function);
         }
 
+        ValidateTraitImplementations(functions);
         AddGlobalAliases(functions);
+        ValidateMemberNameCollisions(functions);
 
         var checkedFunctions = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var function in functions.Values)
+        foreach (var function in functions.Values.ToArray())
         {
             if (function.Kind is not (BoundFunctionKind.User or BoundFunctionKind.UserBlock)
+                || (function.GenericParameterName is not null && function.SpecializedType is null)
                 || !checkedFunctions.Add(function.Name))
             {
                 continue;
@@ -46,17 +185,68 @@ internal sealed class SemanticCompiler(SmallLangProgram program)
         return functions;
     }
 
-    private static BoundFunction BindFunctionDeclaration(FunctionDeclaration function, bool isLocal)
+    private void ValidateMemberNameCollisions(IReadOnlyDictionary<string, BoundFunction> functions)
+    {
+        var seen = new HashSet<BoundFunction>(ReferenceEqualityComparer.Instance);
+        foreach (var function in functions.Values)
+        {
+            if (!seen.Add(function))
+            {
+                continue;
+            }
+
+            var definition = function.InputType is { } inputType && _types.IsStruct(inputType)
+                ? _types.GetStruct(inputType)
+                : _types.Structs.FirstOrDefault(structure =>
+                    function.Name.StartsWith(structure.Name + ".", StringComparison.Ordinal));
+            if (definition is null)
+            {
+                continue;
+            }
+
+            var memberName = function.Name[(function.Name.LastIndexOf('.') + 1)..];
+            if (definition.Fields.Any(field => field.Name == memberName))
+            {
+                throw Error(
+                    function.Line,
+                    function.Column,
+                    $"member '{definition.Name}.{memberName}' conflicts with a stored field of the same name");
+            }
+        }
+    }
+
+    private BoundFunction BindFunctionDeclaration(FunctionDeclaration function, bool isLocal)
     {
         ValidateFunctionDeclaration(function, isLocal);
 
+        if (function.GenericTraitBound is not null && !_traits.ContainsKey(function.GenericTraitBound))
+        {
+            throw Error(function.Line, function.Column, $"unknown trait bound '{function.GenericTraitBound}'");
+        }
+
         var inputType = function.InputType is null
             ? (BoundType?)null
-            : ParseType(function.InputType, function.Line, function.Column);
-        var returnType = ParseType(function.ReturnType, function.Line, function.Column);
+            : ParseFunctionType(function.InputType, function.GenericParameterName, function.Line, function.Column);
+        if (function.InputOwnership == FunctionInputOwnership.Default
+            && inputType == BoundType.IntDictionary)
+        {
+            inputType = BoundType.IntDictionaryView;
+        }
+
+        var returnType = ParseFunctionType(
+            function.ReturnType,
+            function.GenericParameterName,
+            function.Line,
+            function.Column);
+        if (returnType == BoundType.IntSlice)
+        {
+            throw Error(function.Line, function.Column, "readonly Int view returns are not implemented yet");
+        }
+
         var blockInputType = function.BlockInputType is null
             ? (BoundType?)null
             : ParseType(function.BlockInputType, function.Line, function.Column);
+        var inputOwnership = BindFunctionInputOwnership(function, inputType);
         var kind = BindFunctionKind(function, inputType, returnType, isLocal);
         var localFunctions = BindLocalFunctions(function);
 
@@ -64,6 +254,7 @@ internal sealed class SemanticCompiler(SmallLangProgram program)
             function.Name,
             function.InputName,
             inputType,
+            inputOwnership,
             returnType,
             function.BlockInputName,
             blockInputType,
@@ -74,11 +265,73 @@ internal sealed class SemanticCompiler(SmallLangProgram program)
             function.Column,
             kind,
             function.IsStandardLibrary,
-            isLocal);
+            isLocal,
+            function.TraitName,
+            function.GenericParameterName,
+            function.GenericTraitBound);
     }
 
-    private static void ValidateFunctionDeclaration(FunctionDeclaration function, bool isLocal)
+    private BoundFunctionInputOwnership BindFunctionInputOwnership(
+        FunctionDeclaration function,
+        BoundType? inputType)
     {
+        if (function.InputOwnership == FunctionInputOwnership.Move)
+        {
+            if (inputType is null)
+            {
+                throw Error(function.Line, function.Column, "move input requires an input type");
+            }
+
+            if (!IsOwnedHeapType(inputType.Value)
+                && !_types.IsStruct(inputType.Value)
+                && !_types.IsEnum(inputType.Value))
+            {
+                throw Error(function.Line, function.Column, "move input expects an owned container or user value type");
+            }
+
+            return BoundFunctionInputOwnership.Move;
+        }
+
+        if (function.InputOwnership == FunctionInputOwnership.MutableBorrow)
+        {
+            if (inputType is null)
+            {
+                throw Error(function.Line, function.Column, "mut input requires an input type");
+            }
+
+            if (inputType.Value is not (BoundType.DynamicIntArray or BoundType.IntDictionary)
+                && !_types.IsStruct(inputType.Value))
+            {
+                throw Error(function.Line, function.Column, "mut input expects an owned container or struct value");
+            }
+
+            return BoundFunctionInputOwnership.MutableBorrow;
+        }
+
+        return BoundFunctionInputOwnership.Default;
+    }
+
+    private void ValidateFunctionDeclaration(FunctionDeclaration function, bool isLocal)
+    {
+        if (function.GenericParameterName is not null)
+        {
+            if (isLocal || function.TraitName is not null)
+            {
+                throw Error(function.Line, function.Column, "generic local and impl functions are not implemented yet");
+            }
+            if (function.InputType != function.GenericParameterName)
+            {
+                throw Error(
+                    function.Line,
+                    function.Column,
+                    $"generic function input must use its type parameter '{function.GenericParameterName}' in this slice");
+            }
+            if (function.InputOwnership != FunctionInputOwnership.Default)
+            {
+                throw Error(function.Line, function.Column, "generic function inputs are readonly in this slice");
+            }
+        }
+
         if (isLocal && function.Name.Contains('.', StringComparison.Ordinal))
         {
             throw Error(function.Line, function.Column, "local function names cannot be path-qualified");
@@ -99,7 +352,8 @@ internal sealed class SemanticCompiler(SmallLangProgram program)
             throw Error(function.Line, function.Column, "function input name requires an input type");
         }
 
-        if (function.InputName is not null)
+        if (function.InputName is not null
+            && !(function.InputName == "self" && function.Name.Contains('.', StringComparison.Ordinal)))
         {
             ValidateBindingName(function.InputName, function.Line, function.Column);
         }
@@ -119,13 +373,9 @@ internal sealed class SemanticCompiler(SmallLangProgram program)
             throw Error(function.Line, function.Column, "block functions must declare Unit return type");
         }
 
-        if (function.BlockInputName is null && function.BlockBody.Count != 0)
-        {
-            throw Error(function.Line, function.Column, "block function body requires a block input declaration");
-        }
     }
 
-    private static IReadOnlyDictionary<string, BoundFunction> BindLocalFunctions(FunctionDeclaration owner)
+    private IReadOnlyDictionary<string, BoundFunction> BindLocalFunctions(FunctionDeclaration owner)
     {
         var functions = new Dictionary<string, BoundFunction>(StringComparer.Ordinal);
         foreach (var localDeclaration in owner.LocalFunctions)
@@ -145,7 +395,7 @@ internal sealed class SemanticCompiler(SmallLangProgram program)
         return functions;
     }
 
-    private static void ValidateUserFunction(
+    private void ValidateUserFunction(
         BoundFunction function,
         IReadOnlyDictionary<string, BoundFunction> parentFunctions,
         IReadOnlyDictionary<string, BoundType> capturedBindings)
@@ -162,25 +412,38 @@ internal sealed class SemanticCompiler(SmallLangProgram program)
             bodyBindings[function.InputName ?? "it"] = inputType;
         }
 
+        var returnOuterBindings = new Dictionary<string, BoundType>(bodyBindings, StringComparer.Ordinal);
+
         var scopedFunctions = CreateFunctionScope(parentFunctions, function.LocalFunctions);
         foreach (var localFunction in function.LocalFunctions.Values)
         {
             ValidateUserFunction(localFunction, scopedFunctions, bodyBindings);
         }
 
-        if (function.Body is null)
+        var mutableBindings = new HashSet<string>(StringComparer.Ordinal);
+        if (FunctionMutablyBorrowsInput(function))
         {
-            throw Error(function.Line, function.Column, $"function '{function.Name}' has no body");
+            mutableBindings.Add(function.InputName ?? "it");
         }
 
-        var bodyType = InferExpression(
-            function.Body,
-            scopedFunctions,
-            bodyBindings,
-            allowPrintCall: false,
-            allowReadIntCall: function.IsStandardLibrary,
-            allowFlowBindingTarget: false,
-            yieldInputType: null);
+        var returnedMoveInputName = FunctionMovesOwnedHeapInput(function)
+            && function.InputType == function.ReturnType
+                ? function.InputName ?? "it"
+                : null;
+
+        BindStatements(function.BlockBody, scopedFunctions, bodyBindings, mutableBindings, allowContainerBindings: true);
+        var bodyType = function.Body is null
+            ? BoundType.Unit
+            : InferExpression(
+                function.Body,
+                scopedFunctions,
+                bodyBindings,
+                allowPrintCall: false,
+                allowReadIntCall: function.IsStandardLibrary,
+                allowFlowBindingTarget: false,
+                yieldInputType: null,
+                mutableBindings: mutableBindings,
+                allowedOwnedOuterResultName: returnedMoveInputName);
         if (bodyType != function.ReturnType)
         {
             throw Error(
@@ -189,9 +452,26 @@ internal sealed class SemanticCompiler(SmallLangProgram program)
                 $"function '{function.Name}' returns {FormatType(bodyType)} but declares {FormatType(function.ReturnType)}");
         }
 
+        if (function.Body is not null && IsContainerType(bodyType))
+        {
+            EnsureOwnedContainerCanLeaveBlock(
+                function.Body,
+                returnOuterBindings,
+                bodyBindings,
+                returnedMoveInputName);
+
+            if (returnedMoveInputName is not null)
+            {
+                EnsureMoveInputReturnCoverage(
+                    function.Body,
+                    returnedMoveInputName,
+                    scopedFunctions);
+            }
+        }
+
     }
 
-    private static void ValidateUserBlockFunction(
+    private void ValidateUserBlockFunction(
         BoundFunction function,
         IReadOnlyDictionary<string, BoundFunction> parentFunctions,
         IReadOnlyDictionary<string, BoundType> capturedBindings)
@@ -220,7 +500,7 @@ internal sealed class SemanticCompiler(SmallLangProgram program)
         BindStatements(function.BlockBody, scopedFunctions, bodyBindings, yieldInputType: function.BlockInputType.Value);
     }
 
-    private static IReadOnlyDictionary<string, BoundFunction> CreateFunctionScope(
+    private IReadOnlyDictionary<string, BoundFunction> CreateFunctionScope(
         IReadOnlyDictionary<string, BoundFunction> parentFunctions,
         IReadOnlyDictionary<string, BoundFunction> localFunctions)
     {
@@ -238,7 +518,7 @@ internal sealed class SemanticCompiler(SmallLangProgram program)
         return functions;
     }
 
-    private static BoundFunctionKind BindFunctionKind(
+    private BoundFunctionKind BindFunctionKind(
         FunctionDeclaration function,
         BoundType? inputType,
         BoundType returnType,
@@ -356,7 +636,7 @@ internal sealed class SemanticCompiler(SmallLangProgram program)
         };
     }
 
-    private static BoundFunctionKind RequireIntrinsicSignature(
+    private BoundFunctionKind RequireIntrinsicSignature(
         FunctionDeclaration function,
         BoundType? inputType,
         BoundType returnType,
@@ -378,7 +658,7 @@ internal sealed class SemanticCompiler(SmallLangProgram program)
         return kind;
     }
 
-    private static void AddGlobalAliases(Dictionary<string, BoundFunction> functions)
+    private void AddGlobalAliases(Dictionary<string, BoundFunction> functions)
     {
         AddGlobalAlias(functions, "print", "sys.io.print");
         AddGlobalAlias(functions, "println", "sys.io.println");
@@ -394,7 +674,7 @@ internal sealed class SemanticCompiler(SmallLangProgram program)
         AddGlobalAlias(functions, "nowMillis", "sys.time.nowMillis");
     }
 
-    private static void AddGlobalAlias(
+    private void AddGlobalAlias(
         Dictionary<string, BoundFunction> functions,
         string alias,
         string target)
@@ -416,11 +696,11 @@ internal sealed class SemanticCompiler(SmallLangProgram program)
     {
         var bindings = new Dictionary<string, BoundType>(StringComparer.Ordinal);
         var mutableBindings = new HashSet<string>(StringComparer.Ordinal);
-        BindStatements(program.Statements, functions, bindings, mutableBindings);
+        BindStatements(_program.Statements, functions, bindings, mutableBindings);
         return bindings;
     }
 
-    private static void BindStatements(
+    private void BindStatements(
         IReadOnlyList<Statement> statements,
         IReadOnlyDictionary<string, BoundFunction> functions,
         Dictionary<string, BoundType> bindings,
@@ -436,8 +716,10 @@ internal sealed class SemanticCompiler(SmallLangProgram program)
                 case BindingStatement binding:
                     ValidateBindingName(binding.Name, binding.Line, binding.Column);
                     var movedSourceName = GetMoveConsumingContainerSourceName(binding.Value);
+                    var consumedSourceNames = GetOwnedParameterConsumedSourceNames(binding.Value, functions, bindings);
                     if (bindings.ContainsKey(binding.Name)
-                        && !string.Equals(binding.Name, movedSourceName, StringComparison.Ordinal))
+                        && !string.Equals(binding.Name, movedSourceName, StringComparison.Ordinal)
+                        && !consumedSourceNames.Contains(binding.Name, StringComparer.Ordinal))
                     {
                         throw Error(binding.Line, binding.Column, $"binding '{binding.Name}' already exists in this scope");
                     }
@@ -481,12 +763,25 @@ internal sealed class SemanticCompiler(SmallLangProgram program)
                         mutableBindings.Remove(movedSourceName);
                     }
 
+                    ValidateOwnedParameterConsumptionExpression(binding.Value, functions);
+                    foreach (var consumedName in consumedSourceNames)
+                    {
+                        bindings.Remove(consumedName);
+                        mutableBindings.Remove(consumedName);
+                    }
+
                     bindings.Add(binding.Name, valueType);
                     if (binding.IsMutable)
                     {
                         mutableBindings.Add(binding.Name);
                     }
 
+                    break;
+                case IndexAssignmentStatement assignment:
+                    BindIndexAssignment(assignment, functions, bindings, mutableBindings, yieldInputType);
+                    break;
+                case FieldAssignmentStatement assignment:
+                    BindFieldAssignment(assignment, functions, bindings, mutableBindings, yieldInputType);
                     break;
                 case BlockFunctionCallStatement blockFunctionCall:
                     BindBlockFunctionCall(blockFunctionCall, functions, bindings, mutableBindings, yieldInputType);
@@ -510,6 +805,16 @@ internal sealed class SemanticCompiler(SmallLangProgram program)
                         bindings.Add(bindingEffect.Name, bindingEffect.Type);
                     }
 
+                    ValidateOwnedParameterConsumptionExpression(expressionStatement.Expression, functions);
+                    foreach (var consumedName in GetOwnedParameterConsumedSourceNames(
+                        expressionStatement.Expression,
+                        functions,
+                        bindings))
+                    {
+                        bindings.Remove(consumedName);
+                        mutableBindings.Remove(consumedName);
+                    }
+
                     break;
                 default:
                     throw new SmallLangException($"unsupported statement {statement.GetType().Name}");
@@ -517,7 +822,110 @@ internal sealed class SemanticCompiler(SmallLangProgram program)
         }
     }
 
-    private static void BindBlockFunctionCall(
+    private void BindFieldAssignment(
+        FieldAssignmentStatement assignment,
+        IReadOnlyDictionary<string, BoundFunction> functions,
+        IReadOnlyDictionary<string, BoundType> bindings,
+        IReadOnlySet<string> mutableBindings,
+        BoundType? yieldInputType)
+    {
+        if (!bindings.TryGetValue(assignment.Name, out var targetType))
+        {
+            throw Error(assignment.Line, assignment.Column, $"unknown binding '{assignment.Name}'");
+        }
+
+        if (!_types.IsStruct(targetType))
+        {
+            throw Error(assignment.Line, assignment.Column, "field assignment expects a struct owner");
+        }
+
+        if (!mutableBindings.Contains(assignment.Name))
+        {
+            throw Error(
+                assignment.Line,
+                assignment.Column,
+                $"field assignment requires a mutable owner binding; use '{assignment.Name.TrimEnd('!')}!'");
+        }
+
+        var definition = _types.GetStruct(targetType);
+        var field = definition.Fields.FirstOrDefault(candidate => candidate.Name == assignment.FieldName)
+            ?? throw Error(
+                assignment.Line,
+                assignment.Column,
+                $"struct '{definition.Name}' has no field '{assignment.FieldName}'");
+        var valueType = InferExpression(
+            assignment.Value,
+            functions,
+            bindings,
+            allowPrintCall: false,
+            allowReadIntCall: true,
+            allowFlowBindingTarget: false,
+            yieldInputType: yieldInputType,
+            mutableBindings: mutableBindings);
+        if (valueType != field.Type)
+        {
+            throw Error(
+                assignment.Value.Line,
+                assignment.Value.Column,
+                $"field '{definition.Name}.{field.Name}' expects {FormatType(field.Type)}, got {FormatType(valueType)}");
+        }
+    }
+
+    private void BindIndexAssignment(
+        IndexAssignmentStatement assignment,
+        IReadOnlyDictionary<string, BoundFunction> functions,
+        IReadOnlyDictionary<string, BoundType> bindings,
+        IReadOnlySet<string> mutableBindings,
+        BoundType? yieldInputType)
+    {
+        if (!bindings.TryGetValue(assignment.Name, out var targetType))
+        {
+            throw Error(assignment.Line, assignment.Column, $"unknown binding '{assignment.Name}'");
+        }
+
+        if (targetType is not (BoundType.StaticIntArray or BoundType.DynamicIntArray or BoundType.IntDictionary))
+        {
+            throw Error(assignment.Line, assignment.Column, "indexed assignment expects an array or dictionary owner");
+        }
+
+        if (!mutableBindings.Contains(assignment.Name))
+        {
+            throw Error(
+                assignment.Line,
+                assignment.Column,
+                $"indexed assignment requires a mutable owner binding; use '=> {assignment.Name.TrimEnd('!')}!'");
+        }
+
+        var indexType = InferExpression(
+            assignment.Index,
+            functions,
+            bindings,
+            allowPrintCall: false,
+            allowReadIntCall: true,
+            allowFlowBindingTarget: false,
+            yieldInputType: yieldInputType,
+            mutableBindings: mutableBindings);
+        if (indexType != BoundType.Int)
+        {
+            throw Error(assignment.Index.Line, assignment.Index.Column, "indexed assignment index must be Int");
+        }
+
+        var valueType = InferExpression(
+            assignment.Value,
+            functions,
+            bindings,
+            allowPrintCall: false,
+            allowReadIntCall: true,
+            allowFlowBindingTarget: false,
+            yieldInputType: yieldInputType,
+            mutableBindings: mutableBindings);
+        if (valueType != BoundType.Int)
+        {
+            throw Error(assignment.Value.Line, assignment.Value.Column, "indexed assignment value must be Int");
+        }
+    }
+
+    private void BindBlockFunctionCall(
         BlockFunctionCallStatement call,
         IReadOnlyDictionary<string, BoundFunction> functions,
         Dictionary<string, BoundType> bindings,
@@ -545,7 +953,7 @@ internal sealed class SemanticCompiler(SmallLangProgram program)
         }
     }
 
-    private static void BindEachBlockFunctionCall(
+    private void BindEachBlockFunctionCall(
         BlockFunctionCallStatement call,
         IReadOnlyDictionary<string, BoundFunction> functions,
         Dictionary<string, BoundType> bindings,
@@ -600,7 +1008,7 @@ internal sealed class SemanticCompiler(SmallLangProgram program)
                 allowReadIntCall: true,
                 allowFlowBindingTarget: false,
                 mutableBindings: mutableBindings);
-            if (sourceType is not (BoundType.StaticIntArray or BoundType.DynamicIntArray))
+            if (!IsReadonlyIntViewCompatible(sourceType))
             {
                 throw Error(call.Source.Line, call.Source.Column, "each expects a range or Int array input");
             }
@@ -616,10 +1024,10 @@ internal sealed class SemanticCompiler(SmallLangProgram program)
             bodyBindings,
             new HashSet<string>(mutableBindings, StringComparer.Ordinal),
             yieldInputType,
-            allowContainerBindings: false);
+            allowContainerBindings: true);
     }
 
-    private static void BindUserBlockFunctionCall(
+    private void BindUserBlockFunctionCall(
         BlockFunctionCallStatement call,
         BoundFunction function,
         IReadOnlyDictionary<string, BoundFunction> functions,
@@ -667,10 +1075,10 @@ internal sealed class SemanticCompiler(SmallLangProgram program)
             functions,
             bodyBindings,
             new HashSet<string>(mutableBindings, StringComparer.Ordinal),
-            allowContainerBindings: false);
+            allowContainerBindings: true);
     }
 
-    private static void BindRepeatBlockFunctionCall(
+    private void BindRepeatBlockFunctionCall(
         BlockFunctionCallStatement call,
         IReadOnlyDictionary<string, BoundFunction> functions,
         Dictionary<string, BoundType> bindings,
@@ -710,10 +1118,10 @@ internal sealed class SemanticCompiler(SmallLangProgram program)
             bodyBindings,
             new HashSet<string>(mutableBindings, StringComparer.Ordinal),
             yieldInputType,
-            allowContainerBindings: false);
+            allowContainerBindings: true);
     }
 
-    private static FlowEffect InferExpressionStatement(
+    private FlowEffect InferExpressionStatement(
         Expression expression,
         IReadOnlyDictionary<string, BoundFunction> functions,
         IReadOnlyDictionary<string, BoundType> bindings,
@@ -761,7 +1169,7 @@ internal sealed class SemanticCompiler(SmallLangProgram program)
         return FlowEffect.None;
     }
 
-    private static BoundType InferExpression(
+    private BoundType InferExpression(
         Expression expression,
         IReadOnlyDictionary<string, BoundFunction> functions,
         IReadOnlyDictionary<string, BoundType> bindings,
@@ -769,7 +1177,8 @@ internal sealed class SemanticCompiler(SmallLangProgram program)
         bool allowReadIntCall,
         bool allowFlowBindingTarget,
         BoundType? yieldInputType = null,
-        IReadOnlySet<string>? mutableBindings = null)
+        IReadOnlySet<string>? mutableBindings = null,
+        string? allowedOwnedOuterResultName = null)
     {
         return expression switch
         {
@@ -779,8 +1188,13 @@ internal sealed class SemanticCompiler(SmallLangProgram program)
             NameExpression name => InferNameExpression(name, functions, bindings),
             ArrayLiteralExpression array => InferArrayLiteralExpression(array, functions, bindings, allowReadIntCall),
             ArrayRepeatExpression repeat => InferArrayRepeatExpression(repeat, functions, bindings, allowReadIntCall),
+            TypedEmptyArrayExpression typedArray => InferTypedEmptyArrayExpression(typedArray),
             DictionaryLiteralExpression dictionary => InferDictionaryLiteralExpression(dictionary, functions, bindings, allowReadIntCall),
+            TypedEmptyDictionaryExpression typedDictionary => InferTypedEmptyDictionaryExpression(typedDictionary),
             IndexExpression index => InferIndexExpression(index, functions, bindings, allowReadIntCall),
+            StructLiteralExpression literal => InferStructLiteralExpression(literal, functions, bindings, allowReadIntCall),
+            FieldAccessExpression field => InferFieldAccessExpression(field, functions, bindings, allowReadIntCall),
+            BoxExpression box => InferBoxExpression(box, functions, bindings, allowReadIntCall),
             AddExpression add => InferAddExpression(add, functions, bindings, allowReadIntCall),
             SubtractExpression subtract => InferSubtractExpression(subtract, functions, bindings, allowReadIntCall),
             MultiplyExpression multiply => InferMultiplyExpression(multiply, functions, bindings, allowReadIntCall),
@@ -791,8 +1205,28 @@ internal sealed class SemanticCompiler(SmallLangProgram program)
             AndExpression and => InferLogicalExpression(and.Left, and.Right, functions, bindings, allowReadIntCall, "and"),
             OrExpression or => InferLogicalExpression(or.Left, or.Right, functions, bindings, allowReadIntCall, "or"),
             NotExpression not => InferNotExpression(not, functions, bindings, allowReadIntCall),
-            IfExpression conditional => InferIfExpression(conditional, functions, bindings, allowReadIntCall),
-            WhenExpression whenExpression => InferWhenExpression(whenExpression, functions, bindings, allowReadIntCall),
+            IfExpression conditional => InferIfExpression(
+                conditional,
+                functions,
+                bindings,
+                allowReadIntCall,
+                allowedOwnedOuterResultName),
+            WhenExpression whenExpression => InferWhenExpression(
+                whenExpression,
+                functions,
+                bindings,
+                allowReadIntCall,
+                allowedOwnedOuterResultName),
+            EnumMatchExpression enumMatch => InferEnumMatchExpression(
+                enumMatch,
+                functions,
+                bindings,
+                allowReadIntCall,
+                allowedOwnedOuterResultName),
+            EnumPatternExpression => throw Error(
+                expression.Line,
+                expression.Column,
+                "enum patterns are only valid in a subject when arm"),
             SubjectCompareExpression => throw Error(
                 expression.Line,
                 expression.Column,
@@ -803,7 +1237,7 @@ internal sealed class SemanticCompiler(SmallLangProgram program)
                 "subject range is only valid inside value-flow when"),
             FoldExpression fold => InferFoldExpression(fold, functions, bindings, allowReadIntCall),
             RangeExpression => throw Error(expression.Line, expression.Column, "range values are only valid as block-function input"),
-            CallExpression call => InferCallExpression(call, functions, bindings, allowPrintCall, allowReadIntCall),
+            CallExpression call => InferCallExpression(call, functions, bindings, allowPrintCall, allowReadIntCall, mutableBindings),
             FlowExpression flow => InferFlowExpression(
                 flow,
                 functions,
@@ -816,7 +1250,7 @@ internal sealed class SemanticCompiler(SmallLangProgram program)
         };
     }
 
-    private static BoundType InferStringExpression(
+    private BoundType InferStringExpression(
         StringExpression expression,
         IReadOnlyDictionary<string, BoundFunction> functions,
         IReadOnlyDictionary<string, BoundType> bindings,
@@ -842,7 +1276,7 @@ internal sealed class SemanticCompiler(SmallLangProgram program)
         return BoundType.Text;
     }
 
-    private static BoundType InferArrayLiteralExpression(
+    private BoundType InferArrayLiteralExpression(
         ArrayLiteralExpression expression,
         IReadOnlyDictionary<string, BoundFunction> functions,
         IReadOnlyDictionary<string, BoundType> bindings,
@@ -866,7 +1300,7 @@ internal sealed class SemanticCompiler(SmallLangProgram program)
         return expression.IsDynamic ? BoundType.DynamicIntArray : BoundType.StaticIntArray;
     }
 
-    private static BoundType InferArrayRepeatExpression(
+    private BoundType InferArrayRepeatExpression(
         ArrayRepeatExpression expression,
         IReadOnlyDictionary<string, BoundFunction> functions,
         IReadOnlyDictionary<string, BoundType> bindings,
@@ -887,7 +1321,20 @@ internal sealed class SemanticCompiler(SmallLangProgram program)
         return BoundType.StaticIntArray;
     }
 
-    private static BoundType InferDictionaryLiteralExpression(
+    private BoundType InferTypedEmptyArrayExpression(TypedEmptyArrayExpression expression)
+    {
+        if (expression.ElementType != "Int")
+        {
+            throw Error(
+                expression.Line,
+                expression.Column,
+                "typed empty growable arrays only support [Int; ~] or [Int; N~] in the current slice");
+        }
+
+        return BoundType.DynamicIntArray;
+    }
+
+    private BoundType InferDictionaryLiteralExpression(
         DictionaryLiteralExpression expression,
         IReadOnlyDictionary<string, BoundFunction> functions,
         IReadOnlyDictionary<string, BoundType> bindings,
@@ -923,7 +1370,20 @@ internal sealed class SemanticCompiler(SmallLangProgram program)
         return BoundType.IntDictionary;
     }
 
-    private static BoundType InferIndexExpression(
+    private BoundType InferTypedEmptyDictionaryExpression(TypedEmptyDictionaryExpression expression)
+    {
+        if (expression.KeyType != "Int" || expression.ValueType != "Int")
+        {
+            throw Error(
+                expression.Line,
+                expression.Column,
+                "typed empty dictionaries only support {Int: Int} in the current slice");
+        }
+
+        return BoundType.IntDictionary;
+    }
+
+    private BoundType InferIndexExpression(
         IndexExpression expression,
         IReadOnlyDictionary<string, BoundFunction> functions,
         IReadOnlyDictionary<string, BoundType> bindings,
@@ -936,7 +1396,11 @@ internal sealed class SemanticCompiler(SmallLangProgram program)
             allowPrintCall: false,
             allowReadIntCall,
             allowFlowBindingTarget: false);
-        if (sourceType is not (BoundType.StaticIntArray or BoundType.DynamicIntArray or BoundType.IntDictionary))
+        if (sourceType is not (BoundType.IntSlice
+            or BoundType.StaticIntArray
+            or BoundType.DynamicIntArray
+            or BoundType.IntDictionaryView
+            or BoundType.IntDictionary))
         {
             throw Error(expression.Source.Line, expression.Source.Column, "indexing expects an array or dictionary");
         }
@@ -956,7 +1420,171 @@ internal sealed class SemanticCompiler(SmallLangProgram program)
         return BoundType.Int;
     }
 
-    private static BoundType InferAddExpression(
+    private BoundType InferStructLiteralExpression(
+        StructLiteralExpression expression,
+        IReadOnlyDictionary<string, BoundFunction> functions,
+        IReadOnlyDictionary<string, BoundType> bindings,
+        bool allowReadIntCall)
+    {
+        if (!_types.TryResolve(expression.TypeName, out var type) || !_types.IsStruct(type))
+        {
+            throw Error(expression.Line, expression.Column, $"unknown struct type '{expression.TypeName}'");
+        }
+
+        var definition = _types.GetStruct(type);
+        var initializers = new Dictionary<string, StructFieldInitializer>(StringComparer.Ordinal);
+        foreach (var initializer in expression.Fields)
+        {
+            if (!initializers.TryAdd(initializer.Name, initializer))
+            {
+                throw Error(
+                    initializer.Line,
+                    initializer.Column,
+                    $"field '{initializer.Name}' is initialized more than once in '{definition.Name}'");
+            }
+        }
+
+        foreach (var initializer in expression.Fields)
+        {
+            var field = definition.Fields.FirstOrDefault(candidate => candidate.Name == initializer.Name);
+            if (field is null)
+            {
+                throw Error(
+                    initializer.Line,
+                    initializer.Column,
+                    $"struct '{definition.Name}' has no field '{initializer.Name}'");
+            }
+
+            var actualType = InferExpression(
+                initializer.Value,
+                functions,
+                bindings,
+                allowPrintCall: false,
+                allowReadIntCall,
+                allowFlowBindingTarget: false);
+            if (actualType != field.Type)
+            {
+                throw Error(
+                    initializer.Value.Line,
+                    initializer.Value.Column,
+                    $"field '{field.Name}' expects {FormatType(field.Type)}, got {FormatType(actualType)}");
+            }
+        }
+
+        var missing = definition.Fields.FirstOrDefault(field => !initializers.ContainsKey(field.Name));
+        if (missing is not null)
+        {
+            throw Error(
+                expression.Line,
+                expression.Column,
+                $"struct '{definition.Name}' requires field '{missing.Name}' to be initialized");
+        }
+
+        return type;
+    }
+
+    private BoundType InferFieldAccessExpression(
+        FieldAccessExpression expression,
+        IReadOnlyDictionary<string, BoundFunction> functions,
+        IReadOnlyDictionary<string, BoundType> bindings,
+        bool allowReadIntCall)
+    {
+        if (expression.Source is NameExpression typeName
+            && !bindings.ContainsKey(typeName.Name)
+            && _types.TryResolve(typeName.Name, out var enumType)
+            && _types.IsEnum(enumType))
+        {
+            var enumeration = _types.GetEnum(enumType);
+            var variant = enumeration.Variants.FirstOrDefault(candidate => candidate.Name == expression.FieldName)
+                ?? throw Error(
+                    expression.Line,
+                    expression.Column,
+                    $"enum '{enumeration.Name}' has no variant '{expression.FieldName}'");
+            if (variant.PayloadType is not null)
+            {
+                throw Error(
+                    expression.Line,
+                    expression.Column,
+                    $"variant '{enumeration.Name}.{variant.Name}' requires a payload argument");
+            }
+
+            return enumType;
+        }
+
+        if (expression.Source is NameExpression staticTypeName
+            && !bindings.ContainsKey(staticTypeName.Name)
+            && _types.TryResolve(staticTypeName.Name, out var staticType)
+            && _types.IsStruct(staticType))
+        {
+            var memberPath = staticTypeName.Name + "." + expression.FieldName;
+            if (functions.TryGetValue(memberPath, out var associated) && associated.InputType is null)
+            {
+                return associated.ReturnType;
+            }
+
+            throw Error(
+                expression.Line,
+                expression.Column,
+                $"type '{staticTypeName.Name}' has no zero-argument associated member '{expression.FieldName}'");
+        }
+
+        var sourceType = InferExpression(
+            expression.Source,
+            functions,
+            bindings,
+            allowPrintCall: false,
+            allowReadIntCall,
+            allowFlowBindingTarget: false);
+        if (_types.IsBox(sourceType))
+        {
+            sourceType = _types.GetBox(sourceType).ElementType;
+        }
+        if (!_types.IsStruct(sourceType))
+        {
+            throw Error(expression.Line, expression.Column, "field access expects a struct value");
+        }
+
+        var definition = _types.GetStruct(sourceType);
+        var field = definition.Fields.FirstOrDefault(candidate => candidate.Name == expression.FieldName);
+        if (field is not null)
+        {
+            return field.Type;
+        }
+
+        if (TryResolveInstanceMethod(sourceType, expression.FieldName, functions, out var method)
+            && method.InputOwnership == BoundFunctionInputOwnership.Default)
+        {
+            return method.ReturnType;
+        }
+
+        throw Error(
+            expression.Line,
+            expression.Column,
+            $"struct '{definition.Name}' has no field or readonly computed member '{expression.FieldName}'");
+    }
+
+    private BoundType InferBoxExpression(
+        BoxExpression expression,
+        IReadOnlyDictionary<string, BoundFunction> functions,
+        IReadOnlyDictionary<string, BoundType> bindings,
+        bool allowReadIntCall)
+    {
+        var elementType = InferExpression(
+            expression.Value,
+            functions,
+            bindings,
+            allowPrintCall: false,
+            allowReadIntCall,
+            allowFlowBindingTarget: false);
+        var box = _types.Boxes.FirstOrDefault(candidate => candidate.ElementType == elementType)
+            ?? throw Error(
+                expression.Line,
+                expression.Column,
+                $"type {FormatType(elementType)} cannot be boxed in this slice");
+        return box.Id;
+    }
+
+    private BoundType InferAddExpression(
         AddExpression expression,
         IReadOnlyDictionary<string, BoundFunction> functions,
         IReadOnlyDictionary<string, BoundType> bindings,
@@ -965,7 +1593,7 @@ internal sealed class SemanticCompiler(SmallLangProgram program)
         return InferIntegerBinaryExpression(expression.Left, expression.Right, functions, bindings, allowReadIntCall, "+");
     }
 
-    private static BoundType InferMultiplyExpression(
+    private BoundType InferMultiplyExpression(
         MultiplyExpression expression,
         IReadOnlyDictionary<string, BoundFunction> functions,
         IReadOnlyDictionary<string, BoundType> bindings,
@@ -974,7 +1602,7 @@ internal sealed class SemanticCompiler(SmallLangProgram program)
         return InferIntegerBinaryExpression(expression.Left, expression.Right, functions, bindings, allowReadIntCall, "*");
     }
 
-    private static BoundType InferSubtractExpression(
+    private BoundType InferSubtractExpression(
         SubtractExpression expression,
         IReadOnlyDictionary<string, BoundFunction> functions,
         IReadOnlyDictionary<string, BoundType> bindings,
@@ -983,7 +1611,7 @@ internal sealed class SemanticCompiler(SmallLangProgram program)
         return InferIntegerBinaryExpression(expression.Left, expression.Right, functions, bindings, allowReadIntCall, "-");
     }
 
-    private static BoundType InferDivideExpression(
+    private BoundType InferDivideExpression(
         DivideExpression expression,
         IReadOnlyDictionary<string, BoundFunction> functions,
         IReadOnlyDictionary<string, BoundType> bindings,
@@ -992,7 +1620,7 @@ internal sealed class SemanticCompiler(SmallLangProgram program)
         return InferIntegerBinaryExpression(expression.Left, expression.Right, functions, bindings, allowReadIntCall, "/");
     }
 
-    private static BoundType InferModuloExpression(
+    private BoundType InferModuloExpression(
         ModuloExpression expression,
         IReadOnlyDictionary<string, BoundFunction> functions,
         IReadOnlyDictionary<string, BoundType> bindings,
@@ -1001,7 +1629,7 @@ internal sealed class SemanticCompiler(SmallLangProgram program)
         return InferIntegerBinaryExpression(expression.Left, expression.Right, functions, bindings, allowReadIntCall, "%");
     }
 
-    private static BoundType InferNegateExpression(
+    private BoundType InferNegateExpression(
         NegateExpression expression,
         IReadOnlyDictionary<string, BoundFunction> functions,
         IReadOnlyDictionary<string, BoundType> bindings,
@@ -1022,7 +1650,7 @@ internal sealed class SemanticCompiler(SmallLangProgram program)
         return BoundType.Int;
     }
 
-    private static BoundType InferIntegerBinaryExpression(
+    private BoundType InferIntegerBinaryExpression(
         Expression leftExpression,
         Expression rightExpression,
         IReadOnlyDictionary<string, BoundFunction> functions,
@@ -1057,7 +1685,7 @@ internal sealed class SemanticCompiler(SmallLangProgram program)
         return BoundType.Int;
     }
 
-    private static BoundType InferCompareExpression(
+    private BoundType InferCompareExpression(
         CompareExpression expression,
         IReadOnlyDictionary<string, BoundFunction> functions,
         IReadOnlyDictionary<string, BoundType> bindings,
@@ -1091,7 +1719,7 @@ internal sealed class SemanticCompiler(SmallLangProgram program)
         return BoundType.Bool;
     }
 
-    private static BoundType InferLogicalExpression(
+    private BoundType InferLogicalExpression(
         Expression leftExpression,
         Expression rightExpression,
         IReadOnlyDictionary<string, BoundFunction> functions,
@@ -1127,7 +1755,7 @@ internal sealed class SemanticCompiler(SmallLangProgram program)
         return BoundType.Bool;
     }
 
-    private static BoundType InferNotExpression(
+    private BoundType InferNotExpression(
         NotExpression expression,
         IReadOnlyDictionary<string, BoundFunction> functions,
         IReadOnlyDictionary<string, BoundType> bindings,
@@ -1148,11 +1776,12 @@ internal sealed class SemanticCompiler(SmallLangProgram program)
         return BoundType.Bool;
     }
 
-    private static BoundType InferIfExpression(
+    private BoundType InferIfExpression(
         IfExpression expression,
         IReadOnlyDictionary<string, BoundFunction> functions,
         IReadOnlyDictionary<string, BoundType> bindings,
-        bool allowReadIntCall)
+        bool allowReadIntCall,
+        string? allowedOwnedOuterResultName = null)
     {
         var condition = InferExpression(
             expression.Condition,
@@ -1166,7 +1795,12 @@ internal sealed class SemanticCompiler(SmallLangProgram program)
             throw Error(expression.Condition.Line, expression.Condition.Column, "if expects Bool input");
         }
 
-        var thenType = InferBlockBody(expression.Then, functions, bindings, allowReadIntCall);
+        var thenType = InferBlockBody(
+            expression.Then,
+            functions,
+            bindings,
+            allowReadIntCall,
+            allowedOwnedOuterResultName);
         if (expression.Else is null)
         {
             if (thenType != BoundType.Unit)
@@ -1177,7 +1811,12 @@ internal sealed class SemanticCompiler(SmallLangProgram program)
             return BoundType.Unit;
         }
 
-        var elseType = InferBlockBody(expression.Else, functions, bindings, allowReadIntCall);
+        var elseType = InferBlockBody(
+            expression.Else,
+            functions,
+            bindings,
+            allowReadIntCall,
+            allowedOwnedOuterResultName);
         if (thenType != elseType)
         {
             throw Error(
@@ -1189,13 +1828,14 @@ internal sealed class SemanticCompiler(SmallLangProgram program)
         return thenType;
     }
 
-    private static BoundType InferWhenExpression(
+    private BoundType InferWhenExpression(
         WhenExpression expression,
         IReadOnlyDictionary<string, BoundFunction> functions,
         IReadOnlyDictionary<string, BoundType> bindings,
-        bool allowReadIntCall)
+        bool allowReadIntCall,
+        string? allowedOwnedOuterResultName = null)
     {
-        var hasSubjectConditions = expression.Arms.Any(static arm => IsSubjectWhenCondition(arm.Condition));
+        var hasSubjectConditions = expression.Arms.Any(arm => IsSubjectWhenCondition(arm.Condition));
         if (expression.Subject is not null)
         {
             var subjectType = InferExpression(
@@ -1242,7 +1882,12 @@ internal sealed class SemanticCompiler(SmallLangProgram program)
                 throw Error(arm.Condition.Line, arm.Condition.Column, "when arm condition must be Bool");
             }
 
-            var armType = InferBlockBody(arm.Body, functions, bindings, allowReadIntCall);
+            var armType = InferBlockBody(
+                arm.Body,
+                functions,
+                bindings,
+                allowReadIntCall,
+                allowedOwnedOuterResultName);
             resultType ??= armType;
             if (armType != resultType)
             {
@@ -1253,7 +1898,12 @@ internal sealed class SemanticCompiler(SmallLangProgram program)
             }
         }
 
-        var elseType = InferBlockBody(expression.Else, functions, bindings, allowReadIntCall);
+        var elseType = InferBlockBody(
+            expression.Else,
+            functions,
+            bindings,
+            allowReadIntCall,
+            allowedOwnedOuterResultName);
         resultType ??= elseType;
         if (elseType != resultType)
         {
@@ -1266,12 +1916,130 @@ internal sealed class SemanticCompiler(SmallLangProgram program)
         return resultType.Value;
     }
 
-    private static bool IsSubjectWhenCondition(Expression condition)
+    private bool IsSubjectWhenCondition(Expression condition)
     {
         return condition is SubjectCompareExpression or SubjectRangeExpression;
     }
 
-    private static BoundType InferSubjectWhenCondition(
+    private BoundType InferEnumMatchExpression(
+        EnumMatchExpression expression,
+        IReadOnlyDictionary<string, BoundFunction> functions,
+        IReadOnlyDictionary<string, BoundType> bindings,
+        bool allowReadIntCall,
+        string? allowedOwnedOuterResultName)
+    {
+        var subjectType = InferExpression(
+            expression.Subject,
+            functions,
+            bindings,
+            allowPrintCall: false,
+            allowReadIntCall,
+            allowFlowBindingTarget: false);
+        if (!_types.IsEnum(subjectType))
+        {
+            throw Error(expression.Subject.Line, expression.Subject.Column, "enum pattern matching expects an enum subject");
+        }
+
+        var definition = _types.GetEnum(subjectType);
+        var covered = new HashSet<string>(StringComparer.Ordinal);
+        BoundType? resultType = null;
+        foreach (var arm in expression.Arms)
+        {
+            var pattern = (EnumPatternExpression)arm.Condition;
+            if (!_types.TryResolve(pattern.TypeName, out var patternType) || patternType != subjectType)
+            {
+                throw Error(
+                    pattern.Line,
+                    pattern.Column,
+                    $"pattern type '{pattern.TypeName}' does not match enum '{definition.Name}'");
+            }
+
+            var variant = definition.Variants.FirstOrDefault(candidate => candidate.Name == pattern.VariantName)
+                ?? throw Error(
+                    pattern.Line,
+                    pattern.Column,
+                    $"enum '{definition.Name}' has no variant '{pattern.VariantName}'");
+            if (!covered.Add(variant.Name))
+            {
+                throw Error(pattern.Line, pattern.Column, $"variant '{definition.Name}.{variant.Name}' is matched more than once");
+            }
+
+            var armBindings = new Dictionary<string, BoundType>(bindings, StringComparer.Ordinal);
+            if (variant.PayloadType is { } payloadType)
+            {
+                if (pattern.BindingName is null)
+                {
+                    throw Error(
+                        pattern.Line,
+                        pattern.Column,
+                        $"variant '{definition.Name}.{variant.Name}' requires a payload binding");
+                }
+
+                ValidateBindingName(pattern.BindingName, pattern.Line, pattern.Column);
+                armBindings[pattern.BindingName] = payloadType;
+            }
+            else if (pattern.BindingName is not null)
+            {
+                throw Error(
+                    pattern.Line,
+                    pattern.Column,
+                    $"variant '{definition.Name}.{variant.Name}' has no payload to bind");
+            }
+
+            var armType = InferBlockBody(
+                arm.Body,
+                functions,
+                armBindings,
+                allowReadIntCall,
+                allowedOwnedOuterResultName);
+            resultType ??= armType;
+            if (armType != resultType)
+            {
+                throw Error(
+                    arm.Line,
+                    arm.Column,
+                    $"enum when arms must return the same type, got {FormatType(resultType.Value)} and {FormatType(armType)}");
+            }
+        }
+
+        if (expression.Else is null)
+        {
+            var missing = definition.Variants.Where(variant => !covered.Contains(variant.Name)).ToArray();
+            if (missing.Length > 0)
+            {
+                throw Error(
+                    expression.Line,
+                    expression.Column,
+                    $"non-exhaustive enum when; missing {string.Join(", ", missing.Select(variant => definition.Name + "." + variant.Name))}");
+            }
+        }
+        else
+        {
+            if (covered.Count == definition.Variants.Count)
+            {
+                throw Error(expression.Else.Line, expression.Else.Column, "enum when else arm is unreachable because all variants are covered");
+            }
+
+            var elseType = InferBlockBody(
+                expression.Else,
+                functions,
+                bindings,
+                allowReadIntCall,
+                allowedOwnedOuterResultName);
+            resultType ??= elseType;
+            if (elseType != resultType)
+            {
+                throw Error(
+                    expression.Else.Line,
+                    expression.Else.Column,
+                    $"enum when else must return {FormatType(resultType.Value)} but returns {FormatType(elseType)}");
+            }
+        }
+
+        return resultType ?? BoundType.Unit;
+    }
+
+    private BoundType InferSubjectWhenCondition(
         Expression condition,
         IReadOnlyDictionary<string, BoundFunction> functions,
         IReadOnlyDictionary<string, BoundType> bindings,
@@ -1326,7 +2094,7 @@ internal sealed class SemanticCompiler(SmallLangProgram program)
         return BoundType.Bool;
     }
 
-    private static BoundType InferFoldExpression(
+    private BoundType InferFoldExpression(
         FoldExpression expression,
         IReadOnlyDictionary<string, BoundFunction> functions,
         IReadOnlyDictionary<string, BoundType> bindings,
@@ -1384,7 +2152,7 @@ internal sealed class SemanticCompiler(SmallLangProgram program)
                 allowPrintCall: false,
                 allowReadIntCall,
                 allowFlowBindingTarget: false);
-            if (sourceType is not (BoundType.StaticIntArray or BoundType.DynamicIntArray))
+            if (!IsReadonlyIntViewCompatible(sourceType))
             {
                 throw Error(expression.Source.Line, expression.Source.Column, "fold expects a range or Int array input");
             }
@@ -1416,26 +2184,51 @@ internal sealed class SemanticCompiler(SmallLangProgram program)
         return BoundType.Int;
     }
 
-    private static BoundType InferBlockBody(
+    private BoundType InferBlockBody(
         BlockBody body,
         IReadOnlyDictionary<string, BoundFunction> functions,
         IReadOnlyDictionary<string, BoundType> bindings,
-        bool allowReadIntCall)
+        bool allowReadIntCall,
+        string? allowedOwnedOuterResultName = null)
     {
         var bodyBindings = new Dictionary<string, BoundType>(bindings, StringComparer.Ordinal);
-        BindStatements(body.Statements, functions, bodyBindings, allowContainerBindings: false);
-        return body.Value is null
-            ? BoundType.Unit
-            : InferExpression(
+        var bodyMutableBindings = new HashSet<string>(StringComparer.Ordinal);
+        BindStatements(body.Statements, functions, bodyBindings, bodyMutableBindings, allowContainerBindings: true);
+        if (body.Value is null)
+        {
+            return BoundType.Unit;
+        }
+
+        var resultType = InferExpression(
+            body.Value,
+            functions,
+            bodyBindings,
+            allowPrintCall: false,
+            allowReadIntCall,
+            allowFlowBindingTarget: false,
+            mutableBindings: bodyMutableBindings,
+            allowedOwnedOuterResultName: allowedOwnedOuterResultName);
+        if (resultType == BoundType.StaticIntArray)
+        {
+            throw Error(
+                body.Value.Line,
+                body.Value.Column,
+                "static array block results are not supported yet; use a growable array or keep the static array inside the block");
+        }
+
+        if (IsContainerType(resultType))
+        {
+            EnsureOwnedContainerCanLeaveBlock(
                 body.Value,
-                functions,
+                bindings,
                 bodyBindings,
-                allowPrintCall: false,
-                allowReadIntCall,
-                allowFlowBindingTarget: false);
+                allowedOwnedOuterResultName);
+        }
+
+        return resultType;
     }
 
-    private static FlowResult InferFlowExpression(
+    private FlowResult InferFlowExpression(
         FlowExpression expression,
         IReadOnlyDictionary<string, BoundFunction> functions,
         IReadOnlyDictionary<string, BoundType> bindings,
@@ -1445,7 +2238,7 @@ internal sealed class SemanticCompiler(SmallLangProgram program)
         IReadOnlySet<string>? mutableBindings = null)
     {
         var currentType = InferFlowSource(expression.Source, functions, bindings, allowReadIntCall);
-        if (IsOwnedHeapContainerCreationExpression(expression.Source))
+        if (IsOwnedHeapType(currentType) && IsAnonymousOwnedHeapContainerExpression(expression.Source))
         {
             throw Error(
                 expression.Source.Line,
@@ -1508,7 +2301,8 @@ internal sealed class SemanticCompiler(SmallLangProgram program)
                 return new FlowResult(BoundType.Unit, FlowEffect.None);
             }
 
-            if (functions.TryGetValue(path, out var function))
+            if (functions.TryGetValue(path, out var function)
+                || TryResolveInstanceMethod(currentType, path, functions, out function))
             {
                 if (target.Arguments.Count != 0)
                 {
@@ -1575,6 +2369,11 @@ internal sealed class SemanticCompiler(SmallLangProgram program)
                     case BoundFunctionKind.RuntimeCloseIntReader:
                         throw Error(expression.Line, expression.Column, $"{path} does not accept a flowed input");
                     case BoundFunctionKind.User:
+                        if (function.GenericParameterName is not null && function.SpecializedType is null)
+                        {
+                            function = ResolveGenericSpecialization(function, currentType, functions, target);
+                        }
+
                         if (IsMainOnlyRuntimeWrapper(function) && !allowReadIntCall)
                         {
                             throw Error(expression.Line, expression.Column, $"{path} is only valid in main for the current runtime slice");
@@ -1585,12 +2384,25 @@ internal sealed class SemanticCompiler(SmallLangProgram program)
                             throw Error(expression.Line, expression.Column, $"function '{path}' does not accept a flowed input");
                         }
 
-                        if (currentType != function.InputType)
-                        {
-                            throw Error(
+                if (currentType != function.InputType)
+                {
+                            if (!CanPassFunctionArgument(currentType, function.InputType.Value))
+                            {
+                                throw Error(
                                 expression.Line,
                                 expression.Column,
                                 $"function '{path}' expects {FormatType(function.InputType.Value)} but received {FormatType(currentType)}");
+                            }
+                        }
+
+                        if (FunctionMovesOwnedHeapInput(function))
+                        {
+                            EnsureOwnedParameterFlowSource(expression.Source, path);
+                        }
+
+                        if (FunctionMutablyBorrowsInput(function))
+                        {
+                            EnsureMutableBorrowFlowSource(expression.Source, path, mutableBindings);
                         }
 
                         currentType = function.ReturnType;
@@ -1606,7 +2418,7 @@ internal sealed class SemanticCompiler(SmallLangProgram program)
         return new FlowResult(currentType, FlowEffect.None);
     }
 
-    private static bool TryInferContainerFlowTarget(
+    private bool TryInferContainerFlowTarget(
         FlowExpression expression,
         FlowTarget target,
         string path,
@@ -1627,7 +2439,11 @@ internal sealed class SemanticCompiler(SmallLangProgram program)
                     throw Error(target.Line, target.Column, "len does not accept arguments");
                 }
 
-                if (currentType is not (BoundType.StaticIntArray or BoundType.DynamicIntArray or BoundType.IntDictionary))
+                if (currentType is not (BoundType.IntSlice
+                    or BoundType.StaticIntArray
+                    or BoundType.DynamicIntArray
+                    or BoundType.IntDictionaryView
+                    or BoundType.IntDictionary))
                 {
                     return false;
                 }
@@ -1640,7 +2456,9 @@ internal sealed class SemanticCompiler(SmallLangProgram program)
                     throw Error(target.Line, target.Column, "capacity does not accept arguments");
                 }
 
-                if (currentType is not (BoundType.DynamicIntArray or BoundType.IntDictionary))
+                if (currentType is not (BoundType.DynamicIntArray
+                    or BoundType.IntDictionaryView
+                    or BoundType.IntDictionary))
                 {
                     return false;
                 }
@@ -1712,6 +2530,14 @@ internal sealed class SemanticCompiler(SmallLangProgram program)
                 result = new FlowResult(BoundType.DynamicIntArray, FlowEffect.None);
                 return true;
             case "put":
+                if (currentType == BoundType.IntDictionaryView)
+                {
+                    throw Error(
+                        target.Line,
+                        target.Column,
+                        "put is not available on a readonly dictionary parameter; use 'mut {Int: Int}'");
+                }
+
                 if (currentType != BoundType.IntDictionary)
                 {
                     return false;
@@ -1747,6 +2573,14 @@ internal sealed class SemanticCompiler(SmallLangProgram program)
                 result = new FlowResult(BoundType.Unit, FlowEffect.None);
                 return true;
             case "updated":
+                if (currentType == BoundType.IntDictionaryView)
+                {
+                    throw Error(
+                        target.Line,
+                        target.Column,
+                        "updated consumes a dictionary owner and is not available on a readonly dictionary parameter; use 'move {Int: Int}'");
+                }
+
                 if (currentType is not (BoundType.DynamicIntArray or BoundType.IntDictionary))
                 {
                     return false;
@@ -1786,7 +2620,7 @@ internal sealed class SemanticCompiler(SmallLangProgram program)
         }
     }
 
-    private static BoundType InferFlowSource(
+    private BoundType InferFlowSource(
         Expression source,
         IReadOnlyDictionary<string, BoundFunction> functions,
         IReadOnlyDictionary<string, BoundType> bindings,
@@ -1801,17 +2635,45 @@ internal sealed class SemanticCompiler(SmallLangProgram program)
             allowFlowBindingTarget: false);
     }
 
-    private static BoundType InferCallExpression(
+    private BoundType InferCallExpression(
         CallExpression expression,
         IReadOnlyDictionary<string, BoundFunction> functions,
         IReadOnlyDictionary<string, BoundType> bindings,
         bool allowPrintCall,
-        bool allowReadIntCall)
+        bool allowReadIntCall,
+        IReadOnlySet<string>? mutableBindings)
     {
+        if (TryInferEnumConstructor(expression, functions, bindings, allowReadIntCall, out var enumType))
+        {
+            return enumType;
+        }
+
         var path = string.Join('.', expression.Path);
+        string? receiverName = null;
+        BoundType? receiverType = null;
         if (!functions.TryGetValue(path, out var function))
         {
-            throw Error(expression.Line, expression.Column, $"unknown function '{path}'");
+            if (!TryResolveInstanceMethodCall(
+                expression.Path,
+                functions,
+                bindings,
+                out function,
+                out receiverName,
+                out receiverType))
+            {
+                throw Error(expression.Line, expression.Column, $"unknown function or method '{path}'");
+            }
+        }
+
+        if (expression.Path.Count == 2
+            && function.InputType is null
+            && _types.TryResolve(expression.Path[0], out var associatedType)
+            && _types.IsStruct(associatedType))
+        {
+            throw Error(
+                expression.Line,
+                expression.Column,
+                $"zero-argument associated member '{path}' uses property syntax without parentheses: '{path}'");
         }
 
         switch (function.Kind)
@@ -1903,18 +2765,274 @@ internal sealed class SemanticCompiler(SmallLangProgram program)
 
                 return BoundType.Int;
             case BoundFunctionKind.User:
-                return InferUserCallExpression(expression, function, functions, bindings, allowReadIntCall, path);
+                if (function.GenericParameterName is not null && function.SpecializedType is null)
+                {
+                    return InferGenericCallExpression(
+                        expression,
+                        function,
+                        functions,
+                        bindings,
+                        allowReadIntCall);
+                }
+
+                if (receiverName is not null && receiverType is not null)
+                {
+                    throw Error(
+                        expression.Line,
+                        expression.Column,
+                        $"zero-argument method '{path}' uses property syntax without parentheses: '{path}'");
+                }
+
+                return InferUserCallExpression(expression, function, functions, bindings, allowReadIntCall, mutableBindings, path);
             default:
                 throw Error(expression.Line, expression.Column, $"unsupported function kind '{function.Kind}'");
         }
     }
 
-    private static BoundType InferUserCallExpression(
+    private BoundType InferGenericCallExpression(
+        CallExpression expression,
+        BoundFunction template,
+        IReadOnlyDictionary<string, BoundFunction> functions,
+        IReadOnlyDictionary<string, BoundType> bindings,
+        bool allowReadIntCall)
+    {
+        if (expression.Arguments.Count != 1)
+        {
+            throw Error(expression.Line, expression.Column, $"generic function '{template.Name}' expects one argument");
+        }
+
+        var actualType = InferExpression(
+            expression.Arguments[0],
+            functions,
+            bindings,
+            allowPrintCall: false,
+            allowReadIntCall,
+            allowFlowBindingTarget: false);
+        var specialization = ResolveGenericSpecialization(template, actualType, functions, expression);
+        return specialization.ReturnType;
+    }
+
+    private BoundFunction ResolveGenericSpecialization(
+        BoundFunction template,
+        BoundType actualType,
+        IReadOnlyDictionary<string, BoundFunction> functions,
+        object callSite)
+    {
+        if (actualType is BoundType.Unit
+            or BoundType.IntSlice
+            or BoundType.StaticIntArray
+            or BoundType.DynamicIntArray
+            or BoundType.IntDictionaryView
+            or BoundType.IntDictionary)
+        {
+            throw new SmallLangException(
+                $"generic function '{template.Name}' does not yet support {FormatType(actualType)} specialization");
+        }
+
+        if (template.GenericTraitBound is { } traitBound
+            && !functions.Values.Any(candidate => candidate.TraitName == traitBound
+                && candidate.InputType == actualType))
+        {
+            throw new SmallLangException(
+                $"type {FormatType(actualType)} does not implement trait '{traitBound}' required by '{template.Name}'");
+        }
+
+        var specializedName = template.Name + "$" + ((int)actualType).ToString(System.Globalization.CultureInfo.InvariantCulture);
+        if (_boundFunctions is null)
+        {
+            throw new InvalidOperationException("generic specialization requires bound functions");
+        }
+
+        if (!_boundFunctions.TryGetValue(specializedName, out var specialization))
+        {
+            specialization = template with
+            {
+                Name = specializedName,
+                InputType = actualType,
+                ReturnType = template.ReturnType == BoundType.GenericParameter
+                    ? actualType
+                    : template.ReturnType,
+                SpecializedType = actualType
+            };
+            _boundFunctions.Add(specializedName, specialization);
+            if (_validatingGenericSpecializations.Add(specialization))
+            {
+                ValidateUserFunction(
+                    specialization,
+                    _boundFunctions,
+                    new Dictionary<string, BoundType>(StringComparer.Ordinal));
+            }
+        }
+
+        _resolvedGenericCalls[callSite] = specialization;
+        return specialization;
+    }
+
+    private bool TryInferEnumConstructor(
+        CallExpression expression,
+        IReadOnlyDictionary<string, BoundFunction> functions,
+        IReadOnlyDictionary<string, BoundType> bindings,
+        bool allowReadIntCall,
+        out BoundType type)
+    {
+        type = default;
+        if (expression.Path.Count != 2
+            || !_types.TryResolve(expression.Path[0], out type)
+            || !_types.IsEnum(type))
+        {
+            return false;
+        }
+
+        var definition = _types.GetEnum(type);
+        var variant = definition.Variants.FirstOrDefault(candidate => candidate.Name == expression.Path[1])
+            ?? throw Error(
+                expression.Line,
+                expression.Column,
+                $"enum '{definition.Name}' has no variant '{expression.Path[1]}'");
+        if (variant.PayloadType is null)
+        {
+            throw Error(
+                expression.Line,
+                expression.Column,
+                $"payload-free variant '{definition.Name}.{variant.Name}' uses member syntax without parentheses");
+        }
+
+        var expectedCount = variant.PayloadType is null ? 0 : 1;
+        if (expression.Arguments.Count != expectedCount)
+        {
+            throw Error(
+                expression.Line,
+                expression.Column,
+                $"variant '{definition.Name}.{variant.Name}' expects {expectedCount} payload argument(s)");
+        }
+
+        if (variant.PayloadType is { } payloadType)
+        {
+            var actualType = InferExpression(
+                expression.Arguments[0],
+                functions,
+                bindings,
+                allowPrintCall: false,
+                allowReadIntCall,
+                allowFlowBindingTarget: false);
+            if (actualType != payloadType)
+            {
+                throw Error(
+                    expression.Arguments[0].Line,
+                    expression.Arguments[0].Column,
+                    $"variant '{definition.Name}.{variant.Name}' expects {FormatType(payloadType)}, got {FormatType(actualType)}");
+            }
+        }
+
+        return true;
+    }
+
+    private BoundType InferUserMethodCallExpression(
+        CallExpression expression,
+        BoundFunction function,
+        string receiverName,
+        BoundType receiverType,
+        string path)
+    {
+        if (expression.Arguments.Count != 0)
+        {
+            throw Error(
+                expression.Line,
+                expression.Column,
+                $"method '{path}' does not accept additional arguments in this slice");
+        }
+
+        if (function.InputType != receiverType)
+        {
+            throw Error(
+                expression.Line,
+                expression.Column,
+                $"method '{path}' cannot be called on {FormatType(receiverType)} value '{receiverName}'");
+        }
+
+        return function.ReturnType;
+    }
+
+    private bool TryResolveInstanceMethodCall(
+        IReadOnlyList<string> path,
+        IReadOnlyDictionary<string, BoundFunction> functions,
+        IReadOnlyDictionary<string, BoundType> bindings,
+        out BoundFunction function,
+        out string? receiverName,
+        out BoundType? receiverType)
+    {
+        function = null!;
+        receiverName = null;
+        receiverType = null;
+        if (path.Count != 2 || !bindings.TryGetValue(path[0], out var type))
+        {
+            return false;
+        }
+
+        if (!TryResolveInstanceMethod(type, path[1], functions, out function))
+        {
+            return false;
+        }
+
+        receiverName = path[0];
+        receiverType = type;
+        return true;
+    }
+
+    private bool TryResolveInstanceMethod(
+        BoundType receiverType,
+        string methodName,
+        IReadOnlyDictionary<string, BoundFunction> functions,
+        out BoundFunction function)
+    {
+        function = null!;
+        if (!_types.IsStruct(receiverType))
+        {
+            return false;
+        }
+
+        var typeName = _types.GetStruct(receiverType).Name;
+        if (methodName.Contains('.', StringComparison.Ordinal))
+        {
+            var parts = methodName.Split('.');
+            return parts.Length == 2
+                && functions.TryGetValue(parts[0] + "." + typeName + "." + parts[1], out function!)
+                && function.InputType == receiverType;
+        }
+
+        var inherentName = typeName + "." + methodName;
+        if (functions.TryGetValue(inherentName, out function!) && function.InputType == receiverType)
+        {
+            return true;
+        }
+
+        var candidates = functions.Values
+            .Where(candidate => candidate.TraitName is not null
+                && candidate.InputType == receiverType
+                && candidate.Name.EndsWith("." + methodName, StringComparison.Ordinal))
+            .Distinct()
+            .ToArray();
+        if (candidates.Length > 1)
+        {
+            throw new SmallLangException(
+                $"ambiguous trait member '{typeName}.{methodName}'; use 'value -> Trait.{methodName}'");
+        }
+        if (candidates.Length == 1)
+        {
+            function = candidates[0];
+            return true;
+        }
+
+        return false;
+    }
+
+    private BoundType InferUserCallExpression(
         CallExpression expression,
         BoundFunction function,
         IReadOnlyDictionary<string, BoundFunction> functions,
         IReadOnlyDictionary<string, BoundType> bindings,
         bool allowReadIntCall,
+        IReadOnlySet<string>? mutableBindings,
         string path)
     {
         if (IsMainOnlyRuntimeWrapper(function) && !allowReadIntCall)
@@ -1944,7 +3062,7 @@ internal sealed class SemanticCompiler(SmallLangProgram program)
             allowPrintCall: false,
             allowReadIntCall,
             allowFlowBindingTarget: false);
-        if (argumentType != function.InputType)
+        if (!CanPassFunctionArgument(argumentType, function.InputType.Value))
         {
             throw Error(
                 expression.Line,
@@ -1952,10 +3070,25 @@ internal sealed class SemanticCompiler(SmallLangProgram program)
                 $"function '{path}' expects {FormatType(function.InputType.Value)} but received {FormatType(argumentType)}");
         }
 
+        if (FunctionMovesOwnedHeapInput(function))
+        {
+            EnsureOwnedParameterCallArgument(expression.Arguments[0], path);
+        }
+
+        if (FunctionMutablyBorrowsInput(function))
+        {
+            EnsureMutableBorrowCallArgument(expression.Arguments[0], path, mutableBindings);
+        }
+
+        if (FunctionReadonlyBorrowsHeapInput(function, argumentType))
+        {
+            EnsureReadonlyBorrowCallArgument(expression.Arguments[0], path);
+        }
+
         return function.ReturnType;
     }
 
-    private static void EnsureDisplayable(BoundType type, int line, int column, string path)
+    private void EnsureDisplayable(BoundType type, int line, int column, string path)
     {
         if (type is not (BoundType.Text or BoundType.Int))
         {
@@ -1963,7 +3096,7 @@ internal sealed class SemanticCompiler(SmallLangProgram program)
         }
     }
 
-    private static bool IsMainOnlyRuntimeWrapper(BoundFunction function)
+    private bool IsMainOnlyRuntimeWrapper(BoundFunction function)
     {
         return function.Name is "sys.io.readInt"
             or "sys.random.seed"
@@ -1977,7 +3110,7 @@ internal sealed class SemanticCompiler(SmallLangProgram program)
             or "sys.time.nowMillis";
     }
 
-    private static void EnsureRuntimeIntrinsicAllowed(
+    private void EnsureRuntimeIntrinsicAllowed(
         BoundFunction function,
         bool allowRuntimeCall,
         int line,
@@ -1990,7 +3123,7 @@ internal sealed class SemanticCompiler(SmallLangProgram program)
         }
     }
 
-    private static void EnsureRuntimeInput(
+    private void EnsureRuntimeInput(
         BoundType actualType,
         BoundFunction function,
         int line,
@@ -2011,7 +3144,7 @@ internal sealed class SemanticCompiler(SmallLangProgram program)
         }
     }
 
-    private static BoundType ResolveBindingType(
+    private BoundType ResolveBindingType(
         string name,
         IReadOnlyDictionary<string, BoundType> bindings,
         int line,
@@ -2022,7 +3155,7 @@ internal sealed class SemanticCompiler(SmallLangProgram program)
             : throw Error(line, column, $"unknown binding '{name}'");
     }
 
-    private static BoundType InferNameExpression(
+    private BoundType InferNameExpression(
         NameExpression expression,
         IReadOnlyDictionary<string, BoundFunction> functions,
         IReadOnlyDictionary<string, BoundType> bindings)
@@ -2043,7 +3176,7 @@ internal sealed class SemanticCompiler(SmallLangProgram program)
         throw Error(expression.Line, expression.Column, $"unknown binding '{expression.Name}'");
     }
 
-    private static void ValidateBindingName(string name, int line, int column)
+    private void ValidateBindingName(string name, int line, int column)
     {
         if (IsReservedName(name))
         {
@@ -2051,7 +3184,7 @@ internal sealed class SemanticCompiler(SmallLangProgram program)
         }
     }
 
-    private static bool IsReservedName(string name)
+    private bool IsReservedName(string name)
     {
         return name is "main"
             or "sys"
@@ -2084,57 +3217,444 @@ internal sealed class SemanticCompiler(SmallLangProgram program)
             or "yield"
             or "namespace"
             or "import"
+            or "struct"
+            or "enum"
+            or "trait"
+            or "impl"
+            or "for"
+            or "self"
             or "as"
+            or "move"
             or "mut";
     }
 
-    private static BoundType ParseType(string typeName, int line, int column)
+    private TypeDefinitionTable BuildTypeDefinitions(
+        IReadOnlyList<StructDeclaration> structDeclarations,
+        IReadOnlyList<EnumDeclaration> enumDeclarations)
     {
-        return typeName switch
+        var names = new Dictionary<string, TypeId>(StringComparer.Ordinal)
         {
-            "Unit" => BoundType.Unit,
-            "Text" => BoundType.Text,
-            "Int" => BoundType.Int,
-            "Bool" => BoundType.Bool,
-            _ => throw Error(line, column, $"unknown type '{typeName}'")
+            ["Unit"] = BoundType.Unit,
+            ["Text"] = BoundType.Text,
+            ["Int"] = BoundType.Int,
+            ["Bool"] = BoundType.Bool,
+            ["[Int]"] = BoundType.IntSlice,
+            ["[Int; ~]"] = BoundType.DynamicIntArray,
+            ["{Int: Int}"] = BoundType.IntDictionary
+        };
+        var structTypes = new Dictionary<StructDeclaration, TypeId>(ReferenceEqualityComparer.Instance);
+        var enumTypes = new Dictionary<EnumDeclaration, TypeId>(ReferenceEqualityComparer.Instance);
+        var nextTypeId = (int)TypeId.FirstUserDefined;
+
+        foreach (var declaration in structDeclarations)
+        {
+            if (IsReservedName(declaration.Name))
+            {
+                throw Error(declaration.Line, declaration.Column, $"type name '{declaration.Name}' is reserved");
+            }
+
+            var id = (TypeId)nextTypeId++;
+            if (!names.TryAdd(declaration.Name, id))
+            {
+                throw Error(declaration.Line, declaration.Column, $"type '{declaration.Name}' already exists");
+            }
+
+            structTypes.Add(declaration, id);
+        }
+
+        foreach (var declaration in enumDeclarations)
+        {
+            if (IsReservedName(declaration.Name))
+            {
+                throw Error(declaration.Line, declaration.Column, $"type name '{declaration.Name}' is reserved");
+            }
+
+            var id = (TypeId)nextTypeId++;
+            if (!names.TryAdd(declaration.Name, id))
+            {
+                throw Error(declaration.Line, declaration.Column, $"type '{declaration.Name}' already exists");
+            }
+
+            enumTypes.Add(declaration, id);
+        }
+
+        var boxes = new Dictionary<TypeId, BoundBoxDefinition>();
+        var boxableTypes = names
+            .Where(item => item.Value is TypeId.Int or TypeId.Bool or TypeId.Text
+                || structTypes.Values.Contains(item.Value)
+                || enumTypes.Values.Contains(item.Value))
+            .OrderBy(item => (int)item.Value)
+            .ToArray();
+        foreach (var (name, elementType) in boxableTypes)
+        {
+            var id = (TypeId)nextTypeId++;
+            names.Add("box " + name, id);
+            boxes.Add(id, new BoundBoxDefinition(id, elementType, Size: 0, Alignment: 1));
+        }
+
+        var structs = new Dictionary<TypeId, BoundStructDefinition>();
+        foreach (var declaration in structDeclarations)
+        {
+            var fields = new List<BoundStructField>(declaration.Fields.Count);
+            var fieldNames = new HashSet<string>(StringComparer.Ordinal);
+            for (var index = 0; index < declaration.Fields.Count; index++)
+            {
+                var field = declaration.Fields[index];
+                ValidateBindingName(field.Name, field.Line, field.Column);
+                if (!fieldNames.Add(field.Name))
+                {
+                    throw Error(field.Line, field.Column, $"field '{field.Name}' already exists in struct '{declaration.Name}'");
+                }
+
+                if (!names.TryGetValue(field.TypeName, out var fieldType))
+                {
+                    throw Error(field.Line, field.Column, $"unknown type '{field.TypeName}'");
+                }
+
+                if (fieldType is TypeId.Unit
+                    or TypeId.IntSlice
+                    or TypeId.StaticIntArray
+                    or TypeId.DynamicIntArray
+                    or TypeId.IntDictionaryView
+                    or TypeId.IntDictionary)
+                {
+                    throw Error(
+                        field.Line,
+                        field.Column,
+                        $"struct field '{field.Name}' must be an inline value type");
+                }
+
+                fields.Add(new BoundStructField(field.Name, fieldType, index, field.Line, field.Column));
+            }
+
+            var id = structTypes[declaration];
+            structs.Add(id, new BoundStructDefinition(
+                id,
+                declaration.Name,
+                fields,
+                declaration.Line,
+                declaration.Column));
+        }
+
+        var enums = new Dictionary<TypeId, BoundEnumDefinition>();
+        foreach (var declaration in enumDeclarations)
+        {
+            if (declaration.Variants.Count == 0)
+            {
+                throw Error(declaration.Line, declaration.Column, $"enum '{declaration.Name}' requires at least one variant");
+            }
+
+            var variants = new List<BoundEnumVariant>(declaration.Variants.Count);
+            var variantNames = new HashSet<string>(StringComparer.Ordinal);
+            for (var tag = 0; tag < declaration.Variants.Count; tag++)
+            {
+                var variant = declaration.Variants[tag];
+                if (!variantNames.Add(variant.Name))
+                {
+                    throw Error(
+                        variant.Line,
+                        variant.Column,
+                        $"variant '{variant.Name}' already exists in enum '{declaration.Name}'");
+                }
+
+                TypeId? payloadType = null;
+                if (variant.PayloadType is not null)
+                {
+                    if (!names.TryGetValue(variant.PayloadType, out var resolvedPayloadType))
+                    {
+                        throw Error(variant.Line, variant.Column, $"unknown type '{variant.PayloadType}'");
+                    }
+
+                    if (resolvedPayloadType is TypeId.Unit
+                        or TypeId.IntSlice
+                        or TypeId.StaticIntArray
+                        or TypeId.DynamicIntArray
+                        or TypeId.IntDictionaryView
+                        or TypeId.IntDictionary)
+                    {
+                        throw Error(
+                            variant.Line,
+                            variant.Column,
+                            $"enum variant '{variant.Name}' payload must be an inline value type");
+                    }
+
+                    payloadType = resolvedPayloadType;
+                }
+
+                variants.Add(new BoundEnumVariant(
+                    variant.Name,
+                    payloadType,
+                    tag,
+                    variant.Line,
+                    variant.Column));
+            }
+
+            var id = enumTypes[declaration];
+            enums.Add(id, new BoundEnumDefinition(
+                id,
+                declaration.Name,
+                variants,
+                PayloadWords: 0,
+                declaration.Line,
+                declaration.Column));
+        }
+
+        ValidateAcyclicValueTypes(structs, enums);
+        foreach (var (id, definition) in enums.ToArray())
+        {
+            var payloadBytes = definition.Variants
+                .Where(static variant => variant.PayloadType is not null)
+                .Select(variant => InlineSize(variant.PayloadType!.Value, structs, enums, boxes))
+                .DefaultIfEmpty(0)
+                .Max();
+            enums[id] = definition with { PayloadWords = (payloadBytes + 7) / 8 };
+        }
+
+        foreach (var (id, definition) in boxes.ToArray())
+        {
+            var size = InlineSize(definition.ElementType, structs, enums, boxes);
+            boxes[id] = definition with
+            {
+                Size = size,
+                Alignment = Math.Min(Math.Max(size, 1), 8)
+            };
+        }
+
+        return new TypeDefinitionTable(names, structs, enums, boxes);
+    }
+
+    private void ValidateAcyclicValueTypes(
+        IReadOnlyDictionary<TypeId, BoundStructDefinition> structs,
+        IReadOnlyDictionary<TypeId, BoundEnumDefinition> enums)
+    {
+        var states = new Dictionary<TypeId, int>();
+        foreach (var definition in structs.Values)
+        {
+            Visit(definition.Id, definition.Name, definition.Line, definition.Column);
+        }
+        foreach (var definition in enums.Values)
+        {
+            Visit(definition.Id, definition.Name, definition.Line, definition.Column);
+        }
+
+        void Visit(TypeId id, string name, int line, int column)
+        {
+            if (states.TryGetValue(id, out var state))
+            {
+                if (state == 1)
+                {
+                    throw Error(
+                        line,
+                        column,
+                        $"type '{name}' recursively contains itself; recursive values require an explicit heap reference type");
+                }
+
+                return;
+            }
+
+            states[id] = 1;
+            if (structs.TryGetValue(id, out var structure))
+            {
+                foreach (var field in structure.Fields)
+                {
+                    VisitDependency(field.Type);
+                }
+            }
+            else if (enums.TryGetValue(id, out var enumeration))
+            {
+                foreach (var variant in enumeration.Variants)
+                {
+                    if (variant.PayloadType is { } payloadType)
+                    {
+                        VisitDependency(payloadType);
+                    }
+                }
+            }
+
+            states[id] = 2;
+
+            void VisitDependency(TypeId dependency)
+            {
+                if (structs.TryGetValue(dependency, out var nestedStruct))
+                {
+                    Visit(nestedStruct.Id, nestedStruct.Name, nestedStruct.Line, nestedStruct.Column);
+                }
+                else if (enums.TryGetValue(dependency, out var nestedEnum))
+                {
+                    Visit(nestedEnum.Id, nestedEnum.Name, nestedEnum.Line, nestedEnum.Column);
+                }
+            }
+        }
+    }
+
+    private int InlineSize(
+        TypeId type,
+        IReadOnlyDictionary<TypeId, BoundStructDefinition> structs,
+        IReadOnlyDictionary<TypeId, BoundEnumDefinition> enums,
+        IReadOnlyDictionary<TypeId, BoundBoxDefinition> boxes)
+    {
+        if (boxes.ContainsKey(type))
+        {
+            return 8;
+        }
+
+        if (structs.TryGetValue(type, out var structure))
+        {
+            var offset = 0;
+            var maxAlignment = 1;
+            foreach (var field in structure.Fields)
+            {
+                var size = InlineSize(field.Type, structs, enums, boxes);
+                var alignment = Math.Min(Math.Max(size, 1), 8);
+                offset = AlignUp(offset, alignment);
+                offset += size;
+                maxAlignment = Math.Max(maxAlignment, alignment);
+            }
+
+            return AlignUp(offset, maxAlignment);
+        }
+
+        if (enums.TryGetValue(type, out var enumeration))
+        {
+            var payloadBytes = enumeration.Variants
+                .Where(static variant => variant.PayloadType is not null)
+                .Select(variant => InlineSize(variant.PayloadType!.Value, structs, enums, boxes))
+                .DefaultIfEmpty(0)
+                .Max();
+            return 8 + AlignUp(payloadBytes, 8);
+        }
+
+        return type switch
+        {
+            TypeId.Bool => 1,
+            TypeId.Int => 8,
+            TypeId.Text => 16,
+            _ => throw new InvalidOperationException($"type {type} has no inline size")
         };
     }
 
-    private static string FormatType(BoundType type)
+    private int AlignUp(int value, int alignment)
     {
+        return checked((value + alignment - 1) / alignment * alignment);
+    }
+
+    private BoundType ParseType(string typeName, int line, int column)
+    {
+        return _types.TryResolve(typeName, out var type)
+            ? type
+            : throw Error(line, column, $"unknown type '{typeName}'");
+    }
+
+    private BoundType ParseFunctionType(
+        string typeName,
+        string? genericParameterName,
+        int line,
+        int column)
+    {
+        return genericParameterName is not null && typeName == genericParameterName
+            ? BoundType.GenericParameter
+            : ParseType(typeName, line, column);
+    }
+
+    private string FormatType(BoundType type)
+    {
+        if (_types.IsStruct(type))
+        {
+            return _types.GetStruct(type).Name;
+        }
+
+        if (_types.IsEnum(type))
+        {
+            return _types.GetEnum(type).Name;
+        }
+        if (_types.IsBox(type))
+        {
+            return "box " + FormatType(_types.GetBox(type).ElementType);
+        }
+
         return type switch
         {
             BoundType.Unit => "Unit",
             BoundType.Text => "Text",
             BoundType.Int => "Int",
             BoundType.Bool => "Bool",
+            BoundType.IntSlice => "[Int]",
             BoundType.StaticIntArray => "[Int; N]",
-            BoundType.DynamicIntArray => "[Int; ..]",
+            BoundType.DynamicIntArray => "[Int; ~]",
+            BoundType.IntDictionaryView => "{Int: Int}",
             BoundType.IntDictionary => "{Int: Int}",
             _ => type.ToString()
         };
     }
 
-    private static bool IsContainerType(BoundType type)
+    private bool IsContainerType(BoundType type)
     {
-        return type is BoundType.StaticIntArray or BoundType.DynamicIntArray or BoundType.IntDictionary;
+        return type is BoundType.StaticIntArray or BoundType.DynamicIntArray or BoundType.IntDictionary
+            || _types.ContainsOwnedStorage(type);
     }
 
-    private static bool IsContainerCreationExpression(Expression expression)
+    private bool IsReadonlyIntViewCompatible(BoundType type)
+    {
+        return type is BoundType.IntSlice or BoundType.StaticIntArray or BoundType.DynamicIntArray;
+    }
+
+    private bool CanPassFunctionArgument(BoundType actualType, BoundType expectedType)
+    {
+        return actualType == expectedType
+            || (expectedType == BoundType.IntSlice && IsReadonlyIntViewCompatible(actualType))
+            || (expectedType == BoundType.IntDictionaryView && actualType == BoundType.IntDictionary);
+    }
+
+    private bool IsOwnedHeapType(BoundType type)
+    {
+        return _types.ContainsOwnedStorage(type);
+    }
+
+    private bool IsContainerCreationExpression(Expression expression)
     {
         return expression is ArrayLiteralExpression
             or ArrayRepeatExpression
+            or TypedEmptyArrayExpression
             or DictionaryLiteralExpression
+            or TypedEmptyDictionaryExpression
+            or BoxExpression
+            or StructLiteralExpression
+            or CallExpression
+            or FlowExpression
+            or IfExpression
+            or WhenExpression
+            || IsAssociatedOwnedCreationExpression(expression)
             || IsMoveConsumingContainerTransformExpression(expression);
     }
 
-    private static bool IsOwnedHeapContainerCreationExpression(Expression expression)
+    private bool IsAssociatedOwnedCreationExpression(Expression expression)
     {
-        return expression is ArrayLiteralExpression { IsDynamic: true }
-            or DictionaryLiteralExpression;
+        return expression is FieldAccessExpression
+        {
+            Source: NameExpression typeName
+        } field
+            && _types.TryResolve(typeName.Name, out var ownerType)
+            && _types.IsStruct(ownerType)
+            && _boundFunctions is not null
+            && _boundFunctions.TryGetValue(typeName.Name + "." + field.FieldName, out var function)
+            && function.InputType is null;
     }
 
-    private static bool IsMoveConsumingContainerTransformExpression(Expression expression)
+    private bool IsOwnedHeapContainerCreationExpression(Expression expression)
+    {
+        return expression is ArrayLiteralExpression { IsDynamic: true }
+            or TypedEmptyArrayExpression
+            or DictionaryLiteralExpression
+            or TypedEmptyDictionaryExpression
+            or BoxExpression;
+    }
+
+    private bool IsAnonymousOwnedHeapContainerExpression(Expression expression)
+    {
+        return expression is not NameExpression;
+    }
+
+    private bool IsMoveConsumingContainerTransformExpression(Expression expression)
     {
         if (expression is not FlowExpression flow || flow.Targets.Count == 0)
         {
@@ -2150,7 +3670,7 @@ internal sealed class SemanticCompiler(SmallLangProgram program)
         return lastTarget.Path[0] is "append" or "updated";
     }
 
-    private static string? GetMoveConsumingContainerSourceName(Expression expression)
+    private string? GetMoveConsumingContainerSourceName(Expression expression)
     {
         if (!IsMoveConsumingContainerTransformExpression(expression)
             || expression is not FlowExpression flow
@@ -2162,7 +3682,80 @@ internal sealed class SemanticCompiler(SmallLangProgram program)
         return name.Name;
     }
 
-    private static void EnsureMutableContainerSource(
+    private void EnsureOwnedContainerCanLeaveBlock(
+        Expression expression,
+        IReadOnlyDictionary<string, BoundType> outerBindings,
+        IReadOnlyDictionary<string, BoundType> bodyBindings,
+        string? allowedOwnedOuterResultName = null)
+    {
+        if (expression is NameExpression name)
+        {
+            EnsureBlockLocalOwner(
+                name.Name,
+                name.Line,
+                name.Column,
+                outerBindings,
+                bodyBindings,
+                allowedOwnedOuterResultName);
+            return;
+        }
+
+        var movedSourceName = GetMoveConsumingContainerSourceName(expression);
+        if (movedSourceName is not null)
+        {
+            EnsureBlockLocalOwner(
+                movedSourceName,
+                expression.Line,
+                expression.Column,
+                outerBindings,
+                bodyBindings,
+                allowedOwnedOuterResultName);
+            return;
+        }
+
+        if (expression is ArrayLiteralExpression { IsDynamic: true }
+            or TypedEmptyArrayExpression
+            or DictionaryLiteralExpression
+            or TypedEmptyDictionaryExpression
+            or BoxExpression
+            or CallExpression
+            or FlowExpression
+            or IfExpression
+            or WhenExpression)
+        {
+            return;
+        }
+
+        throw Error(
+            expression.Line,
+            expression.Column,
+            "owned container block results must be created in that block or moved from a block-local owner");
+    }
+
+    private void EnsureBlockLocalOwner(
+        string name,
+        int line,
+        int column,
+        IReadOnlyDictionary<string, BoundType> outerBindings,
+        IReadOnlyDictionary<string, BoundType> bodyBindings,
+        string? allowedOwnedOuterResultName)
+    {
+        if (!bodyBindings.TryGetValue(name, out var type) || !IsContainerType(type))
+        {
+            throw Error(line, column, $"unknown owned container '{name}'");
+        }
+
+        if (outerBindings.ContainsKey(name)
+            && !string.Equals(name, allowedOwnedOuterResultName, StringComparison.Ordinal))
+        {
+            throw Error(
+                line,
+                column,
+                "owned container block results must move a block-local owner, not an owner from an outer scope");
+        }
+    }
+
+    private void EnsureMutableContainerSource(
         Expression source,
         string operation,
         IReadOnlySet<string>? mutableBindings)
@@ -2180,11 +3773,11 @@ internal sealed class SemanticCompiler(SmallLangProgram program)
             throw Error(
                 source.Line,
                 source.Column,
-                $"{operation} requires a mutable binding; use '=> mut {name.Name}'");
+                $"{operation} requires a mutable owner binding; use '=> {name.Name.TrimEnd('!')}!'");
         }
     }
 
-    private static void EnsureMoveContainerSource(Expression source, string operation)
+    private void EnsureMoveContainerSource(Expression source, string operation)
     {
         if (source is not NameExpression)
         {
@@ -2195,13 +3788,414 @@ internal sealed class SemanticCompiler(SmallLangProgram program)
         }
     }
 
-    private static bool IsPlainStringLiteral(Expression expression)
+    private void EnsureOwnedParameterFlowSource(Expression source, string functionName)
+    {
+        if (source is not NameExpression)
+        {
+            throw Error(
+                source.Line,
+                source.Column,
+                $"function '{functionName}' consumes an owned container, so the flowed input must be a named owner");
+        }
+    }
+
+    private void EnsureOwnedParameterCallArgument(Expression argument, string functionName)
+    {
+        if (argument is not NameExpression)
+        {
+            throw Error(
+                argument.Line,
+                argument.Column,
+                $"function '{functionName}' consumes an owned container, so the argument must be a named owner");
+        }
+    }
+
+    private void EnsureMutableBorrowFlowSource(
+        Expression source,
+        string functionName,
+        IReadOnlySet<string>? mutableBindings)
+    {
+        if (source is not NameExpression name)
+        {
+            throw Error(
+                source.Line,
+                source.Column,
+                $"function '{functionName}' mutably borrows a container, so the flowed input must be a named mutable owner");
+        }
+
+        EnsureMutableBorrowName(name, functionName, mutableBindings);
+    }
+
+    private void EnsureMutableBorrowCallArgument(
+        Expression argument,
+        string functionName,
+        IReadOnlySet<string>? mutableBindings)
+    {
+        if (argument is not NameExpression name)
+        {
+            throw Error(
+                argument.Line,
+                argument.Column,
+                $"function '{functionName}' mutably borrows a container, so the argument must be a named mutable owner");
+        }
+
+        EnsureMutableBorrowName(name, functionName, mutableBindings);
+    }
+
+    private void EnsureMutableBorrowName(
+        NameExpression name,
+        string functionName,
+        IReadOnlySet<string>? mutableBindings)
+    {
+        if (mutableBindings is null || !mutableBindings.Contains(name.Name))
+        {
+            throw Error(
+                name.Line,
+                name.Column,
+                $"function '{functionName}' mutably borrows a container; use a mutable owner binding such as '{name.Name.TrimEnd('!')}!'");
+        }
+    }
+
+    private void EnsureReadonlyBorrowCallArgument(Expression argument, string functionName)
+    {
+        if (argument is not NameExpression)
+        {
+            throw Error(
+                argument.Line,
+                argument.Column,
+                $"function '{functionName}' borrows a heap container for the call, so the argument must be a named owner");
+        }
+    }
+
+    private IReadOnlyList<string> GetOwnedParameterConsumedSourceNames(
+        Expression expression,
+        IReadOnlyDictionary<string, BoundFunction> functions,
+        IReadOnlyDictionary<string, BoundType> bindings)
+    {
+        if (expression is CallExpression call
+            && TryGetFunction(call.Path, functions, out var callFunction)
+            && FunctionMovesOwnedHeapInput(callFunction)
+            && call.Arguments.Count == 1
+            && call.Arguments[0] is NameExpression argumentName)
+        {
+            return [argumentName.Name];
+        }
+
+        if (expression is FlowExpression flow)
+        {
+            var consumed = new List<string>();
+            var sourceType = flow.Source is NameExpression typedSource
+                && bindings.TryGetValue(typedSource.Name, out var resolvedSourceType)
+                    ? resolvedSourceType
+                    : (BoundType?)null;
+            foreach (var target in flow.Targets)
+            {
+                var path = string.Join('.', target.Path);
+                if ((TryGetFunction(target.Path, functions, out var targetFunction)
+                        || (sourceType is { } receiverType
+                            && TryResolveInstanceMethod(receiverType, path, functions, out targetFunction)))
+                    && FunctionMovesOwnedHeapInput(targetFunction)
+                    && flow.Source is NameExpression sourceName)
+                {
+                    consumed.Add(sourceName.Name);
+                }
+            }
+
+            return consumed;
+        }
+
+        return [];
+    }
+
+    private void EnsureMoveInputReturnCoverage(
+        Expression expression,
+        string inputName,
+        IReadOnlyDictionary<string, BoundFunction> functions)
+    {
+        if (GetMoveInputDisposition(expression, inputName, functions, isResult: true)
+            == MoveInputDisposition.Mixed)
+        {
+            throw Error(
+                expression.Line,
+                expression.Column,
+                $"move input '{inputName}' must be transferred on every return branch or on none of them");
+        }
+    }
+
+    private MoveInputDisposition GetMoveInputDisposition(
+        Expression expression,
+        string inputName,
+        IReadOnlyDictionary<string, BoundFunction> functions,
+        bool isResult)
+    {
+        if (isResult && expression is NameExpression name && name.Name == inputName)
+        {
+            return MoveInputDisposition.Transferred;
+        }
+
+        if (string.Equals(
+            GetMoveConsumingContainerSourceName(expression),
+            inputName,
+            StringComparison.Ordinal))
+        {
+            return MoveInputDisposition.Transferred;
+        }
+
+        if (expression is CallExpression call
+            && TryGetFunction(call.Path, functions, out var callFunction)
+            && FunctionMovesOwnedHeapInput(callFunction)
+            && call.Arguments.Count == 1
+            && call.Arguments[0] is NameExpression argumentName
+            && argumentName.Name == inputName)
+        {
+            return MoveInputDisposition.Transferred;
+        }
+
+        if (expression is FlowExpression flow
+            && flow.Source is NameExpression sourceName
+            && sourceName.Name == inputName
+            && flow.Targets.Any(target =>
+                TryGetFunction(target.Path, functions, out var targetFunction)
+                && FunctionMovesOwnedHeapInput(targetFunction)))
+        {
+            return MoveInputDisposition.Transferred;
+        }
+
+        if (expression is IfExpression conditional && conditional.Else is not null)
+        {
+            return CombineAlternativeMoveInputDispositions(
+                GetMoveInputDisposition(conditional.Then, inputName, functions),
+                GetMoveInputDisposition(conditional.Else, inputName, functions));
+        }
+
+        if (expression is WhenExpression whenExpression)
+        {
+            var disposition = GetMoveInputDisposition(
+                whenExpression.Else,
+                inputName,
+                functions);
+            foreach (var arm in whenExpression.Arms)
+            {
+                disposition = CombineAlternativeMoveInputDispositions(
+                    disposition,
+                    GetMoveInputDisposition(arm.Body, inputName, functions));
+            }
+
+            return disposition;
+        }
+
+        return MoveInputDisposition.Retained;
+    }
+
+    private MoveInputDisposition GetMoveInputDisposition(
+        BlockBody body,
+        string inputName,
+        IReadOnlyDictionary<string, BoundFunction> functions)
+    {
+        var disposition = MoveInputDisposition.Retained;
+        foreach (var statement in body.Statements)
+        {
+            var expression = statement switch
+            {
+                BindingStatement binding => binding.Value,
+                ExpressionStatement expressionStatement => expressionStatement.Expression,
+                _ => null
+            };
+            if (expression is null)
+            {
+                continue;
+            }
+
+            var statementDisposition = GetMoveInputDisposition(
+                expression,
+                inputName,
+                functions,
+                isResult: false);
+            if (statementDisposition != MoveInputDisposition.Retained)
+            {
+                disposition = statementDisposition;
+                break;
+            }
+        }
+
+        if (disposition != MoveInputDisposition.Retained || body.Value is null)
+        {
+            return disposition;
+        }
+
+        return GetMoveInputDisposition(body.Value, inputName, functions, isResult: true);
+    }
+
+    private MoveInputDisposition CombineAlternativeMoveInputDispositions(
+        MoveInputDisposition left,
+        MoveInputDisposition right)
+    {
+        return left == right ? left : MoveInputDisposition.Mixed;
+    }
+
+    private void ValidateOwnedParameterConsumptionExpression(
+        Expression expression,
+        IReadOnlyDictionary<string, BoundFunction> functions)
+    {
+        if (expression is CallExpression call && IsOwnedParameterCall(call, functions))
+        {
+            return;
+        }
+
+        if (expression is FlowExpression flow)
+        {
+            if (ContainsOwnedParameterCall(flow.Source, functions)
+                || flow.Targets.Any(target => target.Arguments.Any(argument => ContainsOwnedParameterCall(argument, functions))))
+            {
+                throw Error(
+                    expression.Line,
+                    expression.Column,
+                    "owned container parameter calls must be direct calls or direct value-flow from a named owner");
+            }
+
+            if (flow.Targets.Any(target => IsOwnedParameterFlowTarget(target, functions)))
+            {
+                return;
+            }
+        }
+
+        if (ContainsOwnedParameterCall(expression, functions))
+        {
+            throw Error(
+                expression.Line,
+                expression.Column,
+                "owned container parameter calls must be direct calls or direct value-flow from a named owner");
+        }
+    }
+
+    private bool ContainsOwnedParameterCall(
+        Expression expression,
+        IReadOnlyDictionary<string, BoundFunction> functions)
+    {
+        return expression switch
+        {
+            CallExpression call => IsOwnedParameterCall(call, functions)
+                || call.Arguments.Any(argument => ContainsOwnedParameterCall(argument, functions)),
+            FlowExpression flow => ContainsOwnedParameterCall(flow.Source, functions)
+                || flow.Targets.Any(target =>
+                    IsOwnedParameterFlowTarget(target, functions)
+                    || target.Arguments.Any(argument => ContainsOwnedParameterCall(argument, functions))),
+            StringExpression text => text.Segments
+                .OfType<InterpolationSegment>()
+                .Any(segment => ContainsOwnedParameterCall(segment.Expression, functions)),
+            AddExpression add => ContainsOwnedParameterCall(add.Left, functions)
+                || ContainsOwnedParameterCall(add.Right, functions),
+            SubtractExpression subtract => ContainsOwnedParameterCall(subtract.Left, functions)
+                || ContainsOwnedParameterCall(subtract.Right, functions),
+            MultiplyExpression multiply => ContainsOwnedParameterCall(multiply.Left, functions)
+                || ContainsOwnedParameterCall(multiply.Right, functions),
+            DivideExpression divide => ContainsOwnedParameterCall(divide.Left, functions)
+                || ContainsOwnedParameterCall(divide.Right, functions),
+            ModuloExpression modulo => ContainsOwnedParameterCall(modulo.Left, functions)
+                || ContainsOwnedParameterCall(modulo.Right, functions),
+            NegateExpression negate => ContainsOwnedParameterCall(negate.Value, functions),
+            CompareExpression compare => ContainsOwnedParameterCall(compare.Left, functions)
+                || ContainsOwnedParameterCall(compare.Right, functions),
+            AndExpression logicalAnd => ContainsOwnedParameterCall(logicalAnd.Left, functions)
+                || ContainsOwnedParameterCall(logicalAnd.Right, functions),
+            OrExpression logicalOr => ContainsOwnedParameterCall(logicalOr.Left, functions)
+                || ContainsOwnedParameterCall(logicalOr.Right, functions),
+            NotExpression logicalNot => ContainsOwnedParameterCall(logicalNot.Value, functions),
+            RangeExpression range => ContainsOwnedParameterCall(range.Start, functions)
+                || ContainsOwnedParameterCall(range.End, functions),
+            FoldExpression fold => ContainsOwnedParameterCall(fold.Source, functions)
+                || ContainsOwnedParameterCall(fold.Initial, functions)
+                || ContainsOwnedParameterCall(fold.Body, functions),
+            IfExpression conditional => ContainsOwnedParameterCall(conditional.Condition, functions)
+                || ContainsOwnedParameterCall(conditional.Then, functions)
+                || (conditional.Else is not null && ContainsOwnedParameterCall(conditional.Else, functions)),
+            WhenExpression whenExpression => (whenExpression.Subject is not null && ContainsOwnedParameterCall(whenExpression.Subject, functions))
+                || whenExpression.Arms.Any(arm => ContainsOwnedParameterCall(arm.Condition, functions) || ContainsOwnedParameterCall(arm.Body, functions))
+                || ContainsOwnedParameterCall(whenExpression.Else, functions),
+            ArrayLiteralExpression array => array.Elements.Any(element => ContainsOwnedParameterCall(element, functions)),
+            ArrayRepeatExpression repeat => ContainsOwnedParameterCall(repeat.Value, functions),
+            DictionaryLiteralExpression dictionary => dictionary.Entries.Any(entry =>
+                ContainsOwnedParameterCall(entry.Key, functions)
+                || ContainsOwnedParameterCall(entry.Value, functions)),
+            IndexExpression index => ContainsOwnedParameterCall(index.Source, functions)
+                || ContainsOwnedParameterCall(index.Index, functions),
+            SubjectCompareExpression compare => ContainsOwnedParameterCall(compare.Right, functions),
+            SubjectRangeExpression range => ContainsOwnedParameterCall(range.Start, functions)
+                || ContainsOwnedParameterCall(range.End, functions),
+            _ => false
+        };
+    }
+
+    private bool ContainsOwnedParameterCall(
+        BlockBody body,
+        IReadOnlyDictionary<string, BoundFunction> functions)
+    {
+        return body.Statements.Any(statement => statement switch
+            {
+                BindingStatement binding => ContainsOwnedParameterCall(binding.Value, functions),
+                IndexAssignmentStatement assignment => ContainsOwnedParameterCall(assignment.Value, functions)
+                    || ContainsOwnedParameterCall(assignment.Index, functions),
+                ExpressionStatement expression => ContainsOwnedParameterCall(expression.Expression, functions),
+                BlockFunctionCallStatement blockFunctionCall => ContainsOwnedParameterCall(blockFunctionCall.Source, functions)
+                    || blockFunctionCall.Body.Any(nested => nested is ExpressionStatement expression
+                        && ContainsOwnedParameterCall(expression.Expression, functions)),
+                _ => false
+            })
+            || (body.Value is not null && ContainsOwnedParameterCall(body.Value, functions));
+    }
+
+    private bool IsOwnedParameterCall(
+        CallExpression call,
+        IReadOnlyDictionary<string, BoundFunction> functions)
+    {
+        return TryGetFunction(call.Path, functions, out var function)
+            && FunctionMovesOwnedHeapInput(function);
+    }
+
+    private bool IsOwnedParameterFlowTarget(
+        FlowTarget target,
+        IReadOnlyDictionary<string, BoundFunction> functions)
+    {
+        return TryGetFunction(target.Path, functions, out var function)
+            && FunctionMovesOwnedHeapInput(function);
+    }
+
+    private bool FunctionMovesOwnedHeapInput(BoundFunction function)
+    {
+        return function.InputOwnership == BoundFunctionInputOwnership.Move
+            && function.InputType is not null;
+    }
+
+    private bool FunctionMutablyBorrowsInput(BoundFunction function)
+    {
+        return function.InputOwnership == BoundFunctionInputOwnership.MutableBorrow
+            && function.InputType is { } inputType
+            && (inputType is BoundType.DynamicIntArray or BoundType.IntDictionary || _types.IsStruct(inputType));
+    }
+
+    private bool FunctionReadonlyBorrowsHeapInput(BoundFunction function, BoundType actualType)
+    {
+        return (function.InputType == BoundType.IntDictionaryView
+                && actualType == BoundType.IntDictionary)
+            || (function.InputType == BoundType.IntSlice
+                && actualType == BoundType.DynamicIntArray);
+    }
+
+    private bool TryGetFunction(
+        IReadOnlyList<string> path,
+        IReadOnlyDictionary<string, BoundFunction> functions,
+        out BoundFunction function)
+    {
+        return functions.TryGetValue(string.Join('.', path), out function!);
+    }
+
+    private bool IsPlainStringLiteral(Expression expression)
     {
         return expression is StringExpression str
             && str.Segments.All(static segment => segment is TextSegment);
     }
 
-    private static SmallLangException Error(int line, int column, string message)
+    private SmallLangException Error(int line, int column, string message)
     {
         return new SmallLangException($"semantic error at {line}:{column}: {message}");
     }
@@ -2216,4 +4210,11 @@ internal sealed class SemanticCompiler(SmallLangProgram program)
     private sealed record NoFlowEffect : FlowEffect;
 
     private sealed record FlowBindingEffect(string Name, BoundType Type) : FlowEffect;
+
+    private enum MoveInputDisposition
+    {
+        Retained,
+        Transferred,
+        Mixed
+    }
 }

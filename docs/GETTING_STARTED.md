@@ -30,7 +30,7 @@ to the accepted language specification and decision log.
 - interpolation of string and integer bindings
 - value-flow calls with `value -> function`
 - value-flow calls with extra receiver arguments, such as
-  `values -> push(30)`
+  `values! -> push(30)`
 - value-flow target-call syntax with `value -> function()`
 - parenthesized calls with `function(value)`
 - SmallLang standard library functions `sys.io.print`, `sys.io.println`, and
@@ -47,13 +47,25 @@ to the accepted language specification and decision log.
 - default loop item binding with `1..9 -> each { ... }`, exposed as `it`
 - integer folds with `range -> fold initial acc, item { nextAcc }`
 - fixed `Int` arrays with `[1, 2, 3]` and `[0; 8]`
-- growable `Int` arrays with `[1, 2, ..]` and `[..]`
-- `{Int: Int}` dictionaries with `{ 1: 100, 2: 200 }`
+- growable `Int` arrays with `[1, 2, ~]`, typed empty `[Int; ~]`, and
+  capacity hint `[Int; 1024~]`
+- `{Int: Int}` dictionaries with `{ 1: 100, 2: 200 }` and typed empty
+  `{Int: Int}` or capacity hint `{Int: Int; 1024~}`
 - checked indexing with `array[index]` and `dictionary[key]`
-- mutable container bindings with `value => mut name`
+- mutable owner bindings with `value => name!`
+- checked indexed assignment with `value => owner![index]`
 - move-consuming container transforms with `append(value)` and
   `updated(keyOrIndex, value)`
+- readonly `[Int]` and `{Int: Int}`, mutable-borrow `mut [Int; ~]` and
+  `mut {Int: Int}`, and explicit `move` growable array/dictionary parameters
+  that may return the consumed input owner
 - deterministic native cleanup for heap-owning dynamic arrays and dictionaries
+- automatic allocation-free stack payloads for small dynamic-array and
+  dictionary literals whose owners remain local and readonly
+- function-entry stack-frame planning with lifetime-based slot reuse across
+  nested branches and loop iterations
+- automatic heap placement for fixed arrays that exceed the planned stack
+  budget
 - purpose-oriented pseudo-random integer generation with `seedRandom` and
   `randomBelow`
 - binary sorted `Int` file writing and nearest-value lookup with
@@ -229,14 +241,21 @@ token RightBrace = "}"
 token LeftParen = "("
 token RightParen = ")"
 token Range = ".."
+token Tilde = "~"
 token Dot = "."
 token Comma = ","
+token Semicolon = ";"
 token Plus = "+"
+token Minus = "-"
 token Star = "*"
+token Slash = "/"
+token Percent = "%"
 token Arrow = "->"
+token FatArrow = "=>"
 token Colon = ":"
 token EqualEqual = "=="
 token BangEqual = "!="
+token Bang = "!"
 token LessEqual = "<="
 token GreaterEqual = ">="
 token Less = "<"
@@ -259,8 +278,9 @@ rule SourceFile = NewLine* NamespaceDeclaration? ImportDeclaration* FunctionDecl
 rule NamespaceDeclaration = Identifier("namespace") Path StatementEnd
 rule ImportDeclaration = Identifier("import") Path (Identifier("as") Identifier)? StatementEnd
 rule FunctionDeclaration = Path Identifier? Colon FunctionSignature FunctionBody
-rule FunctionSignature = Arrow TypeName | TypeName Arrow TypeName
-rule FunctionBody = LeftBrace NewLine* FunctionDeclaration* Expression NewLine* RightBrace | Arrow Expression | Equal Identifier("intrinsic")
+rule FunctionSignature = Arrow TypeAnnotation | InputTypeAnnotation Arrow TypeAnnotation
+rule InputTypeAnnotation = (Identifier("move") | Identifier("mut"))? TypeAnnotation
+rule FunctionBody = LeftBrace NewLine* FunctionDeclaration* Statement* Expression NewLine* RightBrace | FatArrow Expression | Arrow Expression | Equal Identifier("intrinsic")
 rule MainBlock = Identifier("main") LeftBrace NewLine* Statement* RightBrace
 rule Statement = BlockFunctionCallStatement | EachStatement | BindingStatement | ExpressionStatement
 rule BlockFunctionCallStatement = RangeOrLogicalExpression Arrow Path Identifier? LeftBrace NewLine* Statement* RightBrace
@@ -290,13 +310,14 @@ rule MultiplicativeExpression = UnaryExpression ((Star | Slash | Percent) UnaryE
 rule UnaryExpression = Identifier("not") UnaryExpression | Minus UnaryExpression | PrimaryExpression
 rule PrimaryExpression = WhenExpression | CallExpression | StringExpression | NumberExpression | NameExpression
 rule TypeName = Identifier
+rule TypeAnnotation = TypeName | LeftBracket TypeName RightBracket | LeftBracket TypeName Semicolon Tilde RightBracket | LeftBrace TypeName Colon TypeName RightBrace
 ```
 
 The generator reads `syntax/smalllang.grammar` and emits the current recursive
 descent parser at compile time. Bindings use `=>`, so `n * i => value` is the
 preferred binding style for new samples. Function targets in value-flow calls
 omit empty parentheses, such as `7 -> square => num`; target parentheses are
-reserved for additional receiver arguments, such as `values -> push(30)`.
+reserved for additional receiver arguments, such as `values! -> push(30)`.
 Block-function targets use the following brace block as the function's code
 block argument: `1..9 -> each i { ... }`.
 
@@ -396,6 +417,26 @@ approved syntax.
   dictionary, and deterministic cleanup sample
 - `examples/26-immutable-containers.sl`: immutable dynamic-array and dictionary
   transforms that return new owners
+- `examples/28-mutable-indexing.sl`: mutable owner suffixes and checked indexed
+  assignment for fixed arrays, growable arrays, and dictionaries
+- `examples/29-typed-empty-containers.sl`: typed empty growable array and
+  dictionary literals
+- `examples/35-mutable-int-dictionary-parameters.sl`: non-owning mutable
+  dictionary parameters through flow and direct calls
+- `examples/36-return-moved-container-parameters.sl`: returning consumed array
+  and dictionary parameters with direct, transformed, `if`, and `when` paths
+- `examples/37-readonly-int-dictionary-parameters.sl`: non-owning readonly
+  dictionary parameters through nested, flow, and direct calls
+- `examples/38-stack-promoted-dynamic-array.sl`: automatic stack placement for
+  a small, non-escaping, readonly growable-array literal
+- `examples/39-stack-promoted-int-dictionary.sl`: automatic stack placement for
+  small, non-escaping, readonly Swiss-table dictionary literals
+- `examples/40-nested-stack-slot-reuse.sl`: one function-entry stack slot reused
+  by nested branch and loop-local array/dictionary payloads
+- `examples/41-inline-function-stack-frame.sl`: a local inline function reusing
+  its containing function's entry slot across loop iterations
+- `examples/42-fixed-array-placement.sl`: small fixed-array entry placement and
+  oversized fixed-array heap placement with deterministic cleanup
 - `examples/browser`: static HTML/JS runner for the WebAssembly sample
 - `examples/expected`: expected stdout/stdin fixtures for executable samples
 - `stdlib/sys/runtime.sl`: standard library intrinsic boundary declarations

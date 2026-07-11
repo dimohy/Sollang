@@ -48,6 +48,17 @@ internal sealed partial class LlvmEmitter
         return LoadInt(slot, "array_item");
     }
 
+    private void EmitStaticArrayAssign(RuntimeStaticIntArray array, string index, string value)
+    {
+        var inBounds = NextTemp("array_assign_in_bounds");
+        EmitCompare(inBounds, "ult", "i64", index, array.LengthName);
+        EmitTrapUnless(inBounds, "array_assign_bounds");
+
+        var slot = NextTemp("array_slot");
+        EmitAssign(slot, $"getelementptr inbounds [{array.AllocatedLength.ToString(CultureInfo.InvariantCulture)} x i64], ptr {array.PointerName}, i64 0, i64 {index}");
+        EmitStore("i64", value, slot, 8);
+    }
+
     private RuntimeInt EmitDynamicArrayLoad(RuntimeDynamicIntArray array, string index)
     {
         var inBounds = NextTemp("array_in_bounds");
@@ -59,6 +70,26 @@ internal sealed partial class LlvmEmitter
         return LoadInt(slot, "array_item");
     }
 
+    private RuntimeInt EmitIntSliceLoad(RuntimeIntSlice slice, string index)
+    {
+        var inBounds = NextTemp("slice_in_bounds");
+        EmitCompare(inBounds, "ult", "i64", index, slice.LengthName);
+        EmitTrapUnless(inBounds, "slice_bounds");
+
+        var slot = NextTemp("slice_slot");
+        EmitAssign(slot, $"getelementptr i64, ptr {slice.PointerName}, i64 {index}");
+        return LoadInt(slot, "slice_item");
+    }
+
+    private void EmitDynamicArrayAssign(RuntimeDynamicIntArray array, string index, string value)
+    {
+        var inBounds = NextTemp("array_assign_in_bounds");
+        EmitCompare(inBounds, "ult", "i64", index, array.LengthName);
+        EmitTrapUnless(inBounds, "array_assign_bounds");
+
+        StoreDynamicArrayElement(array.PointerName, index, value);
+    }
+
     private string EmitDictionaryAllocate(string capacity)
     {
         var entriesOffset = EmitDictionaryEntriesOffset(capacity, "dict_entries_offset");
@@ -68,6 +99,15 @@ internal sealed partial class LlvmEmitter
         EmitBinary(totalBytes, "add", "i64", entriesOffset, entriesBytes);
         var pointer = EmitHeapAllocate(totalBytes);
         EmitZeroByteBuffer(pointer, capacity, "dict_control_init");
+        return pointer;
+    }
+
+    private string InitializeStackDictionary(string pointer, int capacity)
+    {
+        EmitZeroByteBuffer(
+            pointer,
+            capacity.ToString(CultureInfo.InvariantCulture),
+            "dict_stack_control_init");
         return pointer;
     }
 

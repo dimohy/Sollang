@@ -14,8 +14,12 @@ internal sealed partial class LlvmEmitter
     private readonly List<string> _functions = [];
     private readonly Dictionary<string, RuntimeValue> _locals = new(StringComparer.Ordinal);
     private readonly HashSet<string> _mutableLocals = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _borrowedMutableLocals = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _borrowedOwnedLocals = new(StringComparer.Ordinal);
     private readonly Dictionary<string, MutableContainerSlot> _mutableContainerSlots = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, string> _mutableStructSlots = new(StringComparer.Ordinal);
     private readonly List<BoundFunction> _inlineFunctionStack = [];
+    private StackFramePlan _currentStackFramePlan = StackFramePlan.Empty;
     private RuntimeBlockInvocation? _currentBlockInvocation;
     private IReadOnlyDictionary<string, BoundFunction> _currentFunctions;
     private int _stringId;
@@ -37,11 +41,16 @@ internal sealed partial class LlvmEmitter
             target triple = "{{_platform.TargetTriple}}"
 
             %smalllang.text = type { ptr, i64 }
+            %smalllang.int_slice = type { ptr, i64 }
+            %smalllang.mutable_container = type { ptr, ptr, ptr }
+            %smalllang.dynamic_int_array = type { ptr, i64, i64 }
+            %smalllang.int_dictionary = type { ptr, i64, i64 }
             %smalllang.read_int_result = type { i64, i32 }
             %smalllang.file_int_result = type { i64, i32 }
             %smalllang.file_count_result = type { i64, i32 }
 
             """;
+        header += EmitStructTypeDefinitions();
 
         EmitPlatformGlobalBlock(_platform.EmitGlobals);
         EmitGlobalLine("@smalllang_random_state = internal global i64 88172645463393265");
@@ -53,12 +62,15 @@ internal sealed partial class LlvmEmitter
         EmitPlatformFunctionBlock(_platform.EmitMemoryDeclarations);
         EmitFunctionLine("declare void @llvm.trap()");
         EmitFunctionLine("declare void @llvm.memset.p0.i64(ptr nocapture writeonly, i8, i64, i1 immarg)");
+        EmitFunctionLine("declare void @llvm.lifetime.start.p0(i64 immarg, ptr nocapture)");
+        EmitFunctionLine("declare void @llvm.lifetime.end.p0(i64 immarg, ptr nocapture)");
         EmitFunctionLine();
 
+        EmitOwnedDropHelpers();
         EmitUserFunctions();
         EmitRuntimeHelpers();
         EmitMain();
-        EmitFunctionLine("attributes #0 = { noinline optnone }");
+        EmitFunctionLine("attributes #0 = { nounwind }");
 
         return header + string.Concat(_globals) + string.Concat(_functions);
     }

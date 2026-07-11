@@ -349,6 +349,7 @@ internal sealed partial class LlvmEmitter
         var source = EmitExpression(expression.Source);
         var (pointer, length, staticLength) = source switch
         {
+            RuntimeIntSlice slice => (slice.PointerName, slice.LengthName, null),
             RuntimeStaticIntArray array => (array.PointerName, array.LengthName, (int?)array.AllocatedLength),
             RuntimeDynamicIntArray array => (array.PointerName, array.LengthName, null),
             _ => throw new SmallLangException("fold expects a range or Int array input")
@@ -378,6 +379,10 @@ internal sealed partial class LlvmEmitter
         if (staticLength is { } allocatedLength)
         {
             item = EmitStaticArrayLoad(new RuntimeStaticIntArray(pointer, length, allocatedLength), index);
+        }
+        else if (source is RuntimeIntSlice)
+        {
+            item = EmitIntSliceLoad(new RuntimeIntSlice(pointer, length), index);
         }
         else
         {
@@ -417,7 +422,11 @@ internal sealed partial class LlvmEmitter
         try
         {
             EmitStatements(body.Statements);
+            var transferredOwnerName = body.Value is null
+                ? null
+                : GetBlockResultTransferredOwnerName(body.Value);
             var value = body.Value is null ? null : EmitExpression(body.Value);
+            DropOwnedLocalsCreatedSince(outerLocals, transferredOwnerName);
             return new BlockResult(value, _currentBlockLabel);
         }
         finally
@@ -443,6 +452,10 @@ internal sealed partial class LlvmEmitter
             RuntimeInt => new RuntimeInt(EmitScalarPhi(prefix, "i64", incoming)),
             RuntimeBool => new RuntimeBool(EmitScalarPhi(prefix, "i1", incoming)),
             RuntimeText => EmitTextPhi(prefix, incoming),
+            RuntimeDynamicIntArray => EmitDynamicArrayPhi(prefix, incoming),
+            RuntimeIntDictionary => EmitIntDictionaryPhi(prefix, incoming),
+            RuntimeStruct structure => EmitStructPhi(prefix, structure.Type, incoming),
+            RuntimeEnum enumeration => EmitEnumPhi(prefix, enumeration.Type, incoming),
             RuntimeUnit => RuntimeUnit.Instance,
             _ => throw new SmallLangException($"unsupported phi value {incoming[0].Value.GetType().Name}")
         };
@@ -470,6 +483,60 @@ internal sealed partial class LlvmEmitter
         EmitPhi(length, "i64", FormatPhiIncoming(incoming, static value => ((RuntimeText)value).LengthName));
 
         return new RuntimeText(pointer, length);
+    }
+
+    private RuntimeDynamicIntArray EmitDynamicArrayPhi(string prefix, IReadOnlyList<(RuntimeValue Value, string Label)> incoming)
+    {
+        var pointer = NextTemp(prefix + "_ptr");
+        EmitPhi(pointer, "ptr", FormatPhiIncoming(incoming, static value => ((RuntimeDynamicIntArray)value).PointerName));
+
+        var length = NextTemp(prefix + "_len");
+        EmitPhi(length, "i64", FormatPhiIncoming(incoming, static value => ((RuntimeDynamicIntArray)value).LengthName));
+
+        var capacity = NextTemp(prefix + "_capacity");
+        EmitPhi(capacity, "i64", FormatPhiIncoming(incoming, static value => ((RuntimeDynamicIntArray)value).CapacityName));
+
+        return new RuntimeDynamicIntArray(pointer, length, capacity);
+    }
+
+    private RuntimeIntDictionary EmitIntDictionaryPhi(string prefix, IReadOnlyList<(RuntimeValue Value, string Label)> incoming)
+    {
+        var pointer = NextTemp(prefix + "_ptr");
+        EmitPhi(pointer, "ptr", FormatPhiIncoming(incoming, static value => ((RuntimeIntDictionary)value).PointerName));
+
+        var length = NextTemp(prefix + "_len");
+        EmitPhi(length, "i64", FormatPhiIncoming(incoming, static value => ((RuntimeIntDictionary)value).LengthName));
+
+        var capacity = NextTemp(prefix + "_capacity");
+        EmitPhi(capacity, "i64", FormatPhiIncoming(incoming, static value => ((RuntimeIntDictionary)value).CapacityName));
+
+        return new RuntimeIntDictionary(pointer, length, capacity);
+    }
+
+    private RuntimeStruct EmitStructPhi(
+        string prefix,
+        BoundType type,
+        IReadOnlyList<(RuntimeValue Value, string Label)> incoming)
+    {
+        var value = NextTemp(prefix);
+        EmitPhi(
+            value,
+            LlvmStructType(type),
+            FormatPhiIncoming(incoming, static item => ((RuntimeStruct)item).ValueName));
+        return new RuntimeStruct(type, value);
+    }
+
+    private RuntimeEnum EmitEnumPhi(
+        string prefix,
+        BoundType type,
+        IReadOnlyList<(RuntimeValue Value, string Label)> incoming)
+    {
+        var value = NextTemp(prefix);
+        EmitPhi(
+            value,
+            LlvmEnumType(type),
+            FormatPhiIncoming(incoming, static item => ((RuntimeEnum)item).ValueName));
+        return new RuntimeEnum(type, value);
     }
 
     private static (string Value, string Label)[] FormatPhiIncoming(

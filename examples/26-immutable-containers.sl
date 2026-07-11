@@ -1,5 +1,5 @@
 main {
-    [1, 2, ..] => values
+    [1, 2, ~] => values
     values -> append(3) => values
     values -> updated(0, 9) => values
 

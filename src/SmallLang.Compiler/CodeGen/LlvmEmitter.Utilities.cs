@@ -78,6 +78,13 @@ internal sealed partial class LlvmEmitter
             ? local
             : throw new SmallLangException($"unknown runtime binding '{name}'");
 
+        if (_mutableStructSlots.TryGetValue(name, out var pointer))
+        {
+            var loaded = NextTemp("mutable_struct");
+            EmitLoad(loaded, LlvmStructType(value.Type), pointer, 8);
+            return new RuntimeStruct(value.Type, loaded);
+        }
+
         return LoadMutableContainer(name, value);
     }
 
@@ -87,10 +94,12 @@ internal sealed partial class LlvmEmitter
         var blockFunctionFunctions = _currentFunctions;
         RestoreLocals(invocation.CallerLocals);
         _locals[invocation.ItemName] = value;
+        var yieldedBlockLocals = CaptureLocals();
         _currentFunctions = invocation.CallerFunctions;
         try
         {
             EmitStatements(invocation.Body);
+            DropOwnedLocalsCreatedSince(yieldedBlockLocals, transferredOwnerName: null);
         }
         finally
         {
@@ -104,7 +113,70 @@ internal sealed partial class LlvmEmitter
         return new LocalScope(
             new Dictionary<string, RuntimeValue>(_locals, StringComparer.Ordinal),
             new HashSet<string>(_mutableLocals, StringComparer.Ordinal),
-            new Dictionary<string, MutableContainerSlot>(_mutableContainerSlots, StringComparer.Ordinal));
+            new HashSet<string>(_borrowedMutableLocals, StringComparer.Ordinal),
+            new HashSet<string>(_borrowedOwnedLocals, StringComparer.Ordinal),
+            new Dictionary<string, MutableContainerSlot>(_mutableContainerSlots, StringComparer.Ordinal),
+            new Dictionary<string, string>(_mutableStructSlots, StringComparer.Ordinal));
+    }
+
+    private void ClearLocalState()
+    {
+        _locals.Clear();
+        _mutableLocals.Clear();
+        _borrowedMutableLocals.Clear();
+        _borrowedOwnedLocals.Clear();
+        _mutableContainerSlots.Clear();
+        _mutableStructSlots.Clear();
+    }
+
+    private void SelectStackFrame(BoundFunction function)
+    {
+        _currentStackFramePlan = _program.FunctionStackFrames.TryGetValue(function, out var frame)
+            ? frame
+            : StackFramePlan.Empty;
+    }
+
+    private void EmitStackFrameAllocations()
+    {
+        foreach (var slot in _currentStackFramePlan.Slots)
+        {
+            EmitAlloca(
+                StackSlotPointer(slot.Index),
+                $"[{slot.Size.ToString(CultureInfo.InvariantCulture)} x i8]",
+                slot.Alignment);
+        }
+    }
+
+    private string EmitStackLifetimeStart(object unit)
+    {
+        if (!_currentStackFramePlan.TryGetAllocation(unit, out var allocation))
+        {
+            throw new SmallLangException("stack-promoted container has no frame allocation");
+        }
+
+        var pointer = StackSlotPointer(allocation.SlotIndex);
+        EmitInstruction(
+            $"call void @llvm.lifetime.start.p0(i64 {allocation.Size.ToString(CultureInfo.InvariantCulture)}, ptr {pointer})");
+        return pointer;
+    }
+
+    private void EmitStackLifetimeEndsAfter(object unit)
+    {
+        foreach (var allocation in _currentStackFramePlan.GetLifetimesEndingAfter(unit))
+        {
+            EmitStackLifetimeEnd(allocation);
+        }
+    }
+
+    private void EmitStackLifetimeEnd(StackAllocationPlan allocation)
+    {
+        EmitInstruction(
+            $"call void @llvm.lifetime.end.p0(i64 {allocation.Size.ToString(CultureInfo.InvariantCulture)}, ptr {StackSlotPointer(allocation.SlotIndex)})");
+    }
+
+    private static string StackSlotPointer(int slotIndex)
+    {
+        return $"%stack_slot{slotIndex.ToString(CultureInfo.InvariantCulture)}";
     }
 
     private void RestoreLocals(LocalScope scope)
@@ -121,10 +193,28 @@ internal sealed partial class LlvmEmitter
             _mutableLocals.Add(name);
         }
 
+        _borrowedMutableLocals.Clear();
+        foreach (var name in scope.BorrowedMutableLocals)
+        {
+            _borrowedMutableLocals.Add(name);
+        }
+
+        _borrowedOwnedLocals.Clear();
+        foreach (var name in scope.BorrowedOwnedLocals)
+        {
+            _borrowedOwnedLocals.Add(name);
+        }
+
         _mutableContainerSlots.Clear();
         foreach (var (name, slot) in scope.MutableContainerSlots)
         {
             _mutableContainerSlots.Add(name, slot);
+        }
+
+        _mutableStructSlots.Clear();
+        foreach (var (name, pointer) in scope.MutableStructSlots)
+        {
+            _mutableStructSlots.Add(name, pointer);
         }
     }
 
@@ -132,47 +222,130 @@ internal sealed partial class LlvmEmitter
     {
         foreach (var (name, storedValue) in _locals.Reverse())
         {
-            var value = LoadMutableContainer(name, storedValue);
-            switch (value)
-            {
-                case RuntimeDynamicIntArray array:
-                    EmitCall(target: null, "void", "smalllang_free", $"ptr {array.PointerName}");
-                    break;
-                case RuntimeIntDictionary dictionary:
-                    EmitCall(target: null, "void", "smalllang_free", $"ptr {dictionary.PointerName}");
-                    break;
-            }
+            DropOwnedLocal(name, storedValue);
         }
+    }
+
+    private void DropOwnedLocalsCreatedSince(LocalScope outerScope, string? transferredOwnerName)
+    {
+        foreach (var (name, storedValue) in _locals.Reverse())
+        {
+            if (outerScope.Locals.ContainsKey(name))
+            {
+                continue;
+            }
+
+            if (string.Equals(name, transferredOwnerName, StringComparison.Ordinal))
+            {
+                EndMutableContainerSlotLifetime(name);
+                continue;
+            }
+
+            DropOwnedLocal(name, storedValue);
+        }
+    }
+
+    private void DropOwnedLocal(string name, RuntimeValue storedValue)
+    {
+        if (_borrowedMutableLocals.Contains(name) || _borrowedOwnedLocals.Contains(name))
+        {
+            return;
+        }
+
+        var value = LoadMutableContainer(name, storedValue);
+        if (IsCustomOwnedType(value.Type))
+        {
+            var materialized = MaterializeAggregateValue(value);
+            EmitOwnedDropCall(value.Type, materialized.ValueName);
+            EndMutableContainerSlotLifetime(name);
+            return;
+        }
+
+        switch (value)
+        {
+            case RuntimeStaticIntArray { Storage: RuntimeContainerStorage.Heap } array:
+                EmitCall(target: null, "void", "smalllang_free", $"ptr {array.PointerName}");
+                break;
+            case RuntimeDynamicIntArray { Storage: RuntimeContainerStorage.Heap } array:
+                EmitCall(target: null, "void", "smalllang_free", $"ptr {array.PointerName}");
+                break;
+            case RuntimeIntDictionary { Storage: RuntimeContainerStorage.Heap } dictionary:
+                EmitCall(target: null, "void", "smalllang_free", $"ptr {dictionary.PointerName}");
+                break;
+        }
+
+        EndMutableContainerSlotLifetime(name);
     }
 
     private static bool RequiresHeapAllocation(RuntimeValue value)
     {
-        return value is RuntimeDynamicIntArray or RuntimeIntDictionary;
+        return value is RuntimeStaticIntArray { Storage: RuntimeContainerStorage.Heap }
+            or RuntimeDynamicIntArray { Storage: RuntimeContainerStorage.Heap }
+            or RuntimeIntDictionary { Storage: RuntimeContainerStorage.Heap }
+            or RuntimeBox;
+    }
+
+    private bool IsOwnedContainerRuntimeValue(RuntimeValue value)
+    {
+        return value is RuntimeDynamicIntArray or RuntimeIntDictionary
+            || _program.Types.ContainsOwnedStorage(value.Type);
     }
 
     private void RemoveLocal(string name)
     {
+        EndMutableContainerSlotLifetime(name);
         _locals.Remove(name);
         _mutableLocals.Remove(name);
+        _borrowedMutableLocals.Remove(name);
+        _borrowedOwnedLocals.Remove(name);
         _mutableContainerSlots.Remove(name);
+        _mutableStructSlots.Remove(name);
     }
 
-    private void CreateMutableContainerSlot(string name, RuntimeValue value)
+    private void CreateMutableContainerSlot(BindingStatement binding, RuntimeValue value)
     {
         if (!RequiresHeapAllocation(value))
         {
             return;
         }
 
-        var slot = new MutableContainerSlot(
-            NextTemp("mutable_ptr_addr"),
-            NextTemp("mutable_len_addr"),
-            NextTemp("mutable_capacity_addr"));
-        EmitAlloca(slot.PointerAddress, "ptr", 8);
-        EmitAlloca(slot.LengthAddress, "i64", 8);
-        EmitAlloca(slot.CapacityAddress, "i64", 8);
-        _mutableContainerSlots[name] = slot;
-        StoreMutableContainer(name, value);
+        MutableContainerSlot slot;
+        if (_currentStackFramePlan.TryGetAllocation(binding, out var allocation))
+        {
+            var pointerAddress = EmitStackLifetimeStart(binding);
+            var lengthAddress = NextTemp("mutable_len_addr");
+            EmitAssign(lengthAddress, $"getelementptr i8, ptr {pointerAddress}, i64 8");
+            var capacityAddress = NextTemp("mutable_capacity_addr");
+            EmitAssign(capacityAddress, $"getelementptr i8, ptr {pointerAddress}, i64 16");
+            slot = new MutableContainerSlot(
+                pointerAddress,
+                lengthAddress,
+                capacityAddress,
+                allocation);
+        }
+        else
+        {
+            slot = new MutableContainerSlot(
+                NextTemp("mutable_ptr_addr"),
+                NextTemp("mutable_len_addr"),
+                NextTemp("mutable_capacity_addr"),
+                StackAllocation: null);
+            EmitAlloca(slot.PointerAddress, "ptr", 8);
+            EmitAlloca(slot.LengthAddress, "i64", 8);
+            EmitAlloca(slot.CapacityAddress, "i64", 8);
+        }
+
+        _mutableContainerSlots[binding.Name] = slot;
+        StoreMutableContainer(binding.Name, value);
+    }
+
+    private void EndMutableContainerSlotLifetime(string name)
+    {
+        if (_mutableContainerSlots.TryGetValue(name, out var slot)
+            && slot.StackAllocation is not null)
+        {
+            EmitStackLifetimeEnd(slot.StackAllocation);
+        }
     }
 
     private RuntimeValue LoadMutableContainer(string name, RuntimeValue value)
@@ -237,6 +410,178 @@ internal sealed partial class LlvmEmitter
         return name.Name;
     }
 
+    private string? GetBlockResultTransferredOwnerName(Expression expression)
+    {
+        if (expression is NameExpression name)
+        {
+            return name.Name;
+        }
+
+        var movedSourceName = GetMoveConsumingContainerSourceName(expression);
+        if (movedSourceName is not null)
+        {
+            return movedSourceName;
+        }
+
+        if (expression is CallExpression call
+            && TryResolveFunction(call.Path, out var callFunction)
+            && FunctionConsumesOwnedHeapInput(callFunction)
+            && call.Arguments.Count == 1
+            && call.Arguments[0] is NameExpression argumentName)
+        {
+            return argumentName.Name;
+        }
+
+        if (expression is FlowExpression flow
+            && flow.Source is NameExpression sourceName
+            && flow.Targets.Any(target =>
+                TryResolveFunction(target.Path, out var targetFunction)
+                && FunctionConsumesOwnedHeapInput(targetFunction)))
+        {
+            return sourceName.Name;
+        }
+
+        if (expression is IfExpression conditional && conditional.Else is not null)
+        {
+            return CommonTransferredOwnerName(
+                GetBlockTransferredOwnerName(conditional.Then),
+                GetBlockTransferredOwnerName(conditional.Else));
+        }
+
+        if (expression is WhenExpression whenExpression)
+        {
+            var transferredName = GetBlockTransferredOwnerName(whenExpression.Else);
+            foreach (var arm in whenExpression.Arms)
+            {
+                transferredName = CommonTransferredOwnerName(
+                    transferredName,
+                    GetBlockTransferredOwnerName(arm.Body));
+                if (transferredName is null)
+                {
+                    return null;
+                }
+            }
+
+            return transferredName;
+        }
+
+        return null;
+    }
+
+    private string? GetFunctionResultTransferredOwnerName(
+        BoundFunction function,
+        Expression expression)
+    {
+        if (FunctionConsumesOwnedHeapInput(function)
+            && function.InputType == function.ReturnType)
+        {
+            var inputName = function.InputName ?? "it";
+            if (TransfersOwnerName(expression, inputName, isResult: true))
+            {
+                return inputName;
+            }
+        }
+
+        return GetBlockResultTransferredOwnerName(expression);
+    }
+
+    private bool TransfersOwnerName(Expression expression, string ownerName, bool isResult)
+    {
+        if (isResult && expression is NameExpression name && name.Name == ownerName)
+        {
+            return true;
+        }
+
+        if (string.Equals(
+            GetMoveConsumingContainerSourceName(expression),
+            ownerName,
+            StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        if (expression is CallExpression call
+            && TryResolveFunction(call.Path, out var callFunction)
+            && FunctionConsumesOwnedHeapInput(callFunction)
+            && call.Arguments.Count == 1
+            && call.Arguments[0] is NameExpression argumentName
+            && argumentName.Name == ownerName)
+        {
+            return true;
+        }
+
+        if (expression is FlowExpression flow
+            && flow.Source is NameExpression sourceName
+            && sourceName.Name == ownerName
+            && flow.Targets.Any(target =>
+                TryResolveFunction(target.Path, out var targetFunction)
+                && FunctionConsumesOwnedHeapInput(targetFunction)))
+        {
+            return true;
+        }
+
+        if (expression is IfExpression conditional && conditional.Else is not null)
+        {
+            return TransfersOwnerName(conditional.Then, ownerName)
+                && TransfersOwnerName(conditional.Else, ownerName);
+        }
+
+        return expression is WhenExpression whenExpression
+            && TransfersOwnerName(whenExpression.Else, ownerName)
+            && whenExpression.Arms.All(arm => TransfersOwnerName(arm.Body, ownerName));
+    }
+
+    private bool TransfersOwnerName(BlockBody body, string ownerName)
+    {
+        foreach (var statement in body.Statements)
+        {
+            var expression = statement switch
+            {
+                BindingStatement binding => binding.Value,
+                ExpressionStatement expressionStatement => expressionStatement.Expression,
+                _ => null
+            };
+            if (expression is not null && TransfersOwnerName(expression, ownerName, isResult: false))
+            {
+                return true;
+            }
+        }
+
+        return body.Value is not null && TransfersOwnerName(body.Value, ownerName, isResult: true);
+    }
+
+    private string? GetBlockTransferredOwnerName(BlockBody body)
+    {
+        foreach (var statement in body.Statements)
+        {
+            var expression = statement switch
+            {
+                BindingStatement binding => binding.Value,
+                ExpressionStatement expressionStatement => expressionStatement.Expression,
+                _ => null
+            };
+            if (expression is null)
+            {
+                continue;
+            }
+
+            var transferredName = GetBlockResultTransferredOwnerName(expression);
+            if (transferredName is not null)
+            {
+                return transferredName;
+            }
+        }
+
+        return body.Value is null ? null : GetBlockResultTransferredOwnerName(body.Value);
+    }
+
+    private static string? CommonTransferredOwnerName(string? left, string? right)
+    {
+        return left is not null && string.Equals(left, right, StringComparison.Ordinal)
+            ? left
+            : null;
+    }
+
     private GlobalString AddGlobalString(string text)
     {
         var bytes = Encoding.UTF8.GetBytes(text);
@@ -281,14 +626,7 @@ internal sealed partial class LlvmEmitter
 
     private static int DictionaryCapacityForLength(int length)
     {
-        var minimum = Math.Max(length * 2, 4);
-        var capacity = 1;
-        while (capacity < minimum)
-        {
-            capacity *= 2;
-        }
-
-        return capacity;
+        return IntDictionaryLayout.CapacityForLength(length);
     }
 
     private static string SymbolForFunction(string name)
@@ -333,14 +671,54 @@ internal sealed partial class LlvmEmitter
 
     private sealed record RuntimeBool(string ValueName) : RuntimeValue(BoundType.Bool);
 
-    private sealed record RuntimeStaticIntArray(string PointerName, string LengthName, int AllocatedLength)
+    private sealed record RuntimeStruct(BoundType StructType, string ValueName) : RuntimeValue(StructType);
+
+    private sealed record RuntimeEnum(BoundType EnumType, string ValueName) : RuntimeValue(EnumType);
+
+    private sealed record RuntimeBox(BoundType BoxType, BoundType ElementType, string PointerName)
+        : RuntimeValue(BoxType);
+
+    private sealed record RuntimeIntSlice(string PointerName, string LengthName) : RuntimeValue(BoundType.IntSlice);
+
+    private sealed record RuntimeStaticIntArray(
+        string PointerName,
+        string LengthName,
+        int AllocatedLength,
+        RuntimeContainerStorage Storage = RuntimeContainerStorage.Stack)
         : RuntimeValue(BoundType.StaticIntArray);
 
-    private sealed record RuntimeDynamicIntArray(string PointerName, string LengthName, string CapacityName)
+    private sealed record RuntimeDynamicIntArray(
+        string PointerName,
+        string LengthName,
+        string CapacityName,
+        RuntimeContainerStorage Storage = RuntimeContainerStorage.Heap)
         : RuntimeValue(BoundType.DynamicIntArray);
 
-    private sealed record RuntimeIntDictionary(string PointerName, string LengthName, string CapacityName)
+    private enum RuntimeContainerStorage
+    {
+        Heap,
+        Stack
+    }
+
+    private sealed record RuntimeIntDictionary(
+        string PointerName,
+        string LengthName,
+        string CapacityName,
+        RuntimeContainerStorage Storage = RuntimeContainerStorage.Heap)
         : RuntimeValue(BoundType.IntDictionary);
+
+    private sealed record RuntimeIntDictionaryView(string PointerName, string LengthName, string CapacityName)
+        : RuntimeValue(BoundType.IntDictionaryView);
+
+    private sealed record RuntimeMutableContainerReference(
+        BoundType TargetType,
+        string PointerAddress,
+        string LengthAddress,
+        string CapacityAddress)
+        : RuntimeValue(TargetType);
+
+    private sealed record RuntimeMutableStructReference(BoundType TargetType, string PointerAddress)
+        : RuntimeValue(TargetType);
 
     private sealed record DictionaryFindResult(string FoundName, string SlotName, string H2ByteName);
 
@@ -355,12 +733,19 @@ internal sealed partial class LlvmEmitter
 
     private sealed record RuntimeFlowResult(RuntimeValue? Value, RuntimeFlowBinding? Binding, string Ok);
 
-    private sealed record MutableContainerSlot(string PointerAddress, string LengthAddress, string CapacityAddress);
+    private sealed record MutableContainerSlot(
+        string PointerAddress,
+        string LengthAddress,
+        string CapacityAddress,
+        StackAllocationPlan? StackAllocation);
 
     private sealed record LocalScope(
         Dictionary<string, RuntimeValue> Locals,
         HashSet<string> MutableLocals,
-        Dictionary<string, MutableContainerSlot> MutableContainerSlots);
+        HashSet<string> BorrowedMutableLocals,
+        HashSet<string> BorrowedOwnedLocals,
+        Dictionary<string, MutableContainerSlot> MutableContainerSlots,
+        Dictionary<string, string> MutableStructSlots);
 
     private sealed record RuntimeBlockInvocation(
         string ItemName,

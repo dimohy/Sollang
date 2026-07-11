@@ -1,0 +1,207 @@
+using System.Globalization;
+using System.Text;
+using SmallLang.Compiler.Diagnostics;
+using SmallLang.Compiler.Semantics;
+using SmallLang.Compiler.Syntax;
+
+namespace SmallLang.Compiler.CodeGen;
+
+internal sealed partial class LlvmEmitter
+{
+    private string EmitStructTypeDefinitions()
+    {
+        if (_program.Types.Structs.Count == 0 && _program.Types.Enums.Count == 0)
+        {
+            return string.Empty;
+        }
+
+        var builder = new StringBuilder();
+        foreach (var definition in _program.Types.Structs.OrderBy(static definition => definition.Id))
+        {
+            var fields = string.Join(", ", definition.Fields.Select(field => LlvmType(field.Type)));
+            builder.Append(LlvmStructType(definition.Id))
+                .Append(" = type { ")
+                .Append(fields)
+                .AppendLine(" }");
+        }
+
+        foreach (var definition in _program.Types.Enums.OrderBy(static definition => definition.Id))
+        {
+            builder.Append(LlvmEnumType(definition.Id))
+                .Append(" = type { i32, [")
+                .Append(definition.PayloadWords.ToString(CultureInfo.InvariantCulture))
+                .AppendLine(" x i64] }");
+        }
+
+        builder.AppendLine();
+        return builder.ToString();
+    }
+
+    private RuntimeStruct EmitStructLiteralExpression(StructLiteralExpression expression)
+    {
+        if (!_program.Types.TryResolve(expression.TypeName, out var type) || !_program.Types.IsStruct(type))
+        {
+            throw new SmallLangException($"unknown runtime struct type '{expression.TypeName}'");
+        }
+
+        var definition = _program.Types.GetStruct(type);
+        var initializers = expression.Fields.ToDictionary(static field => field.Name, StringComparer.Ordinal);
+        var aggregate = "poison";
+        foreach (var field in definition.Fields)
+        {
+            var value = EmitExpression(initializers[field.Name].Value);
+            EnsureRuntimeType(value, field.Type, $"{definition.Name}.{field.Name}");
+            var materialized = MaterializeAggregateValue(value);
+            var next = NextTemp("struct_init");
+            EmitAssign(
+                next,
+                $"insertvalue {LlvmStructType(type)} {aggregate}, {materialized.TypeName} {materialized.ValueName}, {field.Index.ToString(CultureInfo.InvariantCulture)}");
+            aggregate = next;
+        }
+
+        return new RuntimeStruct(type, aggregate);
+    }
+
+    private RuntimeValue EmitFieldAccessExpression(FieldAccessExpression expression)
+    {
+        if (TryEmitPayloadlessEnumVariant(expression, out var enumValue))
+        {
+            return enumValue;
+        }
+        if (expression.Source is NameExpression typeName
+            && !_locals.ContainsKey(typeName.Name)
+            && _program.Types.TryResolve(typeName.Name, out var type)
+            && _program.Types.IsStruct(type)
+            && _currentFunctions.TryGetValue(typeName.Name + "." + expression.FieldName, out var associated)
+            && associated.InputType is null)
+        {
+            return EmitFunctionCall(associated, argument: null);
+        }
+
+        var source = EmitExpression(expression.Source);
+        if (source is RuntimeBox box)
+        {
+            var loaded = NextTemp("box_value");
+            EmitLoad(loaded, LlvmType(box.ElementType), box.PointerName, RuntimeAlignment(box.ElementType));
+            source = DematerializeAggregateValue(box.ElementType, loaded);
+        }
+        if (source is not RuntimeStruct value)
+        {
+            throw new SmallLangException("field access expects a runtime struct value");
+        }
+
+        var definition = _program.Types.GetStruct(value.Type);
+        var field = definition.Fields.FirstOrDefault(candidate => candidate.Name == expression.FieldName);
+        if (field is null)
+        {
+            if (TryResolveInstanceMethod(value.Type, expression.FieldName, out var method)
+                && method.InputOwnership == BoundFunctionInputOwnership.Default)
+            {
+                return EmitFunctionCall(method, value);
+            }
+
+            throw new SmallLangException(
+                $"struct '{definition.Name}' has no field or readonly computed member '{expression.FieldName}'");
+        }
+        var extracted = NextTemp("field");
+        EmitAssign(
+            extracted,
+            $"extractvalue {LlvmStructType(value.Type)} {value.ValueName}, {field.Index.ToString(CultureInfo.InvariantCulture)}");
+        return DematerializeAggregateValue(field.Type, extracted);
+    }
+
+    private (string TypeName, string ValueName) MaterializeAggregateValue(RuntimeValue value)
+    {
+        return value switch
+        {
+            RuntimeInt integer => ("i64", integer.ValueName),
+            RuntimeBool boolean => ("i1", boolean.ValueName),
+            RuntimeText text => ("%smalllang.text", BuildTextAggregate(text)),
+            RuntimeStruct structure => (LlvmStructType(structure.Type), structure.ValueName),
+            RuntimeEnum enumeration => (LlvmEnumType(enumeration.Type), enumeration.ValueName),
+            RuntimeBox box => ("ptr", box.PointerName),
+            _ => throw new SmallLangException($"type {value.Type} is not supported in an inline struct field")
+        };
+    }
+
+    private RuntimeValue DematerializeAggregateValue(BoundType type, string valueName)
+    {
+        if (_program.Types.IsStruct(type))
+        {
+            return new RuntimeStruct(type, valueName);
+        }
+        if (_program.Types.IsEnum(type))
+        {
+            return new RuntimeEnum(type, valueName);
+        }
+        if (_program.Types.IsBox(type))
+        {
+            var box = _program.Types.GetBox(type);
+            return new RuntimeBox(type, box.ElementType, valueName);
+        }
+
+        return type switch
+        {
+            BoundType.Int => new RuntimeInt(valueName),
+            BoundType.Bool => new RuntimeBool(valueName),
+            BoundType.Text => ExtractTextAggregate(valueName),
+            _ => throw new SmallLangException($"type {type} is not supported in an inline struct field")
+        };
+    }
+
+    private string BuildTextAggregate(RuntimeText text)
+    {
+        var aggregate0 = NextTemp("text_value");
+        EmitAssign(aggregate0, $"insertvalue %smalllang.text poison, ptr {text.PointerName}, 0");
+        var aggregate1 = NextTemp("text_value");
+        EmitAssign(aggregate1, $"insertvalue %smalllang.text {aggregate0}, i64 {text.LengthName}, 1");
+        return aggregate1;
+    }
+
+    private RuntimeText ExtractTextAggregate(string aggregate)
+    {
+        var pointer = NextTemp("text_ptr");
+        EmitAssign(pointer, $"extractvalue %smalllang.text {aggregate}, 0");
+        var length = NextTemp("text_len");
+        EmitAssign(length, $"extractvalue %smalllang.text {aggregate}, 1");
+        return new RuntimeText(pointer, length);
+    }
+
+    private string LlvmType(BoundType type)
+    {
+        if (_program.Types.IsStruct(type))
+        {
+            return LlvmStructType(type);
+        }
+        if (_program.Types.IsEnum(type))
+        {
+            return LlvmEnumType(type);
+        }
+        if (_program.Types.IsBox(type))
+        {
+            return "ptr";
+        }
+
+        return type switch
+        {
+            BoundType.Unit => "void",
+            BoundType.Text => "%smalllang.text",
+            BoundType.Int => "i64",
+            BoundType.Bool => "i1",
+            BoundType.IntSlice => "%smalllang.int_slice",
+            BoundType.DynamicIntArray => "%smalllang.dynamic_int_array",
+            BoundType.IntDictionaryView or BoundType.IntDictionary => "%smalllang.int_dictionary",
+            _ => throw new SmallLangException($"type {type} has no first-class LLVM representation")
+        };
+    }
+
+    private static string LlvmStructType(BoundType type)
+    {
+        return "%smalllang.struct." + ((int)type).ToString(CultureInfo.InvariantCulture);
+    }
+
+    private static string LlvmEnumType(BoundType type)
+    {
+        return "%smalllang.enum." + ((int)type).ToString(CultureInfo.InvariantCulture);
+    }
+}

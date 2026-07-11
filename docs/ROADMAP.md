@@ -1,0 +1,55 @@
+# SmallLang Implementation Roadmap
+
+Status: active
+Updated: 2026-07-10
+
+Every completed slice must add cumulative `.sl` examples, keep safe-code leak
+freedom statically provable, build with zero warnings, and pass the complete
+example suite. LLVM allocation assertions are required when placement or
+ownership behavior is part of the feature.
+
+## Memory Placement
+
+- [x] Deterministic drop for owned dynamic arrays and dictionaries
+- [x] Readonly, `mut`, and `move` container parameter modes
+- [x] Lazy allocation for empty dynamic containers
+- [x] Top-level readonly array and dictionary stack promotion
+- [x] Function-entry stack-frame allocation plan
+- [x] Binding lifetime intervals and non-overlapping slot reuse
+- [x] Peak concurrent stack budget instead of cumulative candidate bytes
+- [x] `llvm.lifetime.start/end` emission
+- [x] Nested `if`, `when`, block, and loop stack promotion
+- [x] Stack planning for local/standard-library inline function bodies
+- [x] Function-entry placement for mutable container handles
+- [x] Function-entry placement for small fixed arrays
+- [x] Large fixed-array automatic heap placement
+
+## User Types
+
+- [x] Nominal `struct` value types with exact field layout
+- [x] Complete field initialization and direct field access
+- [x] Recursive move/drop generation for owned fields
+- [x] `impl` blocks and associated constructors
+- [x] Readonly `self`, `mut self`, and `move self` method receivers
+- [x] Object-oriented dot-call syntax without class inheritance
+- [x] Payload `enum` values and exhaustive `when`
+- [ ] Standard `Option[T]` and `Result[T, E]` foundations
+
+## Traits And Generics
+
+- [x] Nominal `trait` declarations and explicit `impl`
+- [x] Static trait dispatch as the default
+- [x] Checked type generics with trait bounds
+- [ ] Compile-time value generics for fixed sizes and specialization
+- [x] Monomorphization with deterministic ownership/drop behavior for inline values
+- [ ] Associated types for container and iterator contracts
+- [x] Explicit `box T` for stable identity or recursive-size breaks
+- [ ] Explicit `dyn Trait` and vtables for runtime polymorphism
+
+## Design Direction
+
+SmallLang combines Rust-style ownership, `struct`/`enum`/`trait`/`impl`, and
+explicit dynamic dispatch with familiar object-oriented method calls and
+encapsulation. Values and static dispatch are the defaults. Reference identity,
+heap boxing, and runtime polymorphism must be explicit. Class inheritance and
+implicit null are outside the intended safe language surface.

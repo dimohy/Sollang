@@ -10,8 +10,10 @@ The implemented slice is intentionally narrower than the final design. It
 supports `Int` static arrays, `Int` dynamic arrays, and `{Int: Int}`
 dictionaries, with deterministic drop insertion for owned heap containers.
 It also supports move-consuming owner transforms for growable arrays and
-dictionaries. Borrowed slices, generic element types, mutable indexing
-assignment, and typed empty dictionaries remain future work.
+dictionaries, mutable indexing assignment, typed empty dynamic arrays and
+dictionaries, block-local drop scopes for heap-owning containers, and owned
+growable array/dictionary parameters and returns in functions. Borrowed slices
+and generic element types remain future work.
 
 ## Rust Reference Points
 
@@ -58,7 +60,7 @@ SmallLang should split array concepts by ownership:
 
 ```text
 [T; N]      owned fixed-size array
-[T; ..]     owned growable heap array
+[T; ~]      owned growable heap array
 &[T]        shared borrowed slice view
 &mut [T]    exclusive mutable borrowed slice view
 ```
@@ -69,12 +71,13 @@ borrows storage from another owner.
 
 The source syntax should also look like SmallLang, not Rust. `Vec<T>` is only a
 reference model for the internal ownership shape. User code should say
-`[T; ..]`, not `Vec<T>`.
+`[T; ~]`, not `Vec<T>`.
 
 `{ ... }` should not be used for dynamic arrays. Braces already delimit blocks,
 and they are a better future fit for dictionaries or maps. Dynamic arrays stay
-inside the `[]` family and use `..` to show that the sequence is open and
-growable.
+inside the `[]` family and use `~` to show that the sequence is open and
+growable. A number immediately before `~`, as in `[Int; 1024~]`, is a capacity
+hint, not an initial length.
 
 ## Implemented Container Slice
 
@@ -86,18 +89,20 @@ main {
     numbers[0] => first
     numbers -> len => count
 
-    [10, 20, ..] => mut values
-    values -> push(30)
-    values[2] => third
-    values -> capacity => capacity
+    [10, 20, ~] => values!
+    values! -> push(30)
+    values![2] => third
+    99 => values![1]
+    values! -> capacity => capacity
 
-    [10, 20, ..] => values
+    [10, 20, ~] => values
     values -> append(30) => values
     values -> updated(0, 99) => values
 
-    { 1: 100, 2: 200 } => mut scores
-    scores -> put(3, 300)
-    scores[3] => score
+    { 1: 100, 2: 200 } => scores!
+    scores! -> put(3, 300)
+    250 => scores![2]
+    scores![3] => score
 
     { 1: 100, 2: 200 } => frozenScores
     frozenScores -> updated(2, 250) => frozenScores
@@ -109,10 +114,13 @@ Supported now:
 - `[1, 2, 3]` creates an owned fixed-size `Int` array stored inline in the
   owner.
 - `[0; 8]` creates a repeated fixed-size `Int` array.
-- `[1, 2, ..]` and `[..]` create owned growable `Int` arrays.
-- `{ 1: 100, 2: 200 }` creates an owned `{Int: Int}` dictionary.
-- `value => mut name` creates a mutable binding needed by mutating container
-  operations.
+- `[1, 2, ~]`, `[Int; ~]`, and `[Int; 1024~]` create owned growable `Int`
+  arrays.
+- `{ 1: 100, 2: 200 }` and `{Int: Int}` create owned `{Int: Int}`
+  dictionaries.
+- `value => name!` creates a mutable owner binding needed by mutating container
+  operations. The `!` suffix is part of the local name and remains visible at
+  every use site.
 - `array[index]` and `dictionary[key]` are checked reads.
 - `array -> len`, `array -> capacity`, `array -> push(value)`,
   `dictionary -> len`, `dictionary -> capacity`, and
@@ -123,13 +131,16 @@ Supported now:
   or dictionary owner and returns the moved owner with one value changed or
   inserted.
 - Static and dynamic `Int` arrays work with `each` and `fold`.
+- Functions may accept `[Int]` readonly views. Static and growable `Int` arrays
+  can be passed as `[Int]` without moving ownership, and the caller can keep
+  using the owner after the call.
 - Native Windows and Linux targets allocate through the selected platform
   runtime and emit deterministic cleanup at scope exit.
 
 Current safety boundary:
 
 - Heap-owning containers must be created directly at the binding site, such as
-  `[1, 2, ..] => mut values` or `{ 1: 100 } => mut scores`.
+  `[Int; ~] => values!` or `{Int: Int} => scores!`.
 - Heap-owning containers cannot be produced as anonymous intermediate values in
   a flow chain because the compiler would have no stable drop owner yet.
 - Mutating operations such as `push` and `put` require a named mutable owner.
@@ -139,12 +150,33 @@ Current safety boundary:
 - After a move-consuming transform, the source binding is no longer live. The
   target may reuse the same name, such as `values -> append(30) => values`,
   because the old owner is consumed before the new owner is bound.
-- Container creation inside nested block-function bodies is rejected in this
-  slice until block-local drop scopes are implemented.
+- Container creation inside nested blocks is supported. Heap-owning containers
+  created in a block are dropped at the end of that block unless the block's
+  final expression moves the owner out.
+- A block result may move out a block-local growable array or dictionary owner.
+  Moving an owner from an outer scope through a block result is rejected, except
+  when every function return branch transfers that function's own `move` input.
+- Functions may return `[Int; ~]` and `{Int: Int}` owners. The caller must bind
+  the returned owner directly, and then the caller owns the drop obligation.
+  Anonymous flow use such as `makeValues() -> len` is rejected.
+- Functions may accept `[Int]` readonly views. The callee may read with
+  indexing, `len`, `each`, and `fold`; it cannot mutate the source or store the
+  view beyond the call.
+- Functions may accept `{Int: Int}` readonly views. The callee may use indexing,
+  `len`, and `capacity`; it cannot mutate, move, return, or store the view, and
+  the caller keeps ownership.
+- Functions may accept `mut [Int; ~]` and `mut {Int: Int}` mutable borrows. The
+  caller must pass a named mutable owner such as `values!` or `scores!`; the
+  callee may `push`, `put`, or assign by index, and the caller keeps ownership
+  after the call.
+- Functions may accept `move [Int; ~]` and `move {Int: Int}` owners. Passing
+  one moves the caller's owner into the callee; the source binding cannot be
+  used after the call. The callee may return that owner directly or after
+  `append` or `updated`; the caller must bind the result and receives the drop
+  obligation. Conditional returns must transfer it on every branch or none.
 - Browser WebAssembly currently rejects heap-owning containers because the
   browser target does not yet provide a linear-memory allocator.
-- `Text` arrays, generic arrays, slices, container parameters/returns, and
-  typed empty dictionaries are not implemented yet.
+- `Text` arrays and generic containers are not implemented yet.
 
 ## Function Call Surface
 
@@ -171,8 +203,8 @@ Parentheses should remain only when the flow target receives additional
 arguments beyond the primary left value:
 
 ```smalllang
-values -> push(10)
-values -> reserve(1024)
+values! -> push(10)
+values! -> reserve(1024)
 ```
 
 This keeps the common case closer to pipeline languages, while preserving a
@@ -231,11 +263,11 @@ Dynamic arrays are owned growable array values. The internal model is
 Rust `Vec<T>`-like, but the SmallLang source surface uses array syntax:
 
 ```smalllang
-[..] => mut values
-[10, 20, ..] => mut seeded
-values -> push(10)
-values -> push(20)
-values -> len => count
+[Int; ~] => values!
+[10, 20, ~] => seeded!
+values! -> push(10)
+values! -> push(20)
+values! -> len => count
 ```
 
 The runtime representation is conceptually:
@@ -248,11 +280,12 @@ capacity: Int
 
 Rules:
 
-- A dynamic array owns its heap allocation.
+- A dynamic array owns its payload storage. Heap allocation is the normal
+  placement; D063 permits proven local readonly literals to own stack storage.
 - Moving a dynamic array moves the ownership of the buffer; the old binding
   cannot be used afterward.
-- Dropping a dynamic array drops initialized elements and then deallocates the
-  buffer.
+- Dropping a dynamic array drops initialized elements and deallocates only a
+  heap-placed buffer.
 - `push` may reallocate and therefore requires exclusive mutable access.
 - Any slice or element borrow into a dynamic array must end before a mutating
   operation that may reallocate.
@@ -263,30 +296,74 @@ Storage placement:
 
 - The dynamic array owner value is a small handle: pointer, length, and capacity.
 - A local dynamic array binding can store that handle on the stack.
-- The element buffer is always heap-allocated when capacity is nonzero.
+- The element buffer normally uses heap storage when capacity is nonzero.
+- A small literal payload may use stack storage when placement analysis proves
+  that its immutable local owner never grows or escapes the current frame.
 - Moving a dynamic array moves the handle and transfers ownership of the heap
   buffer. It does not copy the buffer.
 - Reallocation may move the element buffer, so active element/slice borrows must
   end before `push`, `reserve`, or any operation that can reallocate.
 
+### Stack And Heap Cost
+
+- A local `[Int; N]` stores its elements inline and is currently emitted as an
+  LLVM entry-slot allocation when it fits the planned frame budget. A fixed
+  array that does not fit is automatically placed in owned heap storage and
+  freed at its scope drop point. Its indexing and readonly-view surface does
+  not depend on the selected storage.
+- A local `[Int; ~]` or `{Int: Int}` stores only a three-word owner handle
+  (`ptr`, `len`, `capacity`) in the local frame. Its elements or hash-table
+  storage normally live in one owned heap allocation when capacity is nonzero.
+- A direct nonempty `[Int; ~]` literal bound to an immutable local in `main`, a
+  non-inline user function, or one of their nested control-flow blocks is
+  stack-promoted when all later uses are readonly. Recognized readonly uses are
+  checked indexing, `len`, `capacity`, `each`, `fold`, and calls through
+  `[Int]` parameters.
+- A direct nonempty `{Int: Int}` literal has the same placement rule. Its stack
+  cost includes control bytes, alignment padding, and every 16-byte key/value
+  slot in the Swiss table. Recognized readonly uses are checked lookup, `len`,
+  `capacity`, and calls through `{Int: Int}` readonly parameters.
+- Any `move`, `append`, `updated`, mutable binding, possible growth, or function
+  result escape keeps the payload on the heap. `put` also keeps dictionaries on
+  the heap. Local/standard-library inline functions and block-function bodies
+  are not promoted in this slice, because an `alloca` emitted inside a caller
+  loop could accumulate until the frame returns.
+- The frame planner assigns every promoted payload a creation-to-last-use
+  interval. Non-overlapping intervals may share one function-entry stack slot,
+  including mutually exclusive branches and repeated loop bodies. LLVM
+  `lifetime.start/end` calls delimit each use of the slot.
+- Automatic array and dictionary promotion uses a 4096-byte planned frame
+  budget. The budget is charged by physical slot size after reuse rather than
+  by the sum of every candidate payload. Stack-promoted owners keep the normal
+  `ptr`/`len`/`capacity` interface but emit neither allocation nor `free`.
+- `[Int; ~]` and `{Int: Int}` begin as `{ null, 0, 0 }` when no capacity hint
+  is supplied, so merely creating or readonly-borrowing an empty container does
+  not allocate. The first `push` or `put` lazily allocates an initial capacity.
+- Readonly dictionary calls copy only that three-word handle. They do not copy,
+  allocate, rehash, or free dictionary storage. LLVM may keep the words in
+  registers or spill them to the stack according to the target ABI.
+- `move` also transfers only the handle and drop obligation. It does not copy
+  elements. `mut` passes three addresses to the caller's handle slots so growth
+  can update the original owner without another heap wrapper.
+
 The type form is:
 
 ```smalllang
-[Int; ..]
-[Text; ..]
+[Int; ~]
+[Text; ~]
 ```
 
 The literal form uses an open tail marker:
 
 ```smalllang
-[1, 2, 3, ..] => mut values
+[1, 2, 3, ~] => values!
 ```
 
-The `..` marker means the sequence is not a closed fixed-size value anymore; it
+The `~` marker means the sequence is not a closed fixed-size value anymore; it
 is an owned growable array initialized with the listed elements.
 
-The first implementation can support `[Int; ..]` only, but the language design
-should keep `[T; ..]` generic from the start.
+The first implementation can support `[Int; ~]` and `[Int; N~]` only, but the
+language design should keep `[T; ~]` generic from the start.
 
 ## Dictionaries
 
@@ -294,11 +371,11 @@ Dictionaries use braces because braces are a natural fit for key-value data and
 because dynamic arrays stay in the `[]` family:
 
 ```smalllang
-{ 1: 100, 2: 200 } => mut scores
-scores[1] => firstScore
-scores -> put(3, 300)
-scores -> len => count
-scores -> capacity => capacity
+{ 1: 100, 2: 200 } => scores!
+scores![1] => firstScore
+scores! -> put(3, 300)
+scores! -> len => count
+scores! -> capacity => capacity
 ```
 
 The final type form should be:
@@ -308,11 +385,12 @@ The final type form should be:
 {Int: Text}
 ```
 
-The implemented slice supports only `{Int: Int}`. It stores owned heap data
-behind a small owner handle and frees that storage at the owning binding's drop
-point. Lookup is checked: a missing key traps in the current runtime slice
-instead of returning an arbitrary fallback value. A later `get` API should
-return `Option<T>` once option types exist.
+The implemented slice supports only `{Int: Int}`. It normally stores owned heap
+data behind a small owner handle and frees that storage at the owning binding's
+drop point. Proven local readonly literals instead own one aligned stack block
+and require no free. Lookup is checked: a missing key traps in the current
+runtime slice instead of returning an arbitrary fallback value. A later `get`
+API should return `Option<T>` once option types exist.
 
 The empty literal `{}` is intentionally not accepted yet because it needs an
 explicit type annotation or constructor form to avoid guessing key and value
@@ -359,19 +437,19 @@ SmallLang should keep immutable bindings as the default and introduce explicit
 mutable bindings when arrays need in-place updates:
 
 ```smalllang
-[..] => mut values
-values -> push(10)
-values -> push(20)
+[Int; ~] => values!
+values! -> push(10)
+values! -> push(20)
 
-99 => values[1]
+99 => values![1]
 ```
 
 Rules:
 
 - `value => name` creates an immutable binding.
-- `value => mut name` creates a mutable binding.
-- Assigning to `values[index]` requires `values` to be mutable or mutably
-  borrowed.
+- `value => name!` creates a mutable owner binding.
+- Assigning to `values![index]` requires a mutable owner binding or mutable
+  borrow.
 - Borrowing a mutable binding as `&mut` is exclusive for the duration of the
   borrow.
 
@@ -382,7 +460,7 @@ Immutable bindings can still produce changed values by moving the owner into a
 new owner:
 
 ```smalllang
-[1, 2, ..] => values
+[1, 2, ~] => values
 values -> append(3) => values
 values -> updated(0, 9) => values
 
@@ -426,7 +504,8 @@ Known tradeoffs:
 
 Recommended follow-up direction:
 
-- Keep `push`/`put` as explicit in-place mutation for `=> mut` owners.
+- Keep `push`/`put` and indexed assignment as explicit in-place mutation for
+  `=> name!` owners.
 - Add a builder/transient form for bulk construction. A temporary unique builder
   can perform many local updates and then freeze into an immutable owner without
   copying on every step.
@@ -444,7 +523,7 @@ Indexing:
 
 ```smalllang
 numbers[0] => first
-99 => values[1]
+99 => values![1]
 ```
 
 Rules:
@@ -476,14 +555,14 @@ Flow target calls accept receiver-style additional arguments:
 
 ```smalllang
 7 -> square
-values -> push(10)
+values! -> push(10)
 ```
 
 Arrays and dictionaries use this shape for mutating operations:
 
 ```smalllang
-values -> push(10)
-scores -> put(3, 300)
+values! -> push(10)
+scores! -> put(3, 300)
 ```
 
 Design rule:
@@ -497,8 +576,8 @@ Examples:
 
 ```text
 len: &[T] -> Int
-push: &mut [T; ..], T -> Unit
-reserve: &mut [T; ..], Int -> Unit
+push: &mut [T; ~], T -> Unit
+reserve: &mut [T; ~], Int -> Unit
 ```
 
 The target function or intrinsic decides whether the left value is read,
@@ -557,9 +636,9 @@ Every owned value has exactly one owner at a time. When that owner leaves its
 drop scope, the compiler emits cleanup for the value:
 
 ```smalllang
-[..] => mut values
-values -> push(10)
-values -> push(20)
+[Int; ~] => values!
+values! -> push(10)
+values! -> push(20)
 
 # leaving the scope drops 10 and 20, then deallocates the buffer
 ```
@@ -581,10 +660,10 @@ Drop rules:
 Moving an owned array transfers the obligation to drop it:
 
 ```smalllang
-[1, 2, 3, ..] => mut values
-values -> takeArray => result
+[1, 2, 3, ~] => values!
+values! -> takeArray => result
 
-# values is moved and cannot be used or dropped here
+# values! is moved and cannot be used or dropped here
 ```
 
 After a move, the source binding is no longer usable unless it is assigned a new
@@ -616,7 +695,7 @@ Borrow rules:
 The safe language surface must not expose raw allocator pairs such as
 `alloc/free`, raw owning pointers, or APIs that allocate without returning an
 owned value. Allocation enters safe code only through an owned type such as
-`[T; ..]` or the owned result of `heap()`.
+`[T; ~]` or the owned result of `heap()`.
 
 If unsafe/raw interop is added later, it should be isolated behind an explicit
 unsafe boundary and must not be required for ordinary arrays.
@@ -650,9 +729,9 @@ makeView: -> &[Int] {
 Mutating a dynamic array while a slice borrow is live is rejected:
 
 ```smalllang
-[1, 2, 3, ..] => mut values
-values -> slice => view
-values -> push(4)
+[1, 2, 3, ~] => values!
+values! -> slice => view
+values! -> push(4)
 ```
 
 The `push` can reallocate the heap buffer, so the compiler must reject it while
@@ -661,9 +740,9 @@ The `push` can reallocate the heap buffer, so the compiler must reject it while
 Moving and then using the moved binding is rejected:
 
 ```smalllang
-[1, 2, 3, ..] => mut values
-values -> consume
-values -> len => count
+[1, 2, 3, ~] => values!
+values! -> consume
+values! -> len => count
 ```
 
 The `consume` call moves ownership. The later `len` call would read a
@@ -676,8 +755,9 @@ The first useful implementation is now present:
 - `[` and `]` tokens plus array literals.
 - `[Int; N]` static arrays with inferred length.
 - read-only indexing for `[Int; N]`.
-- `[Int; ..]` dynamic arrays with inferred `Int` element type.
-- `{Int: Int}` dictionary literals.
+- `[Int; ~]` dynamic arrays with inferred `Int` element type, including typed
+  empty `[Int; ~]` and capacity hint `[Int; N~]`.
+- `{Int: Int}` dictionary literals, including typed empty `{Int: Int}`.
 - read-only indexing for dynamic arrays and dictionaries.
 - `len` and `capacity` receiver-flow operations.
 - `push(value)` for mutable dynamic arrays.
@@ -688,19 +768,29 @@ The first useful implementation is now present:
   update.
 - `array -> each item { ... }` for `Int` arrays.
 - `array -> fold initial acc, item { ... }` for `Int` arrays.
-- `value => mut name` mutable binding syntax.
+- `value => name!` mutable owner binding syntax.
+- mutable indexing assignment with `value => owner![index]`.
 - deterministic drop emission for heap-owning local dynamic arrays and
   dictionaries on supported native targets.
+- readonly `[Int]` function parameters for non-owning array views.
+- readonly `{Int: Int}` function parameters for non-owning dictionary views.
+- `mut [Int; ~]` and `mut {Int: Int}` function parameters for non-owning
+  mutable container borrows.
+- explicit `move` growable array and dictionary parameters, including returning
+  consumed input owners with complete return-branch coverage.
+- automatic stack promotion for small, non-escaping, readonly dynamic-array
+  and dictionary literals, with LLVM allocation/free assertions in examples 38
+  and 39.
+- function-entry stack slots, last-use lifetime markers, and nested branch/loop
+  slot reuse, with one-slot LLVM assertions in example 40.
+- entry-slot planning for local inline functions and mutable container metadata,
+  plus automatic large fixed-array heap placement, verified by examples 30, 41,
+  and 42.
 
 The next slice should add:
 
 - builder/transient containers for efficient bulk immutable construction
-- mutable indexing assignment
-- borrowing static arrays and dynamic arrays as `&[Int]`
-- passing `&[Int]` and `&mut [Int; ..]` to functions
-- typed empty dictionaries
-- generic `[T; N]`, `[T; ..]`, and `{K: V}` containers
-- general owned container moves and returns with full drop-scope tracking
+- generic `[T; N]`, `[T; ~]`, and `{K: V}` containers
 
 `pop`, `get`, and fallible allocation APIs should wait until `Option` and
 `Result` exist.

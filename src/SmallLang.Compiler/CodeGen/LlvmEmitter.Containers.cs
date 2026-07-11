@@ -138,10 +138,21 @@ internal sealed partial class LlvmEmitter
         return EmitDictionaryPut(dictionary, key, value);
     }
 
+    private void EmitDictionaryAssignExisting(RuntimeIntDictionary dictionary, string key, string value)
+    {
+        var found = EmitDictionaryFindSlot(dictionary, key);
+        EmitTrapUnless(found.FoundName, "dict_assign_missing");
+        StoreDictionaryEntry(dictionary, found.SlotName, key, value);
+    }
+
     private RuntimeIntDictionary EmitDictionaryGrow(RuntimeIntDictionary dictionary)
     {
+        var hasAnyCapacity = NextTemp("dict_has_capacity");
+        EmitCompare(hasAnyCapacity, "eq", "i64", dictionary.CapacityName, "0");
+        var doubledCapacity = NextTemp("dict_doubled_capacity");
+        EmitBinary(doubledCapacity, "mul", "i64", dictionary.CapacityName, "2");
         var newCapacity = NextTemp("dict_new_capacity");
-        EmitBinary(newCapacity, "mul", "i64", dictionary.CapacityName, "2");
+        EmitSelect(newCapacity, hasAnyCapacity, "i64 4", $"i64 {doubledCapacity}");
         var newDictionary = new RuntimeIntDictionary(
             EmitDictionaryAllocate(newCapacity),
             dictionary.LengthName,

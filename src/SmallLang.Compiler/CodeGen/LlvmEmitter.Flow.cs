@@ -79,7 +79,9 @@ internal sealed partial class LlvmEmitter
                     Ok: ok);
             }
 
-            if (TryResolveFunction(target.Path, out var function))
+            if (_program.ResolvedGenericCalls.TryGetValue(target, out var function)
+                || TryResolveFunction(target.Path, out function)
+                || TryResolveInstanceMethod(current.Type, path, out function))
             {
                 if (target.Arguments.Count != 0)
                 {
@@ -133,7 +135,7 @@ internal sealed partial class LlvmEmitter
                     case BoundFunctionKind.RuntimeCloseIntReader:
                         throw new SmallLangException($"{path} does not accept a flowed input");
                     case BoundFunctionKind.User:
-                        current = EmitFlowFunctionCall(function, current);
+                        current = EmitFlowFunctionCall(function, current, expression.Source);
                         continue;
                     default:
                         throw new SmallLangException($"unsupported runtime function kind '{function.Kind}'");
@@ -168,8 +170,10 @@ internal sealed partial class LlvmEmitter
 
                 result = current switch
                 {
+                    RuntimeIntSlice slice => new RuntimeFlowResult(new RuntimeInt(slice.LengthName), null, _mainOk),
                     RuntimeStaticIntArray staticArray => new RuntimeFlowResult(new RuntimeInt(staticArray.LengthName), null, _mainOk),
                     RuntimeDynamicIntArray dynamicArray => new RuntimeFlowResult(new RuntimeInt(dynamicArray.LengthName), null, _mainOk),
+                    RuntimeIntDictionaryView dictionaryView => new RuntimeFlowResult(new RuntimeInt(dictionaryView.LengthName), null, _mainOk),
                     RuntimeIntDictionary intDictionary => new RuntimeFlowResult(new RuntimeInt(intDictionary.LengthName), null, _mainOk),
                     _ => result
                 };
@@ -183,6 +187,7 @@ internal sealed partial class LlvmEmitter
                 result = current switch
                 {
                     RuntimeDynamicIntArray dynamicArray => new RuntimeFlowResult(new RuntimeInt(dynamicArray.CapacityName), null, _mainOk),
+                    RuntimeIntDictionaryView dictionaryView => new RuntimeFlowResult(new RuntimeInt(dictionaryView.CapacityName), null, _mainOk),
                     RuntimeIntDictionary intDictionary => new RuntimeFlowResult(new RuntimeInt(intDictionary.CapacityName), null, _mainOk),
                     _ => result
                 };
@@ -305,7 +310,7 @@ internal sealed partial class LlvmEmitter
 
         if (!_mutableLocals.Contains(name.Name))
         {
-            throw new SmallLangException($"{operation} requires a mutable binding; use '=> mut {name.Name}'");
+            throw new SmallLangException($"{operation} requires a mutable owner binding; use '=> {name.Name.TrimEnd('!')}!'");
         }
 
         return name.Name;

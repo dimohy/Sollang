@@ -44,16 +44,32 @@ The implementation boundary is intentionally narrow:
 - default loop item binding with `start..end -> each { ... }`, exposed as `it`
 - integer folds with `start..end -> fold initial acc, item { nextAcc }`
 - owned `Int` static arrays with `[1, 2, 3]` and `[0; 8]`
-- owned growable `Int` arrays with `[1, 2, ..]` and `[..]`
-- owned `{Int: Int}` dictionaries with `{ 1: 100, 2: 200 }`
+- owned growable `Int` arrays with `[1, 2, ~]`, typed empty `[Int; ~]`, and
+  capacity hint `[Int; 1024~]`
+- owned `{Int: Int}` dictionaries with `{ 1: 100, 2: 200 }` and typed empty
+  `{Int: Int}` or capacity hint `{Int: Int; 1024~}`
 - checked array and dictionary indexing with `container[index]`
-- mutable container bindings with `value => mut name`
+- mutable owner bindings with `value => name!`
+- mutable indexing assignment with `value => owner![index]`
 - receiver-flow container operations: `len`, `capacity`, `push(value)`, and
   `put(key, value)`
 - move-consuming owner-returning container operations: `append(value)` and
   `updated(keyOrIndex, value)`
 - deterministic drop emission for heap-owning dynamic arrays and dictionaries
   on native targets
+- automatic stack promotion for small dynamic-array and dictionary literals
+  whose owners are proven not to grow or escape their function frame
+- function-entry stack slots, last-use lifetime markers, and non-overlapping
+  payload reuse in nested branches and loops
+- block-local drop emission for heap-owning dynamic arrays and dictionaries
+- readonly `[Int]` function parameters that accept static and growable `Int`
+  arrays without taking ownership
+- readonly `{Int: Int}` function parameters that inspect a dictionary without
+  taking ownership or copying its heap allocation
+- `mut [Int; ~]` and `mut {Int: Int}` function parameters that can mutate a
+  caller-owned growable container without taking ownership
+- explicit `move` growable array and dictionary parameters that may return the
+  consumed input owner
 - purpose-oriented pseudo-random integer generation with `seedRandom` and
   `randomBelow`
 - binary sorted `Int` file writing with `openIntWriter`, `writeInt`, and
@@ -318,15 +334,16 @@ source_file  := trivia* namespace_declaration? import_declaration* function_decl
 namespace_declaration := "namespace" path statement_end
 import_declaration := "import" path ("as" identifier)? statement_end
 function_declaration := path identifier? ":" function_signature (block_function_body | function_body)
-function_signature := "->" type_name | type_name "->" type_name
+function_signature := "->" type_annotation | type_annotation "->" type_annotation
 block_function_body := "block" identifier ":" type_name "{" statement* "}"
-function_body := "{" function_declaration* expression "}" | "=>" expression | "->" expression | "=" "intrinsic"
+function_body := "{" function_declaration* statement* expression "}" | "=>" expression | "->" expression | "=" "intrinsic"
 main_block   := "main" block
 block        := "{" statement* "}"
 statement    := block_function_call | each_statement | binding_statement | expression_statement
 block_function_call := range_or_logical_expression "->" path identifier? block
 each_statement := "each" identifier "in" range_expression block
-binding_statement := identifier "=" expression statement_end | expression "=>" "mut"? identifier statement_end
+binding_statement := identifier "=" expression statement_end | expression "=>" identifier "!"? statement_end
+index_assignment_statement := expression "=>" identifier "!"? "[" expression "]" statement_end
 expression_statement := expression statement_end
 statement_end := newline+ | "}" lookahead
 range_expression := logical_or_expression ".." logical_or_expression
@@ -356,10 +373,11 @@ call         := path "(" argument_list? ")"
 argument_list := expression ("," expression)*
 path         := identifier ("." identifier)*
 type_name    := identifier
+type_annotation := type_name | "[" type_name ";" "~" "]" | "{" type_name ":" type_name "}"
 primary      := atom ("[" expression "]")*
 atom         := when_expression | call | array_literal | dictionary_literal | "(" expression ")" | bool_literal | string_literal | number_literal | identifier
-array_literal := "[" ".." "]" | "[" expression ("," expression)* ("," "..")? "]" | "[" expression ";" number_literal "]"
-dictionary_literal := "{" dictionary_entry ("," dictionary_entry)* ","? "}"
+array_literal := "[" type_name ";" ("~" | number_literal "~") "]" | "[" expression ("," expression)* ("," "~")? "]" | "[" expression ";" number_literal "]"
+dictionary_literal := "{" type_name ":" type_name (";" number_literal "~")? "}" | "{" dictionary_entry ("," dictionary_entry)* ","? "}"
 dictionary_entry := expression ":" expression
 bool_literal := "true" | "false"
 number_literal := decimal_digit+
@@ -447,13 +465,16 @@ There is no `let`, `var`, or declaration keyword.
 Initial binding rules:
 
 - `expression => name` introduces an immutable binding.
-- `expression => mut name` introduces a mutable binding.
+- `expression => name!` introduces a mutable owner binding. The `!` suffix is
+  part of the local name, so later reads and mutating calls also show mutation
+  capability at the use site.
 - The older `name = expression` form remains accepted as a compatibility syntax,
   but new samples should prefer `expression => name`.
 - A binding is visible after its declaration statement.
 - Referencing a binding before declaration is a compile-time error.
 - Reusing the same name in the same scope is a compile-time error for now.
-- Mutating container operations require `=> mut` on the owning binding.
+- Mutating container operations require a mutable owner binding with a `!`
+  suffix.
 - Type inference determines the binding's type from the initializer.
 
 This keeps the smallest program easy to read while avoiding hidden mutation
@@ -707,12 +728,14 @@ numbers -> len => count
 Dynamic arrays:
 
 ```smalllang
-[10, 20, ..] => mut values
-values -> push(30)
-values[2] => third
-values -> capacity => capacity
+[10, 20, ~] => values!
+values! -> push(30)
+values![2] => third
+values! -> capacity => capacity
 
-[10, 20, ..] => values
+99 => values![1]
+
+[10, 20, ~] => values
 values -> append(30) => values
 values -> updated(0, 99) => values
 ```
@@ -720,10 +743,10 @@ values -> updated(0, 99) => values
 Dictionaries:
 
 ```smalllang
-{ 1: 100, 2: 200 } => mut scores
-scores -> put(3, 300)
-scores[3] => score
-scores -> len => count
+{ 1: 100, 2: 200 } => scores!
+scores! -> put(3, 300)
+scores![3] => score
+scores! -> len => count
 
 { 1: 100, 2: 200 } => frozenScores
 frozenScores -> updated(2, 250) => frozenScores
@@ -732,12 +755,24 @@ frozenScores -> updated(2, 250) => frozenScores
 Container rules in the current slice:
 
 - Static arrays are owned fixed-size `Int` values stored inline in the owner.
-- Dynamic arrays own a heap buffer plus `ptr`, `len`, and `capacity` metadata.
-- Dictionaries currently support `{Int: Int}` and own one heap allocation that
-  stores Swiss-style control bytes plus slot-aligned key-value entries.
+- Dynamic arrays own `ptr`, `len`, and `capacity` metadata plus their payload
+  storage. The normal payload placement is heap storage.
+- A nonempty dynamic-array literal bound to an immutable local may instead use
+  inline stack payload storage when the compiler proves every remaining use is
+  readonly and the owner does not escape. This optimization does not change the
+  source type or syntax.
+- Dictionaries currently support `{Int: Int}` and own Swiss-style control bytes
+  plus slot-aligned key-value entries. Heap storage is the normal placement, but
+  a small nonempty dictionary literal may use one aligned stack block when its
+  immutable owner is proven readonly and non-escaping. `{Int: Int}` creates an
+  empty typed dictionary.
+- Typed empty arrays and dictionaries without capacity hints begin with a null
+  pointer and zero capacity. Their first mutation allocates initial storage;
+  readonly use of the empty value performs no heap allocation.
 - Indexing is checked. Out-of-bounds array access and missing dictionary keys
   trap in the current runtime slice.
-- `push` and `put` require a named mutable binding created with `=> mut`.
+- `push`, `put`, and indexed assignment require a named mutable owner binding
+  created with `=> name!`.
 - `append` and `updated` consume a named source owner and return the moved owner.
   After the transform, the source binding is no longer live. The target may
   reuse the same name because the old owner is consumed before the new owner is
@@ -752,12 +787,40 @@ Container rules in the current slice:
   heap owner.
 - Heap-owning container creation must happen directly at a binding site so the
   compiler can insert deterministic cleanup.
+- Heap-owning containers may be created inside nested blocks. The compiler drops
+  block-local owners at the end of that block unless the final block expression
+  moves the owner out as the block result.
+- A block result may move a block-local growable array or dictionary owner out
+  to the surrounding binding. Moving an outer owner out through an inner block
+  result is rejected, except when every return branch transfers the current
+  function's own `move` input to the function result.
+- User functions may return `[Int; ~]` and `{Int: Int}` owners. The returned
+  owner must be bound directly by the caller so the caller owns the drop point.
+  Calling such a function as an anonymous flow source is rejected.
+- User functions may accept `[Int]` readonly views. A static `Int` array or
+  growable `Int` array can be passed to `[Int]` without transferring ownership.
+  The callee can read with indexing, `len`, `each`, and `fold`, but cannot
+  mutate or store the view beyond the call.
+- User functions may accept `{Int: Int}` as a readonly dictionary view. The
+  callee receives `ptr`, `len`, and `capacity` metadata by value and may use
+  indexing, `len`, and `capacity`. `put`, indexed assignment, `updated`, return,
+  and storage beyond the call are rejected. The caller remains the owner.
+- User functions may accept `mut [Int; ~]` and `mut {Int: Int}` mutable
+  borrows. The caller must pass a named mutable owner such as `values!` or
+  `scores!`. The callee can use existing mutable operations such as `push`,
+  `put`, and indexed assignment, and the caller keeps ownership after the call.
+- User functions may accept `move [Int; ~]` and `move {Int: Int}` owners.
+  Passing such a value moves ownership into the callee. The caller binding is
+  no longer live after the call. The callee drops the parameter at function
+  exit or returns it directly or after move-consuming transforms. A returned
+  owner must be bound directly by the caller, which receives the drop duty.
+  Conditional returns must transfer the input on every branch or on none.
 - Native Windows and Linux targets emit platform allocation/free primitives and
   drop dynamic arrays and dictionaries at scope exit.
-- Browser WebAssembly rejects heap-owning containers until the target has a
-  linear-memory allocator.
-- Generic `[T; N]`, `[T; ..]`, `{K: V}`, slices, general owned container moves,
-  typed empty dictionaries, and container parameters/returns are future work.
+- Browser WebAssembly rejects heap-placed containers until the target has a
+  linear-memory allocator. Stack-promoted readonly dynamic arrays and
+  dictionaries require no allocator and are accepted.
+- Generic `[T; N]`, `[T; ~]`, and `{K: V}` are future work.
 
 ## Lexical Design
 
@@ -770,8 +833,8 @@ Initial token categories:
 - identifiers
 - string literals, including interpolation markers inside string mode
 - decimal integer literals
-- punctuation: `{`, `}`, `[`, `]`, `(`, `)`, `..`, `.`, `,`, `;`, `+`, `-`,
-  `*`, `/`, `%`, `->`, `=>`, `:`, `=`
+- punctuation: `{`, `}`, `[`, `]`, `(`, `)`, `..`, `~`, `.`, `,`, `;`, `+`,
+  `-`, `*`, `/`, `%`, `->`, `=>`, `:`, `!`, `=`
 - newlines
 - trivia: spaces, tabs, comments when comments are specified
 - end of file
@@ -1048,7 +1111,7 @@ Function targets in a value-flow statement should omit empty parentheses:
 The compatibility spelling `value -> function()` is still accepted in this
 slice. `square()` as a normal call still means a zero-argument parenthesized
 call. Flow targets with additional arguments are supported for receiver-style
-operations such as `values -> push(10)` and `scores -> put(3, 300)`. When a
+operations such as `values! -> push(10)` and `scores! -> put(3, 300)`. When a
 function-like target receives a brace code block argument, the block argument is
 the call marker: `1..9 -> each { ... }` and `1..9 -> each i { ... }` remain
 valid without `each()`.
@@ -1246,8 +1309,14 @@ Current backend:
   full-condition `when`, subject-value `when`, range-arm `when`, `fold`, `Int`
   static arrays, `Int` dynamic arrays, `{Int: Int}` dictionaries, checked
   indexing, mutable container bindings, move-consuming owner-returning container
-  transforms, receiver-argument flow targets, and expression-first bindings are
-  type-checked for the current slice
+  transforms, nominal inline `struct` values, complete field initialization,
+  direct nested field access, readonly `self` methods in `impl` blocks,
+  parenthesis-free computed members, payload `enum` values, exhaustive enum
+  `when` patterns, nominal traits with explicit implementations, checked
+  single-type generics with trait bounds and monomorphization, receiver-argument
+  flow targets, explicit `box T` owners, recursively sized user types through
+  boxed fields or enum payloads, readonly owned-value borrows, static recursive
+  drop glue, and expression-first bindings are type-checked for the current slice
 - value-flow calls: `value -> function` and compatibility spelling
   `value -> function()` are parsed as a flow AST and lowered by
   semantic/codegen stages according to target position; bare flow targets cannot
@@ -1269,7 +1338,8 @@ Current backend:
   block dispatch
 - IR output: immutable UTF-8 literal segments, runtime function calls, runtime
   i64 arithmetic/comparison, i1 boolean values, one-evaluated subject values for
-  subject-value `when`, branch/phi conditional lowering, inlined local
+  subject-value `when`, branch/phi conditional lowering, named inline LLVM
+  aggregates for user structs, statically dispatched methods, inlined local
   functions, and runtime integer decimal output
 - common emitter: `LlvmEmitter` owns function calls, bindings,
   interpolation, local-function inlining, `each` lowering, integer decimal

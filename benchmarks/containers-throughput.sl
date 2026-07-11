@@ -4,15 +4,15 @@ main {
     8000000 => dictN
 
     nowMillis() => arrayBuildStart
-    [..] => mut values
+    [Int; 50000000~] => values!
     1..arrayN -> each i {
-        values -> push(i)
+        values! -> push(i)
     }
     nowMillis() => arrayBuildEnd
 
     nowMillis() => arrayScanStart
     1..arrayScanRepeats -> fold 0 repeatedTotal, turn {
-        values -> fold 0 total, value {
+        values! -> fold 0 total, value {
             total + value
         } => scanChecksum
         repeatedTotal + scanChecksum
@@ -20,23 +20,23 @@ main {
     nowMillis() => arrayScanEnd
 
     nowMillis() => dictBuildStart
-    { 0: 0 } => mut scores
+    {Int: Int; 8000000~} => scores!
     1..dictN -> each i {
-        scores -> put(i, i * 3)
+        scores! -> put(i, i * 3)
     }
     nowMillis() => dictBuildEnd
 
     nowMillis() => dictLookupStart
     1..dictN -> fold 0 total, i {
-        scores[i] => value
+        scores![i] => value
         total + value
     } => dictChecksum
     nowMillis() => dictLookupEnd
 
-    values -> len => arrayLength
-    values -> capacity => arrayCapacity
-    scores -> len => dictLength
-    scores -> capacity => dictCapacity
+    values! -> len => arrayLength
+    values! -> capacity => arrayCapacity
+    scores! -> len => dictLength
+    scores! -> capacity => dictCapacity
     arrayCapacity * 8 => arrayBackingBytes
     (dictCapacity + 7) / 8 * 8 => dictControlBytes
     dictCapacity * 16 => dictEntriesBytes

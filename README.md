@@ -20,8 +20,23 @@ value flow with `value -> target` syntax and expression-first bindings with
 - `main { ... }` or omitted `main` with top-level executable statements
 - block-function calls such as `1..9 -> each i { ... }`
 - flow-oriented `if` and `when` conditionals
-- fixed and growable `Int` arrays, such as `[1, 2, 3]` and `[1, 2, ..]`
-- `{Int: Int}` dictionaries, such as `{ 1: 100, 2: 200 }`
+- fixed and growable `Int` arrays, such as `[1, 2, 3]`, `[1, 2, ~]`,
+  `[Int; ~]`, and `[Int; 1024~]`
+- `{Int: Int}` dictionaries, such as `{ 1: 100, 2: 200 }`, `{Int: Int}`,
+  and `{Int: Int; 1024~}`
+- readonly `[Int]` function parameters for non-owning array views
+- readonly `{Int: Int}` function parameters for non-owning dictionary views
+- `mut [Int; ~]` and `mut {Int: Int}` function parameters for non-owning
+  mutable container borrows
+- explicit `move` growable array and dictionary parameters, including returning
+  the consumed input owner to the caller
+- automatic stack promotion for small, non-escaping, readonly dynamic-array
+  and dictionary literals
+- lifetime-based function-entry stack slots reused across nested branches and
+  loop iterations
+- small fixed arrays and mutable container metadata placed in entry slots, with
+  oversized fixed arrays automatically moved to owned heap storage
+- mutable owner names with `!` and checked indexed assignment
 - move-consuming container transforms, such as `values -> append(3) => values`
 - a SmallLang standard library under `stdlib/sys`
 - source-generated lexer/parser code from compact grammar files

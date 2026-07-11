@@ -10,20 +10,20 @@ main {
     "count = $count" -> println
     "sum = $sum" -> println
 
-    [10, 20, ..] => mut values
-    values -> push(30)
-    values[2] => third
-    values -> len => dynamicCount
-    values -> capacity => dynamicCapacity
+    [10, 20, ~] => values!
+    values! -> push(30)
+    values![2] => third
+    values! -> len => dynamicCount
+    values! -> capacity => dynamicCapacity
 
     "third = $third" -> println
     "dynamicCount = $dynamicCount" -> println
     "dynamicCapacity = $dynamicCapacity" -> println
 
-    { 1: 100, 2: 200 } => mut scores
-    scores -> put(3, 300)
-    scores[3] => score
-    scores -> len => scoreCount
+    { 1: 100, 2: 200 } => scores!
+    scores! -> put(3, 300)
+    scores![3] => score
+    scores! -> len => scoreCount
 
     "score = $score" -> println
     "scoreCount = $scoreCount" -> println

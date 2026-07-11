@@ -101,6 +101,15 @@ internal static class CompilerApp
         var standardLibrary = LoadStandardLibrary(sourcePath);
         var sourceProgram = ParseSourceFile(sourcePath, isStandardLibrary: false);
         return new SmallLangProgram(
+            standardLibrary.SelectMany(static program => program.Structs)
+                .Concat(sourceProgram.Structs)
+                .ToArray(),
+            standardLibrary.SelectMany(static program => program.Enums)
+                .Concat(sourceProgram.Enums)
+                .ToArray(),
+            standardLibrary.SelectMany(static program => program.Traits)
+                .Concat(sourceProgram.Traits)
+                .ToArray(),
             standardLibrary.SelectMany(static program => program.Functions)
                 .Concat(sourceProgram.Functions)
                 .ToArray(),

@@ -24,6 +24,9 @@ foreach (var expectedFile in expectedFiles)
     var sourcePath = Path.Combine(repoRoot, "examples", name + ".sl");
     var stdinPath = Path.Combine(expectedDir, name + ".stdin.txt");
     var outputPath = Path.Combine(artifactsDir, name + ".exe");
+    var llvmContainsPath = Path.Combine(expectedDir, name + ".llvm.contains.txt");
+    var llvmNotContainsPath = Path.Combine(expectedDir, name + ".llvm.not-contains.txt");
+    var verifyLlvm = File.Exists(llvmContainsPath) || File.Exists(llvmNotContainsPath);
 
     if (!File.Exists(sourcePath))
     {
@@ -32,21 +35,28 @@ foreach (var expectedFile in expectedFiles)
         continue;
     }
 
+    var compilerArguments = new List<string>
+    {
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        Path.Combine(repoRoot, "scripts", "smalllang.ps1"),
+        "-Source",
+        Path.Combine("examples", name + ".sl"),
+        "-Output",
+        Path.Combine("artifacts", "example-tests", name + ".exe"),
+        "-Target",
+        "windows-x64"
+    };
+    if (verifyLlvm)
+    {
+        compilerArguments.Add("-KeepTemps");
+    }
+
     var build = Run(
         "powershell.exe",
-        [
-            "-NoProfile",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-File",
-            Path.Combine(repoRoot, "scripts", "smalllang.ps1"),
-            "-Source",
-            Path.Combine("examples", name + ".sl"),
-            "-Output",
-            Path.Combine("artifacts", "example-tests", name + ".exe"),
-            "-Target",
-            "windows-x64"
-        ],
+        compilerArguments,
         input: null,
         repoRoot);
 
@@ -55,6 +65,18 @@ foreach (var expectedFile in expectedFiles)
         Console.Error.WriteLine($"FAIL {name}: compiler exited {build.ExitCode}");
         Console.Error.WriteLine(build.Stdout);
         Console.Error.WriteLine(build.Stderr);
+        failures++;
+        continue;
+    }
+
+    if (verifyLlvm
+        && !VerifyLlvmAssertions(
+            Path.ChangeExtension(outputPath, ".ll"),
+            llvmContainsPath,
+            llvmNotContainsPath,
+            out var llvmError))
+    {
+        Console.Error.WriteLine($"FAIL {name}: {llvmError}");
         failures++;
         continue;
     }
@@ -88,9 +110,56 @@ foreach (var expectedFile in expectedFiles)
     Console.WriteLine($"PASS {name}");
 }
 
+var diagnosticDir = Path.Combine(repoRoot, "examples", "diagnostics");
+var diagnosticFiles = Directory.Exists(diagnosticDir)
+    ? Directory.EnumerateFiles(diagnosticDir, "*.sl").Order(StringComparer.Ordinal).ToArray()
+    : [];
+foreach (var sourcePath in diagnosticFiles)
+{
+    var name = Path.GetFileNameWithoutExtension(sourcePath);
+    var expectedPath = Path.Combine(diagnosticDir, name + ".stderr.contains.txt");
+    if (!File.Exists(expectedPath))
+    {
+        Console.Error.WriteLine($"FAIL diagnostic/{name}: expected diagnostic file not found");
+        failures++;
+        continue;
+    }
+
+    var build = Run(
+        "powershell.exe",
+        [
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            Path.Combine(repoRoot, "scripts", "smalllang.ps1"),
+            "-Source",
+            Path.GetRelativePath(repoRoot, sourcePath),
+            "-Output",
+            Path.Combine("artifacts", "example-tests", "diagnostic-" + name + ".exe"),
+            "-Target",
+            "windows-x64"
+        ],
+        input: null,
+        repoRoot);
+    var expectedDiagnostic = Normalize(File.ReadAllText(expectedPath, Encoding.UTF8)).Trim();
+    var actualDiagnostic = Normalize(build.Stdout + build.Stderr);
+    if (build.ExitCode == 0 || !actualDiagnostic.Contains(expectedDiagnostic, StringComparison.Ordinal))
+    {
+        Console.Error.WriteLine($"FAIL diagnostic/{name}: expected compiler failure containing:");
+        Console.Error.WriteLine(expectedDiagnostic);
+        Console.Error.WriteLine("ACTUAL:");
+        Console.Error.WriteLine(actualDiagnostic);
+        failures++;
+        continue;
+    }
+
+    Console.WriteLine($"PASS diagnostic/{name}");
+}
+
 if (failures == 0)
 {
-    Console.WriteLine($"All {expectedFiles.Length} example tests passed.");
+    Console.WriteLine($"All {expectedFiles.Length + diagnosticFiles.Length} example tests passed.");
     return 0;
 }
 
@@ -144,6 +213,48 @@ static ProcessResult Run(string fileName, IReadOnlyList<string> args, string? in
 static string Normalize(string value)
 {
     return value.Replace("\r\n", "\n", StringComparison.Ordinal);
+}
+
+static bool VerifyLlvmAssertions(
+    string llvmPath,
+    string containsPath,
+    string notContainsPath,
+    out string error)
+{
+    if (!File.Exists(llvmPath))
+    {
+        error = $"LLVM file not found: {llvmPath}";
+        return false;
+    }
+
+    var llvm = File.ReadAllText(llvmPath, Encoding.UTF8);
+    foreach (var expected in ReadAssertions(containsPath))
+    {
+        if (!llvm.Contains(expected, StringComparison.Ordinal))
+        {
+            error = $"LLVM does not contain '{expected}'";
+            return false;
+        }
+    }
+
+    foreach (var forbidden in ReadAssertions(notContainsPath))
+    {
+        if (llvm.Contains(forbidden, StringComparison.Ordinal))
+        {
+            error = $"LLVM unexpectedly contains '{forbidden}'";
+            return false;
+        }
+    }
+
+    error = "";
+    return true;
+}
+
+static IEnumerable<string> ReadAssertions(string path)
+{
+    return File.Exists(path)
+        ? File.ReadLines(path, Encoding.UTF8).Where(line => !string.IsNullOrWhiteSpace(line))
+        : [];
 }
 
 internal sealed record ProcessResult(int ExitCode, string Stdout, string Stderr);
