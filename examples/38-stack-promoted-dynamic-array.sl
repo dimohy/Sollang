@@ -14,7 +14,7 @@ main {
     localValues -> sumValues => localTotal
     localValues[1] => middle
     localValues -> len => localCount
-    sumLocal() => functionTotal
+    sumLocal => functionTotal
 
     "local total = $localTotal" -> println
     "middle = $middle" -> println

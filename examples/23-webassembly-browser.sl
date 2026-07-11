@@ -7,7 +7,7 @@ square: Int -> Int {
 }
 
 main {
-    title() => runtimeName
+    title => runtimeName
     8 -> square => value
     1..5 -> fold 0 sum, i {
         sum + i

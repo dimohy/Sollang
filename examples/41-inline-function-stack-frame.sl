@@ -13,6 +13,6 @@ run: -> Int {
 }
 
 main {
-    run() => total
+    run => total
     "inline total = $total" -> println
 }

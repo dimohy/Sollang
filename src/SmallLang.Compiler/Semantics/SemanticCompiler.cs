@@ -1362,7 +1362,7 @@ internal sealed class SemanticCompiler
                 ? BoundType.Float32
                 : BoundType.Int,
             BoolExpression => BoundType.Bool,
-            NameExpression name => InferNameExpression(name, functions, bindings),
+            NameExpression name => InferNameExpression(name, functions, bindings, allowReadIntCall),
             ArrayLiteralExpression array => InferArrayLiteralExpression(array, functions, bindings, allowReadIntCall),
             ArrayRepeatExpression repeat => InferArrayRepeatExpression(repeat, functions, bindings, allowReadIntCall),
             TypedEmptyArrayExpression typedArray => InferTypedEmptyArrayExpression(typedArray),
@@ -1866,6 +1866,20 @@ internal sealed class SemanticCompiler
         IReadOnlyDictionary<string, BoundType> bindings,
         bool allowReadIntCall)
     {
+        if (expression.Source is NameExpression functionOwner
+            && !bindings.ContainsKey(functionOwner.Name)
+            && functions.TryGetValue(functionOwner.Name + "." + expression.FieldName, out var zeroArgumentFunction)
+            && zeroArgumentFunction.InputType is null)
+        {
+            EnsureFunctionVisible(zeroArgumentFunction, expression.Line, expression.Column);
+            if (IsMainOnlyRuntimeWrapper(zeroArgumentFunction) && !allowReadIntCall)
+            {
+                throw Error(expression.Line, expression.Column,
+                    $"{zeroArgumentFunction.Name} is only valid in main for the current runtime slice");
+            }
+            return zeroArgumentFunction.ReturnType;
+        }
+
         if (expression.Source is NameExpression genericTypeName
             && !bindings.ContainsKey(genericTypeName.Name)
             && (genericTypeName.Name.StartsWith("Option[", StringComparison.Ordinal)
@@ -3135,6 +3149,18 @@ internal sealed class SemanticCompiler
 
         EnsureFunctionVisible(function, expression.Line, expression.Column);
 
+        if (function.InputType is null
+            && expression.Arguments.Count == 0
+            && !(expression.Path.Count == 2
+                && _types.TryResolve(expression.Path[0], out var zeroArgumentOwnerType)
+                && _types.IsStruct(zeroArgumentOwnerType)))
+        {
+            throw Error(
+                expression.Line,
+                expression.Column,
+                $"zero-argument function '{path}' uses property syntax without parentheses: '{path}'");
+        }
+
         if (expression.Path.Count == 2
             && function.InputType is null
             && _types.TryResolve(expression.Path[0], out var associatedType)
@@ -3840,19 +3866,30 @@ internal sealed class SemanticCompiler
     private BoundType InferNameExpression(
         NameExpression expression,
         IReadOnlyDictionary<string, BoundFunction> functions,
-        IReadOnlyDictionary<string, BoundType> bindings)
+        IReadOnlyDictionary<string, BoundType> bindings,
+        bool allowRuntimeCall)
     {
         if (bindings.TryGetValue(expression.Name, out var type))
         {
             return type;
         }
 
-        if (functions.ContainsKey(expression.Name))
+        if (functions.TryGetValue(expression.Name, out var function))
         {
-            throw Error(
-                expression.Line,
-                expression.Column,
-                $"function '{expression.Name}' must be called with parentheses");
+            EnsureFunctionVisible(function, expression.Line, expression.Column);
+            if (function.InputType is not null)
+            {
+                throw Error(
+                    expression.Line,
+                    expression.Column,
+                    $"function '{expression.Name}' expects an argument and must use call or flow syntax");
+            }
+            if (IsMainOnlyRuntimeWrapper(function) && !allowRuntimeCall)
+            {
+                throw Error(expression.Line, expression.Column,
+                    $"{expression.Name} is only valid in main for the current runtime slice");
+            }
+            return function.ReturnType;
         }
 
         throw Error(expression.Line, expression.Column, $"unknown binding '{expression.Name}'");
@@ -4503,8 +4540,18 @@ internal sealed class SemanticCompiler
             or FlowExpression
             or IfExpression
             or WhenExpression
+            || IsZeroArgumentFunctionCreationExpression(expression)
             || IsAssociatedOwnedCreationExpression(expression)
             || IsMoveConsumingContainerTransformExpression(expression);
+    }
+
+    private bool IsZeroArgumentFunctionCreationExpression(Expression expression)
+    {
+        return expression is NameExpression name
+            && _boundFunctions is not null
+            && _boundFunctions.TryGetValue(name.Name, out var function)
+            && function.InputType is null
+            && IsOwnedHeapType(function.ReturnType);
     }
 
     private bool IsAssociatedOwnedCreationExpression(Expression expression)

@@ -1156,8 +1156,9 @@ Function targets in a value-flow statement should omit empty parentheses:
 ```
 
 The compatibility spelling `value -> function()` is still accepted in this
-slice. `square()` as a normal call still means a zero-argument parenthesized
-call. Flow targets with additional arguments are supported for receiver-style
+slice because the flowed value is the function input. A truly zero-input
+function uses property syntax (`nowMillis`, not `nowMillis()`). Flow targets
+with additional arguments are supported for receiver-style
 operations such as `values! -> push(10)` and `scores! -> put(3, 300)`. When a
 function-like target receives a brace code block argument, the block argument is
 the call marker: `1..9 -> each { ... }` and `1..9 -> each i { ... }` remain

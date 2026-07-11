@@ -160,7 +160,7 @@ internal sealed partial class LlvmEmitter
             StringExpression str => EmitTextLiteral(str),
             NumberExpression number => EmitNumberLiteral(number),
             BoolExpression boolean => new RuntimeBool(boolean.Value ? "true" : "false"),
-            NameExpression name => ResolveLocal(name.Name),
+            NameExpression name => EmitNameExpression(name),
             ArrayLiteralExpression array => EmitArrayLiteral(array),
             ArrayRepeatExpression repeat => EmitArrayRepeat(repeat),
             TypedEmptyArrayExpression typedArray => EmitTypedEmptyArray(typedArray),
@@ -195,6 +195,20 @@ internal sealed partial class LlvmEmitter
 
         EmitStackLifetimeEndsAfter(expression);
         return value;
+    }
+
+    private RuntimeValue EmitNameExpression(NameExpression expression)
+    {
+        if (_locals.ContainsKey(expression.Name))
+        {
+            return ResolveLocal(expression.Name);
+        }
+        if (_currentFunctions.TryGetValue(expression.Name, out var function)
+            && function.InputType is null)
+        {
+            return EmitFunctionCall(function, argument: null);
+        }
+        throw new SmallLangException($"unknown runtime binding or zero-argument function '{expression.Name}'");
     }
 
     private RuntimeText EmitTextLiteral(StringExpression expression)

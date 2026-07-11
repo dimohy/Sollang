@@ -24,10 +24,10 @@ sumScores scores: move {Int: Int} -> Int {
 }
 
 main {
-    makeValues() => values!
+    makeValues => values!
     values! -> sumValues => arrayTotal
 
-    makeScores() => scores!
+    makeScores => scores!
     sumScores(scores!) => dictTotal
 
     "array = $arrayTotal" -> println

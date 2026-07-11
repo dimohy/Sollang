@@ -13,7 +13,7 @@ main {
     scores[1] + scores[3] => edges
     scores -> len => count
     scores -> capacity => capacity
-    sumLocal() => functionTotal
+    sumLocal => functionTotal
 
     "second = $second" -> println
     "edges = $edges" -> println

@@ -11,7 +11,7 @@ writeInt value: Int -> Unit {
 }
 
 closeIntWriter: -> Unit {
-    rt.closeIntWriter()
+    rt.closeIntWriter
 }
 
 openIntReader path: Text -> Unit {
@@ -23,5 +23,5 @@ closestInt target: Int -> Int {
 }
 
 closeIntReader: -> Unit {
-    rt.closeIntReader()
+    rt.closeIntReader
 }

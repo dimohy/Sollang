@@ -7,7 +7,7 @@ square n: Int -> Int {
 }
 
 main {
-    getName() => name
+    getName => name
     7 -> square => num
     "Hello, $name. square = $num" -> print
 }

@@ -13,13 +13,13 @@ makeScores: -> {Int: Int} {
 }
 
 main {
-    makeValues() => values!
+    makeValues => values!
     values! -> push(30)
     values! -> fold 0 sum, value {
         sum + value
     } => arrayTotal
 
-    makeScores() => scores!
+    makeScores => scores!
     scores! -> put(3, 300)
     scores![1] + scores![2] + scores![3] => dictTotal
 

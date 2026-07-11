@@ -90,6 +90,13 @@ internal sealed partial class LlvmEmitter
         {
             return enumValue;
         }
+        if (expression.Source is NameExpression functionOwner
+            && !_locals.ContainsKey(functionOwner.Name)
+            && _currentFunctions.TryGetValue(functionOwner.Name + "." + expression.FieldName, out var zeroArgumentFunction)
+            && zeroArgumentFunction.InputType is null)
+        {
+            return EmitFunctionCall(zeroArgumentFunction, argument: null);
+        }
         if (expression.Source is NameExpression typeName
             && !_locals.ContainsKey(typeName.Name)
             && _program.Types.TryResolve(typeName.Name, out var type)

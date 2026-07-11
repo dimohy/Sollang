@@ -1368,8 +1368,8 @@ The parser accepts receiver-only value-flow calls without empty parentheses:
 "Hello, $num" -> println
 ```
 
-The previous empty-parentheses form remains accepted as compatibility syntax,
-but it is no longer the preferred style:
+The previous empty-parentheses flow form remains accepted as compatibility
+syntax for a function that receives the flowed value:
 
 ```smalllang
 7 -> square() => num
@@ -1378,7 +1378,7 @@ but it is no longer the preferred style:
 Statement-level bindings now use `=>`:
 
 ```smalllang
-getName() => name
+getName => name
 n * i => value
 1..100 -> fold 0 sum, i {
     sum + i
@@ -2767,5 +2767,29 @@ integer expressions, arithmetic is checked, descending ranges are rejected,
 and one expansion is limited to 100,000 elements to bound compiler memory use.
 Future constant evaluation may admit immutable constants and pure functions
 without changing this collection syntax.
+
+## D090 - Zero-Argument Functions Use Property Syntax
+
+Status: implemented
+Date: 2026-07-12
+
+A function with no input is invoked by naming it:
+
+```smalllang
+nowMillis => arrayScanStart
+getName => name
+```
+
+Empty parentheses are an error:
+
+```smalllang
+nowMillis() => arrayScanStart # Error
+```
+
+This rule applies to user functions, standard-library wrappers, runtime
+intrinsics, imported functions, and zero-argument associated/method members.
+Parentheses communicate that actual arguments follow. A fluent call still
+receives its left-hand value, so `value -> transform()` remains compatibility
+syntax for that one-input call; the preferred spelling is `value -> transform`.
 
 
