@@ -9,7 +9,8 @@ struct OwnedSymbol {
 }
 
 main {
-    { "lexer": SymbolInfo { name: "tokens", depth: 1 }, "parser": SymbolInfo { name: "syntax", depth: 2 } } => symbols
+    # Explicit form: { "lexer": SymbolInfo { name: "tokens", depth: 1 }, "parser": SymbolInfo { name: "syntax", depth: 2 } }
+    {Text: SymbolInfo; "lexer": { name: "tokens", depth: 1 }, "parser": { name: "syntax", depth: 2 }} => symbols
     symbols -> eachKey key {
         "symbol key = $key" -> println
     }
@@ -17,7 +18,8 @@ main {
         "symbol $(symbol.name) depth $(symbol.depth)" -> println
     }
 
-    { 1: OwnedSymbol { name: "owned-a", payload: box 10 }, 2: OwnedSymbol { name: "owned-b", payload: box 20 } } => owned
+    # Explicit form: { 1: OwnedSymbol { name: "owned-a", payload: box 10 }, 2: OwnedSymbol { name: "owned-b", payload: box 20 } }
+    {Int: OwnedSymbol; 1: { name: "owned-a", payload: box 10 }, 2: { name: "owned-b", payload: box 20 }} => owned
     owned -> eachValue symbol {
         "borrowed symbol = $(symbol.name)" -> println
     }

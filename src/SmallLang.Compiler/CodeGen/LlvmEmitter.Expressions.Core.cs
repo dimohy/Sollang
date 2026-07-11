@@ -190,9 +190,29 @@ internal sealed partial class LlvmEmitter
             : EmitStaticArrayLiteral(expression);
     }
 
+    private RuntimeValue[] EmitArrayLiteralElements(ArrayLiteralExpression expression)
+    {
+        BoundType? elementType = expression.ElementType is not null
+            && _program.Types.TryResolve(expression.ElementType, out var declaredElementType)
+                ? declaredElementType
+                : null;
+        var elements = new RuntimeValue[expression.Elements.Count];
+        for (var index = 0; index < expression.Elements.Count; index++)
+        {
+            var element = expression.Elements[index];
+            elements[index] = element is DictionaryLiteralExpression contextual
+                && elementType is { } contextualElementType
+                && _program.Types.IsStruct(contextualElementType)
+                    ? EmitContextualStructLiteral(contextual, contextualElementType)
+                    : EmitExpression(element);
+            elementType ??= elements[index].Type;
+        }
+        return elements;
+    }
+
     private RuntimeValue EmitStaticArrayLiteral(ArrayLiteralExpression expression)
     {
-        var elements = expression.Elements.Select(EmitExpression).ToArray();
+        var elements = EmitArrayLiteralElements(expression);
         if (elements.Length == 0 || elements.All(static value => value is RuntimeInt))
         {
             return EmitStaticIntArrayLiteral(expression, elements.Cast<RuntimeInt>().ToArray());
@@ -285,7 +305,7 @@ internal sealed partial class LlvmEmitter
 
     private RuntimeValue EmitDynamicArrayLiteral(ArrayLiteralExpression expression)
     {
-        var elements = expression.Elements.Select(EmitExpression).ToArray();
+        var elements = EmitArrayLiteralElements(expression);
         if (elements.Length == 0 || elements.All(static value => value is RuntimeInt))
         {
             return EmitDynamicIntArrayLiteral(expression, elements.Cast<RuntimeInt>().ToArray());
@@ -429,9 +449,31 @@ internal sealed partial class LlvmEmitter
 
     private RuntimeValue EmitDictionaryLiteral(DictionaryLiteralExpression expression)
     {
-        var entries = expression.Entries
-            .Select(entry => (Key: EmitExpression(entry.Key), Value: EmitExpression(entry.Value)))
-            .ToArray();
+        var entries = new List<(RuntimeValue Key, RuntimeValue Value)>(expression.Entries.Count);
+        BoundType? inferredKeyType = expression.KeyType is not null
+            && _program.Types.TryResolve(expression.KeyType, out var declaredKeyType)
+                ? declaredKeyType
+                : null;
+        BoundType? inferredValueType = expression.ValueType is not null
+            && _program.Types.TryResolve(expression.ValueType, out var declaredValueType)
+                ? declaredValueType
+                : null;
+        foreach (var entry in expression.Entries)
+        {
+            var key = entry.Key is DictionaryLiteralExpression contextual
+                && inferredKeyType is { } contextualKeyType
+                && _program.Types.IsStruct(contextualKeyType)
+                    ? EmitContextualStructLiteral(contextual, contextualKeyType)
+                    : EmitExpression(entry.Key);
+            inferredKeyType ??= key.Type;
+            var value = entry.Value is DictionaryLiteralExpression contextualValue
+                && inferredValueType is { } contextualValueType
+                && _program.Types.IsStruct(contextualValueType)
+                    ? EmitContextualStructLiteral(contextualValue, contextualValueType)
+                    : EmitExpression(entry.Value);
+            inferredValueType ??= value.Type;
+            entries.Add((key, value));
+        }
         if (entries[0].Key.Type != BoundType.Int || entries[0].Value.Type != BoundType.Int)
         {
             var dictionaryType = _program.Types.GetOrAddDictionary(entries[0].Key.Type, entries[0].Value.Type);

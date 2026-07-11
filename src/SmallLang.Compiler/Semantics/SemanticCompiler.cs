@@ -1454,16 +1454,27 @@ internal sealed class SemanticCompiler
         IReadOnlyDictionary<string, BoundType> bindings,
         bool allowReadIntCall)
     {
-        BoundType? inferredElementType = null;
+        BoundType? inferredElementType = expression.ElementType is null
+            ? null
+            : ParseType(expression.ElementType, expression.Line, expression.Column);
         foreach (var element in expression.Elements)
         {
-            var elementType = InferExpression(
-                element,
-                functions,
-                bindings,
-                allowPrintCall: false,
-                allowReadIntCall,
-                allowFlowBindingTarget: false);
+            var elementType = element is DictionaryLiteralExpression contextual
+                && inferredElementType is { } contextualElementType
+                && _types.IsStruct(contextualElementType)
+                    ? InferContextualStructLiteral(
+                        contextual,
+                        contextualElementType,
+                        functions,
+                        bindings,
+                        allowReadIntCall)
+                    : InferExpression(
+                        element,
+                        functions,
+                        bindings,
+                        allowPrintCall: false,
+                        allowReadIntCall,
+                        allowFlowBindingTarget: false);
             if (elementType == BoundType.Unit
                 || elementType is BoundType.IntSlice
                     or BoundType.StaticIntArray
@@ -1553,17 +1564,35 @@ internal sealed class SemanticCompiler
         IReadOnlyDictionary<string, BoundType> bindings,
         bool allowReadIntCall)
     {
-        BoundType? inferredKeyType = null;
-        BoundType? inferredValueType = null;
+        BoundType? inferredKeyType = expression.KeyType is null
+            ? null
+            : ParseType(expression.KeyType, expression.Line, expression.Column);
+        BoundType? inferredValueType = expression.ValueType is null
+            ? null
+            : ParseType(expression.ValueType, expression.Line, expression.Column);
+        if (inferredKeyType is { } declaredKey && !IsSupportedDictionaryKeyType(declaredKey))
+        {
+            throw Error(expression.Line, expression.Column,
+                $"dictionary key type {FormatType(declaredKey)} must implement Hash.hash: self -> Int and Eq.eq: self -> Int");
+        }
         foreach (var entry in expression.Entries)
         {
-            var keyType = InferExpression(
-                entry.Key,
-                functions,
-                bindings,
-                allowPrintCall: false,
-                allowReadIntCall,
-                allowFlowBindingTarget: false);
+            var keyType = entry.Key is DictionaryLiteralExpression contextual
+                && inferredKeyType is { } contextualKeyType
+                && _types.IsStruct(contextualKeyType)
+                    ? InferContextualStructLiteral(
+                        contextual,
+                        contextualKeyType,
+                        functions,
+                        bindings,
+                        allowReadIntCall)
+                    : InferExpression(
+                        entry.Key,
+                        functions,
+                        bindings,
+                        allowPrintCall: false,
+                        allowReadIntCall,
+                        allowFlowBindingTarget: false);
             if (!IsSupportedDictionaryKeyType(keyType))
             {
                 throw Error(entry.Key.Line, entry.Key.Column,
@@ -1576,13 +1605,22 @@ internal sealed class SemanticCompiler
             }
             inferredKeyType ??= keyType;
 
-            var valueType = InferExpression(
-                entry.Value,
-                functions,
-                bindings,
-                allowPrintCall: false,
-                allowReadIntCall,
-                allowFlowBindingTarget: false);
+            var valueType = entry.Value is DictionaryLiteralExpression contextualValue
+                && inferredValueType is { } contextualValueType
+                && _types.IsStruct(contextualValueType)
+                    ? InferContextualStructLiteral(
+                        contextualValue,
+                        contextualValueType,
+                        functions,
+                        bindings,
+                        allowReadIntCall)
+                    : InferExpression(
+                        entry.Value,
+                        functions,
+                        bindings,
+                        allowPrintCall: false,
+                        allowReadIntCall,
+                        allowFlowBindingTarget: false);
             if (valueType == BoundType.Unit)
             {
                 throw Error(entry.Value.Line, entry.Value.Column, "dictionary values cannot be Unit");
@@ -1823,6 +1861,23 @@ internal sealed class SemanticCompiler
         IReadOnlyDictionary<string, BoundType> bindings,
         bool allowReadIntCall)
     {
+        if (expression.Source is NameExpression genericTypeName
+            && !bindings.ContainsKey(genericTypeName.Name)
+            && (genericTypeName.Name.StartsWith("Option[", StringComparison.Ordinal)
+                || genericTypeName.Name.StartsWith("Result[", StringComparison.Ordinal)))
+        {
+            var genericEnumType = ParseType(genericTypeName.Name, expression.Line, expression.Column);
+            var enumeration = _types.GetEnum(genericEnumType);
+            var variant = enumeration.Variants.FirstOrDefault(candidate => candidate.Name == expression.FieldName)
+                ?? throw Error(expression.Line, expression.Column,
+                    $"enum '{FormatType(genericEnumType)}' has no variant '{expression.FieldName}'");
+            if (variant.PayloadType is not null)
+            {
+                throw Error(expression.Line, expression.Column,
+                    $"variant '{FormatType(genericEnumType)}.{variant.Name}' requires a payload argument");
+            }
+            return genericEnumType;
+        }
         if (expression.Source is NameExpression typeName
             && !bindings.ContainsKey(typeName.Name)
             && _types.TryResolve(typeName.Name, out var enumType)
@@ -2282,7 +2337,13 @@ internal sealed class SemanticCompiler
         foreach (var arm in expression.Arms)
         {
             var pattern = (EnumPatternExpression)arm.Condition;
-            if (!_types.TryResolve(pattern.TypeName, out var patternType) || patternType != subjectType)
+            if (!_types.TryResolve(pattern.TypeName, out var patternType)
+                && (pattern.TypeName.StartsWith("Option[", StringComparison.Ordinal)
+                    || pattern.TypeName.StartsWith("Result[", StringComparison.Ordinal)))
+            {
+                patternType = ParseType(pattern.TypeName, pattern.Line, pattern.Column);
+            }
+            if (patternType != subjectType)
             {
                 throw Error(
                     pattern.Line,
@@ -2837,16 +2898,25 @@ internal sealed class SemanticCompiler
                     throw Error(target.Line, target.Column, "push expects exactly one argument");
                 }
 
-                var pushedType = InferExpression(
-                    target.Arguments[0],
-                    functions,
-                    bindings,
-                    allowPrintCall: false,
-                    allowReadIntCall,
-                    allowFlowBindingTarget: false);
                 var expectedPushedType = currentType == BoundType.DynamicIntArray
                     ? BoundType.Int
                     : _types.GetDynamicArray(currentType).ElementType;
+                var pushedArgument = target.Arguments[0];
+                var pushedType = pushedArgument is DictionaryLiteralExpression contextualPushed
+                    && _types.IsStruct(expectedPushedType)
+                        ? InferContextualStructLiteral(
+                            contextualPushed,
+                            expectedPushedType,
+                            functions,
+                            bindings,
+                            allowReadIntCall)
+                        : InferExpression(
+                            pushedArgument,
+                            functions,
+                            bindings,
+                            allowPrintCall: false,
+                            allowReadIntCall,
+                            allowFlowBindingTarget: false);
                 if (pushedType != expectedPushedType)
                 {
                     throw Error(
@@ -2933,13 +3003,22 @@ internal sealed class SemanticCompiler
                 for (var argumentIndex = 0; argumentIndex < target.Arguments.Count; argumentIndex++)
                 {
                     var argument = target.Arguments[argumentIndex];
-                    var argumentType = InferExpression(
-                        argument,
-                        functions,
-                        bindings,
-                        allowPrintCall: false,
-                        allowReadIntCall,
-                        allowFlowBindingTarget: false);
+                    var expectedArgumentType = expectedPutTypes[argumentIndex];
+                    var argumentType = argument is DictionaryLiteralExpression contextualArgument
+                        && _types.IsStruct(expectedArgumentType)
+                            ? InferContextualStructLiteral(
+                                contextualArgument,
+                                expectedArgumentType,
+                                functions,
+                                bindings,
+                                allowReadIntCall)
+                            : InferExpression(
+                                argument,
+                                functions,
+                                bindings,
+                                allowPrintCall: false,
+                                allowReadIntCall,
+                                allowFlowBindingTarget: false);
                     if (argumentType != expectedPutTypes[argumentIndex])
                     {
                         throw Error(argument.Line, argument.Column,
@@ -3348,9 +3427,21 @@ internal sealed class SemanticCompiler
         out BoundType type)
     {
         type = default;
-        if (expression.Path.Count < 2
-            || !_types.TryResolve(string.Join('.', expression.Path.Take(expression.Path.Count - 1)), out type)
-            || !_types.IsEnum(type))
+        if (expression.Path.Count < 2)
+        {
+            return false;
+        }
+        var typeName = string.Join('.', expression.Path.Take(expression.Path.Count - 1));
+        if (!_types.TryResolve(typeName, out type))
+        {
+            if (!typeName.StartsWith("Option[", StringComparison.Ordinal)
+                && !typeName.StartsWith("Result[", StringComparison.Ordinal))
+            {
+                return false;
+            }
+            type = ParseType(typeName, expression.Line, expression.Column);
+        }
+        if (!_types.IsEnum(type))
         {
             return false;
         }
@@ -4038,6 +4129,31 @@ internal sealed class SemanticCompiler
 
     private BoundType ParseType(string typeName, int line, int column)
     {
+        if (typeName.StartsWith("Option[", StringComparison.Ordinal) && typeName.EndsWith(']'))
+        {
+            var valueName = typeName[7..^1].Trim();
+            var valueType = ParseType(valueName, line, column);
+            var option = _types.GetOrAddOption(valueType, $"Option[{FormatType(valueType)}]");
+            _types.AddAlias(typeName, option);
+            return option;
+        }
+        if (typeName.StartsWith("Result[", StringComparison.Ordinal) && typeName.EndsWith(']'))
+        {
+            var arguments = typeName[7..^1];
+            var separator = FindTopLevelTypeComma(arguments);
+            if (separator < 0)
+            {
+                throw Error(line, column, "Result requires success and error types");
+            }
+            var okType = ParseType(arguments[..separator].Trim(), line, column);
+            var errorType = ParseType(arguments[(separator + 1)..].Trim(), line, column);
+            var result = _types.GetOrAddResult(
+                okType,
+                errorType,
+                $"Result[{FormatType(okType)}, {FormatType(errorType)}]");
+            _types.AddAlias(typeName, result);
+            return result;
+        }
         if (typeName.StartsWith('[', StringComparison.Ordinal)
             && typeName.EndsWith("; ~]", StringComparison.Ordinal))
         {
@@ -4102,8 +4218,35 @@ internal sealed class SemanticCompiler
         return ParseType(typeName, line, column);
     }
 
+    private static int FindTopLevelTypeComma(string text)
+    {
+        var depth = 0;
+        for (var index = 0; index < text.Length; index++)
+        {
+            depth += text[index] switch
+            {
+                '[' or '{' => 1,
+                ']' or '}' => -1,
+                _ => 0
+            };
+            if (text[index] == ',' && depth == 0)
+            {
+                return index;
+            }
+        }
+        return -1;
+    }
+
     private string FormatType(BoundType type)
     {
+        if (_types.TryGetOptionValue(type, out var optionValue))
+        {
+            return $"Option[{FormatType(optionValue)}]";
+        }
+        if (_types.TryGetResultTypes(type, out var resultTypes))
+        {
+            return $"Result[{FormatType(resultTypes.Ok)}, {FormatType(resultTypes.Error)}]";
+        }
         if (_types.IsStruct(type))
         {
             return _types.GetStruct(type).Name;

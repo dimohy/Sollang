@@ -215,7 +215,11 @@ internal sealed partial class LlvmEmitter
                 }
 
                 var arrayName = RequireMutableContainerSource(source, "push");
-                var pushed = EmitExpression(target.Arguments[0]);
+                var pushed = current is RuntimeDynamicInlineArray contextualArray
+                    && target.Arguments[0] is DictionaryLiteralExpression contextualElement
+                    && _program.Types.IsStruct(contextualArray.ElementType)
+                        ? EmitContextualStructLiteral(contextualElement, contextualArray.ElementType)
+                        : EmitExpression(target.Arguments[0]);
                 var pushedArray = current switch
                 {
                     RuntimeDynamicIntArray array when pushed is RuntimeInt integer =>
@@ -259,8 +263,14 @@ internal sealed partial class LlvmEmitter
                         throw new SmallLangException("put must be final and expects key and value arguments");
                     }
                     var inlineName = RequireMutableContainerSource(source, "put");
-                    var inlineKey = EmitExpression(target.Arguments[0]);
-                    var inlineValue = EmitExpression(target.Arguments[1]);
+                    var inlineKey = target.Arguments[0] is DictionaryLiteralExpression contextualKey
+                        && _program.Types.IsStruct(inlineDictionary.KeyType)
+                            ? EmitContextualStructLiteral(contextualKey, inlineDictionary.KeyType)
+                            : EmitExpression(target.Arguments[0]);
+                    var inlineValue = target.Arguments[1] is DictionaryLiteralExpression contextualValue
+                        && _program.Types.IsStruct(inlineDictionary.ValueType)
+                            ? EmitContextualStructLiteral(contextualValue, inlineDictionary.ValueType)
+                            : EmitExpression(target.Arguments[1]);
                     var inlineUpdated = EmitInlineDictionaryPut(inlineDictionary, inlineKey, inlineValue);
                     StoreMutableContainer(inlineName, inlineUpdated);
                     _locals[inlineName] = inlineUpdated;

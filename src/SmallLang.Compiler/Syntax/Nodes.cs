@@ -213,7 +213,8 @@ internal sealed record ArrayLiteralExpression(
     IReadOnlyList<Expression> Elements,
     bool IsDynamic,
     int Line,
-    int Column)
+    int Column,
+    string? ElementType = null)
     : Expression(Line, Column);
 
 internal sealed record ArrayRepeatExpression(
@@ -230,7 +231,9 @@ internal sealed record TypedEmptyArrayExpression(string ElementType, int? Capaci
 internal sealed record DictionaryLiteralExpression(
     IReadOnlyList<DictionaryEntryExpression> Entries,
     int Line,
-    int Column)
+    int Column,
+    string? KeyType = null,
+    string? ValueType = null)
     : Expression(Line, Column);
 
 internal sealed record TypedEmptyDictionaryExpression(string KeyType, string ValueType, int? CapacityHint, int Line, int Column)

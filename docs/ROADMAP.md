@@ -33,7 +33,7 @@ ownership behavior is part of the feature.
 - [x] Readonly `self`, `mut self`, and `move self` method receivers
 - [x] Object-oriented dot-call syntax without class inheritance
 - [x] Payload `enum` values and exhaustive `when`
-- [ ] Standard `Option[T]` and `Result[T, E]` foundations
+- [x] Standard `Option[T]` and `Result[T, E]` foundations
 
 ## Traits And Generics
 

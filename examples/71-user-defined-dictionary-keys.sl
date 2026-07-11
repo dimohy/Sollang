@@ -20,9 +20,14 @@ impl Eq for SymbolKey {
 }
 
 main {
-    { SymbolKey { scope: 1, id: 10 }: "lexer", SymbolKey { scope: 1, id: 20 }: "parser" } => symbols!
-    symbols! -> put(SymbolKey { scope: 2, id: 10 }, "semantic")
-    symbols! -> put(SymbolKey { scope: 1, id: 20 }, "syntax")
+    # Explicit form: { SymbolKey { scope: 1, id: 10 }: "lexer", SymbolKey { scope: 1, id: 20 }: "parser", SymbolKey { scope: 2, id: 10 }: "semantic" }
+    {SymbolKey: Text;
+        { scope: 1, id: 10 }: "lexer",
+        { scope: 1, id: 20 }: "parser",
+        { scope: 2, id: 10 }: "semantic"
+    } => symbols!
+    # Explicit form: symbols! -> put(SymbolKey { scope: 1, id: 20 }, "syntax")
+    symbols! -> put({ scope: 1, id: 20 }, "syntax")
 
     symbols![{ scope: 1, id: 10 }] => lexer
     symbols![{ scope: 1, id: 20 }] => parser

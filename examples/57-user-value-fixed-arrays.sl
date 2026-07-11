@@ -16,7 +16,8 @@ number reading: Reading -> Int {
 }
 
 main {
-    [Point { x: 10, y: 20 }, Point { x: 30, y: 40 }] => points
+    # Explicit form: [Point { x: 10, y: 20 }, Point { x: 30, y: 40 }]
+    [Point; { x: 10, y: 20 }, { x: 30, y: 40 }] => points
     points[1].x => x
     points[0].y => y
     points -> len => count

@@ -1,7 +1,7 @@
 # SmallLang Self-Hosting Roadmap
 
 Status: active
-Updated: 2026-07-11
+Updated: 2026-07-12
 
 The end state is an SL compiler written in SL that reads a multi-file SL
 program, performs lexical, syntactic, type, ownership, and module analysis,
@@ -44,15 +44,15 @@ not lines of code.
 | Area | Gates | Complete | Partial | Missing | Score |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | Core syntax and control flow | 10 | 8 | 2 | 0 | 9.0 |
-| Types, traits, and generics | 12 | 8 | 2 | 2 | 9.0 |
+| Types, traits, and generics | 12 | 9 | 2 | 1 | 10.0 |
 | Ownership and storage | 10 | 7 | 2 | 1 | 8.0 |
 | Modules, visibility, and builds | 8 | 4 | 2 | 2 | 5.0 |
 | Compiler-construction primitives | 12 | 3 | 3 | 6 | 4.5 |
 | Standard library and tooling | 8 | 2 | 3 | 3 | 3.5 |
-| **Total** | **60** | **32** | **14** | **14** | **39.0 / 60** |
+| **Total** | **60** | **33** | **14** | **13** | **40.0 / 60** |
 
-Current count-based progress: **65.0% (39.0 of 60 equivalent gates)**.
-There are **21 equivalent gates remaining**. Because the missing compiler
+Current count-based progress: **66.7% (40.0 of 60 equivalent gates)**.
+There are **20 equivalent gates remaining**. Because the missing compiler
 primitives are harder than early syntax gates, this is not an elapsed-time
 estimate.
 
@@ -65,17 +65,18 @@ estimate.
 - Partial (2): general multi-parameter functions; structured early exit with
   `return`/`break`/`continue` across ownership scopes.
 
-### Types, traits, and generics — 9.0 / 12
+### Types, traits, and generics — 10.0 / 12
 
-- Complete (8): nominal structs, payload enums, exhaustive matching, impl
+- Complete (9): nominal structs, payload enums, exhaustive matching, impl
   methods, nominal traits/static dispatch, checked type/value specialization,
-  associated types with equality constraints, two-parameter generic inference.
+  associated types with equality constraints, two-parameter generic inference,
+  standard `Option[T]`/`Result[T, E]` tagged values.
 - Partial (2): arrays and dictionaries preserve scalar/user-value layouts and
   recursively drop owned elements, and dictionary function contracts preserve
   concrete K/V types; dynamic-array function contracts preserve element types.
   Owned-element move extraction, fixed-array generic contracts, general
   two-operand equality methods, and owned nominal dictionary keys remain.
-- Missing (2): standard `Option[T]`/`Result[T, E]`, explicit `dyn Trait`.
+- Missing (1): explicit `dyn Trait`.
 
 ### Ownership and storage — 8.0 / 10
 

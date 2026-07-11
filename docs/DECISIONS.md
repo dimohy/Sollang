@@ -2620,7 +2620,7 @@ calls. Missing or incorrectly typed contracts are compile errors.
 
 ## D085 - Contextual Nominal-Key Literals
 
-Status: implemented for dictionary indexing
+Status: implemented for dictionary indexing and literals
 Date: 2026-07-12
 
 When a dictionary's key type K is a nominal struct, an index expression may
@@ -2638,5 +2638,72 @@ fields, and checks each value against the declared field type. LLVM constructs
 the same concrete aggregate as an explicitly named struct literal before the
 normal statically dispatched hash/equality lookup. Example 71 uses the concise
 form for all lookups; diagnostics cover missing and unknown fields.
+
+A typed dictionary literal establishes K and V once in its header. Every struct
+key may therefore omit the repeated nominal name symmetrically:
+
+```smalllang
+{SymbolKey: Text;
+  { scope: 1, id: 10 }: "lexer",
+  { scope: 1, id: 20 }: "parser",
+  { scope: 2, id: 10 }: "semantic"
+}
+```
+
+This extends the existing typed-empty `{K: V}` form: the semicolon separates
+the one-time type header from initialized entries. Unlike first-element-driven
+inference, no entry is syntactically special and reordering entries cannot
+change their interpretation. Each abbreviated key receives the same
+field-completeness, unknown-field, and field-type checks as an abbreviated
+lookup key.
+
+The same expected K applies to mutation, so `symbols! -> put({ scope: 1,
+id: 20 }, "syntax")` also omits the nominal key name. If V is a struct, the
+value argument receives the corresponding contextual treatment as well.
+
+## D086 - Standard Option And Result Specializations
+
+Status: implemented
+Date: 2026-07-12
+
+`Option[T]` and `Result[T, E]` are compiler-known parametric tagged values that
+reuse the ordinary enum ABI, exhaustive `when` analysis, typed payload binding,
+and recursive static drop glue. Their source constructors and patterns keep the
+specialization visible:
+
+```smalllang
+Option[Int].Some(42)
+Option[Int].None
+Result[Int, Text].Ok(7)
+Result[Int, Text].Err("invalid")
+```
+
+This foundation provides explicit absence and typed success/error values
+without nulls, exceptions, runtime type descriptors, or vtables. Example 72
+verifies function contracts, exhaustive matching, both Result payloads, and an
+owned `Option[OwnedNode]` payload. Concise propagation syntax remains a later
+compiler-construction gate.
+
+## D087 - Contextual Struct Elements In Typed Arrays
+
+Status: implemented
+Date: 2026-07-12
+
+Typed initialized arrays declare their element type once before a semicolon:
+
+```smalllang
+[Point; { x: 1, y: 2 }, { x: 3, y: 4 }, { x: 5, y: 6 }]
+```
+
+The header supplies the expected type for every element, so a struct element
+uses the same contextual brace form as typed dictionary keys. `[value; count]`
+remains the repeat-array form; the typed initialized form is unambiguous when
+its entries are struct literals. A trailing `~` keeps the existing growable
+array meaning. Example 73 verifies the growable form, contextual `push`, and
+iteration, with a diagnostic for a missing contextual field.
+
+Growable typed arrays carry the same T into mutation calls, allowing
+`points! -> push({ x: 7, y: 8 })`. Thus construction, indexing/iteration, and
+mutation use one contextual-literal rule rather than separate conveniences.
 
 

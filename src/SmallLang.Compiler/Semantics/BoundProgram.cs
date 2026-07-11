@@ -171,6 +171,10 @@ internal sealed class TypeDefinitionTable
     private readonly Dictionary<TypeId, TypeId> _dynamicArraysByElement = [];
     private readonly Dictionary<TypeId, BoundDictionaryDefinition> _dictionaries = [];
     private readonly Dictionary<(TypeId Key, TypeId Value), TypeId> _dictionariesByTypes = [];
+    private readonly Dictionary<TypeId, TypeId> _optionsByValue = [];
+    private readonly Dictionary<(TypeId Ok, TypeId Error), TypeId> _resultsByTypes = [];
+    private readonly Dictionary<TypeId, TypeId> _optionValues = [];
+    private readonly Dictionary<TypeId, (TypeId Ok, TypeId Error)> _resultTypes = [];
     private int _nextParametricTypeId;
 
     public TypeDefinitionTable(
@@ -203,6 +207,8 @@ internal sealed class TypeDefinitionTable
     public IReadOnlyCollection<BoundDictionaryDefinition> Dictionaries => _dictionaries.Values.ToArray();
 
     public bool TryResolve(string name, out TypeId type) => _names.TryGetValue(name, out type);
+
+    public void AddAlias(string name, TypeId type) => _names.TryAdd(name, type);
 
     public bool IsStruct(TypeId type) => _structs.ContainsKey(type);
 
@@ -281,6 +287,46 @@ internal sealed class TypeDefinitionTable
         _dictionaries.TryGetValue(type, out var definition)
             ? definition
             : throw new KeyNotFoundException($"type id '{(int)type}' is not a dictionary");
+
+    public TypeId GetOrAddOption(TypeId valueType, string displayName)
+    {
+        if (_optionsByValue.TryGetValue(valueType, out var existing))
+        {
+            return existing;
+        }
+        var id = (TypeId)_nextParametricTypeId++;
+        var payloadWords = (InlineSize(valueType) + 7) / 8;
+        _enums.Add(id, new BoundEnumDefinition(id, displayName, [
+            new BoundEnumVariant("None", null, 0, 0, 0),
+            new BoundEnumVariant("Some", valueType, 1, 0, 0)
+        ], payloadWords, 0, 0, ModuleName: "", IsPublic: true));
+        _optionsByValue.Add(valueType, id);
+        _optionValues.Add(id, valueType);
+        return id;
+    }
+
+    public TypeId GetOrAddResult(TypeId okType, TypeId errorType, string displayName)
+    {
+        if (_resultsByTypes.TryGetValue((okType, errorType), out var existing))
+        {
+            return existing;
+        }
+        var id = (TypeId)_nextParametricTypeId++;
+        var payloadWords = (Math.Max(InlineSize(okType), InlineSize(errorType)) + 7) / 8;
+        _enums.Add(id, new BoundEnumDefinition(id, displayName, [
+            new BoundEnumVariant("Ok", okType, 0, 0, 0),
+            new BoundEnumVariant("Err", errorType, 1, 0, 0)
+        ], payloadWords, 0, 0, ModuleName: "", IsPublic: true));
+        _resultsByTypes.Add((okType, errorType), id);
+        _resultTypes.Add(id, (okType, errorType));
+        return id;
+    }
+
+    public bool TryGetOptionValue(TypeId type, out TypeId valueType) =>
+        _optionValues.TryGetValue(type, out valueType);
+
+    public bool TryGetResultTypes(TypeId type, out (TypeId Ok, TypeId Error) types) =>
+        _resultTypes.TryGetValue(type, out types);
 
     public bool ContainsOwnedStorage(TypeId type)
     {
