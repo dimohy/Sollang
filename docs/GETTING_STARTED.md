@@ -472,6 +472,8 @@ approved syntax.
   oversized fixed-array heap placement with deterministic cleanup
 - `examples/54-associated-types.sl`: static trait associated-type binding and
   a generic equality constraint specialized to `Item = Int`
+- `examples/55-multi-parameter-generics.sl`: two inferred type parameters with
+  separate `Int` and `Text` LLVM monomorphizations
 - `examples/browser`: static HTML/JS runner for the WebAssembly sample
 - `examples/expected`: expected stdout/stdin fixtures for executable samples
 - `stdlib/sys/runtime.sl`: standard library intrinsic boundary declarations

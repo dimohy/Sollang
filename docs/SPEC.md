@@ -1316,7 +1316,8 @@ Current backend:
   direct nested field access, readonly `self` methods in `impl` blocks,
   parenthesis-free computed members, payload `enum` values, exhaustive enum
   `when` patterns, nominal traits with explicit implementations, checked
-  single-type generics with trait bounds and monomorphization, compile-time
+  one- and two-type generics with trait bounds, associated-type inference, and
+  monomorphization, compile-time
   `Int` value generics with explicit fluent specialization such as
   `value -> fill[4]`, trait associated types with static `impl` bindings and
   equality constraints such as `[T: Source[Item = Int]]`, receiver-argument

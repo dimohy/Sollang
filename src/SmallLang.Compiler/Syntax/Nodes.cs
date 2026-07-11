@@ -68,6 +68,7 @@ internal sealed record FunctionDeclaration(
     bool IsStandardLibrary,
     string? TraitName = null,
     string? GenericParameterName = null,
+    string? SecondaryGenericParameterName = null,
     string? GenericTraitBound = null,
     string? GenericAssociatedTypeName = null,
     string? GenericAssociatedTypeConstraint = null,

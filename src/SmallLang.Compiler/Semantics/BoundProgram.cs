@@ -30,11 +30,13 @@ internal sealed record BoundFunction(
     bool IsLocal,
     string? TraitName = null,
     string? GenericParameterName = null,
+    string? SecondaryGenericParameterName = null,
     string? GenericTraitBound = null,
     string? GenericAssociatedTypeName = null,
     TypeId? GenericAssociatedTypeConstraint = null,
     IReadOnlyDictionary<string, TypeId>? ImplAssociatedTypes = null,
     TypeId? SpecializedType = null,
+    TypeId? SpecializedSecondaryType = null,
     bool IsValueGeneric = false,
     int? SpecializedValue = null,
     bool HasValueGenericFixedArrayInput = false,
@@ -97,6 +99,7 @@ internal enum TypeId
     IntDictionaryView,
     IntDictionary,
     GenericParameter = 512,
+    SecondaryGenericParameter = 513,
     FirstUserDefined = 1024
 }
 

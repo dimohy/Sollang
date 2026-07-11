@@ -2395,4 +2395,26 @@ concrete implementation and rejects a different or missing binding before LLVM
 emission. Example 54 verifies static dispatch through the constrained generic;
 the associated-type diagnostics verify missing bindings and equality failure.
 
+## D074 - Multi-Parameter Generic Inference
+
+Status: implemented
+Date: 2026-07-11
+
+Generic functions may declare two compile-time type parameters. Constraints
+that relate them use a separate `where` clause:
+
+```smalllang
+readAny[T, Item] where T: Source[Item = Item] value: T -> Item {
+    value -> Source.read
+}
+```
+
+The primary type is inferred from the flowed input. The secondary type is
+inferred from the selected concrete implementation's associated-type binding.
+Every resulting type tuple has its own checked monomorphization and LLVM
+signature; no type descriptors are passed at runtime. A secondary parameter
+that cannot be inferred is a compile error rather than an arbitrary default.
+Example 55 verifies `(NumberSource, Int)` and `(TextSource, Text)` specializations
+with different LLVM return ABIs, plus a no-vtable assertion.
+
 

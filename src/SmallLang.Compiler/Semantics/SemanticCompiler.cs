@@ -287,7 +287,12 @@ internal sealed class SemanticCompiler
 
         var inputType = function.InputType is null
             ? (BoundType?)null
-            : ParseFunctionType(function.InputType, function.GenericParameterName, function.Line, function.Column);
+            : ParseFunctionType(
+                function.InputType,
+                function.GenericParameterName,
+                function.SecondaryGenericParameterName,
+                function.Line,
+                function.Column);
         if (function.InputOwnership == FunctionInputOwnership.Default
             && inputType == BoundType.IntDictionary)
         {
@@ -297,6 +302,7 @@ internal sealed class SemanticCompiler
         var returnType = ParseFunctionType(
             function.ReturnType,
             function.GenericParameterName,
+            function.SecondaryGenericParameterName,
             function.Line,
             function.Column);
         if (returnType == BoundType.IntSlice)
@@ -309,7 +315,12 @@ internal sealed class SemanticCompiler
             : ParseType(function.BlockInputType, function.Line, function.Column);
         var genericAssociatedTypeConstraint = function.GenericAssociatedTypeConstraint is null
             ? (TypeId?)null
-            : ParseType(function.GenericAssociatedTypeConstraint, function.Line, function.Column);
+            : ParseFunctionType(
+                function.GenericAssociatedTypeConstraint,
+                function.GenericParameterName,
+                function.SecondaryGenericParameterName,
+                function.Line,
+                function.Column);
         IReadOnlyDictionary<string, TypeId>? implAssociatedTypes = function.ImplAssociatedTypes is null
             ? null
             : function.ImplAssociatedTypes.ToDictionary(
@@ -342,6 +353,7 @@ internal sealed class SemanticCompiler
             isLocal,
             function.TraitName,
             function.GenericParameterName,
+            function.SecondaryGenericParameterName,
             function.GenericTraitBound,
             function.GenericAssociatedTypeName,
             genericAssociatedTypeConstraint,
@@ -2960,22 +2972,39 @@ internal sealed class SemanticCompiler
             throw new SmallLangException(
                 $"type {FormatType(actualType)} does not implement trait '{traitBound}' required by '{template.Name}'");
         }
+        BoundType? inferredSecondaryType = null;
         if (template.GenericTraitBound is { } constrainedTrait
             && template.GenericAssociatedTypeName is { } associatedTypeName
             && template.GenericAssociatedTypeConstraint is { } associatedTypeConstraint)
         {
-            var satisfiesConstraint = traitImplementation?.ImplAssociatedTypes is { } associatedTypes
-                && associatedTypes.TryGetValue(associatedTypeName, out var actualAssociatedType)
-                && actualAssociatedType == associatedTypeConstraint;
+            var actualAssociatedType = default(BoundType);
+            var hasAssociatedType = traitImplementation?.ImplAssociatedTypes is { } associatedTypes
+                && associatedTypes.TryGetValue(associatedTypeName, out actualAssociatedType);
+            var satisfiesConstraint = hasAssociatedType
+                && (associatedTypeConstraint == BoundType.SecondaryGenericParameter
+                    || actualAssociatedType == associatedTypeConstraint);
             if (!satisfiesConstraint)
             {
                 throw new SmallLangException(
                     $"type {FormatType(actualType)} does not satisfy associated type constraint "
                     + $"'{constrainedTrait}[{associatedTypeName} = {FormatType(associatedTypeConstraint)}]' required by '{template.Name}'");
             }
+            if (associatedTypeConstraint == BoundType.SecondaryGenericParameter)
+            {
+                inferredSecondaryType = actualAssociatedType;
+            }
+        }
+        if (template.SecondaryGenericParameterName is not null && inferredSecondaryType is null)
+        {
+            throw new SmallLangException(
+                $"generic function '{template.Name}' cannot infer type parameter '{template.SecondaryGenericParameterName}'");
         }
 
         var specializedName = template.Name + "$" + ((int)actualType).ToString(System.Globalization.CultureInfo.InvariantCulture);
+        if (inferredSecondaryType is { } secondaryType)
+        {
+            specializedName += "_" + ((int)secondaryType).ToString(System.Globalization.CultureInfo.InvariantCulture);
+        }
         if (_boundFunctions is null)
         {
             throw new InvalidOperationException("generic specialization requires bound functions");
@@ -2989,8 +3018,11 @@ internal sealed class SemanticCompiler
                 InputType = actualType,
                 ReturnType = template.ReturnType == BoundType.GenericParameter
                     ? actualType
-                    : template.ReturnType,
-                SpecializedType = actualType
+                    : template.ReturnType == BoundType.SecondaryGenericParameter
+                        ? inferredSecondaryType!.Value
+                        : template.ReturnType,
+                SpecializedType = actualType,
+                SpecializedSecondaryType = inferredSecondaryType
             };
             _boundFunctions.Add(specializedName, specialization);
             if (_validatingGenericSpecializations.Add(specialization))
@@ -3766,12 +3798,17 @@ internal sealed class SemanticCompiler
     private BoundType ParseFunctionType(
         string typeName,
         string? genericParameterName,
+        string? secondaryGenericParameterName,
         int line,
         int column)
     {
         if (genericParameterName is not null && typeName == genericParameterName)
         {
             return BoundType.GenericParameter;
+        }
+        if (secondaryGenericParameterName is not null && typeName == secondaryGenericParameterName)
+        {
+            return BoundType.SecondaryGenericParameter;
         }
         if (genericParameterName is not null && typeName == $"[Int; {genericParameterName}]")
         {
@@ -3808,6 +3845,8 @@ internal sealed class SemanticCompiler
             BoundType.DynamicIntArray => "[Int; ~]",
             BoundType.IntDictionaryView => "{Int: Int}",
             BoundType.IntDictionary => "{Int: Int}",
+            BoundType.GenericParameter => "generic parameter",
+            BoundType.SecondaryGenericParameter => "secondary generic parameter",
             _ => type.ToString()
         };
     }

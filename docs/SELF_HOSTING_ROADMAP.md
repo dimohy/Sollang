@@ -44,15 +44,15 @@ not lines of code.
 | Area | Gates | Complete | Partial | Missing | Score |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | Core syntax and control flow | 10 | 8 | 2 | 0 | 9.0 |
-| Types, traits, and generics | 12 | 7 | 3 | 2 | 8.5 |
+| Types, traits, and generics | 12 | 8 | 2 | 2 | 9.0 |
 | Ownership and storage | 10 | 7 | 2 | 1 | 8.0 |
 | Modules, visibility, and builds | 8 | 4 | 2 | 2 | 5.0 |
 | Compiler-construction primitives | 12 | 2 | 3 | 7 | 3.5 |
 | Standard library and tooling | 8 | 2 | 3 | 3 | 3.5 |
-| **Total** | **60** | **30** | **15** | **15** | **37.5 / 60** |
+| **Total** | **60** | **31** | **14** | **15** | **38.0 / 60** |
 
-Current count-based progress: **62.5% (37.5 of 60 equivalent gates)**.
-There are **22.5 equivalent gates remaining**. Because the missing compiler
+Current count-based progress: **63.3% (38.0 of 60 equivalent gates)**.
+There are **22 equivalent gates remaining**. Because the missing compiler
 primitives are harder than early syntax gates, this is not an elapsed-time
 estimate.
 
@@ -65,13 +65,13 @@ estimate.
 - Partial (2): general multi-parameter functions; structured early exit with
   `return`/`break`/`continue` across ownership scopes.
 
-### Types, traits, and generics — 8.5 / 12
+### Types, traits, and generics — 9.0 / 12
 
-- Complete (7): nominal structs, payload enums, exhaustive matching, impl
+- Complete (8): nominal structs, payload enums, exhaustive matching, impl
   methods, nominal traits/static dispatch, checked type/value specialization,
-  associated types with equality constraints.
-- Partial (3): generic functions are currently single-type; `[Int; N]` exists
-  but general `[T; N]` does not; container element types remain `Int`-only.
+  associated types with equality constraints, two-parameter generic inference.
+- Partial (2): `[Int; N]` exists but general `[T; N]` does not; container
+  element types remain `Int`-only.
 - Missing (2): standard `Option[T]`/`Result[T, E]`, explicit `dyn Trait`.
 
 ### Ownership and storage — 8.0 / 10
@@ -139,5 +139,6 @@ estimate.
 3. Internal-by-default visibility with explicit `public` exports for functions,
    structs, enums, and traits (implemented).
 4. Associated types and equality constraints (implemented by example 54).
-5. Multi-parameter generics, then generic collection element types (next).
-6. `Option`/`Result` and compiler-grade byte/text/source-span libraries.
+5. Multi-parameter generics (implemented by example 55).
+6. Generic collection element types and ownership/drop specialization (next).
+7. `Option`/`Result` and compiler-grade byte/text/source-span libraries.
