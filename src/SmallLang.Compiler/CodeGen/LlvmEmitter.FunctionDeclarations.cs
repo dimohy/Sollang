@@ -46,6 +46,11 @@ internal sealed partial class LlvmEmitter
                     EmitIntDictionaryFunction(function);
                     break;
                 default:
+                    if (_program.Types.IsDictionary(function.ReturnType))
+                    {
+                        EmitInlineDictionaryFunction(function);
+                        break;
+                    }
                     if (_program.Types.IsStruct(function.ReturnType)
                         || _program.Types.IsEnum(function.ReturnType)
                         || _program.Types.IsBox(function.ReturnType))
@@ -322,6 +327,41 @@ internal sealed partial class LlvmEmitter
         }
     }
 
+    private void EmitInlineDictionaryFunction(BoundFunction function)
+    {
+        if (function.Body is null)
+        {
+            throw new SmallLangException($"function '{function.Name}' has no body");
+        }
+        var previousFunctions = _currentFunctions;
+        _currentFunctions = CreateFunctionScope(_program.Functions, function.LocalFunctions);
+        ClearLocalState();
+        SelectStackFrame(function);
+        try
+        {
+            EmitFunctionLine($"define internal %smalllang.int_dictionary {SymbolForFunction(function.Name)}({ParameterListForFunction(function)}) #0 {{");
+            EmitFunctionLine("entry:");
+            EmitStackFrameAllocations();
+            _currentBlockLabel = "entry";
+            var functionLocals = CaptureLocals();
+            BindFunctionParameter(function);
+            EmitStatements(function.BlockBody);
+            var value = EmitExpression(function.Body);
+            EnsureRuntimeType(value, function.ReturnType, function.Name);
+            var transferredOwnerName = GetFunctionResultTransferredOwnerName(function, function.Body);
+            DropOwnedLocalsCreatedSince(functionLocals, transferredOwnerName);
+            var dictionary = (RuntimeInlineDictionary)value;
+            EmitRet("%smalllang.int_dictionary", BuildDictionaryAggregate(
+                dictionary.PointerName, dictionary.LengthName, dictionary.CapacityName));
+            EmitFunctionLine("}");
+            EmitFunctionLine();
+        }
+        finally
+        {
+            _currentFunctions = previousFunctions;
+        }
+    }
+
     private string ParameterListForFunction(BoundFunction function)
     {
         if (function.InputOwnership == BoundFunctionInputOwnership.MutableBorrow)
@@ -335,6 +375,7 @@ internal sealed partial class LlvmEmitter
             {
                 BoundType.DynamicIntArray => "%smalllang.mutable_container %it",
                 BoundType.IntDictionary => "%smalllang.mutable_container %it",
+                _ when function.InputType is { } type && _program.Types.IsDictionary(type) => "%smalllang.mutable_container %it",
                 _ => throw new SmallLangException("unsupported mutable borrow input type")
             };
         }
@@ -345,6 +386,11 @@ internal sealed partial class LlvmEmitter
                 || _program.Types.IsBox(inputType)))
         {
             return $"{LlvmType(inputType)} %it";
+        }
+
+        if (function.InputType is { } dictionaryType && _program.Types.IsDictionary(dictionaryType))
+        {
+            return "%smalllang.int_dictionary %it";
         }
 
         return function.InputType switch
@@ -391,6 +437,19 @@ internal sealed partial class LlvmEmitter
             _locals.Add(
                 function.InputName ?? "it",
                 new RuntimeBox(boxType, definition.ElementType, "%it"));
+            return;
+        }
+        if (function.InputType is { } dictionaryType && _program.Types.IsDictionary(dictionaryType))
+        {
+            var definition = _program.Types.GetDictionary(dictionaryType);
+            var pointer = NextTemp("param_generic_dict_ptr");
+            EmitAssign(pointer, "extractvalue %smalllang.int_dictionary %it, 0");
+            var length = NextTemp("param_generic_dict_len");
+            EmitAssign(length, "extractvalue %smalllang.int_dictionary %it, 1");
+            var capacity = NextTemp("param_generic_dict_capacity");
+            EmitAssign(capacity, "extractvalue %smalllang.int_dictionary %it, 2");
+            _locals.Add(function.InputName ?? "it", new RuntimeInlineDictionary(
+                dictionaryType, definition.KeyType, definition.ValueType, pointer, length, capacity));
             return;
         }
 
@@ -463,7 +522,8 @@ internal sealed partial class LlvmEmitter
             return;
         }
 
-        if (function.InputType is not (BoundType.DynamicIntArray or BoundType.IntDictionary))
+        if (function.InputType is not (BoundType.DynamicIntArray or BoundType.IntDictionary)
+            && (function.InputType is not { } mutableType || !_program.Types.IsDictionary(mutableType)))
         {
             throw new SmallLangException("unsupported mutable borrow input type");
         }
@@ -476,12 +536,23 @@ internal sealed partial class LlvmEmitter
         EmitAssign(capacityAddress, "extractvalue %smalllang.mutable_container %it, 2");
 
         var name = function.InputName ?? "it";
-        _locals.Add(name, function.InputType switch
+        RuntimeValue mutableValue;
+        if (function.InputType is { } genericDictionary && _program.Types.IsDictionary(genericDictionary))
         {
-            BoundType.DynamicIntArray => new RuntimeDynamicIntArray("", "", ""),
-            BoundType.IntDictionary => new RuntimeIntDictionary("", "", ""),
-            _ => throw new SmallLangException("unsupported mutable borrow input type")
-        });
+            var definition = _program.Types.GetDictionary(genericDictionary);
+            mutableValue = new RuntimeInlineDictionary(
+                genericDictionary, definition.KeyType, definition.ValueType, "", "", "");
+        }
+        else
+        {
+            mutableValue = function.InputType switch
+            {
+                BoundType.DynamicIntArray => new RuntimeDynamicIntArray("", "", ""),
+                BoundType.IntDictionary => new RuntimeIntDictionary("", "", ""),
+                _ => throw new SmallLangException("unsupported mutable borrow input type")
+            };
+        }
+        _locals.Add(name, mutableValue);
         _mutableLocals.Add(name);
         _borrowedMutableLocals.Add(name);
         _mutableContainerSlots.Add(

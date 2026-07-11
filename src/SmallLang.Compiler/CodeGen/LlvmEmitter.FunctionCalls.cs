@@ -434,6 +434,7 @@ internal sealed partial class LlvmEmitter
             BoundType.Bool => EmitBoolFunctionCall(function, argument),
             BoundType.DynamicIntArray => EmitDynamicIntArrayFunctionCall(function, argument),
             BoundType.IntDictionary => EmitIntDictionaryFunctionCall(function, argument),
+            _ when _program.Types.IsDictionary(function.ReturnType) => EmitInlineDictionaryFunctionCall(function, argument),
             _ when _program.Types.IsStruct(function.ReturnType)
                 || _program.Types.IsEnum(function.ReturnType)
                 || _program.Types.IsBox(function.ReturnType)
@@ -525,6 +526,22 @@ internal sealed partial class LlvmEmitter
         return new RuntimeIntDictionary(pointer, length, capacity);
     }
 
+    private RuntimeInlineDictionary EmitInlineDictionaryFunctionCall(BoundFunction function, RuntimeValue? argument)
+    {
+        var aggregate = NextTemp("generic_dict");
+        EmitCall(aggregate, "%smalllang.int_dictionary", SymbolForFunction(function.Name)[1..],
+            FunctionCallArgumentList(function, argument));
+        var pointer = NextTemp("generic_dict_ptr");
+        EmitAssign(pointer, $"extractvalue %smalllang.int_dictionary {aggregate}, 0");
+        var length = NextTemp("generic_dict_len");
+        EmitAssign(length, $"extractvalue %smalllang.int_dictionary {aggregate}, 1");
+        var capacity = NextTemp("generic_dict_capacity");
+        EmitAssign(capacity, $"extractvalue %smalllang.int_dictionary {aggregate}, 2");
+        var definition = _program.Types.GetDictionary(function.ReturnType);
+        return new RuntimeInlineDictionary(function.ReturnType, definition.KeyType, definition.ValueType,
+            pointer, length, capacity);
+    }
+
     private string FunctionCallArgumentList(BoundFunction function, RuntimeValue? argument)
     {
         if (function.InputType is null)
@@ -556,6 +573,12 @@ internal sealed partial class LlvmEmitter
                 throw new SmallLangException(
                     $"function '{function.Name}' expects [Int; {function.SpecializedValue}] but received [Int; {fixedArray.LengthName}]");
             }
+        }
+
+        if (argument is RuntimeInlineDictionary inlineDictionary
+            && function.InputType == inlineDictionary.DictionaryType)
+        {
+            return $"%smalllang.int_dictionary {BuildDictionaryAggregate(inlineDictionary.PointerName, inlineDictionary.LengthName, inlineDictionary.CapacityName)}";
         }
 
         return argument switch
@@ -634,6 +657,7 @@ internal sealed partial class LlvmEmitter
         {
             BoundType.DynamicIntArray => new RuntimeDynamicIntArray("", "", ""),
             BoundType.IntDictionary => new RuntimeIntDictionary("", "", ""),
+            _ when _program.Types.IsDictionary(reference.TargetType) => CreateEmptyRuntimeInlineDictionary(reference.TargetType),
             _ => throw new SmallLangException("unsupported mutable borrow input type")
         };
         _mutableLocals.Add(name);
@@ -731,6 +755,12 @@ internal sealed partial class LlvmEmitter
         var aggregate2 = NextTemp("dict_arg");
         EmitAssign(aggregate2, $"insertvalue %smalllang.int_dictionary {aggregate1}, i64 {capacity}, 2");
         return $"%smalllang.int_dictionary {aggregate2}";
+    }
+
+    private RuntimeInlineDictionary CreateEmptyRuntimeInlineDictionary(BoundType type)
+    {
+        var definition = _program.Types.GetDictionary(type);
+        return new RuntimeInlineDictionary(type, definition.KeyType, definition.ValueType, "", "", "");
     }
 
     private void RemoveOwnedParameterArgumentIfNeeded(BoundFunction function, IReadOnlyList<Expression> arguments)

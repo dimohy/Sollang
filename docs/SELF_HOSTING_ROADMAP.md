@@ -71,8 +71,9 @@ estimate.
   methods, nominal traits/static dispatch, checked type/value specialization,
   associated types with equality constraints, two-parameter generic inference.
 - Partial (2): arrays and dictionaries preserve scalar/user-value layouts and
-  recursively drop owned elements, but owned-element move extraction, generic
-  collection function contracts, and user-defined `Hash`/`Eq` dispatch remain.
+  recursively drop owned elements, and dictionary function contracts preserve
+  concrete K/V types; owned-element move extraction, parametric array function
+  contracts, iterators, and user-defined `Hash`/`Eq` dispatch remain.
 - Missing (2): standard `Option[T]`/`Result[T, E]`, explicit `dyn Trait`.
 
 ### Ownership and storage — 8.0 / 10
@@ -101,8 +102,8 @@ estimate.
 - Complete (2): Text values and deterministic native file I/O wrappers needed
   by the existing demos.
 - Partial (3): generic arrays/dictionaries now cover compiler-useful `Int`,
-  `Text`, and user-value payloads, but reusable collection function contracts
-  remain; string processing is output-oriented; diagnostics have no reusable
+  `Text`, and user-value payloads, including dictionary function contracts, but
+  collection iterators remain; string processing is output-oriented; diagnostics have no reusable
   source-span type.
 - Missing (7): byte buffers, Unicode/code-point iteration, collection iterators,
   tagged error propagation, arena/bump allocation, command-line/environment
@@ -145,5 +146,5 @@ estimate.
 5. Multi-parameter generics (implemented by example 55).
 6. Generic collection element types and ownership/drop specialization
    (implemented for fixed/growable arrays and Swiss-table dictionaries by
-   examples 56-65; function contracts and iterators remain).
+   examples 56-66; parametric array contracts and iterators remain).
 7. `Option`/`Result` and compiler-grade byte/text/source-span libraries.

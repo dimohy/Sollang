@@ -7,6 +7,16 @@ namespace SmallLang.Compiler.CodeGen;
 
 internal sealed partial class LlvmEmitter
 {
+    private string BuildDictionaryAggregate(string pointer, string length, string capacity)
+    {
+        var aggregate0 = NextTemp("generic_dict_value");
+        EmitAssign(aggregate0, $"insertvalue %smalllang.int_dictionary poison, ptr {pointer}, 0");
+        var aggregate1 = NextTemp("generic_dict_value");
+        EmitAssign(aggregate1, $"insertvalue %smalllang.int_dictionary {aggregate0}, i64 {length}, 1");
+        var aggregate2 = NextTemp("generic_dict_value");
+        EmitAssign(aggregate2, $"insertvalue %smalllang.int_dictionary {aggregate1}, i64 {capacity}, 2");
+        return aggregate2;
+    }
     private RuntimeInlineDictionary EmitInlineDictionaryLiteral(
         DictionaryLiteralExpression expression,
         BoundType dictionaryType,

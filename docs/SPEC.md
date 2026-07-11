@@ -796,22 +796,23 @@ Container rules in the current slice:
   to the surrounding binding. Moving an outer owner out through an inner block
   result is rejected, except when every return branch transfers the current
   function's own `move` input to the function result.
-- User functions may return `[Int; ~]` and `{Int: Int}` owners. The returned
+- User functions may return `[Int; ~]` and concrete `{K: V}` owners. The returned
   owner must be bound directly by the caller so the caller owns the drop point.
   Calling such a function as an anonymous flow source is rejected.
 - User functions may accept `[Int]` readonly views. A static `Int` array or
   growable `Int` array can be passed to `[Int]` without transferring ownership.
   The callee can read with indexing, `len`, `each`, and `fold`, but cannot
   mutate or store the view beyond the call.
-- User functions may accept `{Int: Int}` as a readonly dictionary view. The
+- User functions may accept any supported concrete `{K: V}` as a readonly
+  dictionary view. The
   callee receives `ptr`, `len`, and `capacity` metadata by value and may use
   indexing, `len`, and `capacity`. `put`, indexed assignment, `updated`, return,
   and storage beyond the call are rejected. The caller remains the owner.
-- User functions may accept `mut [Int; ~]` and `mut {Int: Int}` mutable
+- User functions may accept `mut [Int; ~]` and `mut {K: V}` mutable
   borrows. The caller must pass a named mutable owner such as `values!` or
   `scores!`. The callee can use existing mutable operations such as `push`,
   `put`, and indexed assignment, and the caller keeps ownership after the call.
-- User functions may accept `move [Int; ~]` and `move {Int: Int}` owners.
+- User functions may accept `move [Int; ~]` and `move {K: V}` owners.
   Passing such a value moves ownership into the callee. The caller binding is
   no longer live after the call. The callee drops the parameter at function
   exit or returns it directly or after move-consuming transforms. A returned
@@ -822,8 +823,9 @@ Container rules in the current slice:
 - Browser WebAssembly rejects heap-placed containers until the target has a
   linear-memory allocator. Stack-promoted readonly dynamic arrays and
   dictionaries require no allocator and are accepted.
-- General element-type generic `[T; N]`, `[T; ~]`, and `{K: V}` containers
-  remain future work. Compile-time `Int` value parameters specialize fixed
+- Parametric array function contracts, collection iterators, and user-defined
+  dictionary `Hash`/`Eq` key dispatch remain future work. Compile-time `Int`
+  value parameters specialize fixed
   repeat counts and fixed `Int` array input contracts. `[Int; N]` accepts only a
   fixed array whose compile-time length equals the explicit call specialization.
 

@@ -2510,4 +2510,24 @@ closed until static `Hash` and `Eq` trait dispatch is wired into collection
 specialization; generic dictionary function contracts and iterators remain the
 next collection boundary.
 
+## D080 - Parametric Dictionary Function Contracts
+
+Status: implemented
+Date: 2026-07-11
+
+Concrete dictionary types may cross user-function boundaries without erasing
+their K/V specialization. Function annotations use `{K: V}` directly. A
+default input is a readonly borrow, `mut {K: V}` passes addressable owner-handle
+slots, and `move {K: V}` transfers the owner and may return the same concrete
+dictionary type.
+
+All specializations share the three-word LLVM handle ABI `{ ptr, len,
+capacity }`; key/value TypeIds and entry layouts remain compile-time metadata
+and never become runtime descriptors. Readonly parameters are excluded from
+drop ownership, mutable borrows update the caller's handle after growth, and
+move parameters transfer exactly one final drop obligation. Example 66 verifies
+readonly lookup, mutable insertion, and move-return for `{Text: Int}`. Separate
+diagnostics reject mutation through a readonly parameter and calls with a
+different dictionary specialization.
+
 

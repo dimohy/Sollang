@@ -393,6 +393,7 @@ internal sealed class SemanticCompiler
             }
 
             if (inputType.Value is not (BoundType.DynamicIntArray or BoundType.IntDictionary)
+                && !_types.IsDictionary(inputType.Value)
                 && !_types.IsStruct(inputType.Value))
             {
                 throw Error(function.Line, function.Column, "mut input expects an owned container or struct value");
@@ -3908,6 +3909,25 @@ internal sealed class SemanticCompiler
 
     private BoundType ParseType(string typeName, int line, int column)
     {
+        if (typeName.Length >= 5 && typeName[0] == '{' && typeName[^1] == '}')
+        {
+            var separator = typeName.IndexOf(':', StringComparison.Ordinal);
+            if (separator > 1)
+            {
+                var keyName = typeName[1..separator].Trim();
+                var valueName = typeName[(separator + 1)..^1].Trim();
+                var keyType = ParseType(keyName, line, column);
+                var valueType = ParseType(valueName, line, column);
+                if (keyType is not (BoundType.Int or BoundType.Text))
+                {
+                    throw Error(line, column,
+                        "dictionary keys must implement Hash and Eq; Int and Text are supported in the current slice");
+                }
+                return keyType == BoundType.Int && valueType == BoundType.Int
+                    ? BoundType.IntDictionary
+                    : _types.GetOrAddDictionary(keyType, valueType);
+            }
+        }
         if (!_types.TryResolve(typeName, out var type))
         {
             throw Error(line, column, $"unknown type '{typeName}'");
@@ -4573,13 +4593,16 @@ internal sealed class SemanticCompiler
     {
         return function.InputOwnership == BoundFunctionInputOwnership.MutableBorrow
             && function.InputType is { } inputType
-            && (inputType is BoundType.DynamicIntArray or BoundType.IntDictionary || _types.IsStruct(inputType));
+            && (inputType is BoundType.DynamicIntArray or BoundType.IntDictionary
+                || _types.IsDictionary(inputType)
+                || _types.IsStruct(inputType));
     }
 
     private bool FunctionReadonlyBorrowsHeapInput(BoundFunction function, BoundType actualType)
     {
         return (function.InputType == BoundType.IntDictionaryView
                 && actualType == BoundType.IntDictionary)
+            || (function.InputType == actualType && _types.IsDictionary(actualType))
             || (function.InputType == BoundType.IntSlice
                 && actualType == BoundType.DynamicIntArray);
     }
