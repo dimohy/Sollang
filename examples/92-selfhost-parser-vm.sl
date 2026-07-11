@@ -1,8 +1,13 @@
 import smalllang.compiler.parser as parser
 
 main {
-    parser.accepts("main { 42 -> println }") => valid
-    parser.accepts("main { -> }") => invalid
-    valid -> if { "valid = true" } else { "valid = false" } -> println
-    invalid -> if { "invalid = true" } else { "invalid = false" } -> println
+    parser.parseEvents("main { 42 -> println }") => validEvents!
+    validEvents! -> len => validEventCount
+    validEvents![validEventCount - 1].value => valid
+    parser.parseEvents("main { -> }") => invalidEvents!
+    invalidEvents! -> len => invalidEventCount
+    invalidEvents![invalidEventCount - 1].value => invalid
+    valid == 1 -> if { "valid = true" } else { "valid = false" } -> println
+    invalid == 1 -> if { "invalid = true" } else { "invalid = false" } -> println
+    "events = $validEventCount" -> println
 }

@@ -173,12 +173,16 @@ estimate.
    itself. Stage 3: the stage-2 compiler rebuilds itself byte-for-byte or with
    normalized-IR equivalence, depending on target linker determinism.
 
-The first grammar-bootstrap slice is now present: `smalllang grammar build`
+The grammar-bootstrap path now includes `smalllang grammar build`, an SL lexer,
+and an SL parser VM. The build command
 compiles the canonical lexer/EBNF specifications into a deterministic ordinary
 SL module containing lexer descriptors and a 1,508-word parser VM program. The
-full test runner checks byte-for-byte regeneration. The remaining work is the
-SL source-span/token/CST substrate and the reusable lexer/parser VMs described
-in [GRAMMAR_BOOTSTRAP.md](GRAMMAR_BOOTSTRAP.md).
+full test runner checks byte-for-byte regeneration. The SL VM consumes those
+tables and emits backtracking-aware CST events; compact green-tree
+materialization, recovery, diagnostics, and CST-to-AST lowering remain as
+described in [GRAMMAR_BOOTSTRAP.md](GRAMMAR_BOOTSTRAP.md). These additions
+strengthen an already-partial compiler-construction gate, so the formal count
+remains **46.5 / 60 (77.5%)** until a lossless CST and diagnostics are verified.
 
 ## Immediate Implementation Order
 
