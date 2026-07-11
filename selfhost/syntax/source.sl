@@ -1,0 +1,20 @@
+namespace smalllang.compiler.syntax
+
+# Byte offsets remain stable across UTF-8 decoding and are shared by tokens,
+# CST nodes, diagnostics, and source maps.
+public struct SourceSpan {
+    fileId: Int
+    start: UIntSize
+    length: UIntSize
+}
+
+public struct SyntaxToken {
+    kind: Int
+    span: SourceSpan
+}
+
+impl SourceSpan {
+    end: self -> UIntSize {
+        self.start + self.length
+    }
+}

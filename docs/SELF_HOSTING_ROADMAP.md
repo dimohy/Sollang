@@ -141,8 +141,9 @@ estimate.
   child execution accepts an owned Text argv array and returns a typed exit or
   launch/wait/signal error on Windows and Linux.
 - Partial (3): generic arrays/dictionaries cover compiler-useful `Int`, `Text`,
-  and user-value payloads plus function contracts; string processing is
-  output-oriented; diagnostics have no reusable source-span type.
+  and user-value payloads plus function contracts; Text now has checked UTF-8
+  byte length/index/slice primitives, but broader string processing remains;
+  reusable SL source spans exist but bootstrap diagnostics do not use them yet.
 
 ### Standard library and tooling — 3.5 / 8
 

@@ -84,8 +84,8 @@ formatter and language server, avoiding a second editor-only grammar.
 
 ## Remaining Bootstrap Stages
 
-1. Add reusable byte-offset `SourceSpan`, `Token`, CST node, and diagnostic
-   types in SL.
+1. Reusable byte-offset `SourceSpan` and `SyntaxToken` are now present in
+   `selfhost/syntax/source.sl`; add CST node and diagnostic types.
 2. Implement the lexer descriptor VM in SL and compare token snapshots against
    the current C# lexer.
 3. Implement the parser bytecode VM in SL and compare CST snapshots.

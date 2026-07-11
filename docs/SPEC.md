@@ -955,6 +955,18 @@ defined directly on `CodePoint`; convert to `UInt32` first when numeric work is
 intentional. Equality and ordering comparisons remain available for lexer
 classification.
 
+`Text` also exposes explicit UTF-8 byte operations for lexer and source-map
+work. `text -> len` returns `UIntSize` byte length, `text -> byte(index)` returns
+a bounds-checked `UInt8`, and `text -> slice(start, length)` returns a borrowed
+`Text` view. Slice offsets are byte offsets and both ends must lie on UTF-8
+scalar boundaries; splitting a continuation sequence traps. Thus byte scanning
+is explicit while every value that retains the `Text` type remains valid UTF-8.
+
+The self-hosting syntax substrate defines `SourceSpan { fileId, start, length }`
+with `UIntSize` byte offsets and `SyntaxToken { kind, span }`. Byte offsets are
+shared across tokens, CST nodes, diagnostics, and source maps so Unicode column
+rendering can be derived without destabilizing stored spans.
+
 ## Arena Storage
 
 `Arena(initialCapacity)` creates a unique owned byte arena. It is a three-word

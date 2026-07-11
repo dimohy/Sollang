@@ -260,6 +260,8 @@ internal sealed partial class LlvmEmitter
 
                 result = current switch
                 {
+                    RuntimeText text => new RuntimeFlowResult(
+                        new RuntimeInt(BoundType.UIntSize, EmitArenaResultSize(text.LengthName)), null, _mainOk),
                     RuntimeIntSlice slice => new RuntimeFlowResult(EmitSizeAsInt(slice.LengthName, "slice_len_value"), null, _mainOk),
                     RuntimeStaticIntArray staticArray => new RuntimeFlowResult(EmitSizeAsInt(staticArray.LengthName, "array_len_value"), null, _mainOk),
                     RuntimeStaticTextArray staticArray => new RuntimeFlowResult(EmitSizeAsInt(staticArray.LengthName, "array_len_value"), null, _mainOk),
@@ -276,6 +278,30 @@ internal sealed partial class LlvmEmitter
                     _ => result
                 };
                 return result.Value is not null;
+            case "byte" when current is RuntimeText text:
+                if (target.Arguments.Count != 1)
+                {
+                    throw new SmallLangException("Text byte expects one index");
+                }
+                var byteIndex = EmitMapInteger(target.Arguments[0], BoundType.UIntSize, "text_byte_index");
+                var byteInBounds = NextTemp("text_byte_in_bounds");
+                EmitCompare(byteInBounds, "ult", "i64", byteIndex, text.LengthName);
+                EmitTrapUnless(byteInBounds, "text_byte_bounds");
+                var bytePointer = NextTemp("text_byte_ptr");
+                EmitAssign(bytePointer, $"getelementptr i8, ptr {text.PointerName}, i64 {byteIndex}");
+                var byteValue = NextTemp("text_byte");
+                EmitLoad(byteValue, "i8", bytePointer, 1);
+                result = new RuntimeFlowResult(new RuntimeInt(BoundType.UInt8, byteValue), null, _mainOk);
+                return true;
+            case "slice" when current is RuntimeText text:
+                if (target.Arguments.Count != 2)
+                {
+                    throw new SmallLangException("Text slice expects start and byte length");
+                }
+                var sliceStart = EmitMapInteger(target.Arguments[0], BoundType.UIntSize, "text_slice_start");
+                var sliceLength = EmitMapInteger(target.Arguments[1], BoundType.UIntSize, "text_slice_length");
+                result = new RuntimeFlowResult(EmitTextSlice(text, sliceStart, sliceLength), null, _mainOk);
+                return true;
             case "capacity":
                 if (target.Arguments.Count != 0)
                 {

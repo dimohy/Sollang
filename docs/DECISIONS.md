@@ -3106,4 +3106,23 @@ SL source. This is deliberately not counted as a completed lexer/parser gate
 until the SL VM produces token/CST snapshots equivalent to the bootstrap
 compiler.
 
+## D104 - Source Spans Use UTF-8 Byte Offsets
+
+Status: first self-hosting substrate implemented
+Date: 2026-07-12
+
+Lexer, CST, diagnostic, and source-map locations share
+`SourceSpan { fileId: Int, start: UIntSize, length: UIntSize }`. Stored offsets
+count UTF-8 bytes rather than Unicode scalars, grapheme clusters, or rendered
+columns. Bytes are stable under tokenization and map directly to source slices;
+line, scalar-column, and display-column values can be derived for diagnostics.
+
+`Text -> len` now returns its byte length. `byte(index)` exposes a checked
+`UInt8`, while `slice(start, length)` returns a borrowed Text only when both
+ends are valid UTF-8 boundaries. This gives the SL lexer efficient byte-level
+classification without allowing invalid UTF-8 Text values. Example 89 verifies
+ASCII byte access, a Hangul slice, byte count, and the reusable span method.
+The bootstrap C# diagnostics have not yet migrated to this type, so the broader
+source-span gate remains partial.
+
 

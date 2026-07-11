@@ -1,0 +1,18 @@
+import smalllang.compiler.syntax as syntax
+
+main {
+    "lexer 한글" => source
+    source -> len => byteCount
+    source -> byte(0) => firstByte
+    source -> slice(6, 6) => textPart
+    syntax.SourceSpan {
+        fileId: 0
+        start: UIntSize(6)
+        length: UIntSize(6)
+    } => span
+    span.end => spanEnd
+    "source bytes = $byteCount" -> println
+    "first byte = $firstByte" -> println
+    textPart -> println
+    "span end = $spanEnd" -> println
+}
