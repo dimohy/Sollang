@@ -50,7 +50,9 @@ internal sealed partial class LlvmEmitter
 
         _mainOk = CombineWriteOk(ok, _mainOk);
         EmitReturnIfReadFailed(ok);
-        return new RuntimeInt(value);
+        var narrowed = NextTemp("read_int32");
+        EmitAssign(narrowed, $"trunc i64 {value} to i32");
+        return new RuntimeInt(narrowed);
     }
 
     private RuntimeInt EmitRuntimeNowMillisIntrinsic(string path)
@@ -58,7 +60,7 @@ internal sealed partial class LlvmEmitter
         _ = path;
         var value = NextTemp("now_ms");
         EmitCall(value, "i64", "smalllang_now_millis", "");
-        return new RuntimeInt(value);
+        return new RuntimeInt(BoundType.Int64, value);
     }
 
     private void EmitReturnIfReadFailed(string readOk)
@@ -148,7 +150,8 @@ internal sealed partial class LlvmEmitter
         }
 
         var ok = NextTemp("runtime_ok");
-        EmitCall(ok, "i32", functionName, $"i64 {integer.ValueName}");
+        var wide = EmitRuntimeIntegerAsI64(integer, "runtime_argument");
+        EmitCall(ok, "i32", functionName, $"i64 {wide}");
         return ok;
     }
 
@@ -172,7 +175,8 @@ internal sealed partial class LlvmEmitter
         };
 
         var result = NextTemp("runtime_int");
-        EmitCall(result, "%smalllang.file_int_result", helperName, $"i64 {integer.ValueName}");
+        var wide = EmitRuntimeIntegerAsI64(integer, "runtime_argument");
+        EmitCall(result, "%smalllang.file_int_result", helperName, $"i64 {wide}");
 
         var value = NextTemp("runtime_value");
         EmitAssign(value, $"extractvalue %smalllang.file_int_result {result}, 0");
@@ -182,7 +186,21 @@ internal sealed partial class LlvmEmitter
 
         _mainOk = CombineWriteOk(ok, _mainOk);
         EmitReturnIfReadFailed(ok);
-        return new RuntimeInt(value);
+        var narrowed = NextTemp("runtime_int32");
+        EmitAssign(narrowed, $"trunc i64 {value} to i32");
+        return new RuntimeInt(narrowed);
+    }
+
+    private string EmitRuntimeIntegerAsI64(RuntimeInt integer, string prefix)
+    {
+        if (NumericBitWidth(integer.Type) == 64)
+        {
+            return integer.ValueName;
+        }
+        var wide = NextTemp(prefix);
+        var extension = IsSignedIntegerType(integer.Type) ? "sext" : "zext";
+        EmitAssign(wide, $"{extension} {LlvmType(integer.Type)} {integer.ValueName} to i64");
+        return wide;
     }
 
 }

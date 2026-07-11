@@ -21,6 +21,6 @@ internal static class IntDictionaryLayout
 
     public static int AllocationBytesForCapacity(int capacity)
     {
-        return checked(EntriesOffsetForCapacity(capacity) + (capacity * 16));
+        return checked(EntriesOffsetForCapacity(capacity) + (capacity * 8));
     }
 }

@@ -25,6 +25,11 @@ internal sealed partial class LlvmEmitter
             }
 
             _currentFunction = function;
+            if (IsNumericType(function.ReturnType))
+            {
+                EmitNumericFunction(function);
+                continue;
+            }
             switch (function.ReturnType)
             {
                 case BoundType.Unit:
@@ -248,6 +253,45 @@ internal sealed partial class LlvmEmitter
         }
     }
 
+    private void EmitNumericFunction(BoundFunction function)
+    {
+        if (function.Body is null)
+        {
+            throw new SmallLangException($"function '{function.Name}' has no body");
+        }
+        var previousFunctions = _currentFunctions;
+        _currentFunctions = CreateFunctionScope(_program.Functions, function.LocalFunctions);
+        ClearLocalState();
+        SelectStackFrame(function);
+        try
+        {
+            var llvmType = LlvmType(function.ReturnType);
+            EmitFunctionLine($"define internal {llvmType} {SymbolForFunction(function.Name)}({ParameterListForFunction(function)}) #0 {{");
+            EmitFunctionLine("entry:");
+            EmitStackFrameAllocations();
+            _currentBlockLabel = "entry";
+            var functionLocals = CaptureLocals();
+            BindFunctionParameter(function);
+            EmitStatements(function.BlockBody);
+            var value = EmitExpression(function.Body);
+            EnsureRuntimeType(value, function.ReturnType, function.Name);
+            DropOwnedLocalsCreatedSince(functionLocals, transferredOwnerName: null);
+            var valueName = value switch
+            {
+                RuntimeInt integer => integer.ValueName,
+                RuntimeFloat floating => floating.ValueName,
+                _ => throw new SmallLangException($"function '{function.Name}' did not produce a numeric value")
+            };
+            EmitRet(llvmType, valueName);
+            EmitFunctionLine("}");
+            EmitFunctionLine();
+        }
+        finally
+        {
+            _currentFunctions = previousFunctions;
+        }
+    }
+
     private void EmitDynamicIntArrayFunction(BoundFunction function)
     {
         if (function.Body is null)
@@ -438,6 +482,11 @@ internal sealed partial class LlvmEmitter
             return "%smalllang.int_dictionary %it";
         }
 
+        if (function.InputType is { } numericInput && IsNumericType(numericInput))
+        {
+            return $"{LlvmType(numericInput)} %it";
+        }
+
         return function.InputType switch
         {
             null => "",
@@ -511,12 +560,20 @@ internal sealed partial class LlvmEmitter
             return;
         }
 
+        if (function.InputType is { } numericInput && IsIntegerType(numericInput))
+        {
+            _locals.Add(function.InputName ?? "it", new RuntimeInt(numericInput, "%it"));
+            return;
+        }
+        if (function.InputType is { } floatInput && IsFloatType(floatInput))
+        {
+            _locals.Add(function.InputName ?? "it", new RuntimeFloat(floatInput, "%it"));
+            return;
+        }
+
         switch (function.InputType)
         {
             case null:
-                return;
-            case BoundType.Int:
-                _locals.Add(function.InputName ?? "it", new RuntimeInt("%it"));
                 return;
             case BoundType.Bool:
                 _locals.Add(function.InputName ?? "it", new RuntimeBool("%it"));

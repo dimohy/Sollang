@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Numerics;
 using System.Text;
 using SmallLang.Compiler.Diagnostics;
 using SmallLang.Compiler.Semantics;
@@ -13,6 +14,11 @@ internal sealed partial class LlvmEmitter
         if (TryEmitEnumConstructor(expression, out var enumValue))
         {
             return enumValue;
+        }
+
+        if (TryEmitNumericConversion(expression, out var numericValue))
+        {
+            return numericValue;
         }
 
         var path = string.Join('.', expression.Path);
@@ -221,6 +227,136 @@ internal sealed partial class LlvmEmitter
         return value;
     }
 
+    private bool TryEmitNumericConversion(CallExpression expression, out RuntimeValue value)
+    {
+        value = null!;
+        if (expression.Path.Count != 1
+            || !_program.Types.TryResolve(expression.Path[0], out var targetType)
+            || !IsNumericType(targetType))
+        {
+            return false;
+        }
+        if (expression.Arguments.Count != 1)
+        {
+            throw new SmallLangException($"numeric conversion '{expression.Path[0]}' expects exactly one argument");
+        }
+        if (IsIntegerType(targetType)
+            && TryGetIntegerLiteralText(expression.Arguments[0], out var integerLiteral))
+        {
+            value = new RuntimeInt(targetType, integerLiteral);
+            return true;
+        }
+        var source = EmitExpression(expression.Arguments[0]);
+        if (!IsNumericType(source.Type))
+        {
+            throw new SmallLangException($"numeric conversion '{expression.Path[0]}' expects a numeric value");
+        }
+        if (source is RuntimeInt checkedInteger && IsIntegerType(targetType))
+        {
+            EmitCheckedIntegerConversion(checkedInteger, targetType);
+        }
+        if (source.Type == targetType
+            || (NumericBitWidth(source.Type) == NumericBitWidth(targetType)
+                && IsIntegerType(source.Type) && IsIntegerType(targetType)))
+        {
+            value = source switch
+            {
+                RuntimeInt sameWidthInteger => new RuntimeInt(targetType, sameWidthInteger.ValueName),
+                RuntimeFloat floating => new RuntimeFloat(targetType, floating.ValueName),
+                _ => throw new SmallLangException("numeric conversion received a non-numeric runtime value")
+            };
+            return true;
+        }
+
+        var converted = NextTemp("numeric_convert");
+        string instruction;
+        if (source is RuntimeInt integer && IsIntegerType(targetType))
+        {
+            instruction = NumericBitWidth(targetType) < NumericBitWidth(source.Type)
+                ? "trunc"
+                : IsSignedIntegerType(source.Type) ? "sext" : "zext";
+            EmitAssign(converted,
+                $"{instruction} {LlvmType(source.Type)} {integer.ValueName} to {LlvmType(targetType)}");
+            value = new RuntimeInt(targetType, converted);
+            return true;
+        }
+        if (source is RuntimeInt intValue && IsFloatType(targetType))
+        {
+            instruction = IsSignedIntegerType(source.Type) ? "sitofp" : "uitofp";
+            EmitAssign(converted,
+                $"{instruction} {LlvmType(source.Type)} {intValue.ValueName} to {LlvmType(targetType)}");
+            value = new RuntimeFloat(targetType, converted);
+            return true;
+        }
+        if (source is RuntimeFloat floatValue && IsIntegerType(targetType))
+        {
+            instruction = IsSignedIntegerType(targetType) ? "fptosi" : "fptoui";
+            EmitAssign(converted,
+                $"{instruction} {LlvmType(source.Type)} {floatValue.ValueName} to {LlvmType(targetType)}");
+            value = new RuntimeInt(targetType, converted);
+            return true;
+        }
+        if (source is RuntimeFloat floatingValue && IsFloatType(targetType))
+        {
+            instruction = NumericBitWidth(targetType) < NumericBitWidth(source.Type) ? "fptrunc" : "fpext";
+            EmitAssign(converted,
+                $"{instruction} {LlvmType(source.Type)} {floatingValue.ValueName} to {LlvmType(targetType)}");
+            value = new RuntimeFloat(targetType, converted);
+            return true;
+        }
+        throw new SmallLangException("unsupported numeric conversion");
+    }
+
+    private static bool TryGetIntegerLiteralText(Expression expression, out string text)
+    {
+        switch (expression)
+        {
+            case NumberExpression number
+                when !number.Text.Contains('.', StringComparison.Ordinal)
+                    && !number.Text.Contains('e', StringComparison.OrdinalIgnoreCase):
+                text = number.Text;
+                return true;
+            case NegateExpression { Value: NumberExpression number }
+                when !number.Text.Contains('.', StringComparison.Ordinal)
+                    && !number.Text.Contains('e', StringComparison.OrdinalIgnoreCase):
+                text = "-" + number.Text;
+                return true;
+            default:
+                text = string.Empty;
+                return false;
+        }
+    }
+
+    private void EmitCheckedIntegerConversion(RuntimeInt source, BoundType targetType)
+    {
+        var (sourceMin, sourceMax) = IntegerRange(source.Type);
+        var (targetMin, targetMax) = IntegerRange(targetType);
+        var llvmType = LlvmType(source.Type);
+        var signed = IsSignedIntegerType(source.Type);
+        if (sourceMin < targetMin)
+        {
+            var lower = NextTemp("numeric_lower_bound");
+            EmitCompare(lower, signed ? "sge" : "uge", llvmType, source.ValueName,
+                targetMin.ToString(CultureInfo.InvariantCulture));
+            EmitTrapUnless(lower, "numeric_conversion_lower");
+        }
+        if (sourceMax > targetMax)
+        {
+            var upper = NextTemp("numeric_upper_bound");
+            EmitCompare(upper, signed ? "sle" : "ule", llvmType, source.ValueName,
+                targetMax.ToString(CultureInfo.InvariantCulture));
+            EmitTrapUnless(upper, "numeric_conversion_upper");
+        }
+    }
+
+    private static (BigInteger Minimum, BigInteger Maximum) IntegerRange(BoundType type)
+    {
+        var bits = NumericBitWidth(type);
+        return IsSignedIntegerType(type)
+            ? (-(BigInteger.One << (bits - 1)), (BigInteger.One << (bits - 1)) - 1)
+            : (BigInteger.Zero, (BigInteger.One << bits) - 1);
+    }
+
     private bool TryResolveInstanceMethodCall(
         IReadOnlyList<string> path,
         out BoundFunction function,
@@ -426,6 +562,11 @@ internal sealed partial class LlvmEmitter
             return EmitInlineFunctionCall(function, argument);
         }
 
+        if (IsNumericType(function.ReturnType))
+        {
+            return EmitNumericFunctionCall(function, argument);
+        }
+
         return function.ReturnType switch
         {
             BoundType.Unit => EmitUnitFunctionCall(function, argument),
@@ -481,6 +622,16 @@ internal sealed partial class LlvmEmitter
         var arguments = FunctionCallArgumentList(function, argument);
         EmitCall(value, "i64", SymbolForFunction(function.Name)[1..], arguments);
         return new RuntimeInt(value);
+    }
+
+    private RuntimeValue EmitNumericFunctionCall(BoundFunction function, RuntimeValue? argument)
+    {
+        var value = NextTemp("numeric_call");
+        var arguments = FunctionCallArgumentList(function, argument);
+        EmitCall(value, LlvmType(function.ReturnType), SymbolForFunction(function.Name)[1..], arguments);
+        return IsIntegerType(function.ReturnType)
+            ? new RuntimeInt(function.ReturnType, value)
+            : new RuntimeFloat(function.ReturnType, value);
     }
 
     private RuntimeBool EmitBoolFunctionCall(BoundFunction function, RuntimeValue? argument)
@@ -603,9 +754,17 @@ internal sealed partial class LlvmEmitter
             return $"%smalllang.int_dictionary {BuildDictionaryAggregate(inlineDictionary.PointerName, inlineDictionary.LengthName, inlineDictionary.CapacityName)}";
         }
 
+        if (argument is RuntimeInt numericInteger && function.InputType == numericInteger.Type)
+        {
+            return $"{LlvmType(numericInteger.Type)} {numericInteger.ValueName}";
+        }
+        if (argument is RuntimeFloat numericFloat && function.InputType == numericFloat.Type)
+        {
+            return $"{LlvmType(numericFloat.Type)} {numericFloat.ValueName}";
+        }
+
         return argument switch
         {
-            RuntimeInt integer when function.InputType == BoundType.Int => $"i64 {integer.ValueName}",
             RuntimeBool boolean when function.InputType == BoundType.Bool => $"i1 {boolean.ValueName}",
             RuntimeIntSlice slice when function.InputType == BoundType.IntSlice => BuildIntSliceArgument(slice.PointerName, slice.LengthName),
             RuntimeStaticIntArray array when function.InputType == BoundType.IntSlice => BuildStaticIntArraySliceArgument(array),
@@ -706,7 +865,7 @@ internal sealed partial class LlvmEmitter
     private string BuildStaticIntArraySliceArgument(RuntimeStaticIntArray array)
     {
         var pointer = NextTemp("slice_ptr");
-        EmitAssign(pointer, $"getelementptr inbounds [{array.AllocatedLength.ToString(CultureInfo.InvariantCulture)} x i64], ptr {array.PointerName}, i64 0, i64 0");
+        EmitAssign(pointer, $"getelementptr inbounds [{array.AllocatedLength.ToString(CultureInfo.InvariantCulture)} x i32], ptr {array.PointerName}, i64 0, i64 0");
         return BuildIntSliceArgument(pointer, array.LengthName);
     }
 
@@ -724,7 +883,7 @@ internal sealed partial class LlvmEmitter
     private RuntimeIntSlice CreateRuntimeIntSlice(RuntimeStaticIntArray array)
     {
         var pointer = NextTemp("slice_ptr");
-        EmitAssign(pointer, $"getelementptr inbounds [{array.AllocatedLength.ToString(CultureInfo.InvariantCulture)} x i64], ptr {array.PointerName}, i64 0, i64 0");
+        EmitAssign(pointer, $"getelementptr inbounds [{array.AllocatedLength.ToString(CultureInfo.InvariantCulture)} x i32], ptr {array.PointerName}, i64 0, i64 0");
         return new RuntimeIntSlice(pointer, array.LengthName);
     }
 

@@ -11,7 +11,7 @@ internal sealed partial class LlvmEmitter
     private RuntimeInt LoadInt(string pointer, string prefix)
     {
         var value = NextTemp(prefix);
-        EmitLoad(value, "i64", pointer, 8);
+        EmitLoad(value, "i32", pointer, 4);
         return new RuntimeInt(value);
     }
 
@@ -42,64 +42,106 @@ internal sealed partial class LlvmEmitter
             ?? throw new SmallLangException("expected runtime boolean expression");
     }
 
-    private RuntimeInt EmitAddExpression(AddExpression expression)
+    private RuntimeValue EmitAddExpression(AddExpression expression)
     {
-        var left = EmitIntExpression(expression.Left);
-        var right = EmitIntExpression(expression.Right);
-        var result = NextTemp("add");
-        EmitBinary(result, "add nsw", "i64", left.ValueName, right.ValueName);
-        return new RuntimeInt(result);
+        return EmitNumericBinary(expression.Left, expression.Right, "add", "fadd", "add");
     }
 
-    private RuntimeInt EmitMultiplyExpression(MultiplyExpression expression)
+    private RuntimeValue EmitMultiplyExpression(MultiplyExpression expression)
     {
-        var left = EmitIntExpression(expression.Left);
-        var right = EmitIntExpression(expression.Right);
-        var result = NextTemp("mul");
-        EmitBinary(result, "mul nsw", "i64", left.ValueName, right.ValueName);
-        return new RuntimeInt(result);
+        return EmitNumericBinary(expression.Left, expression.Right, "mul", "fmul", "mul");
     }
 
-    private RuntimeInt EmitSubtractExpression(SubtractExpression expression)
+    private RuntimeValue EmitSubtractExpression(SubtractExpression expression)
     {
-        var left = EmitIntExpression(expression.Left);
-        var right = EmitIntExpression(expression.Right);
-        var result = NextTemp("sub");
-        EmitBinary(result, "sub nsw", "i64", left.ValueName, right.ValueName);
-        return new RuntimeInt(result);
+        return EmitNumericBinary(expression.Left, expression.Right, "sub", "fsub", "sub");
     }
 
-    private RuntimeInt EmitDivideExpression(DivideExpression expression)
+    private RuntimeValue EmitDivideExpression(DivideExpression expression)
     {
-        var left = EmitIntExpression(expression.Left);
-        var right = EmitIntExpression(expression.Right);
-        var result = NextTemp("div");
-        EmitBinary(result, "sdiv", "i64", left.ValueName, right.ValueName);
-        return new RuntimeInt(result);
+        var left = EmitExpression(expression.Left);
+        var integerOp = IsSignedIntegerType(left.Type) ? "sdiv" : "udiv";
+        return EmitNumericBinary(left, EmitExpression(expression.Right), integerOp, "fdiv", "div");
     }
 
-    private RuntimeInt EmitModuloExpression(ModuloExpression expression)
+    private RuntimeValue EmitModuloExpression(ModuloExpression expression)
     {
-        var left = EmitIntExpression(expression.Left);
-        var right = EmitIntExpression(expression.Right);
-        var result = NextTemp("mod");
-        EmitBinary(result, "srem", "i64", left.ValueName, right.ValueName);
-        return new RuntimeInt(result);
+        var left = EmitExpression(expression.Left);
+        var integerOp = IsSignedIntegerType(left.Type) ? "srem" : "urem";
+        return EmitNumericBinary(left, EmitExpression(expression.Right), integerOp, "frem", "mod");
     }
 
-    private RuntimeInt EmitNegateExpression(NegateExpression expression)
+    private RuntimeValue EmitNegateExpression(NegateExpression expression)
     {
-        var value = EmitIntExpression(expression.Value);
+        var value = EmitExpression(expression.Value);
         var result = NextTemp("neg");
-        EmitBinary(result, "sub nsw", "i64", "0", value.ValueName);
-        return new RuntimeInt(result);
+        if (value is RuntimeInt integer)
+        {
+            EmitBinary(result, "sub", LlvmType(value.Type), "0", integer.ValueName);
+            return new RuntimeInt(value.Type, result);
+        }
+        if (value is RuntimeFloat floating)
+        {
+            EmitBinary(result, "fsub", LlvmType(value.Type), "-0.0", floating.ValueName);
+            return new RuntimeFloat(value.Type, result);
+        }
+        throw new SmallLangException("unary '-' expects a numeric value");
+    }
+
+    private RuntimeValue EmitNumericBinary(
+        Expression leftExpression,
+        Expression rightExpression,
+        string integerOperation,
+        string floatOperation,
+        string prefix) => EmitNumericBinary(
+            EmitExpression(leftExpression), EmitExpression(rightExpression), integerOperation, floatOperation, prefix);
+
+    private RuntimeValue EmitNumericBinary(
+        RuntimeValue left,
+        RuntimeValue right,
+        string integerOperation,
+        string floatOperation,
+        string prefix)
+    {
+        var result = NextTemp(prefix);
+        if (left is RuntimeInt leftInt && right is RuntimeInt rightInt && left.Type == right.Type)
+        {
+            EmitBinary(result, integerOperation, LlvmType(left.Type), leftInt.ValueName, rightInt.ValueName);
+            return new RuntimeInt(left.Type, result);
+        }
+        if (left is RuntimeFloat leftFloat && right is RuntimeFloat rightFloat && left.Type == right.Type)
+        {
+            EmitBinary(result, floatOperation, LlvmType(left.Type), leftFloat.ValueName, rightFloat.ValueName);
+            return new RuntimeFloat(left.Type, result);
+        }
+        throw new SmallLangException("numeric operands must have the same runtime type");
     }
 
     private RuntimeBool EmitCompareExpression(CompareExpression expression)
     {
-        var left = EmitIntExpression(expression.Left);
-        var right = EmitIntExpression(expression.Right);
-        return EmitIntegerComparison(left, expression.Operator, right);
+        var left = EmitExpression(expression.Left);
+        var right = EmitExpression(expression.Right);
+        if (left is RuntimeInt leftInt && right is RuntimeInt rightInt)
+        {
+            return EmitIntegerComparison(leftInt, expression.Operator, rightInt);
+        }
+        if (left is RuntimeFloat leftFloat && right is RuntimeFloat rightFloat)
+        {
+            var result = NextTemp("fcmp");
+            var instruction = expression.Operator switch
+            {
+                ComparisonOperator.Equal => "oeq",
+                ComparisonOperator.NotEqual => "one",
+                ComparisonOperator.Less => "olt",
+                ComparisonOperator.LessOrEqual => "ole",
+                ComparisonOperator.Greater => "ogt",
+                ComparisonOperator.GreaterOrEqual => "oge",
+                _ => throw new SmallLangException($"unsupported comparison operator '{expression.Operator}'")
+            };
+            EmitInstruction($"{result} = fcmp {instruction} {LlvmType(left.Type)} {leftFloat.ValueName}, {rightFloat.ValueName}");
+            return new RuntimeBool(result);
+        }
+        throw new SmallLangException("comparison operands must have the same numeric runtime type");
     }
 
     private RuntimeBool EmitIntegerComparison(RuntimeInt left, ComparisonOperator comparisonOperator, RuntimeInt right)
@@ -115,7 +157,11 @@ internal sealed partial class LlvmEmitter
             ComparisonOperator.GreaterOrEqual => "sge",
             _ => throw new SmallLangException($"unsupported comparison operator '{comparisonOperator}'")
         };
-        EmitCompare(result, instruction, "i64", left.ValueName, right.ValueName);
+        if (!IsSignedIntegerType(left.Type))
+        {
+            instruction = instruction switch { "slt" => "ult", "sle" => "ule", "sgt" => "ugt", "sge" => "uge", _ => instruction };
+        }
+        EmitCompare(result, instruction, LlvmType(left.Type), left.ValueName, right.ValueName);
         return new RuntimeBool(result);
     }
 
@@ -305,17 +351,17 @@ internal sealed partial class LlvmEmitter
         var nextItem = NextTemp("fold_next");
         var initialDone = NextTemp("fold_done");
 
-        EmitCompare(initialDone, "sgt", "i64", start.ValueName, end.ValueName);
+        EmitCompare(initialDone, "sgt", "i32", start.ValueName, end.ValueName);
         EmitConditionalBranch(initialDone, endLabel, bodyLabel);
 
         EmitLabel(bodyLabel);
         _currentBlockLabel = bodyLabel;
         var item = NextTemp(expression.ItemName);
-        EmitPhi(item, "i64", (start.ValueName, entryLabel), (nextItem, continueLabel));
+        EmitPhi(item, "i32", (start.ValueName, entryLabel), (nextItem, continueLabel));
 
         var nextAccumulator = NextTemp("fold_acc_next");
         var accumulator = NextTemp(expression.AccumulatorName);
-        EmitPhi(accumulator, "i64", (initial.ValueName, entryLabel), (nextAccumulator, continueLabel));
+        EmitPhi(accumulator, "i32", (initial.ValueName, entryLabel), (nextAccumulator, continueLabel));
 
         var outerLocals = CaptureLocals();
         _locals[expression.AccumulatorName] = new RuntimeInt(accumulator);
@@ -327,20 +373,20 @@ internal sealed partial class LlvmEmitter
             throw new SmallLangException("fold body must return an integer accumulator value");
         }
 
-        EmitBinary(nextAccumulator, "add", "i64", bodyValue.ValueName, "0");
+        EmitBinary(nextAccumulator, "add", "i32", bodyValue.ValueName, "0");
         EmitBranch(continueLabel);
 
         EmitLabel(continueLabel);
         _currentBlockLabel = continueLabel;
-        EmitBinary(nextItem, "add", "i64", item, "1");
+        EmitBinary(nextItem, "add", "i32", item, "1");
         var done = NextTemp("fold_done");
-        EmitCompare(done, "sgt", "i64", nextItem, end.ValueName);
+        EmitCompare(done, "sgt", "i32", nextItem, end.ValueName);
         EmitConditionalBranch(done, endLabel, bodyLabel);
 
         EmitLabel(endLabel);
         _currentBlockLabel = endLabel;
         var result = NextTemp("fold");
-        EmitPhi(result, "i64", (initial.ValueName, entryLabel), (nextAccumulator, continueLabel));
+        EmitPhi(result, "i32", (initial.ValueName, entryLabel), (nextAccumulator, continueLabel));
         return new RuntimeInt(result);
     }
 
@@ -373,7 +419,7 @@ internal sealed partial class LlvmEmitter
 
         var nextAccumulator = NextTemp("array_fold_acc_next");
         var accumulator = NextTemp(expression.AccumulatorName);
-        EmitPhi(accumulator, "i64", (initial.ValueName, entryLabel), (nextAccumulator, continueLabel));
+        EmitPhi(accumulator, "i32", (initial.ValueName, entryLabel), (nextAccumulator, continueLabel));
 
         RuntimeInt item;
         if (staticLength is { } allocatedLength)
@@ -399,7 +445,7 @@ internal sealed partial class LlvmEmitter
             throw new SmallLangException("fold body must return an integer accumulator value");
         }
 
-        EmitBinary(nextAccumulator, "add", "i64", bodyValue.ValueName, "0");
+        EmitBinary(nextAccumulator, "add", "i32", bodyValue.ValueName, "0");
         EmitBranch(continueLabel);
 
         EmitLabel(continueLabel);
@@ -412,7 +458,7 @@ internal sealed partial class LlvmEmitter
         EmitLabel(endLabel);
         _currentBlockLabel = endLabel;
         var result = NextTemp("array_fold");
-        EmitPhi(result, "i64", (initial.ValueName, entryLabel), (nextAccumulator, continueLabel));
+        EmitPhi(result, "i32", (initial.ValueName, entryLabel), (nextAccumulator, continueLabel));
         return new RuntimeInt(result);
     }
 
@@ -449,7 +495,8 @@ internal sealed partial class LlvmEmitter
     {
         return incoming[0].Value switch
         {
-            RuntimeInt => new RuntimeInt(EmitScalarPhi(prefix, "i64", incoming)),
+            RuntimeInt integer => new RuntimeInt(integer.Type, EmitScalarPhi(prefix, LlvmType(integer.Type), incoming)),
+            RuntimeFloat floating => new RuntimeFloat(floating.Type, EmitScalarPhi(prefix, LlvmType(floating.Type), incoming)),
             RuntimeBool => new RuntimeBool(EmitScalarPhi(prefix, "i1", incoming)),
             RuntimeText => EmitTextPhi(prefix, incoming),
             RuntimeDynamicIntArray => EmitDynamicArrayPhi(prefix, incoming),
@@ -467,6 +514,7 @@ internal sealed partial class LlvmEmitter
         var incomingList = FormatPhiIncoming(incoming, static value => value switch
         {
             RuntimeInt integer => integer.ValueName,
+            RuntimeFloat floating => floating.ValueName,
             RuntimeBool boolean => boolean.ValueName,
             _ => throw new SmallLangException($"unsupported scalar phi value {value.GetType().Name}")
         });

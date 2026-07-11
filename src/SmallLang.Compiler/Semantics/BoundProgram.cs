@@ -93,6 +93,15 @@ internal enum TypeId
     Text,
     Int,
     Bool,
+    Int8,
+    Int16,
+    Int64,
+    UInt8,
+    UInt16,
+    UInt32,
+    UInt64,
+    Float32,
+    Float64,
     IntSlice,
     StaticIntArray,
     StaticTextArray,
@@ -427,7 +436,10 @@ internal sealed class TypeDefinitionTable
         return type switch
         {
             TypeId.Bool => 1,
-            TypeId.Int => 8,
+            TypeId.Int8 or TypeId.UInt8 => 1,
+            TypeId.Int16 or TypeId.UInt16 => 2,
+            TypeId.Int or TypeId.UInt32 or TypeId.Float32 => 4,
+            TypeId.Int64 or TypeId.UInt64 or TypeId.Float64 => 8,
             TypeId.Text => 16,
             _ => throw new InvalidOperationException($"type {type} has no inline size")
         };

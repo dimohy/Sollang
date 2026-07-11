@@ -142,10 +142,10 @@ internal sealed partial class LlvmEmitter
         switch (target)
         {
             case RuntimeStaticIntArray array:
-                EmitStaticArrayAssign(array, index.ValueName, value.ValueName);
+                EmitStaticArrayAssign(array, EmitIntAsSize(index, "assignment_index"), value.ValueName);
                 return;
             case RuntimeDynamicIntArray array:
-                EmitDynamicArrayAssign(array, index.ValueName, value.ValueName);
+                EmitDynamicArrayAssign(array, EmitIntAsSize(index, "assignment_index"), value.ValueName);
                 return;
             case RuntimeIntDictionary dictionary:
                 EmitDictionaryAssignExisting(dictionary, index.ValueName, value.ValueName);
@@ -201,13 +201,13 @@ internal sealed partial class LlvmEmitter
         var next = NextTemp("each_next");
         var initialDone = NextTemp("each_done");
 
-        EmitCompare(initialDone, "sgt", "i64", start.ValueName, end.ValueName);
+        EmitCompare(initialDone, "sgt", "i32", start.ValueName, end.ValueName);
         EmitConditionalBranch(initialDone, endLabel, bodyLabel);
 
         EmitLabel(bodyLabel);
         _currentBlockLabel = bodyLabel;
         var item = NextTemp(statement.ItemName);
-        EmitPhi(item, "i64", (start.ValueName, entryLabel), (next, continueLabel));
+        EmitPhi(item, "i32", (start.ValueName, entryLabel), (next, continueLabel));
 
         var outerLocals = CaptureLocals();
         try
@@ -224,9 +224,9 @@ internal sealed partial class LlvmEmitter
         EmitBranch(continueLabel);
         EmitLabel(continueLabel);
         _currentBlockLabel = continueLabel;
-        EmitBinary(next, "add", "i64", item, "1");
+        EmitBinary(next, "add", "i32", item, "1");
         var done = NextTemp("each_done");
-        EmitCompare(done, "sgt", "i64", next, end.ValueName);
+        EmitCompare(done, "sgt", "i32", next, end.ValueName);
         EmitConditionalBranch(done, endLabel, bodyLabel);
         EmitLabel(endLabel);
         _currentBlockLabel = endLabel;
@@ -447,13 +447,13 @@ internal sealed partial class LlvmEmitter
         var next = NextTemp("repeat_next");
         var initialDone = NextTemp("repeat_done");
 
-        EmitCompare(initialDone, "sle", "i64", count.ValueName, "0");
+        EmitCompare(initialDone, "sle", "i32", count.ValueName, "0");
         EmitConditionalBranch(initialDone, endLabel, bodyLabel);
 
         EmitLabel(bodyLabel);
         _currentBlockLabel = bodyLabel;
         var item = NextTemp(statement.ItemName);
-        EmitPhi(item, "i64", ("1", entryLabel), (next, continueLabel));
+        EmitPhi(item, "i32", ("1", entryLabel), (next, continueLabel));
 
         var outerLocals = CaptureLocals();
         try
@@ -470,9 +470,9 @@ internal sealed partial class LlvmEmitter
         EmitBranch(continueLabel);
         EmitLabel(continueLabel);
         _currentBlockLabel = continueLabel;
-        EmitBinary(next, "add", "i64", item, "1");
+        EmitBinary(next, "add", "i32", item, "1");
         var done = NextTemp("repeat_done");
-        EmitCompare(done, "sgt", "i64", next, count.ValueName);
+        EmitCompare(done, "sgt", "i32", next, count.ValueName);
         EmitConditionalBranch(done, endLabel, bodyLabel);
         EmitLabel(endLabel);
         _currentBlockLabel = endLabel;

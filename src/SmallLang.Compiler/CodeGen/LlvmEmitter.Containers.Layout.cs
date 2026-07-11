@@ -26,15 +26,15 @@ internal sealed partial class LlvmEmitter
     private void StoreStaticArrayElement(string pointer, int allocatedLength, int index, string value)
     {
         var slot = NextTemp("array_slot");
-        EmitAssign(slot, $"getelementptr inbounds [{allocatedLength.ToString(CultureInfo.InvariantCulture)} x i64], ptr {pointer}, i64 0, i64 {index.ToString(CultureInfo.InvariantCulture)}");
-        EmitStore("i64", value, slot, 8);
+        EmitAssign(slot, $"getelementptr inbounds [{allocatedLength.ToString(CultureInfo.InvariantCulture)} x i32], ptr {pointer}, i64 0, i64 {index.ToString(CultureInfo.InvariantCulture)}");
+        EmitStore("i32", value, slot, 4);
     }
 
     private void StoreDynamicArrayElement(string pointer, string index, string value)
     {
         var slot = NextTemp("array_slot");
-        EmitAssign(slot, $"getelementptr i64, ptr {pointer}, i64 {index}");
-        EmitStore("i64", value, slot, 8);
+        EmitAssign(slot, $"getelementptr i32, ptr {pointer}, i64 {index}");
+        EmitStore("i32", value, slot, 4);
     }
 
     private RuntimeInt EmitStaticArrayLoad(RuntimeStaticIntArray array, string index)
@@ -44,7 +44,7 @@ internal sealed partial class LlvmEmitter
         EmitTrapUnless(inBounds, "array_bounds");
 
         var slot = NextTemp("array_slot");
-        EmitAssign(slot, $"getelementptr inbounds [{array.AllocatedLength.ToString(CultureInfo.InvariantCulture)} x i64], ptr {array.PointerName}, i64 0, i64 {index}");
+        EmitAssign(slot, $"getelementptr inbounds [{array.AllocatedLength.ToString(CultureInfo.InvariantCulture)} x i32], ptr {array.PointerName}, i64 0, i64 {index}");
         return LoadInt(slot, "array_item");
     }
 
@@ -105,7 +105,7 @@ internal sealed partial class LlvmEmitter
         EmitTrapUnless(inBounds, "array_assign_bounds");
 
         var slot = NextTemp("array_slot");
-        EmitAssign(slot, $"getelementptr inbounds [{array.AllocatedLength.ToString(CultureInfo.InvariantCulture)} x i64], ptr {array.PointerName}, i64 0, i64 {index}");
+        EmitAssign(slot, $"getelementptr inbounds [{array.AllocatedLength.ToString(CultureInfo.InvariantCulture)} x i32], ptr {array.PointerName}, i64 0, i64 {index}");
         EmitStore("i64", value, slot, 8);
     }
 
@@ -116,7 +116,7 @@ internal sealed partial class LlvmEmitter
         EmitTrapUnless(inBounds, "array_bounds");
 
         var slot = NextTemp("array_slot");
-        EmitAssign(slot, $"getelementptr i64, ptr {array.PointerName}, i64 {index}");
+        EmitAssign(slot, $"getelementptr i32, ptr {array.PointerName}, i64 {index}");
         return LoadInt(slot, "array_item");
     }
 
@@ -154,7 +154,7 @@ internal sealed partial class LlvmEmitter
         EmitTrapUnless(inBounds, "slice_bounds");
 
         var slot = NextTemp("slice_slot");
-        EmitAssign(slot, $"getelementptr i64, ptr {slice.PointerName}, i64 {index}");
+        EmitAssign(slot, $"getelementptr i32, ptr {slice.PointerName}, i64 {index}");
         return LoadInt(slot, "slice_item");
     }
 
@@ -205,13 +205,13 @@ internal sealed partial class LlvmEmitter
         var entryOffset = NextTemp("dict_offset");
         EmitBinary(entryOffset, "mul", "i64", index, "2");
         var keySlot = NextTemp("dict_key_slot");
-        EmitAssign(keySlot, $"getelementptr i64, ptr {entriesPointer}, i64 {entryOffset}");
+        EmitAssign(keySlot, $"getelementptr i32, ptr {entriesPointer}, i64 {entryOffset}");
         var valueOffset = NextTemp("dict_value_offset");
         EmitBinary(valueOffset, "add", "i64", entryOffset, "1");
         var valueSlot = NextTemp("dict_value_slot");
-        EmitAssign(valueSlot, $"getelementptr i64, ptr {entriesPointer}, i64 {valueOffset}");
-        EmitStore("i64", key, keySlot, 8);
-        EmitStore("i64", value, valueSlot, 8);
+        EmitAssign(valueSlot, $"getelementptr i32, ptr {entriesPointer}, i64 {valueOffset}");
+        EmitStore("i32", key, keySlot, 4);
+        EmitStore("i32", value, valueSlot, 4);
     }
 
     private RuntimeInt EmitDictionaryLookup(RuntimeIntDictionary dictionary, string key)
@@ -261,7 +261,7 @@ internal sealed partial class LlvmEmitter
         EmitLabel(compareLabel);
         var entryKey = LoadDictionaryKey(dictionary, slot);
         var keyMatch = NextTemp("dict_lookup_key_match");
-        EmitCompare(keyMatch, "eq", "i64", entryKey.ValueName, key);
+        EmitCompare(keyMatch, "eq", "i32", entryKey.ValueName, key);
         EmitConditionalBranch(keyMatch, matchLabel, nextLabel);
         EmitFunctionLine();
 
@@ -292,7 +292,7 @@ internal sealed partial class LlvmEmitter
         var entryOffset = NextTemp("dict_key_offset");
         EmitBinary(entryOffset, "mul", "i64", index, "2");
         var slot = NextTemp("dict_key_slot");
-        EmitAssign(slot, $"getelementptr i64, ptr {entriesPointer}, i64 {entryOffset}");
+        EmitAssign(slot, $"getelementptr i32, ptr {entriesPointer}, i64 {entryOffset}");
         return LoadInt(slot, "dict_key");
     }
 
@@ -306,7 +306,7 @@ internal sealed partial class LlvmEmitter
         var valueOffset = NextTemp("dict_value_offset");
         EmitBinary(valueOffset, "add", "i64", entryOffset, "1");
         var slot = NextTemp("dict_value_slot");
-        EmitAssign(slot, $"getelementptr i64, ptr {entriesPointer}, i64 {valueOffset}");
+        EmitAssign(slot, $"getelementptr i32, ptr {entriesPointer}, i64 {valueOffset}");
         return LoadInt(slot, "dict_value");
     }
 

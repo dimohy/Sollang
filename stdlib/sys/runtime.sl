@@ -22,4 +22,4 @@ closestInt target: Int -> Int = intrinsic
 
 closeIntReader: -> Unit = intrinsic
 
-nowMillis: -> Int = intrinsic
+nowMillis: -> Long = intrinsic

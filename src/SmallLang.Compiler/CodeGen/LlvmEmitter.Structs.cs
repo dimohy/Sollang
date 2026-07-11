@@ -136,7 +136,8 @@ internal sealed partial class LlvmEmitter
     {
         return value switch
         {
-            RuntimeInt integer => ("i64", integer.ValueName),
+            RuntimeInt integer => (LlvmType(integer.Type), integer.ValueName),
+            RuntimeFloat floating => (LlvmType(floating.Type), floating.ValueName),
             RuntimeBool boolean => ("i1", boolean.ValueName),
             RuntimeText text => ("%smalllang.text", BuildTextAggregate(text)),
             RuntimeStruct structure => (LlvmStructType(structure.Type), structure.ValueName),
@@ -162,9 +163,17 @@ internal sealed partial class LlvmEmitter
             return new RuntimeBox(type, box.ElementType, valueName);
         }
 
+        if (IsIntegerType(type))
+        {
+            return new RuntimeInt(type, valueName);
+        }
+        if (IsFloatType(type))
+        {
+            return new RuntimeFloat(type, valueName);
+        }
+
         return type switch
         {
-            BoundType.Int => new RuntimeInt(valueName),
             BoundType.Bool => new RuntimeBool(valueName),
             BoundType.Text => ExtractTextAggregate(valueName),
             _ => throw new SmallLangException($"type {type} is not supported in an inline struct field")
@@ -212,7 +221,14 @@ internal sealed partial class LlvmEmitter
         {
             BoundType.Unit => "void",
             BoundType.Text => "%smalllang.text",
-            BoundType.Int => "i64",
+            BoundType.Int => "i32",
+            BoundType.Int8 or BoundType.UInt8 => "i8",
+            BoundType.Int16 or BoundType.UInt16 => "i16",
+            BoundType.UInt32 => "i32",
+            BoundType.Int64 => "i64",
+            BoundType.UInt64 => "i64",
+            BoundType.Float32 => "float",
+            BoundType.Float64 => "double",
             BoundType.Bool => "i1",
             BoundType.IntSlice => "%smalllang.int_slice",
             BoundType.DynamicIntArray => "%smalllang.dynamic_int_array",
@@ -220,6 +236,26 @@ internal sealed partial class LlvmEmitter
             _ => throw new SmallLangException($"type {type} has no first-class LLVM representation")
         };
     }
+
+    private static bool IsIntegerType(BoundType type) => type is
+        BoundType.Int or BoundType.Int8 or BoundType.Int16 or BoundType.Int64
+        or BoundType.UInt8 or BoundType.UInt16 or BoundType.UInt32 or BoundType.UInt64;
+
+    private static bool IsSignedIntegerType(BoundType type) => type is
+        BoundType.Int or BoundType.Int8 or BoundType.Int16 or BoundType.Int64;
+
+    private static bool IsFloatType(BoundType type) => type is BoundType.Float32 or BoundType.Float64;
+
+    private static bool IsNumericType(BoundType type) => IsIntegerType(type) || IsFloatType(type);
+
+    private static int NumericBitWidth(BoundType type) => type switch
+    {
+        BoundType.Int8 or BoundType.UInt8 => 8,
+        BoundType.Int16 or BoundType.UInt16 => 16,
+        BoundType.Int or BoundType.UInt32 or BoundType.Float32 => 32,
+        BoundType.Int64 or BoundType.UInt64 or BoundType.Float64 => 64,
+        _ => throw new SmallLangException($"type {type} is not numeric")
+    };
 
     private static string LlvmStructType(BoundType type)
     {

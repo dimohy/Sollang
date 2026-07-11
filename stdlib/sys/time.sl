@@ -2,6 +2,6 @@ namespace sys.time
 
 import sys.runtime as rt
 
-nowMillis: -> Int {
+nowMillis: -> Long {
     rt.nowMillis()
 }

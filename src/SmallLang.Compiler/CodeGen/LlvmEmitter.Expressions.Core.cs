@@ -113,9 +113,30 @@ internal sealed partial class LlvmEmitter
 
     private string EmitWriteIntegerValue(RuntimeInt value, string ok)
     {
+        var printable = value.ValueName;
+        if (NumericBitWidth(value.Type) < 64)
+        {
+            printable = NextTemp("print_integer");
+            var extension = IsSignedIntegerType(value.Type) ? "sext" : "zext";
+            EmitAssign(printable, $"{extension} {LlvmType(value.Type)} {value.ValueName} to i64");
+        }
         var write = NextTemp("write");
-        EmitCall(write, "i32", "smalllang_write_u64", $"ptr %stdout, i64 {value.ValueName}, ptr %written");
+        EmitCall(write, "i32", "smalllang_write_u64", $"ptr %stdout, i64 {printable}, ptr %written");
         return CombineWriteOk(write, ok);
+    }
+
+    private RuntimeInt EmitSizeAsInt(string size, string prefix)
+    {
+        var value = NextTemp(prefix);
+        EmitAssign(value, $"trunc i64 {size} to i32");
+        return new RuntimeInt(value);
+    }
+
+    private string EmitIntAsSize(RuntimeInt value, string prefix)
+    {
+        var size = NextTemp(prefix);
+        EmitAssign(size, $"sext i32 {value.ValueName} to i64");
+        return size;
     }
 
     private string CombineWriteOk(string writeResult, string ok)
@@ -137,7 +158,7 @@ internal sealed partial class LlvmEmitter
         var value = expression switch
         {
             StringExpression str => EmitTextLiteral(str),
-            NumberExpression number => new RuntimeInt(ParseNumber(number).ToString(CultureInfo.InvariantCulture)),
+            NumberExpression number => EmitNumberLiteral(number),
             BoolExpression boolean => new RuntimeBool(boolean.Value ? "true" : "false"),
             NameExpression name => ResolveLocal(name.Name),
             ArrayLiteralExpression array => EmitArrayLiteral(array),
@@ -190,6 +211,24 @@ internal sealed partial class LlvmEmitter
             : EmitStaticArrayLiteral(expression);
     }
 
+    private RuntimeValue EmitNumberLiteral(NumberExpression expression)
+    {
+        if (!expression.Text.Contains('.', StringComparison.Ordinal)
+            && !expression.Text.Contains('e', StringComparison.OrdinalIgnoreCase))
+        {
+            return new RuntimeInt(ParseNumber(expression).ToString(CultureInfo.InvariantCulture));
+        }
+        if (!double.TryParse(expression.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out var value)
+            || double.IsNaN(value) || double.IsInfinity(value))
+        {
+            throw new SmallLangException(
+                $"codegen error at {expression.Line}:{expression.Column}: floating-point literal is out of range");
+        }
+        return new RuntimeFloat(
+            BoundType.Float64,
+            value.ToString("0.0################E+00", CultureInfo.InvariantCulture));
+    }
+
     private RuntimeValue[] EmitArrayLiteralElements(ArrayLiteralExpression expression)
     {
         BoundType? elementType = expression.ElementType is not null
@@ -213,7 +252,7 @@ internal sealed partial class LlvmEmitter
     private RuntimeValue EmitStaticArrayLiteral(ArrayLiteralExpression expression)
     {
         var elements = EmitArrayLiteralElements(expression);
-        if (elements.Length == 0 || elements.All(static value => value is RuntimeInt))
+        if (elements.Length == 0 || elements.All(static value => value.Type == BoundType.Int))
         {
             return EmitStaticIntArrayLiteral(expression, elements.Cast<RuntimeInt>().ToArray());
         }
@@ -246,7 +285,7 @@ internal sealed partial class LlvmEmitter
         }
         else
         {
-            pointer = EmitHeapAllocate(((long)allocatedLength * sizeof(long)).ToString(CultureInfo.InvariantCulture));
+            pointer = EmitHeapAllocate(((long)allocatedLength * sizeof(int)).ToString(CultureInfo.InvariantCulture));
             storage = RuntimeContainerStorage.Heap;
         }
 
@@ -286,7 +325,7 @@ internal sealed partial class LlvmEmitter
         }
         else
         {
-            pointer = EmitHeapAllocate(((long)allocatedLength * sizeof(long)).ToString(CultureInfo.InvariantCulture));
+            pointer = EmitHeapAllocate(((long)allocatedLength * sizeof(int)).ToString(CultureInfo.InvariantCulture));
             storage = RuntimeContainerStorage.Heap;
         }
 
@@ -306,7 +345,7 @@ internal sealed partial class LlvmEmitter
     private RuntimeValue EmitDynamicArrayLiteral(ArrayLiteralExpression expression)
     {
         var elements = EmitArrayLiteralElements(expression);
-        if (elements.Length == 0 || elements.All(static value => value is RuntimeInt))
+        if (elements.Length == 0 || elements.All(static value => value.Type == BoundType.Int))
         {
             return EmitDynamicIntArrayLiteral(expression, elements.Cast<RuntimeInt>().ToArray());
         }
@@ -340,7 +379,7 @@ internal sealed partial class LlvmEmitter
         }
         else
         {
-            pointer = EmitHeapAllocate((capacity * 8).ToString(CultureInfo.InvariantCulture));
+            pointer = EmitHeapAllocate((capacity * 4).ToString(CultureInfo.InvariantCulture));
         }
 
         for (var i = 0; i < elements.Count; i++)
@@ -426,7 +465,7 @@ internal sealed partial class LlvmEmitter
             var intCapacity = expression.CapacityHint ?? 0;
             var intPointer = intCapacity == 0
                 ? "null"
-                : EmitHeapAllocate(((long)intCapacity * 8).ToString(CultureInfo.InvariantCulture));
+                : EmitHeapAllocate(((long)intCapacity * 4).ToString(CultureInfo.InvariantCulture));
             return new RuntimeDynamicIntArray(intPointer, "0", intCapacity.ToString(CultureInfo.InvariantCulture));
         }
         if (!_program.Types.TryResolve(expression.ElementType, out var elementType)
@@ -540,14 +579,15 @@ internal sealed partial class LlvmEmitter
             return EmitInlineDictionaryLookup(inlineDictionary, key);
         }
         var index = EmitIntExpression(expression.Index);
+        var indexSize = EmitIntAsSize(index, "index_size");
         return source switch
         {
-            RuntimeIntSlice slice => EmitIntSliceLoad(slice, index.ValueName),
-            RuntimeStaticIntArray array => EmitStaticArrayLoad(array, index.ValueName),
-            RuntimeStaticTextArray array => EmitStaticTextArrayLoad(array, index.ValueName),
-            RuntimeStaticInlineArray array => EmitStaticInlineArrayLoad(array, index.ValueName),
-            RuntimeDynamicIntArray array => EmitDynamicArrayLoad(array, index.ValueName),
-            RuntimeDynamicInlineArray array => EmitDynamicInlineArrayLoad(array, index.ValueName),
+            RuntimeIntSlice slice => EmitIntSliceLoad(slice, indexSize),
+            RuntimeStaticIntArray array => EmitStaticArrayLoad(array, indexSize),
+            RuntimeStaticTextArray array => EmitStaticTextArrayLoad(array, indexSize),
+            RuntimeStaticInlineArray array => EmitStaticInlineArrayLoad(array, indexSize),
+            RuntimeDynamicIntArray array => EmitDynamicArrayLoad(array, indexSize),
+            RuntimeDynamicInlineArray array => EmitDynamicInlineArrayLoad(array, indexSize),
             RuntimeIntDictionaryView dictionary => EmitDictionaryLookup(
                 new RuntimeIntDictionary(dictionary.PointerName, dictionary.LengthName, dictionary.CapacityName),
                 index.ValueName),

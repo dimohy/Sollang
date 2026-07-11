@@ -765,7 +765,12 @@ internal sealed partial class LlvmEmitter
 
     private sealed record RuntimeText(string PointerName, string LengthName) : RuntimeValue(BoundType.Text);
 
-    private sealed record RuntimeInt(string ValueName) : RuntimeValue(BoundType.Int);
+    private sealed record RuntimeInt(BoundType IntegerType, string ValueName) : RuntimeValue(IntegerType)
+    {
+        public RuntimeInt(string valueName) : this(BoundType.Int, valueName) { }
+    }
+
+    private sealed record RuntimeFloat(BoundType FloatType, string ValueName) : RuntimeValue(FloatType);
 
     private sealed record RuntimeBool(string ValueName) : RuntimeValue(BoundType.Bool);
 

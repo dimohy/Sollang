@@ -2706,4 +2706,38 @@ Growable typed arrays carry the same T into mutation calls, allowing
 `points! -> push({ x: 7, y: 8 })`. Thus construction, indexing/iteration, and
 mutation use one contextual-literal rule rather than separate conveniences.
 
+## D088 - Fixed-Width Numeric Types And Stable Defaults
+
+Status: implemented
+Date: 2026-07-12
+
+SL exposes numeric width directly when layout matters:
+
+```smalllang
+Int8  Int16  Int32  Int64
+UInt8 UInt16 UInt32 UInt64
+Float32 Float64
+```
+
+`Int` is exactly `Int32` on every target and `Float` is exactly `Float32`.
+These are stable aliases, not platform-word types. This keeps ordinary source
+concise, fits 32-bit microcontrollers naturally, and preserves deterministic
+cross-target LLVM layouts. `UInt8` is
+included because byte buffers, UTF-8 lexing, object data, and binary file I/O
+need the full 0...255 domain.
+
+`Long` is the concise `Int64` alias and `Double` is the concise `Float64` alias.
+Code that wants the width visible at the use site can always spell the exact
+fixed-width names. Pointer-sized indexing types (`Size` and `UIntSize`) remain a
+separate target-ABI feature rather than making ordinary `Int` target-dependent.
+
+Integer literals default to `Int`; fractional/exponent literals default to
+`Float`. Conversions are explicit constructor-like expressions such as
+`Int8(42)`, `UInt64(value)`, and `Float32(1.5)`. Literal conversions are checked
+at compile time, runtime integer narrowing emits range checks, and mixed-width
+arithmetic is rejected until the programmer chooses the intended conversion.
+Arithmetic and comparisons lower to the concrete LLVM integer or IEEE-754
+type. Example 74 covers scalar functions, structs, fixed arrays, signed and
+unsigned full-width values, floating-point arithmetic, and conversions.
+
 

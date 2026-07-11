@@ -751,7 +751,7 @@ internal static class StoragePlacementAnalyzer
                 kind = array.IsDynamic
                     ? PromotedOwnerKind.DynamicArray
                     : PromotedOwnerKind.StaticArray;
-                payloadBytes = checked(array.Elements.Count * sizeof(long));
+                payloadBytes = checked(array.Elements.Count * sizeof(int));
                 return true;
             case ArrayRepeatExpression repeat:
                 if (repeat.Count is null)
@@ -761,7 +761,7 @@ internal static class StoragePlacementAnalyzer
                     return false;
                 }
                 kind = PromotedOwnerKind.StaticArray;
-                payloadBytes = checked(Math.Max(repeat.Count.Value, 1) * sizeof(long));
+                payloadBytes = checked(Math.Max(repeat.Count.Value, 1) * sizeof(int));
                 return true;
             case DictionaryLiteralExpression { Entries.Count: > 0 } dictionary:
                 kind = PromotedOwnerKind.Dictionary;

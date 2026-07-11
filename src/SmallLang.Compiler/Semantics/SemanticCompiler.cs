@@ -1,3 +1,5 @@
+using System.Globalization;
+using System.Numerics;
 using SmallLang.Compiler.Diagnostics;
 using SmallLang.Compiler.Syntax;
 
@@ -732,7 +734,7 @@ internal sealed class SemanticCompiler
                 inputType,
                 returnType,
                 expectedInputType: null,
-                BoundType.Int,
+                BoundType.Int64,
                 BoundFunctionKind.RuntimeNowMillis),
             _ => throw Error(function.Line, function.Column, $"unknown intrinsic function '{function.Name}'")
         };
@@ -1355,7 +1357,10 @@ internal sealed class SemanticCompiler
         return expression switch
         {
             StringExpression str => InferStringExpression(str, functions, bindings, allowReadIntCall),
-            NumberExpression => BoundType.Int,
+            NumberExpression number => number.Text.Contains('.', StringComparison.Ordinal)
+                || number.Text.Contains('e', StringComparison.OrdinalIgnoreCase)
+                ? BoundType.Float32
+                : BoundType.Int,
             BoolExpression => BoundType.Bool,
             NameExpression name => InferNameExpression(name, functions, bindings),
             ArrayLiteralExpression array => InferArrayLiteralExpression(array, functions, bindings, allowReadIntCall),
@@ -2033,12 +2038,12 @@ internal sealed class SemanticCompiler
             allowPrintCall: false,
             allowReadIntCall,
             allowFlowBindingTarget: false);
-        if (value != BoundType.Int)
+        if (!IsSignedIntegerType(value) && !IsFloatType(value))
         {
-            throw Error(expression.Value.Line, expression.Value.Column, "operand of unary '-' must be an integer");
+            throw Error(expression.Value.Line, expression.Value.Column, "operand of unary '-' must be a signed numeric value");
         }
 
-        return BoundType.Int;
+        return value;
     }
 
     private BoundType InferIntegerBinaryExpression(
@@ -2063,17 +2068,18 @@ internal sealed class SemanticCompiler
             allowPrintCall: false,
             allowReadIntCall,
             allowFlowBindingTarget: false);
-        if (left != BoundType.Int)
+        if (!IsNumericType(left) || (operatorText == "%" && !IsIntegerType(left)))
         {
-            throw Error(leftExpression.Line, leftExpression.Column, $"left operand of '{operatorText}' must be an integer");
+            throw Error(leftExpression.Line, leftExpression.Column, $"left operand of '{operatorText}' must be a compatible numeric value");
         }
 
-        if (right != BoundType.Int)
+        if (right != left)
         {
-            throw Error(rightExpression.Line, rightExpression.Column, $"right operand of '{operatorText}' must be an integer");
+            throw Error(rightExpression.Line, rightExpression.Column,
+                $"operands of '{operatorText}' must have the same numeric type; left is {FormatType(left)}, right is {FormatType(right)}");
         }
 
-        return BoundType.Int;
+        return left;
     }
 
     private BoundType InferCompareExpression(
@@ -2097,14 +2103,15 @@ internal sealed class SemanticCompiler
             allowReadIntCall,
             allowFlowBindingTarget: false);
 
-        if (left != BoundType.Int)
+        if (!IsNumericType(left))
         {
-            throw Error(expression.Left.Line, expression.Left.Column, "left operand of comparison must be an integer");
+            throw Error(expression.Left.Line, expression.Left.Column, "left operand of comparison must be numeric");
         }
 
-        if (right != BoundType.Int)
+        if (right != left)
         {
-            throw Error(expression.Right.Line, expression.Right.Column, "right operand of comparison must be an integer");
+            throw Error(expression.Right.Line, expression.Right.Column,
+                $"comparison operands must have the same numeric type; left is {FormatType(left)}, right is {FormatType(right)}");
         }
 
         return BoundType.Bool;
@@ -3104,6 +3111,11 @@ internal sealed class SemanticCompiler
             return enumType;
         }
 
+        if (TryInferNumericConversion(expression, functions, bindings, allowReadIntCall, out var numericType))
+        {
+            return numericType;
+        }
+
         var path = string.Join('.', expression.Path);
         string? receiverName = null;
         BoundType? receiverType = null;
@@ -3183,7 +3195,7 @@ internal sealed class SemanticCompiler
                         $"{path} expects Text but received {FormatType(promptType)}");
                 }
 
-                return BoundType.Int;
+                return function.ReturnType;
             case BoundFunctionKind.RuntimeSeedRandom:
             case BoundFunctionKind.RuntimeRandomBelow:
             case BoundFunctionKind.RuntimeOpenIntWriter:
@@ -3221,7 +3233,7 @@ internal sealed class SemanticCompiler
                     throw Error(expression.Line, expression.Column, $"{path} does not accept arguments");
                 }
 
-                return BoundType.Int;
+                return function.ReturnType;
             case BoundFunctionKind.User:
                 if (function.GenericParameterName is not null
                     && function.SpecializedType is null
@@ -3418,6 +3430,96 @@ internal sealed class SemanticCompiler
         _resolvedGenericCalls[callSite] = specialization;
         return specialization;
     }
+
+    private bool TryInferNumericConversion(
+        CallExpression expression,
+        IReadOnlyDictionary<string, BoundFunction> functions,
+        IReadOnlyDictionary<string, BoundType> bindings,
+        bool allowReadIntCall,
+        out BoundType type)
+    {
+        type = default;
+        if (expression.Path.Count != 1
+            || !_types.TryResolve(expression.Path[0], out var targetType)
+            || !IsNumericType(targetType))
+        {
+            return false;
+        }
+        if (expression.Arguments.Count != 1)
+        {
+            throw Error(expression.Line, expression.Column,
+                $"numeric conversion '{expression.Path[0]}' expects exactly one argument");
+        }
+        var sourceType = InferExpression(
+            expression.Arguments[0],
+            functions,
+            bindings,
+            allowPrintCall: false,
+            allowReadIntCall,
+            allowFlowBindingTarget: false);
+        if (!IsNumericType(sourceType))
+        {
+            throw Error(expression.Arguments[0].Line, expression.Arguments[0].Column,
+                $"numeric conversion '{expression.Path[0]}' expects a numeric value, got {FormatType(sourceType)}");
+        }
+        ValidateNumericLiteralConversion(expression.Arguments[0], targetType, expression.Path[0]);
+        type = targetType;
+        return true;
+    }
+
+    private void ValidateNumericLiteralConversion(Expression argument, BoundType targetType, string targetName)
+    {
+        var negative = argument is NegateExpression;
+        var number = argument switch
+        {
+            NumberExpression direct => direct,
+            NegateExpression { Value: NumberExpression negated } => negated,
+            _ => null
+        };
+        if (number is null)
+        {
+            return;
+        }
+        var text = negative ? "-" + number.Text : number.Text;
+        if (IsIntegerType(targetType) && !number.Text.Contains('.', StringComparison.Ordinal)
+            && !number.Text.Contains('e', StringComparison.OrdinalIgnoreCase))
+        {
+            var value = BigInteger.Parse(text, CultureInfo.InvariantCulture);
+            var bits = targetType switch
+            {
+                BoundType.Int8 or BoundType.UInt8 => 8,
+                BoundType.Int16 or BoundType.UInt16 => 16,
+                BoundType.Int or BoundType.UInt32 => 32,
+                _ => 64
+            };
+            var signed = IsSignedIntegerType(targetType);
+            var minimum = signed ? -(BigInteger.One << (bits - 1)) : BigInteger.Zero;
+            var maximum = signed ? (BigInteger.One << (bits - 1)) - 1 : (BigInteger.One << bits) - 1;
+            if (value < minimum || value > maximum)
+            {
+                throw Error(argument.Line, argument.Column,
+                    $"numeric literal {text} is out of range for {targetName} ({minimum}..{maximum})");
+            }
+            return;
+        }
+        if (!double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out var floating)
+            || double.IsInfinity(floating)
+            || (targetType == BoundType.Float32 && Math.Abs(floating) > float.MaxValue))
+        {
+            throw Error(argument.Line, argument.Column, $"numeric literal {text} is out of range for {targetName}");
+        }
+    }
+
+    private static bool IsIntegerType(BoundType type) => type is
+        BoundType.Int or BoundType.Int8 or BoundType.Int16 or BoundType.Int64
+        or BoundType.UInt8 or BoundType.UInt16 or BoundType.UInt32 or BoundType.UInt64;
+
+    private static bool IsSignedIntegerType(BoundType type) => type is
+        BoundType.Int or BoundType.Int8 or BoundType.Int16 or BoundType.Int64;
+
+    private static bool IsFloatType(BoundType type) => type is BoundType.Float32 or BoundType.Float64;
+
+    private static bool IsNumericType(BoundType type) => IsIntegerType(type) || IsFloatType(type);
 
     private bool TryInferEnumConstructor(
         CallExpression expression,
@@ -3670,7 +3772,7 @@ internal sealed class SemanticCompiler
 
     private void EnsureDisplayable(BoundType type, int line, int column, string path)
     {
-        if (type is not (BoundType.Text or BoundType.Int))
+        if (type != BoundType.Text && !IsIntegerType(type))
         {
             throw Error(line, column, $"{path} expects Text or Int but received {FormatType(type)}");
         }
@@ -3818,6 +3920,19 @@ internal sealed class SemanticCompiler
             ["Unit"] = BoundType.Unit,
             ["Text"] = BoundType.Text,
             ["Int"] = BoundType.Int,
+            ["Int8"] = BoundType.Int8,
+            ["Int16"] = BoundType.Int16,
+            ["Int32"] = BoundType.Int,
+            ["Int64"] = BoundType.Int64,
+            ["Long"] = BoundType.Int64,
+            ["UInt8"] = BoundType.UInt8,
+            ["UInt16"] = BoundType.UInt16,
+            ["UInt32"] = BoundType.UInt32,
+            ["UInt64"] = BoundType.UInt64,
+            ["Float"] = BoundType.Float32,
+            ["Float32"] = BoundType.Float32,
+            ["Float64"] = BoundType.Float64,
+            ["Double"] = BoundType.Float64,
             ["Bool"] = BoundType.Bool,
             ["[Int]"] = BoundType.IntSlice,
             ["[Int; ~]"] = BoundType.DynamicIntArray,
@@ -4116,7 +4231,10 @@ internal sealed class SemanticCompiler
         return type switch
         {
             TypeId.Bool => 1,
-            TypeId.Int => 8,
+            TypeId.Int8 or TypeId.UInt8 => 1,
+            TypeId.Int16 or TypeId.UInt16 => 2,
+            TypeId.Int or TypeId.UInt32 or TypeId.Float32 => 4,
+            TypeId.Int64 or TypeId.UInt64 or TypeId.Float64 => 8,
             TypeId.Text => 16,
             _ => throw new InvalidOperationException($"type {type} has no inline size")
         };
@@ -4279,6 +4397,15 @@ internal sealed class SemanticCompiler
             BoundType.Unit => "Unit",
             BoundType.Text => "Text",
             BoundType.Int => "Int",
+            BoundType.Int8 => "Int8",
+            BoundType.Int16 => "Int16",
+            BoundType.Int64 => "Long",
+            BoundType.UInt8 => "UInt8",
+            BoundType.UInt16 => "UInt16",
+            BoundType.UInt32 => "UInt32",
+            BoundType.UInt64 => "UInt64",
+            BoundType.Float32 => "Float",
+            BoundType.Float64 => "Double",
             BoundType.Bool => "Bool",
             BoundType.IntSlice => "[Int]",
             BoundType.StaticIntArray => "[Int; N]",

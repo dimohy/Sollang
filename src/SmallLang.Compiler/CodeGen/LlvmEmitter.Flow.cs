@@ -170,15 +170,15 @@ internal sealed partial class LlvmEmitter
 
                 result = current switch
                 {
-                    RuntimeIntSlice slice => new RuntimeFlowResult(new RuntimeInt(slice.LengthName), null, _mainOk),
-                    RuntimeStaticIntArray staticArray => new RuntimeFlowResult(new RuntimeInt(staticArray.LengthName), null, _mainOk),
-                    RuntimeStaticTextArray staticArray => new RuntimeFlowResult(new RuntimeInt(staticArray.LengthName), null, _mainOk),
-                    RuntimeStaticInlineArray staticArray => new RuntimeFlowResult(new RuntimeInt(staticArray.LengthName), null, _mainOk),
-                    RuntimeDynamicIntArray dynamicArray => new RuntimeFlowResult(new RuntimeInt(dynamicArray.LengthName), null, _mainOk),
-                    RuntimeDynamicInlineArray dynamicArray => new RuntimeFlowResult(new RuntimeInt(dynamicArray.LengthName), null, _mainOk),
-                    RuntimeIntDictionaryView dictionaryView => new RuntimeFlowResult(new RuntimeInt(dictionaryView.LengthName), null, _mainOk),
-                    RuntimeIntDictionary intDictionary => new RuntimeFlowResult(new RuntimeInt(intDictionary.LengthName), null, _mainOk),
-                    RuntimeInlineDictionary inlineMap => new RuntimeFlowResult(new RuntimeInt(inlineMap.LengthName), null, _mainOk),
+                    RuntimeIntSlice slice => new RuntimeFlowResult(EmitSizeAsInt(slice.LengthName, "slice_len_value"), null, _mainOk),
+                    RuntimeStaticIntArray staticArray => new RuntimeFlowResult(EmitSizeAsInt(staticArray.LengthName, "array_len_value"), null, _mainOk),
+                    RuntimeStaticTextArray staticArray => new RuntimeFlowResult(EmitSizeAsInt(staticArray.LengthName, "array_len_value"), null, _mainOk),
+                    RuntimeStaticInlineArray staticArray => new RuntimeFlowResult(EmitSizeAsInt(staticArray.LengthName, "array_len_value"), null, _mainOk),
+                    RuntimeDynamicIntArray dynamicArray => new RuntimeFlowResult(EmitSizeAsInt(dynamicArray.LengthName, "array_len_value"), null, _mainOk),
+                    RuntimeDynamicInlineArray dynamicArray => new RuntimeFlowResult(EmitSizeAsInt(dynamicArray.LengthName, "array_len_value"), null, _mainOk),
+                    RuntimeIntDictionaryView dictionaryView => new RuntimeFlowResult(EmitSizeAsInt(dictionaryView.LengthName, "dict_len_value"), null, _mainOk),
+                    RuntimeIntDictionary intDictionary => new RuntimeFlowResult(EmitSizeAsInt(intDictionary.LengthName, "dict_len_value"), null, _mainOk),
+                    RuntimeInlineDictionary inlineMap => new RuntimeFlowResult(EmitSizeAsInt(inlineMap.LengthName, "dict_len_value"), null, _mainOk),
                     _ => result
                 };
                 return result.Value is not null;
@@ -190,11 +190,11 @@ internal sealed partial class LlvmEmitter
 
                 result = current switch
                 {
-                    RuntimeDynamicIntArray dynamicArray => new RuntimeFlowResult(new RuntimeInt(dynamicArray.CapacityName), null, _mainOk),
-                    RuntimeDynamicInlineArray dynamicArray => new RuntimeFlowResult(new RuntimeInt(dynamicArray.CapacityName), null, _mainOk),
-                    RuntimeIntDictionaryView dictionaryView => new RuntimeFlowResult(new RuntimeInt(dictionaryView.CapacityName), null, _mainOk),
-                    RuntimeIntDictionary intDictionary => new RuntimeFlowResult(new RuntimeInt(intDictionary.CapacityName), null, _mainOk),
-                    RuntimeInlineDictionary inlineMap => new RuntimeFlowResult(new RuntimeInt(inlineMap.CapacityName), null, _mainOk),
+                    RuntimeDynamicIntArray dynamicArray => new RuntimeFlowResult(EmitSizeAsInt(dynamicArray.CapacityName, "array_capacity_value"), null, _mainOk),
+                    RuntimeDynamicInlineArray dynamicArray => new RuntimeFlowResult(EmitSizeAsInt(dynamicArray.CapacityName, "array_capacity_value"), null, _mainOk),
+                    RuntimeIntDictionaryView dictionaryView => new RuntimeFlowResult(EmitSizeAsInt(dictionaryView.CapacityName, "dict_capacity_value"), null, _mainOk),
+                    RuntimeIntDictionary intDictionary => new RuntimeFlowResult(EmitSizeAsInt(intDictionary.CapacityName, "dict_capacity_value"), null, _mainOk),
+                    RuntimeInlineDictionary inlineMap => new RuntimeFlowResult(EmitSizeAsInt(inlineMap.CapacityName, "dict_capacity_value"), null, _mainOk),
                     _ => result
                 };
                 return result.Value is not null;
@@ -323,7 +323,7 @@ internal sealed partial class LlvmEmitter
                 result = current switch
                 {
                     RuntimeDynamicIntArray updateArray => new RuntimeFlowResult(
-                        EmitDynamicArrayUpdatedMove(updateArray, updateKeyOrIndex.ValueName, updateValue.ValueName),
+                        EmitDynamicArrayUpdatedMove(updateArray, EmitIntAsSize(updateKeyOrIndex, "updated_index"), updateValue.ValueName),
                         null,
                         _mainOk),
                     RuntimeIntDictionary updateDictionary => new RuntimeFlowResult(

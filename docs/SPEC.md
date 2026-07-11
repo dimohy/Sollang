@@ -18,8 +18,14 @@ The implementation boundary is intentionally narrow:
 - single-expression function bodies with `name: Input -> Output => expression`
 - nested local function declarations scoped to their containing function
 - local bindings with `value => name`
-- integer bindings with decimal integer literals
-- integer `+`, `-`, `*`, `/`, `%`, unary `-`, and parenthesized expressions
+- fixed-width signed `Int8`, `Int16`, `Int32`, `Int64` and unsigned
+  `UInt8`, `UInt16`, `UInt32`, `UInt64` values; `Int` aliases `Int32` and
+  `Long` aliases `Int64`
+- IEEE-754 `Float32` and `Float64` values; `Float` aliases `Float32` and
+  `Double` aliases `Float64`
+- decimal integer and floating-point literals
+- same-type numeric `+`, `-`, `*`, `/`, comparisons, integer `%`, unary `-`,
+  and parenthesized expressions
 - line comments with `#`
 - `Bool` values from `true`/`false` literals and integer comparison expressions
 - logical `and`, `or`, and `not`
@@ -689,26 +695,32 @@ is not a uniform sample over all possible 100,000,000-element subsets of
 
 ## Numeric Expressions
 
-The first numeric expression support is intentionally narrow:
+Numeric expressions use stable, fixed-width primitives:
 
 ```smalllang
-sum = 20 + 22
+Int8(20) + Int8(22) => small
+Float32(1.5) * Float32(2.0) => scaled
 ```
 
-Initial numeric rules:
+Numeric rules:
 
-- Decimal integer literals are supported.
-- Integer values are represented as signed 64-bit values in the current
-  semantic evaluator.
-- `+` performs checked integer addition.
-- `*` performs checked integer multiplication.
-- `*` binds tighter than `+`; both operators are left-associative.
-- Mixing strings and integers with `+` is not part of the current language.
-- Integer bindings can be interpolated into strings using their invariant
-  decimal display form.
-
-This adds arithmetic without deciding floating point, arbitrary precision,
-numeric suffixes, overflow policy syntax, or implicit string concatenation.
+- Decimal integer literals default to `Int`, which is always `Int32`.
+- Fractional or exponent literals default to `Float`, which is always
+  IEEE-754 `Float32`.
+- Explicit widths are `Int8/16/32/64`, `UInt8/16/32/64`, and `Float32/64`.
+- Constructor-like conversions such as `Int8(value)` and `Float32(value)` are
+  explicit. Literal range failures are compile errors and runtime integer
+  narrowing performs a bounds check.
+- Binary arithmetic requires equal operand types; SL does not silently widen,
+  narrow, or change signedness. `%` is integer-only and unary `-` rejects
+  unsigned values.
+- `*`, `/`, and `%` bind tighter than `+` and `-`; operators are
+  left-associative.
+- Integer bindings can be interpolated using invariant decimal display.
+- `Long` aliases `Int64` and `Double` aliases `Float64`; the exact-width names
+  remain available when representation should be explicit.
+- `Size` and `UIntSize` are reserved for a later target-pointer-width ABI slice;
+  ordinary `Int` never changes width with the target.
 
 ## Containers
 
@@ -1437,7 +1449,6 @@ stage.
 - What escape sequences are allowed in string literals?
 - Should string interpolation support additional display formatting later?
 - What is the mutability/reassignment model after `=>` binding?
-- What numeric types beyond the initial signed 64-bit integer should exist?
 - What comment syntax should be adopted?
 - What is the first official target matrix?
 - Which LLVM integration strategy will the .NET compiler use?

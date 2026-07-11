@@ -128,14 +128,14 @@ internal sealed partial class LlvmEmitter
     {
         if (key is RuntimeInt integer)
         {
-            return EmitHashInt(integer.ValueName);
+            return EmitHashInteger(integer);
         }
         if (key is RuntimeStruct or RuntimeEnum)
         {
             var hashFunction = FindDictionaryKeyTraitMethod(key.Type, "Hash", "hash");
             var hashValue = EmitFunctionCall(hashFunction, key);
             return hashValue is RuntimeInt hashResult
-                ? hashResult.ValueName
+                ? EmitHashInteger(hashResult)
                 : throw new SmallLangException("Hash.hash must return Int");
         }
         if (key is not RuntimeText text)
@@ -183,7 +183,7 @@ internal sealed partial class LlvmEmitter
         if (left is RuntimeInt leftInt && right is RuntimeInt rightInt)
         {
             var equal = NextTemp("generic_dict_key_equal");
-            EmitCompare(equal, "eq", "i64", leftInt.ValueName, rightInt.ValueName);
+            EmitCompare(equal, "eq", LlvmType(leftInt.Type), leftInt.ValueName, rightInt.ValueName);
             return equal;
         }
         if (left is RuntimeStruct or RuntimeEnum)
@@ -196,7 +196,7 @@ internal sealed partial class LlvmEmitter
                 throw new SmallLangException("Eq.eq must return Int");
             }
             var equal = NextTemp("generic_dict_nominal_key_equal");
-            EmitCompare(equal, "eq", "i64", leftEq.ValueName, rightEq.ValueName);
+            EmitCompare(equal, "eq", LlvmType(leftEq.Type), leftEq.ValueName, rightEq.ValueName);
             return equal;
         }
         if (left is not RuntimeText leftText || right is not RuntimeText rightText)

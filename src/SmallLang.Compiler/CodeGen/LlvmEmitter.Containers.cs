@@ -37,7 +37,7 @@ internal sealed partial class LlvmEmitter
         var newCapacity = NextTemp("array_new_capacity");
         EmitSelect(newCapacity, hasAnyCapacity, "i64 4", $"i64 {doubledCapacity}");
         var newBytes = NextTemp("array_new_bytes");
-        EmitBinary(newBytes, "mul", "i64", newCapacity, "8");
+        EmitBinary(newBytes, "mul", "i64", newCapacity, "4");
         var newPointer = EmitHeapAllocate(newBytes);
         EmitCopyIntBuffer(array.PointerName, newPointer, array.LengthName, "array_copy");
         EmitCall(target: null, "void", "smalllang_free", $"ptr {array.PointerName}");
@@ -321,7 +321,7 @@ internal sealed partial class LlvmEmitter
         EmitLabel(compareLabel);
         var entryKey = LoadDictionaryKey(dictionary, slot);
         var keyMatch = NextTemp("dict_find_key_match");
-        EmitCompare(keyMatch, "eq", "i64", entryKey.ValueName, key);
+        EmitCompare(keyMatch, "eq", "i32", entryKey.ValueName, key);
         EmitConditionalBranch(keyMatch, matchLabel, nextLabel);
         EmitFunctionLine();
 
@@ -421,10 +421,34 @@ internal sealed partial class LlvmEmitter
 
     private string EmitHashInt(string key)
     {
+        var wideKey = NextTemp("hash_key");
+        EmitAssign(wideKey, $"sext i32 {key} to i64");
+        return EmitHashWideInt(wideKey);
+    }
+
+    private string EmitHashInteger(RuntimeInt integer)
+    {
+        var width = NumericBitWidth(integer.Type);
+        string wideKey;
+        if (width == 64)
+        {
+            wideKey = integer.ValueName;
+        }
+        else
+        {
+            wideKey = NextTemp("hash_key");
+            var extension = IsSignedIntegerType(integer.Type) ? "sext" : "zext";
+            EmitAssign(wideKey, $"{extension} {LlvmType(integer.Type)} {integer.ValueName} to i64");
+        }
+        return EmitHashWideInt(wideKey);
+    }
+
+    private string EmitHashWideInt(string wideKey)
+    {
         var folded = NextTemp("hash_fold");
         var high = NextTemp("hash_high");
-        EmitBinary(high, "lshr", "i64", key, "32");
-        EmitBinary(folded, "xor", "i64", key, high);
+        EmitBinary(high, "lshr", "i64", wideKey, "32");
+        EmitBinary(folded, "xor", "i64", wideKey, high);
         var hash = NextTemp("hash");
         EmitBinary(hash, "mul", "i64", folded, "-7046029254386353131");
         return hash;
@@ -482,11 +506,11 @@ internal sealed partial class LlvmEmitter
         EmitFunctionLine();
         EmitLabel(bodyLabel);
         var sourceSlot = NextTemp(prefix + "_src");
-        EmitAssign(sourceSlot, $"getelementptr i64, ptr {sourcePointer}, i64 {i}");
+        EmitAssign(sourceSlot, $"getelementptr i32, ptr {sourcePointer}, i64 {i}");
         var targetSlot = NextTemp(prefix + "_dst");
-        EmitAssign(targetSlot, $"getelementptr i64, ptr {targetPointer}, i64 {i}");
+        EmitAssign(targetSlot, $"getelementptr i32, ptr {targetPointer}, i64 {i}");
         var value = LoadInt(sourceSlot, prefix + "_value");
-        EmitStore("i64", value.ValueName, targetSlot, 8);
+        EmitStore("i32", value.ValueName, targetSlot, 4);
         EmitBinary(nextI, "add", "i64", i, "1");
         EmitBranch(loopLabel);
         EmitFunctionLine();

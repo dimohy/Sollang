@@ -1897,7 +1897,10 @@ internal static class ParserEmitter
         builder.AppendLine();
         builder.AppendLine("    private static bool IsBuiltinTypeName(string name)");
         builder.AppendLine("    {");
-        builder.AppendLine("        return name is \"Unit\" or \"Text\" or \"Int\" or \"Bool\" or \"Self\";");
+        builder.AppendLine("        return name is \"Unit\" or \"Text\" or \"Bool\" or \"Self\"");
+        builder.AppendLine("            or \"Int\" or \"Long\" or \"Int8\" or \"Int16\" or \"Int32\" or \"Int64\"");
+        builder.AppendLine("            or \"UInt8\" or \"UInt16\" or \"UInt32\" or \"UInt64\"");
+        builder.AppendLine("            or \"Float\" or \"Double\" or \"Float32\" or \"Float64\";");
         builder.AppendLine("    }");
         builder.AppendLine();
         builder.AppendLine("    private IReadOnlyList<string> ResolveImportedPath(IReadOnlyList<string> path)");

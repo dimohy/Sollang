@@ -1,7 +1,7 @@
 # SmallLang Implementation Roadmap
 
 Status: active
-Updated: 2026-07-10
+Updated: 2026-07-12
 
 Every completed slice must add cumulative `.sl` examples, keep safe-code leak
 freedom statically provable, build with zero warnings, and pass the complete
@@ -26,6 +26,11 @@ ownership behavior is part of the feature.
 
 ## User Types
 
+- [x] Fixed-width `Int8/16/32/64`, `UInt8/16/32/64`, and `Float32/64` primitives
+- [x] Embedded-friendly `Int = Int32`, `Long = Int64`, `Float = Float32`, and
+  `Double = Float64` source aliases
+- [ ] Target-pointer-width `Size` and `UIntSize` ABI types
+- [x] Explicit checked numeric conversions and same-type arithmetic
 - [x] Nominal `struct` value types with exact field layout
 - [x] Complete field initialization and direct field access
 - [x] Recursive move/drop generation for owned fields
