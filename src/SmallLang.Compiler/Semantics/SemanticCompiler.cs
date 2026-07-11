@@ -11,6 +11,7 @@ internal sealed class SemanticCompiler
     private readonly Dictionary<object, BoundFunction> _resolvedGenericCalls = new(ReferenceEqualityComparer.Instance);
     private readonly HashSet<BoundFunction> _validatingGenericSpecializations = new(ReferenceEqualityComparer.Instance);
     private Dictionary<string, BoundFunction>? _boundFunctions;
+    private string _currentModuleName = "";
 
     public SemanticCompiler(SmallLangProgram program)
     {
@@ -274,7 +275,9 @@ internal sealed class SemanticCompiler
             function.GenericParameterName,
             function.GenericTraitBound,
             IsValueGeneric: function.IsValueGeneric,
-            HasValueGenericFixedArrayInput: function.HasValueGenericFixedArrayInput);
+            HasValueGenericFixedArrayInput: function.HasValueGenericFixedArrayInput,
+            ModuleName: function.ModuleName,
+            IsPublic: function.IsPublic || function.IsStandardLibrary);
     }
 
     private BoundFunctionInputOwnership BindFunctionInputOwnership(
@@ -406,6 +409,7 @@ internal sealed class SemanticCompiler
         IReadOnlyDictionary<string, BoundFunction> parentFunctions,
         IReadOnlyDictionary<string, BoundType> capturedBindings)
     {
+        _currentModuleName = function.ModuleName;
         if (function.Kind == BoundFunctionKind.UserBlock)
         {
             ValidateUserBlockFunction(function, parentFunctions, capturedBindings);
@@ -706,6 +710,7 @@ internal sealed class SemanticCompiler
 
     private IReadOnlyDictionary<string, BoundType> BindMain(IReadOnlyDictionary<string, BoundFunction> functions)
     {
+        _currentModuleName = string.Join('.', _program.NamespacePath);
         var bindings = new Dictionary<string, BoundType>(StringComparer.Ordinal);
         var mutableBindings = new HashSet<string>(StringComparer.Ordinal);
         BindStatements(_program.Statements, functions, bindings, mutableBindings);
@@ -2325,6 +2330,7 @@ internal sealed class SemanticCompiler
             if (functions.TryGetValue(path, out var function)
                 || TryResolveInstanceMethod(currentType, path, functions, out function))
             {
+                EnsureFunctionVisible(function, target.Line, target.Column);
                 if (target.Arguments.Count != 0)
                 {
                     throw Error(
@@ -2696,6 +2702,8 @@ internal sealed class SemanticCompiler
                 throw Error(expression.Line, expression.Column, $"unknown function or method '{path}'");
             }
         }
+
+        EnsureFunctionVisible(function, expression.Line, expression.Column);
 
         if (expression.Path.Count == 2
             && function.InputType is null
@@ -3308,6 +3316,7 @@ internal sealed class SemanticCompiler
             or "yield"
             or "namespace"
             or "import"
+            or "public"
             or "struct"
             or "enum"
             or "trait"
@@ -4285,6 +4294,22 @@ internal sealed class SemanticCompiler
         out BoundFunction function)
     {
         return functions.TryGetValue(string.Join('.', path), out function!);
+    }
+
+    private void EnsureFunctionVisible(BoundFunction function, int line, int column)
+    {
+        if (function.IsStandardLibrary
+            || function.IsLocal
+            || function.IsPublic
+            || function.ModuleName == _currentModuleName)
+        {
+            return;
+        }
+
+        throw Error(
+            line,
+            column,
+            $"function '{function.Name}' is internal to module '{function.ModuleName}'");
     }
 
     private bool IsPlainStringLiteral(Expression expression)

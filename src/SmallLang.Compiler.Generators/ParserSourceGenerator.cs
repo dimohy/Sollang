@@ -513,6 +513,16 @@ internal static class ParserEmitter
         builder.AppendLine("    private FunctionDeclaration ParseFunctionDeclaration(bool isLocal, string? methodOwner = null, string? traitName = null)");
         builder.AppendLine("    {");
         builder.AppendLine("        // FunctionDeclaration = Path Identifier? Colon FunctionSignature (BlockFunctionBody | FunctionBody)");
+        builder.AppendLine("        var isPublic = false;");
+        builder.AppendLine("        if (CheckIdentifier(\"public\"))");
+        builder.AppendLine("        {");
+        builder.AppendLine("            var publicToken = ExpectIdentifier(\"public\");");
+        builder.AppendLine("            if (isLocal)");
+        builder.AppendLine("            {");
+        builder.AppendLine("                throw Error(publicToken, \"local functions cannot be public\");");
+        builder.AppendLine("            }");
+        builder.AppendLine("            isPublic = true;");
+        builder.AppendLine("        }");
         builder.AppendLine("        var name = ExpectIdentifier();");
         builder.AppendLine("        var namePath = ParsePathAfterFirstIdentifier(name);");
         builder.AppendLine("        string? genericParameterName = null;");
@@ -614,7 +624,7 @@ internal static class ParserEmitter
         builder.AppendLine("            Expect(TokenKind.RightBrace);");
         builder.AppendLine("        }");
         builder.AppendLine();
-        builder.AppendLine("        return new FunctionDeclaration(functionName, inputName?.Text, inputType, inputOwnership, returnType, blockInputName?.Text, blockInputType?.Text, localFunctions, body, blockBody, name.Line, name.Column, isIntrinsic, isStandardLibrary, traitName, genericParameterName, genericTraitBound, isValueGeneric, hasValueGenericFixedArrayInput);");
+        builder.AppendLine("        return new FunctionDeclaration(functionName, inputName?.Text, inputType, inputOwnership, returnType, blockInputName?.Text, blockInputType?.Text, localFunctions, body, blockBody, name.Line, name.Column, isIntrinsic, isStandardLibrary, traitName, genericParameterName, genericTraitBound, isValueGeneric, hasValueGenericFixedArrayInput, string.Join('.', _namespacePath), isPublic);");
         builder.AppendLine("    }");
         builder.AppendLine();
         builder.AppendLine("    private FunctionInputSignature ParseOptionalSelfSignature(string ownerType, out Token? inputName)");
@@ -1799,7 +1809,7 @@ internal static class ParserEmitter
         builder.AppendLine("            return false;");
         builder.AppendLine("        }");
         builder.AppendLine();
-        builder.AppendLine("        var offset = 1;");
+        builder.AppendLine("        var offset = CheckIdentifier(\"public\") ? 2 : 1;");
         builder.AppendLine("        while (CheckAhead(offset, TokenKind.Dot))");
         builder.AppendLine("        {");
         builder.AppendLine("            offset++;");

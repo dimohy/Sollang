@@ -34,7 +34,9 @@ internal sealed record BoundFunction(
     TypeId? SpecializedType = null,
     bool IsValueGeneric = false,
     int? SpecializedValue = null,
-    bool HasValueGenericFixedArrayInput = false);
+    bool HasValueGenericFixedArrayInput = false,
+    string ModuleName = "",
+    bool IsPublic = false);
 
 internal sealed record BoundTraitMethod(
     string Name,

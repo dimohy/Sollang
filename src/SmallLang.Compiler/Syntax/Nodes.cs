@@ -61,7 +61,9 @@ internal sealed record FunctionDeclaration(
     string? GenericParameterName = null,
     string? GenericTraitBound = null,
     bool IsValueGeneric = false,
-    bool HasValueGenericFixedArrayInput = false);
+    bool HasValueGenericFixedArrayInput = false,
+    string ModuleName = "",
+    bool IsPublic = false);
 
 internal enum FunctionInputOwnership
 {

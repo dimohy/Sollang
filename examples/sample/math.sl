@@ -1,5 +1,5 @@
 namespace sample.math
 
-double value: Int -> Int {
+public double value: Int -> Int {
     value * 2
 }

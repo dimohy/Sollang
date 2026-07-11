@@ -2349,4 +2349,13 @@ visibility and explicit public exports. The design follows Zig's explicit
 root-module graph and Swift's module/API boundary while retaining SL namespace
 and fluent-call syntax.
 
+Module functions are internal by default. A caller in another module may use a
+function only when its declaration begins with `public`; same-module calls and
+local functions remain available without annotation. The parser records both
+the declaration module and visibility, and semantic call resolution compares
+them before code generation. Standard-library functions remain externally
+visible through their bootstrap status. Example 52 marks `sample.math.double`
+public, while the module-internal-access diagnostic proves that importing a
+module does not expose its internal implementation functions.
+
 
