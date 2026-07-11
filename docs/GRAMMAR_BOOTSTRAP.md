@@ -1,6 +1,6 @@
 # SmallLang Grammar Bootstrap
 
-Status: first table-generation slice implemented
+Status: table generation, SL lexer, and SL parser recognizer implemented
 Updated: 2026-07-12
 
 ## Goal
@@ -84,11 +84,12 @@ formatter and language server, avoiding a second editor-only grammar.
 
 ## Remaining Bootstrap Stages
 
-1. Reusable byte-offset `SourceSpan` and `SyntaxToken` are now present in
-   `selfhost/syntax/source.sl`; add CST node and diagnostic types.
-2. Implement the lexer descriptor VM in SL and compare token snapshots against
-   the current C# lexer.
-3. Implement the parser bytecode VM in SL and compare CST snapshots.
+1. Reusable byte-offset `SourceSpan` and `SyntaxToken` are present in
+   `selfhost/syntax/source.sl`; add lossless CST node and diagnostic types.
+2. Expand `selfhost/syntax/lexer.sl` from the executable bootstrap lexer to full
+   escape, number, trivia, and error parity with the current C# lexer.
+3. Extend `selfhost/syntax/parser.sl` from recognition to CST event emission,
+   recovery, and diagnostic parity.
 4. Write CST-to-AST lowering in ordinary SL modules.
 5. Reimplement `grammar build` itself in SL and require byte-identical output.
 6. Remove the C# source generators only after the SL compiler reproduces all
