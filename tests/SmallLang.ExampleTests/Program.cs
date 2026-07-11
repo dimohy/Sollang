@@ -121,6 +121,7 @@ foreach (var sourcePath in diagnosticFiles)
 {
     var name = Path.GetFileNameWithoutExtension(sourcePath);
     var expectedPath = Path.Combine(diagnosticDir, name + ".stderr.contains.txt");
+    var sourcesPath = Path.Combine(diagnosticDir, name + ".sources.txt");
     if (!File.Exists(expectedPath))
     {
         Console.Error.WriteLine($"FAIL diagnostic/{name}: expected diagnostic file not found");
@@ -136,8 +137,8 @@ foreach (var sourcePath in diagnosticFiles)
             "Bypass",
             "-File",
             Path.Combine(repoRoot, "scripts", "smalllang.ps1"),
-            "-Source",
-            Path.GetRelativePath(repoRoot, sourcePath),
+            File.Exists(sourcesPath) ? "-SourcesFile" : "-Source",
+            Path.GetRelativePath(repoRoot, File.Exists(sourcesPath) ? sourcesPath : sourcePath),
             "-Output",
             Path.Combine("artifacts", "example-tests", "diagnostic-" + name + ".exe"),
             "-Target",

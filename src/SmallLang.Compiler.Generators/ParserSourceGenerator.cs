@@ -350,7 +350,8 @@ internal static class ParserEmitter
         builder.AppendLine("            : ParseTopLevelStatements();");
         builder.AppendLine("        SkipNewLines();");
         builder.AppendLine("        Expect(TokenKind.End);");
-        builder.AppendLine("        return new SmallLangProgram(structs, enums, traits, functions, statements);");
+        builder.AppendLine("        var imports = _imports.Select(static pair => new ImportDeclaration(pair.Value, pair.Key)).ToArray();");
+        builder.AppendLine("        return new SmallLangProgram(_namespacePath, imports, structs, enums, traits, functions, statements);");
         builder.AppendLine("    }");
         builder.AppendLine();
         builder.AppendLine("    public Expression ParseExpressionFragment()");

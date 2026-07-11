@@ -99,29 +99,142 @@ internal static class CompilerApp
     private static SmallLangProgram LoadProgram(IReadOnlyList<string> sourcePaths)
     {
         var standardLibrary = LoadStandardLibrary(sourcePaths[0]);
-        var sourcePrograms = sourcePaths
-            .Select(static path => ParseSourceFile(path, isStandardLibrary: false))
-            .ToArray();
-        var executableFiles = sourcePrograms.Count(static program => program.Statements.Count > 0);
-        if (executableFiles > 1)
+        var sourcePrograms = LoadUserPrograms(sourcePaths);
+        var executableFiles = sourcePrograms.Where(static source => source.Program.Statements.Count > 0).ToArray();
+        if (executableFiles.Length > 1)
         {
             throw new SmallLangException("multiple source files contain executable top-level statements; exactly one root file may define the program entry point");
         }
 
         return new SmallLangProgram(
+            [],
+            [],
             standardLibrary.SelectMany(static program => program.Structs)
-                .Concat(sourcePrograms.SelectMany(static program => program.Structs))
+                .Concat(sourcePrograms.SelectMany(static source => source.Program.Structs))
                 .ToArray(),
             standardLibrary.SelectMany(static program => program.Enums)
-                .Concat(sourcePrograms.SelectMany(static program => program.Enums))
+                .Concat(sourcePrograms.SelectMany(static source => source.Program.Enums))
                 .ToArray(),
             standardLibrary.SelectMany(static program => program.Traits)
-                .Concat(sourcePrograms.SelectMany(static program => program.Traits))
+                .Concat(sourcePrograms.SelectMany(static source => source.Program.Traits))
                 .ToArray(),
             standardLibrary.SelectMany(static program => program.Functions)
-                .Concat(sourcePrograms.SelectMany(static program => program.Functions))
+                .Concat(sourcePrograms.SelectMany(static source => source.Program.Functions))
                 .ToArray(),
-            sourcePrograms.SelectMany(static program => program.Statements).ToArray());
+            sourcePrograms.SelectMany(static source => source.Program.Statements).ToArray());
+    }
+
+    private static IReadOnlyList<LoadedSource> LoadUserPrograms(IReadOnlyList<string> sourcePaths)
+    {
+        var loadedByPath = new Dictionary<string, LoadedSource>(StringComparer.OrdinalIgnoreCase);
+        var modules = new Dictionary<string, LoadedSource>(StringComparer.Ordinal);
+        foreach (var sourcePath in sourcePaths)
+        {
+            AddSource(Path.GetFullPath(sourcePath), expectedModule: null, loadedByPath, modules);
+        }
+
+        var roots = loadedByPath.Values.Where(static source => source.Program.Statements.Count > 0).ToArray();
+        if (roots.Length > 1)
+        {
+            throw new SmallLangException("multiple source files contain executable top-level statements; exactly one root file may define the program entry point");
+        }
+
+        var root = roots.Length == 1
+            ? roots[0]
+            : loadedByPath[Path.GetFullPath(sourcePaths[0])];
+        var moduleRoot = Path.GetDirectoryName(root.Path)
+            ?? Directory.GetCurrentDirectory();
+        var states = new Dictionary<string, ModuleVisitState>(StringComparer.OrdinalIgnoreCase);
+        VisitImports(root, moduleRoot, loadedByPath, modules, states, []);
+        return loadedByPath.Values.OrderBy(static source => source.Path, StringComparer.OrdinalIgnoreCase).ToArray();
+    }
+
+    private static LoadedSource AddSource(
+        string path,
+        string? expectedModule,
+        IDictionary<string, LoadedSource> loadedByPath,
+        IDictionary<string, LoadedSource> modules)
+    {
+        if (loadedByPath.TryGetValue(path, out var existing))
+        {
+            return existing;
+        }
+        if (!File.Exists(path))
+        {
+            throw new SmallLangException($"imported module file not found: {path}");
+        }
+
+        var program = ParseSourceFile(path, isStandardLibrary: false);
+        var moduleName = string.Join('.', program.NamespacePath);
+        if (expectedModule is not null && moduleName != expectedModule)
+        {
+            throw new SmallLangException(
+                $"module file '{path}' declares namespace '{moduleName}' but import expects '{expectedModule}'");
+        }
+        if (moduleName.Length > 0
+            && modules.TryGetValue(moduleName, out var duplicate)
+            && !StringComparer.OrdinalIgnoreCase.Equals(duplicate.Path, path))
+        {
+            throw new SmallLangException(
+                $"module '{moduleName}' is declared by both '{duplicate.Path}' and '{path}'");
+        }
+
+        var loaded = new LoadedSource(path, program);
+        loadedByPath.Add(path, loaded);
+        if (moduleName.Length > 0)
+        {
+            modules[moduleName] = loaded;
+        }
+        return loaded;
+    }
+
+    private static void VisitImports(
+        LoadedSource source,
+        string moduleRoot,
+        IDictionary<string, LoadedSource> loadedByPath,
+        IDictionary<string, LoadedSource> modules,
+        IDictionary<string, ModuleVisitState> states,
+        IReadOnlyList<string> chain)
+    {
+        if (states.TryGetValue(source.Path, out var state))
+        {
+            if (state == ModuleVisitState.Visiting)
+            {
+                throw new SmallLangException(
+                    "module import cycle: " + string.Join(" -> ", chain.Append(ModuleName(source.Program))));
+            }
+            return;
+        }
+
+        states[source.Path] = ModuleVisitState.Visiting;
+        var nextChain = chain.Append(ModuleName(source.Program)).ToArray();
+        foreach (var import in source.Program.Imports)
+        {
+            if (import.Path.Count > 0 && import.Path[0] == "sys")
+            {
+                continue;
+            }
+
+            var moduleName = string.Join('.', import.Path);
+            if (!modules.TryGetValue(moduleName, out var imported))
+            {
+                var modulePath = Path.Combine(
+                    moduleRoot,
+                    Path.Combine(import.Path.ToArray()) + ".sl");
+                imported = AddSource(
+                    Path.GetFullPath(modulePath),
+                    moduleName,
+                    loadedByPath,
+                    modules);
+            }
+            VisitImports(imported, moduleRoot, loadedByPath, modules, states, nextChain);
+        }
+        states[source.Path] = ModuleVisitState.Visited;
+    }
+
+    private static string ModuleName(SmallLangProgram program)
+    {
+        return program.NamespacePath.Count == 0 ? "<root>" : string.Join('.', program.NamespacePath);
     }
 
     private static IReadOnlyList<SmallLangProgram> LoadStandardLibrary(string sourcePath)
@@ -179,5 +292,13 @@ internal static class CompilerApp
         var sourceText = File.ReadAllText(path, Encoding.UTF8);
         var tokens = new Lexer(sourceText).Lex();
         return new Parser(tokens, isStandardLibrary).Parse();
+    }
+
+    private sealed record LoadedSource(string Path, SmallLangProgram Program);
+
+    private enum ModuleVisitState
+    {
+        Visiting,
+        Visited
     }
 }

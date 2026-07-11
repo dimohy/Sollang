@@ -211,6 +211,9 @@ aliases. Exactly one file may contain executable top-level statements:
 
 The source-list file contains one repository-relative `.sl` path per line.
 Direct compiler use accepts the same files as positional arguments.
+When only the root file is supplied, each non-`sys` import is mapped from its
+dotted module path to a `.sl` file relative to the root directory. For example,
+`import sample.math as math` discovers `sample/math.sl` recursively.
 
 The compiler itself targets .NET 11 Preview and uses C# Preview.
 

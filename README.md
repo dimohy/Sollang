@@ -149,6 +149,9 @@ dotnet run --project src/SmallLang.Compiler -- build `
   -o artifacts/52-multi-file-modules.exe
 ```
 
+Supplying only the root file is sufficient when imported modules follow the
+dotted-path layout: `import sample.math` discovers `sample/math.sl`.
+
 ## License
 
 SmallLang is licensed under the [Apache License 2.0](LICENSE).

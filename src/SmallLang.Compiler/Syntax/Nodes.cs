@@ -1,11 +1,17 @@
 namespace SmallLang.Compiler.Syntax;
 
 internal sealed record SmallLangProgram(
+    IReadOnlyList<string> NamespacePath,
+    IReadOnlyList<ImportDeclaration> Imports,
     IReadOnlyList<StructDeclaration> Structs,
     IReadOnlyList<EnumDeclaration> Enums,
     IReadOnlyList<TraitDeclaration> Traits,
     IReadOnlyList<FunctionDeclaration> Functions,
     IReadOnlyList<Statement> Statements);
+
+internal sealed record ImportDeclaration(
+    IReadOnlyList<string> Path,
+    string Alias);
 
 internal sealed record StructDeclaration(
     string Name,

@@ -2341,9 +2341,12 @@ compiles a namespaced library file and a separate root file into one executable
 and verifies the direct namespaced LLVM call.
 
 This is the first module-system substrate, not the final package model. The
-next slice makes imports discover source files from a declared root-module
-dependency graph, then adds internal-by-default visibility and explicit public
-exports. The design follows Zig's explicit root-module graph and Swift's
-module/API boundary while retaining SL namespace and fluent-call syntax.
+compiler now follows non-`sys` imports from the root source directory by mapping
+`sample.math` to `sample/math.sl`. Discovery is recursive and reports missing
+files, declared-namespace mismatch, import cycles with the full chain, and
+duplicate module declarations. The next slice adds internal-by-default
+visibility and explicit public exports. The design follows Zig's explicit
+root-module graph and Swift's module/API boundary while retaining SL namespace
+and fluent-call syntax.
 
 
