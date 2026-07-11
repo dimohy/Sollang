@@ -1401,6 +1401,25 @@ and the cumulative input and loop sample shown above.
 
 Current backend:
 
+Memory placement is semantic-preserving and follows an ordered lattice:
+
+1. Scalars and identity-free aggregates remain inline in SSA registers or their
+   containing aggregate.
+2. Addressable values with a statically known size are placed in a reusable
+   stack-frame slot when escape analysis proves that no reference outlives the
+   frame, the value is not stored into an escaping owner, and the frame remains
+   within the 4 KiB promotion budget.
+3. A value is conservatively promoted to the heap when it is returned, moved to
+   another owner, passed through an unknown/escaping call, dynamically sized,
+   too large for the budget, recursively owned, or otherwise not proven safe.
+4. Explicit arenas will cover groups of compiler objects whose lifetimes end
+   together; arena storage does not weaken the same ownership and escape rules.
+
+The source-level type and ownership behavior never depends on the selected
+placement. In particular, `box T` expresses stable address identity, not a
+mandatory heap allocation. A non-escaping box may use a stack slot; an escaping
+box uses the heap without requiring a source change.
+
 - targets: Windows x64, Linux x64, and browser WebAssembly
 - LLVM toolchain: LLVM 22.1.8, downloaded under `.tools` by `scripts/smalllang.ps1`
 - lexer: generated from `syntax/smalllang.lexer` by a Roslyn incremental source

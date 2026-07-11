@@ -89,8 +89,9 @@ estimate.
 ### Ownership and storage — 8.0 / 10
 
 - Complete (7): unique owned values, readonly borrow by default, `mut` borrow,
-  explicit `move`, recursive static drop glue, lifetime-based stack placement,
-  explicit `box T`.
+  explicit `move`, recursive static drop glue, lifetime-based stack placement
+  including non-escaping addressable `box` objects with conservative heap
+  promotion, and explicit `box T`.
 - Partial (2): borrow lifetimes are intentionally narrow; ownership through
   fully generic containers is not implemented.
 - Missing (1): a complete path-sensitive borrow checker for references returned

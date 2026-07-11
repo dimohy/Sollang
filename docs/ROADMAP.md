@@ -62,6 +62,8 @@ ownership behavior is part of the feature.
 - [x] Monomorphization with deterministic ownership/drop behavior for inline values
 - [x] Associated types and equality constraints for container and iterator contracts
 - [x] Explicit `box T` for stable identity or recursive-size breaks
+- [x] Escape-based stack promotion for non-escaping addressable `box` objects
+- [x] Conservative heap promotion for returned, moved, large, or uncertain objects
 - [ ] Explicit `dyn Trait` and vtables for runtime polymorphism
 
 ## Compiler Primitives

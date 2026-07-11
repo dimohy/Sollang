@@ -31,7 +31,7 @@ internal sealed class SemanticCompiler
     {
         var functions = BindFunctions();
         var mainBindings = BindMain(functions);
-        var storagePlacement = StoragePlacementAnalyzer.Analyze(_program, functions);
+        var storagePlacement = StoragePlacementAnalyzer.Analyze(_program, functions, _types);
         return new BoundProgram(
             _types,
             _traits,

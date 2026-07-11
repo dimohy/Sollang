@@ -2907,4 +2907,32 @@ invariant, and direct arithmetic is rejected so it cannot manufacture invalid
 scalars. Example 80 covers ASCII, Hangul, a decomposed combining mark, and a
 supplementary-plane emoji.
 
+## D096 - Escape-Based Automatic Object Placement
+
+Status: implemented, conservative first slice
+Date: 2026-07-12
+
+SL treats storage location as an implementation decision rather than part of a
+value's source-level meaning. Identity-free values stay inline. Addressable
+`box` objects with known size are stack-promoted when the compiler proves that
+the owner is only observed locally and does not escape through a return, move,
+indirect store, or unknown call. Returning or consuming the same source value
+selects heap allocation automatically.
+
+The safety conditions follow Go's escape-analysis invariants: a pointer to a
+stack object must never be stored into a heap object and must never outlive or
+be reused before the logical object dies. SL additionally uses its affine move
+and borrow modes as explicit data-flow evidence. The placement analyzer assigns
+lifetime intervals, reuses non-overlapping aligned slots, caps automatic stack
+promotion at 4 KiB per frame, and falls back to the heap whenever proof is
+incomplete. LLVM lifetime markers expose the exact live interval to later
+optimization passes.
+
+This first object slice promotes direct boxes of copyable literal/struct values.
+Boxes containing recursively owned fields and boxes crossing function ownership
+boundaries remain conservatively heap allocated. Examples 81 and 82 compile the
+same `box` abstraction to stack and heap respectively and assert allocation and
+release behavior in LLVM. Explicit arenas remain the next layer for many
+objects whose lifetimes intentionally end together.
+
 

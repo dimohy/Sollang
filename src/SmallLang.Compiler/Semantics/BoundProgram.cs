@@ -454,6 +454,8 @@ internal sealed class TypeDefinitionTable
         };
     }
 
+    public int InlineSizeOf(TypeId type) => InlineSize(type);
+
     private static int AlignUp(int value, int alignment) =>
         checked((value + alignment - 1) / alignment * alignment);
 }

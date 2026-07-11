@@ -253,6 +253,18 @@ internal sealed partial class LlvmEmitter
         }
 
         var value = LoadMutableContainer(name, storedValue);
+        if (value is RuntimeBox { Storage: RuntimeContainerStorage.Stack } stackBox)
+        {
+            if (_program.Types.ContainsOwnedStorage(stackBox.ElementType))
+            {
+                var loaded = NextTemp("drop_stack_box_value");
+                EmitLoad(loaded, LlvmType(stackBox.ElementType), stackBox.PointerName,
+                    RuntimeAlignment(stackBox.ElementType));
+                EmitOwnedDropCall(stackBox.ElementType, loaded);
+            }
+            EndMutableContainerSlotLifetime(name);
+            return;
+        }
         if (IsCustomOwnedType(value.Type))
         {
             var materialized = MaterializeAggregateValue(value);
@@ -358,7 +370,7 @@ internal sealed partial class LlvmEmitter
             or RuntimeDynamicInlineArray { Storage: RuntimeContainerStorage.Heap }
             or RuntimeIntDictionary { Storage: RuntimeContainerStorage.Heap }
             or RuntimeInlineDictionary { Storage: RuntimeContainerStorage.Heap }
-            or RuntimeBox;
+            or RuntimeBox { Storage: RuntimeContainerStorage.Heap };
     }
 
     private bool IsOwnedContainerRuntimeValue(RuntimeValue value)
@@ -778,7 +790,11 @@ internal sealed partial class LlvmEmitter
 
     private sealed record RuntimeEnum(BoundType EnumType, string ValueName) : RuntimeValue(EnumType);
 
-    private sealed record RuntimeBox(BoundType BoxType, BoundType ElementType, string PointerName)
+    private sealed record RuntimeBox(
+        BoundType BoxType,
+        BoundType ElementType,
+        string PointerName,
+        RuntimeContainerStorage Storage = RuntimeContainerStorage.Heap)
         : RuntimeValue(BoxType);
 
     private sealed record RuntimeIntSlice(string PointerName, string LengthName) : RuntimeValue(BoundType.IntSlice);
