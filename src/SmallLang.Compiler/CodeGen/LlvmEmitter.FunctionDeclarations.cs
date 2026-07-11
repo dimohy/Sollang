@@ -50,6 +50,9 @@ internal sealed partial class LlvmEmitter
                 case BoundType.IntDictionary:
                     EmitIntDictionaryFunction(function);
                     break;
+                case BoundType.Arena:
+                    EmitArenaFunction(function);
+                    break;
                 default:
                     if (_program.Types.IsDynamicArray(function.ReturnType))
                     {
@@ -460,6 +463,7 @@ internal sealed partial class LlvmEmitter
                 BoundType.DynamicIntArray => "%smalllang.mutable_container %it",
                 _ when function.InputType is { } type && _program.Types.IsDynamicArray(type) => "%smalllang.mutable_container %it",
                 BoundType.IntDictionary => "%smalllang.mutable_container %it",
+                BoundType.Arena => "%smalllang.mutable_container %it",
                 _ when function.InputType is { } type && _program.Types.IsDictionary(type) => "%smalllang.mutable_container %it",
                 _ => throw new SmallLangException("unsupported mutable borrow input type")
             };
@@ -496,6 +500,7 @@ internal sealed partial class LlvmEmitter
             BoundType.DynamicIntArray => "%smalllang.dynamic_int_array %it",
             BoundType.IntDictionaryView => "%smalllang.int_dictionary %it",
             BoundType.IntDictionary => "%smalllang.int_dictionary %it",
+            BoundType.Arena => "%smalllang.dynamic_int_array %it",
             _ => throw new SmallLangException("unsupported function input type")
         };
     }
@@ -620,6 +625,17 @@ internal sealed partial class LlvmEmitter
                     _locals.Add(function.InputName ?? "it", new RuntimeIntDictionaryView(pointer, length, capacity));
                     return;
                 }
+            case BoundType.Arena:
+                {
+                    var pointer = NextTemp("param_arena_ptr");
+                    EmitAssign(pointer, "extractvalue %smalllang.dynamic_int_array %it, 0");
+                    var used = NextTemp("param_arena_used");
+                    EmitAssign(used, "extractvalue %smalllang.dynamic_int_array %it, 1");
+                    var capacity = NextTemp("param_arena_capacity");
+                    EmitAssign(capacity, "extractvalue %smalllang.dynamic_int_array %it, 2");
+                    _locals.Add(function.InputName ?? "it", new RuntimeArena(pointer, used, capacity));
+                    return;
+                }
             default:
                 throw new SmallLangException("unsupported function input type");
         }
@@ -637,7 +653,7 @@ internal sealed partial class LlvmEmitter
             return;
         }
 
-        if (function.InputType is not (BoundType.DynamicIntArray or BoundType.IntDictionary)
+        if (function.InputType is not (BoundType.DynamicIntArray or BoundType.IntDictionary or BoundType.Arena)
             && (function.InputType is not { } dynamicType || !_program.Types.IsDynamicArray(dynamicType))
             && (function.InputType is not { } mutableType || !_program.Types.IsDictionary(mutableType)))
         {
@@ -671,6 +687,7 @@ internal sealed partial class LlvmEmitter
             {
                 BoundType.DynamicIntArray => new RuntimeDynamicIntArray("", "", ""),
                 BoundType.IntDictionary => new RuntimeIntDictionary("", "", ""),
+                BoundType.Arena => new RuntimeArena("", "", ""),
                 _ => throw new SmallLangException("unsupported mutable borrow input type")
             };
         }

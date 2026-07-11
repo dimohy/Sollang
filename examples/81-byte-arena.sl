@@ -1,0 +1,33 @@
+reserveByte memory: mut Arena -> UIntSize {
+    memory -> alloc(1, 1)
+}
+
+forwardArena memory: move Arena -> Arena => memory
+
+main {
+    Arena(4) => memory!
+
+    memory! -> alloc(3, 1) => first
+    memory! -> store(first, UInt8(65))
+    memory! -> store(first + UIntSize(1), UInt8(66))
+    memory! -> store(first + UIntSize(2), UInt8(67))
+
+    memory! -> alloc(4, 8) => aligned
+    memory! -> store(aligned, UInt8(90))
+    memory! -> load(first) => a
+    memory! -> load(first + UIntSize(1)) => b
+    memory! -> load(first + UIntSize(2)) => c
+    memory! -> load(aligned) => z
+    memory! -> used => usedBeforeReset
+    memory! -> capacity => capacity
+
+    "arena bytes = $a, $b, $c, $z" -> println
+    "arena layout = $first, $aligned, $usedBeforeReset, $capacity" -> println
+
+    memory! -> reset
+    memory! -> alloc(2, 2) => reused
+    memory! -> reserveByte => reserved
+    memory! -> forwardArena => memory!
+    memory! -> used => usedAfterReset
+    "arena reset = $reused, $reserved, $usedAfterReset" -> println
+}

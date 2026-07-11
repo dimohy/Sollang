@@ -61,15 +61,14 @@ ownership behavior is part of the feature.
 - [x] Compile-time `Int` value generics, `[Int; N]` parameters, and specialization
 - [x] Monomorphization with deterministic ownership/drop behavior for inline values
 - [x] Associated types and equality constraints for container and iterator contracts
-- [x] Explicit `box T` for stable identity or recursive-size breaks
-- [x] Escape-based stack promotion for non-escaping addressable `box` objects
-- [x] Conservative heap promotion for returned, moved, large, or uncertain objects
+- [x] Explicit heap-only `box T` for stable identity or recursive-size breaks
 - [ ] Explicit `dyn Trait` and vtables for runtime polymorphism
 
 ## Compiler Primitives
 
 - [x] UTF-8 `Text` iteration as validated Unicode `CodePoint` values
-- [ ] Arena/bump allocation
+- [x] Owned byte `Arena` with aligned bump allocation, stable offsets, growth,
+  reset, checked byte access, move/mut ABI, and one-shot drop
 - [ ] Reusable byte-offset source spans and diagnostics
 - [ ] Command-line argument and environment access
 - [ ] Child-process execution

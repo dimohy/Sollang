@@ -63,6 +63,7 @@ internal sealed partial class LlvmEmitter
         EmitPlatformFunctionBlock(_platform.EmitMemoryDeclarations);
         EmitFunctionLine("declare void @llvm.trap()");
         EmitFunctionLine("declare void @llvm.memset.p0.i64(ptr nocapture writeonly, i8, i64, i1 immarg)");
+        EmitFunctionLine("declare void @llvm.memcpy.p0.p0.i64(ptr nocapture writeonly, ptr nocapture readonly, i64, i1 immarg)");
         EmitFunctionLine("declare void @llvm.lifetime.start.p0(i64 immarg, ptr nocapture)");
         EmitFunctionLine("declare void @llvm.lifetime.end.p0(i64 immarg, ptr nocapture)");
         EmitFunctionLine();

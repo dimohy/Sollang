@@ -242,6 +242,7 @@ internal sealed partial class LlvmEmitter
             BoundType.IntSlice => "%smalllang.int_slice",
             BoundType.DynamicIntArray => "%smalllang.dynamic_int_array",
             BoundType.IntDictionaryView or BoundType.IntDictionary => "%smalllang.int_dictionary",
+            BoundType.Arena => "%smalllang.dynamic_int_array",
             _ => throw new SmallLangException($"type {type} has no first-class LLVM representation")
         };
     }

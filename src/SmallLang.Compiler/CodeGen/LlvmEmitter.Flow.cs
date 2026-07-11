@@ -162,6 +162,62 @@ internal sealed partial class LlvmEmitter
         result = new RuntimeFlowResult(null, null, _mainOk);
         switch (path)
         {
+            case "used" when current is RuntimeArena usedArena:
+                if (target.Arguments.Count != 0)
+                {
+                    throw new SmallLangException("used does not accept arguments");
+                }
+                result = new RuntimeFlowResult(
+                    new RuntimeInt(BoundType.UIntSize, EmitArenaResultSize(usedArena.UsedName)),
+                    null,
+                    _mainOk);
+                return true;
+            case "alloc" when current is RuntimeArena allocationArena:
+                if (!isLast || target.Arguments.Count != 2)
+                {
+                    throw new SmallLangException("arena alloc must be final and expects byte-count and alignment");
+                }
+                var arenaName = RequireMutableContainerSource(source, "alloc");
+                var bytes = EmitIntExpression(target.Arguments[0]);
+                var alignment = EmitIntExpression(target.Arguments[1]);
+                var allocation = EmitArenaAllocate(allocationArena, bytes, alignment);
+                StoreMutableContainer(arenaName, allocation.Arena);
+                _locals[arenaName] = allocation.Arena;
+                result = new RuntimeFlowResult(allocation.Offset, null, _mainOk);
+                return true;
+            case "store" when current is RuntimeArena storeArena:
+                if (!isLast || target.Arguments.Count != 2)
+                {
+                    throw new SmallLangException("arena store must be final and expects offset and UInt8 value");
+                }
+                RequireMutableContainerSource(source, "store");
+                EmitArenaStore(
+                    storeArena,
+                    EmitIntExpression(target.Arguments[0]),
+                    EmitIntExpression(target.Arguments[1]));
+                result = new RuntimeFlowResult(RuntimeUnit.Instance, null, _mainOk);
+                return true;
+            case "load" when current is RuntimeArena loadArena:
+                if (target.Arguments.Count != 1)
+                {
+                    throw new SmallLangException("arena load expects one offset");
+                }
+                result = new RuntimeFlowResult(
+                    EmitArenaLoad(loadArena, EmitIntExpression(target.Arguments[0])),
+                    null,
+                    _mainOk);
+                return true;
+            case "reset" when current is RuntimeArena resetArena:
+                if (!isLast || target.Arguments.Count != 0)
+                {
+                    throw new SmallLangException("arena reset must be final and takes no arguments");
+                }
+                var resetName = RequireMutableContainerSource(source, "reset");
+                var reset = resetArena with { UsedName = "0" };
+                StoreMutableContainer(resetName, reset);
+                _locals[resetName] = reset;
+                result = new RuntimeFlowResult(RuntimeUnit.Instance, null, _mainOk);
+                return true;
             case "len":
                 if (target.Arguments.Count != 0)
                 {
@@ -195,6 +251,8 @@ internal sealed partial class LlvmEmitter
                     RuntimeIntDictionaryView dictionaryView => new RuntimeFlowResult(EmitSizeAsInt(dictionaryView.CapacityName, "dict_capacity_value"), null, _mainOk),
                     RuntimeIntDictionary intDictionary => new RuntimeFlowResult(EmitSizeAsInt(intDictionary.CapacityName, "dict_capacity_value"), null, _mainOk),
                     RuntimeInlineDictionary inlineMap => new RuntimeFlowResult(EmitSizeAsInt(inlineMap.CapacityName, "dict_capacity_value"), null, _mainOk),
+                    RuntimeArena arena => new RuntimeFlowResult(
+                        new RuntimeInt(BoundType.UIntSize, EmitArenaResultSize(arena.CapacityName)), null, _mainOk),
                     _ => result
                 };
                 return result.Value is not null;

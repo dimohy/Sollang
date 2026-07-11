@@ -955,6 +955,39 @@ defined directly on `CodePoint`; convert to `UInt32` first when numeric work is
 intentional. Equality and ordering comparisons remain available for lexer
 classification.
 
+## Arena Storage
+
+`Arena(initialCapacity)` creates a unique owned byte arena. It is a three-word
+handle containing a backing pointer, used byte count, and capacity. `box T`
+remains different and always means an individually owned heap allocation;
+ordinary structs remain inline values.
+
+```smalllang
+Arena(4096) => syntax!
+syntax! -> alloc(24, 8) => nodeOffset
+syntax! -> store(nodeOffset, UInt8(1))
+syntax! -> load(nodeOffset) => tag
+syntax! -> used => bytesUsed
+syntax! -> reset
+```
+
+- `alloc(bytes, alignment)` requires a mutable arena, accepts `Int` or
+  `UIntSize`, validates non-negative sizes and a nonzero power-of-two alignment,
+  and returns an aligned `UIntSize` offset.
+- Offsets stay stable when the arena grows because they are relative to the
+  backing block rather than raw addresses.
+- Growth selects at least `max(capacity * 2, requiredEnd)`, copies only used
+  bytes, and immediately frees the previous block.
+- `store(UIntSize, UInt8)` and `load(UIntSize)` perform bounds checks against
+  used bytes. Raw pointers are not exposed in safe SL.
+- `reset` retains capacity and sets used bytes to zero. Existing offsets become
+  logically invalid; subsequent checked access is relative to the new contents.
+- `Arena` is affine: readonly borrowing, `mut Arena`, and `move Arena` follow the
+  ordinary ownership rules. Final drop frees the current backing block exactly
+  once. Individual arena allocations are never freed separately.
+- The native targets currently support arenas. Browser wasm remains blocked by
+  its existing no-heap runtime boundary.
+
 The exact string escape set is not finalized. The first required string form is
 a double-quoted UTF-8 literal with optional identifier and expression
 interpolation:
@@ -1400,25 +1433,6 @@ main {
 and the cumulative input and loop sample shown above.
 
 Current backend:
-
-Memory placement is semantic-preserving and follows an ordered lattice:
-
-1. Scalars and identity-free aggregates remain inline in SSA registers or their
-   containing aggregate.
-2. Addressable values with a statically known size are placed in a reusable
-   stack-frame slot when escape analysis proves that no reference outlives the
-   frame, the value is not stored into an escaping owner, and the frame remains
-   within the 4 KiB promotion budget.
-3. A value is conservatively promoted to the heap when it is returned, moved to
-   another owner, passed through an unknown/escaping call, dynamically sized,
-   too large for the budget, recursively owned, or otherwise not proven safe.
-4. Explicit arenas will cover groups of compiler objects whose lifetimes end
-   together; arena storage does not weaken the same ownership and escape rules.
-
-The source-level type and ownership behavior never depends on the selected
-placement. In particular, `box T` expresses stable address identity, not a
-mandatory heap allocation. A non-escaping box may use a stack slot; an escaping
-box uses the heap without requiring a source change.
 
 - targets: Windows x64, Linux x64, and browser WebAssembly
 - LLVM toolchain: LLVM 22.1.8, downloaded under `.tools` by `scripts/smalllang.ps1`

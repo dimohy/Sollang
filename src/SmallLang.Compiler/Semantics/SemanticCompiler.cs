@@ -31,7 +31,7 @@ internal sealed class SemanticCompiler
     {
         var functions = BindFunctions();
         var mainBindings = BindMain(functions);
-        var storagePlacement = StoragePlacementAnalyzer.Analyze(_program, functions, _types);
+        var storagePlacement = StoragePlacementAnalyzer.Analyze(_program, functions);
         return new BoundProgram(
             _types,
             _traits,
@@ -400,7 +400,7 @@ internal sealed class SemanticCompiler
                 throw Error(function.Line, function.Column, "mut input requires an input type");
             }
 
-            if (inputType.Value is not (BoundType.DynamicIntArray or BoundType.IntDictionary)
+            if (inputType.Value is not (BoundType.DynamicIntArray or BoundType.IntDictionary or BoundType.Arena)
                 && !_types.IsDynamicArray(inputType.Value)
                 && !_types.IsDictionary(inputType.Value)
                 && !_types.IsStruct(inputType.Value))
@@ -2947,6 +2947,78 @@ internal sealed class SemanticCompiler
         result = new FlowResult(BoundType.Unit, FlowEffect.None);
         switch (path)
         {
+            case "used" when currentType == BoundType.Arena:
+                if (target.Arguments.Count != 0)
+                {
+                    throw Error(target.Line, target.Column, "used does not accept arguments");
+                }
+                result = new FlowResult(BoundType.UIntSize, FlowEffect.None);
+                return true;
+            case "alloc" when currentType == BoundType.Arena:
+                if (!isLast || target.Arguments.Count != 2)
+                {
+                    throw Error(target.Line, target.Column,
+                        "arena alloc must be final and expects byte-count and alignment arguments");
+                }
+                EnsureMutableContainerSource(expression.Source, "alloc", mutableBindings);
+                foreach (var argument in target.Arguments)
+                {
+                    var argumentType = InferExpression(argument, functions, bindings,
+                        allowPrintCall: false, allowReadIntCall, allowFlowBindingTarget: false);
+                    if (argumentType is not (BoundType.Int or BoundType.UIntSize))
+                    {
+                        throw Error(argument.Line, argument.Column,
+                            "arena alloc byte-count and alignment must be Int or UIntSize");
+                    }
+                }
+                if (target.Arguments[1] is NumberExpression alignmentLiteral
+                    && long.TryParse(alignmentLiteral.Text, NumberStyles.None, CultureInfo.InvariantCulture, out var literalAlignment)
+                    && (literalAlignment <= 0 || (literalAlignment & (literalAlignment - 1)) != 0))
+                {
+                    throw Error(alignmentLiteral.Line, alignmentLiteral.Column,
+                        "arena alignment must be a nonzero power of two");
+                }
+                result = new FlowResult(BoundType.UIntSize, FlowEffect.None);
+                return true;
+            case "store" when currentType == BoundType.Arena:
+                if (!isLast || target.Arguments.Count != 2)
+                {
+                    throw Error(target.Line, target.Column,
+                        "arena store must be final and expects offset and UInt8 value arguments");
+                }
+                EnsureMutableContainerSource(expression.Source, "store", mutableBindings);
+                var storeOffsetType = InferExpression(target.Arguments[0], functions, bindings,
+                    allowPrintCall: false, allowReadIntCall, allowFlowBindingTarget: false);
+                var storeValueType = InferExpression(target.Arguments[1], functions, bindings,
+                    allowPrintCall: false, allowReadIntCall, allowFlowBindingTarget: false);
+                if (storeOffsetType != BoundType.UIntSize || storeValueType != BoundType.UInt8)
+                {
+                    throw Error(target.Line, target.Column, "arena store expects UIntSize offset and UInt8 value");
+                }
+                result = new FlowResult(BoundType.Unit, FlowEffect.None);
+                return true;
+            case "load" when currentType == BoundType.Arena:
+                if (target.Arguments.Count != 1)
+                {
+                    throw Error(target.Line, target.Column, "arena load expects one UIntSize offset");
+                }
+                var loadOffsetType = InferExpression(target.Arguments[0], functions, bindings,
+                    allowPrintCall: false, allowReadIntCall, allowFlowBindingTarget: false);
+                if (loadOffsetType != BoundType.UIntSize)
+                {
+                    throw Error(target.Arguments[0].Line, target.Arguments[0].Column,
+                        "arena load offset must be UIntSize");
+                }
+                result = new FlowResult(BoundType.UInt8, FlowEffect.None);
+                return true;
+            case "reset" when currentType == BoundType.Arena:
+                if (!isLast || target.Arguments.Count != 0)
+                {
+                    throw Error(target.Line, target.Column, "arena reset must be final and takes no arguments");
+                }
+                EnsureMutableContainerSource(expression.Source, "reset", mutableBindings);
+                result = new FlowResult(BoundType.Unit, FlowEffect.None);
+                return true;
             case "len":
                 if (target.Arguments.Count != 0)
                 {
@@ -2976,14 +3048,17 @@ internal sealed class SemanticCompiler
 
                 if (currentType is not (BoundType.DynamicIntArray
                     or BoundType.IntDictionaryView
-                    or BoundType.IntDictionary)
+                    or BoundType.IntDictionary
+                    or BoundType.Arena)
                     && !_types.IsDynamicArray(currentType)
                     && !_types.IsDictionary(currentType))
                 {
                     return false;
                 }
 
-                result = new FlowResult(BoundType.Int, FlowEffect.None);
+                result = new FlowResult(
+                    currentType == BoundType.Arena ? BoundType.UIntSize : BoundType.Int,
+                    FlowEffect.None);
                 return true;
             case "push":
                 if (currentType != BoundType.DynamicIntArray && !_types.IsDynamicArray(currentType))
@@ -3207,6 +3282,11 @@ internal sealed class SemanticCompiler
         if (TryInferEnumConstructor(expression, functions, bindings, allowReadIntCall, out var enumType))
         {
             return enumType;
+        }
+
+        if (TryInferArenaConstructor(expression, functions, bindings, allowReadIntCall, out var arenaType))
+        {
+            return arenaType;
         }
 
         if (TryInferNumericConversion(expression, functions, bindings, allowReadIntCall, out var numericType))
@@ -3539,6 +3619,34 @@ internal sealed class SemanticCompiler
 
         _resolvedGenericCalls[callSite] = specialization;
         return specialization;
+    }
+
+    private bool TryInferArenaConstructor(
+        CallExpression expression,
+        IReadOnlyDictionary<string, BoundFunction> functions,
+        IReadOnlyDictionary<string, BoundType> bindings,
+        bool allowReadIntCall,
+        out BoundType type)
+    {
+        type = default;
+        if (expression.Path.Count != 1 || expression.Path[0] != "Arena")
+        {
+            return false;
+        }
+        if (expression.Arguments.Count != 1)
+        {
+            throw Error(expression.Line, expression.Column, "Arena expects one initial byte-capacity argument");
+        }
+        var capacityType = InferExpression(
+            expression.Arguments[0], functions, bindings,
+            allowPrintCall: false, allowReadIntCall, allowFlowBindingTarget: false);
+        if (capacityType is not (BoundType.Int or BoundType.UIntSize))
+        {
+            throw Error(expression.Arguments[0].Line, expression.Arguments[0].Column,
+                $"Arena capacity must be Int or UIntSize, got {FormatType(capacityType)}");
+        }
+        type = BoundType.Arena;
+        return true;
     }
 
     private bool TryInferNumericConversion(
@@ -4067,6 +4175,7 @@ internal sealed class SemanticCompiler
             ["Size"] = BoundType.Size,
             ["UIntSize"] = BoundType.UIntSize,
             ["CodePoint"] = BoundType.CodePoint,
+            ["Arena"] = BoundType.Arena,
             ["Float"] = BoundType.Float32,
             ["Float32"] = BoundType.Float32,
             ["Float64"] = BoundType.Float64,
@@ -4377,6 +4486,7 @@ internal sealed class SemanticCompiler
             TypeId.Int64 or TypeId.UInt64 or TypeId.Float64 => 8,
             TypeId.Size or TypeId.UIntSize => _pointerBitWidth / 8,
             TypeId.Text => 16,
+            TypeId.Arena => 24,
             _ => throw new InvalidOperationException($"type {type} has no inline size")
         };
     }
@@ -4548,6 +4658,7 @@ internal sealed class SemanticCompiler
             BoundType.Size => "Size",
             BoundType.UIntSize => "UIntSize",
             BoundType.CodePoint => "CodePoint",
+            BoundType.Arena => "Arena",
             BoundType.Float32 => "Float",
             BoundType.Float64 => "Double",
             BoundType.Bool => "Bool",
@@ -5247,7 +5358,7 @@ internal sealed class SemanticCompiler
     {
         return function.InputOwnership == BoundFunctionInputOwnership.MutableBorrow
             && function.InputType is { } inputType
-            && (inputType is BoundType.DynamicIntArray or BoundType.IntDictionary
+            && (inputType is BoundType.DynamicIntArray or BoundType.IntDictionary or BoundType.Arena
                 || _types.IsDynamicArray(inputType)
                 || _types.IsDictionary(inputType)
                 || _types.IsStruct(inputType));

@@ -11,6 +11,11 @@ internal sealed partial class LlvmEmitter
 {
     private RuntimeValue EmitFunctionCall(CallExpression expression)
     {
+        if (TryEmitArenaConstructor(expression, out var arena))
+        {
+            return arena;
+        }
+
         if (TryEmitEnumConstructor(expression, out var enumValue))
         {
             return enumValue;
@@ -590,6 +595,7 @@ internal sealed partial class LlvmEmitter
             BoundType.DynamicIntArray => EmitDynamicIntArrayFunctionCall(function, argument),
             _ when _program.Types.IsDynamicArray(function.ReturnType) => EmitDynamicInlineArrayFunctionCall(function, argument),
             BoundType.IntDictionary => EmitIntDictionaryFunctionCall(function, argument),
+            BoundType.Arena => EmitArenaFunctionCall(function, argument),
             _ when _program.Types.IsDictionary(function.ReturnType) => EmitInlineDictionaryFunctionCall(function, argument),
             _ when _program.Types.IsStruct(function.ReturnType)
                 || _program.Types.IsEnum(function.ReturnType)
@@ -789,6 +795,8 @@ internal sealed partial class LlvmEmitter
             RuntimeIntDictionaryView dictionary when function.InputType == BoundType.IntDictionaryView => BuildIntDictionaryArgument(dictionary.PointerName, dictionary.LengthName, dictionary.CapacityName),
             RuntimeIntDictionary dictionary when function.InputType == BoundType.IntDictionaryView => BuildIntDictionaryArgument(dictionary.PointerName, dictionary.LengthName, dictionary.CapacityName),
             RuntimeIntDictionary dictionary when function.InputType == BoundType.IntDictionary => BuildIntDictionaryArgument(dictionary),
+            RuntimeArena arena when function.InputType == BoundType.Arena =>
+                $"%smalllang.dynamic_int_array {BuildDynamicArrayAggregate(arena.PointerName, arena.UsedName, arena.CapacityName)}",
             RuntimeStruct structure when function.InputType == structure.Type => $"{LlvmStructType(structure.Type)} {structure.ValueName}",
             RuntimeEnum enumeration when function.InputType == enumeration.Type => $"{LlvmEnumType(enumeration.Type)} {enumeration.ValueName}",
             RuntimeBox box when function.InputType == box.Type => $"ptr {box.PointerName}",
@@ -853,6 +861,7 @@ internal sealed partial class LlvmEmitter
             BoundType.DynamicIntArray => new RuntimeDynamicIntArray("", "", ""),
             _ when _program.Types.IsDynamicArray(reference.TargetType) => CreateEmptyRuntimeDynamicInlineArray(reference.TargetType),
             BoundType.IntDictionary => new RuntimeIntDictionary("", "", ""),
+            BoundType.Arena => new RuntimeArena("", "", ""),
             _ when _program.Types.IsDictionary(reference.TargetType) => CreateEmptyRuntimeInlineDictionary(reference.TargetType),
             _ => throw new SmallLangException("unsupported mutable borrow input type")
         };

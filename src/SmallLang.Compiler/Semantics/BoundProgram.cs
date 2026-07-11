@@ -103,6 +103,7 @@ internal enum TypeId
     Size,
     UIntSize,
     CodePoint,
+    Arena,
     Float32,
     Float64,
     IntSlice,
@@ -351,7 +352,7 @@ internal sealed class TypeDefinitionTable
 
     private bool ContainsOwnedStorage(TypeId type, HashSet<TypeId> visiting)
     {
-        if (type is TypeId.DynamicIntArray or TypeId.IntDictionary
+        if (type is TypeId.DynamicIntArray or TypeId.IntDictionary or TypeId.Arena
             || IsBox(type) || IsStaticArray(type) || IsDynamicArray(type) || IsDictionary(type))
         {
             return true;
@@ -450,11 +451,10 @@ internal sealed class TypeDefinitionTable
             TypeId.Int64 or TypeId.UInt64 or TypeId.Float64 => 8,
             TypeId.Size or TypeId.UIntSize => _pointerSize,
             TypeId.Text => 16,
+            TypeId.Arena => 24,
             _ => throw new InvalidOperationException($"type {type} has no inline size")
         };
     }
-
-    public int InlineSizeOf(TypeId type) => InlineSize(type);
 
     private static int AlignUp(int value, int alignment) =>
         checked((value + alignment - 1) / alignment * alignment);

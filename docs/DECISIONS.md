@@ -2907,32 +2907,31 @@ invariant, and direct arithmetic is rejected so it cannot manufacture invalid
 scalars. Example 80 covers ASCII, Hangul, a decomposed combining mark, and a
 supplementary-plane emoji.
 
-## D096 - Escape-Based Automatic Object Placement
+## D096 - Owned Offset-Based Byte Arena
 
-Status: implemented, conservative first slice
+Status: implemented
 Date: 2026-07-12
 
-SL treats storage location as an implementation decision rather than part of a
-value's source-level meaning. Identity-free values stay inline. Addressable
-`box` objects with known size are stack-promoted when the compiler proves that
-the owner is only observed locally and does not escape through a return, move,
-indirect store, or unknown call. Returning or consuming the same source value
-selects heap allocation automatically.
+SL provides `Arena` for compiler data whose allocations share one lifetime.
+The owner stores a backing pointer, used byte count, and capacity, but safe
+source code receives only stable `UIntSize` offsets. This preserves memory
+safety across growth without exposing raw addresses or pretending that an
+arena allocation has an independent destructor.
 
-The safety conditions follow Go's escape-analysis invariants: a pointer to a
-stack object must never be stored into a heap object and must never outlive or
-be reused before the logical object dies. SL additionally uses its affine move
-and borrow modes as explicit data-flow evidence. The placement analyzer assigns
-lifetime intervals, reuses non-overlapping aligned slots, caps automatic stack
-promotion at 4 KiB per frame, and falls back to the heap whenever proof is
-incomplete. LLVM lifetime markers expose the exact live interval to later
-optimization passes.
+Allocation is a checked aligned pointer bump. A nonzero power-of-two alignment
+is required; padding and end arithmetic trap on overflow. Capacity grows to at
+least the larger of twice the old capacity and the required end, used bytes are
+copied, and the old block is freed immediately. Checked byte load/store reject
+offsets outside the initialized prefix. Reset retains the backing allocation
+and rewinds the bump position. Moving an arena transfers its one drop
+obligation; mutable borrowing updates the caller's three-word handle in place.
 
-This first object slice promotes direct boxes of copyable literal/struct values.
-Boxes containing recursively owned fields and boxes crossing function ownership
-boundaries remain conservatively heap allocated. Examples 81 and 82 compile the
-same `box` abstraction to stack and heap respectively and assert allocation and
-release behavior in LLVM. Explicit arenas remain the next layer for many
-objects whose lifetimes intentionally end together.
+`box T` deliberately keeps its conventional meaning: it always creates one
+individually owned heap allocation. Automatic stack/inline placement applies to
+ordinary values and existing compiler-selected container backing storage, not
+to an explicit `box`. Example 48 continues to assert heap allocation/free for
+boxes, while example 81 verifies arena alignment, growth, stable offsets,
+checked access, reset, mutable borrowing, move transfer, and final one-shot
+release.
 
 

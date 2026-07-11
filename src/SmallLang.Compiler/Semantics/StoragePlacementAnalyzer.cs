@@ -50,20 +50,19 @@ internal static class StoragePlacementAnalyzer
 
     public static StoragePlacementAnalysis Analyze(
         SmallLangProgram program,
-        IReadOnlyDictionary<string, BoundFunction> functions,
-        TypeDefinitionTable types)
+        IReadOnlyDictionary<string, BoundFunction> functions)
     {
         var standardInlineFunctions = DistinctFunctions(functions.Values
             .Where(static function => function.Kind == BoundFunctionKind.User && function.IsStandardLibrary));
         var mainFrame = MergeFramePlans(
-            AnalyzeFrame(program.Statements, result: null, functions, types),
-            AnalyzeInlineFunctions(standardInlineFunctions, functions, types));
+            AnalyzeFrame(program.Statements, result: null, functions),
+            AnalyzeInlineFunctions(standardInlineFunctions, functions));
         var functionFrames = new Dictionary<BoundFunction, StackFramePlan>(ReferenceEqualityComparer.Instance);
 
         var visited = new HashSet<BoundFunction>(ReferenceEqualityComparer.Instance);
         foreach (var function in functions.Values)
         {
-            AnalyzeFunction(function, functions, standardInlineFunctions, functionFrames, visited, types);
+            AnalyzeFunction(function, functions, standardInlineFunctions, functionFrames, visited);
         }
 
         return new StoragePlacementAnalysis(mainFrame, functionFrames);
@@ -74,8 +73,7 @@ internal static class StoragePlacementAnalyzer
         IReadOnlyDictionary<string, BoundFunction> parentFunctions,
         IReadOnlyList<BoundFunction> standardInlineFunctions,
         Dictionary<BoundFunction, StackFramePlan> functionFrames,
-        HashSet<BoundFunction> visited,
-        TypeDefinitionTable types)
+        HashSet<BoundFunction> visited)
     {
         if (!visited.Add(function))
         {
@@ -92,13 +90,13 @@ internal static class StoragePlacementAnalyzer
             functionFrames.Add(
                 function,
                 MergeFramePlans(
-                    AnalyzeFrame(function.BlockBody, function.Body, functions, types),
-                    AnalyzeInlineFunctions(inlineFunctions, functions, types)));
+                    AnalyzeFrame(function.BlockBody, function.Body, functions),
+                    AnalyzeInlineFunctions(inlineFunctions, functions)));
         }
 
         foreach (var localFunction in function.LocalFunctions.Values)
         {
-            AnalyzeFunction(localFunction, functions, standardInlineFunctions, functionFrames, visited, types);
+            AnalyzeFunction(localFunction, functions, standardInlineFunctions, functionFrames, visited);
         }
     }
 
@@ -122,14 +120,13 @@ internal static class StoragePlacementAnalyzer
 
     private static IReadOnlyList<StackFramePlan> AnalyzeInlineFunctions(
         IEnumerable<BoundFunction> functions,
-        IReadOnlyDictionary<string, BoundFunction> parentFunctions,
-        TypeDefinitionTable types)
+        IReadOnlyDictionary<string, BoundFunction> parentFunctions)
     {
         var plans = new List<StackFramePlan>();
         foreach (var function in functions)
         {
             var scopedFunctions = CreateFunctionScope(parentFunctions, function.LocalFunctions);
-            plans.Add(AnalyzeFrame(function.BlockBody, function.Body, scopedFunctions, types));
+            plans.Add(AnalyzeFrame(function.BlockBody, function.Body, scopedFunctions));
         }
 
         return plans;
@@ -203,12 +200,11 @@ internal static class StoragePlacementAnalyzer
     private static StackFramePlan AnalyzeFrame(
         IReadOnlyList<Statement> statements,
         Expression? result,
-        IReadOnlyDictionary<string, BoundFunction> functions,
-        TypeDefinitionTable types)
+        IReadOnlyDictionary<string, BoundFunction> functions)
     {
         var positions = BuildUnitPositions(statements, result);
         var candidates = new List<StackCandidate>();
-        CollectScopeCandidates(statements, result, functions, types, positions, candidates);
+        CollectScopeCandidates(statements, result, functions, positions, candidates);
         return AllocateFrame(candidates);
     }
 
@@ -216,7 +212,6 @@ internal static class StoragePlacementAnalyzer
         IReadOnlyList<Statement> statements,
         Expression? result,
         IReadOnlyDictionary<string, BoundFunction> functions,
-        TypeDefinitionTable types,
         IReadOnlyDictionary<object, int> positions,
         List<StackCandidate> candidates)
     {
@@ -225,7 +220,7 @@ internal static class StoragePlacementAnalyzer
         {
             if (statements[i] is BindingStatement binding)
             {
-                if (TryGetCandidate(binding.Value, types, out var kind, out var payloadBytes)
+                if (TryGetCandidate(binding.Value, out var kind, out var payloadBytes)
                     && (kind == PromotedOwnerKind.StaticArray
                         || (!binding.IsMutable
                             && UsesOwnerReadOnly(
@@ -259,12 +254,12 @@ internal static class StoragePlacementAnalyzer
                 }
             }
 
-            CollectNestedScopeCandidates(statements[i], functions, types, positions, candidates);
+            CollectNestedScopeCandidates(statements[i], functions, positions, candidates);
         }
 
         if (result is not null)
         {
-            CollectNestedScopeCandidates(result, functions, types, positions, candidates);
+            CollectNestedScopeCandidates(result, functions, positions, candidates);
         }
     }
 
@@ -481,28 +476,27 @@ internal static class StoragePlacementAnalyzer
     private static void CollectNestedScopeCandidates(
         Statement statement,
         IReadOnlyDictionary<string, BoundFunction> functions,
-        TypeDefinitionTable types,
         IReadOnlyDictionary<object, int> positions,
         List<StackCandidate> candidates)
     {
         switch (statement)
         {
             case BindingStatement binding:
-                CollectNestedScopeCandidates(binding.Value, functions, types, positions, candidates);
+                CollectNestedScopeCandidates(binding.Value, functions, positions, candidates);
                 break;
             case IndexAssignmentStatement assignment:
-                CollectNestedScopeCandidates(assignment.Index, functions, types, positions, candidates);
-                CollectNestedScopeCandidates(assignment.Value, functions, types, positions, candidates);
+                CollectNestedScopeCandidates(assignment.Index, functions, positions, candidates);
+                CollectNestedScopeCandidates(assignment.Value, functions, positions, candidates);
                 break;
             case FieldAssignmentStatement assignment:
-                CollectNestedScopeCandidates(assignment.Value, functions, types, positions, candidates);
+                CollectNestedScopeCandidates(assignment.Value, functions, positions, candidates);
                 break;
             case BlockFunctionCallStatement blockCall:
-                CollectNestedScopeCandidates(blockCall.Source, functions, types, positions, candidates);
-                CollectScopeCandidates(blockCall.Body, result: null, functions, types, positions, candidates);
+                CollectNestedScopeCandidates(blockCall.Source, functions, positions, candidates);
+                CollectScopeCandidates(blockCall.Body, result: null, functions, positions, candidates);
                 break;
             case ExpressionStatement expression:
-                CollectNestedScopeCandidates(expression.Expression, functions, types, positions, candidates);
+                CollectNestedScopeCandidates(expression.Expression, functions, positions, candidates);
                 break;
         }
     }
@@ -510,7 +504,6 @@ internal static class StoragePlacementAnalyzer
     private static void CollectNestedScopeCandidates(
         Expression expression,
         IReadOnlyDictionary<string, BoundFunction> functions,
-        TypeDefinitionTable types,
         IReadOnlyDictionary<object, int> positions,
         List<StackCandidate> candidates)
     {
@@ -519,141 +512,141 @@ internal static class StoragePlacementAnalyzer
             case StringExpression text:
                 foreach (var interpolation in text.Segments.OfType<InterpolationSegment>())
                 {
-                    CollectNestedScopeCandidates(interpolation.Expression, functions, types, positions, candidates);
+                    CollectNestedScopeCandidates(interpolation.Expression, functions, positions, candidates);
                 }
                 break;
             case AddExpression add:
-                CollectNestedScopeCandidates(add.Left, functions, types, positions, candidates);
-                CollectNestedScopeCandidates(add.Right, functions, types, positions, candidates);
+                CollectNestedScopeCandidates(add.Left, functions, positions, candidates);
+                CollectNestedScopeCandidates(add.Right, functions, positions, candidates);
                 break;
             case SubtractExpression subtract:
-                CollectNestedScopeCandidates(subtract.Left, functions, types, positions, candidates);
-                CollectNestedScopeCandidates(subtract.Right, functions, types, positions, candidates);
+                CollectNestedScopeCandidates(subtract.Left, functions, positions, candidates);
+                CollectNestedScopeCandidates(subtract.Right, functions, positions, candidates);
                 break;
             case MultiplyExpression multiply:
-                CollectNestedScopeCandidates(multiply.Left, functions, types, positions, candidates);
-                CollectNestedScopeCandidates(multiply.Right, functions, types, positions, candidates);
+                CollectNestedScopeCandidates(multiply.Left, functions, positions, candidates);
+                CollectNestedScopeCandidates(multiply.Right, functions, positions, candidates);
                 break;
             case DivideExpression divide:
-                CollectNestedScopeCandidates(divide.Left, functions, types, positions, candidates);
-                CollectNestedScopeCandidates(divide.Right, functions, types, positions, candidates);
+                CollectNestedScopeCandidates(divide.Left, functions, positions, candidates);
+                CollectNestedScopeCandidates(divide.Right, functions, positions, candidates);
                 break;
             case ModuloExpression modulo:
-                CollectNestedScopeCandidates(modulo.Left, functions, types, positions, candidates);
-                CollectNestedScopeCandidates(modulo.Right, functions, types, positions, candidates);
+                CollectNestedScopeCandidates(modulo.Left, functions, positions, candidates);
+                CollectNestedScopeCandidates(modulo.Right, functions, positions, candidates);
                 break;
             case NegateExpression negate:
-                CollectNestedScopeCandidates(negate.Value, functions, types, positions, candidates);
+                CollectNestedScopeCandidates(negate.Value, functions, positions, candidates);
                 break;
             case CompareExpression compare:
-                CollectNestedScopeCandidates(compare.Left, functions, types, positions, candidates);
-                CollectNestedScopeCandidates(compare.Right, functions, types, positions, candidates);
+                CollectNestedScopeCandidates(compare.Left, functions, positions, candidates);
+                CollectNestedScopeCandidates(compare.Right, functions, positions, candidates);
                 break;
             case AndExpression and:
-                CollectNestedScopeCandidates(and.Left, functions, types, positions, candidates);
-                CollectNestedScopeCandidates(and.Right, functions, types, positions, candidates);
+                CollectNestedScopeCandidates(and.Left, functions, positions, candidates);
+                CollectNestedScopeCandidates(and.Right, functions, positions, candidates);
                 break;
             case OrExpression or:
-                CollectNestedScopeCandidates(or.Left, functions, types, positions, candidates);
-                CollectNestedScopeCandidates(or.Right, functions, types, positions, candidates);
+                CollectNestedScopeCandidates(or.Left, functions, positions, candidates);
+                CollectNestedScopeCandidates(or.Right, functions, positions, candidates);
                 break;
             case NotExpression not:
-                CollectNestedScopeCandidates(not.Value, functions, types, positions, candidates);
+                CollectNestedScopeCandidates(not.Value, functions, positions, candidates);
                 break;
             case RangeExpression range:
-                CollectNestedScopeCandidates(range.Start, functions, types, positions, candidates);
-                CollectNestedScopeCandidates(range.End, functions, types, positions, candidates);
+                CollectNestedScopeCandidates(range.Start, functions, positions, candidates);
+                CollectNestedScopeCandidates(range.End, functions, positions, candidates);
                 break;
             case FoldExpression fold:
-                CollectNestedScopeCandidates(fold.Source, functions, types, positions, candidates);
-                CollectNestedScopeCandidates(fold.Initial, functions, types, positions, candidates);
-                CollectScopeCandidates(fold.Body.Statements, fold.Body.Value, functions, types, positions, candidates);
+                CollectNestedScopeCandidates(fold.Source, functions, positions, candidates);
+                CollectNestedScopeCandidates(fold.Initial, functions, positions, candidates);
+                CollectScopeCandidates(fold.Body.Statements, fold.Body.Value, functions, positions, candidates);
                 break;
             case IfExpression conditional:
-                CollectNestedScopeCandidates(conditional.Condition, functions, types, positions, candidates);
-                CollectScopeCandidates(conditional.Then.Statements, conditional.Then.Value, functions, types, positions, candidates);
+                CollectNestedScopeCandidates(conditional.Condition, functions, positions, candidates);
+                CollectScopeCandidates(conditional.Then.Statements, conditional.Then.Value, functions, positions, candidates);
                 if (conditional.Else is not null)
                 {
-                    CollectScopeCandidates(conditional.Else.Statements, conditional.Else.Value, functions, types, positions, candidates);
+                    CollectScopeCandidates(conditional.Else.Statements, conditional.Else.Value, functions, positions, candidates);
                 }
                 break;
             case WhenExpression selection:
                 if (selection.Subject is not null)
                 {
-                    CollectNestedScopeCandidates(selection.Subject, functions, types, positions, candidates);
+                    CollectNestedScopeCandidates(selection.Subject, functions, positions, candidates);
                 }
                 foreach (var arm in selection.Arms)
                 {
-                    CollectNestedScopeCandidates(arm.Condition, functions, types, positions, candidates);
-                    CollectScopeCandidates(arm.Body.Statements, arm.Body.Value, functions, types, positions, candidates);
+                    CollectNestedScopeCandidates(arm.Condition, functions, positions, candidates);
+                    CollectScopeCandidates(arm.Body.Statements, arm.Body.Value, functions, positions, candidates);
                 }
-                CollectScopeCandidates(selection.Else.Statements, selection.Else.Value, functions, types, positions, candidates);
+                CollectScopeCandidates(selection.Else.Statements, selection.Else.Value, functions, positions, candidates);
                 break;
             case EnumMatchExpression match:
-                CollectNestedScopeCandidates(match.Subject, functions, types, positions, candidates);
+                CollectNestedScopeCandidates(match.Subject, functions, positions, candidates);
                 foreach (var arm in match.Arms)
                 {
-                    CollectScopeCandidates(arm.Body.Statements, arm.Body.Value, functions, types, positions, candidates);
+                    CollectScopeCandidates(arm.Body.Statements, arm.Body.Value, functions, positions, candidates);
                 }
                 if (match.Else is not null)
                 {
-                    CollectScopeCandidates(match.Else.Statements, match.Else.Value, functions, types, positions, candidates);
+                    CollectScopeCandidates(match.Else.Statements, match.Else.Value, functions, positions, candidates);
                 }
                 break;
             case SubjectCompareExpression subjectCompare:
-                CollectNestedScopeCandidates(subjectCompare.Right, functions, types, positions, candidates);
+                CollectNestedScopeCandidates(subjectCompare.Right, functions, positions, candidates);
                 break;
             case SubjectRangeExpression subjectRange:
-                CollectNestedScopeCandidates(subjectRange.Start, functions, types, positions, candidates);
-                CollectNestedScopeCandidates(subjectRange.End, functions, types, positions, candidates);
+                CollectNestedScopeCandidates(subjectRange.Start, functions, positions, candidates);
+                CollectNestedScopeCandidates(subjectRange.End, functions, positions, candidates);
                 break;
             case FlowExpression flow:
-                CollectNestedScopeCandidates(flow.Source, functions, types, positions, candidates);
+                CollectNestedScopeCandidates(flow.Source, functions, positions, candidates);
                 foreach (var argument in flow.Targets.SelectMany(static target => target.Arguments))
                 {
-                    CollectNestedScopeCandidates(argument, functions, types, positions, candidates);
+                    CollectNestedScopeCandidates(argument, functions, positions, candidates);
                 }
                 break;
             case CallExpression call:
                 foreach (var argument in call.Arguments)
                 {
-                    CollectNestedScopeCandidates(argument, functions, types, positions, candidates);
+                    CollectNestedScopeCandidates(argument, functions, positions, candidates);
                 }
                 break;
             case ArrayLiteralExpression array:
                 foreach (var element in array.Elements)
                 {
-                    CollectNestedScopeCandidates(element, functions, types, positions, candidates);
+                    CollectNestedScopeCandidates(element, functions, positions, candidates);
                 }
                 break;
             case ArrayRepeatExpression repeat:
-                CollectNestedScopeCandidates(repeat.Value, functions, types, positions, candidates);
+                CollectNestedScopeCandidates(repeat.Value, functions, positions, candidates);
                 break;
             case DictionaryLiteralExpression dictionary:
                 foreach (var entry in dictionary.Entries)
                 {
-                    CollectNestedScopeCandidates(entry.Key, functions, types, positions, candidates);
-                    CollectNestedScopeCandidates(entry.Value, functions, types, positions, candidates);
+                    CollectNestedScopeCandidates(entry.Key, functions, positions, candidates);
+                    CollectNestedScopeCandidates(entry.Value, functions, positions, candidates);
                 }
                 break;
             case IndexExpression index:
-                CollectNestedScopeCandidates(index.Source, functions, types, positions, candidates);
-                CollectNestedScopeCandidates(index.Index, functions, types, positions, candidates);
+                CollectNestedScopeCandidates(index.Source, functions, positions, candidates);
+                CollectNestedScopeCandidates(index.Index, functions, positions, candidates);
                 break;
             case StructLiteralExpression structure:
                 foreach (var field in structure.Fields)
                 {
-                    CollectNestedScopeCandidates(field.Value, functions, types, positions, candidates);
+                    CollectNestedScopeCandidates(field.Value, functions, positions, candidates);
                 }
                 break;
             case BoxExpression box:
-                CollectNestedScopeCandidates(box.Value, functions, types, positions, candidates);
+                CollectNestedScopeCandidates(box.Value, functions, positions, candidates);
                 break;
             case FieldAccessExpression field:
-                CollectNestedScopeCandidates(field.Source, functions, types, positions, candidates);
+                CollectNestedScopeCandidates(field.Source, functions, positions, candidates);
                 break;
             case TryExpression attempt:
-                CollectNestedScopeCandidates(attempt.Value, functions, types, positions, candidates);
+                CollectNestedScopeCandidates(attempt.Value, functions, positions, candidates);
                 break;
         }
     }
@@ -754,7 +747,6 @@ internal static class StoragePlacementAnalyzer
 
     private static bool TryGetCandidate(
         Expression expression,
-        TypeDefinitionTable types,
         out PromotedOwnerKind kind,
         out int payloadBytes)
     {
@@ -782,51 +774,11 @@ internal static class StoragePlacementAnalyzer
                 var capacity = IntDictionaryLayout.CapacityForLength(dictionary.Entries.Count);
                 payloadBytes = IntDictionaryLayout.AllocationBytesForCapacity(capacity);
                 return true;
-            case BoxExpression box when TryGetBoxPayloadSize(box.Value, types, out payloadBytes):
-                kind = PromotedOwnerKind.Box;
-                return true;
             default:
                 kind = default;
                 payloadBytes = 0;
                 return false;
         }
-    }
-
-    private static bool TryGetBoxPayloadSize(
-        Expression value,
-        TypeDefinitionTable types,
-        out int payloadBytes)
-    {
-        TypeId elementType;
-        switch (value)
-        {
-            case NumberExpression number:
-                elementType = number.Text.Contains('.', StringComparison.Ordinal)
-                    || number.Text.Contains('e', StringComparison.OrdinalIgnoreCase)
-                        ? TypeId.Float32
-                        : TypeId.Int;
-                break;
-            case BoolExpression:
-                elementType = TypeId.Bool;
-                break;
-            case StringExpression:
-                elementType = TypeId.Text;
-                break;
-            case StructLiteralExpression structure when types.TryResolve(structure.TypeName, out elementType):
-                break;
-            default:
-                payloadBytes = 0;
-                return false;
-        }
-
-        var definition = types.Boxes.FirstOrDefault(box => box.ElementType == elementType);
-        if (definition is null || types.ContainsOwnedStorage(elementType))
-        {
-            payloadBytes = 0;
-            return false;
-        }
-        payloadBytes = definition.Size;
-        return payloadBytes > 0;
     }
 
     private static bool ProducesOwnedHeapContainer(
@@ -1028,9 +980,7 @@ internal static class StoragePlacementAnalyzer
                 UsesOwnerReadOnly(field.Value, ownerName, kind, functions)),
             BoxExpression box => UsesOwnerReadOnly(box.Value, ownerName, kind, functions),
             TryExpression attempt => UsesOwnerReadOnly(attempt.Value, ownerName, kind, functions),
-            FieldAccessExpression field => IsOwnerName(field.Source, ownerName)
-                ? kind == PromotedOwnerKind.Box
-                : UsesOwnerReadOnly(field.Source, ownerName, kind, functions),
+            FieldAccessExpression field => UsesOwnerReadOnly(field.Source, ownerName, kind, functions),
             _ => false
         };
     }
@@ -1193,8 +1143,7 @@ internal static class StoragePlacementAnalyzer
     {
         StaticArray,
         DynamicArray,
-        Dictionary,
-        Box
+        Dictionary
     }
 
     private sealed record StackCandidate(

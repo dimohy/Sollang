@@ -253,18 +253,6 @@ internal sealed partial class LlvmEmitter
         }
 
         var value = LoadMutableContainer(name, storedValue);
-        if (value is RuntimeBox { Storage: RuntimeContainerStorage.Stack } stackBox)
-        {
-            if (_program.Types.ContainsOwnedStorage(stackBox.ElementType))
-            {
-                var loaded = NextTemp("drop_stack_box_value");
-                EmitLoad(loaded, LlvmType(stackBox.ElementType), stackBox.PointerName,
-                    RuntimeAlignment(stackBox.ElementType));
-                EmitOwnedDropCall(stackBox.ElementType, loaded);
-            }
-            EndMutableContainerSlotLifetime(name);
-            return;
-        }
         if (IsCustomOwnedType(value.Type))
         {
             var materialized = MaterializeAggregateValue(value);
@@ -298,6 +286,9 @@ internal sealed partial class LlvmEmitter
             case RuntimeInlineDictionary { Storage: RuntimeContainerStorage.Heap } dictionary:
                 DropInlineDictionaryElements(dictionary);
                 EmitCall(target: null, "void", "smalllang_free", $"ptr {dictionary.PointerName}");
+                break;
+            case RuntimeArena arena:
+                EmitCall(target: null, "void", "smalllang_free", $"ptr {arena.PointerName}");
                 break;
         }
 
@@ -370,7 +361,8 @@ internal sealed partial class LlvmEmitter
             or RuntimeDynamicInlineArray { Storage: RuntimeContainerStorage.Heap }
             or RuntimeIntDictionary { Storage: RuntimeContainerStorage.Heap }
             or RuntimeInlineDictionary { Storage: RuntimeContainerStorage.Heap }
-            or RuntimeBox { Storage: RuntimeContainerStorage.Heap };
+            or RuntimeArena
+            or RuntimeBox;
     }
 
     private bool IsOwnedContainerRuntimeValue(RuntimeValue value)
@@ -460,6 +452,7 @@ internal sealed partial class LlvmEmitter
                 CapacityName = capacity
             },
             RuntimeIntDictionary => new RuntimeIntDictionary(pointer, length, capacity),
+            RuntimeArena => new RuntimeArena(pointer, length, capacity),
             RuntimeInlineDictionary dictionary => dictionary with
             {
                 PointerName = pointer,
@@ -488,6 +481,11 @@ internal sealed partial class LlvmEmitter
                 EmitStore("ptr", array.PointerName, slot.PointerAddress, 8);
                 EmitStore("i64", array.LengthName, slot.LengthAddress, 8);
                 EmitStore("i64", array.CapacityName, slot.CapacityAddress, 8);
+                break;
+            case RuntimeArena arena:
+                EmitStore("ptr", arena.PointerName, slot.PointerAddress, 8);
+                EmitStore("i64", arena.UsedName, slot.LengthAddress, 8);
+                EmitStore("i64", arena.CapacityName, slot.CapacityAddress, 8);
                 break;
             case RuntimeIntDictionary dictionary:
                 EmitStore("ptr", dictionary.PointerName, slot.PointerAddress, 8);
@@ -790,11 +788,7 @@ internal sealed partial class LlvmEmitter
 
     private sealed record RuntimeEnum(BoundType EnumType, string ValueName) : RuntimeValue(EnumType);
 
-    private sealed record RuntimeBox(
-        BoundType BoxType,
-        BoundType ElementType,
-        string PointerName,
-        RuntimeContainerStorage Storage = RuntimeContainerStorage.Heap)
+    private sealed record RuntimeBox(BoundType BoxType, BoundType ElementType, string PointerName)
         : RuntimeValue(BoxType);
 
     private sealed record RuntimeIntSlice(string PointerName, string LengthName) : RuntimeValue(BoundType.IntSlice);
@@ -829,6 +823,9 @@ internal sealed partial class LlvmEmitter
         string CapacityName,
         RuntimeContainerStorage Storage = RuntimeContainerStorage.Heap)
         : RuntimeValue(BoundType.DynamicIntArray);
+
+    private sealed record RuntimeArena(string PointerName, string UsedName, string CapacityName)
+        : RuntimeValue(BoundType.Arena);
 
     private sealed record RuntimeDynamicInlineArray(
         BoundType ArrayType,
