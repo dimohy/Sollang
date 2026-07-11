@@ -1,0 +1,31 @@
+struct OwnedPayload {
+    payload: box Int
+}
+
+makeOwned ok: Bool -> Result<OwnedPayload, OwnedPayload> => when {
+    ok => Result<OwnedPayload, OwnedPayload>.Ok(OwnedPayload { payload: box 1 })
+    else => Result<OwnedPayload, OwnedPayload>.Err(OwnedPayload { payload: box 2 })
+}
+
+passThrough result: move Result<OwnedPayload, OwnedPayload> -> Result<OwnedPayload, OwnedPayload> {
+    result? => payload
+    Result<OwnedPayload, OwnedPayload>.Ok(payload)
+}
+
+main {
+    makeOwned(true) => successSource
+    successSource -> passThrough => success
+    success -> when {
+        Result<OwnedPayload, OwnedPayload>.Ok(value) => 1
+        Result<OwnedPayload, OwnedPayload>.Err(error) => 0
+    } => successKind
+
+    makeOwned(false) => failureSource
+    failureSource -> passThrough => failure
+    failure -> when {
+        Result<OwnedPayload, OwnedPayload>.Ok(value) => 0
+        Result<OwnedPayload, OwnedPayload>.Err(error) => 1
+    } => failureKind
+
+    "owned result = $successKind, $failureKind" -> println
+}

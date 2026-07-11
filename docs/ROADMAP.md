@@ -39,7 +39,7 @@ ownership behavior is part of the feature.
 - [x] Object-oriented dot-call syntax without class inheritance
 - [x] Payload `enum` values and exhaustive `when`
 - [x] Standard `Option<T>` and `Result<T, E>` foundations
-- [ ] Move-aware postfix `?` propagation for owned `Result<T, E>` payloads
+- [x] Move-aware postfix `?` propagation for owned `Result<T, E>` payloads
 
 ## Traits And Generics
 

@@ -16,6 +16,7 @@ internal sealed class SemanticCompiler
     private string _currentModuleName = "";
     private string? _currentTypeScopeName;
     private BoundType? _currentFunctionReturnType;
+    private string? _currentMoveInputName;
 
     public SemanticCompiler(SmallLangProgram program)
     {
@@ -528,6 +529,9 @@ internal sealed class SemanticCompiler
             ValidateUserFunction(localFunction, scopedFunctions, bodyBindings);
         }
         _currentFunctionReturnType = function.ReturnType;
+        _currentMoveInputName = FunctionMovesOwnedHeapInput(function)
+            ? function.InputName ?? "it"
+            : null;
 
         var mutableBindings = new HashSet<string>(StringComparer.Ordinal);
         if (FunctionMutablyBorrowsInput(function))
@@ -806,6 +810,7 @@ internal sealed class SemanticCompiler
         _currentModuleName = string.Join('.', _program.NamespacePath);
         _currentTypeScopeName = null;
         _currentFunctionReturnType = null;
+        _currentMoveInputName = null;
         var bindings = new Dictionary<string, BoundType>(StringComparer.Ordinal);
         var mutableBindings = new HashSet<string>(StringComparer.Ordinal);
         BindStatements(_program.Statements, functions, bindings, mutableBindings);
@@ -2010,13 +2015,38 @@ internal sealed class SemanticCompiler
             throw Error(expression.Line, expression.Column,
                 $"'?' error type {FormatType(operandResult.Error)} does not match function error type {FormatType(outerResult.Error)}");
         }
-        if (_types.ContainsOwnedStorage(operandResult.Ok)
-            || _types.ContainsOwnedStorage(operandResult.Error))
+        if ((_types.ContainsOwnedStorage(operandResult.Ok)
+                || _types.ContainsOwnedStorage(operandResult.Error))
+            && !IsConsumableOwnedResultExpression(expression.Value, functions, bindings))
         {
             throw Error(expression.Line, expression.Column,
-                "'?' with owned Result payloads requires the upcoming move-aware propagation slice");
+                "owned Result '?' must consume a temporary Result or the function's explicit move input");
         }
         return operandResult.Ok;
+    }
+
+    private bool IsConsumableOwnedResultExpression(
+        Expression expression,
+        IReadOnlyDictionary<string, BoundFunction> functions,
+        IReadOnlyDictionary<string, BoundType> bindings)
+    {
+        if (expression is CallExpression)
+        {
+            return true;
+        }
+        if (expression is NameExpression name)
+        {
+            return !bindings.ContainsKey(name.Name)
+                || string.Equals(name.Name, _currentMoveInputName, StringComparison.Ordinal);
+        }
+        if (expression is FieldAccessExpression field
+            && field.Source is NameExpression owner
+            && functions.TryGetValue(owner.Name + "." + field.FieldName, out var function)
+            && function.InputType is null)
+        {
+            return true;
+        }
+        return false;
     }
 
     private BoundType InferBoxExpression(
@@ -4584,6 +4614,7 @@ internal sealed class SemanticCompiler
             or BoxExpression
             or StructLiteralExpression
             or CallExpression
+            or TryExpression
             or FlowExpression
             or IfExpression
             or WhenExpression
@@ -4846,6 +4877,23 @@ internal sealed class SemanticCompiler
         IReadOnlyDictionary<string, BoundFunction> functions,
         IReadOnlyDictionary<string, BoundType> bindings)
     {
+        if (expression is TryExpression { Value: NameExpression attemptedName }
+            && string.Equals(attemptedName.Name, _currentMoveInputName, StringComparison.Ordinal))
+        {
+            return [attemptedName.Name];
+        }
+
+        if (expression is TryExpression attempt)
+        {
+            return GetOwnedParameterConsumedSourceNames(attempt.Value, functions, bindings);
+        }
+
+        if (expression is CallExpression enumCall
+            && TryGetOwnedEnumConstructorSourceName(enumCall, out var enumSourceName))
+        {
+            return [enumSourceName];
+        }
+
         if (expression is CallExpression call
             && TryGetFunction(call.Path, functions, out var callFunction)
             && FunctionMovesOwnedHeapInput(callFunction)
@@ -4879,6 +4927,30 @@ internal sealed class SemanticCompiler
         }
 
         return [];
+    }
+
+    private bool TryGetOwnedEnumConstructorSourceName(CallExpression expression, out string sourceName)
+    {
+        sourceName = "";
+        if (expression.Path.Count < 2
+            || expression.Arguments.Count != 1
+            || expression.Arguments[0] is not NameExpression name)
+        {
+            return false;
+        }
+        var typeName = string.Join('.', expression.Path.Take(expression.Path.Count - 1));
+        if (!_types.TryResolve(typeName, out var type) || !_types.IsEnum(type))
+        {
+            return false;
+        }
+        var variant = _types.GetEnum(type).Variants
+            .FirstOrDefault(candidate => candidate.Name == expression.Path[^1]);
+        if (variant?.PayloadType is not { } payloadType || !_types.ContainsOwnedStorage(payloadType))
+        {
+            return false;
+        }
+        sourceName = name.Name;
+        return true;
     }
 
     private void EnsureMoveInputReturnCoverage(
@@ -5075,6 +5147,7 @@ internal sealed class SemanticCompiler
             OrExpression logicalOr => ContainsOwnedParameterCall(logicalOr.Left, functions)
                 || ContainsOwnedParameterCall(logicalOr.Right, functions),
             NotExpression logicalNot => ContainsOwnedParameterCall(logicalNot.Value, functions),
+            TryExpression attempt => ContainsOwnedParameterCall(attempt.Value, functions),
             RangeExpression range => ContainsOwnedParameterCall(range.Start, functions)
                 || ContainsOwnedParameterCall(range.End, functions),
             FoldExpression fold => ContainsOwnedParameterCall(fold.Source, functions)

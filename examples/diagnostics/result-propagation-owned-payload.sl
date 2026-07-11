@@ -3,7 +3,8 @@ struct OwnedError {
 }
 
 propagate: -> Result<Int, OwnedError> {
-    Result<Int, OwnedError>.Err(OwnedError { payload: box 1 })? => value
+    Result<Int, OwnedError>.Err(OwnedError { payload: box 1 }) => ownedResult
+    ownedResult? => value
     Result<Int, OwnedError>.Ok(value)
 }
 

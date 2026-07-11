@@ -47,12 +47,12 @@ not lines of code.
 | Types, traits, and generics | 12 | 9 | 2 | 1 | 10.0 |
 | Ownership and storage | 10 | 7 | 2 | 1 | 8.0 |
 | Modules, visibility, and builds | 8 | 4 | 2 | 2 | 5.0 |
-| Compiler-construction primitives | 12 | 4 | 4 | 4 | 6.0 |
+| Compiler-construction primitives | 12 | 5 | 3 | 4 | 6.5 |
 | Standard library and tooling | 8 | 2 | 3 | 3 | 3.5 |
-| **Total** | **60** | **34** | **15** | **11** | **41.5 / 60** |
+| **Total** | **60** | **35** | **14** | **11** | **42.0 / 60** |
 
-Current count-based progress: **69.2% (41.5 of 60 equivalent gates)**.
-There are **18.5 equivalent gates remaining**. Because the missing compiler
+Current count-based progress: **70.0% (42.0 of 60 equivalent gates)**.
+There are **18 equivalent gates remaining**. Because the missing compiler
 primitives are harder than early syntax gates, this is not an elapsed-time
 estimate.
 
@@ -101,15 +101,15 @@ estimate.
   enforced by executable top-level statements rather than a module manifest.
 - Missing (2): package manifest/dependency graph; module/interface cache.
 
-### Compiler-construction primitives — 6.0 / 12
+### Compiler-construction primitives — 6.5 / 12
 
-- Complete (4): Text values, deterministic native file I/O wrappers needed by
+- Complete (5): Text values, deterministic native file I/O wrappers needed by
   the existing demos, type-preserving array/dictionary iteration, and owned
-  growable `UInt8` byte buffers with typed push/index/iteration/drop.
-- Partial (4): generic arrays/dictionaries cover compiler-useful `Int`, `Text`,
+  growable `UInt8` byte buffers with typed push/index/iteration/drop, plus typed
+  copyable/owned `Result<T, E>` propagation with deterministic cleanup.
+- Partial (3): generic arrays/dictionaries cover compiler-useful `Int`, `Text`,
   and user-value payloads plus function contracts; string processing is
-  output-oriented; diagnostics have no reusable source-span type; postfix `?`
-  propagates copyable `Result<T, E>` errors but owned payload transfer remains.
+  output-oriented; diagnostics have no reusable source-span type.
 - Missing (4): Unicode/code-point iteration, arena/bump allocation,
   command-line/environment APIs, process execution.
 

@@ -25,6 +25,11 @@ internal sealed partial class LlvmEmitter
         var payload = EmitExpression(expression.Arguments[0]);
         EnsureRuntimeType(payload, payloadType, $"{definition.Name}.{variant.Name}");
         value = EmitEnumValue(type, variant, payload);
+        if (_program.Types.ContainsOwnedStorage(payloadType)
+            && expression.Arguments[0] is NameExpression sourceName)
+        {
+            RemoveLocal(sourceName.Name);
+        }
         return true;
     }
 
@@ -185,6 +190,12 @@ internal sealed partial class LlvmEmitter
             || outerTypes.Error != operandTypes.Error)
         {
             throw new SmallLangException("'?' enclosing function has an incompatible Result error type");
+        }
+        if ((_program.Types.ContainsOwnedStorage(operandTypes.Ok)
+                || _program.Types.ContainsOwnedStorage(operandTypes.Error))
+            && expression.Value is NameExpression consumedName)
+        {
+            RemoveLocal(consumedName.Name);
         }
 
         var tag = NextTemp("try_tag");

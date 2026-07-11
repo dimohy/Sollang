@@ -760,8 +760,11 @@ generic square-bracket spelling is not accepted.
 Postfix `?` applies only to `Result<T, E>`. On `Ok`, its expression value is the
 success payload. On `Err`, it returns `Result<U, E>.Err(error)` from the nearest
 enclosing Result-returning function after deterministic local cleanup. Error
-types must match exactly. Owned payload propagation is not yet accepted because
-its move/drop transfer proof is a separate compiler slice.
+types must match exactly. An owned Result may be propagated when the operand is
+a fresh temporary or the function's explicit `move Result<T, E>` input. A named
+non-move owned Result is rejected instead of being copied. Result constructors
+consume named owned payloads and transfer their single drop obligation into the
+new enum value.
 
 ## Containers
 

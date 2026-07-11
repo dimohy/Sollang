@@ -2845,7 +2845,7 @@ syntax.
 
 ## D093 - Typed Result Propagation With Postfix Question Mark
 
-Status: partially implemented
+Status: implemented
 Date: 2026-07-12
 
 Postfix `?` unwraps `Result<T, E>.Ok` and immediately returns an `Err` from the
@@ -2861,8 +2861,11 @@ doubleChecked value: Int -> Result<Int, Text> {
 The operand must be `Result<T, E>`, the enclosing function must return a
 `Result` with the exact same error type, and LLVM lowering emits an explicit tag
 branch rather than exceptions or stack unwinding. The error branch drops live
-owned locals before returning. Copyable payloads are implemented; propagation
-of owned Ok/Error payloads remains rejected until the move-aware transfer rule
-can prove exactly one final drop owner.
+owned locals before returning. Owned payloads are supported when `?` consumes a
+fresh Result temporary or the enclosing function's explicit `move Result<T, E>`
+input. Extraction transfers the active payload, removes the consumed Result
+owner, and enum construction consumes a named owned payload so exactly one final
+drop obligation remains. Applying `?` to a named non-move owned Result remains a
+compile-time error.
 
 
