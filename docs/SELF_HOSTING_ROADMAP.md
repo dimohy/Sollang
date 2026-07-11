@@ -178,8 +178,9 @@ and an SL parser VM. The build command
 compiles the canonical lexer/EBNF specifications into a deterministic ordinary
 SL module containing lexer descriptors and a 1,508-word parser VM program. The
 full test runner checks byte-for-byte regeneration. The SL VM consumes those
-tables and emits compact backtracking-aware CST events; green-tree
-materialization, recovery, diagnostics, and CST-to-AST lowering remain as
+tables, emits compact backtracking-aware CST events, and materializes flat green
+nodes with parent/token/span metadata. Trivia preservation, recovery,
+diagnostics, and CST-to-AST lowering remain as
 described in [GRAMMAR_BOOTSTRAP.md](GRAMMAR_BOOTSTRAP.md). These additions
 strengthen an already-partial compiler-construction gate, so the formal count
 remains **46.5 / 60 (77.5%)** until a lossless CST and diagnostics are verified.
