@@ -1,3 +1,3 @@
 main {
-    Option[Int].Some("wrong") => value
+    Option<Int>.Some("wrong") => value
 }

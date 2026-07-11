@@ -171,6 +171,45 @@ internal sealed partial class LlvmEmitter
         return DematerializeAggregateValue(payloadType, payload);
     }
 
+    private RuntimeValue EmitTryExpression(TryExpression expression)
+    {
+        var result = EmitExpression(expression.Value) as RuntimeEnum
+            ?? throw new SmallLangException("'?' expects a Result value");
+        if (!_program.Types.TryGetResultTypes(result.Type, out var operandTypes))
+        {
+            throw new SmallLangException("'?' expects a Result value");
+        }
+        var function = _currentFunction
+            ?? throw new SmallLangException("'?' requires an enclosing Result function");
+        if (!_program.Types.TryGetResultTypes(function.ReturnType, out var outerTypes)
+            || outerTypes.Error != operandTypes.Error)
+        {
+            throw new SmallLangException("'?' enclosing function has an incompatible Result error type");
+        }
+
+        var tag = NextTemp("try_tag");
+        EmitAssign(tag, $"extractvalue {LlvmEnumType(result.Type)} {result.ValueName}, 0");
+        var isError = NextTemp("try_is_error");
+        EmitCompare(isError, "eq", "i32", tag, "1");
+        var errorLabel = NextLabel("try_error");
+        var okLabel = NextLabel("try_ok");
+        EmitConditionalBranch(isError, errorLabel, okLabel);
+
+        EmitLabel(errorLabel);
+        _currentBlockLabel = errorLabel;
+        var errorPayload = ExtractEnumPayload(result, operandTypes.Error);
+        var outerDefinition = _program.Types.GetEnum(function.ReturnType);
+        var errorVariant = outerDefinition.Variants.First(variant => variant.Name == "Err");
+        var propagated = EmitEnumValue(function.ReturnType, errorVariant, errorPayload);
+        DropOwnedLocals();
+        var materialized = MaterializeAggregateValue(propagated);
+        EmitRet(materialized.TypeName, materialized.ValueName);
+
+        EmitLabel(okLabel);
+        _currentBlockLabel = okLabel;
+        return ExtractEnumPayload(result, operandTypes.Ok);
+    }
+
     private static int RuntimeAlignment(BoundType type)
     {
         return type switch

@@ -1,0 +1,23 @@
+validate value: Int -> Result<Int, Text> => when {
+    value >= 0 => Result<Int, Text>.Ok(value)
+    else => Result<Int, Text>.Err("negative")
+}
+
+doubleChecked value: Int -> Result<Int, Text> {
+    validate(value)? => checked
+    Result<Int, Text>.Ok(checked * 2)
+}
+
+resultValue result: Result<Int, Text> -> Int {
+    result -> when {
+        Result<Int, Text>.Ok(value) => value
+        Result<Int, Text>.Err(message) => -1
+    }
+}
+
+main {
+    doubleChecked(21) -> resultValue => success
+    doubleChecked(-1) -> resultValue => failure
+    "success = $success" -> println
+    "failure = $failure" -> println
+}

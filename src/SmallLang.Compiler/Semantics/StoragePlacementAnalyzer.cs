@@ -467,6 +467,9 @@ internal static class StoragePlacementAnalyzer
             case FieldAccessExpression field:
                 IndexNestedScopes(field.Source, positions, ref next);
                 break;
+            case TryExpression attempt:
+                IndexNestedScopes(attempt.Value, positions, ref next);
+                break;
         }
     }
 
@@ -641,6 +644,9 @@ internal static class StoragePlacementAnalyzer
                 break;
             case FieldAccessExpression field:
                 CollectNestedScopeCandidates(field.Source, functions, positions, candidates);
+                break;
+            case TryExpression attempt:
+                CollectNestedScopeCandidates(attempt.Value, functions, positions, candidates);
                 break;
         }
     }
@@ -973,6 +979,7 @@ internal static class StoragePlacementAnalyzer
             StructLiteralExpression structure => structure.Fields.All(field =>
                 UsesOwnerReadOnly(field.Value, ownerName, kind, functions)),
             BoxExpression box => UsesOwnerReadOnly(box.Value, ownerName, kind, functions),
+            TryExpression attempt => UsesOwnerReadOnly(attempt.Value, ownerName, kind, functions),
             FieldAccessExpression field => UsesOwnerReadOnly(field.Source, ownerName, kind, functions),
             _ => false
         };
@@ -1121,6 +1128,7 @@ internal static class StoragePlacementAnalyzer
             DictionaryLiteralExpression dictionary => dictionary.Entries.Any(entry =>
                 ContainsOwner(entry.Key, ownerName) || ContainsOwner(entry.Value, ownerName)),
             IndexExpression index => ContainsOwner(index.Source, ownerName) || ContainsOwner(index.Index, ownerName),
+            TryExpression attempt => ContainsOwner(attempt.Value, ownerName),
             _ => false
         };
     }

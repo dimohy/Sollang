@@ -121,7 +121,8 @@ internal sealed partial class LlvmEmitter
             EmitAssign(printable, $"{extension} {LlvmType(value.Type)} {value.ValueName} to i64");
         }
         var write = NextTemp("write");
-        EmitCall(write, "i32", "smalllang_write_u64", $"ptr %stdout, i64 {printable}, ptr %written");
+        var writer = IsSignedIntegerType(value.Type) ? "smalllang_write_i64" : "smalllang_write_u64";
+        EmitCall(write, "i32", writer, $"ptr %stdout, i64 {printable}, ptr %written");
         return CombineWriteOk(write, ok);
     }
 
@@ -169,6 +170,7 @@ internal sealed partial class LlvmEmitter
             IndexExpression index => EmitIndexExpression(index),
             StructLiteralExpression literal => EmitStructLiteralExpression(literal),
             FieldAccessExpression field => EmitFieldAccessExpression(field),
+            TryExpression attempt => EmitTryExpression(attempt),
             BoxExpression box => EmitBoxExpression(box),
             AddExpression add => EmitAddExpression(add),
             SubtractExpression subtract => EmitSubtractExpression(subtract),

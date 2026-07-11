@@ -2254,8 +2254,8 @@ One checked type parameter and optional trait bound are supported on global
 functions:
 
 ```smalllang
-identity[T] value: T -> T { value }
-measureOf[T: Measure] value: T -> Int { value -> Measure.measure }
+identity<T> value: T -> T { value }
+measureOf<T: Measure> value: T -> Int { value -> Measure.measure }
 ```
 
 Every used concrete type produces a separately checked specialization. Trait
@@ -2298,14 +2298,14 @@ Date: 2026-07-11
 A global function may declare one compile-time `Int` value parameter:
 
 ```smalllang
-sumFilled[N: Int] value: Int -> Int {
+sumFilled<N: Int> value: Int -> Int {
     [value; N] => values
     values -> fold 0 total, item { total + item }
 }
 ```
 
 The value argument is explicit at the fluent call boundary, such as
-`7 -> sumFilled[3]`. It is not passed at runtime. Every used value produces a
+`7 -> sumFilled<3>`. It is not passed at runtime. Every used value produces a
 separately checked and emitted specialization, and symbolic fixed-repeat counts
 become LLVM constants in that specialization. Omitting the value argument is a
 compile error. Example 50 verifies distinct `3` and `5` specializations and
@@ -2314,11 +2314,11 @@ their fixed LLVM array shapes.
 Value parameters also participate in fixed-array input types:
 
 ```smalllang
-fixedLength[N: Int] values: [Int; N] -> Int {
+fixedLength<N: Int> values: [Int; N] -> Int {
     values -> len
 }
 
-[10, 20, 30] -> fixedLength[3]
+[10, 20, 30] -> fixedLength<3>
 ```
 
 `[Int; 3]` and `[Int; 5]` are distinct compile-time size contracts at this
@@ -2390,7 +2390,7 @@ An associated type is part of the static conformance contract; it does not add
 a runtime field, metadata pointer, or vtable. Trait method signatures may name
 the associated type, and implementation validation substitutes the concrete
 binding before comparing the method signature. Generic bounds can require an
-equality such as `[T: Source[Item = Int]]`. Monomorphization checks the selected
+equality such as `<T: Source<Item = Int>>`. Monomorphization checks the selected
 concrete implementation and rejects a different or missing binding before LLVM
 emission. Example 54 verifies static dispatch through the constrained generic;
 the associated-type diagnostics verify missing bindings and equality failure.
@@ -2404,7 +2404,7 @@ Generic functions may declare two compile-time type parameters. Constraints
 that relate them use a separate `where` clause:
 
 ```smalllang
-readAny[T, Item] where T: Source[Item = Item] value: T -> Item {
+readAny<T, Item> where T: Source<Item = Item> value: T -> Item {
     value -> Source.read
 }
 ```
@@ -2491,7 +2491,7 @@ Status: implemented for built-in `Int`/`Text` keys and inline value types
 Date: 2026-07-11
 
 Dictionary literals infer one homogeneous key type and one homogeneous value
-type. `TypeDefinitionTable` interns each `Dictionary[K, V]` specialization and
+type. `TypeDefinitionTable` interns each `Dictionary<K, V>` specialization and
 records key/value size, alignment, value offset, and entry stride. The existing
 Swiss-table control-byte scheme remains shared, while entry addressing and LLVM
 load/store operations use the concrete K/V layouts.
@@ -2666,22 +2666,22 @@ value argument receives the corresponding contextual treatment as well.
 Status: implemented
 Date: 2026-07-12
 
-`Option[T]` and `Result[T, E]` are compiler-known parametric tagged values that
+`Option<T>` and `Result<T, E>` are compiler-known parametric tagged values that
 reuse the ordinary enum ABI, exhaustive `when` analysis, typed payload binding,
 and recursive static drop glue. Their source constructors and patterns keep the
 specialization visible:
 
 ```smalllang
-Option[Int].Some(42)
-Option[Int].None
-Result[Int, Text].Ok(7)
-Result[Int, Text].Err("invalid")
+Option<Int>.Some(42)
+Option<Int>.None
+Result<Int, Text>.Ok(7)
+Result<Int, Text>.Err("invalid")
 ```
 
 This foundation provides explicit absence and typed success/error values
 without nulls, exceptions, runtime type descriptors, or vtables. Example 72
 verifies function contracts, exhaustive matching, both Result payloads, and an
-owned `Option[OwnedNode]` payload. Concise propagation syntax remains a later
+owned `Option<OwnedNode>` payload. Concise propagation syntax remains a later
 compiler-construction gate.
 
 ## D087 - Contextual Struct Elements In Typed Arrays
@@ -2819,5 +2819,50 @@ for the nested declaration explicitly exposes `Lexer.Cursor`.
 Nested structs participate in the ordinary exact-layout, move, recursive drop,
 cycle checking, field initialization, and LLVM lowering rules. They are not a
 runtime object or namespace wrapper.
+
+## D092 - Angle Brackets Separate Generics From Arrays
+
+Status: implemented
+Date: 2026-07-12
+
+Type and compile-time value parameters use angle brackets:
+
+```smalllang
+Result<Int, Text>
+Option<Int>
+identity<T> value: T -> T => value
+fixedLength<N: Int> values: [Int; N] -> Int { N }
+values -> fixedLength<3>
+```
+
+Square brackets are reserved for arrays, indexing, fixed lengths, and
+compile-time collection expansion. This removes the visual ambiguity between
+`Result<T, E>` and an array expression. Unlike the earlier Mojo-inspired
+surface, SL follows the familiar Rust/Swift/Kotlin type-application shape while
+still allowing type and value parameters in the same compile-time list. The old
+generic `[...]` spelling is removed rather than retained as compatibility
+syntax.
+
+## D093 - Typed Result Propagation With Postfix Question Mark
+
+Status: partially implemented
+Date: 2026-07-12
+
+Postfix `?` unwraps `Result<T, E>.Ok` and immediately returns an `Err` from the
+enclosing `Result<U, E>` function:
+
+```smalllang
+doubleChecked value: Int -> Result<Int, Text> {
+    validate(value)? => checked
+    Result<Int, Text>.Ok(checked * 2)
+}
+```
+
+The operand must be `Result<T, E>`, the enclosing function must return a
+`Result` with the exact same error type, and LLVM lowering emits an explicit tag
+branch rather than exceptions or stack unwinding. The error branch drops live
+owned locals before returning. Copyable payloads are implemented; propagation
+of owned Ok/Error payloads remains rejected until the move-aware transfer rule
+can prove exactly one final drop owner.
 
 

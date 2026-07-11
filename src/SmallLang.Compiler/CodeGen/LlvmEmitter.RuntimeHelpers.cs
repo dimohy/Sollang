@@ -82,6 +82,25 @@ internal sealed partial class LlvmEmitter
               ret i32 %ok
             }
 
+            define internal i32 @smalllang_write_i64(ptr %stdout, i64 %value, ptr %written) #0 {
+            entry:
+              %negative = icmp slt i64 %value, 0
+              br i1 %negative, label %write_sign, label %write_digits
+
+            write_sign:
+              %sign = alloca i8, align 1
+              store i8 45, ptr %sign, align 1
+              %sign_ok = call i32 @smalllang_write(ptr %stdout, ptr %sign, i64 1, ptr %written)
+              %magnitude = sub i64 0, %value
+              %digits_ok_negative = call i32 @smalllang_write_u64(ptr %stdout, i64 %magnitude, ptr %written)
+              %negative_ok = and i32 %sign_ok, %digits_ok_negative
+              ret i32 %negative_ok
+
+            write_digits:
+              %digits_ok = call i32 @smalllang_write_u64(ptr %stdout, i64 %value, ptr %written)
+              ret i32 %digits_ok
+            }
+
             define internal %smalllang.read_int_result @smalllang_read_i64(ptr %stdin, ptr %read) #0 {
             entry:
               %buf = alloca [64 x i8], align 1

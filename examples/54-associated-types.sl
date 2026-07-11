@@ -15,7 +15,7 @@ impl Source for NumberSource {
     }
 }
 
-sourceInt[T: Source[Item = Int]] value: T -> Int {
+sourceInt<T: Source<Item = Int>> value: T -> Int {
     value -> Source.read
 }
 

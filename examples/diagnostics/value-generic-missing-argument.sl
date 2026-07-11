@@ -1,4 +1,4 @@
-fillCount[N: Int] value: Int -> Int {
+fillCount<N: Int> value: Int -> Int {
     [value; N] => values
     values.len
 }

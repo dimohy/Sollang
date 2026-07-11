@@ -15,7 +15,7 @@ impl Source for TextSource {
     }
 }
 
-sourceInt[T: Source[Item = Int]] value: T -> Int {
+sourceInt<T: Source<Item = Int>> value: T -> Int {
     0
 }
 

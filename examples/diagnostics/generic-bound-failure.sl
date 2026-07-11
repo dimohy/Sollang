@@ -6,7 +6,7 @@ trait Measure {
     measure: self -> Int
 }
 
-measureOf[T: Measure] value: T -> Int {
+measureOf<T: Measure> value: T -> Int {
     value -> Measure.measure
 }
 

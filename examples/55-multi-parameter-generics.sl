@@ -27,7 +27,7 @@ impl Source for TextSource {
     }
 }
 
-readAny[T, Item] where T: Source[Item = Item] value: T -> Item {
+readAny<T, Item> where T: Source<Item = Item> value: T -> Item {
     value -> Source.read
 }
 

@@ -15,6 +15,7 @@ internal sealed class SemanticCompiler
     private Dictionary<string, BoundFunction>? _boundFunctions;
     private string _currentModuleName = "";
     private string? _currentTypeScopeName;
+    private BoundType? _currentFunctionReturnType;
 
     public SemanticCompiler(SmallLangProgram program)
     {
@@ -526,6 +527,7 @@ internal sealed class SemanticCompiler
         {
             ValidateUserFunction(localFunction, scopedFunctions, bodyBindings);
         }
+        _currentFunctionReturnType = function.ReturnType;
 
         var mutableBindings = new HashSet<string>(StringComparer.Ordinal);
         if (FunctionMutablyBorrowsInput(function))
@@ -803,6 +805,7 @@ internal sealed class SemanticCompiler
     {
         _currentModuleName = string.Join('.', _program.NamespacePath);
         _currentTypeScopeName = null;
+        _currentFunctionReturnType = null;
         var bindings = new Dictionary<string, BoundType>(StringComparer.Ordinal);
         var mutableBindings = new HashSet<string>(StringComparer.Ordinal);
         BindStatements(_program.Statements, functions, bindings, mutableBindings);
@@ -1375,6 +1378,7 @@ internal sealed class SemanticCompiler
             IndexExpression index => InferIndexExpression(index, functions, bindings, allowReadIntCall),
             StructLiteralExpression literal => InferStructLiteralExpression(literal, functions, bindings, allowReadIntCall),
             FieldAccessExpression field => InferFieldAccessExpression(field, functions, bindings, allowReadIntCall),
+            TryExpression attempt => InferTryExpression(attempt, functions, bindings, allowReadIntCall),
             BoxExpression box => InferBoxExpression(box, functions, bindings, allowReadIntCall),
             AddExpression add => InferAddExpression(add, functions, bindings, allowReadIntCall),
             SubtractExpression subtract => InferSubtractExpression(subtract, functions, bindings, allowReadIntCall),
@@ -1886,8 +1890,8 @@ internal sealed class SemanticCompiler
 
         if (expression.Source is NameExpression genericTypeName
             && !bindings.ContainsKey(genericTypeName.Name)
-            && (genericTypeName.Name.StartsWith("Option[", StringComparison.Ordinal)
-                || genericTypeName.Name.StartsWith("Result[", StringComparison.Ordinal)))
+            && (genericTypeName.Name.StartsWith("Option<", StringComparison.Ordinal)
+                || genericTypeName.Name.StartsWith("Result<", StringComparison.Ordinal)))
         {
             var genericEnumType = ParseType(genericTypeName.Name, expression.Line, expression.Column);
             var enumeration = _types.GetEnum(genericEnumType);
@@ -1975,6 +1979,44 @@ internal sealed class SemanticCompiler
             expression.Line,
             expression.Column,
             $"struct '{definition.Name}' has no field or readonly computed member '{expression.FieldName}'");
+    }
+
+    private BoundType InferTryExpression(
+        TryExpression expression,
+        IReadOnlyDictionary<string, BoundFunction> functions,
+        IReadOnlyDictionary<string, BoundType> bindings,
+        bool allowReadIntCall)
+    {
+        var operandType = InferExpression(
+            expression.Value,
+            functions,
+            bindings,
+            allowPrintCall: false,
+            allowReadIntCall,
+            allowFlowBindingTarget: false);
+        if (!_types.TryGetResultTypes(operandType, out var operandResult))
+        {
+            throw Error(expression.Line, expression.Column,
+                $"'?' expects Result<T, E> but received {FormatType(operandType)}");
+        }
+        if (_currentFunctionReturnType is null
+            || !_types.TryGetResultTypes(_currentFunctionReturnType.Value, out var outerResult))
+        {
+            throw Error(expression.Line, expression.Column,
+                "'?' can only be used inside a function returning Result<T, E>");
+        }
+        if (operandResult.Error != outerResult.Error)
+        {
+            throw Error(expression.Line, expression.Column,
+                $"'?' error type {FormatType(operandResult.Error)} does not match function error type {FormatType(outerResult.Error)}");
+        }
+        if (_types.ContainsOwnedStorage(operandResult.Ok)
+            || _types.ContainsOwnedStorage(operandResult.Error))
+        {
+            throw Error(expression.Line, expression.Column,
+                "'?' with owned Result payloads requires the upcoming move-aware propagation slice");
+        }
+        return operandResult.Ok;
     }
 
     private BoundType InferBoxExpression(
@@ -2363,8 +2405,8 @@ internal sealed class SemanticCompiler
         {
             var pattern = (EnumPatternExpression)arm.Condition;
             if (!_types.TryResolve(pattern.TypeName, out var patternType)
-                && (pattern.TypeName.StartsWith("Option[", StringComparison.Ordinal)
-                    || pattern.TypeName.StartsWith("Result[", StringComparison.Ordinal)))
+                && (pattern.TypeName.StartsWith("Option<", StringComparison.Ordinal)
+                    || pattern.TypeName.StartsWith("Result<", StringComparison.Ordinal)))
             {
                 patternType = ParseType(pattern.TypeName, pattern.Line, pattern.Column);
             }
@@ -3360,7 +3402,7 @@ internal sealed class SemanticCompiler
             {
                 throw new SmallLangException(
                     $"type {FormatType(actualType)} does not satisfy associated type constraint "
-                    + $"'{constrainedTrait}[{associatedTypeName} = {FormatType(associatedTypeConstraint)}]' required by '{template.Name}'");
+                    + $"'{constrainedTrait}<{associatedTypeName} = {FormatType(associatedTypeConstraint)}>' required by '{template.Name}'");
             }
             if (associatedTypeConstraint == BoundType.SecondaryGenericParameter)
             {
@@ -3566,8 +3608,8 @@ internal sealed class SemanticCompiler
         var typeName = string.Join('.', expression.Path.Take(expression.Path.Count - 1));
         if (!_types.TryResolve(typeName, out type))
         {
-            if (!typeName.StartsWith("Option[", StringComparison.Ordinal)
-                && !typeName.StartsWith("Result[", StringComparison.Ordinal))
+            if (!typeName.StartsWith("Option<", StringComparison.Ordinal)
+                && !typeName.StartsWith("Result<", StringComparison.Ordinal))
             {
                 return false;
             }
@@ -4289,15 +4331,15 @@ internal sealed class SemanticCompiler
 
     private BoundType ParseType(string typeName, int line, int column)
     {
-        if (typeName.StartsWith("Option[", StringComparison.Ordinal) && typeName.EndsWith(']'))
+        if (typeName.StartsWith("Option<", StringComparison.Ordinal) && typeName.EndsWith('>'))
         {
             var valueName = typeName[7..^1].Trim();
             var valueType = ParseType(valueName, line, column);
-            var option = _types.GetOrAddOption(valueType, $"Option[{FormatType(valueType)}]");
+            var option = _types.GetOrAddOption(valueType, $"Option<{FormatType(valueType)}>");
             _types.AddAlias(typeName, option);
             return option;
         }
-        if (typeName.StartsWith("Result[", StringComparison.Ordinal) && typeName.EndsWith(']'))
+        if (typeName.StartsWith("Result<", StringComparison.Ordinal) && typeName.EndsWith('>'))
         {
             var arguments = typeName[7..^1];
             var separator = FindTopLevelTypeComma(arguments);
@@ -4310,7 +4352,7 @@ internal sealed class SemanticCompiler
             var result = _types.GetOrAddResult(
                 okType,
                 errorType,
-                $"Result[{FormatType(okType)}, {FormatType(errorType)}]");
+                $"Result<{FormatType(okType)}, {FormatType(errorType)}>");
             _types.AddAlias(typeName, result);
             return result;
         }
@@ -4401,11 +4443,11 @@ internal sealed class SemanticCompiler
     {
         if (_types.TryGetOptionValue(type, out var optionValue))
         {
-            return $"Option[{FormatType(optionValue)}]";
+            return $"Option<{FormatType(optionValue)}>";
         }
         if (_types.TryGetResultTypes(type, out var resultTypes))
         {
-            return $"Result[{FormatType(resultTypes.Ok)}, {FormatType(resultTypes.Error)}]";
+            return $"Result<{FormatType(resultTypes.Ok)}, {FormatType(resultTypes.Error)}>";
         }
         if (_types.IsStruct(type))
         {

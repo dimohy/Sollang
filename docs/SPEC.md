@@ -743,6 +743,26 @@ to its declaring struct by default. Prefixing the nested declaration with
 ownership, recursive drop, and value-cycle checks are identical to top-level
 structs.
 
+## Generic Delimiters And Result Propagation
+
+Generic type and compile-time value parameters use `<...>`:
+
+```smalllang
+Option<Int>
+Result<Int, Text>
+identity<T> value: T -> T => value
+values -> fixedLength<3>
+```
+
+`[]` is reserved for arrays, indexing, and collection expansion. The former
+generic square-bracket spelling is not accepted.
+
+Postfix `?` applies only to `Result<T, E>`. On `Ok`, its expression value is the
+success payload. On `Err`, it returns `Result<U, E>.Err(error)` from the nearest
+enclosing Result-returning function after deterministic local cleanup. Error
+types must match exactly. Owned payload propagation is not yet accepted because
+its move/drop transfer proof is a separate compiler slice.
+
 ## Containers
 
 Constant ranges and compile-time `each` expressions can construct collections:
@@ -1386,7 +1406,7 @@ Current backend:
   monomorphization, compile-time
   `Int` value generics with explicit fluent specialization such as
   `value -> fill[4]`, trait associated types with static `impl` bindings and
-  equality constraints such as `[T: Source[Item = Int]]`, receiver-argument
+  equality constraints such as `<T: Source<Item = Int>>`, receiver-argument
   flow targets, explicit `box T` owners, recursively sized user types through
   boxed fields or enum payloads, readonly owned-value borrows, static recursive
   drop glue, and expression-first bindings are type-checked for the current slice

@@ -13,11 +13,11 @@ impl Measure for Point {
     }
 }
 
-identity[T] value: T -> T {
+identity<T> value: T -> T {
     value
 }
 
-measureOf[T: Measure] value: T -> Int {
+measureOf<T: Measure> value: T -> Int {
     value -> Measure.measure
 }
 

@@ -1,4 +1,4 @@
-identityFirst[T, U] value: T -> T {
+identityFirst<T, U> value: T -> T {
     value
 }
 

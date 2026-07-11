@@ -47,12 +47,12 @@ not lines of code.
 | Types, traits, and generics | 12 | 9 | 2 | 1 | 10.0 |
 | Ownership and storage | 10 | 7 | 2 | 1 | 8.0 |
 | Modules, visibility, and builds | 8 | 4 | 2 | 2 | 5.0 |
-| Compiler-construction primitives | 12 | 4 | 3 | 5 | 5.5 |
+| Compiler-construction primitives | 12 | 4 | 4 | 4 | 6.0 |
 | Standard library and tooling | 8 | 2 | 3 | 3 | 3.5 |
-| **Total** | **60** | **34** | **14** | **12** | **41.0 / 60** |
+| **Total** | **60** | **34** | **15** | **11** | **41.5 / 60** |
 
-Current count-based progress: **68.3% (41.0 of 60 equivalent gates)**.
-There are **19 equivalent gates remaining**. Because the missing compiler
+Current count-based progress: **69.2% (41.5 of 60 equivalent gates)**.
+There are **18.5 equivalent gates remaining**. Because the missing compiler
 primitives are harder than early syntax gates, this is not an elapsed-time
 estimate.
 
@@ -70,7 +70,7 @@ estimate.
 - Complete (9): nominal structs, payload enums, exhaustive matching, impl
   methods, nominal traits/static dispatch, checked type/value specialization,
   associated types with equality constraints, two-parameter generic inference,
-  standard `Option[T]`/`Result[T, E]` tagged values, fixed-width signed,
+  standard `Option<T>`/`Result<T, E>` tagged values, fixed-width signed,
   unsigned, and IEEE-754 scalar layouts with stable `Int32`/`Float32` defaults
   plus `Long`/`Double` 64-bit aliases.
 - Partial (2): arrays and dictionaries preserve scalar/user-value layouts and
@@ -101,16 +101,17 @@ estimate.
   enforced by executable top-level statements rather than a module manifest.
 - Missing (2): package manifest/dependency graph; module/interface cache.
 
-### Compiler-construction primitives — 5.5 / 12
+### Compiler-construction primitives — 6.0 / 12
 
 - Complete (4): Text values, deterministic native file I/O wrappers needed by
   the existing demos, type-preserving array/dictionary iteration, and owned
   growable `UInt8` byte buffers with typed push/index/iteration/drop.
-- Partial (3): generic arrays/dictionaries cover compiler-useful `Int`, `Text`,
+- Partial (4): generic arrays/dictionaries cover compiler-useful `Int`, `Text`,
   and user-value payloads plus function contracts; string processing is
-  output-oriented; diagnostics have no reusable source-span type.
-- Missing (5): Unicode/code-point iteration, tagged error propagation,
-  arena/bump allocation, command-line/environment APIs, process execution.
+  output-oriented; diagnostics have no reusable source-span type; postfix `?`
+  propagates copyable `Result<T, E>` errors but owned payload transfer remains.
+- Missing (4): Unicode/code-point iteration, arena/bump allocation,
+  command-line/environment APIs, process execution.
 
 ### Standard library and tooling — 3.5 / 8
 
@@ -126,7 +127,7 @@ estimate.
 1. Finish the module graph: imports discover files, visibility is enforced, and
    a project manifest names the root module and dependencies.
 2. Finish the reusable type substrate: multi-parameter generics, associated
-   types, generic `Array[T]`/`Dictionary[K, V]`, `Option`, and `Result`.
+   types, generic `Array<T>`/`Dictionary<K, V>`, `Option`, and `Result`.
 3. Add compiler data primitives: bytes, source spans, Unicode iteration, arena
    allocation, filesystem traversal, arguments, and process execution.
 4. Write the SL lexer and parser using generated bootstrap tables only where

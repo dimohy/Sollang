@@ -1,4 +1,4 @@
-sumFilled[N: Int] value: Int -> Int {
+sumFilled<N: Int> value: Int -> Int {
     [value; N] => values
     values -> fold 0 total, item {
         total + item
@@ -6,8 +6,8 @@ sumFilled[N: Int] value: Int -> Int {
 }
 
 main {
-    7 -> sumFilled[3] => three
-    7 -> sumFilled[5] => five
+    7 -> sumFilled<3> => three
+    7 -> sumFilled<5> => five
     "three = $three" -> println
     "five = $five" -> println
 }

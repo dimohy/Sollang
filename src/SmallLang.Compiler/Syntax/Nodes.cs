@@ -266,6 +266,9 @@ internal sealed record StructFieldInitializer(string Name, Expression Value, int
 internal sealed record FieldAccessExpression(Expression Source, string FieldName, int Line, int Column)
     : Expression(Line, Column);
 
+internal sealed record TryExpression(Expression Value, int Line, int Column)
+    : Expression(Line, Column);
+
 internal sealed record BoxExpression(Expression Value, int Line, int Column)
     : Expression(Line, Column);
 
