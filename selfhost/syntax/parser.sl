@@ -37,6 +37,8 @@ public parseEvents source: Text -> [ParseEvent; ~] {
     true => running!
     false => accepted!
     false => invalidSeen!
+    -1 => firstInvalidToken!
+    0 => furthestToken!
 
     ParseEvent { kind: 0, value: startRule, tokenIndex: tokenIndex! } => startEvent
     events! -> push(startEvent)
@@ -48,6 +50,9 @@ public parseEvents source: Text -> [ParseEvent; ~] {
             tokens![tokenIndex!].kind => triviaKind
             triviaKind == grammar.tokenIdInvalid -> if {
                 true => invalidSeen!
+                firstInvalidToken! < 0 -> if {
+                    tokenIndex! => firstInvalidToken!
+                }
             }
             ParseEvent { kind: 2, value: triviaKind, tokenIndex: tokenIndex! } => triviaEvent
             eventDepth! < (events! -> len) -> if {
@@ -57,6 +62,9 @@ public parseEvents source: Text -> [ParseEvent; ~] {
             }
             eventDepth! + 1 => eventDepth!
             tokenIndex! + 1 => tokenIndex!
+        }
+        tokenIndex! > furthestToken! -> if {
+            tokenIndex! => furthestToken!
         }
         program![pc!] => opcode
         opcode == 0 -> if {
@@ -221,7 +229,11 @@ public parseEvents source: Text -> [ParseEvent; ~] {
     ParseEvent {
         kind: 3
         value: accepted! -> if { 1 } else { 0 }
-        tokenIndex: tokenIndex!
+        tokenIndex: accepted! -> if {
+            tokenIndex!
+        } else {
+            firstInvalidToken! >= 0 -> if { firstInvalidToken! } else { furthestToken! }
+        }
     } => outcome
     eventDepth! < (events! -> len) -> if {
         outcome => events![eventDepth!]
