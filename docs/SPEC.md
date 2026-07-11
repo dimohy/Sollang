@@ -1329,7 +1329,9 @@ Current backend:
   `Text`, and their backing storage is deterministically released
 - copyable user `struct` and `enum` elements receive an element-specific
   parametric array type and use their exact LLVM aggregate layout; arrays of
-  recursively owned elements remain rejected until element-wise drop is emitted
+  recursively owned elements call static element drop glue for every initialized
+  slot before freeing the backing buffer; owned-element indexing remains blocked
+  until move extraction can transfer one slot without leaving a second owner
 - value-flow calls: `value -> function` and compatibility spelling
   `value -> function()` are parsed as a flow AST and lowered by
   semantic/codegen stages according to target position; bare flow targets cannot

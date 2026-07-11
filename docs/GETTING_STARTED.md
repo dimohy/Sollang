@@ -478,6 +478,8 @@ approved syntax.
   with typed indexing and deterministic backing-storage cleanup
 - `examples/57-user-value-fixed-arrays.sl`: parametric fixed arrays of copyable
   user structs and payload enums with exact LLVM aggregate layouts
+- `examples/58-owned-element-fixed-arrays.sl`: owned struct elements with one
+  recursive drop per initialized slot followed by backing-buffer cleanup
 - `examples/browser`: static HTML/JS runner for the WebAssembly sample
 - `examples/expected`: expected stdout/stdin fixtures for executable samples
 - `stdlib/sys/runtime.sl`: standard library intrinsic boundary declarations

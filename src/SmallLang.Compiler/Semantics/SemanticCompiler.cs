@@ -1404,13 +1404,6 @@ internal sealed class SemanticCompiler
             {
                 throw Error(element.Line, element.Column, "fixed array elements must be inline scalar or user values");
             }
-            if (_types.ContainsOwnedStorage(elementType))
-            {
-                throw Error(
-                    element.Line,
-                    element.Column,
-                    $"fixed array element type {FormatType(elementType)} owns storage; recursive element drop is not implemented yet");
-            }
             if (inferredElementType is not null && inferredElementType != elementType)
             {
                 throw Error(
@@ -1568,7 +1561,15 @@ internal sealed class SemanticCompiler
 
         if (_types.IsStaticArray(sourceType))
         {
-            return _types.GetStaticArray(sourceType).ElementType;
+            var elementType = _types.GetStaticArray(sourceType).ElementType;
+            if (_types.ContainsOwnedStorage(elementType))
+            {
+                throw Error(
+                    expression.Line,
+                    expression.Column,
+                    $"indexing owned array element type {FormatType(elementType)} requires move extraction, which is not implemented yet");
+            }
+            return elementType;
         }
         return sourceType == BoundType.StaticTextArray ? BoundType.Text : BoundType.Int;
     }

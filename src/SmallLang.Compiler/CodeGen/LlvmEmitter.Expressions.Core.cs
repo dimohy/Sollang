@@ -354,6 +354,7 @@ internal sealed partial class LlvmEmitter
             definition.ElementType,
             pointer,
             elements.Count.ToString(CultureInfo.InvariantCulture),
+            elements.Count,
             allocatedLength,
             RuntimeContainerStorage.Heap);
     }

@@ -2449,4 +2449,21 @@ double frees, so this remains outside safe SL until the next slice. Example 57
 verifies distinct struct and payload-enum array layouts; the owned-element
 diagnostic verifies the safety boundary.
 
+## D077 - Recursive Drop For Owned Fixed-Array Elements
+
+Status: implemented
+Date: 2026-07-11
+
+Parametric fixed arrays now accept elements that transitively own boxes or other
+heap values. At owner-scope exit the emitter loads each initialized element,
+calls its existing concrete struct/enum/box drop glue exactly once, and only
+then frees the array backing allocation. Array types participate in owned-storage
+classification, so rebinding by copy is rejected.
+
+Indexing an owned element is deliberately rejected until move extraction can
+invalidate the source slot and adjust drop coverage. Returning a copied aggregate
+would create two owners and is therefore not admitted as a temporary shortcut.
+Example 58 verifies two element-drop calls followed by one backing free; copy
+and owned-index diagnostics verify the static ownership boundary.
+
 

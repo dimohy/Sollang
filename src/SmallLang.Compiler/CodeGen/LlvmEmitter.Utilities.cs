@@ -270,6 +270,7 @@ internal sealed partial class LlvmEmitter
                 EmitCall(target: null, "void", "smalllang_free", $"ptr {array.PointerName}");
                 break;
             case RuntimeStaticInlineArray { Storage: RuntimeContainerStorage.Heap } array:
+                DropStaticInlineArrayElements(array);
                 EmitCall(target: null, "void", "smalllang_free", $"ptr {array.PointerName}");
                 break;
             case RuntimeDynamicIntArray { Storage: RuntimeContainerStorage.Heap } array:
@@ -281,6 +282,27 @@ internal sealed partial class LlvmEmitter
         }
 
         EndMutableContainerSlotLifetime(name);
+    }
+
+    private void DropStaticInlineArrayElements(RuntimeStaticInlineArray array)
+    {
+        var definition = _program.Types.GetStaticArray(array.ArrayType);
+        if (!_program.Types.ContainsOwnedStorage(definition.ElementType))
+        {
+            return;
+        }
+
+        var llvmType = LlvmType(definition.ElementType);
+        for (var index = 0; index < array.Length; index++)
+        {
+            var slot = NextTemp("drop_array_slot");
+            EmitAssign(
+                slot,
+                $"getelementptr {llvmType}, ptr {array.PointerName}, i64 {index.ToString(System.Globalization.CultureInfo.InvariantCulture)}");
+            var value = NextTemp("drop_array_value");
+            EmitLoad(value, llvmType, slot, definition.ElementAlignment);
+            EmitOwnedDropCall(definition.ElementType, value);
+        }
     }
 
     private static bool RequiresHeapAllocation(RuntimeValue value)
@@ -707,6 +729,7 @@ internal sealed partial class LlvmEmitter
         BoundType ElementType,
         string PointerName,
         string LengthName,
+        int Length,
         int AllocatedLength,
         RuntimeContainerStorage Storage = RuntimeContainerStorage.Heap)
         : RuntimeValue(ArrayType);

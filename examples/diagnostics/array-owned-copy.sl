@@ -4,5 +4,6 @@ struct Owned {
 
 main {
     [Owned { value: box 1 }] => values
-    values -> len -> println
+    values => copied
+    copied -> len -> println
 }
