@@ -304,6 +304,28 @@ public lower source: Text -> [AstNode; ~] {
                 }
             }
         }
+        declaration!.kind == 9 -> if {
+            declaration!.firstToken => bindingToken!
+            declaration!.firstToken + declaration!.tokenCount => bindingEnd!
+            false => afterFatArrow!
+            bindingToken! < bindingEnd! -> while {
+                tokens![bindingToken!].kind == grammar.tokenIdFatArrow -> if {
+                    true => afterFatArrow!
+                    bindingToken! + 1 => bindingToken!
+                } else {
+                    afterFatArrow! -> if {
+                        tokens![bindingToken!].kind == grammar.tokenIdIdentifier -> if {
+                            bindingToken! => declaration!.payloadToken
+                            bindingEnd! => bindingToken!
+                        } else {
+                            bindingToken! + 1 => bindingToken!
+                        }
+                    } else {
+                        bindingToken! + 1 => bindingToken!
+                    }
+                }
+            }
+        }
         declaration! => ast![declarationIndex!]
         declarationIndex! + 1 => declarationIndex!
     }

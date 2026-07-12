@@ -122,7 +122,8 @@ internal sealed partial class LlvmEmitter
             new HashSet<string>(_borrowedMutableLocals, StringComparer.Ordinal),
             new HashSet<string>(_borrowedOwnedLocals, StringComparer.Ordinal),
             new Dictionary<string, MutableContainerSlot>(_mutableContainerSlots, StringComparer.Ordinal),
-            new Dictionary<string, string>(_mutableStructSlots, StringComparer.Ordinal));
+            new Dictionary<string, string>(_mutableStructSlots, StringComparer.Ordinal),
+            new Dictionary<string, string>(_mutableScalarSlots, StringComparer.Ordinal));
     }
 
     private void ClearLocalState()
@@ -133,6 +134,7 @@ internal sealed partial class LlvmEmitter
         _borrowedOwnedLocals.Clear();
         _mutableContainerSlots.Clear();
         _mutableStructSlots.Clear();
+        _mutableScalarSlots.Clear();
     }
 
     private void SelectStackFrame(BoundFunction function)
@@ -221,6 +223,12 @@ internal sealed partial class LlvmEmitter
         foreach (var (name, pointer) in scope.MutableStructSlots)
         {
             _mutableStructSlots.Add(name, pointer);
+        }
+
+        _mutableScalarSlots.Clear();
+        foreach (var (name, pointer) in scope.MutableScalarSlots)
+        {
+            _mutableScalarSlots.Add(name, pointer);
         }
     }
 
@@ -928,7 +936,8 @@ internal sealed partial class LlvmEmitter
         HashSet<string> BorrowedMutableLocals,
         HashSet<string> BorrowedOwnedLocals,
         Dictionary<string, MutableContainerSlot> MutableContainerSlots,
-        Dictionary<string, string> MutableStructSlots);
+        Dictionary<string, string> MutableStructSlots,
+        Dictionary<string, string> MutableScalarSlots);
 
     private sealed record RuntimeBlockInvocation(
         string ItemName,

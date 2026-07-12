@@ -134,6 +134,10 @@ type AST indexes, and ownership flags without per-symbol heap allocation.
 `selfhost/semantic/diagnostics.sl` performs UTF-8 byte-exact name comparison
 inside each lexical owner and reports duplicate symbols with both symbol indexes
 and the duplicate declaration's precise source span.
+`selfhost/semantic/resolve.sl` walks from each name expression's nearest symbol
+owner toward the root and resolves the first byte-equal declaration. Function
+parameters and method `self` values are synthetic kind-35 symbols owned by their
+declaration; unresolved names become code-2 semantic diagnostics.
 
 The generated module is bootstrap data, not the final parser implementation.
 It deliberately makes the transition incremental and auditable.

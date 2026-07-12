@@ -213,6 +213,11 @@ sharing a lexical owner, using byte-exact UTF-8 name comparison and structured
 source-span diagnostics. Cross-module name resolution and type canonicalization
 remain before semantic parity.
 
+Single-module lexical resolution now walks outward through symbol owners,
+including synthetic function-parameter and method-`self` symbols. Unresolved
+name expressions produce structured code-2 diagnostics with exact UTF-8 spans.
+Imported/module-qualified lookup remains on the critical path.
+
 ## Immediate Implementation Order
 
 1. Multi-file compilation (implemented by example 52).

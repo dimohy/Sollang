@@ -1,6 +1,8 @@
 namespace smalllang.compiler.semantic.diagnostics
 
 import smalllang.compiler.lexer as lexer
+import smalllang.compiler.ast as ast
+import smalllang.compiler.semantic.resolve as resolution
 import smalllang.compiler.semantic.symbols as symbols
 import smalllang.compiler.syntax as syntax
 
@@ -12,6 +14,7 @@ public struct SemanticDiagnostic {
 }
 
 # Code 1 identifies a duplicate declaration in the same lexical owner.
+# Code 2 identifies an unresolved name expression.
 public analyze source: Text -> [SemanticDiagnostic; ~] {
     source -> symbols.collect => table!
     source -> lexer.lex => tokens!
@@ -55,6 +58,36 @@ public analyze source: Text -> [SemanticDiagnostic; ~] {
             diagnostics! -> push(diagnostic)
         }
         symbolIndex! + 1 => symbolIndex!
+    }
+
+    source -> ast.lower => nodes!
+    source -> resolution.resolve => resolved!
+    nodes! -> len => astCount
+    resolved! -> len => resolvedCount
+    0 => diagnosticAstIndex!
+    diagnosticAstIndex! < astCount -> while {
+        nodes![diagnosticAstIndex!] => nameAst
+        nameAst.kind == 15 -> if {
+            false => nameResolved!
+            0 => resolutionIndex!
+            resolutionIndex! < resolvedCount -> while {
+                resolved![resolutionIndex!].astNode == diagnosticAstIndex! -> if {
+                    true => nameResolved!
+                }
+                resolutionIndex! + 1 => resolutionIndex!
+            }
+            not nameResolved! -> if {
+                tokens![nameAst.payloadToken] => unresolvedName
+                SemanticDiagnostic {
+                    code: 2
+                    symbol: -1
+                    previousSymbol: -1
+                    span: unresolvedName.span
+                } => unresolvedDiagnostic
+                diagnostics! -> push(unresolvedDiagnostic)
+            }
+        }
+        diagnosticAstIndex! + 1 => diagnosticAstIndex!
     }
 
     diagnostics!

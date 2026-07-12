@@ -28,6 +28,7 @@ public collect source: Text -> [Symbol; ~] {
         node.kind >= 3 -> if {
             node.kind <= 7 -> if { true => isSymbol! }
         }
+        node.kind == 9 -> if { true => isSymbol! }
         node.kind >= 26 -> if {
             node.kind <= 34 -> if { true => isSymbol! }
         }
@@ -87,6 +88,34 @@ public collect source: Text -> [Symbol; ~] {
             }
         }
         typeAstIndex! + 1 => typeAstIndex!
+    }
+
+    # Parameters and method self values are synthetic lexical symbols owned by
+    # their declaration symbol; they reuse the declaration AST index.
+    symbols! -> len => declaredSymbolCount
+    0 => declarationSymbolIndex!
+    declarationSymbolIndex! < declaredSymbolCount -> while {
+        symbols![declarationSymbolIndex!] => declarationSymbol
+        nodes![declarationSymbol.astNode] => declarationAst
+        declarationAst.secondaryToken >= 0 -> if {
+            (declarationSymbol.kind == 7 or declarationSymbol.kind == 29 or declarationSymbol.kind == 31) -> if {
+                -1 => parameterTypeNode!
+                declarationSymbol.kind == 7 -> if {
+                    declarationSymbol.typeNode => parameterTypeNode!
+                }
+                Symbol {
+                    kind: 35
+                    parent: declarationSymbolIndex!
+                    astNode: declarationSymbol.astNode
+                    nameToken: declarationAst.secondaryToken
+                    typeNode: parameterTypeNode!
+                    secondaryTypeNode: -1
+                    flags: declarationSymbol.flags
+                } => parameterSymbol
+                symbols! -> push(parameterSymbol)
+            }
+        }
+        declarationSymbolIndex! + 1 => declarationSymbolIndex!
     }
 
     symbols!
