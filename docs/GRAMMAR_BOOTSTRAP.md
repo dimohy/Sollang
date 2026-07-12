@@ -202,3 +202,7 @@ Multi-source call resolution now correlates alias-qualified call paths with
 import edges and target function symbols. Each result preserves local/imported
 origin, target module identity, target source index, and public/non-public
 status for later signature and return-type loading.
+Expression inference loads a resolved imported function's return annotation
+from the target source module. Call checking loads its input annotation from the
+same target symbol, emits code 6 for cross-module argument mismatch, and code 9
+for a non-public imported function.

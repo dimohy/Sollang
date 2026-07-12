@@ -18,6 +18,7 @@ public struct ExpressionType {
 # nominal table: Text 1, Int 2, Bool 23.
 public infer sources: [Text; ~] -> [ExpressionType; ~] {
     sources -> nominalTypes.resolve => nominal!
+    sources -> calls.resolveModules => moduleCalls!
     [ExpressionType; ~] => inferred!
     0 => sourceIndex!
     sourceIndex! < (sources -> len) -> while {
@@ -25,7 +26,6 @@ public infer sources: [Text; ~] -> [ExpressionType; ~] {
         source -> ast.lower => nodes!
         source -> symbols.collect => table!
         source -> resolution.resolve => resolvedNames!
-        source -> calls.resolve => resolvedCalls!
         0 => astIndex!
         astIndex! < (nodes! -> len) -> while {
             nodes![astIndex!] => node
@@ -69,16 +69,17 @@ public infer sources: [Text; ~] -> [ExpressionType; ~] {
         }
 
         0 => callIndex!
-        callIndex! < (resolvedCalls! -> len) -> while {
-            resolvedCalls![callIndex!] => call
-            call.status == 0 -> if {
-                table![call.functionSymbol] => function
+        callIndex! < (moduleCalls! -> len) -> while {
+            moduleCalls![callIndex!] => call
+            (call.sourceModule == sourceIndex! and call.status == 0) -> if {
+                sources[call.targetSourceModule] -> symbols.collect => targetTable!
+                targetTable![call.functionSymbol] => function
                 function.secondaryTypeNode >= 0 -> if { function.secondaryTypeNode } else { function.typeNode } => returnTypeAst
                 -1 => returnNominalIndex!
                 0 => returnSearch!
                 returnSearch! < (nominal! -> len) -> while {
                     nominal![returnSearch!] => candidateReturn
-                    (candidateReturn.sourceModule == sourceIndex! and candidateReturn.typeAst == returnTypeAst) -> if {
+                    (candidateReturn.sourceModule == call.targetSourceModule and candidateReturn.typeAst == returnTypeAst) -> if {
                         returnSearch! => returnNominalIndex!
                     }
                     returnSearch! + 1 => returnSearch!

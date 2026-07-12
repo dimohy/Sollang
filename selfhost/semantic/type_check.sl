@@ -24,17 +24,18 @@ public struct TypeCheckDiagnostic {
 # Code 5 identifies a mismatching function return expression. Code 6 identifies
 # a call argument that does not match the local function input type. Code 7
 # identifies an unresolved local call target. Code 8 identifies a binary
-# operator whose typed operands are incompatible.
+# operator whose typed operands are incompatible. Code 9 identifies a
+# non-public imported call target.
 public analyze sources: [Text; ~] -> [TypeCheckDiagnostic; ~] {
     sources -> nominalTypes.resolve => nominal!
     sources -> expressionTypes.infer => expressionTypeTable!
+    sources -> calls.resolveModules => moduleCalls!
     [TypeCheckDiagnostic; ~] => diagnostics!
     0 => sourceIndex!
     sourceIndex! < (sources -> len) -> while {
         sources[sourceIndex!] => source
         source -> ast.lower => nodes!
         source -> symbols.collect => table!
-        source -> calls.resolve => resolvedCalls!
         0 => symbolIndex!
         symbolIndex! < (table! -> len) -> while {
             table![symbolIndex!] => function
@@ -109,16 +110,17 @@ public analyze sources: [Text; ~] -> [TypeCheckDiagnostic; ~] {
         }
 
         0 => callIndex!
-        callIndex! < (resolvedCalls! -> len) -> while {
-            resolvedCalls![callIndex!] => call
-            call.status == 0 -> if {
-                table![call.functionSymbol] => targetFunction
+        callIndex! < (moduleCalls! -> len) -> while {
+            moduleCalls![callIndex!] => call
+            (call.sourceModule == sourceIndex! and call.status == 0) -> if {
+                sources[call.targetSourceModule] -> symbols.collect => targetTable!
+                targetTable![call.functionSymbol] => targetFunction
                 targetFunction.secondaryTypeNode >= 0 -> if {
                     -1 => expectedInputIndex!
                     0 => inputSearch!
                     inputSearch! < (nominal! -> len) -> while {
                         nominal![inputSearch!] => inputType
-                        (inputType.sourceModule == sourceIndex! and inputType.typeAst == targetFunction.typeNode) -> if {
+                        (inputType.sourceModule == call.targetSourceModule and inputType.typeAst == targetFunction.typeNode) -> if {
                             inputSearch! => expectedInputIndex!
                         }
                         inputSearch! + 1 => inputSearch!
@@ -173,9 +175,10 @@ public analyze sources: [Text; ~] -> [TypeCheckDiagnostic; ~] {
                     }
                 }
             } else {
+                call.sourceModule == sourceIndex! -> if {
                 nodes![call.callAst] => unresolvedCall
                 diagnostics! -> push(TypeCheckDiagnostic {
-                    code: 7
+                    code: call.status == 3 -> if { 9 } else { 7 }
                     sourceModule: sourceIndex!
                     functionSymbol: -1
                     expectedOrigin: -1
@@ -191,6 +194,7 @@ public analyze sources: [Text; ~] -> [TypeCheckDiagnostic; ~] {
                         length: unresolvedCall.length
                     }
                 })
+                }
             }
             callIndex! + 1 => callIndex!
         }

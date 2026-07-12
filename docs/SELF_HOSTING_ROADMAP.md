@@ -293,6 +293,11 @@ function symbols and source modules. Public imported functions succeed while
 internal functions retain the explicit non-public status needed for a module
 diagnostic instead of falling back to an unresolved local call.
 
+Imported call signatures now participate in expression inference and checking:
+the target module's return type becomes the caller's call-expression type, its
+input type validates the caller argument, and non-public imported calls produce
+structured code 9 over the complete qualified call.
+
 ## Immediate Implementation Order
 
 1. Multi-file compilation (implemented by example 52).
