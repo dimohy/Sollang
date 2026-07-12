@@ -191,3 +191,7 @@ emits code 6 on mismatch.
 Calls with no matching local function symbol emit code 7 over the complete call
 span, rather than remaining as untyped expressions that later passes could
 silently ignore.
+Binding symbols now acquire the inferred type of their value expression during
+the same fixed-point pass. Every lexically resolved reference to the binding is
+seeded with that identity, allowing later operators and calls to continue type
+inference across local definitions.

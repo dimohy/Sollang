@@ -280,6 +280,10 @@ expression with the function input type using structured code 6 diagnostics.
 Unresolved local call targets now produce structured code 7 diagnostics over
 the complete call expression.
 
+Local bindings now inherit literal, operator, or call-result types and propagate
+them through lexical references. The fixed-point engine can therefore infer
+later expressions such as `result + 1` after `double(2) => result`.
+
 ## Immediate Implementation Order
 
 1. Multi-file compilation (implemented by example 52).

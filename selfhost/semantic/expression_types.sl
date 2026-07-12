@@ -100,6 +100,66 @@ public infer sources: [Text; ~] -> [ExpressionType; ~] {
         true => changed!
         changed! -> while {
             false => changed!
+            0 => bindingSymbolIndex!
+            bindingSymbolIndex! < (table! -> len) -> while {
+                table![bindingSymbolIndex!] => bindingSymbol
+                bindingSymbol.kind == 9 -> if {
+                    -1 => bindingValueIndex!
+                    1000000 => bindingDistance!
+                    0 => valueSearch!
+                    valueSearch! < (inferred! -> len) -> while {
+                        inferred![valueSearch!] => valueType
+                        valueType.sourceModule == sourceIndex! -> if {
+                            nodes![valueType.astNode].parent => ancestor!
+                            1 => distance!
+                            false => belongsToBinding!
+                            (ancestor! >= 0 and not belongsToBinding!) -> while {
+                                ancestor! == bindingSymbol.astNode -> if {
+                                    true => belongsToBinding!
+                                } else {
+                                    nodes![ancestor!].parent => ancestor!
+                                    distance! + 1 => distance!
+                                }
+                            }
+                            (belongsToBinding! and distance! < bindingDistance!) -> if {
+                                valueSearch! => bindingValueIndex!
+                                distance! => bindingDistance!
+                            }
+                        }
+                        valueSearch! + 1 => valueSearch!
+                    }
+                    bindingValueIndex! >= 0 -> if {
+                        inferred![bindingValueIndex!] => bindingType
+                        0 => referenceIndex!
+                        referenceIndex! < (resolvedNames! -> len) -> while {
+                            resolvedNames![referenceIndex!] => reference
+                            reference.symbol == bindingSymbolIndex! -> if {
+                                false => referenceInferred!
+                                0 => inferredSearch!
+                                inferredSearch! < (inferred! -> len) -> while {
+                                    inferred![inferredSearch!] => existing
+                                    (existing.sourceModule == sourceIndex! and existing.astNode == reference.astNode) -> if {
+                                        true => referenceInferred!
+                                    }
+                                    inferredSearch! + 1 => inferredSearch!
+                                }
+                                not referenceInferred! -> if {
+                                    inferred! -> push(ExpressionType {
+                                        sourceModule: sourceIndex!
+                                        astNode: reference.astNode
+                                        origin: bindingType.origin
+                                        targetModule: bindingType.targetModule
+                                        targetSymbol: bindingType.targetSymbol
+                                    })
+                                    true => changed!
+                                }
+                            }
+                            referenceIndex! + 1 => referenceIndex!
+                        }
+                    }
+                }
+                bindingSymbolIndex! + 1 => bindingSymbolIndex!
+            }
             0 => operatorIndex!
             operatorIndex! < (nodes! -> len) -> while {
                 nodes![operatorIndex!] => operator
