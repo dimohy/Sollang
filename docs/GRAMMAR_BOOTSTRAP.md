@@ -161,3 +161,6 @@ types.
 
 The generated module is bootstrap data, not the final parser implementation.
 It deliberately makes the transition incremental and auditable.
+Top-level declaration groups accept explicit newline boundaries before the next
+group or `main`; this prevents a failed declaration repetition probe from
+leaving a valid following entry point unreachable.

@@ -240,6 +240,11 @@ ids to the resolved target module and nominal symbol. Public imported types and
 internal imported types use the same deterministic link record, with visibility
 represented explicitly by the resolution status.
 
+The generated source-file grammar now consumes newline boundaries between
+top-level declaration groups, including the boundary from a declaration to
+`main`. The self-hosted parser therefore retains both declarations and the
+entry point instead of rejecting the valid source at EOF.
+
 ## Immediate Implementation Order
 
 1. Multi-file compilation (implemented by example 52).
