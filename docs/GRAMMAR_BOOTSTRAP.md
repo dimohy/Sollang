@@ -158,6 +158,10 @@ its enclosing type annotation and links the source-local canonical type id to
 the target module and nominal symbol. The link preserves missing/non-public
 statuses instead of silently treating inaccessible declarations as local
 types.
+`selfhost/semantic/type_diagnostics.sl` turns those failed links into stable
+multi-source diagnostics: code 3 is a missing imported nominal type and code 4
+is a non-public imported nominal type. Diagnostic spans use the source-module
+index as `fileId` and cover the complete qualified type annotation.
 
 The generated module is bootstrap data, not the final parser implementation.
 It deliberately makes the transition incremental and auditable.
