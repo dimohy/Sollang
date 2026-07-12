@@ -316,6 +316,12 @@ Unary expression typing now covers `not Bool -> Bool` and `-Int -> Int`.
 Invalid `not Int` and `-Bool` expressions produce structured code-8 diagnostics
 with exact unary spans.
 
+Composite annotations now have a structural semantic record for array/slice,
+dictionary, and box shapes. Their element/key/value identities distinguish
+builtins, local declarations, and function generics; unresolved components such
+as `[Unknown; ~]` produce code 3 over the complete annotation. Recursive
+call-site substitution of these records remains next.
+
 Imported call signatures now participate in expression inference and checking:
 the target module's return type becomes the caller's call-expression type, its
 input type validates the caller argument, and non-public imported calls produce

@@ -220,6 +220,10 @@ self-hosted checker.
 Unary inference recognizes operator code -26 as `not` over Bool and token id 15
 as numeric negation over Int. Incompatible operands emit code 8 with the unary
 operator's complete span and expected/actual builtin identities.
+`selfhost/semantic/composite_types.sl` resolves slice, dynamic/fixed array,
+dictionary, and box component identities. Element/key/value slots preserve
+builtin, local, or function-generic origins plus the fixed-array length token;
+an unresolved component emits code 3 over the complete composite annotation.
 Expression inference loads a resolved imported function's return annotation
 from the target source module. Call checking loads its input annotation from the
 same target symbol, emits code 6 for cross-module argument mismatch, and code 9
