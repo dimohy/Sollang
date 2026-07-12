@@ -295,6 +295,11 @@ function symbols and source modules. Public imported functions succeed while
 internal functions retain the explicit non-public status needed for a module
 diagnostic instead of falling back to an unresolved local call.
 
+One- and two-name generic clauses now lower to distinct lexical symbols, and
+generic annotations resolve to function-owned nominal identities rather than
+missing local types. The return checker can distinguish `T -> T` from an invalid
+`T -> E` value return without specializing either parameter yet.
+
 Imported call signatures now participate in expression inference and checking:
 the target module's return type becomes the caller's call-expression type, its
 input type validates the caller argument, and non-public imported calls produce

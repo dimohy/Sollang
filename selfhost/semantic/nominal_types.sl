@@ -93,11 +93,24 @@ public resolve sources: [Text; ~] -> [NominalType; ~] {
                         } => builtinResult
                         results! -> push(builtinResult)
                     } else {
+                        -1 => typeOwnerFunction!
+                        nodes![typeUse.astNode].parent => ownerAst!
+                        (ownerAst! >= 0 and typeOwnerFunction! < 0) -> while {
+                            0 => ownerSymbolIndex!
+                            ownerSymbolIndex! < (table! -> len) -> while {
+                                table![ownerSymbolIndex!] => ownerCandidate
+                                (ownerCandidate.kind == 7 and ownerCandidate.astNode == ownerAst!) -> if {
+                                    ownerSymbolIndex! => typeOwnerFunction!
+                                }
+                                ownerSymbolIndex! + 1 => ownerSymbolIndex!
+                            }
+                            typeOwnerFunction! < 0 -> if { nodes![ownerAst!].parent => ownerAst! }
+                        }
                         -1 => localSymbol!
                         0 => symbolIndex!
                         (symbolIndex! < (table! -> len) and localSymbol! < 0) -> while {
                             table![symbolIndex!] => candidate
-                            (candidate.parent < 0 and (candidate.kind == 3 or candidate.kind == 4)) -> if {
+                            ((candidate.parent < 0 and (candidate.kind == 3 or candidate.kind == 4)) or (candidate.kind == 32 and candidate.parent == typeOwnerFunction!)) -> if {
                                 tokens![candidate.nameToken] => candidateName
                                 name.span.length == candidateName.span.length => equal!
                                 UIntSize(0) => nameByte!
@@ -111,11 +124,15 @@ public resolve sources: [Text; ~] -> [NominalType; ~] {
                             }
                             symbolIndex! + 1 => symbolIndex!
                         }
+                        0 => localOrigin!
+                        localSymbol! >= 0 -> if {
+                            table![localSymbol!].kind == 32 -> if { 3 => localOrigin! }
+                        }
                         NominalType {
                             sourceModule: sourceIndex!
                             typeAst: typeUse.astNode
                             canonical: typeUse.canonical
-                            origin: 0
+                            origin: localOrigin!
                             targetModule: sourceIndex!
                             targetSymbol: localSymbol!
                             status: localSymbol! >= 0 -> if { 0 } else { 2 }

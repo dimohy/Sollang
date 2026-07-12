@@ -205,6 +205,10 @@ Multi-source call resolution now correlates alias-qualified call paths with
 import edges and target function symbols. Each result preserves local/imported
 origin, target module identity, target source index, and public/non-public
 status for later signature and return-type loading.
+Generic clauses now preserve their first and optional second identifier as
+lexical symbols owned by the function. Nominal resolution uses origin 3 for
+those identities, so `T`/`E` annotations resolve by function scope and enter
+the same return-type comparison used by concrete nominal types.
 Expression inference loads a resolved imported function's return annotation
 from the target source module. Call checking loads its input annotation from the
 same target symbol, emits code 6 for cross-module argument mismatch, and code 9

@@ -90,6 +90,27 @@ public collect source: Text -> [Symbol; ~] {
         typeAstIndex! + 1 => typeAstIndex!
     }
 
+    # A two-name generic clause has one AST node but two lexical symbols.
+    symbols! -> len => beforeSecondaryGenerics
+    0 => genericSymbolIndex!
+    genericSymbolIndex! < beforeSecondaryGenerics -> while {
+        symbols![genericSymbolIndex!] => genericSymbol
+        genericSymbol.kind == 32 -> if {
+            nodes![genericSymbol.astNode].secondaryToken >= 0 -> if {
+                symbols! -> push(Symbol {
+                    kind: 32
+                    parent: genericSymbol.parent
+                    astNode: genericSymbol.astNode
+                    nameToken: nodes![genericSymbol.astNode].secondaryToken
+                    typeNode: -1
+                    secondaryTypeNode: -1
+                    flags: 0
+                })
+            }
+        }
+        genericSymbolIndex! + 1 => genericSymbolIndex!
+    }
+
     # Parameters and method self values are synthetic lexical symbols owned by
     # their declaration symbol; they reuse the declaration AST index.
     symbols! -> len => declaredSymbolCount

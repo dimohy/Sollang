@@ -334,6 +334,29 @@ public lower source: Text -> [AstNode; ~] {
                 }
             }
         }
+        declaration!.kind == 32 -> if {
+            -1 => firstGenericToken!
+            -1 => secondGenericToken!
+            false => afterGenericComma!
+            declaration!.firstToken => genericToken!
+            genericToken! < declaration!.firstToken + declaration!.tokenCount -> while {
+                tokens![genericToken!].kind == grammar.tokenIdComma -> if {
+                    true => afterGenericComma!
+                } else {
+                    tokens![genericToken!].kind == grammar.tokenIdIdentifier -> if {
+                        (not afterGenericComma! and firstGenericToken! < 0) -> if {
+                            genericToken! => firstGenericToken!
+                        }
+                        (afterGenericComma! and secondGenericToken! < 0) -> if {
+                            genericToken! => secondGenericToken!
+                        }
+                    }
+                }
+                genericToken! + 1 => genericToken!
+            }
+            firstGenericToken! => declaration!.payloadToken
+            secondGenericToken! => declaration!.secondaryToken
+        }
         (declaration!.kind >= 3 and declaration!.kind <= 7) -> if {
             declaration!.firstToken => visibilityToken!
             true => findingVisibility!
