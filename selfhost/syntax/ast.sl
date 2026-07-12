@@ -28,7 +28,7 @@ public struct AstNode {
 # 23 box, 24 logical-or, 25 logical-and, 26 struct field, 27 enum variant,
 # 28 trait associated type, 29 trait method, 30 impl associated type,
 # 31 method, 32 generic parameter, 33 generic where constraint,
-# 34 associated-type equality. Keyword operator codes use the same
+# 34 associated-type equality, 36 member access. Keyword operator codes use the same
 # -(keywordIndex + 1) representation as syntax diagnostics.
 public lower source: Text -> [AstNode; ~] {
     classify rule: Int -> Int => when {
@@ -68,6 +68,7 @@ public lower source: Text -> [AstNode; ~] {
         rule == grammar.ruleIdGenericParameterClause => 32
         rule == grammar.ruleIdGenericWhereClause => 33
         rule == grammar.ruleIdAssociatedTypeEqualityConstraint => 34
+        rule == grammar.ruleIdPostfixExpression => 36
         else => -1
     }
     source -> cst.build => green!
@@ -108,6 +109,10 @@ public lower source: Text -> [AstNode; ~] {
                 candidateOperator => operatorKind!
                 operatorTokenIndex! => operatorPayloadToken!
             }
+            (astKind! == 36 and candidateOperator == grammar.tokenIdDot) -> if {
+                candidateOperator => operatorKind!
+                operatorTokenIndex! => operatorPayloadToken!
+            }
             (candidateOperator == grammar.tokenIdIdentifier and candidateToken.span.length == UIntSize(2)) -> if {
                 source -> byte(candidateToken.span.start) => shortKeywordByte0
                 source -> byte(candidateToken.span.start + UIntSize(1)) => shortKeywordByte1
@@ -141,6 +146,9 @@ public lower source: Text -> [AstNode; ~] {
                 -1 => astKind!
             }
             astKind! == 25 -> if {
+                -1 => astKind!
+            }
+            astKind! == 36 -> if {
                 -1 => astKind!
             }
         }

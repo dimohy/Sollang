@@ -229,6 +229,12 @@ across those edges remain before type-system parity. Edge resolution now
 distinguishes unique, missing, and duplicate target modules, while declaration
 symbols preserve explicit `public` visibility in flag bit 4.
 
+Alias-qualified member AST nodes now resolve through import edges into target
+module symbol tables. Public exports succeed, missing members remain distinct,
+and internal declarations produce a visibility failure. Minimal deterministic
+string escapes (`\n`, `\r`, `\t`, `\\`) make real multiline source fixtures
+possible without adding a separate test-only source representation.
+
 ## Immediate Implementation Order
 
 1. Multi-file compilation (implemented by example 52).

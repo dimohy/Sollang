@@ -1148,15 +1148,16 @@ the same as `write<T>`. Empty parentheses remain invalid for zero-input calls,
 so `read<UInt16>()` is rejected. Arbitrary structs still require an explicit
 serialization contract rather than implicit ABI dumping.
 
-The exact string escape set is not finalized. The first required string form is
-a double-quoted UTF-8 literal with optional identifier and expression
-interpolation:
+Double-quoted UTF-8 literals decode `\n`, `\r`, `\t`, and `\\` in text
+segments and support optional identifier and expression interpolation. Unknown
+backslash sequences remain literal for backward compatibility:
 
 ```smalllang
 "Hello World"
 "Hello, $name"
 "next = $(score + 1)"
 "object = { name: $name, score: $score }"
+"first\nsecond"
 ```
 
 Interpolation rules:

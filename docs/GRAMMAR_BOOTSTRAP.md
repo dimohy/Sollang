@@ -150,6 +150,9 @@ with source-module indexes, target identities, path spans, and alias tokens.
 `selfhost/semantic/module_resolve.sl` resolves each edge to exactly one module
 index and distinguishes resolved, missing, and duplicate target identities.
 Declaration AST/symbol flags reserve bit 4 for explicit `public` visibility.
+`selfhost/semantic/qualified.sl` matches the first segment of member-access AST
+nodes to import aliases, resolves the target module, and distinguishes public,
+missing, and non-public target symbols.
 
 The generated module is bootstrap data, not the final parser implementation.
 It deliberately makes the transition incremental and auditable.

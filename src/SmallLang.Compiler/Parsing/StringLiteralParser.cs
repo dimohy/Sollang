@@ -24,7 +24,7 @@ internal static class StringLiteralParser
             {
                 if (i > start)
                 {
-                    segments.Add(new TextSegment(text[start..i]));
+                    segments.Add(new TextSegment(DecodeEscapes(text[start..i])));
                 }
 
                 var nameStart = i + 1;
@@ -48,7 +48,7 @@ internal static class StringLiteralParser
 
             if (i > start)
             {
-                segments.Add(new TextSegment(text[start..i]));
+                segments.Add(new TextSegment(DecodeEscapes(text[start..i])));
             }
 
             var close = FindExpressionInterpolationClose(text, i + 2, token);
@@ -65,10 +65,54 @@ internal static class StringLiteralParser
 
         if (start < text.Length)
         {
-            segments.Add(new TextSegment(text[start..]));
+            segments.Add(new TextSegment(DecodeEscapes(text[start..])));
         }
 
         return segments;
+    }
+
+    private static string DecodeEscapes(string text)
+    {
+        if (!text.Contains('\\'))
+        {
+            return text;
+        }
+
+        var result = new System.Text.StringBuilder(text.Length);
+        for (var i = 0; i < text.Length; i++)
+        {
+            if (text[i] != '\\' || i + 1 >= text.Length)
+            {
+                result.Append(text[i]);
+                continue;
+            }
+
+            var escaped = text[i + 1];
+            switch (escaped)
+            {
+                case 'n':
+                    result.Append('\n');
+                    i++;
+                    break;
+                case 'r':
+                    result.Append('\r');
+                    i++;
+                    break;
+                case 't':
+                    result.Append('\t');
+                    i++;
+                    break;
+                case '\\':
+                    result.Append('\\');
+                    i++;
+                    break;
+                default:
+                    result.Append('\\');
+                    break;
+            }
+        }
+
+        return result.ToString();
     }
 
     private static int FindExpressionInterpolationClose(string text, int start, Token token)
