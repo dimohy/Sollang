@@ -190,11 +190,12 @@ described in [GRAMMAR_BOOTSTRAP.md](GRAMMAR_BOOTSTRAP.md). These additions
 complete the reusable source-span/diagnostic gate. The formal count is now
 **47.0 / 60 (78.3%)**; multi-error parser continuation remains.
 
-The first lowering slice is also executable: generated stable rule ids drive an
-ordinary SL module that selects source, main, number, and name nodes from the
-green CST, reconstructs AST parent links, and removes trivia from expression
-token ranges and spans. Full language coverage is still required before this
-can replace the bootstrap AST builder.
+The lowering path is also executable: generated stable rule ids drive an
+ordinary SL module that selects module/declaration/function/main/binding/flow/
+call/type/literal/name/path nodes from the green CST, reconnects AST parents
+across skipped CST wrappers, and removes trivia from payload token ranges and
+spans. Operator payloads and full language coverage are still required before
+this can replace the bootstrap AST builder.
 
 ## Immediate Implementation Order
 
