@@ -256,6 +256,12 @@ module/symbol identities, visibility failures, and unresolved local names can
 therefore feed the same later signature and expression type checks. Repeated
 top-level declarations of the same category also retain their newline boundary.
 
+The first self-hosted executable type check now compares inferred literal
+return expressions with declared function return annotations. Integer/Text
+agreement succeeds, while mismatches produce structured code 5 at the exact
+return-expression span. Broader expression inference remains before semantic
+parity.
+
 ## Immediate Implementation Order
 
 1. Multi-file compilation (implemented by example 52).

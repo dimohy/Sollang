@@ -175,3 +175,7 @@ enums, traits, impls, or functions in the same group remain parseable.
 local, and imported named type annotations. Builtins receive stable table ids,
 local declarations point at their module symbol, imported declarations retain
 visibility status, and unresolved local names remain explicit status-2 rows.
+`selfhost/semantic/type_check.sl` consumes that table for the first executable
+type-checking slice. It infers integer and string literal return expressions,
+compares them with declared function return annotations, and emits code 5 with
+the exact mismatching expression span.
