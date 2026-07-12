@@ -291,6 +291,13 @@ pinned `llvm-as`, so the test proves LLVM syntax validity rather than text
 similarity alone. Calls, parameters, Text values, ownership, and target/runtime
 declarations remain.
 
+Parameter symbols now have explicit typed-IR nodes, and resolved name
+expressions retain their lexical symbol. LLVM lowering uses those nodes for
+typed `%arg` signatures and parameter reads. Resolved call nodes emit direct
+module-qualified calls such as `@sl_m0_s0`, including a typed literal,
+parameter, or SSA argument. A two-source snapshot is assembled by `llvm-as`,
+proving that file-module identities survive through executable LLVM linkage.
+
 User-function ABI lowering now threads a hidden runtime I/O context containing
 stdin/stdout handles, read/write slots, and the cumulative ok state. This fixes
 function-local `print`/`println` and supplies the context that later file-backed

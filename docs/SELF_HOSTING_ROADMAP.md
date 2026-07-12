@@ -388,6 +388,13 @@ IR-index SSA registers. The example runner sends that stdout to pinned
 aggregate ABI, runtime declarations, target triples, ownership, and file output
 remain before this is a usable compiler backend.
 
+Function parameters and direct calls now cross the same boundary. Parameter
+symbols lower to typed IR, name uses resolve to `%arg`, and imported calls use
+their stable target module/symbol name with typed arguments and SSA results. A
+two-file `sample.math -> app.main` snapshot is accepted by `llvm-as`. Text and
+aggregate ABI, ownership/drop information, runtime declarations, entry-point
+generation, and file output remain.
+
 Imported call signatures now participate in expression inference and checking:
 the target module's return type becomes the caller's call-expression type, its
 input type validates the caller argument, and non-public imported calls produce

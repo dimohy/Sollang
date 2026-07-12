@@ -3,12 +3,14 @@ namespace smalllang.compiler.ir.typed
 import smalllang.compiler.ast as ast
 import smalllang.compiler.semantic.calls as calls
 import smalllang.compiler.semantic.expression_types as expressionTypes
+import smalllang.compiler.semantic.resolve as resolution
 import smalllang.compiler.semantic.symbols as symbols
 
 # Stable, flat typed IR. Indexes are relocatable array offsets so later LLVM
 # lowering can consume the table without allocating an object graph.
 # Kinds: 0 function, 1 return, 2 Text constant, 3 Int constant,
-# 4 Bool constant, 5 name, 6 call, 7 unary, 8 binary, 9 other expression.
+# 4 Bool constant, 5 name, 6 call, 7 unary, 8 binary, 9 other expression,
+# 10 parameter.
 public struct TypedIrNode {
     kind: Int
     parent: Int
@@ -35,6 +37,7 @@ public lower sources: [Text; ~] -> [TypedIrNode; ~] {
         sources[sourceIndex!] => source
         source -> ast.lower => nodes!
         source -> symbols.collect => table!
+        source -> resolution.resolve => resolvedNames!
         0 => symbolIndex!
         symbolIndex! < (table! -> len) -> while {
             table![symbolIndex!] => function
@@ -63,8 +66,33 @@ public lower sources: [Text; ~] -> [TypedIrNode; ~] {
                 }
                 resultTypeIndex! >= 0 -> if {
                     inferred![resultTypeIndex!] => resultType
+                    -1 => parameterSymbol!
+                    -1 => parameterTypeIndex!
+                    0 => parameterSearch!
+                    parameterSearch! < (table! -> len) -> while {
+                        table![parameterSearch!] => parameterCandidate
+                        (parameterCandidate.kind == 35 and parameterCandidate.parent == symbolIndex!) -> if { parameterSearch! => parameterSymbol! }
+                        parameterSearch! + 1 => parameterSearch!
+                    }
+                    parameterSymbol! >= 0 -> if {
+                        0 => parameterNameSearch!
+                        parameterNameSearch! < (resolvedNames! -> len) -> while {
+                            resolvedNames![parameterNameSearch!] => parameterName
+                            parameterName.symbol == parameterSymbol! -> if {
+                                0 => parameterInferredSearch!
+                                parameterInferredSearch! < (inferred! -> len) -> while {
+                                    inferred![parameterInferredSearch!] => parameterInferred
+                                    (parameterInferred.sourceModule == sourceIndex! and parameterInferred.astNode == parameterName.astNode) -> if { parameterInferredSearch! => parameterTypeIndex! }
+                                    parameterInferredSearch! + 1 => parameterInferredSearch!
+                                }
+                            }
+                            parameterNameSearch! + 1 => parameterNameSearch!
+                        }
+                    }
                     results! -> len => functionIr!
                     functionIr! + 1 => returnIr
+                    -1 => parameterIr!
+                    (parameterSymbol! >= 0 and parameterTypeIndex! >= 0) -> if { returnIr + 1 => parameterIr! }
                     results! -> push(TypedIrNode {
                         kind: 0
                         parent: -1
@@ -78,7 +106,7 @@ public lower sources: [Text; ~] -> [TypedIrNode; ~] {
                         payloadToken: function.nameToken
                         opcode: -1
                         operand0: returnIr
-                        operand1: -1
+                        operand1: parameterIr!
                         flags: function.flags
                     })
                     results! -> push(TypedIrNode {
@@ -97,6 +125,26 @@ public lower sources: [Text; ~] -> [TypedIrNode; ~] {
                         operand1: -1
                         flags: 0
                     })
+                    parameterIr! >= 0 -> if {
+                        inferred![parameterTypeIndex!] => parameterType
+                        table![parameterSymbol!] => parameter
+                        results! -> push(TypedIrNode {
+                            kind: 10
+                            parent: functionIr!
+                            sourceModule: sourceIndex!
+                            astNode: function.astNode
+                            symbol: parameterSymbol!
+                            targetModule: sourceIndex!
+                            typeOrigin: parameterType.origin
+                            typeModule: parameterType.targetModule
+                            typeSymbol: parameterType.targetSymbol
+                            payloadToken: parameter.nameToken
+                            opcode: -1
+                            operand0: -1
+                            operand1: -1
+                            flags: parameter.flags
+                        })
+                    }
 
                     [Int; ~] => astToIr!
                     0 => astMapIndex!
@@ -139,6 +187,14 @@ public lower sources: [Text; ~] -> [TypedIrNode; ~] {
                                 expressionIr => astToIr![expressionAstIndex!]
                                 -1 => expressionSymbol!
                                 -1 => expressionTargetModule!
+                                expressionKind! == 5 -> if {
+                                    0 => nameResolutionSearch!
+                                    nameResolutionSearch! < (resolvedNames! -> len) -> while {
+                                        resolvedNames![nameResolutionSearch!] => resolvedName
+                                        resolvedName.astNode == expressionAstIndex! -> if { resolvedName.symbol => expressionSymbol! }
+                                        nameResolutionSearch! + 1 => nameResolutionSearch!
+                                    }
+                                }
                                 expressionKind! == 6 -> if {
                                     0 => callSearch!
                                     callSearch! < (resolvedCalls! -> len) -> while {

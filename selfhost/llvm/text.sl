@@ -23,7 +23,13 @@ public emit sources: [Text; ~] -> Unit {
                 functionEnd! + 1 => functionEnd!
             }
             function.typeSymbol -> llvmType => returnType
-            "define $returnType @sl_m$(function.sourceModule)_s$(function.symbol)() {" -> println
+            function.operand1 >= 0 -> if {
+                ir![function.operand1] => parameter
+                parameter.typeSymbol -> llvmType => parameterType
+                "define $returnType @sl_m$(function.sourceModule)_s$(function.symbol)($parameterType %arg) {" -> println
+            } else {
+                "define $returnType @sl_m$(function.sourceModule)_s$(function.symbol)() {" -> println
+            }
             "entry:" -> println
             functionEnd! - 1 => expressionIndex!
             function.operand0 + 1 => expressionStart
@@ -65,7 +71,7 @@ public emit sources: [Text; ~] -> Unit {
                             ((sources[leftOperand.sourceModule] -> byte(leftToken.span.start)) == UInt8(116)) -> if { "1" } else { "0" } -> print
                         }
                     } else {
-                        "%v$(expression.operand0)" -> print
+                        leftOperand.kind == 5 -> if { "%arg" -> print } else { "%v$(expression.operand0)" -> print }
                     }
                     ", " -> print
                     expression.kind == 7 -> if {
@@ -81,9 +87,30 @@ public emit sources: [Text; ~] -> Unit {
                                 ((sources[rightOperand.sourceModule] -> byte(rightToken.span.start)) == UInt8(116)) -> if { "1" } else { "0" } -> println
                             }
                         } else {
-                            "%v$(expression.operand1)" -> println
+                            rightOperand.kind == 5 -> if { "%arg" -> println } else { "%v$(expression.operand1)" -> println }
                         }
                     }
+                }
+                expression.kind == 6 -> if {
+                    expression.typeSymbol -> llvmType => callType
+                    "  %v$(expressionIndex!) = call $callType @sl_m$(expression.targetModule)_s$(expression.symbol)(" -> print
+                    expression.operand0 >= 0 -> if {
+                        ir![expression.operand0] => argument
+                        argument.typeSymbol -> llvmType => argumentType
+                        "$argumentType " -> print
+                        (argument.kind == 3 or argument.kind == 4) -> if {
+                            sources[argument.sourceModule] -> lexer.lex => argumentTokens!
+                            argumentTokens![argument.payloadToken] => argumentToken
+                            argument.kind == 3 -> if {
+                                sources[argument.sourceModule] -> slice(argumentToken.span.start, argumentToken.span.length) -> print
+                            } else {
+                                ((sources[argument.sourceModule] -> byte(argumentToken.span.start)) == UInt8(116)) -> if { "1" } else { "0" } -> print
+                            }
+                        } else {
+                            argument.kind == 5 -> if { "%arg" -> print } else { "%v$(expression.operand0)" -> print }
+                        }
+                    }
+                    ")" -> println
                 }
                 expressionIndex! - 1 => expressionIndex!
             }
@@ -99,7 +126,7 @@ public emit sources: [Text; ~] -> Unit {
                     ((sources[returnOperand.sourceModule] -> byte(returnToken.span.start)) == UInt8(116)) -> if { "1" } else { "0" } -> println
                 }
             } else {
-                "%v$(returnNode.operand0)" -> println
+                returnOperand.kind == 5 -> if { "%arg" -> println } else { "%v$(returnNode.operand0)" -> println }
             }
             "}" -> println
             functionEnd! => functionIndex!
