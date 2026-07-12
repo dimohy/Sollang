@@ -188,3 +188,6 @@ logical operators. Return checking consumes the outermost inferred expression.
 Resolved calls inherit the function's nominal return type, while type checking
 compares the outermost argument expression with the declared input type and
 emits code 6 on mismatch.
+Calls with no matching local function symbol emit code 7 over the complete call
+span, rather than remaining as untyped expressions that later passes could
+silently ignore.

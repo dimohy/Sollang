@@ -277,6 +277,8 @@ Local call expressions now resolve to function symbols and inherit their
 declared nominal return type. The inferred call result participates in enclosing
 return checks, and single-argument calls compare the complete argument
 expression with the function input type using structured code 6 diagnostics.
+Unresolved local call targets now produce structured code 7 diagnostics over
+the complete call expression.
 
 ## Immediate Implementation Order
 

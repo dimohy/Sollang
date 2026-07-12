@@ -22,7 +22,8 @@ public struct TypeCheckDiagnostic {
 }
 
 # Code 5 identifies a mismatching function return expression. Code 6 identifies
-# a call argument that does not match the local function input type.
+# a call argument that does not match the local function input type. Code 7
+# identifies an unresolved local call target.
 public analyze sources: [Text; ~] -> [TypeCheckDiagnostic; ~] {
     sources -> nominalTypes.resolve => nominal!
     sources -> expressionTypes.infer => expressionTypeTable!
@@ -170,6 +171,25 @@ public analyze sources: [Text; ~] -> [TypeCheckDiagnostic; ~] {
                         }
                     }
                 }
+            } else {
+                nodes![call.callAst] => unresolvedCall
+                diagnostics! -> push(TypeCheckDiagnostic {
+                    code: 7
+                    sourceModule: sourceIndex!
+                    functionSymbol: -1
+                    expectedOrigin: -1
+                    expectedModule: -1
+                    expectedSymbol: -1
+                    actualOrigin: -1
+                    actualModule: -1
+                    actualSymbol: -1
+                    actualBuiltin: -1
+                    span: syntax.SourceSpan {
+                        fileId: sourceIndex!
+                        start: unresolvedCall.start
+                        length: unresolvedCall.length
+                    }
+                })
             }
             callIndex! + 1 => callIndex!
         }
