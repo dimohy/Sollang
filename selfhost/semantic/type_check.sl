@@ -124,15 +124,25 @@ public analyze sources: [Text; ~] -> [TypeCheckDiagnostic; ~] {
                     composite![expectedCompositeIndex!] => expectedComposite
                     expressionTypeTable![returnExpressionType!] => actualType
                     10 + expectedComposite.kind => expectedShape
-                    (expectedComposite.elementOrigin != 3 and (actualType.origin != expectedShape or actualType.targetModule != expectedComposite.elementModule or actualType.targetSymbol != expectedComposite.elementSymbol)) -> if {
+                    true => compositeReturnMatches!
+                    expectedComposite.kind == 5 -> if {
+                        actualType.origin != expectedShape -> if { false => compositeReturnMatches! }
+                        (expectedComposite.keyOrigin != 3 and actualType.targetModule != expectedComposite.keySymbol) -> if { false => compositeReturnMatches! }
+                        (expectedComposite.valueOrigin != 3 and actualType.targetSymbol != expectedComposite.valueSymbol) -> if { false => compositeReturnMatches! }
+                    } else {
+                        expectedComposite.elementOrigin != 3 -> if {
+                            (actualType.origin != expectedShape or actualType.targetModule != expectedComposite.elementModule or actualType.targetSymbol != expectedComposite.elementSymbol) -> if { false => compositeReturnMatches! }
+                        }
+                    }
+                    not compositeReturnMatches! -> if {
                         nodes![returnExpressionAst!] => returnExpression
                         diagnostics! -> push(TypeCheckDiagnostic {
                             code: 5
                             sourceModule: sourceIndex!
                             functionSymbol: symbolIndex!
                             expectedOrigin: expectedShape
-                            expectedModule: expectedComposite.elementModule
-                            expectedSymbol: expectedComposite.elementSymbol
+                            expectedModule: expectedComposite.kind == 5 -> if { expectedComposite.keySymbol } else { expectedComposite.elementModule }
+                            expectedSymbol: expectedComposite.kind == 5 -> if { expectedComposite.valueSymbol } else { expectedComposite.elementSymbol }
                             actualOrigin: actualType.origin
                             actualModule: actualType.targetModule
                             actualSymbol: actualType.targetSymbol
@@ -238,10 +248,16 @@ public analyze sources: [Text; ~] -> [TypeCheckDiagnostic; ~] {
                         10 + expectedComposite.kind => expectedShape
                         false => compositeMatches!
                         actual.origin == expectedShape -> if {
-                            expectedComposite.elementOrigin == 3 -> if {
+                            expectedComposite.kind == 5 -> if {
                                 true => compositeMatches!
+                                (expectedComposite.keyOrigin != 3 and actual.targetModule != expectedComposite.keySymbol) -> if { false => compositeMatches! }
+                                (expectedComposite.valueOrigin != 3 and actual.targetSymbol != expectedComposite.valueSymbol) -> if { false => compositeMatches! }
                             } else {
-                                (actual.targetModule == expectedComposite.elementModule and actual.targetSymbol == expectedComposite.elementSymbol) -> if { true => compositeMatches! }
+                                expectedComposite.elementOrigin == 3 -> if {
+                                    true => compositeMatches!
+                                } else {
+                                    (actual.targetModule == expectedComposite.elementModule and actual.targetSymbol == expectedComposite.elementSymbol) -> if { true => compositeMatches! }
+                                }
                             }
                         }
                         not compositeMatches! -> if {
@@ -251,8 +267,8 @@ public analyze sources: [Text; ~] -> [TypeCheckDiagnostic; ~] {
                                 sourceModule: sourceIndex!
                                 functionSymbol: call.functionSymbol
                                 expectedOrigin: expectedShape
-                                expectedModule: expectedComposite.elementModule
-                                expectedSymbol: expectedComposite.elementSymbol
+                                expectedModule: expectedComposite.kind == 5 -> if { expectedComposite.keySymbol } else { expectedComposite.elementModule }
+                                expectedSymbol: expectedComposite.kind == 5 -> if { expectedComposite.valueSymbol } else { expectedComposite.elementSymbol }
                                 actualOrigin: actual.origin
                                 actualModule: actual.targetModule
                                 actualSymbol: actual.targetSymbol

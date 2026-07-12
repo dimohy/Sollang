@@ -328,6 +328,12 @@ argument element identity into the return type after fixed-point inference.
 Concrete array element mismatches are checked at both call arguments (code 6)
 and function returns (code 5).
 
+Dictionary literals now carry structural origin 15 and separate builtin key and
+value identities. Two-parameter `{K: V} -> {K: V}` calls specialize both slots,
+while concrete dictionary key/value mismatches produce code 6 for arguments and
+code 5 for returns. Local/imported nominal dictionary components remain to be
+encoded beyond the current compact builtin representation.
+
 Imported call signatures now participate in expression inference and checking:
 the target module's return type becomes the caller's call-expression type, its
 input type validates the caller argument, and non-public imported calls produce

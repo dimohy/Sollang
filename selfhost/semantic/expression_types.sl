@@ -200,7 +200,15 @@ public infer sources: [Text; ~] -> [ExpressionType; ~] {
                             (returnCompositeIndex! >= 0 and inputCompositeIndex! >= 0) -> if {
                                 composite![returnCompositeIndex!] => returnComposite
                                 composite![inputCompositeIndex!] => inputComposite
-                                (returnComposite.kind == inputComposite.kind and returnComposite.elementOrigin == 3 and inputComposite.elementOrigin == 3 and returnComposite.elementSymbol == inputComposite.elementSymbol) -> if {
+                                false => sameCompositeGenerics!
+                                returnComposite.kind == inputComposite.kind -> if {
+                                    returnComposite.kind == 5 -> if {
+                                        (returnComposite.keyOrigin == 3 and inputComposite.keyOrigin == 3 and returnComposite.valueOrigin == 3 and inputComposite.valueOrigin == 3 and returnComposite.keySymbol == inputComposite.keySymbol and returnComposite.valueSymbol == inputComposite.valueSymbol) -> if { true => sameCompositeGenerics! }
+                                    } else {
+                                        (returnComposite.elementOrigin == 3 and inputComposite.elementOrigin == 3 and returnComposite.elementSymbol == inputComposite.elementSymbol) -> if { true => sameCompositeGenerics! }
+                                    }
+                                }
+                                sameCompositeGenerics! -> if {
                                     -1 => compositeArgumentIndex!
                                     1000000 => compositeArgumentDistance!
                                     0 => compositeArgumentSearch!
@@ -460,6 +468,83 @@ public infer sources: [Text; ~] -> [ExpressionType; ~] {
                     }
                 }
                 arrayIndex! + 1 => arrayIndex!
+            }
+            0 => dictionaryIndex!
+            dictionaryIndex! < (nodes! -> len) -> while {
+                nodes![dictionaryIndex!] => dictionaryNode
+                dictionaryNode.kind == 38 -> if {
+                    false => dictionaryInferred!
+                    0 => dictionaryExistingIndex!
+                    dictionaryExistingIndex! < (inferred! -> len) -> while {
+                        inferred![dictionaryExistingIndex!] => existingDictionary
+                        (existingDictionary.sourceModule == sourceIndex! and existingDictionary.astNode == dictionaryIndex!) -> if { true => dictionaryInferred! }
+                        dictionaryExistingIndex! + 1 => dictionaryExistingIndex!
+                    }
+                    not dictionaryInferred! -> if {
+                        1000000 => entryDistance!
+                        0 => entryDistanceSearch!
+                        entryDistanceSearch! < (inferred! -> len) -> while {
+                            inferred![entryDistanceSearch!] => entryType
+                            entryType.sourceModule == sourceIndex! -> if {
+                                nodes![entryType.astNode].parent => entryAncestor!
+                                1 => distance!
+                                false => belongsToDictionary!
+                                (entryAncestor! >= 0 and not belongsToDictionary!) -> while {
+                                    entryAncestor! == dictionaryIndex! -> if { true => belongsToDictionary! } else {
+                                        nodes![entryAncestor!].parent => entryAncestor!
+                                        distance! + 1 => distance!
+                                    }
+                                }
+                                (belongsToDictionary! and distance! < entryDistance!) -> if { distance! => entryDistance! }
+                            }
+                            entryDistanceSearch! + 1 => entryDistanceSearch!
+                        }
+                        -1 => keySymbol!
+                        -1 => valueSymbol!
+                        0 => entryPosition!
+                        true => homogeneousDictionary!
+                        0 => entryTypeSearch!
+                        entryTypeSearch! < (inferred! -> len) -> while {
+                            inferred![entryTypeSearch!] => entryType
+                            entryType.sourceModule == sourceIndex! -> if {
+                                nodes![entryType.astNode].parent => entryAncestor!
+                                1 => distance!
+                                false => belongsToDictionary!
+                                (entryAncestor! >= 0 and not belongsToDictionary!) -> while {
+                                    entryAncestor! == dictionaryIndex! -> if { true => belongsToDictionary! } else {
+                                        nodes![entryAncestor!].parent => entryAncestor!
+                                        distance! + 1 => distance!
+                                    }
+                                }
+                                (belongsToDictionary! and distance! == entryDistance!) -> if {
+                                    entryType.origin != 1 -> if { false => homogeneousDictionary! }
+                                    entryPosition! % 2 == 0 -> if {
+                                        keySymbol! < 0 -> if { entryType.targetSymbol => keySymbol! } else {
+                                            entryType.targetSymbol != keySymbol! -> if { false => homogeneousDictionary! }
+                                        }
+                                    } else {
+                                        valueSymbol! < 0 -> if { entryType.targetSymbol => valueSymbol! } else {
+                                            entryType.targetSymbol != valueSymbol! -> if { false => homogeneousDictionary! }
+                                        }
+                                    }
+                                    entryPosition! + 1 => entryPosition!
+                                }
+                            }
+                            entryTypeSearch! + 1 => entryTypeSearch!
+                        }
+                        (entryPosition! > 0 and entryPosition! % 2 == 0 and homogeneousDictionary!) -> if {
+                            inferred! -> push(ExpressionType {
+                                sourceModule: sourceIndex!
+                                astNode: dictionaryIndex!
+                                origin: 15
+                                targetModule: keySymbol!
+                                targetSymbol: valueSymbol!
+                            })
+                            true => changed!
+                        }
+                    }
+                }
+                dictionaryIndex! + 1 => dictionaryIndex!
             }
         }
         sourceIndex! + 1 => sourceIndex!

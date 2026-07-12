@@ -228,6 +228,10 @@ Array expressions now lower as AST kind 37 and homogeneous dynamic literals
 infer structural origin 13 plus their element identity. A `[T; ~] -> [T; ~]`
 call substitutes the inferred element into its result, while concrete composite
 input/return mismatches reuse codes 6 and 5.
+Dictionary expressions now lower as AST kind 38. Homogeneous builtin entries
+infer structural origin 15 with key/value ids, `{K: V} -> {K: V}` substitutes
+both call-site identities, and concrete key/value mismatches participate in the
+same argument and return diagnostics.
 Expression inference loads a resolved imported function's return annotation
 from the target source module. Call checking loads its input annotation from the
 same target symbol, emits code 6 for cross-module argument mismatch, and code 9
