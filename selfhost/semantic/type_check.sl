@@ -31,7 +31,8 @@ public struct TypeCheckDiagnostic {
 # operator whose typed operands are incompatible. Code 9 identifies a
 # non-public imported call target. Code 10 identifies missing or extra call
 # arguments for the current zero-or-one-input function surface. Code 11 is an
-# unknown struct initializer field and code 12 is a field value type mismatch.
+# unknown struct initializer field, code 12 is a field value type mismatch, and
+# code 13 identifies a required field missing from a struct literal.
 public analyze sources: [Text; ~] -> [TypeCheckDiagnostic; ~] {
     sources -> nominalTypes.resolve => nominal!
     sources -> compositeTypes.resolve => composite!
@@ -453,6 +454,66 @@ public analyze sources: [Text; ~] -> [TypeCheckDiagnostic; ~] {
                 }
             }
             initializerIndex! + 1 => initializerIndex!
+        }
+
+        0 => literalCoverageIndex!
+        literalCoverageIndex! < (expressionTypeTable! -> len) -> while {
+            expressionTypeTable![literalCoverageIndex!] => literalType
+            (literalType.sourceModule == sourceIndex! and nodes![literalType.astNode].kind == 39) -> if {
+                nodes![literalType.astNode] => literal
+                sourceIndex! => targetSourceModule!
+                literalType.origin == 2 -> if { moduleIdentities![literalType.targetModule].sourceIndex => targetSourceModule! }
+                sources[targetSourceModule!] -> symbols.collect => targetTable!
+                sources[targetSourceModule!] -> lexer.lex => targetTokens!
+                0 => fieldCoverageIndex!
+                fieldCoverageIndex! < (targetTable! -> len) -> while {
+                    targetTable![fieldCoverageIndex!] => field
+                    (field.kind == 26 and field.parent == literalType.targetSymbol) -> if {
+                        false => fieldInitialized!
+                        0 => initializerSearch!
+                        initializerSearch! < (nodes! -> len) -> while {
+                            nodes![initializerSearch!] => candidateInitializer
+                            candidateInitializer.kind == 40 -> if {
+                                candidateInitializer.parent => candidateLiteral!
+                                (candidateLiteral! >= 0 and nodes![candidateLiteral!].kind != 39) -> while {
+                                    nodes![candidateLiteral!].parent => candidateLiteral!
+                                }
+                                candidateLiteral! == literalType.astNode -> if {
+                                    tokens![candidateInitializer.payloadToken] => initializerName
+                                    targetTokens![field.nameToken] => fieldName
+                                    initializerName.span.length == fieldName.span.length => equal!
+                                    UIntSize(0) => fieldByte!
+                                    (equal! and fieldByte! < initializerName.span.length) -> while {
+                                        source -> byte(initializerName.span.start + fieldByte!) => leftByte
+                                        sources[targetSourceModule!] -> byte(fieldName.span.start + fieldByte!) => rightByte
+                                        leftByte != rightByte -> if { false => equal! }
+                                        fieldByte! + UIntSize(1) => fieldByte!
+                                    }
+                                    equal! -> if { true => fieldInitialized! }
+                                }
+                            }
+                            initializerSearch! + 1 => initializerSearch!
+                        }
+                        not fieldInitialized! -> if {
+                            diagnostics! -> push(TypeCheckDiagnostic {
+                                code: 13
+                                sourceModule: sourceIndex!
+                                functionSymbol: fieldCoverageIndex!
+                                expectedOrigin: -1
+                                expectedModule: literalType.targetModule
+                                expectedSymbol: fieldCoverageIndex!
+                                actualOrigin: -1
+                                actualModule: -1
+                                actualSymbol: -1
+                                actualBuiltin: -1
+                                span: syntax.SourceSpan { fileId: sourceIndex!, start: literal.start, length: literal.length }
+                            })
+                        }
+                    }
+                    fieldCoverageIndex! + 1 => fieldCoverageIndex!
+                }
+            }
+            literalCoverageIndex! + 1 => literalCoverageIndex!
         }
 
         0 => operatorIndex!

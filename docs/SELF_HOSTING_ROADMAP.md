@@ -348,6 +348,8 @@ being misclassified as the call target.
 Struct initializer checking now resolves local and imported field symbols.
 Unknown fields produce code 11 at the field name, and nominal value mismatches
 produce code 12 at the initializer expression with the caller source file id.
+Field coverage is now complete for local and imported literals: omitted required
+fields produce code 13 over the complete literal with the absent field symbol.
 
 Imported call signatures now participate in expression inference and checking:
 the target module's return type becomes the caller's call-expression type, its
