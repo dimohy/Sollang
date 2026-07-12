@@ -300,6 +300,10 @@ the target module's return type becomes the caller's call-expression type, its
 input type validates the caller argument, and non-public imported calls produce
 structured code 9 over the complete qualified call.
 
+Resolved calls now enforce the current zero-or-one-input arity surface. A
+missing required argument and any parenthesized zero-input invocation produce
+code 10; zero-input functions remain property calls such as `now`, not `now()`.
+
 ## Immediate Implementation Order
 
 1. Multi-file compilation (implemented by example 52).

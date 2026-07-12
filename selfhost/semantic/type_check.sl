@@ -1,11 +1,13 @@
 namespace smalllang.compiler.semantic.type_check
 
 import smalllang.compiler.ast as ast
+import smalllang.compiler.lexer as lexer
 import smalllang.compiler.semantic.calls as calls
 import smalllang.compiler.semantic.expression_types as expressionTypes
 import smalllang.compiler.semantic.nominal_types as nominalTypes
 import smalllang.compiler.semantic.symbols as symbols
 import smalllang.compiler.syntax as syntax
+import syntax.generated.smalllang as grammar
 
 public struct TypeCheckDiagnostic {
     code: Int
@@ -25,7 +27,8 @@ public struct TypeCheckDiagnostic {
 # a call argument that does not match the local function input type. Code 7
 # identifies an unresolved local call target. Code 8 identifies a binary
 # operator whose typed operands are incompatible. Code 9 identifies a
-# non-public imported call target.
+# non-public imported call target. Code 10 identifies missing or extra call
+# arguments for the current zero-or-one-input function surface.
 public analyze sources: [Text; ~] -> [TypeCheckDiagnostic; ~] {
     sources -> nominalTypes.resolve => nominal!
     sources -> expressionTypes.infer => expressionTypeTable!
@@ -35,6 +38,7 @@ public analyze sources: [Text; ~] -> [TypeCheckDiagnostic; ~] {
     sourceIndex! < (sources -> len) -> while {
         sources[sourceIndex!] => source
         source -> ast.lower => nodes!
+        source -> lexer.lex => tokens!
         source -> symbols.collect => table!
         0 => symbolIndex!
         symbolIndex! < (table! -> len) -> while {
@@ -115,6 +119,20 @@ public analyze sources: [Text; ~] -> [TypeCheckDiagnostic; ~] {
             (call.sourceModule == sourceIndex! and call.status == 0) -> if {
                 sources[call.targetSourceModule] -> symbols.collect => targetTable!
                 targetTable![call.functionSymbol] => targetFunction
+                nodes![call.callAst] => callNode
+                false => afterLeftParen!
+                false => hasArgument!
+                callNode.firstToken => callTokenIndex!
+                callTokenIndex! < callNode.firstToken + callNode.tokenCount -> while {
+                    tokens![callTokenIndex!].kind == grammar.tokenIdLeftParen -> if {
+                        true => afterLeftParen!
+                    } else {
+                        (afterLeftParen! and tokens![callTokenIndex!].kind != grammar.tokenIdRightParen and tokens![callTokenIndex!].kind != grammar.triviaIdWhitespace and tokens![callTokenIndex!].kind != grammar.triviaIdComment) -> if {
+                            true => hasArgument!
+                        }
+                    }
+                    callTokenIndex! + 1 => callTokenIndex!
+                }
                 targetFunction.secondaryTypeNode >= 0 -> if {
                     -1 => expectedInputIndex!
                     0 => inputSearch!
@@ -172,6 +190,37 @@ public analyze sources: [Text; ~] -> [TypeCheckDiagnostic; ~] {
                                 }
                             })
                         }
+                    }
+                    not hasArgument! -> if {
+                        diagnostics! -> push(TypeCheckDiagnostic {
+                            code: 10
+                            sourceModule: sourceIndex!
+                            functionSymbol: call.functionSymbol
+                            expectedOrigin: -1
+                            expectedModule: call.targetModule
+                            expectedSymbol: -1
+                            actualOrigin: -1
+                            actualModule: -1
+                            actualSymbol: -1
+                            actualBuiltin: -1
+                            span: syntax.SourceSpan { fileId: sourceIndex!, start: callNode.start, length: callNode.length }
+                        })
+                    }
+                } else {
+                    true -> if {
+                        diagnostics! -> push(TypeCheckDiagnostic {
+                            code: 10
+                            sourceModule: sourceIndex!
+                            functionSymbol: call.functionSymbol
+                            expectedOrigin: -1
+                            expectedModule: call.targetModule
+                            expectedSymbol: -1
+                            actualOrigin: -1
+                            actualModule: -1
+                            actualSymbol: -1
+                            actualBuiltin: -1
+                            span: syntax.SourceSpan { fileId: sourceIndex!, start: callNode.start, length: callNode.length }
+                        })
                     }
                 }
             } else {

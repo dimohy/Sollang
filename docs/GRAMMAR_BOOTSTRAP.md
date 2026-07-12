@@ -209,3 +209,6 @@ Expression inference loads a resolved imported function's return annotation
 from the target source module. Call checking loads its input annotation from the
 same target symbol, emits code 6 for cross-module argument mismatch, and code 9
 for a non-public imported function.
+Call checking also compares the signature's zero-or-one-input shape with call
+syntax. Missing required arguments and parenthesized zero-input calls emit code
+10 over the complete call, preserving SmallLang's property-call rule.
