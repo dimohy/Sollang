@@ -326,6 +326,13 @@ the declaration-order field ordinal, and emits `extractvalue` from a local or
 imported nominal aggregate. Local and cross-module member snapshots assemble,
 link, and run. Nested member chains are represented by the same operand graph.
 
+Dynamic Int arrays now use `%sl.array.i32 = { ptr, i64, i64 }` for data,
+length, and capacity. Owned literals allocate with `malloc`, initialize every
+element through typed GEP/store operations, and transfer the aggregate through
+move parameters and returns. Readonly indexing extracts the data pointer,
+computes an element address, and loads `i32`. The snapshot assembles, links, and
+runs; free/drop insertion and non-Int element layouts remain.
+
 User-function ABI lowering now threads a hidden runtime I/O context containing
 stdin/stdout handles, read/write slots, and the cumulative ok state. This fixes
 function-local `print`/`println` and supplies the context that later file-backed

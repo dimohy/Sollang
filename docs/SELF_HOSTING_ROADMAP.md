@@ -421,6 +421,12 @@ layout guesses, so imported member access retains the same ABI. Local/imported
 member executables pass assembly, link, and execution validation. Moves,
 mutable field updates, nested owned fields, and drop glue remain.
 
+Owned dynamic Int arrays now cross LLVM as `{ data, length, capacity }`.
+Literals allocate and initialize storage, move parameters/returns transfer the
+aggregate, and readonly indexing emits extract/GEP/load. The executable backend
+test passes assembly, link, and execution. Deterministic free/drop insertion,
+borrow lifetime enforcement in typed IR, and generic element layouts remain.
+
 Imported call signatures now participate in expression inference and checking:
 the target module's return type becomes the caller's call-expression type, its
 input type validates the caller argument, and non-public imported calls produce

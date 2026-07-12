@@ -36,10 +36,14 @@ public emit sources: [Text; ~] -> Unit {
         else => "F"
     }
     writeType node: typedIr.TypedIrNode -> Unit {
+        node.typeOrigin == 13 -> if {
+            "%sl.array.i32" -> print
+        } else {
         (node.typeOrigin == 0 or node.typeOrigin == 2) -> if {
             "%sl.struct.m$(node.typeModule)_s$(node.typeSymbol)" -> print
         } else {
             node.typeSymbol -> llvmType -> print
+        }
         }
     }
     sources -> typedIr.lower => ir!
@@ -83,6 +87,16 @@ public emit sources: [Text; ~] -> Unit {
             structSymbolIndex! + 1 => structSymbolIndex!
         }
         structSourceIndex! + 1 => structSourceIndex!
+    }
+    false => usesDynamicArray!
+    0 => arrayTypeSearch!
+    arrayTypeSearch! < (ir! -> len) -> while {
+        ir![arrayTypeSearch!].typeOrigin == 13 -> if { true => usesDynamicArray! }
+        arrayTypeSearch! + 1 => arrayTypeSearch!
+    }
+    usesDynamicArray! -> if {
+        "%sl.array.i32 = type { ptr, i64, i64 }" -> println
+        "declare ptr @malloc(i64)" -> println
     }
     false => usesText!
     0 => textTypeSearch!
@@ -219,6 +233,57 @@ public emit sources: [Text; ~] -> Unit {
                     " " -> print
                     memberBase.kind == 5 -> if { "%arg" -> print } else { "%v$(expression.operand0)" -> print }
                     ", $(fieldOrdinal!)" -> println
+                }
+                (expression.kind == 14 and expression.typeOrigin == 13) -> if {
+                    0 => arrayLength!
+                    expression.operand0 => arrayCountIndex!
+                    arrayCountIndex! >= 0 -> while {
+                        arrayLength! + 1 => arrayLength!
+                        ir![arrayCountIndex!].nextOperand => arrayCountIndex!
+                    }
+                    arrayLength! * 4 => arrayByteLength
+                    "  %v$(expressionIndex!)_data = call ptr @malloc(i64 $arrayByteLength)" -> println
+                    expression.operand0 => arrayElementIndex!
+                    0 => arrayElementPosition!
+                    arrayElementIndex! >= 0 -> while {
+                        ir![arrayElementIndex!] => arrayElement
+                        "  %v$(expressionIndex!)_ptr$(arrayElementPosition!) = getelementptr i32, ptr %v$(expressionIndex!)_data, i64 $(arrayElementPosition!)" -> println
+                        "  store i32 " -> print
+                        arrayElement.kind == 3 -> if {
+                            sources[arrayElement.sourceModule] -> lexer.lex => arrayElementTokens!
+                            arrayElementTokens![arrayElement.payloadToken] => arrayElementToken
+                            sources[arrayElement.sourceModule] -> slice(arrayElementToken.span.start, arrayElementToken.span.length) -> print
+                        } else {
+                            arrayElement.kind == 5 -> if { "%arg" -> print } else { "%v$(arrayElementIndex!)" -> print }
+                        }
+                        ", ptr %v$(expressionIndex!)_ptr$(arrayElementPosition!), align 4" -> println
+                        arrayElement.nextOperand => arrayElementIndex!
+                        arrayElementPosition! + 1 => arrayElementPosition!
+                    }
+                    "  %v$(expressionIndex!)_0 = insertvalue %sl.array.i32 poison, ptr %v$(expressionIndex!)_data, 0" -> println
+                    "  %v$(expressionIndex!)_1 = insertvalue %sl.array.i32 %v$(expressionIndex!)_0, i64 $(arrayLength!), 1" -> println
+                    "  %v$(expressionIndex!) = insertvalue %sl.array.i32 %v$(expressionIndex!)_1, i64 $(arrayLength!), 2" -> println
+                }
+                expression.kind == 15 -> if {
+                    ir![expression.operand0] => indexedArray
+                    ir![expression.operand1] => arrayIndex
+                    "  %v$(expressionIndex!)_data = extractvalue %sl.array.i32 " -> print
+                    indexedArray.kind == 5 -> if { "%arg" -> print } else { "%v$(expression.operand0)" -> print }
+                    ", 0" -> println
+                    arrayIndex.kind != 3 -> if {
+                        "  %v$(expressionIndex!)_index = sext i32 " -> print
+                        arrayIndex.kind == 5 -> if { "%arg" -> print } else { "%v$(expression.operand1)" -> print }
+                        " to i64" -> println
+                    }
+                    "  %v$(expressionIndex!)_ptr = getelementptr i32, ptr %v$(expressionIndex!)_data, i64 " -> print
+                    arrayIndex.kind == 3 -> if {
+                        sources[arrayIndex.sourceModule] -> lexer.lex => indexTokens!
+                        indexTokens![arrayIndex.payloadToken] => indexToken
+                        sources[arrayIndex.sourceModule] -> slice(indexToken.span.start, indexToken.span.length) -> println
+                    } else {
+                        "%v$(expressionIndex!)_index" -> println
+                    }
+                    "  %v$(expressionIndex!) = load i32, ptr %v$(expressionIndex!)_ptr, align 4" -> println
                 }
                 (expression.kind == 7 or expression.kind == 8) -> if {
                     ir![expression.operand0] => leftOperand

@@ -10,7 +10,8 @@ import smalllang.compiler.semantic.symbols as symbols
 # lowering can consume the table without allocating an object graph.
 # Kinds: 0 function, 1 return, 2 Text constant, 3 Int constant,
 # 4 Bool constant, 5 name, 6 call, 7 unary, 8 binary, 9 other expression,
-# 10 parameter, 11 entry point, 12 struct literal, 13 member access.
+# 10 parameter, 11 entry point, 12 struct literal, 13 member access,
+# 14 array literal, 15 index access.
 public struct TypedIrNode {
     kind: Int
     parent: Int
@@ -189,6 +190,8 @@ public lower sources: [Text; ~] -> [TypedIrNode; ~] {
                                 (expression.kind == 24 or expression.kind == 25) -> if { 8 => expressionKind! }
                                 expression.kind == 39 -> if { 12 => expressionKind! }
                                 expression.kind == 36 -> if { 13 => expressionKind! }
+                                expression.kind == 37 -> if { 14 => expressionKind! }
+                                expression.kind == 41 -> if { 15 => expressionKind! }
                                 results! -> len => expressionIr
                                 expressionIr => astToIr![expressionAstIndex!]
                                 -1 => expressionSymbol!
@@ -253,7 +256,7 @@ public lower sources: [Text; ~] -> [TypedIrNode; ~] {
                     expressionIrStart => operandIrIndex!
                     operandIrIndex! < expressionIrEnd -> while {
                         results![operandIrIndex!] => operatorIr!
-                        (operatorIr!.kind == 6 or operatorIr!.kind == 7 or operatorIr!.kind == 8 or operatorIr!.kind == 13) -> if {
+                        (operatorIr!.kind == 6 or operatorIr!.kind == 7 or operatorIr!.kind == 8 or operatorIr!.kind == 13 or operatorIr!.kind == 15) -> if {
                             -1 => firstOperand!
                             -1 => secondOperand!
                             UIntSize(0) => firstStart!
@@ -278,7 +281,7 @@ public lower sources: [Text; ~] -> [TypedIrNode; ~] {
                                 childIrIndex! + 1 => childIrIndex!
                             }
                             firstOperand! => operatorIr!.operand0
-                            (operatorIr!.kind == 6 or operatorIr!.kind == 8) -> if { secondOperand! => operatorIr!.operand1 }
+                            (operatorIr!.kind == 6 or operatorIr!.kind == 8 or operatorIr!.kind == 15) -> if { secondOperand! => operatorIr!.operand1 }
                             operatorIr! => results![operandIrIndex!]
                         }
                         operandIrIndex! + 1 => operandIrIndex!
@@ -309,7 +312,7 @@ public lower sources: [Text; ~] -> [TypedIrNode; ~] {
                     expressionIrStart => aggregateIrIndex!
                     aggregateIrIndex! < expressionIrEnd -> while {
                         results![aggregateIrIndex!] => aggregate!
-                        aggregate!.kind == 12 -> if {
+                        (aggregate!.kind == 12 or aggregate!.kind == 14) -> if {
                             -1 => firstFieldOperand!
                             expressionIrStart => fieldOperandSearch!
                             fieldOperandSearch! < expressionIrEnd -> while {

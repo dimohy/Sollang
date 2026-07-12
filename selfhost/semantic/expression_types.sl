@@ -99,6 +99,28 @@ public infer sources: [Text; ~] -> [ExpressionType; ~] {
                             valueOrigin: -1
                             valueModule: -1
                         })
+                    } else {
+                        -1 => valueCompositeIndex!
+                        0 => valueCompositeSearch!
+                        valueCompositeSearch! < (composite! -> len) -> while {
+                            composite![valueCompositeSearch!] => valueCompositeCandidate
+                            (valueCompositeCandidate.sourceModule == sourceIndex! and valueCompositeCandidate.typeAst == valueSymbol.typeNode) -> if { valueCompositeSearch! => valueCompositeIndex! }
+                            valueCompositeSearch! + 1 => valueCompositeSearch!
+                        }
+                        valueCompositeIndex! >= 0 -> if {
+                            composite![valueCompositeIndex!] => valueComposite
+                            inferred! -> push(ExpressionType {
+                                sourceModule: sourceIndex!
+                                astNode: astIndex!
+                                origin: 10 + valueComposite.kind
+                                targetModule: valueComposite.kind == 5 -> if { valueComposite.keySymbol } else { valueComposite.elementModule }
+                                targetSymbol: valueComposite.kind == 5 -> if { valueComposite.valueSymbol } else { valueComposite.elementSymbol }
+                                keyOrigin: valueComposite.kind == 5 -> if { valueComposite.keyOrigin } else { -1 }
+                                keyModule: valueComposite.kind == 5 -> if { valueComposite.keyModule } else { -1 }
+                                valueOrigin: valueComposite.kind == 5 -> if { valueComposite.valueOrigin } else { -1 }
+                                valueModule: valueComposite.kind == 5 -> if { valueComposite.valueModule } else { -1 }
+                            })
+                        }
                     }
                 }
             }
