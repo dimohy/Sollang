@@ -446,6 +446,8 @@ approved syntax.
 - `examples/23-webassembly-browser.sl`: browser WebAssembly stdout sample
 - `examples/24-string-interpolation-dollar.sl`: `$name` and `$(expr)` string
   interpolation sample
+- `examples/172-raw-multiline-strings.sl`: triple-quoted raw strings with
+  indentation trimming and literal quotes, backslashes, and `$()` text
 - `examples/25-arrays-dictionaries.sl`: static array, dynamic array,
   dictionary, and deterministic cleanup sample
 - `examples/26-immutable-containers.sl`: immutable dynamic-array and dictionary

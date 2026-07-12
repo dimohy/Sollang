@@ -8,6 +8,11 @@ internal static class StringLiteralParser
 {
     public static IReadOnlyList<StringSegment> ParseStringSegments(Token token)
     {
+        if (token.IsRawString)
+        {
+            return [new TextSegment(NormalizeRawString(token))];
+        }
+
         var segments = new List<StringSegment>();
         var text = token.Text;
         var start = 0;
@@ -69,6 +74,50 @@ internal static class StringLiteralParser
         }
 
         return segments;
+    }
+
+    private static string NormalizeRawString(Token token)
+    {
+        var text = token.Text;
+        var contentStart = text.StartsWith("\r\n", StringComparison.Ordinal) ? 2
+            : text.StartsWith('\n') ? 1
+            : 0;
+        if (contentStart == 0)
+        {
+            return text;
+        }
+
+        var closingLineStart = text.LastIndexOf('\n');
+        if (closingLineStart < contentStart)
+        {
+            throw ErrorAt(token, "a multiline raw string closing delimiter must begin on a new line");
+        }
+
+        var indentation = text[(closingLineStart + 1)..];
+        if (indentation.Any(static c => c is not (' ' or '\t')))
+        {
+            throw ErrorAt(token, "only indentation may precede a multiline raw string closing delimiter");
+        }
+
+        var body = text[contentStart..closingLineStart];
+        var lines = body.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n');
+        for (var i = 0; i < lines.Length; i++)
+        {
+            if (string.IsNullOrWhiteSpace(lines[i]))
+            {
+                lines[i] = string.Empty;
+                continue;
+            }
+
+            if (!lines[i].StartsWith(indentation, StringComparison.Ordinal))
+            {
+                throw ErrorAt(token, "raw string content must match the closing delimiter indentation");
+            }
+
+            lines[i] = lines[i][indentation.Length..];
+        }
+
+        return string.Join('\n', lines);
     }
 
     private static string DecodeEscapes(string text)

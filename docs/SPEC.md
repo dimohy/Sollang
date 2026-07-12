@@ -387,7 +387,7 @@ dictionary_literal := "{" type_name ":" type_name (";" number_literal "~")? "}" 
 dictionary_entry := expression ":" expression
 bool_literal := "true" | "false"
 number_literal := decimal_digit+
-string_literal := "\"" string_part* "\""
+string_literal := "\"" string_part* "\"" | "\"\"\"" raw_string_text* "\"\"\""
 string_part  := string_text | interpolation
 interpolation := "$" identifier | "$(" expression ")"
 ```
@@ -1159,6 +1159,20 @@ backslash sequences remain literal for backward compatibility:
 "object = { name: $name, score: $score }"
 "first\nsecond"
 ```
+
+Triple-quoted raw literals preserve quotes, backslashes, and `$` markers as
+ordinary text. A multiline raw literal removes its opening newline, closing
+newline, and the indentation shared with its closing delimiter:
+
+```smalllang
+"""
+JSON and paths need no escaping: C:\data\input.json
+$(this remains text)
+"""
+```
+
+Every nonblank content line must include the closing delimiter's indentation.
+Inline raw literals such as `"""a "quoted" path"""` are also supported.
 
 Interpolation rules:
 
