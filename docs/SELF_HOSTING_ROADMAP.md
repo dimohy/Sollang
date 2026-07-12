@@ -307,6 +307,11 @@ operator expressions such as `identity(1 + 2)` specialize to Int after their
 argument is inferred. Trait constraints and independent `T -> E` inference
 remain.
 
+`true` and `false` are now recognized as Bool literals by self-hosted semantic
+analysis rather than unresolved names. They seed logical-expression inference
+and pass Bool return checking, removing a pervasive false diagnostic from the
+compiler's own SL sources.
+
 Imported call signatures now participate in expression inference and checking:
 the target module's return type becomes the caller's call-expression type, its
 input type validates the caller argument, and non-public imported calls produce

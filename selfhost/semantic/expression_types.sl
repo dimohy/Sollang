@@ -1,6 +1,7 @@
 namespace smalllang.compiler.semantic.expression_types
 
 import smalllang.compiler.ast as ast
+import smalllang.compiler.lexer as lexer
 import smalllang.compiler.semantic.calls as calls
 import smalllang.compiler.semantic.nominal_types as nominalTypes
 import smalllang.compiler.semantic.resolve as resolution
@@ -24,6 +25,7 @@ public infer sources: [Text; ~] -> [ExpressionType; ~] {
     sourceIndex! < (sources -> len) -> while {
         sources[sourceIndex!] => source
         source -> ast.lower => nodes!
+        source -> lexer.lex => tokens!
         source -> symbols.collect => table!
         source -> resolution.resolve => resolvedNames!
         0 => astIndex!
@@ -36,13 +38,33 @@ public infer sources: [Text; ~] -> [ExpressionType; ~] {
                 inferred! -> push(ExpressionType { sourceModule: sourceIndex!, astNode: astIndex!, origin: 1, targetModule: -1, targetSymbol: 2 })
             }
             node.kind == 15 -> if {
+                tokens![node.payloadToken] => nameToken
+                false => booleanLiteral!
+                nameToken.span.length == UIntSize(4) -> if {
+                    source -> byte(nameToken.span.start) => boolByte0
+                    source -> byte(nameToken.span.start + UIntSize(1)) => boolByte1
+                    source -> byte(nameToken.span.start + UIntSize(2)) => boolByte2
+                    source -> byte(nameToken.span.start + UIntSize(3)) => boolByte3
+                    (boolByte0 == UInt8(116) and boolByte1 == UInt8(114) and boolByte2 == UInt8(117) and boolByte3 == UInt8(101)) -> if { true => booleanLiteral! }
+                }
+                nameToken.span.length == UIntSize(5) -> if {
+                    source -> byte(nameToken.span.start) => falseByte0
+                    source -> byte(nameToken.span.start + UIntSize(1)) => falseByte1
+                    source -> byte(nameToken.span.start + UIntSize(2)) => falseByte2
+                    source -> byte(nameToken.span.start + UIntSize(3)) => falseByte3
+                    source -> byte(nameToken.span.start + UIntSize(4)) => falseByte4
+                    (falseByte0 == UInt8(102) and falseByte1 == UInt8(97) and falseByte2 == UInt8(108) and falseByte3 == UInt8(115) and falseByte4 == UInt8(101)) -> if { true => booleanLiteral! }
+                }
+                booleanLiteral! -> if {
+                    inferred! -> push(ExpressionType { sourceModule: sourceIndex!, astNode: astIndex!, origin: 1, targetModule: -1, targetSymbol: 23 })
+                }
                 -1 => resolvedNameIndex!
                 0 => nameSearch!
                 nameSearch! < (resolvedNames! -> len) -> while {
                     resolvedNames![nameSearch!].astNode == astIndex! -> if { nameSearch! => resolvedNameIndex! }
                     nameSearch! + 1 => nameSearch!
                 }
-                resolvedNameIndex! >= 0 -> if {
+                (not booleanLiteral! and resolvedNameIndex! >= 0) -> if {
                     table![resolvedNames![resolvedNameIndex!].symbol] => valueSymbol
                     -1 => nominalIndex!
                     0 => typeSearch!

@@ -78,13 +78,31 @@ public analyze source: Text -> [SemanticDiagnostic; ~] {
             }
             not nameResolved! -> if {
                 tokens![nameAst.payloadToken] => unresolvedName
-                SemanticDiagnostic {
+                false => booleanLiteral!
+                unresolvedName.span.length == UIntSize(4) -> if {
+                    source -> byte(unresolvedName.span.start) => boolByte0
+                    source -> byte(unresolvedName.span.start + UIntSize(1)) => boolByte1
+                    source -> byte(unresolvedName.span.start + UIntSize(2)) => boolByte2
+                    source -> byte(unresolvedName.span.start + UIntSize(3)) => boolByte3
+                    (boolByte0 == UInt8(116) and boolByte1 == UInt8(114) and boolByte2 == UInt8(117) and boolByte3 == UInt8(101)) -> if { true => booleanLiteral! }
+                }
+                unresolvedName.span.length == UIntSize(5) -> if {
+                    source -> byte(unresolvedName.span.start) => falseByte0
+                    source -> byte(unresolvedName.span.start + UIntSize(1)) => falseByte1
+                    source -> byte(unresolvedName.span.start + UIntSize(2)) => falseByte2
+                    source -> byte(unresolvedName.span.start + UIntSize(3)) => falseByte3
+                    source -> byte(unresolvedName.span.start + UIntSize(4)) => falseByte4
+                    (falseByte0 == UInt8(102) and falseByte1 == UInt8(97) and falseByte2 == UInt8(108) and falseByte3 == UInt8(115) and falseByte4 == UInt8(101)) -> if { true => booleanLiteral! }
+                }
+                not booleanLiteral! -> if {
+                    SemanticDiagnostic {
                     code: 2
                     symbol: -1
                     previousSymbol: -1
                     span: unresolvedName.span
-                } => unresolvedDiagnostic
-                diagnostics! -> push(unresolvedDiagnostic)
+                    } => unresolvedDiagnostic
+                    diagnostics! -> push(unresolvedDiagnostic)
+                }
             }
         }
         diagnosticAstIndex! + 1 => diagnosticAstIndex!

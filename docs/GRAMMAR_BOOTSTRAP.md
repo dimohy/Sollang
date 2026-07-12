@@ -213,6 +213,10 @@ Call inference now runs inside the fixed-point expression pass. A generic
 `T -> T` signature binds `T` to the inferred argument identity and substitutes
 that identity into the call result, including when the argument type becomes
 available only after operator or binding inference.
+The identifier-shaped language literals `true` and `false` now seed stable Bool
+type id 23 and are excluded from unresolved-name diagnostics. Logical operators
+can therefore infer Bool and satisfy declared Bool return annotations in the
+self-hosted checker.
 Expression inference loads a resolved imported function's return annotation
 from the target source module. Call checking loads its input annotation from the
 same target symbol, emits code 6 for cross-module argument mismatch, and code 9
