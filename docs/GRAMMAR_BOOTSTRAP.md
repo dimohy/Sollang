@@ -268,6 +268,14 @@ Self-hosted compiler examples embed their input modules as raw multiline
 strings. This keeps tested SL source readable as source, removes duplicated
 newline escaping, and continuously exercises raw-string lexing in the bootstrap
 compiler while the embedded text is consumed by the SL lexer and parser.
+
+The first typed IR lowering lives in `selfhost/ir/typed.sl`. It emits a flat,
+relocatable node table whose initial stable kinds are function, return, and
+typed Int/Text/Bool constants. Every node retains its source-module index, AST
+index, owning symbol, complete result identity, payload token, and operand
+indexes. Multi-file snapshots prove that node indexes are compilation-unit
+global while source-module identities remain distinct. Operator, call,
+ownership, and storage payloads remain the next lowering slices.
 Expression inference loads a resolved imported function's return annotation
 from the target source module. Call checking loads its input annotation from the
 same target symbol, emits code 6 for cross-module argument mismatch, and code 9

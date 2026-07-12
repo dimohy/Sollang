@@ -367,6 +367,14 @@ packing only their symbol ids. That metadata survives bindings, generic calls,
 and composite fields, allowing dictionary indexing to check its key and infer
 its value without confusing local, imported, generic, or builtin identities.
 
+Typed semantic output now has an initial stable IR contract. A flat SL-owned
+node table lowers each inferred function result as `function -> return ->
+expression`, with stable kinds for Int, Text, and Bool constants and explicit
+source-module, AST, symbol, type-identity, payload-token, and operand indexes.
+Single- and multi-module snapshots fix this layout before LLVM text lowering is
+added. Operators, calls, ownership, and storage placement are not yet lowered,
+so this starts rather than completes critical-path step 5.
+
 Imported call signatures now participate in expression inference and checking:
 the target module's return type becomes the caller's call-expression type, its
 input type validates the caller argument, and non-public imported calls produce
