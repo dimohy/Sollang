@@ -224,6 +224,10 @@ operator's complete span and expected/actual builtin identities.
 dictionary, and box component identities. Element/key/value slots preserve
 builtin, local, or function-generic origins plus the fixed-array length token;
 an unresolved component emits code 3 over the complete composite annotation.
+Array expressions now lower as AST kind 37 and homogeneous dynamic literals
+infer structural origin 13 plus their element identity. A `[T; ~] -> [T; ~]`
+call substitutes the inferred element into its result, while concrete composite
+input/return mismatches reuse codes 6 and 5.
 Expression inference loads a resolved imported function's return annotation
 from the target source module. Call checking loads its input annotation from the
 same target symbol, emits code 6 for cross-module argument mismatch, and code 9

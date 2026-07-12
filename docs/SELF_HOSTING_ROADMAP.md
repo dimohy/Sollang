@@ -319,8 +319,14 @@ with exact unary spans.
 Composite annotations now have a structural semantic record for array/slice,
 dictionary, and box shapes. Their element/key/value identities distinguish
 builtins, local declarations, and function generics; unresolved components such
-as `[Unknown; ~]` produce code 3 over the complete annotation. Recursive
-call-site substitution of these records remains next.
+as `[Unknown; ~]` produce code 3 over the complete annotation. Dictionary and
+box call-site substitution remains beyond the array slice below.
+
+Array literals now survive AST lowering and homogeneous dynamic arrays carry a
+structural expression identity. Generic `[T; ~] -> [T; ~]` calls substitute the
+argument element identity into the return type after fixed-point inference.
+Concrete array element mismatches are checked at both call arguments (code 6)
+and function returns (code 5).
 
 Imported call signatures now participate in expression inference and checking:
 the target module's return type becomes the caller's call-expression type, its

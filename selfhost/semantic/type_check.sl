@@ -3,6 +3,7 @@ namespace smalllang.compiler.semantic.type_check
 import smalllang.compiler.ast as ast
 import smalllang.compiler.lexer as lexer
 import smalllang.compiler.semantic.calls as calls
+import smalllang.compiler.semantic.composite_types as compositeTypes
 import smalllang.compiler.semantic.expression_types as expressionTypes
 import smalllang.compiler.semantic.nominal_types as nominalTypes
 import smalllang.compiler.semantic.symbols as symbols
@@ -31,6 +32,7 @@ public struct TypeCheckDiagnostic {
 # arguments for the current zero-or-one-input function surface.
 public analyze sources: [Text; ~] -> [TypeCheckDiagnostic; ~] {
     sources -> nominalTypes.resolve => nominal!
+    sources -> compositeTypes.resolve => composite!
     sources -> expressionTypes.infer => expressionTypeTable!
     sources -> calls.resolveModules => moduleCalls!
     [TypeCheckDiagnostic; ~] => diagnostics!
@@ -50,6 +52,7 @@ public analyze sources: [Text; ~] -> [TypeCheckDiagnostic; ~] {
                     function.typeNode
                 } => returnTypeAst
                 -1 => expectedIndex!
+                -1 => expectedCompositeIndex!
                 0 => nominalIndex!
                 nominalIndex! < (nominal! -> len) -> while {
                     nominal![nominalIndex!] => candidateType
@@ -57,6 +60,14 @@ public analyze sources: [Text; ~] -> [TypeCheckDiagnostic; ~] {
                         nominalIndex! => expectedIndex!
                     }
                     nominalIndex! + 1 => nominalIndex!
+                }
+                0 => expectedCompositeSearch!
+                expectedCompositeSearch! < (composite! -> len) -> while {
+                    composite![expectedCompositeSearch!] => candidateComposite
+                    (candidateComposite.sourceModule == sourceIndex! and candidateComposite.typeAst == returnTypeAst) -> if {
+                        expectedCompositeSearch! => expectedCompositeIndex!
+                    }
+                    expectedCompositeSearch! + 1 => expectedCompositeSearch!
                 }
                 -1 => returnExpressionAst!
                 -1 => returnExpressionType!
@@ -109,6 +120,27 @@ public analyze sources: [Text; ~] -> [TypeCheckDiagnostic; ~] {
                         diagnostics! -> push(diagnostic)
                     }
                 }
+                (expectedCompositeIndex! >= 0 and returnExpressionType! >= 0) -> if {
+                    composite![expectedCompositeIndex!] => expectedComposite
+                    expressionTypeTable![returnExpressionType!] => actualType
+                    10 + expectedComposite.kind => expectedShape
+                    (expectedComposite.elementOrigin != 3 and (actualType.origin != expectedShape or actualType.targetModule != expectedComposite.elementModule or actualType.targetSymbol != expectedComposite.elementSymbol)) -> if {
+                        nodes![returnExpressionAst!] => returnExpression
+                        diagnostics! -> push(TypeCheckDiagnostic {
+                            code: 5
+                            sourceModule: sourceIndex!
+                            functionSymbol: symbolIndex!
+                            expectedOrigin: expectedShape
+                            expectedModule: expectedComposite.elementModule
+                            expectedSymbol: expectedComposite.elementSymbol
+                            actualOrigin: actualType.origin
+                            actualModule: actualType.targetModule
+                            actualSymbol: actualType.targetSymbol
+                            actualBuiltin: -1
+                            span: syntax.SourceSpan { fileId: sourceIndex!, start: returnExpression.start, length: returnExpression.length }
+                        })
+                    }
+                }
             }
             symbolIndex! + 1 => symbolIndex!
         }
@@ -135,6 +167,7 @@ public analyze sources: [Text; ~] -> [TypeCheckDiagnostic; ~] {
                 }
                 targetFunction.secondaryTypeNode >= 0 -> if {
                     -1 => expectedInputIndex!
+                    -1 => expectedInputCompositeIndex!
                     0 => inputSearch!
                     inputSearch! < (nominal! -> len) -> while {
                         nominal![inputSearch!] => inputType
@@ -142,6 +175,14 @@ public analyze sources: [Text; ~] -> [TypeCheckDiagnostic; ~] {
                             inputSearch! => expectedInputIndex!
                         }
                         inputSearch! + 1 => inputSearch!
+                    }
+                    0 => inputCompositeSearch!
+                    inputCompositeSearch! < (composite! -> len) -> while {
+                        composite![inputCompositeSearch!] => inputCompositeCandidate
+                        (inputCompositeCandidate.sourceModule == call.targetSourceModule and inputCompositeCandidate.typeAst == targetFunction.typeNode) -> if {
+                            inputCompositeSearch! => expectedInputCompositeIndex!
+                        }
+                        inputCompositeSearch! + 1 => inputCompositeSearch!
                     }
                     -1 => actualArgumentIndex!
                     1000000 => argumentDistance!
@@ -188,6 +229,35 @@ public analyze sources: [Text; ~] -> [TypeCheckDiagnostic; ~] {
                                     start: argumentExpression.start
                                     length: argumentExpression.length
                                 }
+                            })
+                        }
+                    }
+                    (expectedInputCompositeIndex! >= 0 and actualArgumentIndex! >= 0) -> if {
+                        composite![expectedInputCompositeIndex!] => expectedComposite
+                        expressionTypeTable![actualArgumentIndex!] => actual
+                        10 + expectedComposite.kind => expectedShape
+                        false => compositeMatches!
+                        actual.origin == expectedShape -> if {
+                            expectedComposite.elementOrigin == 3 -> if {
+                                true => compositeMatches!
+                            } else {
+                                (actual.targetModule == expectedComposite.elementModule and actual.targetSymbol == expectedComposite.elementSymbol) -> if { true => compositeMatches! }
+                            }
+                        }
+                        not compositeMatches! -> if {
+                            nodes![actual.astNode] => argumentExpression
+                            diagnostics! -> push(TypeCheckDiagnostic {
+                                code: 6
+                                sourceModule: sourceIndex!
+                                functionSymbol: call.functionSymbol
+                                expectedOrigin: expectedShape
+                                expectedModule: expectedComposite.elementModule
+                                expectedSymbol: expectedComposite.elementSymbol
+                                actualOrigin: actual.origin
+                                actualModule: actual.targetModule
+                                actualSymbol: actual.targetSymbol
+                                actualBuiltin: -1
+                                span: syntax.SourceSpan { fileId: sourceIndex!, start: argumentExpression.start, length: argumentExpression.length }
                             })
                         }
                     }

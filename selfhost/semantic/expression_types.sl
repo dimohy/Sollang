@@ -3,6 +3,7 @@ namespace smalllang.compiler.semantic.expression_types
 import smalllang.compiler.ast as ast
 import smalllang.compiler.lexer as lexer
 import smalllang.compiler.semantic.calls as calls
+import smalllang.compiler.semantic.composite_types as compositeTypes
 import smalllang.compiler.semantic.nominal_types as nominalTypes
 import smalllang.compiler.semantic.resolve as resolution
 import smalllang.compiler.semantic.symbols as symbols
@@ -20,6 +21,7 @@ public struct ExpressionType {
 # nominal table: Text 1, Int 2, Bool 23.
 public infer sources: [Text; ~] -> [ExpressionType; ~] {
     sources -> nominalTypes.resolve => nominal!
+    sources -> compositeTypes.resolve => composite!
     sources -> calls.resolveModules => moduleCalls!
     [ExpressionType; ~] => inferred!
     0 => sourceIndex!
@@ -181,6 +183,61 @@ public infer sources: [Text; ~] -> [ExpressionType; ~] {
                                 })
                                 true => changed!
                             }
+                        } else {
+                            -1 => returnCompositeIndex!
+                            -1 => inputCompositeIndex!
+                            0 => compositeSearch!
+                            compositeSearch! < (composite! -> len) -> while {
+                                composite![compositeSearch!] => candidateComposite
+                                (candidateComposite.sourceModule == call.targetSourceModule and candidateComposite.typeAst == returnTypeAst) -> if {
+                                    compositeSearch! => returnCompositeIndex!
+                                }
+                                (function.secondaryTypeNode >= 0 and candidateComposite.sourceModule == call.targetSourceModule and candidateComposite.typeAst == function.typeNode) -> if {
+                                    compositeSearch! => inputCompositeIndex!
+                                }
+                                compositeSearch! + 1 => compositeSearch!
+                            }
+                            (returnCompositeIndex! >= 0 and inputCompositeIndex! >= 0) -> if {
+                                composite![returnCompositeIndex!] => returnComposite
+                                composite![inputCompositeIndex!] => inputComposite
+                                (returnComposite.kind == inputComposite.kind and returnComposite.elementOrigin == 3 and inputComposite.elementOrigin == 3 and returnComposite.elementSymbol == inputComposite.elementSymbol) -> if {
+                                    -1 => compositeArgumentIndex!
+                                    1000000 => compositeArgumentDistance!
+                                    0 => compositeArgumentSearch!
+                                    compositeArgumentSearch! < (inferred! -> len) -> while {
+                                        inferred![compositeArgumentSearch!] => argumentType
+                                        argumentType.sourceModule == sourceIndex! -> if {
+                                            nodes![argumentType.astNode].parent => argumentAncestor!
+                                            1 => distance!
+                                            false => belongsToCall!
+                                            (argumentAncestor! >= 0 and not belongsToCall!) -> while {
+                                                argumentAncestor! == call.callAst -> if { true => belongsToCall! } else {
+                                                    nodes![argumentAncestor!].parent => argumentAncestor!
+                                                    distance! + 1 => distance!
+                                                }
+                                            }
+                                            (belongsToCall! and distance! < compositeArgumentDistance!) -> if {
+                                                compositeArgumentSearch! => compositeArgumentIndex!
+                                                distance! => compositeArgumentDistance!
+                                            }
+                                        }
+                                        compositeArgumentSearch! + 1 => compositeArgumentSearch!
+                                    }
+                                    compositeArgumentIndex! >= 0 -> if {
+                                        inferred![compositeArgumentIndex!] => specializedComposite
+                                        specializedComposite.origin == 10 + inputComposite.kind -> if {
+                                            inferred! -> push(ExpressionType {
+                                                sourceModule: sourceIndex!
+                                                astNode: call.callAst
+                                                origin: specializedComposite.origin
+                                                targetModule: specializedComposite.targetModule
+                                                targetSymbol: specializedComposite.targetSymbol
+                                            })
+                                            true => changed!
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -221,11 +278,13 @@ public infer sources: [Text; ~] -> [ExpressionType; ~] {
                             resolvedNames![referenceIndex!] => reference
                             reference.symbol == bindingSymbolIndex! -> if {
                                 false => referenceInferred!
+                                -1 => referenceInferredIndex!
                                 0 => inferredSearch!
                                 inferredSearch! < (inferred! -> len) -> while {
                                     inferred![inferredSearch!] => existing
                                     (existing.sourceModule == sourceIndex! and existing.astNode == reference.astNode) -> if {
                                         true => referenceInferred!
+                                        inferredSearch! => referenceInferredIndex!
                                     }
                                     inferredSearch! + 1 => inferredSearch!
                                 }
@@ -238,6 +297,15 @@ public infer sources: [Text; ~] -> [ExpressionType; ~] {
                                         targetSymbol: bindingType.targetSymbol
                                     })
                                     true => changed!
+                                } else {
+                                    inferred![referenceInferredIndex!] => existingReference!
+                                    (existingReference!.origin != bindingType.origin or existingReference!.targetModule != bindingType.targetModule or existingReference!.targetSymbol != bindingType.targetSymbol) -> if {
+                                        bindingType.origin => existingReference!.origin
+                                        bindingType.targetModule => existingReference!.targetModule
+                                        bindingType.targetSymbol => existingReference!.targetSymbol
+                                        existingReference! => inferred![referenceInferredIndex!]
+                                        true => changed!
+                                    }
                                 }
                             }
                             referenceIndex! + 1 => referenceIndex!
@@ -326,6 +394,72 @@ public infer sources: [Text; ~] -> [ExpressionType; ~] {
                     }
                 }
                 operatorIndex! + 1 => operatorIndex!
+            }
+            0 => arrayIndex!
+            arrayIndex! < (nodes! -> len) -> while {
+                nodes![arrayIndex!] => arrayNode
+                arrayNode.kind == 37 -> if {
+                    false => arrayInferred!
+                    0 => arrayExistingIndex!
+                    arrayExistingIndex! < (inferred! -> len) -> while {
+                        inferred![arrayExistingIndex!] => existingArray
+                        (existingArray.sourceModule == sourceIndex! and existingArray.astNode == arrayIndex!) -> if { true => arrayInferred! }
+                        arrayExistingIndex! + 1 => arrayExistingIndex!
+                    }
+                    not arrayInferred! -> if {
+                        1000000 => elementDistance!
+                        -1 => elementOrigin!
+                        -1 => elementModule!
+                        -1 => elementSymbol!
+                        true => homogeneous!
+                        0 => elementSearch!
+                        elementSearch! < (inferred! -> len) -> while {
+                            inferred![elementSearch!] => elementType
+                            elementType.sourceModule == sourceIndex! -> if {
+                                nodes![elementType.astNode].parent => elementAncestor!
+                                1 => distance!
+                                false => belongsToArray!
+                                (elementAncestor! >= 0 and not belongsToArray!) -> while {
+                                    elementAncestor! == arrayIndex! -> if { true => belongsToArray! } else {
+                                        nodes![elementAncestor!].parent => elementAncestor!
+                                        distance! + 1 => distance!
+                                    }
+                                }
+                                belongsToArray! -> if {
+                                    distance! < elementDistance! -> if {
+                                        distance! => elementDistance!
+                                        elementType.origin => elementOrigin!
+                                        elementType.targetModule => elementModule!
+                                        elementType.targetSymbol => elementSymbol!
+                                        true => homogeneous!
+                                    } else {
+                                        distance! == elementDistance! -> if {
+                                            (elementType.origin != elementOrigin! or elementType.targetModule != elementModule! or elementType.targetSymbol != elementSymbol!) -> if { false => homogeneous! }
+                                        }
+                                    }
+                                }
+                            }
+                            elementSearch! + 1 => elementSearch!
+                        }
+                        (elementOrigin! >= 0 and homogeneous!) -> if {
+                            false => dynamicArray!
+                            arrayNode.firstToken => arrayTokenIndex!
+                            arrayTokenIndex! < arrayNode.firstToken + arrayNode.tokenCount -> while {
+                                tokens![arrayTokenIndex!].kind == grammar.tokenIdTilde -> if { true => dynamicArray! }
+                                arrayTokenIndex! + 1 => arrayTokenIndex!
+                            }
+                            inferred! -> push(ExpressionType {
+                                sourceModule: sourceIndex!
+                                astNode: arrayIndex!
+                                origin: dynamicArray! -> if { 13 } else { 14 }
+                                targetModule: elementModule!
+                                targetSymbol: elementSymbol!
+                            })
+                            true => changed!
+                        }
+                    }
+                }
+                arrayIndex! + 1 => arrayIndex!
             }
         }
         sourceIndex! + 1 => sourceIndex!
