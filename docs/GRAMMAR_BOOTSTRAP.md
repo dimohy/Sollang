@@ -108,8 +108,11 @@ formatter and language server, avoiding a second editor-only grammar.
    declaration, implementation, function/signature, main, binding, flow/call,
    type, literal, name, and path rules into a flat parent-indexed AST. It skips
    non-semantic CST wrappers, reconnects each node to its nearest AST ancestor,
-   and trims trivia from payload spans. Expand this ordinary SL lowering to
-   operator payloads, declaration names/parameters, and every remaining rule.
+   and trims trivia from payload spans. Equality, comparison, additive,
+   multiplicative, unary, and box nodes are emitted only when their operator is
+   present; each records the exact operator token and preserves precedence in
+   AST parent links. Expand this ordinary SL lowering to logical keyword
+   operators, declaration names/parameters, and every remaining rule.
 6. Reimplement `grammar build` itself in SL and require byte-identical output.
 7. Remove the C# source generators only after the SL compiler reproduces all
    parser behavior and diagnostics.

@@ -194,8 +194,11 @@ The lowering path is also executable: generated stable rule ids drive an
 ordinary SL module that selects module/declaration/function/main/binding/flow/
 call/type/literal/name/path nodes from the green CST, reconnects AST parents
 across skipped CST wrappers, and removes trivia from payload token ranges and
-spans. Operator payloads and full language coverage are still required before
-this can replace the bootstrap AST builder.
+spans. Equality/comparison/arithmetic/unary/box wrappers are filtered by actual
+operator presence and carry exact operator-token payloads, preserving grammar
+precedence in AST parent links. Logical keyword operators, declaration payloads,
+and full language coverage are still required before this can replace the
+bootstrap AST builder.
 
 ## Immediate Implementation Order
 
