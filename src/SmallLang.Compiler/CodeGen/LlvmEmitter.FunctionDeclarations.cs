@@ -451,6 +451,15 @@ internal sealed partial class LlvmEmitter
 
     private string ParameterListForFunction(BoundFunction function)
     {
+        const string runtimeContext = "ptr %stdin, ptr %stdout, ptr %written, ptr %read, ptr %ok_state";
+        var explicitParameters = ExplicitParameterListForFunction(function);
+        return explicitParameters.Length == 0
+            ? runtimeContext
+            : $"{runtimeContext}, {explicitParameters}";
+    }
+
+    private string ExplicitParameterListForFunction(BoundFunction function)
+    {
         if (function.InputOwnership == BoundFunctionInputOwnership.MutableBorrow)
         {
             if (function.InputType is { } mutableType && _program.Types.IsStruct(mutableType))

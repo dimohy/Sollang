@@ -380,6 +380,14 @@ target source-module/function-symbol pair and their argument operand, while
 operators retain stable opcode ids. Ownership and storage placement remain
 before step 5 can be considered complete.
 
+Critical-path step 6 has an executable first slice: SL lowers zero-input
+Int/Bool functions, constants, nested arithmetic, comparisons, Boolean
+negation, and returns into LLVM text with deterministic module/symbol names and
+IR-index SSA registers. The example runner sends that stdout to pinned
+`llvm-as`, proving it is accepted LLVM IR. Function calls, parameters, Text and
+aggregate ABI, runtime declarations, target triples, ownership, and file output
+remain before this is a usable compiler backend.
+
 Imported call signatures now participate in expression inference and checking:
 the target module's return type becomes the caller's call-expression type, its
 input type validates the caller argument, and non-public imported calls produce

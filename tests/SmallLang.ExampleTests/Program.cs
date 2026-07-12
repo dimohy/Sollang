@@ -7,6 +7,7 @@ var artifactsDir = Path.Combine(repoRoot, "artifacts", "example-tests");
 Directory.CreateDirectory(artifactsDir);
 var llvmDir = Path.Combine(repoRoot, ".tools", "llvm-22.1.8");
 var clangPath = Path.Combine(llvmDir, "bin", "clang.exe");
+var llvmAsPath = Path.Combine(llvmDir, "bin", "llvm-as.exe");
 if (!File.Exists(clangPath))
 {
     Console.Error.WriteLine($"LLVM toolchain not found: {clangPath}");
@@ -91,6 +92,7 @@ foreach (var expectedFile in expectedFiles)
     var llvmNotContainsPath = Path.Combine(expectedDir, name + ".llvm.not-contains.txt");
     var wasmLlvmContainsPath = Path.Combine(expectedDir, name + ".wasm32.llvm.contains.txt");
     var sourcesPath = Path.Combine(expectedDir, name + ".sources.txt");
+    var stdoutLlvmValidationPath = Path.Combine(expectedDir, name + ".stdout.llvm.validate.txt");
     var verifyLlvm = File.Exists(llvmContainsPath) || File.Exists(llvmNotContainsPath);
 
     if (!File.Exists(sourcePath))
@@ -214,6 +216,22 @@ foreach (var expectedFile in expectedFiles)
         Console.Error.WriteLine(actual);
         failures++;
         continue;
+    }
+
+    if (File.Exists(stdoutLlvmValidationPath))
+    {
+        var stdoutLlvmPath = Path.Combine(artifactsDir, name + ".stdout.ll");
+        var stdoutBitcodePath = Path.Combine(artifactsDir, name + ".stdout.bc");
+        File.WriteAllText(stdoutLlvmPath, actual, new UTF8Encoding(false));
+        var llvmAs = Run(llvmAsPath, [stdoutLlvmPath, "-o", stdoutBitcodePath], input: null, repoRoot);
+        if (llvmAs.ExitCode != 0)
+        {
+            Console.Error.WriteLine($"FAIL {name}: stdout is not valid LLVM IR");
+            Console.Error.WriteLine(llvmAs.Stdout);
+            Console.Error.WriteLine(llvmAs.Stderr);
+            failures++;
+            continue;
+        }
     }
 
     Console.WriteLine($"PASS {name}");

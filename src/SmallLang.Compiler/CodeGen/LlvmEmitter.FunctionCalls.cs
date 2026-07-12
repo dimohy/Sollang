@@ -804,6 +804,15 @@ internal sealed partial class LlvmEmitter
 
     private string FunctionCallArgumentList(BoundFunction function, RuntimeValue? argument)
     {
+        const string runtimeContext = "ptr %stdin, ptr %stdout, ptr %written, ptr %read, ptr %ok_state";
+        var explicitArguments = ExplicitFunctionCallArgumentList(function, argument);
+        return explicitArguments.Length == 0
+            ? runtimeContext
+            : $"{runtimeContext}, {explicitArguments}";
+    }
+
+    private string ExplicitFunctionCallArgumentList(BoundFunction function, RuntimeValue? argument)
+    {
         if (function.InputType is null)
         {
             if (argument is not null)

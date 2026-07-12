@@ -282,6 +282,19 @@ pass. Nested precedence therefore becomes an explicit IR graph rather than an
 AST convention. Resolved calls retain their target source module and function
 symbol, with argument expressions linked as operands. Operator codes are stored
 directly for LLVM opcode selection.
+
+The first self-hosted LLVM text backend lives in `selfhost/llvm/text.sl`. It
+emits stable `sl_m<module>_s<symbol>` function names, `i32`/`i1` signatures,
+IR-index-derived SSA registers, constants, nested integer arithmetic,
+comparisons, Boolean negation, and returns. Its snapshot is passed through the
+pinned `llvm-as`, so the test proves LLVM syntax validity rather than text
+similarity alone. Calls, parameters, Text values, ownership, and target/runtime
+declarations remain.
+
+User-function ABI lowering now threads a hidden runtime I/O context containing
+stdin/stdout handles, read/write slots, and the cumulative ok state. This fixes
+function-local `print`/`println` and supplies the context that later file-backed
+LLVM emission will use. A future effect pass may erase unused context arguments.
 Expression inference loads a resolved imported function's return annotation
 from the target source module. Call checking loads its input annotation from the
 same target symbol, emits code 6 for cross-module argument mismatch, and code 9
