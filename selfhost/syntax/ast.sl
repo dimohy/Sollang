@@ -13,6 +13,8 @@ public struct AstNode {
     cstRuleId: Int
     operatorKind: Int
     payloadToken: Int
+    secondaryToken: Int
+    flags: Int
     firstToken: Int
     tokenCount: Int
     start: UIntSize
@@ -184,6 +186,8 @@ public lower source: Text -> [AstNode; ~] {
                 cstRuleId: node.ruleId
                 operatorKind: operatorKind!
                 payloadToken: payloadToken!
+                secondaryToken: -1
+                flags: 0
                 firstToken: astFirstToken!
                 tokenCount: astTokenCount!
                 start: astStart!
@@ -242,6 +246,61 @@ public lower source: Text -> [AstNode; ~] {
                         associatedToken! => declaration!.payloadToken
                     }
                     associatedToken! + 1 => associatedToken!
+                }
+            }
+        }
+        (declaration!.kind == 7 or declaration!.kind == 29 or declaration!.kind == 31) -> if {
+            declaration!.firstToken => signatureToken!
+            declaration!.firstToken + declaration!.tokenCount => signatureEnd
+            false => afterColon!
+            signatureToken! < signatureEnd -> while {
+                tokens![signatureToken!].kind == grammar.tokenIdColon -> if {
+                    true => afterColon!
+                    signatureToken! + 1 => signatureToken!
+                } else {
+                    tokens![signatureToken!].kind == grammar.tokenIdArrow -> if {
+                        signatureEnd => signatureToken!
+                    } else {
+                        tokens![signatureToken!].kind == grammar.tokenIdIdentifier -> if {
+                            afterColon! -> if {
+                                tokens![signatureToken!] => modifierToken
+                                false => ownershipKeyword!
+                                modifierToken.span.length == UIntSize(4) -> if {
+                                    source -> byte(modifierToken.span.start) => moveByte0
+                                    source -> byte(modifierToken.span.start + UIntSize(1)) => moveByte1
+                                    source -> byte(modifierToken.span.start + UIntSize(2)) => moveByte2
+                                    source -> byte(modifierToken.span.start + UIntSize(3)) => moveByte3
+                                    (moveByte0 == UInt8(109) and moveByte1 == UInt8(111) and moveByte2 == UInt8(118) and moveByte3 == UInt8(101)) -> if {
+                                        1 => declaration!.flags
+                                        true => ownershipKeyword!
+                                    }
+                                }
+                                modifierToken.span.length == UIntSize(3) -> if {
+                                    source -> byte(modifierToken.span.start) => mutByte0
+                                    source -> byte(modifierToken.span.start + UIntSize(1)) => mutByte1
+                                    source -> byte(modifierToken.span.start + UIntSize(2)) => mutByte2
+                                    (mutByte0 == UInt8(109) and mutByte1 == UInt8(117) and mutByte2 == UInt8(116)) -> if {
+                                        2 => declaration!.flags
+                                        true => ownershipKeyword!
+                                    }
+                                }
+                                (not ownershipKeyword! and modifierToken.span.length == UIntSize(4)) -> if {
+                                    source -> byte(modifierToken.span.start) => selfByte0
+                                    source -> byte(modifierToken.span.start + UIntSize(1)) => selfByte1
+                                    source -> byte(modifierToken.span.start + UIntSize(2)) => selfByte2
+                                    source -> byte(modifierToken.span.start + UIntSize(3)) => selfByte3
+                                    (selfByte0 == UInt8(115) and selfByte1 == UInt8(101) and selfByte2 == UInt8(108) and selfByte3 == UInt8(102)) -> if {
+                                        signatureToken! => declaration!.secondaryToken
+                                    }
+                                }
+                            } else {
+                                signatureToken! != declaration!.payloadToken -> if {
+                                    signatureToken! => declaration!.secondaryToken
+                                }
+                            }
+                        }
+                        signatureToken! + 1 => signatureToken!
+                    }
                 }
             }
         }

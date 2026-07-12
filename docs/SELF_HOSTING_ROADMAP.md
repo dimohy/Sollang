@@ -201,7 +201,9 @@ negative keyword codes as parser diagnostics. Parameter and expression payload
 coverage is still required before this can replace the bootstrap AST builder.
 Nominal declarations, fields, variants, trait members, impl targets,
 methods, associated types, and generic clauses now carry concrete identifier
-token payloads resolved in a second lowering pass.
+token payloads resolved in a second lowering pass. Function parameters and
+method `self` tokens carry explicit move/mutable-borrow flags for later ABI and
+ownership analysis.
 
 ## Immediate Implementation Order
 
