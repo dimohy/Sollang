@@ -244,6 +244,8 @@ Missing and non-public imported nominal types now produce structured codes 3
 and 4 with multi-source file ids and exact qualified-type spans. This moves
 module type lookup from an inspectable table into the self-hosted compiler's
 diagnostic pipeline.
+Unresolved local named annotations now flow through the same code-3 path, making
+named type resolution total across builtin, local, and imported origins.
 
 The generated source-file grammar now consumes newline boundaries between
 top-level declaration groups, including the boundary from a declaration to

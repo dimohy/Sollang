@@ -1,7 +1,7 @@
 namespace smalllang.compiler.semantic.type_diagnostics
 
 import smalllang.compiler.ast as ast
-import smalllang.compiler.semantic.type_resolve as typeResolve
+import smalllang.compiler.semantic.nominal_types as nominalTypes
 import smalllang.compiler.syntax as syntax
 
 public struct TypeDiagnostic {
@@ -16,7 +16,7 @@ public struct TypeDiagnostic {
 # Code 3 identifies a missing imported nominal type.
 # Code 4 identifies an imported nominal type that is not public.
 public analyze sources: [Text; ~] -> [TypeDiagnostic; ~] {
-    sources -> typeResolve.resolve => resolvedTypes!
+    sources -> nominalTypes.resolve => resolvedTypes!
     [TypeDiagnostic; ~] => diagnostics!
     0 => resolvedIndex!
     resolvedIndex! < (resolvedTypes! -> len) -> while {

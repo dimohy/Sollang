@@ -162,6 +162,9 @@ types.
 multi-source diagnostics: code 3 is a missing imported nominal type and code 4
 is a non-public imported nominal type. Diagnostic spans use the source-module
 index as `fileId` and cover the complete qualified type annotation.
+The diagnostic pass now consumes the unified nominal table, so an unresolved
+unqualified local annotation produces the same code 3 as a missing imported
+type instead of remaining a status-only row.
 
 The generated module is bootstrap data, not the final parser implementation.
 It deliberately makes the transition incremental and auditable.
