@@ -288,6 +288,11 @@ Incompatible typed binary operands no longer disappear as uninferred nodes.
 They produce deduplicated code-8 diagnostics over the complete expression,
 including parenthesized cases such as `Int + Bool`.
 
+Alias-qualified calls now resolve across the self-hosted module graph to target
+function symbols and source modules. Public imported functions succeed while
+internal functions retain the explicit non-public status needed for a module
+diagnostic instead of falling back to an unresolved local call.
+
 ## Immediate Implementation Order
 
 1. Multi-file compilation (implemented by example 52).

@@ -198,3 +198,7 @@ inference across local definitions.
 Binary operators with two inferred but incompatible operand types now emit code
 8 over the complete operator span. Nested parenthesized operands are selected
 by nearest typed ancestry, and equivalent wrapper nodes are deduplicated.
+Multi-source call resolution now correlates alias-qualified call paths with
+import edges and target function symbols. Each result preserves local/imported
+origin, target module identity, target source index, and public/non-public
+status for later signature and return-type loading.
