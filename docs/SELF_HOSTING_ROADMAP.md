@@ -224,8 +224,8 @@ slice, dynamic/fixed array, dictionary, and box shapes. Recursive element/key/
 value links now point to interned nominal canonical ids, and fixed arrays retain
 their value-generic length token. The multi-source module graph now assigns
 deterministic 64-bit identities to qualified namespaces and links import paths
-and aliases to source modules. Import visibility and nominal type resolution
-across those edges remain before type-system parity. Edge resolution now
+and aliases to source modules. Import-driven file loading and broader type-
+system parity remain. Edge resolution now
 distinguishes unique, missing, and duplicate target modules, while declaration
 symbols preserve explicit `public` visibility in flag bit 4.
 
@@ -234,6 +234,11 @@ module symbol tables. Public exports succeed, missing members remain distinct,
 and internal declarations produce a visibility failure. Minimal deterministic
 string escapes (`\n`, `\r`, `\t`, `\\`) make real multiline source fixtures
 possible without adding a separate test-only source representation.
+
+Qualified paths nested in type annotations now link source-local canonical type
+ids to the resolved target module and nominal symbol. Public imported types and
+internal imported types use the same deterministic link record, with visibility
+represented explicitly by the resolution status.
 
 ## Immediate Implementation Order
 

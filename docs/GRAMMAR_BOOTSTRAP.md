@@ -153,6 +153,11 @@ Declaration AST/symbol flags reserve bit 4 for explicit `public` visibility.
 `selfhost/semantic/qualified.sl` matches the first segment of member-access AST
 nodes to import aliases, resolves the target module, and distinguishes public,
 missing, and non-public target symbols.
+`selfhost/semantic/type_resolve.sl` walks each qualified path's AST ancestry to
+its enclosing type annotation and links the source-local canonical type id to
+the target module and nominal symbol. The link preserves missing/non-public
+statuses instead of silently treating inaccessible declarations as local
+types.
 
 The generated module is bootstrap data, not the final parser implementation.
 It deliberately makes the transition incremental and auditable.
