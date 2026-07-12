@@ -355,6 +355,9 @@ Local and imported value-member access now propagates field types into later
 expressions and return checks. Unknown members produce code 14 at the field
 token, and an untyped outer member/operator/call suppresses misleading fallback
 return mismatches from an inferred inner operand.
+Composite member fields preserve their structural component identities.
+Postfix index access now lowers as AST kind 41, and array, slice, and fixed-array
+index results inherit the inferred element identity for subsequent checks.
 
 Imported call signatures now participate in expression inference and checking:
 the target module's return type becomes the caller's call-expression type, its

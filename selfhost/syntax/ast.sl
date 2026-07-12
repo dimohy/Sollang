@@ -29,7 +29,8 @@ public struct AstNode {
 # 28 trait associated type, 29 trait method, 30 impl associated type,
 # 31 method, 32 generic parameter, 33 generic where constraint,
 # 34 associated-type equality, 36 member access, 37 array expression,
-# 38 dictionary expression, 39 struct literal, 40 struct field initializer.
+# 38 dictionary expression, 39 struct literal, 40 struct field initializer,
+# 41 index access.
 # Keyword operator codes use the same
 # -(keywordIndex + 1) representation as syntax diagnostics.
 public lower source: Text -> [AstNode; ~] {
@@ -116,6 +117,11 @@ public lower source: Text -> [AstNode; ~] {
                 operatorTokenIndex! => operatorPayloadToken!
             }
             (astKind! == 36 and candidateOperator == grammar.tokenIdDot) -> if {
+                candidateOperator => operatorKind!
+                operatorTokenIndex! => operatorPayloadToken!
+            }
+            (astKind! == 36 and candidateOperator == grammar.tokenIdLeftBracket and operatorTokenIndex! > node.firstToken and tokens![operatorTokenIndex! - 1].kind == grammar.tokenIdBang) -> if {
+                41 => astKind!
                 candidateOperator => operatorKind!
                 operatorTokenIndex! => operatorPayloadToken!
             }

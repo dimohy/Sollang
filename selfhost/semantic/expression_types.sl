@@ -458,11 +458,18 @@ public infer sources: [Text; ~] -> [ExpressionType; ~] {
                                 fieldSymbol! >= 0 -> if {
                                     targetTable![fieldSymbol!] => field
                                     -1 => fieldNominalIndex!
+                                    -1 => fieldCompositeIndex!
                                     0 => fieldTypeSearch!
                                     fieldTypeSearch! < (nominal! -> len) -> while {
                                         nominal![fieldTypeSearch!] => fieldType
                                         (fieldType.sourceModule == targetSourceModule! and fieldType.typeAst == field.typeNode) -> if { fieldTypeSearch! => fieldNominalIndex! }
                                         fieldTypeSearch! + 1 => fieldTypeSearch!
+                                    }
+                                    0 => fieldCompositeSearch!
+                                    fieldCompositeSearch! < (composite! -> len) -> while {
+                                        composite![fieldCompositeSearch!] => fieldCompositeCandidate
+                                        (fieldCompositeCandidate.sourceModule == targetSourceModule! and fieldCompositeCandidate.typeAst == field.typeNode) -> if { fieldCompositeSearch! => fieldCompositeIndex! }
+                                        fieldCompositeSearch! + 1 => fieldCompositeSearch!
                                     }
                                     fieldNominalIndex! >= 0 -> if {
                                         nominal![fieldNominalIndex!] => fieldType
@@ -475,12 +482,70 @@ public infer sources: [Text; ~] -> [ExpressionType; ~] {
                                         })
                                         true => changed!
                                     }
+                                    (fieldNominalIndex! < 0 and fieldCompositeIndex! >= 0) -> if {
+                                        composite![fieldCompositeIndex!] => fieldType
+                                        inferred! -> push(ExpressionType {
+                                            sourceModule: sourceIndex!
+                                            astNode: memberIndex!
+                                            origin: 10 + fieldType.kind
+                                            targetModule: fieldType.kind == 5 -> if { fieldType.keySymbol } else { fieldType.elementModule }
+                                            targetSymbol: fieldType.kind == 5 -> if { fieldType.valueSymbol } else { fieldType.elementSymbol }
+                                        })
+                                        true => changed!
+                                    }
                                 }
                             }
                         }
                     }
                 }
                 memberIndex! + 1 => memberIndex!
+            }
+
+            0 => indexIndex!
+            indexIndex! < (nodes! -> len) -> while {
+                nodes![indexIndex!] => indexAccess
+                indexAccess.kind == 41 -> if {
+                    false => indexInferred!
+                    -1 => indexedTypeIndex!
+                    1000000 => indexedDistance!
+                    0 => indexTypeSearch!
+                    indexTypeSearch! < (inferred! -> len) -> while {
+                        inferred![indexTypeSearch!] => indexType
+                        (indexType.sourceModule == sourceIndex! and indexType.astNode == indexIndex!) -> if { true => indexInferred! }
+                        (indexType.sourceModule == sourceIndex! and indexType.origin >= 12 and indexType.origin <= 14) -> if {
+                            nodes![indexType.astNode].parent => indexAncestor!
+                            1 => indexDistance!
+                            false => belongsToIndex!
+                            (indexAncestor! >= 0 and not belongsToIndex!) -> while {
+                                indexAncestor! == indexIndex! -> if { true => belongsToIndex! } else {
+                                    nodes![indexAncestor!].parent => indexAncestor!
+                                    indexDistance! + 1 => indexDistance!
+                                }
+                            }
+                            (belongsToIndex! and indexDistance! < indexedDistance!) -> if {
+                                indexTypeSearch! => indexedTypeIndex!
+                                indexDistance! => indexedDistance!
+                            }
+                        }
+                        indexTypeSearch! + 1 => indexTypeSearch!
+                    }
+                    (not indexInferred! and indexedTypeIndex! >= 0) -> if {
+                        inferred![indexedTypeIndex!] => indexedType
+                        0 => elementOrigin!
+                        indexedType.targetModule == -1 -> if { 1 => elementOrigin! } else {
+                            indexedType.targetModule == sourceIndex! -> if { 0 => elementOrigin! } else { 2 => elementOrigin! }
+                        }
+                        inferred! -> push(ExpressionType {
+                            sourceModule: sourceIndex!
+                            astNode: indexIndex!
+                            origin: elementOrigin!
+                            targetModule: indexedType.targetModule
+                            targetSymbol: indexedType.targetSymbol
+                        })
+                        true => changed!
+                    }
+                }
+                indexIndex! + 1 => indexIndex!
             }
 
             0 => operatorIndex!

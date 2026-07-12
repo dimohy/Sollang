@@ -252,6 +252,10 @@ Value member access now resolves a local/imported nominal base to its field
 symbol and propagates named field types through fixed-point inference. An
 unknown field emits code 14 at the member token. Return checking suppresses
 cascading mismatches when an outer expression remains untyped.
+Composite field annotations propagate their array, slice, fixed-array,
+dictionary, and box component identities through the same member inference.
+Postfix indexing lowers separately as AST kind 41, and indexing an inferred
+array-like value propagates its element identity to the index expression.
 Expression inference loads a resolved imported function's return annotation
 from the target source module. Call checking loads its input annotation from the
 same target symbol, emits code 6 for cross-module argument mismatch, and code 9
