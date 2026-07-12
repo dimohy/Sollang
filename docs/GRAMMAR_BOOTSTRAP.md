@@ -104,7 +104,10 @@ formatter and language server, avoiding a second editor-only grammar.
    panic-mode error-range event through the next newline, right brace, or EOF;
    the CST materializer turns it into a `ruleId: -1` green node and preserves
    the complete file envelope for later recovery-aware lowering.
-5. Write CST-to-AST lowering in ordinary SL modules.
+5. `selfhost/syntax/ast.sl` now lowers source-file, main-block, number, and name
+   rules into a flat parent-indexed AST and trims trivia from expression spans.
+   Expand this ordinary SL lowering to every declaration, statement, type, and
+   expression payload.
 6. Reimplement `grammar build` itself in SL and require byte-identical output.
 7. Remove the C# source generators only after the SL compiler reproduces all
    parser behavior and diagnostics.

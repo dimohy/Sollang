@@ -318,6 +318,11 @@ internal static class GrammarCompiler
         EmitTextArrayFunction(builder, "lexerLiteralTexts", grammar.LexerLiteralTexts);
         EmitIntArrayFunction(builder, "lexerLiteralIndexes", grammar.LexerLiteralIndexes);
         EmitTextArrayFunction(builder, "ruleNames", grammar.RuleNames);
+        for (var ruleId = 0; ruleId < grammar.RuleNames.Count; ruleId++)
+        {
+            builder.AppendLine($"public ruleId{grammar.RuleNames[ruleId]}: -> Int => {ruleId.ToString(CultureInfo.InvariantCulture)}");
+        }
+        builder.AppendLine();
         EmitTextArrayFunction(builder, "keywordTexts", grammar.Strings);
         EmitIntArrayFunction(builder, "ruleOffsets", grammar.RuleOffsets);
         EmitIntArrayFunction(builder, "parserProgram", grammar.Program);

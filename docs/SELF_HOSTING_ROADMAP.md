@@ -185,10 +185,16 @@ trivia are retained without affecting grammar matching. Unknown bytes are
 preserved as invalid CST tokens and force rejection. Panic-mode recovery now
 creates explicit green error nodes bounded by newline, right brace, or EOF
 while retaining the entire source envelope. Multi-error continuation,
-CST-to-AST lowering, and semantic diagnostics remain as
+full CST-to-AST lowering, and semantic diagnostics remain as
 described in [GRAMMAR_BOOTSTRAP.md](GRAMMAR_BOOTSTRAP.md). These additions
 complete the reusable source-span/diagnostic gate. The formal count is now
 **47.0 / 60 (78.3%)**; multi-error parser continuation remains.
+
+The first lowering slice is also executable: generated stable rule ids drive an
+ordinary SL module that selects source, main, number, and name nodes from the
+green CST, reconstructs AST parent links, and removes trivia from expression
+token ranges and spans. Full language coverage is still required before this
+can replace the bootstrap AST builder.
 
 ## Immediate Implementation Order
 
