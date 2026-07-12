@@ -250,6 +250,12 @@ top-level declaration groups, including the boundary from a declaration to
 `main`. The self-hosted parser therefore retains both declarations and the
 entry point instead of rejecting the valid source at EOF.
 
+Builtin, local, and imported named annotations now converge into one nominal
+type resolution table. Stable builtin ids, module-local symbol ids, imported
+module/symbol identities, visibility failures, and unresolved local names can
+therefore feed the same later signature and expression type checks. Repeated
+top-level declarations of the same category also retain their newline boundary.
+
 ## Immediate Implementation Order
 
 1. Multi-file compilation (implemented by example 52).

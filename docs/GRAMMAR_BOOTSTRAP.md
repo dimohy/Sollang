@@ -168,3 +168,10 @@ It deliberately makes the transition incremental and auditable.
 Top-level declaration groups accept explicit newline boundaries before the next
 group or `main`; this prevents a failed declaration repetition probe from
 leaving a valid following entry point unreachable.
+Each repeated declaration also owns its following newlines, so multiple structs,
+enums, traits, impls, or functions in the same group remain parseable.
+
+`selfhost/semantic/nominal_types.sl` presents one resolution table for builtin,
+local, and imported named type annotations. Builtins receive stable table ids,
+local declarations point at their module symbol, imported declarations retain
+visibility status, and unresolved local names remain explicit status-2 rows.
