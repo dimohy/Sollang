@@ -68,39 +68,101 @@ public infer sources: [Text; ~] -> [ExpressionType; ~] {
             astIndex! + 1 => astIndex!
         }
 
-        0 => callIndex!
-        callIndex! < (moduleCalls! -> len) -> while {
-            moduleCalls![callIndex!] => call
-            (call.sourceModule == sourceIndex! and call.status == 0) -> if {
-                sources[call.targetSourceModule] -> symbols.collect => targetTable!
-                targetTable![call.functionSymbol] => function
-                function.secondaryTypeNode >= 0 -> if { function.secondaryTypeNode } else { function.typeNode } => returnTypeAst
-                -1 => returnNominalIndex!
-                0 => returnSearch!
-                returnSearch! < (nominal! -> len) -> while {
-                    nominal![returnSearch!] => candidateReturn
-                    (candidateReturn.sourceModule == call.targetSourceModule and candidateReturn.typeAst == returnTypeAst) -> if {
-                        returnSearch! => returnNominalIndex!
-                    }
-                    returnSearch! + 1 => returnSearch!
-                }
-                returnNominalIndex! >= 0 -> if {
-                    nominal![returnNominalIndex!] => returnType
-                    inferred! -> push(ExpressionType {
-                        sourceModule: sourceIndex!
-                        astNode: call.callAst
-                        origin: returnType.origin
-                        targetModule: returnType.targetModule
-                        targetSymbol: returnType.targetSymbol
-                    })
-                }
-            }
-            callIndex! + 1 => callIndex!
-        }
-
         true => changed!
         changed! -> while {
             false => changed!
+            0 => callIndex!
+            callIndex! < (moduleCalls! -> len) -> while {
+                moduleCalls![callIndex!] => call
+                (call.sourceModule == sourceIndex! and call.status == 0) -> if {
+                    false => callInferred!
+                    0 => callExistingIndex!
+                    callExistingIndex! < (inferred! -> len) -> while {
+                        inferred![callExistingIndex!] => callExisting
+                        (callExisting.sourceModule == sourceIndex! and callExisting.astNode == call.callAst) -> if { true => callInferred! }
+                        callExistingIndex! + 1 => callExistingIndex!
+                    }
+                    not callInferred! -> if {
+                        sources[call.targetSourceModule] -> symbols.collect => targetTable!
+                        targetTable![call.functionSymbol] => function
+                        function.secondaryTypeNode >= 0 -> if { function.secondaryTypeNode } else { function.typeNode } => returnTypeAst
+                        -1 => returnNominalIndex!
+                        0 => returnSearch!
+                        returnSearch! < (nominal! -> len) -> while {
+                            nominal![returnSearch!] => candidateReturn
+                            (candidateReturn.sourceModule == call.targetSourceModule and candidateReturn.typeAst == returnTypeAst) -> if {
+                                returnSearch! => returnNominalIndex!
+                            }
+                            returnSearch! + 1 => returnSearch!
+                        }
+                        returnNominalIndex! >= 0 -> if {
+                            nominal![returnNominalIndex!] => returnType
+                            returnType.origin => resultOrigin!
+                            returnType.targetModule => resultModule!
+                            returnType.targetSymbol => resultSymbol!
+                            returnType.origin != 3 => canInferCall!
+                            returnType.origin == 3 -> if {
+                                function.secondaryTypeNode >= 0 -> if {
+                                    -1 => inputNominalIndex!
+                                    0 => inputSearch!
+                                    inputSearch! < (nominal! -> len) -> while {
+                                        nominal![inputSearch!] => candidateInput
+                                        (candidateInput.sourceModule == call.targetSourceModule and candidateInput.typeAst == function.typeNode) -> if {
+                                            inputSearch! => inputNominalIndex!
+                                        }
+                                        inputSearch! + 1 => inputSearch!
+                                    }
+                                    inputNominalIndex! >= 0 -> if {
+                                        nominal![inputNominalIndex!] => inputType
+                                        (inputType.origin == 3 and inputType.targetSymbol == returnType.targetSymbol) -> if {
+                                            -1 => argumentTypeIndex!
+                                            1000000 => argumentDistance!
+                                            0 => argumentSearch!
+                                            argumentSearch! < (inferred! -> len) -> while {
+                                                inferred![argumentSearch!] => argumentType
+                                                argumentType.sourceModule == sourceIndex! -> if {
+                                                    nodes![argumentType.astNode].parent => argumentAncestor!
+                                                    1 => distance!
+                                                    false => belongsToCall!
+                                                    (argumentAncestor! >= 0 and not belongsToCall!) -> while {
+                                                        argumentAncestor! == call.callAst -> if { true => belongsToCall! } else {
+                                                            nodes![argumentAncestor!].parent => argumentAncestor!
+                                                            distance! + 1 => distance!
+                                                        }
+                                                    }
+                                                    (belongsToCall! and distance! < argumentDistance!) -> if {
+                                                        argumentSearch! => argumentTypeIndex!
+                                                        distance! => argumentDistance!
+                                                    }
+                                                }
+                                                argumentSearch! + 1 => argumentSearch!
+                                            }
+                                            argumentTypeIndex! >= 0 -> if {
+                                                inferred![argumentTypeIndex!] => specialized
+                                                specialized.origin => resultOrigin!
+                                                specialized.targetModule => resultModule!
+                                                specialized.targetSymbol => resultSymbol!
+                                                true => canInferCall!
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            canInferCall! -> if {
+                                inferred! -> push(ExpressionType {
+                                    sourceModule: sourceIndex!
+                                    astNode: call.callAst
+                                    origin: resultOrigin!
+                                    targetModule: resultModule!
+                                    targetSymbol: resultSymbol!
+                                })
+                                true => changed!
+                            }
+                        }
+                    }
+                }
+                callIndex! + 1 => callIndex!
+            }
             0 => bindingSymbolIndex!
             bindingSymbolIndex! < (table! -> len) -> while {
                 table![bindingSymbolIndex!] => bindingSymbol

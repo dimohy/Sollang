@@ -209,6 +209,10 @@ Generic clauses now preserve their first and optional second identifier as
 lexical symbols owned by the function. Nominal resolution uses origin 3 for
 those identities, so `T`/`E` annotations resolve by function scope and enter
 the same return-type comparison used by concrete nominal types.
+Call inference now runs inside the fixed-point expression pass. A generic
+`T -> T` signature binds `T` to the inferred argument identity and substitutes
+that identity into the call result, including when the argument type becomes
+available only after operator or binding inference.
 Expression inference loads a resolved imported function's return annotation
 from the target source module. Call checking loads its input annotation from the
 same target symbol, emits code 6 for cross-module argument mismatch, and code 9

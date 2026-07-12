@@ -300,6 +300,13 @@ generic annotations resolve to function-owned nominal identities rather than
 missing local types. The return checker can distinguish `T -> T` from an invalid
 `T -> E` value return without specializing either parameter yet.
 
+The first generic call specialization slice now handles `T -> T`: a call-site
+argument binds the function-owned generic identity and the call result becomes
+that concrete nominal type. Because calls participate in the fixed-point pass,
+operator expressions such as `identity(1 + 2)` specialize to Int after their
+argument is inferred. Trait constraints and independent `T -> E` inference
+remain.
+
 Imported call signatures now participate in expression inference and checking:
 the target module's return type becomes the caller's call-expression type, its
 input type validates the caller argument, and non-public imported calls produce

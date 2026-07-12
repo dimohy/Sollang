@@ -170,7 +170,7 @@ public analyze sources: [Text; ~] -> [TypeCheckDiagnostic; ~] {
                     (expectedInputIndex! >= 0 and actualArgumentIndex! >= 0) -> if {
                         nominal![expectedInputIndex!] => expected
                         expressionTypeTable![actualArgumentIndex!] => actual
-                        (expected.origin != actual.origin or expected.targetModule != actual.targetModule or expected.targetSymbol != actual.targetSymbol) -> if {
+                        (expected.origin != 3 and (expected.origin != actual.origin or expected.targetModule != actual.targetModule or expected.targetSymbol != actual.targetSymbol)) -> if {
                             nodes![actual.astNode] => argumentExpression
                             diagnostics! -> push(TypeCheckDiagnostic {
                                 code: 6
@@ -262,6 +262,7 @@ public analyze sources: [Text; ~] -> [TypeCheckDiagnostic; ~] {
                     expressionTypeTable![inferredIndex!] => inferredType
                     inferredType.sourceModule == sourceIndex! -> if {
                         inferredType.astNode == operatorIndex! -> if { true => operatorInferred! }
+                        (nodes![inferredType.astNode].start == operator.start and nodes![inferredType.astNode].length == operator.length) -> if { true => operatorInferred! }
                         inferredType.astNode != operatorIndex! -> if {
                             nodes![inferredType.astNode].parent => operandAncestor!
                             1 => operandDistance!
