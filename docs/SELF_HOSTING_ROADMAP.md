@@ -222,8 +222,10 @@ Self-hosted type canonicalization now deduplicates semantically identical type
 token sequences while ignoring whitespace/comment trivia and classifies named,
 slice, dynamic/fixed array, dictionary, and box shapes. Recursive element/key/
 value links now point to interned nominal canonical ids, and fixed arrays retain
-their value-generic length token. Qualified nominal module identity remains
-before type-system parity.
+their value-generic length token. The multi-source module graph now assigns
+deterministic 64-bit identities to qualified namespaces and links import paths
+and aliases to source modules. Import visibility and nominal type resolution
+across those edges remain before type-system parity.
 
 ## Immediate Implementation Order
 

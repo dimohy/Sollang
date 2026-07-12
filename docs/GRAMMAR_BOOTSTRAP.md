@@ -144,6 +144,9 @@ bytes, assigns stable canonical ids, and classifies named, slice, dynamic/fixed
 array, dictionary, and box layouts. Array/box element and dictionary key/value
 names are interned as canonical nominal ids; fixed arrays retain their value-
 generic length token.
+`selfhost/semantic/modules.sl` accepts multiple source texts, hashes qualified
+namespace paths into deterministic 64-bit identities, and emits import edges
+with source-module indexes, target identities, path spans, and alias tokens.
 
 The generated module is bootstrap data, not the final parser implementation.
 It deliberately makes the transition incremental and auditable.
