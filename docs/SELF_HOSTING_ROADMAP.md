@@ -351,6 +351,11 @@ produce code 12 at the initializer expression with the caller source file id.
 Field coverage is now complete for local and imported literals: omitted required
 fields produce code 13 over the complete literal with the absent field symbol.
 
+Local and imported value-member access now propagates field types into later
+expressions and return checks. Unknown members produce code 14 at the field
+token, and an untyped outer member/operator/call suppresses misleading fallback
+return mismatches from an inferred inner operand.
+
 Imported call signatures now participate in expression inference and checking:
 the target module's return type becomes the caller's call-expression type, its
 input type validates the caller argument, and non-public imported calls produce

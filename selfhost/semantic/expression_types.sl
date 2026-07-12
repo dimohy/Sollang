@@ -4,6 +4,7 @@ import smalllang.compiler.ast as ast
 import smalllang.compiler.lexer as lexer
 import smalllang.compiler.semantic.calls as calls
 import smalllang.compiler.semantic.composite_types as compositeTypes
+import smalllang.compiler.semantic.modules as modules
 import smalllang.compiler.semantic.nominal_types as nominalTypes
 import smalllang.compiler.semantic.qualified as qualified
 import smalllang.compiler.semantic.resolve as resolution
@@ -24,6 +25,7 @@ public infer sources: [Text; ~] -> [ExpressionType; ~] {
     sources -> nominalTypes.resolve => nominal!
     sources -> compositeTypes.resolve => composite!
     sources -> qualified.resolve => qualifiedResults!
+    sources -> modules.identities => moduleIdentities!
     sources -> calls.resolveModules => moduleCalls!
     [ExpressionType; ~] => inferred!
     0 => sourceIndex!
@@ -387,6 +389,100 @@ public infer sources: [Text; ~] -> [ExpressionType; ~] {
                 }
                 bindingSymbolIndex! + 1 => bindingSymbolIndex!
             }
+            0 => memberIndex!
+            memberIndex! < (nodes! -> len) -> while {
+                nodes![memberIndex!] => member
+                member.kind == 36 -> if {
+                    false => memberInferred!
+                    0 => memberExistingIndex!
+                    memberExistingIndex! < (inferred! -> len) -> while {
+                        inferred![memberExistingIndex!] => existingMember
+                        (existingMember.sourceModule == sourceIndex! and existingMember.astNode == memberIndex!) -> if { true => memberInferred! }
+                        memberExistingIndex! + 1 => memberExistingIndex!
+                    }
+                    not memberInferred! -> if {
+                        -1 => baseTypeIndex!
+                        1000000 => baseDistance!
+                        0 => baseSearch!
+                        baseSearch! < (inferred! -> len) -> while {
+                            inferred![baseSearch!] => baseType
+                            baseType.sourceModule == sourceIndex! -> if {
+                                nodes![baseType.astNode].parent => baseAncestor!
+                                1 => distance!
+                                false => belongsToMember!
+                                (baseAncestor! >= 0 and not belongsToMember!) -> while {
+                                    baseAncestor! == memberIndex! -> if { true => belongsToMember! } else {
+                                        nodes![baseAncestor!].parent => baseAncestor!
+                                        distance! + 1 => distance!
+                                    }
+                                }
+                                (belongsToMember! and distance! < baseDistance!) -> if {
+                                    baseSearch! => baseTypeIndex!
+                                    distance! => baseDistance!
+                                }
+                            }
+                            baseSearch! + 1 => baseSearch!
+                        }
+                        baseTypeIndex! >= 0 -> if {
+                            inferred![baseTypeIndex!] => baseType
+                            ((baseType.origin == 0 or baseType.origin == 2) and nodes![baseType.astNode].kind != 39) -> if {
+                                sourceIndex! => targetSourceModule!
+                                baseType.origin == 2 -> if { moduleIdentities![baseType.targetModule].sourceIndex => targetSourceModule! }
+                                sources[targetSourceModule!] -> symbols.collect => targetTable!
+                                sources[targetSourceModule!] -> lexer.lex => targetTokens!
+                                -1 => memberNameToken!
+                                member.firstToken => memberTokenIndex!
+                                memberTokenIndex! < member.firstToken + member.tokenCount -> while {
+                                    tokens![memberTokenIndex!].kind == grammar.tokenIdIdentifier -> if { memberTokenIndex! => memberNameToken! }
+                                    memberTokenIndex! + 1 => memberTokenIndex!
+                                }
+                                -1 => fieldSymbol!
+                                0 => fieldSearch!
+                                (fieldSearch! < (targetTable! -> len) and fieldSymbol! < 0) -> while {
+                                    targetTable![fieldSearch!] => field
+                                    (field.kind == 26 and field.parent == baseType.targetSymbol) -> if {
+                                        tokens![memberNameToken!] => memberName
+                                        targetTokens![field.nameToken] => fieldName
+                                        memberName.span.length == fieldName.span.length => equal!
+                                        UIntSize(0) => fieldByte!
+                                        (equal! and fieldByte! < memberName.span.length) -> while {
+                                            source -> byte(memberName.span.start + fieldByte!) => leftByte
+                                            sources[targetSourceModule!] -> byte(fieldName.span.start + fieldByte!) => rightByte
+                                            leftByte != rightByte -> if { false => equal! }
+                                            fieldByte! + UIntSize(1) => fieldByte!
+                                        }
+                                        equal! -> if { fieldSearch! => fieldSymbol! }
+                                    }
+                                    fieldSearch! + 1 => fieldSearch!
+                                }
+                                fieldSymbol! >= 0 -> if {
+                                    targetTable![fieldSymbol!] => field
+                                    -1 => fieldNominalIndex!
+                                    0 => fieldTypeSearch!
+                                    fieldTypeSearch! < (nominal! -> len) -> while {
+                                        nominal![fieldTypeSearch!] => fieldType
+                                        (fieldType.sourceModule == targetSourceModule! and fieldType.typeAst == field.typeNode) -> if { fieldTypeSearch! => fieldNominalIndex! }
+                                        fieldTypeSearch! + 1 => fieldTypeSearch!
+                                    }
+                                    fieldNominalIndex! >= 0 -> if {
+                                        nominal![fieldNominalIndex!] => fieldType
+                                        inferred! -> push(ExpressionType {
+                                            sourceModule: sourceIndex!
+                                            astNode: memberIndex!
+                                            origin: fieldType.origin
+                                            targetModule: fieldType.targetModule
+                                            targetSymbol: fieldType.targetSymbol
+                                        })
+                                        true => changed!
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                memberIndex! + 1 => memberIndex!
+            }
+
             0 => operatorIndex!
             operatorIndex! < (nodes! -> len) -> while {
                 nodes![operatorIndex!] => operator

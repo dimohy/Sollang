@@ -32,7 +32,8 @@ public struct TypeCheckDiagnostic {
 # non-public imported call target. Code 10 identifies missing or extra call
 # arguments for the current zero-or-one-input function surface. Code 11 is an
 # unknown struct initializer field, code 12 is a field value type mismatch, and
-# code 13 identifies a required field missing from a struct literal.
+# code 13 identifies a required field missing from a struct literal. Code 14 is
+# an unknown value member on a resolved struct type.
 public analyze sources: [Text; ~] -> [TypeCheckDiagnostic; ~] {
     sources -> nominalTypes.resolve => nominal!
     sources -> compositeTypes.resolve => composite!
@@ -98,6 +99,29 @@ public analyze sources: [Text; ~] -> [TypeCheckDiagnostic; ~] {
                         }
                     }
                     expressionTypeIndex! + 1 => expressionTypeIndex!
+                }
+                returnExpressionType! >= 0 -> if {
+                    nodes![returnExpressionAst!].parent => outerExpression!
+                    false => blockedByUntypedOuter!
+                    (outerExpression! >= 0 and outerExpression! != function.astNode and not blockedByUntypedOuter!) -> while {
+                        nodes![outerExpression!] => outerNode
+                        ((outerNode.kind >= 18 and outerNode.kind <= 25) or outerNode.kind == 11 or outerNode.kind == 36 or outerNode.kind == 37 or outerNode.kind == 38 or outerNode.kind == 39) -> if {
+                            false => outerInferred!
+                            0 => outerTypeSearch!
+                            outerTypeSearch! < (expressionTypeTable! -> len) -> while {
+                                expressionTypeTable![outerTypeSearch!] => outerType
+                                (outerType.sourceModule == sourceIndex! and outerType.astNode == outerExpression!) -> if { true => outerInferred! }
+                                (outerType.sourceModule == sourceIndex! and nodes![outerType.astNode].start == outerNode.start and nodes![outerType.astNode].length == outerNode.length) -> if { true => outerInferred! }
+                                outerTypeSearch! + 1 => outerTypeSearch!
+                            }
+                            not outerInferred! -> if { true => blockedByUntypedOuter! }
+                        }
+                        nodes![outerExpression!].parent => outerExpression!
+                    }
+                    blockedByUntypedOuter! -> if {
+                        -1 => returnExpressionType!
+                        -1 => returnExpressionAst!
+                    }
                 }
                 (expectedIndex! >= 0 and returnExpressionType! >= 0) -> if {
                     nominal![expectedIndex!] => expected
@@ -514,6 +538,86 @@ public analyze sources: [Text; ~] -> [TypeCheckDiagnostic; ~] {
                 }
             }
             literalCoverageIndex! + 1 => literalCoverageIndex!
+        }
+
+        0 => memberDiagnosticIndex!
+        memberDiagnosticIndex! < (nodes! -> len) -> while {
+            nodes![memberDiagnosticIndex!] => member
+            member.kind == 36 -> if {
+                -1 => baseTypeIndex!
+                1000000 => baseDistance!
+                0 => baseSearch!
+                baseSearch! < (expressionTypeTable! -> len) -> while {
+                    expressionTypeTable![baseSearch!] => baseType
+                    baseType.sourceModule == sourceIndex! -> if {
+                        nodes![baseType.astNode].parent => baseAncestor!
+                        1 => distance!
+                        false => belongsToMember!
+                        (baseAncestor! >= 0 and not belongsToMember!) -> while {
+                            baseAncestor! == memberDiagnosticIndex! -> if { true => belongsToMember! } else {
+                                nodes![baseAncestor!].parent => baseAncestor!
+                                distance! + 1 => distance!
+                            }
+                        }
+                        (belongsToMember! and distance! < baseDistance!) -> if {
+                            baseSearch! => baseTypeIndex!
+                            distance! => baseDistance!
+                        }
+                    }
+                    baseSearch! + 1 => baseSearch!
+                }
+                baseTypeIndex! >= 0 -> if {
+                    expressionTypeTable![baseTypeIndex!] => baseType
+                    ((baseType.origin == 0 or baseType.origin == 2) and nodes![baseType.astNode].kind != 39) -> if {
+                        sourceIndex! => targetSourceModule!
+                        baseType.origin == 2 -> if { moduleIdentities![baseType.targetModule].sourceIndex => targetSourceModule! }
+                        sources[targetSourceModule!] -> symbols.collect => targetTable!
+                        sources[targetSourceModule!] -> lexer.lex => targetTokens!
+                        -1 => memberNameToken!
+                        member.firstToken => memberTokenIndex!
+                        memberTokenIndex! < member.firstToken + member.tokenCount -> while {
+                            tokens![memberTokenIndex!].kind == grammar.tokenIdIdentifier -> if { memberTokenIndex! => memberNameToken! }
+                            memberTokenIndex! + 1 => memberTokenIndex!
+                        }
+                        false => fieldFound!
+                        0 => fieldSearch!
+                        fieldSearch! < (targetTable! -> len) -> while {
+                            targetTable![fieldSearch!] => field
+                            (field.kind == 26 and field.parent == baseType.targetSymbol) -> if {
+                                tokens![memberNameToken!] => memberName
+                                targetTokens![field.nameToken] => fieldName
+                                memberName.span.length == fieldName.span.length => equal!
+                                UIntSize(0) => fieldByte!
+                                (equal! and fieldByte! < memberName.span.length) -> while {
+                                    source -> byte(memberName.span.start + fieldByte!) => leftByte
+                                    sources[targetSourceModule!] -> byte(fieldName.span.start + fieldByte!) => rightByte
+                                    leftByte != rightByte -> if { false => equal! }
+                                    fieldByte! + UIntSize(1) => fieldByte!
+                                }
+                                equal! -> if { true => fieldFound! }
+                            }
+                            fieldSearch! + 1 => fieldSearch!
+                        }
+                        not fieldFound! -> if {
+                            tokens![memberNameToken!] => unknownMember
+                            diagnostics! -> push(TypeCheckDiagnostic {
+                                code: 14
+                                sourceModule: sourceIndex!
+                                functionSymbol: -1
+                                expectedOrigin: baseType.origin
+                                expectedModule: baseType.targetModule
+                                expectedSymbol: baseType.targetSymbol
+                                actualOrigin: -1
+                                actualModule: -1
+                                actualSymbol: -1
+                                actualBuiltin: -1
+                                span: syntax.SourceSpan { fileId: sourceIndex!, start: unknownMember.span.start, length: unknownMember.span.length }
+                            })
+                        }
+                    }
+                }
+            }
+            memberDiagnosticIndex! + 1 => memberDiagnosticIndex!
         }
 
         0 => operatorIndex!

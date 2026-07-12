@@ -248,6 +248,10 @@ field type, preserving multi-source spans.
 Each struct literal also covers every declared field symbol. Missing required
 fields emit code 13 over the complete local or qualified literal and identify
 the absent target field symbol.
+Value member access now resolves a local/imported nominal base to its field
+symbol and propagates named field types through fixed-point inference. An
+unknown field emits code 14 at the member token. Return checking suppresses
+cascading mismatches when an outer expression remains untyped.
 Expression inference loads a resolved imported function's return annotation
 from the target source module. Call checking loads its input annotation from the
 same target symbol, emits code 6 for cross-module argument mismatch, and code 9
