@@ -116,12 +116,34 @@ public lex source: Text -> [syntax.SyntaxToken; ~] {
                         } else {
                             current == UInt8(34) -> if {
                                 position! => stringStart
-                                position! + UIntSize(1) => position!
-                                (position! < sourceLength and (source -> byte(position!)) != UInt8(34)) -> while {
-                                    position! + UIntSize(1) => position!
+                                false => rawString!
+                                position! + UIntSize(2) < sourceLength -> if {
+                                    ((source -> byte(position! + UIntSize(1))) == UInt8(34) and (source -> byte(position! + UIntSize(2))) == UInt8(34)) -> if { true => rawString! }
                                 }
-                                position! < sourceLength -> if {
+                                rawString! -> if {
+                                    UIntSize(0) => delimiterWidth!
+                                    (position! + delimiterWidth! < sourceLength and (source -> byte(position! + delimiterWidth!)) == UInt8(34)) -> while {
+                                        delimiterWidth! + UIntSize(1) => delimiterWidth!
+                                    }
+                                    position! + delimiterWidth! => position!
+                                    false => rawClosed!
+                                    (position! < sourceLength and not rawClosed!) -> while {
+                                        UIntSize(0) => quoteRun!
+                                        (position! + quoteRun! < sourceLength and (source -> byte(position! + quoteRun!)) == UInt8(34)) -> while {
+                                            quoteRun! + UIntSize(1) => quoteRun!
+                                        }
+                                        quoteRun! >= delimiterWidth! -> if { true => rawClosed! }
+                                        not rawClosed! -> if { position! + UIntSize(1) => position! }
+                                    }
+                                    rawClosed! -> if { position! + delimiterWidth! => position! }
+                                } else {
                                     position! + UIntSize(1) => position!
+                                    (position! < sourceLength and (source -> byte(position!)) != UInt8(34)) -> while {
+                                        position! + UIntSize(1) => position!
+                                    }
+                                    position! < sourceLength -> if {
+                                        position! + UIntSize(1) => position!
+                                    }
                                 }
                                 syntax.SyntaxToken {
                                     kind: grammar.tokenIdString

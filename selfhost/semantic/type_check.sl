@@ -33,7 +33,8 @@ public struct TypeCheckDiagnostic {
 # arguments for the current zero-or-one-input function surface. Code 11 is an
 # unknown struct initializer field, code 12 is a field value type mismatch, and
 # code 13 identifies a required field missing from a struct literal. Code 14 is
-# an unknown value member on a resolved struct type.
+# an unknown value member on a resolved struct type. Code 15 identifies an
+# indexed value that is not array-like, and code 16 identifies a non-Int index.
 public analyze sources: [Text; ~] -> [TypeCheckDiagnostic; ~] {
     sources -> nominalTypes.resolve => nominal!
     sources -> compositeTypes.resolve => composite!
@@ -105,7 +106,7 @@ public analyze sources: [Text; ~] -> [TypeCheckDiagnostic; ~] {
                     false => blockedByUntypedOuter!
                     (outerExpression! >= 0 and outerExpression! != function.astNode and not blockedByUntypedOuter!) -> while {
                         nodes![outerExpression!] => outerNode
-                        ((outerNode.kind >= 18 and outerNode.kind <= 25) or outerNode.kind == 11 or outerNode.kind == 36 or outerNode.kind == 37 or outerNode.kind == 38 or outerNode.kind == 39) -> if {
+                        ((outerNode.kind >= 18 and outerNode.kind <= 25) or outerNode.kind == 11 or outerNode.kind == 36 or outerNode.kind == 37 or outerNode.kind == 38 or outerNode.kind == 39 or outerNode.kind == 41) -> if {
                             false => outerInferred!
                             0 => outerTypeSearch!
                             outerTypeSearch! < (expressionTypeTable! -> len) -> while {
@@ -618,6 +619,87 @@ public analyze sources: [Text; ~] -> [TypeCheckDiagnostic; ~] {
                 }
             }
             memberDiagnosticIndex! + 1 => memberDiagnosticIndex!
+        }
+
+        0 => indexDiagnosticIndex!
+        indexDiagnosticIndex! < (nodes! -> len) -> while {
+            nodes![indexDiagnosticIndex!] => indexAccess
+            indexAccess.kind == 41 -> if {
+                tokens![indexAccess.payloadToken] => leftBracket
+                -1 => indexedValueTypeIndex!
+                -1 => indexValueTypeIndex!
+                1000000 => indexedValueDistance!
+                1000000 => indexValueDistance!
+                0 => indexTypeSearch!
+                indexTypeSearch! < (expressionTypeTable! -> len) -> while {
+                    expressionTypeTable![indexTypeSearch!] => candidateType
+                    (candidateType.sourceModule == sourceIndex! and candidateType.astNode != indexDiagnosticIndex!) -> if {
+                        nodes![candidateType.astNode] => candidateNode
+                        candidateNode.parent => candidateAncestor!
+                        1 => candidateDistance!
+                        false => belongsToIndex!
+                        (candidateAncestor! >= 0 and not belongsToIndex!) -> while {
+                            candidateAncestor! == indexDiagnosticIndex! -> if { true => belongsToIndex! } else {
+                                nodes![candidateAncestor!].parent => candidateAncestor!
+                                candidateDistance! + 1 => candidateDistance!
+                            }
+                        }
+                        belongsToIndex! -> if {
+                            candidateNode.start < leftBracket.span.start -> if {
+                                candidateDistance! < indexedValueDistance! -> if {
+                                    indexTypeSearch! => indexedValueTypeIndex!
+                                    candidateDistance! => indexedValueDistance!
+                                }
+                            } else {
+                                candidateDistance! < indexValueDistance! -> if {
+                                    indexTypeSearch! => indexValueTypeIndex!
+                                    candidateDistance! => indexValueDistance!
+                                }
+                            }
+                        }
+                    }
+                    indexTypeSearch! + 1 => indexTypeSearch!
+                }
+                indexedValueTypeIndex! >= 0 -> if {
+                    expressionTypeTable![indexedValueTypeIndex!] => indexedValueType
+                    (indexedValueType.origin < 12 or indexedValueType.origin > 14) -> if {
+                        nodes![indexedValueType.astNode] => indexedValueNode
+                        diagnostics! -> push(TypeCheckDiagnostic {
+                            code: 15
+                            sourceModule: sourceIndex!
+                            functionSymbol: -1
+                            expectedOrigin: 12
+                            expectedModule: -1
+                            expectedSymbol: -1
+                            actualOrigin: indexedValueType.origin
+                            actualModule: indexedValueType.targetModule
+                            actualSymbol: indexedValueType.targetSymbol
+                            actualBuiltin: indexedValueType.origin == 1 -> if { indexedValueType.targetSymbol } else { -1 }
+                            span: syntax.SourceSpan { fileId: sourceIndex!, start: indexedValueNode.start, length: indexedValueNode.length }
+                        })
+                    }
+                }
+                indexValueTypeIndex! >= 0 -> if {
+                    expressionTypeTable![indexValueTypeIndex!] => indexValueType
+                    (indexValueType.origin != 1 or indexValueType.targetSymbol != 2) -> if {
+                        nodes![indexValueType.astNode] => indexValueNode
+                        diagnostics! -> push(TypeCheckDiagnostic {
+                            code: 16
+                            sourceModule: sourceIndex!
+                            functionSymbol: -1
+                            expectedOrigin: 1
+                            expectedModule: -1
+                            expectedSymbol: 2
+                            actualOrigin: indexValueType.origin
+                            actualModule: indexValueType.targetModule
+                            actualSymbol: indexValueType.targetSymbol
+                            actualBuiltin: indexValueType.origin == 1 -> if { indexValueType.targetSymbol } else { -1 }
+                            span: syntax.SourceSpan { fileId: sourceIndex!, start: indexValueNode.start, length: indexValueNode.length }
+                        })
+                    }
+                }
+            }
+            indexDiagnosticIndex! + 1 => indexDiagnosticIndex!
         }
 
         0 => operatorIndex!

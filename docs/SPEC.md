@@ -1173,6 +1173,8 @@ $(this remains text)
 
 Every nonblank content line must include the closing delimiter's indentation.
 Inline raw literals such as `"""a "quoted" path"""` are also supported.
+The delimiter may contain more than three quotes when the content itself must
+contain a shorter quote run; opening and closing delimiter widths must match.
 
 Interpolation rules:
 

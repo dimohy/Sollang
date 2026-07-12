@@ -358,6 +358,10 @@ return mismatches from an inferred inner operand.
 Composite member fields preserve their structural component identities.
 Postfix index access now lowers as AST kind 41, and array, slice, and fixed-array
 index results inherit the inferred element identity for subsequent checks.
+Structured codes 15 and 16 distinguish a non-array-like indexed target from a
+non-`Int` index. The SL lexer now tokenizes raw multiline strings with matching
+three-or-more-quote delimiters, keeping its source envelope aligned with the
+bootstrap lexer.
 
 Imported call signatures now participate in expression inference and checking:
 the target module's return type becomes the caller's call-expression type, its

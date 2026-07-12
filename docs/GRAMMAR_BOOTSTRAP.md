@@ -256,6 +256,9 @@ Composite field annotations propagate their array, slice, fixed-array,
 dictionary, and box component identities through the same member inference.
 Postfix indexing lowers separately as AST kind 41, and indexing an inferred
 array-like value propagates its element identity to the index expression.
+Index checking emits code 15 for a non-array-like target and code 16 for a
+non-`Int` index. The self-hosted lexer recognizes raw string delimiters of three
+or more quotes, including embedded newlines and shorter quote runs.
 Expression inference loads a resolved imported function's return annotation
 from the target source module. Call checking loads its input annotation from the
 same target symbol, emits code 6 for cross-module argument mismatch, and code 9
