@@ -124,5 +124,13 @@ formatter and language server, avoiding a second editor-only grammar.
 7. Remove the C# source generators only after the SL compiler reproduces all
    parser behavior and diagnostics.
 
+## Semantic Bootstrap
+
+`selfhost/semantic/symbols.sl` starts the semantic phase with a relocatable flat
+symbol table. It collects nominal declarations, functions, fields, variants,
+trait/impl members, methods, associated types, and generic clauses; connects
+each entry to its nearest lexical owner; and stores name tokens, input/output
+type AST indexes, and ownership flags without per-symbol heap allocation.
+
 The generated module is bootstrap data, not the final parser implementation.
 It deliberately makes the transition incremental and auditable.

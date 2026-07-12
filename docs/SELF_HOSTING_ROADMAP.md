@@ -205,6 +205,12 @@ token payloads resolved in a second lowering pass. Function parameters and
 method `self` tokens carry explicit move/mutable-borrow flags for later ABI and
 ownership analysis.
 
+The semantic bootstrap has begun in a separate SL module. Its flat symbol table
+collects declarations and members, resolves nearest lexical owner symbols, and
+attaches concrete name tokens, primary/secondary type AST indexes, and
+move/mutable-borrow flags. Name resolution, duplicate checking, and type
+canonicalization remain before semantic parity.
+
 ## Immediate Implementation Order
 
 1. Multi-file compilation (implemented by example 52).
