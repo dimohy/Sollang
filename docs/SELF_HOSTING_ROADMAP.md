@@ -262,6 +262,11 @@ agreement succeeds, while mismatches produce structured code 5 at the exact
 return-expression span. Broader expression inference remains before semantic
 parity.
 
+Lexically resolved parameter names now propagate the parameter's nominal type
+to the return expression. Identity returns type-check, while returning a Text
+parameter from an Int function reports the same code-5 diagnostic model used by
+literal inference.
+
 ## Immediate Implementation Order
 
 1. Multi-file compilation (implemented by example 52).

@@ -178,4 +178,5 @@ visibility status, and unresolved local names remain explicit status-2 rows.
 `selfhost/semantic/type_check.sl` consumes that table for the first executable
 type-checking slice. It infers integer and string literal return expressions,
 compares them with declared function return annotations, and emits code 5 with
-the exact mismatching expression span.
+the exact mismatching expression span. Lexically resolved parameter names now
+carry their declared nominal type into the same return check.
