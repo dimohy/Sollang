@@ -1,8 +1,8 @@
 namespace smalllang.compiler.semantic.type_check
 
 import smalllang.compiler.ast as ast
+import smalllang.compiler.semantic.expression_types as expressionTypes
 import smalllang.compiler.semantic.nominal_types as nominalTypes
-import smalllang.compiler.semantic.resolve as resolution
 import smalllang.compiler.semantic.symbols as symbols
 import smalllang.compiler.syntax as syntax
 
@@ -25,13 +25,13 @@ public struct TypeCheckDiagnostic {
 # stable nominal_types table: Text is 1 and Int is 2.
 public analyze sources: [Text; ~] -> [TypeCheckDiagnostic; ~] {
     sources -> nominalTypes.resolve => nominal!
+    sources -> expressionTypes.infer => expressionTypeTable!
     [TypeCheckDiagnostic; ~] => diagnostics!
     0 => sourceIndex!
     sourceIndex! < (sources -> len) -> while {
         sources[sourceIndex!] => source
         source -> ast.lower => nodes!
         source -> symbols.collect => table!
-        source -> resolution.resolve => resolvedNames!
         0 => symbolIndex!
         symbolIndex! < (table! -> len) -> while {
             table![symbolIndex!] => function
@@ -51,69 +51,36 @@ public analyze sources: [Text; ~] -> [TypeCheckDiagnostic; ~] {
                     nominalIndex! + 1 => nominalIndex!
                 }
                 -1 => returnExpressionAst!
-                0 => astIndex!
-                astIndex! < (nodes! -> len) -> while {
-                    nodes![astIndex!] => candidateExpression
-                    (candidateExpression.kind == 13 or candidateExpression.kind == 14 or candidateExpression.kind == 15) -> if {
-                        candidateExpression.parent => ancestor!
+                -1 => returnExpressionType!
+                1000000 => returnDistance!
+                0 => expressionTypeIndex!
+                expressionTypeIndex! < (expressionTypeTable! -> len) -> while {
+                    expressionTypeTable![expressionTypeIndex!] => candidateType
+                    candidateType.sourceModule == sourceIndex! -> if {
+                        nodes![candidateType.astNode].parent => ancestor!
+                        1 => distance!
                         false => belongsToFunction!
                         (ancestor! >= 0 and not belongsToFunction!) -> while {
                             ancestor! == function.astNode -> if {
                                 true => belongsToFunction!
                             } else {
                                 nodes![ancestor!].parent => ancestor!
+                                distance! + 1 => distance!
                             }
                         }
-                        belongsToFunction! -> if { astIndex! => returnExpressionAst! }
+                        (belongsToFunction! and distance! < returnDistance!) -> if {
+                            candidateType.astNode => returnExpressionAst!
+                            expressionTypeIndex! => returnExpressionType!
+                            distance! => returnDistance!
+                        }
                     }
-                    astIndex! + 1 => astIndex!
+                    expressionTypeIndex! + 1 => expressionTypeIndex!
                 }
-                (expectedIndex! >= 0 and returnExpressionAst! >= 0) -> if {
+                (expectedIndex! >= 0 and returnExpressionType! >= 0) -> if {
                     nominal![expectedIndex!] => expected
                     nodes![returnExpressionAst!] => returnExpression
-                    -1 => actualOrigin!
-                    -1 => actualModule!
-                    -1 => actualSymbol!
-                    returnExpression.kind == 13 -> if {
-                        1 => actualOrigin!
-                        -1 => actualModule!
-                        1 => actualSymbol!
-                    }
-                    returnExpression.kind == 14 -> if {
-                        1 => actualOrigin!
-                        -1 => actualModule!
-                        2 => actualSymbol!
-                    }
-                    returnExpression.kind == 15 -> if {
-                        -1 => resolvedNameIndex!
-                        0 => nameSearch!
-                        nameSearch! < (resolvedNames! -> len) -> while {
-                            resolvedNames![nameSearch!].astNode == returnExpressionAst! -> if {
-                                nameSearch! => resolvedNameIndex!
-                            }
-                            nameSearch! + 1 => nameSearch!
-                        }
-                        resolvedNameIndex! >= 0 -> if {
-                            resolvedNames![resolvedNameIndex!].symbol => valueSymbolIndex
-                            table![valueSymbolIndex] => valueSymbol
-                            -1 => valueTypeIndex!
-                            0 => valueTypeSearch!
-                            valueTypeSearch! < (nominal! -> len) -> while {
-                                nominal![valueTypeSearch!] => valueType
-                                (valueType.sourceModule == sourceIndex! and valueType.typeAst == valueSymbol.typeNode) -> if {
-                                    valueTypeSearch! => valueTypeIndex!
-                                }
-                                valueTypeSearch! + 1 => valueTypeSearch!
-                            }
-                            valueTypeIndex! >= 0 -> if {
-                                nominal![valueTypeIndex!] => actualType
-                                actualType.origin => actualOrigin!
-                                actualType.targetModule => actualModule!
-                                actualType.targetSymbol => actualSymbol!
-                            }
-                        }
-                    }
-                    (actualOrigin! >= 0 and (expected.origin != actualOrigin! or expected.targetModule != actualModule! or expected.targetSymbol != actualSymbol!)) -> if {
+                    expressionTypeTable![returnExpressionType!] => actualType
+                    (expected.origin != actualType.origin or expected.targetModule != actualType.targetModule or expected.targetSymbol != actualType.targetSymbol) -> if {
                         TypeCheckDiagnostic {
                             code: 5
                             sourceModule: sourceIndex!
@@ -121,10 +88,10 @@ public analyze sources: [Text; ~] -> [TypeCheckDiagnostic; ~] {
                             expectedOrigin: expected.origin
                             expectedModule: expected.targetModule
                             expectedSymbol: expected.targetSymbol
-                            actualOrigin: actualOrigin!
-                            actualModule: actualModule!
-                            actualSymbol: actualSymbol!
-                            actualBuiltin: actualOrigin! == 1 -> if { actualSymbol! } else { -1 }
+                            actualOrigin: actualType.origin
+                            actualModule: actualType.targetModule
+                            actualSymbol: actualType.targetSymbol
+                            actualBuiltin: actualType.origin == 1 -> if { actualType.targetSymbol } else { -1 }
                             span: syntax.SourceSpan {
                                 fileId: sourceIndex!
                                 start: returnExpression.start

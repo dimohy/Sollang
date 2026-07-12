@@ -180,3 +180,7 @@ type-checking slice. It infers integer and string literal return expressions,
 compares them with declared function return annotations, and emits code 5 with
 the exact mismatching expression span. Lexically resolved parameter names now
 carry their declared nominal type into the same return check.
+`selfhost/semantic/expression_types.sl` performs fixed-point bottom-up inference
+over the flat AST. It seeds literals and resolved names, propagates Int through
+arithmetic operators, and produces Bool for compatible equality/comparison and
+logical operators. Return checking consumes the outermost inferred expression.

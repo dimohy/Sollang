@@ -267,6 +267,12 @@ to the return expression. Identity returns type-check, while returning a Text
 parameter from an Int function reports the same code-5 diagnostic model used by
 literal inference.
 
+Bottom-up expression inference now reaches arithmetic, equality/comparison,
+and logical AST nodes. Int arithmetic preserves Int, compatible comparisons
+produce Bool, and return checking selects the outermost inferred expression so
+the diagnostic span covers the complete operator expression rather than its
+last literal.
+
 ## Immediate Implementation Order
 
 1. Multi-file compilation (implemented by example 52).
