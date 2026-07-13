@@ -1,6 +1,30 @@
 using System.Diagnostics;
 using System.Text;
 
+var filters = new List<string>();
+var skipBootstrap = false;
+for (var argumentIndex = 0; argumentIndex < args.Length; argumentIndex++)
+{
+    switch (args[argumentIndex])
+    {
+        case "--filter":
+            if (++argumentIndex >= args.Length)
+            {
+                Console.Error.WriteLine("--filter requires a case-insensitive name fragment.");
+                return 2;
+            }
+            filters.Add(args[argumentIndex]);
+            break;
+        case "--skip-bootstrap":
+            skipBootstrap = true;
+            break;
+        default:
+            Console.Error.WriteLine($"Unknown test option: {args[argumentIndex]}");
+            Console.Error.WriteLine("Usage: dotnet run --project tests/SmallLang.ExampleTests -- [--filter <name>]... [--skip-bootstrap]");
+            return 2;
+    }
+}
+
 var repoRoot = FindRepositoryRoot(AppContext.BaseDirectory);
 var expectedDir = Path.Combine(repoRoot, "examples", "expected");
 var artifactsDir = Path.Combine(repoRoot, "artifacts", "example-tests");
@@ -16,19 +40,6 @@ if (!File.Exists(clangPath))
 }
 
 var compilerProject = Path.Combine(repoRoot, "src", "SmallLang.Compiler", "SmallLang.Compiler.csproj");
-var compilerBuild = Run(
-    "dotnet",
-    ["build", compilerProject, "-c", "Release", "--nologo", "--no-restore"],
-    input: null,
-    repoRoot);
-if (compilerBuild.ExitCode != 0)
-{
-    Console.Error.WriteLine("FAIL compiler bootstrap build");
-    Console.Error.WriteLine(compilerBuild.Stdout);
-    Console.Error.WriteLine(compilerBuild.Stderr);
-    return 1;
-}
-
 var compilerDll = Path.Combine(
     repoRoot,
     "src",
@@ -37,46 +48,77 @@ var compilerDll = Path.Combine(
     "Release",
     "net11.0",
     "SmallLang.Compiler.dll");
-if (!File.Exists(compilerDll))
+if (!skipBootstrap)
+{
+    var compilerBuild = Run(
+        "dotnet",
+        ["build", compilerProject, "-c", "Release", "--nologo", "--no-restore"],
+        input: null,
+        repoRoot);
+    if (compilerBuild.ExitCode != 0)
+    {
+        Console.Error.WriteLine("FAIL compiler bootstrap build");
+        Console.Error.WriteLine(compilerBuild.Stdout);
+        Console.Error.WriteLine(compilerBuild.Stderr);
+        return 1;
+    }
+
+    var generatedGrammarPath = Path.Combine(artifactsDir, "smalllang_grammar.generated.sl");
+    var grammarBuild = Run(
+        "dotnet",
+        [compilerDll, "grammar", "build",
+            Path.Combine(repoRoot, "syntax", "smalllang.lexer"),
+            Path.Combine(repoRoot, "syntax", "smalllang.grammar"),
+            "-o", generatedGrammarPath],
+        input: null,
+        repoRoot);
+    if (grammarBuild.ExitCode != 0)
+    {
+        Console.Error.WriteLine("FAIL grammar table generation");
+        Console.Error.WriteLine(grammarBuild.Stdout);
+        Console.Error.WriteLine(grammarBuild.Stderr);
+        return 1;
+    }
+    var checkedInGrammarPath = Path.Combine(repoRoot, "syntax", "generated", "smalllang_grammar.sl");
+    if (!File.Exists(checkedInGrammarPath)
+        || !File.ReadAllBytes(checkedInGrammarPath).SequenceEqual(File.ReadAllBytes(generatedGrammarPath)))
+    {
+        Console.Error.WriteLine("FAIL generated grammar table is stale; run `smalllang grammar build`");
+        return 1;
+    }
+    Console.WriteLine("PASS grammar/table-determinism");
+}
+else if (!File.Exists(compilerDll))
 {
     Console.Error.WriteLine($"Compiler output not found: {compilerDll}");
+    Console.Error.WriteLine("Remove --skip-bootstrap so the test runner can build it.");
     return 1;
 }
 
-var generatedGrammarPath = Path.Combine(artifactsDir, "smalllang_grammar.generated.sl");
-var grammarBuild = Run(
-    "dotnet",
-    [compilerDll, "grammar", "build",
-        Path.Combine(repoRoot, "syntax", "smalllang.lexer"),
-        Path.Combine(repoRoot, "syntax", "smalllang.grammar"),
-        "-o", generatedGrammarPath],
-    input: null,
-    repoRoot);
-if (grammarBuild.ExitCode != 0)
-{
-    Console.Error.WriteLine("FAIL grammar table generation");
-    Console.Error.WriteLine(grammarBuild.Stdout);
-    Console.Error.WriteLine(grammarBuild.Stderr);
-    return 1;
-}
-var checkedInGrammarPath = Path.Combine(repoRoot, "syntax", "generated", "smalllang_grammar.sl");
-if (!File.Exists(checkedInGrammarPath)
-    || !File.ReadAllBytes(checkedInGrammarPath).SequenceEqual(File.ReadAllBytes(generatedGrammarPath)))
-{
-    Console.Error.WriteLine("FAIL generated grammar table is stale; run `smalllang grammar build`");
-    return 1;
-}
-Console.WriteLine("PASS grammar/table-determinism");
-
-var expectedFiles = Directory
+var allExpectedFiles = Directory
     .EnumerateFiles(expectedDir, "*.stdout.txt")
     .Order(StringComparer.Ordinal)
     .ToArray();
+var diagnosticDir = Path.Combine(repoRoot, "examples", "diagnostics");
+var allDiagnosticFiles = Directory.Exists(diagnosticDir)
+    ? Directory.EnumerateFiles(diagnosticDir, "*.sl").Order(StringComparer.Ordinal).ToArray()
+    : [];
+var expectedFiles = allExpectedFiles
+    .Where(file => MatchesFilters(Path.GetFileName(file)[..^".stdout.txt".Length], filters))
+    .ToArray();
+var diagnosticFiles = allDiagnosticFiles
+    .Where(file => MatchesFilters("diagnostic/" + Path.GetFileNameWithoutExtension(file), filters))
+    .ToArray();
 
-if (expectedFiles.Length == 0)
+if (allExpectedFiles.Length == 0)
 {
     Console.Error.WriteLine("No expected stdout files found.");
     return 1;
+}
+if (filters.Count > 0 && expectedFiles.Length + diagnosticFiles.Length == 0)
+{
+    Console.Error.WriteLine($"No example or diagnostic test matched: {string.Join(", ", filters)}");
+    return 2;
 }
 
 var failures = 0;
@@ -272,10 +314,6 @@ foreach (var expectedFile in expectedFiles)
     Console.WriteLine($"PASS {name}");
 }
 
-var diagnosticDir = Path.Combine(repoRoot, "examples", "diagnostics");
-var diagnosticFiles = Directory.Exists(diagnosticDir)
-    ? Directory.EnumerateFiles(diagnosticDir, "*.sl").Order(StringComparer.Ordinal).ToArray()
-    : [];
 foreach (var sourcePath in diagnosticFiles)
 {
     var name = Path.GetFileNameWithoutExtension(sourcePath);
@@ -348,6 +386,9 @@ static string FindRepositoryRoot(string startPath)
 
     throw new InvalidOperationException("Could not find repository root.");
 }
+
+static bool MatchesFilters(string name, IReadOnlyList<string> filters) => filters.Count == 0
+    || filters.Any(filter => name.Contains(filter, StringComparison.OrdinalIgnoreCase));
 
 static ProcessResult Run(
     string fileName,

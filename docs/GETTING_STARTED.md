@@ -199,6 +199,17 @@ Example stdout tests compile and run the samples listed under
 dotnet run --project tests\SmallLang.ExampleTests\SmallLang.ExampleTests.csproj --no-build
 ```
 
+During development, repeat `--filter` to run only matching example or
+`diagnostic/...` names. Add `--skip-bootstrap` only after the Release compiler
+and generated grammar table have already been verified in the current checkout:
+
+```powershell
+dotnet run --project tests\SmallLang.ExampleTests\SmallLang.ExampleTests.csproj `
+  -c Release --no-build -- --filter 219 --filter 220 --skip-bootstrap
+```
+
+An unfiltered run always remains the commit-gate regression check.
+
 Multiple user source files may form one compilation unit. Declarations from all
 files are merged after each file independently resolves its namespace and import
 aliases. Exactly one file may contain executable top-level statements:
