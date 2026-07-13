@@ -342,6 +342,13 @@ Non-ASCII, quote, backslash, and control bytes use LLVM `\XX` escaping, with
 the byte length retained independently from Unicode scalar count. ASCII and
 Korean snapshots both assemble, link, and execute.
 
+Every self-hosted LLVM module now begins with the canonical Windows bootstrap
+target triple `x86_64-pc-windows-msvc`, matching the C# bootstrap platform
+contract and pinned Clang's `-dumpmachine` result. The triple is part of every
+LLVM snapshot rather than an implicit linker default. Target selection and
+data-layout emission remain to be parameterized before Linux/Wasm self-hosted
+output is enabled.
+
 Nominal structs now have deterministic `%sl.struct.m<module>_s<symbol>` LLVM
 types. Typed IR marks struct literals and links an arbitrary number of ordered
 field operands through sibling indexes. The backend emits each field with an

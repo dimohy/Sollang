@@ -427,6 +427,12 @@ transfers its backing stores without producer-side frees, while a scalar-
 returning consumer releases a `move` parameter exactly once. Branch-sensitive
 liveness, partial moves, and nested owned aggregate drop glue remain.
 
+Self-hosted LLVM text now declares the canonical bootstrap target triple
+`x86_64-pc-windows-msvc` in every module. This matches the existing Windows
+runtime platform and pinned Clang machine contract instead of relying on an
+implicit host default. A target descriptor carrying triple, data layout, ABI,
+and runtime declarations is still required for Linux/Wasm self-host output.
+
 Text now crosses the self-hosted LLVM boundary as `{ ptr, i64 }`. UTF-8
 literals become immutable globals with byte-accurate lengths and LLVM `\XX`
 escaping, and Text parameters, returns, and imported calls share that ABI.

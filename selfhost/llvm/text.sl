@@ -60,6 +60,9 @@ public emit sources: [Text; ~] -> Unit {
         }
         }
     }
+    """"
+    target triple = "x86_64-pc-windows-msvc"
+    """" -> println
     sources -> typedIr.lower => ir!
     sources -> nominalTypes.resolve => nominal!
     sources -> modules.identities => moduleIdentities!
