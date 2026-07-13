@@ -3352,4 +3352,27 @@ References: [LLVM coroutines](https://llvm.org/docs/Coroutines.html),
 [POSIX `pthread_create`](https://pubs.opengroup.org/onlinepubs/000095399/functions/pthread_create.html),
 [POSIX `pthread_join`](https://pubs.opengroup.org/onlinepubs/9799919799/functions/pthread_join.html).
 
+## D113 - Owned Field Replacement Drops The Previous Value And Transfers The New Owner
+
+Status: reference compiler implemented
+Date: 2026-07-13
+
+Assigning to an owned mutable struct field is an ownership transition, not a
+bitwise overwrite. The compiler first evaluates the replacement, drops the
+field's previous value, stores the replacement, and consumes every named owner
+transferred into that replacement. A later use of a consumed replacement is a
+compile-time error. Fresh container construction remains valid without an
+intermediate owner.
+
+Final struct cleanup always loads the current mutable aggregate rather than the
+value captured when the binding was introduced. This prevents a replaced field
+from being freed twice and ensures the replacement is freed exactly once.
+Example 240 covers nested owned structs and dynamic arrays; its diagnostic
+covers use after transfer. The self-hosted move-path checker still needs to
+model field reinitialization and control-flow joins before this rule closes the
+corresponding self-hosting gate.
+
+References: [Rust partial moves](https://doc.rust-lang.org/rust-by-example/scope/move/partial_move.html),
+[Rust destructors and assignment](https://doc.rust-lang.org/reference/destructors.html).
+
 

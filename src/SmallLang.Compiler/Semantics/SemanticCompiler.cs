@@ -1204,8 +1204,8 @@ internal sealed class SemanticCompiler
     private void BindFieldAssignment(
         FieldAssignmentStatement assignment,
         IReadOnlyDictionary<string, BoundFunction> functions,
-        IReadOnlyDictionary<string, BoundType> bindings,
-        IReadOnlySet<string> mutableBindings,
+        Dictionary<string, BoundType> bindings,
+        HashSet<string> mutableBindings,
         BoundType? yieldInputType)
     {
         if (!bindings.TryGetValue(assignment.Name, out var targetType))
@@ -1247,6 +1247,52 @@ internal sealed class SemanticCompiler
                 assignment.Value.Line,
                 assignment.Value.Column,
                 $"field '{definition.Name}.{field.Name}' expects {FormatType(field.Type)}, got {FormatType(valueType)}");
+        }
+
+        var transferred = new HashSet<string>(StringComparer.Ordinal);
+        var movedSourceName = GetMoveConsumingContainerSourceName(assignment.Value);
+        if (movedSourceName is not null)
+        {
+            transferred.Add(movedSourceName);
+        }
+        foreach (var consumedName in GetOwnedParameterConsumedSourceNames(
+                     assignment.Value, functions, bindings))
+        {
+            transferred.Add(consumedName);
+        }
+        foreach (var fieldSourceName in GetOwnedStructFieldSourceNames(
+                     assignment.Value, bindings))
+        {
+            transferred.Add(fieldSourceName);
+        }
+
+        if (_types.ContainsOwnedStorage(field.Type)
+            && assignment.Value is NameExpression sourceName)
+        {
+            if (string.Equals(sourceName.Name, assignment.Name, StringComparison.Ordinal))
+            {
+                throw Error(
+                    assignment.Line,
+                    assignment.Column,
+                    "an owned field cannot be replaced from its containing owner");
+            }
+            transferred.Add(sourceName.Name);
+        }
+
+        if (_types.ContainsOwnedStorage(field.Type)
+            && transferred.Count == 0
+            && !IsContainerCreationExpression(assignment.Value))
+        {
+            throw Error(
+                assignment.Value.Line,
+                assignment.Value.Column,
+                $"owned field '{definition.Name}.{field.Name}' requires a fresh value or a named owner transfer");
+        }
+
+        foreach (var transferredName in transferred)
+        {
+            bindings.Remove(transferredName);
+            mutableBindings.Remove(transferredName);
         }
     }
 

@@ -244,14 +244,40 @@ internal sealed partial class LlvmEmitter
         var type = _locals[assignment.Name].Type;
         var definition = _program.Types.GetStruct(type);
         var field = definition.Fields.First(candidate => candidate.Name == assignment.FieldName);
+        var movedSourceName = GetMoveConsumingContainerSourceName(assignment.Value);
+        var structFieldSourceNames = GetOwnedStructFieldSourceNames(assignment.Value);
+        var directOwnedSourceName = _program.Types.ContainsOwnedStorage(field.Type)
+            && assignment.Value is NameExpression sourceName
+            && _locals.TryGetValue(sourceName.Name, out var sourceValue)
+            && sourceValue.Type == field.Type
+                ? sourceName.Name
+                : null;
         var value = EmitExpression(assignment.Value);
         EnsureRuntimeType(value, field.Type, $"{definition.Name}.{field.Name}");
         var fieldAddress = NextTemp("field_addr");
         EmitAssign(
             fieldAddress,
             $"getelementptr inbounds {LlvmStructType(type)}, ptr {pointer}, i32 0, i32 {field.Index.ToString(CultureInfo.InvariantCulture)}");
+        if (_program.Types.ContainsOwnedStorage(field.Type))
+        {
+            var previous = NextTemp("field_previous");
+            EmitLoad(previous, LlvmType(field.Type), fieldAddress, RuntimeAlignment(field.Type));
+            DropOwnedRuntimeValue(DematerializeAggregateValue(field.Type, previous));
+        }
         var materialized = MaterializeAggregateValue(value);
         EmitStore(materialized.TypeName, materialized.ValueName, fieldAddress, RuntimeAlignment(field.Type));
+        if (movedSourceName is not null)
+        {
+            RemoveLocal(movedSourceName);
+        }
+        if (directOwnedSourceName is not null)
+        {
+            RemoveLocal(directOwnedSourceName);
+        }
+        foreach (var transferredName in structFieldSourceNames)
+        {
+            RemoveLocal(transferredName);
+        }
     }
 
     private void EmitIndexAssignmentStatement(IndexAssignmentStatement assignment)

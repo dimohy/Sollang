@@ -146,7 +146,7 @@ internal sealed partial class LlvmEmitter
         var value = DematerializeAsyncResult(task.ResultType, loaded);
         if (discardResult && _program.Types.ContainsOwnedStorage(task.ResultType))
         {
-            DropDiscardedAsyncResult(value);
+            DropOwnedRuntimeValue(value);
         }
         var closeSucceeded = NextTemp("task_close_succeeded");
         EmitCall(closeSucceeded, "i1", "smalllang_task_release", $"ptr {task.HandleName}");
@@ -199,34 +199,6 @@ internal sealed partial class LlvmEmitter
     private RuntimeValue DematerializeAsyncResult(BoundType type, string value) =>
         type == BoundType.Unit ? RuntimeUnit.Instance : DematerializeAggregateValue(type, value);
 
-    private void DropDiscardedAsyncResult(RuntimeValue value)
-    {
-        if (IsCustomOwnedType(value.Type))
-        {
-            var materialized = MaterializeAggregateValue(value);
-            EmitOwnedDropCall(value.Type, materialized.ValueName);
-            return;
-        }
-
-        switch (value)
-        {
-            case RuntimeDynamicIntArray array:
-                EmitCall(target: null, "void", "smalllang_free", $"ptr {array.PointerName}");
-                break;
-            case RuntimeDynamicInlineArray array:
-                DropDynamicInlineArrayElements(array);
-                EmitCall(target: null, "void", "smalllang_free", $"ptr {array.PointerName}");
-                break;
-            case RuntimeIntDictionary dictionary:
-                EmitCall(target: null, "void", "smalllang_free", $"ptr {dictionary.PointerName}");
-                break;
-            case RuntimeInlineDictionary dictionary:
-                DropInlineDictionaryElements(dictionary);
-                EmitCall(target: null, "void", "smalllang_free", $"ptr {dictionary.PointerName}");
-                break;
-        }
-    }
-
     private void DropFailedAsyncInput(BoundFunction function)
     {
         if (function.InputOwnership != BoundFunctionInputOwnership.Move
@@ -236,7 +208,7 @@ internal sealed partial class LlvmEmitter
             return;
         }
 
-        DropDiscardedAsyncResult(DematerializeAggregateValue(inputType, "%it"));
+        DropOwnedRuntimeValue(DematerializeAggregateValue(inputType, "%it"));
     }
 
     private int AsyncContextSize(BoundType? inputType, BoundType resultType)

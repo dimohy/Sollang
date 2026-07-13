@@ -283,12 +283,26 @@ internal sealed partial class LlvmEmitter
             return;
         }
 
-        var value = LoadMutableContainer(name, storedValue);
+        var value = _mutableStructSlots.TryGetValue(name, out var structPointer)
+            ? LoadMutableStruct(storedValue, structPointer)
+            : LoadMutableContainer(name, storedValue);
+        DropOwnedRuntimeValue(value);
+        EndMutableContainerSlotLifetime(name);
+    }
+
+    private RuntimeValue LoadMutableStruct(RuntimeValue storedValue, string pointer)
+    {
+        var loaded = NextTemp("mutable_struct");
+        EmitLoad(loaded, LlvmStructType(storedValue.Type), pointer, 8);
+        return new RuntimeStruct(storedValue.Type, loaded);
+    }
+
+    private void DropOwnedRuntimeValue(RuntimeValue value)
+    {
         if (IsCustomOwnedType(value.Type))
         {
             var materialized = MaterializeAggregateValue(value);
             EmitOwnedDropCall(value.Type, materialized.ValueName);
-            EndMutableContainerSlotLifetime(name);
             return;
         }
 
@@ -330,7 +344,6 @@ internal sealed partial class LlvmEmitter
                 break;
         }
 
-        EndMutableContainerSlotLifetime(name);
     }
 
     private void DropStaticInlineArrayElements(RuntimeStaticInlineArray array)
