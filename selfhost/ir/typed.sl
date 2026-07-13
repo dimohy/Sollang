@@ -13,7 +13,7 @@ import smalllang.compiler.semantic.symbols as symbols
 # Kinds: 0 function, 1 return, 2 Text constant, 3 Int constant,
 # 4 Bool constant, 5 name, 6 call, 7 unary, 8 binary, 9 other expression,
 # 10 parameter, 11 entry point, 12 struct literal, 13 member access,
-# 14 array literal, 15 index access.
+# 14 array literal, 15 index access, 16 dictionary literal.
 public struct TypedIrNode {
     kind: Int
     parent: Int
@@ -230,6 +230,12 @@ public lower sources: [Text; ~] -> [TypedIrNode; ~] {
                                 expression.kind == 37 -> if { 14 => expressionKind! }
                                 expression.kind == 38 -> if { 16 => expressionKind! }
                                 expression.kind == 41 -> if { 15 => expressionKind! }
+                                0 => propertyCallSearch!
+                                propertyCallSearch! < (resolvedCalls! -> len) -> while {
+                                    resolvedCalls![propertyCallSearch!] => propertyCall
+                                    (propertyCall.sourceModule == sourceIndex! and propertyCall.callAst == expressionAstIndex! and propertyCall.status == 0) -> if { 6 => expressionKind! }
+                                    propertyCallSearch! + 1 => propertyCallSearch!
+                                }
                                 results! -> len => expressionIr
                                 expressionIr => astToIr![expressionAstIndex!]
                                 -1 => expressionSymbol!
@@ -376,6 +382,29 @@ public lower sources: [Text; ~] -> [TypedIrNode; ~] {
         entryAstIndex! < (nodes! -> len) -> while {
             nodes![entryAstIndex!] => entryAst
             entryAst.kind == 8 -> if {
+                -1 => entryResultTypeIndex!
+                1000000 => entryResultDistance!
+                0 => entryTypeSearch!
+                entryTypeSearch! < (inferred! -> len) -> while {
+                    inferred![entryTypeSearch!] => entryCandidateType
+                    entryCandidateType.sourceModule == sourceIndex! -> if {
+                        nodes![entryCandidateType.astNode].parent => entryAncestor!
+                        1 => entryDistance!
+                        false => belongsToEntry!
+                        (entryAncestor! >= 0 and not belongsToEntry!) -> while {
+                            entryAncestor! == entryAstIndex! -> if { true => belongsToEntry! } else {
+                                nodes![entryAncestor!].parent => entryAncestor!
+                                entryDistance! + 1 => entryDistance!
+                            }
+                        }
+                        (belongsToEntry! and entryDistance! < entryResultDistance!) -> if {
+                            entryTypeSearch! => entryResultTypeIndex!
+                            entryDistance! => entryResultDistance!
+                        }
+                    }
+                    entryTypeSearch! + 1 => entryTypeSearch!
+                }
+                results! -> len => entryIr!
                 results! -> push(TypedIrNode {
                     kind: 11
                     parent: -1
@@ -393,6 +422,140 @@ public lower sources: [Text; ~] -> [TypedIrNode; ~] {
                     nextOperand: -1
                     flags: 0
                 })
+                entryResultTypeIndex! >= 0 -> if {
+                    [Int; ~] => entryAstToIr!
+                    0 => entryMapIndex!
+                    entryMapIndex! < (nodes! -> len) -> while {
+                        entryAstToIr! -> push(-1)
+                        entryMapIndex! + 1 => entryMapIndex!
+                    }
+                    results! -> len => entryExpressionStart
+                    0 => entryExpressionAst!
+                    entryExpressionAst! < (nodes! -> len) -> while {
+                        -1 => entryExpressionTypeIndex!
+                        0 => entryExpressionTypeSearch!
+                        entryExpressionTypeSearch! < (inferred! -> len) -> while {
+                            inferred![entryExpressionTypeSearch!] => entryExpressionTypeCandidate
+                            (entryExpressionTypeCandidate.sourceModule == sourceIndex! and entryExpressionTypeCandidate.astNode == entryExpressionAst!) -> if { entryExpressionTypeSearch! => entryExpressionTypeIndex! }
+                            entryExpressionTypeSearch! + 1 => entryExpressionTypeSearch!
+                        }
+                        entryExpressionTypeIndex! >= 0 -> if {
+                            nodes![entryExpressionAst!].parent => entryExpressionAncestor!
+                            false => entryExpressionBelongs!
+                            (entryExpressionAncestor! >= 0 and not entryExpressionBelongs!) -> while {
+                                entryExpressionAncestor! == entryAstIndex! -> if { true => entryExpressionBelongs! } else { nodes![entryExpressionAncestor!].parent => entryExpressionAncestor! }
+                            }
+                            entryExpressionBelongs! -> if {
+                                inferred![entryExpressionTypeIndex!] => entryExpressionType
+                                nodes![entryExpressionAst!] => entryExpression
+                                9 => entryExpressionKind!
+                                entryExpression.kind == 13 -> if { 2 => entryExpressionKind! }
+                                entryExpression.kind == 14 -> if { 3 => entryExpressionKind! }
+                                entryExpression.kind == 15 -> if {
+                                    (entryExpressionType.origin == 1 and entryExpressionType.targetSymbol == 23) -> if { 4 => entryExpressionKind! } else { 5 => entryExpressionKind! }
+                                }
+                                entryExpression.kind == 11 -> if { 6 => entryExpressionKind! }
+                                entryExpression.kind == 22 -> if { 7 => entryExpressionKind! }
+                                (entryExpression.kind >= 18 and entryExpression.kind <= 21) -> if { 8 => entryExpressionKind! }
+                                (entryExpression.kind == 24 or entryExpression.kind == 25) -> if { 8 => entryExpressionKind! }
+                                0 => entryPropertyCallSearch!
+                                entryPropertyCallSearch! < (resolvedCalls! -> len) -> while {
+                                    resolvedCalls![entryPropertyCallSearch!] => entryPropertyCall
+                                    (entryPropertyCall.sourceModule == sourceIndex! and entryPropertyCall.callAst == entryExpressionAst! and entryPropertyCall.status == 0) -> if { 6 => entryExpressionKind! }
+                                    entryPropertyCallSearch! + 1 => entryPropertyCallSearch!
+                                }
+                                results! -> len => entryExpressionIr
+                                entryExpressionIr => entryAstToIr![entryExpressionAst!]
+                                -1 => entryExpressionSymbol!
+                                -1 => entryExpressionTargetModule!
+                                entryExpressionKind! == 5 -> if {
+                                    0 => entryNameSearch!
+                                    entryNameSearch! < (resolvedNames! -> len) -> while {
+                                        resolvedNames![entryNameSearch!] => entryResolvedName
+                                        entryResolvedName.astNode == entryExpressionAst! -> if { entryResolvedName.symbol => entryExpressionSymbol! }
+                                        entryNameSearch! + 1 => entryNameSearch!
+                                    }
+                                }
+                                entryExpressionKind! == 6 -> if {
+                                    0 => entryCallSearch!
+                                    entryCallSearch! < (resolvedCalls! -> len) -> while {
+                                        resolvedCalls![entryCallSearch!] => entryResolvedCall
+                                        (entryResolvedCall.sourceModule == sourceIndex! and entryResolvedCall.callAst == entryExpressionAst! and entryResolvedCall.status == 0) -> if {
+                                            entryResolvedCall.functionSymbol => entryExpressionSymbol!
+                                            entryResolvedCall.targetSourceModule => entryExpressionTargetModule!
+                                        }
+                                        entryCallSearch! + 1 => entryCallSearch!
+                                    }
+                                }
+                                results! -> push(TypedIrNode {
+                                    kind: entryExpressionKind!
+                                    parent: entryIr!
+                                    sourceModule: sourceIndex!
+                                    astNode: entryExpressionAst!
+                                    symbol: entryExpressionSymbol!
+                                    targetModule: entryExpressionTargetModule!
+                                    typeOrigin: entryExpressionType.origin
+                                    typeModule: entryExpressionType.targetModule
+                                    typeSymbol: entryExpressionType.targetSymbol
+                                    payloadToken: entryExpression.payloadToken
+                                    opcode: entryExpression.operatorKind
+                                    operand0: -1
+                                    operand1: -1
+                                    nextOperand: -1
+                                    flags: entryExpression.flags
+                                })
+                            }
+                        }
+                        entryExpressionAst! + 1 => entryExpressionAst!
+                    }
+                    results! -> len => entryExpressionEnd
+                    entryExpressionStart => entryParentIr!
+                    entryParentIr! < entryExpressionEnd -> while {
+                        results![entryParentIr!] => entryIrNode!
+                        nodes![entryIrNode!.astNode].parent => entryParentAst!
+                        -1 => entrySemanticParent!
+                        (entryParentAst! >= 0 and entryParentAst! != entryAstIndex! and entrySemanticParent! < 0) -> while {
+                            entryAstToIr![entryParentAst!] >= 0 -> if { entryAstToIr![entryParentAst!] => entrySemanticParent! } else { nodes![entryParentAst!].parent => entryParentAst! }
+                        }
+                        entrySemanticParent! >= 0 -> if { entrySemanticParent! => entryIrNode!.parent }
+                        entryIrNode! => results![entryParentIr!]
+                        entryParentIr! + 1 => entryParentIr!
+                    }
+                    entryExpressionStart => entryOperandIr!
+                    entryOperandIr! < entryExpressionEnd -> while {
+                        results![entryOperandIr!] => entryOperator!
+                        (entryOperator!.kind == 6 or entryOperator!.kind == 7 or entryOperator!.kind == 8) -> if {
+                            -1 => entryFirstOperand!
+                            -1 => entrySecondOperand!
+                            UIntSize(0) => entryFirstStart!
+                            entryExpressionStart => entryChildIr!
+                            entryChildIr! < entryExpressionEnd -> while {
+                                results![entryChildIr!] => entryChild
+                                entryChild.parent == entryOperandIr! -> if {
+                                    nodes![entryChild.astNode].start => entryChildStart
+                                    entryFirstOperand! < 0 -> if {
+                                        entryChildIr! => entryFirstOperand!
+                                        entryChildStart => entryFirstStart!
+                                    } else {
+                                        entryChildStart < entryFirstStart! -> if {
+                                            entryFirstOperand! => entrySecondOperand!
+                                            entryChildIr! => entryFirstOperand!
+                                            entryChildStart => entryFirstStart!
+                                        } else { entrySecondOperand! < 0 -> if { entryChildIr! => entrySecondOperand! } }
+                                    }
+                                }
+                                entryChildIr! + 1 => entryChildIr!
+                            }
+                            entryFirstOperand! => entryOperator!.operand0
+                            (entryOperator!.kind == 6 or entryOperator!.kind == 8) -> if { entrySecondOperand! => entryOperator!.operand1 }
+                            entryOperator! => results![entryOperandIr!]
+                        }
+                        entryOperandIr! + 1 => entryOperandIr!
+                    }
+                    results![entryIr!] => entryNode!
+                    entryAstToIr![inferred![entryResultTypeIndex!].astNode] => entryNode!.operand0
+                    entryNode! => results![entryIr!]
+                }
             }
             entryAstIndex! + 1 => entryAstIndex!
         }

@@ -546,12 +546,41 @@ public emit sources: [Text; ~] -> Unit {
             functionEnd! => functionIndex!
         } else {
             function.kind == 11 -> if {
+                functionIndex! + 1 => entryEnd!
+                (entryEnd! < (ir! -> len) and ir![entryEnd!].kind != 0 and ir![entryEnd!].kind != 11) -> while { entryEnd! + 1 => entryEnd! }
                 "define i32 @main() {" -> println
                 "entry:" -> println
+                entryEnd! - 1 => entryExpressionIndex!
+                entryExpressionIndex! > functionIndex! -> while {
+                    ir![entryExpressionIndex!] => entryExpression
+                    entryExpression.kind == 6 -> if {
+                        "  %v$(entryExpressionIndex!) = call " -> print
+                        entryExpression -> writeType
+                        " @sl_m$(entryExpression.targetModule)_s$(entryExpression.symbol)(" -> print
+                        entryExpression.operand0 >= 0 -> if {
+                            ir![entryExpression.operand0] => entryArgument
+                            entryArgument -> writeType
+                            " " -> print
+                            (entryArgument.kind == 3 or entryArgument.kind == 4) -> if {
+                                sources[entryArgument.sourceModule] -> lexer.lex => entryArgumentTokens!
+                                entryArgumentTokens![entryArgument.payloadToken] => entryArgumentToken
+                                entryArgument.kind == 3 -> if {
+                                    sources[entryArgument.sourceModule] -> slice(entryArgumentToken.span.start, entryArgumentToken.span.length) -> print
+                                } else {
+                                    ((sources[entryArgument.sourceModule] -> byte(entryArgumentToken.span.start)) == UInt8(116)) -> if { "1" } else { "0" } -> print
+                                }
+                            } else { "%v$(entryExpression.operand0)" -> print }
+                        }
+                        ")" -> println
+                    }
+                    entryExpressionIndex! - 1 => entryExpressionIndex!
+                }
                 "  ret i32 0" -> println
                 "}" -> println
+                entryEnd! => functionIndex!
+            } else {
+                functionIndex! + 1 => functionIndex!
             }
-            functionIndex! + 1 => functionIndex!
         }
     }
 }

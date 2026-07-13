@@ -402,6 +402,13 @@ SL-source -> SL semantic/typed IR -> SL LLVM text -> native linker -> process
 execution path. Main statements, observable program behavior, Text/aggregate
 ABI, ownership/drop, runtime declarations, and direct file output remain.
 
+Non-empty main blocks now begin lowering their inferred expression graph.
+Self-hosted call resolution recognizes a zero-input function name as a property
+call, so `main { ping }` emits and executes `call @ping()` before returning the
+process exit code. This removes the empty-entry-only limitation, while local
+bindings, control flow, runtime effects, and complete statement sequencing
+remain on the critical path.
+
 Text now crosses the self-hosted LLVM boundary as `{ ptr, i64 }`. UTF-8
 literals become immutable globals with byte-accurate lengths and LLVM `\XX`
 escaping, and Text parameters, returns, and imported calls share that ABI.

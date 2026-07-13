@@ -32,7 +32,7 @@ public resolve source: Text -> [CallResolution; ~] {
     0 => astIndex!
     astIndex! < (nodes! -> len) -> while {
         nodes![astIndex!] => node
-        node.kind == 11 -> if {
+        (node.kind == 11 or node.kind == 15) -> if {
             -1 => callNameToken!
             node.firstToken => tokenIndex!
             (tokenIndex! < node.firstToken + node.tokenCount and callNameToken! < 0) -> while {
@@ -54,15 +54,17 @@ public resolve source: Text -> [CallResolution; ~] {
                         callByte != functionByte -> if { false => equal! }
                         nameByte! + UIntSize(1) => nameByte!
                     }
-                    equal! -> if { symbolIndex! => functionSymbol! }
+                    (equal! and (node.kind == 11 or candidate.secondaryTypeNode < 0)) -> if { symbolIndex! => functionSymbol! }
                 }
                 symbolIndex! + 1 => symbolIndex!
             }
-            resolved! -> push(CallResolution {
-                callAst: astIndex!
-                functionSymbol: functionSymbol!
-                status: functionSymbol! >= 0 -> if { 0 } else { 2 }
-            })
+            (node.kind == 11 or functionSymbol! >= 0) -> if {
+                resolved! -> push(CallResolution {
+                    callAst: astIndex!
+                    functionSymbol: functionSymbol!
+                    status: functionSymbol! >= 0 -> if { 0 } else { 2 }
+                })
+            }
         }
         astIndex! + 1 => astIndex!
     }
@@ -85,7 +87,7 @@ public resolveModules sources: [Text; ~] -> [ModuleCallResolution; ~] {
         0 => callAstIndex!
         callAstIndex! < (nodes! -> len) -> while {
             nodes![callAstIndex!] => callNode
-            callNode.kind == 11 -> if {
+            (callNode.kind == 11 or callNode.kind == 15) -> if {
                 -1 => callNameToken!
                 callNode.firstToken => callTokenIndex!
                 (callTokenIndex! < callNode.firstToken + callNode.tokenCount and callNameToken! < 0) -> while {
@@ -107,15 +109,17 @@ public resolveModules sources: [Text; ~] -> [ModuleCallResolution; ~] {
                             callByte != functionByte -> if { false => localEqual! }
                             localNameByte! + UIntSize(1) => localNameByte!
                         }
-                        localEqual! -> if { localSymbolIndex! => localFunctionSymbol! }
+                        (localEqual! and (callNode.kind == 11 or localCandidate.secondaryTypeNode < 0)) -> if { localSymbolIndex! => localFunctionSymbol! }
                     }
                     localSymbolIndex! + 1 => localSymbolIndex!
                 }
-                localCalls! -> push(CallResolution {
-                    callAst: callAstIndex!
-                    functionSymbol: localFunctionSymbol!
-                    status: localFunctionSymbol! >= 0 -> if { 0 } else { 2 }
-                })
+                (callNode.kind == 11 or localFunctionSymbol! >= 0) -> if {
+                    localCalls! -> push(CallResolution {
+                        callAst: callAstIndex!
+                        functionSymbol: localFunctionSymbol!
+                        status: localFunctionSymbol! >= 0 -> if { 0 } else { 2 }
+                    })
+                }
             }
             callAstIndex! + 1 => callAstIndex!
         }

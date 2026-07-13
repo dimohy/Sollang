@@ -298,12 +298,14 @@ module-qualified calls such as `@sl_m0_s0`, including a typed literal,
 parameter, or SSA argument. A two-source snapshot is assembled by `llvm-as`,
 proving that file-module identities survive through executable LLVM linkage.
 
-An AST main block now lowers to a distinct typed-IR entry node. The LLVM backend
-emits it as a Windows x64 `i32 @main()` returning a process exit code. The
+An AST main block now lowers to a distinct typed-IR entry node plus its inferred
+expression graph. The first executable slice resolves a zero-input property
+call such as `ping` with the same rule as the bootstrap compiler, emits the
+call in Windows x64 `i32 @main()`, and then returns process exit code zero. The
 multi-module backend test is no longer assembly-only: the runner assembles the
 stdout IR, links it with pinned Clang, executes the resulting `.exe`, and
-requires exit code zero with no unexpected output. Main statements and runtime
-calls still need full lowering.
+requires exit code zero with no unexpected output. Main bindings, control flow,
+runtime calls, and general statement sequencing still need full lowering.
 
 The backend now defines Text as `%sl.text = { ptr, i64 }`. Plain UTF-8
 literals become immutable byte globals and are assembled into aggregate return
