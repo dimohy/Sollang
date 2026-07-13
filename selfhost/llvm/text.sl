@@ -358,6 +358,7 @@ emitCore sources: move [Text; ~] -> Unit {
     }
     emitOwnedDrops request: OwnedDropRequest -> Unit {
         sources -> typedIr.lower => dropIr!
+        dropIr! -> typedIr.movesFrom => dropMoveEvents!
         dropIr![request.regionIndex] => dropRegion
         sources[dropRegion.sourceModule] -> ast.lower => dropAst!
         UIntSize(0) => dropBeforeStart!
@@ -370,11 +371,27 @@ emitCore sources: move [Text; ~] -> Unit {
             request.beforeAst >= 0 -> if {
                 dropAst![ownedDropCandidate.astNode].start >= dropBeforeStart! -> if { false => ownedDropBeforeEdge! }
             }
-            (ownedDropBeforeEdge! and ownedDropCandidate.kind == 17 and ownedDropCandidate.parent == request.regionIndex and ownedDropCandidate.typeOrigin == 13 and ownedDropCandidate.symbol != request.transferredSymbol) -> if {
+            false => ownedDropMoved!
+            (ownedDropCandidate.kind == 17 and (ownedDropCandidate.typeOrigin == 13 or ownedDropCandidate.typeOrigin == 15)) -> if {
+                0 => ownedMoveIndex!
+                (ownedMoveIndex! < (dropMoveEvents! -> len) and not ownedDropMoved!) -> while {
+                    dropMoveEvents![ownedMoveIndex!] => ownedMove
+                    (ownedMove.sourceModule == ownedDropCandidate.sourceModule and ownedMove.symbol == ownedDropCandidate.symbol and ownedMove.regionIr == request.regionIndex) -> if {
+                        dropIr![ownedMove.callIr] => ownedMoveCall
+                        true => ownedMoveBeforeEdge!
+                        request.beforeAst >= 0 -> if {
+                            dropAst![ownedMoveCall.astNode].start >= dropBeforeStart! -> if { false => ownedMoveBeforeEdge! }
+                        }
+                        (dropAst![ownedMoveCall.astNode].start > dropAst![ownedDropCandidate.astNode].start and ownedMoveBeforeEdge!) -> if { true => ownedDropMoved! }
+                    }
+                    ownedMoveIndex! + 1 => ownedMoveIndex!
+                }
+            }
+            (ownedDropBeforeEdge! and not ownedDropMoved! and ownedDropCandidate.kind == 17 and ownedDropCandidate.parent == request.regionIndex and ownedDropCandidate.typeOrigin == 13 and ownedDropCandidate.symbol != request.transferredSymbol) -> if {
                 "  %cleanup$(request.edgeIndex)_b$(ownedDropIndex!) = extractvalue %sl.array.i32 %v$(ownedDropCandidate.operand0), 0" -> println
                 "  call void @free(ptr %cleanup$(request.edgeIndex)_b$(ownedDropIndex!))" -> println
             }
-            (ownedDropBeforeEdge! and ownedDropCandidate.kind == 17 and ownedDropCandidate.parent == request.regionIndex and ownedDropCandidate.typeOrigin == 15 and ownedDropCandidate.symbol != request.transferredSymbol) -> if {
+            (ownedDropBeforeEdge! and not ownedDropMoved! and ownedDropCandidate.kind == 17 and ownedDropCandidate.parent == request.regionIndex and ownedDropCandidate.typeOrigin == 15 and ownedDropCandidate.symbol != request.transferredSymbol) -> if {
                 "  %cleanup$(request.edgeIndex)_b$(ownedDropIndex!)_keys = extractvalue %sl.dict %v$(ownedDropCandidate.operand0), 0" -> println
                 "  call void @free(ptr %cleanup$(request.edgeIndex)_b$(ownedDropIndex!)_keys)" -> println
                 "  %cleanup$(request.edgeIndex)_b$(ownedDropIndex!)_values = extractvalue %sl.dict %v$(ownedDropCandidate.operand0), 1" -> println
@@ -1038,6 +1055,7 @@ emitCore sources: move [Text; ~] -> Unit {
         }
     }
     sources -> typedIr.lower => ir!
+    ir! -> typedIr.movesFrom => moveEvents!
     sources -> nominalTypes.resolve => nominal!
     sources -> modules.identities => moduleIdentities!
     0 => structSourceIndex!
@@ -1989,6 +2007,19 @@ emitCore sources: move [Text; ~] -> Unit {
             expressionStart => dropIndex!
             dropIndex! < functionEnd! -> while {
                 ir![dropIndex!] => dropCandidate
+                false => dropCandidateMoved!
+                (dropCandidate.kind == 17 and (dropCandidate.typeOrigin == 13 or dropCandidate.typeOrigin == 15)) -> if {
+                    0 => dropMoveIndex!
+                    (dropMoveIndex! < (moveEvents! -> len) and not dropCandidateMoved!) -> while {
+                        moveEvents![dropMoveIndex!] => dropMove
+                        (dropMove.sourceModule == dropCandidate.sourceModule and dropMove.symbol == dropCandidate.symbol and dropMove.regionIr == function.operand0) -> if {
+                            sources[dropCandidate.sourceModule] -> ast.lower => dropCandidateAst!
+                            ir![dropMove.callIr] => dropMoveCall
+                            dropCandidateAst![dropMoveCall.astNode].start > dropCandidateAst![dropCandidate.astNode].start -> if { true => dropCandidateMoved! }
+                        }
+                        dropMoveIndex! + 1 => dropMoveIndex!
+                    }
+                }
                 (dropCandidate.kind == 14 and dropCandidate.typeOrigin == 13 and dropCandidate.parent == function.operand0 and dropIndex! != returnNode.operand0) -> if {
                     "  %drop$(dropIndex!) = extractvalue %sl.array.i32 %v$(dropIndex!), 0" -> println
                     "  call void @free(ptr %drop$(dropIndex!))" -> println
@@ -1999,11 +2030,11 @@ emitCore sources: move [Text; ~] -> Unit {
                     "  %drop$(dropIndex!)_values = extractvalue %sl.dict %v$(dropIndex!), 1" -> println
                     "  call void @free(ptr %drop$(dropIndex!)_values)" -> println
                 }
-                (dropCandidate.kind == 17 and dropCandidate.typeOrigin == 13 and not (returnOperand.kind == 5 and returnOperand.symbol == dropCandidate.symbol)) -> if {
+                (dropCandidate.kind == 17 and dropCandidate.typeOrigin == 13 and not dropCandidateMoved! and not (returnOperand.kind == 5 and returnOperand.symbol == dropCandidate.symbol)) -> if {
                     "  %drop$(dropIndex!) = extractvalue %sl.array.i32 %v$(dropCandidate.operand0), 0" -> println
                     "  call void @free(ptr %drop$(dropIndex!))" -> println
                 }
-                (dropCandidate.kind == 17 and dropCandidate.typeOrigin == 15 and not (returnOperand.kind == 5 and returnOperand.symbol == dropCandidate.symbol)) -> if {
+                (dropCandidate.kind == 17 and dropCandidate.typeOrigin == 15 and not dropCandidateMoved! and not (returnOperand.kind == 5 and returnOperand.symbol == dropCandidate.symbol)) -> if {
                     "  %drop$(dropIndex!)_keys = extractvalue %sl.dict %v$(dropCandidate.operand0), 0" -> println
                     "  call void @free(ptr %drop$(dropIndex!)_keys)" -> println
                     "  %drop$(dropIndex!)_values = extractvalue %sl.dict %v$(dropCandidate.operand0), 1" -> println

@@ -17,6 +17,13 @@ The design deliberately combines a small set of compatible ideas:
   dispatch by default. See the official
   [trait reference](https://doc.rust-lang.org/reference/items/traits.html) and
   [associated items](https://doc.rust-lang.org/stable/reference/items/associated-items.html).
+- Rust tracks moves separately from values and elaborates destruction from that
+  analysis; Swift makes consuming parameters part of the declaration contract.
+  SL follows the same separation with a typed-IR move-event side table, while
+  retaining structured regions until LLVM lowering. See rustc
+  [move paths](https://rustc-dev-guide.rust-lang.org/borrow-check/moves-and-initialization/move-paths.html),
+  Rust [partial moves](https://doc.rust-lang.org/rust-by-example/scope/move/partial_move.html),
+  and Swift [declarations](https://docs.swift.org/swift-book/documentation/the-swift-programming-language/declarations/).
 - Mojo: compile-time type and value parameterization with specialization at use
   sites; SL uses angle brackets to keep this separate from arrays. See
   [generics](https://docs.modular.com/mojo/manual/generics/) and
@@ -469,9 +476,11 @@ branches through nested if/while regions. The C# reference backend drops
 loop-local owned values before either transfer. The self-hosted backend now
 materializes dynamic arrays and dictionaries inside control-flow regions and
 routes `break`/`continue` through explicit cleanup blocks; normal back-edges
-perform the same reverse-order frees. Early `return`, moved region bindings,
-and recursively owned aggregates remain before the structured early-exit gate
-is complete.
+perform the same reverse-order frees. Consuming calls now produce typed-IR move
+events attached to their nearest structured region, so cleanup edges after the
+call omit the transferred array or dictionary without incorrectly suppressing
+cleanup on sibling paths. Recursively owned aggregates and field-level partial
+moves remain before the structured early-exit gate is complete.
 
 Guard-flow loop control is also cumulative: `condition -> if continue` and
 `condition -> if break` are compact Bool-guarded transfers. Both the reference
@@ -484,7 +493,7 @@ type, transfers a returned owner, and drops every other active owner before
 `ret`. The self-hosted AST and typed IR carry a dedicated return terminator;
 the LLVM slice executes an early scalar return from an `if` region and frees a
 function-local dynamic array on both the early and fallthrough paths. Inline
-local-function returns, full path-sensitive move masks, and recursively owned
+local-function returns, field-level partial-move masks, and recursively owned
 aggregate cleanup keep the structured early-exit gate partial.
 
 Typed IR now represents immutable local bindings explicitly and connects each
@@ -505,8 +514,9 @@ released after its final scalar read. Returning a bound owned aggregate now
 transfers its backing stores without producer-side frees, while a scalar-
 returning consumer releases a `move` parameter exactly once. Branch-sensitive
 liveness now covers region-local Int arrays and dictionaries on normal and
-loop-exit edges. Partial moves, early return, and nested owned aggregate drop
-glue remain.
+loop-exit edges. Whole-binding consuming calls now suppress only later cleanup
+within the same structured region. Field-level partial moves and nested owned
+aggregate drop glue remain.
 
 Self-hosted LLVM text selects descriptors implemented in the file module
 `smalllang.compiler.llvm.target`. Windows x64/COFF, Linux x64/ELF, and

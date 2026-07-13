@@ -1,0 +1,23 @@
+import smalllang.compiler.llvm.text as llvm
+
+main {
+    [
+        """
+        consume values: move [Int; ~] -> Int {
+            41
+        }
+
+        choose flag: Bool -> Int {
+            [41, ~] => values
+            values -> consume => result
+            result
+        }
+
+        main {
+            choose(true) => result
+        }
+        """,
+        ~
+    ] => sources!
+    sources! -> llvm.emit
+}

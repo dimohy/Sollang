@@ -3154,4 +3154,23 @@ slices will generalize `Task<T>`, add Linux and stackless I/O lowering, then add
 cooperative cancellation and task-group combinators without weakening the
 structured lifetime rule.
 
+## D106 - Consuming Calls Produce Region-Scoped Move Events
+
+Status: first self-hosted cleanup slice implemented
+Date: 2026-07-13
+
+The self-hosted typed IR records a consuming call in a separate `MoveEvent`
+side table instead of mutating value or type flags. Each event identifies the
+call, the moved binding, and the nearest structured region. Function contracts
+remain the source of truth: an argument is consuming only when the resolved
+target parameter carries `move`.
+
+LLVM cleanup suppresses an array or dictionary free only when the matching move
+is after the binding, before the cleanup edge, and in that same region. A move
+inside a nested conditional therefore cannot suppress cleanup on the parent's
+sibling path. This follows rustc's separation of move analysis from drop
+elaboration and Swift's declaration-level consuming contract without importing
+Rust's complete place tree into the first slice. Field-level partial moves and
+recursive aggregate drop glue remain explicit later gates.
+
 

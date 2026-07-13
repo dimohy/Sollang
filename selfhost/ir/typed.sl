@@ -36,6 +36,15 @@ public struct TypedIrNode {
     flags: Int
 }
 
+# A move event is a consuming call whose argument is a resolved local owner.
+# Cleanup lowering uses this side table instead of overloading value/type flags.
+public struct MoveEvent {
+    callIr: Int
+    sourceModule: Int
+    symbol: Int
+    regionIr: Int
+}
+
 public lower sources: [Text; ~] -> [TypedIrNode; ~] {
     sources -> expressionTypes.infer => inferred!
     sources -> nominalTypes.resolve => nominal!
@@ -1139,4 +1148,45 @@ public lower sources: [Text; ~] -> [TypedIrNode; ~] {
         loopExitIndex! + 1 => loopExitIndex!
     }
     results!
+}
+
+public movesFrom ir: [TypedIrNode; ~] -> [MoveEvent; ~] {
+    [MoveEvent; ~] => events!
+    0 => callIndex!
+    callIndex! < (ir -> len) -> while {
+        ir[callIndex!] => call
+        (call.kind == 6 and call.symbol >= 0 and call.operand0 >= 0) -> if {
+            ir[call.operand0] => argument
+            (argument.kind == 5 and argument.symbol >= 0) -> if {
+                false => consumes!
+                0 => functionIndex!
+                functionIndex! < (ir -> len) -> while {
+                    ir[functionIndex!] => function
+                    (function.kind == 0 and function.sourceModule == call.targetModule and function.symbol == call.symbol and function.operand1 >= 0) -> if {
+                        ir[function.operand1] => parameter
+                        parameter.flags % 2 == 1 -> if { true => consumes! }
+                    }
+                    functionIndex! + 1 => functionIndex!
+                }
+                consumes! -> if {
+                    call.parent => moveRegion!
+                    (moveRegion! >= 0 and ir[moveRegion!].kind != 1 and ir[moveRegion!].kind != 19 and ir[moveRegion!].kind != 20) -> while {
+                        ir[moveRegion!].parent => moveRegion!
+                    }
+                    events! -> push(MoveEvent {
+                        callIr: callIndex!
+                        sourceModule: argument.sourceModule
+                        symbol: argument.symbol
+                        regionIr: moveRegion!
+                    })
+                }
+            }
+        }
+        callIndex! + 1 => callIndex!
+    }
+    events!
+}
+
+public moves sources: [Text; ~] -> [MoveEvent; ~] {
+    sources -> lower -> movesFrom
 }
