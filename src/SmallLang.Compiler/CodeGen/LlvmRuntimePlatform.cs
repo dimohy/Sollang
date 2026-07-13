@@ -51,9 +51,313 @@ internal abstract class LlvmRuntimePlatform
 
     public virtual bool SupportsAsync => false;
 
+    public bool UsesAsyncFile { get; set; }
+
     public virtual void EmitAsyncPrimitives(StringBuilder functions)
     {
+        if (UsesAsyncFile)
+        {
+            functions.AppendLine("""
+            define internal void @smalllang_file_push_request(ptr %control) #0 {
+            entry:
+              %next_slot = getelementptr %smalllang.task_control, ptr %control, i32 0, i32 16
+              br label %push
+
+            push:
+              %head = load atomic ptr, ptr @smalllang_file_request_head acquire, align 8
+              store ptr %head, ptr %next_slot, align 8
+              %exchange = cmpxchg ptr @smalllang_file_request_head, ptr %head, ptr %control release monotonic
+              %pushed = extractvalue { ptr, i1 } %exchange, 1
+              br i1 %pushed, label %signal, label %push
+
+            signal:
+              call void @smalllang_platform_file_worker_signal_request()
+              ret void
+            }
+
+            define internal void @smalllang_file_push_completion(ptr %control) #0 {
+            entry:
+              %next_slot = getelementptr %smalllang.task_control, ptr %control, i32 0, i32 16
+              br label %push
+
+            push:
+              %head = load atomic ptr, ptr @smalllang_file_completion_head acquire, align 8
+              store ptr %head, ptr %next_slot, align 8
+              %exchange = cmpxchg ptr @smalllang_file_completion_head, ptr %head, ptr %control release monotonic
+              %pushed = extractvalue { ptr, i1 } %exchange, 1
+              br i1 %pushed, label %done, label %push
+
+            done:
+              ret void
+            }
+
+            define internal void @smalllang_file_worker_run() #0 {
+            entry:
+              br label %wait
+
+            wait:
+              call void @smalllang_platform_file_worker_wait_request()
+              %stopping_value = load atomic i32, ptr @smalllang_file_worker_stopping acquire, align 4
+              %stopping = icmp ne i32 %stopping_value, 0
+              br i1 %stopping, label %stopped, label %take_batch
+
+            take_batch:
+              %batch = atomicrmw xchg ptr @smalllang_file_request_head, ptr null acq_rel
+              br label %reverse
+
+            reverse:
+              %current = phi ptr [ %batch, %take_batch ], [ %next, %reverse_one ]
+              %reversed = phi ptr [ null, %take_batch ], [ %current, %reverse_one ]
+              %has_current = icmp ne ptr %current, null
+              br i1 %has_current, label %reverse_one, label %process
+
+            reverse_one:
+              %current_next_slot = getelementptr %smalllang.task_control, ptr %current, i32 0, i32 16
+              %next = load ptr, ptr %current_next_slot, align 8
+              store ptr %reversed, ptr %current_next_slot, align 8
+              br label %reverse
+
+            process:
+              %request = phi ptr [ %reversed, %reverse ], [ %next_request_value, %process_bridge ]
+              %has_request = icmp ne ptr %request, null
+              br i1 %has_request, label %read, label %signal
+
+            read:
+              %request_next_slot = getelementptr %smalllang.task_control, ptr %request, i32 0, i32 16
+              %request_next = load ptr, ptr %request_next_slot, align 8
+              %phase_slot = getelementptr %smalllang.task_control, ptr %request, i32 0, i32 12
+              %phase = load atomic i32, ptr %phase_slot acquire, align 4
+              %cancelled_before_read = icmp eq i32 %phase, 3
+              br i1 %cancelled_before_read, label %record_cancelled, label %perform_read
+
+            perform_read:
+              %size_slot = getelementptr %smalllang.task_control, ptr %request, i32 0, i32 11
+              %size = load i32, ptr %size_slot, align 4
+              %size64 = zext i32 %size to i64
+              %data_slot = getelementptr %smalllang.task_control, ptr %request, i32 0, i32 13
+              %result = call %smalllang.file_count_result @smalllang_platform_read_file_bytes(ptr %data_slot, i64 %size64)
+              %count = extractvalue %smalllang.file_count_result %result, 0
+              %ok = extractvalue %smalllang.file_count_result %result, 1
+              %count_slot = getelementptr %smalllang.task_control, ptr %request, i32 0, i32 14
+              store i64 %count, ptr %count_slot, align 8
+              %ok_slot = getelementptr %smalllang.task_control, ptr %request, i32 0, i32 15
+              store i32 %ok, ptr %ok_slot, align 4
+              %phase_after_read = load atomic i32, ptr %phase_slot acquire, align 4
+              %cancelled_after_read = icmp eq i32 %phase_after_read, 3
+              br i1 %cancelled_after_read, label %queue_completion, label %record_complete
+
+            record_complete:
+              store atomic i32 2, ptr %phase_slot release, align 4
+              br label %queue_completion
+
+            record_cancelled:
+              %cancel_count_slot = getelementptr %smalllang.task_control, ptr %request, i32 0, i32 14
+              store i64 0, ptr %cancel_count_slot, align 8
+              %cancel_ok_slot = getelementptr %smalllang.task_control, ptr %request, i32 0, i32 15
+              store i32 0, ptr %cancel_ok_slot, align 4
+              br label %queue_completion
+
+            queue_completion:
+              call void @smalllang_file_push_completion(ptr %request)
+              br label %next_request
+
+            next_request:
+              br label %process_next
+
+            process_next:
+              %next_request_value = phi ptr [ %request_next, %next_request ]
+              %next_request_present = icmp ne ptr %next_request_value, null
+              br i1 %next_request_present, label %process_bridge, label %signal
+
+            process_bridge:
+              br label %process
+
+            signal:
+              call void @smalllang_platform_file_worker_signal_completion()
+              br label %wait
+
+            stopped:
+              ret void
+            }
+
+            define internal i1 @smalllang_file_drain_completions() #0 {
+            entry:
+              %batch = atomicrmw xchg ptr @smalllang_file_completion_head, ptr null acq_rel
+              %has_batch = icmp ne ptr %batch, null
+              br i1 %has_batch, label %clear_signal, label %none
+
+            clear_signal:
+              call void @smalllang_platform_file_worker_clear_completion()
+              br label %reverse
+
+            reverse:
+              %current = phi ptr [ %batch, %clear_signal ], [ %next, %reverse_one ]
+              %reversed = phi ptr [ null, %clear_signal ], [ %current, %reverse_one ]
+              %has_current = icmp ne ptr %current, null
+              br i1 %has_current, label %reverse_one, label %drain
+
+            reverse_one:
+              %current_next_slot = getelementptr %smalllang.task_control, ptr %current, i32 0, i32 16
+              %next = load ptr, ptr %current_next_slot, align 8
+              store ptr %reversed, ptr %current_next_slot, align 8
+              br label %reverse
+
+            drain:
+              %control = phi ptr [ %reversed, %reverse ], [ %control_next, %continue ]
+              %has_control = icmp ne ptr %control, null
+              br i1 %has_control, label %inspect, label %done
+
+            inspect:
+              %control_next_slot = getelementptr %smalllang.task_control, ptr %control, i32 0, i32 16
+              %control_next = load ptr, ptr %control_next_slot, align 8
+              store ptr null, ptr %control_next_slot, align 8
+              %phase_slot = getelementptr %smalllang.task_control, ptr %control, i32 0, i32 12
+              %phase = load atomic i32, ptr %phase_slot acquire, align 4
+              %cancelled = icmp eq i32 %phase, 3
+              br i1 %cancelled, label %destroy_cancelled, label %wake
+
+            destroy_cancelled:
+              %cancel_slot = getelementptr %smalllang.task_control, ptr %control, i32 0, i32 6
+              %cancel = load ptr, ptr %cancel_slot, align 8
+              call void %cancel(ptr %control)
+              call void @smalllang_free(ptr %control)
+              br label %continue
+
+            wake:
+              call void @smalllang_task_enqueue_ready(ptr %control)
+              br label %continue
+
+            continue:
+              %remaining = atomicrmw sub ptr @smalllang_file_outstanding, i64 1 acq_rel
+              br label %drain
+
+            done:
+              ret i1 true
+
+            none:
+              ret i1 false
+            }
+
+            define internal void @smalllang_file_submit(ptr %control, i32 %size) #0 {
+            entry:
+              %started = load i1, ptr @smalllang_file_worker_started, align 1
+              br i1 %started, label %initialize, label %start
+
+            start:
+              %start_ok = call i1 @smalllang_platform_file_worker_start()
+              br i1 %start_ok, label %mark_started, label %failed
+
+            mark_started:
+              store i1 true, ptr @smalllang_file_worker_started, align 1
+              br label %initialize
+
+            initialize:
+              %size_slot = getelementptr %smalllang.task_control, ptr %control, i32 0, i32 11
+              store i32 %size, ptr %size_slot, align 4
+              %phase_slot = getelementptr %smalllang.task_control, ptr %control, i32 0, i32 12
+              store atomic i32 1, ptr %phase_slot release, align 4
+              %status_slot = getelementptr %smalllang.task_control, ptr %control, i32 0, i32 4
+              store i32 6, ptr %status_slot, align 4
+              %old_count = atomicrmw add ptr @smalllang_file_outstanding, i64 1 acq_rel
+              call void @smalllang_file_push_request(ptr %control)
+              ret void
+
+            failed:
+              call void @llvm.trap()
+              unreachable
+            }
+
+            define internal void @smalllang_file_wait_idle() #0 {
+            entry:
+              br label %check
+
+            check:
+              %outstanding = load atomic i64, ptr @smalllang_file_outstanding acquire, align 8
+              %idle = icmp eq i64 %outstanding, 0
+              br i1 %idle, label %done, label %wait
+
+            wait:
+              call void @smalllang_platform_file_worker_wait_completion(i64 -1)
+              %progress = call i1 @smalllang_file_drain_completions()
+              br label %check
+
+            done:
+              ret void
+            }
+
+            define internal void @smalllang_async_shutdown() #0 {
+            entry:
+              %started = load i1, ptr @smalllang_file_worker_started, align 1
+              br i1 %started, label %stop, label %done
+
+            stop:
+              call void @smalllang_file_wait_idle()
+              store atomic i32 1, ptr @smalllang_file_worker_stopping release, align 4
+              call void @smalllang_platform_file_worker_signal_request()
+              call void @smalllang_platform_file_worker_join()
+              store i1 false, ptr @smalllang_file_worker_started, align 1
+              br label %done
+
+            done:
+              ret void
+            }
+
+            define internal i1 @smalllang_file_read_task_worker(ptr %control) #0 {
+            entry:
+              %phase_slot = getelementptr %smalllang.task_control, ptr %control, i32 0, i32 12
+              %phase = load atomic i32, ptr %phase_slot acquire, align 4
+              %initial = icmp eq i32 %phase, 0
+              br i1 %initial, label %submit, label %inspect
+
+            submit:
+              %size_slot = getelementptr %smalllang.task_control, ptr %control, i32 0, i32 11
+              %size = load i32, ptr %size_slot, align 4
+              call void @smalllang_file_submit(ptr %control, i32 %size)
+              ret i1 false
+
+            inspect:
+              %complete = icmp eq i32 %phase, 2
+              ret i1 %complete
+            }
+
+            define internal void @smalllang_file_read_task_cancel(ptr %control) #0 {
+            entry:
+              %context_slot = getelementptr %smalllang.task_control, ptr %control, i32 0, i32 0
+              %context = load ptr, ptr %context_slot, align 8
+              call void @smalllang_free(ptr %context)
+              ret void
+            }
+
+            """);
+        }
+        else
+        {
+            functions.AppendLine("""
+            define internal i1 @smalllang_file_drain_completions() #0 {
+            entry:
+              ret i1 false
+            }
+
+            define internal void @smalllang_platform_file_worker_wait_completion(i64 %requested) #0 {
+            entry:
+              ret void
+            }
+
+            define internal void @smalllang_file_wait_idle() #0 {
+            entry:
+              ret void
+            }
+
+            define internal void @smalllang_async_shutdown() #0 {
+            entry:
+              ret void
+            }
+
+            """);
+        }
+
         functions.AppendLine("""
+
             define internal void @smalllang_task_enqueue_ready(ptr %control) #0 {
             entry:
               %status_slot = getelementptr %smalllang.task_control, ptr %control, i32 0, i32 4
@@ -197,6 +501,7 @@ internal abstract class LlvmRuntimePlatform
 
             define internal i1 @smalllang_timer_wait_next() #0 {
             entry:
+              %file_progress = call i1 @smalllang_file_drain_completions()
               call void @smalllang_timer_wake_due()
               %ready = load ptr, ptr @smalllang_task_ready_head, align 8
               %has_ready = icmp ne ptr %ready, null
@@ -205,13 +510,34 @@ internal abstract class LlvmRuntimePlatform
             inspect_timer:
               %timer = load ptr, ptr @smalllang_task_timer_head, align 8
               %has_timer = icmp ne ptr %timer, null
-              br i1 %has_timer, label %wait, label %stalled
+              %file_outstanding = load atomic i64, ptr @smalllang_file_outstanding acquire, align 8
+              %has_file = icmp ne i64 %file_outstanding, 0
+              br i1 %has_timer, label %timer_timeout, label %inspect_file
 
-            wait:
+            inspect_file:
+              br i1 %has_file, label %wait_file_only, label %stalled
+
+            timer_timeout:
               %deadline_slot = getelementptr %smalllang.task_control, ptr %timer, i32 0, i32 8
               %deadline = load i64, ptr %deadline_slot, align 8
               %now = call i64 @smalllang_now_millis()
-              %remaining = sub i64 %deadline, %now
+              %remaining_raw = sub i64 %deadline, %now
+              %positive = icmp sgt i64 %remaining_raw, 0
+              %remaining = select i1 %positive, i64 %remaining_raw, i64 0
+              br i1 %has_file, label %wait_file_or_timer, label %wait_timer_only
+
+            wait_file_or_timer:
+              call void @smalllang_platform_file_worker_wait_completion(i64 %remaining)
+              %file_timer_progress = call i1 @smalllang_file_drain_completions()
+              call void @smalllang_timer_wake_due()
+              br label %progress
+
+            wait_file_only:
+              call void @smalllang_platform_file_worker_wait_completion(i64 -1)
+              %file_only_progress = call i1 @smalllang_file_drain_completions()
+              br label %progress
+
+            wait_timer_only:
               call void @smalllang_wait_millis(i64 %remaining)
               call void @smalllang_timer_wake_due()
               br label %progress
@@ -249,7 +575,7 @@ internal abstract class LlvmRuntimePlatform
 
             define internal ptr @smalllang_task_start(ptr %worker, ptr %destroy, ptr %cancel, ptr %context) #0 {
             entry:
-              %control = call ptr @smalllang_alloc(i64 80)
+              %control = call ptr @smalllang_alloc(i64 120)
               %allocated = icmp ne ptr %control, null
               br i1 %allocated, label %initialize, label %fail
 
@@ -276,6 +602,18 @@ internal abstract class LlvmRuntimePlatform
               store ptr null, ptr %waiter_slot, align 8
               %waiting_child_slot = getelementptr %smalllang.task_control, ptr %control, i32 0, i32 10
               store ptr null, ptr %waiting_child_slot, align 8
+              %file_size_slot = getelementptr %smalllang.task_control, ptr %control, i32 0, i32 11
+              store i32 0, ptr %file_size_slot, align 4
+              %file_phase_slot = getelementptr %smalllang.task_control, ptr %control, i32 0, i32 12
+              store i32 0, ptr %file_phase_slot, align 4
+              %file_data_slot = getelementptr %smalllang.task_control, ptr %control, i32 0, i32 13
+              store i64 0, ptr %file_data_slot, align 8
+              %file_count_slot = getelementptr %smalllang.task_control, ptr %control, i32 0, i32 14
+              store i64 0, ptr %file_count_slot, align 8
+              %file_ok_slot = getelementptr %smalllang.task_control, ptr %control, i32 0, i32 15
+              store i32 0, ptr %file_ok_slot, align 4
+              %file_next_slot = getelementptr %smalllang.task_control, ptr %control, i32 0, i32 16
+              store ptr null, ptr %file_next_slot, align 8
               %tail = load ptr, ptr @smalllang_task_ready_tail, align 8
               %empty = icmp eq ptr %tail, null
               br i1 %empty, label %first, label %append
@@ -409,7 +747,17 @@ internal abstract class LlvmRuntimePlatform
 
             check_child_waiting:
               %waiting_child = icmp eq i32 %status, 5
-              br i1 %waiting_child, label %detach_child, label %fail
+              br i1 %waiting_child, label %detach_child, label %check_file_waiting
+
+            check_file_waiting:
+              %waiting_file = icmp eq i32 %status, 6
+              br i1 %waiting_file, label %cancel_file, label %fail
+
+            cancel_file:
+              %file_phase_slot = getelementptr %smalllang.task_control, ptr %handle, i32 0, i32 12
+              store atomic i32 3, ptr %file_phase_slot release, align 4
+              store i32 3, ptr %status_slot, align 4
+              ret i1 true
 
             detach_child:
               %waiting_child_slot = getelementptr %smalllang.task_control, ptr %handle, i32 0, i32 10

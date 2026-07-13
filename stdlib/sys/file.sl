@@ -41,4 +41,9 @@ openReader path: Text -> Unit = intrinsic
 
 read<T>: -> Result<Option<T>, Text> = intrinsic
 
+# Asynchronous scalar reads use the shared native file worker. The operation
+# returns an affine Task and therefore composes with the ordinary await and
+# cancellation rules without exposing callbacks or executor handles.
+readAsync<T>: -> async Result<Option<T>, Text> = intrinsic
+
 closeReader: -> Unit = intrinsic

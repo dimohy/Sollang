@@ -349,10 +349,10 @@ internal sealed class SemanticCompiler
         var inputOwnership = BindFunctionInputOwnership(function, inputType);
         var isAsyncRuntimeIntrinsic = function.IsStandardLibrary
             && function.IsIntrinsic
-            && string.Equals(function.Name, "sys.time.sleep", StringComparison.Ordinal);
+            && function.Name is "sys.time.sleep" or "sys.file.readAsync";
         if (function.IsAsync
-            && (!IsAsyncResultTypeSupported(returnType)
-                || !IsAsyncInputTypeSupported(inputType, inputOwnership)
+            && ((!isAsyncRuntimeIntrinsic && !IsAsyncResultTypeSupported(returnType))
+                || (!isAsyncRuntimeIntrinsic && !IsAsyncInputTypeSupported(inputType, inputOwnership))
                 || isLocal
                 || (function.IsStandardLibrary && !isAsyncRuntimeIntrinsic)
                 || (function.IsIntrinsic && !isAsyncRuntimeIntrinsic)))
@@ -806,7 +806,13 @@ internal sealed class SemanticCompiler
             "sys.file.read" => RequireGenericScalarReadSignature(
                 function,
                 inputType,
-                returnType),
+                returnType,
+                isAsync: false),
+            "sys.file.readAsync" => RequireGenericScalarReadSignature(
+                function,
+                inputType,
+                returnType,
+                isAsync: true),
             "sys.file.openWriter" => RequireIntrinsicSignature(
                 function, inputType, returnType, BoundType.Text, BoundType.Unit,
                 BoundFunctionKind.RuntimeOpenIntWriter),
@@ -897,19 +903,25 @@ internal sealed class SemanticCompiler
     private BoundFunctionKind RequireGenericScalarReadSignature(
         FunctionDeclaration function,
         BoundType? inputType,
-        BoundType returnType)
+        BoundType returnType,
+        bool isAsync)
     {
         if (function.GenericParameterName is null
             || inputType is not null
+            || function.IsAsync != isAsync
             || !_types.TryGetResultTypes(returnType, out var resultTypes)
             || !_types.TryGetOptionValue(resultTypes.Ok, out var valueType)
             || valueType != BoundType.GenericParameter
             || resultTypes.Error != BoundType.Text)
         {
             throw Error(function.Line, function.Column,
-                $"intrinsic '{function.Name}' must have signature read<T>: -> Result<Option<T>, Text>");
+                isAsync
+                    ? $"intrinsic '{function.Name}' must have signature readAsync<T>: -> async Result<Option<T>, Text>"
+                    : $"intrinsic '{function.Name}' must have signature read<T>: -> Result<Option<T>, Text>");
         }
-        return BoundFunctionKind.RuntimeReadScalar;
+        return isAsync
+            ? BoundFunctionKind.RuntimeReadScalarAsync
+            : BoundFunctionKind.RuntimeReadScalar;
     }
 
     private BoundFunctionKind RequireIntrinsicSignature(
@@ -4153,7 +4165,7 @@ internal sealed class SemanticCompiler
             allowReadIntCall,
             allowFlowBindingTarget: false);
         var specialization = ResolveGenericSpecialization(template, actualType, functions, expression);
-        return specialization.ReturnType;
+        return AsyncCallType(specialization);
     }
 
     private BoundFunction ResolveGenericSpecialization(
@@ -4162,12 +4174,15 @@ internal sealed class SemanticCompiler
         IReadOnlyDictionary<string, BoundFunction> functions,
         object callSite)
     {
-        if (template.Kind is BoundFunctionKind.RuntimeWriteScalar or BoundFunctionKind.RuntimeReadScalar
+        if (template.Kind is BoundFunctionKind.RuntimeWriteScalar
+                or BoundFunctionKind.RuntimeReadScalar
+                or BoundFunctionKind.RuntimeReadScalarAsync
             && actualType != BoundType.Bool
             && !IsNumericType(actualType)
             && actualType != BoundType.CodePoint)
         {
-            var operation = template.Kind == BoundFunctionKind.RuntimeReadScalar ? "read" : "write";
+            var operation = template.Kind is BoundFunctionKind.RuntimeReadScalar
+                or BoundFunctionKind.RuntimeReadScalarAsync ? "read" : "write";
             throw new SmallLangException(
                 $"generic file {operation} supports Bool, CodePoint, and fixed-width numeric scalars; got {FormatType(actualType)}");
         }
@@ -4304,7 +4319,7 @@ internal sealed class SemanticCompiler
                 $"{path} is only valid in main for the current runtime slice");
         }
         var actualType = ParseType(expression.TypeArgument, expression.Line, expression.Column);
-        return ResolveGenericSpecialization(template, actualType, functions, expression).ReturnType;
+        return AsyncCallType(ResolveGenericSpecialization(template, actualType, functions, expression));
     }
 
     private BoundFunction ResolveValueGenericSpecialization(
@@ -4871,7 +4886,7 @@ internal sealed class SemanticCompiler
         if ((function.Kind == BoundFunctionKind.User
                 && (!function.IsStandardLibrary
                     || function.Name is "sys.time.milliseconds" or "sys.time.seconds"))
-            || function.Kind == BoundFunctionKind.RuntimeSleep)
+            || function.Kind is BoundFunctionKind.RuntimeSleep or BoundFunctionKind.RuntimeReadScalarAsync)
         {
             return;
         }
@@ -5707,6 +5722,7 @@ internal sealed class SemanticCompiler
             or StructLiteralExpression
             or CallExpression
             or TryExpression
+            or TypeApplicationExpression
             or FlowExpression
             or IfExpression
             or WhenExpression

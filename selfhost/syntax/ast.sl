@@ -56,6 +56,7 @@ lowerFrom request: LowerRequest -> [AstNode; ~] {
         rule == grammar.ruleIdFlowExpression => 10
         rule == grammar.ruleIdFlowTargetCall => 11
         rule == grammar.ruleIdCallExpression => 11
+        rule == grammar.ruleIdTypeApplicationExpression => 11
         rule == grammar.ruleIdTypeAnnotation => 12
         rule == grammar.ruleIdStringExpression => 13
         rule == grammar.ruleIdNumberExpression => 14

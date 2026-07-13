@@ -18,6 +18,12 @@ internal sealed class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
         globals.AppendLine("@smalllang_argument_records = internal global ptr null");
         globals.AppendLine("@smalllang_environment_allocations = internal global ptr null");
         globals.AppendLine("@smalllang_environment_empty = internal constant [1 x i8] zeroinitializer, align 1");
+        if (UsesAsyncFile)
+        {
+            globals.AppendLine("@smalllang_file_request_event = internal global ptr null");
+            globals.AppendLine("@smalllang_file_completion_event = internal global ptr null");
+            globals.AppendLine("@smalllang_file_worker_handle = internal global ptr null");
+        }
     }
 
     public override void EmitExternalDeclarations(StringBuilder functions)
@@ -48,10 +54,113 @@ internal sealed class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
         functions.AppendLine("declare dllimport i32 @GetEnvironmentVariableW(ptr, ptr, i32)");
         functions.AppendLine("declare dllimport i32 @GetLastError()");
         functions.AppendLine("declare dllimport void @SetLastError(i32)");
+        if (UsesAsyncFile)
+        {
+            functions.AppendLine("declare dllimport ptr @CreateThread(ptr, i64, ptr, ptr, i32, ptr)");
+            functions.AppendLine("declare dllimport ptr @CreateEventA(ptr, i32, i32, ptr)");
+            functions.AppendLine("declare dllimport i32 @SetEvent(ptr)");
+            functions.AppendLine("declare dllimport i32 @WaitForSingleObject(ptr, i32)");
+        }
     }
 
     public override void EmitMemoryDeclarations(StringBuilder functions)
     {
+    }
+
+    public override void EmitAsyncPrimitives(StringBuilder functions)
+    {
+        base.EmitAsyncPrimitives(functions);
+        if (!UsesAsyncFile)
+        {
+            return;
+        }
+        functions.AppendLine("""
+            define internal i32 @smalllang_windows_file_worker(ptr %unused) #0 {
+            entry:
+              call void @smalllang_file_worker_run()
+              ret i32 0
+            }
+
+            define internal i1 @smalllang_platform_file_worker_start() #0 {
+            entry:
+              %request_event = call ptr @CreateEventA(ptr null, i32 0, i32 0, ptr null)
+              %request_ok = icmp ne ptr %request_event, null
+              br i1 %request_ok, label %completion, label %fail
+
+            completion:
+              store ptr %request_event, ptr @smalllang_file_request_event, align 8
+              %completion_event = call ptr @CreateEventA(ptr null, i32 0, i32 0, ptr null)
+              %completion_ok = icmp ne ptr %completion_event, null
+              br i1 %completion_ok, label %thread, label %fail
+
+            thread:
+              store ptr %completion_event, ptr @smalllang_file_completion_event, align 8
+              %worker = call ptr @CreateThread(ptr null, i64 0, ptr @smalllang_windows_file_worker, ptr null, i32 0, ptr null)
+              %worker_ok = icmp ne ptr %worker, null
+              br i1 %worker_ok, label %ready, label %fail
+
+            ready:
+              store ptr %worker, ptr @smalllang_file_worker_handle, align 8
+              ret i1 true
+
+            fail:
+              ret i1 false
+            }
+
+            define internal void @smalllang_platform_file_worker_signal_request() #0 {
+            entry:
+              %event = load ptr, ptr @smalllang_file_request_event, align 8
+              %ignored = call i32 @SetEvent(ptr %event)
+              ret void
+            }
+
+            define internal void @smalllang_platform_file_worker_wait_request() #0 {
+            entry:
+              %event = load ptr, ptr @smalllang_file_request_event, align 8
+              %ignored = call i32 @WaitForSingleObject(ptr %event, i32 -1)
+              ret void
+            }
+
+            define internal void @smalllang_platform_file_worker_signal_completion() #0 {
+            entry:
+              %event = load ptr, ptr @smalllang_file_completion_event, align 8
+              %ignored = call i32 @SetEvent(ptr %event)
+              ret void
+            }
+
+            define internal void @smalllang_platform_file_worker_clear_completion() #0 {
+            entry:
+              ret void
+            }
+
+            define internal void @smalllang_platform_file_worker_wait_completion(i64 %requested) #0 {
+            entry:
+              %infinite = icmp slt i64 %requested, 0
+              %too_large = icmp ugt i64 %requested, 4294967294
+              %bounded = select i1 %too_large, i64 4294967294, i64 %requested
+              %finite = trunc i64 %bounded to i32
+              %timeout = select i1 %infinite, i32 -1, i32 %finite
+              %event = load ptr, ptr @smalllang_file_completion_event, align 8
+              %ignored = call i32 @WaitForSingleObject(ptr %event, i32 %timeout)
+              ret void
+            }
+
+            define internal void @smalllang_platform_file_worker_join() #0 {
+            entry:
+              %worker = load ptr, ptr @smalllang_file_worker_handle, align 8
+              %waited = call i32 @WaitForSingleObject(ptr %worker, i32 -1)
+              %closed_worker = call i32 @CloseHandle(ptr %worker)
+              %request_event = load ptr, ptr @smalllang_file_request_event, align 8
+              %closed_request = call i32 @CloseHandle(ptr %request_event)
+              %completion_event = load ptr, ptr @smalllang_file_completion_event, align 8
+              %closed_completion = call i32 @CloseHandle(ptr %completion_event)
+              store ptr null, ptr @smalllang_file_worker_handle, align 8
+              store ptr null, ptr @smalllang_file_request_event, align 8
+              store ptr null, ptr @smalllang_file_completion_event, align 8
+              ret void
+            }
+
+            """);
     }
 
     public override void EmitTimePrimitives(StringBuilder functions)

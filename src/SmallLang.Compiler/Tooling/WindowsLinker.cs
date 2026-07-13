@@ -79,6 +79,8 @@ internal sealed class WindowsLinker(LlvmToolchain toolchain)
             HeapAlloc
             HeapFree
             CreateThread
+            CreateEventA
+            SetEvent
             WaitForSingleObject
             """, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
 

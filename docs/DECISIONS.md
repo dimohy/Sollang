@@ -3819,4 +3819,67 @@ References: [Swift Task.sleep](https://developer.apple.com/documentation/swift/t
 [Rust Poll](https://doc.rust-lang.org/stable/std/task/enum.Poll.html),
 [Tokio sleep](https://docs.rs/tokio/latest/tokio/time/fn.sleep.html).
 
+## D126 - Async Regular Files Use One Shared Operation Worker
+
+Status: portable scalar-read runtime and self-host syntax implemented
+Date: 2026-07-14
+
+Regular files do not share the portable readiness semantics of sockets. Tokio
+therefore runs ordinary file operations on its blocking pool, while Java's
+`AsynchronousFileChannel` associates a file channel with a shared executor.
+Windows offers overlapped file operations and Linux offers io_uring, but making
+either one the language ABI would make Task semantics platform-dependent.
+
+SL exposes the operation, not its backend:
+
+```smalllang
+file.readAsync<UInt16> => pending
+pending -> await => result
+```
+
+`readAsync<T>: -> async Result<Option<T>, Text>` is monomorphized for the same
+fixed-width scalar set as synchronous `read<T>`. Its EOF and error contract is
+identical. The first portable backend has exactly one lazily-created native
+file worker per process. Task submission transfers the request to a lock-free
+MPSC stack with release/acquire publication; the worker reverses each batch to
+preserve FIFO submission order, performs blocking regular-file calls away from
+the cooperative executor, and publishes a completion batch. The executor
+waits for either the nearest timer or file completion rather than polling.
+
+Windows uses auto-reset Events and `WaitForSingleObject`. Linux uses a pthread,
+two eventfds, and `poll`. This is one OS thread for the file subsystem, never
+one thread per Task. A later backend may replace the worker with IOCP or
+io_uring without changing SL syntax, Task semantics, or call-site ownership.
+
+Cancellation marks a worker-owned request and returns after consuming the Task
+handle. The completion drain, which owns the final reference, invokes cancel
+destruction and frees control storage exactly once instead of re-enqueuing the
+Task. Structured shutdown waits for outstanding requests, signals the worker,
+joins it, and closes native events. A parent awaiting an async file child uses
+the existing unique waiter edge.
+
+The self-host grammar now models `Path<Type>` as
+`TypeApplicationExpression`; module-call resolution recognizes it as a real
+call, and coroutine discovery retains the following await. The parser's
+expression entry point also accepts a complete expression immediately before
+the synthetic End token, matching the reference parser.
+
+The current `openReader` compatibility surface still owns one process-wide
+cursor. General self-host compiler I/O still requires affine reader/writer
+handles, explicit-offset operations like .NET `RandomAccess.ReadAsync` and
+Java's position-based file channel, async open/write/flush/close, and native
+completion backends where profitable.
+
+Examples 261 and 262 cover Windows/Linux completion, timer coexistence, nested
+parent await, EOF, ready-queue cancellation, graceful worker shutdown, imported
+generic type application, and self-host suspension discovery.
+
+References: [Tokio fs](https://docs.rs/tokio/latest/tokio/fs/),
+[Tokio AsyncRead](https://docs.rs/tokio/latest/tokio/io/),
+[tokio-uring ownership-based operations](https://docs.rs/tokio-uring/latest/tokio_uring/),
+[Java AsynchronousFileChannel](https://docs.oracle.com/en/java/javase/26/docs/api/java.base/java/nio/channels/AsynchronousFileChannel.html),
+[.NET RandomAccess.ReadAsync](https://learn.microsoft.com/dotnet/api/system.io.randomaccess.readasync),
+[Windows overlapped I/O](https://learn.microsoft.com/windows/win32/sync/synchronization-and-overlapped-input-and-output),
+[Swift FileHandle.AsyncBytes](https://developer.apple.com/documentation/foundation/filehandle/asyncbytes).
+
 

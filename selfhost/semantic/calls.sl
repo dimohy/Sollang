@@ -44,7 +44,7 @@ public resolve source: Text -> [CallResolution; ~] {
             tokens![flowTokenIndex!].kind == grammar.tokenIdArrow -> if { true => hasFlowCallTarget! }
             flowTokenIndex! + 1 => flowTokenIndex!
         }
-        ((node.kind == 10 and hasFlowCallTarget! and not hasControlTarget!) or (node.kind == 11 and node.cstRuleId == grammar.ruleIdCallExpression) or node.kind == 15) -> if {
+        ((node.kind == 10 and hasFlowCallTarget! and not hasControlTarget!) or (node.kind == 11 and (node.cstRuleId == grammar.ruleIdCallExpression or node.cstRuleId == grammar.ruleIdTypeApplicationExpression)) or node.kind == 15) -> if {
             -1 => callNameToken!
             node.firstToken => tokenIndex!
             (tokenIndex! < node.firstToken + node.tokenCount and (node.kind == 10 or callNameToken! < 0)) -> while {
@@ -113,7 +113,7 @@ public resolveModules sources: [Text; ~] -> [ModuleCallResolution; ~] {
                 tokens![moduleFlowTokenIndex!].kind == grammar.tokenIdArrow -> if { true => moduleHasFlowCallTarget! }
                 moduleFlowTokenIndex! + 1 => moduleFlowTokenIndex!
             }
-            ((callNode.kind == 10 and moduleHasFlowCallTarget! and not moduleHasControlTarget!) or (callNode.kind == 11 and callNode.cstRuleId == grammar.ruleIdCallExpression) or callNode.kind == 15) -> if {
+            ((callNode.kind == 10 and moduleHasFlowCallTarget! and not moduleHasControlTarget!) or (callNode.kind == 11 and (callNode.cstRuleId == grammar.ruleIdCallExpression or callNode.cstRuleId == grammar.ruleIdTypeApplicationExpression)) or callNode.kind == 15) -> if {
                 -1 => callNameToken!
                 callNode.firstToken => callTokenIndex!
                 (callTokenIndex! < callNode.firstToken + callNode.tokenCount and (callNode.kind == 10 or callNameToken! < 0)) -> while {

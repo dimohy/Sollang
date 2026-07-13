@@ -569,10 +569,21 @@ internal sealed partial class LlvmEmitter
             return null;
         }
 
+        if (flow.Source is not NameExpression name)
+        {
+            return null;
+        }
+
+        if (flow.Targets.Any(target =>
+                target.Path.Count == 1
+                && target.Path[0] is "await" or "cancel"))
+        {
+            return name.Name;
+        }
+
         var lastTarget = flow.Targets[^1];
         if (lastTarget.Path.Count != 1
-            || lastTarget.Path[0] is not ("append" or "updated" or "await" or "cancel")
-            || flow.Source is not NameExpression name)
+            || lastTarget.Path[0] is not ("append" or "updated"))
         {
             return null;
         }
@@ -877,7 +888,8 @@ internal sealed partial class LlvmEmitter
         BoundType? InputType,
         BoundType ResultType,
         string HandleName,
-        string ContextName)
+        string ContextName,
+        BoundFunction? RuntimeFunction = null)
         : RuntimeValue(TaskType);
 
     private sealed record RuntimeStruct(BoundType StructType, string ValueName) : RuntimeValue(StructType);

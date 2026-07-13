@@ -92,7 +92,8 @@ internal enum BoundFunctionKind
     RuntimeEnvironment,
     RuntimeRunProcess,
     RuntimeWriteScalar,
-    RuntimeReadScalar
+    RuntimeReadScalar,
+    RuntimeReadScalarAsync
 }
 
 internal enum TypeId

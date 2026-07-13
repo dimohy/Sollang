@@ -142,6 +142,66 @@ internal sealed partial class LlvmEmitter
             context);
     }
 
+    private RuntimeTask EmitRuntimeReadScalarAsync(BoundFunction function)
+    {
+        if (function.SpecializedType is not { } scalarType
+            || (scalarType != BoundType.Bool && !IsNumericType(scalarType) && scalarType != BoundType.CodePoint)
+            || !_program.Types.TryGetResultTypes(function.ReturnType, out var resultTypes)
+            || !_program.Types.TryGetOptionValue(resultTypes.Ok, out var optionValue)
+            || optionValue != scalarType
+            || resultTypes.Error != BoundType.Text)
+        {
+            throw new SmallLangException($"{function.Name} has an invalid asynchronous scalar specialization");
+        }
+
+        var contextSize = AsyncContextSize(null, function.ReturnType);
+        var context = NextTemp("file_async_context");
+        EmitCall(context, "ptr", "smalllang_alloc", $"i64 {contextSize}");
+        var allocated = NextTemp("file_async_context_allocated");
+        EmitCompare(allocated, "ne", "ptr", context, "null");
+        var initializeLabel = NextLabel("file_async_initialize");
+        var allocationFailedLabel = NextLabel("file_async_allocation_failed");
+        EmitConditionalBranch(allocated, initializeLabel, allocationFailedLabel);
+        EmitLabel(allocationFailedLabel);
+        EmitTrap();
+        EmitLabel(initializeLabel);
+
+        var handle = NextTemp("file_async_handle");
+        EmitCall(
+            handle,
+            "ptr",
+            "smalllang_task_start",
+            $"ptr @smalllang_file_read_task_worker, ptr @smalllang_free, " +
+            $"ptr @smalllang_file_read_task_cancel, ptr {context}");
+        var started = NextTemp("file_async_started");
+        EmitCompare(started, "ne", "ptr", handle, "null");
+        var readyLabel = NextLabel("file_async_ready");
+        var startFailedLabel = NextLabel("file_async_start_failed");
+        EmitConditionalBranch(started, readyLabel, startFailedLabel);
+        EmitLabel(startFailedLabel);
+        EmitCall(target: null, "void", "smalllang_free", $"ptr {context}");
+        EmitTrap();
+        EmitLabel(readyLabel);
+
+        var sizeAddress = NextTemp("file_async_size_address");
+        EmitAssign(
+            sizeAddress,
+            $"getelementptr %smalllang.task_control, ptr {handle}, i32 0, i32 11");
+        EmitStore(
+            "i32",
+            RuntimeScalarByteSize(scalarType).ToString(CultureInfo.InvariantCulture),
+            sizeAddress,
+            4);
+
+        return new RuntimeTask(
+            _program.Types.GetOrAddTask(function.ReturnType),
+            null,
+            function.ReturnType,
+            handle,
+            context,
+            function);
+    }
+
     private void EmitReturnIfReadFailed(string readOk)
     {
         var isOk = NextTemp("read_is_ok");
@@ -163,6 +223,12 @@ internal sealed partial class LlvmEmitter
 
     private RuntimeUnit EmitRuntimeUnitIntrinsic(BoundFunctionKind kind, RuntimeValue? argument, string path)
     {
+        if (_usesAsync
+            && kind is BoundFunctionKind.RuntimeOpenIntReader or BoundFunctionKind.RuntimeCloseIntReader)
+        {
+            EmitCall(target: null, "void", "smalllang_file_wait_idle", "");
+        }
+
         var ok = kind switch
         {
             BoundFunctionKind.RuntimeSeedRandom => EmitRuntimeIntStatusCall(
@@ -310,7 +376,7 @@ internal sealed partial class LlvmEmitter
         return RuntimeUnit.Instance;
     }
 
-    private RuntimeEnum EmitRuntimeReadScalar(BoundFunction function)
+    private RuntimeEnum EmitRuntimeReadScalar(BoundFunction function, string? completedTaskControl = null)
     {
         if (function.SpecializedType is not { } scalarType
             || (scalarType != BoundType.Bool && !IsNumericType(scalarType) && scalarType != BoundType.CodePoint))
@@ -322,6 +388,10 @@ internal sealed partial class LlvmEmitter
             || optionValue != scalarType)
         {
             throw new SmallLangException($"{function.Name} has an invalid scalar result type");
+        }
+        if (completedTaskControl is null && _usesAsync)
+        {
+            EmitCall(target: null, "void", "smalllang_file_wait_idle", "");
         }
 
         var resultDefinition = _program.Types.GetEnum(function.ReturnType);
@@ -337,15 +407,40 @@ internal sealed partial class LlvmEmitter
 
         var byteSize = RuntimeScalarByteSize(scalarType);
         var storageType = scalarType == BoundType.Bool ? "i8" : LlvmType(scalarType);
-        var slot = NextTemp("file_scalar_read");
-        EmitAlloca(slot, storageType, RuntimeAlignment(scalarType));
-        var readResult = NextTemp("file_scalar_read_result");
-        EmitCall(readResult, "%smalllang.file_count_result", "smalllang_platform_read_file_bytes",
-            $"ptr {slot}, i64 {byteSize}");
-        var count = NextTemp("file_scalar_read_count");
-        EmitAssign(count, $"extractvalue %smalllang.file_count_result {readResult}, 0");
-        var readOk = NextTemp("file_scalar_read_ok");
-        EmitAssign(readOk, $"extractvalue %smalllang.file_count_result {readResult}, 1");
+        string slot;
+        string count;
+        string readOk;
+        if (completedTaskControl is null)
+        {
+            slot = NextTemp("file_scalar_read");
+            EmitAlloca(slot, storageType, RuntimeAlignment(scalarType));
+            var readResult = NextTemp("file_scalar_read_result");
+            EmitCall(readResult, "%smalllang.file_count_result", "smalllang_platform_read_file_bytes",
+                $"ptr {slot}, i64 {byteSize}");
+            count = NextTemp("file_scalar_read_count");
+            EmitAssign(count, $"extractvalue %smalllang.file_count_result {readResult}, 0");
+            readOk = NextTemp("file_scalar_read_ok");
+            EmitAssign(readOk, $"extractvalue %smalllang.file_count_result {readResult}, 1");
+        }
+        else
+        {
+            slot = NextTemp("file_async_scalar_data");
+            EmitAssign(
+                slot,
+                $"getelementptr %smalllang.task_control, ptr {completedTaskControl}, i32 0, i32 13");
+            var countSlot = NextTemp("file_async_scalar_count_slot");
+            EmitAssign(
+                countSlot,
+                $"getelementptr %smalllang.task_control, ptr {completedTaskControl}, i32 0, i32 14");
+            count = NextTemp("file_async_scalar_count");
+            EmitLoad(count, "i64", countSlot, 8);
+            var okSlot = NextTemp("file_async_scalar_ok_slot");
+            EmitAssign(
+                okSlot,
+                $"getelementptr %smalllang.task_control, ptr {completedTaskControl}, i32 0, i32 15");
+            readOk = NextTemp("file_async_scalar_ok");
+            EmitLoad(readOk, "i32", okSlot, 4);
+        }
 
         var ioLabel = NextLabel("file_scalar_io");
         var countLabel = NextLabel("file_scalar_count");

@@ -1296,6 +1296,35 @@ the same as `write<T>`. Empty parentheses remain invalid for zero-input calls,
 so `read<UInt16>()` is rejected. Arbitrary structs still require an explicit
 serialization contract rather than implicit ABI dumping.
 
+The asynchronous counterpart is a zero-input generic property as well:
+
+```smalllang
+file.readAsync<UInt16> => pending
+pending -> await => value
+```
+
+Its declared type is
+`readAsync<T>: -> async Result<Option<T>, Text>`. It preserves the same EOF,
+encoding, truncation, and I/O result model as `read<T>`, but the blocking host
+file call runs on one shared native file worker. The Task leaves the ready
+queue while its request is pending; completion returns it to the FIFO ready
+tail. One worker serves all file Tasks, so the runtime never creates one OS
+thread per read. Windows uses auto-reset request/completion events and Linux
+uses `eventfd` plus `poll`; both feed the same target-neutral completion queue.
+
+Cancellation consumes the Task immediately. A request already owned by the
+worker keeps its control record until completion, then destroys its context
+exactly once without waking a former waiter. Runtime shutdown drains canceled
+requests, stops and joins the shared worker, and releases its native event
+resources. Synchronous reads and reader open/close wait for already-submitted
+asynchronous work before touching the shared cursor.
+
+The present compatibility reader still has one process-wide cursor, so
+concurrent reads are serialized in actual submission order. The self-hosting
+file layer still needs owned reader handles, explicit-offset operations,
+asynchronous open/write/close, and a future IOCP/io_uring backend before the
+general file-I/O gate is complete.
+
 Double-quoted UTF-8 literals decode `\n`, `\r`, `\t`, and `\\` in text
 segments and support optional identifier and expression interpolation. Unknown
 backslash sequences remain literal for backward compatibility:

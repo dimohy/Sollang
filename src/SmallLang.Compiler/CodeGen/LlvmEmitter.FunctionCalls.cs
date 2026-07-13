@@ -655,6 +655,15 @@ internal sealed partial class LlvmEmitter
             return EmitRuntimeReadScalar(function);
         }
 
+        if (function.Kind == BoundFunctionKind.RuntimeReadScalarAsync)
+        {
+            if (argument is not null)
+            {
+                throw new SmallLangException($"{function.Name} does not accept an argument");
+            }
+            return EmitRuntimeReadScalarAsync(function);
+        }
+
         if (function.Kind is BoundFunctionKind.RuntimeSeedRandom
             or BoundFunctionKind.RuntimeOpenIntWriter
             or BoundFunctionKind.RuntimeWriteInt

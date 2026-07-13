@@ -131,7 +131,15 @@ numbering. Typed `Duration` and `sleep: Duration -> async Unit` now feed a
 deadline-ordered runtime timer queue. Sleeping Tasks leave the ready queue,
 due timers wake at FIFO tail, and cancellation unlinks timer waiters without a
 per-Task OS thread. Self-host module/call resolution recognizes the separate
-`sys.time` module and preserves the timer await suspension state. File readiness,
+`sys.time` module and preserves the timer await suspension state. Generic
+`readAsync<T>` now sends scalar file reads to one shared native worker and
+returns completions through the same ready queue. Windows uses Events; Linux
+uses `pthread`, `eventfd`, and `poll`. Cancellation defers destruction only
+while the worker owns the request, and shutdown drains then joins the worker.
+The self-host grammar now has a real `TypeApplicationExpression`, its parser
+accepts expression entry rules before the synthetic End token, and imported
+generic calls such as `file.readAsync<UInt16>` retain their await suspension.
+Owned multi-file reader handles, explicit-offset I/O, async open/write/close,
 failure propagation, captures, and task groups remain partial.
 Straight-line states now carry heap owners and
 mutable locals safely: frame storage temporarily owns the value, resume restores

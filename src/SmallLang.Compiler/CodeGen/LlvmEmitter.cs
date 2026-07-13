@@ -14,6 +14,7 @@ internal sealed partial class LlvmEmitter
     private readonly bool _usesProcessEnvironment;
     private readonly bool _usesChildProcesses;
     private readonly bool _usesAsync;
+    private readonly bool _usesAsyncFile;
     private bool UsesProcessRuntime => _usesProcessArguments || _usesProcessEnvironment || _usesChildProcesses;
     private readonly List<string> _globals = [];
     private readonly List<string> _functions = [];
@@ -53,11 +54,15 @@ internal sealed partial class LlvmEmitter
             || program.Functions.Values.Where(function => !function.IsStandardLibrary).Any(function =>
                 (function.Body is not null && UsesChildProcess(function.Body))
                 || function.BlockBody.Any(UsesChildProcess));
+        _usesAsyncFile = program.ResolvedGenericCalls.Values.Any(function =>
+            function.Kind == BoundFunctionKind.RuntimeReadScalarAsync);
         _usesAsync = program.Functions.Values.Any(function => function.IsAsync && !function.IsStandardLibrary)
+            || _usesAsyncFile
             || program.MainStatements.Any(UsesRuntimeSleep)
             || program.Functions.Values.Where(function => !function.IsStandardLibrary).Any(function =>
                 (function.Body is not null && UsesRuntimeSleep(function.Body))
                 || function.BlockBody.Any(UsesRuntimeSleep));
+        _platform.UsesAsyncFile = _usesAsyncFile;
     }
 
     private bool UsesChildProcess(Statement statement) => statement switch
@@ -352,7 +357,7 @@ internal sealed partial class LlvmEmitter
             %smalllang.environment_result = type { ptr, i64, i1, i1 }
             %smalllang.process_result = type { i32, i32 }
             %smalllang.task = type { ptr, ptr }
-            %smalllang.task_control = type { ptr, ptr, ptr, ptr, i32, i32, ptr, ptr, i64, ptr, ptr }
+            %smalllang.task_control = type { ptr, ptr, ptr, ptr, i32, i32, ptr, ptr, i64, ptr, ptr, i32, i32, i64, i64, i32, ptr }
 
             """;
         header += EmitStructTypeDefinitions();
@@ -370,6 +375,11 @@ internal sealed partial class LlvmEmitter
             EmitGlobalLine("@smalllang_task_ready_head = internal global ptr null");
             EmitGlobalLine("@smalllang_task_ready_tail = internal global ptr null");
             EmitGlobalLine("@smalllang_task_timer_head = internal global ptr null");
+            EmitGlobalLine("@smalllang_file_request_head = internal global ptr null");
+            EmitGlobalLine("@smalllang_file_completion_head = internal global ptr null");
+            EmitGlobalLine("@smalllang_file_worker_started = internal global i1 false");
+            EmitGlobalLine("@smalllang_file_worker_stopping = internal global i32 0");
+            EmitGlobalLine("@smalllang_file_outstanding = internal global i64 0");
         }
         EmitGlobalLine();
 

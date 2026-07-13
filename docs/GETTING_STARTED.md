@@ -269,6 +269,24 @@ and waits for the nearest timer only when nothing is runnable. `seconds` is
 available when that unit reads better. Zero or negative durations complete
 immediately.
 
+Generic binary scalar reads can suspend without blocking the cooperative
+executor:
+
+```smalllang
+import sys.file as file
+
+readHeader: -> async Result<Option<UInt16>, Text> {
+    file.readAsync<UInt16> => pending
+    pending -> await
+}
+```
+
+`readAsync<T>` has the same `Ok(Some(value))`, `Ok(None)`, and Text error
+contract as synchronous `read<T>`. All native reads share one background file
+worker and return through the Task ready queue; cancellation uses the ordinary
+affine `task -> cancel` rule. The current reader is cursor-based and global, so
+await every submitted read before closing or reopening it.
+
 Browser WebAssembly output is available through the `wasm32-browser` target. The
 generated module exports `smalllang_start` and `memory`, and imports
 `env.smalllang_browser_write(ptr, len)` so the page can render stdout text:

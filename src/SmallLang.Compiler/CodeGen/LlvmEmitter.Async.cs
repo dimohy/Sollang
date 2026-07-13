@@ -1185,6 +1185,17 @@ internal sealed partial class LlvmEmitter
         EmitLabel(waitFailedLabel);
         EmitTrap();
         EmitLabel(waitedLabel);
+        if (task.RuntimeFunction is { Kind: BoundFunctionKind.RuntimeReadScalarAsync } fileRead)
+        {
+            var fileResult = EmitRuntimeReadScalar(fileRead, task.HandleName);
+            var fileResultAddress = AsyncContextField(
+                task.ContextName, task.InputType, task.ResultType, 6, "file_task_result_address");
+            EmitStore(
+                LlvmEnumType(fileResult.Type),
+                fileResult.ValueName,
+                fileResultAddress,
+                RuntimeAlignment(fileResult.Type));
+        }
         var resultAddress = AsyncContextField(
             task.ContextName, task.InputType, task.ResultType, 6, "task_result_address");
         var loaded = NextTemp(discardResult ? "task_discarded_result" : "task_result");

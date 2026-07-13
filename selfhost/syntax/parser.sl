@@ -90,7 +90,7 @@ public parseRuleEvents request: ParseRequest -> [ParseEvent; ~] {
             eventDepth! + 1 => eventDepth!
             callDepth! == 0 -> if {
                 tokens! -> len => tokenCount
-                tokenIndex! == tokenCount and not invalidSeen! => accepted!
+                (tokenIndex! == tokenCount or (tokenIndex! + 1 == tokenCount and tokens![tokenIndex!].kind == grammar.tokenIdEnd)) and not invalidSeen! => accepted!
                 false => running!
             } else {
                 callDepth! - 1 => callDepth!

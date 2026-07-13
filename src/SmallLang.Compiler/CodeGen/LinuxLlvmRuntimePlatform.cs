@@ -18,6 +18,12 @@ internal sealed class LinuxLlvmRuntimePlatform : LlvmRuntimePlatform
         globals.AppendLine("@smalllang_file_reader_fd = internal global i32 -1");
         globals.AppendLine("@smalllang_argument_count_value = internal global i64 0");
         globals.AppendLine("@smalllang_argument_vector = internal global ptr null");
+        if (UsesAsyncFile)
+        {
+            globals.AppendLine("@smalllang_file_request_event_fd = internal global i32 -1");
+            globals.AppendLine("@smalllang_file_completion_event_fd = internal global i32 -1");
+            globals.AppendLine("@smalllang_file_worker_thread = internal global i64 0");
+        }
     }
 
     public override void EmitExternalDeclarations(StringBuilder functions)
@@ -36,6 +42,13 @@ internal sealed class LinuxLlvmRuntimePlatform : LlvmRuntimePlatform
         functions.AppendLine("declare ptr @getenv(ptr)");
         functions.AppendLine("declare i32 @posix_spawnp(ptr, ptr, ptr, ptr, ptr, ptr)");
         functions.AppendLine("declare i32 @waitpid(i32, ptr, i32)");
+        if (UsesAsyncFile)
+        {
+            functions.AppendLine("declare i32 @eventfd(i32, i32)");
+            functions.AppendLine("declare i32 @poll(ptr, i64, i32)");
+            functions.AppendLine("declare i32 @pthread_create(ptr, ptr, ptr, ptr)");
+            functions.AppendLine("declare i32 @pthread_join(i64, ptr)");
+        }
         functions.AppendLine("@environ = external global ptr");
     }
 
@@ -43,6 +56,117 @@ internal sealed class LinuxLlvmRuntimePlatform : LlvmRuntimePlatform
     {
         functions.AppendLine("declare ptr @malloc(i64)");
         functions.AppendLine("declare void @free(ptr)");
+    }
+
+    public override void EmitAsyncPrimitives(StringBuilder functions)
+    {
+        base.EmitAsyncPrimitives(functions);
+        if (!UsesAsyncFile)
+        {
+            return;
+        }
+        functions.AppendLine("""
+            define internal ptr @smalllang_linux_file_worker(ptr %unused) #0 {
+            entry:
+              call void @smalllang_file_worker_run()
+              ret ptr null
+            }
+
+            define internal i1 @smalllang_platform_file_worker_start() #0 {
+            entry:
+              %request_fd = call i32 @eventfd(i32 0, i32 0)
+              %request_ok = icmp sge i32 %request_fd, 0
+              br i1 %request_ok, label %completion, label %fail
+
+            completion:
+              store i32 %request_fd, ptr @smalllang_file_request_event_fd, align 4
+              %completion_fd = call i32 @eventfd(i32 0, i32 0)
+              %completion_ok = icmp sge i32 %completion_fd, 0
+              br i1 %completion_ok, label %thread, label %fail
+
+            thread:
+              store i32 %completion_fd, ptr @smalllang_file_completion_event_fd, align 4
+              %thread_slot = alloca i64, align 8
+              %create = call i32 @pthread_create(ptr %thread_slot, ptr null, ptr @smalllang_linux_file_worker, ptr null)
+              %thread_ok = icmp eq i32 %create, 0
+              br i1 %thread_ok, label %ready, label %fail
+
+            ready:
+              %worker_thread = load i64, ptr %thread_slot, align 8
+              store i64 %worker_thread, ptr @smalllang_file_worker_thread, align 8
+              ret i1 true
+
+            fail:
+              ret i1 false
+            }
+
+            define internal void @smalllang_platform_file_worker_signal_request() #0 {
+            entry:
+              %value = alloca i64, align 8
+              store i64 1, ptr %value, align 8
+              %fd = load i32, ptr @smalllang_file_request_event_fd, align 4
+              %ignored = call i64 @write(i32 %fd, ptr %value, i64 8)
+              ret void
+            }
+
+            define internal void @smalllang_platform_file_worker_wait_request() #0 {
+            entry:
+              %value = alloca i64, align 8
+              %fd = load i32, ptr @smalllang_file_request_event_fd, align 4
+              %ignored = call i64 @read(i32 %fd, ptr %value, i64 8)
+              ret void
+            }
+
+            define internal void @smalllang_platform_file_worker_signal_completion() #0 {
+            entry:
+              %value = alloca i64, align 8
+              store i64 1, ptr %value, align 8
+              %fd = load i32, ptr @smalllang_file_completion_event_fd, align 4
+              %ignored = call i64 @write(i32 %fd, ptr %value, i64 8)
+              ret void
+            }
+
+            define internal void @smalllang_platform_file_worker_clear_completion() #0 {
+            entry:
+              %value = alloca i64, align 8
+              %fd = load i32, ptr @smalllang_file_completion_event_fd, align 4
+              %ignored = call i64 @read(i32 %fd, ptr %value, i64 8)
+              ret void
+            }
+
+            define internal void @smalllang_platform_file_worker_wait_completion(i64 %requested) #0 {
+            entry:
+              %pollfd = alloca [8 x i8], align 4
+              %fd = load i32, ptr @smalllang_file_completion_event_fd, align 4
+              store i32 %fd, ptr %pollfd, align 4
+              %events_slot = getelementptr i8, ptr %pollfd, i64 4
+              store i16 1, ptr %events_slot, align 2
+              %revents_slot = getelementptr i8, ptr %pollfd, i64 6
+              store i16 0, ptr %revents_slot, align 2
+              %infinite = icmp slt i64 %requested, 0
+              %too_large = icmp sgt i64 %requested, 2147483647
+              %bounded = select i1 %too_large, i64 2147483647, i64 %requested
+              %finite = trunc i64 %bounded to i32
+              %timeout = select i1 %infinite, i32 -1, i32 %finite
+              %ignored = call i32 @poll(ptr %pollfd, i64 1, i32 %timeout)
+              ret void
+            }
+
+            define internal void @smalllang_platform_file_worker_join() #0 {
+            entry:
+              %thread = load i64, ptr @smalllang_file_worker_thread, align 8
+              %joined = call i32 @pthread_join(i64 %thread, ptr null)
+              %request_fd = load i32, ptr @smalllang_file_request_event_fd, align 4
+              %closed_request = call i32 @close(i32 %request_fd)
+              %completion_fd = load i32, ptr @smalllang_file_completion_event_fd, align 4
+              %closed_completion = call i32 @close(i32 %completion_fd)
+              store i64 0, ptr @smalllang_file_worker_thread, align 8
+              store i32 -1, ptr @smalllang_file_request_event_fd, align 4
+              store i32 -1, ptr @smalllang_file_completion_event_fd, align 4
+              ret void
+            }
+
+            """);
     }
 
     public override void EmitTimePrimitives(StringBuilder functions)
