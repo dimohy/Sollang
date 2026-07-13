@@ -35,7 +35,7 @@ public resolve source: Text -> [CallResolution; ~] {
         (node.kind == 10 or node.kind == 11 or node.kind == 15) -> if {
             -1 => callNameToken!
             node.firstToken => tokenIndex!
-            (tokenIndex! < node.firstToken + node.tokenCount and callNameToken! < 0) -> while {
+            (tokenIndex! < node.firstToken + node.tokenCount and (node.kind == 10 or callNameToken! < 0)) -> while {
                 tokens![tokenIndex!].kind == grammar.tokenIdIdentifier -> if { tokenIndex! => callNameToken! }
                 tokenIndex! + 1 => tokenIndex!
             }
@@ -92,7 +92,7 @@ public resolveModules sources: [Text; ~] -> [ModuleCallResolution; ~] {
             (callNode.kind == 10 or callNode.kind == 11 or callNode.kind == 15) -> if {
                 -1 => callNameToken!
                 callNode.firstToken => callTokenIndex!
-                (callTokenIndex! < callNode.firstToken + callNode.tokenCount and callNameToken! < 0) -> while {
+                (callTokenIndex! < callNode.firstToken + callNode.tokenCount and (callNode.kind == 10 or callNameToken! < 0)) -> while {
                     tokens![callTokenIndex!].kind == grammar.tokenIdIdentifier -> if { callTokenIndex! => callNameToken! }
                     callTokenIndex! + 1 => callTokenIndex!
                 }

@@ -451,8 +451,10 @@ currently supported shared IR subset also remain. Text `print`/`println` are
 the first completed runtime effect slice: flow calls survive semantic lowering
 as explicit runtime symbols, Windows emits a `putchar` loop, Linux emits
 `write(2)`, and Wasm declares an `env.smalllang_write` import. Runtime helpers
-are emitted only when referenced. Numeric formatting, input, allocation policy,
-files, process services, and target-native entrypoint/export policy remain.
+are emitted only when referenced. Text parameters now cross effectful `Unit`
+functions, where LLVM `void` calls and returns avoid phantom SSA results.
+Numeric formatting, input, allocation policy, files, process services, and
+target-native entrypoint/export policy remain.
 
 Text now crosses the self-hosted LLVM boundary as `{ ptr, i64 }`. UTF-8
 literals become immutable globals with byte-accurate lengths and LLVM `\XX`

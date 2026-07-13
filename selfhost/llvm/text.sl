@@ -530,13 +530,23 @@ emitCore sources: move [Text; ~] -> Unit {
                 expression.kind == 6 -> if {
                     (expression.symbol == -101 or expression.symbol == -102) -> if {
                         ir![expression.operand0] => runtimeArgument
-                        sources[runtimeArgument.sourceModule] -> lexer.lex => runtimeArgumentTokens!
-                        runtimeArgumentTokens![runtimeArgument.payloadToken] => runtimeArgumentToken
-                        Int(runtimeArgumentToken.span.length) - 2 => runtimeArgumentLength
-                        "  call void @sl_runtime_print(ptr @sl_str_$(expression.operand0), i64 $runtimeArgumentLength, i1 " -> print
+                        runtimeArgument.kind == 2 -> if {
+                            sources[runtimeArgument.sourceModule] -> lexer.lex => runtimeArgumentTokens!
+                            runtimeArgumentTokens![runtimeArgument.payloadToken] => runtimeArgumentToken
+                            Int(runtimeArgumentToken.span.length) - 2 => runtimeArgumentLength
+                            "  call void @sl_runtime_print(ptr @sl_str_$(expression.operand0), i64 $runtimeArgumentLength, i1 " -> print
+                        } else {
+                            "  %v$(expressionIndex!)_runtime_ptr = extractvalue %sl.text " -> print
+                            (runtimeArgument.kind == 5 and function.operand1 >= 0 and runtimeArgument.symbol == ir![function.operand1].symbol) -> if { "%arg" -> print } else { "%v$(expression.operand0)" -> print }
+                            ", 0" -> println
+                            "  %v$(expressionIndex!)_runtime_len = extractvalue %sl.text " -> print
+                            (runtimeArgument.kind == 5 and function.operand1 >= 0 and runtimeArgument.symbol == ir![function.operand1].symbol) -> if { "%arg" -> print } else { "%v$(expression.operand0)" -> print }
+                            ", 1" -> println
+                            "  call void @sl_runtime_print(ptr %v$(expressionIndex!)_runtime_ptr, i64 %v$(expressionIndex!)_runtime_len, i1 " -> print
+                        }
                         expression.symbol == -102 -> if { "true)" -> println } else { "false)" -> println }
                     } else {
-                    "  %v$(expressionIndex!) = call " -> print
+                    (expression.typeOrigin == 1 and expression.typeSymbol == 0) -> if { "  call " -> print } else { "  %v$(expressionIndex!) = call " -> print }
                     expression -> writeType
                     " @sl_m$(expression.targetModule)_s$(expression.symbol)(" -> print
                     expression.operand0 >= 0 -> if {
@@ -604,6 +614,7 @@ emitCore sources: move [Text; ~] -> Unit {
                     }
                 }
             }
+            (function.typeOrigin == 1 and function.typeSymbol == 0) -> if { "  ret void" -> println } else {
             "  ret " -> print
             function -> writeType
             " " -> print
@@ -617,6 +628,7 @@ emitCore sources: move [Text; ~] -> Unit {
                 }
             } else {
                 (returnOperand.kind == 5 and function.operand1 >= 0 and returnOperand.symbol == ir![function.operand1].symbol) -> if { "%arg" -> println } else { "%v$(returnNode.operand0)" -> println }
+            }
             }
             "}" -> println
             functionEnd! => functionIndex!
@@ -725,19 +737,31 @@ emitCore sources: move [Text; ~] -> Unit {
                     entryExpression.kind == 6 -> if {
                         (entryExpression.symbol == -101 or entryExpression.symbol == -102) -> if {
                             ir![entryExpression.operand0] => runtimeArgument
-                            sources[runtimeArgument.sourceModule] -> lexer.lex => runtimeArgumentTokens!
-                            runtimeArgumentTokens![runtimeArgument.payloadToken] => runtimeArgumentToken
-                            Int(runtimeArgumentToken.span.length) - 2 => runtimeArgumentLength
-                            "  call void @sl_runtime_print(ptr @sl_str_$(entryExpression.operand0), i64 $runtimeArgumentLength, i1 " -> print
+                            runtimeArgument.kind == 2 -> if {
+                                sources[runtimeArgument.sourceModule] -> lexer.lex => runtimeArgumentTokens!
+                                runtimeArgumentTokens![runtimeArgument.payloadToken] => runtimeArgumentToken
+                                Int(runtimeArgumentToken.span.length) - 2 => runtimeArgumentLength
+                                "  call void @sl_runtime_print(ptr @sl_str_$(entryExpression.operand0), i64 $runtimeArgumentLength, i1 " -> print
+                            } else {
+                                "  %v$(entryExpressionIndex!)_runtime_ptr = extractvalue %sl.text %v$(entryExpression.operand0), 0" -> println
+                                "  %v$(entryExpressionIndex!)_runtime_len = extractvalue %sl.text %v$(entryExpression.operand0), 1" -> println
+                                "  call void @sl_runtime_print(ptr %v$(entryExpressionIndex!)_runtime_ptr, i64 %v$(entryExpressionIndex!)_runtime_len, i1 " -> print
+                            }
                             entryExpression.symbol == -102 -> if { "true)" -> println } else { "false)" -> println }
                         } else {
-                        "  %v$(entryExpressionIndex!) = call " -> print
+                        (entryExpression.typeOrigin == 1 and entryExpression.typeSymbol == 0) -> if { "  call " -> print } else { "  %v$(entryExpressionIndex!) = call " -> print }
                         entryExpression -> writeType
                         " @sl_m$(entryExpression.targetModule)_s$(entryExpression.symbol)(" -> print
                         entryExpression.operand0 >= 0 -> if {
                             ir![entryExpression.operand0] => entryArgument
                             entryArgument -> writeType
                             " " -> print
+                            entryArgument.kind == 2 -> if {
+                                sources[entryArgument.sourceModule] -> lexer.lex => entryArgumentTokens!
+                                entryArgumentTokens![entryArgument.payloadToken] => entryArgumentToken
+                                Int(entryArgumentToken.span.length) - 2 => entryArgumentLength
+                                "{ ptr @sl_str_$(entryExpression.operand0), i64 $entryArgumentLength }" -> print
+                            } else {
                             (entryArgument.kind == 3 or entryArgument.kind == 4) -> if {
                                 sources[entryArgument.sourceModule] -> lexer.lex => entryArgumentTokens!
                                 entryArgumentTokens![entryArgument.payloadToken] => entryArgumentToken
@@ -747,6 +771,7 @@ emitCore sources: move [Text; ~] -> Unit {
                                     ((sources[entryArgument.sourceModule] -> byte(entryArgumentToken.span.start)) == UInt8(116)) -> if { "1" } else { "0" } -> print
                                 }
                             } else { "%v$(entryExpression.operand0)" -> print }
+                            }
                         }
                         ")" -> println
                         }

@@ -371,6 +371,12 @@ backend emits that ABI only when used: Windows iterates UTF-8 bytes through CRT
 and executes, with its stdout compared against the expected program output.
 Other fluent builtins such as `len` and `each` remain outside the function-call
 catalog, so runtime recognition does not create false unresolved-call errors.
+The same ABI now accepts dynamic `%sl.text` values: a `Text` parameter is split
+with `extractvalue`, forwarded to the runtime helper, and called from `main`
+with a literal aggregate. `Unit` functions and calls lower to LLVM `void`
+without assigning a nonexistent result, completing the first effectful user-
+function round trip. The Windows regression links and executes this generated
+function and compares its `hello` output.
 
 The bootstrap type table now predeclares parametric dynamic-array identities
 used by struct fields before struct layouts are finalized. A field such as

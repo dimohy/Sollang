@@ -1,0 +1,16 @@
+import smalllang.compiler.llvm.text as llvm
+
+main {
+    [
+        """
+        show value: Text -> Unit {
+            value -> println
+        }
+        main {
+            show("hello")
+        }
+        """,
+        ~
+    ] => sources!
+    sources! -> llvm.emit
+}
