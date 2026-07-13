@@ -3606,4 +3606,42 @@ References: [LLVM coroutine destruction](https://llvm.org/docs/Coroutines.html),
 [Swift task cancellation](https://docs.swift.org/swift-book/LanguageGuide/Concurrency.html),
 [Kotlin cancellation](https://kotlinlang.org/docs/cancellation-and-timeouts.html).
 
+## D120 - Branch-Nested Await Preserves Structured CFG
+
+Status: reference compiler and self-host suspension discovery implemented
+Date: 2026-07-14
+
+An `await` binding inside an `if` or `when` arm is a first-class suspension
+point. The async worker keeps the source CFG instead of flattening branches into
+a linear replay list. Its entry switch targets a stable resume label embedded
+in the selected arm. At that label the worker reloads a state-specific frame,
+consumes the stored child Task, and continues through the original join.
+
+The first CFG frame is intentionally path-specific. It contains only bindings
+that are active at that suspension, so cancellation never guesses whether a
+sibling-arm owner was initialized. Straight-line liveness remains minimal;
+branch lowering conservatively spills active lexical bindings. At joins,
+immutable representations use value phis while mutable scalars, structs, and
+container owners use pointer phis over their reconstructed storage slots. This
+preserves exactly one owner and makes both the initially selected path and a
+resumed path dominate later code correctly.
+
+The self-host grammar previously described braced `when` arms without consuming
+their braces or inter-arm newlines. The generated parser VM therefore rejected
+valid multi-line arms even though the reference parser accepted them. The
+grammar now models `LeftBrace BlockBody RightBrace` and explicit inter-arm
+newlines; regenerated tables let self-host typed IR discover nested branch
+suspensions and assign states independently per function. Examples 252 and 253
+cover runtime resumption/cancellation, mutable and owner joins, and self-host
+state planning.
+
+Await in a `while` body remains the next CFG slice. A loop back-edge can revisit
+one suspension state many times, so loop-carried mutable slots require a
+persistent frame representation or explicit back-edge phis rather than branch
+frame reuse.
+
+References: [LLVM coroutines](https://llvm.org/docs/Coroutines.html),
+[Swift concurrency](https://docs.swift.org/swift-book/LanguageGuide/Concurrency.html),
+[Kotlin coroutine state machines](https://kotlinlang.org/spec/asynchronous-programming-with-coroutines.html).
+
 

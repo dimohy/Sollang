@@ -986,7 +986,7 @@ internal sealed partial class LlvmEmitter
         public static RuntimeUnit Instance { get; } = new();
     }
 
-    private sealed record BlockResult(RuntimeValue? Value, string EndLabel);
+    private sealed record BlockResult(RuntimeValue? Value, string EndLabel, LocalScope ExitScope);
 
     private sealed record RuntimeFlowBinding(string Name, RuntimeValue Value);
 

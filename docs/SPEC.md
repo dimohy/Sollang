@@ -590,25 +590,30 @@ runtime boundary. Both native targets now use one cooperative FIFO ready queue;
 `await` pumps ready work until its affine target completes, and release invokes
 the context destroy entry exactly once. There is no OS thread per task and Linux
 does not require pthread linkage. Resume entries return `false` while pending
-and `true` when complete. Tail await and sequential direct await bindings lower
-to real state machines: the parent stores its child task and spills only values
-referenced after the suspension using their exact LLVM size/alignment,
-returns to the scheduler, and reloads those values on resume. Numeric/Boolean
-values and scalar-only structs/enums can cross multiple state 0/1/2/... awaits;
-ordinary control flow may execute after the final resume. The self-hosted IR
-assigns stable one-based states and exports typed `CoroutineFrameSlot` records
-for the same live binding symbols. Await nested inside control-flow regions and
-simultaneously live child tasks still use whole-body lowering until CFG
-liveness and initialized-drop flags exist.
+and `true` when complete. Tail await, sequential direct await bindings, and
+bindings nested in `if` or `when` branches lower to real state machines. The
+parent stores its child task, transfers active path values into an exactly laid
+out state-specific spill frame, returns to the scheduler, and reloads those
+values on resume. A function-entry state switch may target a resume label inside
+the original structured branch CFG; branch joins use value or storage-pointer
+phi nodes, so immutable values, mutable scalars, mutable owners, and other live
+Tasks retain one coherent post-join representation. Straight-line planning
+spills only later-referenced values; the first CFG implementation conservatively
+spills all active branch bindings. Numeric/Boolean values and scalar-only
+structs/enums can cross multiple state 0/1/2/... awaits; ordinary control flow
+may execute after the final resume. The self-hosted grammar and IR recognize the
+same nested sites, assign stable one-based states per async function, and export
+typed `CoroutineFrameSlot` records for live binding symbols.
 For sequential direct awaits, heap-owning and mutable values are now supported:
 the spill frame temporarily becomes their unique owner, the source local is
 removed before cleanup, and resume reconstructs one owner (plus a fresh mutable
 slot when needed). Async containers are never stack-promoted because their
-buffers must outlive a native resume invocation. The current state number is
-the initialization discriminant for straight-line frames; CFG joins and
-cancellation still require per-slot flags and a pending-frame destroy path.
-Cooperative cancellation, task groups, closure-capture analysis, and
-nonblocking I/O registration follow.
+buffers must outlive a native resume invocation. The current state number
+selects the exact active frame layout and cancel path; the pending-frame destroy
+entry cancels the active child and drops initialized owners. Await inside loop
+bodies still uses whole-body cooperative joining until loop-carried frame slots
+and back-edge initialization phis are implemented. Cancellation observation,
+task groups, closure-capture analysis, and nonblocking I/O registration follow.
 
 ## Local Functions
 

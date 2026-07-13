@@ -1,0 +1,48 @@
+import smalllang.compiler.ir.typed as typedIr
+
+main {
+    [
+        """
+        child value: Int -> async Int {
+            value + 1
+        }
+
+        branch value: Int -> async Int {
+            value * 10 => saved
+            value > 0 -> if {
+                value -> child => positiveTask
+                positiveTask -> await => positive
+                saved + positive
+            } else {
+                0 -> child => fallbackTask
+                fallbackTask -> await => fallback
+                saved - fallback
+            }
+        }
+
+        classify value: Int -> async Unit {
+            when {
+                value == 0 {
+                    value -> child => zeroTask
+                    zeroTask -> await => zero
+                }
+                else {
+                    value -> child => otherTask
+                    otherTask -> await => other
+                }
+            }
+        }
+
+        main { }
+        """,
+        ~
+    ] => sources!
+
+    sources! -> typedIr.suspensions => points!
+    sources! -> typedIr.frameSlots => slots!
+    0 => stateTotal!
+    points! -> each point {
+        stateTotal! + point.state => stateTotal!
+    }
+    "cfgSuspensions=$(points! -> len),stateTotal=$(stateTotal!),slots=$(slots! -> len)" -> println
+}

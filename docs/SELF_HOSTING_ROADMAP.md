@@ -111,18 +111,22 @@ resume-state field. Windows and Linux execute the same cooperative queue and no
 longer allocate one OS thread per task. The self-hosted typed-IR module emits
 stable `CoroutineSuspendPoint` records for `await` sites inside async functions
 and typed `CoroutineFrameSlot` records for bindings live across each state. The
-reference compiler lowers tail await and sequential direct await bindings to
-real multi-state resume functions. It spills only later-referenced values with
-exact layout, reuses the child-task slot, and supports ordinary branches after
-resume. This advances the async gate but does not change the formal score:
-CFG-nested await, per-slot initialization/drop flags, multiple simultaneously
-live tasks, nonblocking I/O, cancellation, and task groups remain partial.
+reference compiler lowers tail await, sequential direct await bindings, and
+`if`/`when` branch-nested await to real multi-state resume functions. Branch
+states jump directly into the original structured CFG, use state-specific
+frames, and merge resumed immutable or mutable storage through LLVM phi nodes.
+The self-host grammar now parses braced multi-line `when` arms consistently with
+the reference parser, and typed IR assigns nested suspension states per async
+function. This advances the async gate but does not change the formal score:
+loop-nested await, nonblocking I/O, cancellation observation, failure
+propagation, captures, and task groups remain partial.
 Straight-line states now carry heap owners and
 mutable locals safely: frame storage temporarily owns the value, resume restores
 one owner, and async container stack promotion is disabled. Self-host frame-slot
-flags preserve mutable and obvious composite-owner bits for later destroy
-lowering. Per-slot flags are still required once control-flow joins can leave
-only part of a frame initialized.
+flags preserve mutable, composite-owner, and affine-Task bits for destroy
+lowering. State-specific branch frames avoid reading sibling-path slots that
+were never initialized; loop back-edges still need persistent loop-carried slot
+state.
 
 ## Gate Inventory
 

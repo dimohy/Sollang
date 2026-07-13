@@ -21,8 +21,13 @@ internal sealed partial class LlvmEmitter
         try
         {
             var workerName = AsyncWorkerSymbol(function);
-            var hasTailAwait = TryGetTailAwaitBinding(function, out var tailAwaitBinding);
-            var hasStatefulAwait = TryGetStatefulAwaitPlan(function, out var statefulAwaitPlan);
+            var hasCfgAwait = TryGetCfgAwaitPlan(function, out var cfgAwaitPlan);
+            BindingStatement? tailAwaitBinding = null;
+            AsyncStateMachinePlan? statefulAwaitPlan = null;
+            var hasTailAwait = !hasCfgAwait
+                && TryGetTailAwaitBinding(function, out tailAwaitBinding);
+            var hasStatefulAwait = !hasCfgAwait
+                && TryGetStatefulAwaitPlan(function, out statefulAwaitPlan);
             EmitFunctionLine($"define internal i1 @{workerName}(ptr %control) #0 {{");
             EmitLabel("entry");
             EmitStackFrameAllocations();
@@ -48,7 +53,11 @@ internal sealed partial class LlvmEmitter
 
             var functionLocals = CaptureLocals();
             BindFunctionParameter(function);
-            if (hasStatefulAwait)
+            if (hasCfgAwait)
+            {
+                EmitCfgAwaitWorker(function, cfgAwaitPlan!, functionLocals);
+            }
+            else if (hasStatefulAwait)
             {
                 EmitStatefulAwaitWorker(function, statefulAwaitPlan!, functionLocals);
             }
@@ -64,7 +73,7 @@ internal sealed partial class LlvmEmitter
             EmitFunctionLine();
 
             ClearLocalState();
-            EmitAsyncCancelFunction(function, hasTailAwait, statefulAwaitPlan);
+            EmitAsyncCancelFunction(function, hasTailAwait, statefulAwaitPlan, cfgAwaitPlan);
 
             ClearLocalState();
             EmitFunctionLine($"define internal %smalllang.task {SymbolForFunction(function.Name)}({ParameterListForFunction(function)}) #0 {{");
@@ -128,7 +137,8 @@ internal sealed partial class LlvmEmitter
     private void EmitAsyncCancelFunction(
         BoundFunction function,
         bool hasTailAwait,
-        AsyncStateMachinePlan? statefulPlan)
+        AsyncStateMachinePlan? statefulPlan,
+        AsyncCfgPlan? cfgPlan)
     {
         EmitFunctionLine($"define internal void @{AsyncCancelSymbol(function)}(ptr %control) #0 {{");
         EmitLabel("entry");
@@ -164,7 +174,9 @@ internal sealed partial class LlvmEmitter
             "getelementptr %smalllang.task_control, ptr %control, i32 0, i32 5");
         var state = NextTemp("cancel_state");
         EmitLoad(state, "i32", stateSlot, 4);
-        var pendingStates = statefulPlan?.Awaits.Count ?? (hasTailAwait ? 1 : 0);
+        var pendingStates = cfgPlan?.Awaits.Count
+            ?? statefulPlan?.Awaits.Count
+            ?? (hasTailAwait ? 1 : 0);
         var stateLabels = Enumerable.Range(0, pendingStates + 1)
             .Select(index => NextLabel(index == 0 ? "cancel_initial" : "cancel_suspended"))
             .ToArray();
@@ -189,7 +201,11 @@ internal sealed partial class LlvmEmitter
             EmitLabel(stateLabels[stateIndex]);
             _currentBlockLabel = stateLabels[stateIndex];
             CancelStoredChild(function);
-            if (statefulPlan is not null)
+            if (cfgPlan is not null)
+            {
+                DropCancelledAsyncSpills(function, cfgPlan.Awaits[stateIndex - 1].Spills);
+            }
+            else if (statefulPlan is not null)
             {
                 DropCancelledAsyncSpills(function, statefulPlan.Awaits[stateIndex - 1].Spills);
             }
@@ -392,6 +408,144 @@ internal sealed partial class LlvmEmitter
         EmitAsyncWorkerCompletion(function, functionLocals, remainingStatements);
     }
 
+    private void EmitCfgAwaitWorker(
+        BoundFunction function,
+        AsyncCfgPlan plan,
+        LocalScope functionLocals)
+    {
+        var resumeBaseLocals = CaptureLocals();
+        var stateSlot = NextTemp("async_resume_state_slot");
+        EmitAssign(
+            stateSlot,
+            "getelementptr %smalllang.task_control, ptr %control, i32 0, i32 5");
+        var state = NextTemp("async_resume_state");
+        EmitLoad(state, "i32", stateSlot, 4);
+        var startLabel = NextLabel("async_state_start");
+        foreach (var point in plan.Awaits)
+        {
+            point.ResumeLabel = NextLabel("async_cfg_resume");
+        }
+        var invalidLabel = NextLabel("async_state_invalid");
+        var switchCases = string.Join(" ",
+            new[] { $"i32 0, label %{startLabel}" }.Concat(plan.Awaits.Select(point =>
+                $"i32 {point.State.ToString(CultureInfo.InvariantCulture)}, label %{point.ResumeLabel}")));
+        EmitInstruction($"switch i32 {state}, label %{invalidLabel} [ {switchCases} ]");
+        _currentBlockTerminated = true;
+
+        EmitLabel(invalidLabel);
+        EmitTrap();
+        EmitLabel(startLabel);
+        _currentBlockLabel = startLabel;
+
+        _activeAsyncCfg = new AsyncCfgLowering(function, plan, resumeBaseLocals, stateSlot);
+        try
+        {
+            EmitAsyncWorkerCompletion(function, functionLocals);
+        }
+        finally
+        {
+            _activeAsyncCfg = null;
+            _asyncScopeSnapshots.Clear();
+        }
+    }
+
+    private bool TryEmitCfgAwaitBinding(BindingStatement binding)
+    {
+        if (_activeAsyncCfg is not { } lowering
+            || !lowering.Plan.ByBinding.TryGetValue(binding, out var point))
+        {
+            return false;
+        }
+
+        if (!TryGetAwaitTaskName(binding, out var taskName))
+        {
+            throw new SmallLangException("CFG await plan contains a non-await binding");
+        }
+        var child = ResolveLocal(taskName) as RuntimeTask
+            ?? throw new SmallLangException(
+                $"await in async function '{lowering.Function.Name}' did not produce Task<T>");
+
+        var spillPlans = new List<AsyncSpillPlan>();
+        foreach (var (name, value) in _locals)
+        {
+            if (string.Equals(name, taskName, StringComparison.Ordinal)
+                || lowering.ResumeBaseLocals.Locals.ContainsKey(name))
+            {
+                continue;
+            }
+            if (!IsAsyncSpillType(value.Type))
+            {
+                throw new SmallLangException(
+                    $"binding '{name}' of type {value.Type} cannot cross nested await");
+            }
+            var isMutable = _mutableLocals.Contains(name);
+            if (isMutable && !IsAsyncMutableSpillType(value.Type))
+            {
+                throw new SmallLangException(
+                    $"mutable binding '{name}' of type {value.Type} cannot cross nested await");
+            }
+            spillPlans.Add(new AsyncSpillPlan(name, value.Type, isMutable));
+        }
+
+        point.SetRuntimeShape(spillPlans);
+        var spills = BuildRuntimeAsyncSpills(point.Spills);
+        StoreAsyncSpills(lowering.Function, spills);
+        foreach (var spill in spills)
+        {
+            RemoveLocal(spill.Name);
+        }
+        StoreSuspendedChild(lowering.Function, child);
+        RemoveLocal(taskName);
+        DropOwnedLocalsCreatedSince(lowering.ResumeBaseLocals, transferredOwnerName: null);
+        EmitStore(
+            "i32",
+            point.State.ToString(CultureInfo.InvariantCulture),
+            lowering.StateSlot,
+            4);
+        EmitRet("i1", "false");
+
+        RestoreLocals(lowering.ResumeBaseLocals);
+        EmitLabel(point.ResumeLabel);
+        _currentBlockLabel = point.ResumeLabel;
+        LoadAsyncSpills(lowering.Function, spills);
+        RefreshAsyncScopeSnapshots(spills);
+        var resumedValue = EmitStoredChildAwait(lowering.Function, child);
+        _locals.Add(binding.Name, resumedValue);
+        return true;
+    }
+
+    private void RefreshAsyncScopeSnapshots(IReadOnlyList<RuntimeAsyncSpill> spills)
+    {
+        foreach (var spill in spills)
+        {
+            var value = _locals[spill.Name];
+            foreach (var scope in _asyncScopeSnapshots)
+            {
+                if (!scope.Locals.ContainsKey(spill.Name))
+                {
+                    continue;
+                }
+                scope.Locals[spill.Name] = value;
+                if (!spill.IsMutable)
+                {
+                    continue;
+                }
+                if (_mutableContainerSlots.TryGetValue(spill.Name, out var container))
+                {
+                    scope.MutableContainerSlots[spill.Name] = container;
+                }
+                if (_mutableStructSlots.TryGetValue(spill.Name, out var structure))
+                {
+                    scope.MutableStructSlots[spill.Name] = structure;
+                }
+                if (_mutableScalarSlots.TryGetValue(spill.Name, out var scalar))
+                {
+                    scope.MutableScalarSlots[spill.Name] = scalar;
+                }
+            }
+        }
+    }
+
     private void StoreSuspendedChild(BoundFunction function, RuntimeTask child)
     {
         EmitAsyncContextStore(
@@ -578,6 +732,119 @@ internal sealed partial class LlvmEmitter
         var resultAddress = AsyncContextField(
             "%context", function.InputType, function.ReturnType, 6, "async_result_address");
         EmitStore(result.TypeName, result.ValueName, resultAddress, RuntimeAlignment(function.ReturnType));
+    }
+
+    private bool TryGetCfgAwaitPlan(BoundFunction function, out AsyncCfgPlan? plan)
+    {
+        plan = null;
+        if (function.InputType is { } inputType
+            && _program.Types.ContainsOwnedStorage(inputType))
+        {
+            return false;
+        }
+
+        var candidates = new List<(BindingStatement Binding, bool Nested)>();
+        CollectCfgAwaits(function.BlockBody, nested: false, candidates);
+        if (function.Body is not null)
+        {
+            CollectCfgAwaits(function.Body, nested: false, candidates);
+        }
+        if (!candidates.Any(candidate => candidate.Nested))
+        {
+            return false;
+        }
+
+        var points = candidates
+            .Select((candidate, index) => new AsyncCfgAwaitPoint(index + 1, candidate.Binding))
+            .ToArray();
+        plan = new AsyncCfgPlan(points);
+        return true;
+    }
+
+    private static void CollectCfgAwaits(
+        IReadOnlyList<Statement> statements,
+        bool nested,
+        List<(BindingStatement Binding, bool Nested)> candidates)
+    {
+        foreach (var statement in statements)
+        {
+            switch (statement)
+            {
+                case BindingStatement binding:
+                    if (TryGetAwaitTaskName(binding, out _))
+                    {
+                        candidates.Add((binding, nested));
+                    }
+                    else
+                    {
+                        CollectCfgAwaits(binding.Value, nested, candidates);
+                    }
+                    break;
+                case ExpressionStatement expression:
+                    CollectCfgAwaits(expression.Expression, nested, candidates);
+                    break;
+            }
+        }
+    }
+
+    private static void CollectCfgAwaits(
+        Expression expression,
+        bool nested,
+        List<(BindingStatement Binding, bool Nested)> candidates)
+    {
+        switch (expression)
+        {
+            case IfExpression conditional:
+                CollectCfgAwaits(conditional.Then.Statements, nested: true, candidates);
+                if (conditional.Then.Value is not null)
+                {
+                    CollectCfgAwaits(conditional.Then.Value, nested: true, candidates);
+                }
+                if (conditional.Else is not null)
+                {
+                    CollectCfgAwaits(conditional.Else.Statements, nested: true, candidates);
+                    if (conditional.Else.Value is not null)
+                    {
+                        CollectCfgAwaits(conditional.Else.Value, nested: true, candidates);
+                    }
+                }
+                break;
+            case WhenExpression selection:
+                foreach (var arm in selection.Arms)
+                {
+                    CollectCfgAwaits(arm.Body.Statements, nested: true, candidates);
+                    if (arm.Body.Value is not null)
+                    {
+                        CollectCfgAwaits(arm.Body.Value, nested: true, candidates);
+                    }
+                }
+                CollectCfgAwaits(selection.Else.Statements, nested: true, candidates);
+                if (selection.Else.Value is not null)
+                {
+                    CollectCfgAwaits(selection.Else.Value, nested: true, candidates);
+                }
+                break;
+        }
+    }
+
+    private static bool TryGetAwaitTaskName(BindingStatement binding, out string taskName)
+    {
+        if (!binding.IsMutable
+            && binding.Value is FlowExpression
+            {
+                Source: NameExpression source,
+                Targets.Count: 1
+            } flow
+            && flow.Targets[0].Path.Count == 1
+            && string.Equals(flow.Targets[0].Path[0], "await", StringComparison.Ordinal)
+            && flow.Targets[0].Arguments.Count == 0)
+        {
+            taskName = source.Name;
+            return true;
+        }
+
+        taskName = string.Empty;
+        return false;
     }
 
     private bool TryGetTailAwaitBinding(
@@ -971,6 +1238,41 @@ internal sealed partial class LlvmEmitter
         SymbolForFunction(function.Name)[1..] + "_async_cancel";
 
     private sealed record AsyncStateMachinePlan(IReadOnlyList<AsyncAwaitPoint> Awaits);
+
+    private sealed class AsyncCfgPlan
+    {
+        public AsyncCfgPlan(IReadOnlyList<AsyncCfgAwaitPoint> awaits)
+        {
+            Awaits = awaits;
+            ByBinding = awaits.ToDictionary(point => point.Binding);
+        }
+
+        public IReadOnlyList<AsyncCfgAwaitPoint> Awaits { get; }
+
+        public IReadOnlyDictionary<BindingStatement, AsyncCfgAwaitPoint> ByBinding { get; }
+    }
+
+    private sealed class AsyncCfgAwaitPoint(int state, BindingStatement binding)
+    {
+        public int State { get; } = state;
+
+        public BindingStatement Binding { get; } = binding;
+
+        public string ResumeLabel { get; set; } = string.Empty;
+
+        public IReadOnlyList<AsyncSpillPlan> Spills { get; private set; } = [];
+
+        public void SetRuntimeShape(IReadOnlyList<AsyncSpillPlan> spills)
+        {
+            Spills = spills;
+        }
+    }
+
+    private sealed record AsyncCfgLowering(
+        BoundFunction Function,
+        AsyncCfgPlan Plan,
+        LocalScope ResumeBaseLocals,
+        string StateSlot);
 
     private sealed record AsyncAwaitPoint(
         int StatementIndex,

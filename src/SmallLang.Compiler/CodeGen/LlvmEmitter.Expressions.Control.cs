@@ -220,6 +220,8 @@ internal sealed partial class LlvmEmitter
     private RuntimeValue EmitIfExpression(IfExpression expression)
     {
         var condition = EmitBoolExpression(expression.Condition);
+        var conditionLabel = _currentBlockLabel;
+        var asyncEntryScope = _activeAsyncCfg is null ? null : CaptureLocals();
         var thenLabel = NextLabel("if_then");
         var elseLabel = expression.Else is null ? null : NextLabel("if_else");
         var endLabel = NextLabel("if_end");
@@ -228,6 +230,10 @@ internal sealed partial class LlvmEmitter
 
         EmitLabel(thenLabel);
         _currentBlockLabel = thenLabel;
+        if (asyncEntryScope is not null)
+        {
+            RestoreLocals(asyncEntryScope);
+        }
         var thenResult = EmitScopedBlockBody(expression.Then);
         var thenEndLabel = _currentBlockLabel;
         var thenTerminated = _currentBlockTerminated;
@@ -243,6 +249,10 @@ internal sealed partial class LlvmEmitter
             var activeElseLabel = elseLabel!;
             EmitLabel(activeElseLabel);
             _currentBlockLabel = activeElseLabel;
+            if (asyncEntryScope is not null)
+            {
+                RestoreLocals(asyncEntryScope);
+            }
             elseResult = EmitScopedBlockBody(expression.Else);
             elseTerminated = _currentBlockTerminated;
             if (!elseTerminated)
@@ -259,6 +269,24 @@ internal sealed partial class LlvmEmitter
         EmitLabel(endLabel);
         _currentBlockLabel = endLabel;
 
+        if (asyncEntryScope is not null)
+        {
+            var incomingScopes = new List<(LocalScope Scope, string Label)>();
+            if (!thenTerminated)
+            {
+                incomingScopes.Add((thenResult.ExitScope, thenEndLabel));
+            }
+            if (expression.Else is null)
+            {
+                incomingScopes.Add((asyncEntryScope, conditionLabel));
+            }
+            else if (!elseTerminated)
+            {
+                incomingScopes.Add((elseResult!.ExitScope, elseResult.EndLabel));
+            }
+            MergeAsyncOuterScope(asyncEntryScope, incomingScopes);
+        }
+
         if (expression.Else is null || thenResult.Value is null || elseResult?.Value is null)
         {
             return RuntimeUnit.Instance;
@@ -269,8 +297,10 @@ internal sealed partial class LlvmEmitter
 
     private RuntimeValue EmitWhenExpression(WhenExpression expression)
     {
+        var asyncEntryScope = _activeAsyncCfg is null ? null : CaptureLocals();
         var endLabel = NextLabel("when_end");
         var valueResults = new List<(RuntimeValue Value, string Label)>();
+        var scopeResults = new List<(LocalScope Scope, string Label)>();
         var hasEndPredecessor = false;
         var hasSubjectConditions = expression.Arms.Any(static arm => IsSubjectWhenCondition(arm.Condition));
         var subject = expression.Subject is not null
@@ -283,6 +313,10 @@ internal sealed partial class LlvmEmitter
 
         foreach (var arm in expression.Arms)
         {
+            if (asyncEntryScope is not null)
+            {
+                RestoreLocals(asyncEntryScope);
+            }
             _currentBlockLabel = nextConditionLabel;
             var armLabel = NextLabel("when_arm");
             var nextLabel = NextLabel("when_next");
@@ -298,6 +332,10 @@ internal sealed partial class LlvmEmitter
             {
                 valueResults.Add((armResult.Value, armResult.EndLabel));
             }
+            if (!_currentBlockTerminated && asyncEntryScope is not null)
+            {
+                scopeResults.Add((armResult.ExitScope, armResult.EndLabel));
+            }
 
             if (!_currentBlockTerminated)
             {
@@ -309,10 +347,18 @@ internal sealed partial class LlvmEmitter
         }
 
         _currentBlockLabel = nextConditionLabel;
+        if (asyncEntryScope is not null)
+        {
+            RestoreLocals(asyncEntryScope);
+        }
         var elseResult = EmitScopedBlockBody(expression.Else);
         if (!_currentBlockTerminated && elseResult.Value is not null)
         {
             valueResults.Add((elseResult.Value, elseResult.EndLabel));
+        }
+        if (!_currentBlockTerminated && asyncEntryScope is not null)
+        {
+            scopeResults.Add((elseResult.ExitScope, elseResult.EndLabel));
         }
 
         if (!_currentBlockTerminated)
@@ -326,6 +372,11 @@ internal sealed partial class LlvmEmitter
         }
         EmitLabel(endLabel);
         _currentBlockLabel = endLabel;
+
+        if (asyncEntryScope is not null)
+        {
+            MergeAsyncOuterScope(asyncEntryScope, scopeResults);
+        }
 
         if (valueResults.Count == 0)
         {
@@ -492,24 +543,145 @@ internal sealed partial class LlvmEmitter
     private BlockResult EmitScopedBlockBody(BlockBody body)
     {
         var outerLocals = CaptureLocals();
+        if (_activeAsyncCfg is not null)
+        {
+            _asyncScopeSnapshots.Push(outerLocals);
+        }
         try
         {
             EmitStatements(body.Statements);
             if (_currentBlockTerminated)
             {
-                return new BlockResult(null, _currentBlockLabel);
+                return new BlockResult(null, _currentBlockLabel, CaptureLocals());
             }
             var transferredOwnerName = body.Value is null
                 ? null
                 : GetBlockResultTransferredOwnerName(body.Value);
             var value = body.Value is null ? null : EmitExpression(body.Value);
             DropOwnedLocalsCreatedSince(outerLocals, transferredOwnerName);
-            return new BlockResult(value, _currentBlockLabel);
+            return new BlockResult(value, _currentBlockLabel, CaptureLocals());
         }
         finally
         {
+            if (_activeAsyncCfg is not null)
+            {
+                _asyncScopeSnapshots.Pop();
+            }
             RestoreLocals(outerLocals);
         }
+    }
+
+    private void MergeAsyncOuterScope(
+        LocalScope entryScope,
+        IReadOnlyList<(LocalScope Scope, string Label)> incoming)
+    {
+        if (incoming.Count == 0)
+        {
+            RestoreLocals(entryScope);
+            return;
+        }
+
+        RestoreLocals(entryScope);
+        foreach (var (name, entryValue) in entryScope.Locals)
+        {
+            var presentCount = incoming.Count(item => item.Scope.Locals.ContainsKey(name));
+            if (presentCount == 0)
+            {
+                RemoveLocal(name);
+                continue;
+            }
+            if (presentCount != incoming.Count)
+            {
+                throw new SmallLangException(
+                    $"binding '{name}' has inconsistent ownership across async branch paths");
+            }
+            if (entryScope.MutableLocals.Contains(name))
+            {
+                MergeAsyncMutableSlot(name, entryScope, incoming);
+                continue;
+            }
+            var values = incoming
+                .Select(item => (Value: item.Scope.Locals[name], item.Label))
+                .ToArray();
+            _locals[name] = EmitAsyncScopePhi($"async_{name}", entryValue.Type, values);
+        }
+    }
+
+    private void MergeAsyncMutableSlot(
+        string name,
+        LocalScope entryScope,
+        IReadOnlyList<(LocalScope Scope, string Label)> incoming)
+    {
+        var prefix = name.TrimEnd('!');
+        if (entryScope.MutableScalarSlots.ContainsKey(name))
+        {
+            _mutableScalarSlots[name] = EmitAsyncPointerPhi(
+                $"async_{prefix}_slot",
+                incoming.Select(item =>
+                    (item.Scope.MutableScalarSlots[name], item.Label)).ToArray());
+            return;
+        }
+        if (entryScope.MutableStructSlots.ContainsKey(name))
+        {
+            _mutableStructSlots[name] = EmitAsyncPointerPhi(
+                $"async_{prefix}_struct_slot",
+                incoming.Select(item =>
+                    (item.Scope.MutableStructSlots[name], item.Label)).ToArray());
+            return;
+        }
+        if (entryScope.MutableContainerSlots.ContainsKey(name))
+        {
+            _mutableContainerSlots[name] = new MutableContainerSlot(
+                EmitAsyncPointerPhi(
+                    $"async_{prefix}_ptr_slot",
+                    incoming.Select(item =>
+                        (item.Scope.MutableContainerSlots[name].PointerAddress, item.Label)).ToArray()),
+                EmitAsyncPointerPhi(
+                    $"async_{prefix}_len_slot",
+                    incoming.Select(item =>
+                        (item.Scope.MutableContainerSlots[name].LengthAddress, item.Label)).ToArray()),
+                EmitAsyncPointerPhi(
+                    $"async_{prefix}_capacity_slot",
+                    incoming.Select(item =>
+                        (item.Scope.MutableContainerSlots[name].CapacityAddress, item.Label)).ToArray()),
+                StackAllocation: null);
+            return;
+        }
+
+        throw new SmallLangException(
+            $"mutable binding '{name}' has no storage slot at async branch join");
+    }
+
+    private string EmitAsyncPointerPhi(
+        string prefix,
+        IReadOnlyList<(string Pointer, string Label)> incoming)
+    {
+        var result = NextTemp(prefix);
+        EmitPhi(
+            result,
+            "ptr",
+            incoming.Select(item => (Value: item.Pointer, item.Label)).ToArray());
+        return result;
+    }
+
+    private RuntimeValue EmitAsyncScopePhi(
+        string prefix,
+        BoundType type,
+        IReadOnlyList<(RuntimeValue Value, string Label)> incoming)
+    {
+        if (type == BoundType.Unit)
+        {
+            return RuntimeUnit.Instance;
+        }
+        var materialized = incoming
+            .Select(item => (Value: MaterializeAggregateValue(item.Value), item.Label))
+            .ToArray();
+        var result = NextTemp(prefix);
+        EmitPhi(
+            result,
+            materialized[0].Value.TypeName,
+            materialized.Select(item => (item.Value.ValueName, item.Label)).ToArray());
+        return DematerializeAggregateValue(type, result);
     }
 
     private RuntimeValue EmitPhiValue(

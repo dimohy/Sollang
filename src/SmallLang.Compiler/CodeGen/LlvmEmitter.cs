@@ -36,6 +36,8 @@ internal sealed partial class LlvmEmitter
     private string _currentBlockLabel = "entry";
     private bool _currentBlockTerminated;
     private readonly Stack<LoopContext> _loopContexts = new();
+    private readonly Stack<LocalScope> _asyncScopeSnapshots = new();
+    private AsyncCfgLowering? _activeAsyncCfg;
 
     public LlvmEmitter(BoundProgram program, LlvmRuntimePlatform platform)
     {

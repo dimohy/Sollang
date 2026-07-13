@@ -63,6 +63,12 @@ internal sealed partial class LlvmEmitter
 
     private void EmitStatement(Statement statement)
     {
+        if (statement is BindingStatement cfgAwait && TryEmitCfgAwaitBinding(cfgAwait))
+        {
+            EmitStackLifetimeEndsAfter(statement);
+            return;
+        }
+
         switch (statement)
         {
             case BindingStatement binding:

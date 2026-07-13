@@ -180,6 +180,26 @@ for work whose result is no longer needed; it removes queued work and runs the
 compiler-generated coroutine destroy path for initialized child and frame
 owners.
 
+`await` can suspend inside an `if` or `when` branch without flattening the source
+control flow:
+
+```smalllang
+choose value: Int -> async Int {
+    value * 10 => saved
+    value > 0 -> if {
+        value -> step => pending
+        pending -> await => next
+        saved + next
+    } else {
+        saved
+    }
+}
+```
+
+The generated resume switch targets the branch continuation directly. Values
+that cross the suspension move through the coroutine frame, and the branch join
+merges their resumed representation before later statements execute.
+
 Browser WebAssembly output is available through the `wasm32-browser` target. The
 generated module exports `smalllang_start` and `memory`, and imports
 `env.smalllang_browser_write(ptr, len)` so the page can render stdout text:
