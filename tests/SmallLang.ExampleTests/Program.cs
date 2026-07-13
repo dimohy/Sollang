@@ -3,6 +3,7 @@ using System.Text;
 
 var filters = new List<string>();
 var skipBootstrap = false;
+var jobs = Math.Min(Environment.ProcessorCount, 4);
 for (var argumentIndex = 0; argumentIndex < args.Length; argumentIndex++)
 {
     switch (args[argumentIndex])
@@ -18,9 +19,18 @@ for (var argumentIndex = 0; argumentIndex < args.Length; argumentIndex++)
         case "--skip-bootstrap":
             skipBootstrap = true;
             break;
+        case "--jobs":
+            if (++argumentIndex >= args.Length
+                || !int.TryParse(args[argumentIndex], out jobs)
+                || jobs < 1)
+            {
+                Console.Error.WriteLine("--jobs requires a positive integer.");
+                return 2;
+            }
+            break;
         default:
             Console.Error.WriteLine($"Unknown test option: {args[argumentIndex]}");
-            Console.Error.WriteLine("Usage: dotnet run --project tests/SmallLang.ExampleTests -- [--filter <name>]... [--skip-bootstrap]");
+            Console.Error.WriteLine("Usage: dotnet run --project tests/SmallLang.ExampleTests -- [--filter <name>]... [--skip-bootstrap] [--jobs <count>]");
             return 2;
     }
 }
@@ -122,7 +132,8 @@ if (filters.Count > 0 && expectedFiles.Length + diagnosticFiles.Length == 0)
 }
 
 var failures = 0;
-foreach (var expectedFile in expectedFiles)
+Console.WriteLine($"Running {expectedFiles.Length + diagnosticFiles.Length} tests with {jobs} worker(s).");
+Parallel.ForEach(expectedFiles, new ParallelOptions { MaxDegreeOfParallelism = jobs }, expectedFile =>
 {
     var name = Path.GetFileName(expectedFile)[..^".stdout.txt".Length];
     var sourcePath = Path.Combine(repoRoot, "examples", name + ".sl");
@@ -141,8 +152,8 @@ foreach (var expectedFile in expectedFiles)
     if (!File.Exists(sourcePath))
     {
         Console.Error.WriteLine($"FAIL {name}: source file not found");
-        failures++;
-        continue;
+        Interlocked.Increment(ref failures);
+        return;
     }
 
     var compilerArguments = new List<string>
@@ -181,8 +192,8 @@ foreach (var expectedFile in expectedFiles)
         Console.Error.WriteLine($"FAIL {name}: compiler exited {build.ExitCode}");
         Console.Error.WriteLine(build.Stdout);
         Console.Error.WriteLine(build.Stderr);
-        failures++;
-        continue;
+        Interlocked.Increment(ref failures);
+        return;
     }
 
     if (verifyLlvm
@@ -193,8 +204,8 @@ foreach (var expectedFile in expectedFiles)
             out var llvmError))
     {
         Console.Error.WriteLine($"FAIL {name}: {llvmError}");
-        failures++;
-        continue;
+        Interlocked.Increment(ref failures);
+        return;
     }
 
     if (File.Exists(wasmLlvmContainsPath))
@@ -221,8 +232,8 @@ foreach (var expectedFile in expectedFiles)
             Console.Error.WriteLine(wasmBuild.Stdout);
             Console.Error.WriteLine(wasmBuild.Stderr);
             Console.Error.WriteLine(wasmLlvmError);
-            failures++;
-            continue;
+            Interlocked.Increment(ref failures);
+            return;
         }
     }
 
@@ -246,8 +257,8 @@ foreach (var expectedFile in expectedFiles)
     {
         Console.Error.WriteLine($"FAIL {name}: executable exited {run.ExitCode}");
         Console.Error.WriteLine(run.Stderr);
-        failures++;
-        continue;
+        Interlocked.Increment(ref failures);
+        return;
     }
 
     if (!StringComparer.Ordinal.Equals(expected, actual))
@@ -257,8 +268,8 @@ foreach (var expectedFile in expectedFiles)
         Console.Error.WriteLine(expected);
         Console.Error.WriteLine("ACTUAL:");
         Console.Error.WriteLine(actual);
-        failures++;
-        continue;
+        Interlocked.Increment(ref failures);
+        return;
     }
 
     if (File.Exists(stdoutLlvmValidationPath))
@@ -272,8 +283,8 @@ foreach (var expectedFile in expectedFiles)
             Console.Error.WriteLine($"FAIL {name}: stdout is not valid LLVM IR");
             Console.Error.WriteLine(llvmAs.Stdout);
             Console.Error.WriteLine(llvmAs.Stderr);
-            failures++;
-            continue;
+            Interlocked.Increment(ref failures);
+            return;
         }
 
         if (File.Exists(stdoutLlvmExecutionPath))
@@ -285,8 +296,8 @@ foreach (var expectedFile in expectedFiles)
                 Console.Error.WriteLine($"FAIL {name}: stdout LLVM could not be linked");
                 Console.Error.WriteLine(link.Stdout);
                 Console.Error.WriteLine(link.Stderr);
-                failures++;
-                continue;
+                Interlocked.Increment(ref failures);
+                return;
             }
 
             var linkedRun = Run(linkedPath, [], input: null, repoRoot);
@@ -305,16 +316,16 @@ foreach (var expectedFile in expectedFiles)
                 Console.Error.WriteLine("ACTUAL:");
                 Console.Error.WriteLine(linkedRun.Stdout);
                 Console.Error.WriteLine(linkedRun.Stderr);
-                failures++;
-                continue;
+                Interlocked.Increment(ref failures);
+                return;
             }
         }
     }
 
     Console.WriteLine($"PASS {name}");
-}
+});
 
-foreach (var sourcePath in diagnosticFiles)
+Parallel.ForEach(diagnosticFiles, new ParallelOptions { MaxDegreeOfParallelism = jobs }, sourcePath =>
 {
     var name = Path.GetFileNameWithoutExtension(sourcePath);
     var expectedPath = Path.Combine(diagnosticDir, name + ".stderr.contains.txt");
@@ -325,8 +336,8 @@ foreach (var sourcePath in diagnosticFiles)
     if (!File.Exists(expectedPath))
     {
         Console.Error.WriteLine($"FAIL diagnostic/{name}: expected diagnostic file not found");
-        failures++;
-        continue;
+        Interlocked.Increment(ref failures);
+        return;
     }
 
     var diagnosticArguments = new List<string> { compilerDll, "build" };
@@ -358,12 +369,12 @@ foreach (var sourcePath in diagnosticFiles)
         Console.Error.WriteLine(expectedDiagnostic);
         Console.Error.WriteLine("ACTUAL:");
         Console.Error.WriteLine(actualDiagnostic);
-        failures++;
-        continue;
+        Interlocked.Increment(ref failures);
+        return;
     }
 
     Console.WriteLine($"PASS diagnostic/{name}");
-}
+});
 
 if (failures == 0)
 {

@@ -208,7 +208,11 @@ dotnet run --project tests\SmallLang.ExampleTests\SmallLang.ExampleTests.csproj 
   -c Release --no-build -- --filter 219 --filter 220 --skip-bootstrap
 ```
 
-An unfiltered run always remains the commit-gate regression check.
+The runner uses up to four isolated test workers by default. Use `--jobs 1` for
+deterministic sequential diagnosis or an explicit positive worker count when
+measuring another machine. Compiler bootstrap and grammar-table determinism are
+still checked once before the parallel section. An unfiltered run always remains
+the commit-gate regression check.
 
 Multiple user source files may form one compilation unit. Declarations from all
 files are merged after each file independently resolves its namespace and import
