@@ -178,6 +178,10 @@ internal sealed partial class LlvmEmitter
 
     private RuntimeValue DematerializeAggregateValue(BoundType type, string valueName)
     {
+        if (type == BoundType.Unit)
+        {
+            return RuntimeUnit.Instance;
+        }
         if (_program.Types.IsStruct(type))
         {
             return new RuntimeStruct(type, valueName);

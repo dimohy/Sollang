@@ -244,11 +244,17 @@ internal sealed partial class LlvmEmitter
     {
         var path = argument as RuntimeText
             ?? throw new SmallLangException($"{function.Name} expects Text");
+        var expectedTypeName = function.Kind == BoundFunctionKind.RuntimeOpenWriteFile
+            ? "sys.file.FileWriter"
+            : "sys.file.File";
+        var openSymbol = function.Kind == BoundFunctionKind.RuntimeOpenWriteFile
+            ? "smalllang_platform_open_owned_write_file"
+            : "smalllang_platform_open_owned_read_file";
         if (!_program.Types.TryGetResultTypes(function.ReturnType, out var resultTypes)
             || !_program.Types.IsStruct(resultTypes.Ok)
             || !string.Equals(
                 _program.Types.GetStruct(resultTypes.Ok).Name,
-                "sys.file.File",
+                expectedTypeName,
                 StringComparison.Ordinal)
             || resultTypes.Error != BoundType.Text)
         {
@@ -259,7 +265,7 @@ internal sealed partial class LlvmEmitter
         EmitCall(
             raw,
             "%smalllang.file_handle_result",
-            "smalllang_platform_open_owned_read_file",
+            openSymbol,
             $"ptr {path.PointerName}, i64 {path.LengthName}");
         var handle = NextTemp("file_open_handle");
         EmitAssign(handle, $"extractvalue %smalllang.file_handle_result {raw}, 0");
@@ -307,12 +313,12 @@ internal sealed partial class LlvmEmitter
             [(success, successExit), (failure, errorExit)]);
     }
 
-    private string ExtractOwnedFileHandle(RuntimeStruct file)
+    private string ExtractOwnedFileHandle(RuntimeStruct file, string expectedTypeName = "sys.file.File")
     {
         var definition = _program.Types.GetStruct(file.Type);
-        if (!string.Equals(definition.Name, "sys.file.File", StringComparison.Ordinal))
+        if (!string.Equals(definition.Name, expectedTypeName, StringComparison.Ordinal))
         {
-            throw new SmallLangException("file operation expects sys.file.File");
+            throw new SmallLangException($"file operation expects {expectedTypeName}");
         }
         var handle = NextTemp("file_owned_handle");
         EmitAssign(
@@ -493,6 +499,83 @@ internal sealed partial class LlvmEmitter
         _mainOk = CombineWriteOk(ok, _mainOk);
         EmitReturnIfReadFailed(ok);
         return RuntimeUnit.Instance;
+    }
+
+    private RuntimeEnum EmitRuntimeWriteScalarAt(
+        BoundFunction function,
+        RuntimeStruct writer,
+        Expression valueExpression,
+        Expression offsetExpression)
+    {
+        if (function.SpecializedType is not { } scalarType
+            || (scalarType != BoundType.Bool
+                && !IsNumericType(scalarType)
+                && scalarType != BoundType.CodePoint))
+        {
+            throw new SmallLangException($"{function.Name} has an invalid scalar specialization");
+        }
+        if (!_program.Types.TryGetResultTypes(function.ReturnType, out var resultTypes)
+            || resultTypes.Ok != BoundType.Unit
+            || resultTypes.Error != BoundType.Text)
+        {
+            throw new SmallLangException($"{function.Name} must return Result<Unit, Text>");
+        }
+
+        RuntimeValue value = valueExpression is NumberExpression literal && IsIntegerType(scalarType)
+            ? new RuntimeInt(scalarType, literal.Text)
+            : EmitExpression(valueExpression);
+        EnsureRuntimeType(value, scalarType, function.Name);
+        var materialized = MaterializeAggregateValue(value);
+        var slot = NextTemp("file_scalar_write_at");
+        EmitAlloca(slot, materialized.TypeName, RuntimeAlignment(scalarType));
+        EmitStore(materialized.TypeName, materialized.ValueName, slot, RuntimeAlignment(scalarType));
+
+        var handle = ExtractOwnedFileHandle(writer, "sys.file.FileWriter");
+        var offset = EmitMapInteger(offsetExpression, BoundType.UInt64, "file_write_at_offset");
+        var byteSize = RuntimeScalarByteSize(scalarType);
+        var raw = NextTemp("file_scalar_write_at_result");
+        EmitCall(
+            raw,
+            "%smalllang.file_count_result",
+            "smalllang_platform_write_owned_file_at",
+            $"i64 {handle}, ptr {slot}, i64 {byteSize}, i64 {offset}");
+        var count = NextTemp("file_scalar_write_at_count");
+        EmitAssign(count, $"extractvalue %smalllang.file_count_result {raw}, 0");
+        var platformOk = NextTemp("file_scalar_write_at_ok");
+        EmitAssign(platformOk, $"extractvalue %smalllang.file_count_result {raw}, 1");
+        var callSucceeded = NextTemp("file_scalar_write_at_call_succeeded");
+        EmitCompare(callSucceeded, "ne", "i32", platformOk, "0");
+        var full = NextTemp("file_scalar_write_at_full");
+        EmitCompare(full, "eq", "i64", count, byteSize.ToString(CultureInfo.InvariantCulture));
+        var succeeded = NextTemp("file_scalar_write_at_succeeded");
+        EmitAssign(succeeded, $"and i1 {callSucceeded}, {full}");
+
+        var definition = _program.Types.GetEnum(function.ReturnType);
+        var okVariant = definition.Variants.First(variant => variant.Name == "Ok");
+        var errVariant = definition.Variants.First(variant => variant.Name == "Err");
+        var successLabel = NextLabel("file_write_at_success");
+        var errorLabel = NextLabel("file_write_at_error");
+        var endLabel = NextLabel("file_write_at_end");
+        EmitConditionalBranch(succeeded, successLabel, errorLabel);
+
+        EmitLabel(successLabel);
+        _currentBlockLabel = successLabel;
+        var success = EmitEnumValue(function.ReturnType, okVariant, payload: null);
+        EmitBranch(endLabel);
+        var successExit = _currentBlockLabel;
+
+        EmitLabel(errorLabel);
+        _currentBlockLabel = errorLabel;
+        var failure = EmitEnumValue(function.ReturnType, errVariant, EmitRuntimeErrorText("io"));
+        EmitBranch(endLabel);
+        var errorExit = _currentBlockLabel;
+
+        EmitLabel(endLabel);
+        _currentBlockLabel = endLabel;
+        return EmitEnumPhi(
+            "file_write_at_result",
+            function.ReturnType,
+            [(success, successExit), (failure, errorExit)]);
     }
 
     private RuntimeEnum EmitRuntimeReadScalar(

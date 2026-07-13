@@ -31,6 +31,7 @@ internal sealed class LinuxLlvmRuntimePlatform : LlvmRuntimePlatform
         functions.AppendLine("declare i64 @write(i32, ptr, i64)");
         functions.AppendLine("declare i64 @read(i32, ptr, i64)");
         functions.AppendLine("declare i64 @pread(i32, ptr, i64, i64)");
+        functions.AppendLine("declare i64 @pwrite(i32, ptr, i64, i64)");
         functions.AppendLine("declare i32 @open(ptr, i32, i32)");
         functions.AppendLine("declare i32 @close(i32)");
         functions.AppendLine("declare i32 @dup(i32)");
@@ -511,6 +512,31 @@ internal sealed class LinuxLlvmRuntimePlatform : LlvmRuntimePlatform
               ret %smalllang.file_handle_result %fail1
             }
 
+            define internal %smalllang.file_handle_result @smalllang_platform_open_owned_write_file(ptr %path, i64 %len) #0 {
+            entry:
+              %buf = alloca [4096 x i8], align 1
+              %buf_ptr = getelementptr inbounds [4096 x i8], ptr %buf, i64 0, i64 0
+              %copy_ok = call i32 @smalllang_copy_text_to_c_path(ptr %path, i64 %len, ptr %buf_ptr)
+              %copy_is_ok = icmp ne i32 %copy_ok, 0
+              br i1 %copy_is_ok, label %open_file, label %fail
+
+            open_file:
+              %fd = call i32 @open(ptr %buf_ptr, i32 577, i32 438)
+              %valid = icmp sge i32 %fd, 0
+              br i1 %valid, label %success, label %fail
+
+            success:
+              %handle = sext i32 %fd to i64
+              %ok0 = insertvalue %smalllang.file_handle_result poison, i64 %handle, 0
+              %ok1 = insertvalue %smalllang.file_handle_result %ok0, i32 1, 1
+              ret %smalllang.file_handle_result %ok1
+
+            fail:
+              %fail0 = insertvalue %smalllang.file_handle_result poison, i64 -1, 0
+              %fail1 = insertvalue %smalllang.file_handle_result %fail0, i32 0, 1
+              ret %smalllang.file_handle_result %fail1
+            }
+
             define internal i64 @smalllang_platform_duplicate_owned_file(i64 %source) #0 {
             entry:
               %source_fd = trunc i64 %source to i32
@@ -529,6 +555,30 @@ internal sealed class LinuxLlvmRuntimePlatform : LlvmRuntimePlatform
             read_file:
               %fd = trunc i64 %handle to i32
               %count = call i64 @pread(i32 %fd, ptr %data, i64 %len, i64 %offset)
+              %ok = icmp sge i64 %count, 0
+              br i1 %ok, label %success, label %fail
+
+            success:
+              %ok0 = insertvalue %smalllang.file_count_result poison, i64 %count, 0
+              %ok1 = insertvalue %smalllang.file_count_result %ok0, i32 1, 1
+              ret %smalllang.file_count_result %ok1
+
+            fail:
+              %fail0 = insertvalue %smalllang.file_count_result poison, i64 0, 0
+              %fail1 = insertvalue %smalllang.file_count_result %fail0, i32 0, 1
+              ret %smalllang.file_count_result %fail1
+            }
+
+            define internal %smalllang.file_count_result @smalllang_platform_write_owned_file_at(i64 %handle, ptr %data, i64 %len, i64 %offset) #0 {
+            entry:
+              %fd = trunc i64 %handle to i32
+              %valid_fd = icmp sge i32 %fd, 0
+              %valid_offset = icmp ule i64 %offset, 9223372036854775807
+              %ready = and i1 %valid_fd, %valid_offset
+              br i1 %ready, label %write_file, label %fail
+
+            write_file:
+              %count = call i64 @pwrite(i32 %fd, ptr %data, i64 %len, i64 %offset)
               %ok = icmp sge i64 %count, 0
               br i1 %ok, label %success, label %fail
 

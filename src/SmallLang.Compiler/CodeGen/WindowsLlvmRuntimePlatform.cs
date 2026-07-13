@@ -818,6 +818,31 @@ internal sealed class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
               ret %smalllang.file_handle_result %fail1
             }
 
+            define internal %smalllang.file_handle_result @smalllang_platform_open_owned_write_file(ptr %path, i64 %len) #0 {
+            entry:
+              %buf = alloca [260 x i8], align 1
+              %buf_ptr = getelementptr inbounds [260 x i8], ptr %buf, i64 0, i64 0
+              %copy_ok = call i32 @smalllang_copy_text_to_c_path(ptr %path, i64 %len, ptr %buf_ptr)
+              %copy_is_ok = icmp ne i32 %copy_ok, 0
+              br i1 %copy_is_ok, label %open, label %fail
+
+            open:
+              %handle = call ptr @CreateFileA(ptr %buf_ptr, i32 1073741824, i32 1, ptr null, i32 2, i32 1073741952, ptr null)
+              %handle_int = ptrtoint ptr %handle to i64
+              %invalid = icmp eq i64 %handle_int, -1
+              br i1 %invalid, label %fail, label %success
+
+            success:
+              %ok0 = insertvalue %smalllang.file_handle_result poison, i64 %handle_int, 0
+              %ok1 = insertvalue %smalllang.file_handle_result %ok0, i32 1, 1
+              ret %smalllang.file_handle_result %ok1
+
+            fail:
+              %fail0 = insertvalue %smalllang.file_handle_result poison, i64 -1, 0
+              %fail1 = insertvalue %smalllang.file_handle_result %fail0, i32 0, 1
+              ret %smalllang.file_handle_result %fail1
+            }
+
             define internal i64 @smalllang_platform_duplicate_owned_file(i64 %source_value) #0 {
             entry:
               %source = inttoptr i64 %source_value to ptr
@@ -860,6 +885,47 @@ internal sealed class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
               store i32 0, ptr %count_slot, align 4
               %len = trunc i64 %len64 to i32
               %started = call i32 @ReadFile(ptr %handle, ptr %data, i32 %len, ptr null, ptr %overlapped)
+              %completed = call i32 @GetOverlappedResult(ptr %handle, ptr %overlapped, ptr %count_slot, i32 1)
+              %ok = icmp ne i32 %completed, 0
+              br i1 %ok, label %success, label %fail
+
+            success:
+              %count32 = load i32, ptr %count_slot, align 4
+              %count = zext i32 %count32 to i64
+              %ok0 = insertvalue %smalllang.file_count_result poison, i64 %count, 0
+              %ok1 = insertvalue %smalllang.file_count_result %ok0, i32 1, 1
+              ret %smalllang.file_count_result %ok1
+
+            fail:
+              %fail0 = insertvalue %smalllang.file_count_result poison, i64 0, 0
+              %fail1 = insertvalue %smalllang.file_count_result %fail0, i32 0, 1
+              ret %smalllang.file_count_result %fail1
+            }
+
+            define internal %smalllang.file_count_result @smalllang_platform_write_owned_file_at(i64 %handle_value, ptr %data, i64 %len64, i64 %offset) #0 {
+            entry:
+              %valid_handle = icmp ne i64 %handle_value, -1
+              %valid_offset = icmp ule i64 %offset, 9223372036854775807
+              %fits = icmp ule i64 %len64, 4294967295
+              %ready0 = and i1 %valid_handle, %valid_offset
+              %ready = and i1 %ready0, %fits
+              br i1 %ready, label %write, label %fail
+
+            write:
+              %handle = inttoptr i64 %handle_value to ptr
+              %overlapped = alloca [32 x i8], align 8
+              call void @llvm.memset.p0.i64(ptr %overlapped, i8 0, i64 32, i1 false)
+              %offset_low_slot = getelementptr i8, ptr %overlapped, i64 16
+              %offset_low = trunc i64 %offset to i32
+              store i32 %offset_low, ptr %offset_low_slot, align 4
+              %offset_high_slot = getelementptr i8, ptr %overlapped, i64 20
+              %offset_shifted = lshr i64 %offset, 32
+              %offset_high = trunc i64 %offset_shifted to i32
+              store i32 %offset_high, ptr %offset_high_slot, align 4
+              %count_slot = alloca i32, align 4
+              store i32 0, ptr %count_slot, align 4
+              %len = trunc i64 %len64 to i32
+              %started = call i32 @WriteFile(ptr %handle, ptr %data, i32 %len, ptr null, ptr %overlapped)
               %completed = call i32 @GetOverlappedResult(ptr %handle, ptr %overlapped, ptr %count_slot, i32 1)
               %ok = icmp ne i32 %completed, 0
               br i1 %ok, label %success, label %fail

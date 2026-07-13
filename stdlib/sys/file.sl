@@ -8,7 +8,15 @@ public struct File {
     token: UInt64
 }
 
+# FileWriter is a separate affine capability, so read-only and write-only
+# handles cannot be mixed accidentally. openWrite creates or truncates a file.
+public struct FileWriter {
+    token: UInt64
+}
+
 openRead path: Text -> Result<File, Text> = intrinsic
+
+openWrite path: Text -> Result<FileWriter, Text> = intrinsic
 
 openIntWriter path: Text -> Unit {
     path -> rt.openIntWriter

@@ -3927,4 +3927,42 @@ References: [Rust FileExt](https://doc.rust-lang.org/std/os/unix/fs/trait.FileEx
 [Windows overlapped I/O](https://learn.microsoft.com/en-us/windows/win32/sync/synchronization-and-overlapped-input-and-output),
 [Swift concurrency and AsyncSequence](https://docs.swift.org/swift-book/LanguageGuide/Concurrency.html).
 
+## D128 - Random-Access Writers Are Separate Affine Capabilities
+
+Status: owned scalar offset writes implemented
+Date: 2026-07-14
+
+Reading and writing are different capabilities in safe SL. `openWrite` returns
+`Result<FileWriter, Text>` rather than a mode flag on `File`, so attempting a
+read through a writer or a write through a reader fails during type checking.
+The writer is affine and uses the same deterministic native-handle drop rule.
+
+```smalllang
+file.openWrite(path) => opened
+writer -> writeAt(UInt16(513), 0) => inferred
+writer -> writeAt<UInt16>(1027, 3) => contextual
+```
+
+`writeAt` infers `T` from the value by default. An explicit type argument is
+also accepted so an otherwise default `Int` literal can be contextually encoded
+as `UInt16`. The second argument is a `UInt64` byte offset. A scalar write is
+all-or-error and returns `Result<Unit, Text>`; exposing short scalar writes
+would add recovery complexity without helping compiler workloads.
+
+Rust's `write_at` establishes cursor-independent offset semantics and its
+`write_all_at` demonstrates why the high-level contract should retry or fail
+instead of silently accepting a partial buffer. .NET `RandomAccess.WriteAsync`
+likewise keeps the handle cursor unchanged and treats the offset as an explicit
+operation input. SL's current synchronous backend uses overlapped `WriteFile`
+on Windows and `pwrite` on Linux. Linux writers are deliberately opened without
+`O_APPEND`, whose interaction with positional writes is non-portable.
+
+Example 265 writes scalars out of order, closes the writer deterministically,
+then reads them back through an affine `File`. Diagnostics reject writer copies,
+unsupported `Text`, and negative offsets.
+
+References: [Rust FileExt write_at/write_all_at](https://doc.rust-lang.org/std/os/unix/fs/trait.FileExt.html),
+[.NET RandomAccess](https://learn.microsoft.com/en-us/dotnet/api/system.io.randomaccess),
+[.NET RandomAccess.WriteAsync](https://learn.microsoft.com/en-us/dotnet/api/system.io.randomaccess.writeasync).
+
 

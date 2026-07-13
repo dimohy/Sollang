@@ -1341,8 +1341,29 @@ and original File have independent, exactly-once close obligations. Windows
 uses an overlapped offset and Linux uses `pread`; high-bit offsets unsupported
 by the signed host APIs return `Err("io")`.
 
-Async open/write/flush/close, owned writer handles, and a future IOCP/io_uring
-completion backend remain before the general file-I/O gate is complete.
+Writes use a separate affine capability so a read-only handle cannot be used as
+a writer:
+
+```smalllang
+file.openWrite("values.bin") => opened
+opened -> when {
+    Result<file.FileWriter, Text>.Ok(writer) {
+        writer -> writeAt(UInt16(513), 0) => inferred
+        writer -> writeAt<UInt16>(1027, 3) => contextual
+    }
+    Result<file.FileWriter, Text>.Err(error) => error
+}
+```
+
+`openWrite` creates or truncates the file. `writeAt(value, UInt64)` infers the
+scalar type from `value`; the optional type argument gives an untyped literal a
+context. The operation returns `Result<Unit, Text>` and succeeds only after the
+entire scalar is written. It never advances a cursor and extends the file when
+the offset lies beyond its end. Windows uses an overlapped offset and Linux
+uses `pwrite` without append mode.
+
+Async open/write/flush/close and a future IOCP/io_uring completion backend
+remain before the general file-I/O gate is complete.
 
 Double-quoted UTF-8 literals decode `\n`, `\r`, `\t`, and `\\` in text
 segments and support optional identifier and expression interpolation. Unknown

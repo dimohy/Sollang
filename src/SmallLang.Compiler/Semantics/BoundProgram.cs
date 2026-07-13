@@ -94,7 +94,9 @@ internal enum BoundFunctionKind
     RuntimeWriteScalar,
     RuntimeReadScalar,
     RuntimeReadScalarAsync,
-    RuntimeOpenFile
+    RuntimeOpenFile,
+    RuntimeOpenWriteFile,
+    RuntimeWriteScalarAt
 }
 
 internal enum TypeId
@@ -129,6 +131,7 @@ internal enum TypeId
     Duration,
     BoxDuration,
     File,
+    FileWriter,
     GenericParameter = 512,
     SecondaryGenericParameter = 513,
     FirstUserDefined = 1024
@@ -409,7 +412,8 @@ internal sealed class TypeDefinitionTable
 
     private bool ContainsOwnedStorage(TypeId type, HashSet<TypeId> visiting)
     {
-        if (type is TypeId.DynamicIntArray or TypeId.IntDictionary or TypeId.Arena or TypeId.File
+        if (type is TypeId.DynamicIntArray or TypeId.IntDictionary or TypeId.Arena
+            or TypeId.File or TypeId.FileWriter
             or TypeId.MappedBytes or TypeId.MutableMappedBytes
             || IsTask(type) || IsBox(type) || IsStaticArray(type) || IsDynamicArray(type) || IsDictionary(type))
         {

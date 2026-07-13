@@ -212,7 +212,7 @@ internal sealed partial class LlvmEmitter
         EmitFunctionLine($"define internal void {DropSymbol(structure.Id)}({llvmType} %value) #0 {{");
         EmitFunctionLine("entry:");
         _currentBlockLabel = "entry";
-        if (string.Equals(structure.Name, "sys.file.File", StringComparison.Ordinal))
+        if (structure.Name is "sys.file.File" or "sys.file.FileWriter")
         {
             var handle = NextTemp("drop_file_handle");
             EmitAssign(handle, $"extractvalue {llvmType} %value, 0");

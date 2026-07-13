@@ -306,6 +306,23 @@ The `UInt64` argument is a byte offset. `File` is affine and automatically
 closed; each pending Task owns a duplicated OS handle and is therefore safe
 even if completion order differs from submission order.
 
+Random-access output uses a distinct affine writer capability:
+
+```smalllang
+file.openWrite("values.bin") => opened
+opened -> when {
+    Result<file.FileWriter, Text>.Ok(writer) {
+        writer -> writeAt(UInt16(513), 0)
+        writer -> writeAt<UInt16>(1027, 3)
+    }
+    Result<file.FileWriter, Text>.Err(error) => error
+}
+```
+
+The first form infers `UInt16`; the second contextually types the literal.
+Every write is position-based, all-or-error, and the writer closes
+automatically at owner-scope exit.
+
 Browser WebAssembly output is available through the `wasm32-browser` target. The
 generated module exports `smalllang_start` and `memory`, and imports
 `env.smalllang_browser_write(ptr, len)` so the page can render stdout text:

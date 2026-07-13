@@ -108,7 +108,8 @@ internal sealed partial class LlvmEmitter
             return EmitRuntimeEnvironmentIntrinsic(function, EmitExpression(expression.Arguments[0]));
         }
 
-        if (function.Kind == BoundFunctionKind.RuntimeOpenFile)
+        if (function.Kind is BoundFunctionKind.RuntimeOpenFile
+            or BoundFunctionKind.RuntimeOpenWriteFile)
         {
             if (expression.Arguments.Count != 1)
             {
@@ -646,7 +647,8 @@ internal sealed partial class LlvmEmitter
             return EmitRuntimeRunProcessIntrinsic(function, argv);
         }
 
-        if (function.Kind == BoundFunctionKind.RuntimeOpenFile)
+        if (function.Kind is BoundFunctionKind.RuntimeOpenFile
+            or BoundFunctionKind.RuntimeOpenWriteFile)
         {
             if (argument is null)
             {

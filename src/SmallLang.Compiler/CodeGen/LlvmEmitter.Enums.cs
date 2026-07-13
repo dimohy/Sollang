@@ -165,6 +165,10 @@ internal sealed partial class LlvmEmitter
 
     private RuntimeValue ExtractEnumPayload(RuntimeEnum value, BoundType payloadType)
     {
+        if (payloadType == BoundType.Unit)
+        {
+            return RuntimeUnit.Instance;
+        }
         var llvmType = LlvmEnumType(value.Type);
         var slot = NextTemp("enum_match_slot");
         EmitAlloca(slot, llvmType, 8);

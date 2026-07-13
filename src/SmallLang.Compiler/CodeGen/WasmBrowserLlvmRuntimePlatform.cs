@@ -108,12 +108,26 @@ internal sealed class WasmBrowserLlvmRuntimePlatform : LlvmRuntimePlatform
               ret %smalllang.file_handle_result %fail1
             }
 
+            define internal %smalllang.file_handle_result @smalllang_platform_open_owned_write_file(ptr %path, i64 %len) #0 {
+            entry:
+              %fail0 = insertvalue %smalllang.file_handle_result poison, i64 -1, 0
+              %fail1 = insertvalue %smalllang.file_handle_result %fail0, i32 0, 1
+              ret %smalllang.file_handle_result %fail1
+            }
+
             define internal i64 @smalllang_platform_duplicate_owned_file(i64 %source) #0 {
             entry:
               ret i64 -1
             }
 
             define internal %smalllang.file_count_result @smalllang_platform_read_owned_file_at(i64 %handle, ptr %data, i64 %len, i64 %offset) #0 {
+            entry:
+              %fail0 = insertvalue %smalllang.file_count_result poison, i64 0, 0
+              %fail1 = insertvalue %smalllang.file_count_result %fail0, i32 0, 1
+              ret %smalllang.file_count_result %fail1
+            }
+
+            define internal %smalllang.file_count_result @smalllang_platform_write_owned_file_at(i64 %handle, ptr %data, i64 %len, i64 %offset) #0 {
             entry:
               %fail0 = insertvalue %smalllang.file_count_result poison, i64 0, 0
               %fail1 = insertvalue %smalllang.file_count_result %fail0, i32 0, 1

@@ -163,6 +163,7 @@ internal sealed partial class LlvmEmitter
                             : throw new SmallLangException($"{path} expects a dynamic Text argv array");
                         continue;
                     case BoundFunctionKind.RuntimeOpenFile:
+                    case BoundFunctionKind.RuntimeOpenWriteFile:
                         current = EmitRuntimeOpenFile(function, current);
                         continue;
                     case BoundFunctionKind.RuntimeSleep:
@@ -194,6 +195,27 @@ internal sealed partial class LlvmEmitter
         out RuntimeFlowResult result)
     {
         result = new RuntimeFlowResult(null, null, _mainOk);
+
+        if (current is RuntimeStruct writer
+            && _program.Types.IsStruct(writer.Type)
+            && string.Equals(
+                _program.Types.GetStruct(writer.Type).Name,
+                "sys.file.FileWriter",
+                StringComparison.Ordinal)
+            && path == "writeAt")
+        {
+            if (!_program.ResolvedGenericCalls.TryGetValue(target, out var writeFunction))
+            {
+                throw new SmallLangException("unresolved generic file operation 'writeAt'");
+            }
+            var value = EmitRuntimeWriteScalarAt(
+                writeFunction,
+                writer,
+                target.Arguments[0],
+                target.Arguments[1]);
+            result = new RuntimeFlowResult(value, null, _mainOk);
+            return true;
+        }
 
         if (current is RuntimeStruct file
             && _program.Types.IsStruct(file.Type)
