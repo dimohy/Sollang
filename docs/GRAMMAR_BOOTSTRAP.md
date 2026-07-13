@@ -363,7 +363,12 @@ used by struct fields before struct layouts are finalized. A field such as
 an unknown textual type. LLVM materializes/dematerializes the three-word array
 aggregate through struct literals and member reads, and generated recursive
 drop glue releases the backing store. Moving one owned field out of a larger
-owned request remains a separate partial-move rule.
+owned request now has a conservative first rule: only an owned field of the
+function's explicit `move` input may be extracted, and doing so consumes the
+whole owner. Non-owned fields must be read first; the original struct is then
+removed from semantic and runtime local state, so only the extracted field is
+dropped. Arbitrary multiple-field partial moves still require field-level move
+masks.
 
 Nominal structs now have deterministic `%sl.struct.m<module>_s<symbol>` LLVM
 types. Typed IR marks struct literals and links an arbitrary number of ordered

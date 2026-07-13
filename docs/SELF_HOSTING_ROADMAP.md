@@ -441,8 +441,13 @@ Selecting Linux/Wasm for a complete module remains. The bootstrap compiler now
 gives an owned `[Text; ~]` struct field a stable parametric identity, LLVM
 aggregate ABI, member access, and recursive backing-store drop. The remaining
 request boundary is ownership-specific: moving that field out of a moved
-request needs explicit partial-move tracking so the enclosing struct cannot
-drop the transferred field twice.
+request now uses a conservative whole-owner-consuming extraction rule. A
+function may read copyable fields first, extract one owned field from its
+explicit `move` input, and then the original owner is invalidated and omitted
+from cleanup. This prevents double drop without silently allowing arbitrary
+partial moves. The remaining target-emitter blocker is call-catalog exposure
+for the large target-aware helper; general multi-field partial moves still need
+field-level move masks.
 
 Text now crosses the self-hosted LLVM boundary as `{ ptr, i64 }`. UTF-8
 literals become immutable globals with byte-accurate lengths and LLVM `\XX`

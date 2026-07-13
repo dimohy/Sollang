@@ -64,6 +64,7 @@ internal sealed partial class LlvmEmitter
             case BindingStatement binding:
                 var movedSourceName = GetMoveConsumingContainerSourceName(binding.Value);
                 var value = EmitExpression(binding.Value);
+                var movedFieldOwnerName = GetMoveConsumingOwnedFieldOwnerName(binding.Value, value);
                 if (binding.IsMutable
                     && _mutableScalarSlots.TryGetValue(binding.Name, out var reboundPointer))
                 {
@@ -82,6 +83,10 @@ internal sealed partial class LlvmEmitter
                 if (movedSourceName is not null)
                 {
                     RemoveLocal(movedSourceName);
+                }
+                if (movedFieldOwnerName is not null)
+                {
+                    RemoveLocal(movedFieldOwnerName);
                 }
 
                 _mutableContainerSlots.Remove(binding.Name);
@@ -186,6 +191,20 @@ internal sealed partial class LlvmEmitter
             default:
                 throw new SmallLangException("indexed assignment expects an array or dictionary owner");
         }
+    }
+
+    private string? GetMoveConsumingOwnedFieldOwnerName(Expression expression, RuntimeValue value)
+    {
+        if (expression is not FieldAccessExpression { Source: NameExpression owner }
+            || _currentFunction is null
+            || _currentFunction.InputOwnership != BoundFunctionInputOwnership.Move
+            || !string.Equals(owner.Name, _currentFunction.InputName ?? "it", StringComparison.Ordinal)
+            || !_program.Types.ContainsOwnedStorage(value.Type))
+        {
+            return null;
+        }
+
+        return owner.Name;
     }
 
     private void EmitBlockFunctionCall(BlockFunctionCallStatement statement)

@@ -943,10 +943,12 @@ internal sealed class SemanticCompiler
                         && mutableBindings.Contains(binding.Name)
                         && !IsContainerType(reboundType);
                     var movedSourceName = GetMoveConsumingContainerSourceName(binding.Value);
+                    var movedFieldOwnerName = GetMoveConsumingOwnedFieldOwnerName(binding.Value, bindings);
                     var consumedSourceNames = GetOwnedParameterConsumedSourceNames(binding.Value, functions, bindings);
                     if (bindings.ContainsKey(binding.Name)
                         && !isMutableRebind
                         && !string.Equals(binding.Name, movedSourceName, StringComparison.Ordinal)
+                        && !string.Equals(binding.Name, movedFieldOwnerName, StringComparison.Ordinal)
                         && !consumedSourceNames.Contains(binding.Name, StringComparer.Ordinal))
                     {
                         throw Error(binding.Line, binding.Column, $"binding '{binding.Name}' already exists in this scope");
@@ -986,7 +988,8 @@ internal sealed class SemanticCompiler
                                 "owned containers can only be bound in a scope where the compiler can insert deterministic drops");
                         }
 
-                        if (!IsContainerCreationExpression(binding.Value))
+                        if (!IsContainerCreationExpression(binding.Value)
+                            && movedFieldOwnerName is null)
                         {
                             throw Error(
                                 binding.Line,
@@ -999,6 +1002,11 @@ internal sealed class SemanticCompiler
                     {
                         bindings.Remove(movedSourceName);
                         mutableBindings.Remove(movedSourceName);
+                    }
+                    if (movedFieldOwnerName is not null)
+                    {
+                        bindings.Remove(movedFieldOwnerName);
+                        mutableBindings.Remove(movedFieldOwnerName);
                     }
 
                     ValidateOwnedParameterConsumptionExpression(binding.Value, functions);
@@ -5306,6 +5314,25 @@ internal sealed class SemanticCompiler
         }
 
         return name.Name;
+    }
+
+    private string? GetMoveConsumingOwnedFieldOwnerName(
+        Expression expression,
+        IReadOnlyDictionary<string, BoundType> bindings)
+    {
+        if (expression is not FieldAccessExpression { Source: NameExpression owner } field
+            || !string.Equals(owner.Name, _currentMoveInputName, StringComparison.Ordinal)
+            || !bindings.TryGetValue(owner.Name, out var ownerType)
+            || !_types.IsStruct(ownerType))
+        {
+            return null;
+        }
+
+        var fieldDefinition = _types.GetStruct(ownerType).Fields
+            .FirstOrDefault(candidate => candidate.Name == field.FieldName);
+        return fieldDefinition is not null && _types.ContainsOwnedStorage(fieldDefinition.Type)
+            ? owner.Name
+            : null;
     }
 
     private void EnsureOwnedContainerCanLeaveBlock(
