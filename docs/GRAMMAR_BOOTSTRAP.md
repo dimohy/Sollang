@@ -327,6 +327,14 @@ array, struct, and dictionary values through SSA aliases; member/index reads
 produce the declared scalar return type, and discarded owned array/dictionary
 bindings free their backing stores after the final read.
 
+Aggregate binding exit classification now has executable transfer coverage.
+Returning the binding name of an owned array or dictionary transfers the same
+aggregate to the caller and suppresses both binding and literal drops. By
+contrast, a `move` parameter consumed by a scalar-returning function frees one
+array store or both dictionary stores. The LLVM snapshot fixes the absence of
+`free` in producers and its exact presence in consumers, preventing the first
+bound-aggregate double-free regression class.
+
 The backend now defines Text as `%sl.text = { ptr, i64 }`. Plain UTF-8
 literals become immutable byte globals and are assembled into aggregate return
 values; Text parameters and direct calls pass the same aggregate by value.

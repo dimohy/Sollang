@@ -422,8 +422,10 @@ Aggregate-valued bindings now participate in the same dependency schedule.
 Function-block parsing preserves the final expression after prior statements,
 including `array![index]` and struct member access. Array, struct, and dictionary
 bindings can therefore feed typed reads; owned array/dictionary storage is
-released after its final scalar read. Transfer through a returned aggregate,
-branch-sensitive liveness, and nested owned aggregate drop glue remain.
+released after its final scalar read. Returning a bound owned aggregate now
+transfers its backing stores without producer-side frees, while a scalar-
+returning consumer releases a `move` parameter exactly once. Branch-sensitive
+liveness, partial moves, and nested owned aggregate drop glue remain.
 
 Text now crosses the self-hosted LLVM boundary as `{ ptr, i64 }`. UTF-8
 literals become immutable globals with byte-accurate lengths and LLVM `\XX`

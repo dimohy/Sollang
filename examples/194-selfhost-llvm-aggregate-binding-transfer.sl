@@ -1,0 +1,21 @@
+import smalllang.compiler.llvm.text as llvm
+
+main {
+    [
+        """
+        makeArray: -> [Int; ~] {
+            [1, 2, ~] => values
+            values
+        }
+        makeDictionary: -> {Int: Int} {
+            {1: 10, 2: 20} => values
+            values
+        }
+        consumeArray values: move [Int; ~] -> Int => 0
+        consumeDictionary values: move {Int: Int} -> Int => 0
+        main { }
+        """,
+        ~
+    ] => sources!
+    sources! -> llvm.emit
+}
