@@ -13,7 +13,7 @@ import smalllang.compiler.semantic.symbols as symbols
 # Kinds: 0 function, 1 return, 2 Text constant, 3 Int constant,
 # 4 Bool constant, 5 name, 6 call, 7 unary, 8 binary, 9 other expression,
 # 10 parameter, 11 entry point, 12 struct literal, 13 member access,
-# 14 array literal, 15 index access, 16 dictionary literal.
+# 14 array literal, 15 index access, 16 dictionary literal, 17 binding.
 public struct TypedIrNode {
     kind: Int
     parent: Int
@@ -195,6 +195,70 @@ public lower sources: [Text; ~] -> [TypedIrNode; ~] {
                         astMapIndex! + 1 => astMapIndex!
                     }
                     results! -> len => expressionIrStart
+                    0 => bindingAstIndex!
+                    bindingAstIndex! < (nodes! -> len) -> while {
+                        nodes![bindingAstIndex!] => bindingAst
+                        bindingAst.kind == 9 -> if {
+                            bindingAst.parent => bindingAncestor!
+                            false => bindingBelongsToFunction!
+                            (bindingAncestor! >= 0 and not bindingBelongsToFunction!) -> while {
+                                bindingAncestor! == function.astNode -> if { true => bindingBelongsToFunction! } else { nodes![bindingAncestor!].parent => bindingAncestor! }
+                            }
+                            bindingBelongsToFunction! -> if {
+                                -1 => bindingTypeIndex!
+                                1000000 => bindingTypeDistance!
+                                0 => bindingTypeSearch!
+                                bindingTypeSearch! < (inferred! -> len) -> while {
+                                    inferred![bindingTypeSearch!] => bindingTypeCandidate
+                                    bindingTypeCandidate.sourceModule == sourceIndex! -> if {
+                                        nodes![bindingTypeCandidate.astNode].parent => bindingTypeAncestor!
+                                        1 => bindingDistance!
+                                        false => belongsToBinding!
+                                        (bindingTypeAncestor! >= 0 and not belongsToBinding!) -> while {
+                                            bindingTypeAncestor! == bindingAstIndex! -> if { true => belongsToBinding! } else {
+                                                nodes![bindingTypeAncestor!].parent => bindingTypeAncestor!
+                                                bindingDistance! + 1 => bindingDistance!
+                                            }
+                                        }
+                                        (belongsToBinding! and bindingDistance! < bindingTypeDistance!) -> if {
+                                            bindingTypeSearch! => bindingTypeIndex!
+                                            bindingDistance! => bindingTypeDistance!
+                                        }
+                                    }
+                                    bindingTypeSearch! + 1 => bindingTypeSearch!
+                                }
+                                bindingTypeIndex! >= 0 -> if {
+                                    -1 => bindingSymbol!
+                                    0 => bindingSymbolSearch!
+                                    bindingSymbolSearch! < (table! -> len) -> while {
+                                        table![bindingSymbolSearch!].astNode == bindingAstIndex! -> if { bindingSymbolSearch! => bindingSymbol! }
+                                        bindingSymbolSearch! + 1 => bindingSymbolSearch!
+                                    }
+                                    inferred![bindingTypeIndex!] => bindingType
+                                    results! -> len => bindingIr
+                                    bindingIr => astToIr![bindingAstIndex!]
+                                    results! -> push(TypedIrNode {
+                                        kind: 17
+                                        parent: returnIr
+                                        sourceModule: sourceIndex!
+                                        astNode: bindingAstIndex!
+                                        symbol: bindingSymbol!
+                                        targetModule: sourceIndex!
+                                        typeOrigin: bindingType.origin
+                                        typeModule: bindingType.targetModule
+                                        typeSymbol: bindingType.targetSymbol
+                                        payloadToken: bindingAst.payloadToken
+                                        opcode: -1
+                                        operand0: -1
+                                        operand1: -1
+                                        nextOperand: -1
+                                        flags: bindingAst.flags
+                                    })
+                                }
+                            }
+                        }
+                        bindingAstIndex! + 1 => bindingAstIndex!
+                    }
                     0 => expressionAstIndex!
                     expressionAstIndex! < (nodes! -> len) -> while {
                         -1 => expressionTypeIndex!
@@ -300,7 +364,7 @@ public lower sources: [Text; ~] -> [TypedIrNode; ~] {
                     expressionIrStart => operandIrIndex!
                     operandIrIndex! < expressionIrEnd -> while {
                         results![operandIrIndex!] => operatorIr!
-                        (operatorIr!.kind == 6 or operatorIr!.kind == 7 or operatorIr!.kind == 8 or operatorIr!.kind == 13 or operatorIr!.kind == 15) -> if {
+                        (operatorIr!.kind == 6 or operatorIr!.kind == 7 or operatorIr!.kind == 8 or operatorIr!.kind == 13 or operatorIr!.kind == 15 or operatorIr!.kind == 17) -> if {
                             -1 => firstOperand!
                             -1 => secondOperand!
                             UIntSize(0) => firstStart!
@@ -430,6 +494,70 @@ public lower sources: [Text; ~] -> [TypedIrNode; ~] {
                         entryMapIndex! + 1 => entryMapIndex!
                     }
                     results! -> len => entryExpressionStart
+                    0 => entryBindingAstIndex!
+                    entryBindingAstIndex! < (nodes! -> len) -> while {
+                        nodes![entryBindingAstIndex!] => entryBindingAst
+                        entryBindingAst.kind == 9 -> if {
+                            entryBindingAst.parent => entryBindingAncestor!
+                            false => entryBindingBelongs!
+                            (entryBindingAncestor! >= 0 and not entryBindingBelongs!) -> while {
+                                entryBindingAncestor! == entryAstIndex! -> if { true => entryBindingBelongs! } else { nodes![entryBindingAncestor!].parent => entryBindingAncestor! }
+                            }
+                            entryBindingBelongs! -> if {
+                                -1 => entryBindingTypeIndex!
+                                1000000 => entryBindingTypeDistance!
+                                0 => entryBindingTypeSearch!
+                                entryBindingTypeSearch! < (inferred! -> len) -> while {
+                                    inferred![entryBindingTypeSearch!] => entryBindingTypeCandidate
+                                    entryBindingTypeCandidate.sourceModule == sourceIndex! -> if {
+                                        nodes![entryBindingTypeCandidate.astNode].parent => entryBindingTypeAncestor!
+                                        1 => entryBindingDistance!
+                                        false => entryBelongsToBinding!
+                                        (entryBindingTypeAncestor! >= 0 and not entryBelongsToBinding!) -> while {
+                                            entryBindingTypeAncestor! == entryBindingAstIndex! -> if { true => entryBelongsToBinding! } else {
+                                                nodes![entryBindingTypeAncestor!].parent => entryBindingTypeAncestor!
+                                                entryBindingDistance! + 1 => entryBindingDistance!
+                                            }
+                                        }
+                                        (entryBelongsToBinding! and entryBindingDistance! < entryBindingTypeDistance!) -> if {
+                                            entryBindingTypeSearch! => entryBindingTypeIndex!
+                                            entryBindingDistance! => entryBindingTypeDistance!
+                                        }
+                                    }
+                                    entryBindingTypeSearch! + 1 => entryBindingTypeSearch!
+                                }
+                                entryBindingTypeIndex! >= 0 -> if {
+                                    -1 => entryBindingSymbol!
+                                    0 => entryBindingSymbolSearch!
+                                    entryBindingSymbolSearch! < (table! -> len) -> while {
+                                        table![entryBindingSymbolSearch!].astNode == entryBindingAstIndex! -> if { entryBindingSymbolSearch! => entryBindingSymbol! }
+                                        entryBindingSymbolSearch! + 1 => entryBindingSymbolSearch!
+                                    }
+                                    inferred![entryBindingTypeIndex!] => entryBindingType
+                                    results! -> len => entryBindingIr
+                                    entryBindingIr => entryAstToIr![entryBindingAstIndex!]
+                                    results! -> push(TypedIrNode {
+                                        kind: 17
+                                        parent: entryIr!
+                                        sourceModule: sourceIndex!
+                                        astNode: entryBindingAstIndex!
+                                        symbol: entryBindingSymbol!
+                                        targetModule: sourceIndex!
+                                        typeOrigin: entryBindingType.origin
+                                        typeModule: entryBindingType.targetModule
+                                        typeSymbol: entryBindingType.targetSymbol
+                                        payloadToken: entryBindingAst.payloadToken
+                                        opcode: -1
+                                        operand0: -1
+                                        operand1: -1
+                                        nextOperand: -1
+                                        flags: entryBindingAst.flags
+                                    })
+                                }
+                            }
+                        }
+                        entryBindingAstIndex! + 1 => entryBindingAstIndex!
+                    }
                     0 => entryExpressionAst!
                     entryExpressionAst! < (nodes! -> len) -> while {
                         -1 => entryExpressionTypeIndex!
@@ -524,7 +652,7 @@ public lower sources: [Text; ~] -> [TypedIrNode; ~] {
                     entryExpressionStart => entryOperandIr!
                     entryOperandIr! < entryExpressionEnd -> while {
                         results![entryOperandIr!] => entryOperator!
-                        (entryOperator!.kind == 6 or entryOperator!.kind == 7 or entryOperator!.kind == 8) -> if {
+                        (entryOperator!.kind == 6 or entryOperator!.kind == 7 or entryOperator!.kind == 8 or entryOperator!.kind == 17) -> if {
                             -1 => entryFirstOperand!
                             -1 => entrySecondOperand!
                             UIntSize(0) => entryFirstStart!

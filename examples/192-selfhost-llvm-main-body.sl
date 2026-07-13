@@ -3,9 +3,14 @@ import smalllang.compiler.llvm.text as llvm
 main {
     [
         """
-        ping: -> Int => 0
+        identity value: Int -> Int => value
+        compute: -> Int {
+            1 => value
+            value
+        }
         main {
-            ping
+            0 => code
+            identity(code)
         }
         """,
         ~

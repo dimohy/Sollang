@@ -409,6 +409,13 @@ process exit code. This removes the empty-entry-only limitation, while local
 bindings, control flow, runtime effects, and complete statement sequencing
 remain on the critical path.
 
+Typed IR now represents immutable local bindings explicitly and connects each
+name use by stable symbol id. LLVM materializes scalar literal bindings as SSA
+values in both functions and `main`, so bound values can be returned or passed
+to calls instead of every name being mistaken for `%arg`. General topological
+scheduling, aggregate/call-valued bindings, mutation, and ownership-sensitive
+binding drops remain.
+
 Text now crosses the self-hosted LLVM boundary as `{ ptr, i64 }`. UTF-8
 literals become immutable globals with byte-accurate lengths and LLVM `\XX`
 escaping, and Text parameters, returns, and imported calls share that ABI.

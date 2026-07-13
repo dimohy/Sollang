@@ -307,6 +307,14 @@ stdout IR, links it with pinned Clang, executes the resulting `.exe`, and
 requires exit code zero with no unexpected output. Main bindings, control flow,
 runtime calls, and general statement sequencing still need full lowering.
 
+Scalar literal bindings now have an explicit typed-IR kind linking the binding
+symbol to its value operand. Later name nodes retain that symbol and LLVM
+materializes the immutable SSA value with `freeze`, both in ordinary functions
+and in `main`. The executable snapshot covers `1 => value; value` as a function
+result and `0 => code; identity(code)` in the process entry. General dependency
+ordering for call/operator/container-valued bindings and mutable rebinding
+remain.
+
 The backend now defines Text as `%sl.text = { ptr, i64 }`. Plain UTF-8
 literals become immutable byte globals and are assembled into aggregate return
 values; Text parameters and direct calls pass the same aggregate by value.

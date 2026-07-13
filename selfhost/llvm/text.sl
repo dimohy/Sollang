@@ -184,6 +184,28 @@ public emit sources: [Text; ~] -> Unit {
             function.operand0 + 1 => expressionStart
             expressionIndex! >= expressionStart -> while {
                 ir![expressionIndex!] => expression
+                (expression.kind == 5 and not (function.operand1 >= 0 and expression.symbol == ir![function.operand1].symbol)) -> if {
+                    -1 => bindingValueIr!
+                    expressionStart => bindingValueSearch!
+                    bindingValueSearch! < functionEnd! -> while {
+                        (ir![bindingValueSearch!].kind == 17 and ir![bindingValueSearch!].symbol == expression.symbol) -> if { bindingValueSearch! => bindingValueIr! }
+                        bindingValueSearch! + 1 => bindingValueSearch!
+                    }
+                    bindingValueIr! >= 0 -> if {
+                        ir![ir![bindingValueIr!].operand0] => bindingOperand
+                        "  %v$(expressionIndex!) = freeze " -> print
+                        expression -> writeType
+                        " " -> print
+                        (bindingOperand.kind == 3 or bindingOperand.kind == 4) -> if {
+                            sources[bindingOperand.sourceModule] -> lexer.lex => bindingOperandTokens!
+                            bindingOperandTokens![bindingOperand.payloadToken] => bindingOperandToken
+                            bindingOperand.kind == 3 -> if { sources[bindingOperand.sourceModule] -> slice(bindingOperandToken.span.start, bindingOperandToken.span.length) -> print } else {
+                                ((sources[bindingOperand.sourceModule] -> byte(bindingOperandToken.span.start)) == UInt8(116)) -> if { "1" } else { "0" } -> print
+                            }
+                        } else { "%v$(ir![bindingValueIr!].operand0)" -> print }
+                        "" -> println
+                    }
+                }
                 expression.kind == 2 -> if {
                     sources[expression.sourceModule] -> lexer.lex => expressionTokens!
                     expressionTokens![expression.payloadToken] => expressionToken
@@ -214,7 +236,7 @@ public emit sources: [Text; ~] -> Unit {
                                 ((sources[fieldValue.sourceModule] -> byte(fieldToken.span.start)) == UInt8(116)) -> if { "1" } else { "0" } -> print
                             }
                         } else {
-                            fieldValue.kind == 5 -> if { "%arg" -> print } else { "%v$(fieldValueIndex!)" -> print }
+                            (fieldValue.kind == 5 and function.operand1 >= 0 and fieldValue.symbol == ir![function.operand1].symbol) -> if { "%arg" -> print } else { "%v$(fieldValueIndex!)" -> print }
                         }
                         ", $(fieldPosition!)" -> println
                         fieldValue.nextOperand => fieldValueIndex!
@@ -260,7 +282,7 @@ public emit sources: [Text; ~] -> Unit {
                     "  %v$(expressionIndex!) = extractvalue " -> print
                     memberBase -> writeType
                     " " -> print
-                    memberBase.kind == 5 -> if { "%arg" -> print } else { "%v$(expression.operand0)" -> print }
+                    (memberBase.kind == 5 and function.operand1 >= 0 and memberBase.symbol == ir![function.operand1].symbol) -> if { "%arg" -> print } else { "%v$(expression.operand0)" -> print }
                     ", $(fieldOrdinal!)" -> println
                 }
                 (expression.kind == 14 and expression.typeOrigin == 13) -> if {
@@ -283,7 +305,7 @@ public emit sources: [Text; ~] -> Unit {
                             arrayElementTokens![arrayElement.payloadToken] => arrayElementToken
                             sources[arrayElement.sourceModule] -> slice(arrayElementToken.span.start, arrayElementToken.span.length) -> print
                         } else {
-                            arrayElement.kind == 5 -> if { "%arg" -> print } else { "%v$(arrayElementIndex!)" -> print }
+                            (arrayElement.kind == 5 and function.operand1 >= 0 and arrayElement.symbol == ir![function.operand1].symbol) -> if { "%arg" -> print } else { "%v$(arrayElementIndex!)" -> print }
                         }
                         ", ptr %v$(expressionIndex!)_ptr$(arrayElementPosition!), align 4" -> println
                         arrayElement.nextOperand => arrayElementIndex!
@@ -327,7 +349,7 @@ public emit sources: [Text; ~] -> Unit {
                                 ((sources[dictionaryItem.sourceModule] -> byte(dictionaryItemToken.span.start)) == UInt8(116)) -> if { "1" } else { "0" } -> print
                             }
                         } else {
-                            dictionaryItem.kind == 5 -> if { "%arg" -> print } else { "%v$(dictionaryItemIndex!)" -> print }
+                            (dictionaryItem.kind == 5 and function.operand1 >= 0 and dictionaryItem.symbol == ir![function.operand1].symbol) -> if { "%arg" -> print } else { "%v$(dictionaryItemIndex!)" -> print }
                         }
                         ", ptr %v$(expressionIndex!)_$(dictionarySide)_ptr$(dictionaryEntryPosition), align $(dictionaryItemSymbol -> storageAlign)" -> println
                         dictionaryItem.nextOperand => dictionaryItemIndex!
@@ -343,13 +365,13 @@ public emit sources: [Text; ~] -> Unit {
                     ir![expression.operand1] => arrayIndex
                     indexedArray.typeOrigin == 15 -> if {
                         "  %v$(expressionIndex!)_keys = extractvalue %sl.dict " -> print
-                        indexedArray.kind == 5 -> if { "%arg" -> print } else { "%v$(expression.operand0)" -> print }
+                        (indexedArray.kind == 5 and function.operand1 >= 0 and indexedArray.symbol == ir![function.operand1].symbol) -> if { "%arg" -> print } else { "%v$(expression.operand0)" -> print }
                         ", 0" -> println
                         "  %v$(expressionIndex!)_values = extractvalue %sl.dict " -> print
-                        indexedArray.kind == 5 -> if { "%arg" -> print } else { "%v$(expression.operand0)" -> print }
+                        (indexedArray.kind == 5 and function.operand1 >= 0 and indexedArray.symbol == ir![function.operand1].symbol) -> if { "%arg" -> print } else { "%v$(expression.operand0)" -> print }
                         ", 1" -> println
                         "  %v$(expressionIndex!)_length = extractvalue %sl.dict " -> print
-                        indexedArray.kind == 5 -> if { "%arg" -> print } else { "%v$(expression.operand0)" -> print }
+                        (indexedArray.kind == 5 and function.operand1 >= 0 and indexedArray.symbol == ir![function.operand1].symbol) -> if { "%arg" -> print } else { "%v$(expression.operand0)" -> print }
                         ", 2" -> println
                         "  br label %dict$(expressionIndex!)_start" -> println
                         "dict$(expressionIndex!)_start:" -> println
@@ -377,7 +399,7 @@ public emit sources: [Text; ~] -> Unit {
                                 ((sources[arrayIndex.sourceModule] -> byte(dictionaryIndexToken.span.start)) == UInt8(116)) -> if { "1" } else { "0" } -> println
                             }
                         } else {
-                            arrayIndex.kind == 5 -> if { "%arg" -> println } else { "%v$(expression.operand1)" -> println }
+                            (arrayIndex.kind == 5 and function.operand1 >= 0 and arrayIndex.symbol == ir![function.operand1].symbol) -> if { "%arg" -> println } else { "%v$(expression.operand1)" -> println }
                         }
                         "  br i1 %v$(expressionIndex!)_found, label %dict$(expressionIndex!)_hit, label %dict$(expressionIndex!)_advance" -> println
                         "dict$(expressionIndex!)_advance:" -> println
@@ -395,11 +417,11 @@ public emit sources: [Text; ~] -> Unit {
                         ", ptr %v$(expressionIndex!)_value_ptr, align $(indexedArray.typeSymbol -> storageAlign)" -> println
                     } else {
                     "  %v$(expressionIndex!)_data = extractvalue %sl.array.i32 " -> print
-                    indexedArray.kind == 5 -> if { "%arg" -> print } else { "%v$(expression.operand0)" -> print }
+                    (indexedArray.kind == 5 and function.operand1 >= 0 and indexedArray.symbol == ir![function.operand1].symbol) -> if { "%arg" -> print } else { "%v$(expression.operand0)" -> print }
                     ", 0" -> println
                     arrayIndex.kind != 3 -> if {
                         "  %v$(expressionIndex!)_index = sext i32 " -> print
-                        arrayIndex.kind == 5 -> if { "%arg" -> print } else { "%v$(expression.operand1)" -> print }
+                        (arrayIndex.kind == 5 and function.operand1 >= 0 and arrayIndex.symbol == ir![function.operand1].symbol) -> if { "%arg" -> print } else { "%v$(expression.operand1)" -> print }
                         " to i64" -> println
                     }
                     "  %v$(expressionIndex!)_ptr = getelementptr i32, ptr %v$(expressionIndex!)_data, i64 " -> print
@@ -450,7 +472,7 @@ public emit sources: [Text; ~] -> Unit {
                             ((sources[leftOperand.sourceModule] -> byte(leftToken.span.start)) == UInt8(116)) -> if { "1" } else { "0" } -> print
                         }
                     } else {
-                        leftOperand.kind == 5 -> if { "%arg" -> print } else { "%v$(expression.operand0)" -> print }
+                        (leftOperand.kind == 5 and function.operand1 >= 0 and leftOperand.symbol == ir![function.operand1].symbol) -> if { "%arg" -> print } else { "%v$(expression.operand0)" -> print }
                     }
                     ", " -> print
                     expression.kind == 7 -> if {
@@ -466,7 +488,7 @@ public emit sources: [Text; ~] -> Unit {
                                 ((sources[rightOperand.sourceModule] -> byte(rightToken.span.start)) == UInt8(116)) -> if { "1" } else { "0" } -> println
                             }
                         } else {
-                            rightOperand.kind == 5 -> if { "%arg" -> println } else { "%v$(expression.operand1)" -> println }
+                            (rightOperand.kind == 5 and function.operand1 >= 0 and rightOperand.symbol == ir![function.operand1].symbol) -> if { "%arg" -> println } else { "%v$(expression.operand1)" -> println }
                         }
                     }
                 }
@@ -487,7 +509,7 @@ public emit sources: [Text; ~] -> Unit {
                                 ((sources[argument.sourceModule] -> byte(argumentToken.span.start)) == UInt8(116)) -> if { "1" } else { "0" } -> print
                             }
                         } else {
-                            argument.kind == 5 -> if { "%arg" -> print } else { "%v$(expression.operand0)" -> print }
+                            (argument.kind == 5 and function.operand1 >= 0 and argument.symbol == ir![function.operand1].symbol) -> if { "%arg" -> print } else { "%v$(expression.operand0)" -> print }
                         }
                     }
                     ")" -> println
@@ -540,7 +562,7 @@ public emit sources: [Text; ~] -> Unit {
                     ((sources[returnOperand.sourceModule] -> byte(returnToken.span.start)) == UInt8(116)) -> if { "1" } else { "0" } -> println
                 }
             } else {
-                returnOperand.kind == 5 -> if { "%arg" -> println } else { "%v$(returnNode.operand0)" -> println }
+                (returnOperand.kind == 5 and function.operand1 >= 0 and returnOperand.symbol == ir![function.operand1].symbol) -> if { "%arg" -> println } else { "%v$(returnNode.operand0)" -> println }
             }
             "}" -> println
             functionEnd! => functionIndex!
@@ -553,6 +575,28 @@ public emit sources: [Text; ~] -> Unit {
                 entryEnd! - 1 => entryExpressionIndex!
                 entryExpressionIndex! > functionIndex! -> while {
                     ir![entryExpressionIndex!] => entryExpression
+                    entryExpression.kind == 5 -> if {
+                        -1 => entryBindingValueIr!
+                        functionIndex! + 1 => entryBindingValueSearch!
+                        entryBindingValueSearch! < entryEnd! -> while {
+                            (ir![entryBindingValueSearch!].kind == 17 and ir![entryBindingValueSearch!].symbol == entryExpression.symbol) -> if { entryBindingValueSearch! => entryBindingValueIr! }
+                            entryBindingValueSearch! + 1 => entryBindingValueSearch!
+                        }
+                        entryBindingValueIr! >= 0 -> if {
+                            ir![ir![entryBindingValueIr!].operand0] => entryBindingOperand
+                            "  %v$(entryExpressionIndex!) = freeze " -> print
+                            entryExpression -> writeType
+                            " " -> print
+                            (entryBindingOperand.kind == 3 or entryBindingOperand.kind == 4) -> if {
+                                sources[entryBindingOperand.sourceModule] -> lexer.lex => entryBindingOperandTokens!
+                                entryBindingOperandTokens![entryBindingOperand.payloadToken] => entryBindingOperandToken
+                                entryBindingOperand.kind == 3 -> if { sources[entryBindingOperand.sourceModule] -> slice(entryBindingOperandToken.span.start, entryBindingOperandToken.span.length) -> print } else {
+                                    ((sources[entryBindingOperand.sourceModule] -> byte(entryBindingOperandToken.span.start)) == UInt8(116)) -> if { "1" } else { "0" } -> print
+                                }
+                            } else { "%v$(ir![entryBindingValueIr!].operand0)" -> print }
+                            "" -> println
+                        }
+                    }
                     entryExpression.kind == 6 -> if {
                         "  %v$(entryExpressionIndex!) = call " -> print
                         entryExpression -> writeType
