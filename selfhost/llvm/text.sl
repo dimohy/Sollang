@@ -617,6 +617,33 @@ emitCore sources: move [Text; ~] -> Unit {
             regionEventKinds![regionOrderIndex!] => regionEventKind
             regionEventKind == 1 -> if {
             not regionTerminated! -> if {
+            regionNode.kind == 22 -> if {
+                regionIr![regionNode.operand1] => guardCondition
+                "  br i1 " -> print
+                guardCondition.kind == 4 -> if {
+                    sources[guardCondition.sourceModule] -> lexer.lex => guardConditionTokens!
+                    guardConditionTokens![guardCondition.payloadToken] => guardConditionToken
+                    ((sources[guardCondition.sourceModule] -> byte(guardConditionToken.span.start)) == UInt8(116)) -> if { "1" } else { "0" } -> print
+                } else {
+                    (ownerIndex! >= 0 and regionIr![ownerIndex!].kind == 0 and regionIr![ownerIndex!].operand1 >= 0 and guardCondition.kind == 5 and guardCondition.symbol == regionIr![regionIr![ownerIndex!].operand1].symbol) -> if { "%arg" -> print } else { "%v$(regionNode.operand1)" -> print }
+                }
+                ", label %guard$(regionNodeIndex!)_exit, label %guard$(regionNodeIndex!)_next" -> println
+                "guard$(regionNodeIndex!)_exit:" -> println
+                regionNode.parent => guardCleanupAncestor!
+                (guardCleanupAncestor! >= 0 and guardCleanupAncestor! != regionNode.operand0) -> while {
+                    regionIr![guardCleanupAncestor!].kind == 19 -> if {
+                        OwnedDropRequest { regionIndex: guardCleanupAncestor!, beforeAst: regionNode.astNode, edgeIndex: regionNodeIndex! * 10 + 8 } -> emitOwnedDrops
+                    }
+                    regionIr![guardCleanupAncestor!].parent => guardCleanupAncestor!
+                }
+                regionNode.opcode == 1 -> if {
+                    "  br label %while$(regionNode.operand0)_header" -> println
+                } else {
+                    "  br label %while$(regionNode.operand0)_exit" -> println
+                }
+                "guard$(regionNodeIndex!)_next:" -> println
+                false => regionTerminated!
+            }
             regionNode.kind == 21 -> if {
                 "  br label %cleanup$(regionNodeIndex!)" -> println
                 "cleanup$(regionNodeIndex!):" -> println
@@ -634,7 +661,7 @@ emitCore sources: move [Text; ~] -> Unit {
                 }
                 true => regionTerminated!
             }
-            regionNode.kind != 21 -> if {
+            (regionNode.kind != 21 and regionNode.kind != 22) -> if {
             (regionNode.kind == 5 and ownerIndex! >= 0 and not (regionIr![ownerIndex!].kind == 0 and regionIr![ownerIndex!].operand1 >= 0 and regionNode.symbol == regionIr![regionIr![ownerIndex!].operand1].symbol)) -> if {
                 -1 => regionBindingIndex!
                 0 => regionBindingSearch!

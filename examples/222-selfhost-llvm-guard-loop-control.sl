@@ -1,0 +1,22 @@
+import smalllang.compiler.llvm.text as llvm
+
+main {
+    [
+        """
+        main {
+            0 => index!
+            index! < 4 -> while {
+                index! + 1 => index!
+                [index!, index! + 10, ~] => values
+                {index!: index! + 100} => pairs
+                index! == 2 -> if continue
+                index! == 3 -> if break
+                "normal" -> println
+            }
+            "done" -> println
+        }
+        """,
+        ~
+    ] => sources!
+    sources! -> llvm.emit
+}

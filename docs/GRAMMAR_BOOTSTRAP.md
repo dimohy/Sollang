@@ -367,9 +367,12 @@ last top-level body expression supplies the return operand. LLVM's normal
 slots to SSA `phi` nodes without making the source semantics depend on emitter
 predecessor bookkeeping. `break`/`continue` are dedicated AST and typed-IR loop
 exits that target the closest while and compose through nested if/while tasks.
+The guard-flow shorthand `condition -> if continue` and
+`condition -> if break` lowers to a guarded loop-exit node with a Bool operand;
+`?` remains reserved for `Result` propagation.
 The reference backend drops owned loop locals on both transfers. The
 self-hosted backend also materializes region-local dynamic arrays and
-dictionaries, then routes `break`/`continue` through explicit cleanup blocks
+dictionaries, then routes unconditional and guarded `break`/`continue` through explicit cleanup blocks
 that free them in reverse declaration order; the normal loop back-edge uses the
 same drop routine. Early return, moves from a region, and recursive aggregate
 drop glue remain.

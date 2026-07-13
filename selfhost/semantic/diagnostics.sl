@@ -108,7 +108,7 @@ public analyze source: Text -> [SemanticDiagnostic; ~] {
                 }
             }
         }
-        nameAst.kind == 45 -> if {
+        (nameAst.kind == 45 or nameAst.kind == 46) -> if {
             nameAst.parent => loopOwner!
             false => hasLoopOwner!
             (loopOwner! >= 0 and not hasLoopOwner!) -> while {

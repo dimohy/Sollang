@@ -887,6 +887,7 @@ internal static class StoragePlacementAnalyzer
                 && UsesOwnerReadOnly(assignment.Value, ownerName, kind, functions),
             BlockFunctionCallStatement call => UsesOwnerReadOnly(call, ownerName, kind, functions),
             ExpressionStatement expression => UsesOwnerReadOnly(expression.Expression, ownerName, kind, functions),
+            GuardLoopControlStatement guard => UsesOwnerReadOnly(guard.Condition, ownerName, kind, functions),
             _ => false
         };
     }
@@ -1088,6 +1089,7 @@ internal static class StoragePlacementAnalyzer
             BlockFunctionCallStatement call => ContainsOwner(call.Source, ownerName)
                 || call.Body.Any(nested => ContainsOwner(nested, ownerName)),
             ExpressionStatement expression => ContainsOwner(expression.Expression, ownerName),
+            GuardLoopControlStatement guard => ContainsOwner(guard.Condition, ownerName),
             _ => false
         };
     }

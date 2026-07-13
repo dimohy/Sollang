@@ -109,7 +109,8 @@ internal sealed record GrammarSpec(
         "TypeName",
         "StringExpression",
         "NumberExpression",
-        "NameExpression"
+        "NameExpression",
+        "GuardLoopControlStatement"
     ];
 
     public static GrammarSpec Parse(string path, string text)
@@ -892,7 +893,12 @@ internal static class ParserEmitter
         builder.AppendLine();
         builder.AppendLine("    private Statement ParseStatement()");
         builder.AppendLine("    {");
-        builder.AppendLine("        // Statement = LoopControlStatement | BlockFunctionCallStatement | EachStatement | BindingStatement | ExpressionStatement");
+        builder.AppendLine("        // Statement = GuardLoopControlStatement | LoopControlStatement | BlockFunctionCallStatement | EachStatement | BindingStatement | ExpressionStatement");
+        builder.AppendLine("        if (IsGuardLoopControlStatement())");
+        builder.AppendLine("        {");
+        builder.AppendLine("            return ParseGuardLoopControlStatement();");
+        builder.AppendLine("        }");
+        builder.AppendLine();
         builder.AppendLine("        if (CheckIdentifier(\"break\") || CheckIdentifier(\"continue\"))");
         builder.AppendLine("        {");
         builder.AppendLine("            return ParseLoopControlStatement();");
@@ -928,6 +934,50 @@ internal static class ParserEmitter
         builder.AppendLine("        ExpectStatementEnd();");
         builder.AppendLine("        var kind = keyword.Text == \"break\" ? LoopControlKind.Break : LoopControlKind.Continue;");
         builder.AppendLine("        return new LoopControlStatement(kind, keyword.Line, keyword.Column);");
+        builder.AppendLine("    }");
+        builder.AppendLine();
+        builder.AppendLine("    private Statement ParseGuardLoopControlStatement()");
+        builder.AppendLine("    {");
+        builder.AppendLine("        // GuardLoopControlStatement = RangeOrLogicalExpression Arrow Identifier(\"if\") (Identifier(\"break\") | Identifier(\"continue\")) StatementEnd");
+        builder.AppendLine("        var condition = ParseRangeOrLogicalExpression();");
+        builder.AppendLine("        Expect(TokenKind.Arrow);");
+        builder.AppendLine("        ExpectIdentifier(\"if\");");
+        builder.AppendLine("        var keyword = Expect(TokenKind.Identifier);");
+        builder.AppendLine("        ExpectStatementEnd();");
+        builder.AppendLine("        var kind = keyword.Text == \"break\" ? LoopControlKind.Break : LoopControlKind.Continue;");
+        builder.AppendLine("        return new GuardLoopControlStatement(condition, kind, keyword.Line, keyword.Column);");
+        builder.AppendLine("    }");
+        builder.AppendLine();
+        builder.AppendLine("    private bool IsGuardLoopControlStatement()");
+        builder.AppendLine("    {");
+        builder.AppendLine("        var offset = 0;");
+        builder.AppendLine("        var parentheses = 0;");
+        builder.AppendLine("        var brackets = 0;");
+        builder.AppendLine("        var braces = 0;");
+        builder.AppendLine("        while (_index + offset < tokens.Count)");
+        builder.AppendLine("        {");
+        builder.AppendLine("            var kind = tokens[_index + offset].Kind;");
+        builder.AppendLine("            if (parentheses == 0 && brackets == 0 && braces == 0");
+        builder.AppendLine("                && kind is TokenKind.NewLine or TokenKind.RightBrace or TokenKind.End)");
+        builder.AppendLine("            {");
+        builder.AppendLine("                return offset >= 3");
+        builder.AppendLine("                    && CheckAhead(offset - 3, TokenKind.Arrow)");
+        builder.AppendLine("                    && CheckAheadIdentifier(offset - 2, \"if\")");
+        builder.AppendLine("                    && (CheckAheadIdentifier(offset - 1, \"break\")");
+        builder.AppendLine("                        || CheckAheadIdentifier(offset - 1, \"continue\"));");
+        builder.AppendLine("            }");
+        builder.AppendLine("            switch (kind)");
+        builder.AppendLine("            {");
+        builder.AppendLine("                case TokenKind.LeftParen: parentheses++; break;");
+        builder.AppendLine("                case TokenKind.RightParen: parentheses--; break;");
+        builder.AppendLine("                case TokenKind.LeftBracket: brackets++; break;");
+        builder.AppendLine("                case TokenKind.RightBracket: brackets--; break;");
+        builder.AppendLine("                case TokenKind.LeftBrace: braces++; break;");
+        builder.AppendLine("                case TokenKind.RightBrace when braces > 0: braces--; break;");
+        builder.AppendLine("            }");
+        builder.AppendLine("            offset++;");
+        builder.AppendLine("        }");
+        builder.AppendLine("        return false;");
         builder.AppendLine("    }");
         builder.AppendLine();
         builder.AppendLine("    private bool TryParseLeadingIndexAssignment(out Statement statement)");

@@ -473,6 +473,11 @@ perform the same reverse-order frees. Early `return`, moved region bindings,
 and recursively owned aggregates remain before the structured early-exit gate
 is complete.
 
+Guard-flow loop control is also cumulative: `condition -> if continue` and
+`condition -> if break` are compact Bool-guarded transfers. Both the reference
+and self-hosted backends branch true through the same ownership cleanup path and
+let false fall through. Postfix `?` remains unambiguous `Result` propagation.
+
 Typed IR now represents immutable local bindings explicitly and connects each
 name use by stable symbol id. LLVM materializes scalar literal bindings as SSA
 values in both functions and `main`, so bound values can be returned or passed

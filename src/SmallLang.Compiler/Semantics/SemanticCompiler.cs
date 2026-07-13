@@ -1045,6 +1045,32 @@ internal sealed class SemanticCompiler
                             $"'{loopControl.Kind.ToString().ToLowerInvariant()}' is only valid inside a loop");
                     }
                     break;
+                case GuardLoopControlStatement guardLoopControl:
+                    if (_loopDepth == 0)
+                    {
+                        throw Error(
+                            guardLoopControl.Line,
+                            guardLoopControl.Column,
+                            $"'{guardLoopControl.Kind.ToString().ToLowerInvariant()}' guard is only valid inside a loop");
+                    }
+                    var guardType = InferExpression(
+                        guardLoopControl.Condition,
+                        functions,
+                        bindings,
+                        allowPrintCall: false,
+                        allowReadIntCall: true,
+                        allowFlowBindingTarget: false,
+                        yieldInputType: yieldInputType,
+                        mutableBindings: mutableBindings);
+                    if (guardType != BoundType.Bool)
+                    {
+                        throw Error(
+                            guardLoopControl.Condition.Line,
+                            guardLoopControl.Condition.Column,
+                            $"loop-control guard requires Bool but received {FormatType(guardType)}");
+                    }
+                    ValidateOwnedParameterConsumptionExpression(guardLoopControl.Condition, functions);
+                    break;
                 case ExpressionStatement expressionStatement:
                     var effect = InferExpressionStatement(expressionStatement.Expression, functions, bindings, mutableBindings, yieldInputType);
                     if (effect is FlowBindingEffect bindingEffect)
@@ -5728,6 +5754,7 @@ internal sealed class SemanticCompiler
             {
                 BindingStatement binding => binding.Value,
                 ExpressionStatement expressionStatement => expressionStatement.Expression,
+                GuardLoopControlStatement guard => guard.Condition,
                 _ => null
             };
             if (expression is null)
@@ -5866,6 +5893,7 @@ internal sealed class SemanticCompiler
                 IndexAssignmentStatement assignment => ContainsOwnedParameterCall(assignment.Value, functions)
                     || ContainsOwnedParameterCall(assignment.Index, functions),
                 ExpressionStatement expression => ContainsOwnedParameterCall(expression.Expression, functions),
+                GuardLoopControlStatement guard => ContainsOwnedParameterCall(guard.Condition, functions),
                 BlockFunctionCallStatement blockFunctionCall => ContainsOwnedParameterCall(blockFunctionCall.Source, functions)
                     || blockFunctionCall.Body.Any(nested => nested is ExpressionStatement expression
                         && ContainsOwnedParameterCall(expression.Expression, functions)),

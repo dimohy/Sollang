@@ -366,7 +366,7 @@ block_function_body := "block" identifier ":" type_name "{" statement* "}"
 function_body := "{" function_declaration* statement* expression "}" | "=>" expression | "->" expression | "=" "intrinsic"
 main_block   := "main" block
 block        := "{" statement* "}"
-statement    := loop_control_statement | each_statement | binding_statement | index_assignment_statement | field_assignment_statement | expression_statement | block_function_call
+statement    := guard_loop_control_statement | loop_control_statement | each_statement | binding_statement | index_assignment_statement | field_assignment_statement | expression_statement | block_function_call
 block_function_call := range_or_logical_expression "->" path identifier? block
 each_statement := "each" identifier "in" range_expression block
 binding_statement := identifier "=" expression statement_end | expression "=>" identifier "!"? statement_end
@@ -374,6 +374,7 @@ index_assignment_statement := expression "=>" identifier "!"? "[" expression "]"
 field_assignment_statement := expression "=>" identifier "!"? "." identifier statement_end
 expression_statement := expression statement_end
 loop_control_statement := ("break" | "continue") statement_end
+guard_loop_control_statement := range_or_logical_expression "->" "if" ("break" | "continue") statement_end
 statement_end := newline+ | "}" lookahead
 range_expression := logical_or_expression ".." logical_or_expression
 expression   := flow_expression
@@ -1331,8 +1332,22 @@ drops every owned local created since the target loop was entered before the
 LLVM branch is emitted; nested loops therefore clean up and target their own
 innermost scope.
 
+A single conditional transfer may use the guard-flow shorthand:
+
+```smalllang
+inner! == 2 -> if continue
+inner! == 3 -> if break
+```
+
+The condition must be `Bool`. This is exactly the braceless form of
+`condition -> if { continue }` or `condition -> if { break }`; false continues
+with the next statement. SmallLang deliberately does not use `?` here because
+postfix `?` already means typed `Result` propagation.
+
 The self-hosted LLVM backend represents an early loop transfer as a dedicated
-loop-exit IR node followed by an explicit cleanup basic block. Region-local
+loop-exit IR node; guarded exits additionally carry their Bool condition. A
+true guard branches through an explicit cleanup basic block while false reaches
+the following statement. Region-local
 dynamic arrays release their backing pointer; dictionaries release key and
 value stores in reverse declaration order. The normal back-edge invokes the
 same scope cleanup so every iteration has identical ownership semantics.

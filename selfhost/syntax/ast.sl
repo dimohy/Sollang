@@ -36,7 +36,8 @@ struct LowerRequest {
 # 34 associated-type equality, 36 member access, 37 array expression,
 # 38 dictionary expression, 39 struct literal, 40 struct field initializer,
 # 41 index access, 42 if flow target, 43 control-flow region,
-# 44 while flow target, 45 loop control statement.
+# 44 while flow target, 45 loop control statement,
+# 46 guarded loop control statement.
 # Keyword operator codes use the same
 # -(keywordIndex + 1) representation as syntax diagnostics.
 lowerFrom request: LowerRequest -> [AstNode; ~] {
@@ -86,6 +87,7 @@ lowerFrom request: LowerRequest -> [AstNode; ~] {
         rule == grammar.ruleIdBlockBody => 43
         rule == grammar.ruleIdWhileFlowTarget => 44
         rule == grammar.ruleIdLoopControlStatement => 45
+        rule == grammar.ruleIdGuardLoopControlStatement => 46
         else => -1
     }
     request.source => source
@@ -163,6 +165,31 @@ lowerFrom request: LowerRequest -> [AstNode; ~] {
                 (astKind! == 22 and longKeywordByte0 == UInt8(98) and longKeywordByte1 == UInt8(111) and longKeywordByte2 == UInt8(120)) -> if {
                     23 => astKind!
                     -27 => operatorKind!
+                    operatorTokenIndex! => operatorPayloadToken!
+                }
+            }
+            (operatorGroupDepth! == 0 and astKind! == 46 and candidateOperator == grammar.tokenIdIdentifier and candidateToken.span.length == UIntSize(5)) -> if {
+                source -> byte(candidateToken.span.start) => guardBreakByte0
+                source -> byte(candidateToken.span.start + UIntSize(1)) => guardBreakByte1
+                source -> byte(candidateToken.span.start + UIntSize(2)) => guardBreakByte2
+                source -> byte(candidateToken.span.start + UIntSize(3)) => guardBreakByte3
+                source -> byte(candidateToken.span.start + UIntSize(4)) => guardBreakByte4
+                (guardBreakByte0 == UInt8(98) and guardBreakByte1 == UInt8(114) and guardBreakByte2 == UInt8(101) and guardBreakByte3 == UInt8(97) and guardBreakByte4 == UInt8(107)) -> if {
+                    0 => operatorKind!
+                    operatorTokenIndex! => operatorPayloadToken!
+                }
+            }
+            (operatorGroupDepth! == 0 and astKind! == 46 and candidateOperator == grammar.tokenIdIdentifier and candidateToken.span.length == UIntSize(8)) -> if {
+                source -> byte(candidateToken.span.start) => guardContinueByte0
+                source -> byte(candidateToken.span.start + UIntSize(1)) => guardContinueByte1
+                source -> byte(candidateToken.span.start + UIntSize(2)) => guardContinueByte2
+                source -> byte(candidateToken.span.start + UIntSize(3)) => guardContinueByte3
+                source -> byte(candidateToken.span.start + UIntSize(4)) => guardContinueByte4
+                source -> byte(candidateToken.span.start + UIntSize(5)) => guardContinueByte5
+                source -> byte(candidateToken.span.start + UIntSize(6)) => guardContinueByte6
+                source -> byte(candidateToken.span.start + UIntSize(7)) => guardContinueByte7
+                (guardContinueByte0 == UInt8(99) and guardContinueByte1 == UInt8(111) and guardContinueByte2 == UInt8(110) and guardContinueByte3 == UInt8(116) and guardContinueByte4 == UInt8(105) and guardContinueByte5 == UInt8(110) and guardContinueByte6 == UInt8(117) and guardContinueByte7 == UInt8(101)) -> if {
+                    1 => operatorKind!
                     operatorTokenIndex! => operatorPayloadToken!
                 }
             }

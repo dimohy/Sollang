@@ -123,6 +123,9 @@ internal sealed partial class LlvmEmitter
             case LoopControlStatement loopControl:
                 EmitLoopControlStatement(loopControl);
                 return;
+            case GuardLoopControlStatement guardLoopControl:
+                EmitGuardLoopControlStatement(guardLoopControl);
+                break;
             case ExpressionStatement expressionStatement:
                 _mainOk = EmitExpressionStatement(expressionStatement.Expression, _mainOk);
                 break;
@@ -142,6 +145,28 @@ internal sealed partial class LlvmEmitter
 
         DropOwnedLocalsCreatedSince(loop.OuterScope, transferredOwnerName: null);
         EmitBranch(statement.Kind == LoopControlKind.Break ? loop.BreakLabel : loop.ContinueLabel);
+    }
+
+    private void EmitGuardLoopControlStatement(GuardLoopControlStatement statement)
+    {
+        if (!_loopContexts.TryPeek(out var loop))
+        {
+            throw new SmallLangException(
+                $"'{statement.Kind.ToString().ToLowerInvariant()}' guard is only valid inside a loop");
+        }
+
+        var condition = EmitBoolExpression(statement.Condition);
+        var exitLabel = NextLabel("guard_exit");
+        var nextLabel = NextLabel("guard_next");
+        EmitConditionalBranch(condition.ValueName, exitLabel, nextLabel);
+
+        EmitLabel(exitLabel);
+        _currentBlockLabel = exitLabel;
+        DropOwnedLocalsCreatedSince(loop.OuterScope, transferredOwnerName: null);
+        EmitBranch(statement.Kind == LoopControlKind.Break ? loop.BreakLabel : loop.ContinueLabel);
+
+        EmitLabel(nextLabel);
+        _currentBlockLabel = nextLabel;
     }
 
     private void EmitLoopBody(
