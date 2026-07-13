@@ -112,12 +112,17 @@ longer allocate one OS thread per task. The self-hosted typed-IR module emits
 stable `CoroutineSuspendPoint` records for `await` sites inside async functions
 and typed `CoroutineFrameSlot` records for bindings live across each state. The
 reference compiler lowers tail await and sequential direct await bindings to
-real multi-state resume functions. It spills only later-referenced immutable
-numeric/Boolean/scalar-aggregate values with exact layout, reuses the child-task
-slot, and supports ordinary branches after resume. This advances the async gate
-but does not change the formal score: CFG-nested await, owned/mutable spill drop
-flags, multiple simultaneously live tasks, nonblocking I/O, cancellation, and
-task groups remain partial.
+real multi-state resume functions. It spills only later-referenced values with
+exact layout, reuses the child-task slot, and supports ordinary branches after
+resume. This advances the async gate but does not change the formal score:
+CFG-nested await, per-slot initialization/drop flags, multiple simultaneously
+live tasks, nonblocking I/O, cancellation, and task groups remain partial.
+Straight-line states now carry heap owners and
+mutable locals safely: frame storage temporarily owns the value, resume restores
+one owner, and async container stack promotion is disabled. Self-host frame-slot
+flags preserve mutable and obvious composite-owner bits for later destroy
+lowering. Per-slot flags are still required once control-flow joins can leave
+only part of a frame initialized.
 
 ## Gate Inventory
 

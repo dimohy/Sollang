@@ -591,15 +591,22 @@ runtime boundary. Both native targets now use one cooperative FIFO ready queue;
 the context destroy entry exactly once. There is no OS thread per task and Linux
 does not require pthread linkage. Resume entries return `false` while pending
 and `true` when complete. Tail await and sequential direct await bindings lower
-to real state machines: the parent stores its child task, spills only immutable
-values referenced after the suspension using their exact LLVM size/alignment,
+to real state machines: the parent stores its child task and spills only values
+referenced after the suspension using their exact LLVM size/alignment,
 returns to the scheduler, and reloads those values on resume. Numeric/Boolean
 values and scalar-only structs/enums can cross multiple state 0/1/2/... awaits;
 ordinary control flow may execute after the final resume. The self-hosted IR
 assigns stable one-based states and exports typed `CoroutineFrameSlot` records
-for the same live binding symbols. Await nested inside control-flow regions,
-mutable or heap-owning live values, and simultaneously live child tasks still
-use whole-body lowering until CFG liveness and initialized-drop flags exist.
+for the same live binding symbols. Await nested inside control-flow regions and
+simultaneously live child tasks still use whole-body lowering until CFG
+liveness and initialized-drop flags exist.
+For sequential direct awaits, heap-owning and mutable values are now supported:
+the spill frame temporarily becomes their unique owner, the source local is
+removed before cleanup, and resume reconstructs one owner (plus a fresh mutable
+slot when needed). Async containers are never stack-promoted because their
+buffers must outlive a native resume invocation. The current state number is
+the initialization discriminant for straight-line frames; CFG joins and
+cancellation still require per-slot flags and a pending-frame destroy path.
 Cooperative cancellation, task groups, closure-capture analysis, and
 nonblocking I/O registration follow.
 

@@ -89,9 +89,11 @@ internal static class StoragePlacementAnalyzer
                 EnumerateLocalFunctions(function.LocalFunctions.Values).Concat(standardInlineFunctions));
             functionFrames.Add(
                 function,
-                MergeFramePlans(
-                    AnalyzeFrame(function.BlockBody, function.Body, functions),
-                    AnalyzeInlineFunctions(inlineFunctions, functions)));
+                function.IsAsync
+                    ? StackFramePlan.Empty
+                    : MergeFramePlans(
+                        AnalyzeFrame(function.BlockBody, function.Body, functions),
+                        AnalyzeInlineFunctions(inlineFunctions, functions)));
         }
 
         foreach (var localFunction in function.LocalFunctions.Values)

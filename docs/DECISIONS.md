@@ -3487,4 +3487,45 @@ References: [LLVM coroutine frames](https://llvm.org/docs/Coroutines.html),
 [Rust await expressions](https://doc.rust-lang.org/reference/expressions/await-expr.html),
 [Swift concurrency](https://docs.swift.org/swift-book/LanguageGuide/Concurrency.html).
 
+## D117 - A Suspended Frame Temporarily Owns Every Spilled Owner
+
+Status: reference compiler and self-host ownership metadata implemented
+Date: 2026-07-14
+
+An immutable or mutable heap owner that is live after a direct await can now
+cross that suspension. The compiler materializes its exact aggregate into the
+spill frame and removes the source local before ordinary scope cleanup runs.
+That removal is an affine ownership transfer: while pending, the frame is the
+only owner. Resume loads the aggregate, frees only the spill storage, and
+reintroduces exactly one local owner. Mutable arrays, dictionaries, scalars, and
+structs also receive fresh resume-stack mutation slots so changes after await
+are observed by later suspension or final cleanup.
+
+Async functions no longer stack-promote containers. A promoted buffer would
+point into the native resume invocation that disappears when the worker returns
+pending; forcing heap storage until coroutine-frame allocation elision exists
+prevents that use-after-return class. The active resume state is sufficient as
+the initialization discriminant for the current straight-line state machine:
+all slots for a state are stored before that state becomes observable, and all
+are transferred out together on resume. CFG joins and cancellation will require
+finer per-slot initialization/drop flags and a destroy path for a still-pending
+frame.
+
+Owned drop glue is complete for nested dictionaries as well as dynamic arrays,
+boxes, structs, and enums. Dictionary helpers recursively drop owned keys and
+values before freeing their table. This fixes a latent undefined helper exposed
+by spilling a structure containing a dictionary. Example 247 carries and drops
+an owned array/dictionary/box structure, example 248 carries one array across
+two states and transfers it as the task result, and example 249 mutates an array
+both before and after suspension. Windows and Linux execute the same paths.
+
+Self-host `CoroutineFrameSlot.flags` uses bit 0 for a mutable binding and bit 1
+for an obviously heap-owning composite (`[T; ~]`, dictionary, or box). The
+self-host plan therefore preserves both type identity and the initial cleanup
+contract needed by its future LLVM destroy emitter.
+
+References: [LLVM coroutine cleanup and destroy](https://llvm.org/docs/Coroutines.html),
+[Rust destructors](https://doc.rust-lang.org/reference/destructors.html),
+[Swift cooperative task cancellation](https://docs.swift.org/swift-book/LanguageGuide/Concurrency.html#Task-Cancellation).
+
 

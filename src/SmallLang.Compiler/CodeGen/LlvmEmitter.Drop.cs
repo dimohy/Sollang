@@ -29,20 +29,15 @@ internal sealed partial class LlvmEmitter
         {
             EmitBoxDropHelper(box);
         }
-        if (_program.Types.Structs.Any(definition =>
-                definition.Fields.Any(field => field.Type == BoundType.DynamicIntArray)))
-        {
-            EmitDynamicArrayDropHelper(BoundType.DynamicIntArray, BoundType.Int);
-        }
-        foreach (var array in _program.Types.DynamicArrays
-                     .Where(array => _program.Types.ContainsOwnedStorage(array.ElementType)
-                         || _program.Types.Structs.Any(structure =>
-                             structure.Fields.Any(field => field.Type == array.Id))
-                         || _program.Types.Enums.Any(enumeration =>
-                             enumeration.Variants.Any(variant => variant.PayloadType == array.Id)))
-                     .OrderBy(static array => array.Id))
+        EmitDynamicArrayDropHelper(BoundType.DynamicIntArray, BoundType.Int);
+        foreach (var array in _program.Types.DynamicArrays.OrderBy(static array => array.Id))
         {
             EmitDynamicArrayDropHelper(array.Id, array.ElementType);
+        }
+        EmitDictionaryDropHelper(BoundType.IntDictionary);
+        foreach (var dictionary in _program.Types.Dictionaries.OrderBy(static dictionary => dictionary.Id))
+        {
+            EmitDictionaryDropHelper(dictionary.Id);
         }
         foreach (var structure in _program.Types.Structs
                      .Where(definition => _program.Types.ContainsOwnedStorage(definition.Id))
@@ -175,6 +170,35 @@ internal sealed partial class LlvmEmitter
             _currentBlockLabel = endLabel;
         }
 
+        EmitCall(target: null, "void", "smalllang_free", $"ptr {pointer}");
+        EmitInstruction("ret void");
+        EmitFunctionLine("}");
+        EmitFunctionLine();
+    }
+
+    private void EmitDictionaryDropHelper(BoundType dictionaryType)
+    {
+        const string llvmType = "%smalllang.int_dictionary";
+        EmitFunctionLine($"define internal void {DropSymbol(dictionaryType)}({llvmType} %value) #0 {{");
+        EmitFunctionLine("entry:");
+        _currentBlockLabel = "entry";
+        var pointer = NextTemp("drop_dictionary_ptr");
+        EmitAssign(pointer, $"extractvalue {llvmType} %value, 0");
+        var length = NextTemp("drop_dictionary_len");
+        EmitAssign(length, $"extractvalue {llvmType} %value, 1");
+        var capacity = NextTemp("drop_dictionary_capacity");
+        EmitAssign(capacity, $"extractvalue {llvmType} %value, 2");
+        if (_program.Types.IsDictionary(dictionaryType))
+        {
+            var definition = _program.Types.GetDictionary(dictionaryType);
+            DropInlineDictionaryElements(new RuntimeInlineDictionary(
+                dictionaryType,
+                definition.KeyType,
+                definition.ValueType,
+                pointer,
+                length,
+                capacity));
+        }
         EmitCall(target: null, "void", "smalllang_free", $"ptr {pointer}");
         EmitInstruction("ret void");
         EmitFunctionLine("}");

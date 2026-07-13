@@ -202,6 +202,10 @@ internal sealed partial class LlvmEmitter
                     $"await in async function '{function.Name}' did not produce Task<T>");
             previousSpills = BuildRuntimeAsyncSpills(awaitPoint.Spills);
             StoreAsyncSpills(function, previousSpills);
+            foreach (var spill in previousSpills)
+            {
+                RemoveLocal(spill.Name);
+            }
             StoreSuspendedChild(function, suspendedChild);
             RemoveLocal(awaitPoint.TaskName);
             DropOwnedLocalsCreatedSince(resumeBaseLocals, transferredOwnerName: null);
@@ -264,7 +268,8 @@ internal sealed partial class LlvmEmitter
                 offset,
                 alignment,
                 materialized.TypeName,
-                materialized.ValueName));
+                materialized.ValueName,
+                spill.IsMutable));
             offset = checked(offset + Math.Max(_program.Types.InlineSizeOf(spill.Type), 1));
         }
 
@@ -314,7 +319,12 @@ internal sealed partial class LlvmEmitter
             EmitAssign(address, $"getelementptr i8, ptr {frame}, i64 {spill.Offset}");
             var loaded = NextTemp("async_spill_value");
             EmitLoad(loaded, spill.LlvmType, address, spill.Alignment);
-            _locals[spill.Name] = DematerializeAggregateValue(spill.Type, loaded);
+            var value = DematerializeAggregateValue(spill.Type, loaded);
+            _locals[spill.Name] = value;
+            if (spill.IsMutable)
+            {
+                CreateResumedMutableSlot(spill.Name, value);
+            }
         }
         EmitCall(target: null, "void", "smalllang_free", $"ptr {frame}");
         EmitStore("ptr", "null", frameAddress, 8);
@@ -475,13 +485,16 @@ internal sealed partial class LlvmEmitter
                 {
                     continue;
                 }
-                if (binding.IsMutable
-                    || !bindingTypes.TryGetValue(binding.Name, out var type)
+                if (!bindingTypes.TryGetValue(binding.Name, out var type)
                     || !IsAsyncSpillType(type))
                 {
                     return false;
                 }
-                spillPlans.Add(new AsyncSpillPlan(binding.Name, type));
+                if (binding.IsMutable && !IsAsyncMutableSpillType(type))
+                {
+                    return false;
+                }
+                spillPlans.Add(new AsyncSpillPlan(binding.Name, type, binding.IsMutable));
             }
 
             awaitPlans.Add(new AsyncAwaitPoint(
@@ -511,7 +524,14 @@ internal sealed partial class LlvmEmitter
 
     private bool IsAsyncSpillType(BoundType type, HashSet<BoundType> visiting)
     {
-        if (IsIntegerType(type) || IsFloatType(type) || type == BoundType.Bool)
+        if (IsIntegerType(type)
+            || IsFloatType(type)
+            || type is BoundType.Bool or BoundType.Text
+            || _program.Types.IsBox(type)
+            || type == BoundType.DynamicIntArray
+            || type == BoundType.IntDictionary
+            || _program.Types.IsDynamicArray(type)
+            || _program.Types.IsDictionary(type))
         {
             return true;
         }
@@ -539,6 +559,51 @@ internal sealed partial class LlvmEmitter
         {
             visiting.Remove(type);
         }
+    }
+
+    private bool IsAsyncMutableSpillType(BoundType type)
+    {
+        return IsIntegerType(type)
+            || IsFloatType(type)
+            || type is BoundType.Bool or BoundType.Text
+            || _program.Types.IsStruct(type)
+            || type == BoundType.DynamicIntArray
+            || type == BoundType.IntDictionary
+            || _program.Types.IsDynamicArray(type)
+            || _program.Types.IsDictionary(type);
+    }
+
+    private void CreateResumedMutableSlot(string name, RuntimeValue value)
+    {
+        _mutableLocals.Add(name);
+        if (value is RuntimeStruct structure)
+        {
+            var pointer = NextTemp("async_mutable_struct_slot");
+            EmitAlloca(pointer, LlvmStructType(structure.Type), RuntimeAlignment(structure.Type));
+            EmitStore(LlvmStructType(structure.Type), structure.ValueName, pointer, RuntimeAlignment(structure.Type));
+            _mutableStructSlots[name] = pointer;
+            return;
+        }
+        if (value is RuntimeInt or RuntimeFloat or RuntimeBool or RuntimeText)
+        {
+            var materialized = MaterializeAggregateValue(value);
+            var pointer = NextTemp("async_mutable_scalar_slot");
+            EmitAlloca(pointer, materialized.TypeName, RuntimeAlignment(value.Type));
+            EmitStore(materialized.TypeName, materialized.ValueName, pointer, RuntimeAlignment(value.Type));
+            _mutableScalarSlots[name] = pointer;
+            return;
+        }
+
+        var slot = new MutableContainerSlot(
+            NextTemp("async_mutable_ptr_slot"),
+            NextTemp("async_mutable_len_slot"),
+            NextTemp("async_mutable_capacity_slot"),
+            StackAllocation: null);
+        EmitAlloca(slot.PointerAddress, "ptr", 8);
+        EmitAlloca(slot.LengthAddress, "i64", 8);
+        EmitAlloca(slot.CapacityAddress, "i64", 8);
+        _mutableContainerSlots[name] = slot;
+        StoreMutableContainer(name, value);
     }
 
     private RuntimeTask EmitAsyncFunctionCall(BoundFunction function, RuntimeValue? argument)
@@ -588,6 +653,7 @@ internal sealed partial class LlvmEmitter
         EmitLabel(closeFailedLabel);
         EmitTrap();
         EmitLabel(closedLabel);
+        _currentBlockLabel = closedLabel;
         return value;
     }
 
@@ -670,7 +736,7 @@ internal sealed partial class LlvmEmitter
         string TaskName,
         IReadOnlyList<AsyncSpillPlan> Spills);
 
-    private sealed record AsyncSpillPlan(string Name, BoundType Type);
+    private sealed record AsyncSpillPlan(string Name, BoundType Type, bool IsMutable);
 
     private sealed record RuntimeAsyncSpill(
         string Name,
@@ -678,5 +744,6 @@ internal sealed partial class LlvmEmitter
         int Offset,
         int Alignment,
         string LlvmType,
-        string ValueName);
+        string ValueName,
+        bool IsMutable);
 }

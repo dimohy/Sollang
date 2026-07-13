@@ -71,6 +71,7 @@ public struct CoroutineFrameSlot {
     typeOrigin: Int
     typeModule: Int
     typeSymbol: Int
+    flags: Int
 }
 
 public lower sources: [Text; ~] -> [TypedIrNode; ~] {
@@ -1436,6 +1437,10 @@ public frameSlots sources: [Text; ~] -> [CoroutineFrameSlot; ~] {
                     useIndex! + 1 => useIndex!
                 }
                 usedAfterAwait! -> if {
+                    definition.flags => frameFlags!
+                    (definition.typeOrigin == 13 or definition.typeOrigin == 15 or definition.typeOrigin == 16) -> if {
+                        frameFlags! + 2 => frameFlags!
+                    }
                     slots! -> push(CoroutineFrameSlot {
                         functionIr: point.functionIr
                         state: point.state
@@ -1444,6 +1449,7 @@ public frameSlots sources: [Text; ~] -> [CoroutineFrameSlot; ~] {
                         typeOrigin: definition.typeOrigin
                         typeModule: definition.typeModule
                         typeSymbol: definition.typeSymbol
+                        flags: frameFlags!
                     })
                 }
             }

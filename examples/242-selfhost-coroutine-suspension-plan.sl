@@ -9,11 +9,12 @@ main {
 
         parent value: Int -> async Int {
             value * 2 => base
+            [1, 2, 3, ~] => values!
             value -> child => firstTask
             firstTask -> await => first
             first -> child => secondTask
             secondTask -> await => second
-            base + second
+            base + second + (values! -> len)
         }
 
         main { }
@@ -23,5 +24,5 @@ main {
 
     sources! -> typedIr.suspensions => points!
     sources! -> typedIr.frameSlots => slots!
-    "suspensions=$(points! -> len),states=$(points![0].state)/$(points![1].state),slots=$(slots! -> len),slotStates=$(slots![0].state)/$(slots![1].state)" -> println
+    "suspensions=$(points! -> len),states=$(points![0].state)/$(points![1].state),slots=$(slots! -> len),ownedFlags=$(slots![1].flags)/$(slots![3].flags)" -> println
 }
