@@ -287,7 +287,7 @@ internal sealed partial class LlvmEmitter
             %smalllang.environment_result = type { ptr, i64, i1, i1 }
             %smalllang.process_result = type { i32, i32 }
             %smalllang.task = type { ptr, ptr }
-            %smalllang.task_control = type { ptr, ptr, ptr, ptr, i32, i32 }
+            %smalllang.task_control = type { ptr, ptr, ptr, ptr, i32, i32, ptr }
 
             """;
         header += EmitStructTypeDefinitions();

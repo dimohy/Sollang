@@ -54,9 +54,9 @@ internal abstract class LlvmRuntimePlatform
     public virtual void EmitAsyncPrimitives(StringBuilder functions)
     {
         functions.AppendLine("""
-            define internal ptr @smalllang_task_start(ptr %worker, ptr %destroy, ptr %context) #0 {
+            define internal ptr @smalllang_task_start(ptr %worker, ptr %destroy, ptr %cancel, ptr %context) #0 {
             entry:
-              %control = call ptr @smalllang_alloc(i64 40)
+              %control = call ptr @smalllang_alloc(i64 48)
               %allocated = icmp ne ptr %control, null
               br i1 %allocated, label %initialize, label %fail
 
@@ -73,6 +73,8 @@ internal abstract class LlvmRuntimePlatform
               store i32 0, ptr %status_slot, align 4
               %state_slot = getelementptr %smalllang.task_control, ptr %control, i32 0, i32 5
               store i32 0, ptr %state_slot, align 4
+              %cancel_slot = getelementptr %smalllang.task_control, ptr %control, i32 0, i32 6
+              store ptr %cancel, ptr %cancel_slot, align 8
               %tail = load ptr, ptr @smalllang_task_ready_tail, align 8
               %empty = icmp eq ptr %tail, null
               br i1 %empty, label %first, label %append
@@ -172,6 +174,75 @@ internal abstract class LlvmRuntimePlatform
               %context_slot = getelementptr %smalllang.task_control, ptr %handle, i32 0, i32 0
               %context = load ptr, ptr %context_slot, align 8
               call void %destroy_fn(ptr %context)
+              call void @smalllang_free(ptr %handle)
+              ret i1 true
+
+            fail:
+              ret i1 false
+            }
+
+            define internal i1 @smalllang_task_cancel(ptr %handle) #0 {
+            entry:
+              %status_slot = getelementptr %smalllang.task_control, ptr %handle, i32 0, i32 4
+              %status = load i32, ptr %status_slot, align 4
+              %completed = icmp eq i32 %status, 2
+              br i1 %completed, label %destroy, label %check_queued
+
+            check_queued:
+              %queued = icmp eq i32 %status, 0
+              br i1 %queued, label %find, label %fail
+
+            find:
+              %head = load ptr, ptr @smalllang_task_ready_head, align 8
+              br label %scan
+
+            scan:
+              %previous = phi ptr [ null, %find ], [ %current, %advance ]
+              %current = phi ptr [ %head, %find ], [ %next, %advance ]
+              %has_current = icmp ne ptr %current, null
+              br i1 %has_current, label %compare, label %fail
+
+            compare:
+              %found = icmp eq ptr %current, %handle
+              br i1 %found, label %unlink, label %advance
+
+            advance:
+              %current_next_slot = getelementptr %smalllang.task_control, ptr %current, i32 0, i32 3
+              %next = load ptr, ptr %current_next_slot, align 8
+              br label %scan
+
+            unlink:
+              %handle_next_slot = getelementptr %smalllang.task_control, ptr %handle, i32 0, i32 3
+              %handle_next = load ptr, ptr %handle_next_slot, align 8
+              %is_head = icmp eq ptr %previous, null
+              br i1 %is_head, label %unlink_head, label %unlink_after
+
+            unlink_head:
+              store ptr %handle_next, ptr @smalllang_task_ready_head, align 8
+              br label %repair_tail
+
+            unlink_after:
+              %previous_next_slot = getelementptr %smalllang.task_control, ptr %previous, i32 0, i32 3
+              store ptr %handle_next, ptr %previous_next_slot, align 8
+              br label %repair_tail
+
+            repair_tail:
+              %tail = load ptr, ptr @smalllang_task_ready_tail, align 8
+              %is_tail = icmp eq ptr %tail, %handle
+              br i1 %is_tail, label %replace_tail, label %mark_cancelled
+
+            replace_tail:
+              store ptr %previous, ptr @smalllang_task_ready_tail, align 8
+              br label %mark_cancelled
+
+            mark_cancelled:
+              store i32 3, ptr %status_slot, align 4
+              br label %destroy
+
+            destroy:
+              %cancel_slot = getelementptr %smalllang.task_control, ptr %handle, i32 0, i32 6
+              %cancel_fn = load ptr, ptr %cancel_slot, align 8
+              call void %cancel_fn(ptr %handle)
               call void @smalllang_free(ptr %handle)
               ret i1 true
 

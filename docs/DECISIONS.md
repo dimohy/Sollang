@@ -3561,4 +3561,49 @@ References: [LLVM coroutine frames](https://llvm.org/docs/Coroutines.html),
 [Rust destructors](https://doc.rust-lang.org/reference/destructors.html),
 [Swift concurrency](https://docs.swift.org/swift-book/LanguageGuide/Concurrency.html).
 
+## D119 - Cancellation Consumes A Task And Destroys Its Active State
+
+Status: reference compiler runtime and self-host destroy plan implemented
+Date: 2026-07-14
+
+`task -> cancel` is the explicit cancellation surface. Like `await`, it is an
+affine final flow target: it consumes the Task binding, takes no parentheses or
+arguments, and cannot be repeated. Lexical cleanup still joins an unconsumed
+Task. This keeps ordinary structured scopes completion-oriented while allowing
+the owner to state that a result is no longer needed.
+
+The cooperative task control now stores a function-specific cancel entry in
+addition to context, resume, normal destroy, ready linkage, status, and resume
+state. Cancellation of queued work unlinks it from the FIFO ready queue before
+destroying it. Because the executor is single-threaded and cooperative, a
+caller cannot concurrently observe another Task in the running state. A
+completed Task can also be canceled; its initialized owned result is dropped
+instead of transferred to a caller.
+
+Every async declaration emits a matching cancel function. State zero drops an
+owned move input that never began execution. A completed state drops an owned
+result. Each suspended state recursively cancels the active child, destroys
+initialized spill slots in reverse definition order, frees the spill storage,
+then frees the async context. Task-valued spill slots recursively use the same
+primitive. Invalid states trap rather than guessing which owners were
+initialized.
+
+The self-host typed IR exports `destroySlots`. For each suspension it places a
+synthetic active-child Task first, followed by owned frame slots in deterministic
+LIFO order; scalar-only liveness slots are excluded. Example 242 proves five
+destroy entries across its two states. Example 251 executes cancellation before
+initial execution, after completion with an owned result, and during suspension
+with an active child, owned array, and second live Task. It then runs another
+Task to prove the ready queue remains usable.
+
+This combines LLVM's separate resume/destroy entries with Rust's destruction of
+suspended state and Swift/Kotlin cooperative cancellation. SL deliberately uses
+affine flow syntax instead of an exception as its first cancellation surface.
+Cancellation observation inside long CPU loops, task groups, and cancellation
+propagation from a canceled parent scope remain later slices.
+
+References: [LLVM coroutine destruction](https://llvm.org/docs/Coroutines.html),
+[Swift task cancellation](https://docs.swift.org/swift-book/LanguageGuide/Concurrency.html),
+[Kotlin cancellation](https://kotlinlang.org/docs/cancellation-and-timeouts.html).
+
 

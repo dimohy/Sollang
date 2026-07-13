@@ -571,7 +571,7 @@ internal sealed partial class LlvmEmitter
 
         var lastTarget = flow.Targets[^1];
         if (lastTarget.Path.Count != 1
-            || lastTarget.Path[0] is not ("append" or "updated" or "await")
+            || lastTarget.Path[0] is not ("append" or "updated" or "await" or "cancel")
             || flow.Source is not NameExpression name)
         {
             return null;

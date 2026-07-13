@@ -1478,3 +1478,36 @@ public frameSlots sources: [Text; ~] -> [CoroutineFrameSlot; ~] {
     }
     slots!
 }
+
+# Destruction order is explicit and deterministic. Each state starts with a
+# synthetic active-child entry (symbol -1, Task bit set), followed by initialized
+# owned frame slots in reverse definition order. Scalar-only slots need no drop.
+public destroySlots sources: [Text; ~] -> [CoroutineFrameSlot; ~] {
+    sources -> suspensions => points!
+    sources -> frameSlots => slots!
+    [CoroutineFrameSlot; ~] => destroys!
+    0 => pointIndex!
+    pointIndex! < (points! -> len) -> while {
+        points![pointIndex!] => point
+        destroys! -> push(CoroutineFrameSlot {
+            functionIr: point.functionIr
+            state: point.state
+            sourceModule: point.sourceModule
+            symbol: -1
+            typeOrigin: -1
+            typeModule: -1
+            typeSymbol: -1
+            flags: 4
+        })
+        slots! -> len => slotCursor!
+        slotCursor! > 0 -> while {
+            slotCursor! - 1 => slotCursor!
+            slots![slotCursor!] => slot
+            (slot.functionIr == point.functionIr and slot.state == point.state and ((slot.flags / 2) % 2 == 1 or (slot.flags / 4) % 2 == 1)) -> if {
+                destroys! -> push(slot)
+            }
+        }
+        pointIndex! + 1 => pointIndex!
+    }
+    destroys!
+}

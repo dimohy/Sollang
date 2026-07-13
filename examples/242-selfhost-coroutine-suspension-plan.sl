@@ -24,6 +24,7 @@ main {
 
     sources! -> typedIr.suspensions => points!
     sources! -> typedIr.frameSlots => slots!
+    sources! -> typedIr.destroySlots => destroys!
     0 => taskSlots!
     0 => ownedSlots!
     0 => slotIndex!
@@ -32,5 +33,5 @@ main {
         ((slots![slotIndex!].flags / 2) % 2 == 1) -> if { ownedSlots! + 1 => ownedSlots! }
         slotIndex! + 1 => slotIndex!
     }
-    "suspensions=$(points! -> len),states=$(points![0].state)/$(points![1].state),slots=$(slots! -> len),taskSlots=$(taskSlots!),ownedSlots=$(ownedSlots!)" -> println
+    "suspensions=$(points! -> len),states=$(points![0].state)/$(points![1].state),slots=$(slots! -> len),taskSlots=$(taskSlots!),ownedSlots=$(ownedSlots!),destroySlots=$(destroys! -> len)" -> println
 }

@@ -64,6 +64,9 @@ internal sealed partial class LlvmEmitter
             EmitFunctionLine();
 
             ClearLocalState();
+            EmitAsyncCancelFunction(function, hasTailAwait, statefulAwaitPlan);
+
+            ClearLocalState();
             EmitFunctionLine($"define internal %smalllang.task {SymbolForFunction(function.Name)}({ParameterListForFunction(function)}) #0 {{");
             EmitLabel("entry");
             var context = NextTemp("async_context");
@@ -96,7 +99,7 @@ internal sealed partial class LlvmEmitter
                 handle,
                 "ptr",
                 "smalllang_task_start",
-                $"ptr @{workerName}, ptr @smalllang_free, ptr {context}");
+                $"ptr @{workerName}, ptr @smalllang_free, ptr @{AsyncCancelSymbol(function)}, ptr {context}");
             var started = NextTemp("async_started");
             EmitCompare(started, "ne", "ptr", handle, "null");
             var readyLabel = NextLabel("async_ready");
@@ -120,6 +123,172 @@ internal sealed partial class LlvmEmitter
         {
             _currentFunctions = previousFunctions;
         }
+    }
+
+    private void EmitAsyncCancelFunction(
+        BoundFunction function,
+        bool hasTailAwait,
+        AsyncStateMachinePlan? statefulPlan)
+    {
+        EmitFunctionLine($"define internal void @{AsyncCancelSymbol(function)}(ptr %control) #0 {{");
+        EmitLabel("entry");
+        _currentBlockLabel = "entry";
+        var contextSlot = NextTemp("cancel_context_slot");
+        EmitAssign(
+            contextSlot,
+            "getelementptr %smalllang.task_control, ptr %control, i32 0, i32 0");
+        EmitLoad("%context", "ptr", contextSlot, 8);
+        var statusSlot = NextTemp("cancel_status_slot");
+        EmitAssign(
+            statusSlot,
+            "getelementptr %smalllang.task_control, ptr %control, i32 0, i32 4");
+        var status = NextTemp("cancel_status");
+        EmitLoad(status, "i32", statusSlot, 4);
+        var completed = NextTemp("cancel_completed");
+        EmitCompare(completed, "eq", "i32", status, "2");
+        var completedLabel = NextLabel("cancel_completed");
+        var pendingLabel = NextLabel("cancel_pending");
+        var cleanupLabel = NextLabel("cancel_cleanup");
+        EmitConditionalBranch(completed, completedLabel, pendingLabel);
+
+        EmitLabel(completedLabel);
+        _currentBlockLabel = completedLabel;
+        DropCancelledAsyncResult(function);
+        EmitBranch(cleanupLabel);
+
+        EmitLabel(pendingLabel);
+        _currentBlockLabel = pendingLabel;
+        var stateSlot = NextTemp("cancel_state_slot");
+        EmitAssign(
+            stateSlot,
+            "getelementptr %smalllang.task_control, ptr %control, i32 0, i32 5");
+        var state = NextTemp("cancel_state");
+        EmitLoad(state, "i32", stateSlot, 4);
+        var pendingStates = statefulPlan?.Awaits.Count ?? (hasTailAwait ? 1 : 0);
+        var stateLabels = Enumerable.Range(0, pendingStates + 1)
+            .Select(index => NextLabel(index == 0 ? "cancel_initial" : "cancel_suspended"))
+            .ToArray();
+        var invalidLabel = NextLabel("cancel_invalid");
+        var switchCases = string.Join(" ", stateLabels.Select((label, index) =>
+            $"i32 {index}, label %{label}"));
+        EmitInstruction(
+            $"switch i32 {state}, label %{invalidLabel} [ {switchCases} ]");
+        _currentBlockTerminated = true;
+
+        EmitLabel(invalidLabel);
+        _currentBlockLabel = invalidLabel;
+        EmitTrap();
+
+        EmitLabel(stateLabels[0]);
+        _currentBlockLabel = stateLabels[0];
+        DropCancelledAsyncInput(function);
+        EmitBranch(cleanupLabel);
+
+        for (var stateIndex = 1; stateIndex <= pendingStates; stateIndex++)
+        {
+            EmitLabel(stateLabels[stateIndex]);
+            _currentBlockLabel = stateLabels[stateIndex];
+            CancelStoredChild(function);
+            if (statefulPlan is not null)
+            {
+                DropCancelledAsyncSpills(function, statefulPlan.Awaits[stateIndex - 1].Spills);
+            }
+            EmitBranch(cleanupLabel);
+        }
+
+        EmitLabel(cleanupLabel);
+        _currentBlockLabel = cleanupLabel;
+        EmitCall(target: null, "void", "smalllang_free", "ptr %context");
+        EmitInstruction("ret void");
+        _currentBlockTerminated = true;
+        EmitFunctionLine("}");
+        EmitFunctionLine();
+    }
+
+    private void DropCancelledAsyncInput(BoundFunction function)
+    {
+        if (function.InputOwnership != BoundFunctionInputOwnership.Move
+            || function.InputType is not { } inputType
+            || !_program.Types.ContainsOwnedStorage(inputType))
+        {
+            return;
+        }
+
+        var inputAddress = AsyncContextField(
+            "%context", function.InputType, function.ReturnType, 5, "cancel_input_address");
+        var input = NextTemp("cancel_input");
+        EmitLoad(input, AsyncStorageLlvmType(inputType), inputAddress, RuntimeAlignment(inputType));
+        DropOwnedRuntimeValue(DematerializeAggregateValue(inputType, input));
+    }
+
+    private void DropCancelledAsyncResult(BoundFunction function)
+    {
+        if (!_program.Types.ContainsOwnedStorage(function.ReturnType))
+        {
+            return;
+        }
+
+        var resultAddress = AsyncContextField(
+            "%context", function.InputType, function.ReturnType, 6, "cancel_result_address");
+        var result = NextTemp("cancel_result");
+        EmitLoad(
+            result,
+            AsyncStorageLlvmType(function.ReturnType),
+            resultAddress,
+            RuntimeAlignment(function.ReturnType));
+        DropOwnedRuntimeValue(DematerializeAsyncResult(function.ReturnType, result));
+    }
+
+    private void CancelStoredChild(BoundFunction function)
+    {
+        var handleAddress = AsyncContextField(
+            "%context", function.InputType, function.ReturnType, 7, "cancel_child_handle_address");
+        var handle = NextTemp("cancel_child_handle");
+        EmitLoad(handle, "ptr", handleAddress, 8);
+        EmitCancelTaskHandle(handle);
+    }
+
+    private void DropCancelledAsyncSpills(
+        BoundFunction function,
+        IReadOnlyList<AsyncSpillPlan> spills)
+    {
+        if (spills.Count == 0)
+        {
+            return;
+        }
+
+        var frameAddress = AsyncContextField(
+            "%context", function.InputType, function.ReturnType, 9, "cancel_spill_frame_address");
+        var frame = NextTemp("cancel_spill_frame");
+        EmitLoad(frame, "ptr", frameAddress, 8);
+        var layouts = new List<(AsyncSpillPlan Spill, int Offset, int Alignment)>(spills.Count);
+        var offset = 0;
+        foreach (var spill in spills)
+        {
+            var alignment = RuntimeAlignment(spill.Type);
+            offset = AlignAsyncSize(offset, alignment);
+            layouts.Add((spill, offset, alignment));
+            offset = checked(offset + Math.Max(_program.Types.InlineSizeOf(spill.Type), 1));
+        }
+        foreach (var layout in layouts.AsEnumerable().Reverse())
+        {
+            var spill = layout.Spill;
+            var address = NextTemp("cancel_spill_address");
+            EmitAssign(address, $"getelementptr i8, ptr {frame}, i64 {layout.Offset}");
+            var loaded = NextTemp("cancel_spill_value");
+            EmitLoad(loaded, LlvmType(spill.Type), address, layout.Alignment);
+            if (_program.Types.IsTask(spill.Type))
+            {
+                var handle = NextTemp("cancel_spill_task_handle");
+                EmitAssign(handle, $"extractvalue %smalllang.task {loaded}, 0");
+                EmitCancelTaskHandle(handle);
+            }
+            else if (_program.Types.ContainsOwnedStorage(spill.Type))
+            {
+                DropOwnedRuntimeValue(DematerializeAggregateValue(spill.Type, loaded));
+            }
+        }
+        EmitCall(target: null, "void", "smalllang_free", $"ptr {frame}");
     }
 
     private void EmitAsyncWorkerCompletion(BoundFunction function, LocalScope functionLocals)
@@ -708,6 +877,25 @@ internal sealed partial class LlvmEmitter
         return value;
     }
 
+    private void EmitCancelTask(RuntimeTask task)
+    {
+        EmitCancelTaskHandle(task.HandleName);
+    }
+
+    private void EmitCancelTaskHandle(string handle)
+    {
+        var cancelled = NextTemp("task_cancel_succeeded");
+        EmitCall(cancelled, "i1", "smalllang_task_cancel", $"ptr {handle}");
+        var cancelledLabel = NextLabel("task_cancelled");
+        var cancelFailedLabel = NextLabel("task_cancel_failed");
+        EmitConditionalBranch(cancelled, cancelledLabel, cancelFailedLabel);
+        EmitLabel(cancelFailedLabel);
+        _currentBlockLabel = cancelFailedLabel;
+        EmitTrap();
+        EmitLabel(cancelledLabel);
+        _currentBlockLabel = cancelledLabel;
+    }
+
     private void EmitAsyncContextLoad(
         string target, string context, BoundType? inputType, BoundType resultType,
         int field, string type, int alignment)
@@ -778,6 +966,9 @@ internal sealed partial class LlvmEmitter
 
     private static string AsyncWorkerSymbol(BoundFunction function) =>
         SymbolForFunction(function.Name)[1..] + "_async_worker";
+
+    private static string AsyncCancelSymbol(BoundFunction function) =>
+        SymbolForFunction(function.Name)[1..] + "_async_cancel";
 
     private sealed record AsyncStateMachinePlan(IReadOnlyList<AsyncAwaitPoint> Awaits);
 

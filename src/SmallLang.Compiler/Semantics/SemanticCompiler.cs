@@ -3436,6 +3436,17 @@ internal sealed class SemanticCompiler
                 }
                 result = new FlowResult(awaitedType, FlowEffect.None);
                 return true;
+            case "cancel" when _types.IsTask(currentType):
+                if (target.Arguments.Count != 0)
+                {
+                    throw Error(target.Line, target.Column, "cancel does not accept arguments");
+                }
+                if (!isLast)
+                {
+                    throw Error(target.Line, target.Column, "cancel must be the final flow target");
+                }
+                result = new FlowResult(BoundType.Unit, FlowEffect.None);
+                return true;
             case "flush" when currentType == BoundType.MutableMappedBytes:
                 if (!isLast || target.Arguments.Count != 0)
                 {
@@ -3801,6 +3812,13 @@ internal sealed class SemanticCompiler
                         target.Line,
                         target.Column,
                         $"await expects Task<T> but received {FormatType(currentType)}");
+                }
+                if (path == "cancel")
+                {
+                    throw Error(
+                        target.Line,
+                        target.Column,
+                        $"cancel expects Task<T> but received {FormatType(currentType)}");
                 }
                 return false;
         }
@@ -5649,7 +5667,7 @@ internal sealed class SemanticCompiler
             return false;
         }
 
-        return lastTarget.Path[0] is "append" or "updated" or "await";
+        return lastTarget.Path[0] is "append" or "updated" or "await" or "cancel";
     }
 
     private string? GetMoveConsumingContainerSourceName(Expression expression)

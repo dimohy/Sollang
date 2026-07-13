@@ -164,6 +164,22 @@ the generic sendable-input coverage can be built and executed through WSL with:
 wsl --exec /mnt/p/MyWorks/SmallLang/artifacts/238-sendable-async-inputs-linux
 ```
 
+Async calls start cooperative affine tasks. `await` consumes a task and returns
+its value; `cancel` consumes it without producing a value. Cancellation is a
+final flow target and does not use parentheses:
+
+```smalllang
+5 -> parent => pending
+0 -> gate => gateTask
+gateTask -> await => ready
+pending -> cancel
+```
+
+An unconsumed task is still joined by lexical scope cleanup. Explicit cancel is
+for work whose result is no longer needed; it removes queued work and runs the
+compiler-generated coroutine destroy path for initialized child and frame
+owners.
+
 Browser WebAssembly output is available through the `wasm32-browser` target. The
 generated module exports `smalllang_start` and `memory`, and imports
 `env.smalllang_browser_write(ptr, len)` so the page can render stdout text:

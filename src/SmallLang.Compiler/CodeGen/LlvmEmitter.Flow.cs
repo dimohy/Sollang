@@ -190,6 +190,14 @@ internal sealed partial class LlvmEmitter
                 }
                 result = new RuntimeFlowResult(EmitAwaitTask(task), null, _mainOk);
                 return true;
+            case "cancel" when current is RuntimeTask task:
+                if (!isLast || target.Arguments.Count != 0)
+                {
+                    throw new SmallLangException("cancel must be final and takes no arguments");
+                }
+                EmitCancelTask(task);
+                result = new RuntimeFlowResult(RuntimeUnit.Instance, null, _mainOk);
+                return true;
             case "used" when current is RuntimeArena usedArena:
                 if (target.Arguments.Count != 0)
                 {
