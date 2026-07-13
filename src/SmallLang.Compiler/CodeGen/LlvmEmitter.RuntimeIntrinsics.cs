@@ -144,6 +144,14 @@ internal sealed partial class LlvmEmitter
 
     private RuntimeTask EmitRuntimeReadScalarAsync(BoundFunction function)
     {
+        return EmitRuntimeReadScalarAsync(function, file: null, offsetExpression: null);
+    }
+
+    private RuntimeTask EmitRuntimeReadScalarAsync(
+        BoundFunction function,
+        RuntimeStruct? file,
+        Expression? offsetExpression)
+    {
         if (function.SpecializedType is not { } scalarType
             || (scalarType != BoundType.Bool && !IsNumericType(scalarType) && scalarType != BoundType.CodePoint)
             || !_program.Types.TryGetResultTypes(function.ReturnType, out var resultTypes)
@@ -193,6 +201,36 @@ internal sealed partial class LlvmEmitter
             sizeAddress,
             4);
 
+        if (file is not null)
+        {
+            var sourceHandle = ExtractOwnedFileHandle(file);
+            var ownedHandle = NextTemp("file_async_owned_handle");
+            EmitCall(
+                ownedHandle,
+                "i64",
+                "smalllang_platform_duplicate_owned_file",
+                $"i64 {sourceHandle}");
+            var handleAddress = NextTemp("file_async_owned_handle_address");
+            EmitAssign(
+                handleAddress,
+                $"getelementptr %smalllang.task_control, ptr {handle}, i32 0, i32 17");
+            EmitStore("i64", ownedHandle, handleAddress, 8);
+            var offset = EmitMapInteger(
+                offsetExpression!,
+                BoundType.UInt64,
+                "file_async_offset");
+            var offsetAddress = NextTemp("file_async_offset_address");
+            EmitAssign(
+                offsetAddress,
+                $"getelementptr %smalllang.task_control, ptr {handle}, i32 0, i32 18");
+            EmitStore("i64", offset, offsetAddress, 8);
+            var explicitAddress = NextTemp("file_async_explicit_address");
+            EmitAssign(
+                explicitAddress,
+                $"getelementptr %smalllang.task_control, ptr {handle}, i32 0, i32 19");
+            EmitStore("i32", "1", explicitAddress, 4);
+        }
+
         return new RuntimeTask(
             _program.Types.GetOrAddTask(function.ReturnType),
             null,
@@ -200,6 +238,87 @@ internal sealed partial class LlvmEmitter
             handle,
             context,
             function);
+    }
+
+    private RuntimeEnum EmitRuntimeOpenFile(BoundFunction function, RuntimeValue argument)
+    {
+        var path = argument as RuntimeText
+            ?? throw new SmallLangException($"{function.Name} expects Text");
+        if (!_program.Types.TryGetResultTypes(function.ReturnType, out var resultTypes)
+            || !_program.Types.IsStruct(resultTypes.Ok)
+            || !string.Equals(
+                _program.Types.GetStruct(resultTypes.Ok).Name,
+                "sys.file.File",
+                StringComparison.Ordinal)
+            || resultTypes.Error != BoundType.Text)
+        {
+            throw new SmallLangException($"{function.Name} has an invalid File result type");
+        }
+
+        var raw = NextTemp("file_open_result");
+        EmitCall(
+            raw,
+            "%smalllang.file_handle_result",
+            "smalllang_platform_open_owned_read_file",
+            $"ptr {path.PointerName}, i64 {path.LengthName}");
+        var handle = NextTemp("file_open_handle");
+        EmitAssign(handle, $"extractvalue %smalllang.file_handle_result {raw}, 0");
+        var ok = NextTemp("file_open_ok");
+        EmitAssign(ok, $"extractvalue %smalllang.file_handle_result {raw}, 1");
+        var succeeded = NextTemp("file_open_succeeded");
+        EmitCompare(succeeded, "ne", "i32", ok, "0");
+
+        var definition = _program.Types.GetEnum(function.ReturnType);
+        var okVariant = definition.Variants.First(variant => variant.Name == "Ok");
+        var errVariant = definition.Variants.First(variant => variant.Name == "Err");
+        var successLabel = NextLabel("file_open_success");
+        var errorLabel = NextLabel("file_open_error");
+        var endLabel = NextLabel("file_open_end");
+        EmitConditionalBranch(succeeded, successLabel, errorLabel);
+
+        EmitLabel(successLabel);
+        _currentBlockLabel = successLabel;
+        var fileAggregate = NextTemp("file_value");
+        EmitAssign(
+            fileAggregate,
+            $"insertvalue {LlvmStructType(resultTypes.Ok)} poison, i64 {handle}, 0");
+        var success = EmitEnumValue(
+            function.ReturnType,
+            okVariant,
+            new RuntimeStruct(resultTypes.Ok, fileAggregate));
+        EmitBranch(endLabel);
+        var successExit = _currentBlockLabel;
+
+        EmitLabel(errorLabel);
+        _currentBlockLabel = errorLabel;
+        var errorText = AddGlobalString("io");
+        var failure = EmitEnumValue(
+            function.ReturnType,
+            errVariant,
+            new RuntimeText(errorText.Name, errorText.Length.ToString(CultureInfo.InvariantCulture)));
+        EmitBranch(endLabel);
+        var errorExit = _currentBlockLabel;
+
+        EmitLabel(endLabel);
+        _currentBlockLabel = endLabel;
+        return EmitEnumPhi(
+            "file_open_result",
+            function.ReturnType,
+            [(success, successExit), (failure, errorExit)]);
+    }
+
+    private string ExtractOwnedFileHandle(RuntimeStruct file)
+    {
+        var definition = _program.Types.GetStruct(file.Type);
+        if (!string.Equals(definition.Name, "sys.file.File", StringComparison.Ordinal))
+        {
+            throw new SmallLangException("file operation expects sys.file.File");
+        }
+        var handle = NextTemp("file_owned_handle");
+        EmitAssign(
+            handle,
+            $"extractvalue {LlvmStructType(file.Type)} {file.ValueName}, 0");
+        return handle;
     }
 
     private void EmitReturnIfReadFailed(string readOk)
@@ -376,7 +495,11 @@ internal sealed partial class LlvmEmitter
         return RuntimeUnit.Instance;
     }
 
-    private RuntimeEnum EmitRuntimeReadScalar(BoundFunction function, string? completedTaskControl = null)
+    private RuntimeEnum EmitRuntimeReadScalar(
+        BoundFunction function,
+        string? completedTaskControl = null,
+        RuntimeStruct? file = null,
+        Expression? offsetExpression = null)
     {
         if (function.SpecializedType is not { } scalarType
             || (scalarType != BoundType.Bool && !IsNumericType(scalarType) && scalarType != BoundType.CodePoint))
@@ -389,7 +512,7 @@ internal sealed partial class LlvmEmitter
         {
             throw new SmallLangException($"{function.Name} has an invalid scalar result type");
         }
-        if (completedTaskControl is null && _usesAsync)
+        if (completedTaskControl is null && file is null && _usesAsync)
         {
             EmitCall(target: null, "void", "smalllang_file_wait_idle", "");
         }
@@ -415,8 +538,24 @@ internal sealed partial class LlvmEmitter
             slot = NextTemp("file_scalar_read");
             EmitAlloca(slot, storageType, RuntimeAlignment(scalarType));
             var readResult = NextTemp("file_scalar_read_result");
-            EmitCall(readResult, "%smalllang.file_count_result", "smalllang_platform_read_file_bytes",
-                $"ptr {slot}, i64 {byteSize}");
+            if (file is null)
+            {
+                EmitCall(readResult, "%smalllang.file_count_result", "smalllang_platform_read_file_bytes",
+                    $"ptr {slot}, i64 {byteSize}");
+            }
+            else
+            {
+                var fileHandle = ExtractOwnedFileHandle(file);
+                var offset = EmitMapInteger(
+                    offsetExpression!,
+                    BoundType.UInt64,
+                    "file_read_at_offset");
+                EmitCall(
+                    readResult,
+                    "%smalllang.file_count_result",
+                    "smalllang_platform_read_owned_file_at",
+                    $"i64 {fileHandle}, ptr {slot}, i64 {byteSize}, i64 {offset}");
+            }
             count = NextTemp("file_scalar_read_count");
             EmitAssign(count, $"extractvalue %smalllang.file_count_result {readResult}, 0");
             readOk = NextTemp("file_scalar_read_ok");

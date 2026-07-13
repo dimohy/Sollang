@@ -3882,4 +3882,49 @@ References: [Tokio fs](https://docs.rs/tokio/latest/tokio/fs/),
 [Windows overlapped I/O](https://learn.microsoft.com/windows/win32/sync/synchronization-and-overlapped-input-and-output),
 [Swift FileHandle.AsyncBytes](https://developer.apple.com/documentation/foundation/filehandle/asyncbytes).
 
+## D127 - Files Are Affine Owners And Random Access Is Position-Based
+
+Status: owned read handles and scalar offset reads implemented
+Date: 2026-07-14
+
+The process-wide compatibility cursor cannot support independent compiler
+modules or concurrent parsing safely. New SL code therefore opens an affine
+resource:
+
+```smalllang
+file.openRead(path) => opened
+reader -> readAt<UInt16>(offset) => value
+reader -> readAtAsync<UInt16>(offset) => pending
+```
+
+`File` has one close obligation, cannot be copied, and is closed by ordinary
+scope cleanup. A read offset is `UInt64` and does not mutate file position.
+This follows Rust `FileExt::read_at` and .NET `RandomAccess.ReadAsync`, both of
+which separate position from the file object's sequential cursor.
+
+An async operation must not borrow a File beyond its proven lifetime. Rather
+than adding an unsafe implicit escape, the first backend duplicates the native
+handle into the affine Task. Completion or cancellation closes that duplicate
+exactly once; the original File remains independently usable and closes at its
+own scope exit. Windows opens the handle for overlapped I/O and supplies the
+64-bit offset through `OVERLAPPED`; Linux uses `pread`. Both still complete via
+the shared operation worker, so Task scheduling remains target-neutral.
+
+The reference parser now distinguishes a flow type argument from the existing
+compile-time integer argument. The grammar accepts both `value -> fixed<4>` and
+`reader -> readAt<UInt16>(offset)`. Self-host call resolution ignores identifiers
+inside `<...>` and `(...)` when selecting a flow target, avoiding accidental
+resolution to `UInt16` or an argument binding.
+
+Example 263 covers synchronous and concurrent asynchronous offset reads,
+automatic File cleanup, duplicated Task handles, and Windows/Linux parity.
+Example 264 proves self-host generic flow-target resolution. Diagnostics reject
+File copying, unsupported scalar types, and negative/non-UInt64 offsets.
+
+References: [Rust FileExt](https://doc.rust-lang.org/std/os/unix/fs/trait.FileExt.html),
+[Rust File](https://doc.rust-lang.org/stable/std/fs/struct.File.html),
+[.NET RandomAccess.ReadAsync](https://learn.microsoft.com/en-us/dotnet/api/system.io.randomaccess.readasync),
+[Windows overlapped I/O](https://learn.microsoft.com/en-us/windows/win32/sync/synchronization-and-overlapped-input-and-output),
+[Swift concurrency and AsyncSequence](https://docs.swift.org/swift-book/LanguageGuide/Concurrency.html).
+
 

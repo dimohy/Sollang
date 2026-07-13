@@ -813,6 +813,10 @@ internal sealed class SemanticCompiler
                 inputType,
                 returnType,
                 isAsync: true),
+            "sys.file.openRead" => RequireOpenFileSignature(
+                function,
+                inputType,
+                returnType),
             "sys.file.openWriter" => RequireIntrinsicSignature(
                 function, inputType, returnType, BoundType.Text, BoundType.Unit,
                 BoundFunctionKind.RuntimeOpenIntWriter),
@@ -922,6 +926,25 @@ internal sealed class SemanticCompiler
         return isAsync
             ? BoundFunctionKind.RuntimeReadScalarAsync
             : BoundFunctionKind.RuntimeReadScalar;
+    }
+
+    private BoundFunctionKind RequireOpenFileSignature(
+        FunctionDeclaration function,
+        BoundType? inputType,
+        BoundType returnType)
+    {
+        if (inputType != BoundType.Text
+            || !_types.TryGetResultTypes(returnType, out var resultTypes)
+            || !IsFileType(resultTypes.Ok)
+            || resultTypes.Error != BoundType.Text)
+        {
+            throw Error(
+                function.Line,
+                function.Column,
+                $"intrinsic '{function.Name}' must have signature Text -> Result<File, Text>");
+        }
+
+        return BoundFunctionKind.RuntimeOpenFile;
     }
 
     private BoundFunctionKind RequireIntrinsicSignature(
@@ -3404,6 +3427,7 @@ internal sealed class SemanticCompiler
                     case BoundFunctionKind.RuntimeCloseIntReader:
                         throw Error(expression.Line, expression.Column, $"{path} does not accept a flowed input");
                     case BoundFunctionKind.RuntimeEnvironment:
+                    case BoundFunctionKind.RuntimeOpenFile:
                         if (currentType != BoundType.Text)
                         {
                             throw Error(expression.Line, expression.Column,
@@ -3493,6 +3517,74 @@ internal sealed class SemanticCompiler
         out FlowResult result)
     {
         result = new FlowResult(BoundType.Unit, FlowEffect.None);
+
+        if (IsFileType(currentType) && path is "readAt" or "readAtAsync")
+        {
+            if (target.TypeArgument is null || target.CompileTimeValueArgument is not null)
+            {
+                throw Error(
+                    target.Line,
+                    target.Column,
+                    $"{path} requires an explicit scalar type, for example '{path}<UInt16>(offset)'");
+            }
+            if (target.Arguments.Count != 1)
+            {
+                throw Error(target.Line, target.Column, $"{path} expects exactly one UInt64 byte offset");
+            }
+
+            var scalarType = ParseType(target.TypeArgument, target.Line, target.Column);
+            if (scalarType != BoundType.Bool
+                && !IsNumericType(scalarType)
+                && scalarType != BoundType.CodePoint)
+            {
+                throw Error(
+                    target.Line,
+                    target.Column,
+                    $"{path} supports Bool, CodePoint, and fixed-width numeric scalars; got {FormatType(scalarType)}");
+            }
+            ValidateMapContextValue(
+                target.Arguments[0],
+                BoundType.UInt64,
+                "file offset",
+                functions,
+                bindings,
+                allowReadIntCall);
+
+            var optionType = _types.GetOrAddOption(scalarType, $"Option<{FormatType(scalarType)}>");
+            var returnType = _types.GetOrAddResult(
+                optionType,
+                BoundType.Text,
+                $"Result<Option<{FormatType(scalarType)}>, Text>");
+            var isAsync = path == "readAtAsync";
+            var specialization = new BoundFunction(
+                Name: $"sys.file.{path}${(int)scalarType}",
+                InputName: "file",
+                InputType: currentType,
+                InputOwnership: BoundFunctionInputOwnership.Default,
+                ReturnType: returnType,
+                BlockInputName: null,
+                BlockInputType: null,
+                LocalFunctions: new Dictionary<string, BoundFunction>(StringComparer.Ordinal),
+                Body: null,
+                BlockBody: [],
+                Line: target.Line,
+                Column: target.Column,
+                Kind: isAsync
+                    ? BoundFunctionKind.RuntimeReadScalarAsync
+                    : BoundFunctionKind.RuntimeReadScalar,
+                IsStandardLibrary: true,
+                IsLocal: false,
+                SpecializedType: scalarType,
+                ModuleName: "sys.file",
+                IsPublic: true,
+                IsAsync: isAsync);
+            _resolvedGenericCalls[target] = specialization;
+            result = new FlowResult(
+                isAsync ? _types.GetOrAddTask(returnType) : returnType,
+                FlowEffect.None);
+            return true;
+        }
+
         switch (path)
         {
             case "await" when _types.TryGetTaskValue(currentType, out var awaitedType):
@@ -4026,17 +4118,18 @@ internal sealed class SemanticCompiler
 
                 return function.ReturnType;
             case BoundFunctionKind.RuntimeEnvironment:
+            case BoundFunctionKind.RuntimeOpenFile:
                 if (expression.Arguments.Count != 1)
                 {
-                    throw Error(expression.Line, expression.Column, $"{path} expects exactly one Text name");
+                    throw Error(expression.Line, expression.Column, $"{path} expects exactly one Text argument");
                 }
-                var environmentNameType = InferExpression(
+                var textArgumentType = InferExpression(
                     expression.Arguments[0], functions, bindings,
                     allowPrintCall: false, allowReadIntCall, allowFlowBindingTarget: false);
-                if (environmentNameType != BoundType.Text)
+                if (textArgumentType != BoundType.Text)
                 {
                     throw Error(expression.Arguments[0].Line, expression.Arguments[0].Column,
-                        $"{path} expects Text but received {FormatType(environmentNameType)}");
+                        $"{path} expects Text but received {FormatType(textArgumentType)}");
                 }
                 return function.ReturnType;
             case BoundFunctionKind.RuntimeRunProcess:
@@ -4886,7 +4979,9 @@ internal sealed class SemanticCompiler
         if ((function.Kind == BoundFunctionKind.User
                 && (!function.IsStandardLibrary
                     || function.Name is "sys.time.milliseconds" or "sys.time.seconds"))
-            || function.Kind is BoundFunctionKind.RuntimeSleep or BoundFunctionKind.RuntimeReadScalarAsync)
+            || function.Kind is BoundFunctionKind.RuntimeSleep
+                or BoundFunctionKind.RuntimeReadScalarAsync
+                or BoundFunctionKind.RuntimeOpenFile)
         {
             return;
         }
@@ -4993,6 +5088,8 @@ internal sealed class SemanticCompiler
                 "sys.time.Duration",
                 StringComparison.Ordinal)
                 ? TypeId.Duration
+                : string.Equals(declaration.Name, "sys.file.File", StringComparison.Ordinal)
+                    ? TypeId.File
                 : (TypeId)nextTypeId++;
             if (!names.TryAdd(declaration.Name, id))
             {
@@ -5024,7 +5121,7 @@ internal sealed class SemanticCompiler
         var predeclaredDynamicArraysByElement = new Dictionary<TypeId, TypeId>();
         var boxableTypes = names
             .Where(item => item.Value is TypeId.Int or TypeId.Bool or TypeId.Text
-                || structTypes.Values.Contains(item.Value)
+                || (structTypes.Values.Contains(item.Value) && item.Value != TypeId.File)
                 || enumTypes.Values.Contains(item.Value))
             .OrderBy(item => (int)item.Value)
             .ToArray();
@@ -5625,6 +5722,15 @@ internal sealed class SemanticCompiler
     private bool IsOwnedHeapType(BoundType type)
     {
         return _types.ContainsOwnedStorage(type);
+    }
+
+    private bool IsFileType(BoundType type)
+    {
+        return _types.IsStruct(type)
+            && string.Equals(
+                _types.GetStruct(type).Name,
+                "sys.file.File",
+                StringComparison.Ordinal);
     }
 
     private bool IsAsyncResultTypeSupported(BoundType type)

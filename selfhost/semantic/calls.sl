@@ -47,8 +47,14 @@ public resolve source: Text -> [CallResolution; ~] {
         ((node.kind == 10 and hasFlowCallTarget! and not hasControlTarget!) or (node.kind == 11 and (node.cstRuleId == grammar.ruleIdCallExpression or node.cstRuleId == grammar.ruleIdTypeApplicationExpression)) or node.kind == 15) -> if {
             -1 => callNameToken!
             node.firstToken => tokenIndex!
+            false => inFlowTypeArgument!
+            false => inFlowCallArguments!
             (tokenIndex! < node.firstToken + node.tokenCount and (node.kind == 10 or callNameToken! < 0)) -> while {
-                tokens![tokenIndex!].kind == grammar.tokenIdIdentifier -> if { tokenIndex! => callNameToken! }
+                tokens![tokenIndex!].kind == grammar.tokenIdLess -> if { true => inFlowTypeArgument! }
+                tokens![tokenIndex!].kind == grammar.tokenIdGreater -> if { false => inFlowTypeArgument! }
+                tokens![tokenIndex!].kind == grammar.tokenIdLeftParen -> if { true => inFlowCallArguments! }
+                tokens![tokenIndex!].kind == grammar.tokenIdRightParen -> if { false => inFlowCallArguments! }
+                (tokens![tokenIndex!].kind == grammar.tokenIdIdentifier and not inFlowTypeArgument! and not inFlowCallArguments!) -> if { tokenIndex! => callNameToken! }
                 tokenIndex! + 1 => tokenIndex!
             }
             callNameToken! >= 0 -> if {
@@ -116,8 +122,14 @@ public resolveModules sources: [Text; ~] -> [ModuleCallResolution; ~] {
             ((callNode.kind == 10 and moduleHasFlowCallTarget! and not moduleHasControlTarget!) or (callNode.kind == 11 and (callNode.cstRuleId == grammar.ruleIdCallExpression or callNode.cstRuleId == grammar.ruleIdTypeApplicationExpression)) or callNode.kind == 15) -> if {
                 -1 => callNameToken!
                 callNode.firstToken => callTokenIndex!
+                false => moduleInFlowTypeArgument!
+                false => moduleInFlowCallArguments!
                 (callTokenIndex! < callNode.firstToken + callNode.tokenCount and (callNode.kind == 10 or callNameToken! < 0)) -> while {
-                    tokens![callTokenIndex!].kind == grammar.tokenIdIdentifier -> if { callTokenIndex! => callNameToken! }
+                    tokens![callTokenIndex!].kind == grammar.tokenIdLess -> if { true => moduleInFlowTypeArgument! }
+                    tokens![callTokenIndex!].kind == grammar.tokenIdGreater -> if { false => moduleInFlowTypeArgument! }
+                    tokens![callTokenIndex!].kind == grammar.tokenIdLeftParen -> if { true => moduleInFlowCallArguments! }
+                    tokens![callTokenIndex!].kind == grammar.tokenIdRightParen -> if { false => moduleInFlowCallArguments! }
+                    (tokens![callTokenIndex!].kind == grammar.tokenIdIdentifier and not moduleInFlowTypeArgument! and not moduleInFlowCallArguments!) -> if { callTokenIndex! => callNameToken! }
                     callTokenIndex! + 1 => callTokenIndex!
                 }
                 callNameToken! >= 0 -> if {

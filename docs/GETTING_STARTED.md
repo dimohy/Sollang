@@ -287,6 +287,25 @@ worker and return through the Task ready queue; cancellation uses the ordinary
 affine `task -> cancel` rule. The current reader is cursor-based and global, so
 await every submitted read before closing or reopening it.
 
+For concurrent or random-access work, prefer the owned File surface:
+
+```smalllang
+file.openRead("values.bin") => opened
+opened -> when {
+    Result<file.File, Text>.Ok(reader) {
+        reader -> readAtAsync<UInt16>(0) => header
+        reader -> readAtAsync<UInt16>(4096) => record
+        header -> await => headerValue
+        record -> await => recordValue
+    }
+    Result<file.File, Text>.Err(error) => error
+}
+```
+
+The `UInt64` argument is a byte offset. `File` is affine and automatically
+closed; each pending Task owns a duplicated OS handle and is therefore safe
+even if completion order differs from submission order.
+
 Browser WebAssembly output is available through the `wasm32-browser` target. The
 generated module exports `smalllang_start` and `memory`, and imports
 `env.smalllang_browser_write(ptr, len)` so the page can render stdout text:

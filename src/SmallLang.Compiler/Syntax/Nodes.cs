@@ -225,6 +225,7 @@ internal sealed record FlowTarget(
     IReadOnlyList<string> Path,
     IReadOnlyList<Expression> Arguments,
     bool UsesCallSyntax,
+    string? TypeArgument,
     int? CompileTimeValueArgument,
     int Line,
     int Column);

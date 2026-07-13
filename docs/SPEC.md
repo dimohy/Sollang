@@ -1319,11 +1319,30 @@ requests, stops and joins the shared worker, and releases its native event
 resources. Synchronous reads and reader open/close wait for already-submitted
 asynchronous work before touching the shared cursor.
 
-The present compatibility reader still has one process-wide cursor, so
-concurrent reads are serialized in actual submission order. The self-hosting
-file layer still needs owned reader handles, explicit-offset operations,
-asynchronous open/write/close, and a future IOCP/io_uring backend before the
-general file-I/O gate is complete.
+The compatibility reader still has one process-wide cursor, but new code can
+use an affine native file owner and position-independent reads:
+
+```smalllang
+file.openRead("values.bin") => opened
+opened -> when {
+    Result<file.File, Text>.Ok(reader) {
+        reader -> readAt<UInt16>(0) => header
+        reader -> readAtAsync<UInt16>(128) => pending
+        pending -> await => record
+    }
+    Result<file.File, Text>.Err(error) => error
+}
+```
+
+`File` is non-copyable and closes deterministically at owner-scope exit.
+`readAt<T>(UInt64)` and `readAtAsync<T>(UInt64)` never advance a shared cursor.
+The asynchronous form duplicates the native handle into the Task, so the Task
+and original File have independent, exactly-once close obligations. Windows
+uses an overlapped offset and Linux uses `pread`; high-bit offsets unsupported
+by the signed host APIs return `Err("io")`.
+
+Async open/write/flush/close, owned writer handles, and a future IOCP/io_uring
+completion backend remain before the general file-I/O gate is complete.
 
 Double-quoted UTF-8 literals decode `\n`, `\r`, `\t`, and `\\` in text
 segments and support optional identifier and expression interpolation. Unknown

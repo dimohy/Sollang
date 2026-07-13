@@ -10,12 +10,13 @@ internal sealed partial class LlvmEmitter
     {
         var needsHelpers = _program.MainBindings.Values.Any(IsCustomOwnedType)
             || _program.MainStatements.Any(UsesBox)
-            || _program.Functions.Values.Any(function => IsCustomOwnedType(function.ReturnType)
+            || _program.Functions.Values.Where(function => !function.IsStandardLibrary).Any(function =>
+                IsCustomOwnedType(function.ReturnType)
                 || (function.InputType is { } input && IsCustomOwnedType(input))
                 || (function.Body is not null && UsesBox(function.Body))
                 || function.BlockBody.Any(UsesBox))
-            || _program.Types.Structs.Any(definition => IsCustomOwnedType(definition.Id))
-            || _program.Types.Enums.Any(definition => IsCustomOwnedType(definition.Id))
+            || _program.FunctionBindings.Any(item =>
+                !item.Key.IsStandardLibrary && item.Value.Values.Any(IsCustomOwnedType))
             || _program.Types.StaticArrays.Any(definition =>
                 _program.Types.ContainsOwnedStorage(definition.ElementType))
             || _program.Types.DynamicArrays.Any(definition =>
@@ -211,6 +212,20 @@ internal sealed partial class LlvmEmitter
         EmitFunctionLine($"define internal void {DropSymbol(structure.Id)}({llvmType} %value) #0 {{");
         EmitFunctionLine("entry:");
         _currentBlockLabel = "entry";
+        if (string.Equals(structure.Name, "sys.file.File", StringComparison.Ordinal))
+        {
+            var handle = NextTemp("drop_file_handle");
+            EmitAssign(handle, $"extractvalue {llvmType} %value, 0");
+            EmitCall(
+                target: null,
+                "void",
+                "smalllang_platform_close_owned_file",
+                $"i64 {handle}");
+            EmitInstruction("ret void");
+            EmitFunctionLine("}");
+            EmitFunctionLine();
+            return;
+        }
         foreach (var field in structure.Fields.Where(field => _program.Types.ContainsOwnedStorage(field.Type)))
         {
             var extracted = NextTemp("drop_field");

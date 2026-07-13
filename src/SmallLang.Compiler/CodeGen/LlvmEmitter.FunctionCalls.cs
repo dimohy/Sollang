@@ -108,6 +108,15 @@ internal sealed partial class LlvmEmitter
             return EmitRuntimeEnvironmentIntrinsic(function, EmitExpression(expression.Arguments[0]));
         }
 
+        if (function.Kind == BoundFunctionKind.RuntimeOpenFile)
+        {
+            if (expression.Arguments.Count != 1)
+            {
+                throw new SmallLangException($"{path} expects exactly one Text path");
+            }
+            return EmitRuntimeOpenFile(function, EmitExpression(expression.Arguments[0]));
+        }
+
         if (function.Kind == BoundFunctionKind.RuntimeWriteScalar)
         {
             if (expression.Arguments.Count != 1)
@@ -635,6 +644,15 @@ internal sealed partial class LlvmEmitter
                 throw new SmallLangException($"{function.Name} expects a dynamic Text argv array");
             }
             return EmitRuntimeRunProcessIntrinsic(function, argv);
+        }
+
+        if (function.Kind == BoundFunctionKind.RuntimeOpenFile)
+        {
+            if (argument is null)
+            {
+                throw new SmallLangException($"{function.Name} expects exactly one Text path");
+            }
+            return EmitRuntimeOpenFile(function, argument);
         }
 
         if (function.Kind == BoundFunctionKind.RuntimeWriteScalar)

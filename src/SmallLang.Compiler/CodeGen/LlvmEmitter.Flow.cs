@@ -162,6 +162,9 @@ internal sealed partial class LlvmEmitter
                             ? EmitRuntimeRunProcessIntrinsic(function, argv)
                             : throw new SmallLangException($"{path} expects a dynamic Text argv array");
                         continue;
+                    case BoundFunctionKind.RuntimeOpenFile:
+                        current = EmitRuntimeOpenFile(function, current);
+                        continue;
                     case BoundFunctionKind.RuntimeSleep:
                         current = EmitRuntimeSleepIntrinsic(function, current, path);
                         continue;
@@ -191,6 +194,32 @@ internal sealed partial class LlvmEmitter
         out RuntimeFlowResult result)
     {
         result = new RuntimeFlowResult(null, null, _mainOk);
+
+        if (current is RuntimeStruct file
+            && _program.Types.IsStruct(file.Type)
+            && string.Equals(
+                _program.Types.GetStruct(file.Type).Name,
+                "sys.file.File",
+                StringComparison.Ordinal)
+            && path is "readAt" or "readAtAsync")
+        {
+            if (!_program.ResolvedGenericCalls.TryGetValue(target, out var fileFunction))
+            {
+                throw new SmallLangException($"unresolved generic file operation '{path}'");
+            }
+            var value = path == "readAtAsync"
+                ? (RuntimeValue)EmitRuntimeReadScalarAsync(
+                    fileFunction,
+                    file,
+                    target.Arguments[0])
+                : EmitRuntimeReadScalar(
+                    fileFunction,
+                    file: file,
+                    offsetExpression: target.Arguments[0]);
+            result = new RuntimeFlowResult(value, null, _mainOk);
+            return true;
+        }
+
         switch (path)
         {
             case "await" when current is RuntimeTask task:

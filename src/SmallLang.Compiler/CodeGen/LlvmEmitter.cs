@@ -353,11 +353,12 @@ internal sealed partial class LlvmEmitter
             %smalllang.read_int_result = type { i64, i32 }
             %smalllang.file_int_result = type { i64, i32 }
             %smalllang.file_count_result = type { i64, i32 }
+            %smalllang.file_handle_result = type { i64, i32 }
             %smalllang.mapped_bytes = type { ptr, i64, ptr, i64, i1 }
             %smalllang.environment_result = type { ptr, i64, i1, i1 }
             %smalllang.process_result = type { i32, i32 }
             %smalllang.task = type { ptr, ptr }
-            %smalllang.task_control = type { ptr, ptr, ptr, ptr, i32, i32, ptr, ptr, i64, ptr, ptr, i32, i32, i64, i64, i32, ptr }
+            %smalllang.task_control = type { ptr, ptr, ptr, ptr, i32, i32, ptr, ptr, i64, ptr, ptr, i32, i32, i64, i64, i32, ptr, i64, i64, i32 }
 
             """;
         header += EmitStructTypeDefinitions();

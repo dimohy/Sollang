@@ -135,7 +135,25 @@ internal abstract class LlvmRuntimePlatform
               %size = load i32, ptr %size_slot, align 4
               %size64 = zext i32 %size to i64
               %data_slot = getelementptr %smalllang.task_control, ptr %request, i32 0, i32 13
-              %result = call %smalllang.file_count_result @smalllang_platform_read_file_bytes(ptr %data_slot, i64 %size64)
+              %explicit_slot = getelementptr %smalllang.task_control, ptr %request, i32 0, i32 19
+              %explicit = load i32, ptr %explicit_slot, align 4
+              %is_explicit = icmp ne i32 %explicit, 0
+              br i1 %is_explicit, label %perform_owned_read, label %perform_compatibility_read
+
+            perform_compatibility_read:
+              %compatibility_result = call %smalllang.file_count_result @smalllang_platform_read_file_bytes(ptr %data_slot, i64 %size64)
+              br label %record_read
+
+            perform_owned_read:
+              %owned_handle_slot = getelementptr %smalllang.task_control, ptr %request, i32 0, i32 17
+              %owned_handle = load i64, ptr %owned_handle_slot, align 8
+              %owned_offset_slot = getelementptr %smalllang.task_control, ptr %request, i32 0, i32 18
+              %owned_offset = load i64, ptr %owned_offset_slot, align 8
+              %owned_result = call %smalllang.file_count_result @smalllang_platform_read_owned_file_at(i64 %owned_handle, ptr %data_slot, i64 %size64, i64 %owned_offset)
+              br label %record_read
+
+            record_read:
+              %result = phi %smalllang.file_count_result [ %compatibility_result, %perform_compatibility_read ], [ %owned_result, %perform_owned_read ]
               %count = extractvalue %smalllang.file_count_result %result, 0
               %ok = extractvalue %smalllang.file_count_result %result, 1
               %count_slot = getelementptr %smalllang.task_control, ptr %request, i32 0, i32 14
@@ -158,6 +176,19 @@ internal abstract class LlvmRuntimePlatform
               br label %queue_completion
 
             queue_completion:
+              %completion_explicit_slot = getelementptr %smalllang.task_control, ptr %request, i32 0, i32 19
+              %completion_explicit = load i32, ptr %completion_explicit_slot, align 4
+              %completion_is_explicit = icmp ne i32 %completion_explicit, 0
+              br i1 %completion_is_explicit, label %close_owned_request, label %push_completed_request
+
+            close_owned_request:
+              %completion_handle_slot = getelementptr %smalllang.task_control, ptr %request, i32 0, i32 17
+              %completion_handle = load i64, ptr %completion_handle_slot, align 8
+              call void @smalllang_platform_close_owned_file(i64 %completion_handle)
+              store i32 0, ptr %completion_explicit_slot, align 4
+              br label %push_completed_request
+
+            push_completed_request:
               call void @smalllang_file_push_completion(ptr %request)
               br label %next_request
 
@@ -322,6 +353,19 @@ internal abstract class LlvmRuntimePlatform
 
             define internal void @smalllang_file_read_task_cancel(ptr %control) #0 {
             entry:
+              %explicit_slot = getelementptr %smalllang.task_control, ptr %control, i32 0, i32 19
+              %explicit = load i32, ptr %explicit_slot, align 4
+              %owns_handle = icmp ne i32 %explicit, 0
+              br i1 %owns_handle, label %close_handle, label %destroy_context
+
+            close_handle:
+              %handle_slot = getelementptr %smalllang.task_control, ptr %control, i32 0, i32 17
+              %handle = load i64, ptr %handle_slot, align 8
+              call void @smalllang_platform_close_owned_file(i64 %handle)
+              store i32 0, ptr %explicit_slot, align 4
+              br label %destroy_context
+
+            destroy_context:
               %context_slot = getelementptr %smalllang.task_control, ptr %control, i32 0, i32 0
               %context = load ptr, ptr %context_slot, align 8
               call void @smalllang_free(ptr %context)
@@ -575,7 +619,7 @@ internal abstract class LlvmRuntimePlatform
 
             define internal ptr @smalllang_task_start(ptr %worker, ptr %destroy, ptr %cancel, ptr %context) #0 {
             entry:
-              %control = call ptr @smalllang_alloc(i64 120)
+              %control = call ptr @smalllang_alloc(i64 144)
               %allocated = icmp ne ptr %control, null
               br i1 %allocated, label %initialize, label %fail
 
@@ -614,6 +658,12 @@ internal abstract class LlvmRuntimePlatform
               store i32 0, ptr %file_ok_slot, align 4
               %file_next_slot = getelementptr %smalllang.task_control, ptr %control, i32 0, i32 16
               store ptr null, ptr %file_next_slot, align 8
+              %file_handle_slot = getelementptr %smalllang.task_control, ptr %control, i32 0, i32 17
+              store i64 -1, ptr %file_handle_slot, align 8
+              %file_offset_slot = getelementptr %smalllang.task_control, ptr %control, i32 0, i32 18
+              store i64 0, ptr %file_offset_slot, align 8
+              %file_explicit_slot = getelementptr %smalllang.task_control, ptr %control, i32 0, i32 19
+              store i32 0, ptr %file_explicit_slot, align 4
               %tail = load ptr, ptr @smalllang_task_ready_tail, align 8
               %empty = icmp eq ptr %tail, null
               br i1 %empty, label %first, label %append

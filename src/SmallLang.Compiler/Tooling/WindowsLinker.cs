@@ -56,9 +56,12 @@ internal sealed class WindowsLinker(LlvmToolchain toolchain)
             EXPORTS
             GetStdHandle
             ReadFile
+            GetOverlappedResult
             WriteFile
             CreateFileA
             CloseHandle
+            GetCurrentProcess
+            DuplicateHandle
             SetFilePointerEx
             GetFileSizeEx
             SetEndOfFile

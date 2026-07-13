@@ -139,8 +139,15 @@ while the worker owns the request, and shutdown drains then joins the worker.
 The self-host grammar now has a real `TypeApplicationExpression`, its parser
 accepts expression entry rules before the synthetic End token, and imported
 generic calls such as `file.readAsync<UInt16>` retain their await suspension.
-Owned multi-file reader handles, explicit-offset I/O, async open/write/close,
-failure propagation, captures, and task groups remain partial.
+Flow targets now also preserve type arguments such as
+`reader -> readAtAsync<UInt16>(offset)`. Self-host call scanning ignores type
+and runtime argument identifiers when selecting the target name.
+
+`sys.file.File` is now an affine native reader owner with deterministic close.
+`readAt<T>` and `readAtAsync<T>` use explicit UInt64 offsets; async Tasks own a
+duplicated native handle, Windows uses overlapped reads, and Linux uses `pread`.
+Owned writers, async open/write/close, failure propagation, captures, and task
+groups remain partial.
 Straight-line states now carry heap owners and
 mutable locals safely: frame storage temporarily owns the value, resume restores
 one owner, and async container stack promotion is disabled. Self-host frame-slot
@@ -229,8 +236,9 @@ test-performance boundary.
 - Partial (3): file/random/time APIs are narrow compiler intrinsics; VS Code
   support is grammar-only; tests are example-driven without an SL unit-test
   framework. File I/O now monomorphizes canonical scalar `write<T>` and
-  zero-input `read<T>` calls with explicit EOF/error results, while explicit
-  user-value serialization remains.
+  zero-input `read<T>` calls with explicit EOF/error results. Affine `File`
+  owners and position-based `readAt<T>`/`readAtAsync<T>` remove shared-cursor
+  races, while owned writers and explicit user-value serialization remain.
 - Missing (3): portable path/filesystem library, package/build command, formatter
   and language server based on the real parser.
 

@@ -2,6 +2,14 @@ namespace sys.file
 
 import sys.runtime as rt
 
+# File is an affine native resource. Its private token cannot be constructed or
+# copied by user code, and leaving the owner scope closes it deterministically.
+public struct File {
+    token: UInt64
+}
+
+openRead path: Text -> Result<File, Text> = intrinsic
+
 openIntWriter path: Text -> Unit {
     path -> rt.openIntWriter
 }
