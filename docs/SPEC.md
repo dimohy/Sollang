@@ -570,8 +570,9 @@ cannot be awaited twice or used after `await`. `main` is the implicit root async
 scope, while other functions must declare `async` before using `await`.
 
 The Windows x64 and Linux x64 runtimes represent every task with the same
-two-pointer handle
-while its heap context stores input and result slots specialized for their exact
+two-pointer value while an owned task-control record stores its context,
+resume/destroy entries, ready-queue link, lifecycle status, and resume state.
+The heap context stores input and result slots specialized for their exact
 types. Scalar values, immutable `Text`, and value-only structs/enums are
 structurally sendable and need no annotation. Heap-owning arrays, dictionaries,
 structs, enums, and boxes cross into an async worker only through a `move` input;
@@ -585,11 +586,14 @@ awaiting scope; if a task leaves scope unawaited, cleanup joins it and drops the
 result before freeing the context. If native worker creation fails, a moved input
 is dropped before its context is released. The LLVM emitter calls the common
 `smalllang_task_start`, `smalllang_task_join`, and `smalllang_task_release`
-runtime boundary. Windows currently implements it with native thread handles;
-Linux uses an owned pthread handle. Async bodies remain CPU-pure until concurrent
-stdlib contracts are explicit. Cooperative cancellation, task groups,
-closure-capture analysis, and a stackless I/O scheduler remain subsequent
-slices.
+runtime boundary. Both native targets now use one cooperative FIFO ready queue;
+`await` pumps ready work until its affine target completes, and release invokes
+the context destroy entry exactly once. There is no OS thread per task and Linux
+does not require pthread linkage. Current resume entries still run a whole
+CPU-pure body once. The self-hosted IR assigns stable one-based states to source
+`await` points; splitting live locals into the owned frame and returning from
+each suspension is the next lowering slice. Cooperative cancellation, task
+groups, closure-capture analysis, and nonblocking I/O registration follow.
 
 ## Local Functions
 

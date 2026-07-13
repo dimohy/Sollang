@@ -287,6 +287,7 @@ internal sealed partial class LlvmEmitter
             %smalllang.environment_result = type { ptr, i64, i1, i1 }
             %smalllang.process_result = type { i32, i32 }
             %smalllang.task = type { ptr, ptr }
+            %smalllang.task_control = type { ptr, ptr, ptr, ptr, i32, i32 }
 
             """;
         header += EmitStructTypeDefinitions();
@@ -299,6 +300,11 @@ internal sealed partial class LlvmEmitter
         EmitGlobalLine("@smalllang_random_state = internal global i64 88172645463393265");
         EmitGlobalLine("@smalllang_writer_buffer = internal global [8192 x i64] zeroinitializer, align 8");
         EmitGlobalLine("@smalllang_writer_buffer_count = internal global i64 0");
+        if (_usesAsync)
+        {
+            EmitGlobalLine("@smalllang_task_ready_head = internal global ptr null");
+            EmitGlobalLine("@smalllang_task_ready_tail = internal global ptr null");
+        }
         EmitGlobalLine();
 
         EmitPlatformFunctionBlock(_platform.EmitExternalDeclarations);

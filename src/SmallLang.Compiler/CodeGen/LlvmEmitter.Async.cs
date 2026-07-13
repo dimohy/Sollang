@@ -83,7 +83,11 @@ internal sealed partial class LlvmEmitter
                 RuntimeAlignment(function.ReturnType));
 
             var handle = NextTemp("async_handle");
-            EmitCall(handle, "ptr", "smalllang_task_start", $"ptr @{workerName}, ptr {context}");
+            EmitCall(
+                handle,
+                "ptr",
+                "smalllang_task_start",
+                $"ptr @{workerName}, ptr @smalllang_free, ptr {context}");
             var started = NextTemp("async_started");
             EmitCompare(started, "ne", "ptr", handle, "null");
             var readyLabel = NextLabel("async_ready");
@@ -150,7 +154,6 @@ internal sealed partial class LlvmEmitter
         }
         var closeSucceeded = NextTemp("task_close_succeeded");
         EmitCall(closeSucceeded, "i1", "smalllang_task_release", $"ptr {task.HandleName}");
-        EmitCall(target: null, "void", "smalllang_free", $"ptr {task.ContextName}");
         var closedLabel = NextLabel("task_closed");
         var closeFailedLabel = NextLabel("task_close_failed");
         EmitConditionalBranch(closeSucceeded, closedLabel, closeFailedLabel);

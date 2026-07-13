@@ -3375,4 +3375,41 @@ corresponding self-hosting gate.
 References: [Rust partial moves](https://doc.rust-lang.org/rust-by-example/scope/move/partial_move.html),
 [Rust destructors and assignment](https://doc.rust-lang.org/reference/destructors.html).
 
+## D114 - Async Tasks Use An Owned Cooperative Frame Before True Suspension
+
+Status: cooperative executor and self-host suspension plan implemented
+Date: 2026-07-14
+
+SmallLang no longer creates one OS thread for every async call. Windows and
+Linux share one `%smalllang.task_control` layout containing the specialized
+context, resume and destroy entries, FIFO ready link, lifecycle status, and a
+reserved resume state. Starting a task allocates that control record and queues
+it. `await` pumps ready tasks until its affine target completes. Releasing a
+completed task invokes its destroy entry, which owns context deallocation, and
+then frees the control record. Reverse-order await and lexical cleanup therefore
+retain deterministic one-owner destruction without `CreateThread` or pthread.
+
+This follows Swift and Kotlin in keeping scheduling below structured source
+syntax, Rust in treating async work as compiler-generated state, and LLVM in
+separating ramp/resume/destroy responsibilities. SmallLang deliberately keeps
+its existing hot child-task surface and explicit `await`; it does not expose
+polling, wakers, continuations, or executor objects in ordinary language syntax.
+The self-hosted `typedIr.suspensions` pass assigns stable one-based state numbers
+to `await` paths inside async functions so the SL LLVM emitter can reproduce the
+same frame plan.
+
+This is the first stackless boundary, not completed suspension lowering. A
+resume entry currently runs its CPU-pure function body once, and a nested await
+can still consume native call stack while pumping its child. The next slice must
+spill values live across each await into the owned frame, set the numbered
+state, return to the scheduler, and resume through a state switch. Nonblocking
+timer/file readiness, cooperative cancellation/failure, captures, and task
+groups follow that foundation. Example 241 covers FIFO scheduling and reverse
+await on Windows and Linux; example 242 covers the self-host state plan.
+
+References: [LLVM coroutines](https://llvm.org/docs/Coroutines.html),
+[Swift concurrency](https://docs.swift.org/swift-book/LanguageGuide/Concurrency.html),
+[Rust await expressions](https://doc.rust-lang.org/reference/expressions/await-expr.html),
+[Kotlin coroutine scopes](https://kotlinlang.org/docs/coroutines-basics.html#coroutine-scope-and-structured-concurrency).
+
 

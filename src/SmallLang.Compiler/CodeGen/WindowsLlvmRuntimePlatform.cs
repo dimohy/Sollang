@@ -14,34 +14,6 @@ internal sealed class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
 
     public override string AsyncWorkerSuccessValue => "0";
 
-    public override void EmitAsyncPrimitives(StringBuilder functions)
-    {
-        functions.AppendLine("declare dllimport ptr @CreateThread(ptr, i64, ptr, ptr, i32, ptr)");
-        functions.AppendLine("declare dllimport i32 @WaitForSingleObject(ptr, i32)");
-        functions.AppendLine("""
-            define internal ptr @smalllang_task_start(ptr %worker, ptr %context) #0 {
-            entry:
-              %handle = call ptr @CreateThread(ptr null, i64 0, ptr %worker, ptr %context, i32 0, ptr null)
-              ret ptr %handle
-            }
-
-            define internal i1 @smalllang_task_join(ptr %handle) #0 {
-            entry:
-              %result = call i32 @WaitForSingleObject(ptr %handle, i32 -1)
-              %ok = icmp eq i32 %result, 0
-              ret i1 %ok
-            }
-
-            define internal i1 @smalllang_task_release(ptr %handle) #0 {
-            entry:
-              %result = call i32 @CloseHandle(ptr %handle)
-              %ok = icmp ne i32 %result, 0
-              ret i1 %ok
-            }
-
-            """);
-    }
-
     public override void EmitGlobals(StringBuilder globals)
     {
         globals.AppendLine("@smalllang_file_writer = internal global ptr null");

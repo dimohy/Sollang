@@ -49,6 +49,17 @@ public struct MoveEvent {
     memberIr: Int
 }
 
+# A suspension point belongs to one async function and receives a stable,
+# one-based resume state in source order. awaitIr is -1 until the corresponding
+# flow target becomes a first-class typed-IR node; awaitAst remains stable now.
+public struct CoroutineSuspendPoint {
+    functionIr: Int
+    sourceModule: Int
+    awaitAst: Int
+    awaitIr: Int
+    state: Int
+}
+
 public lower sources: [Text; ~] -> [TypedIrNode; ~] {
     sources -> expressionTypes.infer => inferred!
     sources -> nominalTypes.resolve => nominal!
@@ -1300,4 +1311,72 @@ public movesFrom ir: [TypedIrNode; ~] -> [MoveEvent; ~] {
 
 public moves sources: [Text; ~] -> [MoveEvent; ~] {
     sources -> lower -> movesFrom
+}
+
+public suspensions sources: [Text; ~] -> [CoroutineSuspendPoint; ~] {
+    sources -> lower => ir!
+    [CoroutineSuspendPoint; ~] => points!
+    0 => sourceIndex!
+    sourceIndex! < (sources -> len) -> while {
+        sources[sourceIndex!] => source
+        source -> ast.lower => astNodes!
+        source -> lexer.lex => tokens!
+        0 => awaitAstIndex!
+        awaitAstIndex! < (astNodes! -> len) -> while {
+            astNodes![awaitAstIndex!] => awaitAst
+            false => isAwait!
+            (awaitAst.kind == 16 and awaitAst.parent >= 0 and astNodes![awaitAst.parent].kind == 10 and awaitAst.payloadToken >= 0) -> if {
+                tokens![awaitAst.payloadToken] => awaitToken
+                awaitToken.span.length == UIntSize(5) -> if {
+                    source -> byte(awaitToken.span.start) => awaitByte0
+                    source -> byte(awaitToken.span.start + UIntSize(1)) => awaitByte1
+                    source -> byte(awaitToken.span.start + UIntSize(2)) => awaitByte2
+                    source -> byte(awaitToken.span.start + UIntSize(3)) => awaitByte3
+                    source -> byte(awaitToken.span.start + UIntSize(4)) => awaitByte4
+                    (awaitByte0 == UInt8(97) and awaitByte1 == UInt8(119) and awaitByte2 == UInt8(97) and awaitByte3 == UInt8(105) and awaitByte4 == UInt8(116)) -> if {
+                        true => isAwait!
+                    }
+                }
+            }
+            isAwait! -> if {
+                awaitAst.parent => functionAstIndex!
+                (functionAstIndex! >= 0 and astNodes![functionAstIndex!].kind != 7) -> while {
+                    astNodes![functionAstIndex!].parent => functionAstIndex!
+                }
+                (functionAstIndex! >= 0 and (astNodes![functionAstIndex!].flags / 8) % 2 == 1) -> if {
+                    -1 => functionIr!
+                    -1 => awaitIr!
+                    0 => irIndex!
+                    irIndex! < (ir! -> len) -> while {
+                        ir![irIndex!] => node
+                        (node.sourceModule == sourceIndex! and node.astNode == functionAstIndex! and node.kind == 0) -> if {
+                            irIndex! => functionIr!
+                        }
+                        (node.sourceModule == sourceIndex! and node.astNode == awaitAstIndex!) -> if {
+                            irIndex! => awaitIr!
+                        }
+                        irIndex! + 1 => irIndex!
+                    }
+                    functionIr! >= 0 -> if {
+                        1 => state!
+                        0 => pointSearch!
+                        pointSearch! < (points! -> len) -> while {
+                            points![pointSearch!].functionIr == functionIr! -> if { state! + 1 => state! }
+                            pointSearch! + 1 => pointSearch!
+                        }
+                        points! -> push(CoroutineSuspendPoint {
+                            functionIr: functionIr!
+                            sourceModule: sourceIndex!
+                            awaitAst: awaitAstIndex!
+                            awaitIr: awaitIr!
+                            state: state!
+                        })
+                    }
+                }
+            }
+            awaitAstIndex! + 1 => awaitAstIndex!
+        }
+        sourceIndex! + 1 => sourceIndex!
+    }
+    points!
 }

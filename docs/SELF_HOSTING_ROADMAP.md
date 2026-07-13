@@ -105,6 +105,16 @@ There are **13.0 equivalent gates remaining**. Because the remaining compiler
 primitives are harder than early syntax gates, this is not an elapsed-time
 estimate.
 
+The async executor now has an owned, target-neutral task-control ABI with
+context/resume/destroy pointers, FIFO ready linkage, lifecycle status, and a
+reserved resume-state field. Windows and Linux execute the same cooperative
+queue and no longer allocate one OS thread per task. The self-hosted typed-IR
+module emits stable `CoroutineSuspendPoint` records for `await` sites inside
+async functions. This advances the async gate but does not change the formal
+score: resume entries still execute a whole CPU-pure body, so live-across-await
+frame spilling, true suspension, nonblocking I/O, cancellation, and task groups
+remain partial.
+
 ## Gate Inventory
 
 ### Core syntax and control flow — 9.0 / 10
