@@ -286,13 +286,16 @@ internal sealed partial class LlvmEmitter
             %smalllang.mapped_bytes = type { ptr, i64, ptr, i64, i1 }
             %smalllang.environment_result = type { ptr, i64, i1, i1 }
             %smalllang.process_result = type { i32, i32 }
-            %smalllang.task.i32 = type { ptr, ptr }
-            %smalllang.async_context.i32 = type { ptr, ptr, ptr, ptr, ptr, i32, i32 }
+            %smalllang.task = type { ptr, ptr }
 
             """;
         header += EmitStructTypeDefinitions();
 
         EmitPlatformGlobalBlock(_platform.EmitGlobals);
+        if (_platform is WindowsLlvmRuntimePlatform)
+        {
+            EmitGlobalLine("@_fltused = global i32 0");
+        }
         EmitGlobalLine("@smalllang_random_state = internal global i64 88172645463393265");
         EmitGlobalLine("@smalllang_writer_buffer = internal global [8192 x i64] zeroinitializer, align 8");
         EmitGlobalLine("@smalllang_writer_buffer_count = internal global i64 0");

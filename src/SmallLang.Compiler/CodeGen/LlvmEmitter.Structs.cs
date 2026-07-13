@@ -156,6 +156,12 @@ internal sealed partial class LlvmEmitter
             RuntimeDynamicInlineArray array => (
                 "%smalllang.dynamic_int_array",
                 BuildDynamicArrayAggregate(array.PointerName, array.LengthName, array.CapacityName)),
+            RuntimeIntDictionary dictionary => (
+                "%smalllang.int_dictionary",
+                BuildDictionaryAggregate(dictionary.PointerName, dictionary.LengthName, dictionary.CapacityName)),
+            RuntimeInlineDictionary dictionary => (
+                "%smalllang.int_dictionary",
+                BuildDictionaryAggregate(dictionary.PointerName, dictionary.LengthName, dictionary.CapacityName)),
             _ => throw new SmallLangException($"type {value.Type} is not supported in an inline struct field")
         };
     }
@@ -185,6 +191,18 @@ internal sealed partial class LlvmEmitter
             var definition = _program.Types.GetDynamicArray(type);
             var (pointer, length, capacity) = ExtractDynamicArrayAggregate(valueName);
             return new RuntimeDynamicInlineArray(type, definition.ElementType, pointer, length, capacity);
+        }
+        if (type == BoundType.IntDictionary)
+        {
+            var (pointer, length, capacity) = ExtractDictionaryAggregate(valueName);
+            return new RuntimeIntDictionary(pointer, length, capacity);
+        }
+        if (_program.Types.IsDictionary(type))
+        {
+            var definition = _program.Types.GetDictionary(type);
+            var (pointer, length, capacity) = ExtractDictionaryAggregate(valueName);
+            return new RuntimeInlineDictionary(
+                type, definition.KeyType, definition.ValueType, pointer, length, capacity);
         }
 
         if (IsIntegerType(type))
@@ -233,6 +251,17 @@ internal sealed partial class LlvmEmitter
         return (pointer, length, capacity);
     }
 
+    private (string Pointer, string Length, string Capacity) ExtractDictionaryAggregate(string aggregate)
+    {
+        var pointer = NextTemp("dictionary_ptr");
+        EmitAssign(pointer, $"extractvalue %smalllang.int_dictionary {aggregate}, 0");
+        var length = NextTemp("dictionary_len");
+        EmitAssign(length, $"extractvalue %smalllang.int_dictionary {aggregate}, 1");
+        var capacity = NextTemp("dictionary_capacity");
+        EmitAssign(capacity, $"extractvalue %smalllang.int_dictionary {aggregate}, 2");
+        return (pointer, length, capacity);
+    }
+
     private string LlvmType(BoundType type)
     {
         if (_program.Types.IsStruct(type))
@@ -255,6 +284,10 @@ internal sealed partial class LlvmEmitter
         {
             return "%smalllang.dynamic_int_array";
         }
+        if (_program.Types.IsTask(type))
+        {
+            return "%smalllang.task";
+        }
 
         return type switch
         {
@@ -275,7 +308,6 @@ internal sealed partial class LlvmEmitter
             BoundType.DynamicIntArray => "%smalllang.dynamic_int_array",
             BoundType.IntDictionaryView or BoundType.IntDictionary => "%smalllang.int_dictionary",
             BoundType.Arena => "%smalllang.dynamic_int_array",
-            BoundType.TaskInt => "%smalllang.task.i32",
             _ => throw new SmallLangException($"type {type} has no first-class LLVM representation")
         };
     }

@@ -3255,4 +3255,35 @@ self-hosted LLVM cases remain dominated by native optimization, so module-level
 object caching is the next performance step rather than further blind worker
 growth.
 
+## D110 - Task Result Types Are Generic But Task Ownership Is Affine
+
+Status: first generic-result slice implemented
+Date: 2026-07-13
+
+An async declaration still exposes its ordinary result type, while a call
+produces `Task<T>` and `await` consumes that task to recover `T`. This follows
+Rust `Future::Output` and Kotlin `Deferred<T>` in preserving the result type,
+and Swift/Kotlin structured concurrency in keeping child work inside its parent
+scope. SmallLang deliberately differs from Kotlin's repeatable `Deferred.await`:
+the task handle is an affine owner, so its native handle, context, and possibly
+owned result have one statically provable cleanup path.
+
+All specializations share `%smalllang.task = { ptr, ptr }`. The heap context is
+specialized to the LLVM representation and alignment of `T`, avoiding boxed
+`Any` values and runtime type tags. Awaiting transfers an owned result to the
+caller. Dropping an unawaited task joins it, recursively drops its result, then
+releases the context and OS handle. Unit, numeric, Bool, Text, dynamic collections,
+and owned structs are executable in example 236. Example 237 records bit 8 on
+self-hosted typed-IR call nodes while preserving the declared result metadata,
+so later self-hosted async lowering can recover `T` without type erasure.
+
+The current worker input remains absent or `Int`, and Windows native threads
+remain the only executor. General inputs and captures require a compile-time
+sendability gate; Linux and nonblocking I/O require the planned stackless
+scheduler. Cancellation and dynamic task groups follow after those foundations.
+
+References: [Swift structured concurrency](https://docs.swift.org/swift-book/LanguageGuide/Concurrency.html),
+[Rust `Future::Output`](https://doc.rust-lang.org/std/future/trait.Future.html),
+[Kotlin structured `async`](https://kotlinlang.org/docs/composing-suspending-functions.html).
+
 

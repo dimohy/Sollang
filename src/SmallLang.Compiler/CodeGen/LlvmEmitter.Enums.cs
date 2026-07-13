@@ -225,7 +225,7 @@ internal sealed partial class LlvmEmitter
     {
         return type switch
         {
-            BoundType.Bool or BoundType.Int8 or BoundType.UInt8 => 1,
+            BoundType.Unit or BoundType.Bool or BoundType.Int8 or BoundType.UInt8 => 1,
             BoundType.Int16 or BoundType.UInt16 => 2,
             BoundType.Int or BoundType.UInt32 or BoundType.Float32 => 4,
             BoundType.CodePoint => 4,

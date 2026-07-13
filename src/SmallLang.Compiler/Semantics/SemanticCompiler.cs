@@ -345,7 +345,7 @@ internal sealed class SemanticCompiler
         }
         var inputOwnership = BindFunctionInputOwnership(function, inputType);
         if (function.IsAsync
-            && (returnType != BoundType.Int
+            && (!IsAsyncResultTypeSupported(returnType)
                 || inputType is not (null or BoundType.Int)
                 || isLocal
                 || function.IsStandardLibrary
@@ -354,7 +354,7 @@ internal sealed class SemanticCompiler
             throw Error(
                 function.Line,
                 function.Column,
-                "the first async runtime slice supports only non-local Int -> async Int or -> async Int functions");
+                "async functions require a transferable result, an optional Int input, and a non-local user declaration");
         }
         var kind = BindFunctionKind(function, inputType, returnType, isLocal);
         var localFunctions = BindLocalFunctions(function);
@@ -1159,6 +1159,8 @@ internal sealed class SemanticCompiler
                     }
                     return;
                 case ExpressionStatement expressionStatement:
+                    var movedExpressionSourceName = GetMoveConsumingContainerSourceName(
+                        expressionStatement.Expression);
                     var effect = InferExpressionStatement(expressionStatement.Expression, functions, bindings, mutableBindings, yieldInputType);
                     if (effect is FlowBindingEffect bindingEffect)
                     {
@@ -1185,6 +1187,11 @@ internal sealed class SemanticCompiler
                     {
                         bindings.Remove(consumedName);
                         mutableBindings.Remove(consumedName);
+                    }
+                    if (movedExpressionSourceName is not null)
+                    {
+                        bindings.Remove(movedExpressionSourceName);
+                        mutableBindings.Remove(movedExpressionSourceName);
                     }
 
                     break;
@@ -3365,7 +3372,7 @@ internal sealed class SemanticCompiler
         result = new FlowResult(BoundType.Unit, FlowEffect.None);
         switch (path)
         {
-            case "await" when currentType == BoundType.TaskInt:
+            case "await" when _types.TryGetTaskValue(currentType, out var awaitedType):
                 if (!_currentFunctionIsAsync)
                 {
                     throw Error(target.Line, target.Column, "await is only valid in async functions or main");
@@ -3374,7 +3381,7 @@ internal sealed class SemanticCompiler
                 {
                     throw Error(target.Line, target.Column, "await does not accept arguments");
                 }
-                result = new FlowResult(BoundType.Int, FlowEffect.None);
+                result = new FlowResult(awaitedType, FlowEffect.None);
                 return true;
             case "flush" when currentType == BoundType.MutableMappedBytes:
                 if (!isLast || target.Arguments.Count != 0)
@@ -3740,7 +3747,7 @@ internal sealed class SemanticCompiler
                     throw Error(
                         target.Line,
                         target.Column,
-                        $"await expects Task<Int> but received {FormatType(currentType)}");
+                        $"await expects Task<T> but received {FormatType(currentType)}");
                 }
                 return false;
         }
@@ -4113,6 +4120,11 @@ internal sealed class SemanticCompiler
             var ok = SubstituteGenericType(resultTypes.Ok, primaryType, secondaryType);
             var error = SubstituteGenericType(resultTypes.Error, primaryType, secondaryType);
             return _types.GetOrAddResult(ok, error, $"Result<{FormatType(ok)}, {FormatType(error)}>");
+        }
+        if (_types.TryGetTaskValue(type, out var taskValue))
+        {
+            var value = SubstituteGenericType(taskValue, primaryType, secondaryType);
+            return _types.GetOrAddTask(value);
         }
         return type;
     }
@@ -4577,8 +4589,8 @@ internal sealed class SemanticCompiler
         return AsyncCallType(function);
     }
 
-    private static BoundType AsyncCallType(BoundFunction function) =>
-        function.IsAsync ? BoundType.TaskInt : function.ReturnType;
+    private BoundType AsyncCallType(BoundFunction function) =>
+        function.IsAsync ? _types.GetOrAddTask(function.ReturnType) : function.ReturnType;
 
     private void EnsureDisplayable(BoundType type, int line, int column, string path)
     {
@@ -5134,6 +5146,7 @@ internal sealed class SemanticCompiler
             TypeId.Arguments => 8,
             TypeId.Arena => 24,
             TypeId.MappedBytes or TypeId.MutableMappedBytes => 40,
+            TypeId.DynamicIntArray or TypeId.IntDictionary => 24,
             _ => throw new InvalidOperationException($"type {type} has no inline size")
         };
     }
@@ -5309,6 +5322,10 @@ internal sealed class SemanticCompiler
             var dictionary = _types.GetDictionary(type);
             return $"{{{FormatType(dictionary.KeyType)}: {FormatType(dictionary.ValueType)}}}";
         }
+        if (_types.TryGetTaskValue(type, out var taskValue))
+        {
+            return $"Task<{FormatType(taskValue)}>";
+        }
 
         return type switch
         {
@@ -5338,7 +5355,6 @@ internal sealed class SemanticCompiler
             BoundType.DynamicIntArray => "[Int; ~]",
             BoundType.IntDictionaryView => "{Int: Int}",
             BoundType.IntDictionary => "{Int: Int}",
-            BoundType.TaskInt => "Task<Int>",
             BoundType.GenericParameter => "generic parameter",
             BoundType.SecondaryGenericParameter => "secondary generic parameter",
             _ => type.ToString()
@@ -5414,6 +5430,18 @@ internal sealed class SemanticCompiler
     private bool IsOwnedHeapType(BoundType type)
     {
         return _types.ContainsOwnedStorage(type);
+    }
+
+    private bool IsAsyncResultTypeSupported(BoundType type)
+    {
+        return type is BoundType.Unit or BoundType.Text or BoundType.Bool
+            or BoundType.DynamicIntArray or BoundType.IntDictionary
+            || IsNumericType(type)
+            || _types.IsDynamicArray(type)
+            || _types.IsDictionary(type)
+            || _types.IsStruct(type)
+            || _types.IsEnum(type)
+            || _types.IsBox(type);
     }
 
     private bool IsContainerCreationExpression(Expression expression)

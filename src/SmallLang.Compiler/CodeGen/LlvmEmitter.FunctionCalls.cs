@@ -655,7 +655,7 @@ internal sealed partial class LlvmEmitter
 
         if (function.IsAsync)
         {
-            return EmitAsyncIntFunctionCall(function, argument);
+            return EmitAsyncFunctionCall(function, argument);
         }
 
         if (IsNumericType(function.ReturnType))

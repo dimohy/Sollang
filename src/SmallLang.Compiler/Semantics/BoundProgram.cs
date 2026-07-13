@@ -199,6 +199,8 @@ internal sealed class TypeDefinitionTable
     private readonly Dictionary<(TypeId Ok, TypeId Error), TypeId> _resultsByTypes = [];
     private readonly Dictionary<TypeId, TypeId> _optionValues = [];
     private readonly Dictionary<TypeId, (TypeId Ok, TypeId Error)> _resultTypes = [];
+    private readonly Dictionary<TypeId, TypeId> _tasksByValue = [];
+    private readonly Dictionary<TypeId, TypeId> _taskValues = [];
     private int _nextParametricTypeId;
     private readonly int _pointerSize;
 
@@ -214,6 +216,8 @@ internal sealed class TypeDefinitionTable
         _enums = new Dictionary<TypeId, BoundEnumDefinition>(enums);
         _boxes = new Dictionary<TypeId, BoundBoxDefinition>(boxes);
         _pointerSize = pointerSize;
+        _tasksByValue.Add(TypeId.Int, TypeId.TaskInt);
+        _taskValues.Add(TypeId.TaskInt, TypeId.Int);
         _nextParametricTypeId = _names.Values
             .Concat(_boxes.Keys)
             .Select(static type => (int)type)
@@ -257,7 +261,7 @@ internal sealed class TypeDefinitionTable
         }
 
         var id = (TypeId)_nextParametricTypeId++;
-        var size = InlineSize(elementType);
+        var size = InlineSizeOf(elementType);
         var alignment = Math.Min(Math.Max(size, 1), 8);
         _staticArrays.Add(id, new BoundStaticArrayDefinition(id, elementType, size, alignment));
         _staticArraysByElement.Add(elementType, id);
@@ -275,7 +279,7 @@ internal sealed class TypeDefinitionTable
         }
 
         var id = (TypeId)_nextParametricTypeId++;
-        var size = InlineSize(elementType);
+        var size = InlineSizeOf(elementType);
         var alignment = Math.Min(Math.Max(size, 1), 8);
         _dynamicArrays.Add(id, new BoundDynamicArrayDefinition(id, elementType, size, alignment));
         _dynamicArraysByElement.Add(elementType, id);
@@ -293,7 +297,7 @@ internal sealed class TypeDefinitionTable
             return;
         }
 
-        var size = InlineSize(elementType);
+        var size = InlineSizeOf(elementType);
         var alignment = Math.Min(Math.Max(size, 1), 8);
         _dynamicArrays.Add(id, new BoundDynamicArrayDefinition(id, elementType, size, alignment));
         _dynamicArraysByElement.Add(elementType, id);
@@ -310,9 +314,9 @@ internal sealed class TypeDefinitionTable
             return existing;
         }
 
-        var keySize = InlineSize(keyType);
+        var keySize = InlineSizeOf(keyType);
         var keyAlignment = Math.Min(Math.Max(keySize, 1), 8);
-        var valueSize = InlineSize(valueType);
+        var valueSize = InlineSizeOf(valueType);
         var valueAlignment = Math.Min(Math.Max(valueSize, 1), 8);
         var valueOffset = AlignUp(keySize, valueAlignment);
         var entryAlignment = Math.Max(keyAlignment, valueAlignment);
@@ -340,7 +344,7 @@ internal sealed class TypeDefinitionTable
             return existing;
         }
         var id = (TypeId)_nextParametricTypeId++;
-        var payloadWords = (InlineSize(valueType) + 7) / 8;
+        var payloadWords = (InlineSizeOf(valueType) + 7) / 8;
         _enums.Add(id, new BoundEnumDefinition(id, displayName, [
             new BoundEnumVariant("None", null, 0, 0, 0),
             new BoundEnumVariant("Some", valueType, 1, 0, 0)
@@ -357,7 +361,7 @@ internal sealed class TypeDefinitionTable
             return existing;
         }
         var id = (TypeId)_nextParametricTypeId++;
-        var payloadWords = (Math.Max(InlineSize(okType), InlineSize(errorType)) + 7) / 8;
+        var payloadWords = (Math.Max(InlineSizeOf(okType), InlineSizeOf(errorType)) + 7) / 8;
         _enums.Add(id, new BoundEnumDefinition(id, displayName, [
             new BoundEnumVariant("Ok", okType, 0, 0, 0),
             new BoundEnumVariant("Err", errorType, 1, 0, 0)
@@ -373,6 +377,24 @@ internal sealed class TypeDefinitionTable
     public bool TryGetResultTypes(TypeId type, out (TypeId Ok, TypeId Error) types) =>
         _resultTypes.TryGetValue(type, out types);
 
+    public TypeId GetOrAddTask(TypeId valueType)
+    {
+        if (_tasksByValue.TryGetValue(valueType, out var existing))
+        {
+            return existing;
+        }
+
+        var id = (TypeId)_nextParametricTypeId++;
+        _tasksByValue.Add(valueType, id);
+        _taskValues.Add(id, valueType);
+        return id;
+    }
+
+    public bool IsTask(TypeId type) => _taskValues.ContainsKey(type);
+
+    public bool TryGetTaskValue(TypeId type, out TypeId valueType) =>
+        _taskValues.TryGetValue(type, out valueType);
+
     public bool ContainsOwnedStorage(TypeId type)
     {
         return ContainsOwnedStorage(type, new HashSet<TypeId>());
@@ -380,9 +402,9 @@ internal sealed class TypeDefinitionTable
 
     private bool ContainsOwnedStorage(TypeId type, HashSet<TypeId> visiting)
     {
-        if (type is TypeId.DynamicIntArray or TypeId.IntDictionary or TypeId.Arena or TypeId.TaskInt
+        if (type is TypeId.DynamicIntArray or TypeId.IntDictionary or TypeId.Arena
             or TypeId.MappedBytes or TypeId.MutableMappedBytes
-            || IsBox(type) || IsStaticArray(type) || IsDynamicArray(type) || IsDictionary(type))
+            || IsTask(type) || IsBox(type) || IsStaticArray(type) || IsDynamicArray(type) || IsDictionary(type))
         {
             return true;
         }
@@ -446,8 +468,16 @@ internal sealed class TypeDefinitionTable
             : throw new KeyNotFoundException($"type id '{(int)type}' is not a dynamic array");
     }
 
-    private int InlineSize(TypeId type)
+    public int InlineSizeOf(TypeId type)
     {
+        if (type is TypeId.DynamicIntArray or TypeId.IntDictionary)
+        {
+            return 24;
+        }
+        if (IsDynamicArray(type) || IsDictionary(type))
+        {
+            return 24;
+        }
         if (_boxes.ContainsKey(type))
         {
             return 8;
@@ -458,7 +488,7 @@ internal sealed class TypeDefinitionTable
             var maxAlignment = 1;
             foreach (var field in structure.Fields)
             {
-                var size = InlineSize(field.Type);
+                var size = InlineSizeOf(field.Type);
                 var alignment = Math.Min(Math.Max(size, 1), 8);
                 offset = AlignUp(offset, alignment);
                 offset += size;
@@ -472,6 +502,7 @@ internal sealed class TypeDefinitionTable
         }
         return type switch
         {
+            TypeId.Unit => 0,
             TypeId.Bool => 1,
             TypeId.Int8 or TypeId.UInt8 => 1,
             TypeId.Int16 or TypeId.UInt16 => 2,
@@ -483,7 +514,7 @@ internal sealed class TypeDefinitionTable
             TypeId.Arguments => 8,
             TypeId.Arena => 24,
             TypeId.MappedBytes or TypeId.MutableMappedBytes => 40,
-            TypeId.TaskInt => 16,
+            _ when IsTask(type) => 16,
             TypeId.GenericParameter or TypeId.SecondaryGenericParameter => 8,
             _ => throw new InvalidOperationException($"type {type} has no inline size")
         };

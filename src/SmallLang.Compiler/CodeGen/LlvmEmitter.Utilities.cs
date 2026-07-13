@@ -294,7 +294,7 @@ internal sealed partial class LlvmEmitter
 
         switch (value)
         {
-            case RuntimeTaskInt task:
+            case RuntimeTask task:
                 EmitAwaitTask(task, discardResult: true);
                 break;
             case RuntimeStaticIntArray { Storage: RuntimeContainerStorage.Heap } array:
@@ -401,7 +401,7 @@ internal sealed partial class LlvmEmitter
             or RuntimeInlineDictionary { Storage: RuntimeContainerStorage.Heap }
             or RuntimeArena
             or RuntimeBox
-            or RuntimeTaskInt;
+            or RuntimeTask;
     }
 
     private bool IsOwnedContainerRuntimeValue(RuntimeValue value)
@@ -859,8 +859,12 @@ internal sealed partial class LlvmEmitter
 
     private sealed record RuntimeBool(string ValueName) : RuntimeValue(BoundType.Bool);
 
-    private sealed record RuntimeTaskInt(string HandleName, string ContextName)
-        : RuntimeValue(BoundType.TaskInt);
+    private sealed record RuntimeTask(
+        BoundType TaskType,
+        BoundType ResultType,
+        string HandleName,
+        string ContextName)
+        : RuntimeValue(TaskType);
 
     private sealed record RuntimeStruct(BoundType StructType, string ValueName) : RuntimeValue(StructType);
 

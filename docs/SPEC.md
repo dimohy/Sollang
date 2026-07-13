@@ -569,11 +569,16 @@ needed; otherwise scope cleanup joins the task and discards the result. A task
 cannot be awaited twice or used after `await`. `main` is the implicit root async
 scope, while other functions must declare `async` before using `await`.
 
-The first executable runtime slice supports CPU-pure `Int -> async Int` and
-`-> async Int` on Windows x64. It uses native child threads and owned task
-contexts; runtime/standard-library effects are rejected until their concurrent
-contracts are explicit. General `Task<T>`, Linux lowering, cooperative cancellation, task
-groups, and a stackless I/O scheduler remain subsequent slices.
+The Windows x64 runtime represents every task with the same two-pointer handle
+while its heap context stores a result slot specialized for `T`. `Unit`, numeric,
+`Bool`, `Text`, dynamic array/dictionary, struct, enum, and `box` results cross
+the task boundary without erasing their type. Owned results transfer to the
+awaiting scope; if a task leaves scope unawaited, cleanup joins it and drops the
+result before freeing the context. The current input boundary remains an
+optional `Int`, and async bodies remain CPU-pure until concurrent stdlib
+contracts are explicit. Linux lowering, cooperative cancellation, task groups,
+sendability checking for general inputs/captures, and a stackless I/O scheduler
+remain subsequent slices.
 
 ## Local Functions
 

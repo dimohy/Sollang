@@ -183,7 +183,7 @@ internal sealed partial class LlvmEmitter
         result = new RuntimeFlowResult(null, null, _mainOk);
         switch (path)
         {
-            case "await" when current is RuntimeTaskInt task:
+            case "await" when current is RuntimeTask task:
                 if (target.Arguments.Count != 0)
                 {
                     throw new SmallLangException("await does not accept arguments");

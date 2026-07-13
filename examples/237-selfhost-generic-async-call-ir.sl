@@ -1,0 +1,23 @@
+import smalllang.compiler.ir.typed as typedIr
+
+main {
+    [
+        """
+        decide: -> async Bool {
+            true
+        }
+
+        main {
+            decide => pending
+        }
+        """,
+        ~
+    ] => sources!
+    sources! -> typedIr.lower => ir!
+
+    ir! -> each node {
+        (node.kind == 6 and node.symbol >= 0) -> if {
+            "async call = flags $(node.flags), result $(node.typeOrigin):$(node.typeSymbol)" -> println
+        }
+    }
+}

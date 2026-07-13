@@ -33,7 +33,12 @@ internal sealed partial class LlvmEmitter
 
         if (expression is FlowExpression flow)
         {
+            var movedSourceName = GetMoveConsumingContainerSourceName(flow);
             var result = EmitFlowExpression(flow, ok, allowBindingTarget: false);
+            if (movedSourceName is not null)
+            {
+                RemoveLocal(movedSourceName);
+            }
             if (result.Binding is { } binding)
             {
                 _locals.Add(binding.Name, binding.Value);

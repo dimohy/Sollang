@@ -405,6 +405,7 @@ public lower sources: [Text; ~] -> [TypedIrNode; ~] {
                                 expressionIr => astToIr![expressionAstIndex!]
                                 -1 => expressionSymbol!
                                 -1 => expressionTargetModule!
+                                expression.flags => expressionFlags!
                                 expressionKind! == 5 -> if {
                                     0 => nameResolutionSearch!
                                     nameResolutionSearch! < (resolvedNames! -> len) -> while {
@@ -420,6 +421,10 @@ public lower sources: [Text; ~] -> [TypedIrNode; ~] {
                                         (resolvedCall.sourceModule == sourceIndex! and resolvedCall.callAst == expressionAstIndex! and resolvedCall.status == 0) -> if {
                                             resolvedCall.functionSymbol => expressionSymbol!
                                             resolvedCall.targetSourceModule => expressionTargetModule!
+                                            sources[resolvedCall.targetSourceModule] -> symbols.collect => expressionTargetTable!
+                                            ((expressionTargetTable![resolvedCall.functionSymbol].flags / 8) % 2 == 1 and (expressionFlags! / 8) % 2 == 0) -> if {
+                                                expressionFlags! + 8 => expressionFlags!
+                                            }
                                         }
                                         callSearch! + 1 => callSearch!
                                     }
@@ -439,7 +444,7 @@ public lower sources: [Text; ~] -> [TypedIrNode; ~] {
                                     operand0: -1
                                     operand1: -1
                                     nextOperand: -1
-                                    flags: expression.flags
+                                    flags: expressionFlags!
                                 })
                                 }
                             }
@@ -869,6 +874,7 @@ public lower sources: [Text; ~] -> [TypedIrNode; ~] {
                                 entryExpressionIr => entryAstToIr![entryExpressionAst!]
                                 -1 => entryExpressionSymbol!
                                 -1 => entryExpressionTargetModule!
+                                entryExpression.flags => entryExpressionFlags!
                                 entryExpressionKind! == 5 -> if {
                                     0 => entryNameSearch!
                                     entryNameSearch! < (resolvedNames! -> len) -> while {
@@ -884,6 +890,10 @@ public lower sources: [Text; ~] -> [TypedIrNode; ~] {
                                         (entryResolvedCall.sourceModule == sourceIndex! and entryResolvedCall.callAst == entryExpressionAst! and entryResolvedCall.status == 0) -> if {
                                             entryResolvedCall.functionSymbol => entryExpressionSymbol!
                                             entryResolvedCall.targetSourceModule => entryExpressionTargetModule!
+                                            sources[entryResolvedCall.targetSourceModule] -> symbols.collect => entryExpressionTargetTable!
+                                            ((entryExpressionTargetTable![entryResolvedCall.functionSymbol].flags / 8) % 2 == 1 and (entryExpressionFlags! / 8) % 2 == 0) -> if {
+                                                entryExpressionFlags! + 8 => entryExpressionFlags!
+                                            }
                                         }
                                         entryCallSearch! + 1 => entryCallSearch!
                                     }
@@ -903,7 +913,7 @@ public lower sources: [Text; ~] -> [TypedIrNode; ~] {
                                     operand0: -1
                                     operand1: -1
                                     nextOperand: -1
-                                    flags: entryExpression.flags
+                                    flags: entryExpressionFlags!
                                 })
                                 }
                             }
