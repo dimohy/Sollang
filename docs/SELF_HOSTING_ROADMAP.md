@@ -453,6 +453,8 @@ as explicit runtime symbols, Windows emits a `putchar` loop, Linux emits
 `write(2)`, and Wasm declares an `env.smalllang_write` import. Runtime helpers
 are emitted only when referenced. Text parameters now cross effectful `Unit`
 functions, where LLVM `void` calls and returns avoid phantom SSA results.
+Main-local Text literals and immutable bindings now also form valid SSA before
+dynamic runtime output, rather than referring to an undefined `%v` value.
 Numeric formatting, input, allocation policy, files, process services, and
 target-native entrypoint/export policy remain.
 

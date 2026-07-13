@@ -668,6 +668,13 @@ emitCore sources: move [Text; ~] -> Unit {
                 entryOrderIndex! < (entryOrder! -> len) -> while {
                     entryOrder![entryOrderIndex!] => entryExpressionIndex!
                     ir![entryExpressionIndex!] => entryExpression
+                    (entryExpression.kind == 2 and entryExpression.parent >= 0 and ir![entryExpression.parent].kind == 17) -> if {
+                        sources[entryExpression.sourceModule] -> lexer.lex => entryExpressionTokens!
+                        entryExpressionTokens![entryExpression.payloadToken] => entryExpressionToken
+                        entryExpressionToken.span.length - UIntSize(2) => entryExpressionLength
+                        "  %v$(entryExpressionIndex!)_ptr = insertvalue %sl.text poison, ptr @sl_str_$(entryExpressionIndex!), 0" -> println
+                        "  %v$(entryExpressionIndex!) = insertvalue %sl.text %v$(entryExpressionIndex!)_ptr, i64 $entryExpressionLength, 1" -> println
+                    }
                     entryExpression.kind == 5 -> if {
                         -1 => entryBindingValueIr!
                         functionIndex! + 1 => entryBindingValueSearch!

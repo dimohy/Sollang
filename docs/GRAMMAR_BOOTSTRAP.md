@@ -377,6 +377,12 @@ with a literal aggregate. `Unit` functions and calls lower to LLVM `void`
 without assigning a nonexistent result, completing the first effectful user-
 function round trip. The Windows regression links and executes this generated
 function and compares its `hello` output.
+Main-local Text bindings now materialize literal aggregates before their
+binding `freeze`, and name operands resolve to that binding SSA value before
+runtime extraction. Direct literal calls and literal function arguments retain
+their compact constant paths, avoiding unused materializations. A second
+execution regression verifies `"hello" => message` followed by
+`message -> println`.
 
 The bootstrap type table now predeclares parametric dynamic-array identities
 used by struct fields before struct layouts are finalized. A field such as

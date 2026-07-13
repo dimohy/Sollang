@@ -1,0 +1,14 @@
+import smalllang.compiler.llvm.text as llvm
+
+main {
+    [
+        """
+        main {
+            "hello" => message
+            message -> println
+        }
+        """,
+        ~
+    ] => sources!
+    sources! -> llvm.emit
+}
