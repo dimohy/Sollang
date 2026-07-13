@@ -392,8 +392,11 @@ symbol table and typed-IR binding nodes. LLVM walks multiple segments, prints
 each intervening literal range, and formats every `i32` into a reusable 12-byte
 stack buffer without allocating intermediate Text. Repeated names and empty
 leading/trailing ranges are valid; sign extension makes `-2147483648` safe.
-Function parameters, `$(expression)`, other display types, general dynamic Text
-construction, and lifetime ownership remain.
+Function literals use the same scan: `Int` parameters lower directly to
+`%arg`, while local bindings use their producer SSA value. A linked regression
+prints `-7->-6->-7`, also proving that unary minus emits LLVM `sub i32 0, value`
+rather than the previously reversed operands. `$(expression)`, other display
+types, general dynamic Text construction, and lifetime ownership remain.
 
 The bootstrap type table now predeclares parametric dynamic-array identities
 used by struct fields before struct layouts are finalized. A field such as

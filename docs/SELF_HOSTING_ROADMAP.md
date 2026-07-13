@@ -459,9 +459,13 @@ integer-interpolation lowering recognizes main-local `Int` bindings in a Text
 literal, walks any number of `$name` segments in source order, and formats each
 value through one target-neutral `i32` helper. It supports repeated names and
 empty leading/trailing literal segments. The helper sign-extends before
-negation, so `Int32`'s minimum value is handled without overflow. Function
-parameters, `$(expression)`, broader numeric types, input, allocation policy,
-files, process services, and target-native entrypoint/export policy remain.
+negation, so `Int32`'s minimum value is handled without overflow. The same
+lowering now resolves function `Int` parameters to `%arg` and function-local
+bindings to their producer SSA values. LLVM unary negation was corrected to
+emit `0 - value`, which the function execution regression verifies with
+negative arguments and locals. `$(expression)`, broader numeric types, input,
+allocation policy, files, process services, and target-native entrypoint/export
+policy remain.
 
 Text now crosses the self-hosted LLVM boundary as `{ ptr, i64 }`. UTF-8
 literals become immutable globals with byte-accurate lengths and LLVM `\XX`

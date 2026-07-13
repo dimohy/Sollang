@@ -498,20 +498,30 @@ emitCore sources: move [Text; ~] -> Unit {
                     "  %v$(expressionIndex!) = $(operation!) " -> print
                     leftOperand -> writeType
                     " " -> print
-                    (leftOperand.kind == 3 or leftOperand.kind == 4) -> if {
-                        sources[leftOperand.sourceModule] -> lexer.lex => leftTokens!
-                        leftTokens![leftOperand.payloadToken] => leftToken
-                        leftOperand.kind == 3 -> if {
-                            sources[leftOperand.sourceModule] -> slice(leftToken.span.start, leftToken.span.length) -> print
+                    (expression.kind == 7 and expression.opcode != -26) -> if { "0" -> print } else {
+                        (leftOperand.kind == 3 or leftOperand.kind == 4) -> if {
+                            sources[leftOperand.sourceModule] -> lexer.lex => leftTokens!
+                            leftTokens![leftOperand.payloadToken] => leftToken
+                            leftOperand.kind == 3 -> if {
+                                sources[leftOperand.sourceModule] -> slice(leftToken.span.start, leftToken.span.length) -> print
+                            } else {
+                                ((sources[leftOperand.sourceModule] -> byte(leftToken.span.start)) == UInt8(116)) -> if { "1" } else { "0" } -> print
+                            }
                         } else {
-                            ((sources[leftOperand.sourceModule] -> byte(leftToken.span.start)) == UInt8(116)) -> if { "1" } else { "0" } -> print
+                            (leftOperand.kind == 5 and function.operand1 >= 0 and leftOperand.symbol == ir![function.operand1].symbol) -> if { "%arg" -> print } else { "%v$(expression.operand0)" -> print }
                         }
-                    } else {
-                        (leftOperand.kind == 5 and function.operand1 >= 0 and leftOperand.symbol == ir![function.operand1].symbol) -> if { "%arg" -> print } else { "%v$(expression.operand0)" -> print }
                     }
                     ", " -> print
                     expression.kind == 7 -> if {
-                        expression.opcode == -26 -> if { "true" -> println } else { "0" -> println }
+                        expression.opcode == -26 -> if { "true" -> println } else {
+                            (leftOperand.kind == 3 or leftOperand.kind == 4) -> if {
+                                sources[leftOperand.sourceModule] -> lexer.lex => unaryTokens!
+                                unaryTokens![leftOperand.payloadToken] => unaryToken
+                                sources[leftOperand.sourceModule] -> slice(unaryToken.span.start, unaryToken.span.length) -> println
+                            } else {
+                                (leftOperand.kind == 5 and function.operand1 >= 0 and leftOperand.symbol == ir![function.operand1].symbol) -> if { "%arg" -> println } else { "%v$(expression.operand0)" -> println }
+                            }
+                        }
                     } else {
                         ir![expression.operand1] => rightOperand
                         (rightOperand.kind == 3 or rightOperand.kind == 4) -> if {
@@ -534,7 +544,93 @@ emitCore sources: move [Text; ~] -> Unit {
                             sources[runtimeArgument.sourceModule] -> lexer.lex => runtimeArgumentTokens!
                             runtimeArgumentTokens![runtimeArgument.payloadToken] => runtimeArgumentToken
                             Int(runtimeArgumentToken.span.length) - 2 => runtimeArgumentLength
-                            "  call void @sl_runtime_print(ptr @sl_str_$(expression.operand0), i64 $runtimeArgumentLength, i1 " -> print
+                            runtimeArgumentToken.span.start + UIntSize(1) => functionInterpolationContentStart
+                            runtimeArgumentToken.span.start + runtimeArgumentToken.span.length - UIntSize(1) => functionInterpolationContentEnd
+                            functionInterpolationContentStart => functionInterpolationSegmentStart!
+                            0 => functionInterpolationPartIndex!
+                            false => functionEmittedInterpolation!
+                            true => functionInterpolationSegmentsRemain!
+                            functionInterpolationSegmentsRemain! -> while {
+                                functionInterpolationSegmentStart! => functionInterpolationDollar!
+                                -1 => functionInterpolationBindingIr!
+                                false => functionInterpolationParameter!
+                                functionInterpolationSegmentStart! => functionInterpolationMatchStart!
+                                functionInterpolationSegmentStart! => functionInterpolationNameEnd!
+                                (functionInterpolationDollar! < functionInterpolationContentEnd and functionInterpolationBindingIr! < 0 and not functionInterpolationParameter!) -> while {
+                                    ((sources[runtimeArgument.sourceModule] -> byte(functionInterpolationDollar!)) == UInt8(36) and functionInterpolationDollar! + UIntSize(1) < functionInterpolationContentEnd) -> if {
+                                        functionInterpolationDollar! + UIntSize(1) => functionInterpolationNameStart
+                                        functionInterpolationNameStart => functionInterpolationNameEnd!
+                                        true => functionInterpolationNameContinues!
+                                        (functionInterpolationNameEnd! < functionInterpolationContentEnd and functionInterpolationNameContinues!) -> while {
+                                            sources[runtimeArgument.sourceModule] -> byte(functionInterpolationNameEnd!) => functionInterpolationNameByte
+                                            ((functionInterpolationNameByte >= UInt8(48) and functionInterpolationNameByte <= UInt8(57)) or (functionInterpolationNameByte >= UInt8(65) and functionInterpolationNameByte <= UInt8(90)) or (functionInterpolationNameByte >= UInt8(97) and functionInterpolationNameByte <= UInt8(122)) or functionInterpolationNameByte == UInt8(95)) -> if {
+                                                functionInterpolationNameEnd! + UIntSize(1) => functionInterpolationNameEnd!
+                                            } else { false => functionInterpolationNameContinues! }
+                                        }
+                                        functionInterpolationNameEnd! > functionInterpolationNameStart -> if {
+                                            sources[runtimeArgument.sourceModule] -> symbols.collect => functionInterpolationSymbols!
+                                            0 => functionInterpolationSymbolIndex!
+                                            functionInterpolationSymbolIndex! < (functionInterpolationSymbols! -> len) -> while {
+                                                functionInterpolationSymbols![functionInterpolationSymbolIndex!] => functionInterpolationSymbol
+                                                (functionInterpolationSymbol.kind == 9 or functionInterpolationSymbol.kind == 35) -> if {
+                                                    runtimeArgumentTokens![functionInterpolationSymbol.nameToken] => functionInterpolationSymbolToken
+                                                    functionInterpolationSymbolToken.span.length == functionInterpolationNameEnd! - functionInterpolationNameStart => functionInterpolationNameEqual!
+                                                    UIntSize(0) => functionInterpolationNameByteIndex!
+                                                    (functionInterpolationNameEqual! and functionInterpolationNameByteIndex! < functionInterpolationSymbolToken.span.length) -> while {
+                                                        (sources[runtimeArgument.sourceModule] -> byte(functionInterpolationNameStart + functionInterpolationNameByteIndex!)) != (sources[runtimeArgument.sourceModule] -> byte(functionInterpolationSymbolToken.span.start + functionInterpolationNameByteIndex!)) -> if { false => functionInterpolationNameEqual! }
+                                                        functionInterpolationNameByteIndex! + UIntSize(1) => functionInterpolationNameByteIndex!
+                                                    }
+                                                    functionInterpolationNameEqual! -> if {
+                                                        (functionInterpolationSymbol.kind == 35 and function.operand1 >= 0 and ir![function.operand1].symbol == functionInterpolationSymbolIndex! and ir![function.operand1].typeSymbol == 2) -> if {
+                                                            true => functionInterpolationParameter!
+                                                            functionInterpolationDollar! => functionInterpolationMatchStart!
+                                                        } else {
+                                                            expressionStart => functionInterpolationBindingSearch!
+                                                            functionInterpolationBindingSearch! < functionEnd! -> while {
+                                                                (ir![functionInterpolationBindingSearch!].kind == 17 and ir![functionInterpolationBindingSearch!].symbol == functionInterpolationSymbolIndex! and ir![functionInterpolationBindingSearch!].typeSymbol == 2) -> if {
+                                                                    functionInterpolationBindingSearch! => functionInterpolationBindingIr!
+                                                                    functionInterpolationDollar! => functionInterpolationMatchStart!
+                                                                }
+                                                                functionInterpolationBindingSearch! + 1 => functionInterpolationBindingSearch!
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                                functionInterpolationSymbolIndex! + 1 => functionInterpolationSymbolIndex!
+                                            }
+                                        }
+                                    }
+                                    (functionInterpolationBindingIr! < 0 and not functionInterpolationParameter!) -> if { functionInterpolationDollar! + UIntSize(1) => functionInterpolationDollar! }
+                                }
+                                (functionInterpolationBindingIr! >= 0 or functionInterpolationParameter!) -> if {
+                                    Int(functionInterpolationSegmentStart! - functionInterpolationContentStart) => functionInterpolationPartOffset
+                                    Int(functionInterpolationMatchStart! - functionInterpolationSegmentStart!) => functionInterpolationPartLength
+                                    "  %v$(expressionIndex!)_interpolation_part$(functionInterpolationPartIndex!) = getelementptr i8, ptr @sl_str_$(expression.operand0), i64 $functionInterpolationPartOffset" -> println
+                                    "  call void @sl_runtime_print(ptr %v$(expressionIndex!)_interpolation_part$(functionInterpolationPartIndex!), i64 $functionInterpolationPartLength, i1 false)" -> println
+                                    "  call void @sl_runtime_print_i32(i32 " -> print
+                                    functionInterpolationParameter! -> if { "%arg" -> print } else {
+                                        ir![functionInterpolationBindingIr!] => functionInterpolationBinding
+                                        ir![functionInterpolationBinding.operand0] => functionInterpolationValue
+                                        functionInterpolationValue.kind == 3 -> if {
+                                            sources[functionInterpolationValue.sourceModule] -> lexer.lex => functionInterpolationValueTokens!
+                                            functionInterpolationValueTokens![functionInterpolationValue.payloadToken] => functionInterpolationValueToken
+                                            sources[functionInterpolationValue.sourceModule] -> slice(functionInterpolationValueToken.span.start, functionInterpolationValueToken.span.length) -> print
+                                        } else { "%v$(functionInterpolationBinding.operand0)" -> print }
+                                    }
+                                    ", i1 false)" -> println
+                                    functionInterpolationNameEnd! => functionInterpolationSegmentStart!
+                                    functionInterpolationPartIndex! + 1 => functionInterpolationPartIndex!
+                                    true => functionEmittedInterpolation!
+                                } else { false => functionInterpolationSegmentsRemain! }
+                            }
+                            functionEmittedInterpolation! -> if {
+                                Int(functionInterpolationSegmentStart! - functionInterpolationContentStart) => functionInterpolationSuffixOffset
+                                Int(functionInterpolationContentEnd - functionInterpolationSegmentStart!) => functionInterpolationSuffixLength
+                                "  %v$(expressionIndex!)_interpolation_suffix = getelementptr i8, ptr @sl_str_$(expression.operand0), i64 $functionInterpolationSuffixOffset" -> println
+                                "  call void @sl_runtime_print(ptr %v$(expressionIndex!)_interpolation_suffix, i64 $functionInterpolationSuffixLength, i1 " -> print
+                            } else {
+                                "  call void @sl_runtime_print(ptr @sl_str_$(expression.operand0), i64 $runtimeArgumentLength, i1 " -> print
+                            }
                         } else {
                             "  %v$(expressionIndex!)_runtime_ptr = extractvalue %sl.text " -> print
                             (runtimeArgument.kind == 5 and function.operand1 >= 0 and runtimeArgument.symbol == ir![function.operand1].symbol) -> if { "%arg" -> print } else { "%v$(expression.operand0)" -> print }
@@ -720,16 +816,24 @@ emitCore sources: move [Text; ~] -> Unit {
                         "  %v$(entryExpressionIndex!) = $(entryOperation!) " -> print
                         entryLeft -> writeType
                         " " -> print
-                        (entryLeft.kind == 3 or entryLeft.kind == 4) -> if {
-                            sources[entryLeft.sourceModule] -> lexer.lex => entryLeftTokens!
-                            entryLeftTokens![entryLeft.payloadToken] => entryLeftToken
-                            entryLeft.kind == 3 -> if { sources[entryLeft.sourceModule] -> slice(entryLeftToken.span.start, entryLeftToken.span.length) -> print } else {
-                                ((sources[entryLeft.sourceModule] -> byte(entryLeftToken.span.start)) == UInt8(116)) -> if { "1" } else { "0" } -> print
-                            }
-                        } else { "%v$(entryExpression.operand0)" -> print }
+                        (entryExpression.kind == 7 and entryExpression.opcode != -26) -> if { "0" -> print } else {
+                            (entryLeft.kind == 3 or entryLeft.kind == 4) -> if {
+                                sources[entryLeft.sourceModule] -> lexer.lex => entryLeftTokens!
+                                entryLeftTokens![entryLeft.payloadToken] => entryLeftToken
+                                entryLeft.kind == 3 -> if { sources[entryLeft.sourceModule] -> slice(entryLeftToken.span.start, entryLeftToken.span.length) -> print } else {
+                                    ((sources[entryLeft.sourceModule] -> byte(entryLeftToken.span.start)) == UInt8(116)) -> if { "1" } else { "0" } -> print
+                                }
+                            } else { "%v$(entryExpression.operand0)" -> print }
+                        }
                         ", " -> print
                         entryExpression.kind == 7 -> if {
-                            entryExpression.opcode == -26 -> if { "true" -> println } else { "0" -> println }
+                            entryExpression.opcode == -26 -> if { "true" -> println } else {
+                                (entryLeft.kind == 3 or entryLeft.kind == 4) -> if {
+                                    sources[entryLeft.sourceModule] -> lexer.lex => entryUnaryTokens!
+                                    entryUnaryTokens![entryLeft.payloadToken] => entryUnaryToken
+                                    sources[entryLeft.sourceModule] -> slice(entryUnaryToken.span.start, entryUnaryToken.span.length) -> println
+                                } else { "%v$(entryExpression.operand0)" -> println }
+                            }
                         } else {
                             ir![entryExpression.operand1] => entryRight
                             (entryRight.kind == 3 or entryRight.kind == 4) -> if {
