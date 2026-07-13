@@ -432,6 +432,11 @@ Self-hosted LLVM text now declares the canonical bootstrap target triple
 runtime platform and pinned Clang machine contract instead of relying on an
 implicit host default. A target descriptor carrying triple, data layout, ABI,
 and runtime declarations is still required for Linux/Wasm self-host output.
+The first descriptor is now implemented as the file module
+`smalllang.compiler.llvm.target`. Its Windows x64 value owns the canonical
+triple, pinned-Clang data layout, 64-bit pointer width, and COFF object-format
+identity; the LLVM text emitter consumes the descriptor through a normal file
+import. Linux x64 and Wasm32 descriptor values remain.
 
 Text now crosses the self-hosted LLVM boundary as `{ ptr, i64 }`. UTF-8
 literals become immutable globals with byte-accurate lengths and LLVM `\XX`

@@ -3,6 +3,7 @@ namespace smalllang.compiler.llvm.text
 import smalllang.compiler.ast as ast
 import smalllang.compiler.ir.typed as typedIr
 import smalllang.compiler.lexer as lexer
+import smalllang.compiler.llvm.target as llvmTarget
 import smalllang.compiler.semantic.modules as modules
 import smalllang.compiler.semantic.nominal_types as nominalTypes
 import smalllang.compiler.semantic.symbols as symbols
@@ -60,9 +61,9 @@ public emit sources: [Text; ~] -> Unit {
         }
         }
     }
-    """"
-    target triple = "x86_64-pc-windows-msvc"
-    """" -> println
+    llvmTarget.windowsX64 => targetDescriptor
+    targetDescriptor.dataLayoutLine -> println
+    targetDescriptor.tripleLine -> println
     sources -> typedIr.lower => ir!
     sources -> nominalTypes.resolve => nominal!
     sources -> modules.identities => moduleIdentities!

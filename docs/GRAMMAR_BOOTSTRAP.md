@@ -347,7 +347,11 @@ target triple `x86_64-pc-windows-msvc`, matching the C# bootstrap platform
 contract and pinned Clang's `-dumpmachine` result. The triple is part of every
 LLVM snapshot rather than an implicit linker default. Target selection and
 data-layout emission remain to be parameterized before Linux/Wasm self-hosted
-output is enabled.
+output is enabled. Target metadata now lives in the ordinary SL module
+`smalllang.compiler.llvm.target`: `TargetDescriptor` groups the preformatted
+triple/data-layout lines, pointer bit width, and object format. The LLVM emitter
+loads `windowsX64` from that module instead of embedding target text, and a
+standalone example verifies all four fields.
 
 Nominal structs now have deterministic `%sl.struct.m<module>_s<symbol>` LLVM
 types. Typed IR marks struct literals and links an arbitrary number of ordered
