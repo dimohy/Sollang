@@ -346,7 +346,7 @@ internal sealed class SemanticCompiler
         var inputOwnership = BindFunctionInputOwnership(function, inputType);
         if (function.IsAsync
             && (!IsAsyncResultTypeSupported(returnType)
-                || inputType is not (null or BoundType.Int)
+                || !IsAsyncInputTypeSupported(inputType, inputOwnership)
                 || isLocal
                 || function.IsStandardLibrary
                 || function.IsIntrinsic))
@@ -354,7 +354,7 @@ internal sealed class SemanticCompiler
             throw Error(
                 function.Line,
                 function.Column,
-                "async functions require a transferable result, an optional Int input, and a non-local user declaration");
+                "async functions require a transferable result, a sendable input, and a non-local user declaration; owned inputs must use move");
         }
         var kind = BindFunctionKind(function, inputType, returnType, isLocal);
         var localFunctions = BindLocalFunctions(function);
@@ -5434,14 +5434,85 @@ internal sealed class SemanticCompiler
 
     private bool IsAsyncResultTypeSupported(BoundType type)
     {
-        return type is BoundType.Unit or BoundType.Text or BoundType.Bool
+        return type == BoundType.Unit || IsAsyncValueTypeSupported(type);
+    }
+
+    private bool IsAsyncInputTypeSupported(
+        BoundType? type,
+        BoundFunctionInputOwnership ownership)
+    {
+        if (type is null)
+        {
+            return true;
+        }
+
+        if (ownership == BoundFunctionInputOwnership.MutableBorrow
+            || !IsAsyncValueTypeSupported(type.Value))
+        {
+            return false;
+        }
+
+        return !_types.ContainsOwnedStorage(type.Value)
+            || ownership == BoundFunctionInputOwnership.Move;
+    }
+
+    private bool IsAsyncValueTypeSupported(BoundType type)
+    {
+        return IsAsyncValueTypeSupported(type, []);
+    }
+
+    private bool IsAsyncValueTypeSupported(BoundType type, HashSet<BoundType> visiting)
+    {
+        if (type is BoundType.Unit or BoundType.Text or BoundType.Bool
             or BoundType.DynamicIntArray or BoundType.IntDictionary
-            || IsNumericType(type)
-            || _types.IsDynamicArray(type)
-            || _types.IsDictionary(type)
-            || _types.IsStruct(type)
-            || _types.IsEnum(type)
-            || _types.IsBox(type);
+            || IsNumericType(type))
+        {
+            return true;
+        }
+
+        if (!visiting.Add(type))
+        {
+            return true;
+        }
+
+        try
+        {
+            if (_types.IsStruct(type))
+            {
+                return _types.GetStruct(type).Fields.All(
+                    field => IsAsyncValueTypeSupported(field.Type, visiting));
+            }
+            if (_types.IsEnum(type))
+            {
+                return _types.GetEnum(type).Variants.All(
+                    variant => variant.PayloadType is null
+                        || IsAsyncValueTypeSupported(variant.PayloadType.Value, visiting));
+            }
+            if (_types.IsBox(type))
+            {
+                return IsAsyncValueTypeSupported(_types.GetBox(type).ElementType, visiting);
+            }
+            if (_types.IsStaticArray(type))
+            {
+                return IsAsyncValueTypeSupported(_types.GetStaticArray(type).ElementType, visiting);
+            }
+            if (_types.IsDynamicArray(type))
+            {
+                return IsAsyncValueTypeSupported(_types.GetDynamicArray(type).ElementType, visiting);
+            }
+            if (_types.IsDictionary(type))
+            {
+                var dictionary = _types.GetDictionary(type);
+                return IsAsyncValueTypeSupported(dictionary.KeyType, visiting)
+                    && IsAsyncValueTypeSupported(dictionary.ValueType, visiting);
+            }
+
+            return false;
+        }
+        finally
+        {
+            visiting.Remove(type);
+        }
     }
 
     private bool IsContainerCreationExpression(Expression expression)

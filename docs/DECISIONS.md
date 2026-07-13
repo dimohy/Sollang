@@ -3286,4 +3286,38 @@ References: [Swift structured concurrency](https://docs.swift.org/swift-book/Lan
 [Rust `Future::Output`](https://doc.rust-lang.org/std/future/trait.Future.html),
 [Kotlin structured `async`](https://kotlinlang.org/docs/composing-suspending-functions.html).
 
+## D111 - Async Inputs Use Structural Sendability And Ownership Transfer
+
+Status: first general-input slice implemented
+Date: 2026-07-13
+
+Async inputs are no longer restricted to `Int`. SmallLang infers sendability
+structurally instead of requiring a marker on ordinary value types. Numeric
+values, `Bool`, immutable `Text`, and structs/enums composed only of sendable
+values can be copied into a task context. A value that contains owned heap
+storage must instead use a `move` input, such as
+`process packet: move Packet -> async Result`. The task then owns the value and
+must either move it into its result or drop it after the body. Mutable borrows,
+borrowed slices/views, arenas, mappings, and tasks are not sendable in this
+slice.
+
+This combines Swift's inferred `Sendable` for value compositions with Rust's
+automatically derived `Send`, while making the transfer rule more explicit for
+SmallLang's affine owners. It also avoids Kotlin's shared-mutable-state hazards:
+there is no shared mutable alias to synchronize because an owned value moves to
+exactly one concurrency domain. No `unsafe Sendable` escape hatch is introduced;
+future shared state must come through an explicit atomic, lock, actor, or isolated
+runtime type with a compiler-known contract.
+
+The heap worker context is specialized over both input and result LLVM layouts.
+Owned input cleanup is emitted on normal worker completion and on native thread
+creation failure. Example 238 covers scalar, Text, value struct, owned struct,
+dynamic array, box, and recursive enum inputs, including move-through-result and
+unawaited-task cleanup. Diagnostics reject owned default borrows, borrowed views,
+and mutable borrows.
+
+References: [Swift `Sendable` types](https://docs.swift.org/swift-book/LanguageGuide/Concurrency.html#ID649),
+[Rust `Send`](https://doc.rust-lang.org/std/marker/trait.Send.html),
+[Kotlin shared mutable state](https://kotlinlang.org/docs/shared-mutable-state-and-concurrency.html).
+
 

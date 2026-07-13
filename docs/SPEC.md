@@ -570,15 +570,22 @@ cannot be awaited twice or used after `await`. `main` is the implicit root async
 scope, while other functions must declare `async` before using `await`.
 
 The Windows x64 runtime represents every task with the same two-pointer handle
-while its heap context stores a result slot specialized for `T`. `Unit`, numeric,
+while its heap context stores input and result slots specialized for their exact
+types. Scalar values, immutable `Text`, and value-only structs/enums are
+structurally sendable and need no annotation. Heap-owning arrays, dictionaries,
+structs, enums, and boxes cross into an async worker only through a `move` input;
+the task becomes their sole owner. Mutable borrows and borrowed views are rejected
+because the caller could otherwise access the same storage while the worker runs.
+
+`Unit`, numeric,
 `Bool`, `Text`, dynamic array/dictionary, struct, enum, and `box` results cross
 the task boundary without erasing their type. Owned results transfer to the
 awaiting scope; if a task leaves scope unawaited, cleanup joins it and drops the
-result before freeing the context. The current input boundary remains an
-optional `Int`, and async bodies remain CPU-pure until concurrent stdlib
-contracts are explicit. Linux lowering, cooperative cancellation, task groups,
-sendability checking for general inputs/captures, and a stackless I/O scheduler
-remain subsequent slices.
+result before freeing the context. If native worker creation fails, a moved input
+is dropped before its context is released. Async bodies remain CPU-pure until
+concurrent stdlib contracts are explicit. Linux lowering, cooperative
+cancellation, task groups, closure-capture analysis, and a stackless I/O
+scheduler remain subsequent slices.
 
 ## Local Functions
 

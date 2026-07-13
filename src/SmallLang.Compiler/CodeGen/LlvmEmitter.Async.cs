@@ -24,14 +24,16 @@ internal sealed partial class LlvmEmitter
             EmitStackFrameAllocations();
             _currentBlockLabel = "entry";
 
-            EmitAsyncContextLoad("%stdin", "%context", function.ReturnType, 0, "ptr", 8);
-            EmitAsyncContextLoad("%stdout", "%context", function.ReturnType, 1, "ptr", 8);
-            EmitAsyncContextLoad("%written", "%context", function.ReturnType, 2, "ptr", 8);
-            EmitAsyncContextLoad("%read", "%context", function.ReturnType, 3, "ptr", 8);
-            EmitAsyncContextLoad("%ok_state", "%context", function.ReturnType, 4, "ptr", 8);
-            if (function.InputType == BoundType.Int)
+            EmitAsyncContextLoad("%stdin", "%context", function.InputType, function.ReturnType, 0, "ptr", 8);
+            EmitAsyncContextLoad("%stdout", "%context", function.InputType, function.ReturnType, 1, "ptr", 8);
+            EmitAsyncContextLoad("%written", "%context", function.InputType, function.ReturnType, 2, "ptr", 8);
+            EmitAsyncContextLoad("%read", "%context", function.InputType, function.ReturnType, 3, "ptr", 8);
+            EmitAsyncContextLoad("%ok_state", "%context", function.InputType, function.ReturnType, 4, "ptr", 8);
+            if (function.InputType is { } inputType)
             {
-                EmitAsyncContextLoad("%it", "%context", function.ReturnType, 5, "i32", 4);
+                EmitAsyncContextLoad(
+                    "%it", "%context", function.InputType, function.ReturnType, 5,
+                    AsyncStorageLlvmType(inputType), RuntimeAlignment(inputType));
             }
 
             var functionLocals = CaptureLocals();
@@ -55,7 +57,7 @@ internal sealed partial class LlvmEmitter
             DropOwnedLocalsCreatedSince(functionLocals, transferredOwnerName);
             var result = MaterializeAsyncResult(value);
             var resultAddress = AsyncContextField(
-                "%context", function.ReturnType, 6, "async_result_address");
+                "%context", function.InputType, function.ReturnType, 6, "async_result_address");
             EmitStore(result.TypeName, result.ValueName, resultAddress, RuntimeAlignment(function.ReturnType));
             EmitRet("i32", "0");
             EmitFunctionLine("}");
@@ -65,14 +67,20 @@ internal sealed partial class LlvmEmitter
             EmitFunctionLine($"define internal %smalllang.task {SymbolForFunction(function.Name)}({ParameterListForFunction(function)}) #0 {{");
             EmitLabel("entry");
             var context = NextTemp("async_context");
-            EmitCall(context, "ptr", "smalllang_alloc", $"i64 {AsyncContextSize(function.ReturnType)}");
-            EmitAsyncContextStore(context, function.ReturnType, 0, "ptr", "%stdin", 8);
-            EmitAsyncContextStore(context, function.ReturnType, 1, "ptr", "%stdout", 8);
-            EmitAsyncContextStore(context, function.ReturnType, 2, "ptr", "%written", 8);
-            EmitAsyncContextStore(context, function.ReturnType, 3, "ptr", "%read", 8);
-            EmitAsyncContextStore(context, function.ReturnType, 4, "ptr", "%ok_state", 8);
-            EmitAsyncContextStore(context, function.ReturnType, 5, "i32", function.InputType == BoundType.Int ? "%it" : "0", 4);
-            EmitAsyncContextStore(context, function.ReturnType, 6, AsyncResultLlvmType(function.ReturnType), "zeroinitializer", RuntimeAlignment(function.ReturnType));
+            EmitCall(context, "ptr", "smalllang_alloc", $"i64 {AsyncContextSize(function.InputType, function.ReturnType)}");
+            EmitAsyncContextStore(context, function.InputType, function.ReturnType, 0, "ptr", "%stdin", 8);
+            EmitAsyncContextStore(context, function.InputType, function.ReturnType, 1, "ptr", "%stdout", 8);
+            EmitAsyncContextStore(context, function.InputType, function.ReturnType, 2, "ptr", "%written", 8);
+            EmitAsyncContextStore(context, function.InputType, function.ReturnType, 3, "ptr", "%read", 8);
+            EmitAsyncContextStore(context, function.InputType, function.ReturnType, 4, "ptr", "%ok_state", 8);
+            EmitAsyncContextStore(
+                context, function.InputType, function.ReturnType, 5,
+                AsyncStorageLlvmType(function.InputType), function.InputType is null ? "0" : "%it",
+                AsyncStorageAlignment(function.InputType));
+            EmitAsyncContextStore(
+                context, function.InputType, function.ReturnType, 6,
+                AsyncStorageLlvmType(function.ReturnType), "zeroinitializer",
+                RuntimeAlignment(function.ReturnType));
 
             var handle = NextTemp("async_handle");
             EmitCall(handle, "ptr", "CreateThread", $"ptr null, i64 0, ptr @{workerName}, ptr {context}, i32 0, ptr null");
@@ -82,6 +90,7 @@ internal sealed partial class LlvmEmitter
             var failedLabel = NextLabel("async_failed");
             EmitConditionalBranch(started, readyLabel, failedLabel);
             EmitLabel(failedLabel);
+            DropFailedAsyncInput(function);
             EmitCall(target: null, "void", "smalllang_free", $"ptr {context}");
             EmitTrap();
             EmitLabel(readyLabel);
@@ -112,7 +121,12 @@ internal sealed partial class LlvmEmitter
         EmitAssign(handle, $"extractvalue %smalllang.task {aggregate}, 0");
         var context = NextTemp("task_context");
         EmitAssign(context, $"extractvalue %smalllang.task {aggregate}, 1");
-        return new RuntimeTask(_program.Types.GetOrAddTask(function.ReturnType), function.ReturnType, handle, context);
+        return new RuntimeTask(
+            _program.Types.GetOrAddTask(function.ReturnType),
+            function.InputType,
+            function.ReturnType,
+            handle,
+            context);
     }
 
     private RuntimeValue EmitAwaitTask(RuntimeTask task, bool discardResult = false)
@@ -127,9 +141,10 @@ internal sealed partial class LlvmEmitter
         EmitLabel(waitFailedLabel);
         EmitTrap();
         EmitLabel(waitedLabel);
-        var resultAddress = AsyncContextField(task.ContextName, task.ResultType, 6, "task_result_address");
+        var resultAddress = AsyncContextField(
+            task.ContextName, task.InputType, task.ResultType, 6, "task_result_address");
         var loaded = NextTemp(discardResult ? "task_discarded_result" : "task_result");
-        EmitLoad(loaded, AsyncResultLlvmType(task.ResultType), resultAddress, RuntimeAlignment(task.ResultType));
+        EmitLoad(loaded, AsyncStorageLlvmType(task.ResultType), resultAddress, RuntimeAlignment(task.ResultType));
         var value = DematerializeAsyncResult(task.ResultType, loaded);
         if (discardResult && _program.Types.ContainsOwnedStorage(task.ResultType))
         {
@@ -150,32 +165,37 @@ internal sealed partial class LlvmEmitter
     }
 
     private void EmitAsyncContextLoad(
-        string target, string context, BoundType resultType, int field, string type, int alignment)
+        string target, string context, BoundType? inputType, BoundType resultType,
+        int field, string type, int alignment)
     {
-        var address = AsyncContextField(context, resultType, field, "async_context_field");
+        var address = AsyncContextField(context, inputType, resultType, field, "async_context_field");
         EmitLoad(target, type, address, alignment);
     }
 
     private void EmitAsyncContextStore(
-        string context, BoundType resultType, int field, string type, string value, int alignment)
+        string context, BoundType? inputType, BoundType resultType,
+        int field, string type, string value, int alignment)
     {
-        var address = AsyncContextField(context, resultType, field, "async_context_field");
+        var address = AsyncContextField(context, inputType, resultType, field, "async_context_field");
         EmitStore(type, value, address, alignment);
     }
 
     private string AsyncContextField(
-        string context, BoundType resultType, int field, string prefix)
+        string context, BoundType? inputType, BoundType resultType, int field, string prefix)
     {
         var address = NextTemp(prefix);
-        EmitAssign(address, $"getelementptr {AsyncContextType(resultType)}, ptr {context}, i32 0, i32 {field}");
+        EmitAssign(address, $"getelementptr {AsyncContextType(inputType, resultType)}, ptr {context}, i32 0, i32 {field}");
         return address;
     }
 
-    private string AsyncContextType(BoundType resultType) =>
-        $"{{ ptr, ptr, ptr, ptr, ptr, i32, {AsyncResultLlvmType(resultType)} }}";
+    private string AsyncContextType(BoundType? inputType, BoundType resultType) =>
+        $"{{ ptr, ptr, ptr, ptr, ptr, {AsyncStorageLlvmType(inputType)}, {AsyncStorageLlvmType(resultType)} }}";
 
-    private string AsyncResultLlvmType(BoundType resultType) =>
-        resultType == BoundType.Unit ? "i8" : LlvmType(resultType);
+    private string AsyncStorageLlvmType(BoundType? type) =>
+        type is null or BoundType.Unit ? "i8" : LlvmType(type.Value);
+
+    private int AsyncStorageAlignment(BoundType? type) =>
+        type is null ? 1 : RuntimeAlignment(type.Value);
 
     private (string TypeName, string ValueName) MaterializeAsyncResult(RuntimeValue value) =>
         value is RuntimeUnit ? ("i8", "0") : MaterializeAggregateValue(value);
@@ -211,10 +231,27 @@ internal sealed partial class LlvmEmitter
         }
     }
 
-    private int AsyncContextSize(BoundType resultType)
+    private void DropFailedAsyncInput(BoundFunction function)
     {
-        var alignment = RuntimeAlignment(resultType);
-        var resultOffset = AlignAsyncSize(44, alignment);
+        if (function.InputOwnership != BoundFunctionInputOwnership.Move
+            || function.InputType is not { } inputType
+            || !_program.Types.ContainsOwnedStorage(inputType))
+        {
+            return;
+        }
+
+        DropDiscardedAsyncResult(DematerializeAggregateValue(inputType, "%it"));
+    }
+
+    private int AsyncContextSize(BoundType? inputType, BoundType resultType)
+    {
+        var inputAlignment = AsyncStorageAlignment(inputType);
+        var inputOffset = AlignAsyncSize(40, inputAlignment);
+        var inputSize = inputType is null
+            ? 1
+            : Math.Max(_program.Types.InlineSizeOf(inputType.Value), 1);
+        var resultAlignment = RuntimeAlignment(resultType);
+        var resultOffset = AlignAsyncSize(inputOffset + inputSize, resultAlignment);
         var resultSize = Math.Max(_program.Types.InlineSizeOf(resultType), 1);
         return AlignAsyncSize(resultOffset + resultSize, 8);
     }

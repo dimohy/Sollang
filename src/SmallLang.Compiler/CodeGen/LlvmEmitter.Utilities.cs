@@ -861,6 +861,7 @@ internal sealed partial class LlvmEmitter
 
     private sealed record RuntimeTask(
         BoundType TaskType,
+        BoundType? InputType,
         BoundType ResultType,
         string HandleName,
         string ContextName)
