@@ -107,13 +107,14 @@ estimate.
 
 The async executor now has an owned, target-neutral task-control ABI with
 context/resume/destroy pointers, FIFO ready linkage, lifecycle status, and a
-reserved resume-state field. Windows and Linux execute the same cooperative
-queue and no longer allocate one OS thread per task. The self-hosted typed-IR
-module emits stable `CoroutineSuspendPoint` records for `await` sites inside
-async functions. This advances the async gate but does not change the formal
-score: resume entries still execute a whole CPU-pure body, so live-across-await
-frame spilling, true suspension, nonblocking I/O, cancellation, and task groups
-remain partial.
+resume-state field. Windows and Linux execute the same cooperative queue and no
+longer allocate one OS thread per task. The self-hosted typed-IR module emits
+stable `CoroutineSuspendPoint` records for `await` sites inside async functions.
+The reference compiler now lowers the single-binding tail-await shape to a real
+two-state resume function, including an owned child-task slot and pending-task
+requeue. This advances the async gate but does not change the formal score:
+general live-across-await frame spilling, multi-state control flow, nonblocking
+I/O, cancellation, and task groups remain partial.
 
 ## Gate Inventory
 

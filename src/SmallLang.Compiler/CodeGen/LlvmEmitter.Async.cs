@@ -1,5 +1,6 @@
 using SmallLang.Compiler.Diagnostics;
 using SmallLang.Compiler.Semantics;
+using SmallLang.Compiler.Syntax;
 
 namespace SmallLang.Compiler.CodeGen;
 
@@ -19,10 +20,17 @@ internal sealed partial class LlvmEmitter
         try
         {
             var workerName = AsyncWorkerSymbol(function);
-            EmitFunctionLine($"define internal {_platform.AsyncWorkerReturnType} @{workerName}(ptr %context) #0 {{");
+            var hasTailAwait = TryGetTailAwaitBinding(function, out var tailAwaitBinding);
+            EmitFunctionLine($"define internal i1 @{workerName}(ptr %control) #0 {{");
             EmitLabel("entry");
             EmitStackFrameAllocations();
             _currentBlockLabel = "entry";
+
+            var contextSlot = NextTemp("async_control_context_slot");
+            EmitAssign(
+                contextSlot,
+                "getelementptr %smalllang.task_control, ptr %control, i32 0, i32 0");
+            EmitLoad("%context", "ptr", contextSlot, 8);
 
             EmitAsyncContextLoad("%stdin", "%context", function.InputType, function.ReturnType, 0, "ptr", 8);
             EmitAsyncContextLoad("%stdout", "%context", function.InputType, function.ReturnType, 1, "ptr", 8);
@@ -38,28 +46,14 @@ internal sealed partial class LlvmEmitter
 
             var functionLocals = CaptureLocals();
             BindFunctionParameter(function);
-            EmitStatements(function.BlockBody);
-            var movedBodySourceName = function.Body is null
-                ? null
-                : GetMoveConsumingContainerSourceName(function.Body);
-            var value = function.Body is null
-                ? RuntimeUnit.Instance
-                : EmitExpression(function.Body);
-            EnsureRuntimeType(value, function.ReturnType, function.Name);
-            if (movedBodySourceName is not null)
+            if (hasTailAwait)
             {
-                RemoveLocal(movedBodySourceName);
+                EmitTailAwaitWorker(function, tailAwaitBinding!, functionLocals);
             }
-            var transferredOwnerName = IsOwnedContainerRuntimeValue(value)
-                && function.Body is not null
-                ? GetFunctionResultTransferredOwnerName(function, function.Body)
-                : null;
-            DropOwnedLocalsCreatedSince(functionLocals, transferredOwnerName);
-            var result = MaterializeAsyncResult(value);
-            var resultAddress = AsyncContextField(
-                "%context", function.InputType, function.ReturnType, 6, "async_result_address");
-            EmitStore(result.TypeName, result.ValueName, resultAddress, RuntimeAlignment(function.ReturnType));
-            EmitRet(_platform.AsyncWorkerReturnType, _platform.AsyncWorkerSuccessValue);
+            else
+            {
+                EmitAsyncWorkerCompletion(function, functionLocals);
+            }
             EmitFunctionLine("}");
             EmitFunctionLine();
 
@@ -81,6 +75,12 @@ internal sealed partial class LlvmEmitter
                 context, function.InputType, function.ReturnType, 6,
                 AsyncStorageLlvmType(function.ReturnType), "zeroinitializer",
                 RuntimeAlignment(function.ReturnType));
+            EmitAsyncContextStore(
+                context, function.InputType, function.ReturnType, 7,
+                "ptr", "null", 8);
+            EmitAsyncContextStore(
+                context, function.InputType, function.ReturnType, 8,
+                "ptr", "null", 8);
 
             var handle = NextTemp("async_handle");
             EmitCall(
@@ -111,6 +111,124 @@ internal sealed partial class LlvmEmitter
         {
             _currentFunctions = previousFunctions;
         }
+    }
+
+    private void EmitAsyncWorkerCompletion(BoundFunction function, LocalScope functionLocals)
+    {
+        EmitStatements(function.BlockBody);
+        var movedBodySourceName = function.Body is null
+            ? null
+            : GetMoveConsumingContainerSourceName(function.Body);
+        var value = function.Body is null
+            ? RuntimeUnit.Instance
+            : EmitExpression(function.Body);
+        EnsureRuntimeType(value, function.ReturnType, function.Name);
+        if (movedBodySourceName is not null)
+        {
+            RemoveLocal(movedBodySourceName);
+        }
+        var transferredOwnerName = IsOwnedContainerRuntimeValue(value)
+            && function.Body is not null
+            ? GetFunctionResultTransferredOwnerName(function, function.Body)
+            : null;
+        DropOwnedLocalsCreatedSince(functionLocals, transferredOwnerName);
+        StoreAsyncResult(function, value);
+        EmitRet("i1", "true");
+    }
+
+    private void EmitTailAwaitWorker(
+        BoundFunction function,
+        BindingStatement tailAwaitBinding,
+        LocalScope functionLocals)
+    {
+        var stateSlot = NextTemp("async_resume_state_slot");
+        EmitAssign(
+            stateSlot,
+            "getelementptr %smalllang.task_control, ptr %control, i32 0, i32 5");
+        var state = NextTemp("async_resume_state");
+        EmitLoad(state, "i32", stateSlot, 4);
+        var startLabel = NextLabel("async_state_start");
+        var resumeLabel = NextLabel("async_state_resume");
+        var invalidLabel = NextLabel("async_state_invalid");
+        EmitInstruction(
+            $"switch i32 {state}, label %{invalidLabel} [ i32 0, label %{startLabel} i32 1, label %{resumeLabel} ]");
+        _currentBlockTerminated = true;
+
+        EmitLabel(invalidLabel);
+        EmitTrap();
+
+        EmitLabel(startLabel);
+        EmitStatements(function.BlockBody);
+        var child = ResolveLocal(tailAwaitBinding.Name) as RuntimeTask
+            ?? throw new SmallLangException(
+                $"tail await in async function '{function.Name}' did not produce Task<T>");
+        EmitAsyncContextStore(
+            "%context", function.InputType, function.ReturnType, 7,
+            "ptr", child.HandleName, 8);
+        EmitAsyncContextStore(
+            "%context", function.InputType, function.ReturnType, 8,
+            "ptr", child.ContextName, 8);
+        RemoveLocal(tailAwaitBinding.Name);
+        EmitStore("i32", "1", stateSlot, 4);
+        EmitRet("i1", "false");
+
+        EmitLabel(resumeLabel);
+        var childHandleAddress = AsyncContextField(
+            "%context", function.InputType, function.ReturnType, 7, "async_child_handle_address");
+        var childHandle = NextTemp("async_child_handle");
+        EmitLoad(childHandle, "ptr", childHandleAddress, 8);
+        var childContextAddress = AsyncContextField(
+            "%context", function.InputType, function.ReturnType, 8, "async_child_context_address");
+        var childContext = NextTemp("async_child_context");
+        EmitLoad(childContext, "ptr", childContextAddress, 8);
+        var resumedChild = child with
+        {
+            HandleName = childHandle,
+            ContextName = childContext
+        };
+        var value = EmitAwaitTask(resumedChild);
+        EnsureRuntimeType(value, function.ReturnType, function.Name);
+        DropOwnedLocalsCreatedSince(functionLocals, transferredOwnerName: null);
+        StoreAsyncResult(function, value);
+        EmitRet("i1", "true");
+    }
+
+    private void StoreAsyncResult(BoundFunction function, RuntimeValue value)
+    {
+        var result = MaterializeAsyncResult(value);
+        var resultAddress = AsyncContextField(
+            "%context", function.InputType, function.ReturnType, 6, "async_result_address");
+        EmitStore(result.TypeName, result.ValueName, resultAddress, RuntimeAlignment(function.ReturnType));
+    }
+
+    private bool TryGetTailAwaitBinding(
+        BoundFunction function,
+        out BindingStatement? binding)
+    {
+        binding = null;
+        if (function.InputType is { } inputType
+            && _program.Types.ContainsOwnedStorage(inputType))
+        {
+            return false;
+        }
+        if (function.BlockBody.Count != 1
+            || function.BlockBody[0] is not BindingStatement candidate
+            || candidate.IsMutable
+            || function.Body is not FlowExpression
+            {
+                Source: NameExpression source,
+                Targets.Count: 1
+            } flow
+            || !string.Equals(source.Name, candidate.Name, StringComparison.Ordinal)
+            || flow.Targets[0].Path.Count != 1
+            || !string.Equals(flow.Targets[0].Path[0], "await", StringComparison.Ordinal)
+            || flow.Targets[0].Arguments.Count != 0)
+        {
+            return false;
+        }
+
+        binding = candidate;
+        return true;
     }
 
     private RuntimeTask EmitAsyncFunctionCall(BoundFunction function, RuntimeValue? argument)
@@ -188,7 +306,7 @@ internal sealed partial class LlvmEmitter
     }
 
     private string AsyncContextType(BoundType? inputType, BoundType resultType) =>
-        $"{{ ptr, ptr, ptr, ptr, ptr, {AsyncStorageLlvmType(inputType)}, {AsyncStorageLlvmType(resultType)} }}";
+        $"{{ ptr, ptr, ptr, ptr, ptr, {AsyncStorageLlvmType(inputType)}, {AsyncStorageLlvmType(resultType)}, ptr, ptr }}";
 
     private string AsyncStorageLlvmType(BoundType? type) =>
         type is null or BoundType.Unit ? "i8" : LlvmType(type.Value);
@@ -224,7 +342,8 @@ internal sealed partial class LlvmEmitter
         var resultAlignment = RuntimeAlignment(resultType);
         var resultOffset = AlignAsyncSize(inputOffset + inputSize, resultAlignment);
         var resultSize = Math.Max(_program.Types.InlineSizeOf(resultType), 1);
-        return AlignAsyncSize(resultOffset + resultSize, 8);
+        var childTaskOffset = AlignAsyncSize(resultOffset + resultSize, 8);
+        return childTaskOffset + 16;
     }
 
     private static int AlignAsyncSize(int value, int alignment) =>

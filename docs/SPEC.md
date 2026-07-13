@@ -589,11 +589,14 @@ is dropped before its context is released. The LLVM emitter calls the common
 runtime boundary. Both native targets now use one cooperative FIFO ready queue;
 `await` pumps ready work until its affine target completes, and release invokes
 the context destroy entry exactly once. There is no OS thread per task and Linux
-does not require pthread linkage. Current resume entries still run a whole
-CPU-pure body once. The self-hosted IR assigns stable one-based states to source
-`await` points; splitting live locals into the owned frame and returning from
-each suspension is the next lowering slice. Cooperative cancellation, task
-groups, closure-capture analysis, and nonblocking I/O registration follow.
+does not require pthread linkage. Resume entries return `false` while pending
+and `true` when complete. A single-binding tail await already lowers to a real
+two-state machine: the parent stores its child task in the owned frame, returns
+to the scheduler, then reloads and consumes the child on resume. Other async
+bodies still run their whole CPU-pure body once. The self-hosted IR assigns
+stable one-based states to every source `await`; general liveness analysis and
+typed frame spilling are the next lowering slice. Cooperative cancellation,
+task groups, closure-capture analysis, and nonblocking I/O registration follow.
 
 ## Local Functions
 

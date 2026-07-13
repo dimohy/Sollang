@@ -10,10 +10,6 @@ internal sealed class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
 
     public override bool SupportsAsync => true;
 
-    public override string AsyncWorkerReturnType => "i32";
-
-    public override string AsyncWorkerSuccessValue => "0";
-
     public override void EmitGlobals(StringBuilder globals)
     {
         globals.AppendLine("@smalllang_file_writer = internal global ptr null");

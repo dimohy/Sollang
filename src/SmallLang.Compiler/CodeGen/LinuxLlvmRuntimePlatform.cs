@@ -12,10 +12,6 @@ internal sealed class LinuxLlvmRuntimePlatform : LlvmRuntimePlatform
 
     public override bool SupportsAsync => true;
 
-    public override string AsyncWorkerReturnType => "ptr";
-
-    public override string AsyncWorkerSuccessValue => "null";
-
     public override void EmitGlobals(StringBuilder globals)
     {
         globals.AppendLine("@smalllang_file_writer_fd = internal global i32 -1");

@@ -3412,4 +3412,37 @@ References: [LLVM coroutines](https://llvm.org/docs/Coroutines.html),
 [Rust await expressions](https://doc.rust-lang.org/reference/expressions/await-expr.html),
 [Kotlin coroutine scopes](https://kotlinlang.org/docs/coroutines-basics.html#coroutine-scope-and-structured-concurrency).
 
+## D115 - Tail Await Is The First True Stackless Suspension Shape
+
+Status: reference compiler implemented
+Date: 2026-07-14
+
+An async function whose body starts one child task and returns that task's
+awaited result now lowers to a real two-state resume function. State zero starts
+the child, stores its task handle and context in the parent's owned async frame,
+sets resume state one, and returns `false` (pending) to the cooperative
+scheduler. The scheduler appends the parent to the FIFO queue instead of marking
+it complete. State one reloads the child task, joins and releases it, transfers
+its typed result into the parent result slot, and returns `true` (complete).
+
+The worker ABI is consequently target-neutral: every resume entry accepts its
+task-control pointer and returns `i1`, where false means pending and true means
+complete. This is the first path where SmallLang async execution actually
+returns to the scheduler at an `await`; it neither blocks an OS thread nor keeps
+the parent SmallLang function on the native call stack. Owned array results are
+covered so suspension cannot accidentally duplicate or prematurely drop the
+child owner. Examples 228 and 243 assert the generated state switch and pending
+return; example 243 also executes on Windows and Linux.
+
+This slice deliberately recognizes only the single-binding tail-await shape.
+General awaits still need liveness analysis, typed frame slots for every value
+live across suspension, one resume block per `typedIr.suspensions` state, and
+cleanup edges for partially initialized frames. Cancellation, failure
+propagation, task groups, timers, and nonblocking I/O remain later layers rather
+than additional surface syntax.
+
+References: [LLVM coroutine lowering](https://llvm.org/docs/Coroutines.html),
+[Rust await expressions](https://doc.rust-lang.org/reference/expressions/await-expr.html),
+[Swift concurrency](https://docs.swift.org/swift-book/LanguageGuide/Concurrency.html).
+
 

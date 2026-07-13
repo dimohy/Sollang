@@ -51,18 +51,9 @@ internal abstract class LlvmRuntimePlatform
 
     public virtual bool SupportsAsync => false;
 
-    public virtual string AsyncWorkerReturnType =>
-        throw new NotSupportedException("async is unavailable on this platform");
-
-    public virtual string AsyncWorkerSuccessValue =>
-        throw new NotSupportedException("async is unavailable on this platform");
-
     public virtual void EmitAsyncPrimitives(StringBuilder functions)
     {
-        var workerResult = AsyncWorkerReturnType == "void"
-            ? "  call void %worker(ptr %context)"
-            : $"  %worker_result = call {AsyncWorkerReturnType} %worker(ptr %context)";
-        functions.AppendLine($$"""
+        functions.AppendLine("""
             define internal ptr @smalllang_task_start(ptr %worker, ptr %destroy, ptr %context) #0 {
             entry:
               %control = call ptr @smalllang_alloc(i64 40)
@@ -134,10 +125,31 @@ internal abstract class LlvmRuntimePlatform
               store i32 1, ptr %ready_status_slot, align 4
               %resume_slot = getelementptr %smalllang.task_control, ptr %ready, i32 0, i32 1
               %worker = load ptr, ptr %resume_slot, align 8
-              %context_slot = getelementptr %smalllang.task_control, ptr %ready, i32 0, i32 0
-              %context = load ptr, ptr %context_slot, align 8
-            {{workerResult}}
+              %worker_complete = call i1 %worker(ptr %ready)
+              br i1 %worker_complete, label %complete, label %requeue
+
+            complete:
               store i32 2, ptr %ready_status_slot, align 4
+              br label %poll
+
+            requeue:
+              store i32 0, ptr %ready_status_slot, align 4
+              store ptr null, ptr %next_slot, align 8
+              %tail = load ptr, ptr @smalllang_task_ready_tail, align 8
+              %queue_empty = icmp eq ptr %tail, null
+              br i1 %queue_empty, label %requeue_first, label %requeue_append
+
+            requeue_first:
+              store ptr %ready, ptr @smalllang_task_ready_head, align 8
+              br label %requeued
+
+            requeue_append:
+              %tail_next_slot = getelementptr %smalllang.task_control, ptr %tail, i32 0, i32 3
+              store ptr %ready, ptr %tail_next_slot, align 8
+              br label %requeued
+
+            requeued:
+              store ptr %ready, ptr @smalllang_task_ready_tail, align 8
               br label %poll
 
             success:
