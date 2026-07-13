@@ -39,7 +39,7 @@ internal static class CompilerApp
 
     private static void Build(CliOptions options)
     {
-        var program = LoadProgram(options.SourcePaths);
+        var program = LoadProgram(options.SourcePaths, options.Project);
         var pointerBitWidth = options.Target == CompilationTarget.Wasm32Browser ? 32 : 64;
         var boundProgram = new SemanticCompiler(program, pointerBitWidth).Compile();
         var llvmIr = LlvmIrGenerator.GenerateProgram(boundProgram, options.Target);
@@ -102,10 +102,12 @@ internal static class CompilerApp
         }
     }
 
-    private static SmallLangProgram LoadProgram(IReadOnlyList<string> sourcePaths)
+    private static SmallLangProgram LoadProgram(
+        IReadOnlyList<string> sourcePaths,
+        ProjectBuild? project)
     {
         var standardLibrary = LoadStandardLibrary(sourcePaths[0]);
-        var sourcePrograms = LoadUserPrograms(sourcePaths);
+        var sourcePrograms = LoadUserPrograms(sourcePaths, project);
         var executableFiles = sourcePrograms.Where(static source => source.Program.Statements.Count > 0).ToArray();
         if (executableFiles.Length > 1)
         {
@@ -130,13 +132,21 @@ internal static class CompilerApp
             sourcePrograms.SelectMany(static source => source.Program.Statements).ToArray());
     }
 
-    private static IReadOnlyList<LoadedSource> LoadUserPrograms(IReadOnlyList<string> sourcePaths)
+    private static IReadOnlyList<LoadedSource> LoadUserPrograms(
+        IReadOnlyList<string> sourcePaths,
+        ProjectBuild? project)
     {
         var loadedByPath = new Dictionary<string, LoadedSource>(StringComparer.OrdinalIgnoreCase);
         var modules = new Dictionary<string, LoadedSource>(StringComparer.Ordinal);
         foreach (var sourcePath in sourcePaths)
         {
-            AddSource(Path.GetFullPath(sourcePath), expectedModule: null, loadedByPath, modules);
+            AddSource(
+                Path.GetFullPath(sourcePath),
+                expectedModule: null,
+                project?.RootPackage,
+                isDependencyRoot: false,
+                loadedByPath,
+                modules);
         }
 
         var roots = loadedByPath.Values.Where(static source => source.Program.Statements.Count > 0).ToArray();
@@ -150,19 +160,31 @@ internal static class CompilerApp
             : loadedByPath[Path.GetFullPath(sourcePaths[0])];
         var moduleRoot = Path.GetDirectoryName(root.Path)
             ?? Directory.GetCurrentDirectory();
+        var packagesByName = project?.Packages.ToDictionary(
+            static package => package.Manifest.Name,
+            StringComparer.Ordinal)
+            ?? new Dictionary<string, ProjectPackage>(StringComparer.Ordinal);
         var states = new Dictionary<string, ModuleVisitState>(StringComparer.OrdinalIgnoreCase);
-        VisitImports(root, moduleRoot, loadedByPath, modules, states, []);
+        VisitImports(root, moduleRoot, packagesByName, loadedByPath, modules, states, []);
         return loadedByPath.Values.OrderBy(static source => source.Path, StringComparer.OrdinalIgnoreCase).ToArray();
     }
 
     private static LoadedSource AddSource(
         string path,
         string? expectedModule,
+        ProjectPackage? package,
+        bool isDependencyRoot,
         IDictionary<string, LoadedSource> loadedByPath,
         IDictionary<string, LoadedSource> modules)
     {
         if (loadedByPath.TryGetValue(path, out var existing))
         {
+            if (!SamePackage(existing.Package, package))
+            {
+                throw new SmallLangException(
+                    $"source file '{path}' belongs to both project '{PackageName(existing.Package)}' "
+                    + $"and project '{PackageName(package)}'");
+            }
             return existing;
         }
         if (!File.Exists(path))
@@ -177,6 +199,11 @@ internal static class CompilerApp
             throw new SmallLangException(
                 $"module file '{path}' declares namespace '{moduleName}' but import expects '{expectedModule}'");
         }
+        if (isDependencyRoot && program.Statements.Count > 0)
+        {
+            throw new SmallLangException(
+                $"dependency product '{package!.Product.Name}' contains executable top-level statements: {path}");
+        }
         if (moduleName.Length > 0
             && modules.TryGetValue(moduleName, out var duplicate)
             && !StringComparer.OrdinalIgnoreCase.Equals(duplicate.Path, path))
@@ -185,7 +212,7 @@ internal static class CompilerApp
                 $"module '{moduleName}' is declared by both '{duplicate.Path}' and '{path}'");
         }
 
-        var loaded = new LoadedSource(path, program);
+        var loaded = new LoadedSource(path, program, package);
         loadedByPath.Add(path, loaded);
         if (moduleName.Length > 0)
         {
@@ -197,6 +224,7 @@ internal static class CompilerApp
     private static void VisitImports(
         LoadedSource source,
         string moduleRoot,
+        IReadOnlyDictionary<string, ProjectPackage> packagesByName,
         IDictionary<string, LoadedSource> loadedByPath,
         IDictionary<string, LoadedSource> modules,
         IDictionary<string, ModuleVisitState> states,
@@ -222,18 +250,54 @@ internal static class CompilerApp
             }
 
             var moduleName = string.Join('.', import.Path);
-            if (!modules.TryGetValue(moduleName, out var imported))
+            var importedPackage = source.Package;
+            var importRoot = source.Package?.SourceRoot ?? moduleRoot;
+            var isDependencyRoot = false;
+            if (source.Package is not null
+                && source.Package.Dependencies.TryGetValue(import.Path[0], out var dependency))
             {
-                var modulePath = Path.Combine(
-                    moduleRoot,
-                    Path.Combine(import.Path.ToArray()) + ".sl");
+                importedPackage = dependency;
+                importRoot = dependency.SourceRoot;
+                isDependencyRoot = import.Path.Count == 1;
+            }
+            else if (source.Package is not null
+                     && packagesByName.ContainsKey(import.Path[0])
+                     && !string.Equals(
+                         import.Path[0],
+                         source.Package.Manifest.Name,
+                         StringComparison.Ordinal))
+            {
+                throw new SmallLangException(
+                    $"project '{source.Package.Manifest.Name}' imports undeclared dependency '{import.Path[0]}'");
+            }
+
+            LoadedSource? imported = null;
+            if (modules.TryGetValue(moduleName, out var existing)
+                && SamePackage(existing.Package, importedPackage))
+            {
+                imported = existing;
+            }
+            if (imported is null)
+            {
+                var modulePath = isDependencyRoot
+                    ? importedPackage!.Product.RootSource
+                    : Path.Combine(importRoot, Path.Combine(import.Path.ToArray()) + ".sl");
                 imported = AddSource(
                     Path.GetFullPath(modulePath),
                     moduleName,
+                    importedPackage,
+                    isDependencyRoot,
                     loadedByPath,
                     modules);
             }
-            VisitImports(imported, moduleRoot, loadedByPath, modules, states, nextChain);
+            VisitImports(
+                imported,
+                moduleRoot,
+                packagesByName,
+                loadedByPath,
+                modules,
+                states,
+                nextChain);
         }
         states[source.Path] = ModuleVisitState.Visited;
     }
@@ -242,6 +306,17 @@ internal static class CompilerApp
     {
         return program.NamespacePath.Count == 0 ? "<root>" : string.Join('.', program.NamespacePath);
     }
+
+    private static bool SamePackage(ProjectPackage? left, ProjectPackage? right)
+    {
+        if (left is null || right is null)
+        {
+            return left is null && right is null;
+        }
+        return StringComparer.OrdinalIgnoreCase.Equals(left.Manifest.Path, right.Manifest.Path);
+    }
+
+    private static string PackageName(ProjectPackage? package) => package?.Manifest.Name ?? "<explicit-sources>";
 
     private static IReadOnlyList<SmallLangProgram> LoadStandardLibrary(string sourcePath)
     {
@@ -301,7 +376,10 @@ internal static class CompilerApp
         return new Parser(tokens, isStandardLibrary).Parse();
     }
 
-    private sealed record LoadedSource(string Path, SmallLangProgram Program);
+    private sealed record LoadedSource(
+        string Path,
+        SmallLangProgram Program,
+        ProjectPackage? Package);
 
     private enum ModuleVisitState
     {

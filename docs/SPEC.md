@@ -484,13 +484,21 @@ Notes:
   qualified by the namespace.
 - Imports may alias a path, such as `import sys.runtime as rt`. A path beginning
   with the alias is resolved to the imported path before semantic analysis.
-- A `smalllang.project` manifest names the project and root source with the
-  language-shaped form `project { name: "app" root: "src/main.sl" }`.
-  `smalllang build` searches ancestor directories for it; `--project` selects
-  one explicitly. Both values are compile-time string literals. The root is
-  project-relative, must remain within that directory, and must name an `.sl`
-  file. Imported modules continue to be discovered relative to the root source.
-- A manifest build without `-o` writes to `build/<name>` with the target's
+- A `smalllang.project` manifest names the project and either one `root` source
+  or a nonempty `products` map. The forms are mutually exclusive. Product roots
+  are confined existing `.sl` files. `smalllang build` searches ancestors;
+  `--project` selects a manifest and `--product` selects among multiple products.
+- A manifest may contain a `dependencies` map from an import-safe project name
+  to an exact relative local directory or manifest path. The key must equal the
+  referenced project's name, and that project must expose a same-named product.
+  Graph traversal is ordinal and rejects cycles and one-name/multiple-path
+  collisions. One source path cannot belong to different packages. A package
+  may import only direct dependencies; transitive packages remain visible only
+  to the package that declared them.
+- Local modules resolve relative to the selected product root. The dependency
+  name is its first module-path segment; a one-segment import selects its root
+  product and deeper paths resolve beneath that product's source directory.
+- A manifest build without `-o` writes to `build/<product>` with the target's
   `.exe` or `.wasm` suffix where applicable. Explicit CLI options override only
   build settings, not manifest identity or root ownership.
 

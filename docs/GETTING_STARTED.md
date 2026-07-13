@@ -427,6 +427,38 @@ may not escape it. Without `-o`, artifacts are written as
 target. Command-line target, optimization, LLVM, and output options remain
 explicit overrides.
 
+Use `products` when one project produces several executables, and use
+`dependencies` for exact local package paths:
+
+```smalllang
+project {
+    name: "tools"
+    products: {
+        compiler: "src/compiler.sl"
+        formatter: "src/formatter.sl"
+    }
+    dependencies: {
+        syntax: "../syntax"
+    }
+}
+```
+
+`smalllang build --product compiler` selects one product. A project with one
+product needs no selection; a project with several reports the sorted choices
+instead of silently choosing. Product and dependency names are import-safe
+identifiers. Every dependency path is relative to the declaring manifest and
+must point directly to a directory or `smalllang.project` file; directory
+traversal looking for a coincidental package is not performed.
+
+The dependency key must equal the dependency project's `name`, and that package
+must expose a product with the same name. Source imports use that first segment,
+such as `import syntax.tree as tree`. Each package can see only its own direct
+dependencies; a dependency's dependencies do not become ambient imports of the
+parent. The compiler resolves the complete local graph in sorted order and
+rejects dependency cycles and duplicate project names before parsing sources.
+Versioned registries, Git sources, lock files, and workspaces are not yet part
+of this bootstrap format.
+
 When only the root file is supplied, each non-`sys` import is mapped from its
 dotted module path to a `.sl` file relative to the root directory. For example,
 `import sample.math as math` discovers `sample/math.sl` recursively.

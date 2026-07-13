@@ -4,6 +4,7 @@ namespace SmallLang.Compiler.Cli;
 
 internal sealed record CliOptions(
     IReadOnlyList<string> SourcePaths,
+    ProjectBuild? Project,
     string OutputPath,
     string? LlvmHome,
     CompilationTarget Target,
@@ -21,6 +22,7 @@ internal sealed record CliOptions(
         string? output = null;
         string? llvmHome = null;
         string? projectPath = null;
+        string? productName = null;
         var target = CompilationTarget.WindowsX64;
         var keepTemps = false;
         string? optimizationLevel = null;
@@ -39,6 +41,9 @@ internal sealed record CliOptions(
                     break;
                 case "--project":
                     projectPath = RequireValue(args, ref i, arg);
+                    break;
+                case "--product":
+                    productName = RequireValue(args, ref i, arg);
                     break;
                 case "--target":
                     target = ParseTarget(RequireValue(args, ref i, arg));
@@ -67,8 +72,12 @@ internal sealed record CliOptions(
         {
             throw new SmallLangException("--project cannot be combined with explicit source files");
         }
+        if (sources.Count > 0 && productName is not null)
+        {
+            throw new SmallLangException("--product requires a project build");
+        }
 
-        ProjectManifest? project = null;
+        ProjectBuild? project = null;
         if (sources.Count == 0)
         {
             projectPath ??= ProjectManifest.FindFrom(Directory.GetCurrentDirectory());
@@ -77,8 +86,8 @@ internal sealed record CliOptions(
                 throw new SmallLangException(
                     $"no source file or {ProjectManifest.FileName} was found; {Usage}");
             }
-            project = ProjectManifest.Load(projectPath);
-            sources.Add(project.RootSource);
+            project = ProjectBuild.Load(projectPath, productName);
+            sources.Add(project.Product.RootSource);
         }
 
         output ??= project is null
@@ -87,6 +96,7 @@ internal sealed record CliOptions(
 
         return new CliOptions(
             sources.Select(Path.GetFullPath).ToArray(),
+            project,
             Path.GetFullPath(output),
             llvmHome is null ? null : Path.GetFullPath(llvmHome),
             target,
@@ -105,20 +115,20 @@ internal sealed record CliOptions(
             _ => throw new SmallLangException($"unsupported target '{target}'")
         };
 
-    private static string DefaultProjectOutput(ProjectManifest project, CompilationTarget target) =>
+    private static string DefaultProjectOutput(ProjectBuild project, CompilationTarget target) =>
         Path.Combine(
-            project.Directory,
+            project.RootPackage.Manifest.Directory,
             "build",
             target switch
             {
-                CompilationTarget.WindowsX64 => project.Name + ".exe",
-                CompilationTarget.LinuxX64 => project.Name,
-                CompilationTarget.Wasm32Browser => project.Name + ".wasm",
+                CompilationTarget.WindowsX64 => project.Product.Name + ".exe",
+                CompilationTarget.LinuxX64 => project.Product.Name,
+                CompilationTarget.Wasm32Browser => project.Product.Name + ".wasm",
                 _ => throw new SmallLangException($"unsupported target '{target}'")
             });
 
     private const string Usage =
-        "usage: smalllang build [<source.sl> ... | --project <smalllang.project|directory>] "
+        "usage: smalllang build [<source.sl> ... | --project <smalllang.project|directory>] [--product <name>] "
         + "[-o <output>] [--target windows-x64|linux-x64|wasm32-browser] "
         + "[--llvm <dir>] [-O0|-O1|-O2|-O3] [--keep-temps]";
 

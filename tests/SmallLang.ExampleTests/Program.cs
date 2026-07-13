@@ -174,13 +174,16 @@ Parallel.ForEach(
     };
     if (File.Exists(projectPath))
     {
-        var projectReference = File.ReadLines(projectPath)
-            .Single(static line => !string.IsNullOrWhiteSpace(line))
-            .Trim();
+        var projectArguments = File.ReadLines(projectPath)
+            .Where(static line => !string.IsNullOrWhiteSpace(line))
+            .Select(static line => line.Trim())
+            .ToArray();
+        var projectReference = projectArguments[0];
         compilerArguments.AddRange([
             "--project",
             Path.GetFullPath(projectReference, repoRoot)
         ]);
+        compilerArguments.AddRange(projectArguments[1..]);
     }
     else if (File.Exists(sourcesPath))
     {

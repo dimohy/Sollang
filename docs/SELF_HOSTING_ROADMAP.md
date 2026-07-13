@@ -95,13 +95,13 @@ not lines of code.
 | Core syntax and control flow | 10 | 8 | 2 | 0 | 9.0 |
 | Types, traits, and generics | 12 | 10 | 1 | 1 | 10.5 |
 | Ownership and storage | 10 | 7 | 2 | 1 | 8.0 |
-| Modules, visibility, and builds | 8 | 5 | 1 | 2 | 5.5 |
+| Modules, visibility, and builds | 8 | 5 | 2 | 1 | 6.0 |
 | Compiler-construction primitives | 12 | 10 | 2 | 0 | 11.0 |
 | Standard library and tooling | 8 | 2 | 4 | 2 | 4.0 |
-| **Total** | **60** | **42** | **12** | **6** | **48.0 / 60** |
+| **Total** | **60** | **42** | **13** | **5** | **48.5 / 60** |
 
-Current count-based progress: **80.0% (48.0 of 60 equivalent gates)**.
-There are **12.0 equivalent gates remaining**. Because the remaining compiler
+Current count-based progress: **80.8% (48.5 of 60 equivalent gates)**.
+There are **11.5 equivalent gates remaining**. Because the remaining compiler
 primitives are harder than early syntax gates, this is not an elapsed-time
 estimate.
 
@@ -210,7 +210,7 @@ test-performance boundary.
 - Missing (1): a complete path-sensitive borrow checker for references returned
   from functions and stored in user values.
 
-### Modules, visibility, and builds — 5.5 / 8
+### Modules, visibility, and builds — 6.0 / 8
 
 - Complete (5): file namespaces/import aliases; multiple user source files in
   one compilation unit; root imports recursively discover module files with
@@ -219,8 +219,12 @@ test-performance boundary.
   `public` exports and module-qualified nominal identity; `smalllang.project`
   names a confined root source and output identity, and source-free
   `smalllang build` discovers it from ancestor directories.
-- Partial (1): stdlib loading uses a fixed bootstrap list.
-- Missing (2): package manifest/dependency graph; module/interface cache.
+- Partial (2): stdlib loading uses a fixed bootstrap list; the package graph has
+  deterministic multiple-product selection, exact local path dependencies,
+  direct-dependency visibility, transitive resolution, and cycle/name-collision
+  diagnostics, but not versions, registries, Git sources, a lock file, or
+  workspaces.
+- Missing (1): module/interface cache.
 
 ### Compiler-construction primitives — 11.0 / 12
 
@@ -255,17 +259,18 @@ test-performance boundary.
   output path; `writeAtAsync<T>` owns copied bytes and a duplicate handle while
   it is pending, `syncAsync` provides an explicit durability barrier, and async
   open owns its path and transfers its newly opened handle on await. Explicit
-  user-value serialization remains. The package/build surface has a confined
-  root manifest, automatic discovery, recursive imports, and target output,
-  but not dependency resolution, products, tests, or a build DAG.
+  user-value serialization remains. The package/build surface has confined
+  roots, automatic discovery, selected products, deterministic local dependency
+  resolution, recursive imports, and target output, but not versioned/remote
+  resolution, a lock file, workspaces, tests, or a general build DAG.
 - Missing (2): portable path/filesystem library; formatter and language server
   based on the real parser.
 
 ## Critical Path To Self-Hosting
 
-1. Finish the package graph: imports discover files, visibility is enforced,
-   and `smalllang.project` names the root; dependency products and resolution
-   remain.
+1. Finish distributable packages: local dependency products and direct
+   visibility work; version constraints, remote sources, a lock file, and
+   workspace-wide resolution remain.
 2. Finish the reusable type substrate: multi-parameter generics, associated
    types, generic `Array<T>`/`Dictionary<K, V>`, `Option`, and `Result`.
 3. Add compiler data primitives: bytes, source spans, Unicode iteration, arena
@@ -293,7 +298,7 @@ while retaining the entire source envelope. Multi-error continuation,
 full CST-to-AST lowering, and semantic diagnostics remain as
 described in [GRAMMAR_BOOTSTRAP.md](GRAMMAR_BOOTSTRAP.md). These additions
 complete the reusable source-span/diagnostic gate. The formal count is now
-**48.0 / 60 (80.0%)**; multi-error parser continuation remains.
+**48.5 / 60 (80.8%)**; multi-error parser continuation remains.
 
 The lowering path is also executable: generated stable rule ids drive an
 ordinary SL module that selects module/declaration/function/main/binding/flow/

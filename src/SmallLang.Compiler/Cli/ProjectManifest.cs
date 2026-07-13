@@ -3,12 +3,40 @@ using SmallLang.Compiler.Lexing;
 
 namespace SmallLang.Compiler.Cli;
 
-internal sealed record ProjectManifest(string Path, string Name, string RootSource)
+internal sealed record ProjectManifest(
+    string Path,
+    string Name,
+    IReadOnlyDictionary<string, string> Products,
+    IReadOnlyDictionary<string, string> Dependencies)
 {
     public const string FileName = "smalllang.project";
 
     public string Directory => System.IO.Path.GetDirectoryName(Path)
         ?? System.IO.Directory.GetCurrentDirectory();
+
+    public ProjectProduct SelectProduct(string? requestedName)
+    {
+        if (requestedName is not null)
+        {
+            if (!Products.TryGetValue(requestedName, out var selectedRoot))
+            {
+                throw new SmallLangException(
+                    $"project '{Name}' has no product '{requestedName}'; available products: "
+                    + string.Join(", ", Products.Keys.Order(StringComparer.Ordinal)));
+            }
+            return new ProjectProduct(requestedName, selectedRoot);
+        }
+
+        if (Products.Count != 1)
+        {
+            throw new SmallLangException(
+                $"project '{Name}' has multiple products; select one with --product: "
+                + string.Join(", ", Products.Keys.Order(StringComparer.Ordinal)));
+        }
+
+        var only = Products.Single();
+        return new ProjectProduct(only.Key, only.Value);
+    }
 
     public static ProjectManifest Load(string pathOrDirectory)
     {
@@ -23,10 +51,67 @@ internal sealed record ProjectManifest(string Path, string Name, string RootSour
 
         var source = File.ReadAllText(manifestPath);
         var parser = new ManifestParser(new Lexer(source).Lex(), manifestPath);
-        var (name, root) = parser.Parse();
-        ValidateName(name, manifestPath);
+        var parsed = parser.Parse();
+        ValidateProjectName(parsed.Name, manifestPath);
+
+        if (parsed.Root is not null && parsed.Products is not null)
+        {
+            throw new SmallLangException(
+                $"project manifest cannot declare both 'root' and 'products': {manifestPath}");
+        }
+        if (parsed.Root is null && parsed.Products is null)
+        {
+            throw new SmallLangException(
+                $"project manifest requires either 'root' or 'products': {manifestPath}");
+        }
+
         var projectDirectory = System.IO.Path.GetDirectoryName(manifestPath)
             ?? System.IO.Directory.GetCurrentDirectory();
+        IReadOnlyDictionary<string, string> products;
+        if (parsed.Root is not null)
+        {
+            products = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                [parsed.Name] = ResolveRoot(parsed.Root, projectDirectory, manifestPath)
+            };
+        }
+        else
+        {
+            if (parsed.Products!.Count == 0)
+            {
+                throw new SmallLangException($"project 'products' must not be empty: {manifestPath}");
+            }
+            products = parsed.Products.ToDictionary(
+                pair => ValidateEntryName(pair.Key, "product", manifestPath),
+                pair => ResolveRoot(pair.Value, projectDirectory, manifestPath),
+                StringComparer.Ordinal);
+        }
+
+        var dependencies = (parsed.Dependencies ?? new Dictionary<string, string>(StringComparer.Ordinal))
+            .ToDictionary(
+                pair => ValidateEntryName(pair.Key, "dependency", manifestPath),
+                pair => ResolveDependencyPath(pair.Value, projectDirectory, manifestPath),
+                StringComparer.Ordinal);
+        return new ProjectManifest(manifestPath, parsed.Name, products, dependencies);
+    }
+
+    public static string? FindFrom(string startDirectory)
+    {
+        for (var current = new DirectoryInfo(System.IO.Path.GetFullPath(startDirectory));
+             current is not null;
+             current = current.Parent)
+        {
+            var candidate = System.IO.Path.Combine(current.FullName, FileName);
+            if (File.Exists(candidate))
+            {
+                return candidate;
+            }
+        }
+        return null;
+    }
+
+    private static string ResolveRoot(string root, string projectDirectory, string manifestPath)
+    {
         if (System.IO.Path.IsPathRooted(root))
         {
             throw new SmallLangException($"project root must be relative to the manifest: {root}");
@@ -48,26 +133,20 @@ internal sealed record ProjectManifest(string Path, string Name, string RootSour
         {
             throw new SmallLangException($"project root source not found: {rootSource}");
         }
-
-        return new ProjectManifest(manifestPath, name, rootSource);
+        return rootSource;
     }
 
-    public static string? FindFrom(string startDirectory)
+    private static string ResolveDependencyPath(string path, string projectDirectory, string manifestPath)
     {
-        for (var current = new DirectoryInfo(System.IO.Path.GetFullPath(startDirectory));
-             current is not null;
-             current = current.Parent)
+        if (System.IO.Path.IsPathRooted(path))
         {
-            var candidate = System.IO.Path.Combine(current.FullName, FileName);
-            if (File.Exists(candidate))
-            {
-                return candidate;
-            }
+            throw new SmallLangException(
+                $"dependency path must be relative to the manifest in {manifestPath}: {path}");
         }
-        return null;
+        return System.IO.Path.GetFullPath(path, projectDirectory);
     }
 
-    private static void ValidateName(string name, string manifestPath)
+    private static void ValidateProjectName(string name, string manifestPath)
     {
         if (string.IsNullOrWhiteSpace(name))
         {
@@ -79,11 +158,29 @@ internal sealed record ProjectManifest(string Path, string Name, string RootSour
         }
     }
 
+    private static string ValidateEntryName(string name, string kind, string manifestPath)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            throw new SmallLangException($"{kind} name must not be empty in {manifestPath}");
+        }
+        if (!IsIdentifierStart(name[0]) || name.Skip(1).Any(static character => !IsIdentifierPart(character)))
+        {
+            throw new SmallLangException(
+                $"{kind} name must be an import-safe identifier in {manifestPath}: {name}");
+        }
+        return name;
+    }
+
+    private static bool IsIdentifierStart(char character) => character == '_' || char.IsLetter(character);
+
+    private static bool IsIdentifierPart(char character) => character == '_' || char.IsLetterOrDigit(character);
+
     private sealed class ManifestParser(IReadOnlyList<Token> tokens, string path)
     {
         private int _index;
 
-        public (string Name, string Root) Parse()
+        public ParsedManifest Parse()
         {
             SkipNewLines();
             var project = Expect(TokenKind.Identifier, "'project'");
@@ -95,32 +192,34 @@ internal sealed record ProjectManifest(string Path, string Name, string RootSour
 
             string? name = null;
             string? root = null;
+            Dictionary<string, string>? products = null;
+            Dictionary<string, string>? dependencies = null;
             SkipSeparators();
             while (!Check(TokenKind.RightBrace))
             {
                 var field = Expect(TokenKind.Identifier, "field name");
                 Expect(TokenKind.Colon, "':'");
-                var value = Expect(TokenKind.String, "string literal");
                 switch (field.Text)
                 {
                     case "name" when name is null:
-                        name = value.Text;
+                        name = Expect(TokenKind.String, "string literal").Text;
                         break;
                     case "root" when root is null:
-                        root = value.Text;
+                        root = Expect(TokenKind.String, "string literal").Text;
                         break;
-                    case "name" or "root":
+                    case "products" when products is null:
+                        products = ParseStringMap("products");
+                        break;
+                    case "dependencies" when dependencies is null:
+                        dependencies = ParseStringMap("dependencies");
+                        break;
+                    case "name" or "root" or "products" or "dependencies":
                         throw Error(field, $"duplicate project field '{field.Text}'");
                     default:
                         throw Error(field, $"unknown project field '{field.Text}'");
                 }
 
-                if (!Check(TokenKind.RightBrace)
-                    && !Check(TokenKind.NewLine)
-                    && !Check(TokenKind.Comma))
-                {
-                    throw Error(Peek(), "project fields must be separated by a newline or comma");
-                }
+                RequireSeparator("project fields");
                 SkipSeparators();
             }
 
@@ -131,11 +230,38 @@ internal sealed record ProjectManifest(string Path, string Name, string RootSour
             {
                 throw new SmallLangException($"project manifest is missing required field 'name': {path}");
             }
-            if (root is null)
+            return new ParsedManifest(name, root, products, dependencies);
+        }
+
+        private Dictionary<string, string> ParseStringMap(string fieldName)
+        {
+            Expect(TokenKind.LeftBrace, "'{'");
+            var values = new Dictionary<string, string>(StringComparer.Ordinal);
+            SkipSeparators();
+            while (!Check(TokenKind.RightBrace))
             {
-                throw new SmallLangException($"project manifest is missing required field 'root': {path}");
+                var key = Expect(TokenKind.Identifier, $"{fieldName} entry name");
+                Expect(TokenKind.Colon, "':'");
+                var value = Expect(TokenKind.String, "string literal");
+                if (!values.TryAdd(key.Text, value.Text))
+                {
+                    throw Error(key, $"duplicate {fieldName} entry '{key.Text}'");
+                }
+                RequireSeparator($"{fieldName} entries");
+                SkipSeparators();
             }
-            return (name, root);
+            Expect(TokenKind.RightBrace, "'}'");
+            return values;
+        }
+
+        private void RequireSeparator(string description)
+        {
+            if (!Check(TokenKind.RightBrace)
+                && !Check(TokenKind.NewLine)
+                && !Check(TokenKind.Comma))
+            {
+                throw Error(Peek(), $"{description} must be separated by a newline or comma");
+            }
         }
 
         private void SkipSeparators()
@@ -172,4 +298,12 @@ internal sealed record ProjectManifest(string Path, string Name, string RootSour
         private SmallLangException Error(Token token, string message) =>
             new($"{path}({token.Line},{token.Column}): {message}");
     }
+
+    private sealed record ParsedManifest(
+        string Name,
+        string? Root,
+        Dictionary<string, string>? Products,
+        Dictionary<string, string>? Dependencies);
 }
+
+internal sealed record ProjectProduct(string Name, string RootSource);

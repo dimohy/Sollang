@@ -4122,4 +4122,53 @@ partial to complete; package dependencies and module/interface caching remain.
 References: [Swift packages](https://docs.swift.org/swiftpm/documentation/packagemanagerdocs/introducingpackages/),
 [Zig build system](https://ziglang.org/learn/build-system/).
 
+## D133 - Package Visibility Follows Direct Product Dependencies
+
+Status: deterministic local package graph implemented
+Date: 2026-07-14
+
+`smalllang.project` now separates selectable products from package dependencies
+while keeping both as compact SL-shaped maps:
+
+```smalllang
+project {
+    name: "tools"
+    products: {
+        compiler: "src/compiler.sl"
+        formatter: "src/formatter.sl"
+    }
+    dependencies: {
+        syntax: "../syntax"
+    }
+}
+```
+
+This takes Swift Package Manager's useful separation between products, targets,
+and dependencies without copying its executable manifest API. It takes Cargo's
+exact relative path-dependency rule: local dependency paths point to the actual
+package directory rather than searching descendants. It takes Zig's root-module
+and build-DAG direction, but keeps bootstrap graph evaluation deterministic and
+non-executable until SL can host it itself.
+
+A dependency key is deliberately both the project identity and first import
+segment. The referenced manifest must have the same `name` and a same-named
+product. Renaming and multiple versions are deferred because current semantic
+nominal identity is module-qualified rather than package-id-qualified; accepting
+aliases now would silently conflate packages. Each package sees only direct
+dependencies, while each dependency resolves its own transitive declarations.
+The loader sorts dependency names, rejects graph cycles and duplicate names at
+different paths, rejects one source file claimed by different packages, and
+selects exactly one root product before source discovery.
+
+The next distribution layer needs package-id-qualified nominal identity,
+version constraints, content-pinned remote sources, a checked-in lock file, and
+workspace resolution. Those features must preserve deterministic inputs before
+the build manifest becomes an executable compile-time SL value.
+
+References: [Swift packages](https://docs.swift.org/swiftpm/documentation/packagemanagerdocs/introducingpackages/),
+[Swift products](https://docs.swift.org/swiftpm/documentation/packagedescription/product/),
+[Cargo path dependencies](https://doc.rust-lang.org/cargo/reference/specifying-dependencies.html#specifying-path-dependencies),
+[Cargo workspaces](https://doc.rust-lang.org/cargo/reference/workspaces.html),
+[Zig build system](https://ziglang.org/learn/build-system/).
+
 

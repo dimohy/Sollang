@@ -167,6 +167,26 @@ Save this as `smalllang.project`, then run `smalllang build`. The compiler
 searches the current directory and its ancestors, or accepts an explicit
 `--project <file-or-directory>`. Default artifacts are written under `build/`.
 
+Projects with more than one executable or local packages can declare compact
+maps instead of repeating compiler source arguments:
+
+```smalllang
+project {
+    name: "tools"
+    products: {
+        compiler: "src/compiler.sl"
+        formatter: "src/formatter.sl"
+    }
+    dependencies: {
+        syntax: "../syntax"
+    }
+}
+```
+
+Use `smalllang build --product compiler`. A dependency path points to the exact
+directory containing another `smalllang.project`; its name is also its first
+import segment, for example `import syntax.tree as tree`.
+
 ## License
 
 SmallLang is licensed under the [Apache License 2.0](LICENSE).
