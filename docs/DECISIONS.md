@@ -3644,4 +3644,41 @@ References: [LLVM coroutines](https://llvm.org/docs/Coroutines.html),
 [Swift concurrency](https://docs.swift.org/swift-book/LanguageGuide/Concurrency.html),
 [Kotlin coroutine state machines](https://kotlinlang.org/spec/asynchronous-programming-with-coroutines.html).
 
+## D121 - Loop-Nested Await Reuses States Through Back-Edge Phis
+
+Status: reference compiler and self-host suspension discovery implemented
+Date: 2026-07-14
+
+An await site is a stable state-machine location, not a dynamically unique
+event. A `while` body may therefore suspend at the same site on every iteration.
+The async worker entry switch resumes directly inside the structured loop body;
+normal completion of that body flows through an explicit continue block and
+back to the loop header.
+
+Every binding visible before the loop receives a header phi. Immutable values
+carry their materialized LLVM representation. Mutable scalars, structs, and
+containers carry storage pointers, with container pointer/length/capacity slots
+kept coherent as one mutable owner. The initial predecessor supplies the
+pre-loop representation and the back-edge supplies the post-body
+representation. This makes both the first iteration and every resumed iteration
+dominate the condition, body, and eventual exit without replaying earlier work.
+
+State-specific spill frames remain temporary: each pending child owns the live
+values needed at that site, resume reconstructs exactly one local
+representation, and cancellation destroys the active frame. A loop may contain
+multiple await sites, keep another affine child Task live across one site, own a
+dynamic container across the back-edge, or branch around suspension on selected
+iterations. Examples 254 and 255 cover runtime repetition, cancellation,
+loop-carried mutable/owned state, a skipped-await path, and the self-host state
+and frame-slot plan.
+
+Early `break` and `continue` edges are deliberately rejected in a suspending
+loop until each edge transports initialized-owner flags. Silently routing those
+edges through the ordinary back-edge could otherwise read an uninitialized
+state-specific owner or duplicate cleanup.
+
+References: [LLVM coroutines](https://llvm.org/docs/Coroutines.html),
+[LLVM phi nodes](https://llvm.org/docs/LangRef.html#phi-instruction),
+[Kotlin coroutine state machines](https://kotlinlang.org/spec/asynchronous-programming-with-coroutines.html).
+
 

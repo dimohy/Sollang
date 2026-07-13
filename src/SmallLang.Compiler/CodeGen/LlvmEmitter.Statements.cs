@@ -545,6 +545,12 @@ internal sealed partial class LlvmEmitter
 
     private void EmitWhileBlockFunctionCall(BlockFunctionCallStatement statement)
     {
+        if (HasPlannedCfgAwait(statement.Body))
+        {
+            EmitAsyncWhileBlockFunctionCall(statement);
+            return;
+        }
+
         var conditionLabel = NextLabel("while_condition");
         var bodyLabel = NextLabel("while_body");
         var endLabel = NextLabel("while_end");
@@ -574,6 +580,257 @@ internal sealed partial class LlvmEmitter
 
         EmitLabel(endLabel);
         _currentBlockLabel = endLabel;
+    }
+
+    private bool HasPlannedCfgAwait(IReadOnlyList<Statement> statements)
+    {
+        if (_activeAsyncCfg is not { } lowering)
+        {
+            return false;
+        }
+
+        var candidates = new List<(BindingStatement Binding, bool Nested)>();
+        CollectCfgAwaits(statements, nested: true, candidates);
+        return candidates.Any(candidate =>
+            lowering.Plan.ByBinding.ContainsKey(candidate.Binding));
+    }
+
+    private void EmitAsyncWhileBlockFunctionCall(BlockFunctionCallStatement statement)
+    {
+        if (_activeAsyncCfg is not { } lowering)
+        {
+            throw new SmallLangException("async while lowering requires an active CFG plan");
+        }
+        if (ContainsLoopControl(statement.Body))
+        {
+            throw new SmallLangException(
+                "break and continue inside an await-suspending while body require loop-edge ownership flags");
+        }
+
+        var entryLabel = _currentBlockLabel;
+        var initialScope = CaptureLocals();
+        var carriedNames = initialScope.Locals.Keys
+            .Where(name => !lowering.ResumeBaseLocals.Locals.ContainsKey(name))
+            .ToArray();
+        var immutableCarries = new List<(
+            string Name,
+            BoundType Type,
+            string LlvmType,
+            string EntryValue,
+            string NextValue)>();
+        var scalarCarries = new List<(string Name, string EntryPointer, string NextPointer)>();
+        var structCarries = new List<(string Name, string EntryPointer, string NextPointer)>();
+        var containerCarries = new List<(
+            string Name,
+            MutableContainerSlot Entry,
+            string NextPointer,
+            string NextLength,
+            string NextCapacity)>();
+
+        foreach (var name in carriedNames)
+        {
+            if (!initialScope.MutableLocals.Contains(name))
+            {
+                var value = initialScope.Locals[name];
+                var materialized = MaterializeAggregateValue(value);
+                immutableCarries.Add((
+                    name,
+                    value.Type,
+                    materialized.TypeName,
+                    materialized.ValueName,
+                    NextTemp($"async_loop_{name}_next")));
+                continue;
+            }
+            var prefix = name.TrimEnd('!');
+            if (initialScope.MutableScalarSlots.TryGetValue(name, out var scalar))
+            {
+                scalarCarries.Add((name, scalar, NextTemp($"async_loop_{prefix}_slot_next")));
+                continue;
+            }
+            if (initialScope.MutableStructSlots.TryGetValue(name, out var structure))
+            {
+                structCarries.Add((name, structure, NextTemp($"async_loop_{prefix}_struct_next")));
+                continue;
+            }
+            if (initialScope.MutableContainerSlots.TryGetValue(name, out var container))
+            {
+                containerCarries.Add((
+                    name,
+                    container,
+                    NextTemp($"async_loop_{prefix}_ptr_next"),
+                    NextTemp($"async_loop_{prefix}_len_next"),
+                    NextTemp($"async_loop_{prefix}_capacity_next")));
+                continue;
+            }
+            throw new SmallLangException(
+                $"mutable loop-carried binding '{name}' has no storage slot");
+        }
+
+        var conditionLabel = NextLabel("async_while_condition");
+        var bodyLabel = NextLabel("async_while_body");
+        var continueLabel = NextLabel("async_while_continue");
+        var endLabel = NextLabel("async_while_end");
+        EmitBranch(conditionLabel);
+
+        EmitLabel(conditionLabel);
+        _currentBlockLabel = conditionLabel;
+        foreach (var carry in immutableCarries)
+        {
+            var value = NextTemp($"async_loop_{carry.Name}");
+            EmitPhi(
+                value,
+                carry.LlvmType,
+                (carry.EntryValue, entryLabel),
+                (carry.NextValue, continueLabel));
+            _locals[carry.Name] = DematerializeAggregateValue(carry.Type, value);
+        }
+        foreach (var carry in scalarCarries)
+        {
+            var pointer = NextTemp($"async_loop_{carry.Name.TrimEnd('!')}_slot");
+            EmitPhi(
+                pointer,
+                "ptr",
+                (carry.EntryPointer, entryLabel),
+                (carry.NextPointer, continueLabel));
+            _mutableScalarSlots[carry.Name] = pointer;
+        }
+        foreach (var carry in structCarries)
+        {
+            var pointer = NextTemp($"async_loop_{carry.Name.TrimEnd('!')}_struct_slot");
+            EmitPhi(
+                pointer,
+                "ptr",
+                (carry.EntryPointer, entryLabel),
+                (carry.NextPointer, continueLabel));
+            _mutableStructSlots[carry.Name] = pointer;
+        }
+        foreach (var carry in containerCarries)
+        {
+            var prefix = carry.Name.TrimEnd('!');
+            var pointer = NextTemp($"async_loop_{prefix}_ptr_slot");
+            EmitPhi(
+                pointer,
+                "ptr",
+                (carry.Entry.PointerAddress, entryLabel),
+                (carry.NextPointer, continueLabel));
+            var length = NextTemp($"async_loop_{prefix}_len_slot");
+            EmitPhi(
+                length,
+                "ptr",
+                (carry.Entry.LengthAddress, entryLabel),
+                (carry.NextLength, continueLabel));
+            var capacity = NextTemp($"async_loop_{prefix}_capacity_slot");
+            EmitPhi(
+                capacity,
+                "ptr",
+                (carry.Entry.CapacityAddress, entryLabel),
+                (carry.NextCapacity, continueLabel));
+            _mutableContainerSlots[carry.Name] = new MutableContainerSlot(
+                pointer,
+                length,
+                capacity,
+                StackAllocation: null);
+        }
+
+        var headerScope = CaptureLocals();
+        var condition = EmitExpression(statement.Source) as RuntimeBool
+            ?? throw new SmallLangException("while condition must be Bool");
+        EmitConditionalBranch(condition.ValueName, bodyLabel, endLabel);
+
+        EmitLabel(bodyLabel);
+        _currentBlockLabel = bodyLabel;
+        var loopBodyScope = CaptureLocals();
+        _asyncScopeSnapshots.Push(loopBodyScope);
+        LocalScope bodyExitScope;
+        try
+        {
+            EmitLoopBody(statement.Body, loopBodyScope, continueLabel, endLabel);
+            bodyExitScope = CaptureLocals();
+        }
+        finally
+        {
+            _asyncScopeSnapshots.Pop();
+        }
+        if (_currentBlockTerminated)
+        {
+            throw new SmallLangException(
+                "await-suspending while body must reach its loop back-edge");
+        }
+
+        RestoreLocals(headerScope);
+        foreach (var name in carriedNames)
+        {
+            if (!bodyExitScope.Locals.TryGetValue(name, out var value))
+            {
+                throw new SmallLangException(
+                    $"loop-carried binding '{name}' is consumed on the back-edge");
+            }
+            _locals[name] = value;
+            if (headerScope.MutableScalarSlots.ContainsKey(name))
+            {
+                _mutableScalarSlots[name] = bodyExitScope.MutableScalarSlots[name];
+            }
+            if (headerScope.MutableStructSlots.ContainsKey(name))
+            {
+                _mutableStructSlots[name] = bodyExitScope.MutableStructSlots[name];
+            }
+            if (headerScope.MutableContainerSlots.ContainsKey(name))
+            {
+                _mutableContainerSlots[name] = bodyExitScope.MutableContainerSlots[name];
+            }
+        }
+        EmitBranch(continueLabel);
+
+        EmitLabel(continueLabel);
+        _currentBlockLabel = continueLabel;
+        foreach (var carry in immutableCarries)
+        {
+            var current = MaterializeAggregateValue(ResolveLocal(carry.Name));
+            EmitAssign(
+                carry.NextValue,
+                $"select i1 true, {carry.LlvmType} {current.ValueName}, {carry.LlvmType} {current.ValueName}");
+        }
+        foreach (var carry in scalarCarries)
+        {
+            EmitAssign(
+                carry.NextPointer,
+                $"getelementptr i8, ptr {_mutableScalarSlots[carry.Name]}, i64 0");
+        }
+        foreach (var carry in structCarries)
+        {
+            EmitAssign(
+                carry.NextPointer,
+                $"getelementptr i8, ptr {_mutableStructSlots[carry.Name]}, i64 0");
+        }
+        foreach (var carry in containerCarries)
+        {
+            var slot = _mutableContainerSlots[carry.Name];
+            EmitAssign(carry.NextPointer, $"getelementptr i8, ptr {slot.PointerAddress}, i64 0");
+            EmitAssign(carry.NextLength, $"getelementptr i8, ptr {slot.LengthAddress}, i64 0");
+            EmitAssign(carry.NextCapacity, $"getelementptr i8, ptr {slot.CapacityAddress}, i64 0");
+        }
+        EmitBranch(conditionLabel);
+
+        EmitLabel(endLabel);
+        _currentBlockLabel = endLabel;
+        RestoreLocals(headerScope);
+    }
+
+    private static bool ContainsLoopControl(IReadOnlyList<Statement> statements)
+    {
+        return statements.Any(statement => statement switch
+        {
+            LoopControlStatement or GuardLoopControlStatement => true,
+            BlockFunctionCallStatement block => ContainsLoopControl(block.Body),
+            ExpressionStatement { Expression: IfExpression conditional } =>
+                ContainsLoopControl(conditional.Then.Statements)
+                || (conditional.Else is not null
+                    && ContainsLoopControl(conditional.Else.Statements)),
+            ExpressionStatement { Expression: WhenExpression selection } =>
+                selection.Arms.Any(arm => ContainsLoopControl(arm.Body.Statements))
+                || ContainsLoopControl(selection.Else.Statements),
+            _ => false
+        });
     }
 
     private void EmitDictionaryEachBlockFunctionCall(

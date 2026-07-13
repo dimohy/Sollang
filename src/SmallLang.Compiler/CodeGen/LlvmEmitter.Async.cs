@@ -783,6 +783,11 @@ internal sealed partial class LlvmEmitter
                 case ExpressionStatement expression:
                     CollectCfgAwaits(expression.Expression, nested, candidates);
                     break;
+                case BlockFunctionCallStatement block
+                    when block.Target.Count == 1
+                        && string.Equals(block.Target[0], "while", StringComparison.Ordinal):
+                    CollectCfgAwaits(block.Body, nested: true, candidates);
+                    break;
             }
         }
     }

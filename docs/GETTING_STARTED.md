@@ -200,6 +200,28 @@ The generated resume switch targets the branch continuation directly. Values
 that cross the suspension move through the coroutine frame, and the branch join
 merges their resumed representation before later statements execute.
 
+The same suspension model applies inside `while`. Numbered states are stable
+sites, not one-shot events, so a loop can revisit one site on every iteration:
+
+```smalllang
+sum count: Int -> async Int {
+    0 => index!
+    0 => total!
+    index! < count -> while {
+        index! -> step => pending
+        pending -> await => next
+        total! + next => total!
+        index! + 1 => index!
+    }
+    total!
+}
+```
+
+The compiler carries mutable storage pointers through loop-header phis and
+spills live values only while the child is pending. `break` and `continue` in a
+suspending loop remain a compile-time error until early loop edges carry their
+own initialized-owner state.
+
 Browser WebAssembly output is available through the `wasm32-browser` target. The
 generated module exports `smalllang_start` and `memory`, and imports
 `env.smalllang_browser_write(ptr, len)` so the page can render stdout text:
