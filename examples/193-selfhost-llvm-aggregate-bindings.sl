@@ -1,0 +1,26 @@
+import smalllang.compiler.llvm.text as llvm
+
+main {
+    [
+        """
+        struct Point {
+            x: Int
+        }
+        arrayFirst: -> Int {
+            [7, 8, ~] => values
+            values![0]
+        }
+        pointX: -> Int {
+            Point { x: 9 } => point
+            point.x
+        }
+        dictionaryValue: -> Int {
+            {1: 10, 2: 20} => values
+            values![2]
+        }
+        main { }
+        """,
+        ~
+    ] => sources!
+    sources! -> llvm.emit
+}

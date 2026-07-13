@@ -565,6 +565,16 @@ public emit sources: [Text; ~] -> Unit {
                     "  %drop$(dropIndex!)_values = extractvalue %sl.dict %v$(dropIndex!), 1" -> println
                     "  call void @free(ptr %drop$(dropIndex!)_values)" -> println
                 }
+                (dropCandidate.kind == 17 and dropCandidate.typeOrigin == 13 and not (returnOperand.kind == 5 and returnOperand.symbol == dropCandidate.symbol)) -> if {
+                    "  %drop$(dropIndex!) = extractvalue %sl.array.i32 %v$(dropCandidate.operand0), 0" -> println
+                    "  call void @free(ptr %drop$(dropIndex!))" -> println
+                }
+                (dropCandidate.kind == 17 and dropCandidate.typeOrigin == 15 and not (returnOperand.kind == 5 and returnOperand.symbol == dropCandidate.symbol)) -> if {
+                    "  %drop$(dropIndex!)_keys = extractvalue %sl.dict %v$(dropCandidate.operand0), 0" -> println
+                    "  call void @free(ptr %drop$(dropIndex!)_keys)" -> println
+                    "  %drop$(dropIndex!)_values = extractvalue %sl.dict %v$(dropCandidate.operand0), 1" -> println
+                    "  call void @free(ptr %drop$(dropIndex!)_values)" -> println
+                }
                 dropIndex! + 1 => dropIndex!
             }
             function.operand1 >= 0 -> if {

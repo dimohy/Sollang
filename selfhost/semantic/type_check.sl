@@ -93,7 +93,7 @@ public analyze sources: [Text; ~] -> [TypeCheckDiagnostic; ~] {
                                 distance! + 1 => distance!
                             }
                         }
-                        (belongsToFunction! and distance! < returnDistance!) -> if {
+                        (belongsToFunction! and (distance! < returnDistance! or (distance! == returnDistance! and (returnExpressionAst! < 0 or nodes![candidateType.astNode].start > nodes![returnExpressionAst!].start)))) -> if {
                             candidateType.astNode => returnExpressionAst!
                             expressionTypeIndex! => returnExpressionType!
                             distance! => returnDistance!

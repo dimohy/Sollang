@@ -63,7 +63,7 @@ public lower sources: [Text; ~] -> [TypedIrNode; ~] {
                                 distance! + 1 => distance!
                             }
                         }
-                        (belongsToFunction! and distance! < resultDistance!) -> if {
+                        (belongsToFunction! and (distance! < resultDistance! or (distance! == resultDistance! and (resultTypeIndex! < 0 or nodes![candidateType.astNode].start > nodes![inferred![resultTypeIndex!].astNode].start)))) -> if {
                             typeSearch! => resultTypeIndex!
                             distance! => resultDistance!
                         }
@@ -477,7 +477,7 @@ public lower sources: [Text; ~] -> [TypedIrNode; ~] {
                                 entryDistance! + 1 => entryDistance!
                             }
                         }
-                        (belongsToEntry! and entryDistance! < entryResultDistance!) -> if {
+                        (belongsToEntry! and (entryDistance! < entryResultDistance! or (entryDistance! == entryResultDistance! and (entryResultTypeIndex! < 0 or nodes![entryCandidateType.astNode].start > nodes![inferred![entryResultTypeIndex!].astNode].start)))) -> if {
                             entryTypeSearch! => entryResultTypeIndex!
                             entryDistance! => entryResultDistance!
                         }

@@ -177,7 +177,7 @@ estimate.
 The grammar-bootstrap path now includes `smalllang grammar build`, an SL lexer,
 and an SL parser VM. The build command
 compiles the canonical lexer/EBNF specifications into a deterministic ordinary
-SL module containing lexer descriptors and a 1,508-word parser VM program. The
+SL module containing lexer descriptors and a 1,580-word parser VM program. The
 full test runner checks byte-for-byte regeneration. The SL VM consumes those
 tables, emits compact backtracking-aware CST events, and materializes flat green
 nodes with parent/token/span metadata. Valid-source whitespace and comment
@@ -417,6 +417,13 @@ scheduling now uses a stable operand-readiness pass, so call-valued and
 operator-valued scalar bindings are emitted before their uses in functions and
 `main`. Aggregate/container dependencies, mutation, branch joins, cycle
 diagnostics, and ownership-sensitive binding drops remain.
+
+Aggregate-valued bindings now participate in the same dependency schedule.
+Function-block parsing preserves the final expression after prior statements,
+including `array![index]` and struct member access. Array, struct, and dictionary
+bindings can therefore feed typed reads; owned array/dictionary storage is
+released after its final scalar read. Transfer through a returned aggregate,
+branch-sensitive liveness, and nested owned aggregate drop glue remain.
 
 Text now crosses the self-hosted LLVM boundary as `{ ptr, i64 }`. UTF-8
 literals become immutable globals with byte-accurate lengths and LLVM `\XX`

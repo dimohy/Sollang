@@ -318,6 +318,15 @@ their operands. Snapshots cover both `identity(1) => value; value` and
 `1 + 2 => code; identity(code)`. Container-valued binding scheduling, mutable
 rebinding, branch joins, and ownership-aware drop ordering remain.
 
+Function block grammar now parses one or more complete statements and selects
+the last nearest expression by source position as the return value. This avoids
+the PEG ambiguity where a trailing newline let the final expression be consumed
+as a statement and then replaced by recovery. Postfix grammar also describes
+SL's real `value![index]` spelling explicitly. Aggregate bindings now preserve
+array, struct, and dictionary values through SSA aliases; member/index reads
+produce the declared scalar return type, and discarded owned array/dictionary
+bindings free their backing stores after the final read.
+
 The backend now defines Text as `%sl.text = { ptr, i64 }`. Plain UTF-8
 literals become immutable byte globals and are assembled into aggregate return
 values; Text parameters and direct calls pass the same aggregate by value.
