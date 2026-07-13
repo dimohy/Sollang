@@ -1323,7 +1323,8 @@ The compatibility reader still has one process-wide cursor, but new code can
 use an affine native file owner and position-independent reads:
 
 ```smalllang
-file.openRead("values.bin") => opened
+file.openReadAsync("values.bin") => opening
+opening -> await => opened
 opened -> when {
     Result<file.File, Text>.Ok(reader) {
         reader -> readAt<UInt16>(0) => header
@@ -1333,6 +1334,11 @@ opened -> when {
     Result<file.File, Text>.Err(error) => error
 }
 ```
+
+`openReadAsync(Text)` returns `Task<Result<File, Text>>`; `openWriteAsync(Text)`
+returns the corresponding writer Task. The Task owns a copy of the path until
+the worker completes. A successful `await` transfers the new native handle
+into the Result, while failure and cancellation retain no handle.
 
 `File` is non-copyable and closes deterministically at owner-scope exit.
 `readAt<T>(UInt64)` and `readAtAsync<T>(UInt64)` never advance a shared cursor.
@@ -1380,8 +1386,8 @@ shares the same FIFO worker, so earlier submitted writes complete before the
 barrier. SL deliberately calls this `sync`, not `flush`: random-access writers
 have no hidden language buffer to empty. Deterministic scope drop closes the
 original handle immediately and does not await Tasks because every pending
-operation owns its own duplicate. Async open and a future IOCP/io_uring
-completion backend remain before the general file-I/O gate is complete.
+operation owns its own duplicate. A future IOCP/io_uring completion backend
+remains before the general file-I/O gate is complete.
 
 Double-quoted UTF-8 literals decode `\n`, `\r`, `\t`, and `\\` in text
 segments and support optional identifier and expression interpolation. Unknown

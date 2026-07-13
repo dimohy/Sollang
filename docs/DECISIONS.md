@@ -4040,4 +4040,47 @@ References: [Tokio File sync_all](https://docs.rs/tokio/latest/tokio/fs/struct.F
 [Windows FlushFileBuffers](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-flushfilebuffers),
 [Linux fsync](https://man7.org/linux/man-pages/man2/fsync.2.html).
 
+## D131 - Async Open Owns Its Path And Transfers One Handle
+
+Status: portable asynchronous read/write open implemented
+Date: 2026-07-14
+
+SL exposes asynchronous construction on the file module rather than on an
+already-existing object:
+
+```smalllang
+file.openReadAsync(path) => opening
+opening -> await => opened
+```
+
+`openReadAsync` returns `Task<Result<File, Text>>`; `openWriteAsync` returns
+`Task<Result<FileWriter, Text>>`. The Task allocation contains both its result
+storage and a byte-for-byte copy of the path, so the worker never borrows a
+temporary Text. A successful await clears Task ownership and transfers exactly
+one native handle into the affine Result. Failure transfers none. Cancellation
+closes a handle if opening completed before the cancellation became visible,
+then destroys the context exactly once.
+
+This mirrors Tokio's portable contract: path and options are moved into
+blocking filesystem work, while an io_uring backend may later replace the
+implementation without changing source syntax. It also avoids pretending that
+.NET's asynchronous `FileStream` flag makes constructor-time open asynchronous;
+that flag governs I/O on the opened handle.
+
+An owned anonymous enum subject is now dropped after `when` when every arm
+returns a non-owning value. This makes `opening -> await -> when { ... }` both
+concise and deterministic instead of leaking the matched File/FileWriter.
+Move detection also follows an enum-match subject, preventing a consumed Task
+from being awaited again at scope cleanup.
+
+The bootstrap grammar recursively parses nested generic annotations, including
+`Result<File, Text>` and nested array/dictionary components. Example 270 covers
+success, missing-file failure, cancellation, handle transfer, and Windows/Linux
+execution. Example 271 proves self-host imported-call and suspension discovery;
+a diagnostic rejects non-Text paths.
+
+References: [Tokio OpenOptions source](https://docs.rs/tokio/latest/src/tokio/fs/open_options.rs.html),
+[Tokio File](https://docs.rs/tokio/latest/tokio/fs/struct.File.html),
+[.NET FileStream constructors](https://learn.microsoft.com/en-us/dotnet/api/system.io.filestream.-ctor).
+
 

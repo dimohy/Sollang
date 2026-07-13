@@ -137,9 +137,16 @@ internal sealed partial class LlvmEmitter
 
         EmitLabel(endLabel);
         _currentBlockLabel = endLabel;
-        return valueResults.Count == 0
+        var result = valueResults.Count == 0
             ? RuntimeUnit.Instance
             : EmitPhiValue("enum_when", valueResults);
+        if (IsAnonymousOwnedExpression(expression.Subject)
+            && _program.Types.ContainsOwnedStorage(subject.Type)
+            && !_program.Types.ContainsOwnedStorage(result.Type))
+        {
+            DropOwnedRuntimeValue(subject);
+        }
+        return result;
     }
 
     private BlockResult EmitEnumArmBody(BlockBody body, string? bindingName, RuntimeValue? payload)

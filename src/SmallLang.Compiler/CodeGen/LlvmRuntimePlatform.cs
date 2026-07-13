@@ -147,6 +147,14 @@ internal abstract class LlvmRuntimePlatform
             inspect_owned_operation:
               %operation_slot = getelementptr %smalllang.task_control, ptr %request, i32 0, i32 20
               %operation = load i32, ptr %operation_slot, align 4
+              %is_open_read = icmp eq i32 %operation, 3
+              br i1 %is_open_read, label %perform_owned_open_read, label %inspect_owned_open_write
+
+            inspect_owned_open_write:
+              %is_open_write = icmp eq i32 %operation, 4
+              br i1 %is_open_write, label %perform_owned_open_write, label %inspect_owned_sync
+
+            inspect_owned_sync:
               %is_sync = icmp eq i32 %operation, 2
               br i1 %is_sync, label %perform_owned_sync, label %inspect_owned_transfer
 
@@ -178,8 +186,32 @@ internal abstract class LlvmRuntimePlatform
               %sync_result = insertvalue %smalllang.file_count_result %sync_result0, i32 %sync_ok, 1
               br label %record_read
 
+            perform_owned_open_read:
+              %open_read_path = load ptr, ptr %data_slot, align 8
+              %open_read_length_slot = getelementptr %smalllang.task_control, ptr %request, i32 0, i32 18
+              %open_read_length = load i64, ptr %open_read_length_slot, align 8
+              %open_read_result = call %smalllang.file_handle_result @smalllang_platform_open_owned_read_file(ptr %open_read_path, i64 %open_read_length)
+              br label %record_open
+
+            perform_owned_open_write:
+              %open_write_path = load ptr, ptr %data_slot, align 8
+              %open_write_length_slot = getelementptr %smalllang.task_control, ptr %request, i32 0, i32 18
+              %open_write_length = load i64, ptr %open_write_length_slot, align 8
+              %open_write_result = call %smalllang.file_handle_result @smalllang_platform_open_owned_write_file(ptr %open_write_path, i64 %open_write_length)
+              br label %record_open
+
+            record_open:
+              %open_result = phi %smalllang.file_handle_result [ %open_read_result, %perform_owned_open_read ], [ %open_write_result, %perform_owned_open_write ]
+              %open_handle = extractvalue %smalllang.file_handle_result %open_result, 0
+              %open_ok = extractvalue %smalllang.file_handle_result %open_result, 1
+              %open_handle_slot = getelementptr %smalllang.task_control, ptr %request, i32 0, i32 17
+              store i64 %open_handle, ptr %open_handle_slot, align 8
+              %open_count_result0 = insertvalue %smalllang.file_count_result poison, i64 0, 0
+              %open_count_result = insertvalue %smalllang.file_count_result %open_count_result0, i32 %open_ok, 1
+              br label %record_read
+
             record_read:
-              %result = phi %smalllang.file_count_result [ %compatibility_result, %perform_compatibility_read ], [ %owned_result, %perform_owned_read ], [ %write_result, %perform_owned_write ], [ %sync_result, %perform_owned_sync ]
+              %result = phi %smalllang.file_count_result [ %compatibility_result, %perform_compatibility_read ], [ %owned_result, %perform_owned_read ], [ %write_result, %perform_owned_write ], [ %sync_result, %perform_owned_sync ], [ %open_count_result, %record_open ]
               %count = extractvalue %smalllang.file_count_result %result, 0
               %ok = extractvalue %smalllang.file_count_result %result, 1
               %count_slot = getelementptr %smalllang.task_control, ptr %request, i32 0, i32 14
@@ -204,8 +236,17 @@ internal abstract class LlvmRuntimePlatform
             queue_completion:
               %completion_explicit_slot = getelementptr %smalllang.task_control, ptr %request, i32 0, i32 19
               %completion_explicit = load i32, ptr %completion_explicit_slot, align 4
-              %completion_is_explicit = icmp ne i32 %completion_explicit, 0
-              br i1 %completion_is_explicit, label %close_owned_request, label %push_completed_request
+              %completion_is_duplicate = icmp eq i32 %completion_explicit, 1
+              br i1 %completion_is_duplicate, label %close_owned_request, label %inspect_transferred_open
+
+            inspect_transferred_open:
+              %completion_is_open = icmp eq i32 %completion_explicit, 2
+              br i1 %completion_is_open, label %inspect_open_completion, label %push_completed_request
+
+            inspect_open_completion:
+              %open_completion_phase = load atomic i32, ptr %phase_slot acquire, align 4
+              %open_completion_cancelled = icmp eq i32 %open_completion_phase, 3
+              br i1 %open_completion_cancelled, label %close_owned_request, label %push_completed_request
 
             close_owned_request:
               %completion_handle_slot = getelementptr %smalllang.task_control, ptr %request, i32 0, i32 17
@@ -377,7 +418,7 @@ internal abstract class LlvmRuntimePlatform
               ret i1 %complete
             }
 
-            define internal void @smalllang_file_read_task_cancel(ptr %control) #0 {
+            define internal void @smalllang_file_operation_task_cancel(ptr %control) #0 {
             entry:
               %explicit_slot = getelementptr %smalllang.task_control, ptr %control, i32 0, i32 19
               %explicit = load i32, ptr %explicit_slot, align 4

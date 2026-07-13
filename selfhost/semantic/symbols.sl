@@ -64,7 +64,7 @@ public collect source: Text -> [Symbol; ~] {
     0 => typeAstIndex!
     typeAstIndex! < astCount -> while {
         nodes![typeAstIndex!] => typeAst
-        typeAst.kind == 12 -> if {
+        (typeAst.kind == 12 and (typeAst.parent < 0 or nodes![typeAst.parent].kind != 12)) -> if {
             typeAst.parent => typeParentAst!
             -1 => typeOwnerSymbol!
             (typeParentAst! >= 0 and typeOwnerSymbol! < 0) -> while {

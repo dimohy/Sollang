@@ -96,6 +96,8 @@ internal enum BoundFunctionKind
     RuntimeReadScalarAsync,
     RuntimeOpenFile,
     RuntimeOpenWriteFile,
+    RuntimeOpenFileAsync,
+    RuntimeOpenWriteFileAsync,
     RuntimeWriteScalarAt,
     RuntimeWriteScalarAtAsync,
     RuntimeSyncFileAsync

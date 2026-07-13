@@ -118,6 +118,16 @@ internal sealed partial class LlvmEmitter
             return EmitRuntimeOpenFile(function, EmitExpression(expression.Arguments[0]));
         }
 
+        if (function.Kind is BoundFunctionKind.RuntimeOpenFileAsync
+            or BoundFunctionKind.RuntimeOpenWriteFileAsync)
+        {
+            if (expression.Arguments.Count != 1)
+            {
+                throw new SmallLangException($"{path} expects exactly one Text path");
+            }
+            return EmitRuntimeOpenFileAsync(function, EmitExpression(expression.Arguments[0]));
+        }
+
         if (function.Kind == BoundFunctionKind.RuntimeWriteScalar)
         {
             if (expression.Arguments.Count != 1)
@@ -655,6 +665,16 @@ internal sealed partial class LlvmEmitter
                 throw new SmallLangException($"{function.Name} expects exactly one Text path");
             }
             return EmitRuntimeOpenFile(function, argument);
+        }
+
+        if (function.Kind is BoundFunctionKind.RuntimeOpenFileAsync
+            or BoundFunctionKind.RuntimeOpenWriteFileAsync)
+        {
+            if (argument is null)
+            {
+                throw new SmallLangException($"{function.Name} expects exactly one Text path");
+            }
+            return EmitRuntimeOpenFileAsync(function, argument);
         }
 
         if (function.Kind == BoundFunctionKind.RuntimeWriteScalar)

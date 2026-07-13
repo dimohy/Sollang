@@ -180,7 +180,7 @@ internal sealed partial class LlvmEmitter
             "ptr",
             "smalllang_task_start",
             $"ptr @smalllang_file_operation_task_worker, ptr @smalllang_free, " +
-            $"ptr @smalllang_file_read_task_cancel, ptr {context}");
+            $"ptr @smalllang_file_operation_task_cancel, ptr {context}");
         var started = NextTemp("file_async_started");
         EmitCompare(started, "ne", "ptr", handle, "null");
         var readyLabel = NextLabel("file_async_ready");
@@ -281,7 +281,7 @@ internal sealed partial class LlvmEmitter
             "ptr",
             "smalllang_task_start",
             $"ptr @smalllang_file_operation_task_worker, ptr @smalllang_free, " +
-            $"ptr @smalllang_file_read_task_cancel, ptr {context}");
+            $"ptr @smalllang_file_operation_task_cancel, ptr {context}");
         var started = NextTemp("file_async_write_started");
         EmitCompare(started, "ne", "ptr", handle, "null");
         var readyLabel = NextLabel("file_async_write_ready");
@@ -359,7 +359,7 @@ internal sealed partial class LlvmEmitter
             "ptr",
             "smalllang_task_start",
             $"ptr @smalllang_file_operation_task_worker, ptr @smalllang_free, " +
-            $"ptr @smalllang_file_read_task_cancel, ptr {context}");
+            $"ptr @smalllang_file_operation_task_cancel, ptr {context}");
         var started = NextTemp("file_async_sync_started");
         EmitCompare(started, "ne", "ptr", handle, "null");
         var readyLabel = NextLabel("file_async_sync_ready");
@@ -403,22 +403,9 @@ internal sealed partial class LlvmEmitter
     {
         var path = argument as RuntimeText
             ?? throw new SmallLangException($"{function.Name} expects Text");
-        var expectedTypeName = function.Kind == BoundFunctionKind.RuntimeOpenWriteFile
-            ? "sys.file.FileWriter"
-            : "sys.file.File";
-        var openSymbol = function.Kind == BoundFunctionKind.RuntimeOpenWriteFile
+        var openSymbol = IsWriteOpenFunction(function.Kind)
             ? "smalllang_platform_open_owned_write_file"
             : "smalllang_platform_open_owned_read_file";
-        if (!_program.Types.TryGetResultTypes(function.ReturnType, out var resultTypes)
-            || !_program.Types.IsStruct(resultTypes.Ok)
-            || !string.Equals(
-                _program.Types.GetStruct(resultTypes.Ok).Name,
-                expectedTypeName,
-                StringComparison.Ordinal)
-            || resultTypes.Error != BoundType.Text)
-        {
-            throw new SmallLangException($"{function.Name} has an invalid File result type");
-        }
 
         var raw = NextTemp("file_open_result");
         EmitCall(
@@ -430,6 +417,114 @@ internal sealed partial class LlvmEmitter
         EmitAssign(handle, $"extractvalue %smalllang.file_handle_result {raw}, 0");
         var ok = NextTemp("file_open_ok");
         EmitAssign(ok, $"extractvalue %smalllang.file_handle_result {raw}, 1");
+        return EmitRuntimeOpenFileResult(function, handle, ok);
+    }
+
+    private RuntimeTask EmitRuntimeOpenFileAsync(BoundFunction function, RuntimeValue argument)
+    {
+        var path = argument as RuntimeText
+            ?? throw new SmallLangException($"{function.Name} expects Text");
+        ValidateRuntimeOpenFileResult(function);
+
+        var contextSize = AsyncContextSize(null, function.ReturnType);
+        var allocationSize = NextTemp("file_async_open_allocation_size");
+        EmitAssign(allocationSize, $"add i64 {contextSize}, {path.LengthName}");
+        var context = NextTemp("file_async_open_context");
+        EmitCall(context, "ptr", "smalllang_alloc", $"i64 {allocationSize}");
+        var allocated = NextTemp("file_async_open_context_allocated");
+        EmitCompare(allocated, "ne", "ptr", context, "null");
+        var initializeLabel = NextLabel("file_async_open_initialize");
+        var allocationFailedLabel = NextLabel("file_async_open_allocation_failed");
+        EmitConditionalBranch(allocated, initializeLabel, allocationFailedLabel);
+        EmitLabel(allocationFailedLabel);
+        EmitTrap();
+        EmitLabel(initializeLabel);
+
+        var ownedPath = NextTemp("file_async_open_owned_path");
+        EmitAssign(ownedPath, $"getelementptr i8, ptr {context}, i64 {contextSize}");
+        EmitInstruction(
+            $"call void @llvm.memcpy.p0.p0.i64(ptr {ownedPath}, ptr {path.PointerName}, "
+            + $"i64 {path.LengthName}, i1 false)");
+
+        var handle = NextTemp("file_async_open_handle");
+        EmitCall(
+            handle,
+            "ptr",
+            "smalllang_task_start",
+            $"ptr @smalllang_file_operation_task_worker, ptr @smalllang_free, " +
+            $"ptr @smalllang_file_operation_task_cancel, ptr {context}");
+        var started = NextTemp("file_async_open_started");
+        EmitCompare(started, "ne", "ptr", handle, "null");
+        var readyLabel = NextLabel("file_async_open_ready");
+        var startFailedLabel = NextLabel("file_async_open_start_failed");
+        EmitConditionalBranch(started, readyLabel, startFailedLabel);
+        EmitLabel(startFailedLabel);
+        EmitCall(target: null, "void", "smalllang_free", $"ptr {context}");
+        EmitTrap();
+        EmitLabel(readyLabel);
+
+        var sizeAddress = NextTemp("file_async_open_size_address");
+        EmitAssign(sizeAddress, $"getelementptr %smalllang.task_control, ptr {handle}, i32 0, i32 11");
+        EmitStore("i32", "0", sizeAddress, 4);
+        var dataAddress = NextTemp("file_async_open_data_address");
+        EmitAssign(dataAddress, $"getelementptr %smalllang.task_control, ptr {handle}, i32 0, i32 13");
+        EmitStore("ptr", ownedPath, dataAddress, 8);
+        var ownedHandleAddress = NextTemp("file_async_open_owned_handle_address");
+        EmitAssign(ownedHandleAddress, $"getelementptr %smalllang.task_control, ptr {handle}, i32 0, i32 17");
+        EmitStore("i64", "-1", ownedHandleAddress, 8);
+        var pathLengthAddress = NextTemp("file_async_open_path_length_address");
+        EmitAssign(pathLengthAddress, $"getelementptr %smalllang.task_control, ptr {handle}, i32 0, i32 18");
+        EmitStore("i64", path.LengthName, pathLengthAddress, 8);
+        var ownershipAddress = NextTemp("file_async_open_ownership_address");
+        EmitAssign(ownershipAddress, $"getelementptr %smalllang.task_control, ptr {handle}, i32 0, i32 19");
+        EmitStore("i32", "2", ownershipAddress, 4);
+        var operationAddress = NextTemp("file_async_open_operation_address");
+        EmitAssign(operationAddress, $"getelementptr %smalllang.task_control, ptr {handle}, i32 0, i32 20");
+        EmitStore(
+            "i32",
+            IsWriteOpenFunction(function.Kind) ? "4" : "3",
+            operationAddress,
+            4);
+
+        return new RuntimeTask(
+            _program.Types.GetOrAddTask(function.ReturnType),
+            null,
+            function.ReturnType,
+            handle,
+            context,
+            function);
+    }
+
+    private RuntimeEnum EmitRuntimeCompletedOpenFile(
+        BoundFunction function,
+        string completedTaskControl)
+    {
+        var handleSlot = NextTemp("file_async_open_handle_slot");
+        EmitAssign(
+            handleSlot,
+            $"getelementptr %smalllang.task_control, ptr {completedTaskControl}, i32 0, i32 17");
+        var handle = NextTemp("file_async_open_result_handle");
+        EmitLoad(handle, "i64", handleSlot, 8);
+        var okSlot = NextTemp("file_async_open_ok_slot");
+        EmitAssign(
+            okSlot,
+            $"getelementptr %smalllang.task_control, ptr {completedTaskControl}, i32 0, i32 15");
+        var ok = NextTemp("file_async_open_ok");
+        EmitLoad(ok, "i32", okSlot, 4);
+        var ownershipSlot = NextTemp("file_async_open_ownership_slot");
+        EmitAssign(
+            ownershipSlot,
+            $"getelementptr %smalllang.task_control, ptr {completedTaskControl}, i32 0, i32 19");
+        EmitStore("i32", "0", ownershipSlot, 4);
+        return EmitRuntimeOpenFileResult(function, handle, ok);
+    }
+
+    private RuntimeEnum EmitRuntimeOpenFileResult(
+        BoundFunction function,
+        string handle,
+        string ok)
+    {
+        var resultTypes = ValidateRuntimeOpenFileResult(function);
         var succeeded = NextTemp("file_open_succeeded");
         EmitCompare(succeeded, "ne", "i32", ok, "0");
 
@@ -471,6 +566,28 @@ internal sealed partial class LlvmEmitter
             function.ReturnType,
             [(success, successExit), (failure, errorExit)]);
     }
+
+    private (BoundType Ok, BoundType Error) ValidateRuntimeOpenFileResult(BoundFunction function)
+    {
+        var expectedTypeName = IsWriteOpenFunction(function.Kind)
+            ? "sys.file.FileWriter"
+            : "sys.file.File";
+        if (!_program.Types.TryGetResultTypes(function.ReturnType, out var resultTypes)
+            || !_program.Types.IsStruct(resultTypes.Ok)
+            || !string.Equals(
+                _program.Types.GetStruct(resultTypes.Ok).Name,
+                expectedTypeName,
+                StringComparison.Ordinal)
+            || resultTypes.Error != BoundType.Text)
+        {
+            throw new SmallLangException($"{function.Name} has an invalid File result type");
+        }
+        return resultTypes;
+    }
+
+    private static bool IsWriteOpenFunction(BoundFunctionKind kind) =>
+        kind is BoundFunctionKind.RuntimeOpenWriteFile
+            or BoundFunctionKind.RuntimeOpenWriteFileAsync;
 
     private string ExtractOwnedFileHandle(RuntimeStruct file, string expectedTypeName = "sys.file.File")
     {

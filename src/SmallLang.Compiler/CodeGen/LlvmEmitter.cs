@@ -57,7 +57,9 @@ internal sealed partial class LlvmEmitter
         _usesAsyncFile = program.ResolvedGenericCalls.Values.Any(function =>
             function.Kind is BoundFunctionKind.RuntimeReadScalarAsync
                 or BoundFunctionKind.RuntimeWriteScalarAtAsync
-                or BoundFunctionKind.RuntimeSyncFileAsync);
+                or BoundFunctionKind.RuntimeSyncFileAsync
+                or BoundFunctionKind.RuntimeOpenFileAsync
+                or BoundFunctionKind.RuntimeOpenWriteFileAsync);
         _usesAsync = program.Functions.Values.Any(function => function.IsAsync && !function.IsStandardLibrary)
             || _usesAsyncFile
             || program.MainStatements.Any(UsesRuntimeSleep)

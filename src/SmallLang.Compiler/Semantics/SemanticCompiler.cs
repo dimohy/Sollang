@@ -349,7 +349,10 @@ internal sealed class SemanticCompiler
         var inputOwnership = BindFunctionInputOwnership(function, inputType);
         var isAsyncRuntimeIntrinsic = function.IsStandardLibrary
             && function.IsIntrinsic
-            && function.Name is "sys.time.sleep" or "sys.file.readAsync";
+            && function.Name is "sys.time.sleep"
+                or "sys.file.readAsync"
+                or "sys.file.openReadAsync"
+                or "sys.file.openWriteAsync";
         if (function.IsAsync
             && ((!isAsyncRuntimeIntrinsic && !IsAsyncResultTypeSupported(returnType))
                 || (!isAsyncRuntimeIntrinsic && !IsAsyncInputTypeSupported(inputType, inputOwnership))
@@ -818,13 +821,29 @@ internal sealed class SemanticCompiler
                 inputType,
                 returnType,
                 "sys.file.File",
-                BoundFunctionKind.RuntimeOpenFile),
+                BoundFunctionKind.RuntimeOpenFile,
+                isAsync: false),
+            "sys.file.openReadAsync" => RequireOpenFileSignature(
+                function,
+                inputType,
+                returnType,
+                "sys.file.File",
+                BoundFunctionKind.RuntimeOpenFileAsync,
+                isAsync: true),
             "sys.file.openWrite" => RequireOpenFileSignature(
                 function,
                 inputType,
                 returnType,
                 "sys.file.FileWriter",
-                BoundFunctionKind.RuntimeOpenWriteFile),
+                BoundFunctionKind.RuntimeOpenWriteFile,
+                isAsync: false),
+            "sys.file.openWriteAsync" => RequireOpenFileSignature(
+                function,
+                inputType,
+                returnType,
+                "sys.file.FileWriter",
+                BoundFunctionKind.RuntimeOpenWriteFileAsync,
+                isAsync: true),
             "sys.file.openWriter" => RequireIntrinsicSignature(
                 function, inputType, returnType, BoundType.Text, BoundType.Unit,
                 BoundFunctionKind.RuntimeOpenIntWriter),
@@ -941,9 +960,11 @@ internal sealed class SemanticCompiler
         BoundType? inputType,
         BoundType returnType,
         string expectedTypeName,
-        BoundFunctionKind kind)
+        BoundFunctionKind kind,
+        bool isAsync)
     {
-        if (inputType != BoundType.Text
+        if (function.IsAsync != isAsync
+            || inputType != BoundType.Text
             || !_types.TryGetResultTypes(returnType, out var resultTypes)
             || !IsNamedStructType(resultTypes.Ok, expectedTypeName)
             || resultTypes.Error != BoundType.Text)
@@ -951,7 +972,9 @@ internal sealed class SemanticCompiler
             throw Error(
                 function.Line,
                 function.Column,
-                $"intrinsic '{function.Name}' must return Result<{expectedTypeName}, Text> from Text");
+                $"intrinsic '{function.Name}' must have signature Text -> "
+                + (isAsync ? "async " : "")
+                + $"Result<{expectedTypeName}, Text>");
         }
 
         return kind;
@@ -3446,6 +3469,16 @@ internal sealed class SemanticCompiler
                         }
                         currentType = function.ReturnType;
                         continue;
+                    case BoundFunctionKind.RuntimeOpenFileAsync:
+                    case BoundFunctionKind.RuntimeOpenWriteFileAsync:
+                        if (currentType != BoundType.Text)
+                        {
+                            throw Error(expression.Line, expression.Column,
+                                $"{path} expects Text but received {FormatType(currentType)}");
+                        }
+                        _resolvedGenericCalls[target] = function;
+                        currentType = AsyncCallType(function);
+                        continue;
                     case BoundFunctionKind.RuntimeRunProcess:
                         EnsureRuntimeInput(currentType, function, expression.Line, expression.Column, path);
                         currentType = function.ReturnType;
@@ -4264,6 +4297,22 @@ internal sealed class SemanticCompiler
                         $"{path} expects Text but received {FormatType(textArgumentType)}");
                 }
                 return function.ReturnType;
+            case BoundFunctionKind.RuntimeOpenFileAsync:
+            case BoundFunctionKind.RuntimeOpenWriteFileAsync:
+                if (expression.Arguments.Count != 1)
+                {
+                    throw Error(expression.Line, expression.Column, $"{path} expects exactly one Text argument");
+                }
+                var asyncPathType = InferExpression(
+                    expression.Arguments[0], functions, bindings,
+                    allowPrintCall: false, allowReadIntCall, allowFlowBindingTarget: false);
+                if (asyncPathType != BoundType.Text)
+                {
+                    throw Error(expression.Arguments[0].Line, expression.Arguments[0].Column,
+                        $"{path} expects Text but received {FormatType(asyncPathType)}");
+                }
+                _resolvedGenericCalls[expression] = function;
+                return AsyncCallType(function);
             case BoundFunctionKind.RuntimeRunProcess:
                 if (expression.Arguments.Count != 1)
                 {
@@ -5114,7 +5163,9 @@ internal sealed class SemanticCompiler
             || function.Kind is BoundFunctionKind.RuntimeSleep
                 or BoundFunctionKind.RuntimeReadScalarAsync
                 or BoundFunctionKind.RuntimeOpenFile
-                or BoundFunctionKind.RuntimeOpenWriteFile)
+                or BoundFunctionKind.RuntimeOpenWriteFile
+                or BoundFunctionKind.RuntimeOpenFileAsync
+                or BoundFunctionKind.RuntimeOpenWriteFileAsync)
         {
             return;
         }
@@ -6042,6 +6093,11 @@ internal sealed class SemanticCompiler
 
     private string? GetMoveConsumingContainerSourceName(Expression expression)
     {
+        if (expression is EnumMatchExpression match)
+        {
+            return GetMoveConsumingContainerSourceName(match.Subject);
+        }
+
         if (!IsMoveConsumingContainerTransformExpression(expression)
             || expression is not FlowExpression flow
             || flow.Source is not NameExpression name)

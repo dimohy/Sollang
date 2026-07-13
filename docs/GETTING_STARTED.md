@@ -290,7 +290,8 @@ await every submitted read before closing or reopening it.
 For concurrent or random-access work, prefer the owned File surface:
 
 ```smalllang
-file.openRead("values.bin") => opened
+file.openReadAsync("values.bin") => opening
+opening -> await => opened
 opened -> when {
     Result<file.File, Text>.Ok(reader) {
         reader -> readAtAsync<UInt16>(0) => header
@@ -303,13 +304,16 @@ opened -> when {
 ```
 
 The `UInt64` argument is a byte offset. `File` is affine and automatically
-closed; each pending Task owns a duplicated OS handle and is therefore safe
-even if completion order differs from submission order.
+closed; each pending read Task owns a duplicated OS handle and is therefore
+safe even if completion order differs from submission order. The open Task
+owns its path bytes and transfers the new handle only through a successful
+`await`.
 
 Random-access output uses a distinct affine writer capability:
 
 ```smalllang
-file.openWrite("values.bin") => opened
+file.openWriteAsync("values.bin") => opening
+opening -> await => opened
 opened -> when {
     Result<file.FileWriter, Text>.Ok(writer) {
         writer -> writeAt(UInt16(513), 0)

@@ -564,6 +564,11 @@ internal sealed partial class LlvmEmitter
 
     private static string? GetMoveConsumingContainerSourceName(Expression expression)
     {
+        if (expression is EnumMatchExpression match)
+        {
+            return GetMoveConsumingContainerSourceName(match.Subject);
+        }
+
         if (expression is not FlowExpression flow || flow.Targets.Count == 0)
         {
             return null;
@@ -589,6 +594,16 @@ internal sealed partial class LlvmEmitter
         }
 
         return name.Name;
+    }
+
+    private static bool IsAnonymousOwnedExpression(Expression expression)
+    {
+        return expression switch
+        {
+            NameExpression => false,
+            FieldAccessExpression field => IsAnonymousOwnedExpression(field.Source),
+            _ => true
+        };
     }
 
     private IReadOnlyList<string> GetOwnedStructFieldSourceNames(Expression expression)

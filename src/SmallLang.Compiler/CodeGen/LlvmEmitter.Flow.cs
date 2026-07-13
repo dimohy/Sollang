@@ -166,6 +166,10 @@ internal sealed partial class LlvmEmitter
                     case BoundFunctionKind.RuntimeOpenWriteFile:
                         current = EmitRuntimeOpenFile(function, current);
                         continue;
+                    case BoundFunctionKind.RuntimeOpenFileAsync:
+                    case BoundFunctionKind.RuntimeOpenWriteFileAsync:
+                        current = EmitRuntimeOpenFileAsync(function, current);
+                        continue;
                     case BoundFunctionKind.RuntimeSleep:
                         current = EmitRuntimeSleepIntrinsic(function, current, path);
                         continue;

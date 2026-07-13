@@ -154,7 +154,11 @@ the writer handle, and shares the existing file worker and completion queue;
 self-host call and suspension analysis retain its generic flow target.
 `syncAsync` adds a durable-data barrier through Windows `FlushFileBuffers` and
 Linux `fsync`, also with a Task-owned duplicate. Scope drop remains the close
-operation because pending Tasks never borrow the source handle. Async open,
+operation because pending Tasks never borrow the source handle. `openReadAsync`
+and `openWriteAsync` copy path bytes into their Task context and transfer the
+new native handle only after successful await; cancellation closes a completed
+but unclaimed handle. The self-host grammar now parses nested generic type
+annotations such as `Result<File, Text>`. Native completion backends, broader
 failure propagation, captures, and task groups remain partial.
 Straight-line states now carry heap owners and
 mutable locals safely: frame storage temporarily owns the value, resume restores
@@ -248,8 +252,9 @@ test-performance boundary.
   owners and position-based `readAt<T>`/`readAtAsync<T>` remove shared-cursor
   races. Affine `FileWriter` and scalar `writeAt<T>` now provide the symmetric
   output path; `writeAtAsync<T>` owns copied bytes and a duplicate handle while
-  it is pending, and `syncAsync` provides an explicit durability barrier. Async
-  open and explicit user-value serialization remain.
+  it is pending, `syncAsync` provides an explicit durability barrier, and async
+  open owns its path and transfers its newly opened handle on await. Explicit
+  user-value serialization remains.
 - Missing (3): portable path/filesystem library, package/build command, formatter
   and language server based on the real parser.
 

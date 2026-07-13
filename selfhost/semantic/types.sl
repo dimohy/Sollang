@@ -27,7 +27,7 @@ public canonicalize source: Text -> [TypeUse; ~] {
 
     astIndex! < astCount -> while {
         nodes![astIndex!] => node
-        node.kind == 12 -> if {
+        (node.kind == 12 and (node.parent < 0 or nodes![node.parent].kind != 12)) -> if {
             node.firstToken => firstSignificant!
             true => findingFirst!
             (firstSignificant! < node.firstToken + node.tokenCount and findingFirst!) -> while {

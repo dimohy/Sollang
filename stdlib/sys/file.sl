@@ -17,7 +17,11 @@ public struct FileWriter {
 
 openRead path: Text -> Result<File, Text> = intrinsic
 
+openReadAsync path: Text -> async Result<File, Text> = intrinsic
+
 openWrite path: Text -> Result<FileWriter, Text> = intrinsic
+
+openWriteAsync path: Text -> async Result<FileWriter, Text> = intrinsic
 
 openIntWriter path: Text -> Unit {
     path -> rt.openIntWriter
