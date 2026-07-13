@@ -17,6 +17,21 @@ struct WhileBranchRequest {
     ownerIndex: Int
 }
 
+struct WhileValueRequest {
+    whileIndex: Int
+    ownerIndex: Int
+    nodeIndex: Int
+}
+
+struct WhileBoolTask {
+    kind: Int
+    nodeIndex: Int
+    trueKind: Int
+    trueNode: Int
+    falseKind: Int
+    falseNode: Int
+}
+
 emitCore sources: move [Text; ~] -> Unit {
     llvmType symbol: Int -> Text => when {
         symbol == 1 => "%sl.text"
@@ -110,92 +125,229 @@ emitCore sources: move [Text; ~] -> Unit {
         }
         rootIndex!
     }
+    writeWhileValue request: WhileValueRequest -> Unit {
+        sources -> typedIr.lower => valueIr!
+        valueIr![request.nodeIndex] => value
+        (value.kind == 3 or value.kind == 4) -> if {
+            sources[value.sourceModule] -> lexer.lex => valueTokens!
+            valueTokens![value.payloadToken] => valueToken
+            value.kind == 3 -> if {
+                sources[value.sourceModule] -> slice(valueToken.span.start, valueToken.span.length) -> print
+            } else {
+                ((sources[value.sourceModule] -> byte(valueToken.span.start)) == UInt8(116)) -> if { "1" } else { "0" } -> print
+            }
+        } else {
+            (request.ownerIndex >= 0 and valueIr![request.ownerIndex].kind == 0 and valueIr![request.ownerIndex].operand1 >= 0 and value.kind == 5 and value.symbol == valueIr![valueIr![request.ownerIndex].operand1].symbol) -> if {
+                "%arg" -> print
+            } else {
+                "%while$(request.whileIndex)_v$(request.nodeIndex)" -> print
+            }
+        }
+    }
     emitWhileBranch request: WhileBranchRequest -> Unit {
         request.whileIndex => whileIndex
         request.ownerIndex => ownerIndex
         sources -> typedIr.lower => branchIr!
         branchIr![whileIndex] => whileNode
-        branchIr![whileNode.operand0] => condition
-        false => materialized!
-        condition.kind == 8 -> if {
-            branchIr![condition.operand0] => left
-            branchIr![condition.operand1] => right
-            -1 => leftMutableBinding!
-            left.kind == 5 -> if {
-                0 => leftBindingSearch!
-                leftBindingSearch! < (branchIr! -> len) -> while {
-                    (branchIr![leftBindingSearch!].kind == 17 and branchIr![leftBindingSearch!].symbol == left.symbol and branchIr![leftBindingSearch!].flags == 1) -> if { leftBindingSearch! => leftMutableBinding! }
-                    leftBindingSearch! + 1 => leftBindingSearch!
-                }
-            }
-            leftMutableBinding! >= 0 -> if {
-                leftMutableBinding! -> mutableBindingRoot => leftRoot
-                "  %while$(whileIndex)_left = load " -> print
-                left -> writeType
-                ", ptr %slot$(leftRoot), align $(left.typeSymbol -> storageAlign)" -> println
-            }
-            -1 => rightMutableBinding!
-            right.kind == 5 -> if {
-                0 => rightBindingSearch!
-                rightBindingSearch! < (branchIr! -> len) -> while {
-                    (branchIr![rightBindingSearch!].kind == 17 and branchIr![rightBindingSearch!].symbol == right.symbol and branchIr![rightBindingSearch!].flags == 1) -> if { rightBindingSearch! => rightMutableBinding! }
-                    rightBindingSearch! + 1 => rightBindingSearch!
-                }
-            }
-            rightMutableBinding! >= 0 -> if {
-                rightMutableBinding! -> mutableBindingRoot => rightRoot
-                "  %while$(whileIndex)_right = load " -> print
-                right -> writeType
-                ", ptr %slot$(rightRoot), align $(right.typeSymbol -> storageAlign)" -> println
-            }
-            "  %while$(whileIndex)_condition = " -> print
-            condition.opcode == grammar.tokenIdEqualEqual -> if { "icmp eq" -> print }
-            condition.opcode == grammar.tokenIdBangEqual -> if { "icmp ne" -> print }
-            condition.opcode == grammar.tokenIdLess -> if { "icmp slt" -> print }
-            condition.opcode == grammar.tokenIdLessEqual -> if { "icmp sle" -> print }
-            condition.opcode == grammar.tokenIdGreater -> if { "icmp sgt" -> print }
-            condition.opcode == grammar.tokenIdGreaterEqual -> if { "icmp sge" -> print }
-            " " -> print
-            left -> writeType
-            " " -> print
-            leftMutableBinding! >= 0 -> if {
-                "%while$(whileIndex)_left" -> print
+        [WhileBoolTask; ~] => boolTasks!
+        boolTasks! -> push(WhileBoolTask {
+            kind: 0
+            nodeIndex: whileNode.operand0
+            trueKind: 0
+            trueNode: whileIndex
+            falseKind: 1
+            falseNode: whileIndex
+        })
+        1 => boolTaskSize!
+        boolTaskSize! > 0 -> while {
+            boolTaskSize! - 1 => boolTaskSize!
+            boolTasks![boolTaskSize!] => boolTask
+            boolTask.kind == 1 -> if {
+                "while$(whileIndex)_bool$(boolTask.nodeIndex)_rhs:" -> println
             } else {
-                (left.kind == 3 or left.kind == 4) -> if {
-                    sources[left.sourceModule] -> lexer.lex => leftTokens!
-                    leftTokens![left.payloadToken] => leftToken
-                    left.kind == 3 -> if { sources[left.sourceModule] -> slice(leftToken.span.start, leftToken.span.length) -> print } else { ((sources[left.sourceModule] -> byte(leftToken.span.start)) == UInt8(116)) -> if { "1" } else { "0" } -> print }
+                branchIr![boolTask.nodeIndex] => boolNode
+                (boolNode.kind == 8 and (boolNode.opcode == -25 or boolNode.opcode == -24)) -> if {
+                    WhileBoolTask {
+                        kind: 0
+                        nodeIndex: boolNode.operand1
+                        trueKind: boolTask.trueKind
+                        trueNode: boolTask.trueNode
+                        falseKind: boolTask.falseKind
+                        falseNode: boolTask.falseNode
+                    } => rightTask
+                    boolTaskSize! == (boolTasks! -> len) -> if { boolTasks! -> push(rightTask) } else { rightTask => boolTasks![boolTaskSize!] }
+                    boolTaskSize! + 1 => boolTaskSize!
+                    WhileBoolTask {
+                        kind: 1
+                        nodeIndex: boolTask.nodeIndex
+                        trueKind: -1
+                        trueNode: -1
+                        falseKind: -1
+                        falseNode: -1
+                    } => labelTask
+                    boolTaskSize! == (boolTasks! -> len) -> if { boolTasks! -> push(labelTask) } else { labelTask => boolTasks![boolTaskSize!] }
+                    boolTaskSize! + 1 => boolTaskSize!
+                    boolTask.trueKind => leftTrueKind!
+                    boolTask.trueNode => leftTrueNode!
+                    boolTask.falseKind => leftFalseKind!
+                    boolTask.falseNode => leftFalseNode!
+                    boolNode.opcode == -25 -> if {
+                        2 => leftTrueKind!
+                        boolTask.nodeIndex => leftTrueNode!
+                    } else {
+                        2 => leftFalseKind!
+                        boolTask.nodeIndex => leftFalseNode!
+                    }
+                    WhileBoolTask {
+                        kind: 0
+                        nodeIndex: boolNode.operand0
+                        trueKind: leftTrueKind!
+                        trueNode: leftTrueNode!
+                        falseKind: leftFalseKind!
+                        falseNode: leftFalseNode!
+                    } => leftTask
+                    boolTaskSize! == (boolTasks! -> len) -> if { boolTasks! -> push(leftTask) } else { leftTask => boolTasks![boolTaskSize!] }
+                    boolTaskSize! + 1 => boolTaskSize!
                 } else {
-                    (ownerIndex >= 0 and branchIr![ownerIndex].kind == 0 and branchIr![ownerIndex].operand1 >= 0 and left.kind == 5 and left.symbol == branchIr![branchIr![ownerIndex].operand1].symbol) -> if { "%arg" -> print } else { "%v$(condition.operand0)" -> print }
-                }
-            }
-            ", " -> print
-            rightMutableBinding! >= 0 -> if {
-                "%while$(whileIndex)_right" -> println
-            } else {
-                (right.kind == 3 or right.kind == 4) -> if {
-                    sources[right.sourceModule] -> lexer.lex => rightTokens!
-                    rightTokens![right.payloadToken] => rightToken
-                    right.kind == 3 -> if { sources[right.sourceModule] -> slice(rightToken.span.start, rightToken.span.length) -> println } else { ((sources[right.sourceModule] -> byte(rightToken.span.start)) == UInt8(116)) -> if { "1" } else { "0" } -> println }
+                (boolNode.kind == 7 and boolNode.opcode == -26) -> if {
+                    WhileBoolTask {
+                        kind: 0
+                        nodeIndex: boolNode.operand0
+                        trueKind: boolTask.falseKind
+                        trueNode: boolTask.falseNode
+                        falseKind: boolTask.trueKind
+                        falseNode: boolTask.trueNode
+                    } => notTask
+                    boolTaskSize! == (boolTasks! -> len) -> if { boolTasks! -> push(notTask) } else { notTask => boolTasks![boolTaskSize!] }
+                    boolTaskSize! + 1 => boolTaskSize!
                 } else {
-                    (ownerIndex >= 0 and branchIr![ownerIndex].kind == 0 and branchIr![ownerIndex].operand1 >= 0 and right.kind == 5 and right.symbol == branchIr![branchIr![ownerIndex].operand1].symbol) -> if { "%arg" -> println } else { "%v$(condition.operand1)" -> println }
+                    [Int; ~] => valueTasks!
+                    valueTasks! -> push(boolTask.nodeIndex + 1)
+                    1 => valueTaskSize!
+                    valueTaskSize! > 0 -> while {
+                        valueTaskSize! - 1 => valueTaskSize!
+                        valueTasks![valueTaskSize!] => valueTask
+                        valueTask > 0 -> if {
+                            valueTask - 1 => valueNodeIndex
+                            branchIr![valueNodeIndex] => valueNode
+                            0 - valueNodeIndex - 1 => emitValueTask
+                            valueTaskSize! == (valueTasks! -> len) -> if { valueTasks! -> push(emitValueTask) } else { emitValueTask => valueTasks![valueTaskSize!] }
+                            valueTaskSize! + 1 => valueTaskSize!
+                            (valueNode.kind == 6 or valueNode.kind == 7 or valueNode.kind == 8) -> if {
+                                (valueNode.kind == 8 and valueNode.operand1 >= 0) -> if {
+                                    valueNode.operand1 + 1 => secondValueTask
+                                    valueTaskSize! == (valueTasks! -> len) -> if { valueTasks! -> push(secondValueTask) } else { secondValueTask => valueTasks![valueTaskSize!] }
+                                    valueTaskSize! + 1 => valueTaskSize!
+                                }
+                                valueNode.operand0 >= 0 -> if {
+                                    valueNode.operand0 + 1 => firstValueTask
+                                    valueTaskSize! == (valueTasks! -> len) -> if { valueTasks! -> push(firstValueTask) } else { firstValueTask => valueTasks![valueTaskSize!] }
+                                    valueTaskSize! + 1 => valueTaskSize!
+                                }
+                            }
+                        } else {
+                            0 - valueTask - 1 => valueNodeIndex
+                            branchIr![valueNodeIndex] => valueNode
+                            valueNode.kind == 5 -> if {
+                                false => parameterValue!
+                                (ownerIndex >= 0 and branchIr![ownerIndex].kind == 0 and branchIr![ownerIndex].operand1 >= 0 and valueNode.symbol == branchIr![branchIr![ownerIndex].operand1].symbol) -> if { true => parameterValue! }
+                                not parameterValue! -> if {
+                                    -1 => valueBindingIndex!
+                                    0 => valueBindingSearch!
+                                    valueBindingSearch! < (branchIr! -> len) -> while {
+                                        (branchIr![valueBindingSearch!].kind == 17 and branchIr![valueBindingSearch!].symbol == valueNode.symbol) -> if { valueBindingSearch! => valueBindingIndex! }
+                                        valueBindingSearch! + 1 => valueBindingSearch!
+                                    }
+                                    valueBindingIndex! >= 0 -> if {
+                                        branchIr![valueBindingIndex!] => valueBinding
+                                        valueBinding.flags == 1 -> if {
+                                            valueBindingIndex! -> mutableBindingRoot => valueRoot
+                                            "  %while$(whileIndex)_v$(valueNodeIndex) = load " -> print
+                                            valueNode -> writeType
+                                            ", ptr %slot$(valueRoot), align $(valueNode.typeSymbol -> storageAlign)" -> println
+                                        } else {
+                                            branchIr![valueBinding.operand0] => bindingOperand
+                                            "  %while$(whileIndex)_v$(valueNodeIndex) = freeze " -> print
+                                            valueNode -> writeType
+                                            " " -> print
+                                            (bindingOperand.kind == 3 or bindingOperand.kind == 4) -> if {
+                                                sources[bindingOperand.sourceModule] -> lexer.lex => bindingTokens!
+                                                bindingTokens![bindingOperand.payloadToken] => bindingToken
+                                                bindingOperand.kind == 3 -> if { sources[bindingOperand.sourceModule] -> slice(bindingToken.span.start, bindingToken.span.length) -> print } else { ((sources[bindingOperand.sourceModule] -> byte(bindingToken.span.start)) == UInt8(116)) -> if { "1" } else { "0" } -> print }
+                                            } else { "%v$(valueBinding.operand0)" -> print }
+                                            "" -> println
+                                        }
+                                    }
+                                }
+                            }
+                            valueNode.kind == 6 -> if {
+                                "  %while$(whileIndex)_v$(valueNodeIndex) = call " -> print
+                                valueNode -> writeType
+                                " @sl_m$(valueNode.targetModule)_s$(valueNode.symbol)(" -> print
+                                valueNode.operand0 >= 0 -> if {
+                                    branchIr![valueNode.operand0] => callArgument
+                                    callArgument -> writeType
+                                    " " -> print
+                                    WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: valueNode.operand0 } -> writeWhileValue
+                                }
+                                ")" -> println
+                            }
+                            (valueNode.kind == 7 or valueNode.kind == 8) -> if {
+                                branchIr![valueNode.operand0] => left
+                                "  %while$(whileIndex)_v$(valueNodeIndex) = " -> print
+                                valueNode.kind == 7 -> if {
+                                    valueNode.opcode == -26 -> if { "xor" -> print } else { "sub" -> print }
+                                } else {
+                                    valueNode.opcode == grammar.tokenIdPlus -> if { "add" -> print }
+                                    valueNode.opcode == grammar.tokenIdMinus -> if { "sub" -> print }
+                                    valueNode.opcode == grammar.tokenIdStar -> if { "mul" -> print }
+                                    valueNode.opcode == grammar.tokenIdSlash -> if { "sdiv" -> print }
+                                    valueNode.opcode == grammar.tokenIdPercent -> if { "srem" -> print }
+                                    valueNode.opcode == grammar.tokenIdEqualEqual -> if { "icmp eq" -> print }
+                                    valueNode.opcode == grammar.tokenIdBangEqual -> if { "icmp ne" -> print }
+                                    valueNode.opcode == grammar.tokenIdLess -> if { "icmp slt" -> print }
+                                    valueNode.opcode == grammar.tokenIdLessEqual -> if { "icmp sle" -> print }
+                                    valueNode.opcode == grammar.tokenIdGreater -> if { "icmp sgt" -> print }
+                                    valueNode.opcode == grammar.tokenIdGreaterEqual -> if { "icmp sge" -> print }
+                                    valueNode.opcode == -24 -> if { "or" -> print }
+                                    valueNode.opcode == -25 -> if { "and" -> print }
+                                }
+                                " " -> print
+                                left -> writeType
+                                " " -> print
+                                valueNode.kind == 7 -> if {
+                                    valueNode.opcode == -26 -> if {
+                                        WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: valueNode.operand0 } -> writeWhileValue
+                                        ", true" -> println
+                                    } else {
+                                        "0, " -> print
+                                        WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: valueNode.operand0 } -> writeWhileValue
+                                        "" -> println
+                                    }
+                                } else {
+                                    WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: valueNode.operand0 } -> writeWhileValue
+                                    ", " -> print
+                                    WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: valueNode.operand1 } -> writeWhileValue
+                                    "" -> println
+                                }
+                            }
+                        }
+                    }
+                    "  br i1 " -> print
+                    WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: boolTask.nodeIndex } -> writeWhileValue
+                    ", label %" -> print
+                    boolTask.trueKind == 0 -> if { "while$(whileIndex)_body" -> print }
+                    boolTask.trueKind == 1 -> if { "while$(whileIndex)_exit" -> print }
+                    boolTask.trueKind == 2 -> if { "while$(whileIndex)_bool$(boolTask.trueNode)_rhs" -> print }
+                    ", label %" -> print
+                    boolTask.falseKind == 0 -> if { "while$(whileIndex)_body" -> print }
+                    boolTask.falseKind == 1 -> if { "while$(whileIndex)_exit" -> print }
+                    boolTask.falseKind == 2 -> if { "while$(whileIndex)_bool$(boolTask.falseNode)_rhs" -> print }
+                    "" -> println
+                }
                 }
             }
-            true => materialized!
         }
-        "  br i1 " -> print
-        materialized! -> if {
-            "%while$(whileIndex)_condition" -> print
-        } else {
-            condition.kind == 4 -> if {
-                sources[condition.sourceModule] -> lexer.lex => conditionTokens!
-                conditionTokens![condition.payloadToken] => conditionToken
-                ((sources[condition.sourceModule] -> byte(conditionToken.span.start)) == UInt8(116)) -> if { "1" } else { "0" } -> print
-            } else {
-                (ownerIndex >= 0 and branchIr![ownerIndex].kind == 0 and branchIr![ownerIndex].operand1 >= 0 and condition.kind == 5 and condition.symbol == branchIr![branchIr![ownerIndex].operand1].symbol) -> if { "%arg" -> print } else { "%v$(whileNode.operand0)" -> print }
-            }
-        }
-        ", label %while$(whileIndex)_body, label %while$(whileIndex)_exit" -> println
     }
     emitRegion regionIndex: Int -> Unit {
         sources -> typedIr.lower => regionIr!

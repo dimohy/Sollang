@@ -455,11 +455,15 @@ in functions and `main`; the explicit region task stack also handles while
 nested inside if. Mutable scalar declarations and rebinds now retain their `!`
 flag, name resolution selects the closest preceding definition, and LLVM
 hoists one stack slot per mutable scalar. Integer comparison conditions reload
-that slot in every header, while body rebinds store the next value before the
-back-edge. This memory-form lowering is valid for nested CFGs and is designed
+the complete Bool tree in every header, while body rebinds store the next value
+before the back-edge. Logical `and`/`or` use explicit short-circuit blocks and
+call-valued leaves run only on reachable paths. Declared result annotations now
+determine emitted LLVM function signatures and the last top-level body
+expression supplies the return operand, fixing effectful Bool helpers used by
+loop conditions. This memory-form lowering is valid for nested CFGs and is designed
 for LLVM `mem2reg`/SROA promotion to SSA `phi` nodes. Native regressions execute
-terminating mutable loops in both a function and `main`. Compound Bool and
-call-valued conditions, `break`/`continue`, and ownership cleanup on loop exits
+terminating mutable loops in both a function and `main`, including observable
+short-circuit calls. `break`/`continue` and ownership cleanup on loop exits
 remain before general self-hosted loops are complete.
 
 Typed IR now represents immutable local bindings explicitly and connects each

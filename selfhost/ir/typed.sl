@@ -51,28 +51,60 @@ public lower sources: [Text; ~] -> [TypedIrNode; ~] {
             function.kind == 7 -> if {
                 -1 => resultTypeIndex!
                 1000000 => resultDistance!
+                UIntSize(0) => resultTopLevelStart!
                 0 => typeSearch!
                 typeSearch! < (inferred! -> len) -> while {
                     inferred![typeSearch!] => candidateType
                     candidateType.sourceModule == sourceIndex! -> if {
                         nodes![candidateType.astNode].parent => ancestor!
+                        candidateType.astNode => functionChildAst!
                         1 => distance!
                         false => belongsToFunction!
                         (ancestor! >= 0 and not belongsToFunction!) -> while {
                             ancestor! == function.astNode -> if { true => belongsToFunction! } else {
+                                ancestor! => functionChildAst!
                                 nodes![ancestor!].parent => ancestor!
                                 distance! + 1 => distance!
                             }
                         }
-                        (belongsToFunction! and (distance! < resultDistance! or (distance! == resultDistance! and (resultTypeIndex! < 0 or nodes![candidateType.astNode].start > nodes![inferred![resultTypeIndex!].astNode].start)))) -> if {
-                            typeSearch! => resultTypeIndex!
-                            distance! => resultDistance!
+                        belongsToFunction! -> if {
+                            nodes![functionChildAst!].start => candidateTopLevelStart
+                            (resultTypeIndex! < 0 or candidateTopLevelStart > resultTopLevelStart! or (candidateTopLevelStart == resultTopLevelStart! and distance! < resultDistance!)) -> if {
+                                typeSearch! => resultTypeIndex!
+                                distance! => resultDistance!
+                                candidateTopLevelStart => resultTopLevelStart!
+                            }
                         }
                     }
                     typeSearch! + 1 => typeSearch!
                 }
                 resultTypeIndex! >= 0 -> if {
                     inferred![resultTypeIndex!] => resultType
+                    resultType.origin => functionResultOrigin!
+                    resultType.targetModule => functionResultModule!
+                    resultType.targetSymbol => functionResultSymbol!
+                    function.typeNode => declaredResultAst!
+                    function.secondaryTypeNode >= 0 -> if { function.secondaryTypeNode => declaredResultAst! }
+                    0 => declaredResultNominalSearch!
+                    declaredResultNominalSearch! < (nominal! -> len) -> while {
+                        nominal![declaredResultNominalSearch!] => declaredResultNominal
+                        (declaredResultNominal.sourceModule == sourceIndex! and declaredResultNominal.typeAst == declaredResultAst!) -> if {
+                            declaredResultNominal.origin => functionResultOrigin!
+                            declaredResultNominal.targetModule => functionResultModule!
+                            declaredResultNominal.targetSymbol => functionResultSymbol!
+                        }
+                        declaredResultNominalSearch! + 1 => declaredResultNominalSearch!
+                    }
+                    0 => declaredResultCompositeSearch!
+                    declaredResultCompositeSearch! < (composite! -> len) -> while {
+                        composite![declaredResultCompositeSearch!] => declaredResultComposite
+                        (declaredResultComposite.sourceModule == sourceIndex! and declaredResultComposite.typeAst == declaredResultAst!) -> if {
+                            10 + declaredResultComposite.kind => functionResultOrigin!
+                            declaredResultComposite.elementModule => functionResultModule!
+                            declaredResultComposite.elementSymbol => functionResultSymbol!
+                        }
+                        declaredResultCompositeSearch! + 1 => declaredResultCompositeSearch!
+                    }
                     -1 => parameterSymbol!
                     -1 => parameterTypeIndex!
                     0 => parameterSearch!
@@ -141,9 +173,9 @@ public lower sources: [Text; ~] -> [TypedIrNode; ~] {
                         astNode: function.astNode
                         symbol: symbolIndex!
                         targetModule: sourceIndex!
-                        typeOrigin: resultType.origin
-                        typeModule: resultType.targetModule
-                        typeSymbol: resultType.targetSymbol
+                        typeOrigin: functionResultOrigin!
+                        typeModule: functionResultModule!
+                        typeSymbol: functionResultSymbol!
                         payloadToken: function.nameToken
                         opcode: -1
                         operand0: returnIr
@@ -158,9 +190,9 @@ public lower sources: [Text; ~] -> [TypedIrNode; ~] {
                         astNode: resultType.astNode
                         symbol: symbolIndex!
                         targetModule: -1
-                        typeOrigin: resultType.origin
-                        typeModule: resultType.targetModule
-                        typeSymbol: resultType.targetSymbol
+                        typeOrigin: functionResultOrigin!
+                        typeModule: functionResultModule!
+                        typeSymbol: functionResultSymbol!
                         payloadToken: -1
                         opcode: -1
                         operand0: -1

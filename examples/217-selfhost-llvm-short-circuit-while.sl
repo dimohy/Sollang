@@ -1,0 +1,28 @@
+import smalllang.compiler.llvm.text as llvm
+
+main {
+    [
+        """
+        check value: Int -> Bool {
+            "check" -> println
+            value < 3
+        }
+
+        run enabled: Bool -> Unit {
+            0 => index!
+            enabled and check(index!) -> while {
+                index! + 1 => index!
+            }
+            "run-done" -> println
+        }
+
+        main {
+            run(true)
+            run(false)
+            "main-done" -> println
+        }
+        """,
+        ~
+    ] => sources!
+    sources! -> llvm.emit
+}

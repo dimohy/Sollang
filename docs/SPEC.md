@@ -139,8 +139,11 @@ block as the predecessor of an enclosing `phi` input.
 Self-hosted mutable scalar loops use an explicit memory form before LLVM
 optimization: one non-escaping entry-block `alloca` represents each mutable
 binding chain, rebinds are ordered stores, and reads are ordered loads. A
-`while` comparison is regenerated in the header so every iteration observes
-the latest stored value. LLVM may then promote the slot to SSA and synthesize
+`while` condition tree is regenerated in the header so every iteration observes
+the latest stored value. Logical `and` and `or` lower to short-circuit branches
+rather than eager bitwise evaluation; `not` exchanges the continuation targets,
+and a call-valued leaf executes only when its path is reached. LLVM may then
+promote the slot to SSA and synthesize
 the loop-carried `phi`; the language semantics do not require a heap allocation
 or expose this intermediate representation.
 

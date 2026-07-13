@@ -358,11 +358,15 @@ Mutable scalar bindings now survive the bootstrap boundary as flagged binding
 nodes. Resolution selects the nearest preceding rebind, while a rebind's own
 right-hand side still observes the previous value. The LLVM text backend hoists
 one stack slot per mutable scalar, emits ordered `load`/`store` operations, and
-recomputes integer comparison conditions in every loop header for functions and
-`main`. LLVM's normal `mem2reg`/SROA pipeline can promote these non-escaping
+recomputes the complete Bool condition tree in every loop header for functions
+and `main`. `and`/`or` become explicit short-circuit blocks, `not` swaps branch
+targets, and call-valued leaves execute only on the path that demands them.
+Declared result types now drive self-hosted LLVM function signatures, while the
+last top-level body expression supplies the return operand. LLVM's normal
+`mem2reg`/SROA pipeline can promote these non-escaping
 slots to SSA `phi` nodes without making the source semantics depend on emitter
-predecessor bookkeeping. Compound Bool and call-valued mutable conditions,
-`break`/`continue`, and ownership cleanup on loop exits remain.
+predecessor bookkeeping. `break`/`continue` and ownership cleanup on loop exits
+remain.
 
 The first self-hosted LLVM text backend lives in `selfhost/llvm/text.sl`. It
 emits stable `sl_m<module>_s<symbol>` function names, `i32`/`i1` signatures,
