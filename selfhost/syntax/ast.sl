@@ -102,39 +102,40 @@ lowerFrom request: LowerRequest -> [AstNode; ~] {
         -1 => operatorPayloadToken!
         node.firstToken => operatorTokenIndex!
         node.firstToken + node.tokenCount => operatorTokenEnd
+        0 => operatorGroupDepth!
         operatorTokenIndex! < operatorTokenEnd -> while {
             tokens![operatorTokenIndex!].kind => candidateOperator
             tokens![operatorTokenIndex!] => candidateToken
-            astKind! == 18 and (candidateOperator == grammar.tokenIdEqualEqual or candidateOperator == grammar.tokenIdBangEqual) -> if {
+            operatorGroupDepth! == 0 and astKind! == 18 and (candidateOperator == grammar.tokenIdEqualEqual or candidateOperator == grammar.tokenIdBangEqual) -> if {
                 candidateOperator => operatorKind!
                 operatorTokenIndex! => operatorPayloadToken!
             }
-            astKind! == 19 and (candidateOperator == grammar.tokenIdLessEqual or candidateOperator == grammar.tokenIdGreaterEqual or candidateOperator == grammar.tokenIdLess or candidateOperator == grammar.tokenIdGreater) -> if {
+            operatorGroupDepth! == 0 and astKind! == 19 and (candidateOperator == grammar.tokenIdLessEqual or candidateOperator == grammar.tokenIdGreaterEqual or candidateOperator == grammar.tokenIdLess or candidateOperator == grammar.tokenIdGreater) -> if {
                 candidateOperator => operatorKind!
                 operatorTokenIndex! => operatorPayloadToken!
             }
-            astKind! == 20 and (candidateOperator == grammar.tokenIdPlus or candidateOperator == grammar.tokenIdMinus) -> if {
+            operatorGroupDepth! == 0 and astKind! == 20 and (candidateOperator == grammar.tokenIdPlus or candidateOperator == grammar.tokenIdMinus) -> if {
                 candidateOperator => operatorKind!
                 operatorTokenIndex! => operatorPayloadToken!
             }
-            astKind! == 21 and (candidateOperator == grammar.tokenIdStar or candidateOperator == grammar.tokenIdSlash or candidateOperator == grammar.tokenIdPercent) -> if {
+            operatorGroupDepth! == 0 and astKind! == 21 and (candidateOperator == grammar.tokenIdStar or candidateOperator == grammar.tokenIdSlash or candidateOperator == grammar.tokenIdPercent) -> if {
                 candidateOperator => operatorKind!
                 operatorTokenIndex! => operatorPayloadToken!
             }
-            astKind! == 22 and (candidateOperator == grammar.tokenIdMinus or candidateOperator == grammar.tokenIdBang) -> if {
+            operatorGroupDepth! == 0 and astKind! == 22 and (candidateOperator == grammar.tokenIdMinus or candidateOperator == grammar.tokenIdBang) -> if {
                 candidateOperator => operatorKind!
                 operatorTokenIndex! => operatorPayloadToken!
             }
-            (astKind! == 36 and candidateOperator == grammar.tokenIdDot) -> if {
+            (operatorGroupDepth! == 0 and astKind! == 36 and candidateOperator == grammar.tokenIdDot) -> if {
                 candidateOperator => operatorKind!
                 operatorTokenIndex! => operatorPayloadToken!
             }
-            (astKind! == 36 and candidateOperator == grammar.tokenIdLeftBracket and operatorTokenIndex! > node.firstToken and tokens![operatorTokenIndex! - 1].kind == grammar.tokenIdBang) -> if {
+            (operatorGroupDepth! == 0 and astKind! == 36 and candidateOperator == grammar.tokenIdLeftBracket and operatorTokenIndex! > node.firstToken and tokens![operatorTokenIndex! - 1].kind == grammar.tokenIdBang) -> if {
                 41 => astKind!
                 candidateOperator => operatorKind!
                 operatorTokenIndex! => operatorPayloadToken!
             }
-            (candidateOperator == grammar.tokenIdIdentifier and candidateToken.span.length == UIntSize(2)) -> if {
+            (operatorGroupDepth! == 0 and candidateOperator == grammar.tokenIdIdentifier and candidateToken.span.length == UIntSize(2)) -> if {
                 source -> byte(candidateToken.span.start) => shortKeywordByte0
                 source -> byte(candidateToken.span.start + UIntSize(1)) => shortKeywordByte1
                 (astKind! == 24 and shortKeywordByte0 == UInt8(111) and shortKeywordByte1 == UInt8(114)) -> if {
@@ -142,7 +143,7 @@ lowerFrom request: LowerRequest -> [AstNode; ~] {
                     operatorTokenIndex! => operatorPayloadToken!
                 }
             }
-            (candidateOperator == grammar.tokenIdIdentifier and candidateToken.span.length == UIntSize(3)) -> if {
+            (operatorGroupDepth! == 0 and candidateOperator == grammar.tokenIdIdentifier and candidateToken.span.length == UIntSize(3)) -> if {
                 source -> byte(candidateToken.span.start) => longKeywordByte0
                 source -> byte(candidateToken.span.start + UIntSize(1)) => longKeywordByte1
                 source -> byte(candidateToken.span.start + UIntSize(2)) => longKeywordByte2
@@ -159,6 +160,12 @@ lowerFrom request: LowerRequest -> [AstNode; ~] {
                     -27 => operatorKind!
                     operatorTokenIndex! => operatorPayloadToken!
                 }
+            }
+            (candidateOperator == grammar.tokenIdLeftParen or candidateOperator == grammar.tokenIdLeftBracket or candidateOperator == grammar.tokenIdLeftBrace) -> if {
+                operatorGroupDepth! + 1 => operatorGroupDepth!
+            }
+            (candidateOperator == grammar.tokenIdRightParen or candidateOperator == grammar.tokenIdRightBracket or candidateOperator == grammar.tokenIdRightBrace) -> if {
+                operatorGroupDepth! - 1 => operatorGroupDepth!
             }
             operatorTokenIndex! + 1 => operatorTokenIndex!
         }

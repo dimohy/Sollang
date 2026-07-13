@@ -282,6 +282,15 @@ the same generated precedence rules and lossless spans used by full modules.
 This mirrors the C# reference compiler's `ParseExpressionFragment` foundation
 needed by `$(expression)` rather than introducing a second interpolation-only
 parser.
+`smalllang.compiler.ir.interpolation` now consumes that fragment AST. It scans
+balanced `$(`...`)` ranges, including nested parentheses, and lowers integer
+literals, lexical names, unary nodes, and binary nodes into one relocatable
+owned table. Names resolve to the enclosing function's real symbol indexes;
+each node retains its source-string token, literal range, expression range,
+operator, semantic parent, and operand indexes for later LLVM scheduling.
+Operator discovery now ignores tokens nested inside parentheses/brackets/
+braces, fixing a self-hosted AST defect where an inner `+` could turn an outer
+wrapper into a false additive node.
 
 The first typed IR lowering lives in `selfhost/ir/typed.sl`. It emits a flat,
 relocatable node table whose initial stable kinds are function, return, and

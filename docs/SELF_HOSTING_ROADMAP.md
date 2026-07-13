@@ -476,8 +476,14 @@ the direct `Int` output slice above does not allocate a temporary Text value.
 For `$(expression)`, the generated parser VM, CST, and AST now accept an
 expression grammar start rule. A standalone fragment preserves precedence,
 unary operators, parent links, token payloads, and byte spans exactly as the
-full-module path does. The remaining step is to attach those fragment nodes to
-the surrounding lexical scope and typed interpolation IR before LLVM emission.
+full-module path does. The fragment-to-scope attachment now exists in
+`smalllang.compiler.ir.interpolation`: balanced
+expression ranges lower to a flat operator tree, and parameter/local names use
+the enclosing function's symbol identity. Nested arithmetic such as
+`$((value + 1) * 2)` preserves the multiplication root and additive child.
+The remaining boundary is consuming this interpolation IR in the LLVM emitter
+and extending the same resolution to main-local bindings and non-`Int` display
+types.
 
 Nominal struct ABI now uses deterministic module/symbol LLVM type names.
 Struct-literal fields form a general typed-IR sibling chain and lower through
