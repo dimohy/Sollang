@@ -1,0 +1,106 @@
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc"
+@sl_runtime_newline = private constant [1 x i8] c"\0A"
+declare i32 @putchar(i32)
+define internal void @sl_runtime_print(ptr %data, i64 %len, i1 %newline) {
+entry:
+  br label %loop
+loop:
+  %index = phi i64 [ 0, %entry ], [ %next, %body ]
+  %in_range = icmp ult i64 %index, %len
+  br i1 %in_range, label %body, label %end
+body:
+  %slot = getelementptr i8, ptr %data, i64 %index
+  %byte = load i8, ptr %slot, align 1
+  %value = zext i8 %byte to i32
+  %written = call i32 @putchar(i32 %value)
+  %next = add i64 %index, 1
+  br label %loop
+end:
+  br i1 %newline, label %write_newline, label %done
+write_newline:
+  %newline_written = call i32 @putchar(i32 10)
+  br label %done
+done:
+  ret void
+}
+@sl_runtime_bool_true = private constant [4 x i8] c"true"
+@sl_runtime_bool_false = private constant [5 x i8] c"false"
+define internal void @sl_runtime_print_i1(i1 %value, i1 %newline) {
+entry:
+  %data = select i1 %value, ptr @sl_runtime_bool_true, ptr @sl_runtime_bool_false
+  %length = select i1 %value, i64 4, i64 5
+  call void @sl_runtime_print(ptr %data, i64 %length, i1 %newline)
+  ret void
+}
+%sl.text = type { ptr, i64 }
+@sl_str_4 = private unnamed_addr constant [52 x i8] c"flag=$(flag), not=$(not flag), equal=$(flag == true)"
+@sl_str_13 = private unnamed_addr constant [95 x i8] c"positive=$(positive), literal=$(false), compare=$(value <= 10), logic=$(positive and not false)"
+@sl_str_24 = private unnamed_addr constant [90 x i8] c"main=$(larger), equality=$(4 == 4), bool-equality=$(true != false), logic=$(true or false)"
+define void @sl_m0_s0(i1 %arg) {
+entry:
+  %v4_ptr = insertvalue %sl.text poison, ptr @sl_str_4, 0
+  %v4 = insertvalue %sl.text %v4_ptr, i64 52, 1
+  %v3_expression_literal0 = getelementptr i8, ptr @sl_str_4, i64 0
+  call void @sl_runtime_print(ptr %v3_expression_literal0, i64 5, i1 false)
+  call void @sl_runtime_print_i1(i1 %arg, i1 false)
+  %v3_expression_literal1 = getelementptr i8, ptr @sl_str_4, i64 12
+  call void @sl_runtime_print(ptr %v3_expression_literal1, i64 6, i1 false)
+  %v3_expression1 = xor i1 %arg, true
+  call void @sl_runtime_print_i1(i1 %v3_expression1, i1 false)
+  %v3_expression_literal2 = getelementptr i8, ptr @sl_str_4, i64 29
+  call void @sl_runtime_print(ptr %v3_expression_literal2, i64 8, i1 false)
+  %v3_expression3 = icmp eq i1 %arg, 1
+  call void @sl_runtime_print_i1(i1 %v3_expression3, i1 false)
+  %v3_expression_suffix = getelementptr i8, ptr @sl_str_4, i64 52
+  call void @sl_runtime_print(ptr %v3_expression_suffix, i64 0, i1 true)
+  ret void
+}
+define void @sl_m0_s1(i32 %arg) {
+entry:
+  %v13_ptr = insertvalue %sl.text poison, ptr @sl_str_13, 0
+  %v13 = insertvalue %sl.text %v13_ptr, i64 95, 1
+  %v9 = icmp sgt i32 %arg, 0
+  %v12_expression_literal0 = getelementptr i8, ptr @sl_str_13, i64 0
+  call void @sl_runtime_print(ptr %v12_expression_literal0, i64 9, i1 false)
+  call void @sl_runtime_print_i1(i1 %v9, i1 false)
+  %v12_expression_literal1 = getelementptr i8, ptr @sl_str_13, i64 20
+  call void @sl_runtime_print(ptr %v12_expression_literal1, i64 10, i1 false)
+  call void @sl_runtime_print_i1(i1 0, i1 false)
+  %v12_expression_literal2 = getelementptr i8, ptr @sl_str_13, i64 38
+  call void @sl_runtime_print(ptr %v12_expression_literal2, i64 10, i1 false)
+  %v12_expression8 = icmp sle i32 %arg, 10
+  call void @sl_runtime_print_i1(i1 %v12_expression8, i1 false)
+  %v12_expression_literal3 = getelementptr i8, ptr @sl_str_13, i64 62
+  call void @sl_runtime_print(ptr %v12_expression_literal3, i64 8, i1 false)
+  %v12_expression13 = xor i1 0, true
+  %v12_expression11 = and i1 %v9, %v12_expression13
+  call void @sl_runtime_print_i1(i1 %v12_expression11, i1 false)
+  %v12_expression_suffix = getelementptr i8, ptr @sl_str_13, i64 95
+  call void @sl_runtime_print(ptr %v12_expression_suffix, i64 0, i1 true)
+  ret void
+}
+define i32 @main() {
+entry:
+  call void @sl_m0_s0(i1 1)
+  call void @sl_m0_s1(i32 7)
+  %v20 = icmp sgt i32 3, 9
+  %v23_expression_literal0 = getelementptr i8, ptr @sl_str_24, i64 0
+  call void @sl_runtime_print(ptr %v23_expression_literal0, i64 5, i1 false)
+  call void @sl_runtime_print_i1(i1 %v20, i1 false)
+  %v23_expression_literal1 = getelementptr i8, ptr @sl_str_24, i64 14
+  call void @sl_runtime_print(ptr %v23_expression_literal1, i64 11, i1 false)
+  %v23_expression16 = icmp eq i32 4, 4
+  call void @sl_runtime_print_i1(i1 %v23_expression16, i1 false)
+  %v23_expression_literal2 = getelementptr i8, ptr @sl_str_24, i64 34
+  call void @sl_runtime_print(ptr %v23_expression_literal2, i64 16, i1 false)
+  %v23_expression19 = icmp ne i1 1, 0
+  call void @sl_runtime_print_i1(i1 %v23_expression19, i1 false)
+  %v23_expression_literal3 = getelementptr i8, ptr @sl_str_24, i64 66
+  call void @sl_runtime_print(ptr %v23_expression_literal3, i64 8, i1 false)
+  %v23_expression22 = or i1 1, 0
+  call void @sl_runtime_print_i1(i1 %v23_expression22, i1 false)
+  %v23_expression_suffix = getelementptr i8, ptr @sl_str_24, i64 90
+  call void @sl_runtime_print(ptr %v23_expression_suffix, i64 0, i1 true)
+  ret i32 0
+}

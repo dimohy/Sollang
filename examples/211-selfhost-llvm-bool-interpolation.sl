@@ -1,0 +1,25 @@
+import smalllang.compiler.llvm.text as llvm
+
+main {
+    [
+        """
+        show flag: Bool -> Unit {
+            "flag=$(flag), not=$(not flag), equal=$(flag == true)" -> println
+        }
+
+        evaluate value: Int -> Unit {
+            value > 0 => positive
+            "positive=$(positive), literal=$(false), compare=$(value <= 10), logic=$(positive and not false)" -> println
+        }
+
+        main {
+            show(true)
+            evaluate(7)
+            3 > 9 => larger
+            "main=$(larger), equality=$(4 == 4), bool-equality=$(true != false), logic=$(true or false)" -> println
+        }
+        """,
+        ~
+    ] => sources!
+    sources! -> llvm.emit
+}

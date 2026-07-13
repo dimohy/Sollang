@@ -23,7 +23,7 @@ public lex source: Text -> [syntax.SyntaxToken; ~] {
         value == UInt16(11582) => grammar.tokenIdArrow
         value == UInt16(15678) => grammar.tokenIdFatArrow
         value == UInt16(15677) => grammar.tokenIdEqualEqual
-        value == UInt16(8541) => grammar.tokenIdBangEqual
+        value == UInt16(8509) => grammar.tokenIdBangEqual
         value == UInt16(15421) => grammar.tokenIdLessEqual
         value == UInt16(15933) => grammar.tokenIdGreaterEqual
         else => -1

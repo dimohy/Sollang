@@ -4,6 +4,7 @@ main {
     """
     main {
         42 -> println
+        true != false => different
     }
     # note
     """ -> lexer.lex => tokens!

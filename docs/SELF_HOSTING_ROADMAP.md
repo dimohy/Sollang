@@ -33,6 +33,16 @@ The design deliberately combines a small set of compatible ideas:
   for compiler work while reserving grapheme segmentation for a library layer.
   See Rust [`char`](https://doc.rust-lang.org/std/primitive.char.html) and
   Swift [Strings and Characters](https://docs.swift.org/swift-book/documentation/the-swift-programming-language/stringsandcharacters/).
+- Rust routes default formatting through the static `Display` trait and a
+  writer-like `Formatter`; Swift lowers interpolation into typed
+  `appendLiteral`/`appendInterpolation` calls; Zig validates compile-time-known
+  format descriptions in ordinary library code. SL combines those ideas:
+  interpolation segments and result types are fixed at compile time, builtin
+  values stream directly to the output sink, and user values will use a static
+  `Display` trait rather than implicit reflection or heap-built temporary Text.
+  See Rust [`std::fmt`](https://doc.rust-lang.org/stable/std/fmt/), Swift
+  [`StringInterpolationProtocol`](https://developer.apple.com/documentation/swift/stringinterpolationprotocol),
+  and the Zig [language reference](https://ziglang.org/documentation/master/).
 - Zig recommends an arena when allocations share one lifetime and can all be
   released together; rustc describes arena allocation as a pointer bump. SL's
   byte arena follows that lifetime model while exposing checked offsets instead
@@ -483,12 +493,17 @@ the enclosing function's symbol identity. Nested arithmetic such as
 `$((value + 1) * 2)` preserves the multiplication root and additive child.
 Pass-through precedence wrappers are removed and the first top-level operator
 is retained, preventing a later nested unary token from replacing the root.
-The LLVM emitter now consumes that tree in both functions and `main`, resolves
-parameter and local producer SSA values, and streams `Int` results without a
-temporary Text allocation. Windows output links and executes; Linux x64 and
-Wasm32 output assembles. Remaining work is typed display lowering beyond
-`Int`, additional expression result types, and owned dynamic Text construction
-where streaming is insufficient.
+Each literal/operator node now carries its stable builtin result type; lexical
+name nodes retain their symbol identity and obtain the declared/inferred type
+from typed IR. The LLVM emitter consumes the tree in both functions and `main`,
+resolves parameter and local producer SSA values, and streams `Int` and `Bool`
+results without a temporary Text allocation. Bool literals, names,
+comparisons, equality, `and`/`or`, and `not` lower to `i1` SSA and the canonical
+`true`/`false` spellings. Windows output
+links and executes; Linux x64 and Wasm32 output assembles. Remaining work is
+fixed-width numeric and user-defined static `Display` lowering, additional
+expression result types, and owned dynamic Text construction where streaming
+is insufficient.
 
 Nominal struct ABI now uses deterministic module/symbol LLVM type names.
 Struct-literal fields form a general typed-IR sibling chain and lower through

@@ -294,7 +294,13 @@ wrapper into a false additive node. Operator selection is stable at the first
 top-level token, so a later unary `-` no longer overwrites an outer additive
 operator. Pass-through precedence wrappers with only one semantic child are
 removed from interpolation IR; `-value` therefore has one unary root rather
-than an invalid binary wrapper around it.
+than an invalid binary wrapper around it. Literal/operator nodes carry stable
+builtin result types (`Int` 2 and `Bool` 23), while names retain the symbol used
+to read their type from typed IR. Boolean literals, comparisons, equality,
+logical operators, and `not` therefore retain their `i1` result boundary
+through LLVM scheduling. The lexer regression also fixes the `!=` packed-byte
+constant, so the self-hosted lexer emits one `BangEqual` token instead of
+`Bang` plus `Equal`.
 
 The first typed IR lowering lives in `selfhost/ir/typed.sl`. It emits a flat,
 relocatable node table whose initial stable kinds are function, return, and
@@ -425,8 +431,11 @@ nodes, resolves function parameters plus function/main local bindings, and
 streams literal/value segments through the same allocation-free `i32`
 formatter. The Windows regression links and executes parameter/local/main
 expressions; equivalent Linux x64 and Wasm32 modules assemble with `llvm-as`.
-Other display types, comparison/logical formatting, general dynamic Text
-construction, and lifetime ownership remain.
+The same typed path now streams Bool literals, parameters, locals, comparisons,
+equality, `and`/`or`, and `not` as canonical `true`/`false` text through an
+allocation-free `i1` helper. Fixed-width numeric and user-defined static
+display contracts, general dynamic Text construction, and lifetime ownership
+remain.
 
 The bootstrap type table now predeclares parametric dynamic-array identities
 used by struct fields before struct layouts are finalized. A field such as

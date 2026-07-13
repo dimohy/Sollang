@@ -565,20 +565,43 @@ emitCore sources: move [Text; ~] -> Unit {
                                         functionExpressionNodeIndex! >= 0 -> while {
                                             functionExpressionInterpolation![functionExpressionNodeIndex!] => functionExpressionNode
                                             (functionExpressionNode.sourceToken == runtimeArgument.payloadToken and functionExpressionNode.segment == functionExpressionRoot.segment and (functionExpressionNode.kind == 2 or functionExpressionNode.kind == 3)) -> if {
-                                                functionExpressionNode.kind == 2 -> if { "sub" } else {
-                                                    functionExpressionNode.opcode == grammar.tokenIdPlus -> if { "add" } else {
-                                                    functionExpressionNode.opcode == grammar.tokenIdMinus -> if { "sub" } else {
-                                                    functionExpressionNode.opcode == grammar.tokenIdStar -> if { "mul" } else {
-                                                    functionExpressionNode.opcode == grammar.tokenIdSlash -> if { "sdiv" } else { "srem" }
+                                                "" => functionExpressionOperation!
+                                                functionExpressionNode.kind == 2 -> if { "sub" => functionExpressionOperation! }
+                                                (functionExpressionNode.kind == 2 and functionExpressionNode.opcode == -26) -> if { "xor" => functionExpressionOperation! }
+                                                functionExpressionNode.opcode == grammar.tokenIdPlus -> if { "add" => functionExpressionOperation! }
+                                                functionExpressionNode.opcode == grammar.tokenIdMinus -> if { "sub" => functionExpressionOperation! }
+                                                functionExpressionNode.opcode == grammar.tokenIdStar -> if { "mul" => functionExpressionOperation! }
+                                                functionExpressionNode.opcode == grammar.tokenIdSlash -> if { "sdiv" => functionExpressionOperation! }
+                                                functionExpressionNode.opcode == grammar.tokenIdPercent -> if { "srem" => functionExpressionOperation! }
+                                                functionExpressionNode.opcode == grammar.tokenIdEqualEqual -> if { "icmp eq" => functionExpressionOperation! }
+                                                functionExpressionNode.opcode == grammar.tokenIdBangEqual -> if { "icmp ne" => functionExpressionOperation! }
+                                                functionExpressionNode.opcode == grammar.tokenIdLess -> if { "icmp slt" => functionExpressionOperation! }
+                                                functionExpressionNode.opcode == grammar.tokenIdLessEqual -> if { "icmp sle" => functionExpressionOperation! }
+                                                functionExpressionNode.opcode == grammar.tokenIdGreater -> if { "icmp sgt" => functionExpressionOperation! }
+                                                functionExpressionNode.opcode == grammar.tokenIdGreaterEqual -> if { "icmp sge" => functionExpressionOperation! }
+                                                functionExpressionNode.opcode == -24 -> if { "or" => functionExpressionOperation! }
+                                                functionExpressionNode.opcode == -25 -> if { "and" => functionExpressionOperation! }
+                                                (functionExpressionNode.opcode == -24 or functionExpressionNode.opcode == -25 or (functionExpressionNode.kind == 2 and functionExpressionNode.opcode == -26)) => functionExpressionBoolOperands!
+                                                (functionExpressionNode.opcode == grammar.tokenIdEqualEqual or functionExpressionNode.opcode == grammar.tokenIdBangEqual) -> if {
+                                                    functionExpressionInterpolation![functionExpressionNode.operand0] => functionExpressionTypeOperand
+                                                    functionExpressionTypeOperand.typeSymbol == 23 -> if { true => functionExpressionBoolOperands! }
+                                                    functionExpressionTypeOperand.kind == 1 -> if {
+                                                        (function.operand1 >= 0 and ir![function.operand1].symbol == functionExpressionTypeOperand.symbol and ir![function.operand1].typeSymbol == 23) -> if { true => functionExpressionBoolOperands! }
+                                                        expressionStart => functionExpressionTypeBindingSearch!
+                                                        functionExpressionTypeBindingSearch! < functionEnd! -> while {
+                                                            (ir![functionExpressionTypeBindingSearch!].kind == 17 and ir![functionExpressionTypeBindingSearch!].symbol == functionExpressionTypeOperand.symbol and ir![functionExpressionTypeBindingSearch!].typeSymbol == 23) -> if { true => functionExpressionBoolOperands! }
+                                                            functionExpressionTypeBindingSearch! + 1 => functionExpressionTypeBindingSearch!
+                                                        }
                                                     }
-                                                    }
-                                                    }
-                                                } => functionExpressionOperation
-                                                "  %v$(expressionIndex!)_expression$(functionExpressionNodeIndex!) = $functionExpressionOperation i32 " -> print
-                                                functionExpressionNode.kind == 2 -> if { "0" -> print } else {
+                                                }
+                                                functionExpressionBoolOperands! -> if { "i1" } else { "i32" } => functionExpressionOperandType
+                                                "  %v$(expressionIndex!)_expression$(functionExpressionNodeIndex!) = $(functionExpressionOperation!) $functionExpressionOperandType " -> print
+                                                (functionExpressionNode.kind == 2 and functionExpressionNode.opcode != -26) -> if { "0" -> print } else {
                                                     functionExpressionInterpolation![functionExpressionNode.operand0] => functionExpressionLeft
-                                                    functionExpressionLeft.kind == 0 -> if {
-                                                        sources[runtimeArgument.sourceModule] -> slice(functionExpressionLeft.payloadStart, functionExpressionLeft.payloadLength) -> print
+                                                    (functionExpressionLeft.kind == 0 or functionExpressionLeft.kind == 4) -> if {
+                                                        functionExpressionLeft.kind == 4 -> if {
+                                                            (sources[runtimeArgument.sourceModule] -> byte(functionExpressionLeft.payloadStart)) == UInt8(116) -> if { "1" -> print } else { "0" -> print }
+                                                        } else { sources[runtimeArgument.sourceModule] -> slice(functionExpressionLeft.payloadStart, functionExpressionLeft.payloadLength) -> print }
                                                     } else {
                                                     functionExpressionLeft.kind == 1 -> if {
                                                         (function.operand1 >= 0 and ir![function.operand1].symbol == functionExpressionLeft.symbol) -> if { "%arg" -> print } else {
@@ -603,8 +626,11 @@ emitCore sources: move [Text; ~] -> Unit {
                                                 ", " -> print
                                                 functionExpressionNode.kind == 2 -> if {
                                                     functionExpressionInterpolation![functionExpressionNode.operand0] => functionExpressionUnary
-                                                    functionExpressionUnary.kind == 0 -> if {
-                                                        sources[runtimeArgument.sourceModule] -> slice(functionExpressionUnary.payloadStart, functionExpressionUnary.payloadLength) -> println
+                                                    functionExpressionNode.opcode == -26 -> if { "true" -> println } else {
+                                                    (functionExpressionUnary.kind == 0 or functionExpressionUnary.kind == 4) -> if {
+                                                        functionExpressionUnary.kind == 4 -> if {
+                                                            (sources[runtimeArgument.sourceModule] -> byte(functionExpressionUnary.payloadStart)) == UInt8(116) -> if { "1" -> println } else { "0" -> println }
+                                                        } else { sources[runtimeArgument.sourceModule] -> slice(functionExpressionUnary.payloadStart, functionExpressionUnary.payloadLength) -> println }
                                                     } else {
                                                     functionExpressionUnary.kind == 1 -> if {
                                                         (function.operand1 >= 0 and ir![function.operand1].symbol == functionExpressionUnary.symbol) -> if { "%arg" -> println } else {
@@ -625,10 +651,13 @@ emitCore sources: move [Text; ~] -> Unit {
                                                         }
                                                     } else { "%v$(expressionIndex!)_expression$(functionExpressionNode.operand0)" -> println }
                                                     }
+                                                    }
                                                 } else {
                                                     functionExpressionInterpolation![functionExpressionNode.operand1] => functionExpressionRight
-                                                    functionExpressionRight.kind == 0 -> if {
-                                                        sources[runtimeArgument.sourceModule] -> slice(functionExpressionRight.payloadStart, functionExpressionRight.payloadLength) -> println
+                                                    (functionExpressionRight.kind == 0 or functionExpressionRight.kind == 4) -> if {
+                                                        functionExpressionRight.kind == 4 -> if {
+                                                            (sources[runtimeArgument.sourceModule] -> byte(functionExpressionRight.payloadStart)) == UInt8(116) -> if { "1" -> println } else { "0" -> println }
+                                                        } else { sources[runtimeArgument.sourceModule] -> slice(functionExpressionRight.payloadStart, functionExpressionRight.payloadLength) -> println }
                                                     } else {
                                                     functionExpressionRight.kind == 1 -> if {
                                                         (function.operand1 >= 0 and ir![function.operand1].symbol == functionExpressionRight.symbol) -> if { "%arg" -> println } else {
@@ -653,24 +682,36 @@ emitCore sources: move [Text; ~] -> Unit {
                                             }
                                             functionExpressionNodeIndex! - 1 => functionExpressionNodeIndex!
                                         }
-                                        "  call void @sl_runtime_print_i32(i32 " -> print
-                                        functionExpressionRoot.kind == 0 -> if {
-                                            sources[runtimeArgument.sourceModule] -> slice(functionExpressionRoot.payloadStart, functionExpressionRoot.payloadLength) -> print
-                                        } else {
+                                        functionExpressionRoot.typeSymbol => functionExpressionRootTypeSymbol!
+                                        -1 => functionExpressionRootBinding!
                                         functionExpressionRoot.kind == 1 -> if {
-                                            (function.operand1 >= 0 and ir![function.operand1].symbol == functionExpressionRoot.symbol) -> if { "%arg" -> print } else {
-                                                -1 => functionExpressionRootBinding!
+                                            (function.operand1 >= 0 and ir![function.operand1].symbol == functionExpressionRoot.symbol) -> if {
+                                                ir![function.operand1].typeSymbol => functionExpressionRootTypeSymbol!
+                                            } else {
                                                 expressionStart => functionExpressionRootBindingSearch!
                                                 functionExpressionRootBindingSearch! < functionEnd! -> while {
                                                     (ir![functionExpressionRootBindingSearch!].kind == 17 and ir![functionExpressionRootBindingSearch!].symbol == functionExpressionRoot.symbol) -> if { functionExpressionRootBindingSearch! => functionExpressionRootBinding! }
                                                     functionExpressionRootBindingSearch! + 1 => functionExpressionRootBindingSearch!
                                                 }
+                                                functionExpressionRootBinding! >= 0 -> if { ir![functionExpressionRootBinding!].typeSymbol => functionExpressionRootTypeSymbol! }
+                                            }
+                                        }
+                                        functionExpressionRootTypeSymbol! == 23 -> if { "  call void @sl_runtime_print_i1(i1 " -> print } else { "  call void @sl_runtime_print_i32(i32 " -> print }
+                                        (functionExpressionRoot.kind == 0 or functionExpressionRoot.kind == 4) -> if {
+                                            functionExpressionRoot.kind == 4 -> if {
+                                                (sources[runtimeArgument.sourceModule] -> byte(functionExpressionRoot.payloadStart)) == UInt8(116) -> if { "1" -> print } else { "0" -> print }
+                                            } else { sources[runtimeArgument.sourceModule] -> slice(functionExpressionRoot.payloadStart, functionExpressionRoot.payloadLength) -> print }
+                                        } else {
+                                        functionExpressionRoot.kind == 1 -> if {
+                                            (function.operand1 >= 0 and ir![function.operand1].symbol == functionExpressionRoot.symbol) -> if { "%arg" -> print } else {
                                                 functionExpressionRootBinding! >= 0 -> if {
                                                     ir![ir![functionExpressionRootBinding!].operand0] => functionExpressionRootValue
-                                                    functionExpressionRootValue.kind == 3 -> if {
+                                                    (functionExpressionRootValue.kind == 3 or functionExpressionRootValue.kind == 4) -> if {
                                                         sources[functionExpressionRootValue.sourceModule] -> lexer.lex => functionExpressionRootTokens!
                                                         functionExpressionRootTokens![functionExpressionRootValue.payloadToken] => functionExpressionRootToken
-                                                        sources[functionExpressionRootValue.sourceModule] -> slice(functionExpressionRootToken.span.start, functionExpressionRootToken.span.length) -> print
+                                                        functionExpressionRootValue.kind == 4 -> if {
+                                                            (sources[functionExpressionRootValue.sourceModule] -> byte(functionExpressionRootToken.span.start)) == UInt8(116) -> if { "1" -> print } else { "0" -> print }
+                                                        } else { sources[functionExpressionRootValue.sourceModule] -> slice(functionExpressionRootToken.span.start, functionExpressionRootToken.span.length) -> print }
                                                     } else { "%v$(ir![functionExpressionRootBinding!].operand0)" -> print }
                                                 }
                                             }
@@ -1015,20 +1056,42 @@ emitCore sources: move [Text; ~] -> Unit {
                                             entryExpressionNodeIndex! >= 0 -> while {
                                                 entryExpressionInterpolation![entryExpressionNodeIndex!] => entryInterpolationNode
                                                 (entryInterpolationNode.sourceToken == runtimeArgument.payloadToken and entryInterpolationNode.segment == entryExpressionRoot.segment and (entryInterpolationNode.kind == 2 or entryInterpolationNode.kind == 3)) -> if {
-                                                    entryInterpolationNode.kind == 2 -> if { "sub" } else {
-                                                        entryInterpolationNode.opcode == grammar.tokenIdPlus -> if { "add" } else {
-                                                        entryInterpolationNode.opcode == grammar.tokenIdMinus -> if { "sub" } else {
-                                                        entryInterpolationNode.opcode == grammar.tokenIdStar -> if { "mul" } else {
-                                                        entryInterpolationNode.opcode == grammar.tokenIdSlash -> if { "sdiv" } else { "srem" }
+                                                    "" => entryExpressionOperation!
+                                                    entryInterpolationNode.kind == 2 -> if { "sub" => entryExpressionOperation! }
+                                                    (entryInterpolationNode.kind == 2 and entryInterpolationNode.opcode == -26) -> if { "xor" => entryExpressionOperation! }
+                                                    entryInterpolationNode.opcode == grammar.tokenIdPlus -> if { "add" => entryExpressionOperation! }
+                                                    entryInterpolationNode.opcode == grammar.tokenIdMinus -> if { "sub" => entryExpressionOperation! }
+                                                    entryInterpolationNode.opcode == grammar.tokenIdStar -> if { "mul" => entryExpressionOperation! }
+                                                    entryInterpolationNode.opcode == grammar.tokenIdSlash -> if { "sdiv" => entryExpressionOperation! }
+                                                    entryInterpolationNode.opcode == grammar.tokenIdPercent -> if { "srem" => entryExpressionOperation! }
+                                                    entryInterpolationNode.opcode == grammar.tokenIdEqualEqual -> if { "icmp eq" => entryExpressionOperation! }
+                                                    entryInterpolationNode.opcode == grammar.tokenIdBangEqual -> if { "icmp ne" => entryExpressionOperation! }
+                                                    entryInterpolationNode.opcode == grammar.tokenIdLess -> if { "icmp slt" => entryExpressionOperation! }
+                                                    entryInterpolationNode.opcode == grammar.tokenIdLessEqual -> if { "icmp sle" => entryExpressionOperation! }
+                                                    entryInterpolationNode.opcode == grammar.tokenIdGreater -> if { "icmp sgt" => entryExpressionOperation! }
+                                                    entryInterpolationNode.opcode == grammar.tokenIdGreaterEqual -> if { "icmp sge" => entryExpressionOperation! }
+                                                    entryInterpolationNode.opcode == -24 -> if { "or" => entryExpressionOperation! }
+                                                    entryInterpolationNode.opcode == -25 -> if { "and" => entryExpressionOperation! }
+                                                    (entryInterpolationNode.opcode == -24 or entryInterpolationNode.opcode == -25 or (entryInterpolationNode.kind == 2 and entryInterpolationNode.opcode == -26)) => entryExpressionBoolOperands!
+                                                    (entryInterpolationNode.opcode == grammar.tokenIdEqualEqual or entryInterpolationNode.opcode == grammar.tokenIdBangEqual) -> if {
+                                                        entryExpressionInterpolation![entryInterpolationNode.operand0] => entryExpressionTypeOperand
+                                                        entryExpressionTypeOperand.typeSymbol == 23 -> if { true => entryExpressionBoolOperands! }
+                                                        entryExpressionTypeOperand.kind == 1 -> if {
+                                                            functionIndex! + 1 => entryExpressionTypeBindingSearch!
+                                                            entryExpressionTypeBindingSearch! < entryEnd! -> while {
+                                                                (ir![entryExpressionTypeBindingSearch!].kind == 17 and ir![entryExpressionTypeBindingSearch!].symbol == entryExpressionTypeOperand.symbol and ir![entryExpressionTypeBindingSearch!].typeSymbol == 23) -> if { true => entryExpressionBoolOperands! }
+                                                                entryExpressionTypeBindingSearch! + 1 => entryExpressionTypeBindingSearch!
+                                                            }
                                                         }
-                                                        }
-                                                        }
-                                                    } => entryExpressionOperation
-                                                    "  %v$(entryExpressionIndex!)_expression$(entryExpressionNodeIndex!) = $entryExpressionOperation i32 " -> print
-                                                    entryInterpolationNode.kind == 2 -> if { "0" -> print } else {
+                                                    }
+                                                    entryExpressionBoolOperands! -> if { "i1" } else { "i32" } => entryExpressionOperandType
+                                                    "  %v$(entryExpressionIndex!)_expression$(entryExpressionNodeIndex!) = $(entryExpressionOperation!) $entryExpressionOperandType " -> print
+                                                    (entryInterpolationNode.kind == 2 and entryInterpolationNode.opcode != -26) -> if { "0" -> print } else {
                                                         entryExpressionInterpolation![entryInterpolationNode.operand0] => entryExpressionLeft
-                                                        entryExpressionLeft.kind == 0 -> if {
-                                                            sources[runtimeArgument.sourceModule] -> slice(entryExpressionLeft.payloadStart, entryExpressionLeft.payloadLength) -> print
+                                                        (entryExpressionLeft.kind == 0 or entryExpressionLeft.kind == 4) -> if {
+                                                            entryExpressionLeft.kind == 4 -> if {
+                                                                (sources[runtimeArgument.sourceModule] -> byte(entryExpressionLeft.payloadStart)) == UInt8(116) -> if { "1" -> print } else { "0" -> print }
+                                                            } else { sources[runtimeArgument.sourceModule] -> slice(entryExpressionLeft.payloadStart, entryExpressionLeft.payloadLength) -> print }
                                                         } else {
                                                         entryExpressionLeft.kind == 1 -> if {
                                                             -1 => entryExpressionLeftBinding!
@@ -1051,8 +1114,11 @@ emitCore sources: move [Text; ~] -> Unit {
                                                     ", " -> print
                                                     entryInterpolationNode.kind == 2 -> if {
                                                         entryExpressionInterpolation![entryInterpolationNode.operand0] => entryExpressionUnary
-                                                        entryExpressionUnary.kind == 0 -> if {
-                                                            sources[runtimeArgument.sourceModule] -> slice(entryExpressionUnary.payloadStart, entryExpressionUnary.payloadLength) -> println
+                                                        entryInterpolationNode.opcode == -26 -> if { "true" -> println } else {
+                                                        (entryExpressionUnary.kind == 0 or entryExpressionUnary.kind == 4) -> if {
+                                                            entryExpressionUnary.kind == 4 -> if {
+                                                                (sources[runtimeArgument.sourceModule] -> byte(entryExpressionUnary.payloadStart)) == UInt8(116) -> if { "1" -> println } else { "0" -> println }
+                                                            } else { sources[runtimeArgument.sourceModule] -> slice(entryExpressionUnary.payloadStart, entryExpressionUnary.payloadLength) -> println }
                                                         } else {
                                                         entryExpressionUnary.kind == 1 -> if {
                                                             -1 => entryExpressionUnaryBinding!
@@ -1071,10 +1137,13 @@ emitCore sources: move [Text; ~] -> Unit {
                                                             }
                                                         } else { "%v$(entryExpressionIndex!)_expression$(entryInterpolationNode.operand0)" -> println }
                                                         }
+                                                        }
                                                     } else {
                                                         entryExpressionInterpolation![entryInterpolationNode.operand1] => entryExpressionRight
-                                                        entryExpressionRight.kind == 0 -> if {
-                                                            sources[runtimeArgument.sourceModule] -> slice(entryExpressionRight.payloadStart, entryExpressionRight.payloadLength) -> println
+                                                        (entryExpressionRight.kind == 0 or entryExpressionRight.kind == 4) -> if {
+                                                            entryExpressionRight.kind == 4 -> if {
+                                                                (sources[runtimeArgument.sourceModule] -> byte(entryExpressionRight.payloadStart)) == UInt8(116) -> if { "1" -> println } else { "0" -> println }
+                                                            } else { sources[runtimeArgument.sourceModule] -> slice(entryExpressionRight.payloadStart, entryExpressionRight.payloadLength) -> println }
                                                         } else {
                                                         entryExpressionRight.kind == 1 -> if {
                                                             -1 => entryExpressionRightBinding!
@@ -1097,23 +1166,31 @@ emitCore sources: move [Text; ~] -> Unit {
                                                 }
                                                 entryExpressionNodeIndex! - 1 => entryExpressionNodeIndex!
                                             }
-                                            "  call void @sl_runtime_print_i32(i32 " -> print
-                                            entryExpressionRoot.kind == 0 -> if {
-                                                sources[runtimeArgument.sourceModule] -> slice(entryExpressionRoot.payloadStart, entryExpressionRoot.payloadLength) -> print
-                                            } else {
+                                            entryExpressionRoot.typeSymbol => entryExpressionRootTypeSymbol!
+                                            -1 => entryExpressionRootBinding!
                                             entryExpressionRoot.kind == 1 -> if {
-                                                -1 => entryExpressionRootBinding!
                                                 functionIndex! + 1 => entryExpressionRootBindingSearch!
                                                 entryExpressionRootBindingSearch! < entryEnd! -> while {
                                                     (ir![entryExpressionRootBindingSearch!].kind == 17 and ir![entryExpressionRootBindingSearch!].symbol == entryExpressionRoot.symbol) -> if { entryExpressionRootBindingSearch! => entryExpressionRootBinding! }
                                                     entryExpressionRootBindingSearch! + 1 => entryExpressionRootBindingSearch!
                                                 }
+                                                entryExpressionRootBinding! >= 0 -> if { ir![entryExpressionRootBinding!].typeSymbol => entryExpressionRootTypeSymbol! }
+                                            }
+                                            entryExpressionRootTypeSymbol! == 23 -> if { "  call void @sl_runtime_print_i1(i1 " -> print } else { "  call void @sl_runtime_print_i32(i32 " -> print }
+                                            (entryExpressionRoot.kind == 0 or entryExpressionRoot.kind == 4) -> if {
+                                                entryExpressionRoot.kind == 4 -> if {
+                                                    (sources[runtimeArgument.sourceModule] -> byte(entryExpressionRoot.payloadStart)) == UInt8(116) -> if { "1" -> print } else { "0" -> print }
+                                                } else { sources[runtimeArgument.sourceModule] -> slice(entryExpressionRoot.payloadStart, entryExpressionRoot.payloadLength) -> print }
+                                            } else {
+                                            entryExpressionRoot.kind == 1 -> if {
                                                 entryExpressionRootBinding! >= 0 -> if {
                                                     ir![ir![entryExpressionRootBinding!].operand0] => entryExpressionRootValue
-                                                    entryExpressionRootValue.kind == 3 -> if {
+                                                    (entryExpressionRootValue.kind == 3 or entryExpressionRootValue.kind == 4) -> if {
                                                         sources[entryExpressionRootValue.sourceModule] -> lexer.lex => entryExpressionRootTokens!
                                                         entryExpressionRootTokens![entryExpressionRootValue.payloadToken] => entryExpressionRootToken
-                                                        sources[entryExpressionRootValue.sourceModule] -> slice(entryExpressionRootToken.span.start, entryExpressionRootToken.span.length) -> print
+                                                        entryExpressionRootValue.kind == 4 -> if {
+                                                            (sources[entryExpressionRootValue.sourceModule] -> byte(entryExpressionRootToken.span.start)) == UInt8(116) -> if { "1" -> print } else { "0" -> print }
+                                                        } else { sources[entryExpressionRootValue.sourceModule] -> slice(entryExpressionRootToken.span.start, entryExpressionRootToken.span.length) -> print }
                                                     } else { "%v$(ir![entryExpressionRootBinding!].operand0)" -> print }
                                                 }
                                             } else { "%v$(entryExpressionIndex!)_expression$(entryExpressionRootSearch!)" -> print }
@@ -1278,8 +1355,59 @@ usesIntInterpolation sources: [Text; ~] -> Bool {
             token.span.start + UIntSize(1) => byteIndex!
             token.span.start + token.span.length - UIntSize(1) => byteEnd
             byteIndex! < byteEnd -> while {
-                (sources[argument.sourceModule] -> byte(byteIndex!)) == UInt8(36) -> if { true => usesInterpolation! }
+                ((sources[argument.sourceModule] -> byte(byteIndex!)) == UInt8(36) and byteIndex! + UIntSize(1) < byteEnd) -> if {
+                    sources[argument.sourceModule] -> byte(byteIndex! + UIntSize(1)) => interpolationNextByte
+                    (interpolationNextByte != UInt8(40) and ((interpolationNextByte >= UInt8(65) and interpolationNextByte <= UInt8(90)) or (interpolationNextByte >= UInt8(97) and interpolationNextByte <= UInt8(122)) or interpolationNextByte == UInt8(95) or interpolationNextByte >= UInt8(128))) -> if { true => usesInterpolation! }
+                }
                 byteIndex! + UIntSize(1) => byteIndex!
+            }
+            sources[argument.sourceModule] -> interpolation.lower => interpolationNodes!
+            0 => interpolationIndex!
+            interpolationIndex! < (interpolationNodes! -> len) -> while {
+                interpolationNodes![interpolationIndex!] => interpolationNode
+                (interpolationNode.sourceToken == argument.payloadToken and interpolationNode.parent < 0) -> if {
+                    interpolationNode.typeSymbol == 2 -> if { true => usesInterpolation! }
+                    interpolationNode.kind == 1 -> if {
+                        0 => valueSearch!
+                        valueSearch! < (ir! -> len) -> while {
+                            ir![valueSearch!] => valueNode
+                            ((valueNode.kind == 10 or valueNode.kind == 17) and valueNode.sourceModule == argument.sourceModule and valueNode.symbol == interpolationNode.symbol and valueNode.typeSymbol == 2) -> if { true => usesInterpolation! }
+                            valueSearch! + 1 => valueSearch!
+                        }
+                    }
+                }
+                interpolationIndex! + 1 => interpolationIndex!
+            }
+        }
+        nodeIndex! + 1 => nodeIndex!
+    }
+    usesInterpolation!
+}
+
+usesBoolInterpolation sources: [Text; ~] -> Bool {
+    sources -> typedIr.lower => ir!
+    false => usesInterpolation!
+    0 => nodeIndex!
+    nodeIndex! < (ir! -> len) -> while {
+        ir![nodeIndex!] => node
+        (node.kind == 6 and (node.symbol == -101 or node.symbol == -102) and node.operand0 >= 0 and ir![node.operand0].kind == 2) -> if {
+            ir![node.operand0] => argument
+            sources[argument.sourceModule] -> interpolation.lower => interpolationNodes!
+            0 => interpolationIndex!
+            interpolationIndex! < (interpolationNodes! -> len) -> while {
+                interpolationNodes![interpolationIndex!] => interpolationNode
+                (interpolationNode.sourceToken == argument.payloadToken and interpolationNode.parent < 0) -> if {
+                    interpolationNode.typeSymbol == 23 -> if { true => usesInterpolation! }
+                    interpolationNode.kind == 1 -> if {
+                        0 => valueSearch!
+                        valueSearch! < (ir! -> len) -> while {
+                            ir![valueSearch!] => valueNode
+                            ((valueNode.kind == 10 or valueNode.kind == 17) and valueNode.sourceModule == argument.sourceModule and valueNode.symbol == interpolationNode.symbol and valueNode.typeSymbol == 23) -> if { true => usesInterpolation! }
+                            valueSearch! + 1 => valueSearch!
+                        }
+                    }
+                }
+                interpolationIndex! + 1 => interpolationIndex!
             }
         }
         nodeIndex! + 1 => nodeIndex!
@@ -1321,6 +1449,20 @@ emitIntTextRuntime: -> Unit {
       %start_address = ptrtoint ptr %start to i64
       %length = sub i64 %end_address, %start_address
       call void @sl_runtime_print(ptr %start, i64 %length, i1 %newline)
+      ret void
+    }
+    """ -> println
+}
+
+emitBoolTextRuntime: -> Unit {
+    """
+    @sl_runtime_bool_true = private constant [4 x i8] c"true"
+    @sl_runtime_bool_false = private constant [5 x i8] c"false"
+    define internal void @sl_runtime_print_i1(i1 %value, i1 %newline) {
+    entry:
+      %data = select i1 %value, ptr @sl_runtime_bool_true, ptr @sl_runtime_bool_false
+      %length = select i1 %value, i64 4, i64 5
+      call void @sl_runtime_print(ptr %data, i64 %length, i1 %newline)
       ret void
     }
     """ -> println
@@ -1397,6 +1539,7 @@ public emit sources: move [Text; ~] -> Unit {
     target.tripleLine -> println
     sources -> usesTextRuntime -> if { emitWindowsTextRuntime }
     sources -> usesIntInterpolation -> if { emitIntTextRuntime }
+    sources -> usesBoolInterpolation -> if { emitBoolTextRuntime }
     emitCore(sources)
 }
 
@@ -1406,6 +1549,7 @@ public emitLinux sources: move [Text; ~] -> Unit {
     target.tripleLine -> println
     sources -> usesTextRuntime -> if { emitLinuxTextRuntime }
     sources -> usesIntInterpolation -> if { emitIntTextRuntime }
+    sources -> usesBoolInterpolation -> if { emitBoolTextRuntime }
     emitCore(sources)
 }
 
@@ -1415,5 +1559,6 @@ public emitWasm sources: move [Text; ~] -> Unit {
     target.tripleLine -> println
     sources -> usesTextRuntime -> if { emitWasmTextRuntime }
     sources -> usesIntInterpolation -> if { emitIntTextRuntime }
+    sources -> usesBoolInterpolation -> if { emitBoolTextRuntime }
     emitCore(sources)
 }

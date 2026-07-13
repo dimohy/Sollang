@@ -1163,6 +1163,15 @@ backslash sequences remain literal for backward compatibility:
 "first\nsecond"
 ```
 
+Interpolation is statically typed. Builtin values use target-neutral writers
+selected from the expression result type; they do not first allocate a
+temporary Text. `Int` uses decimal output and `Bool` uses the canonical
+`true`/`false` spellings. The intended user-defined extension is a statically
+dispatched `Display` trait that writes into an interpolation sink. There is no
+implicit reflection, debug formatting fallback, or automatic heap promotion.
+Formatting adapters/options may be added explicitly without changing the
+default `$name` and `$(expression)` syntax.
+
 Triple-quoted raw literals preserve quotes, backslashes, and `$` markers as
 ordinary text. A multiline raw literal removes its opening newline, closing
 newline, and the indentation shared with its closing delimiter:

@@ -8,7 +8,8 @@ import syntax.generated.smalllang as grammar
 # Relocatable interpolation IR. Segment offsets are relative to the first byte
 # inside the source string token. Expression-node indexes are global offsets in
 # one owned table, matching the rest of the self-hosted compiler IR.
-# Kinds: 0 integer literal, 1 lexical name, 2 unary, 3 binary.
+# Kinds: 0 integer literal, 1 lexical name, 2 unary, 3 binary,
+# 4 boolean literal. Builtin result ids match the nominal table.
 public struct InterpolationNode {
     kind: Int
     segment: Int
@@ -25,6 +26,7 @@ public struct InterpolationNode {
     literalLength: UIntSize
     expressionStart: UIntSize
     expressionLength: UIntSize
+    typeSymbol: Int
 }
 
 public lower source: Text -> [InterpolationNode; ~] {
@@ -82,7 +84,17 @@ public lower source: Text -> [InterpolationNode; ~] {
                             }
                             -1 => loweredKind!
                             fragmentNode.kind == 14 -> if { 0 => loweredKind! }
-                            fragmentNode.kind == 15 -> if { 1 => loweredKind! }
+                            false => fragmentBooleanLiteral!
+                            fragmentNode.kind == 15 -> if {
+                                fragmentTokens![fragmentNode.payloadToken] => fragmentNameToken
+                                fragmentNameToken.span.length == UIntSize(4) -> if {
+                                    ((fragment -> byte(fragmentNameToken.span.start)) == UInt8(116) and (fragment -> byte(fragmentNameToken.span.start + UIntSize(1))) == UInt8(114) and (fragment -> byte(fragmentNameToken.span.start + UIntSize(2))) == UInt8(117) and (fragment -> byte(fragmentNameToken.span.start + UIntSize(3))) == UInt8(101)) -> if { true => fragmentBooleanLiteral! }
+                                }
+                                fragmentNameToken.span.length == UIntSize(5) -> if {
+                                    ((fragment -> byte(fragmentNameToken.span.start)) == UInt8(102) and (fragment -> byte(fragmentNameToken.span.start + UIntSize(1))) == UInt8(97) and (fragment -> byte(fragmentNameToken.span.start + UIntSize(2))) == UInt8(108) and (fragment -> byte(fragmentNameToken.span.start + UIntSize(3))) == UInt8(115) and (fragment -> byte(fragmentNameToken.span.start + UIntSize(4))) == UInt8(101)) -> if { true => fragmentBooleanLiteral! }
+                                }
+                                fragmentBooleanLiteral! -> if { 4 => loweredKind! } else { 1 => loweredKind! }
+                            }
                             fragmentNode.kind == 22 -> if { 2 => loweredKind! }
                             (fragmentChildCount! >= 2 and ((fragmentNode.kind >= 18 and fragmentNode.kind <= 21) or fragmentNode.kind == 24 or fragmentNode.kind == 25)) -> if { 3 => loweredKind! }
                             loweredKind! >= 0 -> if {
@@ -128,6 +140,15 @@ public lower source: Text -> [InterpolationNode; ~] {
                                         candidateSymbol! + 1 => candidateSymbol!
                                     }
                                 }
+                                -1 => loweredTypeSymbol!
+                                loweredKind! == 0 -> if { 2 => loweredTypeSymbol! }
+                                loweredKind! == 4 -> if { 23 => loweredTypeSymbol! }
+                                loweredKind! == 2 -> if {
+                                    fragmentNode.operatorKind == -26 -> if { 23 => loweredTypeSymbol! } else { 2 => loweredTypeSymbol! }
+                                }
+                                loweredKind! == 3 -> if {
+                                    (fragmentNode.operatorKind == grammar.tokenIdEqualEqual or fragmentNode.operatorKind == grammar.tokenIdBangEqual or fragmentNode.operatorKind == grammar.tokenIdLess or fragmentNode.operatorKind == grammar.tokenIdLessEqual or fragmentNode.operatorKind == grammar.tokenIdGreater or fragmentNode.operatorKind == grammar.tokenIdGreaterEqual or fragmentNode.operatorKind == -24 or fragmentNode.operatorKind == -25) -> if { 23 => loweredTypeSymbol! } else { 2 => loweredTypeSymbol! }
+                                }
                                 InterpolationNode {
                                     kind: loweredKind!
                                     segment: segmentIndex!
@@ -144,6 +165,7 @@ public lower source: Text -> [InterpolationNode; ~] {
                                     literalLength: cursor! - literalStart!
                                     expressionStart: fragmentStart - contentStart
                                     expressionLength: fragmentEnd! - fragmentStart
+                                    typeSymbol: loweredTypeSymbol!
                                 } => lowered
                                 nodes! -> len => loweredIndex
                                 nodes! -> push(lowered)
