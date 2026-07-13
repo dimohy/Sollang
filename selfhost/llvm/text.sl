@@ -97,6 +97,7 @@ public emit sources: [Text; ~] -> Unit {
     usesDynamicArray! -> if {
         "%sl.array.i32 = type { ptr, i64, i64 }" -> println
         "declare ptr @malloc(i64)" -> println
+        "declare void @free(ptr)" -> println
     }
     false => usesText!
     0 => textTypeSearch!
@@ -368,6 +369,24 @@ public emit sources: [Text; ~] -> Unit {
             }
             ir![function.operand0] => returnNode
             ir![returnNode.operand0] => returnOperand
+            expressionStart => dropIndex!
+            dropIndex! < functionEnd! -> while {
+                ir![dropIndex!] => dropCandidate
+                (dropCandidate.kind == 14 and dropCandidate.typeOrigin == 13 and dropCandidate.parent == function.operand0 and dropIndex! != returnNode.operand0) -> if {
+                    "  %drop$(dropIndex!) = extractvalue %sl.array.i32 %v$(dropIndex!), 0" -> println
+                    "  call void @free(ptr %drop$(dropIndex!))" -> println
+                }
+                dropIndex! + 1 => dropIndex!
+            }
+            function.operand1 >= 0 -> if {
+                ir![function.operand1] => ownedParameter
+                (ownedParameter.typeOrigin == 13 and ownedParameter.flags % 2 == 1) -> if {
+                    not (returnOperand.kind == 5 and returnOperand.symbol == ownedParameter.symbol) -> if {
+                        "  %drop_arg = extractvalue %sl.array.i32 %arg, 0" -> println
+                        "  call void @free(ptr %drop_arg)" -> println
+                    }
+                }
+            }
             "  ret " -> print
             function -> writeType
             " " -> print

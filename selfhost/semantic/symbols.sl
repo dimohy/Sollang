@@ -119,7 +119,7 @@ public collect source: Text -> [Symbol; ~] {
         symbols![declarationSymbolIndex!] => declarationSymbol
         nodes![declarationSymbol.astNode] => declarationAst
         declarationAst.secondaryToken >= 0 -> if {
-            (declarationSymbol.kind == 7 or declarationSymbol.kind == 29 or declarationSymbol.kind == 31) -> if {
+            ((declarationSymbol.kind == 7 and declarationSymbol.secondaryTypeNode >= 0) or declarationSymbol.kind == 29 or declarationSymbol.kind == 31) -> if {
                 -1 => parameterTypeNode!
                 declarationSymbol.kind == 7 -> if {
                     declarationSymbol.typeNode => parameterTypeNode!

@@ -427,6 +427,13 @@ aggregate, and readonly indexing emits extract/GEP/load. The executable backend
 test passes assembly, link, and execution. Deterministic free/drop insertion,
 borrow lifetime enforcement in typed IR, and generic element layouts remain.
 
+Function-exit ownership lowering now inserts deterministic `free` calls for
+unreturned dynamic-array temporaries and unused move parameters. Directly
+returned literals and move parameters are recognized as transfers and are not
+freed, preventing the first class of double-free errors. Snapshots assert both
+the positive drop cases and the absence of drops on transfer. Conditional
+paths, early exits, nested owned aggregates, and general liveness remain.
+
 Imported call signatures now participate in expression inference and checking:
 the target module's return type becomes the caller's call-expression type, its
 input type validates the caller argument, and non-public imported calls produce

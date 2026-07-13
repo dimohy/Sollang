@@ -2,7 +2,9 @@ namespace smalllang.compiler.ir.typed
 
 import smalllang.compiler.ast as ast
 import smalllang.compiler.semantic.calls as calls
+import smalllang.compiler.semantic.composite_types as compositeTypes
 import smalllang.compiler.semantic.expression_types as expressionTypes
+import smalllang.compiler.semantic.nominal_types as nominalTypes
 import smalllang.compiler.semantic.resolve as resolution
 import smalllang.compiler.semantic.symbols as symbols
 
@@ -32,6 +34,8 @@ public struct TypedIrNode {
 
 public lower sources: [Text; ~] -> [TypedIrNode; ~] {
     sources -> expressionTypes.infer => inferred!
+    sources -> nominalTypes.resolve => nominal!
+    sources -> compositeTypes.resolve => composite!
     sources -> calls.resolveModules => resolvedCalls!
     [TypedIrNode; ~] => results!
     0 => sourceIndex!
@@ -91,10 +95,44 @@ public lower sources: [Text; ~] -> [TypedIrNode; ~] {
                             parameterNameSearch! + 1 => parameterNameSearch!
                         }
                     }
+                    -1 => parameterOrigin!
+                    -1 => parameterModule!
+                    -1 => parameterTypeSymbol!
+                    parameterTypeIndex! >= 0 -> if {
+                        inferred![parameterTypeIndex!] => inferredParameterType
+                        inferredParameterType.origin => parameterOrigin!
+                        inferredParameterType.targetModule => parameterModule!
+                        inferredParameterType.targetSymbol => parameterTypeSymbol!
+                    }
+                    (parameterSymbol! >= 0 and parameterOrigin! < 0) -> if {
+                        table![parameterSymbol!] => declaredParameter
+                        0 => declaredNominalSearch!
+                        declaredNominalSearch! < (nominal! -> len) -> while {
+                            nominal![declaredNominalSearch!] => declaredNominal
+                            (declaredNominal.sourceModule == sourceIndex! and declaredNominal.typeAst == declaredParameter.typeNode) -> if {
+                                declaredNominal.origin => parameterOrigin!
+                                declaredNominal.targetModule => parameterModule!
+                                declaredNominal.targetSymbol => parameterTypeSymbol!
+                            }
+                            declaredNominalSearch! + 1 => declaredNominalSearch!
+                        }
+                        parameterOrigin! < 0 -> if {
+                            0 => declaredCompositeSearch!
+                            declaredCompositeSearch! < (composite! -> len) -> while {
+                                composite![declaredCompositeSearch!] => declaredComposite
+                                (declaredComposite.sourceModule == sourceIndex! and declaredComposite.typeAst == declaredParameter.typeNode) -> if {
+                                    10 + declaredComposite.kind => parameterOrigin!
+                                    declaredComposite.elementModule => parameterModule!
+                                    declaredComposite.elementSymbol => parameterTypeSymbol!
+                                }
+                                declaredCompositeSearch! + 1 => declaredCompositeSearch!
+                            }
+                        }
+                    }
                     results! -> len => functionIr!
                     functionIr! + 1 => returnIr
                     -1 => parameterIr!
-                    (parameterSymbol! >= 0 and parameterTypeIndex! >= 0) -> if { returnIr + 1 => parameterIr! }
+                    (parameterSymbol! >= 0 and parameterOrigin! >= 0) -> if { returnIr + 1 => parameterIr! }
                     results! -> push(TypedIrNode {
                         kind: 0
                         parent: -1
@@ -130,7 +168,6 @@ public lower sources: [Text; ~] -> [TypedIrNode; ~] {
                         flags: 0
                     })
                     parameterIr! >= 0 -> if {
-                        inferred![parameterTypeIndex!] => parameterType
                         table![parameterSymbol!] => parameter
                         results! -> push(TypedIrNode {
                             kind: 10
@@ -139,9 +176,9 @@ public lower sources: [Text; ~] -> [TypedIrNode; ~] {
                             astNode: function.astNode
                             symbol: parameterSymbol!
                             targetModule: sourceIndex!
-                            typeOrigin: parameterType.origin
-                            typeModule: parameterType.targetModule
-                            typeSymbol: parameterType.targetSymbol
+                            typeOrigin: parameterOrigin!
+                            typeModule: parameterModule!
+                            typeSymbol: parameterTypeSymbol!
                             payloadToken: parameter.nameToken
                             opcode: -1
                             operand0: -1

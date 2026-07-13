@@ -333,6 +333,14 @@ move parameters and returns. Readonly indexing extracts the data pointer,
 computes an element address, and loads `i32`. The snapshot assembles, links, and
 runs; free/drop insertion and non-Int element layouts remain.
 
+The first deterministic ownership exit pass now distinguishes transfer from
+drop for dynamic arrays. An owned literal that is not the function result is
+freed exactly once before return; an unused `move` array parameter is also
+freed, while a returned literal or returned move parameter transfers ownership
+without a free. Parameter types are recovered from declarations even when the
+parameter is never referenced. Branch/path-sensitive exits and nested owned
+aggregates remain.
+
 User-function ABI lowering now threads a hidden runtime I/O context containing
 stdin/stdout handles, read/write slots, and the cumulative ok state. This fixes
 function-local `print`/`println` and supplies the context that later file-backed
