@@ -37,6 +37,11 @@ internal sealed partial class LlvmEmitter
             }
 
             _currentFunction = function;
+            if (function.IsAsync)
+            {
+                EmitAsyncIntFunction(function);
+                continue;
+            }
             if (IsNumericType(function.ReturnType))
             {
                 EmitNumericFunction(function);

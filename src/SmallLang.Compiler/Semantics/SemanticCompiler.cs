@@ -19,6 +19,7 @@ internal sealed class SemanticCompiler
     private string? _currentMoveInputName;
     private IReadOnlyDictionary<string, BoundType>? _currentFunctionOuterBindings;
     private bool _currentFunctionAllowsEarlyReturn;
+    private bool _currentFunctionIsAsync;
     private readonly int _pointerBitWidth;
     private int _loopDepth;
 
@@ -343,6 +344,18 @@ internal sealed class SemanticCompiler
             throw Error(function.Line, function.Column, "associated type bindings require a trait impl");
         }
         var inputOwnership = BindFunctionInputOwnership(function, inputType);
+        if (function.IsAsync
+            && (returnType != BoundType.Int
+                || inputType is not (null or BoundType.Int)
+                || isLocal
+                || function.IsStandardLibrary
+                || function.IsIntrinsic))
+        {
+            throw Error(
+                function.Line,
+                function.Column,
+                "the first async runtime slice supports only non-local Int -> async Int or -> async Int functions");
+        }
         var kind = BindFunctionKind(function, inputType, returnType, isLocal);
         var localFunctions = BindLocalFunctions(function);
 
@@ -372,7 +385,8 @@ internal sealed class SemanticCompiler
             IsValueGeneric: function.IsValueGeneric,
             HasValueGenericFixedArrayInput: function.HasValueGenericFixedArrayInput,
             ModuleName: function.ModuleName,
-            IsPublic: function.IsPublic || function.IsStandardLibrary);
+            IsPublic: function.IsPublic || function.IsStandardLibrary,
+            IsAsync: function.IsAsync);
     }
 
     private BoundFunctionInputOwnership BindFunctionInputOwnership(
@@ -541,6 +555,7 @@ internal sealed class SemanticCompiler
             : null;
         _currentFunctionOuterBindings = returnOuterBindings;
         _currentFunctionAllowsEarlyReturn = !function.IsLocal;
+        _currentFunctionIsAsync = function.IsAsync;
 
         var mutableBindings = new HashSet<string>(StringComparer.Ordinal);
         if (FunctionMutablyBorrowsInput(function))
@@ -598,6 +613,7 @@ internal sealed class SemanticCompiler
         IReadOnlyDictionary<string, BoundFunction> parentFunctions,
         IReadOnlyDictionary<string, BoundType> capturedBindings)
     {
+        _currentFunctionIsAsync = false;
         if (function.InputType is null)
         {
             throw Error(function.Line, function.Column, $"block function '{function.Name}' requires an input");
@@ -923,6 +939,7 @@ internal sealed class SemanticCompiler
         _currentMoveInputName = null;
         _currentFunctionOuterBindings = null;
         _currentFunctionAllowsEarlyReturn = false;
+        _currentFunctionIsAsync = true;
         var bindings = new Dictionary<string, BoundType>(StringComparer.Ordinal);
         var mutableBindings = new HashSet<string>(StringComparer.Ordinal);
         BindStatements(_program.Statements, functions, bindings, mutableBindings);
@@ -1078,6 +1095,13 @@ internal sealed class SemanticCompiler
                     ValidateOwnedParameterConsumptionExpression(guardLoopControl.Condition, functions);
                     break;
                 case ReturnStatement returnStatement:
+                    if (_currentFunctionIsAsync)
+                    {
+                        throw Error(
+                            returnStatement.Line,
+                            returnStatement.Column,
+                            "explicit return in an async function is not supported in the first runtime slice");
+                    }
                     if (_currentFunctionReturnType is null)
                     {
                         throw Error(
@@ -3174,6 +3198,7 @@ internal sealed class SemanticCompiler
                 || TryResolveInstanceMethod(currentType, path, functions, out function))
             {
                 EnsureFunctionVisible(function, target.Line, target.Column);
+                EnsureAsyncRuntimeCallable(function, target.Line, target.Column, path);
                 if (target.Arguments.Count != 0)
                 {
                     throw Error(
@@ -3305,7 +3330,7 @@ internal sealed class SemanticCompiler
                             EnsureMutableBorrowFlowSource(expression.Source, path, mutableBindings);
                         }
 
-                        currentType = function.ReturnType;
+                        currentType = AsyncCallType(function);
                         continue;
                     default:
                         throw Error(expression.Line, expression.Column, $"unsupported function kind '{function.Kind}'");
@@ -3333,6 +3358,21 @@ internal sealed class SemanticCompiler
         result = new FlowResult(BoundType.Unit, FlowEffect.None);
         switch (path)
         {
+            case "await" when currentType == BoundType.TaskInt:
+                if (!_currentFunctionIsAsync)
+                {
+                    throw Error(target.Line, target.Column, "await is only valid in async functions or main");
+                }
+                if (target.Arguments.Count != 0)
+                {
+                    throw Error(target.Line, target.Column, "await does not accept arguments");
+                }
+                if (expression.Source is not NameExpression)
+                {
+                    throw Error(target.Line, target.Column, "await consumes a named Task owner");
+                }
+                result = new FlowResult(BoundType.Int, FlowEffect.None);
+                return true;
             case "flush" when currentType == BoundType.MutableMappedBytes:
                 if (!isLast || target.Arguments.Count != 0)
                 {
@@ -3692,6 +3732,13 @@ internal sealed class SemanticCompiler
                 result = new FlowResult(currentType, FlowEffect.None);
                 return true;
             default:
+                if (path == "await")
+                {
+                    throw Error(
+                        target.Line,
+                        target.Column,
+                        $"await expects Task<Int> but received {FormatType(currentType)}");
+                }
                 return false;
         }
     }
@@ -3752,6 +3799,7 @@ internal sealed class SemanticCompiler
         }
 
         EnsureFunctionVisible(function, expression.Line, expression.Column);
+        EnsureAsyncRuntimeCallable(function, expression.Line, expression.Column, path);
 
         if (function.InputType is null
             && expression.Arguments.Count == 0
@@ -4485,7 +4533,7 @@ internal sealed class SemanticCompiler
                 throw Error(expression.Line, expression.Column, $"function '{path}' does not accept arguments");
             }
 
-            return function.ReturnType;
+            return AsyncCallType(function);
         }
 
         if (expression.Arguments.Count != 1)
@@ -4523,8 +4571,11 @@ internal sealed class SemanticCompiler
             EnsureReadonlyBorrowCallArgument(expression.Arguments[0], path);
         }
 
-        return function.ReturnType;
+        return AsyncCallType(function);
     }
+
+    private static BoundType AsyncCallType(BoundFunction function) =>
+        function.IsAsync ? BoundType.TaskInt : function.ReturnType;
 
     private void EnsureDisplayable(BoundType type, int line, int column, string path)
     {
@@ -4608,6 +4659,7 @@ internal sealed class SemanticCompiler
         if (TryGetFunction(expression.Name, functions, out var function))
         {
             EnsureFunctionVisible(function, expression.Line, expression.Column);
+            EnsureAsyncRuntimeCallable(function, expression.Line, expression.Column, expression.Name);
             if (function.InputType is not null)
             {
                 throw Error(
@@ -4620,7 +4672,7 @@ internal sealed class SemanticCompiler
                 throw Error(expression.Line, expression.Column,
                     $"{expression.Name} is only valid in main for the current runtime slice");
             }
-            return function.ReturnType;
+            return AsyncCallType(function);
         }
 
         throw Error(expression.Line, expression.Column, $"unknown binding '{expression.Name}'");
@@ -4632,6 +4684,24 @@ internal sealed class SemanticCompiler
         {
             throw Error(line, column, $"binding name '{name}' is reserved");
         }
+    }
+
+    private void EnsureAsyncRuntimeCallable(BoundFunction function, int line, int column, string path)
+    {
+        if (!_currentFunctionIsAsync || _currentFunctionReturnType is null)
+        {
+            return;
+        }
+
+        if (function.Kind == BoundFunctionKind.User && function.IsAsync)
+        {
+            return;
+        }
+
+        throw Error(
+            line,
+            column,
+            $"async function '{path}' is outside the CPU-pure first runtime slice");
     }
 
     private bool IsReservedName(string name)
@@ -5265,6 +5335,7 @@ internal sealed class SemanticCompiler
             BoundType.DynamicIntArray => "[Int; ~]",
             BoundType.IntDictionaryView => "{Int: Int}",
             BoundType.IntDictionary => "{Int: Int}",
+            BoundType.TaskInt => "Task<Int>",
             BoundType.GenericParameter => "generic parameter",
             BoundType.SecondaryGenericParameter => "secondary generic parameter",
             _ => type.ToString()
@@ -5375,7 +5446,7 @@ internal sealed class SemanticCompiler
         return functionName is not null
             && _boundFunctions.TryGetValue(functionName, out var function)
             && function.InputType is null
-            && IsOwnedHeapType(function.ReturnType);
+            && (IsOwnedHeapType(function.ReturnType) || function.IsAsync);
     }
 
     private bool IsAssociatedOwnedCreationExpression(Expression expression)
@@ -5418,7 +5489,7 @@ internal sealed class SemanticCompiler
             return false;
         }
 
-        return lastTarget.Path[0] is "append" or "updated";
+        return lastTarget.Path[0] is "append" or "updated" or "await";
     }
 
     private string? GetMoveConsumingContainerSourceName(Expression expression)

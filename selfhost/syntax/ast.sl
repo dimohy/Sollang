@@ -38,6 +38,7 @@ struct LowerRequest {
 # 41 index access, 42 if flow target, 43 control-flow region,
 # 44 while flow target, 45 loop control statement,
 # 46 guarded loop control statement, 47 explicit return statement.
+# Function flags: 1 move input, 2 mutable input, 4 public, 8 async.
 # Keyword operator codes use the same
 # -(keywordIndex + 1) representation as syntax diagnostics.
 lowerFrom request: LowerRequest -> [AstNode; ~] {
@@ -333,6 +334,23 @@ lowerFrom request: LowerRequest -> [AstNode; ~] {
                     signatureToken! + 1 => signatureToken!
                 } else {
                     tokens![signatureToken!].kind == grammar.tokenIdArrow -> if {
+                        signatureToken! + 1 => asyncToken!
+                        (asyncToken! < signatureEnd and (tokens![asyncToken!].kind == grammar.triviaIdWhitespace or tokens![asyncToken!].kind == grammar.triviaIdComment)) -> while {
+                            asyncToken! + 1 => asyncToken!
+                        }
+                        asyncToken! < signatureEnd -> if {
+                            tokens![asyncToken!] => asyncName
+                            (asyncName.kind == grammar.tokenIdIdentifier and asyncName.span.length == UIntSize(5)) -> if {
+                                source -> byte(asyncName.span.start) => asyncByte0
+                                source -> byte(asyncName.span.start + UIntSize(1)) => asyncByte1
+                                source -> byte(asyncName.span.start + UIntSize(2)) => asyncByte2
+                                source -> byte(asyncName.span.start + UIntSize(3)) => asyncByte3
+                                source -> byte(asyncName.span.start + UIntSize(4)) => asyncByte4
+                                (asyncByte0 == UInt8(97) and asyncByte1 == UInt8(115) and asyncByte2 == UInt8(121) and asyncByte3 == UInt8(110) and asyncByte4 == UInt8(99)) -> if {
+                                    declaration!.flags + 8 => declaration!.flags
+                                }
+                            }
+                        }
                         signatureEnd => signatureToken!
                     } else {
                         tokens![signatureToken!].kind == grammar.tokenIdIdentifier -> if {

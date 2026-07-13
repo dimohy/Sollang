@@ -77,6 +77,8 @@ internal sealed class WindowsLinker(LlvmToolchain toolchain)
             GetProcessHeap
             HeapAlloc
             HeapFree
+            CreateThread
+            WaitForSingleObject
             """, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
 
         Run(toolchain.LlvmLib,

@@ -77,7 +77,8 @@ internal sealed record FunctionDeclaration(
     bool IsValueGeneric = false,
     bool HasValueGenericFixedArrayInput = false,
     string ModuleName = "",
-    bool IsPublic = false);
+    bool IsPublic = false,
+    bool IsAsync = false);
 
 internal enum FunctionInputOwnership
 {

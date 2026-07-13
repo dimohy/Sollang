@@ -533,6 +533,37 @@ When the input name is supplied after the function name, the body receives the
 value through that binding. This mirrors `start..end -> each { ... }` and
 `start..end -> each item { ... }`.
 
+## Structured Async Functions
+
+`async` is a function effect written immediately before the result type. Calling
+an async function starts a child task and returns an affine `Task<T>` owner;
+flowing that owner to `await` consumes it exactly once and produces `T`:
+
+```smalllang
+square value: Int -> async Int {
+    value * value
+}
+
+main {
+    20 -> square => first
+    22 -> square => second
+    first -> await => a
+    second -> await => b
+}
+```
+
+Tasks are structured resources, not detached handles. Every task must finish
+before its lexical scope exits. An explicit `await` chooses where its result is
+needed; otherwise scope cleanup joins the task and discards the result. A task
+cannot be awaited twice or used after `await`. `main` is the implicit root async
+scope, while other functions must declare `async` before using `await`.
+
+The first executable runtime slice supports CPU-pure `Int -> async Int` and
+`-> async Int` on Windows x64. It uses native child threads and owned task
+contexts; runtime/standard-library effects are rejected until their concurrent
+contracts are explicit. General `Task<T>`, Linux lowering, cooperative cancellation, task
+groups, and a stackless I/O scheduler remain subsequent slices.
+
 ## Local Functions
 
 Functions may declare local helper functions before their final body expression:

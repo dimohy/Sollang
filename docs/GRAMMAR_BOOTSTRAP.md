@@ -130,7 +130,7 @@ formatter and language server, avoiding a second editor-only grammar.
    extracts nominal type names, struct fields, enum variants, trait members,
    associated types, methods, and generic clauses directly from header tokens.
    Function and method nodes additionally carry a secondary parameter/`self`
-   token plus ownership flags (`1` move, `2` mutable borrow).
+   token plus flags (`1` move, `2` mutable borrow, `4` public, `8` async).
 6. Reimplement `grammar build` itself in SL and require byte-identical output.
 7. Remove the C# source generators only after the SL compiler reproduces all
    parser behavior and diagnostics.

@@ -13,6 +13,7 @@ internal sealed partial class LlvmEmitter
     private readonly bool _usesProcessArguments;
     private readonly bool _usesProcessEnvironment;
     private readonly bool _usesChildProcesses;
+    private readonly bool _usesAsync;
     private bool UsesProcessRuntime => _usesProcessArguments || _usesProcessEnvironment || _usesChildProcesses;
     private readonly List<string> _globals = [];
     private readonly List<string> _functions = [];
@@ -50,6 +51,7 @@ internal sealed partial class LlvmEmitter
             || program.Functions.Values.Where(function => !function.IsStandardLibrary).Any(function =>
                 (function.Body is not null && UsesChildProcess(function.Body))
                 || function.BlockBody.Any(UsesChildProcess));
+        _usesAsync = program.Functions.Values.Any(function => function.IsAsync);
     }
 
     private bool UsesChildProcess(Statement statement) => statement switch
@@ -266,6 +268,10 @@ internal sealed partial class LlvmEmitter
         {
             throw new SmallLangException("child processes are unavailable on the current target");
         }
+        if (_usesAsync && _platform is not WindowsLlvmRuntimePlatform)
+        {
+            throw new SmallLangException("async functions are currently available only for the Windows x64 runtime slice");
+        }
         var header = $$"""
             target triple = "{{_platform.TargetTriple}}"
 
@@ -280,6 +286,8 @@ internal sealed partial class LlvmEmitter
             %smalllang.mapped_bytes = type { ptr, i64, ptr, i64, i1 }
             %smalllang.environment_result = type { ptr, i64, i1, i1 }
             %smalllang.process_result = type { i32, i32 }
+            %smalllang.task.i32 = type { ptr, ptr }
+            %smalllang.async_context.i32 = type { ptr, ptr, ptr, ptr, ptr, i32, i32 }
 
             """;
         header += EmitStructTypeDefinitions();
@@ -292,6 +300,11 @@ internal sealed partial class LlvmEmitter
 
         EmitPlatformFunctionBlock(_platform.EmitExternalDeclarations);
         EmitPlatformFunctionBlock(_platform.EmitMemoryDeclarations);
+        if (_usesAsync)
+        {
+            EmitFunctionLine("declare dllimport ptr @CreateThread(ptr, i64, ptr, ptr, i32, ptr)");
+            EmitFunctionLine("declare dllimport i32 @WaitForSingleObject(ptr, i32)");
+        }
         EmitFunctionLine("declare void @llvm.trap()");
         EmitFunctionLine("declare void @llvm.memset.p0.i64(ptr nocapture writeonly, i8, i64, i1 immarg)");
         EmitFunctionLine("declare void @llvm.memcpy.p0.p0.i64(ptr nocapture writeonly, ptr nocapture readonly, i64, i1 immarg)");

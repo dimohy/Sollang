@@ -670,6 +670,12 @@ internal static class ParserEmitter
         builder.AppendLine("        }");
         builder.AppendLine();
         builder.AppendLine("        Expect(TokenKind.Arrow);");
+        builder.AppendLine("        var isAsync = false;");
+        builder.AppendLine("        if (CheckIdentifier(\"async\"))");
+        builder.AppendLine("        {");
+        builder.AppendLine("            ExpectIdentifier(\"async\");");
+        builder.AppendLine("            isAsync = true;");
+        builder.AppendLine("        }");
         builder.AppendLine("        var returnType = ParseTypeAnnotation();");
         builder.AppendLine("        if (methodOwner is not null && returnType == \"Self\")");
         builder.AppendLine("        {");
@@ -724,7 +730,7 @@ internal static class ParserEmitter
         builder.AppendLine("        }");
         builder.AppendLine();
         builder.AppendLine("        _activeGenericParameterNames.Clear();");
-        builder.AppendLine("        return new FunctionDeclaration(functionName, inputName?.Text, inputType, inputOwnership, returnType, blockInputName?.Text, blockInputType?.Text, localFunctions, body, blockBody, name.Line, name.Column, isIntrinsic, isStandardLibrary, traitName, genericParameterName, secondaryGenericParameterName, genericTraitBound, genericAssociatedTypeName, genericAssociatedTypeConstraint, implAssociatedTypes, isValueGeneric, hasValueGenericFixedArrayInput, string.Join('.', _namespacePath), isPublic);");
+        builder.AppendLine("        return new FunctionDeclaration(functionName, inputName?.Text, inputType, inputOwnership, returnType, blockInputName?.Text, blockInputType?.Text, localFunctions, body, blockBody, name.Line, name.Column, isIntrinsic, isStandardLibrary, traitName, genericParameterName, secondaryGenericParameterName, genericTraitBound, genericAssociatedTypeName, genericAssociatedTypeConstraint, implAssociatedTypes, isValueGeneric, hasValueGenericFixedArrayInput, string.Join('.', _namespacePath), isPublic, isAsync);");
         builder.AppendLine("    }");
         builder.AppendLine();
         builder.AppendLine("    private FunctionInputSignature ParseOptionalSelfSignature(string ownerType, out Token? inputName)");

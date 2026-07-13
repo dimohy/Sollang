@@ -3125,4 +3125,33 @@ ASCII byte access, a Hangul slice, byte count, and the reusable span method.
 The bootstrap C# diagnostics have not yet migrated to this type, so the broader
 source-span gate remains partial.
 
+## D105 - Async Tasks Are Affine Structured Children
+
+Status: first executable slice implemented
+Date: 2026-07-13
+
+Async syntax follows the existing left-to-right function and value-flow forms:
+`Int -> async Int` declares the effect, an async call produces `Task<Int>`, and
+`task -> await` consumes that task to produce its value. Parentheses and a
+second statement-shaped `await task` form are intentionally unnecessary.
+
+Task lifetime follows Swift and Kotlin structured concurrency: a child cannot
+outlive its lexical owner. Scope cleanup therefore joins every unconsumed task
+instead of silently detaching it. Task ownership follows Mojo's consume-once
+coroutine direction: an explicit await removes the binding, so double-await and
+use-after-await fail during semantic analysis. The surface keeps C#'s readable
+`async`/`await` vocabulary while rejecting C#'s easy-to-ignore unobserved task
+pattern. Rust's cold futures were not selected for ordinary calls because SL
+uses a task-producing call to make parallel start order visible in straight-line
+flow code.
+
+The initial Windows x64 lowering supports only CPU-pure zero/one-`Int` input and
+`Int` result functions. Runtime and standard-library calls are rejected inside
+this first slice rather than racing shared output or I/O state. Each call allocates one owned context and starts a native
+thread; await or scope cleanup waits, closes the handle, and frees the context
+exactly once. The self-hosted AST records async in function flag bit 8. Later
+slices will generalize `Task<T>`, add Linux and stackless I/O lowering, then add
+cooperative cancellation and task-group combinators without weakening the
+structured lifetime rule.
+
 

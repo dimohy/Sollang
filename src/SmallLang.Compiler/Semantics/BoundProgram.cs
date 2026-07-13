@@ -41,7 +41,8 @@ internal sealed record BoundFunction(
     int? SpecializedValue = null,
     bool HasValueGenericFixedArrayInput = false,
     string ModuleName = "",
-    bool IsPublic = false);
+    bool IsPublic = false,
+    bool IsAsync = false);
 
 internal sealed record BoundTraitMethod(
     string Name,
@@ -120,6 +121,7 @@ internal enum TypeId
     DynamicIntArray,
     IntDictionaryView,
     IntDictionary,
+    TaskInt,
     GenericParameter = 512,
     SecondaryGenericParameter = 513,
     FirstUserDefined = 1024
@@ -378,7 +380,7 @@ internal sealed class TypeDefinitionTable
 
     private bool ContainsOwnedStorage(TypeId type, HashSet<TypeId> visiting)
     {
-        if (type is TypeId.DynamicIntArray or TypeId.IntDictionary or TypeId.Arena
+        if (type is TypeId.DynamicIntArray or TypeId.IntDictionary or TypeId.Arena or TypeId.TaskInt
             or TypeId.MappedBytes or TypeId.MutableMappedBytes
             || IsBox(type) || IsStaticArray(type) || IsDynamicArray(type) || IsDictionary(type))
         {
@@ -481,6 +483,7 @@ internal sealed class TypeDefinitionTable
             TypeId.Arguments => 8,
             TypeId.Arena => 24,
             TypeId.MappedBytes or TypeId.MutableMappedBytes => 40,
+            TypeId.TaskInt => 16,
             TypeId.GenericParameter or TypeId.SecondaryGenericParameter => 8,
             _ => throw new InvalidOperationException($"type {type} has no inline size")
         };

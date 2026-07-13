@@ -294,6 +294,9 @@ internal sealed partial class LlvmEmitter
 
         switch (value)
         {
+            case RuntimeTaskInt task:
+                EmitAwaitTask(task, discardResult: true);
+                break;
             case RuntimeStaticIntArray { Storage: RuntimeContainerStorage.Heap } array:
                 EmitCall(target: null, "void", "smalllang_free", $"ptr {array.PointerName}");
                 break;
@@ -397,7 +400,8 @@ internal sealed partial class LlvmEmitter
             or RuntimeIntDictionary { Storage: RuntimeContainerStorage.Heap }
             or RuntimeInlineDictionary { Storage: RuntimeContainerStorage.Heap }
             or RuntimeArena
-            or RuntimeBox;
+            or RuntimeBox
+            or RuntimeTaskInt;
     }
 
     private bool IsOwnedContainerRuntimeValue(RuntimeValue value)
@@ -554,7 +558,7 @@ internal sealed partial class LlvmEmitter
 
         var lastTarget = flow.Targets[^1];
         if (lastTarget.Path.Count != 1
-            || lastTarget.Path[0] is not ("append" or "updated")
+            || lastTarget.Path[0] is not ("append" or "updated" or "await")
             || flow.Source is not NameExpression name)
         {
             return null;
@@ -828,6 +832,9 @@ internal sealed partial class LlvmEmitter
     private sealed record RuntimeFloat(BoundType FloatType, string ValueName) : RuntimeValue(FloatType);
 
     private sealed record RuntimeBool(string ValueName) : RuntimeValue(BoundType.Bool);
+
+    private sealed record RuntimeTaskInt(string HandleName, string ContextName)
+        : RuntimeValue(BoundType.TaskInt);
 
     private sealed record RuntimeStruct(BoundType StructType, string ValueName) : RuntimeValue(StructType);
 
