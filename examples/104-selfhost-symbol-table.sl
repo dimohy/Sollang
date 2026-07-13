@@ -3,7 +3,12 @@ import smalllang.compiler.lexer as lexer
 import smalllang.compiler.semantic.symbols as symbols
 
 main {
-    "struct Point { x: Int y: Int } impl Point { reset: mut self -> Int { 1 } } make value: move Int -> Int { value } main { }" => source
+    """
+    struct Point { x: Int y: Int }
+    impl Point { reset: mut self -> Int { 1 } }
+    make value: move Int -> Int { value }
+    main { }
+    """ => source
     source -> symbols.collect => table!
     source -> lexer.lex => tokens!
     source -> ast.lower => nodes!

@@ -2,7 +2,25 @@ import smalllang.compiler.ast as ast
 import smalllang.compiler.lexer as lexer
 
 main {
-    ["take values: move [Int; ~] -> Int { 1 } main { }", "borrow values: mut [Int; ~] -> Int { 1 } main { }", "impl Worker { run: move self -> Int { 1 } } main { }"] -> each source {
+    [
+        """
+        take values: move [Int; ~] -> Int {
+            1
+        }
+        main { }
+        """,
+        """
+        borrow values: mut [Int; ~] -> Int {
+            1
+        }
+        main { }
+        """,
+        """
+        impl Worker { run: move self -> Int { 1 } }
+        main { }
+        """,
+        ~
+    ] -> each source {
         source -> ast.lower => nodes!
         source -> lexer.lex => tokens!
         nodes! -> len => count

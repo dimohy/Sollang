@@ -3,7 +3,11 @@ import smalllang.compiler.semantic.symbols as symbols
 import smalllang.compiler.lexer as lexer
 
 main {
-    "convert<T, E> value: T -> E => value\nmain { }" => source
+    """
+    convert<T, E> value: T -> E => value
+
+    main { }
+    """ => source
     [source, ~] => sources!
     source -> symbols.collect => table!
     source -> lexer.lex => tokens!

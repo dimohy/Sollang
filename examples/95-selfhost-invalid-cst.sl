@@ -3,12 +3,17 @@ import smalllang.compiler.parser as parser
 import smalllang.compiler.cst as cst
 
 main {
-    lexer.lex("main {@}") => tokens!
-    tokens![3].kind => invalidKind
-    parser.parseEvents("main {@}") => events!
+    """
+    main {
+        @
+    }
+    """ => source
+    source -> lexer.lex => tokens!
+    tokens![5].kind => invalidKind
+    source -> parser.parseEvents => events!
     events! -> len => eventCount
     events![eventCount - 1].value => accepted
-    cst.build("main {@}") => nodes!
+    source -> cst.build => nodes!
     nodes![0] => root
     "invalid kind = $invalidKind" -> println
     "accepted = $accepted" -> println

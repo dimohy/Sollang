@@ -1,7 +1,11 @@
 import smalllang.compiler.ast as ast
 
 main {
-    ast.lower("main { 42 -> println }") => nodes!
+    """
+    main {
+        42 -> println
+    }
+    """ -> ast.lower => nodes!
     nodes! -> len => count
     "ast nodes = $count" -> println
     nodes! -> each node {

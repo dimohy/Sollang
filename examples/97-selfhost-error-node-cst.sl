@@ -1,7 +1,11 @@
 import smalllang.compiler.cst as cst
 
 main {
-    cst.build("main { -> }") => nodes!
+    """
+    main {
+        ->
+    }
+    """ -> cst.build => nodes!
     nodes! -> len => nodeCount
     nodes![0] => root
     "nodes = $nodeCount" -> println

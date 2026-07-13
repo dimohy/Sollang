@@ -267,7 +267,11 @@ dictionary key as well as a non-`Int` array index.
 Self-hosted compiler examples embed their input modules as raw multiline
 strings. This keeps tested SL source readable as source, removes duplicated
 newline escaping, and continuously exercises raw-string lexing in the bootstrap
-compiler while the embedded text is consumed by the SL lexer and parser.
+compiler while the embedded text is consumed by the SL lexer and parser. The
+opening and closing `"""` delimiters occupy the same indentation column. Embedded
+top-level SL starts in that column after raw-string indentation removal, and
+each nested block adds four spaces, so fixtures follow the same layout as
+ordinary `.sl` files.
 
 The first typed IR lowering lives in `selfhost/ir/typed.sl`. It emits a flat,
 relocatable node table whose initial stable kinds are function, return, and

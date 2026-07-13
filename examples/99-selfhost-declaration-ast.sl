@@ -1,7 +1,15 @@
 import smalllang.compiler.ast as ast
 
 main {
-    ast.lower("double value: Int -> Int { value * 2 } main { 5 -> double }") => nodes!
+    """
+    double value: Int -> Int {
+        value * 2
+    }
+
+    main {
+        5 -> double
+    }
+    """ -> ast.lower => nodes!
     nodes! -> len => count
     "ast nodes = $count" -> println
     nodes! -> each node {

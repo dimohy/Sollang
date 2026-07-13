@@ -1,10 +1,19 @@
 import smalllang.compiler.diagnostics as diagnostics
 
 main {
-    diagnostics.analyze("main { -> }") => syntaxErrors!
+    """
+    main {
+        ->
+    }
+    """ => syntaxSource
+    syntaxSource -> diagnostics.analyze => syntaxErrors!
     syntaxErrors![0] => syntaxError
-    diagnostics.expectedCodes("main { -> }") => expected!
-    diagnostics.analyze("main {@}") => invalidErrors!
+    syntaxSource -> diagnostics.expectedCodes => expected!
+    """
+    main {
+        @
+    }
+    """ -> diagnostics.analyze => invalidErrors!
     invalidErrors![0] => invalidError
 
     "syntax = $(syntaxError.code),$(syntaxError.span.start),$(syntaxError.span.length),$(syntaxError.foundKind)" -> println

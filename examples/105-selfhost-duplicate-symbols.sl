@@ -3,7 +3,18 @@ import smalllang.compiler.semantic.diagnostics as diagnostics
 import smalllang.compiler.semantic.symbols as symbols
 
 main {
-    "struct Point { x: Int x: Int } struct Point { y: Int } main { }" => source
+    """
+    struct Point {
+        x: Int
+        x: Int
+    }
+
+    struct Point {
+        y: Int
+    }
+
+    main { }
+    """ => source
     source -> symbols.collect => table!
     source -> diagnostics.analyze => errors!
     source -> lexer.lex => tokens!

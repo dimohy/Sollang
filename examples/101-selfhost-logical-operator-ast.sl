@@ -1,7 +1,11 @@
 import smalllang.compiler.ast as ast
 
 main {
-    ast.lower("main { true or false and not false }") => nodes!
+    """
+    main {
+        true or false and not false
+    }
+    """ -> ast.lower => nodes!
     nodes! -> len => count
     0 => index!
     index! < count -> while {

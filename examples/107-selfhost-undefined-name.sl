@@ -2,7 +2,13 @@ import smalllang.compiler.lexer as lexer
 import smalllang.compiler.semantic.diagnostics as diagnostics
 
 main {
-    "identity value: Int -> Int { missing } main { }" => source
+    """
+    identity value: Int -> Int {
+        missing
+    }
+
+    main { }
+    """ => source
     source -> diagnostics.analyze => errors!
     source -> lexer.lex => tokens!
     errors! -> each error {

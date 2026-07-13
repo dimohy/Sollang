@@ -3,7 +3,13 @@ import smalllang.compiler.semantic.resolve as resolve
 import smalllang.compiler.semantic.symbols as symbols
 
 main {
-    "identity value: move Int -> Int { value } main { }" => source
+    """
+    identity value: move Int -> Int {
+        value
+    }
+
+    main { }
+    """ => source
     source -> resolve.resolve => names!
     source -> symbols.collect => table!
     source -> lexer.lex => tokens!

@@ -2,7 +2,13 @@ import smalllang.compiler.ast as ast
 import smalllang.compiler.lexer as lexer
 
 main {
-    "public struct Point { x: Int y: Int } public enum Maybe { None Some(Int) } public trait Show { show: self -> Int } impl Show for Point { show: self -> Int => 1 } main { }" => source
+    """
+    public struct Point { x: Int y: Int }
+    public enum Maybe { None Some(Int) }
+    public trait Show { show: self -> Int }
+    impl Show for Point { show: self -> Int => 1 }
+    main { }
+    """ => source
     source -> ast.lower => nodes!
     source -> lexer.lex => tokens!
     nodes! -> len => count
