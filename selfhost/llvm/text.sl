@@ -748,7 +748,72 @@ emitCore sources: move [Text; ~] -> Unit {
                                 sources[runtimeArgument.sourceModule] -> lexer.lex => runtimeArgumentTokens!
                                 runtimeArgumentTokens![runtimeArgument.payloadToken] => runtimeArgumentToken
                                 Int(runtimeArgumentToken.span.length) - 2 => runtimeArgumentLength
-                                "  call void @sl_runtime_print(ptr @sl_str_$(entryExpression.operand0), i64 $runtimeArgumentLength, i1 " -> print
+                                runtimeArgumentToken.span.start + UIntSize(1) => interpolationContentStart
+                                runtimeArgumentToken.span.start + runtimeArgumentToken.span.length - UIntSize(1) => interpolationContentEnd
+                                interpolationContentStart => interpolationDollar!
+                                -1 => interpolationBindingIr!
+                                interpolationContentStart => interpolationMatchStart!
+                                UIntSize(0) => interpolationNameEnd!
+                                interpolationDollar! < interpolationContentEnd -> while {
+                                    ((sources[runtimeArgument.sourceModule] -> byte(interpolationDollar!)) == UInt8(36) and interpolationDollar! + UIntSize(1) < interpolationContentEnd) -> if {
+                                        interpolationDollar! + UIntSize(1) => interpolationNameStart
+                                        interpolationNameStart => interpolationNameEnd!
+                                        true => interpolationNameContinues!
+                                        (interpolationNameEnd! < interpolationContentEnd and interpolationNameContinues!) -> while {
+                                            sources[runtimeArgument.sourceModule] -> byte(interpolationNameEnd!) => interpolationNameByte
+                                            ((interpolationNameByte >= UInt8(48) and interpolationNameByte <= UInt8(57)) or (interpolationNameByte >= UInt8(65) and interpolationNameByte <= UInt8(90)) or (interpolationNameByte >= UInt8(97) and interpolationNameByte <= UInt8(122)) or interpolationNameByte == UInt8(95)) -> if {
+                                                interpolationNameEnd! + UIntSize(1) => interpolationNameEnd!
+                                            } else { false => interpolationNameContinues! }
+                                        }
+                                        interpolationNameEnd! > interpolationNameStart -> if {
+                                            sources[runtimeArgument.sourceModule] -> symbols.collect => interpolationSymbols!
+                                            0 => interpolationSymbolIndex!
+                                            interpolationSymbolIndex! < (interpolationSymbols! -> len) -> while {
+                                                interpolationSymbols![interpolationSymbolIndex!] => interpolationSymbol
+                                                interpolationSymbol.kind == 9 -> if {
+                                                    runtimeArgumentTokens![interpolationSymbol.nameToken] => interpolationSymbolToken
+                                                    interpolationSymbolToken.span.length == interpolationNameEnd! - interpolationNameStart => interpolationNameEqual!
+                                                    UIntSize(0) => interpolationNameByteIndex!
+                                                    (interpolationNameEqual! and interpolationNameByteIndex! < interpolationSymbolToken.span.length) -> while {
+                                                        (sources[runtimeArgument.sourceModule] -> byte(interpolationNameStart + interpolationNameByteIndex!)) != (sources[runtimeArgument.sourceModule] -> byte(interpolationSymbolToken.span.start + interpolationNameByteIndex!)) -> if { false => interpolationNameEqual! }
+                                                        interpolationNameByteIndex! + UIntSize(1) => interpolationNameByteIndex!
+                                                    }
+                                                    interpolationNameEqual! -> if {
+                                                        functionIndex! + 1 => interpolationBindingSearch!
+                                                        interpolationBindingSearch! < entryEnd! -> while {
+                                                            (ir![interpolationBindingSearch!].kind == 17 and ir![interpolationBindingSearch!].symbol == interpolationSymbolIndex! and ir![interpolationBindingSearch!].typeSymbol == 2) -> if {
+                                                                interpolationBindingSearch! => interpolationBindingIr!
+                                                                interpolationDollar! => interpolationMatchStart!
+                                                            }
+                                                            interpolationBindingSearch! + 1 => interpolationBindingSearch!
+                                                        }
+                                                    }
+                                                }
+                                                interpolationSymbolIndex! + 1 => interpolationSymbolIndex!
+                                            }
+                                        }
+                                    }
+                                    interpolationBindingIr! < 0 -> if { interpolationDollar! + UIntSize(1) => interpolationDollar! } else { interpolationContentEnd => interpolationDollar! }
+                                }
+                                interpolationBindingIr! >= 0 -> if {
+                                    Int(interpolationMatchStart! - interpolationContentStart) => interpolationPrefixLength
+                                    "  call void @sl_runtime_print(ptr @sl_str_$(entryExpression.operand0), i64 $interpolationPrefixLength, i1 false)" -> println
+                                    ir![interpolationBindingIr!] => interpolationBinding
+                                    ir![interpolationBinding.operand0] => interpolationValue
+                                    "  call void @sl_runtime_print_i32(i32 " -> print
+                                    interpolationValue.kind == 3 -> if {
+                                        sources[interpolationValue.sourceModule] -> lexer.lex => interpolationValueTokens!
+                                        interpolationValueTokens![interpolationValue.payloadToken] => interpolationValueToken
+                                        sources[interpolationValue.sourceModule] -> slice(interpolationValueToken.span.start, interpolationValueToken.span.length) -> print
+                                    } else { "%v$(interpolationBinding.operand0)" -> print }
+                                    ", i1 false)" -> println
+                                    Int(interpolationNameEnd! - interpolationContentStart) => interpolationSuffixOffset
+                                    Int(interpolationContentEnd - interpolationNameEnd!) => interpolationSuffixLength
+                                    "  %v$(entryExpressionIndex!)_interpolation_suffix = getelementptr i8, ptr @sl_str_$(entryExpression.operand0), i64 $interpolationSuffixOffset" -> println
+                                    "  call void @sl_runtime_print(ptr %v$(entryExpressionIndex!)_interpolation_suffix, i64 $interpolationSuffixLength, i1 " -> print
+                                } else {
+                                    "  call void @sl_runtime_print(ptr @sl_str_$(entryExpression.operand0), i64 $runtimeArgumentLength, i1 " -> print
+                                }
                             } else {
                                 "  %v$(entryExpressionIndex!)_runtime_ptr = extractvalue %sl.text %v$(entryExpression.operand0), 0" -> println
                                 "  %v$(entryExpressionIndex!)_runtime_len = extractvalue %sl.text %v$(entryExpression.operand0), 1" -> println
@@ -804,6 +869,67 @@ usesTextRuntime sources: [Text; ~] -> Bool {
         nodeIndex! + 1 => nodeIndex!
     }
     usesRuntime!
+}
+
+usesIntInterpolation sources: [Text; ~] -> Bool {
+    sources -> typedIr.lower => ir!
+    false => usesInterpolation!
+    0 => nodeIndex!
+    nodeIndex! < (ir! -> len) -> while {
+        ir![nodeIndex!] => node
+        (node.kind == 6 and (node.symbol == -101 or node.symbol == -102) and node.operand0 >= 0 and ir![node.operand0].kind == 2) -> if {
+            ir![node.operand0] => argument
+            sources[argument.sourceModule] -> lexer.lex => tokens!
+            tokens![argument.payloadToken] => token
+            token.span.start + UIntSize(1) => byteIndex!
+            token.span.start + token.span.length - UIntSize(1) => byteEnd
+            byteIndex! < byteEnd -> while {
+                (sources[argument.sourceModule] -> byte(byteIndex!)) == UInt8(36) -> if { true => usesInterpolation! }
+                byteIndex! + UIntSize(1) => byteIndex!
+            }
+        }
+        nodeIndex! + 1 => nodeIndex!
+    }
+    usesInterpolation!
+}
+
+emitIntTextRuntime: -> Unit {
+    """
+    define internal void @sl_runtime_print_i32(i32 %value, i1 %newline) {
+    entry:
+      %buffer = alloca [12 x i8], align 1
+      %end = getelementptr [12 x i8], ptr %buffer, i64 0, i64 12
+      %wide = sext i32 %value to i64
+      %negative = icmp slt i64 %wide, 0
+      %negated = sub i64 0, %wide
+      %magnitude = select i1 %negative, i64 %negated, i64 %wide
+      br label %digits
+    digits:
+      %current = phi i64 [ %magnitude, %entry ], [ %quotient, %digits ]
+      %cursor = phi ptr [ %end, %entry ], [ %digit_slot, %digits ]
+      %digit = urem i64 %current, 10
+      %quotient = udiv i64 %current, 10
+      %digit_slot = getelementptr i8, ptr %cursor, i64 -1
+      %digit8 = trunc i64 %digit to i8
+      %ascii = add i8 %digit8, 48
+      store i8 %ascii, ptr %digit_slot, align 1
+      %more = icmp ne i64 %quotient, 0
+      br i1 %more, label %digits, label %digits_done
+    digits_done:
+      br i1 %negative, label %write_sign, label %emit
+    write_sign:
+      %sign_slot = getelementptr i8, ptr %digit_slot, i64 -1
+      store i8 45, ptr %sign_slot, align 1
+      br label %emit
+    emit:
+      %start = phi ptr [ %digit_slot, %digits_done ], [ %sign_slot, %write_sign ]
+      %end_address = ptrtoint ptr %end to i64
+      %start_address = ptrtoint ptr %start to i64
+      %length = sub i64 %end_address, %start_address
+      call void @sl_runtime_print(ptr %start, i64 %length, i1 %newline)
+      ret void
+    }
+    """ -> println
 }
 
 emitWindowsTextRuntime: -> Unit {
@@ -876,6 +1002,7 @@ public emit sources: move [Text; ~] -> Unit {
     target.dataLayoutLine -> println
     target.tripleLine -> println
     sources -> usesTextRuntime -> if { emitWindowsTextRuntime }
+    sources -> usesIntInterpolation -> if { emitIntTextRuntime }
     emitCore(sources)
 }
 
@@ -884,6 +1011,7 @@ public emitLinux sources: move [Text; ~] -> Unit {
     target.dataLayoutLine -> println
     target.tripleLine -> println
     sources -> usesTextRuntime -> if { emitLinuxTextRuntime }
+    sources -> usesIntInterpolation -> if { emitIntTextRuntime }
     emitCore(sources)
 }
 
@@ -892,5 +1020,6 @@ public emitWasm sources: move [Text; ~] -> Unit {
     target.dataLayoutLine -> println
     target.tripleLine -> println
     sources -> usesTextRuntime -> if { emitWasmTextRuntime }
+    sources -> usesIntInterpolation -> if { emitIntTextRuntime }
     emitCore(sources)
 }
