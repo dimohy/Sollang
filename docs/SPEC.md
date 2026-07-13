@@ -1331,6 +1331,12 @@ drops every owned local created since the target loop was entered before the
 LLVM branch is emitted; nested loops therefore clean up and target their own
 innermost scope.
 
+The self-hosted LLVM backend represents an early loop transfer as a dedicated
+loop-exit IR node followed by an explicit cleanup basic block. Region-local
+dynamic arrays release their backing pointer; dictionaries release key and
+value stores in reverse declaration order. The normal back-edge invokes the
+same scope cleanup so every iteration has identical ownership semantics.
+
 The loop variable is immutable for the iteration and scoped to the loop body.
 Bindings introduced inside the loop body are also scoped to that body. The
 current range direction is ascending only; if the start is greater than the end,

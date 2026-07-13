@@ -828,6 +828,11 @@ public lower sources: [Text; ~] -> [TypedIrNode; ~] {
                                 entryExpression.kind == 22 -> if { 7 => entryExpressionKind! }
                                 (entryExpression.kind >= 18 and entryExpression.kind <= 21) -> if { 8 => entryExpressionKind! }
                                 (entryExpression.kind == 24 or entryExpression.kind == 25) -> if { 8 => entryExpressionKind! }
+                                entryExpression.kind == 39 -> if { 12 => entryExpressionKind! }
+                                entryExpression.kind == 36 -> if { 13 => entryExpressionKind! }
+                                entryExpression.kind == 37 -> if { 14 => entryExpressionKind! }
+                                entryExpression.kind == 38 -> if { 16 => entryExpressionKind! }
+                                entryExpression.kind == 41 -> if { 15 => entryExpressionKind! }
                                 0 => entryPropertyCallSearch!
                                 entryPropertyCallSearch! < (resolvedCalls! -> len) -> while {
                                     resolvedCalls![entryPropertyCallSearch!] => entryPropertyCall
@@ -1045,6 +1050,23 @@ public lower sources: [Text; ~] -> [TypedIrNode; ~] {
                         }
                         entryBindingNameIr! + 1 => entryBindingNameIr!
                     }
+                    entryExpressionStart => entryAggregateIrIndex!
+                    entryAggregateIrIndex! < entryExpressionEnd -> while {
+                        results![entryAggregateIrIndex!] => entryAggregate!
+                        (entryAggregate!.kind == 12 or entryAggregate!.kind == 14 or entryAggregate!.kind == 16) -> if {
+                            -1 => entryFirstFieldOperand!
+                            entryExpressionStart => entryFieldOperandSearch!
+                            entryFieldOperandSearch! < entryExpressionEnd -> while {
+                                results![entryFieldOperandSearch!].parent == entryAggregateIrIndex! -> if {
+                                    (entryFirstFieldOperand! < 0 or nodes![results![entryFieldOperandSearch!].astNode].start < nodes![results![entryFirstFieldOperand!].astNode].start) -> if { entryFieldOperandSearch! => entryFirstFieldOperand! }
+                                }
+                                entryFieldOperandSearch! + 1 => entryFieldOperandSearch!
+                            }
+                            entryFirstFieldOperand! => entryAggregate!.operand0
+                            entryAggregate! => results![entryAggregateIrIndex!]
+                        }
+                        entryAggregateIrIndex! + 1 => entryAggregateIrIndex!
+                    }
                     results![entryIr!] => entryNode!
                     entryAstToIr![inferred![entryResultTypeIndex!].astNode] => entryResultIr!
                     (entryResultIr! >= 0 and results![entryResultIr!].kind == 9) -> if {
@@ -1061,6 +1083,31 @@ public lower sources: [Text; ~] -> [TypedIrNode; ~] {
             entryAstIndex! + 1 => entryAstIndex!
         }
         sourceIndex! + 1 => sourceIndex!
+    }
+    0 => ownedBindingIndex!
+    ownedBindingIndex! < (results! -> len) -> while {
+        results![ownedBindingIndex!] => ownedBinding!
+        (ownedBinding!.kind == 17 and (ownedBinding!.typeOrigin == 13 or ownedBinding!.typeOrigin == 15)) -> if {
+            -1 => ownedBindingValue!
+            0 => ownedBindingValueSearch!
+            ownedBindingValueSearch! < (results! -> len) -> while {
+                results![ownedBindingValueSearch!] => ownedValueCandidate
+                ((ownedBinding!.typeOrigin == 13 and ownedValueCandidate.kind == 14) or (ownedBinding!.typeOrigin == 15 and ownedValueCandidate.kind == 16)) -> if {
+                    ownedValueCandidate.parent => ownedValueAncestor!
+                    false => ownedValueBelongs!
+                    (ownedValueAncestor! >= 0 and not ownedValueBelongs!) -> while {
+                        ownedValueAncestor! == ownedBindingIndex! -> if { true => ownedValueBelongs! } else { results![ownedValueAncestor!].parent => ownedValueAncestor! }
+                    }
+                    (ownedValueBelongs! and ownedBindingValue! < 0) -> if { ownedBindingValueSearch! => ownedBindingValue! }
+                }
+                ownedBindingValueSearch! + 1 => ownedBindingValueSearch!
+            }
+            ownedBindingValue! >= 0 -> if {
+                ownedBindingValue! => ownedBinding!.operand0
+                ownedBinding! => results![ownedBindingIndex!]
+            }
+        }
+        ownedBindingIndex! + 1 => ownedBindingIndex!
     }
     0 => loopExitIndex!
     loopExitIndex! < (results! -> len) -> while {

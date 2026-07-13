@@ -367,8 +367,12 @@ last top-level body expression supplies the return operand. LLVM's normal
 slots to SSA `phi` nodes without making the source semantics depend on emitter
 predecessor bookkeeping. `break`/`continue` are dedicated AST and typed-IR loop
 exits that target the closest while and compose through nested if/while tasks.
-The reference backend drops owned loop locals on both transfers; equivalent
-self-hosted ownership cleanup blocks remain.
+The reference backend drops owned loop locals on both transfers. The
+self-hosted backend also materializes region-local dynamic arrays and
+dictionaries, then routes `break`/`continue` through explicit cleanup blocks
+that free them in reverse declaration order; the normal loop back-edge uses the
+same drop routine. Early return, moves from a region, and recursive aggregate
+drop glue remain.
 
 The first self-hosted LLVM text backend lives in `selfhost/llvm/text.sl`. It
 emits stable `sl_m<module>_s<symbol>` function names, `i32`/`i1` signatures,

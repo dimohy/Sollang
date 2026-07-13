@@ -466,8 +466,12 @@ terminating mutable loops in both a function and `main`, including observable
 short-circuit calls. Dedicated loop-exit IR now links `break`/`continue` to the
 closest structured while, suppresses unreachable siblings, and emits valid
 branches through nested if/while regions. The C# reference backend drops
-loop-local owned values before either transfer; matching self-hosted ownership
-cleanup blocks remain before the structured early-exit gate is complete.
+loop-local owned values before either transfer. The self-hosted backend now
+materializes dynamic arrays and dictionaries inside control-flow regions and
+routes `break`/`continue` through explicit cleanup blocks; normal back-edges
+perform the same reverse-order frees. Early `return`, moved region bindings,
+and recursively owned aggregates remain before the structured early-exit gate
+is complete.
 
 Typed IR now represents immutable local bindings explicitly and connects each
 name use by stable symbol id. LLVM materializes scalar literal bindings as SSA
@@ -486,7 +490,9 @@ bindings can therefore feed typed reads; owned array/dictionary storage is
 released after its final scalar read. Returning a bound owned aggregate now
 transfers its backing stores without producer-side frees, while a scalar-
 returning consumer releases a `move` parameter exactly once. Branch-sensitive
-liveness, partial moves, and nested owned aggregate drop glue remain.
+liveness now covers region-local Int arrays and dictionaries on normal and
+loop-exit edges. Partial moves, early return, and nested owned aggregate drop
+glue remain.
 
 Self-hosted LLVM text selects descriptors implemented in the file module
 `smalllang.compiler.llvm.target`. Windows x64/COFF, Linux x64/ELF, and

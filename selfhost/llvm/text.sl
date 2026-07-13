@@ -32,6 +32,12 @@ struct WhileBoolTask {
     falseNode: Int
 }
 
+struct OwnedDropRequest {
+    regionIndex: Int
+    beforeAst: Int
+    edgeIndex: Int
+}
+
 emitCore sources: move [Text; ~] -> Unit {
     llvmType symbol: Int -> Text => when {
         symbol == 1 => "%sl.text"
@@ -349,6 +355,32 @@ emitCore sources: move [Text; ~] -> Unit {
             }
         }
     }
+    emitOwnedDrops request: OwnedDropRequest -> Unit {
+        sources -> typedIr.lower => dropIr!
+        dropIr![request.regionIndex] => dropRegion
+        sources[dropRegion.sourceModule] -> ast.lower => dropAst!
+        UIntSize(0) => dropBeforeStart!
+        request.beforeAst >= 0 -> if { dropAst![request.beforeAst].start => dropBeforeStart! }
+        dropIr! -> len => ownedDropIndex!
+        ownedDropIndex! > 0 -> while {
+            ownedDropIndex! - 1 => ownedDropIndex!
+            dropIr![ownedDropIndex!] => ownedDropCandidate
+            true => ownedDropBeforeEdge!
+            request.beforeAst >= 0 -> if {
+                dropAst![ownedDropCandidate.astNode].start >= dropBeforeStart! -> if { false => ownedDropBeforeEdge! }
+            }
+            (ownedDropBeforeEdge! and ownedDropCandidate.kind == 17 and ownedDropCandidate.parent == request.regionIndex and ownedDropCandidate.typeOrigin == 13) -> if {
+                "  %cleanup$(request.edgeIndex)_b$(ownedDropIndex!) = extractvalue %sl.array.i32 %v$(ownedDropCandidate.operand0), 0" -> println
+                "  call void @free(ptr %cleanup$(request.edgeIndex)_b$(ownedDropIndex!))" -> println
+            }
+            (ownedDropBeforeEdge! and ownedDropCandidate.kind == 17 and ownedDropCandidate.parent == request.regionIndex and ownedDropCandidate.typeOrigin == 15) -> if {
+                "  %cleanup$(request.edgeIndex)_b$(ownedDropIndex!)_keys = extractvalue %sl.dict %v$(ownedDropCandidate.operand0), 0" -> println
+                "  call void @free(ptr %cleanup$(request.edgeIndex)_b$(ownedDropIndex!)_keys)" -> println
+                "  %cleanup$(request.edgeIndex)_b$(ownedDropIndex!)_values = extractvalue %sl.dict %v$(ownedDropCandidate.operand0), 1" -> println
+                "  call void @free(ptr %cleanup$(request.edgeIndex)_b$(ownedDropIndex!)_values)" -> println
+            }
+        }
+    }
     emitRegion regionIndex: Int -> Unit {
         sources -> typedIr.lower => regionIr!
         regionIr![regionIndex] => region
@@ -460,6 +492,13 @@ emitCore sources: move [Text; ~] -> Unit {
                                             localSecondAncestor! == regionTaskNode -> if { true => localSecondBelongs! } else { regionIr![localSecondAncestor!].parent => localSecondAncestor! }
                                         }
                                         (localSecondBelongs! and not localScheduled![localCandidate.operand1]) -> if { false => localReady! }
+                                    }
+                                    (localCandidate.kind == 12 or localCandidate.kind == 14 or localCandidate.kind == 16) -> if {
+                                        localCandidate.operand0 => localAggregateOperand!
+                                        localAggregateOperand! >= 0 -> while {
+                                            not localScheduled![localAggregateOperand!] -> if { false => localReady! }
+                                            regionIr![localAggregateOperand!].nextOperand => localAggregateOperand!
+                                        }
                                     }
                                     localReady! -> if {
                                         localOrder! -> push(localCandidateIndex!)
@@ -579,6 +618,15 @@ emitCore sources: move [Text; ~] -> Unit {
             regionEventKind == 1 -> if {
             not regionTerminated! -> if {
             regionNode.kind == 21 -> if {
+                "  br label %cleanup$(regionNodeIndex!)" -> println
+                "cleanup$(regionNodeIndex!):" -> println
+                regionNode.parent => cleanupAncestor!
+                (cleanupAncestor! >= 0 and cleanupAncestor! != regionNode.operand0) -> while {
+                    regionIr![cleanupAncestor!].kind == 19 -> if {
+                        OwnedDropRequest { regionIndex: cleanupAncestor!, beforeAst: regionNode.astNode, edgeIndex: regionNodeIndex! * 10 + 9 } -> emitOwnedDrops
+                    }
+                    regionIr![cleanupAncestor!].parent => cleanupAncestor!
+                }
                 regionNode.opcode == 1 -> if {
                     "  br label %while$(regionNode.operand0)_header" -> println
                 } else {
@@ -633,6 +681,77 @@ emitCore sources: move [Text; ~] -> Unit {
                 } else { "%v$(regionNode.operand0)" -> print }
                 ", ptr %slot$(mutableRegionRoot), align " -> print
                 "$(regionNode.typeSymbol -> storageAlign)" -> println
+            }
+            (regionNode.kind == 14 and regionNode.typeOrigin == 13) -> if {
+                0 => regionArrayLength!
+                regionNode.operand0 => regionArrayCountIndex!
+                regionArrayCountIndex! >= 0 -> while {
+                    regionArrayLength! + 1 => regionArrayLength!
+                    regionIr![regionArrayCountIndex!].nextOperand => regionArrayCountIndex!
+                }
+                regionArrayLength! * 4 => regionArrayByteLength
+                "  %v$(regionNodeIndex!)_data = call ptr @malloc(i64 $regionArrayByteLength)" -> println
+                regionNode.operand0 => regionArrayElementIndex!
+                0 => regionArrayElementPosition!
+                regionArrayElementIndex! >= 0 -> while {
+                    regionIr![regionArrayElementIndex!] => regionArrayElement
+                    "  %v$(regionNodeIndex!)_ptr$(regionArrayElementPosition!) = getelementptr i32, ptr %v$(regionNodeIndex!)_data, i64 $(regionArrayElementPosition!)" -> println
+                    "  store i32 " -> print
+                    regionArrayElement.kind == 3 -> if {
+                        sources[regionArrayElement.sourceModule] -> lexer.lex => regionArrayElementTokens!
+                        regionArrayElementTokens![regionArrayElement.payloadToken] => regionArrayElementToken
+                        sources[regionArrayElement.sourceModule] -> slice(regionArrayElementToken.span.start, regionArrayElementToken.span.length) -> print
+                    } else { "%v$(regionArrayElementIndex!)" -> print }
+                    ", ptr %v$(regionNodeIndex!)_ptr$(regionArrayElementPosition!), align 4" -> println
+                    regionArrayElement.nextOperand => regionArrayElementIndex!
+                    regionArrayElementPosition! + 1 => regionArrayElementPosition!
+                }
+                "  %v$(regionNodeIndex!)_0 = insertvalue %sl.array.i32 poison, ptr %v$(regionNodeIndex!)_data, 0" -> println
+                "  %v$(regionNodeIndex!)_1 = insertvalue %sl.array.i32 %v$(regionNodeIndex!)_0, i64 $(regionArrayLength!), 1" -> println
+                "  %v$(regionNodeIndex!) = insertvalue %sl.array.i32 %v$(regionNodeIndex!)_1, i64 $(regionArrayLength!), 2" -> println
+            }
+            (regionNode.kind == 16 and regionNode.typeOrigin == 15) -> if {
+                0 => regionDictionaryItemCount!
+                regionNode.operand0 => regionDictionaryCountIndex!
+                regionDictionaryCountIndex! >= 0 -> while {
+                    regionDictionaryItemCount! + 1 => regionDictionaryItemCount!
+                    regionIr![regionDictionaryCountIndex!].nextOperand => regionDictionaryCountIndex!
+                }
+                regionDictionaryItemCount! / 2 => regionDictionaryLength
+                regionDictionaryLength * (regionNode.typeModule -> storageSize) => regionDictionaryKeyByteLength
+                regionDictionaryLength * (regionNode.typeSymbol -> storageSize) => regionDictionaryValueByteLength
+                "  %v$(regionNodeIndex!)_keys = call ptr @malloc(i64 $regionDictionaryKeyByteLength)" -> println
+                "  %v$(regionNodeIndex!)_values = call ptr @malloc(i64 $regionDictionaryValueByteLength)" -> println
+                regionNode.operand0 => regionDictionaryItemIndex!
+                0 => regionDictionaryItemPosition!
+                regionDictionaryItemIndex! >= 0 -> while {
+                    regionIr![regionDictionaryItemIndex!] => regionDictionaryItem
+                    regionDictionaryItemPosition! / 2 => regionDictionaryEntryPosition
+                    regionDictionaryItemPosition! % 2 == 0 -> if { "keys" } else { "values" } => regionDictionarySide
+                    regionDictionaryItemPosition! % 2 == 0 -> if { regionNode.typeModule } else { regionNode.typeSymbol } => regionDictionaryItemSymbol
+                    "  %v$(regionNodeIndex!)_$(regionDictionarySide)_ptr$(regionDictionaryEntryPosition) = getelementptr " -> print
+                    regionDictionaryItemSymbol -> llvmType -> print
+                    ", ptr %v$(regionNodeIndex!)_$(regionDictionarySide), i64 $(regionDictionaryEntryPosition)" -> println
+                    "  store " -> print
+                    regionDictionaryItemSymbol -> llvmType -> print
+                    " " -> print
+                    (regionDictionaryItem.kind == 3 or regionDictionaryItem.kind == 4) -> if {
+                        sources[regionDictionaryItem.sourceModule] -> lexer.lex => regionDictionaryItemTokens!
+                        regionDictionaryItemTokens![regionDictionaryItem.payloadToken] => regionDictionaryItemToken
+                        regionDictionaryItem.kind == 3 -> if {
+                            sources[regionDictionaryItem.sourceModule] -> slice(regionDictionaryItemToken.span.start, regionDictionaryItemToken.span.length) -> print
+                        } else {
+                            ((sources[regionDictionaryItem.sourceModule] -> byte(regionDictionaryItemToken.span.start)) == UInt8(116)) -> if { "1" } else { "0" } -> print
+                        }
+                    } else { "%v$(regionDictionaryItemIndex!)" -> print }
+                    ", ptr %v$(regionNodeIndex!)_$(regionDictionarySide)_ptr$(regionDictionaryEntryPosition), align $(regionDictionaryItemSymbol -> storageAlign)" -> println
+                    regionDictionaryItem.nextOperand => regionDictionaryItemIndex!
+                    regionDictionaryItemPosition! + 1 => regionDictionaryItemPosition!
+                }
+                "  %v$(regionNodeIndex!)_0 = insertvalue %sl.dict poison, ptr %v$(regionNodeIndex!)_keys, 0" -> println
+                "  %v$(regionNodeIndex!)_1 = insertvalue %sl.dict %v$(regionNodeIndex!)_0, ptr %v$(regionNodeIndex!)_values, 1" -> println
+                "  %v$(regionNodeIndex!)_2 = insertvalue %sl.dict %v$(regionNodeIndex!)_1, i64 $(regionDictionaryLength), 2" -> println
+                "  %v$(regionNodeIndex!) = insertvalue %sl.dict %v$(regionNodeIndex!)_2, i64 $(regionDictionaryLength), 3" -> println
             }
             (regionNode.kind == 7 or regionNode.kind == 8) -> if {
                 regionIr![regionNode.operand0] => regionLeft
@@ -746,6 +865,7 @@ emitCore sources: move [Text; ~] -> Unit {
             regionEventKind == 3 -> if {
                 ifActive![regionNodeIndex!] -> if {
                     not regionTerminated! -> if {
+                        OwnedDropRequest { regionIndex: regionNode.operand1, beforeAst: -1, edgeIndex: regionNodeIndex! * 10 + 1 } -> emitOwnedDrops
                         "  br label %if$(regionNodeIndex!)_merge" -> println
                         true => ifThenReachesMerge![regionNodeIndex!]
                     }
@@ -757,6 +877,11 @@ emitCore sources: move [Text; ~] -> Unit {
                 ifActive![regionNodeIndex!] -> if {
                 regionNode.nextOperand < 0 -> if { true => ifThenReachesMerge![regionNodeIndex!] }
                 not regionTerminated! -> if {
+                    regionNode.nextOperand >= 0 -> if {
+                        OwnedDropRequest { regionIndex: regionNode.nextOperand, beforeAst: -1, edgeIndex: regionNodeIndex! * 10 + 2 } -> emitOwnedDrops
+                    } else {
+                        OwnedDropRequest { regionIndex: regionNode.operand1, beforeAst: -1, edgeIndex: regionNodeIndex! * 10 + 2 } -> emitOwnedDrops
+                    }
                     "  br label %if$(regionNodeIndex!)_merge" -> println
                     true => ifThenReachesMerge![regionNodeIndex!]
                 }
@@ -812,7 +937,10 @@ emitCore sources: move [Text; ~] -> Unit {
             }
             regionEventKind == 8 -> if {
                 loopActive![regionNodeIndex!] -> if {
-                    not regionTerminated! -> if { "  br label %while$(regionNodeIndex!)_header" -> println }
+                    not regionTerminated! -> if {
+                        OwnedDropRequest { regionIndex: regionNode.operand1, beforeAst: -1, edgeIndex: regionNodeIndex! * 10 + 3 } -> emitOwnedDrops
+                        "  br label %while$(regionNodeIndex!)_header" -> println
+                    }
                     "while$(regionNodeIndex!)_exit:" -> println
                     false => regionTerminated!
                 }
@@ -1758,6 +1886,7 @@ emitCore sources: move [Text; ~] -> Unit {
                     WhileBranchRequest { whileIndex: expressionIndex!, ownerIndex: functionIndex! } -> emitWhileBranch
                     "while$(expressionIndex!)_body:" -> println
                     expression.operand1 -> emitRegion
+                    OwnedDropRequest { regionIndex: expression.operand1, beforeAst: -1, edgeIndex: expressionIndex! * 10 + 3 } -> emitOwnedDrops
                     "  br label %while$(expressionIndex!)_header" -> println
                     "while$(expressionIndex!)_exit:" -> println
                 }
@@ -2382,6 +2511,7 @@ emitCore sources: move [Text; ~] -> Unit {
                         WhileBranchRequest { whileIndex: entryExpressionIndex!, ownerIndex: functionIndex! } -> emitWhileBranch
                         "while$(entryExpressionIndex!)_body:" -> println
                         entryExpression.operand1 -> emitRegion
+                        OwnedDropRequest { regionIndex: entryExpression.operand1, beforeAst: -1, edgeIndex: entryExpressionIndex! * 10 + 3 } -> emitOwnedDrops
                         "  br label %while$(entryExpressionIndex!)_header" -> println
                         "while$(entryExpressionIndex!)_exit:" -> println
                     }
