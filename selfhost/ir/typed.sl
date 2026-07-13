@@ -283,6 +283,15 @@ public lower sources: [Text; ~] -> [TypedIrNode; ~] {
                                 controlIr => astToIr![expressionAstIndex!]
                                 18 => controlKind!
                                 expression.kind == 43 -> if { 19 => controlKind! }
+                                1 => controlTypeOrigin!
+                                -1 => controlTypeModule!
+                                0 => controlTypeSymbol!
+                                expressionTypeIndex! >= 0 -> if {
+                                    inferred![expressionTypeIndex!] => inferredControlType
+                                    inferredControlType.origin => controlTypeOrigin!
+                                    inferredControlType.targetModule => controlTypeModule!
+                                    inferredControlType.targetSymbol => controlTypeSymbol!
+                                }
                                 results! -> push(TypedIrNode {
                                     kind: controlKind!
                                     parent: returnIr
@@ -290,9 +299,9 @@ public lower sources: [Text; ~] -> [TypedIrNode; ~] {
                                     astNode: expressionAstIndex!
                                     symbol: -1
                                     targetModule: sourceIndex!
-                                    typeOrigin: 1
-                                    typeModule: -1
-                                    typeSymbol: 2
+                                    typeOrigin: controlTypeOrigin!
+                                    typeModule: controlTypeModule!
+                                    typeSymbol: controlTypeSymbol!
                                     payloadToken: expression.payloadToken
                                     opcode: -1
                                     operand0: -1
@@ -307,7 +316,16 @@ public lower sources: [Text; ~] -> [TypedIrNode; ~] {
                                 expression.kind == 13 -> if { 2 => expressionKind! }
                                 expression.kind == 14 -> if { 3 => expressionKind! }
                                 expression.kind == 15 -> if {
-                                    (expressionType.origin == 1 and expressionType.targetSymbol == 23) -> if { 4 => expressionKind! } else { 5 => expressionKind! }
+                                    5 => expressionKind!
+                                    (expressionType.origin == 1 and expressionType.targetSymbol == 23) -> if {
+                                        true => expressionIsBoolLiteral!
+                                        0 => expressionBoolNameSearch!
+                                        expressionBoolNameSearch! < (resolvedNames! -> len) -> while {
+                                            resolvedNames![expressionBoolNameSearch!].astNode == expressionAstIndex! -> if { false => expressionIsBoolLiteral! }
+                                            expressionBoolNameSearch! + 1 => expressionBoolNameSearch!
+                                        }
+                                        expressionIsBoolLiteral! -> if { 4 => expressionKind! }
+                                    }
                                 }
                                 expression.kind == 11 -> if { 6 => expressionKind! }
                                 expression.kind == 22 -> if { 7 => expressionKind! }
@@ -447,7 +465,9 @@ public lower sources: [Text; ~] -> [TypedIrNode; ~] {
                         results![controlIrIndex!] => control!
                         control!.kind == 19 -> if {
                             -1 => firstRegionChild!
+                            -1 => lastRegionChild!
                             UIntSize(0) => firstRegionChildStart!
+                            UIntSize(0) => lastRegionChildStart!
                             expressionIrStart => regionChildSearch!
                             regionChildSearch! < expressionIrEnd -> while {
                                 results![regionChildSearch!].parent == controlIrIndex! -> if {
@@ -456,10 +476,15 @@ public lower sources: [Text; ~] -> [TypedIrNode; ~] {
                                         regionChildSearch! => firstRegionChild!
                                         regionChildStart => firstRegionChildStart!
                                     }
+                                    (lastRegionChild! < 0 or regionChildStart > lastRegionChildStart!) -> if {
+                                        regionChildSearch! => lastRegionChild!
+                                        regionChildStart => lastRegionChildStart!
+                                    }
                                 }
                                 regionChildSearch! + 1 => regionChildSearch!
                             }
                             firstRegionChild! => control!.operand0
+                            lastRegionChild! => control!.operand1
                             control! => results![controlIrIndex!]
                         }
                         control!.kind == 18 -> if {
@@ -531,7 +556,15 @@ public lower sources: [Text; ~] -> [TypedIrNode; ~] {
                     }
 
                     results![returnIr] => returnNode!
-                    astToIr![resultType.astNode] => returnNode!.operand0
+                    astToIr![resultType.astNode] => returnOperandIr!
+                    (returnOperandIr! >= 0 and results![returnOperandIr!].kind == 9) -> if {
+                        expressionIrStart => returnControlSearch!
+                        returnControlSearch! < expressionIrEnd -> while {
+                            (results![returnControlSearch!].kind == 18 and results![returnControlSearch!].parent == returnOperandIr!) -> if { returnControlSearch! => returnOperandIr! }
+                            returnControlSearch! + 1 => returnControlSearch!
+                        }
+                    }
+                    returnOperandIr! => returnNode!.operand0
                     returnNode! => results![returnIr]
                 }
             }
@@ -674,6 +707,15 @@ public lower sources: [Text; ~] -> [TypedIrNode; ~] {
                                 entryControlIr => entryAstToIr![entryExpressionAst!]
                                 18 => entryControlKind!
                                 entryExpression.kind == 43 -> if { 19 => entryControlKind! }
+                                1 => entryControlTypeOrigin!
+                                -1 => entryControlTypeModule!
+                                0 => entryControlTypeSymbol!
+                                entryExpressionTypeIndex! >= 0 -> if {
+                                    inferred![entryExpressionTypeIndex!] => inferredEntryControlType
+                                    inferredEntryControlType.origin => entryControlTypeOrigin!
+                                    inferredEntryControlType.targetModule => entryControlTypeModule!
+                                    inferredEntryControlType.targetSymbol => entryControlTypeSymbol!
+                                }
                                 results! -> push(TypedIrNode {
                                     kind: entryControlKind!
                                     parent: entryIr!
@@ -681,9 +723,9 @@ public lower sources: [Text; ~] -> [TypedIrNode; ~] {
                                     astNode: entryExpressionAst!
                                     symbol: -1
                                     targetModule: sourceIndex!
-                                    typeOrigin: 1
-                                    typeModule: -1
-                                    typeSymbol: 2
+                                    typeOrigin: entryControlTypeOrigin!
+                                    typeModule: entryControlTypeModule!
+                                    typeSymbol: entryControlTypeSymbol!
                                     payloadToken: entryExpression.payloadToken
                                     opcode: -1
                                     operand0: -1
@@ -698,7 +740,16 @@ public lower sources: [Text; ~] -> [TypedIrNode; ~] {
                                 entryExpression.kind == 13 -> if { 2 => entryExpressionKind! }
                                 entryExpression.kind == 14 -> if { 3 => entryExpressionKind! }
                                 entryExpression.kind == 15 -> if {
-                                    (entryExpressionType.origin == 1 and entryExpressionType.targetSymbol == 23) -> if { 4 => entryExpressionKind! } else { 5 => entryExpressionKind! }
+                                    5 => entryExpressionKind!
+                                    (entryExpressionType.origin == 1 and entryExpressionType.targetSymbol == 23) -> if {
+                                        true => entryExpressionIsBoolLiteral!
+                                        0 => entryBoolNameSearch!
+                                        entryBoolNameSearch! < (resolvedNames! -> len) -> while {
+                                            resolvedNames![entryBoolNameSearch!].astNode == entryExpressionAst! -> if { false => entryExpressionIsBoolLiteral! }
+                                            entryBoolNameSearch! + 1 => entryBoolNameSearch!
+                                        }
+                                        entryExpressionIsBoolLiteral! -> if { 4 => entryExpressionKind! }
+                                    }
                                 }
                                 entryExpression.kind == 11 -> if { 6 => entryExpressionKind! }
                                 entryExpression.kind == 22 -> if { 7 => entryExpressionKind! }
@@ -825,7 +876,9 @@ public lower sources: [Text; ~] -> [TypedIrNode; ~] {
                         results![entryControlIrIndex!] => entryControl!
                         entryControl!.kind == 19 -> if {
                             -1 => entryFirstRegionChild!
+                            -1 => entryLastRegionChild!
                             UIntSize(0) => entryFirstRegionChildStart!
+                            UIntSize(0) => entryLastRegionChildStart!
                             entryExpressionStart => entryRegionChildSearch!
                             entryRegionChildSearch! < entryExpressionEnd -> while {
                                 results![entryRegionChildSearch!].parent == entryControlIrIndex! -> if {
@@ -834,10 +887,15 @@ public lower sources: [Text; ~] -> [TypedIrNode; ~] {
                                         entryRegionChildSearch! => entryFirstRegionChild!
                                         entryRegionChildStart => entryFirstRegionChildStart!
                                     }
+                                    (entryLastRegionChild! < 0 or entryRegionChildStart > entryLastRegionChildStart!) -> if {
+                                        entryRegionChildSearch! => entryLastRegionChild!
+                                        entryRegionChildStart => entryLastRegionChildStart!
+                                    }
                                 }
                                 entryRegionChildSearch! + 1 => entryRegionChildSearch!
                             }
                             entryFirstRegionChild! => entryControl!.operand0
+                            entryLastRegionChild! => entryControl!.operand1
                             entryControl! => results![entryControlIrIndex!]
                         }
                         entryControl!.kind == 18 -> if {
@@ -889,7 +947,15 @@ public lower sources: [Text; ~] -> [TypedIrNode; ~] {
                         entryBindingNameIr! + 1 => entryBindingNameIr!
                     }
                     results![entryIr!] => entryNode!
-                    entryAstToIr![inferred![entryResultTypeIndex!].astNode] => entryNode!.operand0
+                    entryAstToIr![inferred![entryResultTypeIndex!].astNode] => entryResultIr!
+                    (entryResultIr! >= 0 and results![entryResultIr!].kind == 9) -> if {
+                        entryExpressionStart => entryResultControlSearch!
+                        entryResultControlSearch! < entryExpressionEnd -> while {
+                            (results![entryResultControlSearch!].kind == 18 and results![entryResultControlSearch!].parent == entryResultIr!) -> if { entryResultControlSearch! => entryResultIr! }
+                            entryResultControlSearch! + 1 => entryResultControlSearch!
+                        }
+                    }
+                    entryResultIr! => entryNode!.operand0
                     entryNode! => results![entryIr!]
                 }
             }

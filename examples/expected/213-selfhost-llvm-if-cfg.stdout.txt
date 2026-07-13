@@ -1,0 +1,108 @@
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc"
+@sl_runtime_newline = private constant [1 x i8] c"\0A"
+declare i32 @putchar(i32)
+define internal void @sl_runtime_print(ptr %data, i64 %len, i1 %newline) {
+entry:
+  br label %loop
+loop:
+  %index = phi i64 [ 0, %entry ], [ %next, %body ]
+  %in_range = icmp ult i64 %index, %len
+  br i1 %in_range, label %body, label %end
+body:
+  %slot = getelementptr i8, ptr %data, i64 %index
+  %byte = load i8, ptr %slot, align 1
+  %value = zext i8 %byte to i32
+  %written = call i32 @putchar(i32 %value)
+  %next = add i64 %index, 1
+  br label %loop
+end:
+  br i1 %newline, label %write_newline, label %done
+write_newline:
+  %newline_written = call i32 @putchar(i32 10)
+  br label %done
+done:
+  ret void
+}
+define internal void @sl_runtime_print_i32(i32 %value, i1 %newline) {
+entry:
+  %buffer = alloca [12 x i8], align 1
+  %end = getelementptr [12 x i8], ptr %buffer, i64 0, i64 12
+  %wide = sext i32 %value to i64
+  %negative = icmp slt i64 %wide, 0
+  %negated = sub i64 0, %wide
+  %magnitude = select i1 %negative, i64 %negated, i64 %wide
+  br label %digits
+digits:
+  %current = phi i64 [ %magnitude, %entry ], [ %quotient, %digits ]
+  %cursor = phi ptr [ %end, %entry ], [ %digit_slot, %digits ]
+  %digit = urem i64 %current, 10
+  %quotient = udiv i64 %current, 10
+  %digit_slot = getelementptr i8, ptr %cursor, i64 -1
+  %digit8 = trunc i64 %digit to i8
+  %ascii = add i8 %digit8, 48
+  store i8 %ascii, ptr %digit_slot, align 1
+  %more = icmp ne i64 %quotient, 0
+  br i1 %more, label %digits, label %digits_done
+digits_done:
+  br i1 %negative, label %write_sign, label %emit
+write_sign:
+  %sign_slot = getelementptr i8, ptr %digit_slot, i64 -1
+  store i8 45, ptr %sign_slot, align 1
+  br label %emit
+emit:
+  %start = phi ptr [ %digit_slot, %digits_done ], [ %sign_slot, %write_sign ]
+  %end_address = ptrtoint ptr %end to i64
+  %start_address = ptrtoint ptr %start to i64
+  %length = sub i64 %end_address, %start_address
+  call void @sl_runtime_print(ptr %start, i64 %length, i1 %newline)
+  ret void
+}
+%sl.text = type { ptr, i64 }
+@sl_str_18 = private unnamed_addr constant [4 x i8] c"then"
+@sl_str_21 = private unnamed_addr constant [4 x i8] c"else"
+@sl_str_31 = private unnamed_addr constant [9 x i8] c"main-then"
+@sl_str_34 = private unnamed_addr constant [9 x i8] c"main-else"
+@sl_str_38 = private unnamed_addr constant [12 x i8] c"value=$value"
+define i32 @sl_m0_s0(i1 %arg) {
+entry:
+  br i1 %arg, label %if5_then, label %if5_else
+if5_then:
+  br label %if5_merge
+if5_else:
+  br label %if5_merge
+if5_merge:
+  %v5 = phi i32 [ 7, %if5_then ], [ 9, %if5_else ]
+  ret i32 %v5
+}
+define void @sl_m0_s1(i1 %arg) {
+entry:
+  br i1 %arg, label %if15_then, label %if15_else
+if15_then:
+  call void @sl_runtime_print(ptr @sl_str_18, i64 4, i1 true)
+  br label %if15_merge
+if15_else:
+  call void @sl_runtime_print(ptr @sl_str_21, i64 4, i1 true)
+  br label %if15_merge
+if15_merge:
+  ret void
+}
+define i32 @main() {
+entry:
+  call void @sl_m0_s1(i1 0)
+  br i1 1, label %if28_then, label %if28_else
+if28_then:
+  call void @sl_runtime_print(ptr @sl_str_31, i64 9, i1 true)
+  br label %if28_merge
+if28_else:
+  call void @sl_runtime_print(ptr @sl_str_34, i64 9, i1 true)
+  br label %if28_merge
+if28_merge:
+  %v35 = call i32 @sl_m0_s0(i1 0)
+  %v37_interpolation_part0 = getelementptr i8, ptr @sl_str_38, i64 0
+  call void @sl_runtime_print(ptr %v37_interpolation_part0, i64 6, i1 false)
+  call void @sl_runtime_print_i32(i32 %v35, i1 false)
+  %v37_interpolation_suffix = getelementptr i8, ptr @sl_str_38, i64 12
+  call void @sl_runtime_print(ptr %v37_interpolation_suffix, i64 0, i1 true)
+  ret i32 0
+}

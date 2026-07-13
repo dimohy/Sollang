@@ -62,6 +62,175 @@ emitCore sources: move [Text; ~] -> Unit {
         }
         }
     }
+    emitRegion regionIndex: Int -> Unit {
+        sources -> typedIr.lower => regionIr!
+        regionIr![regionIndex] => region
+        region.parent => ownerIndex!
+        (ownerIndex! >= 0 and regionIr![ownerIndex!].kind != 0 and regionIr![ownerIndex!].kind != 11) -> while { regionIr![ownerIndex!].parent => ownerIndex! }
+        [Bool; ~] => regionScheduled!
+        0 => regionScheduleInit!
+        regionScheduleInit! < (regionIr! -> len) -> while {
+            regionScheduled! -> push(false)
+            regionScheduleInit! + 1 => regionScheduleInit!
+        }
+        [Int; ~] => regionOrder!
+        true => regionProgress!
+        regionProgress! -> while {
+            false => regionProgress!
+            0 => regionCandidateIndex!
+            regionCandidateIndex! < (regionIr! -> len) -> while {
+                not regionScheduled![regionCandidateIndex!] -> if {
+                    regionIr![regionCandidateIndex!] => regionCandidate
+                    regionCandidate.parent => regionAncestor!
+                    false => belongsToRegion!
+                    false => nestedRegion!
+                    (regionAncestor! >= 0 and not belongsToRegion! and not nestedRegion!) -> while {
+                        regionAncestor! == regionIndex -> if { true => belongsToRegion! } else {
+                            regionIr![regionAncestor!].kind == 19 -> if { true => nestedRegion! } else { regionIr![regionAncestor!].parent => regionAncestor! }
+                        }
+                    }
+                    belongsToRegion! -> if {
+                        true => regionReady!
+                        regionCandidate.operand0 >= 0 -> if {
+                            regionIr![regionCandidate.operand0].parent => operandAncestor!
+                            false => operandBelongs!
+                            (operandAncestor! >= 0 and not operandBelongs!) -> while {
+                                operandAncestor! == regionIndex -> if { true => operandBelongs! } else { regionIr![operandAncestor!].parent => operandAncestor! }
+                            }
+                            (operandBelongs! and not regionScheduled![regionCandidate.operand0]) -> if { false => regionReady! }
+                        }
+                        regionCandidate.operand1 >= 0 -> if {
+                            regionIr![regionCandidate.operand1].parent => secondOperandAncestor!
+                            false => secondOperandBelongs!
+                            (secondOperandAncestor! >= 0 and not secondOperandBelongs!) -> while {
+                                secondOperandAncestor! == regionIndex -> if { true => secondOperandBelongs! } else { regionIr![secondOperandAncestor!].parent => secondOperandAncestor! }
+                            }
+                            (secondOperandBelongs! and not regionScheduled![regionCandidate.operand1]) -> if { false => regionReady! }
+                        }
+                        regionReady! -> if {
+                            regionOrder! -> push(regionCandidateIndex!)
+                            true => regionScheduled![regionCandidateIndex!]
+                            true => regionProgress!
+                        }
+                    }
+                }
+                regionCandidateIndex! + 1 => regionCandidateIndex!
+            }
+        }
+        0 => regionOrderIndex!
+        regionOrderIndex! < (regionOrder! -> len) -> while {
+            regionOrder![regionOrderIndex!] => regionNodeIndex!
+            regionIr![regionNodeIndex!] => regionNode
+            (regionNode.kind == 5 and ownerIndex! >= 0 and not (regionIr![ownerIndex!].kind == 0 and regionIr![ownerIndex!].operand1 >= 0 and regionNode.symbol == regionIr![regionIr![ownerIndex!].operand1].symbol)) -> if {
+                -1 => regionBindingIndex!
+                0 => regionBindingSearch!
+                regionBindingSearch! < (regionIr! -> len) -> while {
+                    (regionIr![regionBindingSearch!].kind == 17 and regionIr![regionBindingSearch!].symbol == regionNode.symbol) -> if { regionBindingSearch! => regionBindingIndex! }
+                    regionBindingSearch! + 1 => regionBindingSearch!
+                }
+                regionBindingIndex! >= 0 -> if {
+                    regionIr![regionIr![regionBindingIndex!].operand0] => regionBindingValue
+                    "  %v$(regionNodeIndex!) = freeze " -> print
+                    regionNode -> writeType
+                    " " -> print
+                    (regionBindingValue.kind == 3 or regionBindingValue.kind == 4) -> if {
+                        sources[regionBindingValue.sourceModule] -> lexer.lex => regionBindingTokens!
+                        regionBindingTokens![regionBindingValue.payloadToken] => regionBindingToken
+                        regionBindingValue.kind == 3 -> if { sources[regionBindingValue.sourceModule] -> slice(regionBindingToken.span.start, regionBindingToken.span.length) -> print } else {
+                            ((sources[regionBindingValue.sourceModule] -> byte(regionBindingToken.span.start)) == UInt8(116)) -> if { "1" } else { "0" } -> print
+                        }
+                    } else { "%v$(regionIr![regionBindingIndex!].operand0)" -> print }
+                    "" -> println
+                }
+            }
+            (regionNode.kind == 7 or regionNode.kind == 8) -> if {
+                regionIr![regionNode.operand0] => regionLeft
+                "" => regionOperation!
+                regionNode.kind == 7 -> if {
+                    regionNode.opcode == -26 -> if { "xor" => regionOperation! } else { "sub" => regionOperation! }
+                } else {
+                    regionNode.opcode == grammar.tokenIdPlus -> if { "add" => regionOperation! }
+                    regionNode.opcode == grammar.tokenIdMinus -> if { "sub" => regionOperation! }
+                    regionNode.opcode == grammar.tokenIdStar -> if { "mul" => regionOperation! }
+                    regionNode.opcode == grammar.tokenIdSlash -> if { "sdiv" => regionOperation! }
+                    regionNode.opcode == grammar.tokenIdPercent -> if { "srem" => regionOperation! }
+                    regionNode.opcode == grammar.tokenIdEqualEqual -> if { "icmp eq" => regionOperation! }
+                    regionNode.opcode == grammar.tokenIdBangEqual -> if { "icmp ne" => regionOperation! }
+                    regionNode.opcode == grammar.tokenIdLess -> if { "icmp slt" => regionOperation! }
+                    regionNode.opcode == grammar.tokenIdLessEqual -> if { "icmp sle" => regionOperation! }
+                    regionNode.opcode == grammar.tokenIdGreater -> if { "icmp sgt" => regionOperation! }
+                    regionNode.opcode == grammar.tokenIdGreaterEqual -> if { "icmp sge" => regionOperation! }
+                    regionNode.opcode == -24 -> if { "or" => regionOperation! }
+                    regionNode.opcode == -25 -> if { "and" => regionOperation! }
+                }
+                "  %v$(regionNodeIndex!) = $(regionOperation!) " -> print
+                regionLeft -> writeType
+                " " -> print
+                (regionNode.kind == 7 and regionNode.opcode != -26) -> if { "0" -> print } else {
+                    (regionLeft.kind == 3 or regionLeft.kind == 4) -> if {
+                        sources[regionLeft.sourceModule] -> lexer.lex => regionLeftTokens!
+                        regionLeftTokens![regionLeft.payloadToken] => regionLeftToken
+                        regionLeft.kind == 3 -> if { sources[regionLeft.sourceModule] -> slice(regionLeftToken.span.start, regionLeftToken.span.length) -> print } else {
+                            ((sources[regionLeft.sourceModule] -> byte(regionLeftToken.span.start)) == UInt8(116)) -> if { "1" } else { "0" } -> print
+                        }
+                    } else {
+                        (ownerIndex! >= 0 and regionIr![ownerIndex!].kind == 0 and regionIr![ownerIndex!].operand1 >= 0 and regionLeft.kind == 5 and regionLeft.symbol == regionIr![regionIr![ownerIndex!].operand1].symbol) -> if { "%arg" -> print } else { "%v$(regionNode.operand0)" -> print }
+                    }
+                }
+                regionNode.kind == 7 -> if {
+                    regionNode.opcode == -26 -> if { ", true" -> println } else {
+                        (regionLeft.kind == 3 or regionLeft.kind == 4) -> if {
+                            sources[regionLeft.sourceModule] -> lexer.lex => regionUnaryTokens!
+                            regionUnaryTokens![regionLeft.payloadToken] => regionUnaryToken
+                            sources[regionLeft.sourceModule] -> slice(regionUnaryToken.span.start, regionUnaryToken.span.length) -> println
+                        } else { ", %v$(regionNode.operand0)" -> println }
+                    }
+                } else {
+                    ", " -> print
+                    regionIr![regionNode.operand1] => regionRight
+                    (regionRight.kind == 3 or regionRight.kind == 4) -> if {
+                        sources[regionRight.sourceModule] -> lexer.lex => regionRightTokens!
+                        regionRightTokens![regionRight.payloadToken] => regionRightToken
+                        regionRight.kind == 3 -> if { sources[regionRight.sourceModule] -> slice(regionRightToken.span.start, regionRightToken.span.length) -> println } else {
+                            ((sources[regionRight.sourceModule] -> byte(regionRightToken.span.start)) == UInt8(116)) -> if { "1" } else { "0" } -> println
+                        }
+                    } else { "%v$(regionNode.operand1)" -> println }
+                }
+            }
+            regionNode.kind == 6 -> if {
+                (regionNode.symbol == -101 or regionNode.symbol == -102) -> if {
+                    regionIr![regionNode.operand0] => regionArgument
+                    regionArgument.kind == 2 -> if {
+                        sources[regionArgument.sourceModule] -> lexer.lex => regionArgumentTokens!
+                        regionArgumentTokens![regionArgument.payloadToken] => regionArgumentToken
+                        Int(regionArgumentToken.span.length) - 2 => regionArgumentLength
+                        "  call void @sl_runtime_print(ptr @sl_str_$(regionNode.operand0), i64 $regionArgumentLength, i1 " -> print
+                        regionNode.symbol == -102 -> if { "true)" -> println } else { "false)" -> println }
+                    }
+                } else {
+                    (regionNode.typeOrigin == 1 and regionNode.typeSymbol == 0) -> if { "  call " -> print } else { "  %v$(regionNodeIndex!) = call " -> print }
+                    regionNode -> writeType
+                    " @sl_m$(regionNode.targetModule)_s$(regionNode.symbol)(" -> print
+                    regionNode.operand0 >= 0 -> if {
+                        regionIr![regionNode.operand0] => regionCallArgument
+                        regionCallArgument -> writeType
+                        " " -> print
+                        (regionCallArgument.kind == 3 or regionCallArgument.kind == 4) -> if {
+                            sources[regionCallArgument.sourceModule] -> lexer.lex => regionCallTokens!
+                            regionCallTokens![regionCallArgument.payloadToken] => regionCallToken
+                            regionCallArgument.kind == 3 -> if { sources[regionCallArgument.sourceModule] -> slice(regionCallToken.span.start, regionCallToken.span.length) -> print } else {
+                                ((sources[regionCallArgument.sourceModule] -> byte(regionCallToken.span.start)) == UInt8(116)) -> if { "1" } else { "0" } -> print
+                            }
+                        } else {
+                            (ownerIndex! >= 0 and regionIr![ownerIndex!].kind == 0 and regionIr![ownerIndex!].operand1 >= 0 and regionCallArgument.kind == 5 and regionCallArgument.symbol == regionIr![regionIr![ownerIndex!].operand1].symbol) -> if { "%arg" -> print } else { "%v$(regionNode.operand0)" -> print }
+                        }
+                    }
+                    ")" -> println
+                }
+            }
+            regionOrderIndex! + 1 => regionOrderIndex!
+        }
+    }
     sources -> typedIr.lower => ir!
     sources -> nominalTypes.resolve => nominal!
     sources -> modules.identities => moduleIdentities!
@@ -197,14 +366,49 @@ emitCore sources: move [Text; ~] -> Unit {
                 scheduleCandidate! < functionEnd! -> while {
                     not expressionScheduled![scheduleCandidate!] -> if {
                         ir![scheduleCandidate!] => scheduleNode
-                        true => scheduleReady!
-                        (scheduleNode.operand0 >= expressionStart and scheduleNode.operand0 < functionEnd! and not expressionScheduled![scheduleNode.operand0]) -> if { false => scheduleReady! }
-                        (scheduleNode.operand1 >= expressionStart and scheduleNode.operand1 < functionEnd! and not expressionScheduled![scheduleNode.operand1]) -> if { false => scheduleReady! }
+                        scheduleNode.parent => scheduleAncestor!
+                        scheduleNode.kind == 19 => insideControlRegion!
+                        (scheduleAncestor! >= expressionStart and not insideControlRegion!) -> while {
+                            ir![scheduleAncestor!].kind == 19 -> if { true => insideControlRegion! } else { ir![scheduleAncestor!].parent => scheduleAncestor! }
+                        }
+                        (insideControlRegion! or scheduleNode.kind == 19) -> if {
+                            true => expressionScheduled![scheduleCandidate!]
+                            true => scheduleProgress!
+                        }
+                        not (insideControlRegion! or scheduleNode.kind == 19) => scheduleReady!
+                        (scheduleReady! and scheduleNode.operand0 >= expressionStart and scheduleNode.operand0 < functionEnd! and not expressionScheduled![scheduleNode.operand0]) -> if { false => scheduleReady! }
+                        (scheduleReady! and scheduleNode.kind != 18 and scheduleNode.operand1 >= expressionStart and scheduleNode.operand1 < functionEnd! and not expressionScheduled![scheduleNode.operand1]) -> if { false => scheduleReady! }
                         (scheduleReady! and (scheduleNode.kind == 12 or scheduleNode.kind == 14 or scheduleNode.kind == 16)) -> if {
                             scheduleNode.operand0 => scheduleSibling!
                             scheduleSibling! >= 0 -> while {
                                 not expressionScheduled![scheduleSibling!] -> if { false => scheduleReady! }
                                 ir![scheduleSibling!].nextOperand => scheduleSibling!
+                            }
+                        }
+                        (scheduleReady! and (scheduleNode.kind == 6 or scheduleNode.kind == 18)) -> if {
+                            true => rootEffect!
+                            scheduleNode.parent => effectAncestor!
+                            (effectAncestor! >= expressionStart and rootEffect!) -> while {
+                                (ir![effectAncestor!].kind == 6 or ir![effectAncestor!].kind == 18) -> if { false => rootEffect! } else { ir![effectAncestor!].parent => effectAncestor! }
+                            }
+                            rootEffect! -> if {
+                                sources[scheduleNode.sourceModule] -> ast.lower => effectAst!
+                                expressionStart => earlierEffectSearch!
+                                earlierEffectSearch! < functionEnd! -> while {
+                                    ir![earlierEffectSearch!] => earlierEffect
+                                    (not expressionScheduled![earlierEffectSearch!] and (earlierEffect.kind == 6 or earlierEffect.kind == 18) and effectAst![earlierEffect.astNode].start < effectAst![scheduleNode.astNode].start) -> if {
+                                        earlierEffect.parent => earlierEffectAncestor!
+                                        true => earlierRootEffect!
+                                        false => earlierInsideRegion!
+                                        (earlierEffectAncestor! >= expressionStart and earlierRootEffect! and not earlierInsideRegion!) -> while {
+                                            ir![earlierEffectAncestor!].kind == 19 -> if { true => earlierInsideRegion! } else {
+                                                (ir![earlierEffectAncestor!].kind == 6 or ir![earlierEffectAncestor!].kind == 18) -> if { false => earlierRootEffect! } else { ir![earlierEffectAncestor!].parent => earlierEffectAncestor! }
+                                            }
+                                        }
+                                        (earlierRootEffect! and not earlierInsideRegion!) -> if { false => scheduleReady! }
+                                    }
+                                    earlierEffectSearch! + 1 => earlierEffectSearch!
+                                }
                             }
                         }
                         scheduleReady! -> if {
@@ -848,6 +1052,56 @@ emitCore sources: move [Text; ~] -> Unit {
                     ")" -> println
                     }
                 }
+                expression.kind == 18 -> if {
+                    ir![expression.operand0] => ifCondition
+                    "  br i1 " -> print
+                    ifCondition.kind == 4 -> if {
+                        sources[ifCondition.sourceModule] -> lexer.lex => ifConditionTokens!
+                        ifConditionTokens![ifCondition.payloadToken] => ifConditionToken
+                        ((sources[ifCondition.sourceModule] -> byte(ifConditionToken.span.start)) == UInt8(116)) -> if { "1" } else { "0" } -> print
+                    } else {
+                        (ifCondition.kind == 5 and function.operand1 >= 0 and ifCondition.symbol == ir![function.operand1].symbol) -> if { "%arg" -> print } else { "%v$(expression.operand0)" -> print }
+                    }
+                    expression.nextOperand >= 0 -> if {
+                        ", label %if$(expressionIndex!)_then, label %if$(expressionIndex!)_else" -> println
+                    } else {
+                        ", label %if$(expressionIndex!)_then, label %if$(expressionIndex!)_merge" -> println
+                    }
+                    "if$(expressionIndex!)_then:" -> println
+                    expression.operand1 -> emitRegion
+                    "  br label %if$(expressionIndex!)_merge" -> println
+                    expression.nextOperand >= 0 -> if {
+                        "if$(expressionIndex!)_else:" -> println
+                        expression.nextOperand -> emitRegion
+                        "  br label %if$(expressionIndex!)_merge" -> println
+                    }
+                    "if$(expressionIndex!)_merge:" -> println
+                    (expression.typeSymbol != 0 and expression.nextOperand >= 0) -> if {
+                        ir![expression.operand1] => thenRegion
+                        ir![expression.nextOperand] => elseRegion
+                        ir![thenRegion.operand1] => thenValue
+                        ir![elseRegion.operand1] => elseValue
+                        "  %v$(expressionIndex!) = phi " -> print
+                        expression -> writeType
+                        " [ " -> print
+                        (thenValue.kind == 3 or thenValue.kind == 4) -> if {
+                            sources[thenValue.sourceModule] -> lexer.lex => thenValueTokens!
+                            thenValueTokens![thenValue.payloadToken] => thenValueToken
+                            thenValue.kind == 3 -> if { sources[thenValue.sourceModule] -> slice(thenValueToken.span.start, thenValueToken.span.length) -> print } else {
+                                ((sources[thenValue.sourceModule] -> byte(thenValueToken.span.start)) == UInt8(116)) -> if { "1" } else { "0" } -> print
+                            }
+                        } else { "%v$(thenRegion.operand1)" -> print }
+                        ", %if$(expressionIndex!)_then ], [ " -> print
+                        (elseValue.kind == 3 or elseValue.kind == 4) -> if {
+                            sources[elseValue.sourceModule] -> lexer.lex => elseValueTokens!
+                            elseValueTokens![elseValue.payloadToken] => elseValueToken
+                            elseValue.kind == 3 -> if { sources[elseValue.sourceModule] -> slice(elseValueToken.span.start, elseValueToken.span.length) -> print } else {
+                                ((sources[elseValue.sourceModule] -> byte(elseValueToken.span.start)) == UInt8(116)) -> if { "1" } else { "0" } -> print
+                            }
+                        } else { "%v$(elseRegion.operand1)" -> print }
+                        ", %if$(expressionIndex!)_else ]" -> println
+                    }
+                }
                 expressionOrderIndex! + 1 => expressionOrderIndex!
             }
             ir![function.operand0] => returnNode
@@ -932,9 +1186,44 @@ emitCore sources: move [Text; ~] -> Unit {
                     entryScheduleCandidate! < entryEnd! -> while {
                         not entryScheduled![entryScheduleCandidate!] -> if {
                             ir![entryScheduleCandidate!] => entryScheduleNode
-                            true => entryScheduleReady!
-                            (entryScheduleNode.operand0 > functionIndex! and entryScheduleNode.operand0 < entryEnd! and not entryScheduled![entryScheduleNode.operand0]) -> if { false => entryScheduleReady! }
-                            (entryScheduleNode.operand1 > functionIndex! and entryScheduleNode.operand1 < entryEnd! and not entryScheduled![entryScheduleNode.operand1]) -> if { false => entryScheduleReady! }
+                            entryScheduleNode.parent => entryScheduleAncestor!
+                            entryScheduleNode.kind == 19 => entryInsideControlRegion!
+                            (entryScheduleAncestor! > functionIndex! and not entryInsideControlRegion!) -> while {
+                                ir![entryScheduleAncestor!].kind == 19 -> if { true => entryInsideControlRegion! } else { ir![entryScheduleAncestor!].parent => entryScheduleAncestor! }
+                            }
+                            (entryInsideControlRegion! or entryScheduleNode.kind == 19) -> if {
+                                true => entryScheduled![entryScheduleCandidate!]
+                                true => entryScheduleProgress!
+                            }
+                            not (entryInsideControlRegion! or entryScheduleNode.kind == 19) => entryScheduleReady!
+                            (entryScheduleReady! and entryScheduleNode.operand0 > functionIndex! and entryScheduleNode.operand0 < entryEnd! and not entryScheduled![entryScheduleNode.operand0]) -> if { false => entryScheduleReady! }
+                            (entryScheduleReady! and entryScheduleNode.kind != 18 and entryScheduleNode.operand1 > functionIndex! and entryScheduleNode.operand1 < entryEnd! and not entryScheduled![entryScheduleNode.operand1]) -> if { false => entryScheduleReady! }
+                            (entryScheduleReady! and (entryScheduleNode.kind == 6 or entryScheduleNode.kind == 18)) -> if {
+                                true => entryRootEffect!
+                                entryScheduleNode.parent => entryEffectAncestor!
+                                (entryEffectAncestor! > functionIndex! and entryRootEffect!) -> while {
+                                    (ir![entryEffectAncestor!].kind == 6 or ir![entryEffectAncestor!].kind == 18) -> if { false => entryRootEffect! } else { ir![entryEffectAncestor!].parent => entryEffectAncestor! }
+                                }
+                                entryRootEffect! -> if {
+                                    sources[entryScheduleNode.sourceModule] -> ast.lower => entryEffectAst!
+                                    functionIndex! + 1 => entryEarlierEffectSearch!
+                                    entryEarlierEffectSearch! < entryEnd! -> while {
+                                        ir![entryEarlierEffectSearch!] => entryEarlierEffect
+                                        (not entryScheduled![entryEarlierEffectSearch!] and (entryEarlierEffect.kind == 6 or entryEarlierEffect.kind == 18) and entryEffectAst![entryEarlierEffect.astNode].start < entryEffectAst![entryScheduleNode.astNode].start) -> if {
+                                            entryEarlierEffect.parent => entryEarlierEffectAncestor!
+                                            true => entryEarlierRootEffect!
+                                            false => entryEarlierInsideRegion!
+                                            (entryEarlierEffectAncestor! > functionIndex! and entryEarlierRootEffect! and not entryEarlierInsideRegion!) -> while {
+                                                ir![entryEarlierEffectAncestor!].kind == 19 -> if { true => entryEarlierInsideRegion! } else {
+                                                    (ir![entryEarlierEffectAncestor!].kind == 6 or ir![entryEarlierEffectAncestor!].kind == 18) -> if { false => entryEarlierRootEffect! } else { ir![entryEarlierEffectAncestor!].parent => entryEarlierEffectAncestor! }
+                                                }
+                                            }
+                                            (entryEarlierRootEffect! and not entryEarlierInsideRegion!) -> if { false => entryScheduleReady! }
+                                        }
+                                        entryEarlierEffectSearch! + 1 => entryEarlierEffectSearch!
+                                    }
+                                }
+                            }
                             entryScheduleReady! -> if {
                                 entryOrder! -> push(entryScheduleCandidate!)
                                 true => entryScheduled![entryScheduleCandidate!]
@@ -1317,6 +1606,54 @@ emitCore sources: move [Text; ~] -> Unit {
                             }
                         }
                         ")" -> println
+                        }
+                    }
+                    entryExpression.kind == 18 -> if {
+                        ir![entryExpression.operand0] => entryIfCondition
+                        "  br i1 " -> print
+                        entryIfCondition.kind == 4 -> if {
+                            sources[entryIfCondition.sourceModule] -> lexer.lex => entryIfConditionTokens!
+                            entryIfConditionTokens![entryIfCondition.payloadToken] => entryIfConditionToken
+                            ((sources[entryIfCondition.sourceModule] -> byte(entryIfConditionToken.span.start)) == UInt8(116)) -> if { "1" } else { "0" } -> print
+                        } else { "%v$(entryExpression.operand0)" -> print }
+                        entryExpression.nextOperand >= 0 -> if {
+                            ", label %if$(entryExpressionIndex!)_then, label %if$(entryExpressionIndex!)_else" -> println
+                        } else {
+                            ", label %if$(entryExpressionIndex!)_then, label %if$(entryExpressionIndex!)_merge" -> println
+                        }
+                        "if$(entryExpressionIndex!)_then:" -> println
+                        entryExpression.operand1 -> emitRegion
+                        "  br label %if$(entryExpressionIndex!)_merge" -> println
+                        entryExpression.nextOperand >= 0 -> if {
+                            "if$(entryExpressionIndex!)_else:" -> println
+                            entryExpression.nextOperand -> emitRegion
+                            "  br label %if$(entryExpressionIndex!)_merge" -> println
+                        }
+                        "if$(entryExpressionIndex!)_merge:" -> println
+                        (entryExpression.typeSymbol != 0 and entryExpression.nextOperand >= 0) -> if {
+                            ir![entryExpression.operand1] => entryThenRegion
+                            ir![entryExpression.nextOperand] => entryElseRegion
+                            ir![entryThenRegion.operand1] => entryThenValue
+                            ir![entryElseRegion.operand1] => entryElseValue
+                            "  %v$(entryExpressionIndex!) = phi " -> print
+                            entryExpression -> writeType
+                            " [ " -> print
+                            (entryThenValue.kind == 3 or entryThenValue.kind == 4) -> if {
+                                sources[entryThenValue.sourceModule] -> lexer.lex => entryThenValueTokens!
+                                entryThenValueTokens![entryThenValue.payloadToken] => entryThenValueToken
+                                entryThenValue.kind == 3 -> if { sources[entryThenValue.sourceModule] -> slice(entryThenValueToken.span.start, entryThenValueToken.span.length) -> print } else {
+                                    ((sources[entryThenValue.sourceModule] -> byte(entryThenValueToken.span.start)) == UInt8(116)) -> if { "1" } else { "0" } -> print
+                                }
+                            } else { "%v$(entryThenRegion.operand1)" -> print }
+                            ", %if$(entryExpressionIndex!)_then ], [ " -> print
+                            (entryElseValue.kind == 3 or entryElseValue.kind == 4) -> if {
+                                sources[entryElseValue.sourceModule] -> lexer.lex => entryElseValueTokens!
+                                entryElseValueTokens![entryElseValue.payloadToken] => entryElseValueToken
+                                entryElseValue.kind == 3 -> if { sources[entryElseValue.sourceModule] -> slice(entryElseValueToken.span.start, entryElseValueToken.span.length) -> print } else {
+                                    ((sources[entryElseValue.sourceModule] -> byte(entryElseValueToken.span.start)) == UInt8(116)) -> if { "1" } else { "0" } -> print
+                                }
+                            } else { "%v$(entryElseRegion.operand1)" -> print }
+                            ", %if$(entryExpressionIndex!)_else ]" -> println
                         }
                     }
                     entryOrderIndex! + 1 => entryOrderIndex!

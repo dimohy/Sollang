@@ -894,6 +894,159 @@ public infer sources: [Text; ~] -> [ExpressionType; ~] {
                 }
                 dictionaryIndex! + 1 => dictionaryIndex!
             }
+
+            0 => regionIndex!
+            regionIndex! < (nodes! -> len) -> while {
+                nodes![regionIndex!].kind == 43 -> if {
+                    false => regionInferred!
+                    0 => regionExistingSearch!
+                    regionExistingSearch! < (inferred! -> len) -> while {
+                        (inferred![regionExistingSearch!].sourceModule == sourceIndex! and inferred![regionExistingSearch!].astNode == regionIndex!) -> if { true => regionInferred! }
+                        regionExistingSearch! + 1 => regionExistingSearch!
+                    }
+                    not regionInferred! -> if {
+                        -1 => regionResultIndex!
+                        1000000 => regionResultDistance!
+                        0 => regionResultSearch!
+                        regionResultSearch! < (inferred! -> len) -> while {
+                            inferred![regionResultSearch!] => regionCandidate
+                            regionCandidate.sourceModule == sourceIndex! -> if {
+                                nodes![regionCandidate.astNode].parent => regionAncestor!
+                                1 => regionDistance!
+                                false => belongsToRegion!
+                                (regionAncestor! >= 0 and not belongsToRegion!) -> while {
+                                    regionAncestor! == regionIndex! -> if { true => belongsToRegion! } else {
+                                        nodes![regionAncestor!].parent => regionAncestor!
+                                        regionDistance! + 1 => regionDistance!
+                                    }
+                                }
+                                (belongsToRegion! and (regionDistance! < regionResultDistance! or (regionDistance! == regionResultDistance! and (regionResultIndex! < 0 or nodes![regionCandidate.astNode].start > nodes![inferred![regionResultIndex!].astNode].start)))) -> if {
+                                    regionResultSearch! => regionResultIndex!
+                                    regionDistance! => regionResultDistance!
+                                }
+                            }
+                            regionResultSearch! + 1 => regionResultSearch!
+                        }
+                        regionResultIndex! >= 0 -> if {
+                            inferred![regionResultIndex!] => regionResult
+                            inferred! -> push(ExpressionType {
+                                sourceModule: sourceIndex!
+                                astNode: regionIndex!
+                                origin: regionResult.origin
+                                targetModule: regionResult.targetModule
+                                targetSymbol: regionResult.targetSymbol
+                                keyOrigin: regionResult.keyOrigin
+                                keyModule: regionResult.keyModule
+                                valueOrigin: regionResult.valueOrigin
+                                valueModule: regionResult.valueModule
+                            })
+                            true => changed!
+                        }
+                    }
+                }
+                regionIndex! + 1 => regionIndex!
+            }
+
+            0 => controlIndex!
+            controlIndex! < (nodes! -> len) -> while {
+                nodes![controlIndex!].kind == 42 -> if {
+                    false => controlInferred!
+                    0 => controlExistingSearch!
+                    controlExistingSearch! < (inferred! -> len) -> while {
+                        (inferred![controlExistingSearch!].sourceModule == sourceIndex! and inferred![controlExistingSearch!].astNode == controlIndex!) -> if { true => controlInferred! }
+                        controlExistingSearch! + 1 => controlExistingSearch!
+                    }
+                    not controlInferred! -> if {
+                        0 => controlRegionCount!
+                        0 => inferredRegionCount!
+                        -1 => firstRegionTypeIndex!
+                        true => homogeneousRegions!
+                        0 => controlRegionSearch!
+                        controlRegionSearch! < (nodes! -> len) -> while {
+                            (nodes![controlRegionSearch!].parent == controlIndex! and nodes![controlRegionSearch!].kind == 43) -> if {
+                                controlRegionCount! + 1 => controlRegionCount!
+                                -1 => controlRegionTypeIndex!
+                                0 => controlRegionTypeSearch!
+                                controlRegionTypeSearch! < (inferred! -> len) -> while {
+                                    (inferred![controlRegionTypeSearch!].sourceModule == sourceIndex! and inferred![controlRegionTypeSearch!].astNode == controlRegionSearch!) -> if { controlRegionTypeSearch! => controlRegionTypeIndex! }
+                                    controlRegionTypeSearch! + 1 => controlRegionTypeSearch!
+                                }
+                                controlRegionTypeIndex! >= 0 -> if {
+                                    inferredRegionCount! + 1 => inferredRegionCount!
+                                    firstRegionTypeIndex! < 0 -> if { controlRegionTypeIndex! => firstRegionTypeIndex! } else {
+                                        inferred![firstRegionTypeIndex!] => firstRegionType
+                                        inferred![controlRegionTypeIndex!] => otherRegionType
+                                        (firstRegionType.origin != otherRegionType.origin or firstRegionType.targetModule != otherRegionType.targetModule or firstRegionType.targetSymbol != otherRegionType.targetSymbol or firstRegionType.keyOrigin != otherRegionType.keyOrigin or firstRegionType.keyModule != otherRegionType.keyModule or firstRegionType.valueOrigin != otherRegionType.valueOrigin or firstRegionType.valueModule != otherRegionType.valueModule) -> if { false => homogeneousRegions! }
+                                    }
+                                }
+                            }
+                            controlRegionSearch! + 1 => controlRegionSearch!
+                        }
+                        (controlRegionCount! > 0 and inferredRegionCount! == controlRegionCount! and homogeneousRegions!) -> if {
+                            controlRegionCount! == 1 -> if {
+                                inferred! -> push(ExpressionType { sourceModule: sourceIndex!, astNode: controlIndex!, origin: 1, targetModule: -1, targetSymbol: 0, keyOrigin: -1, keyModule: -1, valueOrigin: -1, valueModule: -1 })
+                            } else {
+                                inferred![firstRegionTypeIndex!] => controlResult
+                                inferred! -> push(ExpressionType {
+                                    sourceModule: sourceIndex!
+                                    astNode: controlIndex!
+                                    origin: controlResult.origin
+                                    targetModule: controlResult.targetModule
+                                    targetSymbol: controlResult.targetSymbol
+                                    keyOrigin: controlResult.keyOrigin
+                                    keyModule: controlResult.keyModule
+                                    valueOrigin: controlResult.valueOrigin
+                                    valueModule: controlResult.valueModule
+                                })
+                            }
+                            true => changed!
+                        }
+                    }
+                }
+                controlIndex! + 1 => controlIndex!
+            }
+
+            0 => controlFlowIndex!
+            controlFlowIndex! < (nodes! -> len) -> while {
+                nodes![controlFlowIndex!].kind == 10 -> if {
+                    false => controlFlowInferred!
+                    0 => controlFlowExistingSearch!
+                    controlFlowExistingSearch! < (inferred! -> len) -> while {
+                        (inferred![controlFlowExistingSearch!].sourceModule == sourceIndex! and inferred![controlFlowExistingSearch!].astNode == controlFlowIndex!) -> if { true => controlFlowInferred! }
+                        controlFlowExistingSearch! + 1 => controlFlowExistingSearch!
+                    }
+                    not controlFlowInferred! -> if {
+                        -1 => controlTargetTypeIndex!
+                        0 => controlTargetSearch!
+                        controlTargetSearch! < (nodes! -> len) -> while {
+                            (nodes![controlTargetSearch!].parent == controlFlowIndex! and nodes![controlTargetSearch!].kind == 42) -> if {
+                                0 => controlTargetTypeSearch!
+                                controlTargetTypeSearch! < (inferred! -> len) -> while {
+                                    (inferred![controlTargetTypeSearch!].sourceModule == sourceIndex! and inferred![controlTargetTypeSearch!].astNode == controlTargetSearch!) -> if { controlTargetTypeSearch! => controlTargetTypeIndex! }
+                                    controlTargetTypeSearch! + 1 => controlTargetTypeSearch!
+                                }
+                            }
+                            controlTargetSearch! + 1 => controlTargetSearch!
+                        }
+                        controlTargetTypeIndex! >= 0 -> if {
+                            inferred![controlTargetTypeIndex!] => controlFlowResult
+                            inferred! -> push(ExpressionType {
+                                sourceModule: sourceIndex!
+                                astNode: controlFlowIndex!
+                                origin: controlFlowResult.origin
+                                targetModule: controlFlowResult.targetModule
+                                targetSymbol: controlFlowResult.targetSymbol
+                                keyOrigin: controlFlowResult.keyOrigin
+                                keyModule: controlFlowResult.keyModule
+                                valueOrigin: controlFlowResult.valueOrigin
+                                valueModule: controlFlowResult.valueModule
+                            })
+                            true => changed!
+                        }
+                    }
+                }
+                controlFlowIndex! + 1 => controlFlowIndex!
+            }
         }
         sourceIndex! + 1 => sourceIndex!
     }

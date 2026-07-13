@@ -434,8 +434,15 @@ statements before the permissive block-call shape, fixing the shared grammar
 defect that previously captured `if` too early. AST nodes retain the control
 target and both block-body regions. Typed IR links the Bool condition, ordered
 `then`/`else` regions, and each region's first child in both functions and
-`main`. The next backend slice lowers this structured form to LLVM diamond CFGs
-and inserts a merge/`phi` only for value-producing conditionals.
+`main`. The LLVM backend now lowers scalar statement conditionals to diamond
+CFGs and inserts a merge/`phi` only for matching Int/Bool value branches.
+Region descendants execute only beneath their branch labels. A native Windows
+regression proves parameter-driven function branches, source-ordered effects,
+a constant main branch, and an Int-producing conditional returning through a
+`phi`. The same work fixes two semantic leaks found during self-hosting: a
+control flow can no longer inherit a nested branch call target, and Bool-typed
+names are no longer mistaken for Bool literals. Nested conditionals,
+branch-local owned aggregates, loop regions, and non-scalar joins remain.
 
 Typed IR now represents immutable local bindings explicitly and connects each
 name use by stable symbol id. LLVM materializes scalar literal bindings as SSA

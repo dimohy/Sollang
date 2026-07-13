@@ -332,6 +332,17 @@ to retain branch-local typing and ownership before the LLVM backend creates
 explicit basic blocks, conditional branches, merge blocks, and value `phi`
 nodes where required.
 
+The LLVM backend now consumes that boundary for scalar conditionals in both
+functions and `main`. Region descendants are removed from the ordinary global
+expression schedule, emitted only under their `then`/`else` labels, and joined
+at a deterministic merge label. Unit conditionals emit branches without a
+value; matching Int/Bool branches emit a `phi`. Top-level calls and controls
+also retain source order instead of being reordered merely because their data
+dependencies are independent. Call resolution excludes a flow whose direct
+target is control syntax, and Bool-typed names remain names rather than being
+misclassified as `true`/`false` literals. Nested control regions, branch-local
+owned aggregates, and non-scalar value joins remain later slices.
+
 The first self-hosted LLVM text backend lives in `selfhost/llvm/text.sl`. It
 emits stable `sl_m<module>_s<symbol>` function names, `i32`/`i1` signatures,
 IR-index-derived SSA registers, constants, nested integer arithmetic,
@@ -353,8 +364,9 @@ call such as `ping` with the same rule as the bootstrap compiler, emits the
 call in Windows x64 `i32 @main()`, and then returns process exit code zero. The
 multi-module backend test is no longer assembly-only: the runner assembles the
 stdout IR, links it with pinned Clang, executes the resulting `.exe`, and
-requires exit code zero with no unexpected output. Main bindings, control flow,
-runtime calls, and general statement sequencing still need full lowering.
+requires exit code zero with no unexpected output. Main bindings and scalar
+`if` control flow now execute; broader loops, nested control, ownership-aware
+branches, and complete statement sequencing still need full lowering.
 
 Scalar literal bindings now have an explicit typed-IR kind linking the binding
 symbol to its value operand. Later name nodes retain that symbol and LLVM
