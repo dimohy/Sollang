@@ -351,7 +351,11 @@ output is enabled. Target metadata now lives in the ordinary SL module
 `smalllang.compiler.llvm.target`: `TargetDescriptor` groups the preformatted
 triple/data-layout lines, pointer bit width, and object format. The LLVM emitter
 loads `windowsX64` from that module instead of embedding target text, and a
-standalone example verifies all four fields.
+standalone example verifies all four fields. The same module now provides
+`linuxX64` (ELF, 64-bit pointers) and `wasm32Browser` (WebAssembly, 32-bit
+pointers) using data layouts extracted from pinned Clang 22. Target headers for
+all three assemble with `llvm-as`; selecting the non-Windows descriptor in the
+full emitter still requires a target-aware request boundary.
 
 Nominal structs now have deterministic `%sl.struct.m<module>_s<symbol>` LLVM
 types. Typed IR marks struct literals and links an arbitrary number of ordered
