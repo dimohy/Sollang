@@ -268,9 +268,9 @@ internal sealed partial class LlvmEmitter
         {
             throw new SmallLangException("child processes are unavailable on the current target");
         }
-        if (_usesAsync && _platform is not WindowsLlvmRuntimePlatform)
+        if (_usesAsync && !_platform.SupportsAsync)
         {
-            throw new SmallLangException("async functions are currently available only for the Windows x64 runtime slice");
+            throw new SmallLangException("async functions are unavailable on the current target");
         }
         var header = $$"""
             target triple = "{{_platform.TargetTriple}}"
@@ -305,8 +305,7 @@ internal sealed partial class LlvmEmitter
         EmitPlatformFunctionBlock(_platform.EmitMemoryDeclarations);
         if (_usesAsync)
         {
-            EmitFunctionLine("declare dllimport ptr @CreateThread(ptr, i64, ptr, ptr, i32, ptr)");
-            EmitFunctionLine("declare dllimport i32 @WaitForSingleObject(ptr, i32)");
+            EmitPlatformFunctionBlock(_platform.EmitAsyncPrimitives);
         }
         EmitFunctionLine("declare void @llvm.trap()");
         EmitFunctionLine("declare void @llvm.memset.p0.i64(ptr nocapture writeonly, i8, i64, i1 immarg)");

@@ -19,7 +19,7 @@ internal sealed partial class LlvmEmitter
         try
         {
             var workerName = AsyncWorkerSymbol(function);
-            EmitFunctionLine($"define internal i32 @{workerName}(ptr %context) #0 {{");
+            EmitFunctionLine($"define internal {_platform.AsyncWorkerReturnType} @{workerName}(ptr %context) #0 {{");
             EmitLabel("entry");
             EmitStackFrameAllocations();
             _currentBlockLabel = "entry";
@@ -59,7 +59,7 @@ internal sealed partial class LlvmEmitter
             var resultAddress = AsyncContextField(
                 "%context", function.InputType, function.ReturnType, 6, "async_result_address");
             EmitStore(result.TypeName, result.ValueName, resultAddress, RuntimeAlignment(function.ReturnType));
-            EmitRet("i32", "0");
+            EmitRet(_platform.AsyncWorkerReturnType, _platform.AsyncWorkerSuccessValue);
             EmitFunctionLine("}");
             EmitFunctionLine();
 
@@ -83,7 +83,7 @@ internal sealed partial class LlvmEmitter
                 RuntimeAlignment(function.ReturnType));
 
             var handle = NextTemp("async_handle");
-            EmitCall(handle, "ptr", "CreateThread", $"ptr null, i64 0, ptr @{workerName}, ptr {context}, i32 0, ptr null");
+            EmitCall(handle, "ptr", "smalllang_task_start", $"ptr @{workerName}, ptr {context}");
             var started = NextTemp("async_started");
             EmitCompare(started, "ne", "ptr", handle, "null");
             var readyLabel = NextLabel("async_ready");
@@ -131,10 +131,8 @@ internal sealed partial class LlvmEmitter
 
     private RuntimeValue EmitAwaitTask(RuntimeTask task, bool discardResult = false)
     {
-        var waitResult = NextTemp("task_wait");
-        EmitCall(waitResult, "i32", "WaitForSingleObject", $"ptr {task.HandleName}, i32 -1");
         var waitSucceeded = NextTemp("task_wait_succeeded");
-        EmitCompare(waitSucceeded, "eq", "i32", waitResult, "0");
+        EmitCall(waitSucceeded, "i1", "smalllang_task_join", $"ptr {task.HandleName}");
         var waitedLabel = NextLabel("task_waited");
         var waitFailedLabel = NextLabel("task_wait_failed");
         EmitConditionalBranch(waitSucceeded, waitedLabel, waitFailedLabel);
@@ -150,11 +148,9 @@ internal sealed partial class LlvmEmitter
         {
             DropDiscardedAsyncResult(value);
         }
-        var closeResult = NextTemp("task_close");
-        EmitCall(closeResult, "i32", "CloseHandle", $"ptr {task.HandleName}");
-        EmitCall(target: null, "void", "smalllang_free", $"ptr {task.ContextName}");
         var closeSucceeded = NextTemp("task_close_succeeded");
-        EmitCompare(closeSucceeded, "ne", "i32", closeResult, "0");
+        EmitCall(closeSucceeded, "i1", "smalllang_task_release", $"ptr {task.HandleName}");
+        EmitCall(target: null, "void", "smalllang_free", $"ptr {task.ContextName}");
         var closedLabel = NextLabel("task_closed");
         var closeFailedLabel = NextLabel("task_close_failed");
         EmitConditionalBranch(closeSucceeded, closedLabel, closeFailedLabel);

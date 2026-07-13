@@ -3320,4 +3320,36 @@ References: [Swift `Sendable` types](https://docs.swift.org/swift-book/LanguageG
 [Rust `Send`](https://doc.rust-lang.org/std/marker/trait.Send.html),
 [Kotlin shared mutable state](https://kotlinlang.org/docs/shared-mutable-state-and-concurrency.html).
 
+## D112 - Task Primitives Are Platform-Neutral Before Stackless Lowering
+
+Status: Windows/Linux native-thread backends implemented
+Date: 2026-07-13
+
+User async lowering no longer calls `CreateThread`, `WaitForSingleObject`, or
+`CloseHandle` directly. It targets the internal primitives
+`smalllang_task_start`, `smalllang_task_join`, and `smalllang_task_release`.
+Windows maps these to kernel thread handles. Linux allocates an owned x64
+`pthread_t` cell, starts a worker with `pthread_create`, joins it with
+`pthread_join`, and frees the cell on release. The public `%smalllang.task =
+{ ptr, ptr }` representation and generic input/result context remain identical
+on both targets.
+
+Worker result ABIs stay platform-correct behind that boundary: Windows x64 uses
+an `i32` thread result and Linux x64 uses the POSIX `ptr` result. Linux linking
+uses `-pthread` during object generation and final WSL linking. Native execution
+was verified for generic sendable inputs/results, nested await, and lexical
+scope joining.
+
+This is an executor boundary, not the final scheduler. The next lowering will
+replace the blocking native-thread implementation behind the same semantic
+surface with coroutine frames and resume continuations. LLVM's async-continuation
+model likewise puts argument/result marshalling in an async context and requires
+the frontend to describe suspension control flow. SmallLang will retain its
+owned context and affine task cleanup while adding explicit state/resume/destroy
+entries and an event loop.
+
+References: [LLVM coroutines](https://llvm.org/docs/Coroutines.html),
+[POSIX `pthread_create`](https://pubs.opengroup.org/onlinepubs/000095399/functions/pthread_create.html),
+[POSIX `pthread_join`](https://pubs.opengroup.org/onlinepubs/9799919799/functions/pthread_join.html).
+
 

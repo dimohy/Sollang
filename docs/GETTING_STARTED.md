@@ -153,6 +153,17 @@ Linux x64 output is available through WSL:
 wsl --exec /mnt/p/MyWorks/SmallLang/artifacts/01-function-basic-hello-linux
 ```
 
+Structured async uses the same source syntax on Windows and Linux. For example,
+the generic sendable-input coverage can be built and executed through WSL with:
+
+```powershell
+.\scripts\smalllang.ps1 `
+  -Source examples\238-sendable-async-inputs.sl `
+  -Output artifacts\238-sendable-async-inputs-linux `
+  -Target linux-x64
+wsl --exec /mnt/p/MyWorks/SmallLang/artifacts/238-sendable-async-inputs-linux
+```
+
 Browser WebAssembly output is available through the `wasm32-browser` target. The
 generated module exports `smalllang_start` and `memory`, and imports
 `env.smalllang_browser_write(ptr, len)` so the page can render stdout text:

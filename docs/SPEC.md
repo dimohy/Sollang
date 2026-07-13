@@ -569,7 +569,8 @@ needed; otherwise scope cleanup joins the task and discards the result. A task
 cannot be awaited twice or used after `await`. `main` is the implicit root async
 scope, while other functions must declare `async` before using `await`.
 
-The Windows x64 runtime represents every task with the same two-pointer handle
+The Windows x64 and Linux x64 runtimes represent every task with the same
+two-pointer handle
 while its heap context stores input and result slots specialized for their exact
 types. Scalar values, immutable `Text`, and value-only structs/enums are
 structurally sendable and need no annotation. Heap-owning arrays, dictionaries,
@@ -582,10 +583,13 @@ because the caller could otherwise access the same storage while the worker runs
 the task boundary without erasing their type. Owned results transfer to the
 awaiting scope; if a task leaves scope unawaited, cleanup joins it and drops the
 result before freeing the context. If native worker creation fails, a moved input
-is dropped before its context is released. Async bodies remain CPU-pure until
-concurrent stdlib contracts are explicit. Linux lowering, cooperative
-cancellation, task groups, closure-capture analysis, and a stackless I/O
-scheduler remain subsequent slices.
+is dropped before its context is released. The LLVM emitter calls the common
+`smalllang_task_start`, `smalllang_task_join`, and `smalllang_task_release`
+runtime boundary. Windows currently implements it with native thread handles;
+Linux uses an owned pthread handle. Async bodies remain CPU-pure until concurrent
+stdlib contracts are explicit. Cooperative cancellation, task groups,
+closure-capture analysis, and a stackless I/O scheduler remain subsequent
+slices.
 
 ## Local Functions
 

@@ -10,6 +10,56 @@ internal sealed class LinuxLlvmRuntimePlatform : LlvmRuntimePlatform
 
     public override string EntryPointParameters => "i32 %argc, ptr %argv";
 
+    public override bool SupportsAsync => true;
+
+    public override string AsyncWorkerReturnType => "ptr";
+
+    public override string AsyncWorkerSuccessValue => "null";
+
+    public override void EmitAsyncPrimitives(StringBuilder functions)
+    {
+        functions.AppendLine("declare i32 @pthread_create(ptr, ptr, ptr, ptr)");
+        functions.AppendLine("declare i32 @pthread_join(i64, ptr)");
+        functions.AppendLine("""
+            define internal ptr @smalllang_task_start(ptr %worker, ptr %context) #0 {
+            entry:
+              %handle = call ptr @smalllang_alloc(i64 8)
+              %allocated = icmp ne ptr %handle, null
+              br i1 %allocated, label %create, label %fail
+
+            create:
+              %result = call i32 @pthread_create(ptr %handle, ptr null, ptr %worker, ptr %context)
+              %ok = icmp eq i32 %result, 0
+              br i1 %ok, label %success, label %free_fail
+
+            free_fail:
+              call void @smalllang_free(ptr %handle)
+              br label %fail
+
+            success:
+              ret ptr %handle
+
+            fail:
+              ret ptr null
+            }
+
+            define internal i1 @smalllang_task_join(ptr %handle) #0 {
+            entry:
+              %thread = load i64, ptr %handle, align 8
+              %result = call i32 @pthread_join(i64 %thread, ptr null)
+              %ok = icmp eq i32 %result, 0
+              ret i1 %ok
+            }
+
+            define internal i1 @smalllang_task_release(ptr %handle) #0 {
+            entry:
+              call void @smalllang_free(ptr %handle)
+              ret i1 true
+            }
+
+            """);
+    }
+
     public override void EmitGlobals(StringBuilder globals)
     {
         globals.AppendLine("@smalllang_file_writer_fd = internal global i32 -1");

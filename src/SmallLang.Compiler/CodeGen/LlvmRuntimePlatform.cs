@@ -49,6 +49,18 @@ internal abstract class LlvmRuntimePlatform
 
     public virtual bool SupportsChildProcesses => true;
 
+    public virtual bool SupportsAsync => false;
+
+    public virtual string AsyncWorkerReturnType =>
+        throw new NotSupportedException("async is unavailable on this platform");
+
+    public virtual string AsyncWorkerSuccessValue =>
+        throw new NotSupportedException("async is unavailable on this platform");
+
+    public virtual void EmitAsyncPrimitives(StringBuilder functions)
+    {
+    }
+
     public virtual void EmitExitCleanup(StringBuilder functions)
     {
     }
