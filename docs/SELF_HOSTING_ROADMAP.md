@@ -448,6 +448,16 @@ control flow can no longer inherit a nested branch call target, and Bool-typed
 names are no longer mistaken for Bool literals. Branch-local owned aggregates,
 loop regions, and non-scalar joins remain.
 
+The self-hosted grammar no longer treats `while` as a generic block call. A
+dedicated AST target and typed-IR kind 20 retain the Bool condition and body
+region. LLVM lowering emits `header`/`body`/`exit` blocks and a real back-edge
+in functions and `main`; the explicit region task stack also handles while
+nested inside if. An executable false-loop regression proves the body is not
+run, while an uncalled true-loop function is assembled to prove the body and
+back-edge are structurally valid. Loop-carried mutable scalar `phi` nodes,
+mutable condition recomputation, `break`/`continue`, and ownership cleanup on
+loop exits remain before general self-hosted loops are complete.
+
 Typed IR now represents immutable local bindings explicitly and connects each
 name use by stable symbol id. LLVM materializes scalar literal bindings as SSA
 values in both functions and `main`, so bound values can be returned or passed

@@ -48,6 +48,9 @@ public infer sources: [Text; ~] -> [ExpressionType; ~] {
             node.kind == 14 -> if {
                 inferred! -> push(ExpressionType { sourceModule: sourceIndex!, astNode: astIndex!, origin: 1, targetModule: -1, targetSymbol: 2, keyOrigin: -1, keyModule: -1, valueOrigin: -1, valueModule: -1 })
             }
+            node.kind == 44 -> if {
+                inferred! -> push(ExpressionType { sourceModule: sourceIndex!, astNode: astIndex!, origin: 1, targetModule: -1, targetSymbol: 0, keyOrigin: -1, keyModule: -1, valueOrigin: -1, valueModule: -1 })
+            }
             node.kind == 15 -> if {
                 tokens![node.payloadToken] => nameToken
                 false => booleanLiteral!
@@ -1009,7 +1012,7 @@ public infer sources: [Text; ~] -> [ExpressionType; ~] {
                         -1 => directControlAst!
                         0 => directControlSearch!
                         directControlSearch! < (nodes! -> len) -> while {
-                            (nodes![directControlSearch!].parent == controlFlowIndex! and nodes![directControlSearch!].kind == 42) -> if { directControlSearch! => directControlAst! }
+                            (nodes![directControlSearch!].parent == controlFlowIndex! and (nodes![directControlSearch!].kind == 42 or nodes![directControlSearch!].kind == 44)) -> if { directControlSearch! => directControlAst! }
                             directControlSearch! + 1 => directControlSearch!
                         }
                         0 => controlTargetTypeSearch!

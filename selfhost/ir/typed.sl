@@ -14,7 +14,7 @@ import smalllang.compiler.semantic.symbols as symbols
 # 4 Bool constant, 5 name, 6 call, 7 unary, 8 binary, 9 other expression,
 # 10 parameter, 11 entry point, 12 struct literal, 13 member access,
 # 14 array literal, 15 index access, 16 dictionary literal, 17 binding,
-# 18 structured if, 19 control-flow region.
+# 18 structured if, 19 control-flow region, 20 structured while.
 public struct TypedIrNode {
     kind: Int
     parent: Int
@@ -278,11 +278,12 @@ public lower sources: [Text; ~] -> [TypedIrNode; ~] {
                             expressionTypeSearch! + 1 => expressionTypeSearch!
                         }
                         expressionBelongsToFunction! -> if {
-                            (expression.kind == 42 or expression.kind == 43) -> if {
+                            (expression.kind == 42 or expression.kind == 43 or expression.kind == 44) -> if {
                                 results! -> len => controlIr
                                 controlIr => astToIr![expressionAstIndex!]
                                 18 => controlKind!
                                 expression.kind == 43 -> if { 19 => controlKind! }
+                                expression.kind == 44 -> if { 20 => controlKind! }
                                 1 => controlTypeOrigin!
                                 -1 => controlTypeModule!
                                 0 => controlTypeSymbol!
@@ -503,7 +504,7 @@ public lower sources: [Text; ~] -> [TypedIrNode; ~] {
                             lastRegionChild! => control!.operand1
                             control! => results![controlIrIndex!]
                         }
-                        control!.kind == 18 -> if {
+                        (control!.kind == 18 or control!.kind == 20) -> if {
                             nodes![control!.astNode].parent => controlFlowAst
                             -1 => conditionIr!
                             UIntSize(0) => conditionStart!
@@ -531,7 +532,7 @@ public lower sources: [Text; ~] -> [TypedIrNode; ~] {
                             }
                             conditionIr! => control!.operand0
                             thenRegion! => control!.operand1
-                            elseRegion! => control!.nextOperand
+                            control!.kind == 18 -> if { elseRegion! => control!.nextOperand } else { -1 => control!.nextOperand }
                             control! => results![controlIrIndex!]
                         }
                         controlIrIndex! + 1 => controlIrIndex!
@@ -576,7 +577,7 @@ public lower sources: [Text; ~] -> [TypedIrNode; ~] {
                     (returnOperandIr! >= 0 and results![returnOperandIr!].kind == 9) -> if {
                         expressionIrStart => returnControlSearch!
                         returnControlSearch! < expressionIrEnd -> while {
-                            (results![returnControlSearch!].kind == 18 and results![returnControlSearch!].parent == returnOperandIr!) -> if { returnControlSearch! => returnOperandIr! }
+                            ((results![returnControlSearch!].kind == 18 or results![returnControlSearch!].kind == 20) and results![returnControlSearch!].parent == returnOperandIr!) -> if { returnControlSearch! => returnOperandIr! }
                             returnControlSearch! + 1 => returnControlSearch!
                         }
                     }
@@ -718,11 +719,12 @@ public lower sources: [Text; ~] -> [TypedIrNode; ~] {
                             entryExpressionTypeSearch! + 1 => entryExpressionTypeSearch!
                         }
                         entryExpressionBelongs! -> if {
-                            (entryExpression.kind == 42 or entryExpression.kind == 43) -> if {
+                            (entryExpression.kind == 42 or entryExpression.kind == 43 or entryExpression.kind == 44) -> if {
                                 results! -> len => entryControlIr
                                 entryControlIr => entryAstToIr![entryExpressionAst!]
                                 18 => entryControlKind!
                                 entryExpression.kind == 43 -> if { 19 => entryControlKind! }
+                                entryExpression.kind == 44 -> if { 20 => entryControlKind! }
                                 1 => entryControlTypeOrigin!
                                 -1 => entryControlTypeModule!
                                 0 => entryControlTypeSymbol!
@@ -930,7 +932,7 @@ public lower sources: [Text; ~] -> [TypedIrNode; ~] {
                             entryLastRegionChild! => entryControl!.operand1
                             entryControl! => results![entryControlIrIndex!]
                         }
-                        entryControl!.kind == 18 -> if {
+                        (entryControl!.kind == 18 or entryControl!.kind == 20) -> if {
                             nodes![entryControl!.astNode].parent => entryControlFlowAst
                             -1 => entryConditionIr!
                             UIntSize(0) => entryConditionStart!
@@ -958,7 +960,7 @@ public lower sources: [Text; ~] -> [TypedIrNode; ~] {
                             }
                             entryConditionIr! => entryControl!.operand0
                             entryThenRegion! => entryControl!.operand1
-                            entryElseRegion! => entryControl!.nextOperand
+                            entryControl!.kind == 18 -> if { entryElseRegion! => entryControl!.nextOperand } else { -1 => entryControl!.nextOperand }
                             entryControl! => results![entryControlIrIndex!]
                         }
                         entryControlIrIndex! + 1 => entryControlIrIndex!
@@ -983,7 +985,7 @@ public lower sources: [Text; ~] -> [TypedIrNode; ~] {
                     (entryResultIr! >= 0 and results![entryResultIr!].kind == 9) -> if {
                         entryExpressionStart => entryResultControlSearch!
                         entryResultControlSearch! < entryExpressionEnd -> while {
-                            (results![entryResultControlSearch!].kind == 18 and results![entryResultControlSearch!].parent == entryResultIr!) -> if { entryResultControlSearch! => entryResultIr! }
+                            ((results![entryResultControlSearch!].kind == 18 or results![entryResultControlSearch!].kind == 20) and results![entryResultControlSearch!].parent == entryResultIr!) -> if { entryResultControlSearch! => entryResultIr! }
                             entryResultControlSearch! + 1 => entryResultControlSearch!
                         }
                     }

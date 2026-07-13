@@ -73,8 +73,11 @@ generic `Path`, and ordinary expression statements must precede the more
 permissive block-function-call statement. Otherwise `if` can be consumed as a
 path or the left side of a block call before `IfFlowTarget` is attempted. The
 canonical grammar and generated table enforce this special-before-general
-ordering; the self-hosted `if` regression prevents the C# grammar builder and
-SL parser VM from drifting back to the ambiguous order.
+ordering. `while` likewise has a dedicated `WhileFlowTarget` rather than
+depending on the generic block-call fallback. Self-hosted regressions prevent
+the C# grammar builder and SL parser VM from drifting back to ambiguous order.
+Its rule and keyword descriptor are appended after existing grammar entries so
+previous stable rule ids and keyword operator codes do not move.
 
 ## Lexer Descriptor Kinds
 
@@ -346,6 +349,14 @@ this permits arbitrary nesting without consuming the bootstrap compiler's
 inline expansion stack. When a nested value conditional feeds an outer `phi`,
 the incoming predecessor is the inner merge block, not the outer branch label.
 Branch-local owned aggregates and non-scalar value joins remain later slices.
+
+Flow `while` now crosses the same structured boundary as kind 20. The AST keeps
+its condition and body region, typed IR links them explicitly, and LLVM emits
+deterministic `header`, `body`, and `exit` blocks with a body-to-header
+back-edge. The region work stack also composes a while nested inside an if.
+This first executable loop slice covers invariant Bool conditions in functions
+and `main`; loop-carried mutable scalar `phi` nodes and condition recomputation
+from mutable state remain the next loop slice.
 
 The first self-hosted LLVM text backend lives in `selfhost/llvm/text.sl`. It
 emits stable `sl_m<module>_s<symbol>` function names, `i32`/`i1` signatures,

@@ -35,7 +35,7 @@ public resolve source: Text -> [CallResolution; ~] {
         false => hasControlTarget!
         0 => controlTargetSearch!
         controlTargetSearch! < (nodes! -> len) -> while {
-            (nodes![controlTargetSearch!].parent == astIndex! and nodes![controlTargetSearch!].kind == 42) -> if { true => hasControlTarget! }
+            (nodes![controlTargetSearch!].parent == astIndex! and (nodes![controlTargetSearch!].kind == 42 or nodes![controlTargetSearch!].kind == 44)) -> if { true => hasControlTarget! }
             controlTargetSearch! + 1 => controlTargetSearch!
         }
         ((node.kind == 10 and not hasControlTarget!) or node.kind == 11 or node.kind == 15) -> if {
@@ -98,7 +98,7 @@ public resolveModules sources: [Text; ~] -> [ModuleCallResolution; ~] {
             false => moduleHasControlTarget!
             0 => moduleControlTargetSearch!
             moduleControlTargetSearch! < (nodes! -> len) -> while {
-                (nodes![moduleControlTargetSearch!].parent == callAstIndex! and nodes![moduleControlTargetSearch!].kind == 42) -> if { true => moduleHasControlTarget! }
+                (nodes![moduleControlTargetSearch!].parent == callAstIndex! and (nodes![moduleControlTargetSearch!].kind == 42 or nodes![moduleControlTargetSearch!].kind == 44)) -> if { true => moduleHasControlTarget! }
                 moduleControlTargetSearch! + 1 => moduleControlTargetSearch!
             }
             ((callNode.kind == 10 and not moduleHasControlTarget!) or callNode.kind == 11 or callNode.kind == 15) -> if {
