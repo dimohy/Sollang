@@ -504,81 +504,98 @@ public infer sources: [Text; ~] -> [ExpressionType; ~] {
                         baseTypeIndex! >= 0 -> if {
                             inferred![baseTypeIndex!] => baseType
                             ((baseType.origin == 0 or baseType.origin == 2) and nodes![baseType.astNode].kind != 39) -> if {
-                                sourceIndex! => targetSourceModule!
-                                baseType.origin == 2 -> if { moduleIdentities![baseType.targetModule].sourceIndex => targetSourceModule! }
-                                sources[targetSourceModule!] -> symbols.collect => targetTable!
-                                sources[targetSourceModule!] -> lexer.lex => targetTokens!
-                                -1 => memberNameToken!
+                                baseType.origin => memberCurrentOrigin!
+                                baseType.targetModule => memberCurrentModule!
+                                baseType.targetSymbol => memberCurrentSymbol!
+                                baseType.keyOrigin => memberCurrentKeyOrigin!
+                                baseType.keyModule => memberCurrentKeyModule!
+                                baseType.valueOrigin => memberCurrentValueOrigin!
+                                baseType.valueModule => memberCurrentValueModule!
+                                true => memberPathValid!
+                                0 => memberIdentifierOrdinal!
                                 member.firstToken => memberTokenIndex!
-                                memberTokenIndex! < member.firstToken + member.tokenCount -> while {
-                                    tokens![memberTokenIndex!].kind == grammar.tokenIdIdentifier -> if { memberTokenIndex! => memberNameToken! }
+                                (memberPathValid! and memberTokenIndex! < member.firstToken + member.tokenCount) -> while {
+                                    tokens![memberTokenIndex!].kind == grammar.tokenIdIdentifier -> if {
+                                        memberIdentifierOrdinal! > 0 -> if {
+                                            memberCurrentModule! => targetSourceModule!
+                                            memberCurrentOrigin! == 2 -> if { moduleIdentities![memberCurrentModule!].sourceIndex => targetSourceModule! }
+                                            sources[targetSourceModule!] -> symbols.collect => targetTable!
+                                            sources[targetSourceModule!] -> lexer.lex => targetTokens!
+                                            -1 => fieldSymbol!
+                                            0 => fieldSearch!
+                                            (fieldSearch! < (targetTable! -> len) and fieldSymbol! < 0) -> while {
+                                                targetTable![fieldSearch!] => field
+                                                (field.kind == 26 and field.parent == memberCurrentSymbol!) -> if {
+                                                    tokens![memberTokenIndex!] => memberName
+                                                    targetTokens![field.nameToken] => fieldName
+                                                    memberName.span.length == fieldName.span.length => equal!
+                                                    UIntSize(0) => fieldByte!
+                                                    (equal! and fieldByte! < memberName.span.length) -> while {
+                                                        source -> byte(memberName.span.start + fieldByte!) => leftByte
+                                                        sources[targetSourceModule!] -> byte(fieldName.span.start + fieldByte!) => rightByte
+                                                        leftByte != rightByte -> if { false => equal! }
+                                                        fieldByte! + UIntSize(1) => fieldByte!
+                                                    }
+                                                    equal! -> if { fieldSearch! => fieldSymbol! }
+                                                }
+                                                fieldSearch! + 1 => fieldSearch!
+                                            }
+                                            fieldSymbol! >= 0 -> if {
+                                                targetTable![fieldSymbol!] => field
+                                                -1 => fieldNominalIndex!
+                                                -1 => fieldCompositeIndex!
+                                                0 => fieldTypeSearch!
+                                                fieldTypeSearch! < (nominal! -> len) -> while {
+                                                    nominal![fieldTypeSearch!] => fieldType
+                                                    (fieldType.sourceModule == targetSourceModule! and fieldType.typeAst == field.typeNode) -> if { fieldTypeSearch! => fieldNominalIndex! }
+                                                    fieldTypeSearch! + 1 => fieldTypeSearch!
+                                                }
+                                                0 => fieldCompositeSearch!
+                                                fieldCompositeSearch! < (composite! -> len) -> while {
+                                                    composite![fieldCompositeSearch!] => fieldCompositeCandidate
+                                                    (fieldCompositeCandidate.sourceModule == targetSourceModule! and fieldCompositeCandidate.typeAst == field.typeNode) -> if { fieldCompositeSearch! => fieldCompositeIndex! }
+                                                    fieldCompositeSearch! + 1 => fieldCompositeSearch!
+                                                }
+                                                fieldNominalIndex! >= 0 -> if {
+                                                    nominal![fieldNominalIndex!] => fieldType
+                                                    fieldType.origin => memberCurrentOrigin!
+                                                    fieldType.targetModule => memberCurrentModule!
+                                                    fieldType.targetSymbol => memberCurrentSymbol!
+                                                    -1 => memberCurrentKeyOrigin!
+                                                    -1 => memberCurrentKeyModule!
+                                                    -1 => memberCurrentValueOrigin!
+                                                    -1 => memberCurrentValueModule!
+                                                } else {
+                                                    fieldCompositeIndex! >= 0 -> if {
+                                                        composite![fieldCompositeIndex!] => fieldType
+                                                        10 + fieldType.kind => memberCurrentOrigin!
+                                                        fieldType.kind == 5 -> if { fieldType.keySymbol => memberCurrentModule! } else { fieldType.elementModule => memberCurrentModule! }
+                                                        fieldType.kind == 5 -> if { fieldType.valueSymbol => memberCurrentSymbol! } else { fieldType.elementSymbol => memberCurrentSymbol! }
+                                                        fieldType.kind == 5 -> if { fieldType.keyOrigin => memberCurrentKeyOrigin! } else { -1 => memberCurrentKeyOrigin! }
+                                                        fieldType.kind == 5 -> if { fieldType.keyModule => memberCurrentKeyModule! } else { -1 => memberCurrentKeyModule! }
+                                                        fieldType.kind == 5 -> if { fieldType.valueOrigin => memberCurrentValueOrigin! } else { -1 => memberCurrentValueOrigin! }
+                                                        fieldType.kind == 5 -> if { fieldType.valueModule => memberCurrentValueModule! } else { -1 => memberCurrentValueModule! }
+                                                    } else { false => memberPathValid! }
+                                                }
+                                            } else { false => memberPathValid! }
+                                        }
+                                        memberIdentifierOrdinal! + 1 => memberIdentifierOrdinal!
+                                    }
                                     memberTokenIndex! + 1 => memberTokenIndex!
                                 }
-                                -1 => fieldSymbol!
-                                0 => fieldSearch!
-                                (fieldSearch! < (targetTable! -> len) and fieldSymbol! < 0) -> while {
-                                    targetTable![fieldSearch!] => field
-                                    (field.kind == 26 and field.parent == baseType.targetSymbol) -> if {
-                                        tokens![memberNameToken!] => memberName
-                                        targetTokens![field.nameToken] => fieldName
-                                        memberName.span.length == fieldName.span.length => equal!
-                                        UIntSize(0) => fieldByte!
-                                        (equal! and fieldByte! < memberName.span.length) -> while {
-                                            source -> byte(memberName.span.start + fieldByte!) => leftByte
-                                            sources[targetSourceModule!] -> byte(fieldName.span.start + fieldByte!) => rightByte
-                                            leftByte != rightByte -> if { false => equal! }
-                                            fieldByte! + UIntSize(1) => fieldByte!
-                                        }
-                                        equal! -> if { fieldSearch! => fieldSymbol! }
-                                    }
-                                    fieldSearch! + 1 => fieldSearch!
-                                }
-                                fieldSymbol! >= 0 -> if {
-                                    targetTable![fieldSymbol!] => field
-                                    -1 => fieldNominalIndex!
-                                    -1 => fieldCompositeIndex!
-                                    0 => fieldTypeSearch!
-                                    fieldTypeSearch! < (nominal! -> len) -> while {
-                                        nominal![fieldTypeSearch!] => fieldType
-                                        (fieldType.sourceModule == targetSourceModule! and fieldType.typeAst == field.typeNode) -> if { fieldTypeSearch! => fieldNominalIndex! }
-                                        fieldTypeSearch! + 1 => fieldTypeSearch!
-                                    }
-                                    0 => fieldCompositeSearch!
-                                    fieldCompositeSearch! < (composite! -> len) -> while {
-                                        composite![fieldCompositeSearch!] => fieldCompositeCandidate
-                                        (fieldCompositeCandidate.sourceModule == targetSourceModule! and fieldCompositeCandidate.typeAst == field.typeNode) -> if { fieldCompositeSearch! => fieldCompositeIndex! }
-                                        fieldCompositeSearch! + 1 => fieldCompositeSearch!
-                                    }
-                                    fieldNominalIndex! >= 0 -> if {
-                                        nominal![fieldNominalIndex!] => fieldType
-                                        inferred! -> push(ExpressionType {
-                                            sourceModule: sourceIndex!
-                                            astNode: memberIndex!
-                                            origin: fieldType.origin
-                                            targetModule: fieldType.targetModule
-                                            targetSymbol: fieldType.targetSymbol
-                                            keyOrigin: -1
-                                            keyModule: -1
-                                            valueOrigin: -1
-                                            valueModule: -1
-                                        })
-                                        true => changed!
-                                    }
-                                    (fieldNominalIndex! < 0 and fieldCompositeIndex! >= 0) -> if {
-                                        composite![fieldCompositeIndex!] => fieldType
-                                        inferred! -> push(ExpressionType {
-                                            sourceModule: sourceIndex!
-                                            astNode: memberIndex!
-                                            origin: 10 + fieldType.kind
-                                            targetModule: fieldType.kind == 5 -> if { fieldType.keySymbol } else { fieldType.elementModule }
-                                            targetSymbol: fieldType.kind == 5 -> if { fieldType.valueSymbol } else { fieldType.elementSymbol }
-                                            keyOrigin: fieldType.kind == 5 -> if { fieldType.keyOrigin } else { -1 }
-                                            keyModule: fieldType.kind == 5 -> if { fieldType.keyModule } else { -1 }
-                                            valueOrigin: fieldType.kind == 5 -> if { fieldType.valueOrigin } else { -1 }
-                                            valueModule: fieldType.kind == 5 -> if { fieldType.valueModule } else { -1 }
-                                        })
-                                        true => changed!
-                                    }
+                                (memberPathValid! and memberIdentifierOrdinal! > 1) -> if {
+                                    inferred! -> push(ExpressionType {
+                                        sourceModule: sourceIndex!
+                                        astNode: memberIndex!
+                                        origin: memberCurrentOrigin!
+                                        targetModule: memberCurrentModule!
+                                        targetSymbol: memberCurrentSymbol!
+                                        keyOrigin: memberCurrentKeyOrigin!
+                                        keyModule: memberCurrentKeyModule!
+                                        valueOrigin: memberCurrentValueOrigin!
+                                        valueModule: memberCurrentValueModule!
+                                    })
+                                    true => changed!
                                 }
                             }
                         }

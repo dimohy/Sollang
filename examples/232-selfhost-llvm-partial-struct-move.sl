@@ -1,0 +1,33 @@
+import smalllang.compiler.llvm.text as llvm
+
+main {
+    [
+        """
+        struct Inner {
+            values: [Int; ~]
+        }
+
+        struct Outer {
+            left: Inner
+            right: [Int; ~]
+        }
+
+        partial flag: Bool -> Int {
+            Outer {
+                left: Inner {
+                    values: [1, 2, ~]
+                }
+                right: [3, 4, ~]
+            } => outer!
+            outer!.left.values => values!
+            7
+        }
+
+        main {
+            partial(true) => result
+        }
+        """,
+        ~
+    ] => sources!
+    sources! -> llvm.emit
+}

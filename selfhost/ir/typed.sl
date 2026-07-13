@@ -1,12 +1,15 @@
 namespace smalllang.compiler.ir.typed
 
 import smalllang.compiler.ast as ast
+import smalllang.compiler.lexer as lexer
 import smalllang.compiler.semantic.calls as calls
 import smalllang.compiler.semantic.composite_types as compositeTypes
 import smalllang.compiler.semantic.expression_types as expressionTypes
+import smalllang.compiler.semantic.modules as modules
 import smalllang.compiler.semantic.nominal_types as nominalTypes
 import smalllang.compiler.semantic.resolve as resolution
 import smalllang.compiler.semantic.symbols as symbols
+import syntax.generated.smalllang as grammar
 
 # Stable, flat typed IR. Indexes are relocatable array offsets so later LLVM
 # lowering can consume the table without allocating an object graph.
@@ -39,10 +42,11 @@ public struct TypedIrNode {
 # A move event is a consuming call whose argument is a resolved local owner.
 # Cleanup lowering uses this side table instead of overloading value/type flags.
 public struct MoveEvent {
-    callIr: Int
+    siteIr: Int
     sourceModule: Int
     symbol: Int
     regionIr: Int
+    memberIr: Int
 }
 
 public lower sources: [Text; ~] -> [TypedIrNode; ~] {
@@ -50,6 +54,7 @@ public lower sources: [Text; ~] -> [TypedIrNode; ~] {
     sources -> nominalTypes.resolve => nominal!
     sources -> compositeTypes.resolve => composite!
     sources -> calls.resolveModules => resolvedCalls!
+    sources -> modules.identities => moduleIdentities!
     [TypedIrNode; ~] => results!
     0 => sourceIndex!
     sourceIndex! < (sources -> len) -> while {
@@ -1134,6 +1139,89 @@ public lower sources: [Text; ~] -> [TypedIrNode; ~] {
         }
         ownedBindingIndex! + 1 => ownedBindingIndex!
     }
+    0 => memberIndex!
+    memberIndex! < (results! -> len) -> while {
+        results![memberIndex!] => member!
+        (member!.kind == 13 and member!.operand0 >= 0) -> if {
+            results![member!.operand0] => memberBase
+            memberBase.typeOrigin => memberCurrentOrigin!
+            memberBase.typeModule => memberCurrentModule!
+            memberBase.typeSymbol => memberCurrentSymbol!
+            sources[member!.sourceModule] -> ast.lower => memberNodes!
+            sources[member!.sourceModule] -> lexer.lex => memberTokens!
+            memberNodes![member!.astNode] => memberAst
+            0 => memberIdentifierOrdinal!
+            memberAst.firstToken => memberTokenIndex!
+            memberTokenIndex! < memberAst.firstToken + memberAst.tokenCount -> while {
+                memberTokens![memberTokenIndex!].kind == grammar.tokenIdIdentifier -> if {
+                    memberIdentifierOrdinal! > 0 -> if {
+                        memberCurrentModule! => memberOwnerSource!
+                        memberCurrentOrigin! == 2 -> if { moduleIdentities![memberCurrentModule!].sourceIndex => memberOwnerSource! }
+                        sources[memberOwnerSource!] -> symbols.collect => memberOwnerTable!
+                        sources[memberOwnerSource!] -> lexer.lex => memberOwnerTokens!
+                        0 => memberFieldOrdinal!
+                        0 => memberFieldIndex!
+                        memberFieldIndex! < (memberOwnerTable! -> len) -> while {
+                            memberOwnerTable![memberFieldIndex!] => memberField
+                            (memberField.kind == 26 and memberField.parent == memberCurrentSymbol!) -> if {
+                                memberTokens![memberTokenIndex!] => memberName
+                                memberOwnerTokens![memberField.nameToken] => memberFieldName
+                                memberName.span.length == memberFieldName.span.length => memberEqual!
+                                UIntSize(0) => memberNameByte!
+                                (memberEqual! and memberNameByte! < memberName.span.length) -> while {
+                                    sources[member!.sourceModule] -> byte(memberName.span.start + memberNameByte!) => memberByte
+                                    sources[memberOwnerSource!] -> byte(memberFieldName.span.start + memberNameByte!) => memberFieldByte
+                                    memberByte != memberFieldByte -> if { false => memberEqual! }
+                                    memberNameByte! + UIntSize(1) => memberNameByte!
+                                }
+                                memberEqual! -> if {
+                                    memberFieldOrdinal! => member!.symbol
+                                    memberOwnerSource! => member!.targetModule
+                                    -1 => memberFieldTypeIndex!
+                                    0 => memberFieldTypeSearch!
+                                    memberFieldTypeSearch! < (nominal! -> len) -> while {
+                                        (nominal![memberFieldTypeSearch!].sourceModule == memberOwnerSource! and nominal![memberFieldTypeSearch!].typeAst == memberField.typeNode) -> if { memberFieldTypeSearch! => memberFieldTypeIndex! }
+                                        memberFieldTypeSearch! + 1 => memberFieldTypeSearch!
+                                    }
+                                    memberFieldTypeIndex! >= 0 -> if {
+                                        nominal![memberFieldTypeIndex!] => memberFieldType
+                                        memberFieldType.origin => memberCurrentOrigin!
+                                        memberFieldType.targetModule => memberCurrentModule!
+                                        memberFieldType.targetSymbol => memberCurrentSymbol!
+                                    } else {
+                                        0 => memberCompositeSearch!
+                                        memberCompositeSearch! < (composite! -> len) -> while {
+                                            composite![memberCompositeSearch!] => memberCompositeType
+                                            (memberCompositeType.sourceModule == memberOwnerSource! and memberCompositeType.typeAst == memberField.typeNode) -> if {
+                                                10 + memberCompositeType.kind => memberCurrentOrigin!
+                                                memberCompositeType.kind == 5 -> if {
+                                                    memberCompositeType.keySymbol => memberCurrentModule!
+                                                    memberCompositeType.valueSymbol => memberCurrentSymbol!
+                                                } else {
+                                                    memberCompositeType.elementModule => memberCurrentModule!
+                                                    memberCompositeType.elementSymbol => memberCurrentSymbol!
+                                                }
+                                            }
+                                            memberCompositeSearch! + 1 => memberCompositeSearch!
+                                        }
+                                    }
+                                    memberCurrentOrigin! => member!.typeOrigin
+                                    memberCurrentModule! => member!.typeModule
+                                    memberCurrentSymbol! => member!.typeSymbol
+                                }
+                                memberFieldOrdinal! + 1 => memberFieldOrdinal!
+                            }
+                            memberFieldIndex! + 1 => memberFieldIndex!
+                        }
+                    }
+                    memberIdentifierOrdinal! + 1 => memberIdentifierOrdinal!
+                }
+                memberTokenIndex! + 1 => memberTokenIndex!
+            }
+            member! => results![memberIndex!]
+        }
+        memberIndex! + 1 => memberIndex!
+    }
     0 => loopExitIndex!
     loopExitIndex! < (results! -> len) -> while {
         results![loopExitIndex!] => loopExit!
@@ -1152,37 +1240,46 @@ public lower sources: [Text; ~] -> [TypedIrNode; ~] {
 
 public movesFrom ir: [TypedIrNode; ~] -> [MoveEvent; ~] {
     [MoveEvent; ~] => events!
-    0 => callIndex!
-    callIndex! < (ir -> len) -> while {
-        ir[callIndex!] => call
-        (call.kind == 6 and call.symbol >= 0 and call.operand0 >= 0) -> if {
-            ir[call.operand0] => argument
-            (argument.kind == 5 and argument.symbol >= 0) -> if {
-                false => consumes!
-                0 => functionIndex!
-                functionIndex! < (ir -> len) -> while {
-                    ir[functionIndex!] => function
-                    (function.kind == 0 and function.sourceModule == call.targetModule and function.symbol == call.symbol and function.operand1 >= 0) -> if {
-                        ir[function.operand1] => parameter
-                        parameter.flags % 2 == 1 -> if { true => consumes! }
-                    }
-                    functionIndex! + 1 => functionIndex!
+    0 => siteIndex!
+    siteIndex! < (ir -> len) -> while {
+        ir[siteIndex!] => site
+        -1 => movedValueIr!
+        (site.kind == 6 and site.symbol >= 0 and site.operand0 >= 0) -> if {
+            false => consumes!
+            0 => functionIndex!
+            functionIndex! < (ir -> len) -> while {
+                ir[functionIndex!] => function
+                (function.kind == 0 and function.sourceModule == site.targetModule and function.symbol == site.symbol and function.operand1 >= 0) -> if {
+                    ir[function.operand1] => parameter
+                    parameter.flags % 2 == 1 -> if { true => consumes! }
                 }
-                consumes! -> if {
-                    call.parent => moveRegion!
-                    (moveRegion! >= 0 and ir[moveRegion!].kind != 1 and ir[moveRegion!].kind != 19 and ir[moveRegion!].kind != 20) -> while {
-                        ir[moveRegion!].parent => moveRegion!
-                    }
-                    events! -> push(MoveEvent {
-                        callIr: callIndex!
-                        sourceModule: argument.sourceModule
-                        symbol: argument.symbol
-                        regionIr: moveRegion!
-                    })
+                functionIndex! + 1 => functionIndex!
+            }
+            consumes! -> if { site.operand0 => movedValueIr! }
+        }
+        (site.kind == 17 and site.operand0 >= 0 and ir[site.operand0].kind == 13 and (ir[site.operand0].typeOrigin == 13 or ir[site.operand0].typeOrigin == 15 or ir[site.operand0].typeOrigin == 0 or ir[site.operand0].typeOrigin == 2)) -> if {
+            site.operand0 => movedValueIr!
+        }
+        movedValueIr! >= 0 -> if {
+            movedValueIr! => moveRootIr!
+            -1 => moveMemberIr!
+            ir[moveRootIr!].kind == 13 -> if { moveRootIr! => moveMemberIr! }
+            (moveRootIr! >= 0 and ir[moveRootIr!].kind == 13) -> while { ir[moveRootIr!].operand0 => moveRootIr! }
+            (moveRootIr! >= 0 and ir[moveRootIr!].kind == 5 and ir[moveRootIr!].symbol >= 0) -> if {
+                site.parent => moveRegion!
+                (moveRegion! >= 0 and ir[moveRegion!].kind != 1 and ir[moveRegion!].kind != 19 and ir[moveRegion!].kind != 20) -> while {
+                    ir[moveRegion!].parent => moveRegion!
                 }
+                events! -> push(MoveEvent {
+                    siteIr: siteIndex!
+                    sourceModule: ir[moveRootIr!].sourceModule
+                    symbol: ir[moveRootIr!].symbol
+                    regionIr: moveRegion!
+                    memberIr: moveMemberIr!
+                })
             }
         }
-        callIndex! + 1 => callIndex!
+        siteIndex! + 1 => siteIndex!
     }
     events!
 }

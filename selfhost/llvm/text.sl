@@ -48,6 +48,12 @@ struct DropGlueRequest {
     valueIndex: Int
     nameRoot: Int
     pathCode: Int
+    bindingIndex: Int
+    regionIndex: Int
+    beforeAst: Int
+    parentTask: Int
+    fieldOrdinal: Int
+    hasPartialMoves: Bool
 }
 
 emitCore sources: move [Text; ~] -> Unit {
@@ -63,10 +69,117 @@ emitCore sources: move [Text; ~] -> Unit {
         [request, ~] => dropTasks!
         sources -> nominalTypes.resolve => dropNominal!
         sources -> compositeTypes.resolve => dropComposite!
+        [typedIr.TypedIrNode; ~] => dropGlueIr!
+        [typedIr.MoveEvent; ~] => dropGlueMoves!
+        request.hasPartialMoves -> if {
+            sources -> typedIr.lower => computedDropGlueIr!
+            computedDropGlueIr! -> each computedDropGlueNode { dropGlueIr! -> push(computedDropGlueNode) }
+            computedDropGlueIr! -> typedIr.movesFrom => computedDropGlueMoves!
+            computedDropGlueMoves! -> each computedDropGlueMove { dropGlueMoves! -> push(computedDropGlueMove) }
+            true => partialMetadataReady
+        }
         0 => dropTaskIndex!
         dropTaskIndex! < (dropTasks! -> len) -> while {
         dropTasks![dropTaskIndex!] => dropTask
-        dropTask.typeOrigin == 13 -> if {
+        false => dropTaskMoved!
+        (dropTask.bindingIndex >= 0 and dropTask.hasPartialMoves) -> if {
+            sources -> modules.identities => dropModules!
+            dropGlueIr![dropTask.bindingIndex] => dropGlueBinding
+            sources[dropGlueBinding.sourceModule] -> ast.lower => dropGlueAst!
+            UIntSize(0) => dropGlueBeforeStart!
+            dropTask.beforeAst >= 0 -> if { dropGlueAst![dropTask.beforeAst].start => dropGlueBeforeStart! }
+            0 => dropGlueMoveIndex!
+            (dropGlueMoveIndex! < (dropGlueMoves! -> len) and not dropTaskMoved!) -> while {
+                dropGlueMoves![dropGlueMoveIndex!] => dropGlueMove
+                (dropGlueMove.memberIr >= 0 and dropGlueMove.sourceModule == dropGlueBinding.sourceModule and dropGlueMove.symbol == dropGlueBinding.symbol and dropGlueMove.regionIr == dropTask.regionIndex) -> if {
+                    dropGlueIr![dropGlueMove.siteIr] => dropGlueSite
+                    true => dropGlueMoveBeforeEdge!
+                    dropTask.beforeAst >= 0 -> if {
+                        dropGlueAst![dropGlueSite.astNode].start >= dropGlueBeforeStart! -> if { false => dropGlueMoveBeforeEdge! }
+                    }
+                    dropGlueAst![dropGlueSite.astNode].start <= dropGlueAst![dropGlueBinding.astNode].start -> if { false => dropGlueMoveBeforeEdge! }
+                    0 => dropTaskDepth!
+                    dropTaskIndex! => dropTaskCursor!
+                    (dropTaskCursor! >= 0 and dropTasks![dropTaskCursor!].fieldOrdinal >= 0) -> while {
+                        dropTaskDepth! + 1 => dropTaskDepth!
+                        dropTasks![dropTaskCursor!].parentTask => dropTaskCursor!
+                    }
+                    dropGlueIr![dropGlueMove.memberIr] => dropMoveMember
+                    sources[dropMoveMember.sourceModule] -> ast.lower => dropMoveNodes!
+                    sources[dropMoveMember.sourceModule] -> lexer.lex => dropMoveTokens!
+                    dropMoveNodes![dropMoveMember.astNode] => dropMoveAst
+                    -1 => dropMoveDepth!
+                    dropMoveAst.firstToken => dropMoveTokenIndex!
+                    dropMoveTokenIndex! < dropMoveAst.firstToken + dropMoveAst.tokenCount -> while {
+                        dropMoveTokens![dropMoveTokenIndex!].kind == grammar.tokenIdIdentifier -> if { dropMoveDepth! + 1 => dropMoveDepth! }
+                        dropMoveTokenIndex! + 1 => dropMoveTokenIndex!
+                    }
+                    dropTaskDepth! == dropMoveDepth! => sameDropPath!
+                    dropGlueBinding.typeOrigin => dropMoveCurrentOrigin!
+                    dropGlueBinding.typeModule => dropMoveCurrentModule!
+                    dropGlueBinding.typeSymbol => dropMoveCurrentSymbol!
+                    0 => dropMoveIdentifierOrdinal!
+                    dropMoveAst.firstToken => dropMoveTokenIndex!
+                    (sameDropPath! and dropMoveTokenIndex! < dropMoveAst.firstToken + dropMoveAst.tokenCount) -> while {
+                        dropMoveTokens![dropMoveTokenIndex!].kind == grammar.tokenIdIdentifier -> if {
+                            dropMoveIdentifierOrdinal! > 0 -> if {
+                                dropMoveCurrentModule! => dropMoveOwnerSource!
+                                dropMoveCurrentOrigin! == 2 -> if { dropModules![dropMoveCurrentModule!].sourceIndex => dropMoveOwnerSource! }
+                                sources[dropMoveOwnerSource!] -> symbols.collect => dropMoveOwnerTable!
+                                sources[dropMoveOwnerSource!] -> lexer.lex => dropMoveOwnerTokens!
+                                -1 => dropMoveFieldOrdinal!
+                                -1 => dropMoveFieldTypeNode!
+                                0 => dropMoveCandidateOrdinal!
+                                0 => dropMoveFieldIndex!
+                                dropMoveFieldIndex! < (dropMoveOwnerTable! -> len) -> while {
+                                    dropMoveOwnerTable![dropMoveFieldIndex!] => dropMoveField
+                                    (dropMoveField.kind == 26 and dropMoveField.parent == dropMoveCurrentSymbol!) -> if {
+                                        dropMoveTokens![dropMoveTokenIndex!] => dropMoveName
+                                        dropMoveOwnerTokens![dropMoveField.nameToken] => dropMoveFieldName
+                                        dropMoveName.span.length == dropMoveFieldName.span.length => dropMoveEqual!
+                                        UIntSize(0) => dropMoveNameByte!
+                                        (dropMoveEqual! and dropMoveNameByte! < dropMoveName.span.length) -> while {
+                                            sources[dropMoveMember.sourceModule] -> byte(dropMoveName.span.start + dropMoveNameByte!) => dropMoveByte
+                                            sources[dropMoveOwnerSource!] -> byte(dropMoveFieldName.span.start + dropMoveNameByte!) => dropMoveFieldByte
+                                            dropMoveByte != dropMoveFieldByte -> if { false => dropMoveEqual! }
+                                            dropMoveNameByte! + UIntSize(1) => dropMoveNameByte!
+                                        }
+                                        dropMoveEqual! -> if {
+                                            dropMoveCandidateOrdinal! => dropMoveFieldOrdinal!
+                                            dropMoveField.typeNode => dropMoveFieldTypeNode!
+                                        }
+                                        dropMoveCandidateOrdinal! + 1 => dropMoveCandidateOrdinal!
+                                    }
+                                    dropMoveFieldIndex! + 1 => dropMoveFieldIndex!
+                                }
+                                dropTaskIndex! => dropTaskCursor!
+                                dropTaskDepth! - dropMoveIdentifierOrdinal! => dropTaskParentSteps!
+                                dropTaskParentSteps! > 0 -> while {
+                                    dropTasks![dropTaskCursor!].parentTask => dropTaskCursor!
+                                    dropTaskParentSteps! - 1 => dropTaskParentSteps!
+                                }
+                                (dropMoveFieldOrdinal! < 0 or dropTasks![dropTaskCursor!].fieldOrdinal != dropMoveFieldOrdinal!) -> if { false => sameDropPath! }
+                                0 => dropMoveNominalIndex!
+                                dropMoveNominalIndex! < (dropNominal! -> len) -> while {
+                                    dropNominal![dropMoveNominalIndex!] => dropMoveNominalType
+                                    (dropMoveNominalType.sourceModule == dropMoveOwnerSource! and dropMoveNominalType.typeAst == dropMoveFieldTypeNode!) -> if {
+                                        dropMoveNominalType.origin => dropMoveCurrentOrigin!
+                                        dropMoveNominalType.targetModule => dropMoveCurrentModule!
+                                        dropMoveNominalType.targetSymbol => dropMoveCurrentSymbol!
+                                    }
+                                    dropMoveNominalIndex! + 1 => dropMoveNominalIndex!
+                                }
+                            }
+                            dropMoveIdentifierOrdinal! + 1 => dropMoveIdentifierOrdinal!
+                        }
+                        dropMoveTokenIndex! + 1 => dropMoveTokenIndex!
+                    }
+                    (dropGlueMoveBeforeEdge! and sameDropPath!) -> if { true => dropTaskMoved! }
+                }
+                dropGlueMoveIndex! + 1 => dropGlueMoveIndex!
+            }
+        }
+        (not dropTaskMoved! and dropTask.typeOrigin == 13) -> if {
             "  " -> print
             dropTask -> emitDropPathName
             "_data = extractvalue %sl.array.i32 " -> print
@@ -76,7 +189,7 @@ emitCore sources: move [Text; ~] -> Unit {
             dropTask -> emitDropPathName
             "_data)" -> println
         } else {
-        dropTask.typeOrigin == 15 -> if {
+        (not dropTaskMoved! and dropTask.typeOrigin == 15) -> if {
             "  " -> print
             dropTask -> emitDropPathName
             "_keys = extractvalue %sl.dict " -> print
@@ -94,7 +207,7 @@ emitCore sources: move [Text; ~] -> Unit {
             dropTask -> emitDropPathName
             "_values)" -> println
         } else {
-        (dropTask.typeOrigin == 0 or dropTask.typeOrigin == 2) -> if {
+        (not dropTaskMoved! and (dropTask.typeOrigin == 0 or dropTask.typeOrigin == 2)) -> if {
             sources[dropTask.typeModule] -> symbols.collect => dropStructTable!
             0 => dropFieldOrdinal!
             0 => dropFieldIndex!
@@ -136,6 +249,12 @@ emitCore sources: move [Text; ~] -> Unit {
                             valueIndex: -1
                             nameRoot: dropTask.nameRoot
                             pathCode: dropFieldPath
+                            bindingIndex: dropTask.bindingIndex
+                            regionIndex: dropTask.regionIndex
+                            beforeAst: dropTask.beforeAst
+                            parentTask: dropTaskIndex!
+                            fieldOrdinal: dropFieldOrdinal!
+                            hasPartialMoves: dropTask.hasPartialMoves
                         })
                     }
                     dropFieldOrdinal! + 1 => dropFieldOrdinal!
@@ -480,12 +599,14 @@ emitCore sources: move [Text; ~] -> Unit {
                 dropAst![ownedDropCandidate.astNode].start >= dropBeforeStart! -> if { false => ownedDropBeforeEdge! }
             }
             false => ownedDropMoved!
+            false => ownedDropHasPartialMoves!
             (ownedDropCandidate.kind == 17 and (ownedDropCandidate.typeOrigin == 13 or ownedDropCandidate.typeOrigin == 15 or ownedDropCandidate.typeOrigin == 0 or ownedDropCandidate.typeOrigin == 2)) -> if {
                 0 => ownedMoveIndex!
                 (ownedMoveIndex! < (dropMoveEvents! -> len) and not ownedDropMoved!) -> while {
                     dropMoveEvents![ownedMoveIndex!] => ownedMove
-                    (ownedMove.sourceModule == ownedDropCandidate.sourceModule and ownedMove.symbol == ownedDropCandidate.symbol and ownedMove.regionIr == request.regionIndex) -> if {
-                        dropIr![ownedMove.callIr] => ownedMoveCall
+                    (ownedMove.memberIr >= 0 and ownedMove.sourceModule == ownedDropCandidate.sourceModule and ownedMove.symbol == ownedDropCandidate.symbol) -> if { true => ownedDropHasPartialMoves! }
+                    (ownedMove.memberIr < 0 and ownedMove.sourceModule == ownedDropCandidate.sourceModule and ownedMove.symbol == ownedDropCandidate.symbol and ownedMove.regionIr == request.regionIndex) -> if {
+                        dropIr![ownedMove.siteIr] => ownedMoveCall
                         true => ownedMoveBeforeEdge!
                         request.beforeAst >= 0 -> if {
                             dropAst![ownedMoveCall.astNode].start >= dropBeforeStart! -> if { false => ownedMoveBeforeEdge! }
@@ -514,6 +635,12 @@ emitCore sources: move [Text; ~] -> Unit {
                     valueIndex: ownedDropCandidate.operand0
                     nameRoot: request.edgeIndex * 1000 + ownedDropIndex!
                     pathCode: 0
+                    bindingIndex: ownedDropIndex!
+                    regionIndex: request.regionIndex
+                    beforeAst: request.beforeAst
+                    parentTask: -1
+                    fieldOrdinal: -1
+                    hasPartialMoves: ownedDropHasPartialMoves!
                 } -> emitDropGlue
             }
         }
@@ -1506,45 +1633,98 @@ emitCore sources: move [Text; ~] -> Unit {
                 }
                 expression.kind == 13 -> if {
                     ir![expression.operand0] => memberBase
-                    memberBase.typeModule => ownerSourceModule!
-                    memberBase.typeOrigin == 2 -> if { moduleIdentities![memberBase.typeModule].sourceIndex => ownerSourceModule! }
-                    sources[ownerSourceModule!] -> symbols.collect => ownerTable!
-                    sources[ownerSourceModule!] -> lexer.lex => ownerTokens!
+                    memberBase.typeOrigin => memberCurrentOrigin!
+                    memberBase.typeModule => memberCurrentModule!
+                    memberBase.typeSymbol => memberCurrentSymbol!
                     sources[expression.sourceModule] -> ast.lower => memberNodes!
                     sources[expression.sourceModule] -> lexer.lex => memberTokens!
                     memberNodes![expression.astNode] => memberAst
-                    -1 => memberNameToken!
+                    0 => memberIdentifierCount!
                     memberAst.firstToken => memberTokenIndex!
                     memberTokenIndex! < memberAst.firstToken + memberAst.tokenCount -> while {
-                        memberTokens![memberTokenIndex!].kind == grammar.tokenIdIdentifier -> if { memberTokenIndex! => memberNameToken! }
+                        memberTokens![memberTokenIndex!].kind == grammar.tokenIdIdentifier -> if { memberIdentifierCount! + 1 => memberIdentifierCount! }
                         memberTokenIndex! + 1 => memberTokenIndex!
                     }
-                    -1 => fieldOrdinal!
-                    0 => candidateFieldOrdinal!
-                    0 => memberFieldSearch!
-                    memberFieldSearch! < (ownerTable! -> len) -> while {
-                        ownerTable![memberFieldSearch!] => memberField
-                        (memberField.kind == 26 and memberField.parent == memberBase.typeSymbol) -> if {
-                            memberTokens![memberNameToken!] => memberName
-                            ownerTokens![memberField.nameToken] => fieldName
-                            memberName.span.length == fieldName.span.length => equal!
-                            UIntSize(0) => fieldNameByte!
-                            (equal! and fieldNameByte! < memberName.span.length) -> while {
-                                sources[expression.sourceModule] -> byte(memberName.span.start + fieldNameByte!) => memberByte
-                                sources[ownerSourceModule!] -> byte(fieldName.span.start + fieldNameByte!) => fieldByte
-                                memberByte != fieldByte -> if { false => equal! }
-                                fieldNameByte! + UIntSize(1) => fieldNameByte!
+                    0 => memberIdentifierOrdinal!
+                    0 => memberProjectionOrdinal!
+                    memberAst.firstToken => memberTokenIndex!
+                    memberTokenIndex! < memberAst.firstToken + memberAst.tokenCount -> while {
+                        memberTokens![memberTokenIndex!].kind == grammar.tokenIdIdentifier -> if {
+                            memberIdentifierOrdinal! > 0 -> if {
+                                memberCurrentModule! => ownerSourceModule!
+                                memberCurrentOrigin! == 2 -> if { moduleIdentities![memberCurrentModule!].sourceIndex => ownerSourceModule! }
+                                sources[ownerSourceModule!] -> symbols.collect => ownerTable!
+                                sources[ownerSourceModule!] -> lexer.lex => ownerTokens!
+                                -1 => fieldOrdinal!
+                                0 => candidateFieldOrdinal!
+                                0 => memberFieldSearch!
+                                memberFieldSearch! < (ownerTable! -> len) -> while {
+                                    ownerTable![memberFieldSearch!] => memberField
+                                    (memberField.kind == 26 and memberField.parent == memberCurrentSymbol!) -> if {
+                                        memberTokens![memberTokenIndex!] => memberName
+                                        ownerTokens![memberField.nameToken] => fieldName
+                                        memberName.span.length == fieldName.span.length => equal!
+                                        UIntSize(0) => fieldNameByte!
+                                        (equal! and fieldNameByte! < memberName.span.length) -> while {
+                                            sources[expression.sourceModule] -> byte(memberName.span.start + fieldNameByte!) => memberByte
+                                            sources[ownerSourceModule!] -> byte(fieldName.span.start + fieldNameByte!) => fieldByte
+                                            memberByte != fieldByte -> if { false => equal! }
+                                            fieldNameByte! + UIntSize(1) => fieldNameByte!
+                                        }
+                                        equal! -> if {
+                                            candidateFieldOrdinal! => fieldOrdinal!
+                                            -1 => memberFieldTypeIndex!
+                                            0 => memberFieldTypeSearch!
+                                            memberFieldTypeSearch! < (nominal! -> len) -> while {
+                                                (nominal![memberFieldTypeSearch!].sourceModule == ownerSourceModule! and nominal![memberFieldTypeSearch!].typeAst == memberField.typeNode) -> if { memberFieldTypeSearch! => memberFieldTypeIndex! }
+                                                memberFieldTypeSearch! + 1 => memberFieldTypeSearch!
+                                            }
+                                            -1 => memberNextOrigin!
+                                            -1 => memberNextModule!
+                                            -1 => memberNextSymbol!
+                                            memberFieldTypeIndex! >= 0 -> if {
+                                                nominal![memberFieldTypeIndex!] => memberFieldType
+                                                memberFieldType.origin => memberNextOrigin!
+                                                memberFieldType.targetModule => memberNextModule!
+                                                memberFieldType.targetSymbol => memberNextSymbol!
+                                            } else {
+                                                0 => memberCompositeSearch!
+                                                memberCompositeSearch! < (composite! -> len) -> while {
+                                                    composite![memberCompositeSearch!] => memberCompositeType
+                                                    (memberCompositeType.sourceModule == ownerSourceModule! and memberCompositeType.typeAst == memberField.typeNode) -> if {
+                                                        10 + memberCompositeType.kind => memberNextOrigin!
+                                                        memberCompositeType.kind == 5 -> if {
+                                                            memberCompositeType.keySymbol => memberNextModule!
+                                                            memberCompositeType.valueSymbol => memberNextSymbol!
+                                                        } else {
+                                                            memberCompositeType.elementModule => memberNextModule!
+                                                            memberCompositeType.elementSymbol => memberNextSymbol!
+                                                        }
+                                                    }
+                                                    memberCompositeSearch! + 1 => memberCompositeSearch!
+                                                }
+                                            }
+                                            "  " -> print
+                                            memberIdentifierOrdinal! == memberIdentifierCount! - 1 -> if { "%v$(expressionIndex!)" -> print } else { "%v$(expressionIndex!)_m$(memberProjectionOrdinal!)" -> print }
+                                            " = extractvalue %sl.struct.m$(ownerSourceModule!)_s$(memberCurrentSymbol!) " -> print
+                                            memberProjectionOrdinal! == 0 -> if {
+                                                (memberBase.kind == 5 and function.operand1 >= 0 and memberBase.symbol == ir![function.operand1].symbol) -> if { "%arg" -> print } else { "%v$(expression.operand0)" -> print }
+                                            } else { "%v$(expressionIndex!)_m$(memberProjectionOrdinal! - 1)" -> print }
+                                            ", $(fieldOrdinal!)" -> println
+                                            memberNextOrigin! => memberCurrentOrigin!
+                                            memberNextModule! => memberCurrentModule!
+                                            memberNextSymbol! => memberCurrentSymbol!
+                                            memberProjectionOrdinal! + 1 => memberProjectionOrdinal!
+                                        }
+                                        candidateFieldOrdinal! + 1 => candidateFieldOrdinal!
+                                    }
+                                    memberFieldSearch! + 1 => memberFieldSearch!
+                                }
                             }
-                            equal! -> if { candidateFieldOrdinal! => fieldOrdinal! }
-                            candidateFieldOrdinal! + 1 => candidateFieldOrdinal!
+                            memberIdentifierOrdinal! + 1 => memberIdentifierOrdinal!
                         }
-                        memberFieldSearch! + 1 => memberFieldSearch!
+                        memberTokenIndex! + 1 => memberTokenIndex!
                     }
-                    "  %v$(expressionIndex!) = extractvalue " -> print
-                    memberBase -> writeType
-                    " " -> print
-                    (memberBase.kind == 5 and function.operand1 >= 0 and memberBase.symbol == ir![function.operand1].symbol) -> if { "%arg" -> print } else { "%v$(expression.operand0)" -> print }
-                    ", $(fieldOrdinal!)" -> println
                 }
                 (expression.kind == 14 and expression.typeOrigin == 13) -> if {
                     0 => arrayLength!
@@ -2148,13 +2328,15 @@ emitCore sources: move [Text; ~] -> Unit {
             dropIndex! < functionEnd! -> while {
                 ir![dropIndex!] => dropCandidate
                 false => dropCandidateMoved!
+                false => dropCandidateHasPartialMoves!
                 (dropCandidate.kind == 17 and (dropCandidate.typeOrigin == 13 or dropCandidate.typeOrigin == 15 or dropCandidate.typeOrigin == 0 or dropCandidate.typeOrigin == 2)) -> if {
                     0 => dropMoveIndex!
                     (dropMoveIndex! < (moveEvents! -> len) and not dropCandidateMoved!) -> while {
                         moveEvents![dropMoveIndex!] => dropMove
-                        (dropMove.sourceModule == dropCandidate.sourceModule and dropMove.symbol == dropCandidate.symbol and dropMove.regionIr == function.operand0) -> if {
+                        (dropMove.memberIr >= 0 and dropMove.sourceModule == dropCandidate.sourceModule and dropMove.symbol == dropCandidate.symbol) -> if { true => dropCandidateHasPartialMoves! }
+                        (dropMove.memberIr < 0 and dropMove.sourceModule == dropCandidate.sourceModule and dropMove.symbol == dropCandidate.symbol and dropMove.regionIr == function.operand0) -> if {
                             sources[dropCandidate.sourceModule] -> ast.lower => dropCandidateAst!
-                            ir![dropMove.callIr] => dropMoveCall
+                            ir![dropMove.siteIr] => dropMoveCall
                             dropCandidateAst![dropMoveCall.astNode].start > dropCandidateAst![dropCandidate.astNode].start -> if { true => dropCandidateMoved! }
                         }
                         dropMoveIndex! + 1 => dropMoveIndex!
@@ -2179,6 +2361,12 @@ emitCore sources: move [Text; ~] -> Unit {
                         valueIndex: dropIndex!
                         nameRoot: dropIndex!
                         pathCode: 0
+                        bindingIndex: -1
+                        regionIndex: function.operand0
+                        beforeAst: -1
+                        parentTask: -1
+                        fieldOrdinal: -1
+                        hasPartialMoves: false
                     } -> emitDropGlue
                 }
                 (dropCandidate.kind == 17 and dropCandidate.typeOrigin == 13 and not dropCandidateMoved! and not (returnOperand.kind == 5 and returnOperand.symbol == dropCandidate.symbol)) -> if {
@@ -2200,12 +2388,25 @@ emitCore sources: move [Text; ~] -> Unit {
                         valueIndex: dropCandidate.operand0
                         nameRoot: dropIndex!
                         pathCode: 0
+                        bindingIndex: dropIndex!
+                        regionIndex: function.operand0
+                        beforeAst: -1
+                        parentTask: -1
+                        fieldOrdinal: -1
+                        hasPartialMoves: dropCandidateHasPartialMoves!
                     } -> emitDropGlue
                 }
                 dropIndex! + 1 => dropIndex!
             }
             function.operand1 >= 0 -> if {
                 ir![function.operand1] => ownedParameter
+                false => ownedParameterHasPartialMoves!
+                0 => ownedParameterMoveIndex!
+                ownedParameterMoveIndex! < (moveEvents! -> len) -> while {
+                    moveEvents![ownedParameterMoveIndex!] => ownedParameterMove
+                    (ownedParameterMove.memberIr >= 0 and ownedParameterMove.sourceModule == ownedParameter.sourceModule and ownedParameterMove.symbol == ownedParameter.symbol) -> if { true => ownedParameterHasPartialMoves! }
+                    ownedParameterMoveIndex! + 1 => ownedParameterMoveIndex!
+                }
                 (ownedParameter.typeOrigin == 13 and ownedParameter.flags % 2 == 1) -> if {
                     not (returnOperand.kind == 5 and returnOperand.symbol == ownedParameter.symbol) -> if {
                         "  %drop_arg = extractvalue %sl.array.i32 %arg, 0" -> println
@@ -2230,6 +2431,12 @@ emitCore sources: move [Text; ~] -> Unit {
                             valueIndex: -1
                             nameRoot: functionIndex!
                             pathCode: 0
+                            bindingIndex: function.operand1
+                            regionIndex: function.operand0
+                            beforeAst: -1
+                            parentTask: -1
+                            fieldOrdinal: -1
+                            hasPartialMoves: ownedParameterHasPartialMoves!
                         } -> emitDropGlue
                     }
                 }

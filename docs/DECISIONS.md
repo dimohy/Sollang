@@ -3175,7 +3175,7 @@ inside a nested conditional therefore cannot suppress cleanup on the parent's
 sibling path. This follows rustc's separation of move analysis from drop
 elaboration and Swift's declaration-level consuming contract without importing
 Rust's complete place tree into the first slice. Recursive aggregate drop glue
-is completed by D107; field-level partial moves remain a later gate.
+is completed by D107, and field-level paths are added by D108.
 
 ## D107 - Struct Drop Glue Is A Static Obligation Tree
 
@@ -3198,9 +3198,38 @@ all use the same glue. A whole-owner move suppresses caller cleanup and the
 callee recursively releases its fields exactly once.
 
 Example 231 assembles, links, and executes LLVM for `Outer -> Inner -> [Int; ~]`
-on normal, moved, and early-return paths. The next ownership layer is a field
-move mask: moving one field must release that path's obligation, preserve its
-siblings, and reject whole-value use until the field is reinitialized or the
-remaining owner is destroyed.
+on normal, moved, and early-return paths. D108 adds the first field-path mask
+over this obligation tree.
+
+## D108 - Partial Moves Release One Static Drop Path
+
+Status: first static self-hosted slice implemented
+Date: 2026-07-13
+
+A partial move is represented by the binding identity plus the complete member
+path, not by invalidating the whole struct. Moving `outer.left.values` releases
+only that leaf's drop obligation. Destruction still walks `outer`, expands
+`left` and `right`, skips the exact moved leaf, and releases every owned sibling.
+The extracted value becomes a separate owner and is dropped exactly once.
+
+Typed IR stores the member node on each `MoveEvent`. Sequential member-type
+resolution preserves every intermediate nominal type, and LLVM compares the
+resolved field ordinals with its static drop-task ancestry. The ownership
+diagnostic is deliberately a separate module from ordinary type checking: a
+subsequent use of the whole owner, the moved path, a descendant, or an ancestor
+is rejected, while a diverging sibling path remains valid.
+
+Examples 232 and 233 verify nested extraction, sibling cleanup, LLVM assembly,
+native execution, and invalid whole-owner reuse. This slice does not yet model
+field reinitialization or control-flow joins with different moved-path sets;
+those require dataflow state per region before the broader path-sensitive
+ownership gate can be complete.
+
+The emitter marks drop requests that can actually intersect a partial move, so
+ordinary recursive drop glue does not rebuild typed-IR move metadata. A marked
+request still rebuilds immutable nominal/composite/path tables inside the local
+helper because the current SL local-function surface cannot capture bindings
+declared after local declarations. Hoisting these tables into one emitter
+analysis context is the next compile-time performance optimization.
 
 

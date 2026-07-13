@@ -506,12 +506,12 @@ used by struct fields before struct layouts are finalized. A field such as
 an unknown textual type. LLVM materializes/dematerializes the three-word array
 aggregate through struct literals and member reads, and generated recursive
 drop glue releases the backing store. Moving one owned field out of a larger
-owned request now has a conservative first rule: only an owned field of the
-function's explicit `move` input may be extracted, and doing so consumes the
-whole owner. Non-owned fields must be read first; the original struct is then
-removed from semantic and runtime local state, so only the extracted field is
-dropped. Arbitrary multiple-field partial moves still require field-level move
-masks.
+owned request now has a static field-path rule. Typed IR records the complete
+member path of an owned extraction. LLVM releases that path's drop obligation,
+preserves and recursively drops sibling fields, and transfers the extracted
+field to its new owner. A separate ownership pass rejects later use of the whole
+owner or an overlapping ancestor/descendant path while allowing diverging
+siblings. Field reinitialization and branch-sensitive moved-path joins remain.
 
 Nominal structs now have deterministic `%sl.struct.m<module>_s<symbol>` LLVM
 types. Typed IR marks struct literals and links an arbitrary number of ordered

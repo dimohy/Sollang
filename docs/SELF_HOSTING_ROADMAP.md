@@ -481,8 +481,10 @@ events attached to their nearest structured region, so cleanup edges after the
 call omit the transferred array or dictionary without incorrectly suppressing
 cleanup on sibling paths. Struct drop obligations now recurse through nested
 struct fields into owned arrays and dictionaries on normal, moved-parameter,
-and early-return edges. Inline local-function returns and field-level partial
-moves remain before the structured early-exit gate is complete.
+and early-return edges. Static field-level partial moves now preserve sibling
+drop obligations and reject overlapping reuse. Inline local-function returns,
+field reinitialization, and branch joins remain before the structured
+early-exit gate is complete.
 
 Guard-flow loop control is also cumulative: `condition -> if continue` and
 `condition -> if break` are compact Bool-guarded transfers. Both the reference
@@ -494,9 +496,9 @@ statements. The reference backend validates the enclosing function and result
 type, transfers a returned owner, and drops every other active owner before
 `ret`. The self-hosted AST and typed IR carry a dedicated return terminator;
 the LLVM slice executes an early scalar return from an `if` region and frees a
-function-local dynamic array on both the early and fallthrough paths. Inline
-local-function returns and field-level partial-move masks keep the structured
-early-exit gate partial.
+function-local dynamic array on both the early and fallthrough paths. Static
+partial-move masks are now emitted; inline local-function returns and moved-path
+reinitialization/joins keep the structured early-exit gate partial.
 
 Typed IR now represents immutable local bindings explicitly and connects each
 name use by stable symbol id. LLVM materializes scalar literal bindings as SSA
@@ -517,8 +519,9 @@ transfers its backing stores without producer-side frees, while a scalar-
 returning consumer releases a `move` parameter exactly once. Branch-sensitive
 liveness now covers region-local Int arrays and dictionaries on normal and
 loop-exit edges. Whole-binding consuming calls now suppress only later cleanup
-within the same structured region. Field-level partial moves and nested owned
-aggregate member mutation remain.
+within the same structured region. Nested static field moves now retain sibling
+drop obligations. Field reinitialization and nested owned aggregate member
+mutation remain.
 
 Self-hosted LLVM text selects descriptors implemented in the file module
 `smalllang.compiler.llvm.target`. Windows x64/COFF, Linux x64/ELF, and
@@ -531,15 +534,13 @@ body is not a header-only fixture. Namespaced same-module calls now resolve by
 falling back to the current canonical module name in semantic analysis and LLVM
 code generation, fixing the private shared-emitter catalog boundary without
 aliases or backend duplication. The bootstrap compiler now
-gives an owned `[Text; ~]` struct field a stable parametric identity, LLVM
-aggregate ABI, member access, and recursive backing-store drop. The remaining
-request boundary is ownership-specific: moving that field out of a moved
-request now uses a conservative whole-owner-consuming extraction rule. A
-function may read copyable fields first, extract one owned field from its
-explicit `move` input, and then the original owner is invalidated and omitted
-from cleanup. This prevents double drop without silently allowing arbitrary
-partial moves. General multi-field partial moves still need field-level move
-masks. Target-specific runtime declarations and ABI lowering beyond the
+gives owned struct fields stable parametric identities, LLVM aggregate ABI,
+nested member access, and recursive backing-store drop. Typed-IR move events now
+retain complete static member paths. LLVM skips only the exact moved leaf while
+recursively dropping sibling obligations, and a separate ownership diagnostic
+rejects later whole-owner or overlapping-path use while allowing diverging
+siblings. Field reinitialization and branch-sensitive moved-path joins remain.
+Target-specific runtime declarations and ABI lowering beyond the
 currently supported shared IR subset also remain. Text `print`/`println` are
 the first completed runtime effect slice: flow calls survive semantic lowering
 as explicit runtime symbols, Windows emits a `putchar` loop, Linux emits
@@ -615,7 +616,8 @@ returned literals and move parameters are recognized as transfers and are not
 freed, preventing the first class of double-free errors. Snapshots assert both
 the positive drop cases and the absence of drops on transfer. Conditional
 paths, early exits, and nested owned struct fields now share the same recursive
-drop obligations. Field-level partial moves and general liveness remain.
+drop obligations. Static partial moves release one path while preserving
+siblings; reinitialization, branch joins, and general liveness remain.
 
 Owned dictionaries now have a common self-hosted `%sl.dict` LLVM ABI with
 separate key/value stores plus length/capacity, while typed IR drives concrete
