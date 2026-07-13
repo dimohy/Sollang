@@ -362,6 +362,16 @@ unqualified name to the caller's current module, while local functions and
 explicitly qualified/imported names retain precedence. This lets public target
 entry points call the private shared emitter without duplicating it.
 
+Flow calls are no longer discarded merely because their target is supplied by
+the runtime rather than a user module. `print` and `println` receive stable
+typed-IR runtime symbols and lower through one `%sl.text` print ABI. The
+backend emits that ABI only when used: Windows iterates UTF-8 bytes through CRT
+`putchar`, Linux calls `write(2)`, and Wasm imports `env.smalllang_write` with a
+32-bit byte length. All three outputs assemble; the Windows output also links
+and executes, with its stdout compared against the expected program output.
+Other fluent builtins such as `len` and `each` remain outside the function-call
+catalog, so runtime recognition does not create false unresolved-call errors.
+
 The bootstrap type table now predeclares parametric dynamic-array identities
 used by struct fields before struct layouts are finalized. A field such as
 `sources: [Text; ~]` therefore retains its element layout instead of becoming

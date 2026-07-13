@@ -528,6 +528,14 @@ emitCore sources: move [Text; ~] -> Unit {
                     }
                 }
                 expression.kind == 6 -> if {
+                    (expression.symbol == -101 or expression.symbol == -102) -> if {
+                        ir![expression.operand0] => runtimeArgument
+                        sources[runtimeArgument.sourceModule] -> lexer.lex => runtimeArgumentTokens!
+                        runtimeArgumentTokens![runtimeArgument.payloadToken] => runtimeArgumentToken
+                        Int(runtimeArgumentToken.span.length) - 2 => runtimeArgumentLength
+                        "  call void @sl_runtime_print(ptr @sl_str_$(expression.operand0), i64 $runtimeArgumentLength, i1 " -> print
+                        expression.symbol == -102 -> if { "true)" -> println } else { "false)" -> println }
+                    } else {
                     "  %v$(expressionIndex!) = call " -> print
                     expression -> writeType
                     " @sl_m$(expression.targetModule)_s$(expression.symbol)(" -> print
@@ -548,6 +556,7 @@ emitCore sources: move [Text; ~] -> Unit {
                         }
                     }
                     ")" -> println
+                    }
                 }
                 expressionOrderIndex! + 1 => expressionOrderIndex!
             }
@@ -714,6 +723,14 @@ emitCore sources: move [Text; ~] -> Unit {
                         }
                     }
                     entryExpression.kind == 6 -> if {
+                        (entryExpression.symbol == -101 or entryExpression.symbol == -102) -> if {
+                            ir![entryExpression.operand0] => runtimeArgument
+                            sources[runtimeArgument.sourceModule] -> lexer.lex => runtimeArgumentTokens!
+                            runtimeArgumentTokens![runtimeArgument.payloadToken] => runtimeArgumentToken
+                            Int(runtimeArgumentToken.span.length) - 2 => runtimeArgumentLength
+                            "  call void @sl_runtime_print(ptr @sl_str_$(entryExpression.operand0), i64 $runtimeArgumentLength, i1 " -> print
+                            entryExpression.symbol == -102 -> if { "true)" -> println } else { "false)" -> println }
+                        } else {
                         "  %v$(entryExpressionIndex!) = call " -> print
                         entryExpression -> writeType
                         " @sl_m$(entryExpression.targetModule)_s$(entryExpression.symbol)(" -> print
@@ -732,6 +749,7 @@ emitCore sources: move [Text; ~] -> Unit {
                             } else { "%v$(entryExpression.operand0)" -> print }
                         }
                         ")" -> println
+                        }
                     }
                     entryOrderIndex! + 1 => entryOrderIndex!
                 }
@@ -745,10 +763,87 @@ emitCore sources: move [Text; ~] -> Unit {
     }
 }
 
+usesTextRuntime sources: [Text; ~] -> Bool {
+    sources -> typedIr.lower => ir!
+    false => usesRuntime!
+    0 => nodeIndex!
+    nodeIndex! < (ir! -> len) -> while {
+        (ir![nodeIndex!].symbol == -101 or ir![nodeIndex!].symbol == -102) -> if { true => usesRuntime! }
+        nodeIndex! + 1 => nodeIndex!
+    }
+    usesRuntime!
+}
+
+emitWindowsTextRuntime: -> Unit {
+    """
+    @sl_runtime_newline = private constant [1 x i8] c"\0A"
+    declare i32 @putchar(i32)
+    define internal void @sl_runtime_print(ptr %data, i64 %len, i1 %newline) {
+    entry:
+      br label %loop
+    loop:
+      %index = phi i64 [ 0, %entry ], [ %next, %body ]
+      %in_range = icmp ult i64 %index, %len
+      br i1 %in_range, label %body, label %end
+    body:
+      %slot = getelementptr i8, ptr %data, i64 %index
+      %byte = load i8, ptr %slot, align 1
+      %value = zext i8 %byte to i32
+      %written = call i32 @putchar(i32 %value)
+      %next = add i64 %index, 1
+      br label %loop
+    end:
+      br i1 %newline, label %write_newline, label %done
+    write_newline:
+      %newline_written = call i32 @putchar(i32 10)
+      br label %done
+    done:
+      ret void
+    }
+    """ -> println
+}
+
+emitLinuxTextRuntime: -> Unit {
+    """
+    @sl_runtime_newline = private constant [1 x i8] c"\0A"
+    declare i64 @write(i32, ptr, i64)
+    define internal void @sl_runtime_print(ptr %data, i64 %len, i1 %newline) {
+    entry:
+      %written = call i64 @write(i32 1, ptr %data, i64 %len)
+      br i1 %newline, label %write_newline, label %done
+    write_newline:
+      %newline_written = call i64 @write(i32 1, ptr @sl_runtime_newline, i64 1)
+      br label %done
+    done:
+      ret void
+    }
+    """ -> println
+}
+
+emitWasmTextRuntime: -> Unit {
+    """"
+    @sl_runtime_newline = private constant [1 x i8] c"\0A"
+    declare void @smalllang_browser_write(ptr, i32) #1
+    define internal void @sl_runtime_print(ptr %data, i64 %len, i1 %newline) {
+    entry:
+      %len32 = trunc i64 %len to i32
+      call void @smalllang_browser_write(ptr %data, i32 %len32)
+      br i1 %newline, label %write_newline, label %done
+    write_newline:
+      call void @smalllang_browser_write(ptr @sl_runtime_newline, i32 1)
+      br label %done
+    done:
+      ret void
+    }
+    attributes #1 = { "wasm-import-module"="env" "wasm-import-name"="smalllang_write" }
+    """" -> println
+}
+
 public emit sources: move [Text; ~] -> Unit {
     llvmTarget.windowsX64 => target
     target.dataLayoutLine -> println
     target.tripleLine -> println
+    sources -> usesTextRuntime -> if { emitWindowsTextRuntime }
     emitCore(sources)
 }
 
@@ -756,6 +851,7 @@ public emitLinux sources: move [Text; ~] -> Unit {
     llvmTarget.linuxX64 => target
     target.dataLayoutLine -> println
     target.tripleLine -> println
+    sources -> usesTextRuntime -> if { emitLinuxTextRuntime }
     emitCore(sources)
 }
 
@@ -763,5 +859,6 @@ public emitWasm sources: move [Text; ~] -> Unit {
     llvmTarget.wasm32Browser => target
     target.dataLayoutLine -> println
     target.tripleLine -> println
+    sources -> usesTextRuntime -> if { emitWasmTextRuntime }
     emitCore(sources)
 }

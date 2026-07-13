@@ -213,6 +213,20 @@ public infer sources: [Text; ~] -> [ExpressionType; ~] {
                         callExistingIndex! + 1 => callExistingIndex!
                     }
                     not callInferred! -> if {
+                        call.origin == 2 -> if {
+                            inferred! -> push(ExpressionType {
+                                sourceModule: sourceIndex!
+                                astNode: call.callAst
+                                origin: 1
+                                targetModule: -1
+                                targetSymbol: 0
+                                keyOrigin: -1
+                                keyModule: -1
+                                valueOrigin: -1
+                                valueModule: -1
+                            })
+                            true => changed!
+                        } else {
                         sources[call.targetSourceModule] -> symbols.collect => targetTable!
                         targetTable![call.functionSymbol] => function
                         function.secondaryTypeNode >= 0 -> if { function.secondaryTypeNode } else { function.typeNode } => returnTypeAst
@@ -359,6 +373,7 @@ public infer sources: [Text; ~] -> [ExpressionType; ~] {
                                     }
                                 }
                             }
+                        }
                         }
                     }
                 }

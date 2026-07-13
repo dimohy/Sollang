@@ -1,0 +1,23 @@
+target datalayout = "e-m:e-p:32:32-p10:8:8-p20:8:8-i64:64-i128:128-n32:64-S128-ni:1:10:20"
+target triple = "wasm32-unknown-unknown-wasm"
+@sl_runtime_newline = private constant [1 x i8] c"\0A"
+declare void @smalllang_browser_write(ptr, i32) #1
+define internal void @sl_runtime_print(ptr %data, i64 %len, i1 %newline) {
+entry:
+  %len32 = trunc i64 %len to i32
+  call void @smalllang_browser_write(ptr %data, i32 %len32)
+  br i1 %newline, label %write_newline, label %done
+write_newline:
+  call void @smalllang_browser_write(ptr @sl_runtime_newline, i32 1)
+  br label %done
+done:
+  ret void
+}
+attributes #1 = { "wasm-import-module"="env" "wasm-import-name"="smalllang_write" }
+%sl.text = type { ptr, i64 }
+@sl_str_2 = private unnamed_addr constant [5 x i8] c"hello"
+define i32 @main() {
+entry:
+  call void @sl_runtime_print(ptr @sl_str_2, i64 5, i1 true)
+  ret i32 0
+}

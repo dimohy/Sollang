@@ -447,7 +447,12 @@ explicit `move` input, and then the original owner is invalidated and omitted
 from cleanup. This prevents double drop without silently allowing arbitrary
 partial moves. General multi-field partial moves still need field-level move
 masks. Target-specific runtime declarations and ABI lowering beyond the
-currently supported shared IR subset also remain.
+currently supported shared IR subset also remain. Text `print`/`println` are
+the first completed runtime effect slice: flow calls survive semantic lowering
+as explicit runtime symbols, Windows emits a `putchar` loop, Linux emits
+`write(2)`, and Wasm declares an `env.smalllang_write` import. Runtime helpers
+are emitted only when referenced. Numeric formatting, input, allocation policy,
+files, process services, and target-native entrypoint/export policy remain.
 
 Text now crosses the self-hosted LLVM boundary as `{ ptr, i64 }`. UTF-8
 literals become immutable globals with byte-accurate lengths and LLVM `\XX`

@@ -32,13 +32,14 @@ public resolve source: Text -> [CallResolution; ~] {
     0 => astIndex!
     astIndex! < (nodes! -> len) -> while {
         nodes![astIndex!] => node
-        (node.kind == 11 or node.kind == 15) -> if {
+        (node.kind == 10 or node.kind == 11 or node.kind == 15) -> if {
             -1 => callNameToken!
             node.firstToken => tokenIndex!
             (tokenIndex! < node.firstToken + node.tokenCount and callNameToken! < 0) -> while {
                 tokens![tokenIndex!].kind == grammar.tokenIdIdentifier -> if { tokenIndex! => callNameToken! }
                 tokenIndex! + 1 => tokenIndex!
             }
+            callNameToken! >= 0 -> if {
             -1 => functionSymbol!
             0 => symbolIndex!
             (symbolIndex! < (table! -> len) and functionSymbol! < 0) -> while {
@@ -54,7 +55,7 @@ public resolve source: Text -> [CallResolution; ~] {
                         callByte != functionByte -> if { false => equal! }
                         nameByte! + UIntSize(1) => nameByte!
                     }
-                    (equal! and (node.kind == 11 or candidate.secondaryTypeNode < 0)) -> if { symbolIndex! => functionSymbol! }
+                    (node.kind != 10 and equal! and (node.kind == 11 or candidate.secondaryTypeNode < 0)) -> if { symbolIndex! => functionSymbol! }
                 }
                 symbolIndex! + 1 => symbolIndex!
             }
@@ -64,6 +65,7 @@ public resolve source: Text -> [CallResolution; ~] {
                     functionSymbol: functionSymbol!
                     status: functionSymbol! >= 0 -> if { 0 } else { 2 }
                 })
+            }
             }
         }
         astIndex! + 1 => astIndex!
@@ -87,13 +89,14 @@ public resolveModules sources: [Text; ~] -> [ModuleCallResolution; ~] {
         0 => callAstIndex!
         callAstIndex! < (nodes! -> len) -> while {
             nodes![callAstIndex!] => callNode
-            (callNode.kind == 11 or callNode.kind == 15) -> if {
+            (callNode.kind == 10 or callNode.kind == 11 or callNode.kind == 15) -> if {
                 -1 => callNameToken!
                 callNode.firstToken => callTokenIndex!
                 (callTokenIndex! < callNode.firstToken + callNode.tokenCount and callNameToken! < 0) -> while {
                     tokens![callTokenIndex!].kind == grammar.tokenIdIdentifier -> if { callTokenIndex! => callNameToken! }
                     callTokenIndex! + 1 => callTokenIndex!
                 }
+                callNameToken! >= 0 -> if {
                 -1 => localFunctionSymbol!
                 0 => localSymbolIndex!
                 (localSymbolIndex! < (table! -> len) and localFunctionSymbol! < 0) -> while {
@@ -109,16 +112,42 @@ public resolveModules sources: [Text; ~] -> [ModuleCallResolution; ~] {
                             callByte != functionByte -> if { false => localEqual! }
                             localNameByte! + UIntSize(1) => localNameByte!
                         }
-                        (localEqual! and (callNode.kind == 11 or localCandidate.secondaryTypeNode < 0)) -> if { localSymbolIndex! => localFunctionSymbol! }
+                        (callNode.kind != 10 and localEqual! and (callNode.kind == 11 or localCandidate.secondaryTypeNode < 0)) -> if { localSymbolIndex! => localFunctionSymbol! }
                     }
                     localSymbolIndex! + 1 => localSymbolIndex!
                 }
-                (callNode.kind == 11 or localFunctionSymbol! >= 0) -> if {
+                ((callNode.kind == 10 or callNode.kind == 11) and localFunctionSymbol! < 0) -> if {
+                    tokens![callNameToken!] => runtimeName
+                    runtimeName.span.length == UIntSize(5) -> if {
+                        source -> byte(runtimeName.span.start) => runtimeByte0
+                        source -> byte(runtimeName.span.start + UIntSize(1)) => runtimeByte1
+                        source -> byte(runtimeName.span.start + UIntSize(2)) => runtimeByte2
+                        source -> byte(runtimeName.span.start + UIntSize(3)) => runtimeByte3
+                        source -> byte(runtimeName.span.start + UIntSize(4)) => runtimeByte4
+                        (runtimeByte0 == UInt8(112) and runtimeByte1 == UInt8(114) and runtimeByte2 == UInt8(105) and runtimeByte3 == UInt8(110) and runtimeByte4 == UInt8(116)) -> if {
+                            -101 => localFunctionSymbol!
+                        }
+                    }
+                    runtimeName.span.length == UIntSize(7) -> if {
+                        source -> byte(runtimeName.span.start) => runtimeByte0
+                        source -> byte(runtimeName.span.start + UIntSize(1)) => runtimeByte1
+                        source -> byte(runtimeName.span.start + UIntSize(2)) => runtimeByte2
+                        source -> byte(runtimeName.span.start + UIntSize(3)) => runtimeByte3
+                        source -> byte(runtimeName.span.start + UIntSize(4)) => runtimeByte4
+                        source -> byte(runtimeName.span.start + UIntSize(5)) => runtimeByte5
+                        source -> byte(runtimeName.span.start + UIntSize(6)) => runtimeByte6
+                        (runtimeByte0 == UInt8(112) and runtimeByte1 == UInt8(114) and runtimeByte2 == UInt8(105) and runtimeByte3 == UInt8(110) and runtimeByte4 == UInt8(116) and runtimeByte5 == UInt8(108) and runtimeByte6 == UInt8(110)) -> if {
+                            -102 => localFunctionSymbol!
+                        }
+                    }
+                }
+                (callNode.kind == 11 or localFunctionSymbol! != -1) -> if {
                     localCalls! -> push(CallResolution {
                         callAst: callAstIndex!
                         functionSymbol: localFunctionSymbol!
-                        status: localFunctionSymbol! >= 0 -> if { 0 } else { 2 }
+                        status: localFunctionSymbol! != -1 -> if { 0 } else { 2 }
                     })
+                }
                 }
             }
             callAstIndex! + 1 => callAstIndex!
@@ -176,12 +205,13 @@ public resolveModules sources: [Text; ~] -> [ModuleCallResolution; ~] {
                     status: importedStatus!
                 })
             } else {
+                local.functionSymbol < -1 => runtimeCall
                 results! -> push(ModuleCallResolution {
                     sourceModule: sourceIndex!
                     callAst: local.callAst
-                    origin: 0
+                    origin: runtimeCall -> if { 2 } else { 0 }
                     targetModule: sourceIndex!
-                    targetSourceModule: sourceIndex!
+                    targetSourceModule: runtimeCall -> if { -1 } else { sourceIndex! }
                     functionSymbol: local.functionSymbol
                     status: local.status
                 })

@@ -248,9 +248,19 @@ foreach (var expectedFile in expectedFiles)
             }
 
             var linkedRun = Run(linkedPath, [], input: null, repoRoot);
-            if (linkedRun.ExitCode != 0 || Normalize(linkedRun.Stdout).Length != 0)
+            var executionExpectation = Normalize(File.ReadAllText(stdoutLlvmExecutionPath, Encoding.UTF8));
+            var expectedLinkedStdout = string.IsNullOrWhiteSpace(executionExpectation)
+                || StringComparer.Ordinal.Equals(executionExpectation.Trim(), "exit=0")
+                ? string.Empty
+                : executionExpectation;
+            var actualLinkedStdout = Normalize(linkedRun.Stdout);
+            if (linkedRun.ExitCode != 0
+                || !StringComparer.Ordinal.Equals(expectedLinkedStdout, actualLinkedStdout))
             {
                 Console.Error.WriteLine($"FAIL {name}: linked stdout LLVM executable failed");
+                Console.Error.WriteLine("EXPECTED:");
+                Console.Error.WriteLine(expectedLinkedStdout);
+                Console.Error.WriteLine("ACTUAL:");
                 Console.Error.WriteLine(linkedRun.Stdout);
                 Console.Error.WriteLine(linkedRun.Stderr);
                 failures++;
