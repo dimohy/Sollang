@@ -13,7 +13,8 @@ import smalllang.compiler.semantic.symbols as symbols
 # Kinds: 0 function, 1 return, 2 Text constant, 3 Int constant,
 # 4 Bool constant, 5 name, 6 call, 7 unary, 8 binary, 9 other expression,
 # 10 parameter, 11 entry point, 12 struct literal, 13 member access,
-# 14 array literal, 15 index access, 16 dictionary literal, 17 binding.
+# 14 array literal, 15 index access, 16 dictionary literal, 17 binding,
+# 18 structured if, 19 control-flow region.
 public struct TypedIrNode {
     kind: Int
     parent: Int
@@ -261,6 +262,14 @@ public lower sources: [Text; ~] -> [TypedIrNode; ~] {
                     }
                     0 => expressionAstIndex!
                     expressionAstIndex! < (nodes! -> len) -> while {
+                        nodes![expressionAstIndex!] => expression
+                        expression.parent => expressionAncestor!
+                        false => expressionBelongsToFunction!
+                        (expressionAncestor! >= 0 and not expressionBelongsToFunction!) -> while {
+                            expressionAncestor! == function.astNode -> if { true => expressionBelongsToFunction! } else {
+                                nodes![expressionAncestor!].parent => expressionAncestor!
+                            }
+                        }
                         -1 => expressionTypeIndex!
                         0 => expressionTypeSearch!
                         expressionTypeSearch! < (inferred! -> len) -> while {
@@ -268,17 +277,32 @@ public lower sources: [Text; ~] -> [TypedIrNode; ~] {
                             (candidateExpressionType.sourceModule == sourceIndex! and candidateExpressionType.astNode == expressionAstIndex!) -> if { expressionTypeSearch! => expressionTypeIndex! }
                             expressionTypeSearch! + 1 => expressionTypeSearch!
                         }
-                        expressionTypeIndex! >= 0 -> if {
-                            nodes![expressionAstIndex!].parent => expressionAncestor!
-                            false => expressionBelongsToFunction!
-                            (expressionAncestor! >= 0 and not expressionBelongsToFunction!) -> while {
-                                expressionAncestor! == function.astNode -> if { true => expressionBelongsToFunction! } else {
-                                    nodes![expressionAncestor!].parent => expressionAncestor!
-                                }
-                            }
-                            expressionBelongsToFunction! -> if {
+                        expressionBelongsToFunction! -> if {
+                            (expression.kind == 42 or expression.kind == 43) -> if {
+                                results! -> len => controlIr
+                                controlIr => astToIr![expressionAstIndex!]
+                                18 => controlKind!
+                                expression.kind == 43 -> if { 19 => controlKind! }
+                                results! -> push(TypedIrNode {
+                                    kind: controlKind!
+                                    parent: returnIr
+                                    sourceModule: sourceIndex!
+                                    astNode: expressionAstIndex!
+                                    symbol: -1
+                                    targetModule: sourceIndex!
+                                    typeOrigin: 1
+                                    typeModule: -1
+                                    typeSymbol: 2
+                                    payloadToken: expression.payloadToken
+                                    opcode: -1
+                                    operand0: -1
+                                    operand1: -1
+                                    nextOperand: -1
+                                    flags: expression.flags
+                                })
+                            } else {
+                                expressionTypeIndex! >= 0 -> if {
                                 inferred![expressionTypeIndex!] => expressionType
-                                nodes![expressionAstIndex!] => expression
                                 9 => expressionKind!
                                 expression.kind == 13 -> if { 2 => expressionKind! }
                                 expression.kind == 14 -> if { 3 => expressionKind! }
@@ -340,6 +364,7 @@ public lower sources: [Text; ~] -> [TypedIrNode; ~] {
                                     nextOperand: -1
                                     flags: expression.flags
                                 })
+                                }
                             }
                         }
                         expressionAstIndex! + 1 => expressionAstIndex!
@@ -415,6 +440,60 @@ public lower sources: [Text; ~] -> [TypedIrNode; ~] {
                         nextSibling! => sibling!.nextOperand
                         sibling! => results![siblingIrIndex!]
                         siblingIrIndex! + 1 => siblingIrIndex!
+                    }
+
+                    expressionIrStart => controlIrIndex!
+                    controlIrIndex! < expressionIrEnd -> while {
+                        results![controlIrIndex!] => control!
+                        control!.kind == 19 -> if {
+                            -1 => firstRegionChild!
+                            UIntSize(0) => firstRegionChildStart!
+                            expressionIrStart => regionChildSearch!
+                            regionChildSearch! < expressionIrEnd -> while {
+                                results![regionChildSearch!].parent == controlIrIndex! -> if {
+                                    nodes![results![regionChildSearch!].astNode].start => regionChildStart
+                                    (firstRegionChild! < 0 or regionChildStart < firstRegionChildStart!) -> if {
+                                        regionChildSearch! => firstRegionChild!
+                                        regionChildStart => firstRegionChildStart!
+                                    }
+                                }
+                                regionChildSearch! + 1 => regionChildSearch!
+                            }
+                            firstRegionChild! => control!.operand0
+                            control! => results![controlIrIndex!]
+                        }
+                        control!.kind == 18 -> if {
+                            nodes![control!.astNode].parent => controlFlowAst
+                            -1 => conditionIr!
+                            UIntSize(0) => conditionStart!
+                            expressionIrStart => conditionSearch!
+                            conditionSearch! < expressionIrEnd -> while {
+                                results![conditionSearch!] => conditionCandidate
+                                (nodes![conditionCandidate.astNode].parent == controlFlowAst and nodes![conditionCandidate.astNode].start < nodes![control!.astNode].start) -> if {
+                                    nodes![conditionCandidate.astNode].start => candidateStart
+                                    (conditionIr! < 0 or candidateStart > conditionStart!) -> if {
+                                        conditionSearch! => conditionIr!
+                                        candidateStart => conditionStart!
+                                    }
+                                }
+                                conditionSearch! + 1 => conditionSearch!
+                            }
+                            -1 => thenRegion!
+                            -1 => elseRegion!
+                            expressionIrStart => regionSearch!
+                            regionSearch! < expressionIrEnd -> while {
+                                results![regionSearch!] => regionCandidate
+                                (regionCandidate.kind == 19 and regionCandidate.parent == controlIrIndex!) -> if {
+                                    thenRegion! < 0 -> if { regionSearch! => thenRegion! } else { regionSearch! => elseRegion! }
+                                }
+                                regionSearch! + 1 => regionSearch!
+                            }
+                            conditionIr! => control!.operand0
+                            thenRegion! => control!.operand1
+                            elseRegion! => control!.nextOperand
+                            control! => results![controlIrIndex!]
+                        }
+                        controlIrIndex! + 1 => controlIrIndex!
                     }
 
                     expressionIrStart => bindingNameIrIndex!
@@ -576,6 +655,12 @@ public lower sources: [Text; ~] -> [TypedIrNode; ~] {
                     }
                     0 => entryExpressionAst!
                     entryExpressionAst! < (nodes! -> len) -> while {
+                        nodes![entryExpressionAst!] => entryExpression
+                        entryExpression.parent => entryExpressionAncestor!
+                        false => entryExpressionBelongs!
+                        (entryExpressionAncestor! >= 0 and not entryExpressionBelongs!) -> while {
+                            entryExpressionAncestor! == entryAstIndex! -> if { true => entryExpressionBelongs! } else { nodes![entryExpressionAncestor!].parent => entryExpressionAncestor! }
+                        }
                         -1 => entryExpressionTypeIndex!
                         0 => entryExpressionTypeSearch!
                         entryExpressionTypeSearch! < (inferred! -> len) -> while {
@@ -583,15 +668,32 @@ public lower sources: [Text; ~] -> [TypedIrNode; ~] {
                             (entryExpressionTypeCandidate.sourceModule == sourceIndex! and entryExpressionTypeCandidate.astNode == entryExpressionAst!) -> if { entryExpressionTypeSearch! => entryExpressionTypeIndex! }
                             entryExpressionTypeSearch! + 1 => entryExpressionTypeSearch!
                         }
-                        entryExpressionTypeIndex! >= 0 -> if {
-                            nodes![entryExpressionAst!].parent => entryExpressionAncestor!
-                            false => entryExpressionBelongs!
-                            (entryExpressionAncestor! >= 0 and not entryExpressionBelongs!) -> while {
-                                entryExpressionAncestor! == entryAstIndex! -> if { true => entryExpressionBelongs! } else { nodes![entryExpressionAncestor!].parent => entryExpressionAncestor! }
-                            }
-                            entryExpressionBelongs! -> if {
+                        entryExpressionBelongs! -> if {
+                            (entryExpression.kind == 42 or entryExpression.kind == 43) -> if {
+                                results! -> len => entryControlIr
+                                entryControlIr => entryAstToIr![entryExpressionAst!]
+                                18 => entryControlKind!
+                                entryExpression.kind == 43 -> if { 19 => entryControlKind! }
+                                results! -> push(TypedIrNode {
+                                    kind: entryControlKind!
+                                    parent: entryIr!
+                                    sourceModule: sourceIndex!
+                                    astNode: entryExpressionAst!
+                                    symbol: -1
+                                    targetModule: sourceIndex!
+                                    typeOrigin: 1
+                                    typeModule: -1
+                                    typeSymbol: 2
+                                    payloadToken: entryExpression.payloadToken
+                                    opcode: -1
+                                    operand0: -1
+                                    operand1: -1
+                                    nextOperand: -1
+                                    flags: entryExpression.flags
+                                })
+                            } else {
+                                entryExpressionTypeIndex! >= 0 -> if {
                                 inferred![entryExpressionTypeIndex!] => entryExpressionType
-                                nodes![entryExpressionAst!] => entryExpression
                                 9 => entryExpressionKind!
                                 entryExpression.kind == 13 -> if { 2 => entryExpressionKind! }
                                 entryExpression.kind == 14 -> if { 3 => entryExpressionKind! }
@@ -648,6 +750,7 @@ public lower sources: [Text; ~] -> [TypedIrNode; ~] {
                                     nextOperand: -1
                                     flags: entryExpression.flags
                                 })
+                                }
                             }
                         }
                         entryExpressionAst! + 1 => entryExpressionAst!
@@ -695,6 +798,80 @@ public lower sources: [Text; ~] -> [TypedIrNode; ~] {
                             entryOperator! => results![entryOperandIr!]
                         }
                         entryOperandIr! + 1 => entryOperandIr!
+                    }
+                    entryExpressionStart => entrySiblingIr!
+                    entrySiblingIr! < entryExpressionEnd -> while {
+                        results![entrySiblingIr!] => entrySibling!
+                        -1 => entryNextSibling!
+                        UIntSize(0) => entryNextSiblingStart!
+                        entryExpressionStart => entrySiblingSearch!
+                        entrySiblingSearch! < entryExpressionEnd -> while {
+                            results![entrySiblingSearch!] => entrySiblingCandidate
+                            (entrySiblingCandidate.parent == entrySibling!.parent and nodes![entrySiblingCandidate.astNode].start > nodes![entrySibling!.astNode].start) -> if {
+                                nodes![entrySiblingCandidate.astNode].start => entrySiblingCandidateStart
+                                (entryNextSibling! < 0 or entrySiblingCandidateStart < entryNextSiblingStart!) -> if {
+                                    entrySiblingSearch! => entryNextSibling!
+                                    entrySiblingCandidateStart => entryNextSiblingStart!
+                                }
+                            }
+                            entrySiblingSearch! + 1 => entrySiblingSearch!
+                        }
+                        entryNextSibling! => entrySibling!.nextOperand
+                        entrySibling! => results![entrySiblingIr!]
+                        entrySiblingIr! + 1 => entrySiblingIr!
+                    }
+                    entryExpressionStart => entryControlIrIndex!
+                    entryControlIrIndex! < entryExpressionEnd -> while {
+                        results![entryControlIrIndex!] => entryControl!
+                        entryControl!.kind == 19 -> if {
+                            -1 => entryFirstRegionChild!
+                            UIntSize(0) => entryFirstRegionChildStart!
+                            entryExpressionStart => entryRegionChildSearch!
+                            entryRegionChildSearch! < entryExpressionEnd -> while {
+                                results![entryRegionChildSearch!].parent == entryControlIrIndex! -> if {
+                                    nodes![results![entryRegionChildSearch!].astNode].start => entryRegionChildStart
+                                    (entryFirstRegionChild! < 0 or entryRegionChildStart < entryFirstRegionChildStart!) -> if {
+                                        entryRegionChildSearch! => entryFirstRegionChild!
+                                        entryRegionChildStart => entryFirstRegionChildStart!
+                                    }
+                                }
+                                entryRegionChildSearch! + 1 => entryRegionChildSearch!
+                            }
+                            entryFirstRegionChild! => entryControl!.operand0
+                            entryControl! => results![entryControlIrIndex!]
+                        }
+                        entryControl!.kind == 18 -> if {
+                            nodes![entryControl!.astNode].parent => entryControlFlowAst
+                            -1 => entryConditionIr!
+                            UIntSize(0) => entryConditionStart!
+                            entryExpressionStart => entryConditionSearch!
+                            entryConditionSearch! < entryExpressionEnd -> while {
+                                results![entryConditionSearch!] => entryConditionCandidate
+                                (nodes![entryConditionCandidate.astNode].parent == entryControlFlowAst and nodes![entryConditionCandidate.astNode].start < nodes![entryControl!.astNode].start) -> if {
+                                    nodes![entryConditionCandidate.astNode].start => entryCandidateStart
+                                    (entryConditionIr! < 0 or entryCandidateStart > entryConditionStart!) -> if {
+                                        entryConditionSearch! => entryConditionIr!
+                                        entryCandidateStart => entryConditionStart!
+                                    }
+                                }
+                                entryConditionSearch! + 1 => entryConditionSearch!
+                            }
+                            -1 => entryThenRegion!
+                            -1 => entryElseRegion!
+                            entryExpressionStart => entryRegionSearch!
+                            entryRegionSearch! < entryExpressionEnd -> while {
+                                results![entryRegionSearch!] => entryRegionCandidate
+                                (entryRegionCandidate.kind == 19 and entryRegionCandidate.parent == entryControlIrIndex!) -> if {
+                                    entryThenRegion! < 0 -> if { entryRegionSearch! => entryThenRegion! } else { entryRegionSearch! => entryElseRegion! }
+                                }
+                                entryRegionSearch! + 1 => entryRegionSearch!
+                            }
+                            entryConditionIr! => entryControl!.operand0
+                            entryThenRegion! => entryControl!.operand1
+                            entryElseRegion! => entryControl!.nextOperand
+                            entryControl! => results![entryControlIrIndex!]
+                        }
+                        entryControlIrIndex! + 1 => entryControlIrIndex!
                     }
                     entryExpressionStart => entryBindingNameIr!
                     entryBindingNameIr! < entryExpressionEnd -> while {

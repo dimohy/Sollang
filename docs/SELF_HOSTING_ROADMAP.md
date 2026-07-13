@@ -48,6 +48,15 @@ The design deliberately combines a small set of compatible ideas:
   byte arena follows that lifetime model while exposing checked offsets instead
   of raw pointers. See Zig [Choosing an Allocator](https://ziglang.org/documentation/master/#Choosing-an-Allocator)
   and rustc [`rustc_arena`](https://doc.rust-lang.org/stable/nightly-rustc/rustc_arena/index.html).
+- MLIR SCF keeps `if` and loop bodies as structured regions, while Rust MIR
+  makes the later control-flow graph explicit as typed basic blocks ending in
+  terminators. LLVM then lowers an `if` to a conditional branch, two branch
+  blocks, a continuation block, and a `phi` only when the expression produces
+  a joined value. SL follows that staged boundary: structured regions in typed
+  IR first, explicit LLVM CFG during backend lowering. See MLIR
+  [SCF](https://mlir.llvm.org/docs/Dialects/SCFDialect/), the rustc guide to
+  [MIR](https://rustc-dev-guide.rust-lang.org/mir/index.html), and LLVM's
+  [control-flow tutorial](https://llvm.org/docs/tutorial/MyFirstLanguageFrontend/LangImpl05.html).
 - Windows file mappings and POSIX `mmap` keep large files outside ordinary heap
   allocation while exposing bounded views. SL wraps those views in affine
   ownership and aligns hidden base mappings to the host granularity. See
@@ -418,6 +427,15 @@ call, so `main { ping }` emits and executes `call @ping()` before returning the
 process exit code. This removes the empty-entry-only limitation, while local
 bindings, control flow, runtime effects, and complete statement sequencing
 remain on the critical path.
+
+Self-hosted parsing and typed IR now preserve flow-oriented `if` explicitly.
+The ordered grammar tries `IfFlowTarget` before a generic path and expression
+statements before the permissive block-call shape, fixing the shared grammar
+defect that previously captured `if` too early. AST nodes retain the control
+target and both block-body regions. Typed IR links the Bool condition, ordered
+`then`/`else` regions, and each region's first child in both functions and
+`main`. The next backend slice lowers this structured form to LLVM diamond CFGs
+and inserts a merge/`phi` only for value-producing conditionals.
 
 Typed IR now represents immutable local bindings explicitly and connects each
 name use by stable symbol id. LLVM materializes scalar literal bindings as SSA

@@ -126,6 +126,12 @@ The pipeline must avoid unnecessary intermediate forms. Each stage should exist
 because it makes diagnostics, semantic analysis, optimization, or LLVM lowering
 meaningfully better.
 
+Structured control flow is retained through typed IR. An `if` owns ordered
+`then` and optional `else` regions plus its Bool condition. LLVM lowering then
+creates explicit basic blocks and branches; it creates a merge `phi` only when
+the conditional is value-producing. This keeps branch-local type, ownership,
+and lifetime analysis independent of target-specific CFG text emission.
+
 ## First Program
 
 The first valid SmallLang program is:
@@ -345,16 +351,17 @@ block_function_body := "block" identifier ":" type_name "{" statement* "}"
 function_body := "{" function_declaration* statement* expression "}" | "=>" expression | "->" expression | "=" "intrinsic"
 main_block   := "main" block
 block        := "{" statement* "}"
-statement    := block_function_call | each_statement | binding_statement | expression_statement
+statement    := each_statement | binding_statement | index_assignment_statement | field_assignment_statement | expression_statement | block_function_call
 block_function_call := range_or_logical_expression "->" path identifier? block
 each_statement := "each" identifier "in" range_expression block
 binding_statement := identifier "=" expression statement_end | expression "=>" identifier "!"? statement_end
 index_assignment_statement := expression "=>" identifier "!"? "[" expression "]" statement_end
+field_assignment_statement := expression "=>" identifier "!"? "." identifier statement_end
 expression_statement := expression statement_end
 statement_end := newline+ | "}" lookahead
 range_expression := logical_or_expression ".." logical_or_expression
 expression   := flow_expression
-flow_expression := range_or_logical_expression ("->" (path flow_target_call? | if_flow_target | when_flow_target | fold_flow_target))*
+flow_expression := range_or_logical_expression ("->" (if_flow_target | when_flow_target | fold_flow_target | path flow_target_call?))*
 flow_target_call := "(" argument_list? ")"
 range_or_logical_expression := range_expression | logical_or_expression
 if_flow_target := "if" block_body ("else" block_body)?

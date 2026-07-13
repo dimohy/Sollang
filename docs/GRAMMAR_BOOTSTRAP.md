@@ -68,6 +68,14 @@ current SmallLang grammar already represents expression precedence as layered
 non-left-recursive rules, so it does not require a more complicated LR
 generator for the first self-hosted parser.
 
+Choices are ordered. A keyword-shaped control target must therefore precede a
+generic `Path`, and ordinary expression statements must precede the more
+permissive block-function-call statement. Otherwise `if` can be consumed as a
+path or the left side of a block call before `IfFlowTarget` is attempted. The
+canonical grammar and generated table enforce this special-before-general
+ordering; the self-hosted `if` regression prevents the C# grammar builder and
+SL parser VM from drifting back to the ambiguous order.
+
 ## Lexer Descriptor Kinds
 
 The first descriptor format represents whitespace, line comments, identifiers,
@@ -315,6 +323,14 @@ pass. Nested precedence therefore becomes an explicit IR graph rather than an
 AST convention. Resolved calls retain their target source module and function
 symbol, with argument expressions linked as operands. Operator codes are stored
 directly for LLVM opcode selection.
+
+Flow conditionals now remain structured in typed IR instead of disappearing
+into generic expression nodes. Kind 18 links the Bool condition to ordered
+kind-19 `then` and optional `else` regions; each region links its first child,
+and siblings form a source-ordered chain. This is the semantic boundary needed
+to retain branch-local typing and ownership before the LLVM backend creates
+explicit basic blocks, conditional branches, merge blocks, and value `phi`
+nodes where required.
 
 The first self-hosted LLVM text backend lives in `selfhost/llvm/text.sl`. It
 emits stable `sl_m<module>_s<symbol>` function names, `i32`/`i1` signatures,
