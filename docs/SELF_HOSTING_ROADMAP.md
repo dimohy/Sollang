@@ -437,9 +437,12 @@ Target descriptors are now implemented in the file module
 Wasm32/WebAssembly values each own their pinned-Clang triple, data layout,
 pointer width, and object-format identity. All three headers assemble, while
 the LLVM text emitter currently consumes Windows through a normal file import.
-Selecting Linux/Wasm for a complete module remains because the current
-bootstrap type system cannot yet carry the owned `[Text; ~]` source set inside
-an emitter-request struct without losing its composite field identity.
+Selecting Linux/Wasm for a complete module remains. The bootstrap compiler now
+gives an owned `[Text; ~]` struct field a stable parametric identity, LLVM
+aggregate ABI, member access, and recursive backing-store drop. The remaining
+request boundary is ownership-specific: moving that field out of a moved
+request needs explicit partial-move tracking so the enclosing struct cannot
+drop the transferred field twice.
 
 Text now crosses the self-hosted LLVM boundary as `{ ptr, i64 }`. UTF-8
 literals become immutable globals with byte-accurate lengths and LLVM `\XX`

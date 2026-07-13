@@ -280,6 +280,24 @@ internal sealed class TypeDefinitionTable
         return id;
     }
 
+    public void RegisterDynamicArray(TypeId id, TypeId elementType)
+    {
+        if (_dynamicArraysByElement.TryGetValue(elementType, out var existing))
+        {
+            if (existing != id)
+            {
+                throw new InvalidOperationException($"dynamic array element type '{(int)elementType}' already has type id '{(int)existing}'");
+            }
+            return;
+        }
+
+        var size = InlineSize(elementType);
+        var alignment = Math.Min(Math.Max(size, 1), 8);
+        _dynamicArrays.Add(id, new BoundDynamicArrayDefinition(id, elementType, size, alignment));
+        _dynamicArraysByElement.Add(elementType, id);
+        _nextParametricTypeId = Math.Max(_nextParametricTypeId, (int)id + 1);
+    }
+
     public bool TryGetDynamicArrayForElement(TypeId elementType, out TypeId arrayType) =>
         _dynamicArraysByElement.TryGetValue(elementType, out arrayType);
 

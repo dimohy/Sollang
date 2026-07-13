@@ -25,6 +25,21 @@ internal sealed partial class LlvmEmitter
         {
             EmitBoxDropHelper(box);
         }
+        if (_program.Types.Structs.Any(definition =>
+                definition.Fields.Any(field => field.Type == BoundType.DynamicIntArray)))
+        {
+            EmitDynamicArrayDropHelper(BoundType.DynamicIntArray, BoundType.Int);
+        }
+        foreach (var array in _program.Types.DynamicArrays
+                     .Where(array => _program.Types.ContainsOwnedStorage(array.ElementType)
+                         || _program.Types.Structs.Any(structure =>
+                             structure.Fields.Any(field => field.Type == array.Id))
+                         || _program.Types.Enums.Any(enumeration =>
+                             enumeration.Variants.Any(variant => variant.PayloadType == array.Id)))
+                     .OrderBy(static array => array.Id))
+        {
+            EmitDynamicArrayDropHelper(array.Id, array.ElementType);
+        }
         foreach (var structure in _program.Types.Structs
                      .Where(definition => _program.Types.ContainsOwnedStorage(definition.Id))
                      .OrderBy(static definition => definition.Id))
@@ -58,6 +73,50 @@ internal sealed partial class LlvmEmitter
             EmitOwnedDropCall(box.ElementType, loaded);
         }
         EmitCall(target: null, "void", "smalllang_free", "ptr %value");
+        EmitInstruction("ret void");
+        EmitFunctionLine("}");
+        EmitFunctionLine();
+    }
+
+    private void EmitDynamicArrayDropHelper(BoundType arrayType, BoundType elementType)
+    {
+        const string llvmType = "%smalllang.dynamic_int_array";
+        EmitFunctionLine($"define internal void {DropSymbol(arrayType)}({llvmType} %value) #0 {{");
+        EmitFunctionLine("entry:");
+        _currentBlockLabel = "entry";
+        var pointer = NextTemp("drop_array_ptr");
+        EmitAssign(pointer, $"extractvalue {llvmType} %value, 0");
+
+        if (_program.Types.ContainsOwnedStorage(elementType))
+        {
+            var length = NextTemp("drop_array_len");
+            EmitAssign(length, $"extractvalue {llvmType} %value, 1");
+            var loopLabel = NextLabel("drop_array_loop");
+            var itemLabel = NextLabel("drop_array_item");
+            var endLabel = NextLabel("drop_array_end");
+            EmitBranch(loopLabel);
+            EmitLabel(loopLabel);
+            _currentBlockLabel = loopLabel;
+            var index = NextTemp("drop_array_index");
+            var next = NextTemp("drop_array_next");
+            EmitInstruction($"{index} = phi i64 [ 0, %entry ], [ {next}, %{itemLabel} ]");
+            var inRange = NextTemp("drop_array_in_range");
+            EmitCompare(inRange, "ult", "i64", index, length);
+            EmitConditionalBranch(inRange, itemLabel, endLabel);
+            EmitLabel(itemLabel);
+            _currentBlockLabel = itemLabel;
+            var slot = NextTemp("drop_array_slot");
+            EmitAssign(slot, $"getelementptr {LlvmType(elementType)}, ptr {pointer}, i64 {index}");
+            var element = NextTemp("drop_array_element");
+            EmitLoad(element, LlvmType(elementType), slot, RuntimeAlignment(elementType));
+            EmitOwnedDropCall(elementType, element);
+            EmitBinary(next, "add", "i64", index, "1");
+            EmitBranch(loopLabel);
+            EmitLabel(endLabel);
+            _currentBlockLabel = endLabel;
+        }
+
+        EmitCall(target: null, "void", "smalllang_free", $"ptr {pointer}");
         EmitInstruction("ret void");
         EmitFunctionLine("}");
         EmitFunctionLine();

@@ -357,6 +357,14 @@ pointers) using data layouts extracted from pinned Clang 22. Target headers for
 all three assemble with `llvm-as`; selecting the non-Windows descriptor in the
 full emitter still requires a target-aware request boundary.
 
+The bootstrap type table now predeclares parametric dynamic-array identities
+used by struct fields before struct layouts are finalized. A field such as
+`sources: [Text; ~]` therefore retains its element layout instead of becoming
+an unknown textual type. LLVM materializes/dematerializes the three-word array
+aggregate through struct literals and member reads, and generated recursive
+drop glue releases the backing store. Moving one owned field out of a larger
+owned request remains a separate partial-move rule.
+
 Nominal structs now have deterministic `%sl.struct.m<module>_s<symbol>` LLVM
 types. Typed IR marks struct literals and links an arbitrary number of ordered
 field operands through sibling indexes. The backend emits each field with an

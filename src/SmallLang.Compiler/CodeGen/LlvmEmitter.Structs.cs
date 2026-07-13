@@ -150,6 +150,12 @@ internal sealed partial class LlvmEmitter
             RuntimeStruct structure => (LlvmStructType(structure.Type), structure.ValueName),
             RuntimeEnum enumeration => (LlvmEnumType(enumeration.Type), enumeration.ValueName),
             RuntimeBox box => ("ptr", box.PointerName),
+            RuntimeDynamicIntArray array => (
+                "%smalllang.dynamic_int_array",
+                BuildDynamicArrayAggregate(array.PointerName, array.LengthName, array.CapacityName)),
+            RuntimeDynamicInlineArray array => (
+                "%smalllang.dynamic_int_array",
+                BuildDynamicArrayAggregate(array.PointerName, array.LengthName, array.CapacityName)),
             _ => throw new SmallLangException($"type {value.Type} is not supported in an inline struct field")
         };
     }
@@ -168,6 +174,17 @@ internal sealed partial class LlvmEmitter
         {
             var box = _program.Types.GetBox(type);
             return new RuntimeBox(type, box.ElementType, valueName);
+        }
+        if (type == BoundType.DynamicIntArray)
+        {
+            var (pointer, length, capacity) = ExtractDynamicArrayAggregate(valueName);
+            return new RuntimeDynamicIntArray(pointer, length, capacity);
+        }
+        if (_program.Types.IsDynamicArray(type))
+        {
+            var definition = _program.Types.GetDynamicArray(type);
+            var (pointer, length, capacity) = ExtractDynamicArrayAggregate(valueName);
+            return new RuntimeDynamicInlineArray(type, definition.ElementType, pointer, length, capacity);
         }
 
         if (IsIntegerType(type))
@@ -205,6 +222,17 @@ internal sealed partial class LlvmEmitter
         return new RuntimeText(pointer, length);
     }
 
+    private (string Pointer, string Length, string Capacity) ExtractDynamicArrayAggregate(string aggregate)
+    {
+        var pointer = NextTemp("array_ptr");
+        EmitAssign(pointer, $"extractvalue %smalllang.dynamic_int_array {aggregate}, 0");
+        var length = NextTemp("array_len");
+        EmitAssign(length, $"extractvalue %smalllang.dynamic_int_array {aggregate}, 1");
+        var capacity = NextTemp("array_capacity");
+        EmitAssign(capacity, $"extractvalue %smalllang.dynamic_int_array {aggregate}, 2");
+        return (pointer, length, capacity);
+    }
+
     private string LlvmType(BoundType type)
     {
         if (_program.Types.IsStruct(type))
@@ -222,6 +250,10 @@ internal sealed partial class LlvmEmitter
         if (_program.Types.IsDictionary(type))
         {
             return "%smalllang.int_dictionary";
+        }
+        if (_program.Types.IsDynamicArray(type))
+        {
+            return "%smalllang.dynamic_int_array";
         }
 
         return type switch

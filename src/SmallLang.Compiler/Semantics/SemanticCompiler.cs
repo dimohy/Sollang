@@ -4627,6 +4627,8 @@ internal sealed class SemanticCompiler
         }
 
         var boxes = new Dictionary<TypeId, BoundBoxDefinition>();
+        var predeclaredDynamicArrays = new Dictionary<TypeId, TypeId>();
+        var predeclaredDynamicArraysByElement = new Dictionary<TypeId, TypeId>();
         var boxableTypes = names
             .Where(item => item.Value is TypeId.Int or TypeId.Bool or TypeId.Text
                 || structTypes.Values.Contains(item.Value)
@@ -4655,7 +4657,8 @@ internal sealed class SemanticCompiler
                     throw Error(field.Line, field.Column, $"field '{field.Name}' already exists in struct '{declaration.Name}'");
                 }
 
-                if (!names.TryGetValue(field.TypeName, out var fieldType))
+                if (!names.TryGetValue(field.TypeName, out var fieldType)
+                    && !TryResolveDefinitionDynamicArray(field.TypeName, out fieldType))
                 {
                     throw Error(field.Line, field.Column, $"unknown type '{field.TypeName}'");
                 }
@@ -4663,9 +4666,7 @@ internal sealed class SemanticCompiler
                 if (fieldType is TypeId.Unit
                     or TypeId.IntSlice
                     or TypeId.StaticIntArray
-                    or TypeId.DynamicIntArray
-                    or TypeId.IntDictionaryView
-                    or TypeId.IntDictionary)
+                    or TypeId.IntDictionaryView)
                 {
                     throw Error(
                         field.Line,
@@ -4759,7 +4760,7 @@ internal sealed class SemanticCompiler
         {
             var payloadBytes = definition.Variants
                 .Where(static variant => variant.PayloadType is not null)
-                .Select(variant => InlineSize(variant.PayloadType!.Value, structs, enums, boxes))
+                .Select(variant => InlineSize(variant.PayloadType!.Value, structs, enums, boxes, predeclaredDynamicArrays))
                 .DefaultIfEmpty(0)
                 .Max();
             enums[id] = definition with { PayloadWords = (payloadBytes + 7) / 8 };
@@ -4767,7 +4768,7 @@ internal sealed class SemanticCompiler
 
         foreach (var (id, definition) in boxes.ToArray())
         {
-            var size = InlineSize(definition.ElementType, structs, enums, boxes);
+            var size = InlineSize(definition.ElementType, structs, enums, boxes, predeclaredDynamicArrays);
             boxes[id] = definition with
             {
                 Size = size,
@@ -4775,7 +4776,44 @@ internal sealed class SemanticCompiler
             };
         }
 
-        return new TypeDefinitionTable(names, structs, enums, boxes, _pointerBitWidth / 8);
+        var result = new TypeDefinitionTable(names, structs, enums, boxes, _pointerBitWidth / 8);
+        foreach (var (id, elementType) in predeclaredDynamicArrays)
+        {
+            result.RegisterDynamicArray(id, elementType);
+        }
+        return result;
+
+        bool TryResolveDefinitionDynamicArray(string typeName, out TypeId type)
+        {
+            type = default;
+            if (!typeName.StartsWith('[', StringComparison.Ordinal)
+                || !typeName.EndsWith("; ~]", StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            var elementName = typeName[1..^4].Trim();
+            if (!names.TryGetValue(elementName, out var elementType)
+                || elementType == BoundType.Unit)
+            {
+                return false;
+            }
+            if (elementType == BoundType.Int)
+            {
+                type = BoundType.DynamicIntArray;
+                return true;
+            }
+            if (predeclaredDynamicArraysByElement.TryGetValue(elementType, out type))
+            {
+                return true;
+            }
+
+            type = (TypeId)nextTypeId++;
+            predeclaredDynamicArrays.Add(type, elementType);
+            predeclaredDynamicArraysByElement.Add(elementType, type);
+            names.TryAdd(typeName, type);
+            return true;
+        }
     }
 
     private void ValidateAcyclicValueTypes(
@@ -4846,7 +4884,8 @@ internal sealed class SemanticCompiler
         TypeId type,
         IReadOnlyDictionary<TypeId, BoundStructDefinition> structs,
         IReadOnlyDictionary<TypeId, BoundEnumDefinition> enums,
-        IReadOnlyDictionary<TypeId, BoundBoxDefinition> boxes)
+        IReadOnlyDictionary<TypeId, BoundBoxDefinition> boxes,
+        IReadOnlyDictionary<TypeId, TypeId> dynamicArrays)
     {
         if (boxes.ContainsKey(type))
         {
@@ -4859,7 +4898,7 @@ internal sealed class SemanticCompiler
             var maxAlignment = 1;
             foreach (var field in structure.Fields)
             {
-                var size = InlineSize(field.Type, structs, enums, boxes);
+                var size = InlineSize(field.Type, structs, enums, boxes, dynamicArrays);
                 var alignment = Math.Min(Math.Max(size, 1), 8);
                 offset = AlignUp(offset, alignment);
                 offset += size;
@@ -4873,10 +4912,15 @@ internal sealed class SemanticCompiler
         {
             var payloadBytes = enumeration.Variants
                 .Where(static variant => variant.PayloadType is not null)
-                .Select(variant => InlineSize(variant.PayloadType!.Value, structs, enums, boxes))
+                .Select(variant => InlineSize(variant.PayloadType!.Value, structs, enums, boxes, dynamicArrays))
                 .DefaultIfEmpty(0)
                 .Max();
             return 8 + AlignUp(payloadBytes, 8);
+        }
+
+        if (dynamicArrays.ContainsKey(type))
+        {
+            return 3 * (_pointerBitWidth / 8);
         }
 
         return type switch
