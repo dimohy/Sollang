@@ -3,7 +3,7 @@ using System.Text;
 
 var filters = new List<string>();
 var skipBootstrap = false;
-var jobs = Math.Min(Environment.ProcessorCount, 4);
+var jobs = Math.Min(Environment.ProcessorCount, 8);
 for (var argumentIndex = 0; argumentIndex < args.Length; argumentIndex++)
 {
     switch (args[argumentIndex])
@@ -135,6 +135,7 @@ var failures = 0;
 Console.WriteLine($"Running {expectedFiles.Length + diagnosticFiles.Length} tests with {jobs} worker(s).");
 Parallel.ForEach(expectedFiles, new ParallelOptions { MaxDegreeOfParallelism = jobs }, expectedFile =>
 {
+    var stopwatch = Stopwatch.StartNew();
     var name = Path.GetFileName(expectedFile)[..^".stdout.txt".Length];
     var sourcePath = Path.Combine(repoRoot, "examples", name + ".sl");
     var stdinPath = Path.Combine(expectedDir, name + ".stdin.txt");
@@ -174,7 +175,8 @@ Parallel.ForEach(expectedFiles, new ParallelOptions { MaxDegreeOfParallelism = j
     compilerArguments.AddRange([
         "-o", outputPath,
         "--target", "windows-x64",
-        "--llvm", llvmDir
+        "--llvm", llvmDir,
+        "-O1"
     ]);
     if (verifyLlvm)
     {
@@ -217,6 +219,7 @@ Parallel.ForEach(expectedFiles, new ParallelOptions { MaxDegreeOfParallelism = j
             "-o", wasmOutputPath,
             "--target", "wasm32-browser",
             "--llvm", llvmDir,
+            "-O1",
             "--keep-temps"
         };
         var wasmBuild = Run("dotnet", wasmArguments, input: null, repoRoot);
@@ -322,11 +325,12 @@ Parallel.ForEach(expectedFiles, new ParallelOptions { MaxDegreeOfParallelism = j
         }
     }
 
-    Console.WriteLine($"PASS {name}");
+    Console.WriteLine($"PASS {name} ({stopwatch.Elapsed.TotalSeconds:F2}s)");
 });
 
 Parallel.ForEach(diagnosticFiles, new ParallelOptions { MaxDegreeOfParallelism = jobs }, sourcePath =>
 {
+    var stopwatch = Stopwatch.StartNew();
     var name = Path.GetFileNameWithoutExtension(sourcePath);
     var expectedPath = Path.Combine(diagnosticDir, name + ".stderr.contains.txt");
     var sourcesPath = Path.Combine(diagnosticDir, name + ".sources.txt");
@@ -373,7 +377,7 @@ Parallel.ForEach(diagnosticFiles, new ParallelOptions { MaxDegreeOfParallelism =
         return;
     }
 
-    Console.WriteLine($"PASS diagnostic/{name}");
+    Console.WriteLine($"PASS diagnostic/{name} ({stopwatch.Elapsed.TotalSeconds:F2}s)");
 });
 
 if (failures == 0)
@@ -408,6 +412,7 @@ static ProcessResult Run(
     string workingDirectory,
     IReadOnlyDictionary<string, string>? environment = null)
 {
+    const int ProcessTimeoutMilliseconds = 5 * 60 * 1000;
     using var process = new Process();
     process.StartInfo = new ProcessStartInfo
     {
@@ -438,10 +443,21 @@ static ProcessResult Run(
         process.StandardInput.Close();
     }
 
-    var stdout = process.StandardOutput.ReadToEnd();
-    var stderr = process.StandardError.ReadToEnd();
-    process.WaitForExit();
-    return new ProcessResult(process.ExitCode, stdout, stderr);
+    var stdoutTask = process.StandardOutput.ReadToEndAsync();
+    var stderrTask = process.StandardError.ReadToEndAsync();
+    if (!process.WaitForExit(ProcessTimeoutMilliseconds))
+    {
+        process.Kill(entireProcessTree: true);
+        process.WaitForExit();
+        Task.WaitAll(stdoutTask, stderrTask);
+        return new ProcessResult(
+            -1,
+            stdoutTask.Result,
+            $"process timed out after {ProcessTimeoutMilliseconds / 1000} seconds: {fileName}{Environment.NewLine}{stderrTask.Result}");
+    }
+
+    Task.WaitAll(stdoutTask, stderrTask);
+    return new ProcessResult(process.ExitCode, stdoutTask.Result, stderrTask.Result);
 }
 
 static string Normalize(string value)

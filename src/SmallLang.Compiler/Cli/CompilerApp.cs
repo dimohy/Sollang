@@ -89,13 +89,13 @@ internal static class CompilerApp
         switch (options.Target)
         {
             case CompilationTarget.WindowsX64:
-                new WindowsLinker(toolchain).LinkLlvmIr(llPath, options.OutputPath, workDir);
+                new WindowsLinker(toolchain).LinkLlvmIr(llPath, options.OutputPath, workDir, options.OptimizationLevel);
                 break;
             case CompilationTarget.LinuxX64:
-                new WslLinuxLinker(toolchain).LinkLlvmIr(llPath, options.OutputPath, workDir);
+                new WslLinuxLinker(toolchain).LinkLlvmIr(llPath, options.OutputPath, workDir, options.OptimizationLevel);
                 break;
             case CompilationTarget.Wasm32Browser:
-                new WasmBrowserLinker(toolchain).LinkLlvmIr(llPath, options.OutputPath, workDir);
+                new WasmBrowserLinker(toolchain).LinkLlvmIr(llPath, options.OutputPath, workDir, options.OptimizationLevel);
                 break;
             default:
                 throw new SmallLangException($"unsupported target '{options.Target}'");

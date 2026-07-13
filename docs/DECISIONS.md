@@ -3225,11 +3225,34 @@ field reinitialization or control-flow joins with different moved-path sets;
 those require dataflow state per region before the broader path-sensitive
 ownership gate can be complete.
 
-The emitter marks drop requests that can actually intersect a partial move, so
-ordinary recursive drop glue does not rebuild typed-IR move metadata. A marked
-request still rebuilds immutable nominal/composite/path tables inside the local
-helper because the current SL local-function surface cannot capture bindings
-declared after local declarations. Hoisting these tables into one emitter
-analysis context is the next compile-time performance optimization.
+The emitter marks drop requests that can actually intersect a partial move.
+D109 then hoists the immutable typed IR, move events, type tables, and module
+identities into one emitter analysis context, so drop glue and local helpers no
+longer rebuild the same metadata.
+
+## D109 - Emitter Analysis Is An Owned, Borrowed Context
+
+Status: implemented
+Date: 2026-07-13
+
+The self-hosted LLVM backend computes typed IR, move events, nominal types,
+composite types, and module identities once. An owned `EmitContext` keeps those
+arrays alive for the whole emission and local helpers borrow its fields. The
+context is consumed once when emission finishes, preserving deterministic
+cleanup without global mutable caches.
+
+Constructing a context transfers each owned field from its source binding.
+Reading `context.ir` or `context.sources` through a named owner is a borrow, not
+an anonymous heap value, while moving such a field still participates in the
+existing partial-move rules. Example 235 covers the multi-owned-field transfer
+and a nested local helper borrowing the cached typed IR.
+
+Example tests now bound every child process to five minutes, kill the complete
+process tree on timeout, default to eight workers, and report per-case timing.
+Compiler optimization can be selected with the conventional `-O0`, `-O1`,
+`-O2`, and `-O3` flags; tests use `-O1`. The full suite shows that large
+self-hosted LLVM cases remain dominated by native optimization, so module-level
+object caching is the next performance step rather than further blind worker
+growth.
 
 

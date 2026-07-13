@@ -6,7 +6,7 @@ namespace SmallLang.Compiler.Tooling;
 
 internal sealed class WindowsLinker(LlvmToolchain toolchain)
 {
-    public void LinkLlvmIr(string llPath, string outputPath, string workDir)
+    public void LinkLlvmIr(string llPath, string outputPath, string workDir, string? optimizationLevel)
     {
         var objectPath = Path.Combine(workDir, Path.GetFileNameWithoutExtension(outputPath) + ".obj");
         var importLib = CreateKernel32ImportLibrary(workDir);
@@ -17,7 +17,7 @@ internal sealed class WindowsLinker(LlvmToolchain toolchain)
         [
             "-target",
             "x86_64-pc-windows-msvc",
-            "-O3",
+            optimizationLevel ?? "-O3",
             "-fno-addrsig",
             "-mno-stack-arg-probe",
             "-c",

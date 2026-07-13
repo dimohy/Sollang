@@ -67,6 +67,7 @@ internal sealed partial class LlvmEmitter
         {
             case BindingStatement binding:
                 var movedSourceName = GetMoveConsumingContainerSourceName(binding.Value);
+                var structFieldSourceNames = GetOwnedStructFieldSourceNames(binding.Value);
                 var value = EmitExpression(binding.Value);
                 var movedFieldOwnerName = GetMoveConsumingOwnedFieldOwnerName(binding.Value, value);
                 if (binding.IsMutable
@@ -91,6 +92,10 @@ internal sealed partial class LlvmEmitter
                 if (movedFieldOwnerName is not null)
                 {
                     RemoveLocal(movedFieldOwnerName);
+                }
+                foreach (var transferredName in structFieldSourceNames)
+                {
+                    RemoveLocal(transferredName);
                 }
 
                 _mutableContainerSlots.Remove(binding.Name);

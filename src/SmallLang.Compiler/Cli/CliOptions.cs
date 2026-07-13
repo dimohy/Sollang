@@ -7,13 +7,14 @@ internal sealed record CliOptions(
     string OutputPath,
     string? LlvmHome,
     CompilationTarget Target,
-    bool KeepTemps)
+    bool KeepTemps,
+    string? OptimizationLevel)
 {
     public static CliOptions Parse(string[] args)
     {
         if (args is not ["build", ..])
         {
-            throw new SmallLangException("usage: smalllang build <source.sl> [more-source.sl ...] -o <output> [--target windows-x64|linux-x64|wasm32-browser] [--llvm <dir>] [--keep-temps]");
+            throw new SmallLangException("usage: smalllang build <source.sl> [more-source.sl ...] -o <output> [--target windows-x64|linux-x64|wasm32-browser] [--llvm <dir>] [-O0|-O1|-O2|-O3] [--keep-temps]");
         }
 
         var sources = new List<string>();
@@ -21,6 +22,7 @@ internal sealed record CliOptions(
         string? llvmHome = null;
         var target = CompilationTarget.WindowsX64;
         var keepTemps = false;
+        string? optimizationLevel = null;
 
         for (var i = 1; i < args.Length; i++)
         {
@@ -39,6 +41,12 @@ internal sealed record CliOptions(
                     break;
                 case "--keep-temps":
                     keepTemps = true;
+                    break;
+                case "-O0":
+                case "-O1":
+                case "-O2":
+                case "-O3":
+                    optimizationLevel = arg;
                     break;
                 default:
                     if (arg.StartsWith("-", StringComparison.Ordinal))
@@ -71,7 +79,8 @@ internal sealed record CliOptions(
             Path.GetFullPath(output),
             llvmHome is null ? null : Path.GetFullPath(llvmHome),
             target,
-            keepTemps);
+            keepTemps,
+            optimizationLevel);
     }
 
     private static CompilationTarget ParseTarget(string value)

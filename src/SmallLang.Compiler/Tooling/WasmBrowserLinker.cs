@@ -6,7 +6,7 @@ namespace SmallLang.Compiler.Tooling;
 
 internal sealed class WasmBrowserLinker(LlvmToolchain toolchain)
 {
-    public void LinkLlvmIr(string llPath, string outputPath, string workDir)
+    public void LinkLlvmIr(string llPath, string outputPath, string workDir, string? optimizationLevel)
     {
         var objectPath = Path.Combine(workDir, Path.GetFileNameWithoutExtension(outputPath) + ".wasm.o");
 
@@ -14,7 +14,7 @@ internal sealed class WasmBrowserLinker(LlvmToolchain toolchain)
         [
             "-target",
             "wasm32-unknown-unknown-wasm",
-            "-Oz",
+            optimizationLevel ?? "-Oz",
             "-fno-addrsig",
             "-c",
             llPath,

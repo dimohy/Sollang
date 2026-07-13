@@ -567,6 +567,32 @@ internal sealed partial class LlvmEmitter
         return name.Name;
     }
 
+    private IReadOnlyList<string> GetOwnedStructFieldSourceNames(Expression expression)
+    {
+        if (expression is not StructLiteralExpression literal
+            || !_program.Types.TryResolve(literal.TypeName, out var type)
+            || !_program.Types.IsStruct(type))
+        {
+            return [];
+        }
+
+        var definition = _program.Types.GetStruct(type);
+        var transferred = new List<string>();
+        foreach (var initializer in literal.Fields)
+        {
+            var field = definition.Fields.FirstOrDefault(candidate => candidate.Name == initializer.Name);
+            if (field is not null
+                && _program.Types.ContainsOwnedStorage(field.Type)
+                && initializer.Value is NameExpression name
+                && _locals.TryGetValue(name.Name, out var source)
+                && source.Type == field.Type)
+            {
+                transferred.Add(name.Name);
+            }
+        }
+        return transferred;
+    }
+
     private string? GetBlockResultTransferredOwnerName(Expression expression)
     {
         if (expression is NameExpression name)

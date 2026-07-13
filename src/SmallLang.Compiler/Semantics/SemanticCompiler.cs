@@ -969,11 +969,13 @@ internal sealed class SemanticCompiler
                     var movedSourceName = GetMoveConsumingContainerSourceName(binding.Value);
                     var movedFieldOwnerName = GetMoveConsumingOwnedFieldOwnerName(binding.Value, bindings);
                     var consumedSourceNames = GetOwnedParameterConsumedSourceNames(binding.Value, functions, bindings);
+                    var structFieldSourceNames = GetOwnedStructFieldSourceNames(binding.Value, bindings);
                     if (bindings.ContainsKey(binding.Name)
                         && !isMutableRebind
                         && !string.Equals(binding.Name, movedSourceName, StringComparison.Ordinal)
                         && !string.Equals(binding.Name, movedFieldOwnerName, StringComparison.Ordinal)
-                        && !consumedSourceNames.Contains(binding.Name, StringComparer.Ordinal))
+                        && !consumedSourceNames.Contains(binding.Name, StringComparer.Ordinal)
+                        && !structFieldSourceNames.Contains(binding.Name, StringComparer.Ordinal))
                     {
                         throw Error(binding.Line, binding.Column, $"binding '{binding.Name}' already exists in this scope");
                     }
@@ -1039,6 +1041,11 @@ internal sealed class SemanticCompiler
                         bindings.Remove(consumedName);
                         mutableBindings.Remove(consumedName);
                     }
+                    foreach (var transferredName in structFieldSourceNames)
+                    {
+                        bindings.Remove(transferredName);
+                        mutableBindings.Remove(transferredName);
+                    }
 
                     if (!isMutableRebind)
                     {
@@ -1095,19 +1102,19 @@ internal sealed class SemanticCompiler
                     ValidateOwnedParameterConsumptionExpression(guardLoopControl.Condition, functions);
                     break;
                 case ReturnStatement returnStatement:
-                    if (_currentFunctionIsAsync)
-                    {
-                        throw Error(
-                            returnStatement.Line,
-                            returnStatement.Column,
-                            "explicit return in an async function is not supported in the first runtime slice");
-                    }
                     if (_currentFunctionReturnType is null)
                     {
                         throw Error(
                             returnStatement.Line,
                             returnStatement.Column,
                             "'return' is only valid inside a value or Unit function");
+                    }
+                    if (_currentFunctionIsAsync)
+                    {
+                        throw Error(
+                            returnStatement.Line,
+                            returnStatement.Column,
+                            "explicit return in an async function is not supported in the first runtime slice");
                     }
                     if (!_currentFunctionAllowsEarlyReturn)
                     {
@@ -5469,7 +5476,12 @@ internal sealed class SemanticCompiler
 
     private bool IsAnonymousOwnedHeapContainerExpression(Expression expression)
     {
-        return expression is not NameExpression;
+        return expression switch
+        {
+            NameExpression => false,
+            FieldAccessExpression field => IsAnonymousOwnedHeapContainerExpression(field.Source),
+            _ => true
+        };
     }
 
     private bool IsMoveConsumingContainerTransformExpression(Expression expression)
@@ -5498,6 +5510,44 @@ internal sealed class SemanticCompiler
         }
 
         return name.Name;
+    }
+
+    private IReadOnlyList<string> GetOwnedStructFieldSourceNames(
+        Expression expression,
+        IReadOnlyDictionary<string, BoundType> bindings)
+    {
+        if (expression is not StructLiteralExpression literal
+            || !_types.TryResolve(literal.TypeName, out var type)
+            || !_types.IsStruct(type))
+        {
+            return [];
+        }
+
+        var definition = _types.GetStruct(type);
+        var transferred = new List<string>();
+        var unique = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var initializer in literal.Fields)
+        {
+            var field = definition.Fields.FirstOrDefault(candidate => candidate.Name == initializer.Name);
+            if (field is null
+                || !_types.ContainsOwnedStorage(field.Type)
+                || initializer.Value is not NameExpression name
+                || !bindings.TryGetValue(name.Name, out var sourceType)
+                || sourceType != field.Type)
+            {
+                continue;
+            }
+
+            if (!unique.Add(name.Name))
+            {
+                throw Error(
+                    initializer.Line,
+                    initializer.Column,
+                    $"owned binding '{name.Name}' cannot initialize more than one struct field");
+            }
+            transferred.Add(name.Name);
+        }
+        return transferred;
     }
 
     private string? GetMoveConsumingOwnedFieldOwnerName(

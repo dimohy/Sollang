@@ -6,7 +6,7 @@ namespace SmallLang.Compiler.Tooling;
 
 internal sealed class WslLinuxLinker(LlvmToolchain toolchain)
 {
-    public void LinkLlvmIr(string llPath, string outputPath, string workDir)
+    public void LinkLlvmIr(string llPath, string outputPath, string workDir, string? optimizationLevel)
     {
         var objectPath = Path.Combine(workDir, Path.GetFileNameWithoutExtension(outputPath) + ".o");
 
@@ -14,7 +14,7 @@ internal sealed class WslLinuxLinker(LlvmToolchain toolchain)
         [
             "-target",
             "x86_64-unknown-linux-gnu",
-            "-Oz",
+            optimizationLevel ?? "-Oz",
             "-fno-addrsig",
             "-c",
             llPath,
