@@ -93,6 +93,7 @@ internal enum BoundFunctionKind
     RuntimeArguments,
     RuntimeEnvironment,
     RuntimeRunProcess,
+    RuntimeRunProcessToFile,
     RuntimeBorrowSourceText,
     RuntimeMapSourceText,
     RuntimeWriteScalar,
@@ -141,6 +142,7 @@ internal enum TypeId
     File,
     FileWriter,
     SourceText,
+    RunToFileRequest,
     GenericParameter = 512,
     SecondaryGenericParameter = 513,
     FirstUserDefined = 1024

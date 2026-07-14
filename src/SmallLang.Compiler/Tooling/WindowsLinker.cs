@@ -36,6 +36,7 @@ internal sealed class WindowsLinker(LlvmToolchain toolchain)
             "/opt:ref",
             "/opt:icf",
             "/fixed",
+            "/stack:8388608,65536",
             "/merge:.rdata=.text",
             "/merge:.pdata=.text",
             "/merge:.xdata=.text",
@@ -55,6 +56,8 @@ internal sealed class WindowsLinker(LlvmToolchain toolchain)
             LIBRARY kernel32.dll
             EXPORTS
             GetStdHandle
+            CreateProcessW
+            GetExitCodeProcess
             ReadFile
             GetOverlappedResult
             WriteFile

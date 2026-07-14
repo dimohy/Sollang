@@ -35,6 +35,7 @@ internal sealed class LinuxLlvmRuntimePlatform : LlvmRuntimePlatform
         functions.AppendLine("declare i32 @open(ptr, i32, i32)");
         functions.AppendLine("declare i32 @close(i32)");
         functions.AppendLine("declare i32 @dup(i32)");
+        functions.AppendLine("declare i32 @dup2(i32, i32)");
         functions.AppendLine("declare i32 @fsync(i32)");
         functions.AppendLine("declare i64 @lseek(i32, i64, i32)");
         functions.AppendLine("declare i32 @ftruncate(i32, i64)");
@@ -388,6 +389,46 @@ internal sealed class LinuxLlvmRuntimePlatform : LlvmRuntimePlatform
               %signal0 = insertvalue %smalllang.process_result poison, i32 0, 0
               %signal1 = insertvalue %smalllang.process_result %signal0, i32 3, 1
               ret %smalllang.process_result %signal1
+            }
+
+            define internal %smalllang.process_result @smalllang_run_process_to_file(ptr %records, i64 %count, ptr %path, i64 %path_len) #0 {
+            entry:
+              %opened = call %smalllang.file_handle_result @smalllang_platform_open_owned_write_file(ptr %path, i64 %path_len)
+              %status = extractvalue %smalllang.file_handle_result %opened, 1
+              %open_ok = icmp eq i32 %status, 1
+              br i1 %open_ok, label %save, label %error
+
+            save:
+              %handle_value = extractvalue %smalllang.file_handle_result %opened, 0
+              %fd = trunc i64 %handle_value to i32
+              %previous = call i32 @dup(i32 1)
+              %saved = icmp sge i32 %previous, 0
+              br i1 %saved, label %redirect, label %close_error
+
+            redirect:
+              %redirected = call i32 @dup2(i32 %fd, i32 1)
+              %redirect_ok = icmp sge i32 %redirected, 0
+              br i1 %redirect_ok, label %run, label %close_saved_error
+
+            run:
+              %result = call %smalllang.process_result @smalllang_run_process(ptr %records, i64 %count)
+              %restored = call i32 @dup2(i32 %previous, i32 1)
+              %closed_previous = call i32 @close(i32 %previous)
+              call void @smalllang_platform_close_owned_file(i64 %handle_value)
+              ret %smalllang.process_result %result
+
+            close_saved_error:
+              %closed_saved = call i32 @close(i32 %previous)
+              br label %close_error
+
+            close_error:
+              call void @smalllang_platform_close_owned_file(i64 %handle_value)
+              br label %error
+
+            error:
+              %error0 = insertvalue %smalllang.process_result poison, i32 0, 0
+              %error1 = insertvalue %smalllang.process_result %error0, i32 1, 1
+              ret %smalllang.process_result %error1
             }
 
             """);

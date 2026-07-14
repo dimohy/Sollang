@@ -924,6 +924,10 @@ internal sealed class SemanticCompiler
                 function,
                 inputType,
                 returnType),
+            "sys.process.runToFile" => RequireProcessRunToFileIntrinsicSignature(
+                function,
+                inputType,
+                returnType),
             "sys.file.borrowText" => RequireIntrinsicSignature(
                 function, inputType, returnType, BoundType.Text, BoundType.SourceText,
                 BoundFunctionKind.RuntimeBorrowSourceText),
@@ -1042,6 +1046,37 @@ internal sealed class SemanticCompiler
                 $"intrinsic '{function.Name}' must have signature [Text; ~] -> Result<Int, Text>");
         }
         return BoundFunctionKind.RuntimeRunProcess;
+    }
+
+    private BoundFunctionKind RequireProcessRunToFileIntrinsicSignature(
+        FunctionDeclaration function,
+        BoundType? inputType,
+        BoundType returnType)
+    {
+        if (inputType is not { } requestType
+            || !_types.IsStruct(requestType)
+            || _types.GetStruct(requestType) is not { Name: "sys.process.RunToFileRequest" } request)
+        {
+            throw Error(function.Line, function.Column,
+                $"intrinsic '{function.Name}' must have signature RunToFileRequest -> Result<Int, Text>");
+        }
+
+        var argvField = request.Fields.FirstOrDefault(static field => field.Name == "argv");
+        var outputField = request.Fields.FirstOrDefault(static field => field.Name == "output");
+        if (request.Fields.Count != 2
+            || argvField is null
+            || outputField is null
+            || !_types.IsDynamicArray(argvField.Type)
+            || _types.GetDynamicArray(argvField.Type).ElementType != BoundType.Text
+            || outputField.Type != BoundType.Text
+            || !_types.TryGetResultTypes(returnType, out var resultTypes)
+            || resultTypes.Ok != BoundType.Int
+            || resultTypes.Error != BoundType.Text)
+        {
+            throw Error(function.Line, function.Column,
+                $"intrinsic '{function.Name}' must have signature RunToFileRequest -> Result<Int, Text>");
+        }
+        return BoundFunctionKind.RuntimeRunProcessToFile;
     }
 
     private BoundFunctionKind RequireGenericScalarWriteSignature(
@@ -3696,6 +3731,7 @@ internal sealed class SemanticCompiler
                         currentType = AsyncCallType(function);
                         continue;
                     case BoundFunctionKind.RuntimeRunProcess:
+                    case BoundFunctionKind.RuntimeRunProcessToFile:
                         EnsureRuntimeInput(currentType, function, expression.Line, expression.Column, path);
                         currentType = function.ReturnType;
                         continue;
@@ -4527,9 +4563,10 @@ internal sealed class SemanticCompiler
                 _resolvedGenericCalls[expression] = function;
                 return AsyncCallType(function);
             case BoundFunctionKind.RuntimeRunProcess:
+            case BoundFunctionKind.RuntimeRunProcessToFile:
                 if (expression.Arguments.Count != 1)
                 {
-                    throw Error(expression.Line, expression.Column, $"{path} expects one dynamic Text argv array");
+                    throw Error(expression.Line, expression.Column, $"{path} expects exactly one request");
                 }
                 var argvType = InferExpression(
                     expression.Arguments[0], functions, bindings,
@@ -5438,6 +5475,7 @@ internal sealed class SemanticCompiler
                 or BoundFunctionKind.RuntimeSleep => ["Clock"],
             BoundFunctionKind.RuntimeArguments
                 or BoundFunctionKind.RuntimeRunProcess => ["Process"],
+            BoundFunctionKind.RuntimeRunProcessToFile => ["Process", "File"],
             BoundFunctionKind.RuntimeEnvironment => ["Environment"],
             BoundFunctionKind.RuntimeOpenIntWriter
                 or BoundFunctionKind.RuntimeWriteInt
@@ -5563,6 +5601,8 @@ internal sealed class SemanticCompiler
                     ? TypeId.FileWriter
                     : string.Equals(declaration.Name, "sys.file.SourceText", StringComparison.Ordinal)
                         ? TypeId.SourceText
+                        : string.Equals(declaration.Name, "sys.process.RunToFileRequest", StringComparison.Ordinal)
+                            ? TypeId.RunToFileRequest
                 : (TypeId)nextTypeId++;
             if (!names.TryAdd(declaration.Name, id))
             {
@@ -5596,6 +5636,7 @@ internal sealed class SemanticCompiler
             .Where(item => item.Value is TypeId.Int or TypeId.Bool or TypeId.Text
                 || (structTypes.Values.Contains(item.Value)
                     && item.Value is not (TypeId.File or TypeId.FileWriter or TypeId.SourceText))
+                    && item.Value is not TypeId.RunToFileRequest
                 || enumTypes.Values.Contains(item.Value))
             .OrderBy(item => (int)item.Value)
             .ToArray();

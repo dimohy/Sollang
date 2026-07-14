@@ -198,6 +198,7 @@ if (expectedFiles.Any(IsReusableSelfHostCompilerTest))
             "*.sl",
             SearchOption.AllDirectories))
         .Append(selfHostDriverSourcesPath)
+        .Append(Path.Combine(repoRoot, "tests", "SmallLang.ExampleTests", "Program.cs"))
         .Append(compilerDll)
         .ToArray();
     if (!IsOutputCurrent(selfHostDriverPath, selfHostDriverInputs))
@@ -210,7 +211,7 @@ if (expectedFiles.Any(IsReusableSelfHostCompilerTest))
             "-o", selfHostDriverPath,
             "--target", "windows-x64",
             "--llvm", llvmDir,
-            "-O1"
+            "-O0"
         ]);
         var driverBuild = Run("dotnet", driverArguments, input: null, repoRoot);
         if (driverBuild.ExitCode != 0)

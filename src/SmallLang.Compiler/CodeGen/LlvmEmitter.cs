@@ -36,6 +36,9 @@ internal sealed partial class LlvmEmitter
     private string _mainOk = "true";
     private string _currentBlockLabel = "entry";
     private bool _currentBlockTerminated;
+    private readonly Dictionary<string, List<string>> _hoistedAllocaBlocks = new(StringComparer.Ordinal);
+    private List<string>? _currentHoistedAllocas;
+    private int _allocaBlockId;
     private readonly Stack<LoopContext> _loopContexts = new();
     private readonly Stack<LocalScope> _asyncScopeSnapshots = new();
     private AsyncCfgLowering? _activeAsyncCfg;
@@ -67,6 +70,7 @@ internal sealed partial class LlvmEmitter
                 (function.Body is not null && UsesRuntimeSleep(function.Body))
                 || function.BlockBody.Any(UsesRuntimeSleep));
         _platform.UsesAsyncFile = _usesAsyncFile;
+        _platform.UsesProcessRuntime = UsesProcessRuntime;
     }
 
     private bool UsesChildProcess(Statement statement) => statement switch
@@ -83,9 +87,10 @@ internal sealed partial class LlvmEmitter
 
     private bool UsesChildProcess(Expression expression)
     {
-        if (expression is CallExpression call && string.Join('.', call.Path) == "sys.process.run") return true;
+        if (expression is CallExpression call
+            && string.Join('.', call.Path) is "sys.process.run" or "sys.process.runToFile") return true;
         if (expression is FlowExpression flow
-            && flow.Targets.Any(target => string.Join('.', target.Path) == "sys.process.run")) return true;
+            && flow.Targets.Any(target => string.Join('.', target.Path) is "sys.process.run" or "sys.process.runToFile")) return true;
         return expression switch
         {
             StringExpression value => value.Segments.OfType<InterpolationSegment>().Any(x => UsesChildProcess(x.Expression)),
@@ -408,6 +413,10 @@ internal sealed partial class LlvmEmitter
         EmitMain();
         EmitFunctionLine("attributes #0 = { nounwind }");
 
-        return header + string.Concat(_globals) + string.Concat(_functions);
+        var functions = string.Concat(_functions.Select(line =>
+            _hoistedAllocaBlocks.TryGetValue(line, out var allocations)
+                ? string.Concat(allocations)
+                : line));
+        return header + string.Concat(_globals) + functions;
     }
 }

@@ -140,6 +140,7 @@ internal sealed partial class LlvmEmitter
 
     private void ClearLocalState()
     {
+        _currentHoistedAllocas = null;
         _locals.Clear();
         _mutableLocals.Clear();
         _borrowedMutableLocals.Clear();
@@ -165,6 +166,11 @@ internal sealed partial class LlvmEmitter
                 $"[{slot.Size.ToString(CultureInfo.InvariantCulture)} x i8]",
                 slot.Alignment);
         }
+        var marker = $"  ; smalllang hoisted allocas {_allocaBlockId.ToString(CultureInfo.InvariantCulture)}{Environment.NewLine}";
+        _allocaBlockId++;
+        _currentHoistedAllocas = [];
+        _hoistedAllocaBlocks.Add(marker, _currentHoistedAllocas);
+        _functions.Add(marker);
     }
 
     private string EmitStackLifetimeStart(object unit)

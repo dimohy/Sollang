@@ -16,6 +16,7 @@ internal sealed class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
         globals.AppendLine("@smalllang_file_reader = internal global ptr null");
         globals.AppendLine("@smalllang_argument_count_value = internal global i64 0");
         globals.AppendLine("@smalllang_argument_records = internal global ptr null");
+        globals.AppendLine("@smalllang_process_output_override = internal global ptr null");
         globals.AppendLine("@smalllang_environment_allocations = internal global ptr null");
         globals.AppendLine("@smalllang_environment_empty = internal constant [1 x i8] zeroinitializer, align 1");
         if (UsesAsyncFile)
@@ -54,7 +55,15 @@ internal sealed class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
         functions.AppendLine("declare dllimport i32 @WideCharToMultiByte(i32, i32, ptr, i32, ptr, i32, ptr, ptr)");
         functions.AppendLine("declare dllimport ptr @LocalFree(ptr)");
         functions.AppendLine("declare dllimport i32 @MultiByteToWideChar(i32, i32, ptr, i32, ptr, i32)");
-        functions.AppendLine("declare dllimport i64 @_wspawnvp(i32, ptr, ptr)");
+        if (UsesProcessRuntime)
+        {
+            functions.AppendLine("declare dllimport i32 @CreateProcessW(ptr, ptr, ptr, ptr, i32, i32, ptr, ptr, ptr, ptr)");
+            functions.AppendLine("declare dllimport i32 @GetExitCodeProcess(ptr, ptr)");
+        }
+        if (UsesProcessRuntime || UsesAsyncFile)
+        {
+            functions.AppendLine("declare dllimport i32 @WaitForSingleObject(ptr, i32)");
+        }
         functions.AppendLine("declare dllimport i32 @GetEnvironmentVariableW(ptr, ptr, i32)");
         functions.AppendLine("declare dllimport i32 @GetLastError()");
         functions.AppendLine("declare dllimport void @SetLastError(i32)");
@@ -63,7 +72,6 @@ internal sealed class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
             functions.AppendLine("declare dllimport ptr @CreateThread(ptr, i64, ptr, ptr, i32, ptr)");
             functions.AppendLine("declare dllimport ptr @CreateEventA(ptr, i32, i32, ptr)");
             functions.AppendLine("declare dllimport i32 @SetEvent(ptr)");
-            functions.AppendLine("declare dllimport i32 @WaitForSingleObject(ptr, i32)");
         }
     }
 
@@ -602,6 +610,207 @@ internal sealed class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
               ret ptr null
             }
 
+            define internal ptr @smalllang_join_windows_args(ptr %argv, i64 %count) #0 {
+            entry:
+              %i_slot = alloca i64, align 8
+              %total_slot = alloca i64, align 8
+              store i64 0, ptr %i_slot, align 8
+              store i64 0, ptr %total_slot, align 8
+              br label %measure_outer
+
+            measure_outer:
+              %i = load i64, ptr %i_slot, align 8
+              %outer_done = icmp eq i64 %i, %count
+              br i1 %outer_done, label %allocate, label %measure_inner
+
+            measure_inner:
+              %j = phi i64 [ 0, %measure_outer ], [ %j_next, %measure_more ]
+              %arg_slot = getelementptr ptr, ptr %argv, i64 %i
+              %arg = load ptr, ptr %arg_slot, align 8
+              %char_ptr = getelementptr i16, ptr %arg, i64 %j
+              %char = load i16, ptr %char_ptr, align 2
+              %arg_done = icmp eq i16 %char, 0
+              br i1 %arg_done, label %measure_arg_done, label %measure_more
+
+            measure_more:
+              %j_next = add i64 %j, 1
+              br label %measure_inner
+
+            measure_arg_done:
+              %total = load i64, ptr %total_slot, align 8
+              %needs_space = icmp ne i64 %i, 0
+              %space = zext i1 %needs_space to i64
+              %with_arg = add i64 %total, %j
+              %next_total = add i64 %with_arg, %space
+              store i64 %next_total, ptr %total_slot, align 8
+              %i_next = add i64 %i, 1
+              store i64 %i_next, ptr %i_slot, align 8
+              br label %measure_outer
+
+            allocate:
+              %total_chars = load i64, ptr %total_slot, align 8
+              %chars_with_null = add i64 %total_chars, 1
+              %bytes = mul i64 %chars_with_null, 2
+              %command = call ptr @smalllang_alloc(i64 %bytes)
+              %allocated = icmp ne ptr %command, null
+              br i1 %allocated, label %copy_setup, label %fail
+
+            copy_setup:
+              store i64 0, ptr %i_slot, align 8
+              store i64 0, ptr %total_slot, align 8
+              br label %copy_outer
+
+            copy_outer:
+              %copy_i = load i64, ptr %i_slot, align 8
+              %copy_done = icmp eq i64 %copy_i, %count
+              br i1 %copy_done, label %terminate, label %copy_space
+
+            copy_space:
+              %copy_offset = load i64, ptr %total_slot, align 8
+              %copy_needs_space = icmp ne i64 %copy_i, 0
+              br i1 %copy_needs_space, label %store_space, label %copy_inner
+
+            store_space:
+              %space_ptr = getelementptr i16, ptr %command, i64 %copy_offset
+              store i16 32, ptr %space_ptr, align 2
+              %after_space = add i64 %copy_offset, 1
+              store i64 %after_space, ptr %total_slot, align 8
+              br label %copy_inner
+
+            copy_inner:
+              %copy_j = phi i64 [ 0, %copy_space ], [ 0, %store_space ], [ %copy_j_next, %copy_more ]
+              %copy_arg_slot = getelementptr ptr, ptr %argv, i64 %copy_i
+              %copy_arg = load ptr, ptr %copy_arg_slot, align 8
+              %copy_char_ptr = getelementptr i16, ptr %copy_arg, i64 %copy_j
+              %copy_char = load i16, ptr %copy_char_ptr, align 2
+              %copy_arg_done = icmp eq i16 %copy_char, 0
+              br i1 %copy_arg_done, label %copy_arg_finish, label %copy_more
+
+            copy_more:
+              %current_offset = load i64, ptr %total_slot, align 8
+              %destination = getelementptr i16, ptr %command, i64 %current_offset
+              store i16 %copy_char, ptr %destination, align 2
+              %next_offset = add i64 %current_offset, 1
+              store i64 %next_offset, ptr %total_slot, align 8
+              %copy_j_next = add i64 %copy_j, 1
+              br label %copy_inner
+
+            copy_arg_finish:
+              %copy_i_next = add i64 %copy_i, 1
+              store i64 %copy_i_next, ptr %i_slot, align 8
+              br label %copy_outer
+
+            terminate:
+              %final_offset = load i64, ptr %total_slot, align 8
+              %null_ptr = getelementptr i16, ptr %command, i64 %final_offset
+              store i16 0, ptr %null_ptr, align 2
+              ret ptr %command
+
+            fail:
+              ret ptr null
+            }
+
+            define internal ptr @smalllang_inherit_windows_handle(ptr %source) #0 {
+            entry:
+              %process = call ptr @GetCurrentProcess()
+              %target_slot = alloca ptr, align 8
+              %duplicated = call i32 @DuplicateHandle(ptr %process, ptr %source, ptr %process, ptr %target_slot, i32 0, i32 1, i32 2)
+              %ok = icmp ne i32 %duplicated, 0
+              br i1 %ok, label %success, label %fail
+            success:
+              %target = load ptr, ptr %target_slot, align 8
+              ret ptr %target
+            fail:
+              ret ptr null
+            }
+
+            define internal i64 @smalllang_spawn_windows(ptr %program, ptr %argv, i64 %count) #0 {
+            entry:
+              %command = call ptr @smalllang_join_windows_args(ptr %argv, i64 %count)
+              %command_ok = icmp ne ptr %command, null
+              br i1 %command_ok, label %handles, label %fail
+
+            handles:
+              %stdin_source = call ptr @GetStdHandle(i32 -10)
+              %stdout_override = load ptr, ptr @smalllang_process_output_override, align 8
+              %has_override = icmp ne ptr %stdout_override, null
+              %stdout_default = call ptr @GetStdHandle(i32 -11)
+              %stdout_source = select i1 %has_override, ptr %stdout_override, ptr %stdout_default
+              %stderr_source = call ptr @GetStdHandle(i32 -12)
+              %stdin_handle = call ptr @smalllang_inherit_windows_handle(ptr %stdin_source)
+              %stdout_handle = call ptr @smalllang_inherit_windows_handle(ptr %stdout_source)
+              %stderr_handle = call ptr @smalllang_inherit_windows_handle(ptr %stderr_source)
+              %stdin_ok = icmp ne ptr %stdin_handle, null
+              %stdout_ok = icmp ne ptr %stdout_handle, null
+              %stderr_ok = icmp ne ptr %stderr_handle, null
+              %io_ok0 = and i1 %stdin_ok, %stdout_ok
+              %io_ok = and i1 %io_ok0, %stderr_ok
+              br i1 %io_ok, label %create, label %close_handles_fail
+
+            create:
+              %startup = alloca [104 x i8], align 8
+              %process_info = alloca [24 x i8], align 8
+              call void @llvm.memset.p0.i64(ptr %startup, i8 0, i64 104, i1 false)
+              call void @llvm.memset.p0.i64(ptr %process_info, i8 0, i64 24, i1 false)
+              store i32 104, ptr %startup, align 4
+              %flags_ptr = getelementptr i8, ptr %startup, i64 60
+              store i32 256, ptr %flags_ptr, align 4
+              %stdin_ptr = getelementptr i8, ptr %startup, i64 80
+              store ptr %stdin_handle, ptr %stdin_ptr, align 8
+              %stdout_ptr = getelementptr i8, ptr %startup, i64 88
+              store ptr %stdout_handle, ptr %stdout_ptr, align 8
+              %stderr_ptr = getelementptr i8, ptr %startup, i64 96
+              store ptr %stderr_handle, ptr %stderr_ptr, align 8
+              %created = call i32 @CreateProcessW(ptr %program, ptr %command, ptr null, ptr null, i32 1, i32 0, ptr null, ptr null, ptr %startup, ptr %process_info)
+              %created_ok = icmp ne i32 %created, 0
+              br i1 %created_ok, label %wait, label %close_handles_fail
+
+            wait:
+              %process_handle = load ptr, ptr %process_info, align 8
+              %thread_ptr = getelementptr i8, ptr %process_info, i64 8
+              %thread_handle = load ptr, ptr %thread_ptr, align 8
+              %waited = call i32 @WaitForSingleObject(ptr %process_handle, i32 -1)
+              %exit_slot = alloca i32, align 4
+              %exit_read = call i32 @GetExitCodeProcess(ptr %process_handle, ptr %exit_slot)
+              %exit_ok = icmp ne i32 %exit_read, 0
+              %closed_thread = call i32 @CloseHandle(ptr %thread_handle)
+              %closed_process = call i32 @CloseHandle(ptr %process_handle)
+              %closed_stdin = call i32 @CloseHandle(ptr %stdin_handle)
+              %closed_stdout = call i32 @CloseHandle(ptr %stdout_handle)
+              %closed_stderr = call i32 @CloseHandle(ptr %stderr_handle)
+              call void @smalllang_free(ptr %command)
+              br i1 %exit_ok, label %success, label %fail_return
+
+            success:
+              %exit_code = load i32, ptr %exit_slot, align 4
+              %exit_code64 = zext i32 %exit_code to i64
+              ret i64 %exit_code64
+
+            close_handles_fail:
+              br i1 %stdin_ok, label %close_stdin_fail, label %close_stdout_fail
+            close_stdin_fail:
+              %closed_stdin_fail = call i32 @CloseHandle(ptr %stdin_handle)
+              br label %close_stdout_fail
+            close_stdout_fail:
+              br i1 %stdout_ok, label %close_stdout_present, label %close_stderr_fail
+            close_stdout_present:
+              %closed_stdout_fail = call i32 @CloseHandle(ptr %stdout_handle)
+              br label %close_stderr_fail
+            close_stderr_fail:
+              br i1 %stderr_ok, label %close_stderr_present, label %free_fail
+            close_stderr_present:
+              %closed_stderr_fail = call i32 @CloseHandle(ptr %stderr_handle)
+              br label %free_fail
+            free_fail:
+              call void @smalllang_free(ptr %command)
+              br label %fail_return
+
+            fail:
+              br label %fail_return
+            fail_return:
+              ret i64 -1
+            }
+
             define internal %smalllang.process_result @smalllang_run_process(ptr %records, i64 %count) #0 {
             entry:
               %has_program = icmp ugt i64 %count, 0
@@ -705,7 +914,7 @@ internal sealed class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
               %null_slot = getelementptr ptr, ptr %wide_argv, i64 %count
               store ptr null, ptr %null_slot, align 8
               %program = load ptr, ptr %program_slot, align 8
-              %spawn_result = call i64 @_wspawnvp(i32 0, ptr %program, ptr %wide_argv)
+              %spawn_result = call i64 @smalllang_spawn_windows(ptr %program, ptr %wide_argv, i64 %count)
               br label %cleanup
 
             cleanup:
@@ -734,6 +943,33 @@ internal sealed class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
               ret %smalllang.process_result %ok1
 
             spawn_error:
+              %error0 = insertvalue %smalllang.process_result poison, i32 0, 0
+              %error1 = insertvalue %smalllang.process_result %error0, i32 1, 1
+              ret %smalllang.process_result %error1
+            }
+
+            define internal %smalllang.process_result @smalllang_run_process_to_file(ptr %records, i64 %count, ptr %path, i64 %path_len) #0 {
+            entry:
+              %path_buffer = alloca [260 x i8], align 1
+              %path_buffer_ptr = getelementptr inbounds [260 x i8], ptr %path_buffer, i64 0, i64 0
+              %path_ok = call i32 @smalllang_copy_text_to_c_path(ptr %path, i64 %path_len, ptr %path_buffer_ptr)
+              %path_valid = icmp ne i32 %path_ok, 0
+              br i1 %path_valid, label %open, label %error
+
+            open:
+              %handle = call ptr @CreateFileA(ptr %path_buffer_ptr, i32 1073741824, i32 1, ptr null, i32 2, i32 128, ptr null)
+              %handle_value = ptrtoint ptr %handle to i64
+              %open_ok = icmp ne i64 %handle_value, -1
+              br i1 %open_ok, label %run, label %error
+
+            run:
+              store ptr %handle, ptr @smalllang_process_output_override, align 8
+              %result = call %smalllang.process_result @smalllang_run_process(ptr %records, i64 %count)
+              store ptr null, ptr @smalllang_process_output_override, align 8
+              %closed = call i32 @CloseHandle(ptr %handle)
+              ret %smalllang.process_result %result
+
+            error:
               %error0 = insertvalue %smalllang.process_result poison, i32 0, 0
               %error1 = insertvalue %smalllang.process_result %error0, i32 1, 1
               ret %smalllang.process_result %error1

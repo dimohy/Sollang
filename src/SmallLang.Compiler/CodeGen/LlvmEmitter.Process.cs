@@ -98,6 +98,40 @@ internal sealed partial class LlvmEmitter
         var raw = NextTemp("process_result");
         EmitCall(raw, "%smalllang.process_result", "smalllang_run_process",
             $"ptr {argv.PointerName}, i64 {argv.LengthName}");
+        return EmitRuntimeProcessResult(function, raw);
+    }
+
+    private RuntimeEnum EmitRuntimeRunProcessToFileIntrinsic(
+        BoundFunction function,
+        RuntimeStruct request)
+    {
+        if (!_platform.SupportsChildProcesses)
+        {
+            throw new SmallLangException("child processes are unavailable on the current target");
+        }
+
+        var definition = _program.Types.GetStruct(request.Type);
+        var argvField = definition.GetField("argv");
+        var outputField = definition.GetField("output");
+        var argvAggregate = NextTemp("process_argv");
+        EmitAssign(argvAggregate,
+            $"extractvalue {LlvmStructType(request.Type)} {request.ValueName}, {argvField.Index}");
+        var argv = DematerializeAggregateValue(argvField.Type, argvAggregate) as RuntimeDynamicInlineArray
+            ?? throw new SmallLangException($"{function.Name} expects Text argv entries");
+        var outputAggregate = NextTemp("process_output");
+        EmitAssign(outputAggregate,
+            $"extractvalue {LlvmStructType(request.Type)} {request.ValueName}, {outputField.Index}");
+        var output = DematerializeAggregateValue(outputField.Type, outputAggregate) as RuntimeText
+            ?? throw new SmallLangException($"{function.Name} expects a Text output path");
+
+        var raw = NextTemp("process_file_result");
+        EmitCall(raw, "%smalllang.process_result", "smalllang_run_process_to_file",
+            $"ptr {argv.PointerName}, i64 {argv.LengthName}, ptr {output.PointerName}, i64 {output.LengthName}");
+        return EmitRuntimeProcessResult(function, raw);
+    }
+
+    private RuntimeEnum EmitRuntimeProcessResult(BoundFunction function, string raw)
+    {
         var exitCode = NextTemp("process_exit_code");
         EmitAssign(exitCode, $"extractvalue %smalllang.process_result {raw}, 0");
         var errorCode = NextTemp("process_error_code");

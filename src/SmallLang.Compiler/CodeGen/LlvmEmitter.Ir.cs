@@ -47,7 +47,14 @@ internal sealed partial class LlvmEmitter
 
     private void EmitAlloca(string target, string typeName, int align)
     {
-        EmitAssign(target, $"alloca {typeName}, align {align.ToString(CultureInfo.InvariantCulture)}");
+        var instruction = $"  {target} = alloca {typeName}, align {align.ToString(CultureInfo.InvariantCulture)}{Environment.NewLine}";
+        if (_currentHoistedAllocas is not null)
+        {
+            _currentHoistedAllocas.Add(instruction);
+            return;
+        }
+
+        _functions.Add(instruction);
     }
 
     private void EmitLoad(string target, string typeName, string pointer, int align)

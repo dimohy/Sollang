@@ -670,6 +670,15 @@ internal sealed partial class LlvmEmitter
             return EmitRuntimeRunProcessIntrinsic(function, argv);
         }
 
+        if (function.Kind == BoundFunctionKind.RuntimeRunProcessToFile)
+        {
+            if (argument is not RuntimeStruct request)
+            {
+                throw new SmallLangException($"{function.Name} expects a RunToFileRequest");
+            }
+            return EmitRuntimeRunProcessToFileIntrinsic(function, request);
+        }
+
         if (function.Kind is BoundFunctionKind.RuntimeBorrowSourceText
             or BoundFunctionKind.RuntimeMapSourceText)
         {

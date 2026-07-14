@@ -803,7 +803,14 @@ public inferContext prepared: semanticContext.CompilationContext -> [ExpressionT
                                     prepared.tokens[sourceRange.tokenStart + memberTokenIndex!].kind == grammar.tokenIdIdentifier -> if {
                                         memberIdentifierOrdinal! > 0 -> if {
                                             memberCurrentModule! => targetSourceModule!
-                                            memberCurrentOrigin! == 2 -> if { prepared.modules[memberCurrentModule!].sourceIndex => targetSourceModule! }
+                                            memberCurrentOrigin! == 2 -> if {
+                                                (memberCurrentModule! >= 0 and memberCurrentModule! < (prepared.modules -> len)) -> if {
+                                                    prepared.modules[memberCurrentModule!].sourceIndex => targetSourceModule!
+                                                } else {
+                                                    false => memberPathValid!
+                                                }
+                                            }
+                                            (memberPathValid! and targetSourceModule! >= 0 and targetSourceModule! < (prepared.sources -> len)) -> if {
                                             prepared.sources[targetSourceModule!] -> symbols.collectSource => targetTable!
                                             prepared.sources[targetSourceModule!] -> lexer.lexSource => targetTokens!
                                             -1 => fieldSymbol!
@@ -862,6 +869,7 @@ public inferContext prepared: semanticContext.CompilationContext -> [ExpressionT
                                                         fieldType.kind == 5 -> if { fieldType.valueModule => memberCurrentValueModule! } else { -1 => memberCurrentValueModule! }
                                                     } else { false => memberPathValid! }
                                                 }
+                                            } else { false => memberPathValid! }
                                             } else { false => memberPathValid! }
                                         }
                                         memberIdentifierOrdinal! + 1 => memberIdentifierOrdinal!

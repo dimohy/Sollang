@@ -52,6 +52,7 @@ internal abstract class LlvmRuntimePlatform
     public virtual bool SupportsAsync => false;
 
     public bool UsesAsyncFile { get; set; }
+    public bool UsesProcessRuntime { get; set; }
 
     public virtual void EmitAsyncPrimitives(StringBuilder functions)
     {

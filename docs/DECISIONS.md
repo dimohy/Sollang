@@ -5243,3 +5243,52 @@ for self-host compilation.
 The formal roadmap score remains 42 complete, 13 partial, 5 missing
 (48.5/60, 80.8%): stage 1 emits valid LLVM from files, but it does not yet
 invoke the platform linker itself or prove a reproducible stage-2 compiler.
+
+## D164 - Native slc Reuses a Bootstrap and Drives the Host Toolchain
+
+Status: stage-1 native build orchestration implemented; reproducible stage 2
+pending
+Date: 2026-07-15
+
+The reusable native `selfhost-slc-driver` now has a `build-windows` mode. It
+self-invokes its existing multi-file emitter, redirects the emitted LLVM IR to
+a named file through `sys.process.runToFile`, and passes that IR to the pinned
+Clang driver. Clang remains responsible for the target backend, assembler, and
+linker pipeline; SL owns source mapping, module compilation, argv construction,
+exit-code checking, and artifact selection. No command shell or command-string
+parsing is involved.
+
+`runToFile` accepts a typed `RunToFileRequest { argv, output }`. Windows uses
+`CreateProcessW` with explicitly inherited standard handles and correct Windows
+argv quoting. Linux redirects the child stdout descriptor around the existing
+`posix_spawnp` path. Example 306 proves literal argv preservation, output-file
+creation, the child exit code, and captured bytes; example 87 continues to
+prove the ordinary inherited-output process path.
+
+One C#-bootstrapped native stage-1 driver compiled a two-module SL program,
+invoked Clang, produced a Windows executable, and ran it with
+`module answer = 42`. The example runner now builds the reusable driver at
+`-O0` and includes its bootstrap configuration in freshness inputs. This keeps
+the one-time native bootstrap near 2.5 seconds instead of spending roughly a
+minute optimizing a compiler that is immediately reused for small fixtures.
+The coordinated self-host suite passed 166/166 in 40.5 seconds including a
+cold reusable-driver rebuild; individual LLVM emitter fixtures remained around
+0.02-0.35 seconds.
+
+LLVM allocas discovered during function lowering are now buffered and emitted
+once in the entry block. An `alloca` inside a loop otherwise consumes new stack
+space on every iteration until function return, making an unoptimized native
+compiler depend on optimizer hoisting. The buffered representation is linear
+to render and avoids the quadratic cost of repeatedly inserting text into the
+already emitted module. Windows native images retain an 8 MiB reserved stack
+and the real `__chkstk` probe from D163.
+
+A full 27-module stage-2 attempt now crosses file mapping, parser, semantic
+analysis, and typed-IR lowering and reaches self-host LLVM emission. It does
+not yet produce a complete stage-2 module: the self-host emitter still lacks
+the complete compiler-sized lowering surface. The formal score therefore
+remains 42 complete, 13 partial, 5 missing (48.5/60, 80.8%).
+
+Final coordinated verification passed 428/428 examples and diagnostics with
+eight workers in 37.0 seconds. The Release solution build completed with zero
+warnings and zero errors.

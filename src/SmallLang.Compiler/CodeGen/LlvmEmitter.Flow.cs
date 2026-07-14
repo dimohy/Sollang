@@ -19,7 +19,8 @@ internal sealed partial class LlvmEmitter
     {
         if (!_platform.SupportsChildProcesses
             && expression.Targets.Any(target => TryResolveFunction(target.Path, out var function)
-                && function.Kind == BoundFunctionKind.RuntimeRunProcess))
+                && function.Kind is BoundFunctionKind.RuntimeRunProcess
+                    or BoundFunctionKind.RuntimeRunProcessToFile))
         {
             throw new SmallLangException("child processes are unavailable on the current target");
         }
@@ -161,6 +162,11 @@ internal sealed partial class LlvmEmitter
                         current = current is RuntimeDynamicInlineArray argv
                             ? EmitRuntimeRunProcessIntrinsic(function, argv)
                             : throw new SmallLangException($"{path} expects a dynamic Text argv array");
+                        continue;
+                    case BoundFunctionKind.RuntimeRunProcessToFile:
+                        current = current is RuntimeStruct request
+                            ? EmitRuntimeRunProcessToFileIntrinsic(function, request)
+                            : throw new SmallLangException($"{path} expects a RunToFileRequest");
                         continue;
                     case BoundFunctionKind.RuntimeBorrowSourceText:
                         current = EmitBorrowSourceText(current);

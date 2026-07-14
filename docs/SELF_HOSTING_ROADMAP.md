@@ -848,6 +848,32 @@ Resolved calls now enforce the current zero-or-one-input arity surface. A
 missing required argument and any parenthesized zero-input invocation produce
 code 10; zero-input functions remain property calls such as `now`, not `now()`.
 
+## Native Stage-1 Build and Stage-2 Checklist
+
+The native stage-1 driver owns a structured build path. It emits its
+multi-file result to disk with `sys.process.runToFile`, invokes the pinned Clang
+driver without a shell, and checks both child exit codes. A C#-bootstrapped
+driver produced and ran a two-module Windows executable whose output was
+`module answer = 42`. The test runner caches this native driver and bootstraps
+it at `-O0`; a cold 166-case self-host verification, including that rebuild,
+passed 166/166 in 40.5 seconds. Dynamic LLVM allocas are hoisted to function
+entry so unoptimized loop execution has bounded stack use.
+
+- [x] map and own multiple SL source modules;
+- [x] emit target-specific LLVM from the cached native stage-1 compiler;
+- [x] redirect LLVM to a file through a typed, shell-free process API;
+- [x] invoke Clang and produce a runnable native executable;
+- [x] prove the path with a multi-module SL program;
+- [ ] emit the complete 27-module compiler without an LLVM-lowering trap;
+- [ ] build `slc-stage2` from that complete module;
+- [ ] compare stage-1 and stage-2 output reproducibly.
+
+The full compiler attempt reaches self-host LLVM emission after semantic and
+typed-IR lowering, but the last three items remain open. The formal roadmap
+score is unchanged at 42 complete, 13 partial, 5 missing (48.5/60, 80.8%). The
+coordinated final regression passed 428/428 in 37.0 seconds with eight workers
+and a zero-warning, zero-error Release build.
+
 ## Immediate Implementation Order
 
 1. Multi-file compilation (implemented by example 52).
