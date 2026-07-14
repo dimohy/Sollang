@@ -2,6 +2,7 @@ namespace smalllang.compiler.semantic.qualified
 
 import smalllang.compiler.ast as ast
 import smalllang.compiler.lexer as lexer
+import smalllang.compiler.semantic.analysis as analysis
 import smalllang.compiler.semantic.module_resolve as moduleResolve
 import smalllang.compiler.semantic.modules as modules
 import smalllang.compiler.semantic.symbols as symbols
@@ -17,28 +18,31 @@ public struct QualifiedResolution {
 
 # Status: 0 public symbol, 2 missing member, 3 non-public member.
 public resolve sources: [Text; ~] -> [QualifiedResolution; ~] {
-    sources -> modules.identities => identities!
-    sources -> modules.imports => imports!
-    sources -> moduleResolve.resolve => resolvedImports!
+    sources -> analysis.analyze => package
+    package -> resolveAnalyzed
+}
+public resolveAnalyzed package: analysis.PackageAnalysis -> [QualifiedResolution; ~] {
+    package -> modules.identitiesAnalyzed => identities!
+    package -> modules.importsAnalyzed => imports!
+    package -> moduleResolve.resolveAnalyzed => resolvedImports!
     [QualifiedResolution; ~] => results!
-    sources -> len => sourceCount
+    package.sources -> len => sourceCount
     imports! -> len => importCount
     0 => sourceIndex!
     sourceIndex! < sourceCount -> while {
-        sources[sourceIndex!] => source
-        source -> ast.lower => nodes!
-        source -> lexer.lex => tokens!
-        nodes! -> len => astCount
+        package.sources[sourceIndex!] => source
+        package.ranges[sourceIndex!] => sourceRange
+        sourceRange.astCount => astCount
         0 => pathAstIndex!
         pathAstIndex! < astCount -> while {
-            nodes![pathAstIndex!] => pathAst
+            package.nodes[sourceRange.astStart + pathAstIndex!] => pathAst
             (pathAst.kind == 16 or pathAst.kind == 36) -> if {
                 -1 => firstIdentifier!
                 -1 => lastIdentifier!
                 pathAst.firstToken => pathToken!
                 pathAst.firstToken + pathAst.tokenCount => pathEnd
                 pathToken! < pathEnd -> while {
-                    tokens![pathToken!].kind == grammar.tokenIdIdentifier -> if {
+                    package.tokens[sourceRange.tokenStart + pathToken!].kind == grammar.tokenIdIdentifier -> if {
                         firstIdentifier! < 0 -> if { pathToken! => firstIdentifier! }
                         pathToken! => lastIdentifier!
                     }
@@ -50,8 +54,8 @@ public resolve sources: [Text; ~] -> [QualifiedResolution; ~] {
                         imports![edgeIndex!] => edge
                         resolvedImports![edgeIndex!] => resolvedImport
                         (edge.sourceModule == sourceIndex! and resolvedImport.status == 0) -> if {
-                            tokens![edge.aliasToken] => aliasName
-                            tokens![firstIdentifier!] => pathAlias
+                            package.tokens[sourceRange.tokenStart + edge.aliasToken] => aliasName
+                            package.tokens[sourceRange.tokenStart + firstIdentifier!] => pathAlias
                             aliasName.span.length == pathAlias.span.length => aliasEqual!
                             UIntSize(0) => aliasByte!
                             (aliasEqual! and aliasByte! < aliasName.span.length) -> while {
@@ -63,17 +67,16 @@ public resolve sources: [Text; ~] -> [QualifiedResolution; ~] {
                             aliasEqual! -> if {
                                 resolvedImport.targetModule => targetModule
                                 identities![targetModule].sourceIndex => targetSourceIndex
-                                sources[targetSourceIndex] => targetSource
-                                targetSource -> symbols.collect => targetSymbols!
-                                targetSource -> lexer.lex => targetTokens!
+                                package.sources[targetSourceIndex] => targetSource
+                                package.ranges[targetSourceIndex] => targetRange
                                 -1 => targetSymbol!
                                 false => targetPublic!
                                 0 => symbolIndex!
-                                symbolIndex! < (targetSymbols! -> len) -> while {
-                                    targetSymbols![symbolIndex!] => candidate
+                                symbolIndex! < targetRange.symbolCount -> while {
+                                    package.symbols[targetRange.symbolStart + symbolIndex!] => candidate
                                     candidate.parent < 0 -> if {
-                                        targetTokens![candidate.nameToken] => candidateName
-                                        tokens![lastIdentifier!] => memberName
+                                        package.tokens[targetRange.tokenStart + candidate.nameToken] => candidateName
+                                        package.tokens[sourceRange.tokenStart + lastIdentifier!] => memberName
                                         candidateName.span.length == memberName.span.length => memberEqual!
                                         UIntSize(0) => memberByte!
                                         (memberEqual! and memberByte! < candidateName.span.length) -> while {

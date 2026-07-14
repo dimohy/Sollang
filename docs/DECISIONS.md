@@ -4758,4 +4758,67 @@ passed 7/7, example 188 passed in 58.6 seconds, and the single coordinated
 eight-worker runner passed all 408 cases in 397.9 seconds with monotonic
 `n/408` progress records.
 
+## D150 - Whole-Compilation Facts Use One Borrowed Flat Context
+
+Status: package context connected through checking, typed IR, and LLVM
+Date: 2026-07-14
+
+`smalllang.compiler.semantic.analysis` now builds one relocatable package
+front end. `PackageAnalysis` owns flat source, AST, token, symbol, and resolved
+name arrays. Each `SourceAnalysisRange` maps a source-local index space onto
+those arrays. AST parent indexes, symbol indexes, and resolved-name indexes
+therefore stay local and stable; consumers add the source range start only at
+the package boundary. This avoids nested owned arrays and remains suitable for
+serialization, memory mapping, and later incremental invalidation.
+
+`smalllang.compiler.semantic.context.CompilationContext` combines those source
+products with canonical types/references/fields, nominal and composite facts,
+module identities, qualified names, and resolved calls. `inferContext`,
+`resolveContext`, and `lowerContext` borrow that one aggregate. Type checking
+and LLVM orchestration prepare it once and pass it through shallow expression
+inference, recursive expression IDs, and typed IR. These hot paths index the
+flat products directly rather than copying per-source AST/token/symbol arrays.
+The older source-only and explicit request APIs remain compatibility wrappers.
+
+Module identity, import, qualified-name, and call resolution also expose
+`*Analyzed` entry points over the same package products. The context builder
+uses them, so these passes no longer re-lex or re-parse merely to inspect module
+paths and call names. Example 294 proves two source ranges are contiguous for
+all four flat product tables, retain source-local root indexes, and account for
+every stored record. Example 293 proves legacy prepared, source-only, and
+borrowed-context typed IR remain equivalent.
+
+The first owned-request version copied the package arrays into every semantic
+request and raised example 188 to 65.1 seconds. It was rejected and replaced
+before this decision was finalized. The borrowed context plus direct flat
+indexing measures 63.5-64.1 seconds on the same single-worker example, close to
+the earlier stable 63.8-second measurement but above the one-off 58.6-second
+low. The two 409-case coordinated runs took 415.5 and 421.2 seconds versus
+397.9 seconds for 408 cases. This is not claimed as a performance win: canonical type,
+nominal, composite, and type-use resolvers still build their own source-local
+products, so the context currently adds one package preparation before those
+remaining migrations remove the older work.
+
+The first analyzed module APIs duplicated their compatibility implementations,
+which made every self-host manifest compile both paths. The final source keeps
+one analyzed implementation and turns the original module/import/qualified
+entry points into short wrappers. This removes that source duplication; a
+focused post-refactor module/checking/IR/LLVM slice passed, while another full
+run was avoided because the preceding two had already established the 409-case
+behavior and the wrapper refactor did not alter the analyzed core.
+
+This slice does not promote a formal gate. The next performance step is to make
+canonical type terms/IDs, nominal types, composite types, and imported type
+resolution consume `PackageAnalysis`; only then should package-context speed be
+judged. Ownership/effect products, recursive drop glue, and remaining LLVM
+source scans must join the same context afterward. The count remains 48.5/60
+(80.8%).
+
+Regression evidence on 2026-07-14: the Release solution build completed with
+zero warnings and errors. Representative module, type-check, expression-ID,
+typed-IR, LLVM, and context slices passed. Two coordinated eight-worker runs
+passed all 409 cases in 415.5 and 421.2 seconds with monotonic `n/409` records;
+the final compatibility-wrapper deduplication then passed its focused 7/7
+slice.
+
 

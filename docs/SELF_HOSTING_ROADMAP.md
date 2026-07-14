@@ -670,16 +670,17 @@ ownership/effect checks still keep semantic parity partial;
 the canonical gate count therefore remains 42 complete, 13 partial, and 5
 missing (48.5/60, 80.8%).
 
-LLVM orchestration now passes one prepared canonical type/reference/field set,
-plus nominal, composite, module, qualified-name, and resolved-call tables, into
-shallow expression inference, recursive expression type IDs, and typed IR.
-Compatibility wrappers remain public, while prepared call, inference,
-expression-ID, and lowering entry points prevent those package-level semantic
-passes from being rerun by the emitter. Symbol collection also accepts an
-existing AST, and name resolution exposes an AST/token/symbol prepared boundary.
-The next context layer still needs flattened per-source AST, token, symbol, and
-resolved-name ranges that all checking, ownership/effect, drop, and LLVM
-consumers can borrow without copying.
+One borrowed `CompilationContext` now carries canonical type/reference/field,
+nominal, composite, module, qualified-name, resolved-call, and flattened
+per-source AST/token/symbol/resolved-name products. Source ranges preserve local
+indexes while allowing type checking, shallow inference, recursive expression
+IDs, typed IR, and LLVM orchestration to read one aggregate without copying its
+owned arrays. Module/import/qualified/call resolution also consumes those flat
+products. Compatibility wrappers remain public. Canonical type-term/ID,
+nominal, composite, and imported-type resolution still prepare source-local
+products before the context is complete; ownership/effect, drop, and remaining
+LLVM scans also need migration. The first full context run is correctness
+evidence, not a speed claim, until those older preparations are removed.
 
 Self-hosted LLVM text selects descriptors implemented in the file module
 `smalllang.compiler.llvm.target`. Windows x64/COFF, Linux x64/ELF, and

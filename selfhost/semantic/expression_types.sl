@@ -2,13 +2,17 @@ namespace smalllang.compiler.semantic.expression_types
 
 import smalllang.compiler.ast as ast
 import smalllang.compiler.lexer as lexer
+import smalllang.compiler.semantic.analysis as analysis
 import smalllang.compiler.semantic.calls as calls
 import smalllang.compiler.semantic.composite_types as compositeTypes
+import smalllang.compiler.semantic.context as semanticContext
 import smalllang.compiler.semantic.modules as modules
 import smalllang.compiler.semantic.nominal_types as nominalTypes
 import smalllang.compiler.semantic.qualified as qualified
 import smalllang.compiler.semantic.resolve as resolution
 import smalllang.compiler.semantic.symbols as symbols
+import smalllang.compiler.semantic.type_ids as typeIds
+import smalllang.compiler.syntax as syntax
 import syntax.generated.smalllang as grammar
 
 public struct ExpressionType {
@@ -30,33 +34,30 @@ public struct ExpressionTypeRequest {
     qualified: [qualified.QualifiedResolution; ~]
     modules: [modules.ModuleIdentity; ~]
     calls: [calls.ModuleCallResolution; ~]
+    analysisRanges: [analysis.SourceAnalysisRange; ~]
+    analysisNodes: [ast.AstNode; ~]
+    analysisTokens: [syntax.SyntaxToken; ~]
+    analysisSymbols: [symbols.Symbol; ~]
+    analysisNames: [resolution.ResolvedName; ~]
 }
 
 # Bottom-up expression inference over the flat AST. Builtin ids use the stable
 # nominal table: Text 1, Int 2, Bool 23.
-public inferPrepared request: move ExpressionTypeRequest -> [ExpressionType; ~] {
-    [nominalTypes.NominalType; ~] => nominal!
-    request.nominal -> each nominalType { nominal! -> push(nominalType) }
-    [compositeTypes.CompositeType; ~] => composite!
-    request.composite -> each compositeType { composite! -> push(compositeType) }
-    [qualified.QualifiedResolution; ~] => qualifiedResults!
-    request.qualified -> each qualifiedResult { qualifiedResults! -> push(qualifiedResult) }
-    [modules.ModuleIdentity; ~] => moduleIdentities!
-    request.modules -> each moduleIdentity { moduleIdentities! -> push(moduleIdentity) }
-    [calls.ModuleCallResolution; ~] => moduleCalls!
-    request.calls -> each moduleCall { moduleCalls! -> push(moduleCall) }
-    request.sources => sources
+public inferContext prepared: semanticContext.CompilationContext -> [ExpressionType; ~] {
     [ExpressionType; ~] => inferred!
     0 => sourceIndex!
-    sourceIndex! < (sources -> len) -> while {
-        sources[sourceIndex!] => source
-        source -> ast.lower => nodes!
-        source -> lexer.lex => tokens!
-        nodes! -> symbols.collectPrepared => table!
-        source -> resolution.resolve => resolvedNames!
+    sourceIndex! < (prepared.sources -> len) -> while {
+        prepared.sources[sourceIndex!] => source
+        prepared.ranges[sourceIndex!] => sourceRange
+        [resolution.ResolvedName; ~] => resolvedNames!
+        0 => sourceNameOffset!
+        sourceNameOffset! < sourceRange.nameCount -> while {
+            resolvedNames! -> push(prepared.names[sourceRange.nameStart + sourceNameOffset!])
+            sourceNameOffset! + 1 => sourceNameOffset!
+        }
         0 => astIndex!
-        astIndex! < (nodes! -> len) -> while {
-            nodes![astIndex!] => node
+        astIndex! < sourceRange.astCount -> while {
+            prepared.nodes[sourceRange.astStart + astIndex!] => node
             node.kind == 13 -> if {
                 inferred! -> push(ExpressionType { sourceModule: sourceIndex!, astNode: astIndex!, origin: 1, targetModule: -1, targetSymbol: 1, keyOrigin: -1, keyModule: -1, valueOrigin: -1, valueModule: -1 })
             }
@@ -73,7 +74,7 @@ public inferPrepared request: move ExpressionTypeRequest -> [ExpressionType; ~] 
                 inferred! -> push(ExpressionType { sourceModule: sourceIndex!, astNode: astIndex!, origin: 1, targetModule: -1, targetSymbol: 0, keyOrigin: -1, keyModule: -1, valueOrigin: -1, valueModule: -1 })
             }
             node.kind == 15 -> if {
-                tokens![node.payloadToken] => nameToken
+                prepared.tokens[sourceRange.tokenStart + node.payloadToken] => nameToken
                 false => booleanLiteral!
                 nameToken.span.length == UIntSize(4) -> if {
                     source -> byte(nameToken.span.start) => boolByte0
@@ -100,34 +101,34 @@ public inferPrepared request: move ExpressionTypeRequest -> [ExpressionType; ~] 
                     nameSearch! + 1 => nameSearch!
                 }
                 (not booleanLiteral! and resolvedNameIndex! >= 0) -> if {
-                    table![resolvedNames![resolvedNameIndex!].symbol] => valueSymbol
+                    prepared.symbols[sourceRange.symbolStart + resolvedNames![resolvedNameIndex!].symbol] => valueSymbol
                     false => blockValueInferred!
-                    (valueSymbol.kind == 35 and nodes![valueSymbol.astNode].kind == 48) -> if {
+                    (valueSymbol.kind == 35 and prepared.nodes[sourceRange.astStart + valueSymbol.astNode].kind == 48) -> if {
                         -1 => blockCallResolution!
                         0 => blockCallSearch!
-                        blockCallSearch! < (moduleCalls! -> len) -> while {
-                            moduleCalls![blockCallSearch!] => blockCallCandidate
+                        blockCallSearch! < (prepared.calls -> len) -> while {
+                            prepared.calls[blockCallSearch!] => blockCallCandidate
                             (blockCallCandidate.sourceModule == sourceIndex! and blockCallCandidate.callAst == valueSymbol.astNode and blockCallCandidate.status == 0) -> if {
                                 blockCallSearch! => blockCallResolution!
                             }
                             blockCallSearch! + 1 => blockCallSearch!
                         }
                         blockCallResolution! >= 0 -> if {
-                            moduleCalls![blockCallResolution!] => blockCall
-                            sources[blockCall.targetSourceModule] -> symbols.collect => blockTargetTable!
+                            prepared.calls[blockCallResolution!] => blockCall
+                            prepared.sources[blockCall.targetSourceModule] -> symbols.collect => blockTargetTable!
                             blockTargetTable![blockCall.functionSymbol] => blockTargetFunction
                             blockTargetFunction.blockTypeNode >= 0 -> if {
                                 -1 => blockNominalIndex!
                                 0 => blockNominalSearch!
-                                blockNominalSearch! < (nominal! -> len) -> while {
-                                    nominal![blockNominalSearch!] => blockNominalCandidate
+                                blockNominalSearch! < (prepared.nominal -> len) -> while {
+                                    prepared.nominal[blockNominalSearch!] => blockNominalCandidate
                                     (blockNominalCandidate.sourceModule == blockCall.targetSourceModule and blockNominalCandidate.typeAst == blockTargetFunction.blockTypeNode) -> if {
                                         blockNominalSearch! => blockNominalIndex!
                                     }
                                     blockNominalSearch! + 1 => blockNominalSearch!
                                 }
                                 blockNominalIndex! >= 0 -> if {
-                                    nominal![blockNominalIndex!] => blockValueType
+                                    prepared.nominal[blockNominalIndex!] => blockValueType
                                     inferred! -> push(ExpressionType {
                                         sourceModule: sourceIndex!
                                         astNode: astIndex!
@@ -143,8 +144,8 @@ public inferPrepared request: move ExpressionTypeRequest -> [ExpressionType; ~] 
                                 }
                                 not blockValueInferred! -> if {
                                     0 => blockCompositeSearch!
-                                    blockCompositeSearch! < (composite! -> len) -> while {
-                                        composite![blockCompositeSearch!] => blockComposite
+                                    blockCompositeSearch! < (prepared.composite -> len) -> while {
+                                        prepared.composite[blockCompositeSearch!] => blockComposite
                                         (blockComposite.sourceModule == blockCall.targetSourceModule and blockComposite.typeAst == blockTargetFunction.blockTypeNode) -> if {
                                             inferred! -> push(ExpressionType {
                                                 sourceModule: sourceIndex!
@@ -168,15 +169,15 @@ public inferPrepared request: move ExpressionTypeRequest -> [ExpressionType; ~] 
                     not blockValueInferred! -> if {
                     -1 => nominalIndex!
                     0 => typeSearch!
-                    typeSearch! < (nominal! -> len) -> while {
-                        nominal![typeSearch!] => candidateType
+                    typeSearch! < (prepared.nominal -> len) -> while {
+                        prepared.nominal[typeSearch!] => candidateType
                         (candidateType.sourceModule == sourceIndex! and candidateType.typeAst == valueSymbol.typeNode) -> if {
                             typeSearch! => nominalIndex!
                         }
                         typeSearch! + 1 => typeSearch!
                     }
                     nominalIndex! >= 0 -> if {
-                        nominal![nominalIndex!] => valueType
+                        prepared.nominal[nominalIndex!] => valueType
                         inferred! -> push(ExpressionType {
                             sourceModule: sourceIndex!
                             astNode: astIndex!
@@ -191,13 +192,13 @@ public inferPrepared request: move ExpressionTypeRequest -> [ExpressionType; ~] 
                     } else {
                         -1 => valueCompositeIndex!
                         0 => valueCompositeSearch!
-                        valueCompositeSearch! < (composite! -> len) -> while {
-                            composite![valueCompositeSearch!] => valueCompositeCandidate
+                        valueCompositeSearch! < (prepared.composite -> len) -> while {
+                            prepared.composite[valueCompositeSearch!] => valueCompositeCandidate
                             (valueCompositeCandidate.sourceModule == sourceIndex! and valueCompositeCandidate.typeAst == valueSymbol.typeNode) -> if { valueCompositeSearch! => valueCompositeIndex! }
                             valueCompositeSearch! + 1 => valueCompositeSearch!
                         }
                         valueCompositeIndex! >= 0 -> if {
-                            composite![valueCompositeIndex!] => valueComposite
+                            prepared.composite[valueCompositeIndex!] => valueComposite
                             inferred! -> push(ExpressionType {
                                 sourceModule: sourceIndex!
                                 astNode: astIndex!
@@ -218,16 +219,16 @@ public inferPrepared request: move ExpressionTypeRequest -> [ExpressionType; ~] 
                 -1 => typeNameToken!
                 node.firstToken => structTokenIndex!
                 (structTokenIndex! < node.firstToken + node.tokenCount and typeNameToken! < 0) -> while {
-                    tokens![structTokenIndex!].kind == grammar.tokenIdIdentifier -> if { structTokenIndex! => typeNameToken! }
+                    prepared.tokens[sourceRange.tokenStart + structTokenIndex!].kind == grammar.tokenIdIdentifier -> if { structTokenIndex! => typeNameToken! }
                     structTokenIndex! + 1 => structTokenIndex!
                 }
                 -1 => structSymbol!
                 0 => structSearch!
-                (structSearch! < (table! -> len) and structSymbol! < 0) -> while {
-                    table![structSearch!] => candidateStruct
+                (structSearch! < sourceRange.symbolCount and structSymbol! < 0) -> while {
+                    prepared.symbols[sourceRange.symbolStart + structSearch!] => candidateStruct
                     (candidateStruct.kind == 3 and candidateStruct.parent < 0) -> if {
-                        tokens![typeNameToken!] => literalName
-                        tokens![candidateStruct.nameToken] => declarationName
+                        prepared.tokens[sourceRange.tokenStart + typeNameToken!] => literalName
+                        prepared.tokens[sourceRange.tokenStart + candidateStruct.nameToken] => declarationName
                         literalName.span.length == declarationName.span.length => equal!
                         UIntSize(0) => nameByte!
                         (equal! and nameByte! < literalName.span.length) -> while {
@@ -255,14 +256,14 @@ public inferPrepared request: move ExpressionTypeRequest -> [ExpressionType; ~] 
                 } else {
                     -1 => importedStructIndex!
                     0 => qualifiedSearch!
-                    qualifiedSearch! < (qualifiedResults! -> len) -> while {
-                        qualifiedResults![qualifiedSearch!] => importedCandidate
+                    qualifiedSearch! < (prepared.qualified -> len) -> while {
+                        prepared.qualified[qualifiedSearch!] => importedCandidate
                         importedCandidate.sourceModule == sourceIndex! -> if {
                             importedCandidate.pathAst => importedAncestor!
                             false => belongsToStructLiteral!
                             (importedAncestor! >= 0 and not belongsToStructLiteral!) -> while {
                                 importedAncestor! == astIndex! -> if { true => belongsToStructLiteral! } else {
-                                    nodes![importedAncestor!].parent => importedAncestor!
+                                    prepared.nodes[sourceRange.astStart + importedAncestor!].parent => importedAncestor!
                                 }
                             }
                             (belongsToStructLiteral! and importedCandidate.status == 0) -> if { qualifiedSearch! => importedStructIndex! }
@@ -270,7 +271,7 @@ public inferPrepared request: move ExpressionTypeRequest -> [ExpressionType; ~] 
                         qualifiedSearch! + 1 => qualifiedSearch!
                     }
                     importedStructIndex! >= 0 -> if {
-                        qualifiedResults![importedStructIndex!] => importedStruct
+                        prepared.qualified[importedStructIndex!] => importedStruct
                         inferred! -> push(ExpressionType {
                             sourceModule: sourceIndex!
                             astNode: astIndex!
@@ -292,8 +293,8 @@ public inferPrepared request: move ExpressionTypeRequest -> [ExpressionType; ~] 
         changed! -> while {
             false => changed!
             0 => callIndex!
-            callIndex! < (moduleCalls! -> len) -> while {
-                moduleCalls![callIndex!] => call
+            callIndex! < (prepared.calls -> len) -> while {
+                prepared.calls[callIndex!] => call
                 (call.sourceModule == sourceIndex! and call.status == 0) -> if {
                     false => callInferred!
                     0 => callExistingIndex!
@@ -317,20 +318,20 @@ public inferPrepared request: move ExpressionTypeRequest -> [ExpressionType; ~] 
                             })
                             true => changed!
                         } else {
-                        sources[call.targetSourceModule] -> symbols.collect => targetTable!
+                        prepared.sources[call.targetSourceModule] -> symbols.collect => targetTable!
                         targetTable![call.functionSymbol] => function
                         function.secondaryTypeNode >= 0 -> if { function.secondaryTypeNode } else { function.typeNode } => returnTypeAst
                         -1 => returnNominalIndex!
                         0 => returnSearch!
-                        returnSearch! < (nominal! -> len) -> while {
-                            nominal![returnSearch!] => candidateReturn
+                        returnSearch! < (prepared.nominal -> len) -> while {
+                            prepared.nominal[returnSearch!] => candidateReturn
                             (candidateReturn.sourceModule == call.targetSourceModule and candidateReturn.typeAst == returnTypeAst) -> if {
                                 returnSearch! => returnNominalIndex!
                             }
                             returnSearch! + 1 => returnSearch!
                         }
                         returnNominalIndex! >= 0 -> if {
-                            nominal![returnNominalIndex!] => returnType
+                            prepared.nominal[returnNominalIndex!] => returnType
                             returnType.origin => resultOrigin!
                             returnType.targetModule => resultModule!
                             returnType.targetSymbol => resultSymbol!
@@ -339,15 +340,15 @@ public inferPrepared request: move ExpressionTypeRequest -> [ExpressionType; ~] 
                                 function.secondaryTypeNode >= 0 -> if {
                                     -1 => inputNominalIndex!
                                     0 => inputSearch!
-                                    inputSearch! < (nominal! -> len) -> while {
-                                        nominal![inputSearch!] => candidateInput
+                                    inputSearch! < (prepared.nominal -> len) -> while {
+                                        prepared.nominal[inputSearch!] => candidateInput
                                         (candidateInput.sourceModule == call.targetSourceModule and candidateInput.typeAst == function.typeNode) -> if {
                                             inputSearch! => inputNominalIndex!
                                         }
                                         inputSearch! + 1 => inputSearch!
                                     }
                                     inputNominalIndex! >= 0 -> if {
-                                        nominal![inputNominalIndex!] => inputType
+                                        prepared.nominal[inputNominalIndex!] => inputType
                                         (inputType.origin == 3 and inputType.targetSymbol == returnType.targetSymbol) -> if {
                                             -1 => argumentTypeIndex!
                                             1000000 => argumentDistance!
@@ -356,19 +357,19 @@ public inferPrepared request: move ExpressionTypeRequest -> [ExpressionType; ~] 
                                                 inferred![argumentSearch!] => argumentType
                                                 argumentType.sourceModule == sourceIndex! -> if {
                                                     true => beforeRoleTarget!
-                                                    nodes![call.callAst] => genericCallNode
+                                                    prepared.nodes[sourceRange.astStart + call.callAst] => genericCallNode
                                                     genericCallNode.kind == 48 -> if {
-                                                        nodes![argumentType.astNode] => genericArgumentNode
-                                                        genericArgumentNode.start + genericArgumentNode.length > tokens![genericCallNode.payloadToken].span.start -> if {
+                                                        prepared.nodes[sourceRange.astStart + argumentType.astNode] => genericArgumentNode
+                                                        genericArgumentNode.start + genericArgumentNode.length > prepared.tokens[sourceRange.tokenStart + genericCallNode.payloadToken].span.start -> if {
                                                             false => beforeRoleTarget!
                                                         }
                                                     }
-                                                    nodes![argumentType.astNode].parent => argumentAncestor!
+                                                    prepared.nodes[sourceRange.astStart + argumentType.astNode].parent => argumentAncestor!
                                                     1 => distance!
                                                     false => belongsToCall!
                                                     (argumentAncestor! >= 0 and not belongsToCall!) -> while {
                                                         argumentAncestor! == call.callAst -> if { true => belongsToCall! } else {
-                                                            nodes![argumentAncestor!].parent => argumentAncestor!
+                                                            prepared.nodes[sourceRange.astStart + argumentAncestor!].parent => argumentAncestor!
                                                             distance! + 1 => distance!
                                                         }
                                                     }
@@ -408,8 +409,8 @@ public inferPrepared request: move ExpressionTypeRequest -> [ExpressionType; ~] 
                             -1 => returnCompositeIndex!
                             -1 => inputCompositeIndex!
                             0 => compositeSearch!
-                            compositeSearch! < (composite! -> len) -> while {
-                                composite![compositeSearch!] => candidateComposite
+                            compositeSearch! < (prepared.composite -> len) -> while {
+                                prepared.composite[compositeSearch!] => candidateComposite
                                 (candidateComposite.sourceModule == call.targetSourceModule and candidateComposite.typeAst == returnTypeAst) -> if {
                                     compositeSearch! => returnCompositeIndex!
                                 }
@@ -419,8 +420,8 @@ public inferPrepared request: move ExpressionTypeRequest -> [ExpressionType; ~] 
                                 compositeSearch! + 1 => compositeSearch!
                             }
                             (returnCompositeIndex! >= 0 and inputCompositeIndex! >= 0) -> if {
-                                composite![returnCompositeIndex!] => returnComposite
-                                composite![inputCompositeIndex!] => inputComposite
+                                prepared.composite[returnCompositeIndex!] => returnComposite
+                                prepared.composite[inputCompositeIndex!] => inputComposite
                                 false => sameCompositeGenerics!
                                 returnComposite.kind == inputComposite.kind -> if {
                                     returnComposite.kind == 5 -> if {
@@ -437,19 +438,19 @@ public inferPrepared request: move ExpressionTypeRequest -> [ExpressionType; ~] 
                                         inferred![compositeArgumentSearch!] => argumentType
                                         argumentType.sourceModule == sourceIndex! -> if {
                                             true => compositeBeforeRoleTarget!
-                                            nodes![call.callAst] => compositeCallNode
+                                            prepared.nodes[sourceRange.astStart + call.callAst] => compositeCallNode
                                             compositeCallNode.kind == 48 -> if {
-                                                nodes![argumentType.astNode] => compositeArgumentNode
-                                                compositeArgumentNode.start + compositeArgumentNode.length > tokens![compositeCallNode.payloadToken].span.start -> if {
+                                                prepared.nodes[sourceRange.astStart + argumentType.astNode] => compositeArgumentNode
+                                                compositeArgumentNode.start + compositeArgumentNode.length > prepared.tokens[sourceRange.tokenStart + compositeCallNode.payloadToken].span.start -> if {
                                                     false => compositeBeforeRoleTarget!
                                                 }
                                             }
-                                            nodes![argumentType.astNode].parent => argumentAncestor!
+                                            prepared.nodes[sourceRange.astStart + argumentType.astNode].parent => argumentAncestor!
                                             1 => distance!
                                             false => belongsToCall!
                                             (argumentAncestor! >= 0 and not belongsToCall!) -> while {
                                                 argumentAncestor! == call.callAst -> if { true => belongsToCall! } else {
-                                                    nodes![argumentAncestor!].parent => argumentAncestor!
+                                                    prepared.nodes[sourceRange.astStart + argumentAncestor!].parent => argumentAncestor!
                                                     distance! + 1 => distance!
                                                 }
                                             }
@@ -491,8 +492,8 @@ public inferPrepared request: move ExpressionTypeRequest -> [ExpressionType; ~] 
             0 => roleReferenceIndex!
             roleReferenceIndex! < (resolvedNames! -> len) -> while {
                 resolvedNames![roleReferenceIndex!] => roleReference
-                table![roleReference.symbol] => roleValueSymbol
-                (roleValueSymbol.kind == 35 and nodes![roleValueSymbol.astNode].kind == 48) -> if {
+                prepared.symbols[sourceRange.symbolStart + roleReference.symbol] => roleValueSymbol
+                (roleValueSymbol.kind == 35 and prepared.nodes[sourceRange.astStart + roleValueSymbol.astNode].kind == 48) -> if {
                     -1 => roleValueTypeIndex!
                     0 => roleValueTypeSearch!
                     roleValueTypeSearch! < (inferred! -> len) -> while {
@@ -504,16 +505,16 @@ public inferPrepared request: move ExpressionTypeRequest -> [ExpressionType; ~] 
                     }
                     -1 => roleCallIndex!
                     0 => roleCallSearch!
-                    roleCallSearch! < (moduleCalls! -> len) -> while {
-                        moduleCalls![roleCallSearch!] => roleCallCandidate
+                    roleCallSearch! < (prepared.calls -> len) -> while {
+                        prepared.calls[roleCallSearch!] => roleCallCandidate
                         (roleCallCandidate.sourceModule == sourceIndex! and roleCallCandidate.callAst == roleValueSymbol.astNode and roleCallCandidate.status == 0 and roleCallCandidate.targetSourceModule >= 0) -> if {
                             roleCallSearch! => roleCallIndex!
                         }
                         roleCallSearch! + 1 => roleCallSearch!
                     }
                     (roleValueTypeIndex! >= 0 and roleCallIndex! >= 0) -> if {
-                        moduleCalls![roleCallIndex!] => roleCall
-                        sources[roleCall.targetSourceModule] -> symbols.collect => roleTargetTable!
+                        prepared.calls[roleCallIndex!] => roleCall
+                        prepared.sources[roleCall.targetSourceModule] -> symbols.collect => roleTargetTable!
                         roleTargetTable![roleCall.functionSymbol] => roleFunction
                         (roleFunction.secondaryTypeNode >= 0 and roleFunction.blockTypeNode >= 0) -> if {
                             -1 => roleSourceTypeIndex!
@@ -522,8 +523,8 @@ public inferPrepared request: move ExpressionTypeRequest -> [ExpressionType; ~] 
                             roleSourceSearch! < (inferred! -> len) -> while {
                                 inferred![roleSourceSearch!] => roleSourceTypeCandidate
                                 roleSourceTypeCandidate.sourceModule == sourceIndex! -> if {
-                                    nodes![roleSourceTypeCandidate.astNode] => roleSourceNode
-                                    roleSourceNode.start + roleSourceNode.length <= tokens![nodes![roleCall.callAst].payloadToken].span.start -> if {
+                                    prepared.nodes[sourceRange.astStart + roleSourceTypeCandidate.astNode] => roleSourceNode
+                                    roleSourceNode.start + roleSourceNode.length <= prepared.tokens[sourceRange.tokenStart + prepared.nodes[sourceRange.astStart + roleCall.callAst].payloadToken].span.start -> if {
                                         roleSourceNode.parent => roleSourceAncestor!
                                         1 => roleDistance!
                                         false => belongsToRole!
@@ -531,7 +532,7 @@ public inferPrepared request: move ExpressionTypeRequest -> [ExpressionType; ~] 
                                             roleSourceAncestor! == roleCall.callAst -> if {
                                                 true => belongsToRole!
                                             } else {
-                                                nodes![roleSourceAncestor!].parent => roleSourceAncestor!
+                                                prepared.nodes[sourceRange.astStart + roleSourceAncestor!].parent => roleSourceAncestor!
                                                 roleDistance! + 1 => roleDistance!
                                             }
                                         }
@@ -548,8 +549,8 @@ public inferPrepared request: move ExpressionTypeRequest -> [ExpressionType; ~] 
                                 -1 => roleInputNominalIndex!
                                 -1 => roleBlockNominalIndex!
                                 0 => roleNominalSearch!
-                                roleNominalSearch! < (nominal! -> len) -> while {
-                                    nominal![roleNominalSearch!] => roleNominal
+                                roleNominalSearch! < (prepared.nominal -> len) -> while {
+                                    prepared.nominal[roleNominalSearch!] => roleNominal
                                     (roleNominal.sourceModule == roleCall.targetSourceModule and roleNominal.typeAst == roleFunction.typeNode) -> if { roleNominalSearch! => roleInputNominalIndex! }
                                     (roleNominal.sourceModule == roleCall.targetSourceModule and roleNominal.typeAst == roleFunction.blockTypeNode) -> if { roleNominalSearch! => roleBlockNominalIndex! }
                                     roleNominalSearch! + 1 => roleNominalSearch!
@@ -557,8 +558,8 @@ public inferPrepared request: move ExpressionTypeRequest -> [ExpressionType; ~] 
                                 -1 => roleInputCompositeIndex!
                                 -1 => roleBlockCompositeIndex!
                                 0 => roleCompositeSearch!
-                                roleCompositeSearch! < (composite! -> len) -> while {
-                                    composite![roleCompositeSearch!] => roleComposite
+                                roleCompositeSearch! < (prepared.composite -> len) -> while {
+                                    prepared.composite[roleCompositeSearch!] => roleComposite
                                     (roleComposite.sourceModule == roleCall.targetSourceModule and roleComposite.typeAst == roleFunction.typeNode) -> if { roleCompositeSearch! => roleInputCompositeIndex! }
                                     (roleComposite.sourceModule == roleCall.targetSourceModule and roleComposite.typeAst == roleFunction.blockTypeNode) -> if { roleCompositeSearch! => roleBlockCompositeIndex! }
                                     roleCompositeSearch! + 1 => roleCompositeSearch!
@@ -573,10 +574,10 @@ public inferPrepared request: move ExpressionTypeRequest -> [ExpressionType; ~] 
                                 -1 => specializedRoleValueModule!
 
                                 roleBlockNominalIndex! >= 0 -> if {
-                                    nominal![roleBlockNominalIndex!] => roleBlockNominal
+                                    prepared.nominal[roleBlockNominalIndex!] => roleBlockNominal
                                     roleBlockNominal.origin == 3 -> if {
                                         roleInputNominalIndex! >= 0 -> if {
-                                            nominal![roleInputNominalIndex!] => roleInputNominal
+                                            prepared.nominal[roleInputNominalIndex!] => roleInputNominal
                                             (roleInputNominal.origin == 3 and roleInputNominal.targetSymbol == roleBlockNominal.targetSymbol) -> if {
                                                 roleSourceType.origin => specializedRoleOrigin!
                                                 roleSourceType.targetModule => specializedRoleModule!
@@ -588,7 +589,7 @@ public inferPrepared request: move ExpressionTypeRequest -> [ExpressionType; ~] 
                                             }
                                         }
                                         roleInputCompositeIndex! >= 0 -> if {
-                                            composite![roleInputCompositeIndex!] => roleInputComposite
+                                            prepared.composite[roleInputCompositeIndex!] => roleInputComposite
                                             roleInputComposite.kind == 5 -> if {
                                                 (roleInputComposite.keyOrigin == 3 and roleInputComposite.keySymbol == roleBlockNominal.targetSymbol and roleSourceType.origin == 15) -> if {
                                                     roleSourceType.keyOrigin => specializedRoleOrigin!
@@ -613,8 +614,8 @@ public inferPrepared request: move ExpressionTypeRequest -> [ExpressionType; ~] 
                                     }
                                 }
                                 (specializedRoleOrigin! < 0 and roleInputNominalIndex! >= 0 and roleBlockCompositeIndex! >= 0) -> if {
-                                    nominal![roleInputNominalIndex!] => roleInputNominal
-                                    composite![roleBlockCompositeIndex!] => roleBlockComposite
+                                    prepared.nominal[roleInputNominalIndex!] => roleInputNominal
+                                    prepared.composite[roleBlockCompositeIndex!] => roleBlockComposite
                                     (roleInputNominal.origin == 3 and roleBlockComposite.kind != 5 and roleBlockComposite.elementOrigin == 3 and roleInputNominal.targetSymbol == roleBlockComposite.elementSymbol) -> if {
                                         10 + roleBlockComposite.kind => specializedRoleOrigin!
                                         roleSourceType.targetModule => specializedRoleModule!
@@ -622,8 +623,8 @@ public inferPrepared request: move ExpressionTypeRequest -> [ExpressionType; ~] 
                                     }
                                 }
                                 (specializedRoleOrigin! < 0 and roleBlockCompositeIndex! >= 0 and roleInputCompositeIndex! >= 0) -> if {
-                                    composite![roleBlockCompositeIndex!] => roleBlockComposite
-                                    composite![roleInputCompositeIndex!] => roleInputComposite
+                                    prepared.composite[roleBlockCompositeIndex!] => roleBlockComposite
+                                    prepared.composite[roleInputCompositeIndex!] => roleInputComposite
                                     false => sameRoleComposite!
                                     (roleBlockComposite.kind == roleInputComposite.kind and roleSourceType.origin == 10 + roleInputComposite.kind) -> if {
                                         roleInputComposite.kind == 5 -> if {
@@ -667,8 +668,8 @@ public inferPrepared request: move ExpressionTypeRequest -> [ExpressionType; ~] 
                 roleReferenceIndex! + 1 => roleReferenceIndex!
             }
             0 => bindingSymbolIndex!
-            bindingSymbolIndex! < (table! -> len) -> while {
-                table![bindingSymbolIndex!] => bindingSymbol
+            bindingSymbolIndex! < sourceRange.symbolCount -> while {
+                prepared.symbols[sourceRange.symbolStart + bindingSymbolIndex!] => bindingSymbol
                 bindingSymbol.kind == 9 -> if {
                     -1 => bindingValueIndex!
                     1000000 => bindingDistance!
@@ -676,7 +677,7 @@ public inferPrepared request: move ExpressionTypeRequest -> [ExpressionType; ~] 
                     valueSearch! < (inferred! -> len) -> while {
                         inferred![valueSearch!] => valueType
                         valueType.sourceModule == sourceIndex! -> if {
-                            nodes![valueType.astNode].parent => ancestor!
+                            prepared.nodes[sourceRange.astStart + valueType.astNode].parent => ancestor!
                             1 => distance!
                             valueType.astNode == bindingSymbol.astNode => belongsToBinding!
                             belongsToBinding! -> if { 0 => distance! }
@@ -684,7 +685,7 @@ public inferPrepared request: move ExpressionTypeRequest -> [ExpressionType; ~] 
                                 ancestor! == bindingSymbol.astNode -> if {
                                     true => belongsToBinding!
                                 } else {
-                                    nodes![ancestor!].parent => ancestor!
+                                    prepared.nodes[sourceRange.astStart + ancestor!].parent => ancestor!
                                     distance! + 1 => distance!
                                 }
                             }
@@ -747,8 +748,8 @@ public inferPrepared request: move ExpressionTypeRequest -> [ExpressionType; ~] 
                 bindingSymbolIndex! + 1 => bindingSymbolIndex!
             }
             0 => memberIndex!
-            memberIndex! < (nodes! -> len) -> while {
-                nodes![memberIndex!] => member
+            memberIndex! < sourceRange.astCount -> while {
+                prepared.nodes[sourceRange.astStart + memberIndex!] => member
                 member.kind == 36 -> if {
                     false => memberInferred!
                     0 => memberExistingIndex!
@@ -764,12 +765,12 @@ public inferPrepared request: move ExpressionTypeRequest -> [ExpressionType; ~] 
                         baseSearch! < (inferred! -> len) -> while {
                             inferred![baseSearch!] => baseType
                             baseType.sourceModule == sourceIndex! -> if {
-                                nodes![baseType.astNode].parent => baseAncestor!
+                                prepared.nodes[sourceRange.astStart + baseType.astNode].parent => baseAncestor!
                                 1 => distance!
                                 false => belongsToMember!
                                 (baseAncestor! >= 0 and not belongsToMember!) -> while {
                                     baseAncestor! == memberIndex! -> if { true => belongsToMember! } else {
-                                        nodes![baseAncestor!].parent => baseAncestor!
+                                        prepared.nodes[sourceRange.astStart + baseAncestor!].parent => baseAncestor!
                                         distance! + 1 => distance!
                                     }
                                 }
@@ -782,7 +783,7 @@ public inferPrepared request: move ExpressionTypeRequest -> [ExpressionType; ~] 
                         }
                         baseTypeIndex! >= 0 -> if {
                             inferred![baseTypeIndex!] => baseType
-                            ((baseType.origin == 0 or baseType.origin == 2) and nodes![baseType.astNode].kind != 39) -> if {
+                            ((baseType.origin == 0 or baseType.origin == 2) and prepared.nodes[sourceRange.astStart + baseType.astNode].kind != 39) -> if {
                                 baseType.origin => memberCurrentOrigin!
                                 baseType.targetModule => memberCurrentModule!
                                 baseType.targetSymbol => memberCurrentSymbol!
@@ -794,24 +795,24 @@ public inferPrepared request: move ExpressionTypeRequest -> [ExpressionType; ~] 
                                 0 => memberIdentifierOrdinal!
                                 member.firstToken => memberTokenIndex!
                                 (memberPathValid! and memberTokenIndex! < member.firstToken + member.tokenCount) -> while {
-                                    tokens![memberTokenIndex!].kind == grammar.tokenIdIdentifier -> if {
+                                    prepared.tokens[sourceRange.tokenStart + memberTokenIndex!].kind == grammar.tokenIdIdentifier -> if {
                                         memberIdentifierOrdinal! > 0 -> if {
                                             memberCurrentModule! => targetSourceModule!
-                                            memberCurrentOrigin! == 2 -> if { moduleIdentities![memberCurrentModule!].sourceIndex => targetSourceModule! }
-                                            sources[targetSourceModule!] -> symbols.collect => targetTable!
-                                            sources[targetSourceModule!] -> lexer.lex => targetTokens!
+                                            memberCurrentOrigin! == 2 -> if { prepared.modules[memberCurrentModule!].sourceIndex => targetSourceModule! }
+                                            prepared.sources[targetSourceModule!] -> symbols.collect => targetTable!
+                                            prepared.sources[targetSourceModule!] -> lexer.lex => targetTokens!
                                             -1 => fieldSymbol!
                                             0 => fieldSearch!
                                             (fieldSearch! < (targetTable! -> len) and fieldSymbol! < 0) -> while {
                                                 targetTable![fieldSearch!] => field
                                                 (field.kind == 26 and field.parent == memberCurrentSymbol!) -> if {
-                                                    tokens![memberTokenIndex!] => memberName
+                                                    prepared.tokens[sourceRange.tokenStart + memberTokenIndex!] => memberName
                                                     targetTokens![field.nameToken] => fieldName
                                                     memberName.span.length == fieldName.span.length => equal!
                                                     UIntSize(0) => fieldByte!
                                                     (equal! and fieldByte! < memberName.span.length) -> while {
                                                         source -> byte(memberName.span.start + fieldByte!) => leftByte
-                                                        sources[targetSourceModule!] -> byte(fieldName.span.start + fieldByte!) => rightByte
+                                                        prepared.sources[targetSourceModule!] -> byte(fieldName.span.start + fieldByte!) => rightByte
                                                         leftByte != rightByte -> if { false => equal! }
                                                         fieldByte! + UIntSize(1) => fieldByte!
                                                     }
@@ -824,19 +825,19 @@ public inferPrepared request: move ExpressionTypeRequest -> [ExpressionType; ~] 
                                                 -1 => fieldNominalIndex!
                                                 -1 => fieldCompositeIndex!
                                                 0 => fieldTypeSearch!
-                                                fieldTypeSearch! < (nominal! -> len) -> while {
-                                                    nominal![fieldTypeSearch!] => fieldType
+                                                fieldTypeSearch! < (prepared.nominal -> len) -> while {
+                                                    prepared.nominal[fieldTypeSearch!] => fieldType
                                                     (fieldType.sourceModule == targetSourceModule! and fieldType.typeAst == field.typeNode) -> if { fieldTypeSearch! => fieldNominalIndex! }
                                                     fieldTypeSearch! + 1 => fieldTypeSearch!
                                                 }
                                                 0 => fieldCompositeSearch!
-                                                fieldCompositeSearch! < (composite! -> len) -> while {
-                                                    composite![fieldCompositeSearch!] => fieldCompositeCandidate
+                                                fieldCompositeSearch! < (prepared.composite -> len) -> while {
+                                                    prepared.composite[fieldCompositeSearch!] => fieldCompositeCandidate
                                                     (fieldCompositeCandidate.sourceModule == targetSourceModule! and fieldCompositeCandidate.typeAst == field.typeNode) -> if { fieldCompositeSearch! => fieldCompositeIndex! }
                                                     fieldCompositeSearch! + 1 => fieldCompositeSearch!
                                                 }
                                                 fieldNominalIndex! >= 0 -> if {
-                                                    nominal![fieldNominalIndex!] => fieldType
+                                                    prepared.nominal[fieldNominalIndex!] => fieldType
                                                     fieldType.origin => memberCurrentOrigin!
                                                     fieldType.targetModule => memberCurrentModule!
                                                     fieldType.targetSymbol => memberCurrentSymbol!
@@ -846,7 +847,7 @@ public inferPrepared request: move ExpressionTypeRequest -> [ExpressionType; ~] 
                                                     -1 => memberCurrentValueModule!
                                                 } else {
                                                     fieldCompositeIndex! >= 0 -> if {
-                                                        composite![fieldCompositeIndex!] => fieldType
+                                                        prepared.composite[fieldCompositeIndex!] => fieldType
                                                         10 + fieldType.kind => memberCurrentOrigin!
                                                         fieldType.kind == 5 -> if { fieldType.keySymbol => memberCurrentModule! } else { fieldType.elementModule => memberCurrentModule! }
                                                         fieldType.kind == 5 -> if { fieldType.valueSymbol => memberCurrentSymbol! } else { fieldType.elementSymbol => memberCurrentSymbol! }
@@ -884,8 +885,8 @@ public inferPrepared request: move ExpressionTypeRequest -> [ExpressionType; ~] 
             }
 
             0 => indexIndex!
-            indexIndex! < (nodes! -> len) -> while {
-                nodes![indexIndex!] => indexAccess
+            indexIndex! < sourceRange.astCount -> while {
+                prepared.nodes[sourceRange.astStart + indexIndex!] => indexAccess
                 indexAccess.kind == 41 -> if {
                     false => indexInferred!
                     -1 => indexedTypeIndex!
@@ -895,12 +896,12 @@ public inferPrepared request: move ExpressionTypeRequest -> [ExpressionType; ~] 
                         inferred![indexTypeSearch!] => indexType
                         (indexType.sourceModule == sourceIndex! and indexType.astNode == indexIndex!) -> if { true => indexInferred! }
                         (indexType.sourceModule == sourceIndex! and indexType.origin >= 12 and indexType.origin <= 15) -> if {
-                            nodes![indexType.astNode].parent => indexAncestor!
+                            prepared.nodes[sourceRange.astStart + indexType.astNode].parent => indexAncestor!
                             1 => indexDistance!
                             false => belongsToIndex!
                             (indexAncestor! >= 0 and not belongsToIndex!) -> while {
                                 indexAncestor! == indexIndex! -> if { true => belongsToIndex! } else {
-                                    nodes![indexAncestor!].parent => indexAncestor!
+                                    prepared.nodes[sourceRange.astStart + indexAncestor!].parent => indexAncestor!
                                     indexDistance! + 1 => indexDistance!
                                 }
                             }
@@ -941,15 +942,15 @@ public inferPrepared request: move ExpressionTypeRequest -> [ExpressionType; ~] 
             }
 
             0 => operatorIndex!
-            operatorIndex! < (nodes! -> len) -> while {
-                nodes![operatorIndex!] => operator
+            operatorIndex! < sourceRange.astCount -> while {
+                prepared.nodes[sourceRange.astStart + operatorIndex!] => operator
                 (operator.kind >= 18 and operator.kind <= 25) -> if {
                     false => alreadyInferred!
                     0 => existingIndex!
                     existingIndex! < (inferred! -> len) -> while {
                         inferred![existingIndex!] => existing
                         (existing.sourceModule == sourceIndex! and existing.astNode == operatorIndex!) -> if { true => alreadyInferred! }
-                        (existing.sourceModule == sourceIndex! and nodes![existing.astNode].start == operator.start and nodes![existing.astNode].length == operator.length) -> if { true => alreadyInferred! }
+                        (existing.sourceModule == sourceIndex! and prepared.nodes[sourceRange.astStart + existing.astNode].start == operator.start and prepared.nodes[sourceRange.astStart + existing.astNode].length == operator.length) -> if { true => alreadyInferred! }
                         existingIndex! + 1 => existingIndex!
                     }
                     not alreadyInferred! -> if {
@@ -958,7 +959,7 @@ public inferPrepared request: move ExpressionTypeRequest -> [ExpressionType; ~] 
                         0 => childSearch!
                         childSearch! < (inferred! -> len) -> while {
                             inferred![childSearch!] => child
-                            (child.sourceModule == sourceIndex! and nodes![child.astNode].parent == operatorIndex!) -> if {
+                            (child.sourceModule == sourceIndex! and prepared.nodes[sourceRange.astStart + child.astNode].parent == operatorIndex!) -> if {
                                 firstChild! < 0 -> if { childSearch! => firstChild! } else { childSearch! => secondChild! }
                             }
                             childSearch! + 1 => childSearch!
@@ -1038,8 +1039,8 @@ public inferPrepared request: move ExpressionTypeRequest -> [ExpressionType; ~] 
                 operatorIndex! + 1 => operatorIndex!
             }
             0 => arrayIndex!
-            arrayIndex! < (nodes! -> len) -> while {
-                nodes![arrayIndex!] => arrayNode
+            arrayIndex! < sourceRange.astCount -> while {
+                prepared.nodes[sourceRange.astStart + arrayIndex!] => arrayNode
                 arrayNode.kind == 37 -> if {
                     false => arrayInferred!
                     0 => arrayExistingIndex!
@@ -1058,12 +1059,12 @@ public inferPrepared request: move ExpressionTypeRequest -> [ExpressionType; ~] 
                         elementSearch! < (inferred! -> len) -> while {
                             inferred![elementSearch!] => elementType
                             elementType.sourceModule == sourceIndex! -> if {
-                                nodes![elementType.astNode].parent => elementAncestor!
+                                prepared.nodes[sourceRange.astStart + elementType.astNode].parent => elementAncestor!
                                 1 => distance!
                                 false => belongsToArray!
                                 (elementAncestor! >= 0 and not belongsToArray!) -> while {
                                     elementAncestor! == arrayIndex! -> if { true => belongsToArray! } else {
-                                        nodes![elementAncestor!].parent => elementAncestor!
+                                        prepared.nodes[sourceRange.astStart + elementAncestor!].parent => elementAncestor!
                                         distance! + 1 => distance!
                                     }
                                 }
@@ -1087,7 +1088,7 @@ public inferPrepared request: move ExpressionTypeRequest -> [ExpressionType; ~] 
                             false => dynamicArray!
                             arrayNode.firstToken => arrayTokenIndex!
                             arrayTokenIndex! < arrayNode.firstToken + arrayNode.tokenCount -> while {
-                                tokens![arrayTokenIndex!].kind == grammar.tokenIdTilde -> if { true => dynamicArray! }
+                                prepared.tokens[sourceRange.tokenStart + arrayTokenIndex!].kind == grammar.tokenIdTilde -> if { true => dynamicArray! }
                                 arrayTokenIndex! + 1 => arrayTokenIndex!
                             }
                             inferred! -> push(ExpressionType {
@@ -1108,8 +1109,8 @@ public inferPrepared request: move ExpressionTypeRequest -> [ExpressionType; ~] 
                 arrayIndex! + 1 => arrayIndex!
             }
             0 => dictionaryIndex!
-            dictionaryIndex! < (nodes! -> len) -> while {
-                nodes![dictionaryIndex!] => dictionaryNode
+            dictionaryIndex! < sourceRange.astCount -> while {
+                prepared.nodes[sourceRange.astStart + dictionaryIndex!] => dictionaryNode
                 dictionaryNode.kind == 38 -> if {
                     false => dictionaryInferred!
                     0 => dictionaryExistingIndex!
@@ -1124,12 +1125,12 @@ public inferPrepared request: move ExpressionTypeRequest -> [ExpressionType; ~] 
                         entryDistanceSearch! < (inferred! -> len) -> while {
                             inferred![entryDistanceSearch!] => entryType
                             entryType.sourceModule == sourceIndex! -> if {
-                                nodes![entryType.astNode].parent => entryAncestor!
+                                prepared.nodes[sourceRange.astStart + entryType.astNode].parent => entryAncestor!
                                 1 => distance!
                                 false => belongsToDictionary!
                                 (entryAncestor! >= 0 and not belongsToDictionary!) -> while {
                                     entryAncestor! == dictionaryIndex! -> if { true => belongsToDictionary! } else {
-                                        nodes![entryAncestor!].parent => entryAncestor!
+                                        prepared.nodes[sourceRange.astStart + entryAncestor!].parent => entryAncestor!
                                         distance! + 1 => distance!
                                     }
                                 }
@@ -1149,12 +1150,12 @@ public inferPrepared request: move ExpressionTypeRequest -> [ExpressionType; ~] 
                         entryTypeSearch! < (inferred! -> len) -> while {
                             inferred![entryTypeSearch!] => entryType
                             entryType.sourceModule == sourceIndex! -> if {
-                                nodes![entryType.astNode].parent => entryAncestor!
+                                prepared.nodes[sourceRange.astStart + entryType.astNode].parent => entryAncestor!
                                 1 => distance!
                                 false => belongsToDictionary!
                                 (entryAncestor! >= 0 and not belongsToDictionary!) -> while {
                                     entryAncestor! == dictionaryIndex! -> if { true => belongsToDictionary! } else {
-                                        nodes![entryAncestor!].parent => entryAncestor!
+                                        prepared.nodes[sourceRange.astStart + entryAncestor!].parent => entryAncestor!
                                         distance! + 1 => distance!
                                     }
                                 }
@@ -1201,8 +1202,8 @@ public inferPrepared request: move ExpressionTypeRequest -> [ExpressionType; ~] 
             }
 
             0 => regionIndex!
-            regionIndex! < (nodes! -> len) -> while {
-                nodes![regionIndex!].kind == 43 -> if {
+            regionIndex! < sourceRange.astCount -> while {
+                prepared.nodes[sourceRange.astStart + regionIndex!].kind == 43 -> if {
                     false => regionInferred!
                     0 => regionExistingSearch!
                     regionExistingSearch! < (inferred! -> len) -> while {
@@ -1214,8 +1215,8 @@ public inferPrepared request: move ExpressionTypeRequest -> [ExpressionType; ~] 
                         0 => regionResultSearch!
                         regionResultSearch! < (inferred! -> len) -> while {
                             inferred![regionResultSearch!] => regionCandidate
-                            (regionCandidate.sourceModule == sourceIndex! and nodes![regionCandidate.astNode].parent == regionIndex!) -> if {
-                                (regionResultIndex! < 0 or nodes![regionCandidate.astNode].start > nodes![inferred![regionResultIndex!].astNode].start) -> if {
+                            (regionCandidate.sourceModule == sourceIndex! and prepared.nodes[sourceRange.astStart + regionCandidate.astNode].parent == regionIndex!) -> if {
+                                (regionResultIndex! < 0 or prepared.nodes[sourceRange.astStart + regionCandidate.astNode].start > prepared.nodes[sourceRange.astStart + inferred![regionResultIndex!].astNode].start) -> if {
                                     regionResultSearch! => regionResultIndex!
                                 }
                             }
@@ -1242,8 +1243,8 @@ public inferPrepared request: move ExpressionTypeRequest -> [ExpressionType; ~] 
             }
 
             0 => controlIndex!
-            controlIndex! < (nodes! -> len) -> while {
-                nodes![controlIndex!].kind == 42 -> if {
+            controlIndex! < sourceRange.astCount -> while {
+                prepared.nodes[sourceRange.astStart + controlIndex!].kind == 42 -> if {
                     false => controlInferred!
                     0 => controlExistingSearch!
                     controlExistingSearch! < (inferred! -> len) -> while {
@@ -1256,8 +1257,8 @@ public inferPrepared request: move ExpressionTypeRequest -> [ExpressionType; ~] 
                         -1 => firstRegionTypeIndex!
                         true => homogeneousRegions!
                         0 => controlRegionSearch!
-                        controlRegionSearch! < (nodes! -> len) -> while {
-                            (nodes![controlRegionSearch!].parent == controlIndex! and nodes![controlRegionSearch!].kind == 43) -> if {
+                        controlRegionSearch! < sourceRange.astCount -> while {
+                            (prepared.nodes[sourceRange.astStart + controlRegionSearch!].parent == controlIndex! and prepared.nodes[sourceRange.astStart + controlRegionSearch!].kind == 43) -> if {
                                 controlRegionCount! + 1 => controlRegionCount!
                                 -1 => controlRegionTypeIndex!
                                 0 => controlRegionTypeSearch!
@@ -1301,8 +1302,8 @@ public inferPrepared request: move ExpressionTypeRequest -> [ExpressionType; ~] 
             }
 
             0 => controlFlowIndex!
-            controlFlowIndex! < (nodes! -> len) -> while {
-                nodes![controlFlowIndex!].kind == 10 -> if {
+            controlFlowIndex! < sourceRange.astCount -> while {
+                prepared.nodes[sourceRange.astStart + controlFlowIndex!].kind == 10 -> if {
                     false => controlFlowInferred!
                     0 => controlFlowExistingSearch!
                     controlFlowExistingSearch! < (inferred! -> len) -> while {
@@ -1313,16 +1314,16 @@ public inferPrepared request: move ExpressionTypeRequest -> [ExpressionType; ~] 
                         -1 => controlTargetTypeIndex!
                         -1 => directControlAst!
                         0 => directControlSearch!
-                        directControlSearch! < (nodes! -> len) -> while {
-                            (nodes![directControlSearch!].parent == controlFlowIndex! and (nodes![directControlSearch!].kind == 42 or nodes![directControlSearch!].kind == 44)) -> if { directControlSearch! => directControlAst! }
+                        directControlSearch! < sourceRange.astCount -> while {
+                            (prepared.nodes[sourceRange.astStart + directControlSearch!].parent == controlFlowIndex! and (prepared.nodes[sourceRange.astStart + directControlSearch!].kind == 42 or prepared.nodes[sourceRange.astStart + directControlSearch!].kind == 44)) -> if { directControlSearch! => directControlAst! }
                             directControlSearch! + 1 => directControlSearch!
                         }
                         0 => controlTargetTypeSearch!
                         controlTargetTypeSearch! < (inferred! -> len) -> while {
                             inferred![controlTargetTypeSearch!] => flowChildType
                             (directControlAst! >= 0 and flowChildType.sourceModule == sourceIndex! and flowChildType.astNode == directControlAst!) -> if { controlTargetTypeSearch! => controlTargetTypeIndex! }
-                            (directControlAst! < 0 and nodes![controlFlowIndex!].parent >= 0 and nodes![nodes![controlFlowIndex!].parent].kind == 43 and flowChildType.sourceModule == sourceIndex! and nodes![flowChildType.astNode].parent == controlFlowIndex!) -> if {
-                                (controlTargetTypeIndex! < 0 or nodes![flowChildType.astNode].start > nodes![inferred![controlTargetTypeIndex!].astNode].start) -> if { controlTargetTypeSearch! => controlTargetTypeIndex! }
+                            (directControlAst! < 0 and prepared.nodes[sourceRange.astStart + controlFlowIndex!].parent >= 0 and prepared.nodes[sourceRange.astStart + prepared.nodes[sourceRange.astStart + controlFlowIndex!].parent].kind == 43 and flowChildType.sourceModule == sourceIndex! and prepared.nodes[sourceRange.astStart + flowChildType.astNode].parent == controlFlowIndex!) -> if {
+                                (controlTargetTypeIndex! < 0 or prepared.nodes[sourceRange.astStart + flowChildType.astNode].start > prepared.nodes[sourceRange.astStart + inferred![controlTargetTypeIndex!].astNode].start) -> if { controlTargetTypeSearch! => controlTargetTypeIndex! }
                             }
                             controlTargetTypeSearch! + 1 => controlTargetTypeSearch!
                         }
@@ -1351,33 +1352,54 @@ public inferPrepared request: move ExpressionTypeRequest -> [ExpressionType; ~] 
     inferred!
 }
 
-public infer sources: [Text; ~] -> [ExpressionType; ~] {
-    sources -> nominalTypes.resolve => nominal!
-    sources -> compositeTypes.resolve => composite!
-    sources -> qualified.resolve => qualifiedResults!
-    sources -> modules.identities => moduleIdentities!
-    [Text; ~] => callSources!
-    sources -> each source { callSources! -> push(source) }
-    [modules.ModuleIdentity; ~] => callModules!
-    moduleIdentities! -> each moduleIdentity { callModules! -> push(moduleIdentity) }
-    [qualified.QualifiedResolution; ~] => callQualified!
-    qualifiedResults! -> each qualifiedResult { callQualified! -> push(qualifiedResult) }
-    calls.ModuleCallRequest {
-        sources: callSources!
-        modules: callModules!
-        qualified: callQualified!
-    } => callRequest!
-    callRequest! -> calls.resolveModulesPrepared => moduleCalls!
-    [Text; ~] => preparedSources!
-    sources -> each preparedSource { preparedSources! -> push(preparedSource) }
-    ExpressionTypeRequest {
-        sources: preparedSources!
+public inferPrepared request: move ExpressionTypeRequest -> [ExpressionType; ~] {
+    [Text; ~] => sources!
+    request.sources -> each source { sources! -> push(source) }
+    [nominalTypes.NominalType; ~] => nominal!
+    request.nominal -> each nominalType { nominal! -> push(nominalType) }
+    [compositeTypes.CompositeType; ~] => composite!
+    request.composite -> each compositeType { composite! -> push(compositeType) }
+    [qualified.QualifiedResolution; ~] => qualifiedResults!
+    request.qualified -> each qualifiedResult { qualifiedResults! -> push(qualifiedResult) }
+    [modules.ModuleIdentity; ~] => moduleIdentities!
+    request.modules -> each moduleIdentity { moduleIdentities! -> push(moduleIdentity) }
+    [calls.ModuleCallResolution; ~] => moduleCalls!
+    request.calls -> each moduleCall { moduleCalls! -> push(moduleCall) }
+    [analysis.SourceAnalysisRange; ~] => ranges!
+    request.analysisRanges -> each sourceRange { ranges! -> push(sourceRange) }
+    [ast.AstNode; ~] => nodes!
+    request.analysisNodes -> each node { nodes! -> push(node) }
+    [syntax.SyntaxToken; ~] => tokens!
+    request.analysisTokens -> each token { tokens! -> push(token) }
+    [symbols.Symbol; ~] => symbolTable!
+    request.analysisSymbols -> each symbol { symbolTable! -> push(symbol) }
+    [resolution.ResolvedName; ~] => names!
+    request.analysisNames -> each name { names! -> push(name) }
+    [typeIds.SemanticType; ~] => types!
+    [typeIds.TypeReference; ~] => references!
+    [typeIds.NominalField; ~] => fields!
+    semanticContext.CompilationContext {
+        sources: sources!
+        types: types!
+        references: references!
+        fields: fields!
         nominal: nominal!
         composite: composite!
-        qualified: qualifiedResults!
         modules: moduleIdentities!
+        qualified: qualifiedResults!
         calls: moduleCalls!
-    } => request!
-    request! -> inferPrepared => inferred!
+        ranges: ranges!
+        nodes: nodes!
+        tokens: tokens!
+        symbols: symbolTable!
+        names: names!
+    } => prepared!
+    prepared! -> inferContext => inferred!
+    inferred!
+}
+
+public infer sources: [Text; ~] -> [ExpressionType; ~] {
+    sources -> semanticContext.prepare => prepared!
+    prepared! -> inferContext => inferred!
     inferred!
 }

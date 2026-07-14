@@ -1,6 +1,7 @@
 namespace smalllang.compiler.semantic.module_resolve
 
 import smalllang.compiler.lexer
+import smalllang.compiler.semantic.analysis as analysis
 import smalllang.compiler.semantic.modules as modules
 
 public struct ResolvedImport {
@@ -13,23 +14,27 @@ public struct ResolvedImport {
 # Status: 0 resolved, 1 missing target, 2 duplicate target identity,
 # 3 duplicate import alias in one source module.
 public resolve sources: [Text; ~] -> [ResolvedImport; ~] {
-    sources -> modules.identities => identities!
-    sources -> modules.imports => imports!
+    sources -> analysis.analyze => package
+    package -> resolveAnalyzed
+}
+public resolveAnalyzed package: analysis.PackageAnalysis -> [ResolvedImport; ~] {
+    package -> modules.identitiesAnalyzed => identities!
+    package -> modules.importsAnalyzed => imports!
     [ResolvedImport; ~] => resolved!
     identities! -> len => moduleCount
     imports! -> len => importCount
     0 => edgeIndex!
     edgeIndex! < importCount -> while {
         imports![edgeIndex!] => edge
-        sources[edge.sourceModule] => edgeSource
-        edgeSource -> lexer.lex => edgeTokens!
-        edgeTokens![edge.aliasToken] => edgeAlias
+        package.sources[edge.sourceModule] => edgeSource
+        package.ranges[edge.sourceModule] => sourceRange
+        package.tokens[sourceRange.tokenStart + edge.aliasToken] => edgeAlias
         false => duplicateAlias!
         0 => priorEdgeIndex!
         priorEdgeIndex! < edgeIndex! -> while {
             imports![priorEdgeIndex!] => priorEdge
             priorEdge.sourceModule == edge.sourceModule -> if {
-                edgeTokens![priorEdge.aliasToken] => priorAlias
+                package.tokens[sourceRange.tokenStart + priorEdge.aliasToken] => priorAlias
                 edgeAlias.span.length == priorAlias.span.length => aliasEqual!
                 UIntSize(0) => aliasByte!
                 (aliasEqual! and aliasByte! < edgeAlias.span.length) -> while {

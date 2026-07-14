@@ -2,6 +2,7 @@ namespace smalllang.compiler.semantic.modules
 
 import smalllang.compiler.ast as ast
 import smalllang.compiler.lexer as lexer
+import smalllang.compiler.semantic.analysis as analysis
 import syntax.generated.smalllang as grammar
 
 public struct ModuleIdentity {
@@ -21,26 +22,33 @@ public struct ImportEdge {
 }
 
 public identities sources: [Text; ~] -> [ModuleIdentity; ~] {
+    sources -> analysis.analyze => package
+    package -> identitiesAnalyzed
+}
+public imports sources: [Text; ~] -> [ImportEdge; ~] {
+    sources -> analysis.analyze => package
+    package -> importsAnalyzed
+}
+public identitiesAnalyzed package: analysis.PackageAnalysis -> [ModuleIdentity; ~] {
     [ModuleIdentity; ~] => modules!
-    sources -> len => sourceCount
+    package.sources -> len => sourceCount
     0 => sourceIndex!
     sourceIndex! < sourceCount -> while {
-        sources[sourceIndex!] => source
-        source -> ast.lower => nodes!
-        source -> lexer.lex => tokens!
+        package.sources[sourceIndex!] => source
+        package.ranges[sourceIndex!] => sourceRange
         UInt64(0) => pathHash!
         UIntSize(0) => pathStart!
         UIntSize(0) => pathLength!
         0 => importCount!
-        nodes! -> len => nodeCount
+        sourceRange.astCount => nodeCount
         0 => nodeIndex!
         nodeIndex! < nodeCount -> while {
-            nodes![nodeIndex!] => node
+            package.nodes[sourceRange.astStart + nodeIndex!] => node
             node.kind == 2 -> if { importCount! + 1 => importCount! }
             node.kind == 1 -> if {
                 0 => pathIndex!
                 pathIndex! < nodeCount -> while {
-                    nodes![pathIndex!] => pathNode
+                    package.nodes[sourceRange.astStart + pathIndex!] => pathNode
                     (pathNode.parent == nodeIndex! and pathNode.kind == 16) -> if {
                         pathNode.start => pathStart!
                         pathNode.length => pathLength!
@@ -48,7 +56,7 @@ public identities sources: [Text; ~] -> [ModuleIdentity; ~] {
                         pathNode.firstToken => pathToken!
                         pathNode.firstToken + pathNode.tokenCount => pathTokenEnd
                         pathToken! < pathTokenEnd -> while {
-                            tokens![pathToken!] => token
+                            package.tokens[sourceRange.tokenStart + pathToken!] => token
                             token.kind == grammar.triviaIdWhitespace -> if {
                             } else {
                                 token.kind == grammar.triviaIdComment -> if {
@@ -84,18 +92,18 @@ public identities sources: [Text; ~] -> [ModuleIdentity; ~] {
     modules!
 }
 
-public imports sources: [Text; ~] -> [ImportEdge; ~] {
+
+public importsAnalyzed package: analysis.PackageAnalysis -> [ImportEdge; ~] {
     [ImportEdge; ~] => edges!
-    sources -> len => sourceCount
+    package.sources -> len => sourceCount
     0 => sourceIndex!
     sourceIndex! < sourceCount -> while {
-        sources[sourceIndex!] => source
-        source -> ast.lower => nodes!
-        source -> lexer.lex => tokens!
-        nodes! -> len => nodeCount
+        package.sources[sourceIndex!] => source
+        package.ranges[sourceIndex!] => sourceRange
+        sourceRange.astCount => nodeCount
         0 => nodeIndex!
         nodeIndex! < nodeCount -> while {
-            nodes![nodeIndex!] => node
+            package.nodes[sourceRange.astStart + nodeIndex!] => node
             node.kind == 2 -> if {
                 UInt64(0) => targetHash!
                 UIntSize(0) => importStart!
@@ -104,7 +112,7 @@ public imports sources: [Text; ~] -> [ImportEdge; ~] {
                 -1 => defaultAliasToken!
                 0 => pathIndex!
                 pathIndex! < nodeCount -> while {
-                    nodes![pathIndex!] => pathNode
+                    package.nodes[sourceRange.astStart + pathIndex!] => pathNode
                     (pathNode.parent == nodeIndex! and pathNode.kind == 16) -> if {
                         pathNode.start => importStart!
                         pathNode.length => importLength!
@@ -112,7 +120,7 @@ public imports sources: [Text; ~] -> [ImportEdge; ~] {
                         pathNode.firstToken => importPathToken!
                         pathNode.firstToken + pathNode.tokenCount => importPathEnd
                         importPathToken! < importPathEnd -> while {
-                            tokens![importPathToken!] => token
+                            package.tokens[sourceRange.tokenStart + importPathToken!] => token
                             token.kind == grammar.tokenIdIdentifier -> if {
                                 importPathToken! => defaultAliasToken!
                             }
@@ -139,7 +147,7 @@ public imports sources: [Text; ~] -> [ImportEdge; ~] {
                 node.firstToken => importToken!
                 node.firstToken + node.tokenCount => importTokenEnd
                 importToken! < importTokenEnd -> while {
-                    tokens![importToken!] => token
+                    package.tokens[sourceRange.tokenStart + importToken!] => token
                     afterAs! -> if {
                         token.kind == grammar.tokenIdIdentifier -> if {
                             importToken! => aliasToken!

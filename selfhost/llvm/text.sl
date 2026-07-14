@@ -5,11 +5,10 @@ import smalllang.compiler.ir.interpolation as interpolation
 import smalllang.compiler.ir.typed as typedIr
 import smalllang.compiler.lexer as lexer
 import smalllang.compiler.llvm.target as llvmTarget
-import smalllang.compiler.semantic.calls as calls
 import smalllang.compiler.semantic.composite_types as compositeTypes
+import smalllang.compiler.semantic.context as semanticContext
 import smalllang.compiler.semantic.modules as modules
 import smalllang.compiler.semantic.nominal_types as nominalTypes
-import smalllang.compiler.semantic.qualified as qualified
 import smalllang.compiler.semantic.symbols as symbols
 import smalllang.compiler.semantic.type_ids as typeIds
 import syntax.generated.smalllang as grammar
@@ -284,73 +283,18 @@ public writeType node: typedIr.TypedIrNode -> Unit {
 
 prepare request: move PrepareRequest -> EmitContext {
     request.pointerBitWidth => pointerBitWidth
-    request.sources -> typeIds.resolve => semanticSet
-    [Text; ~] => typedSources!
-    request.sources -> each typedSource { typedSources! -> push(typedSource) }
+    request.sources -> semanticContext.prepare => prepared
+    prepared -> typedIr.lowerContext => ir!
     [typeIds.SemanticType; ~] => semanticTypes!
-    [typeIds.SemanticType; ~] => typedTypes!
-    semanticSet.types -> each semanticType {
-        semanticTypes! -> push(semanticType)
-        typedTypes! -> push(semanticType)
-    }
+    prepared.types -> each semanticType { semanticTypes! -> push(semanticType) }
     [typeIds.NominalField; ~] => semanticFields!
-    [typeIds.NominalField; ~] => typedFields!
-    semanticSet.fields -> each semanticField {
-        semanticFields! -> push(semanticField)
-        typedFields! -> push(semanticField)
-    }
-    [typeIds.TypeReference; ~] => typedReferences!
-    semanticSet.references -> each typedReference { typedReferences! -> push(typedReference) }
-    request.sources -> nominalTypes.resolve => resolvedNominal!
+    prepared.fields -> each semanticField { semanticFields! -> push(semanticField) }
     [nominalTypes.NominalType; ~] => nominal!
-    [nominalTypes.NominalType; ~] => typedNominal!
-    resolvedNominal! -> each nominalType {
-        nominal! -> push(nominalType)
-        typedNominal! -> push(nominalType)
-    }
-    request.sources -> compositeTypes.resolve => resolvedComposite!
+    prepared.nominal -> each nominalType { nominal! -> push(nominalType) }
     [compositeTypes.CompositeType; ~] => composite!
-    [compositeTypes.CompositeType; ~] => typedComposite!
-    resolvedComposite! -> each compositeType {
-        composite! -> push(compositeType)
-        typedComposite! -> push(compositeType)
-    }
-    request.sources -> modules.identities => resolvedModules!
+    prepared.composite -> each compositeType { composite! -> push(compositeType) }
     [modules.ModuleIdentity; ~] => moduleIdentities!
-    [modules.ModuleIdentity; ~] => typedModules!
-    resolvedModules! -> each moduleIdentity {
-        moduleIdentities! -> push(moduleIdentity)
-        typedModules! -> push(moduleIdentity)
-    }
-    request.sources -> qualified.resolve => resolvedQualified!
-    [qualified.QualifiedResolution; ~] => typedQualified!
-    [qualified.QualifiedResolution; ~] => callQualified!
-    resolvedQualified! -> each qualifiedResult {
-        typedQualified! -> push(qualifiedResult)
-        callQualified! -> push(qualifiedResult)
-    }
-    [Text; ~] => callSources!
-    request.sources -> each callSource { callSources! -> push(callSource) }
-    [modules.ModuleIdentity; ~] => callModules!
-    moduleIdentities! -> each callModule { callModules! -> push(callModule) }
-    calls.ModuleCallRequest {
-        sources: callSources!
-        modules: callModules!
-        qualified: callQualified!
-    } => callRequest!
-    callRequest! -> calls.resolveModulesPrepared => resolvedCalls!
-    typedIr.TypedIrRequest {
-        sources: typedSources!
-        types: typedTypes!
-        references: typedReferences!
-        fields: typedFields!
-        nominal: typedNominal!
-        composite: typedComposite!
-        modules: typedModules!
-        qualified: typedQualified!
-        calls: resolvedCalls!
-    } => typedRequest!
-    typedRequest! -> typedIr.lowerPrepared => ir!
+    prepared.modules -> each moduleIdentity { moduleIdentities! -> push(moduleIdentity) }
     request.sources => sources
     [typeIds.SemanticType; ~] => layoutTypes!
     semanticTypes! -> each layoutType { layoutTypes! -> push(layoutType) }

@@ -2,8 +2,10 @@ namespace smalllang.compiler.ir.typed
 
 import smalllang.compiler.ast as ast
 import smalllang.compiler.lexer as lexer
+import smalllang.compiler.semantic.analysis as analysis
 import smalllang.compiler.semantic.calls as calls
 import smalllang.compiler.semantic.composite_types as compositeTypes
+import smalllang.compiler.semantic.context as semanticContext
 import smalllang.compiler.semantic.expression_type_ids as expressionTypeIds
 import smalllang.compiler.semantic.expression_types as expressionTypes
 import smalllang.compiler.semantic.modules as modules
@@ -12,6 +14,7 @@ import smalllang.compiler.semantic.qualified as qualified
 import smalllang.compiler.semantic.resolve as resolution
 import smalllang.compiler.semantic.symbols as symbols
 import smalllang.compiler.semantic.type_ids as typeIds
+import smalllang.compiler.syntax as syntax
 import syntax.generated.smalllang as grammar
 
 # Stable, flat typed IR. Indexes are relocatable array offsets so later LLVM
@@ -99,62 +102,15 @@ public struct TypedIrRequest {
     modules: [modules.ModuleIdentity; ~]
     qualified: [qualified.QualifiedResolution; ~]
     calls: [calls.ModuleCallResolution; ~]
+    analysisRanges: [analysis.SourceAnalysisRange; ~]
+    analysisNodes: [ast.AstNode; ~]
+    analysisTokens: [syntax.SyntaxToken; ~]
+    analysisSymbols: [symbols.Symbol; ~]
+    analysisNames: [resolution.ResolvedName; ~]
 }
 
-public lowerPrepared request: move TypedIrRequest -> [TypedIrNode; ~] {
-    [Text; ~] => expressionSources!
-    request.sources -> each expressionSource { expressionSources! -> push(expressionSource) }
-    [typeIds.SemanticType; ~] => expressionTypesPrepared!
-    request.types -> each expressionTypePrepared { expressionTypesPrepared! -> push(expressionTypePrepared) }
-    [typeIds.TypeReference; ~] => expressionReferences!
-    request.references -> each expressionReference { expressionReferences! -> push(expressionReference) }
-    [typeIds.NominalField; ~] => expressionFields!
-    request.fields -> each expressionField { expressionFields! -> push(expressionField) }
-    [nominalTypes.NominalType; ~] => nominal!
-    [nominalTypes.NominalType; ~] => inferredNominal!
-    request.nominal -> each nominalType {
-        nominal! -> push(nominalType)
-        inferredNominal! -> push(nominalType)
-    }
-    [compositeTypes.CompositeType; ~] => composite!
-    [compositeTypes.CompositeType; ~] => inferredComposite!
-    request.composite -> each compositeType {
-        composite! -> push(compositeType)
-        inferredComposite! -> push(compositeType)
-    }
-    [modules.ModuleIdentity; ~] => moduleIdentities!
-    [modules.ModuleIdentity; ~] => expressionModules!
-    [modules.ModuleIdentity; ~] => inferredModules!
-    request.modules -> each moduleIdentity {
-        moduleIdentities! -> push(moduleIdentity)
-        expressionModules! -> push(moduleIdentity)
-        inferredModules! -> push(moduleIdentity)
-    }
-    [qualified.QualifiedResolution; ~] => expressionQualified!
-    [qualified.QualifiedResolution; ~] => inferredQualified!
-    request.qualified -> each qualifiedResult {
-        expressionQualified! -> push(qualifiedResult)
-        inferredQualified! -> push(qualifiedResult)
-    }
-    [calls.ModuleCallResolution; ~] => expressionCalls!
-    [calls.ModuleCallResolution; ~] => inferredCalls!
-    [calls.ModuleCallResolution; ~] => resolvedCalls!
-    request.calls -> each resolvedCall {
-        expressionCalls! -> push(resolvedCall)
-        inferredCalls! -> push(resolvedCall)
-        resolvedCalls! -> push(resolvedCall)
-    }
-    expressionTypeIds.ExpressionTypeIdRequest {
-        sources: expressionSources!
-        types: expressionTypesPrepared!
-        references: expressionReferences!
-        fields: expressionFields!
-        modules: expressionModules!
-        qualified: expressionQualified!
-        calls: expressionCalls!
-    } => expressionRequest!
-    expressionRequest! -> expressionTypeIds.resolvePrepared => recursiveTypes
-    request.sources => sources
+public lowerContext prepared: semanticContext.CompilationContext -> [TypedIrNode; ~] {
+    prepared -> expressionTypeIds.resolveContext => recursiveTypes
     [typeIds.SemanticType; ~] => recursiveSemanticTypes!
     recursiveTypes.types -> each recursiveSemanticType {
         recursiveSemanticTypes! -> push(recursiveSemanticType)
@@ -173,27 +129,21 @@ public lowerPrepared request: move TypedIrRequest -> [TypedIrNode; ~] {
     recursiveTypes.expressions -> each recursiveExpression {
         recursiveExpressions! -> push(recursiveExpression)
     }
-    [Text; ~] => inferredSources!
-    sources -> each inferredSource { inferredSources! -> push(inferredSource) }
-    expressionTypes.ExpressionTypeRequest {
-        sources: inferredSources!
-        nominal: inferredNominal!
-        composite: inferredComposite!
-        qualified: inferredQualified!
-        modules: inferredModules!
-        calls: inferredCalls!
-    } => inferredRequest!
-    inferredRequest! -> expressionTypes.inferPrepared => inferred!
+    prepared -> expressionTypes.inferContext => inferred!
     [TypedIrNode; ~] => results!
     0 => sourceIndex!
-    sourceIndex! < (sources -> len) -> while {
-        sources[sourceIndex!] => source
-        source -> ast.lower => nodes!
-        nodes! -> symbols.collectPrepared => table!
-        source -> resolution.resolve => resolvedNames!
+    sourceIndex! < (prepared.sources -> len) -> while {
+        prepared.sources[sourceIndex!] => source
+        prepared.ranges[sourceIndex!] => sourceRange
+        [resolution.ResolvedName; ~] => resolvedNames!
+        0 => sourceNameOffset!
+        sourceNameOffset! < sourceRange.nameCount -> while {
+            resolvedNames! -> push(prepared.names[sourceRange.nameStart + sourceNameOffset!])
+            sourceNameOffset! + 1 => sourceNameOffset!
+        }
         0 => symbolIndex!
-        symbolIndex! < (table! -> len) -> while {
-            table![symbolIndex!] => function
+        symbolIndex! < sourceRange.symbolCount -> while {
+            prepared.symbols[sourceRange.symbolStart + symbolIndex!] => function
             function.kind == 7 -> if {
                 -1 => resultTypeIndex!
                 1000000 => resultDistance!
@@ -202,19 +152,19 @@ public lowerPrepared request: move TypedIrRequest -> [TypedIrNode; ~] {
                 typeSearch! < (inferred! -> len) -> while {
                     inferred![typeSearch!] => candidateType
                     candidateType.sourceModule == sourceIndex! -> if {
-                        nodes![candidateType.astNode].parent => ancestor!
+                        prepared.nodes[sourceRange.astStart + candidateType.astNode].parent => ancestor!
                         candidateType.astNode => functionChildAst!
                         1 => distance!
                         false => belongsToFunction!
                         (ancestor! >= 0 and not belongsToFunction!) -> while {
                             ancestor! == function.astNode -> if { true => belongsToFunction! } else {
                                 ancestor! => functionChildAst!
-                                nodes![ancestor!].parent => ancestor!
+                                prepared.nodes[sourceRange.astStart + ancestor!].parent => ancestor!
                                 distance! + 1 => distance!
                             }
                         }
                         belongsToFunction! -> if {
-                            nodes![functionChildAst!].start => candidateTopLevelStart
+                            prepared.nodes[sourceRange.astStart + functionChildAst!].start => candidateTopLevelStart
                             (resultTypeIndex! < 0 or candidateTopLevelStart > resultTopLevelStart! or (candidateTopLevelStart == resultTopLevelStart! and distance! < resultDistance!)) -> if {
                                 typeSearch! => resultTypeIndex!
                                 distance! => resultDistance!
@@ -232,8 +182,8 @@ public lowerPrepared request: move TypedIrRequest -> [TypedIrNode; ~] {
                     function.typeNode => declaredResultAst!
                     function.secondaryTypeNode >= 0 -> if { function.secondaryTypeNode => declaredResultAst! }
                     0 => declaredResultNominalSearch!
-                    declaredResultNominalSearch! < (nominal! -> len) -> while {
-                        nominal![declaredResultNominalSearch!] => declaredResultNominal
+                    declaredResultNominalSearch! < (prepared.nominal -> len) -> while {
+                        prepared.nominal[declaredResultNominalSearch!] => declaredResultNominal
                         (declaredResultNominal.sourceModule == sourceIndex! and declaredResultNominal.typeAst == declaredResultAst!) -> if {
                             declaredResultNominal.origin => functionResultOrigin!
                             declaredResultNominal.targetModule => functionResultModule!
@@ -242,8 +192,8 @@ public lowerPrepared request: move TypedIrRequest -> [TypedIrNode; ~] {
                         declaredResultNominalSearch! + 1 => declaredResultNominalSearch!
                     }
                     0 => declaredResultCompositeSearch!
-                    declaredResultCompositeSearch! < (composite! -> len) -> while {
-                        composite![declaredResultCompositeSearch!] => declaredResultComposite
+                    declaredResultCompositeSearch! < (prepared.composite -> len) -> while {
+                        prepared.composite[declaredResultCompositeSearch!] => declaredResultComposite
                         (declaredResultComposite.sourceModule == sourceIndex! and declaredResultComposite.typeAst == declaredResultAst!) -> if {
                             10 + declaredResultComposite.kind => functionResultOrigin!
                             declaredResultComposite.elementModule => functionResultModule!
@@ -254,8 +204,8 @@ public lowerPrepared request: move TypedIrRequest -> [TypedIrNode; ~] {
                     -1 => parameterSymbol!
                     -1 => parameterTypeIndex!
                     0 => parameterSearch!
-                    parameterSearch! < (table! -> len) -> while {
-                        table![parameterSearch!] => parameterCandidate
+                    parameterSearch! < sourceRange.symbolCount -> while {
+                        prepared.symbols[sourceRange.symbolStart + parameterSearch!] => parameterCandidate
                         (parameterCandidate.kind == 35 and parameterCandidate.parent == symbolIndex!) -> if { parameterSearch! => parameterSymbol! }
                         parameterSearch! + 1 => parameterSearch!
                     }
@@ -284,10 +234,10 @@ public lowerPrepared request: move TypedIrRequest -> [TypedIrNode; ~] {
                         inferredParameterType.targetSymbol => parameterTypeSymbol!
                     }
                     (parameterSymbol! >= 0 and parameterOrigin! < 0) -> if {
-                        table![parameterSymbol!] => declaredParameter
+                        prepared.symbols[sourceRange.symbolStart + parameterSymbol!] => declaredParameter
                         0 => declaredNominalSearch!
-                        declaredNominalSearch! < (nominal! -> len) -> while {
-                            nominal![declaredNominalSearch!] => declaredNominal
+                        declaredNominalSearch! < (prepared.nominal -> len) -> while {
+                            prepared.nominal[declaredNominalSearch!] => declaredNominal
                             (declaredNominal.sourceModule == sourceIndex! and declaredNominal.typeAst == declaredParameter.typeNode) -> if {
                                 declaredNominal.origin => parameterOrigin!
                                 declaredNominal.targetModule => parameterModule!
@@ -297,8 +247,8 @@ public lowerPrepared request: move TypedIrRequest -> [TypedIrNode; ~] {
                         }
                         parameterOrigin! < 0 -> if {
                             0 => declaredCompositeSearch!
-                            declaredCompositeSearch! < (composite! -> len) -> while {
-                                composite![declaredCompositeSearch!] => declaredComposite
+                            declaredCompositeSearch! < (prepared.composite -> len) -> while {
+                                prepared.composite[declaredCompositeSearch!] => declaredComposite
                                 (declaredComposite.sourceModule == sourceIndex! and declaredComposite.typeAst == declaredParameter.typeNode) -> if {
                                     10 + declaredComposite.kind => parameterOrigin!
                                     declaredComposite.elementModule => parameterModule!
@@ -353,7 +303,7 @@ public lowerPrepared request: move TypedIrRequest -> [TypedIrNode; ~] {
                         flags: 0
                     })
                     parameterIr! >= 0 -> if {
-                        table![parameterSymbol!] => parameter
+                        prepared.symbols[sourceRange.symbolStart + parameterSymbol!] => parameter
                         results! -> push(TypedIrNode {
                             kind: 10
                             parent: functionIr!
@@ -378,19 +328,19 @@ public lowerPrepared request: move TypedIrRequest -> [TypedIrNode; ~] {
 
                     [Int; ~] => astToIr!
                     0 => astMapIndex!
-                    astMapIndex! < (nodes! -> len) -> while {
+                    astMapIndex! < sourceRange.astCount -> while {
                         astToIr! -> push(-1)
                         astMapIndex! + 1 => astMapIndex!
                     }
                     results! -> len => expressionIrStart
                     0 => bindingAstIndex!
-                    bindingAstIndex! < (nodes! -> len) -> while {
-                        nodes![bindingAstIndex!] => bindingAst
+                    bindingAstIndex! < sourceRange.astCount -> while {
+                        prepared.nodes[sourceRange.astStart + bindingAstIndex!] => bindingAst
                         (bindingAst.kind == 9 or (bindingAst.kind == 48 and bindingAst.secondaryToken >= 0)) -> if {
                             bindingAst.parent => bindingAncestor!
                             false => bindingBelongsToFunction!
                             (bindingAncestor! >= 0 and not bindingBelongsToFunction!) -> while {
-                                bindingAncestor! == function.astNode -> if { true => bindingBelongsToFunction! } else { nodes![bindingAncestor!].parent => bindingAncestor! }
+                                bindingAncestor! == function.astNode -> if { true => bindingBelongsToFunction! } else { prepared.nodes[sourceRange.astStart + bindingAncestor!].parent => bindingAncestor! }
                             }
                             bindingBelongsToFunction! -> if {
                                 -1 => bindingTypeIndex!
@@ -399,13 +349,13 @@ public lowerPrepared request: move TypedIrRequest -> [TypedIrNode; ~] {
                                 bindingTypeSearch! < (inferred! -> len) -> while {
                                     inferred![bindingTypeSearch!] => bindingTypeCandidate
                                     bindingTypeCandidate.sourceModule == sourceIndex! -> if {
-                                        nodes![bindingTypeCandidate.astNode].parent => bindingTypeAncestor!
+                                        prepared.nodes[sourceRange.astStart + bindingTypeCandidate.astNode].parent => bindingTypeAncestor!
                                         1 => bindingDistance!
                                         bindingTypeCandidate.astNode == bindingAstIndex! => belongsToBinding!
                                         belongsToBinding! -> if { 0 => bindingDistance! }
                                         (bindingTypeAncestor! >= 0 and not belongsToBinding!) -> while {
                                             bindingTypeAncestor! == bindingAstIndex! -> if { true => belongsToBinding! } else {
-                                                nodes![bindingTypeAncestor!].parent => bindingTypeAncestor!
+                                                prepared.nodes[sourceRange.astStart + bindingTypeAncestor!].parent => bindingTypeAncestor!
                                                 bindingDistance! + 1 => bindingDistance!
                                             }
                                         }
@@ -419,8 +369,8 @@ public lowerPrepared request: move TypedIrRequest -> [TypedIrNode; ~] {
                                 bindingTypeIndex! >= 0 -> if {
                                     -1 => bindingSymbol!
                                     0 => bindingSymbolSearch!
-                                    bindingSymbolSearch! < (table! -> len) -> while {
-                                        (table![bindingSymbolSearch!].kind == 9 and table![bindingSymbolSearch!].astNode == bindingAstIndex!) -> if { bindingSymbolSearch! => bindingSymbol! }
+                                    bindingSymbolSearch! < sourceRange.symbolCount -> while {
+                                        (prepared.symbols[sourceRange.symbolStart + bindingSymbolSearch!].kind == 9 and prepared.symbols[sourceRange.symbolStart + bindingSymbolSearch!].astNode == bindingAstIndex!) -> if { bindingSymbolSearch! => bindingSymbol! }
                                         bindingSymbolSearch! + 1 => bindingSymbolSearch!
                                     }
                                     inferred![bindingTypeIndex!] => bindingType
@@ -452,13 +402,13 @@ public lowerPrepared request: move TypedIrRequest -> [TypedIrNode; ~] {
                         bindingAstIndex! + 1 => bindingAstIndex!
                     }
                     0 => expressionAstIndex!
-                    expressionAstIndex! < (nodes! -> len) -> while {
-                        nodes![expressionAstIndex!] => expression
+                    expressionAstIndex! < sourceRange.astCount -> while {
+                        prepared.nodes[sourceRange.astStart + expressionAstIndex!] => expression
                         expression.parent => expressionAncestor!
                         false => expressionBelongsToFunction!
                         (expressionAncestor! >= 0 and not expressionBelongsToFunction!) -> while {
                             expressionAncestor! == function.astNode -> if { true => expressionBelongsToFunction! } else {
-                                nodes![expressionAncestor!].parent => expressionAncestor!
+                                prepared.nodes[sourceRange.astStart + expressionAncestor!].parent => expressionAncestor!
                             }
                         }
                         -1 => expressionTypeIndex!
@@ -579,8 +529,8 @@ public lowerPrepared request: move TypedIrRequest -> [TypedIrNode; ~] {
                                 expression.kind == 38 -> if { 16 => expressionKind! }
                                 expression.kind == 41 -> if { 15 => expressionKind! }
                                 0 => propertyCallSearch!
-                                propertyCallSearch! < (resolvedCalls! -> len) -> while {
-                                    resolvedCalls![propertyCallSearch!] => propertyCall
+                                propertyCallSearch! < (prepared.calls -> len) -> while {
+                                    prepared.calls[propertyCallSearch!] => propertyCall
                                     (propertyCall.sourceModule == sourceIndex! and propertyCall.callAst == expressionAstIndex! and propertyCall.status == 0) -> if { 6 => expressionKind! }
                                     propertyCallSearch! + 1 => propertyCallSearch!
                                 }
@@ -599,13 +549,13 @@ public lowerPrepared request: move TypedIrRequest -> [TypedIrNode; ~] {
                                 }
                                 expressionKind! == 6 -> if {
                                     0 => callSearch!
-                                    callSearch! < (resolvedCalls! -> len) -> while {
-                                        resolvedCalls![callSearch!] => resolvedCall
+                                    callSearch! < (prepared.calls -> len) -> while {
+                                        prepared.calls[callSearch!] => resolvedCall
                                         (resolvedCall.sourceModule == sourceIndex! and resolvedCall.callAst == expressionAstIndex! and resolvedCall.status == 0) -> if {
                                             resolvedCall.functionSymbol => expressionSymbol!
                                             resolvedCall.targetSourceModule => expressionTargetModule!
                                             (resolvedCall.functionSymbol >= 0 and resolvedCall.targetSourceModule >= 0) -> if {
-                                                sources[resolvedCall.targetSourceModule] -> symbols.collect => expressionTargetTable!
+                                                prepared.sources[resolvedCall.targetSourceModule] -> symbols.collect => expressionTargetTable!
                                                 ((expressionTargetTable![resolvedCall.functionSymbol].flags / 8) % 2 == 1 and (expressionFlags! / 8) % 2 == 0) -> if {
                                                     expressionFlags! + 8 => expressionFlags!
                                                 }
@@ -644,11 +594,11 @@ public lowerPrepared request: move TypedIrRequest -> [TypedIrNode; ~] {
                     expressionIrStart => parentIrIndex!
                     parentIrIndex! < expressionIrEnd -> while {
                         results![parentIrIndex!] => expressionIrNode!
-                        nodes![expressionIrNode!.astNode].parent => parentAst!
+                        prepared.nodes[sourceRange.astStart + expressionIrNode!.astNode].parent => parentAst!
                         -1 => semanticParentIr!
                         (parentAst! >= 0 and parentAst! != function.astNode and semanticParentIr! < 0) -> while {
                             astToIr![parentAst!] >= 0 -> if { astToIr![parentAst!] => semanticParentIr! } else {
-                                nodes![parentAst!].parent => parentAst!
+                                prepared.nodes[sourceRange.astStart + parentAst!].parent => parentAst!
                             }
                         }
                         semanticParentIr! >= 0 -> if { semanticParentIr! => expressionIrNode!.parent }
@@ -667,7 +617,7 @@ public lowerPrepared request: move TypedIrRequest -> [TypedIrNode; ~] {
                             childIrIndex! < expressionIrEnd -> while {
                                 results![childIrIndex!] => childIr
                                 childIr.parent == operandIrIndex! -> if {
-                                    nodes![childIr.astNode].start => childStart
+                                    prepared.nodes[sourceRange.astStart + childIr.astNode].start => childStart
                                     firstOperand! < 0 -> if {
                                         childIrIndex! => firstOperand!
                                         childStart => firstStart!
@@ -702,8 +652,8 @@ public lowerPrepared request: move TypedIrRequest -> [TypedIrNode; ~] {
                         expressionIrStart => siblingSearch!
                         siblingSearch! < expressionIrEnd -> while {
                             results![siblingSearch!] => siblingCandidate
-                            (siblingCandidate.parent == sibling!.parent and nodes![siblingCandidate.astNode].start > nodes![sibling!.astNode].start) -> if {
-                                nodes![siblingCandidate.astNode].start => siblingCandidateStart
+                            (siblingCandidate.parent == sibling!.parent and prepared.nodes[sourceRange.astStart + siblingCandidate.astNode].start > prepared.nodes[sourceRange.astStart + sibling!.astNode].start) -> if {
+                                prepared.nodes[sourceRange.astStart + siblingCandidate.astNode].start => siblingCandidateStart
                                 (nextSibling! < 0 or siblingCandidateStart < nextSiblingStart!) -> if {
                                     siblingSearch! => nextSibling!
                                     siblingCandidateStart => nextSiblingStart!
@@ -727,7 +677,7 @@ public lowerPrepared request: move TypedIrRequest -> [TypedIrNode; ~] {
                             expressionIrStart => regionChildSearch!
                             regionChildSearch! < expressionIrEnd -> while {
                                 results![regionChildSearch!].parent == controlIrIndex! -> if {
-                                    nodes![results![regionChildSearch!].astNode].start => regionChildStart
+                                    prepared.nodes[sourceRange.astStart + results![regionChildSearch!].astNode].start => regionChildStart
                                     (firstRegionChild! < 0 or regionChildStart < firstRegionChildStart!) -> if {
                                         regionChildSearch! => firstRegionChild!
                                         regionChildStart => firstRegionChildStart!
@@ -746,7 +696,7 @@ public lowerPrepared request: move TypedIrRequest -> [TypedIrNode; ~] {
                                 expressionIrStart => nestedResultSearch!
                                 nestedResultSearch! < expressionIrEnd -> while {
                                     results![nestedResultSearch!].parent == lastRegionChild! -> if {
-                                        nodes![results![nestedResultSearch!].astNode].start => nestedResultStart
+                                        prepared.nodes[sourceRange.astStart + results![nestedResultSearch!].astNode].start => nestedResultStart
                                         (nestedRegionResult! < 0 or nestedResultStart > nestedRegionResultStart!) -> if {
                                             nestedResultSearch! => nestedRegionResult!
                                             nestedResultStart => nestedRegionResultStart!
@@ -760,14 +710,14 @@ public lowerPrepared request: move TypedIrRequest -> [TypedIrNode; ~] {
                             control! => results![controlIrIndex!]
                         }
                         (control!.kind == 18 or control!.kind == 20) -> if {
-                            nodes![control!.astNode].parent => controlFlowAst
+                            prepared.nodes[sourceRange.astStart + control!.astNode].parent => controlFlowAst
                             -1 => conditionIr!
                             UIntSize(0) => conditionStart!
                             expressionIrStart => conditionSearch!
                             conditionSearch! < expressionIrEnd -> while {
                                 results![conditionSearch!] => conditionCandidate
-                                (nodes![conditionCandidate.astNode].parent == controlFlowAst and nodes![conditionCandidate.astNode].start < nodes![control!.astNode].start) -> if {
-                                    nodes![conditionCandidate.astNode].start => candidateStart
+                                (prepared.nodes[sourceRange.astStart + conditionCandidate.astNode].parent == controlFlowAst and prepared.nodes[sourceRange.astStart + conditionCandidate.astNode].start < prepared.nodes[sourceRange.astStart + control!.astNode].start) -> if {
+                                    prepared.nodes[sourceRange.astStart + conditionCandidate.astNode].start => candidateStart
                                     (conditionIr! < 0 or candidateStart > conditionStart!) -> if {
                                         conditionSearch! => conditionIr!
                                         candidateStart => conditionStart!
@@ -827,7 +777,7 @@ public lowerPrepared request: move TypedIrRequest -> [TypedIrNode; ~] {
                             expressionIrStart => fieldOperandSearch!
                             fieldOperandSearch! < expressionIrEnd -> while {
                                 results![fieldOperandSearch!].parent == aggregateIrIndex! -> if {
-                                    (firstFieldOperand! < 0 or nodes![results![fieldOperandSearch!].astNode].start < nodes![results![firstFieldOperand!].astNode].start) -> if { fieldOperandSearch! => firstFieldOperand! }
+                                    (firstFieldOperand! < 0 or prepared.nodes[sourceRange.astStart + results![fieldOperandSearch!].astNode].start < prepared.nodes[sourceRange.astStart + results![firstFieldOperand!].astNode].start) -> if { fieldOperandSearch! => firstFieldOperand! }
                                 }
                                 fieldOperandSearch! + 1 => fieldOperandSearch!
                             }
@@ -853,8 +803,8 @@ public lowerPrepared request: move TypedIrRequest -> [TypedIrNode; ~] {
             symbolIndex! + 1 => symbolIndex!
         }
         0 => entryAstIndex!
-        entryAstIndex! < (nodes! -> len) -> while {
-            nodes![entryAstIndex!] => entryAst
+        entryAstIndex! < sourceRange.astCount -> while {
+            prepared.nodes[sourceRange.astStart + entryAstIndex!] => entryAst
             entryAst.kind == 8 -> if {
                 -1 => entryResultTypeIndex!
                 1000000 => entryResultDistance!
@@ -862,16 +812,16 @@ public lowerPrepared request: move TypedIrRequest -> [TypedIrNode; ~] {
                 entryTypeSearch! < (inferred! -> len) -> while {
                     inferred![entryTypeSearch!] => entryCandidateType
                     entryCandidateType.sourceModule == sourceIndex! -> if {
-                        nodes![entryCandidateType.astNode].parent => entryAncestor!
+                        prepared.nodes[sourceRange.astStart + entryCandidateType.astNode].parent => entryAncestor!
                         1 => entryDistance!
                         false => belongsToEntry!
                         (entryAncestor! >= 0 and not belongsToEntry!) -> while {
                             entryAncestor! == entryAstIndex! -> if { true => belongsToEntry! } else {
-                                nodes![entryAncestor!].parent => entryAncestor!
+                                prepared.nodes[sourceRange.astStart + entryAncestor!].parent => entryAncestor!
                                 entryDistance! + 1 => entryDistance!
                             }
                         }
-                        (belongsToEntry! and (entryDistance! < entryResultDistance! or (entryDistance! == entryResultDistance! and (entryResultTypeIndex! < 0 or nodes![entryCandidateType.astNode].start > nodes![inferred![entryResultTypeIndex!].astNode].start)))) -> if {
+                        (belongsToEntry! and (entryDistance! < entryResultDistance! or (entryDistance! == entryResultDistance! and (entryResultTypeIndex! < 0 or prepared.nodes[sourceRange.astStart + entryCandidateType.astNode].start > prepared.nodes[sourceRange.astStart + inferred![entryResultTypeIndex!].astNode].start)))) -> if {
                             entryTypeSearch! => entryResultTypeIndex!
                             entryDistance! => entryResultDistance!
                         }
@@ -902,19 +852,19 @@ public lowerPrepared request: move TypedIrRequest -> [TypedIrNode; ~] {
                 entryResultTypeIndex! >= 0 -> if {
                     [Int; ~] => entryAstToIr!
                     0 => entryMapIndex!
-                    entryMapIndex! < (nodes! -> len) -> while {
+                    entryMapIndex! < sourceRange.astCount -> while {
                         entryAstToIr! -> push(-1)
                         entryMapIndex! + 1 => entryMapIndex!
                     }
                     results! -> len => entryExpressionStart
                     0 => entryBindingAstIndex!
-                    entryBindingAstIndex! < (nodes! -> len) -> while {
-                        nodes![entryBindingAstIndex!] => entryBindingAst
+                    entryBindingAstIndex! < sourceRange.astCount -> while {
+                        prepared.nodes[sourceRange.astStart + entryBindingAstIndex!] => entryBindingAst
                         (entryBindingAst.kind == 9 or (entryBindingAst.kind == 48 and entryBindingAst.secondaryToken >= 0)) -> if {
                             entryBindingAst.parent => entryBindingAncestor!
                             false => entryBindingBelongs!
                             (entryBindingAncestor! >= 0 and not entryBindingBelongs!) -> while {
-                                entryBindingAncestor! == entryAstIndex! -> if { true => entryBindingBelongs! } else { nodes![entryBindingAncestor!].parent => entryBindingAncestor! }
+                                entryBindingAncestor! == entryAstIndex! -> if { true => entryBindingBelongs! } else { prepared.nodes[sourceRange.astStart + entryBindingAncestor!].parent => entryBindingAncestor! }
                             }
                             entryBindingBelongs! -> if {
                                 -1 => entryBindingTypeIndex!
@@ -923,13 +873,13 @@ public lowerPrepared request: move TypedIrRequest -> [TypedIrNode; ~] {
                                 entryBindingTypeSearch! < (inferred! -> len) -> while {
                                     inferred![entryBindingTypeSearch!] => entryBindingTypeCandidate
                                     entryBindingTypeCandidate.sourceModule == sourceIndex! -> if {
-                                        nodes![entryBindingTypeCandidate.astNode].parent => entryBindingTypeAncestor!
+                                        prepared.nodes[sourceRange.astStart + entryBindingTypeCandidate.astNode].parent => entryBindingTypeAncestor!
                                         1 => entryBindingDistance!
                                         entryBindingTypeCandidate.astNode == entryBindingAstIndex! => entryBelongsToBinding!
                                         entryBelongsToBinding! -> if { 0 => entryBindingDistance! }
                                         (entryBindingTypeAncestor! >= 0 and not entryBelongsToBinding!) -> while {
                                             entryBindingTypeAncestor! == entryBindingAstIndex! -> if { true => entryBelongsToBinding! } else {
-                                                nodes![entryBindingTypeAncestor!].parent => entryBindingTypeAncestor!
+                                                prepared.nodes[sourceRange.astStart + entryBindingTypeAncestor!].parent => entryBindingTypeAncestor!
                                                 entryBindingDistance! + 1 => entryBindingDistance!
                                             }
                                         }
@@ -943,8 +893,8 @@ public lowerPrepared request: move TypedIrRequest -> [TypedIrNode; ~] {
                                 entryBindingTypeIndex! >= 0 -> if {
                                     -1 => entryBindingSymbol!
                                     0 => entryBindingSymbolSearch!
-                                    entryBindingSymbolSearch! < (table! -> len) -> while {
-                                        (table![entryBindingSymbolSearch!].kind == 9 and table![entryBindingSymbolSearch!].astNode == entryBindingAstIndex!) -> if { entryBindingSymbolSearch! => entryBindingSymbol! }
+                                    entryBindingSymbolSearch! < sourceRange.symbolCount -> while {
+                                        (prepared.symbols[sourceRange.symbolStart + entryBindingSymbolSearch!].kind == 9 and prepared.symbols[sourceRange.symbolStart + entryBindingSymbolSearch!].astNode == entryBindingAstIndex!) -> if { entryBindingSymbolSearch! => entryBindingSymbol! }
                                         entryBindingSymbolSearch! + 1 => entryBindingSymbolSearch!
                                     }
                                     inferred![entryBindingTypeIndex!] => entryBindingType
@@ -976,12 +926,12 @@ public lowerPrepared request: move TypedIrRequest -> [TypedIrNode; ~] {
                         entryBindingAstIndex! + 1 => entryBindingAstIndex!
                     }
                     0 => entryExpressionAst!
-                    entryExpressionAst! < (nodes! -> len) -> while {
-                        nodes![entryExpressionAst!] => entryExpression
+                    entryExpressionAst! < sourceRange.astCount -> while {
+                        prepared.nodes[sourceRange.astStart + entryExpressionAst!] => entryExpression
                         entryExpression.parent => entryExpressionAncestor!
                         false => entryExpressionBelongs!
                         (entryExpressionAncestor! >= 0 and not entryExpressionBelongs!) -> while {
-                            entryExpressionAncestor! == entryAstIndex! -> if { true => entryExpressionBelongs! } else { nodes![entryExpressionAncestor!].parent => entryExpressionAncestor! }
+                            entryExpressionAncestor! == entryAstIndex! -> if { true => entryExpressionBelongs! } else { prepared.nodes[sourceRange.astStart + entryExpressionAncestor!].parent => entryExpressionAncestor! }
                         }
                         -1 => entryExpressionTypeIndex!
                         0 => entryExpressionTypeSearch!
@@ -1101,8 +1051,8 @@ public lowerPrepared request: move TypedIrRequest -> [TypedIrNode; ~] {
                                 entryExpression.kind == 38 -> if { 16 => entryExpressionKind! }
                                 entryExpression.kind == 41 -> if { 15 => entryExpressionKind! }
                                 0 => entryPropertyCallSearch!
-                                entryPropertyCallSearch! < (resolvedCalls! -> len) -> while {
-                                    resolvedCalls![entryPropertyCallSearch!] => entryPropertyCall
+                                entryPropertyCallSearch! < (prepared.calls -> len) -> while {
+                                    prepared.calls[entryPropertyCallSearch!] => entryPropertyCall
                                     (entryPropertyCall.sourceModule == sourceIndex! and entryPropertyCall.callAst == entryExpressionAst! and entryPropertyCall.status == 0) -> if { 6 => entryExpressionKind! }
                                     entryPropertyCallSearch! + 1 => entryPropertyCallSearch!
                                 }
@@ -1121,13 +1071,13 @@ public lowerPrepared request: move TypedIrRequest -> [TypedIrNode; ~] {
                                 }
                                 entryExpressionKind! == 6 -> if {
                                     0 => entryCallSearch!
-                                    entryCallSearch! < (resolvedCalls! -> len) -> while {
-                                        resolvedCalls![entryCallSearch!] => entryResolvedCall
+                                    entryCallSearch! < (prepared.calls -> len) -> while {
+                                        prepared.calls[entryCallSearch!] => entryResolvedCall
                                         (entryResolvedCall.sourceModule == sourceIndex! and entryResolvedCall.callAst == entryExpressionAst! and entryResolvedCall.status == 0) -> if {
                                             entryResolvedCall.functionSymbol => entryExpressionSymbol!
                                             entryResolvedCall.targetSourceModule => entryExpressionTargetModule!
                                             (entryResolvedCall.functionSymbol >= 0 and entryResolvedCall.targetSourceModule >= 0) -> if {
-                                                sources[entryResolvedCall.targetSourceModule] -> symbols.collect => entryExpressionTargetTable!
+                                                prepared.sources[entryResolvedCall.targetSourceModule] -> symbols.collect => entryExpressionTargetTable!
                                                 ((entryExpressionTargetTable![entryResolvedCall.functionSymbol].flags / 8) % 2 == 1 and (entryExpressionFlags! / 8) % 2 == 0) -> if {
                                                     entryExpressionFlags! + 8 => entryExpressionFlags!
                                                 }
@@ -1165,10 +1115,10 @@ public lowerPrepared request: move TypedIrRequest -> [TypedIrNode; ~] {
                     entryExpressionStart => entryParentIr!
                     entryParentIr! < entryExpressionEnd -> while {
                         results![entryParentIr!] => entryIrNode!
-                        nodes![entryIrNode!.astNode].parent => entryParentAst!
+                        prepared.nodes[sourceRange.astStart + entryIrNode!.astNode].parent => entryParentAst!
                         -1 => entrySemanticParent!
                         (entryParentAst! >= 0 and entryParentAst! != entryAstIndex! and entrySemanticParent! < 0) -> while {
-                            entryAstToIr![entryParentAst!] >= 0 -> if { entryAstToIr![entryParentAst!] => entrySemanticParent! } else { nodes![entryParentAst!].parent => entryParentAst! }
+                            entryAstToIr![entryParentAst!] >= 0 -> if { entryAstToIr![entryParentAst!] => entrySemanticParent! } else { prepared.nodes[sourceRange.astStart + entryParentAst!].parent => entryParentAst! }
                         }
                         entrySemanticParent! >= 0 -> if { entrySemanticParent! => entryIrNode!.parent }
                         entryIrNode! => results![entryParentIr!]
@@ -1185,7 +1135,7 @@ public lowerPrepared request: move TypedIrRequest -> [TypedIrNode; ~] {
                             entryChildIr! < entryExpressionEnd -> while {
                                 results![entryChildIr!] => entryChild
                                 entryChild.parent == entryOperandIr! -> if {
-                                    nodes![entryChild.astNode].start => entryChildStart
+                                    prepared.nodes[sourceRange.astStart + entryChild.astNode].start => entryChildStart
                                     entryFirstOperand! < 0 -> if {
                                         entryChildIr! => entryFirstOperand!
                                         entryChildStart => entryFirstStart!
@@ -1217,8 +1167,8 @@ public lowerPrepared request: move TypedIrRequest -> [TypedIrNode; ~] {
                         entryExpressionStart => entrySiblingSearch!
                         entrySiblingSearch! < entryExpressionEnd -> while {
                             results![entrySiblingSearch!] => entrySiblingCandidate
-                            (entrySiblingCandidate.parent == entrySibling!.parent and nodes![entrySiblingCandidate.astNode].start > nodes![entrySibling!.astNode].start) -> if {
-                                nodes![entrySiblingCandidate.astNode].start => entrySiblingCandidateStart
+                            (entrySiblingCandidate.parent == entrySibling!.parent and prepared.nodes[sourceRange.astStart + entrySiblingCandidate.astNode].start > prepared.nodes[sourceRange.astStart + entrySibling!.astNode].start) -> if {
+                                prepared.nodes[sourceRange.astStart + entrySiblingCandidate.astNode].start => entrySiblingCandidateStart
                                 (entryNextSibling! < 0 or entrySiblingCandidateStart < entryNextSiblingStart!) -> if {
                                     entrySiblingSearch! => entryNextSibling!
                                     entrySiblingCandidateStart => entryNextSiblingStart!
@@ -1241,7 +1191,7 @@ public lowerPrepared request: move TypedIrRequest -> [TypedIrNode; ~] {
                             entryExpressionStart => entryRegionChildSearch!
                             entryRegionChildSearch! < entryExpressionEnd -> while {
                                 results![entryRegionChildSearch!].parent == entryControlIrIndex! -> if {
-                                    nodes![results![entryRegionChildSearch!].astNode].start => entryRegionChildStart
+                                    prepared.nodes[sourceRange.astStart + results![entryRegionChildSearch!].astNode].start => entryRegionChildStart
                                     (entryFirstRegionChild! < 0 or entryRegionChildStart < entryFirstRegionChildStart!) -> if {
                                         entryRegionChildSearch! => entryFirstRegionChild!
                                         entryRegionChildStart => entryFirstRegionChildStart!
@@ -1260,7 +1210,7 @@ public lowerPrepared request: move TypedIrRequest -> [TypedIrNode; ~] {
                                 entryExpressionStart => entryNestedResultSearch!
                                 entryNestedResultSearch! < entryExpressionEnd -> while {
                                     results![entryNestedResultSearch!].parent == entryLastRegionChild! -> if {
-                                        nodes![results![entryNestedResultSearch!].astNode].start => entryNestedResultStart
+                                        prepared.nodes[sourceRange.astStart + results![entryNestedResultSearch!].astNode].start => entryNestedResultStart
                                         (entryNestedRegionResult! < 0 or entryNestedResultStart > entryNestedRegionResultStart!) -> if {
                                             entryNestedResultSearch! => entryNestedRegionResult!
                                             entryNestedResultStart => entryNestedRegionResultStart!
@@ -1274,14 +1224,14 @@ public lowerPrepared request: move TypedIrRequest -> [TypedIrNode; ~] {
                             entryControl! => results![entryControlIrIndex!]
                         }
                         (entryControl!.kind == 18 or entryControl!.kind == 20) -> if {
-                            nodes![entryControl!.astNode].parent => entryControlFlowAst
+                            prepared.nodes[sourceRange.astStart + entryControl!.astNode].parent => entryControlFlowAst
                             -1 => entryConditionIr!
                             UIntSize(0) => entryConditionStart!
                             entryExpressionStart => entryConditionSearch!
                             entryConditionSearch! < entryExpressionEnd -> while {
                                 results![entryConditionSearch!] => entryConditionCandidate
-                                (nodes![entryConditionCandidate.astNode].parent == entryControlFlowAst and nodes![entryConditionCandidate.astNode].start < nodes![entryControl!.astNode].start) -> if {
-                                    nodes![entryConditionCandidate.astNode].start => entryCandidateStart
+                                (prepared.nodes[sourceRange.astStart + entryConditionCandidate.astNode].parent == entryControlFlowAst and prepared.nodes[sourceRange.astStart + entryConditionCandidate.astNode].start < prepared.nodes[sourceRange.astStart + entryControl!.astNode].start) -> if {
+                                    prepared.nodes[sourceRange.astStart + entryConditionCandidate.astNode].start => entryCandidateStart
                                     (entryConditionIr! < 0 or entryCandidateStart > entryConditionStart!) -> if {
                                         entryConditionSearch! => entryConditionIr!
                                         entryCandidateStart => entryConditionStart!
@@ -1339,7 +1289,7 @@ public lowerPrepared request: move TypedIrRequest -> [TypedIrNode; ~] {
                             entryExpressionStart => entryFieldOperandSearch!
                             entryFieldOperandSearch! < entryExpressionEnd -> while {
                                 results![entryFieldOperandSearch!].parent == entryAggregateIrIndex! -> if {
-                                    (entryFirstFieldOperand! < 0 or nodes![results![entryFieldOperandSearch!].astNode].start < nodes![results![entryFirstFieldOperand!].astNode].start) -> if { entryFieldOperandSearch! => entryFirstFieldOperand! }
+                                    (entryFirstFieldOperand! < 0 or prepared.nodes[sourceRange.astStart + results![entryFieldOperandSearch!].astNode].start < prepared.nodes[sourceRange.astStart + results![entryFirstFieldOperand!].astNode].start) -> if { entryFieldOperandSearch! => entryFirstFieldOperand! }
                                 }
                                 entryFieldOperandSearch! + 1 => entryFieldOperandSearch!
                             }
@@ -1398,8 +1348,8 @@ public lowerPrepared request: move TypedIrRequest -> [TypedIrNode; ~] {
             memberBase.typeOrigin => memberCurrentOrigin!
             memberBase.typeModule => memberCurrentModule!
             memberBase.typeSymbol => memberCurrentSymbol!
-            sources[member!.sourceModule] -> ast.lower => memberNodes!
-            sources[member!.sourceModule] -> lexer.lex => memberTokens!
+            prepared.sources[member!.sourceModule] -> ast.lower => memberNodes!
+            prepared.sources[member!.sourceModule] -> lexer.lex => memberTokens!
             memberNodes![member!.astNode] => memberAst
             0 => memberIdentifierOrdinal!
             memberAst.firstToken => memberTokenIndex!
@@ -1407,9 +1357,9 @@ public lowerPrepared request: move TypedIrRequest -> [TypedIrNode; ~] {
                 memberTokens![memberTokenIndex!].kind == grammar.tokenIdIdentifier -> if {
                     memberIdentifierOrdinal! > 0 -> if {
                         memberCurrentModule! => memberOwnerSource!
-                        memberCurrentOrigin! == 2 -> if { moduleIdentities![memberCurrentModule!].sourceIndex => memberOwnerSource! }
-                        sources[memberOwnerSource!] -> symbols.collect => memberOwnerTable!
-                        sources[memberOwnerSource!] -> lexer.lex => memberOwnerTokens!
+                        memberCurrentOrigin! == 2 -> if { prepared.modules[memberCurrentModule!].sourceIndex => memberOwnerSource! }
+                        prepared.sources[memberOwnerSource!] -> symbols.collect => memberOwnerTable!
+                        prepared.sources[memberOwnerSource!] -> lexer.lex => memberOwnerTokens!
                         0 => memberFieldOrdinal!
                         0 => memberFieldIndex!
                         memberFieldIndex! < (memberOwnerTable! -> len) -> while {
@@ -1420,8 +1370,8 @@ public lowerPrepared request: move TypedIrRequest -> [TypedIrNode; ~] {
                                 memberName.span.length == memberFieldName.span.length => memberEqual!
                                 UIntSize(0) => memberNameByte!
                                 (memberEqual! and memberNameByte! < memberName.span.length) -> while {
-                                    sources[member!.sourceModule] -> byte(memberName.span.start + memberNameByte!) => memberByte
-                                    sources[memberOwnerSource!] -> byte(memberFieldName.span.start + memberNameByte!) => memberFieldByte
+                                    prepared.sources[member!.sourceModule] -> byte(memberName.span.start + memberNameByte!) => memberByte
+                                    prepared.sources[memberOwnerSource!] -> byte(memberFieldName.span.start + memberNameByte!) => memberFieldByte
                                     memberByte != memberFieldByte -> if { false => memberEqual! }
                                     memberNameByte! + UIntSize(1) => memberNameByte!
                                 }
@@ -1430,19 +1380,19 @@ public lowerPrepared request: move TypedIrRequest -> [TypedIrNode; ~] {
                                     memberOwnerSource! => member!.targetModule
                                     -1 => memberFieldTypeIndex!
                                     0 => memberFieldTypeSearch!
-                                    memberFieldTypeSearch! < (nominal! -> len) -> while {
-                                        (nominal![memberFieldTypeSearch!].sourceModule == memberOwnerSource! and nominal![memberFieldTypeSearch!].typeAst == memberField.typeNode) -> if { memberFieldTypeSearch! => memberFieldTypeIndex! }
+                                    memberFieldTypeSearch! < (prepared.nominal -> len) -> while {
+                                        (prepared.nominal[memberFieldTypeSearch!].sourceModule == memberOwnerSource! and prepared.nominal[memberFieldTypeSearch!].typeAst == memberField.typeNode) -> if { memberFieldTypeSearch! => memberFieldTypeIndex! }
                                         memberFieldTypeSearch! + 1 => memberFieldTypeSearch!
                                     }
                                     memberFieldTypeIndex! >= 0 -> if {
-                                        nominal![memberFieldTypeIndex!] => memberFieldType
+                                        prepared.nominal[memberFieldTypeIndex!] => memberFieldType
                                         memberFieldType.origin => memberCurrentOrigin!
                                         memberFieldType.targetModule => memberCurrentModule!
                                         memberFieldType.targetSymbol => memberCurrentSymbol!
                                     } else {
                                         0 => memberCompositeSearch!
-                                        memberCompositeSearch! < (composite! -> len) -> while {
-                                            composite![memberCompositeSearch!] => memberCompositeType
+                                        memberCompositeSearch! < (prepared.composite -> len) -> while {
+                                            prepared.composite[memberCompositeSearch!] => memberCompositeType
                                             (memberCompositeType.sourceModule == memberOwnerSource! and memberCompositeType.typeAst == memberField.typeNode) -> if {
                                                 10 + memberCompositeType.kind => memberCurrentOrigin!
                                                 memberCompositeType.kind == 5 -> if {
@@ -1523,47 +1473,60 @@ public lowerPrepared request: move TypedIrRequest -> [TypedIrNode; ~] {
     results!
 }
 
-public lower sources: [Text; ~] -> [TypedIrNode; ~] {
-    sources -> typeIds.resolve => semantic
-    [Text; ~] => preparedSources!
-    sources -> each preparedSource { preparedSources! -> push(preparedSource) }
-    [typeIds.SemanticType; ~] => preparedTypes!
-    semantic.types -> each preparedType { preparedTypes! -> push(preparedType) }
-    [typeIds.TypeReference; ~] => preparedReferences!
-    semantic.references -> each preparedReference { preparedReferences! -> push(preparedReference) }
-    [typeIds.NominalField; ~] => preparedFields!
-    semantic.fields -> each preparedField { preparedFields! -> push(preparedField) }
-    sources -> nominalTypes.resolve => nominal!
-    sources -> compositeTypes.resolve => composite!
-    sources -> modules.identities => moduleIdentities!
-    sources -> qualified.resolve => qualifiedResults!
-    [Text; ~] => callSources!
-    sources -> each callSource { callSources! -> push(callSource) }
-    [modules.ModuleIdentity; ~] => callModules!
-    moduleIdentities! -> each callModule { callModules! -> push(callModule) }
-    [qualified.QualifiedResolution; ~] => callQualified!
-    qualifiedResults! -> each callQualifiedResult { callQualified! -> push(callQualifiedResult) }
-    calls.ModuleCallRequest {
-        sources: callSources!
-        modules: callModules!
-        qualified: callQualified!
-    } => callRequest!
-    callRequest! -> calls.resolveModulesPrepared => resolvedCalls!
-    TypedIrRequest {
-        sources: preparedSources!
-        types: preparedTypes!
-        references: preparedReferences!
-        fields: preparedFields!
+public lowerPrepared request: move TypedIrRequest -> [TypedIrNode; ~] {
+    [Text; ~] => sources!
+    request.sources -> each source { sources! -> push(source) }
+    [typeIds.SemanticType; ~] => types!
+    request.types -> each semanticType { types! -> push(semanticType) }
+    [typeIds.TypeReference; ~] => references!
+    request.references -> each reference { references! -> push(reference) }
+    [typeIds.NominalField; ~] => fields!
+    request.fields -> each field { fields! -> push(field) }
+    [nominalTypes.NominalType; ~] => nominal!
+    request.nominal -> each nominalType { nominal! -> push(nominalType) }
+    [compositeTypes.CompositeType; ~] => composite!
+    request.composite -> each compositeType { composite! -> push(compositeType) }
+    [modules.ModuleIdentity; ~] => moduleIdentities!
+    request.modules -> each moduleIdentity { moduleIdentities! -> push(moduleIdentity) }
+    [qualified.QualifiedResolution; ~] => qualifiedResults!
+    request.qualified -> each qualifiedResult { qualifiedResults! -> push(qualifiedResult) }
+    [calls.ModuleCallResolution; ~] => moduleCalls!
+    request.calls -> each moduleCall { moduleCalls! -> push(moduleCall) }
+    [analysis.SourceAnalysisRange; ~] => ranges!
+    request.analysisRanges -> each sourceRange { ranges! -> push(sourceRange) }
+    [ast.AstNode; ~] => nodes!
+    request.analysisNodes -> each node { nodes! -> push(node) }
+    [syntax.SyntaxToken; ~] => tokens!
+    request.analysisTokens -> each token { tokens! -> push(token) }
+    [symbols.Symbol; ~] => symbolTable!
+    request.analysisSymbols -> each symbol { symbolTable! -> push(symbol) }
+    [resolution.ResolvedName; ~] => names!
+    request.analysisNames -> each name { names! -> push(name) }
+    semanticContext.CompilationContext {
+        sources: sources!
+        types: types!
+        references: references!
+        fields: fields!
         nominal: nominal!
         composite: composite!
         modules: moduleIdentities!
         qualified: qualifiedResults!
-        calls: resolvedCalls!
-    } => request!
-    request! -> lowerPrepared => result!
+        calls: moduleCalls!
+        ranges: ranges!
+        nodes: nodes!
+        tokens: tokens!
+        symbols: symbolTable!
+        names: names!
+    } => prepared!
+    prepared! -> lowerContext => result!
     result!
 }
 
+public lower sources: [Text; ~] -> [TypedIrNode; ~] {
+    sources -> semanticContext.prepare => prepared!
+    prepared! -> lowerContext => result!
+    result!
+}
 public movesFrom ir: [TypedIrNode; ~] -> [MoveEvent; ~] {
     [MoveEvent; ~] => events!
     0 => siteIndex!

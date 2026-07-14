@@ -2,6 +2,7 @@ namespace smalllang.compiler.semantic.calls
 
 import smalllang.compiler.ast as ast
 import smalllang.compiler.lexer as lexer
+import smalllang.compiler.semantic.analysis as analysis
 import smalllang.compiler.semantic.modules as modules
 import smalllang.compiler.semantic.qualified as qualified
 import smalllang.compiler.semantic.symbols as symbols
@@ -281,5 +282,170 @@ public resolveModules sources: [Text; ~] -> [ModuleCallResolution; ~] {
         qualified: qualifiedResults!
     } => request!
     request! -> resolveModulesPrepared => results!
+    results!
+}
+
+public resolveModulesAnalyzed package: analysis.PackageAnalysis -> [ModuleCallResolution; ~] {
+    package -> modules.identitiesAnalyzed => identities!
+    package -> qualified.resolveAnalyzed => qualifiedResults!
+    [ModuleCallResolution; ~] => results!
+    0 => sourceIndex!
+    sourceIndex! < (package.sources -> len) -> while {
+        package.sources[sourceIndex!] => source
+        package.ranges[sourceIndex!] => sourceRange
+        [CallResolution; ~] => localCalls!
+        0 => callAstIndex!
+        callAstIndex! < sourceRange.astCount -> while {
+            package.nodes[sourceRange.astStart + callAstIndex!] => callNode
+            false => moduleHasControlTarget!
+            false => moduleHasFlowCallTarget!
+            0 => moduleControlTargetSearch!
+            moduleControlTargetSearch! < sourceRange.astCount -> while {
+                (package.nodes[sourceRange.astStart + moduleControlTargetSearch!].parent == callAstIndex! and (package.nodes[sourceRange.astStart + moduleControlTargetSearch!].kind == 42 or package.nodes[sourceRange.astStart + moduleControlTargetSearch!].kind == 44)) -> if { true => moduleHasControlTarget! }
+                moduleControlTargetSearch! + 1 => moduleControlTargetSearch!
+            }
+            callNode.firstToken => moduleFlowTokenIndex!
+            (callNode.kind == 10 and moduleFlowTokenIndex! < callNode.firstToken + callNode.tokenCount) -> while {
+                package.tokens[sourceRange.tokenStart + moduleFlowTokenIndex!].kind == grammar.tokenIdArrow -> if { true => moduleHasFlowCallTarget! }
+                moduleFlowTokenIndex! + 1 => moduleFlowTokenIndex!
+            }
+            ((callNode.kind == 10 and moduleHasFlowCallTarget! and not moduleHasControlTarget!) or (callNode.kind == 11 and (callNode.cstRuleId == grammar.ruleIdCallExpression or callNode.cstRuleId == grammar.ruleIdTypeApplicationExpression)) or callNode.kind == 15 or callNode.kind == 48) -> if {
+                -1 => callNameToken!
+                callNode.kind == 48 -> if { callNode.payloadToken => callNameToken! }
+                callNode.firstToken => callTokenIndex!
+                false => moduleInFlowTypeArgument!
+                false => moduleInFlowCallArguments!
+                (callTokenIndex! < callNode.firstToken + callNode.tokenCount and callNode.kind != 48 and (callNode.kind == 10 or callNameToken! < 0)) -> while {
+                    package.tokens[sourceRange.tokenStart + callTokenIndex!].kind == grammar.tokenIdLess -> if { true => moduleInFlowTypeArgument! }
+                    package.tokens[sourceRange.tokenStart + callTokenIndex!].kind == grammar.tokenIdGreater -> if { false => moduleInFlowTypeArgument! }
+                    package.tokens[sourceRange.tokenStart + callTokenIndex!].kind == grammar.tokenIdLeftParen -> if { true => moduleInFlowCallArguments! }
+                    package.tokens[sourceRange.tokenStart + callTokenIndex!].kind == grammar.tokenIdRightParen -> if { false => moduleInFlowCallArguments! }
+                    (package.tokens[sourceRange.tokenStart + callTokenIndex!].kind == grammar.tokenIdIdentifier and not moduleInFlowTypeArgument! and not moduleInFlowCallArguments!) -> if { callTokenIndex! => callNameToken! }
+                    callTokenIndex! + 1 => callTokenIndex!
+                }
+                callNameToken! >= 0 -> if {
+                -1 => localFunctionSymbol!
+                0 => localSymbolIndex!
+                (localSymbolIndex! < sourceRange.symbolCount and localFunctionSymbol! < 0) -> while {
+                    package.symbols[sourceRange.symbolStart + localSymbolIndex!] => localCandidate
+                    (localCandidate.kind == 7 and localCandidate.parent < 0) -> if {
+                        package.tokens[sourceRange.tokenStart + callNameToken!] => callName
+                        package.tokens[sourceRange.tokenStart + localCandidate.nameToken] => functionName
+                        callName.span.length == functionName.span.length => localEqual!
+                        UIntSize(0) => localNameByte!
+                        (localEqual! and localNameByte! < callName.span.length) -> while {
+                            source -> byte(callName.span.start + localNameByte!) => callByte
+                            source -> byte(functionName.span.start + localNameByte!) => functionByte
+                            callByte != functionByte -> if { false => localEqual! }
+                            localNameByte! + UIntSize(1) => localNameByte!
+                        }
+                        (localEqual! and (callNode.kind == 10 or callNode.kind == 11 or callNode.kind == 48 or localCandidate.secondaryTypeNode < 0)) -> if { localSymbolIndex! => localFunctionSymbol! }
+                    }
+                    localSymbolIndex! + 1 => localSymbolIndex!
+                }
+                ((callNode.kind == 10 or callNode.kind == 11) and localFunctionSymbol! < 0) -> if {
+                    package.tokens[sourceRange.tokenStart + callNameToken!] => runtimeName
+                    runtimeName.span.length == UIntSize(5) -> if {
+                        source -> byte(runtimeName.span.start) => runtimeByte0
+                        source -> byte(runtimeName.span.start + UIntSize(1)) => runtimeByte1
+                        source -> byte(runtimeName.span.start + UIntSize(2)) => runtimeByte2
+                        source -> byte(runtimeName.span.start + UIntSize(3)) => runtimeByte3
+                        source -> byte(runtimeName.span.start + UIntSize(4)) => runtimeByte4
+                        (runtimeByte0 == UInt8(112) and runtimeByte1 == UInt8(114) and runtimeByte2 == UInt8(105) and runtimeByte3 == UInt8(110) and runtimeByte4 == UInt8(116)) -> if {
+                            -101 => localFunctionSymbol!
+                        }
+                    }
+                    runtimeName.span.length == UIntSize(7) -> if {
+                        source -> byte(runtimeName.span.start) => runtimeByte0
+                        source -> byte(runtimeName.span.start + UIntSize(1)) => runtimeByte1
+                        source -> byte(runtimeName.span.start + UIntSize(2)) => runtimeByte2
+                        source -> byte(runtimeName.span.start + UIntSize(3)) => runtimeByte3
+                        source -> byte(runtimeName.span.start + UIntSize(4)) => runtimeByte4
+                        source -> byte(runtimeName.span.start + UIntSize(5)) => runtimeByte5
+                        source -> byte(runtimeName.span.start + UIntSize(6)) => runtimeByte6
+                        (runtimeByte0 == UInt8(112) and runtimeByte1 == UInt8(114) and runtimeByte2 == UInt8(105) and runtimeByte3 == UInt8(110) and runtimeByte4 == UInt8(116) and runtimeByte5 == UInt8(108) and runtimeByte6 == UInt8(110)) -> if {
+                            -102 => localFunctionSymbol!
+                        }
+                    }
+                }
+                (callNode.kind == 11 or callNode.kind == 48 or localFunctionSymbol! != -1) -> if {
+                    localCalls! -> push(CallResolution {
+                        callAst: callAstIndex!
+                        functionSymbol: localFunctionSymbol!
+                        status: localFunctionSymbol! != -1 -> if { 0 } else { 2 }
+                    })
+                }
+                }
+            }
+            callAstIndex! + 1 => callAstIndex!
+        }
+        0 => localIndex!
+        localIndex! < (localCalls! -> len) -> while {
+            localCalls![localIndex!] => local
+            package.nodes[sourceRange.astStart + local.callAst] => localCallNode
+            localCallNode.firstToken + localCallNode.tokenCount => callLeftParenToken!
+            localCallNode.firstToken => callScanToken!
+            callScanToken! < localCallNode.firstToken + localCallNode.tokenCount -> while {
+                package.tokens[sourceRange.tokenStart + callScanToken!].kind == grammar.tokenIdLeftParen -> if {
+                    callScanToken! => callLeftParenToken!
+                    localCallNode.firstToken + localCallNode.tokenCount => callScanToken!
+                } else {
+                    callScanToken! + 1 => callScanToken!
+                }
+            }
+            -1 => importedIndex!
+            0 => qualifiedIndex!
+            qualifiedIndex! < (qualifiedResults! -> len) -> while {
+                qualifiedResults![qualifiedIndex!] => candidate
+                candidate.sourceModule == sourceIndex! -> if {
+                    candidate.pathAst => ancestor!
+                    0 => callPathDistance!
+                    false => belongsToCall!
+                    (ancestor! >= 0 and not belongsToCall!) -> while {
+                        ancestor! == local.callAst -> if {
+                            true => belongsToCall!
+                        } else {
+                            package.nodes[sourceRange.astStart + ancestor!].parent => ancestor!
+                            callPathDistance! + 1 => callPathDistance!
+                        }
+                    }
+                    package.nodes[sourceRange.astStart + candidate.pathAst] => candidatePath
+                    (belongsToCall! and candidatePath.firstToken + candidatePath.tokenCount <= callLeftParenToken!) -> if { qualifiedIndex! => importedIndex! }
+                }
+                qualifiedIndex! + 1 => qualifiedIndex!
+            }
+            importedIndex! >= 0 -> if {
+                qualifiedResults![importedIndex!] => imported
+                identities![imported.targetModule].sourceIndex => targetSourceModule
+                imported.status => importedStatus!
+                imported.status == 0 -> if {
+                    package.ranges[targetSourceModule] => targetRange
+                    package.symbols[targetRange.symbolStart + imported.targetSymbol].kind != 7 -> if { 2 => importedStatus! }
+                }
+                results! -> push(ModuleCallResolution {
+                    sourceModule: sourceIndex!
+                    callAst: local.callAst
+                    origin: 1
+                    targetModule: imported.targetModule
+                    targetSourceModule: targetSourceModule
+                    functionSymbol: imported.targetSymbol
+                    status: importedStatus!
+                })
+            } else {
+                local.functionSymbol < -1 => runtimeCall
+                results! -> push(ModuleCallResolution {
+                    sourceModule: sourceIndex!
+                    callAst: local.callAst
+                    origin: runtimeCall -> if { 2 } else { 0 }
+                    targetModule: sourceIndex!
+                    targetSourceModule: runtimeCall -> if { -1 } else { sourceIndex! }
+                    functionSymbol: local.functionSymbol
+                    status: local.status
+                })
+            }
+            localIndex! + 1 => localIndex!
+        }
+        sourceIndex! + 1 => sourceIndex!
+    }
     results!
 }

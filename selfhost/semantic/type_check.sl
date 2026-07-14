@@ -2,12 +2,9 @@ namespace smalllang.compiler.semantic.type_check
 
 import smalllang.compiler.ast as ast
 import smalllang.compiler.lexer as lexer
-import smalllang.compiler.semantic.calls as calls
-import smalllang.compiler.semantic.composite_types as compositeTypes
+import smalllang.compiler.semantic.context as semanticContext
 import smalllang.compiler.semantic.expression_types as expressionTypes
 import smalllang.compiler.semantic.expression_type_ids as expressionTypeIds
-import smalllang.compiler.semantic.modules as modules
-import smalllang.compiler.semantic.nominal_types as nominalTypes
 import smalllang.compiler.semantic.symbols as symbols
 import smalllang.compiler.syntax as syntax
 import syntax.generated.smalllang as grammar
@@ -39,22 +36,17 @@ public struct TypeCheckDiagnostic {
 # and code 17 identifies role syntax targeting a function without a block
 # input contract.
 public analyze sources: [Text; ~] -> [TypeCheckDiagnostic; ~] {
-    sources -> nominalTypes.resolve => nominal!
-    sources -> compositeTypes.resolve => composite!
-    sources -> expressionTypes.infer => expressionTypeTable!
-    sources -> expressionTypeIds.resolve => recursiveTypes
-    sources -> calls.resolveModules => moduleCalls!
-    sources -> modules.identities => moduleIdentities!
+    sources -> semanticContext.prepare => prepared
+    prepared -> expressionTypes.inferContext => expressionTypeTable!
+    prepared -> expressionTypeIds.resolveContext => recursiveTypes
     [TypeCheckDiagnostic; ~] => diagnostics!
     0 => sourceIndex!
     sourceIndex! < (sources -> len) -> while {
         sources[sourceIndex!] => source
-        source -> ast.lower => nodes!
-        source -> lexer.lex => tokens!
-        nodes! -> symbols.collectPrepared => table!
+        prepared.ranges[sourceIndex!] => sourceRange
         0 => symbolIndex!
-        symbolIndex! < (table! -> len) -> while {
-            table![symbolIndex!] => function
+        symbolIndex! < sourceRange.symbolCount -> while {
+            prepared.symbols[sourceRange.symbolStart + symbolIndex!] => function
             function.kind == 7 -> if {
                 function.secondaryTypeNode >= 0 -> if {
                     function.secondaryTypeNode
@@ -64,16 +56,16 @@ public analyze sources: [Text; ~] -> [TypeCheckDiagnostic; ~] {
                 -1 => expectedIndex!
                 -1 => expectedCompositeIndex!
                 0 => nominalIndex!
-                nominalIndex! < (nominal! -> len) -> while {
-                    nominal![nominalIndex!] => candidateType
+                nominalIndex! < (prepared.nominal -> len) -> while {
+                    prepared.nominal[nominalIndex!] => candidateType
                     (candidateType.sourceModule == sourceIndex! and candidateType.typeAst == returnTypeAst) -> if {
                         nominalIndex! => expectedIndex!
                     }
                     nominalIndex! + 1 => nominalIndex!
                 }
                 0 => expectedCompositeSearch!
-                expectedCompositeSearch! < (composite! -> len) -> while {
-                    composite![expectedCompositeSearch!] => candidateComposite
+                expectedCompositeSearch! < (prepared.composite -> len) -> while {
+                    prepared.composite[expectedCompositeSearch!] => candidateComposite
                     (candidateComposite.sourceModule == sourceIndex! and candidateComposite.typeAst == returnTypeAst) -> if {
                         expectedCompositeSearch! => expectedCompositeIndex!
                     }
@@ -86,18 +78,18 @@ public analyze sources: [Text; ~] -> [TypeCheckDiagnostic; ~] {
                 expressionTypeIndex! < (expressionTypeTable! -> len) -> while {
                     expressionTypeTable![expressionTypeIndex!] => candidateType
                     candidateType.sourceModule == sourceIndex! -> if {
-                        nodes![candidateType.astNode].parent => ancestor!
+                        prepared.nodes[sourceRange.astStart + candidateType.astNode].parent => ancestor!
                         1 => distance!
                         false => belongsToFunction!
                         (ancestor! >= 0 and not belongsToFunction!) -> while {
                             ancestor! == function.astNode -> if {
                                 true => belongsToFunction!
                             } else {
-                                nodes![ancestor!].parent => ancestor!
+                                prepared.nodes[sourceRange.astStart + ancestor!].parent => ancestor!
                                 distance! + 1 => distance!
                             }
                         }
-                        (belongsToFunction! and (distance! < returnDistance! or (distance! == returnDistance! and (returnExpressionAst! < 0 or nodes![candidateType.astNode].start > nodes![returnExpressionAst!].start)))) -> if {
+                        (belongsToFunction! and (distance! < returnDistance! or (distance! == returnDistance! and (returnExpressionAst! < 0 or prepared.nodes[sourceRange.astStart + candidateType.astNode].start > prepared.nodes[sourceRange.astStart + returnExpressionAst!].start)))) -> if {
                             candidateType.astNode => returnExpressionAst!
                             expressionTypeIndex! => returnExpressionType!
                             distance! => returnDistance!
@@ -106,22 +98,22 @@ public analyze sources: [Text; ~] -> [TypeCheckDiagnostic; ~] {
                     expressionTypeIndex! + 1 => expressionTypeIndex!
                 }
                 returnExpressionType! >= 0 -> if {
-                    nodes![returnExpressionAst!].parent => outerExpression!
+                    prepared.nodes[sourceRange.astStart + returnExpressionAst!].parent => outerExpression!
                     false => blockedByUntypedOuter!
                     (outerExpression! >= 0 and outerExpression! != function.astNode and not blockedByUntypedOuter!) -> while {
-                        nodes![outerExpression!] => outerNode
+                        prepared.nodes[sourceRange.astStart + outerExpression!] => outerNode
                         ((outerNode.kind >= 18 and outerNode.kind <= 25) or outerNode.kind == 11 or outerNode.kind == 36 or outerNode.kind == 37 or outerNode.kind == 38 or outerNode.kind == 39 or outerNode.kind == 41) -> if {
                             false => outerInferred!
                             0 => outerTypeSearch!
                             outerTypeSearch! < (expressionTypeTable! -> len) -> while {
                                 expressionTypeTable![outerTypeSearch!] => outerType
                                 (outerType.sourceModule == sourceIndex! and outerType.astNode == outerExpression!) -> if { true => outerInferred! }
-                                (outerType.sourceModule == sourceIndex! and nodes![outerType.astNode].start == outerNode.start and nodes![outerType.astNode].length == outerNode.length) -> if { true => outerInferred! }
+                                (outerType.sourceModule == sourceIndex! and prepared.nodes[sourceRange.astStart + outerType.astNode].start == outerNode.start and prepared.nodes[sourceRange.astStart + outerType.astNode].length == outerNode.length) -> if { true => outerInferred! }
                                 outerTypeSearch! + 1 => outerTypeSearch!
                             }
                             not outerInferred! -> if { true => blockedByUntypedOuter! }
                         }
-                        nodes![outerExpression!].parent => outerExpression!
+                        prepared.nodes[sourceRange.astStart + outerExpression!].parent => outerExpression!
                     }
                     blockedByUntypedOuter! -> if {
                         -1 => returnExpressionType!
@@ -143,16 +135,16 @@ public analyze sources: [Text; ~] -> [TypeCheckDiagnostic; ~] {
                 recursiveReturnSearch! < (recursiveTypes.expressions -> len) -> while {
                     recursiveTypes.expressions[recursiveReturnSearch!] => candidate
                     candidate.sourceModule == sourceIndex! -> if {
-                        nodes![candidate.astNode].parent => ancestor!
+                        prepared.nodes[sourceRange.astStart + candidate.astNode].parent => ancestor!
                         1 => distance!
                         false => belongsToFunction!
                         (ancestor! >= 0 and not belongsToFunction!) -> while {
                             ancestor! == function.astNode -> if { true => belongsToFunction! } else {
-                                nodes![ancestor!].parent => ancestor!
+                                prepared.nodes[sourceRange.astStart + ancestor!].parent => ancestor!
                                 distance! + 1 => distance!
                             }
                         }
-                        (belongsToFunction! and (distance! < recursiveReturnDistance! or (distance! == recursiveReturnDistance! and (recursiveReturnExpression! < 0 or nodes![candidate.astNode].start > nodes![recursiveTypes.expressions[recursiveReturnExpression!].astNode].start)))) -> if {
+                        (belongsToFunction! and (distance! < recursiveReturnDistance! or (distance! == recursiveReturnDistance! and (recursiveReturnExpression! < 0 or prepared.nodes[sourceRange.astStart + candidate.astNode].start > prepared.nodes[sourceRange.astStart + recursiveTypes.expressions[recursiveReturnExpression!].astNode].start)))) -> if {
                             recursiveReturnSearch! => recursiveReturnExpression!
                             distance! => recursiveReturnDistance!
                         }
@@ -166,8 +158,8 @@ public analyze sources: [Text; ~] -> [TypeCheckDiagnostic; ~] {
                     recursiveTypes.expressions[recursiveReturnExpression!] => actualReference
                     recursiveTypes.types[expectedReference.typeId] => expectedType
                     recursiveTypes.types[actualReference.typeId] => actualType
-                    nodes![actualReference.astNode].parent == function.astNode => directRecursiveReturn
-                    (nodes![actualReference.astNode].kind == 11 or nodes![actualReference.astNode].kind == 48) => recursiveCallReturn
+                    prepared.nodes[sourceRange.astStart + actualReference.astNode].parent == function.astNode => directRecursiveReturn
+                    (prepared.nodes[sourceRange.astStart + actualReference.astNode].kind == 11 or prepared.nodes[sourceRange.astStart + actualReference.astNode].kind == 48) => recursiveCallReturn
                     ((directRecursiveReturn or recursiveCallReturn) and expectedReference.status == 0 and actualReference.status == 0 and not expectedType.containsParameter and not actualType.containsParameter) -> if {
                         true => recursiveReturnChecked!
                         expectedReference.typeId != actualReference.typeId -> if {
@@ -181,8 +173,8 @@ public analyze sources: [Text; ~] -> [TypeCheckDiagnostic; ~] {
                     }
                 }
                 ((not recursiveReturnChecked! or recursiveReturnMismatch!) and expectedIndex! >= 0 and returnExpressionType! >= 0) -> if {
-                    nominal![expectedIndex!] => expected
-                    nodes![returnExpressionAst!] => returnExpression
+                    prepared.nominal[expectedIndex!] => expected
+                    prepared.nodes[sourceRange.astStart + returnExpressionAst!] => returnExpression
                     expressionTypeTable![returnExpressionType!] => actualType
                     (expected.origin != actualType.origin or expected.targetModule != actualType.targetModule or expected.targetSymbol != actualType.targetSymbol) -> if {
                         TypeCheckDiagnostic {
@@ -206,7 +198,7 @@ public analyze sources: [Text; ~] -> [TypeCheckDiagnostic; ~] {
                     }
                 }
                 ((not recursiveReturnChecked! or recursiveReturnMismatch!) and expectedCompositeIndex! >= 0 and returnExpressionType! >= 0) -> if {
-                    composite![expectedCompositeIndex!] => expectedComposite
+                    prepared.composite[expectedCompositeIndex!] => expectedComposite
                     expressionTypeTable![returnExpressionType!] => actualType
                     10 + expectedComposite.kind => expectedShape
                     true => compositeReturnMatches!
@@ -220,7 +212,7 @@ public analyze sources: [Text; ~] -> [TypeCheckDiagnostic; ~] {
                         }
                     }
                     not compositeReturnMatches! -> if {
-                        nodes![returnExpressionAst!] => returnExpression
+                        prepared.nodes[sourceRange.astStart + returnExpressionAst!] => returnExpression
                         diagnostics! -> push(TypeCheckDiagnostic {
                             code: 5
                             sourceModule: sourceIndex!
@@ -251,7 +243,7 @@ public analyze sources: [Text; ~] -> [TypeCheckDiagnostic; ~] {
                         recursiveTypes.expressions[recursiveReturnExpression!] => actualReference
                         recursiveTypes.types[expectedReference.typeId] => expectedType
                         recursiveTypes.types[actualReference.typeId] => actualType
-                        nodes![actualReference.astNode] => returnExpression
+                        prepared.nodes[sourceRange.astStart + actualReference.astNode] => returnExpression
                         diagnostics! -> push(TypeCheckDiagnostic {
                             code: 5
                             sourceModule: sourceIndex!
@@ -272,12 +264,12 @@ public analyze sources: [Text; ~] -> [TypeCheckDiagnostic; ~] {
         }
 
         0 => callIndex!
-        callIndex! < (moduleCalls! -> len) -> while {
-            moduleCalls![callIndex!] => call
+        callIndex! < (prepared.calls -> len) -> while {
+            prepared.calls[callIndex!] => call
             (call.sourceModule == sourceIndex! and call.status == 0 and call.targetSourceModule >= 0) -> if {
                 sources[call.targetSourceModule] -> symbols.collect => targetTable!
                 targetTable![call.functionSymbol] => targetFunction
-                nodes![call.callAst] => callNode
+                prepared.nodes[sourceRange.astStart + call.callAst] => callNode
                 false => invalidRoleTarget!
                 (callNode.kind == 48 and targetFunction.blockTypeNode < 0) -> if {
                     true => invalidRoleTarget!
@@ -300,10 +292,10 @@ public analyze sources: [Text; ~] -> [TypeCheckDiagnostic; ~] {
                 false => hasArgument!
                 callNode.firstToken => callTokenIndex!
                 callTokenIndex! < callNode.firstToken + callNode.tokenCount -> while {
-                    tokens![callTokenIndex!].kind == grammar.tokenIdLeftParen -> if {
+                    prepared.tokens[sourceRange.tokenStart + callTokenIndex!].kind == grammar.tokenIdLeftParen -> if {
                         true => afterLeftParen!
                     } else {
-                        (afterLeftParen! and tokens![callTokenIndex!].kind != grammar.tokenIdRightParen and tokens![callTokenIndex!].kind != grammar.triviaIdWhitespace and tokens![callTokenIndex!].kind != grammar.triviaIdComment) -> if {
+                        (afterLeftParen! and prepared.tokens[sourceRange.tokenStart + callTokenIndex!].kind != grammar.tokenIdRightParen and prepared.tokens[sourceRange.tokenStart + callTokenIndex!].kind != grammar.triviaIdWhitespace and prepared.tokens[sourceRange.tokenStart + callTokenIndex!].kind != grammar.triviaIdComment) -> if {
                             true => hasArgument!
                         }
                     }
@@ -314,16 +306,16 @@ public analyze sources: [Text; ~] -> [TypeCheckDiagnostic; ~] {
                     -1 => expectedInputIndex!
                     -1 => expectedInputCompositeIndex!
                     0 => inputSearch!
-                    inputSearch! < (nominal! -> len) -> while {
-                        nominal![inputSearch!] => inputType
+                    inputSearch! < (prepared.nominal -> len) -> while {
+                        prepared.nominal[inputSearch!] => inputType
                         (inputType.sourceModule == call.targetSourceModule and inputType.typeAst == targetFunction.typeNode) -> if {
                             inputSearch! => expectedInputIndex!
                         }
                         inputSearch! + 1 => inputSearch!
                     }
                     0 => inputCompositeSearch!
-                    inputCompositeSearch! < (composite! -> len) -> while {
-                        composite![inputCompositeSearch!] => inputCompositeCandidate
+                    inputCompositeSearch! < (prepared.composite -> len) -> while {
+                        prepared.composite[inputCompositeSearch!] => inputCompositeCandidate
                         (inputCompositeCandidate.sourceModule == call.targetSourceModule and inputCompositeCandidate.typeAst == targetFunction.typeNode) -> if {
                             inputCompositeSearch! => expectedInputCompositeIndex!
                         }
@@ -337,19 +329,19 @@ public analyze sources: [Text; ~] -> [TypeCheckDiagnostic; ~] {
                         argumentType.sourceModule == sourceIndex! -> if {
                             true => beforeRoleTarget!
                             callNode.kind == 48 -> if {
-                                nodes![argumentType.astNode] => argumentNode
-                                argumentNode.start + argumentNode.length > tokens![callNode.payloadToken].span.start -> if {
+                                prepared.nodes[sourceRange.astStart + argumentType.astNode] => argumentNode
+                                argumentNode.start + argumentNode.length > prepared.tokens[sourceRange.tokenStart + callNode.payloadToken].span.start -> if {
                                     false => beforeRoleTarget!
                                 }
                             }
-                            nodes![argumentType.astNode].parent => argumentAncestor!
+                            prepared.nodes[sourceRange.astStart + argumentType.astNode].parent => argumentAncestor!
                             1 => distance!
                             false => belongsToCall!
                             (argumentAncestor! >= 0 and not belongsToCall!) -> while {
                                 argumentAncestor! == call.callAst -> if {
                                     true => belongsToCall!
                                 } else {
-                                    nodes![argumentAncestor!].parent => argumentAncestor!
+                                    prepared.nodes[sourceRange.astStart + argumentAncestor!].parent => argumentAncestor!
                                     distance! + 1 => distance!
                                 }
                             }
@@ -377,15 +369,15 @@ public analyze sources: [Text; ~] -> [TypeCheckDiagnostic; ~] {
                         candidate.sourceModule == sourceIndex! -> if {
                             true => beforeRoleTarget!
                             callNode.kind == 48 -> if {
-                                nodes![candidate.astNode] => argumentNode
-                                argumentNode.start + argumentNode.length > tokens![callNode.payloadToken].span.start -> if { false => beforeRoleTarget! }
+                                prepared.nodes[sourceRange.astStart + candidate.astNode] => argumentNode
+                                argumentNode.start + argumentNode.length > prepared.tokens[sourceRange.tokenStart + callNode.payloadToken].span.start -> if { false => beforeRoleTarget! }
                             }
-                            nodes![candidate.astNode].parent => argumentAncestor!
+                            prepared.nodes[sourceRange.astStart + candidate.astNode].parent => argumentAncestor!
                             1 => distance!
                             false => belongsToCall!
                             (argumentAncestor! >= 0 and not belongsToCall!) -> while {
                                 argumentAncestor! == call.callAst -> if { true => belongsToCall! } else {
-                                    nodes![argumentAncestor!].parent => argumentAncestor!
+                                    prepared.nodes[sourceRange.astStart + argumentAncestor!].parent => argumentAncestor!
                                     distance! + 1 => distance!
                                 }
                             }
@@ -403,7 +395,7 @@ public analyze sources: [Text; ~] -> [TypeCheckDiagnostic; ~] {
                         recursiveTypes.expressions[recursiveArgumentExpression!] => actualReference
                         recursiveTypes.types[expectedReference.typeId] => expectedType
                         recursiveTypes.types[actualReference.typeId] => actualType
-                        nodes![actualReference.astNode].parent == call.callAst => directRecursiveArgument
+                        prepared.nodes[sourceRange.astStart + actualReference.astNode].parent == call.callAst => directRecursiveArgument
                         (actualArgumentIndex! >= 0 and expressionTypeTable![actualArgumentIndex!].astNode == actualReference.astNode) => sameRecursiveArgumentSurface
                         ((directRecursiveArgument or sameRecursiveArgumentSurface) and expectedReference.status == 0 and actualReference.status == 0 and not expectedType.containsParameter and not actualType.containsParameter) -> if {
                             true => recursiveArgumentChecked!
@@ -447,10 +439,10 @@ public analyze sources: [Text; ~] -> [TypeCheckDiagnostic; ~] {
                         }
                     }
                     ((not recursiveArgumentChecked! or recursiveArgumentMismatch!) and expectedInputIndex! >= 0 and actualArgumentIndex! >= 0) -> if {
-                        nominal![expectedInputIndex!] => expected
+                        prepared.nominal[expectedInputIndex!] => expected
                         expressionTypeTable![actualArgumentIndex!] => actual
                         (expected.origin != 3 and (expected.origin != actual.origin or expected.targetModule != actual.targetModule or expected.targetSymbol != actual.targetSymbol)) -> if {
-                            nodes![actual.astNode] => argumentExpression
+                            prepared.nodes[sourceRange.astStart + actual.astNode] => argumentExpression
                             diagnostics! -> push(TypeCheckDiagnostic {
                                 code: 6
                                 sourceModule: sourceIndex!
@@ -471,7 +463,7 @@ public analyze sources: [Text; ~] -> [TypeCheckDiagnostic; ~] {
                         }
                     }
                     ((not recursiveArgumentChecked! or recursiveArgumentMismatch!) and expectedInputCompositeIndex! >= 0 and actualArgumentIndex! >= 0) -> if {
-                        composite![expectedInputCompositeIndex!] => expectedComposite
+                        prepared.composite[expectedInputCompositeIndex!] => expectedComposite
                         expressionTypeTable![actualArgumentIndex!] => actual
                         10 + expectedComposite.kind => expectedShape
                         false => compositeMatches!
@@ -489,7 +481,7 @@ public analyze sources: [Text; ~] -> [TypeCheckDiagnostic; ~] {
                             }
                         }
                         not compositeMatches! -> if {
-                            nodes![actual.astNode] => argumentExpression
+                            prepared.nodes[sourceRange.astStart + actual.astNode] => argumentExpression
                             diagnostics! -> push(TypeCheckDiagnostic {
                                 code: 6
                                 sourceModule: sourceIndex!
@@ -520,7 +512,7 @@ public analyze sources: [Text; ~] -> [TypeCheckDiagnostic; ~] {
                             recursiveTypes.expressions[recursiveArgumentExpression!] => actualReference
                             recursiveTypes.types[expectedReference.typeId] => expectedType
                             recursiveTypes.types[actualReference.typeId] => actualType
-                            nodes![actualReference.astNode] => argumentExpression
+                            prepared.nodes[sourceRange.astStart + actualReference.astNode] => argumentExpression
                             diagnostics! -> push(TypeCheckDiagnostic {
                                 code: 6
                                 sourceModule: sourceIndex!
@@ -571,7 +563,7 @@ public analyze sources: [Text; ~] -> [TypeCheckDiagnostic; ~] {
                 }
             } else {
                 (call.sourceModule == sourceIndex! and call.targetSourceModule >= 0) -> if {
-                nodes![call.callAst] => unresolvedCall
+                prepared.nodes[sourceRange.astStart + call.callAst] => unresolvedCall
                 diagnostics! -> push(TypeCheckDiagnostic {
                     code: call.status == 3 -> if { 9 } else { 7 }
                     sourceModule: sourceIndex!
@@ -595,12 +587,12 @@ public analyze sources: [Text; ~] -> [TypeCheckDiagnostic; ~] {
         }
 
         0 => initializerIndex!
-        initializerIndex! < (nodes! -> len) -> while {
-            nodes![initializerIndex!] => initializer
+        initializerIndex! < sourceRange.astCount -> while {
+            prepared.nodes[sourceRange.astStart + initializerIndex!] => initializer
             initializer.kind == 40 -> if {
                 initializer.parent => literalAst!
-                (literalAst! >= 0 and nodes![literalAst!].kind != 39) -> while {
-                    nodes![literalAst!].parent => literalAst!
+                (literalAst! >= 0 and prepared.nodes[sourceRange.astStart + literalAst!].kind != 39) -> while {
+                    prepared.nodes[sourceRange.astStart + literalAst!].parent => literalAst!
                 }
                 -1 => literalTypeIndex!
                 0 => literalTypeSearch!
@@ -615,7 +607,7 @@ public analyze sources: [Text; ~] -> [TypeCheckDiagnostic; ~] {
                     expressionTypeTable![literalTypeIndex!] => literalType
                     sourceIndex! => targetSourceModule!
                     literalType.origin == 2 -> if {
-                        moduleIdentities![literalType.targetModule].sourceIndex => targetSourceModule!
+                        prepared.modules[literalType.targetModule].sourceIndex => targetSourceModule!
                     }
                     sources[targetSourceModule!] -> symbols.collect => targetTable!
                     sources[targetSourceModule!] -> lexer.lex => targetTokens!
@@ -624,7 +616,7 @@ public analyze sources: [Text; ~] -> [TypeCheckDiagnostic; ~] {
                     (fieldSearch! < (targetTable! -> len) and fieldSymbol! < 0) -> while {
                         targetTable![fieldSearch!] => fieldCandidate
                         (fieldCandidate.kind == 26 and fieldCandidate.parent == literalType.targetSymbol) -> if {
-                            tokens![initializer.payloadToken] => initializerName
+                            prepared.tokens[sourceRange.tokenStart + initializer.payloadToken] => initializerName
                             targetTokens![fieldCandidate.nameToken] => fieldName
                             initializerName.span.length == fieldName.span.length => equal!
                             UIntSize(0) => fieldByte!
@@ -639,7 +631,7 @@ public analyze sources: [Text; ~] -> [TypeCheckDiagnostic; ~] {
                         fieldSearch! + 1 => fieldSearch!
                     }
                     fieldSymbol! < 0 -> if {
-                        tokens![initializer.payloadToken] => unknownField
+                        prepared.tokens[sourceRange.tokenStart + initializer.payloadToken] => unknownField
                         diagnostics! -> push(TypeCheckDiagnostic {
                             code: 11
                             sourceModule: sourceIndex!
@@ -660,12 +652,12 @@ public analyze sources: [Text; ~] -> [TypeCheckDiagnostic; ~] {
                         valueTypeSearch! < (expressionTypeTable! -> len) -> while {
                             expressionTypeTable![valueTypeSearch!] => valueType
                             valueType.sourceModule == sourceIndex! -> if {
-                                nodes![valueType.astNode].parent => valueAncestor!
+                                prepared.nodes[sourceRange.astStart + valueType.astNode].parent => valueAncestor!
                                 1 => distance!
                                 false => belongsToInitializer!
                                 (valueAncestor! >= 0 and not belongsToInitializer!) -> while {
                                     valueAncestor! == initializerIndex! -> if { true => belongsToInitializer! } else {
-                                        nodes![valueAncestor!].parent => valueAncestor!
+                                        prepared.nodes[sourceRange.astStart + valueAncestor!].parent => valueAncestor!
                                         distance! + 1 => distance!
                                     }
                                 }
@@ -680,16 +672,16 @@ public analyze sources: [Text; ~] -> [TypeCheckDiagnostic; ~] {
                             targetTable![fieldSymbol!] => field
                             -1 => fieldNominalIndex!
                             0 => fieldTypeSearch!
-                            fieldTypeSearch! < (nominal! -> len) -> while {
-                                nominal![fieldTypeSearch!] => fieldTypeCandidate
+                            fieldTypeSearch! < (prepared.nominal -> len) -> while {
+                                prepared.nominal[fieldTypeSearch!] => fieldTypeCandidate
                                 (fieldTypeCandidate.sourceModule == targetSourceModule! and fieldTypeCandidate.typeAst == field.typeNode) -> if { fieldTypeSearch! => fieldNominalIndex! }
                                 fieldTypeSearch! + 1 => fieldTypeSearch!
                             }
                             fieldNominalIndex! >= 0 -> if {
-                                nominal![fieldNominalIndex!] => expectedFieldType
+                                prepared.nominal[fieldNominalIndex!] => expectedFieldType
                                 expressionTypeTable![initializerValueType!] => actualFieldType
                                 (expectedFieldType.origin != actualFieldType.origin or expectedFieldType.targetModule != actualFieldType.targetModule or expectedFieldType.targetSymbol != actualFieldType.targetSymbol) -> if {
-                                    nodes![actualFieldType.astNode] => fieldValue
+                                    prepared.nodes[sourceRange.astStart + actualFieldType.astNode] => fieldValue
                                     diagnostics! -> push(TypeCheckDiagnostic {
                                         code: 12
                                         sourceModule: sourceIndex!
@@ -715,10 +707,10 @@ public analyze sources: [Text; ~] -> [TypeCheckDiagnostic; ~] {
         0 => literalCoverageIndex!
         literalCoverageIndex! < (expressionTypeTable! -> len) -> while {
             expressionTypeTable![literalCoverageIndex!] => literalType
-            (literalType.sourceModule == sourceIndex! and nodes![literalType.astNode].kind == 39) -> if {
-                nodes![literalType.astNode] => literal
+            (literalType.sourceModule == sourceIndex! and prepared.nodes[sourceRange.astStart + literalType.astNode].kind == 39) -> if {
+                prepared.nodes[sourceRange.astStart + literalType.astNode] => literal
                 sourceIndex! => targetSourceModule!
-                literalType.origin == 2 -> if { moduleIdentities![literalType.targetModule].sourceIndex => targetSourceModule! }
+                literalType.origin == 2 -> if { prepared.modules[literalType.targetModule].sourceIndex => targetSourceModule! }
                 sources[targetSourceModule!] -> symbols.collect => targetTable!
                 sources[targetSourceModule!] -> lexer.lex => targetTokens!
                 0 => fieldCoverageIndex!
@@ -727,15 +719,15 @@ public analyze sources: [Text; ~] -> [TypeCheckDiagnostic; ~] {
                     (field.kind == 26 and field.parent == literalType.targetSymbol) -> if {
                         false => fieldInitialized!
                         0 => initializerSearch!
-                        initializerSearch! < (nodes! -> len) -> while {
-                            nodes![initializerSearch!] => candidateInitializer
+                        initializerSearch! < sourceRange.astCount -> while {
+                            prepared.nodes[sourceRange.astStart + initializerSearch!] => candidateInitializer
                             candidateInitializer.kind == 40 -> if {
                                 candidateInitializer.parent => candidateLiteral!
-                                (candidateLiteral! >= 0 and nodes![candidateLiteral!].kind != 39) -> while {
-                                    nodes![candidateLiteral!].parent => candidateLiteral!
+                                (candidateLiteral! >= 0 and prepared.nodes[sourceRange.astStart + candidateLiteral!].kind != 39) -> while {
+                                    prepared.nodes[sourceRange.astStart + candidateLiteral!].parent => candidateLiteral!
                                 }
                                 candidateLiteral! == literalType.astNode -> if {
-                                    tokens![candidateInitializer.payloadToken] => initializerName
+                                    prepared.tokens[sourceRange.tokenStart + candidateInitializer.payloadToken] => initializerName
                                     targetTokens![field.nameToken] => fieldName
                                     initializerName.span.length == fieldName.span.length => equal!
                                     UIntSize(0) => fieldByte!
@@ -773,20 +765,20 @@ public analyze sources: [Text; ~] -> [TypeCheckDiagnostic; ~] {
         }
 
         0 => memberDiagnosticIndex!
-        memberDiagnosticIndex! < (nodes! -> len) -> while {
-            nodes![memberDiagnosticIndex!] => member
+        memberDiagnosticIndex! < sourceRange.astCount -> while {
+            prepared.nodes[sourceRange.astStart + memberDiagnosticIndex!] => member
             member.kind == 36 -> if {
                 false => resolvedCallMember!
                 0 => memberCallSearch!
-                memberCallSearch! < (moduleCalls! -> len) -> while {
-                    moduleCalls![memberCallSearch!] => memberCall
+                memberCallSearch! < (prepared.calls -> len) -> while {
+                    prepared.calls[memberCallSearch!] => memberCall
                     (memberCall.sourceModule == sourceIndex! and memberCall.status == 0) -> if {
                         memberCall.callAst => callAncestor!
                         (callAncestor! >= 0 and not resolvedCallMember!) -> while {
                             callAncestor! == memberDiagnosticIndex! -> if {
                                 true => resolvedCallMember!
                             } else {
-                                nodes![callAncestor!].parent => callAncestor!
+                                prepared.nodes[sourceRange.astStart + callAncestor!].parent => callAncestor!
                             }
                         }
                     }
@@ -799,12 +791,12 @@ public analyze sources: [Text; ~] -> [TypeCheckDiagnostic; ~] {
                 baseSearch! < (expressionTypeTable! -> len) -> while {
                     expressionTypeTable![baseSearch!] => baseType
                     baseType.sourceModule == sourceIndex! -> if {
-                        nodes![baseType.astNode].parent => baseAncestor!
+                        prepared.nodes[sourceRange.astStart + baseType.astNode].parent => baseAncestor!
                         1 => distance!
                         false => belongsToMember!
                         (baseAncestor! >= 0 and not belongsToMember!) -> while {
                             baseAncestor! == memberDiagnosticIndex! -> if { true => belongsToMember! } else {
-                                nodes![baseAncestor!].parent => baseAncestor!
+                                prepared.nodes[sourceRange.astStart + baseAncestor!].parent => baseAncestor!
                                 distance! + 1 => distance!
                             }
                         }
@@ -817,15 +809,15 @@ public analyze sources: [Text; ~] -> [TypeCheckDiagnostic; ~] {
                 }
                 baseTypeIndex! >= 0 -> if {
                     expressionTypeTable![baseTypeIndex!] => baseType
-                    ((baseType.origin == 0 or baseType.origin == 2) and nodes![baseType.astNode].kind != 39) -> if {
+                    ((baseType.origin == 0 or baseType.origin == 2) and prepared.nodes[sourceRange.astStart + baseType.astNode].kind != 39) -> if {
                         sourceIndex! => targetSourceModule!
-                        baseType.origin == 2 -> if { moduleIdentities![baseType.targetModule].sourceIndex => targetSourceModule! }
+                        baseType.origin == 2 -> if { prepared.modules[baseType.targetModule].sourceIndex => targetSourceModule! }
                         sources[targetSourceModule!] -> symbols.collect => targetTable!
                         sources[targetSourceModule!] -> lexer.lex => targetTokens!
                         -1 => memberNameToken!
                         member.firstToken => memberTokenIndex!
                         memberTokenIndex! < member.firstToken + member.tokenCount -> while {
-                            tokens![memberTokenIndex!].kind == grammar.tokenIdIdentifier -> if { memberTokenIndex! => memberNameToken! }
+                            prepared.tokens[sourceRange.tokenStart + memberTokenIndex!].kind == grammar.tokenIdIdentifier -> if { memberTokenIndex! => memberNameToken! }
                             memberTokenIndex! + 1 => memberTokenIndex!
                         }
                         false => fieldFound!
@@ -833,7 +825,7 @@ public analyze sources: [Text; ~] -> [TypeCheckDiagnostic; ~] {
                         fieldSearch! < (targetTable! -> len) -> while {
                             targetTable![fieldSearch!] => field
                             (field.kind == 26 and field.parent == baseType.targetSymbol) -> if {
-                                tokens![memberNameToken!] => memberName
+                                prepared.tokens[sourceRange.tokenStart + memberNameToken!] => memberName
                                 targetTokens![field.nameToken] => fieldName
                                 memberName.span.length == fieldName.span.length => equal!
                                 UIntSize(0) => fieldByte!
@@ -848,7 +840,7 @@ public analyze sources: [Text; ~] -> [TypeCheckDiagnostic; ~] {
                             fieldSearch! + 1 => fieldSearch!
                         }
                         not fieldFound! -> if {
-                            tokens![memberNameToken!] => unknownMember
+                            prepared.tokens[sourceRange.tokenStart + memberNameToken!] => unknownMember
                             diagnostics! -> push(TypeCheckDiagnostic {
                                 code: 14
                                 sourceModule: sourceIndex!
@@ -871,10 +863,10 @@ public analyze sources: [Text; ~] -> [TypeCheckDiagnostic; ~] {
         }
 
         0 => indexDiagnosticIndex!
-        indexDiagnosticIndex! < (nodes! -> len) -> while {
-            nodes![indexDiagnosticIndex!] => indexAccess
+        indexDiagnosticIndex! < sourceRange.astCount -> while {
+            prepared.nodes[sourceRange.astStart + indexDiagnosticIndex!] => indexAccess
             indexAccess.kind == 41 -> if {
-                tokens![indexAccess.payloadToken] => leftBracket
+                prepared.tokens[sourceRange.tokenStart + indexAccess.payloadToken] => leftBracket
                 -1 => indexedValueTypeIndex!
                 -1 => indexValueTypeIndex!
                 1000000 => indexedValueDistance!
@@ -883,13 +875,13 @@ public analyze sources: [Text; ~] -> [TypeCheckDiagnostic; ~] {
                 indexTypeSearch! < (expressionTypeTable! -> len) -> while {
                     expressionTypeTable![indexTypeSearch!] => candidateType
                     (candidateType.sourceModule == sourceIndex! and candidateType.astNode != indexDiagnosticIndex!) -> if {
-                        nodes![candidateType.astNode] => candidateNode
+                        prepared.nodes[sourceRange.astStart + candidateType.astNode] => candidateNode
                         candidateNode.parent => candidateAncestor!
                         1 => candidateDistance!
                         false => belongsToIndex!
                         (candidateAncestor! >= 0 and not belongsToIndex!) -> while {
                             candidateAncestor! == indexDiagnosticIndex! -> if { true => belongsToIndex! } else {
-                                nodes![candidateAncestor!].parent => candidateAncestor!
+                                prepared.nodes[sourceRange.astStart + candidateAncestor!].parent => candidateAncestor!
                                 candidateDistance! + 1 => candidateDistance!
                             }
                         }
@@ -920,7 +912,7 @@ public analyze sources: [Text; ~] -> [TypeCheckDiagnostic; ~] {
                         indexedValueType.targetModule => expectedIndexSymbol!
                     }
                     (indexedValueType.origin < 12 or indexedValueType.origin > 15) -> if {
-                        nodes![indexedValueType.astNode] => indexedValueNode
+                        prepared.nodes[sourceRange.astStart + indexedValueType.astNode] => indexedValueNode
                         diagnostics! -> push(TypeCheckDiagnostic {
                             code: 15
                             sourceModule: sourceIndex!
@@ -939,7 +931,7 @@ public analyze sources: [Text; ~] -> [TypeCheckDiagnostic; ~] {
                 indexValueTypeIndex! >= 0 -> if {
                     expressionTypeTable![indexValueTypeIndex!] => indexValueType
                     (indexValueType.origin != expectedIndexOrigin! or indexValueType.targetModule != expectedIndexModule! or indexValueType.targetSymbol != expectedIndexSymbol!) -> if {
-                        nodes![indexValueType.astNode] => indexValueNode
+                        prepared.nodes[sourceRange.astStart + indexValueType.astNode] => indexValueNode
                         diagnostics! -> push(TypeCheckDiagnostic {
                             code: 16
                             sourceModule: sourceIndex!
@@ -960,8 +952,8 @@ public analyze sources: [Text; ~] -> [TypeCheckDiagnostic; ~] {
         }
 
         0 => operatorIndex!
-        operatorIndex! < (nodes! -> len) -> while {
-            nodes![operatorIndex!] => operator
+        operatorIndex! < sourceRange.astCount -> while {
+            prepared.nodes[sourceRange.astStart + operatorIndex!] => operator
             ((operator.kind >= 18 and operator.kind <= 22) or operator.kind == 24 or operator.kind == 25) -> if {
                 false => operatorInferred!
                 -1 => leftTypeIndex!
@@ -973,16 +965,16 @@ public analyze sources: [Text; ~] -> [TypeCheckDiagnostic; ~] {
                     expressionTypeTable![inferredIndex!] => inferredType
                     inferredType.sourceModule == sourceIndex! -> if {
                         inferredType.astNode == operatorIndex! -> if { true => operatorInferred! }
-                        (nodes![inferredType.astNode].start == operator.start and nodes![inferredType.astNode].length == operator.length) -> if { true => operatorInferred! }
+                        (prepared.nodes[sourceRange.astStart + inferredType.astNode].start == operator.start and prepared.nodes[sourceRange.astStart + inferredType.astNode].length == operator.length) -> if { true => operatorInferred! }
                         inferredType.astNode != operatorIndex! -> if {
-                            nodes![inferredType.astNode].parent => operandAncestor!
+                            prepared.nodes[sourceRange.astStart + inferredType.astNode].parent => operandAncestor!
                             1 => operandDistance!
                             false => belongsToOperator!
                             (operandAncestor! >= 0 and not belongsToOperator!) -> while {
                                 operandAncestor! == operatorIndex! -> if {
                                     true => belongsToOperator!
                                 } else {
-                                    nodes![operandAncestor!].parent => operandAncestor!
+                                    prepared.nodes[sourceRange.astStart + operandAncestor!].parent => operandAncestor!
                                     operandDistance! + 1 => operandDistance!
                                 }
                             }

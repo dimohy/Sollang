@@ -2,12 +2,17 @@ namespace smalllang.compiler.semantic.expression_type_ids
 
 import smalllang.compiler.ast
 import smalllang.compiler.lexer
+import smalllang.compiler.semantic.analysis
 import smalllang.compiler.semantic.calls
+import smalllang.compiler.semantic.composite_types as compositeTypes
+import smalllang.compiler.semantic.context as semanticContext
 import smalllang.compiler.semantic.modules
+import smalllang.compiler.semantic.nominal_types as nominalTypes
 import smalllang.compiler.semantic.qualified
 import smalllang.compiler.semantic.resolve as resolution
 import smalllang.compiler.semantic.symbols
 import smalllang.compiler.semantic.type_ids as typeIds
+import smalllang.compiler.syntax
 import syntax.generated.smalllang as grammar
 
 public struct ExpressionTypeId {
@@ -32,50 +37,45 @@ public struct ExpressionTypeIdRequest {
     modules: [modules.ModuleIdentity; ~]
     qualified: [qualified.QualifiedResolution; ~]
     calls: [calls.ModuleCallResolution; ~]
+    analysisRanges: [analysis.SourceAnalysisRange; ~]
+    analysisNodes: [ast.AstNode; ~]
+    analysisTokens: [syntax.SyntaxToken; ~]
+    analysisSymbols: [symbols.Symbol; ~]
+    analysisNames: [resolution.ResolvedName; ~]
 }
 
 # Bridges the existing shallow expression pass into the canonical recursive
 # type arena. Annotation-backed names and call results retain their full type;
 # builtin expressions use the stable builtin id directly.
-public resolvePrepared request: move ExpressionTypeIdRequest -> ExpressionTypeIdSet {
+public resolveContext prepared: semanticContext.CompilationContext -> ExpressionTypeIdSet {
     [typeIds.SemanticType; ~] => types!
-    request.types -> each semanticType {
-        types! -> push(semanticType)
-    }
+    prepared.types -> each semanticType { types! -> push(semanticType) }
     [typeIds.TypeReference; ~] => references!
-    request.references -> each reference {
-        references! -> push(reference)
-    }
+    prepared.references -> each reference { references! -> push(reference) }
     [typeIds.NominalField; ~] => fields!
-    request.fields -> each field {
-        fields! -> push(field)
-    }
-    [modules.ModuleIdentity; ~] => moduleIdentities!
-    request.modules -> each moduleIdentity { moduleIdentities! -> push(moduleIdentity) }
-    [qualified.QualifiedResolution; ~] => qualifiedResults!
-    request.qualified -> each qualifiedResult { qualifiedResults! -> push(qualifiedResult) }
-    [calls.ModuleCallResolution; ~] => moduleCalls!
-    request.calls -> each moduleCall { moduleCalls! -> push(moduleCall) }
-    request.sources => sources
+    prepared.fields -> each field { fields! -> push(field) }
     [ExpressionTypeId; ~] => expressions!
 
     0 => sourceIndex!
-    sourceIndex! < (sources -> len) -> while {
-        sources[sourceIndex!] => source
-        source -> ast.lower => nodes!
-        source -> lexer.lex => tokens!
-        nodes! -> symbols.collectPrepared => table!
-        source -> resolution.resolve => resolvedNames!
+    sourceIndex! < (prepared.sources -> len) -> while {
+        prepared.sources[sourceIndex!] => source
+        prepared.ranges[sourceIndex!] => sourceRange
+        [resolution.ResolvedName; ~] => resolvedNames!
+        0 => sourceNameOffset!
+        sourceNameOffset! < sourceRange.nameCount -> while {
+            resolvedNames! -> push(prepared.names[sourceRange.nameStart + sourceNameOffset!])
+            sourceNameOffset! + 1 => sourceNameOffset!
+        }
 
         0 => astIndex!
-        astIndex! < (nodes! -> len) -> while {
-            nodes![astIndex!] => node
+        astIndex! < sourceRange.astCount -> while {
+            prepared.nodes[sourceRange.astStart + astIndex!] => node
             -1 => builtinTypeId!
             node.kind == 13 -> if { 1 => builtinTypeId! }
             node.kind == 14 -> if { 2 => builtinTypeId! }
             (node.kind >= 44 and node.kind <= 47) -> if { 0 => builtinTypeId! }
             node.kind == 15 -> if {
-                tokens![node.payloadToken] => name
+                prepared.tokens[sourceRange.tokenStart + node.payloadToken] => name
                 name.span.length == UIntSize(4) -> if {
                     source -> byte(name.span.start) => byte0
                     source -> byte(name.span.start + UIntSize(1)) => byte1
@@ -96,17 +96,17 @@ public resolvePrepared request: move ExpressionTypeIdRequest -> ExpressionTypeId
                 -1 => typeNameToken!
                 node.firstToken => literalTokenIndex!
                 (literalTokenIndex! < node.firstToken + node.tokenCount and typeNameToken! < 0) -> while {
-                    tokens![literalTokenIndex!].kind == grammar.tokenIdIdentifier -> if { literalTokenIndex! => typeNameToken! }
+                    prepared.tokens[sourceRange.tokenStart + literalTokenIndex!].kind == grammar.tokenIdIdentifier -> if { literalTokenIndex! => typeNameToken! }
                     literalTokenIndex! + 1 => literalTokenIndex!
                 }
                 -1 => literalTargetModule!
                 -1 => literalTargetSymbol!
                 0 => localStructSearch!
-                (localStructSearch! < (table! -> len) and literalTargetSymbol! < 0) -> while {
-                    table![localStructSearch!] => candidateStruct
+                (localStructSearch! < sourceRange.symbolCount and literalTargetSymbol! < 0) -> while {
+                    prepared.symbols[sourceRange.symbolStart + localStructSearch!] => candidateStruct
                     (candidateStruct.kind == 3 and candidateStruct.parent < 0) -> if {
-                        tokens![typeNameToken!] => literalName
-                        tokens![candidateStruct.nameToken] => declarationName
+                        prepared.tokens[sourceRange.tokenStart + typeNameToken!] => literalName
+                        prepared.tokens[sourceRange.tokenStart + candidateStruct.nameToken] => declarationName
                         literalName.span.length == declarationName.span.length => equal!
                         UIntSize(0) => nameByte!
                         (equal! and nameByte! < literalName.span.length) -> while {
@@ -124,18 +124,18 @@ public resolvePrepared request: move ExpressionTypeIdRequest -> ExpressionTypeId
                 }
                 literalTargetSymbol! < 0 -> if {
                     0 => qualifiedSearch!
-                    qualifiedSearch! < (qualifiedResults! -> len) -> while {
-                        qualifiedResults![qualifiedSearch!] => importedCandidate
+                    qualifiedSearch! < (prepared.qualified -> len) -> while {
+                        prepared.qualified[qualifiedSearch!] => importedCandidate
                         (importedCandidate.sourceModule == sourceIndex! and importedCandidate.status == 0) -> if {
                             importedCandidate.pathAst => importedAncestor!
                             false => belongsToLiteral!
                             (importedAncestor! >= 0 and not belongsToLiteral!) -> while {
                                 importedAncestor! == astIndex! -> if { true => belongsToLiteral! } else {
-                                    nodes![importedAncestor!].parent => importedAncestor!
+                                    prepared.nodes[sourceRange.astStart + importedAncestor!].parent => importedAncestor!
                                 }
                             }
                             belongsToLiteral! -> if {
-                                moduleIdentities![importedCandidate.targetModule].sourceIndex => literalTargetModule!
+                                prepared.modules[importedCandidate.targetModule].sourceIndex => literalTargetModule!
                                 importedCandidate.targetSymbol => literalTargetSymbol!
                             }
                         }
@@ -182,7 +182,7 @@ public resolvePrepared request: move ExpressionTypeIdRequest -> ExpressionTypeId
         }
 
         resolvedNames! -> each resolvedName {
-            table![resolvedName.symbol] => valueSymbol
+            prepared.symbols[sourceRange.symbolStart + resolvedName.symbol] => valueSymbol
             valueSymbol.typeNode >= 0 -> if {
                 -1 => referenceIndex!
                 0 => referenceSearch!
@@ -226,8 +226,8 @@ public resolvePrepared request: move ExpressionTypeIdRequest -> ExpressionTypeId
     compositeChanged! -> while {
         false => compositeChanged!
         0 => compositeSourceIndex!
-        compositeSourceIndex! < (sources -> len) -> while {
-            sources[compositeSourceIndex!] => compositeSource
+        compositeSourceIndex! < (prepared.sources -> len) -> while {
+            prepared.sources[compositeSourceIndex!] => compositeSource
             compositeSource -> ast.lower => compositeNodes!
             compositeSource -> lexer.lex => compositeTokens!
             0 => compositeAstIndex!
@@ -364,9 +364,9 @@ public resolvePrepared request: move ExpressionTypeIdRequest -> ExpressionTypeId
         }
     }
 
-    moduleCalls! -> each call {
+    prepared.calls -> each call {
         (call.status == 0 and call.targetSourceModule >= 0) -> if {
-            sources[call.targetSourceModule] -> symbols.collect => targetTable!
+            prepared.sources[call.targetSourceModule] -> symbols.collect => targetTable!
             targetTable![call.functionSymbol] => function
             function.secondaryTypeNode >= 0 -> if { function.secondaryTypeNode } else { function.typeNode } => returnTypeAst
             returnTypeAst >= 0 -> if {
@@ -397,8 +397,8 @@ public resolvePrepared request: move ExpressionTypeIdRequest -> ExpressionTypeId
                         }
                         -1 => argumentExpression!
                         1000000 => argumentDistance!
-                        sources[call.sourceModule] -> ast.lower => callNodes!
-                        sources[call.sourceModule] -> lexer.lex => callTokens!
+                        prepared.sources[call.sourceModule] -> ast.lower => callNodes!
+                        prepared.sources[call.sourceModule] -> lexer.lex => callTokens!
                         callNodes![call.callAst] => callNode
                         0 => argumentSearch!
                         argumentSearch! < (expressions! -> len) -> while {
@@ -473,39 +473,55 @@ public resolvePrepared request: move ExpressionTypeIdRequest -> ExpressionTypeId
     result!
 }
 
-public resolve sources: [Text; ~] -> ExpressionTypeIdSet {
-    sources -> typeIds.resolve => semantic
-    sources -> modules.identities => moduleIdentities!
-    sources -> qualified.resolve => qualifiedResults!
-    [Text; ~] => callSources!
-    sources -> each callSource { callSources! -> push(callSource) }
-    [modules.ModuleIdentity; ~] => callModules!
-    moduleIdentities! -> each callModule { callModules! -> push(callModule) }
-    [qualified.QualifiedResolution; ~] => callQualified!
-    qualifiedResults! -> each callResolution { callQualified! -> push(callResolution) }
-    calls.ModuleCallRequest {
-        sources: callSources!
-        modules: callModules!
-        qualified: callQualified!
-    } => callRequest!
-    callRequest! -> calls.resolveModulesPrepared => moduleCalls!
-    [Text; ~] => preparedSources!
-    sources -> each preparedSource { preparedSources! -> push(preparedSource) }
-    [typeIds.SemanticType; ~] => preparedTypes!
-    semantic.types -> each preparedType { preparedTypes! -> push(preparedType) }
-    [typeIds.TypeReference; ~] => preparedReferences!
-    semantic.references -> each preparedReference { preparedReferences! -> push(preparedReference) }
-    [typeIds.NominalField; ~] => preparedFields!
-    semantic.fields -> each preparedField { preparedFields! -> push(preparedField) }
-    ExpressionTypeIdRequest {
-        sources: preparedSources!
-        types: preparedTypes!
-        references: preparedReferences!
-        fields: preparedFields!
+public resolvePrepared request: move ExpressionTypeIdRequest -> ExpressionTypeIdSet {
+    [Text; ~] => sources!
+    request.sources -> each source { sources! -> push(source) }
+    [typeIds.SemanticType; ~] => types!
+    request.types -> each semanticType { types! -> push(semanticType) }
+    [typeIds.TypeReference; ~] => references!
+    request.references -> each reference { references! -> push(reference) }
+    [typeIds.NominalField; ~] => fields!
+    request.fields -> each field { fields! -> push(field) }
+    [modules.ModuleIdentity; ~] => moduleIdentities!
+    request.modules -> each moduleIdentity { moduleIdentities! -> push(moduleIdentity) }
+    [qualified.QualifiedResolution; ~] => qualifiedResults!
+    request.qualified -> each qualifiedResult { qualifiedResults! -> push(qualifiedResult) }
+    [calls.ModuleCallResolution; ~] => moduleCalls!
+    request.calls -> each moduleCall { moduleCalls! -> push(moduleCall) }
+    [analysis.SourceAnalysisRange; ~] => ranges!
+    request.analysisRanges -> each sourceRange { ranges! -> push(sourceRange) }
+    [ast.AstNode; ~] => nodes!
+    request.analysisNodes -> each node { nodes! -> push(node) }
+    [syntax.SyntaxToken; ~] => tokens!
+    request.analysisTokens -> each token { tokens! -> push(token) }
+    [symbols.Symbol; ~] => symbolTable!
+    request.analysisSymbols -> each symbol { symbolTable! -> push(symbol) }
+    [resolution.ResolvedName; ~] => names!
+    request.analysisNames -> each name { names! -> push(name) }
+    [nominalTypes.NominalType; ~] => nominal!
+    [compositeTypes.CompositeType; ~] => composite!
+    semanticContext.CompilationContext {
+        sources: sources!
+        types: types!
+        references: references!
+        fields: fields!
+        nominal: nominal!
+        composite: composite!
         modules: moduleIdentities!
         qualified: qualifiedResults!
         calls: moduleCalls!
-    } => request!
-    request! -> resolvePrepared => result!
+        ranges: ranges!
+        nodes: nodes!
+        tokens: tokens!
+        symbols: symbolTable!
+        names: names!
+    } => prepared!
+    prepared! -> resolveContext => result!
+    result!
+}
+
+public resolve sources: [Text; ~] -> ExpressionTypeIdSet {
+    sources -> semanticContext.prepare => prepared!
+    prepared! -> resolveContext => result!
     result!
 }
