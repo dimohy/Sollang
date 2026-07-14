@@ -88,8 +88,39 @@ public struct CoroutineFrameSlot {
     flags: Int
 }
 
-public lower sources: [Text; ~] -> [TypedIrNode; ~] {
-    sources -> expressionTypeIds.resolve => recursiveTypes
+public struct TypedIrRequest {
+    sources: [Text; ~]
+    types: [typeIds.SemanticType; ~]
+    references: [typeIds.TypeReference; ~]
+    fields: [typeIds.NominalField; ~]
+    nominal: [nominalTypes.NominalType; ~]
+    composite: [compositeTypes.CompositeType; ~]
+    modules: [modules.ModuleIdentity; ~]
+}
+
+public lowerPrepared request: move TypedIrRequest -> [TypedIrNode; ~] {
+    [Text; ~] => expressionSources!
+    request.sources -> each expressionSource { expressionSources! -> push(expressionSource) }
+    [typeIds.SemanticType; ~] => expressionTypesPrepared!
+    request.types -> each expressionTypePrepared { expressionTypesPrepared! -> push(expressionTypePrepared) }
+    [typeIds.TypeReference; ~] => expressionReferences!
+    request.references -> each expressionReference { expressionReferences! -> push(expressionReference) }
+    [typeIds.NominalField; ~] => expressionFields!
+    request.fields -> each expressionField { expressionFields! -> push(expressionField) }
+    [nominalTypes.NominalType; ~] => nominal!
+    request.nominal -> each nominalType { nominal! -> push(nominalType) }
+    [compositeTypes.CompositeType; ~] => composite!
+    request.composite -> each compositeType { composite! -> push(compositeType) }
+    [modules.ModuleIdentity; ~] => moduleIdentities!
+    request.modules -> each moduleIdentity { moduleIdentities! -> push(moduleIdentity) }
+    expressionTypeIds.ExpressionTypeIdRequest {
+        sources: expressionSources!
+        types: expressionTypesPrepared!
+        references: expressionReferences!
+        fields: expressionFields!
+    } => expressionRequest!
+    expressionRequest! -> expressionTypeIds.resolvePrepared => recursiveTypes
+    request.sources => sources
     [typeIds.SemanticType; ~] => recursiveSemanticTypes!
     recursiveTypes.types -> each recursiveSemanticType {
         recursiveSemanticTypes! -> push(recursiveSemanticType)
@@ -109,10 +140,7 @@ public lower sources: [Text; ~] -> [TypedIrNode; ~] {
         recursiveExpressions! -> push(recursiveExpression)
     }
     sources -> expressionTypes.infer => inferred!
-    sources -> nominalTypes.resolve => nominal!
-    sources -> compositeTypes.resolve => composite!
     sources -> calls.resolveModules => resolvedCalls!
-    sources -> modules.identities => moduleIdentities!
     [TypedIrNode; ~] => results!
     0 => sourceIndex!
     sourceIndex! < (sources -> len) -> while {
@@ -1450,6 +1478,32 @@ public lower sources: [Text; ~] -> [TypedIrNode; ~] {
         canonicalBindingIndex! + 1 => canonicalBindingIndex!
     }
     results!
+}
+
+public lower sources: [Text; ~] -> [TypedIrNode; ~] {
+    sources -> typeIds.resolve => semantic
+    [Text; ~] => preparedSources!
+    sources -> each preparedSource { preparedSources! -> push(preparedSource) }
+    [typeIds.SemanticType; ~] => preparedTypes!
+    semantic.types -> each preparedType { preparedTypes! -> push(preparedType) }
+    [typeIds.TypeReference; ~] => preparedReferences!
+    semantic.references -> each preparedReference { preparedReferences! -> push(preparedReference) }
+    [typeIds.NominalField; ~] => preparedFields!
+    semantic.fields -> each preparedField { preparedFields! -> push(preparedField) }
+    sources -> nominalTypes.resolve => nominal!
+    sources -> compositeTypes.resolve => composite!
+    sources -> modules.identities => moduleIdentities!
+    TypedIrRequest {
+        sources: preparedSources!
+        types: preparedTypes!
+        references: preparedReferences!
+        fields: preparedFields!
+        nominal: nominal!
+        composite: composite!
+        modules: moduleIdentities!
+    } => request!
+    request! -> lowerPrepared => result!
+    result!
 }
 
 public movesFrom ir: [TypedIrNode; ~] -> [MoveEvent; ~] {

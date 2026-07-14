@@ -282,13 +282,55 @@ public writeType node: typedIr.TypedIrNode -> Unit {
 
 prepare request: move PrepareRequest -> EmitContext {
     request.pointerBitWidth => pointerBitWidth
-    request.sources => sources
-    sources -> typedIr.lower => ir!
-    sources -> typeIds.resolve => semanticSet
+    request.sources -> typeIds.resolve => semanticSet
+    [Text; ~] => typedSources!
+    request.sources -> each typedSource { typedSources! -> push(typedSource) }
     [typeIds.SemanticType; ~] => semanticTypes!
-    semanticSet.types -> each semanticType { semanticTypes! -> push(semanticType) }
+    [typeIds.SemanticType; ~] => typedTypes!
+    semanticSet.types -> each semanticType {
+        semanticTypes! -> push(semanticType)
+        typedTypes! -> push(semanticType)
+    }
     [typeIds.NominalField; ~] => semanticFields!
-    semanticSet.fields -> each semanticField { semanticFields! -> push(semanticField) }
+    [typeIds.NominalField; ~] => typedFields!
+    semanticSet.fields -> each semanticField {
+        semanticFields! -> push(semanticField)
+        typedFields! -> push(semanticField)
+    }
+    [typeIds.TypeReference; ~] => typedReferences!
+    semanticSet.references -> each typedReference { typedReferences! -> push(typedReference) }
+    request.sources -> nominalTypes.resolve => resolvedNominal!
+    [nominalTypes.NominalType; ~] => nominal!
+    [nominalTypes.NominalType; ~] => typedNominal!
+    resolvedNominal! -> each nominalType {
+        nominal! -> push(nominalType)
+        typedNominal! -> push(nominalType)
+    }
+    request.sources -> compositeTypes.resolve => resolvedComposite!
+    [compositeTypes.CompositeType; ~] => composite!
+    [compositeTypes.CompositeType; ~] => typedComposite!
+    resolvedComposite! -> each compositeType {
+        composite! -> push(compositeType)
+        typedComposite! -> push(compositeType)
+    }
+    request.sources -> modules.identities => resolvedModules!
+    [modules.ModuleIdentity; ~] => moduleIdentities!
+    [modules.ModuleIdentity; ~] => typedModules!
+    resolvedModules! -> each moduleIdentity {
+        moduleIdentities! -> push(moduleIdentity)
+        typedModules! -> push(moduleIdentity)
+    }
+    typedIr.TypedIrRequest {
+        sources: typedSources!
+        types: typedTypes!
+        references: typedReferences!
+        fields: typedFields!
+        nominal: typedNominal!
+        composite: typedComposite!
+        modules: typedModules!
+    } => typedRequest!
+    typedRequest! -> typedIr.lowerPrepared => ir!
+    request.sources => sources
     [typeIds.SemanticType; ~] => layoutTypes!
     semanticTypes! -> each layoutType { layoutTypes! -> push(layoutType) }
     [typeIds.NominalField; ~] => layoutFields!
@@ -302,9 +344,6 @@ prepare request: move PrepareRequest -> EmitContext {
     [Int; ~] => typeLayoutStatuses!
     layouts.statuses -> each layoutStatus { typeLayoutStatuses! -> push(layoutStatus) }
     ir! -> typedIr.movesFrom => moves!
-    sources -> nominalTypes.resolve => nominal!
-    sources -> compositeTypes.resolve => composite!
-    sources -> modules.identities => moduleIdentities!
     EmitContext {
         sources: sources
         ir: ir!

@@ -4670,4 +4670,48 @@ struct and dynamic-array slot alignment changes from 4 to 8. After updating
 those exact LLVM baselines, examples 231 and 232 passed 2/2, providing complete
 evidence for all 407 current cases without rerunning the unchanged 405 cases.
 
+## D148 - Prepared Semantic Context Removes Repeated LLVM Analysis
+
+Status: canonical type and shallow declaration context reuse implemented
+Date: 2026-07-14
+
+Expression type-ID resolution and typed-IR lowering now expose prepared entry
+points. `ExpressionTypeIdRequest` accepts an already resolved canonical type,
+reference, and field arena. `TypedIrRequest` adds the nominal, composite, and
+module tables needed by typed IR. The original `resolve` and `lower` APIs remain
+compatible wrappers that prepare these inputs once, so existing clients keep
+their surface while orchestration layers can reuse analysis products.
+
+LLVM preparation is the first orchestration consumer. It resolves canonical
+types, nominal annotations, composite annotations, and module identities once,
+copies their flat relocatable records into the typed-IR request and emitter
+context, and calls `lowerPrepared`. It no longer invokes `typeIds.resolve`,
+`nominalTypes.resolve`, `compositeTypes.resolve`, or `modules.identities` again
+after typed IR has independently performed the same work. The arrays are copied
+because the current affine container model cannot yet move one owned field out
+of a returned aggregate; semantic passes themselves are not repeated.
+
+Example 293 constructs the prepared request explicitly and proves that its 11
+typed-IR nodes have the same kind, canonical type ID, kind, and ownership flags
+as the compatible `typedIr.lower` path; eight nodes carry canonical IDs. The
+representative LLVM dynamic-array example 188 fell from the prior 83.7-second
+single-worker baseline to 63.8 seconds, a 23.8 percent reduction. Sharing the
+additional nominal/composite/module tables preserved the result at 64.0 seconds;
+those tables are not the remaining dominant cost.
+
+This remains a partial migration and does not promote a roadmap gate. Calls,
+qualified resolution, AST/lexer/symbol products, shallow expression inference,
+and several ownership/drop consumers still recompute their own tables. A future
+whole-compilation context should cache those immutable products per source and
+pass one package-qualified context through checking, typed IR, effects, layout,
+drop glue, and code emission. The count remains 48.5/60 (80.8%).
+
+Regression evidence on 2026-07-14: the Release solution build completed with
+zero warnings and errors. The prepared/baseline typed-IR slice passed 13/13,
+example 293 passed independently, and example 188 passed in 63.8 seconds. The
+single coordinated eight-worker runner then passed all 408 cases in 396.5
+seconds with flushed `n/408` progress records. Compared with the preceding
+collision-free 416.7-second 407-case run, total wall time fell by 20.2 seconds
+despite adding one case.
+
 

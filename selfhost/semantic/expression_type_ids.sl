@@ -24,26 +24,33 @@ public struct ExpressionTypeIdSet {
     expressions: [ExpressionTypeId; ~]
 }
 
+public struct ExpressionTypeIdRequest {
+    sources: [Text; ~]
+    types: [typeIds.SemanticType; ~]
+    references: [typeIds.TypeReference; ~]
+    fields: [typeIds.NominalField; ~]
+}
+
 # Bridges the existing shallow expression pass into the canonical recursive
 # type arena. Annotation-backed names and call results retain their full type;
 # builtin expressions use the stable builtin id directly.
-public resolve sources: [Text; ~] -> ExpressionTypeIdSet {
-    sources -> typeIds.resolve => semantic!
-    sources -> calls.resolveModules => moduleCalls!
-    sources -> modules.identities => moduleIdentities!
-    sources -> qualified.resolve => qualifiedResults!
+public resolvePrepared request: move ExpressionTypeIdRequest -> ExpressionTypeIdSet {
     [typeIds.SemanticType; ~] => types!
-    semantic!.types -> each semanticType {
+    request.types -> each semanticType {
         types! -> push(semanticType)
     }
     [typeIds.TypeReference; ~] => references!
-    semantic!.references -> each reference {
+    request.references -> each reference {
         references! -> push(reference)
     }
     [typeIds.NominalField; ~] => fields!
-    semantic!.fields -> each field {
+    request.fields -> each field {
         fields! -> push(field)
     }
+    request.sources => sources
+    sources -> calls.resolveModules => moduleCalls!
+    sources -> modules.identities => moduleIdentities!
+    sources -> qualified.resolve => qualifiedResults!
     [ExpressionTypeId; ~] => expressions!
 
     0 => sourceIndex!
@@ -457,5 +464,25 @@ public resolve sources: [Text; ~] -> ExpressionTypeIdSet {
     }
 
     ExpressionTypeIdSet { types: types!, references: references!, fields: fields!, expressions: expressions! } => result!
+    result!
+}
+
+public resolve sources: [Text; ~] -> ExpressionTypeIdSet {
+    sources -> typeIds.resolve => semantic
+    [Text; ~] => preparedSources!
+    sources -> each preparedSource { preparedSources! -> push(preparedSource) }
+    [typeIds.SemanticType; ~] => preparedTypes!
+    semantic.types -> each preparedType { preparedTypes! -> push(preparedType) }
+    [typeIds.TypeReference; ~] => preparedReferences!
+    semantic.references -> each preparedReference { preparedReferences! -> push(preparedReference) }
+    [typeIds.NominalField; ~] => preparedFields!
+    semantic.fields -> each preparedField { preparedFields! -> push(preparedField) }
+    ExpressionTypeIdRequest {
+        sources: preparedSources!
+        types: preparedTypes!
+        references: preparedReferences!
+        fields: preparedFields!
+    } => request!
+    request! -> resolvePrepared => result!
     result!
 }
