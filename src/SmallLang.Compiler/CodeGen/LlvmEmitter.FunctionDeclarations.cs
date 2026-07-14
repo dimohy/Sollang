@@ -560,6 +560,18 @@ internal sealed partial class LlvmEmitter
             _borrowedOwnedLocals.Add(function.InputName ?? "it");
         }
 
+        if (function.InputType == BoundType.SourceText)
+        {
+            _locals.Add(function.InputName ?? "it", ExtractSourceTextAggregate("%it"));
+            return;
+        }
+        if (function.InputType is BoundType.MappedBytes or BoundType.MutableMappedBytes)
+        {
+            _locals.Add(
+                function.InputName ?? "it",
+                ExtractMappedBytesAggregate(function.InputType.Value, "%it"));
+            return;
+        }
         if (function.InputType is { } inputType && _program.Types.IsStruct(inputType))
         {
             _locals.Add(function.InputName ?? "it", new RuntimeStruct(inputType, "%it"));

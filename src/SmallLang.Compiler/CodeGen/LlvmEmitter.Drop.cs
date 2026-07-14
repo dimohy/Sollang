@@ -148,13 +148,14 @@ internal sealed partial class LlvmEmitter
             EmitAssign(length, $"extractvalue {llvmType} %value, 1");
             var loopLabel = NextLabel("drop_array_loop");
             var itemLabel = NextLabel("drop_array_item");
+            var continueLabel = NextLabel("drop_array_continue");
             var endLabel = NextLabel("drop_array_end");
             EmitBranch(loopLabel);
             EmitLabel(loopLabel);
             _currentBlockLabel = loopLabel;
             var index = NextTemp("drop_array_index");
             var next = NextTemp("drop_array_next");
-            EmitInstruction($"{index} = phi i64 [ 0, %entry ], [ {next}, %{itemLabel} ]");
+            EmitInstruction($"{index} = phi i64 [ 0, %entry ], [ {next}, %{continueLabel} ]");
             var inRange = NextTemp("drop_array_in_range");
             EmitCompare(inRange, "ult", "i64", index, length);
             EmitConditionalBranch(inRange, itemLabel, endLabel);
@@ -165,6 +166,9 @@ internal sealed partial class LlvmEmitter
             var element = NextTemp("drop_array_element");
             EmitLoad(element, LlvmType(elementType), slot, RuntimeAlignment(elementType));
             EmitOwnedDropCall(elementType, element);
+            EmitBranch(continueLabel);
+            EmitLabel(continueLabel);
+            _currentBlockLabel = continueLabel;
             EmitBinary(next, "add", "i64", index, "1");
             EmitBranch(loopLabel);
             EmitLabel(endLabel);
@@ -286,6 +290,15 @@ internal sealed partial class LlvmEmitter
 
     private void EmitOwnedDropCall(BoundType type, string valueName)
     {
+        if (type == BoundType.SourceText)
+        {
+            var basePointer = NextTemp("drop_source_text_base");
+            EmitAssign(basePointer, $"extractvalue %smalllang.source_text {valueName}, 2");
+            var mappedLength = NextTemp("drop_source_text_length");
+            EmitAssign(mappedLength, $"extractvalue %smalllang.source_text {valueName}, 3");
+            EmitSourceTextUnmap(basePointer, mappedLength);
+            return;
+        }
         if (type is BoundType.MappedBytes or BoundType.MutableMappedBytes)
         {
             var basePointer = NextTemp("drop_mapped_base");
@@ -297,6 +310,23 @@ internal sealed partial class LlvmEmitter
             return;
         }
         EmitCall(target: null, "void", DropSymbol(type)[1..], $"{LlvmType(type)} {valueName}");
+    }
+
+    private void EmitSourceTextUnmap(string basePointer, string mappedLength)
+    {
+        var owned = NextTemp("source_text_owned");
+        EmitCompare(owned, "ne", "ptr", basePointer, "null");
+        var unmapLabel = NextLabel("source_text_unmap");
+        var doneLabel = NextLabel("source_text_drop_done");
+        EmitConditionalBranch(owned, unmapLabel, doneLabel);
+        EmitFunctionLine();
+        EmitLabel(unmapLabel);
+        EmitCall(target: null, "void", "smalllang_mapped_unmap",
+            $"ptr {basePointer}, i64 {mappedLength}");
+        EmitBranch(doneLabel);
+        EmitFunctionLine();
+        EmitLabel(doneLabel);
+        _currentBlockLabel = doneLabel;
     }
 
     private static string DropSymbol(BoundType type)

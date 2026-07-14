@@ -162,6 +162,12 @@ internal sealed partial class LlvmEmitter
                             ? EmitRuntimeRunProcessIntrinsic(function, argv)
                             : throw new SmallLangException($"{path} expects a dynamic Text argv array");
                         continue;
+                    case BoundFunctionKind.RuntimeBorrowSourceText:
+                        current = EmitBorrowSourceText(current);
+                        continue;
+                    case BoundFunctionKind.RuntimeMapSourceText:
+                        current = EmitMapSourceText(current);
+                        continue;
                     case BoundFunctionKind.RuntimeOpenFile:
                     case BoundFunctionKind.RuntimeOpenWriteFile:
                         current = EmitRuntimeOpenFile(function, current);
@@ -362,11 +368,40 @@ internal sealed partial class LlvmEmitter
                     RuntimeInlineDictionary inlineMap => new RuntimeFlowResult(EmitSizeAsInt(inlineMap.LengthName, "dict_len_value"), null, _mainOk),
                     RuntimeMappedBytes mapped => new RuntimeFlowResult(
                         new RuntimeInt(BoundType.UIntSize, EmitArenaResultSize(mapped.LengthName)), null, _mainOk),
+                    RuntimeSourceText sourceText => new RuntimeFlowResult(
+                        new RuntimeInt(BoundType.UIntSize, EmitArenaResultSize(sourceText.LengthName)), null, _mainOk),
                     RuntimeArguments arguments => new RuntimeFlowResult(
                         new RuntimeInt(BoundType.UIntSize, EmitArenaResultSize(arguments.LengthName)), null, _mainOk),
                     _ => result
                 };
                 return result.Value is not null;
+            case "byte" when current is RuntimeSourceText sourceText:
+                if (target.Arguments.Count != 1)
+                {
+                    throw new SmallLangException("SourceText byte expects one index");
+                }
+                var sourceByteIndex = EmitMapInteger(target.Arguments[0], BoundType.UIntSize, "source_text_byte_index");
+                var sourceByteInBounds = NextTemp("source_text_byte_in_bounds");
+                EmitCompare(sourceByteInBounds, "ult", "i64", sourceByteIndex, sourceText.LengthName);
+                EmitTrapUnless(sourceByteInBounds, "source_text_byte_bounds");
+                var sourceBytePointer = NextTemp("source_text_byte_ptr");
+                EmitAssign(sourceBytePointer, $"getelementptr i8, ptr {sourceText.DataPointerName}, i64 {sourceByteIndex}");
+                var sourceByteValue = NextTemp("source_text_byte");
+                EmitLoad(sourceByteValue, "i8", sourceBytePointer, 1);
+                result = new RuntimeFlowResult(new RuntimeInt(BoundType.UInt8, sourceByteValue), null, _mainOk);
+                return true;
+            case "slice" when current is RuntimeSourceText sourceText:
+                if (target.Arguments.Count != 2)
+                {
+                    throw new SmallLangException("SourceText slice expects start and byte length");
+                }
+                var sourceSliceStart = EmitMapInteger(target.Arguments[0], BoundType.UIntSize, "source_text_slice_start");
+                var sourceSliceLength = EmitMapInteger(target.Arguments[1], BoundType.UIntSize, "source_text_slice_length");
+                result = new RuntimeFlowResult(
+                    EmitTextSlice(new RuntimeText(sourceText.DataPointerName, sourceText.LengthName), sourceSliceStart, sourceSliceLength),
+                    null,
+                    _mainOk);
+                return true;
             case "byte" when current is RuntimeText text:
                 if (target.Arguments.Count != 1)
                 {

@@ -1,0 +1,17 @@
+import sys.file as file
+
+main {
+    "lexer" -> file.borrowText => borrowed!
+    borrowed! -> len => borrowedLength
+    borrowed! -> byte(UIntSize(0)) => firstByte
+    borrowed! -> slice(UIntSize(1), UIntSize(3)) => middle
+
+    "examples/01-function-basic-hello.sl" -> file.mapText => mapped!
+    mapped! -> slice(UIntSize(0), UIntSize(7)) => prefix
+    mapped! -> len => mappedLength
+    mappedLength > UIntSize(0) -> if { "true" } else { "false" } => mappedNonempty
+
+    "borrowed = $borrowedLength,$firstByte,$middle" -> println
+    "mapped prefix = $prefix" -> println
+    "mapped nonempty = $mappedNonempty" -> println
+}

@@ -148,6 +148,7 @@ internal sealed partial class LlvmEmitter
             RuntimeBool boolean => ("i1", boolean.ValueName),
             RuntimeTask task => ("%smalllang.task", BuildTaskAggregate(task)),
             RuntimeText text => ("%smalllang.text", BuildTextAggregate(text)),
+            RuntimeSourceText source => ("%smalllang.source_text", BuildSourceTextAggregate(source)),
             RuntimeMappedBytes mapped => ("%smalllang.mapped_bytes", BuildMappedBytesAggregate(mapped)),
             RuntimeStruct structure => (LlvmStructType(structure.Type), structure.ValueName),
             RuntimeEnum enumeration => (LlvmEnumType(enumeration.Type), enumeration.ValueName),
@@ -182,6 +183,14 @@ internal sealed partial class LlvmEmitter
         if (type == BoundType.Unit)
         {
             return RuntimeUnit.Instance;
+        }
+        if (type is BoundType.MappedBytes or BoundType.MutableMappedBytes)
+        {
+            return ExtractMappedBytesAggregate(type, valueName);
+        }
+        if (type == BoundType.SourceText)
+        {
+            return ExtractSourceTextAggregate(valueName);
         }
         if (_program.Types.IsStruct(type))
         {
@@ -219,11 +228,6 @@ internal sealed partial class LlvmEmitter
             return new RuntimeInlineDictionary(
                 type, definition.KeyType, definition.ValueType, pointer, length, capacity);
         }
-        if (type is BoundType.MappedBytes or BoundType.MutableMappedBytes)
-        {
-            return ExtractMappedBytesAggregate(type, valueName);
-        }
-
         if (IsIntegerType(type))
         {
             return new RuntimeInt(type, valueName);
@@ -257,6 +261,32 @@ internal sealed partial class LlvmEmitter
         var length = NextTemp("text_len");
         EmitAssign(length, $"extractvalue %smalllang.text {aggregate}, 1");
         return new RuntimeText(pointer, length);
+    }
+
+    private string BuildSourceTextAggregate(RuntimeSourceText source)
+    {
+        var value0 = NextTemp("source_text_value");
+        EmitAssign(value0, $"insertvalue %smalllang.source_text poison, ptr {source.DataPointerName}, 0");
+        var value1 = NextTemp("source_text_value");
+        EmitAssign(value1, $"insertvalue %smalllang.source_text {value0}, i64 {source.LengthName}, 1");
+        var value2 = NextTemp("source_text_value");
+        EmitAssign(value2, $"insertvalue %smalllang.source_text {value1}, ptr {source.BasePointerName}, 2");
+        var value3 = NextTemp("source_text_value");
+        EmitAssign(value3, $"insertvalue %smalllang.source_text {value2}, i64 {source.MappedLengthName}, 3");
+        return value3;
+    }
+
+    private RuntimeSourceText ExtractSourceTextAggregate(string aggregate)
+    {
+        var data = NextTemp("source_text_data");
+        EmitAssign(data, $"extractvalue %smalllang.source_text {aggregate}, 0");
+        var length = NextTemp("source_text_length");
+        EmitAssign(length, $"extractvalue %smalllang.source_text {aggregate}, 1");
+        var basePointer = NextTemp("source_text_base");
+        EmitAssign(basePointer, $"extractvalue %smalllang.source_text {aggregate}, 2");
+        var mappedLength = NextTemp("source_text_mapped_length");
+        EmitAssign(mappedLength, $"extractvalue %smalllang.source_text {aggregate}, 3");
+        return new RuntimeSourceText(data, length, basePointer, mappedLength);
     }
 
     private string BuildMappedBytesAggregate(RuntimeMappedBytes mapped)
@@ -312,6 +342,14 @@ internal sealed partial class LlvmEmitter
 
     private string LlvmType(BoundType type)
     {
+        if (type == BoundType.SourceText)
+        {
+            return "%smalllang.source_text";
+        }
+        if (type is BoundType.MappedBytes or BoundType.MutableMappedBytes)
+        {
+            return "%smalllang.mapped_bytes";
+        }
         if (_program.Types.IsStruct(type))
         {
             return LlvmStructType(type);
@@ -356,6 +394,7 @@ internal sealed partial class LlvmEmitter
             BoundType.DynamicIntArray => "%smalllang.dynamic_int_array",
             BoundType.IntDictionaryView or BoundType.IntDictionary => "%smalllang.int_dictionary",
             BoundType.Arena => "%smalllang.dynamic_int_array",
+            BoundType.SourceText => "%smalllang.source_text",
             BoundType.MappedBytes or BoundType.MutableMappedBytes => "%smalllang.mapped_bytes",
             _ => throw new SmallLangException($"type {type} has no first-class LLVM representation")
         };

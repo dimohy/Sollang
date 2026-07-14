@@ -342,6 +342,9 @@ internal sealed partial class LlvmEmitter
                 EmitCall(target: null, "void", "smalllang_mapped_unmap",
                     $"ptr {mapped.BasePointerName}, i64 {mapped.MappedLengthName}");
                 break;
+            case RuntimeSourceText source:
+                EmitSourceTextUnmap(source.BasePointerName, source.MappedLengthName);
+                break;
         }
 
     }
@@ -378,6 +381,7 @@ internal sealed partial class LlvmEmitter
         var entryLabel = _currentBlockLabel;
         var loopLabel = NextLabel("drop_dynamic_array");
         var bodyLabel = NextLabel("drop_dynamic_array_body");
+        var continueLabel = NextLabel("drop_dynamic_array_continue");
         var doneLabel = NextLabel("drop_dynamic_array_done");
         var nextIndex = NextTemp("drop_dynamic_array_next");
         var llvmType = LlvmType(definition.ElementType);
@@ -385,7 +389,7 @@ internal sealed partial class LlvmEmitter
         EmitFunctionLine();
         EmitLabel(loopLabel);
         var index = NextTemp("drop_dynamic_array_index");
-        EmitPhi(index, "i64", ("0", entryLabel), (nextIndex, bodyLabel));
+        EmitPhi(index, "i64", ("0", entryLabel), (nextIndex, continueLabel));
         var active = NextTemp("drop_dynamic_array_active");
         EmitCompare(active, "ult", "i64", index, array.LengthName);
         EmitConditionalBranch(active, bodyLabel, doneLabel);
@@ -396,6 +400,10 @@ internal sealed partial class LlvmEmitter
         var value = NextTemp("drop_dynamic_array_value");
         EmitLoad(value, llvmType, slot, definition.ElementAlignment);
         EmitOwnedDropCall(definition.ElementType, value);
+        EmitBranch(continueLabel);
+        EmitFunctionLine();
+        EmitLabel(continueLabel);
+        _currentBlockLabel = continueLabel;
         EmitBinary(nextIndex, "add", "i64", index, "1");
         EmitBranch(loopLabel);
         EmitFunctionLine();
@@ -960,6 +968,13 @@ internal sealed partial class LlvmEmitter
         string BasePointerName,
         string MappedLengthName)
         : RuntimeValue(MappedType);
+
+    private sealed record RuntimeSourceText(
+        string DataPointerName,
+        string LengthName,
+        string BasePointerName,
+        string MappedLengthName)
+        : RuntimeValue(BoundType.SourceText);
 
     private sealed record RuntimeDynamicInlineArray(
         BoundType ArrayType,

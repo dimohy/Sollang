@@ -15,6 +15,16 @@ public struct FileWriter {
     token: UInt64
 }
 
+# SourceText is an affine compiler input. A borrowed literal has no mapping;
+# a mapped file owns its mapping until the SourceText owner is dropped.
+public struct SourceText {
+    token: UInt64
+}
+
+borrowText text: Text -> SourceText = intrinsic
+
+mapText path: Text -> SourceText uses File = intrinsic
+
 openRead path: Text -> Result<File, Text> uses File = intrinsic
 
 openReadAsync path: Text -> async Result<File, Text> uses File = intrinsic

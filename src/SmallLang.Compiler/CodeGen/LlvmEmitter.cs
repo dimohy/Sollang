@@ -350,6 +350,7 @@ internal sealed partial class LlvmEmitter
             target triple = "{{_platform.TargetTriple}}"
 
             %smalllang.text = type { ptr, i64 }
+            %smalllang.source_text = type { ptr, i64, ptr, i64 }
             %smalllang.int_slice = type { ptr, i64 }
             %smalllang.mutable_container = type { ptr, ptr, ptr }
             %smalllang.dynamic_int_array = type { ptr, i64, i64 }

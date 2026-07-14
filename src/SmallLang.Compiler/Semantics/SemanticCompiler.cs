@@ -624,6 +624,18 @@ internal sealed class SemanticCompiler
                 $"function '{function.Name}' returns {FormatType(bodyType)} but declares {FormatType(function.ReturnType)}");
         }
 
+        if (function.InputType is { } sourceInput
+            && TypeContains(sourceInput, BoundType.SourceText)
+            && TypeContains(function.ReturnType, BoundType.Text)
+            && (ContainsSliceFlow(function.BlockBody)
+                || (function.Body is not null && ContainsSliceFlow(function.Body))))
+        {
+            throw Error(
+                function.Line,
+                function.Column,
+                $"function '{function.Name}' cannot return Text storage after slicing borrowed SourceText; copy into an owned text type or keep the view inside the SourceText borrow");
+        }
+
         if (function.Body is not null && IsContainerType(bodyType))
         {
             EnsureOwnedContainerCanLeaveBlock(
@@ -912,6 +924,12 @@ internal sealed class SemanticCompiler
                 function,
                 inputType,
                 returnType),
+            "sys.file.borrowText" => RequireIntrinsicSignature(
+                function, inputType, returnType, BoundType.Text, BoundType.SourceText,
+                BoundFunctionKind.RuntimeBorrowSourceText),
+            "sys.file.mapText" => RequireIntrinsicSignature(
+                function, inputType, returnType, BoundType.Text, BoundType.SourceText,
+                BoundFunctionKind.RuntimeMapSourceText),
             "sys.file.write" => RequireGenericScalarWriteSignature(
                 function,
                 inputType,
@@ -2035,7 +2053,8 @@ internal sealed class SemanticCompiler
         bool allowFlowBindingTarget,
         BoundType? yieldInputType = null,
         IReadOnlySet<string>? mutableBindings = null,
-        string? allowedOwnedOuterResultName = null)
+        string? allowedOwnedOuterResultName = null,
+        bool allowOwnedElementBorrow = false)
     {
         return expression switch
         {
@@ -2052,7 +2071,12 @@ internal sealed class SemanticCompiler
             TypedEmptyArrayExpression typedArray => InferTypedEmptyArrayExpression(typedArray),
             DictionaryLiteralExpression dictionary => InferDictionaryLiteralExpression(dictionary, functions, bindings, allowReadIntCall),
             TypedEmptyDictionaryExpression typedDictionary => InferTypedEmptyDictionaryExpression(typedDictionary),
-            IndexExpression index => InferIndexExpression(index, functions, bindings, allowReadIntCall),
+            IndexExpression index => InferIndexExpression(
+                index,
+                functions,
+                bindings,
+                allowReadIntCall,
+                allowOwnedElementBorrow),
             StructLiteralExpression literal => InferStructLiteralExpression(literal, functions, bindings, allowReadIntCall),
             FieldAccessExpression field => InferFieldAccessExpression(field, functions, bindings, allowReadIntCall),
             TryExpression attempt => InferTryExpression(attempt, functions, bindings, allowReadIntCall),
@@ -2350,7 +2374,8 @@ internal sealed class SemanticCompiler
         IndexExpression expression,
         IReadOnlyDictionary<string, BoundFunction> functions,
         IReadOnlyDictionary<string, BoundType> bindings,
-        bool allowReadIntCall)
+        bool allowReadIntCall,
+        bool allowOwnedElementBorrow)
     {
         var sourceType = InferExpression(
             expression.Source,
@@ -2403,7 +2428,7 @@ internal sealed class SemanticCompiler
         if (_types.IsStaticArray(sourceType))
         {
             var elementType = _types.GetStaticArray(sourceType).ElementType;
-            if (_types.ContainsOwnedStorage(elementType))
+            if (_types.ContainsOwnedStorage(elementType) && !allowOwnedElementBorrow)
             {
                 throw Error(
                     expression.Line,
@@ -2423,7 +2448,7 @@ internal sealed class SemanticCompiler
         if (_types.IsDynamicArray(sourceType))
         {
             var elementType = _types.GetDynamicArray(sourceType).ElementType;
-            if (_types.ContainsOwnedStorage(elementType))
+            if (_types.ContainsOwnedStorage(elementType) && !allowOwnedElementBorrow)
             {
                 throw Error(
                     expression.Line,
@@ -3487,8 +3512,19 @@ internal sealed class SemanticCompiler
         BoundType? yieldInputType = null,
         IReadOnlySet<string>? mutableBindings = null)
     {
-        var currentType = InferFlowSource(expression.Source, functions, bindings, allowReadIntCall);
-        if (IsOwnedHeapType(currentType) && IsAnonymousOwnedHeapContainerExpression(expression.Source))
+        var firstTargetReadonlyBorrows = expression.Targets.Count > 0
+            && TryGetFunction(expression.Targets[0].Path, functions, out var firstFunction)
+            && firstFunction.InputType is not null
+            && firstFunction.InputOwnership == BoundFunctionInputOwnership.Default;
+        var currentType = InferFlowSource(
+            expression.Source,
+            functions,
+            bindings,
+            allowReadIntCall,
+            firstTargetReadonlyBorrows);
+        if (IsOwnedHeapType(currentType)
+            && IsAnonymousOwnedHeapContainerExpression(expression.Source)
+            && !firstTargetReadonlyBorrows)
         {
             throw Error(
                 expression.Source.Line,
@@ -3636,6 +3672,8 @@ internal sealed class SemanticCompiler
                     case BoundFunctionKind.RuntimeCloseIntReader:
                         throw Error(expression.Line, expression.Column, $"{path} does not accept a flowed input");
                     case BoundFunctionKind.RuntimeEnvironment:
+                    case BoundFunctionKind.RuntimeBorrowSourceText:
+                    case BoundFunctionKind.RuntimeMapSourceText:
                     case BoundFunctionKind.RuntimeOpenFile:
                     case BoundFunctionKind.RuntimeOpenWriteFile:
                         if (currentType != BoundType.Text)
@@ -4037,6 +4075,7 @@ internal sealed class SemanticCompiler
                 }
 
                 if (currentType is not (BoundType.Text
+                    or BoundType.SourceText
                     or BoundType.IntSlice
                     or BoundType.StaticIntArray
                     or BoundType.StaticTextArray
@@ -4054,12 +4093,12 @@ internal sealed class SemanticCompiler
                 }
 
                 result = new FlowResult(
-                    currentType is BoundType.Text or BoundType.MappedBytes or BoundType.MutableMappedBytes or BoundType.Arguments
+                    currentType is BoundType.Text or BoundType.SourceText or BoundType.MappedBytes or BoundType.MutableMappedBytes or BoundType.Arguments
                         ? BoundType.UIntSize
                         : BoundType.Int,
                     FlowEffect.None);
                 return true;
-            case "byte" when currentType == BoundType.Text:
+            case "byte" when currentType is BoundType.Text or BoundType.SourceText:
                 if (target.Arguments.Count != 1)
                 {
                     throw Error(target.Line, target.Column, "Text byte expects one UIntSize index");
@@ -4075,7 +4114,7 @@ internal sealed class SemanticCompiler
                 }
                 result = new FlowResult(BoundType.UInt8, FlowEffect.None);
                 return true;
-            case "slice" when currentType == BoundType.Text:
+            case "slice" when currentType is BoundType.Text or BoundType.SourceText:
                 if (target.Arguments.Count != 2)
                 {
                     throw Error(target.Line, target.Column,
@@ -4322,7 +4361,8 @@ internal sealed class SemanticCompiler
         Expression source,
         IReadOnlyDictionary<string, BoundFunction> functions,
         IReadOnlyDictionary<string, BoundType> bindings,
-        bool allowReadIntCall)
+        bool allowReadIntCall,
+        bool allowOwnedElementBorrow = false)
     {
         return InferExpression(
             source,
@@ -4330,7 +4370,8 @@ internal sealed class SemanticCompiler
             bindings,
             allowPrintCall: false,
             allowReadIntCall,
-            allowFlowBindingTarget: false);
+            allowFlowBindingTarget: false,
+            allowOwnedElementBorrow: allowOwnedElementBorrow);
     }
 
     private BoundType InferCallExpression(
@@ -4450,6 +4491,8 @@ internal sealed class SemanticCompiler
 
                 return function.ReturnType;
             case BoundFunctionKind.RuntimeEnvironment:
+            case BoundFunctionKind.RuntimeBorrowSourceText:
+            case BoundFunctionKind.RuntimeMapSourceText:
             case BoundFunctionKind.RuntimeOpenFile:
             case BoundFunctionKind.RuntimeOpenWriteFile:
                 if (expression.Arguments.Count != 1)
@@ -5178,7 +5221,9 @@ internal sealed class SemanticCompiler
                     bindings,
                     allowPrintCall: false,
                     allowReadIntCall,
-                    allowFlowBindingTarget: false);
+                    allowFlowBindingTarget: false,
+                    allowOwnedElementBorrow:
+                        function.InputOwnership == BoundFunctionInputOwnership.Default);
         if (argumentType == function.InputType.Value
             && IsIntegerLiteralExpression(expression.Arguments[0]))
         {
@@ -5407,7 +5452,8 @@ internal sealed class SemanticCompiler
                 or BoundFunctionKind.RuntimeOpenWriteFileAsync
                 or BoundFunctionKind.RuntimeWriteScalarAt
                 or BoundFunctionKind.RuntimeWriteScalarAtAsync
-                or BoundFunctionKind.RuntimeSyncFileAsync => ["File"],
+                or BoundFunctionKind.RuntimeSyncFileAsync
+                or BoundFunctionKind.RuntimeMapSourceText => ["File"],
             _ => []
         };
     }
@@ -5479,6 +5525,7 @@ internal sealed class SemanticCompiler
             ["UIntSize"] = BoundType.UIntSize,
             ["CodePoint"] = BoundType.CodePoint,
             ["Arena"] = BoundType.Arena,
+            ["SourceText"] = BoundType.SourceText,
             ["Arguments"] = BoundType.Arguments,
             ["MappedBytes"] = BoundType.MappedBytes,
             ["MutableMappedBytes"] = BoundType.MutableMappedBytes,
@@ -5509,9 +5556,11 @@ internal sealed class SemanticCompiler
                 StringComparison.Ordinal)
                 ? TypeId.Duration
                 : string.Equals(declaration.Name, "sys.file.File", StringComparison.Ordinal)
-                    ? TypeId.File
-                    : string.Equals(declaration.Name, "sys.file.FileWriter", StringComparison.Ordinal)
-                        ? TypeId.FileWriter
+                ? TypeId.File
+                : string.Equals(declaration.Name, "sys.file.FileWriter", StringComparison.Ordinal)
+                    ? TypeId.FileWriter
+                    : string.Equals(declaration.Name, "sys.file.SourceText", StringComparison.Ordinal)
+                        ? TypeId.SourceText
                 : (TypeId)nextTypeId++;
             if (!names.TryAdd(declaration.Name, id))
             {
@@ -5544,7 +5593,7 @@ internal sealed class SemanticCompiler
         var boxableTypes = names
             .Where(item => item.Value is TypeId.Int or TypeId.Bool or TypeId.Text
                 || (structTypes.Values.Contains(item.Value)
-                    && item.Value is not (TypeId.File or TypeId.FileWriter))
+                    && item.Value is not (TypeId.File or TypeId.FileWriter or TypeId.SourceText))
                 || enumTypes.Values.Contains(item.Value))
             .OrderBy(item => (int)item.Value)
             .ToArray();
@@ -5806,6 +5855,14 @@ internal sealed class SemanticCompiler
         {
             return 8;
         }
+        if (type == TypeId.SourceText)
+        {
+            return 32;
+        }
+        if (type is TypeId.MappedBytes or TypeId.MutableMappedBytes)
+        {
+            return 40;
+        }
 
         if (structs.TryGetValue(type, out var structure))
         {
@@ -5850,6 +5907,7 @@ internal sealed class SemanticCompiler
             TypeId.Text => 16,
             TypeId.Arguments => 8,
             TypeId.Arena => 24,
+            TypeId.SourceText => 32,
             TypeId.MappedBytes or TypeId.MutableMappedBytes => 40,
             TypeId.DynamicIntArray or TypeId.IntDictionary => 24,
             _ => throw new InvalidOperationException($"type {type} has no inline size")
@@ -6175,6 +6233,7 @@ internal sealed class SemanticCompiler
             BoundType.UIntSize => "UIntSize",
             BoundType.CodePoint => "CodePoint",
             BoundType.Arena => "Arena",
+            BoundType.SourceText => "SourceText",
             BoundType.Arguments => "Arguments",
             BoundType.MappedBytes => "MappedBytes",
             BoundType.MutableMappedBytes => "MutableMappedBytes",
@@ -7046,6 +7105,146 @@ internal sealed class SemanticCompiler
                 || ContainsOwnedParameterCall(range.End, functions),
             _ => false
         };
+    }
+
+    private bool TypeContains(BoundType type, BoundType expected)
+    {
+        return TypeContains(type, expected, []);
+    }
+
+    private bool TypeContains(BoundType type, BoundType expected, HashSet<BoundType> visiting)
+    {
+        if (type == expected)
+        {
+            return true;
+        }
+        if (!visiting.Add(type))
+        {
+            return false;
+        }
+
+        bool result;
+        if (_types.IsStaticArray(type))
+        {
+            result = TypeContains(_types.GetStaticArray(type).ElementType, expected, visiting);
+        }
+        else if (_types.IsDynamicArray(type))
+        {
+            result = TypeContains(_types.GetDynamicArray(type).ElementType, expected, visiting);
+        }
+        else if (_types.IsDictionary(type))
+        {
+            var dictionary = _types.GetDictionary(type);
+            result = TypeContains(dictionary.KeyType, expected, visiting)
+                || TypeContains(dictionary.ValueType, expected, visiting);
+        }
+        else if (_types.IsBox(type))
+        {
+            result = TypeContains(_types.GetBox(type).ElementType, expected, visiting);
+        }
+        else if (_types.IsStruct(type))
+        {
+            result = _types.GetStruct(type).Fields.Any(field =>
+                TypeContains(field.Type, expected, visiting));
+        }
+        else if (_types.IsEnum(type))
+        {
+            result = _types.GetEnum(type).Variants.Any(variant =>
+                variant.PayloadType is { } payload
+                && TypeContains(payload, expected, visiting));
+        }
+        else
+        {
+            result = false;
+        }
+        visiting.Remove(type);
+        return result;
+    }
+
+    private static bool ContainsSliceFlow(Expression expression)
+    {
+        return expression switch
+        {
+            FlowExpression flow => flow.Targets.Any(target =>
+                    target.Path.Count == 1 && target.Path[0] == "slice")
+                || ContainsSliceFlow(flow.Source)
+                || flow.Targets.Any(target => target.Arguments.Any(ContainsSliceFlow)),
+            CallExpression call => call.Arguments.Any(ContainsSliceFlow),
+            StringExpression text => text.Segments
+                .OfType<InterpolationSegment>()
+                .Any(segment => ContainsSliceFlow(segment.Expression)),
+            AddExpression add => ContainsSliceFlow(add.Left) || ContainsSliceFlow(add.Right),
+            SubtractExpression subtract => ContainsSliceFlow(subtract.Left) || ContainsSliceFlow(subtract.Right),
+            MultiplyExpression multiply => ContainsSliceFlow(multiply.Left) || ContainsSliceFlow(multiply.Right),
+            DivideExpression divide => ContainsSliceFlow(divide.Left) || ContainsSliceFlow(divide.Right),
+            ModuloExpression modulo => ContainsSliceFlow(modulo.Left) || ContainsSliceFlow(modulo.Right),
+            NegateExpression negate => ContainsSliceFlow(negate.Value),
+            CompareExpression compare => ContainsSliceFlow(compare.Left) || ContainsSliceFlow(compare.Right),
+            AndExpression logicalAnd => ContainsSliceFlow(logicalAnd.Left) || ContainsSliceFlow(logicalAnd.Right),
+            OrExpression logicalOr => ContainsSliceFlow(logicalOr.Left) || ContainsSliceFlow(logicalOr.Right),
+            NotExpression logicalNot => ContainsSliceFlow(logicalNot.Value),
+            TryExpression attempt => ContainsSliceFlow(attempt.Value),
+            RangeExpression range => ContainsSliceFlow(range.Start) || ContainsSliceFlow(range.End),
+            CompileTimeEachExpression each => ContainsSliceFlow(each.Source)
+                || ContainsSliceFlow(each.Selector)
+                || (each.DictionaryValueSelector is not null && ContainsSliceFlow(each.DictionaryValueSelector)),
+            FoldExpression fold => ContainsSliceFlow(fold.Source)
+                || ContainsSliceFlow(fold.Initial)
+                || ContainsSliceFlow(fold.Body),
+            IfExpression conditional => ContainsSliceFlow(conditional.Condition)
+                || ContainsSliceFlow(conditional.Then)
+                || (conditional.Else is not null && ContainsSliceFlow(conditional.Else)),
+            WhenExpression whenExpression => (whenExpression.Subject is not null && ContainsSliceFlow(whenExpression.Subject))
+                || whenExpression.Arms.Any(arm => ContainsSliceFlow(arm.Condition) || ContainsSliceFlow(arm.Body))
+                || ContainsSliceFlow(whenExpression.Else),
+            EnumMatchExpression match => ContainsSliceFlow(match.Subject)
+                || match.Arms.Any(arm => ContainsSliceFlow(arm.Condition) || ContainsSliceFlow(arm.Body))
+                || (match.Else is not null && ContainsSliceFlow(match.Else)),
+            ArrayLiteralExpression array => array.Elements.Any(ContainsSliceFlow),
+            ArrayRepeatExpression repeat => ContainsSliceFlow(repeat.Value),
+            DictionaryLiteralExpression dictionary => dictionary.Entries.Any(entry =>
+                ContainsSliceFlow(entry.Key) || ContainsSliceFlow(entry.Value)),
+            IndexExpression index => ContainsSliceFlow(index.Source) || ContainsSliceFlow(index.Index),
+            StructLiteralExpression structure => structure.Fields.Any(field => ContainsSliceFlow(field.Value)),
+            FieldAccessExpression field => ContainsSliceFlow(field.Source),
+            BoxExpression box => ContainsSliceFlow(box.Value),
+            MapExpression map => ContainsSliceFlow(map.Path)
+                || (map.Offset is not null && ContainsSliceFlow(map.Offset))
+                || (map.Length is not null && ContainsSliceFlow(map.Length))
+                || (map.FileSize is not null && ContainsSliceFlow(map.FileSize)),
+            SubjectCompareExpression compare => ContainsSliceFlow(compare.Right),
+            SubjectRangeExpression range => ContainsSliceFlow(range.Start) || ContainsSliceFlow(range.End),
+            _ => false
+        };
+    }
+
+    private static bool ContainsSliceFlow(BlockBody body)
+    {
+        return ContainsSliceFlow(body.Statements)
+            || (body.Value is not null && ContainsSliceFlow(body.Value));
+    }
+
+    private static bool ContainsSliceFlow(IReadOnlyList<Statement> statements)
+    {
+        return statements.Any(statement => statement switch
+            {
+                BindingStatement binding => ContainsSliceFlow(binding.Value),
+                ReturnStatement { Value: { } value } => ContainsSliceFlow(value),
+                IndexAssignmentStatement assignment => ContainsSliceFlow(assignment.Index)
+                    || ContainsSliceFlow(assignment.Value),
+                FieldAssignmentStatement assignment => ContainsSliceFlow(assignment.Value),
+                ExpressionStatement expression => ContainsSliceFlow(expression.Expression),
+                GuardLoopControlStatement guard => ContainsSliceFlow(guard.Condition),
+                BlockFunctionCallStatement block => ContainsSliceFlow(block.Source)
+                    || block.Body.Any(nested => nested switch
+                    {
+                        BindingStatement binding => ContainsSliceFlow(binding.Value),
+                        ReturnStatement { Value: { } value } => ContainsSliceFlow(value),
+                        ExpressionStatement expression => ContainsSliceFlow(expression.Expression),
+                        _ => false
+                    }),
+                _ => false
+            });
     }
 
     private bool ContainsOwnedParameterCall(

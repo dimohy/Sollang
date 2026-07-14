@@ -93,6 +93,8 @@ internal enum BoundFunctionKind
     RuntimeArguments,
     RuntimeEnvironment,
     RuntimeRunProcess,
+    RuntimeBorrowSourceText,
+    RuntimeMapSourceText,
     RuntimeWriteScalar,
     RuntimeReadScalar,
     RuntimeReadScalarAsync,
@@ -138,6 +140,7 @@ internal enum TypeId
     BoxDuration,
     File,
     FileWriter,
+    SourceText,
     GenericParameter = 512,
     SecondaryGenericParameter = 513,
     FirstUserDefined = 1024
@@ -420,7 +423,7 @@ internal sealed class TypeDefinitionTable
     {
         if (type is TypeId.DynamicIntArray or TypeId.IntDictionary or TypeId.Arena
             or TypeId.File or TypeId.FileWriter
-            or TypeId.MappedBytes or TypeId.MutableMappedBytes
+            or TypeId.SourceText or TypeId.MappedBytes or TypeId.MutableMappedBytes
             || IsTask(type) || IsBox(type) || IsStaticArray(type) || IsDynamicArray(type) || IsDictionary(type))
         {
             return true;
@@ -499,6 +502,14 @@ internal sealed class TypeDefinitionTable
         {
             return 8;
         }
+        if (type == TypeId.SourceText)
+        {
+            return 32;
+        }
+        if (type is TypeId.MappedBytes or TypeId.MutableMappedBytes)
+        {
+            return 40;
+        }
         if (_structs.TryGetValue(type, out var structure))
         {
             var offset = 0;
@@ -530,6 +541,7 @@ internal sealed class TypeDefinitionTable
             TypeId.Text => 16,
             TypeId.Arguments => 8,
             TypeId.Arena => 24,
+            TypeId.SourceText => 32,
             TypeId.MappedBytes or TypeId.MutableMappedBytes => 40,
             _ when IsTask(type) => 16,
             TypeId.GenericParameter or TypeId.SecondaryGenericParameter => 8,

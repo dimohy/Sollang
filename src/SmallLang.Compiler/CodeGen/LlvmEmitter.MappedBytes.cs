@@ -8,6 +8,38 @@ namespace SmallLang.Compiler.CodeGen;
 
 internal sealed partial class LlvmEmitter
 {
+    private RuntimeSourceText EmitBorrowSourceText(RuntimeValue value)
+    {
+        var text = value as RuntimeText
+            ?? throw new SmallLangException("borrowText expects Text");
+        return new RuntimeSourceText(text.PointerName, text.LengthName, "null", "0");
+    }
+
+    private RuntimeSourceText EmitMapSourceText(RuntimeValue value)
+    {
+        if (!_platform.SupportsMemoryMapping)
+        {
+            throw new SmallLangException("mapText is unavailable on the current target");
+        }
+        var path = value as RuntimeText
+            ?? throw new SmallLangException("mapText path must be Text");
+        var aggregate = NextTemp("source_text_mapped");
+        EmitCall(aggregate, "%smalllang.mapped_bytes", "smalllang_map_file",
+            $"ptr {path.PointerName}, i64 {path.LengthName}, i64 0, i64 0, i64 0, i1 false");
+        var data = NextTemp("source_text_data");
+        EmitAssign(data, $"extractvalue %smalllang.mapped_bytes {aggregate}, 0");
+        var valid = NextTemp("source_text_valid");
+        EmitCompare(valid, "ne", "ptr", data, "null");
+        EmitTrapUnless(valid, "source_text_open");
+        var length = NextTemp("source_text_length");
+        EmitAssign(length, $"extractvalue %smalllang.mapped_bytes {aggregate}, 1");
+        var basePointer = NextTemp("source_text_base");
+        EmitAssign(basePointer, $"extractvalue %smalllang.mapped_bytes {aggregate}, 2");
+        var mappedLength = NextTemp("source_text_mapped_length");
+        EmitAssign(mappedLength, $"extractvalue %smalllang.mapped_bytes {aggregate}, 3");
+        return new RuntimeSourceText(data, length, basePointer, mappedLength);
+    }
+
     private RuntimeMappedBytes EmitMapExpression(MapExpression expression)
     {
         if (!_platform.SupportsMemoryMapping)

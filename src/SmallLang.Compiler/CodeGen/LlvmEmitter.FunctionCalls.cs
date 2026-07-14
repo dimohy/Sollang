@@ -108,6 +108,19 @@ internal sealed partial class LlvmEmitter
             return EmitRuntimeEnvironmentIntrinsic(function, EmitExpression(expression.Arguments[0]));
         }
 
+        if (function.Kind is BoundFunctionKind.RuntimeBorrowSourceText
+            or BoundFunctionKind.RuntimeMapSourceText)
+        {
+            if (expression.Arguments.Count != 1)
+            {
+                throw new SmallLangException($"{path} expects exactly one Text value");
+            }
+            var sourceArgument = EmitExpression(expression.Arguments[0]);
+            return function.Kind == BoundFunctionKind.RuntimeBorrowSourceText
+                ? EmitBorrowSourceText(sourceArgument)
+                : EmitMapSourceText(sourceArgument);
+        }
+
         if (function.Kind is BoundFunctionKind.RuntimeOpenFile
             or BoundFunctionKind.RuntimeOpenWriteFile)
         {
@@ -657,6 +670,18 @@ internal sealed partial class LlvmEmitter
             return EmitRuntimeRunProcessIntrinsic(function, argv);
         }
 
+        if (function.Kind is BoundFunctionKind.RuntimeBorrowSourceText
+            or BoundFunctionKind.RuntimeMapSourceText)
+        {
+            if (argument is null)
+            {
+                throw new SmallLangException($"{function.Name} expects exactly one Text value");
+            }
+            return function.Kind == BoundFunctionKind.RuntimeBorrowSourceText
+                ? EmitBorrowSourceText(argument)
+                : EmitMapSourceText(argument);
+        }
+
         if (function.Kind is BoundFunctionKind.RuntimeOpenFile
             or BoundFunctionKind.RuntimeOpenWriteFile)
         {
@@ -955,6 +980,10 @@ internal sealed partial class LlvmEmitter
         {
             RuntimeText text when function.InputType == BoundType.Text =>
                 $"%smalllang.text {BuildTextAggregate(text)}",
+            RuntimeSourceText source when function.InputType == BoundType.SourceText =>
+                $"%smalllang.source_text {BuildSourceTextAggregate(source)}",
+            RuntimeMappedBytes mapped when function.InputType == mapped.Type =>
+                $"%smalllang.mapped_bytes {BuildMappedBytesAggregate(mapped)}",
             RuntimeBool boolean when function.InputType == BoundType.Bool => $"i1 {boolean.ValueName}",
             RuntimeIntSlice slice when function.InputType == BoundType.IntSlice => BuildIntSliceArgument(slice.PointerName, slice.LengthName),
             RuntimeStaticIntArray array when function.InputType == BoundType.IntSlice => BuildStaticIntArraySliceArgument(array),
