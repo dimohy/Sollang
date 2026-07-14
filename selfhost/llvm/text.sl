@@ -1627,6 +1627,23 @@ emitCore context: move EmitContext -> Unit uses Console {
                         context.sources[regionIndexValue.sourceModule] -> slice(regionIndexToken.span.start, regionIndexToken.span.length) -> print
                     } else { "%v$(regionNode.operand1)" -> print }
                     ")" -> println
+                } else {
+                    "  %v$(regionNodeIndex!)_data = extractvalue %sl.array.i32 %v$(regionNode.operand0), 0" -> println
+                    regionIndexValue.kind != 3 -> if {
+                        "  %v$(regionNodeIndex!)_index = sext i32 %v$(regionNode.operand1) to i64" -> println
+                    }
+                    "  %v$(regionNodeIndex!)_ptr = getelementptr " -> print
+                    regionNode -> writeType
+                    ", ptr %v$(regionNodeIndex!)_data, i64 " -> print
+                    regionIndexValue.kind == 3 -> if {
+                        regionIndexValue -> sourceToken => regionIndexToken
+                        context.sources[regionIndexValue.sourceModule] -> slice(regionIndexToken.span.start, regionIndexToken.span.length) -> println
+                    } else {
+                        "%v$(regionNodeIndex!)_index" -> println
+                    }
+                    "  %v$(regionNodeIndex!) = load " -> print
+                    regionNode -> writeType
+                    ", ptr %v$(regionNodeIndex!)_ptr, align $(regionNode -> storageAlign)" -> println
                 }
             }
             (regionNode.kind == 7 or regionNode.kind == 8) -> if {
@@ -1727,7 +1744,7 @@ emitCore context: move EmitContext -> Unit uses Console {
                     }
                     ")" -> println
                 }
-                }
+            }
             }
             }
             }
@@ -1735,13 +1752,30 @@ emitCore context: move EmitContext -> Unit uses Console {
             regionEventKind == 2 -> if {
                 not regionTerminated! -> if {
                 true => ifActive![regionNodeIndex!]
-                context.ir[regionNode.operand0] => nestedCondition
+                regionNode.operand0 => nestedConditionIndex!
+                (nestedConditionIndex! >= 0 and context.ir[nestedConditionIndex!].kind == 9) -> while {
+                    -1 => nestedConditionChild!
+                    UIntSize(0) => nestedConditionChildStart!
+                    0 => nestedConditionChildSearch!
+                    nestedConditionChildSearch! < (context.ir -> len) -> while {
+                        context.ir[nestedConditionChildSearch!].parent == nestedConditionIndex! -> if {
+                            context.ir[nestedConditionChildSearch!] -> sourceNode => nestedConditionChildAst
+                            (nestedConditionChild! < 0 or nestedConditionChildAst.start > nestedConditionChildStart!) -> if {
+                                nestedConditionChildSearch! => nestedConditionChild!
+                                nestedConditionChildAst.start => nestedConditionChildStart!
+                            }
+                        }
+                        nestedConditionChildSearch! + 1 => nestedConditionChildSearch!
+                    }
+                    nestedConditionChild! >= 0 -> if { nestedConditionChild! => nestedConditionIndex! } else { -1 => nestedConditionIndex! }
+                }
+                context.ir[nestedConditionIndex!] => nestedCondition
                 "  br i1 " -> print
                 nestedCondition.kind == 4 -> if {
                     nestedCondition -> sourceToken => nestedConditionToken
                     ((context.sources[nestedCondition.sourceModule] -> byte(nestedConditionToken.span.start)) == UInt8(116)) -> if { "1" } else { "0" } -> print
                 } else {
-                    (ownerIndex! >= 0 and context.ir[ownerIndex!].kind == 0 and context.ir[ownerIndex!].operand1 >= 0 and nestedCondition.kind == 5 and nestedCondition.symbol == context.ir[context.ir[ownerIndex!].operand1].symbol) -> if { "%arg" -> print } else { "%v$(regionNode.operand0)" -> print }
+                    (ownerIndex! >= 0 and context.ir[ownerIndex!].kind == 0 and context.ir[ownerIndex!].operand1 >= 0 and nestedCondition.kind == 5 and nestedCondition.symbol == context.ir[context.ir[ownerIndex!].operand1].symbol) -> if { "%arg" -> print } else { "%v$(nestedConditionIndex!)" -> print }
                 }
                 regionNode.nextOperand >= 0 -> if {
                     ", label %if$(regionNodeIndex!)_then, label %if$(regionNodeIndex!)_else" -> println
@@ -2422,14 +2456,18 @@ emitCore context: move EmitContext -> Unit uses Console {
                         (arrayIndex.kind == 5 and function.operand1 >= 0 and arrayIndex.symbol == context.ir[function.operand1].symbol) -> if { "%arg" -> print } else { "%v$(expression.operand1)" -> print }
                         " to i64" -> println
                     }
-                    "  %v$(expressionIndex!)_ptr = getelementptr i32, ptr %v$(expressionIndex!)_data, i64 " -> print
+                    "  %v$(expressionIndex!)_ptr = getelementptr " -> print
+                    expression -> writeType
+                    ", ptr %v$(expressionIndex!)_data, i64 " -> print
                     arrayIndex.kind == 3 -> if {
                         arrayIndex -> sourceToken => indexToken
                         context.sources[arrayIndex.sourceModule] -> slice(indexToken.span.start, indexToken.span.length) -> println
                     } else {
                         "%v$(expressionIndex!)_index" -> println
                     }
-                    "  %v$(expressionIndex!) = load i32, ptr %v$(expressionIndex!)_ptr, align 4" -> println
+                    "  %v$(expressionIndex!) = load " -> print
+                    expression -> writeType
+                    ", ptr %v$(expressionIndex!)_ptr, align $(expression -> storageAlign)" -> println
                     }
                     }
                 }

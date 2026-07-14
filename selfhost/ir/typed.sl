@@ -573,6 +573,23 @@ public lowerContext prepared: semanticContext.CompilationContext -> [TypedIrNode
                                 -1 => expressionTargetModule!
                                 expression.flags => expressionFlags!
                                 expression.operatorKind => expressionOpcode!
+                                expressionKind! == 13 -> if {
+                                    0 => valuePathSearch!
+                                    valuePathSearch! < (prepared.qualified -> len) -> while {
+                                        prepared.qualified[valuePathSearch!] => valuePath
+                                        (valuePath.sourceModule == sourceIndex! and valuePath.pathAst == expressionAstIndex! and valuePath.status == 0) -> if {
+                                            prepared.modules[valuePath.targetModule].sourceIndex => valueTargetSource
+                                            prepared.ranges[valueTargetSource] => valueTargetRange
+                                            prepared.symbols[valueTargetRange.symbolStart + valuePath.targetSymbol] => valueTarget
+                                            (valueTarget.kind == 7 and valueTarget.secondaryTypeNode < 0) -> if {
+                                                6 => expressionKind!
+                                                valuePath.targetSymbol => expressionSymbol!
+                                                valueTargetSource => expressionTargetModule!
+                                            }
+                                        }
+                                        valuePathSearch! + 1 => valuePathSearch!
+                                    }
+                                }
                                 expression.kind == 10 -> if {
                                     0 => intrinsicChildSearch!
                                     intrinsicChildSearch! < sourceRange.astCount -> while {
@@ -767,9 +784,25 @@ public lowerContext prepared: semanticContext.CompilationContext -> [TypedIrNode
                                         candidateStart => conditionStart!
                                     }
                                 }
-                                conditionSearch! + 1 => conditionSearch!
+                            conditionSearch! + 1 => conditionSearch!
+                        }
+                        (conditionIr! >= 0 and results![conditionIr!].kind == 9) -> while {
+                            -1 => nestedConditionResult!
+                            UIntSize(0) => nestedConditionStart!
+                            expressionIrStart => nestedConditionSearch!
+                            nestedConditionSearch! < expressionIrEnd -> while {
+                                results![nestedConditionSearch!].parent == conditionIr! -> if {
+                                    prepared.nodes[sourceRange.astStart + results![nestedConditionSearch!].astNode].start => nestedCandidateStart
+                                    (nestedConditionResult! < 0 or nestedCandidateStart > nestedConditionStart!) -> if {
+                                        nestedConditionSearch! => nestedConditionResult!
+                                        nestedCandidateStart => nestedConditionStart!
+                                    }
+                                }
+                                nestedConditionSearch! + 1 => nestedConditionSearch!
                             }
-                            -1 => thenRegion!
+                            nestedConditionResult! >= 0 -> if { nestedConditionResult! => conditionIr! } else { -1 => conditionIr! }
+                        }
+                        -1 => thenRegion!
                             -1 => elseRegion!
                             expressionIrStart => regionSearch!
                             regionSearch! < expressionIrEnd -> while {
@@ -1106,6 +1139,23 @@ public lowerContext prepared: semanticContext.CompilationContext -> [TypedIrNode
                                 -1 => entryExpressionTargetModule!
                                 entryExpression.flags => entryExpressionFlags!
                                 entryExpression.operatorKind => entryExpressionOpcode!
+                                entryExpressionKind! == 13 -> if {
+                                    0 => entryValuePathSearch!
+                                    entryValuePathSearch! < (prepared.qualified -> len) -> while {
+                                        prepared.qualified[entryValuePathSearch!] => entryValuePath
+                                        (entryValuePath.sourceModule == sourceIndex! and entryValuePath.pathAst == entryExpressionAst! and entryValuePath.status == 0) -> if {
+                                            prepared.modules[entryValuePath.targetModule].sourceIndex => entryValueTargetSource
+                                            prepared.ranges[entryValueTargetSource] => entryValueTargetRange
+                                            prepared.symbols[entryValueTargetRange.symbolStart + entryValuePath.targetSymbol] => entryValueTarget
+                                            (entryValueTarget.kind == 7 and entryValueTarget.secondaryTypeNode < 0) -> if {
+                                                6 => entryExpressionKind!
+                                                entryValuePath.targetSymbol => entryExpressionSymbol!
+                                                entryValueTargetSource => entryExpressionTargetModule!
+                                            }
+                                        }
+                                        entryValuePathSearch! + 1 => entryValuePathSearch!
+                                    }
+                                }
                                 entryExpression.kind == 10 -> if {
                                     0 => entryIntrinsicChildSearch!
                                     entryIntrinsicChildSearch! < sourceRange.astCount -> while {
@@ -1293,6 +1343,22 @@ public lowerContext prepared: semanticContext.CompilationContext -> [TypedIrNode
                                     }
                                 }
                                 entryConditionSearch! + 1 => entryConditionSearch!
+                            }
+                            (entryConditionIr! >= 0 and results![entryConditionIr!].kind == 9) -> while {
+                                -1 => entryNestedConditionResult!
+                                UIntSize(0) => entryNestedConditionStart!
+                                entryExpressionStart => entryNestedConditionSearch!
+                                entryNestedConditionSearch! < entryExpressionEnd -> while {
+                                    results![entryNestedConditionSearch!].parent == entryConditionIr! -> if {
+                                        prepared.nodes[sourceRange.astStart + results![entryNestedConditionSearch!].astNode].start => entryNestedCandidateStart
+                                        (entryNestedConditionResult! < 0 or entryNestedCandidateStart > entryNestedConditionStart!) -> if {
+                                            entryNestedConditionSearch! => entryNestedConditionResult!
+                                            entryNestedCandidateStart => entryNestedConditionStart!
+                                        }
+                                    }
+                                    entryNestedConditionSearch! + 1 => entryNestedConditionSearch!
+                                }
+                                entryNestedConditionResult! >= 0 -> if { entryNestedConditionResult! => entryConditionIr! } else { -1 => entryConditionIr! }
                             }
                             -1 => entryThenRegion!
                             -1 => entryElseRegion!

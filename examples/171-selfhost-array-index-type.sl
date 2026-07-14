@@ -5,6 +5,8 @@ import smalllang.compiler.ast as ast
 main {
     [
         """
+        struct Store { values: [Int; ~] }
+        first store: Store -> Int => store.values[0]
         main {
             [1, 2, ~] => values
             values![0]

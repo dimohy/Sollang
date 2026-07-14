@@ -111,6 +111,9 @@ lowerFrom request: LowerRequest -> [AstNode; ~] {
     source -> lexer.lex => tokens!
     [AstNode; ~] => ast!
     [Int; ~] => cstToAst!
+    [Int; ~] => indexedMemberParents!
+    [Int; ~] => indexedMemberNodes!
+    [UIntSize; ~] => indexedMemberBracketStarts!
     0 => cstIndex!
     0 - 1 => missingNode
 
@@ -123,6 +126,7 @@ lowerFrom request: LowerRequest -> [AstNode; ~] {
         }
         -1 => operatorKind!
         -1 => operatorPayloadToken!
+        -1 => memberDotToken!
         node.firstToken => operatorTokenIndex!
         node.firstToken + node.tokenCount => operatorTokenEnd
         0 => operatorGroupDepth!
@@ -152,6 +156,7 @@ lowerFrom request: LowerRequest -> [AstNode; ~] {
             (operatorGroupDepth! == 0 and astKind! == 36 and candidateOperator == grammar.tokenIdDot) -> if {
                 candidateOperator => operatorKind!
                 operatorTokenIndex! => operatorPayloadToken!
+                operatorTokenIndex! => memberDotToken!
             }
             (operatorGroupDepth! == 0 and astKind! == 36 and candidateOperator == grammar.tokenIdLeftBracket and operatorTokenIndex! > node.firstToken) -> if {
                 41 => astKind!
@@ -286,8 +291,45 @@ lowerFrom request: LowerRequest -> [AstNode; ~] {
             ast! -> len => astIndex
             ast! -> push(astNode)
             astIndex => cstToAst![cstIndex!]
+            (astKind! == 41 and memberDotToken! >= 0) -> if {
+                ast! -> len => indexedMemberNode
+                ast! -> push(AstNode {
+                    kind: 36
+                    parent: astIndex
+                    cstRuleId: node.ruleId
+                    operatorKind: grammar.tokenIdDot
+                    payloadToken: memberDotToken!
+                    secondaryToken: -1
+                    tertiaryToken: -1
+                    flags: 0
+                    firstToken: astFirstToken!
+                    tokenCount: operatorPayloadToken! - astFirstToken!
+                    start: astStart!
+                    length: tokens![operatorPayloadToken!].span.start - astStart!
+                })
+                indexedMemberParents! -> push(astIndex)
+                indexedMemberNodes! -> push(indexedMemberNode)
+                indexedMemberBracketStarts! -> push(tokens![operatorPayloadToken!].span.start)
+            }
         }
         cstIndex! + 1 => cstIndex!
+    }
+
+    0 => indexedMemberFixup!
+    indexedMemberFixup! < (indexedMemberParents! -> len) -> while {
+        indexedMemberParents![indexedMemberFixup!] => indexedMemberParent
+        indexedMemberNodes![indexedMemberFixup!] => indexedMemberNode
+        indexedMemberBracketStarts![indexedMemberFixup!] => indexedMemberBracketStart
+        0 => indexedMemberChild!
+        indexedMemberChild! < (ast! -> len) -> while {
+            ast![indexedMemberChild!] => indexedMemberChildNode!
+            (indexedMemberChild! != indexedMemberNode and indexedMemberChildNode!.parent == indexedMemberParent and indexedMemberChildNode!.start < indexedMemberBracketStart) -> if {
+                indexedMemberNode => indexedMemberChildNode!.parent
+                indexedMemberChildNode! => ast![indexedMemberChild!]
+            }
+            indexedMemberChild! + 1 => indexedMemberChild!
+        }
+        indexedMemberFixup! + 1 => indexedMemberFixup!
     }
 
     # Resolve declaration payloads after every semantic parent/child index is

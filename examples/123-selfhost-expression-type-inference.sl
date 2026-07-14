@@ -6,6 +6,10 @@ main {
         """
         sum: -> Int => 1 + 2
         less: -> Bool => 1 < 2
+        within: -> Bool {
+            UIntSize(1) => offset
+            offset + offset < offset
+        }
         main { }
         """,
         ~
@@ -13,10 +17,8 @@ main {
     sources! -> expressionTypes.infer => inferred!
     sources![0] -> ast.lower => nodes!
     inferred! -> each item {
-        nodes![item.astNode].parent >= 0 -> if {
-            nodes![nodes![item.astNode].parent].kind == 10 -> if {
-                "expression type = $(nodes![item.astNode].kind),$(item.targetSymbol)" -> println
-            }
+        (nodes![item.astNode].kind == 19 or nodes![item.astNode].kind == 20) -> if {
+            "expression type = $(nodes![item.astNode].kind),$(item.targetSymbol)" -> println
         }
     }
 }

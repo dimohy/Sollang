@@ -4,8 +4,10 @@ import smalllang.compiler.ast as ast
 main {
     [
         """
+        struct Item { value: Int }
         main {
             [1, 2, ~] => values
+            [Item; ~] => items
             values
         }
         """,

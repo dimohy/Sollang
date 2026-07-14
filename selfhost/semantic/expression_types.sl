@@ -104,6 +104,32 @@ public inferContext prepared: semanticContext.CompilationContext -> [ExpressionT
                         inferred! -> push(ExpressionType { sourceModule: sourceIndex!, astNode: astIndex!, origin: 1, targetModule: -1, targetSymbol: 16, keyOrigin: -1, keyModule: -1, valueOrigin: -1, valueModule: -1 })
                     }
                 }
+                -1 => qualifiedPathIndex!
+                0 => qualifiedPathSearch!
+                qualifiedPathSearch! < (prepared.qualified -> len) -> while {
+                    prepared.qualified[qualifiedPathSearch!] => qualifiedPathCandidate
+                    (qualifiedPathCandidate.sourceModule == sourceIndex! and qualifiedPathCandidate.pathAst == astIndex! and qualifiedPathCandidate.status == 0) -> if {
+                        qualifiedPathSearch! => qualifiedPathIndex!
+                    }
+                    qualifiedPathSearch! + 1 => qualifiedPathSearch!
+                }
+                qualifiedPathIndex! >= 0 -> if {
+                    prepared.qualified[qualifiedPathIndex!] => qualifiedPath
+                    prepared.modules[qualifiedPath.targetModule].sourceIndex => qualifiedTargetSource
+                    prepared.ranges[qualifiedTargetSource] => qualifiedTargetRange
+                    prepared.symbols[qualifiedTargetRange.symbolStart + qualifiedPath.targetSymbol] => qualifiedTargetSymbol
+                    (qualifiedTargetSymbol.kind == 7 and qualifiedTargetSymbol.secondaryTypeNode < 0) -> if {
+                        qualifiedTargetSymbol.typeNode => qualifiedReturnTypeAst
+                        0 => qualifiedReturnSearch!
+                        qualifiedReturnSearch! < (prepared.nominal -> len) -> while {
+                            prepared.nominal[qualifiedReturnSearch!] => qualifiedReturnType
+                            (qualifiedReturnType.sourceModule == qualifiedTargetSource and qualifiedReturnType.typeAst == qualifiedReturnTypeAst) -> if {
+                                inferred! -> push(ExpressionType { sourceModule: sourceIndex!, astNode: astIndex!, origin: qualifiedReturnType.origin, targetModule: qualifiedReturnType.targetModule, targetSymbol: qualifiedReturnType.targetSymbol, keyOrigin: -1, keyModule: -1, valueOrigin: -1, valueModule: -1 })
+                            }
+                            qualifiedReturnSearch! + 1 => qualifiedReturnSearch!
+                        }
+                    }
+                }
             }
             node.kind == 11 -> if {
                 prepared.tokens[sourceRange.tokenStart + node.payloadToken] => callName
@@ -137,9 +163,58 @@ public inferContext prepared: semanticContext.CompilationContext -> [ExpressionT
                     typedArrayTokenIndex! + 1 => typedArrayTokenIndex!
                 }
                 (typedArrayMarker! and typedArrayNameToken! >= 0) -> if {
-                    prepared.tokens[sourceRange.tokenStart + typedArrayNameToken!] => typedArrayName
-                    TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "Text" } -> textMatches -> if {
-                        inferred! -> push(ExpressionType { sourceModule: sourceIndex!, astNode: astIndex!, origin: 13, targetModule: -1, targetSymbol: 1, keyOrigin: -1, keyModule: -1, valueOrigin: -1, valueModule: -1 })
+                    -1 => typedArrayElementType!
+                    1000000 => typedArrayElementDistance!
+                    0 => typedArrayNominalSearch!
+                    typedArrayNominalSearch! < (prepared.nominal -> len) -> while {
+                        prepared.nominal[typedArrayNominalSearch!] => typedArrayNominal
+                        typedArrayNominal.sourceModule == sourceIndex! -> if {
+                            typedArrayNominal.typeAst => typedArrayAncestor!
+                            0 => typedArrayDistance!
+                            false => typedArrayTypeBelongs!
+                            (typedArrayAncestor! >= 0 and not typedArrayTypeBelongs!) -> while {
+                                typedArrayAncestor! == astIndex! -> if { true => typedArrayTypeBelongs! } else {
+                                    prepared.nodes[sourceRange.astStart + typedArrayAncestor!].parent => typedArrayAncestor!
+                                    typedArrayDistance! + 1 => typedArrayDistance!
+                                }
+                            }
+                            (typedArrayTypeBelongs! and typedArrayDistance! < typedArrayElementDistance!) -> if {
+                                typedArrayNominalSearch! => typedArrayElementType!
+                                typedArrayDistance! => typedArrayElementDistance!
+                            }
+                        }
+                        typedArrayNominalSearch! + 1 => typedArrayNominalSearch!
+                    }
+                    typedArrayElementType! >= 0 -> if {
+                        prepared.nominal[typedArrayElementType!] => typedArrayElement
+                        inferred! -> push(ExpressionType { sourceModule: sourceIndex!, astNode: astIndex!, origin: 13, targetModule: typedArrayElement.targetModule, targetSymbol: typedArrayElement.targetSymbol, keyOrigin: -1, keyModule: -1, valueOrigin: -1, valueModule: -1 })
+                    } else {
+                        prepared.tokens[sourceRange.tokenStart + typedArrayNameToken!] => typedArrayName
+                        -1 => typedArrayLocalSymbol!
+                        0 => typedArraySymbolSearch!
+                        typedArraySymbolSearch! < sourceRange.symbolCount -> while {
+                            prepared.symbols[sourceRange.symbolStart + typedArraySymbolSearch!] => typedArraySymbol
+                            (typedArraySymbol.kind == 3 or typedArraySymbol.kind == 4 or typedArraySymbol.kind == 32) -> if {
+                                prepared.tokens[sourceRange.tokenStart + typedArraySymbol.nameToken] => typedArraySymbolName
+                                typedArrayName.span.length == typedArraySymbolName.span.length => typedArrayNamesEqual!
+                                UIntSize(0) => typedArrayNameByte!
+                                (typedArrayNamesEqual! and typedArrayNameByte! < typedArrayName.span.length) -> while {
+                                    source -> byte(typedArrayName.span.start + typedArrayNameByte!) => typedArrayLeftByte
+                                    source -> byte(typedArraySymbolName.span.start + typedArrayNameByte!) => typedArrayRightByte
+                                    typedArrayLeftByte != typedArrayRightByte -> if { false => typedArrayNamesEqual! }
+                                    typedArrayNameByte! + UIntSize(1) => typedArrayNameByte!
+                                }
+                                typedArrayNamesEqual! -> if { typedArraySymbolSearch! => typedArrayLocalSymbol! }
+                            }
+                            typedArraySymbolSearch! + 1 => typedArraySymbolSearch!
+                        }
+                        typedArrayLocalSymbol! >= 0 -> if {
+                            inferred! -> push(ExpressionType { sourceModule: sourceIndex!, astNode: astIndex!, origin: 13, targetModule: sourceIndex!, targetSymbol: typedArrayLocalSymbol!, keyOrigin: -1, keyModule: -1, valueOrigin: -1, valueModule: -1 })
+                        } else {
+                            TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "Text" } -> textMatches -> if {
+                                inferred! -> push(ExpressionType { sourceModule: sourceIndex!, astNode: astIndex!, origin: 13, targetModule: -1, targetSymbol: 1, keyOrigin: -1, keyModule: -1, valueOrigin: -1, valueModule: -1 })
+                            }
+                        }
                     }
                 }
             }
@@ -1114,9 +1189,9 @@ public inferContext prepared: semanticContext.CompilationContext -> [ExpressionT
                             (firstChild! >= 0 and secondChild! >= 0) -> if {
                                 inferred![firstChild!] => left
                                 inferred![secondChild!] => right
-                                (left.origin == 1 and left.targetSymbol == 2 and right.origin == 1 and right.targetSymbol == 2) -> if {
+                                (left.origin == 1 and right.origin == 1 and left.targetSymbol == right.targetSymbol and ((left.targetSymbol >= 2 and left.targetSymbol <= 13) or (left.targetSymbol >= 19 and left.targetSymbol <= 22))) -> if {
                                     true => canInfer!
-                                    2 => resultSymbol!
+                                    left.targetSymbol => resultSymbol!
                                 }
                             }
                         }
