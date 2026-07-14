@@ -1343,12 +1343,12 @@ use an affine native file owner and position-independent reads:
 file.openReadAsync("values.bin") => opening
 opening -> await => opened
 opened -> when {
-    Result<file.File, Text>.Ok(reader) {
+    Ok(reader) {
         reader -> readAt<UInt16>(0) => header
         reader -> readAtAsync<UInt16>(128) => pending
         pending -> await => record
     }
-    Result<file.File, Text>.Err(error) => error
+    Err(error) => error
 }
 ```
 
@@ -1370,7 +1370,7 @@ a writer:
 ```smalllang
 file.openWrite("values.bin") => opened
 opened -> when {
-    Result<file.FileWriter, Text>.Ok(writer) {
+    Ok(writer) {
         writer -> writeAt(UInt16(513), 0) => inferred
         writer -> writeAt<UInt16>(1027, 3) => contextual
         writer -> writeAtAsync(UInt16(2049), 8) => pending
@@ -1378,7 +1378,7 @@ opened -> when {
         writer -> syncAsync => syncing
         syncing -> await => durable
     }
-    Result<file.FileWriter, Text>.Err(error) => error
+    Err(error) => error
 }
 ```
 

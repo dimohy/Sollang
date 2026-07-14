@@ -4201,4 +4201,30 @@ References: [Kotlin type-safe builders](https://kotlinlang.org/docs/type-safe-bu
 [Scala scoped capabilities](https://docs.scala-lang.org/scala3/reference/experimental/capture-checking/scoped-capabilities.html),
 [Effekt effect handlers](https://effekt-lang.org/docs/concepts/effect-handlers).
 
+## D135 - Enum Patterns Infer Their Type From The When Subject
+
+Status: implemented
+Date: 2026-07-14
+
+An enum subject fixes the enum type for every pattern arm, so payload patterns
+omit the redundant type qualification:
+
+```smalllang
+openedReader -> when {
+    Ok(reader) {
+        reader -> readAt<UInt16>(0)
+    }
+    Err(error) => error
+}
+```
+
+This is contextual pattern lookup, not a global import of variant constructors.
+`Ok(reader)` above resolves only against the known subject type, such as
+`Result<file.File, Text>`. A missing variant is diagnosed against that enum, so
+another enum's identically named variant cannot be selected accidentally.
+Fully qualified patterns remain valid when explicitness is useful, and enum
+construction remains qualified because a constructor has no subject from which
+to infer its type. The same rule applies to user enums and permits forms such
+as `Value(value)`, `Some(value)`, `Missing`, and `None`.
+
 

@@ -6,17 +6,17 @@ enum Reading {
 
 number reading: Reading -> Int {
     reading -> when {
-        Reading.Value(value) => value
-        Reading.Missing => 0
-        Reading.Label(label) => 0
+        Value(value) => value
+        Missing => 0
+        Label(label) => 0
     }
 }
 
 kind reading: Reading -> Text {
     reading -> when {
-        Reading.Value(value) => "number"
-        Reading.Missing => "missing"
-        Reading.Label(label) => label
+        Value(value) => "number"
+        Missing => "missing"
+        Label(label) => label
     }
 }
 

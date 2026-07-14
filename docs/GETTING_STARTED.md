@@ -293,13 +293,13 @@ For concurrent or random-access work, prefer the owned File surface:
 file.openReadAsync("values.bin") => opening
 opening -> await => opened
 opened -> when {
-    Result<file.File, Text>.Ok(reader) {
+    Ok(reader) {
         reader -> readAtAsync<UInt16>(0) => header
         reader -> readAtAsync<UInt16>(4096) => record
         header -> await => headerValue
         record -> await => recordValue
     }
-    Result<file.File, Text>.Err(error) => error
+    Err(error) => error
 }
 ```
 
@@ -315,14 +315,14 @@ Random-access output uses a distinct affine writer capability:
 file.openWriteAsync("values.bin") => opening
 opening -> await => opened
 opened -> when {
-    Result<file.FileWriter, Text>.Ok(writer) {
+    Ok(writer) {
         writer -> writeAt(UInt16(513), 0)
         writer -> writeAtAsync<UInt16>(1027, 3) => pending
         pending -> await => written
         writer -> syncAsync => syncing
         syncing -> await => durable
     }
-    Result<file.FileWriter, Text>.Err(error) => error
+    Err(error) => error
 }
 ```
 

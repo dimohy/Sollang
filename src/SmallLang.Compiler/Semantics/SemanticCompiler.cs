@@ -3099,7 +3099,9 @@ internal sealed class SemanticCompiler
         foreach (var arm in expression.Arms)
         {
             var pattern = (EnumPatternExpression)arm.Condition;
-            if (!_types.TryResolve(pattern.TypeName, out var patternType)
+            var patternType = subjectType;
+            if (pattern.TypeName.Length > 0
+                && !_types.TryResolve(pattern.TypeName, out patternType)
                 && (pattern.TypeName.StartsWith("Option<", StringComparison.Ordinal)
                     || pattern.TypeName.StartsWith("Result<", StringComparison.Ordinal)))
             {
