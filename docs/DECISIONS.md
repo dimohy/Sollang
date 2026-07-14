@@ -4417,4 +4417,37 @@ zero warnings and errors. The generic/block/grammar/type focused slice passed
 75/75, and the single coordinated eight-worker runner passed byte-for-byte
 grammar determinism plus all 399 cases in 389.8 seconds.
 
+## D142 - Recursive Type IDs Are Global Expression Currency
+
+Status: first expression boundary implemented
+Date: 2026-07-14
+
+Semantic type identity is global to a compilation, not local to a source file
+or spelling. `type_ids.sl` lowers each source annotation through the recursive
+term arena and interns the result by semantic identity. A locally spelled
+`Point` and an imported `model.Point` therefore share the same nominal node and
+the same complete `Result<[Point; ~], {Text: box Point}>` root. Local/imported
+origin is provenance only and is deliberately excluded from nominal equality
+once declaration module and symbol identity agree.
+
+Builtin semantic types are seeded in the existing stable symbol order, so the
+canonical ID of `Unit` through `Bool` is identical to the legacy builtin symbol
+ID. `expression_type_ids.sl` is the migration bridge: builtin expressions map
+directly, while annotation-backed name expressions and resolved call results
+use the complete recursive annotation root. It copies the returned semantic
+arena into its result because moving an owned array field directly between two
+owned aggregate values would create ambiguous ownership at the current
+bootstrap boundary.
+
+Examples 285 and 286 prove cross-module canonical identity for recursive
+annotations and expressions. This remains a partial migration: exact recursive
+equality must next replace shallow comparisons in type checking, then flow
+through generic specialization, typed IR, ownership/effects, and LLVM. The
+roadmap count therefore remains 48.5/60 (80.8%).
+
+Regression evidence on 2026-07-14: the Release solution build completed with
+zero warnings and errors. The focused 285/286 slice passed 2/2, and the single
+coordinated eight-worker runner passed all 401 cases in 376.7 seconds with
+flushed `n/401` progress records.
+
 

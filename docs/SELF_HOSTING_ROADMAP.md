@@ -643,7 +643,12 @@ recomposition, including imported roles. Block item declarations accept full
 recursive type annotations. A new self-host semantic type-term arena interns
 nested trees and performs full-depth structural substitution, with
 `Result<[T; ~], {Text: box T}>` as executable evidence. Migrating expression,
-checking, IR, and LLVM consumers from the older shallow fields remains, and
+checking, IR, and LLVM consumers from the older shallow fields remains. The
+first migration boundary now globally interns annotation types by declaration
+identity across modules, seeds stable builtin IDs, and gives annotation-backed
+name and call expressions their complete recursive type ID. Type checking,
+generic call substitution, IR, ownership/effects, and LLVM still need to
+consume that ID consistently, and
 role-specific ownership/effect checks still keep semantic parity partial;
 the canonical gate count therefore remains 42 complete, 13 partial, and 5
 missing (48.5/60, 80.8%).

@@ -1,0 +1,43 @@
+import smalllang.compiler.semantic.expression_type_ids as expressionTypeIds
+
+main {
+    [
+        """
+        namespace sample.model
+
+        public struct Point {
+            x: Int
+        }
+
+        public keep value: Result<[Point; ~], {Text: box Point}> -> Result<[Point; ~], {Text: box Point}> => value
+        """,
+        """
+        namespace app.main
+        import sample.model as model
+
+        keep value: Result<[model.Point; ~], {Text: box model.Point}> -> Result<[model.Point; ~], {Text: box model.Point}> => value
+
+        main { }
+        """,
+        ~
+    ] => sources!
+    sources! -> expressionTypeIds.resolve => resolved
+
+    -1 => modelValueType!
+    -1 => appValueType!
+    0 => recursiveValues!
+    resolved.expressions -> each expression {
+        resolved.types[expression.typeId] => semanticType
+        (expression.status == 0 and semanticType.kind == 7 and semanticType.origin == 4 and semanticType.symbol == 1) -> if {
+            recursiveValues! + 1 => recursiveValues!
+            expression.sourceModule == 0 -> if { expression.typeId => modelValueType! }
+            expression.sourceModule == 1 -> if { expression.typeId => appValueType! }
+        }
+    }
+
+    (recursiveValues! >= 2 and modelValueType! >= 0 and modelValueType! == appValueType!) -> if {
+        "recursive expression type ids = valid"
+    } else {
+        "recursive expression type ids = invalid"
+    } -> println
+}
