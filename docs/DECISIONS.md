@@ -4821,4 +4821,48 @@ passed all 409 cases in 415.5 and 421.2 seconds with monotonic `n/409` records;
 the final compatibility-wrapper deduplication then passed its focused 7/7
 slice.
 
+## D151 - Canonical Type Preparation Joins Package Analysis
+
+Status: recursive terms, canonical uses, and type resolvers share package facts
+Date: 2026-07-14
+
+`PackageAnalysis` now also owns flat recursive type-term and canonical type-use
+arrays. `SourceAnalysisRange` adds contiguous `termStart`/`termCount` and
+`typeStart`/`typeCount` pairs while preserving the source-local AST, token,
+symbol, child-term, and canonical-use indexes stored in each record. Example
+294 verifies both new ranges begin at zero for the first source, join exactly
+at the second source, and account for every stored record.
+
+The type-term and type-use lowerers expose prepared syntax entry points. Package
+analysis parses and lexes each source once, then supplies the already built AST
+and token tables to both lowerers. Canonical type-ID resolution consumes package
+module identities, qualified names, AST, tokens, symbols, and term ranges.
+Imported-type, nominal-type, and composite-type resolution consume the same
+qualified results, nodes, tokens, symbols, and canonical type-use ranges.
+Their original source-only entry points now create one package and delegate to
+the analyzed implementation, preserving compatibility without retaining a
+second resolver body.
+
+The current affine aggregate model still requires one transient copy of each
+source's AST and token records into the shared prepared-syntax request while
+`PackageAnalysis` is being assembled. This replaces repeated parsing and
+lexing, but it is not yet a zero-copy construction path. A future borrowed-view
+or builder representation can remove that construction copy without changing
+consumer APIs.
+
+This slice does not promote a formal roadmap gate. Ownership/effect products,
+recursive drop glue, and remaining LLVM source scans must still consume the
+same context; dynamic-array/dictionary child lowering and generic nominal
+application layout also remain open. The canonical count stays 42 complete,
+13 partial, and 5 missing: 48.5/60 (80.8%).
+
+Regression evidence on 2026-07-14: direct type-term/type-use tests passed 3/3;
+the module/imported/nominal/composite/type-ID/context slice passed 8/8; Release
+build completed with zero warnings and errors; and the single coordinated
+eight-worker full runner passed 409/409 in 417.7 seconds with monotonic flushed
+progress records. Example 188 passed alone in 65.08 seconds. These measurements
+sit within the preceding context range (415.5-421.2 seconds full and roughly
+63.5-64.1 seconds single), so the change is recorded as architectural reuse,
+not a demonstrated performance improvement.
+
 

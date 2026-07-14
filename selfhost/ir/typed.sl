@@ -14,6 +14,8 @@ import smalllang.compiler.semantic.qualified as qualified
 import smalllang.compiler.semantic.resolve as resolution
 import smalllang.compiler.semantic.symbols as symbols
 import smalllang.compiler.semantic.type_ids as typeIds
+import smalllang.compiler.semantic.type_terms as typeTerms
+import smalllang.compiler.semantic.types as semanticTypes
 import smalllang.compiler.syntax as syntax
 import syntax.generated.smalllang as grammar
 
@@ -1502,6 +1504,8 @@ public lowerPrepared request: move TypedIrRequest -> [TypedIrNode; ~] {
     request.analysisSymbols -> each symbol { symbolTable! -> push(symbol) }
     [resolution.ResolvedName; ~] => names!
     request.analysisNames -> each name { names! -> push(name) }
+    [typeTerms.TypeTerm; ~] => terms!
+    [semanticTypes.TypeUse; ~] => typeUses!
     semanticContext.CompilationContext {
         sources: sources!
         types: types!
@@ -1517,6 +1521,8 @@ public lowerPrepared request: move TypedIrRequest -> [TypedIrNode; ~] {
         tokens: tokens!
         symbols: symbolTable!
         names: names!
+        terms: terms!
+        typeUses: typeUses!
     } => prepared!
     prepared! -> lowerContext => result!
     result!

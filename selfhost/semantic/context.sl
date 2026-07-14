@@ -10,6 +10,8 @@ import smalllang.compiler.semantic.qualified as qualified
 import smalllang.compiler.semantic.resolve as resolution
 import smalllang.compiler.semantic.symbols as symbols
 import smalllang.compiler.semantic.type_ids as typeIds
+import smalllang.compiler.semantic.type_terms as typeTerms
+import smalllang.compiler.semantic.types as semanticTypes
 import smalllang.compiler.syntax as syntax
 
 # Immutable whole-compilation facts. Consumers borrow this aggregate, so its
@@ -29,13 +31,15 @@ public struct CompilationContext {
     tokens: [syntax.SyntaxToken; ~]
     symbols: [symbols.Symbol; ~]
     names: [resolution.ResolvedName; ~]
+    terms: [typeTerms.TypeTerm; ~]
+    typeUses: [semanticTypes.TypeUse; ~]
 }
 
 public prepare sources: [Text; ~] -> CompilationContext {
     sources -> analysis.analyze => packageAnalysis
-    sources -> typeIds.resolve => semanticSet
-    sources -> nominalTypes.resolve => nominalTypes!
-    sources -> compositeTypes.resolve => compositeTypes!
+    packageAnalysis -> typeIds.resolveAnalyzed => semanticSet
+    packageAnalysis -> nominalTypes.resolveAnalyzed => nominalTypes!
+    packageAnalysis -> compositeTypes.resolveAnalyzed => compositeTypes!
     packageAnalysis -> modules.identitiesAnalyzed => moduleIdentities!
     packageAnalysis -> qualified.resolveAnalyzed => qualifiedResults!
     packageAnalysis -> calls.resolveModulesAnalyzed => resolvedCalls!
@@ -58,6 +62,10 @@ public prepare sources: [Text; ~] -> CompilationContext {
     packageAnalysis.symbols -> each symbol { contextSymbols! -> push(symbol) }
     [resolution.ResolvedName; ~] => contextNames!
     packageAnalysis.names -> each name { contextNames! -> push(name) }
+    [typeTerms.TypeTerm; ~] => contextTerms!
+    packageAnalysis.terms -> each term { contextTerms! -> push(term) }
+    [semanticTypes.TypeUse; ~] => contextTypeUses!
+    packageAnalysis.typeUses -> each typeUse { contextTypeUses! -> push(typeUse) }
 
     CompilationContext {
         sources: contextSources!
@@ -74,6 +82,8 @@ public prepare sources: [Text; ~] -> CompilationContext {
         tokens: contextTokens!
         symbols: contextSymbols!
         names: contextNames!
+        terms: contextTerms!
+        typeUses: contextTypeUses!
     } => result!
     result!
 }

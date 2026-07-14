@@ -2,10 +2,10 @@ namespace smalllang.compiler.semantic.type_ids
 
 import smalllang.compiler.ast
 import smalllang.compiler.lexer
+import smalllang.compiler.semantic.analysis as analysis
 import smalllang.compiler.semantic.modules
 import smalllang.compiler.semantic.qualified
 import smalllang.compiler.semantic.symbols
-import smalllang.compiler.semantic.type_terms as typeTerms
 import syntax.generated.smalllang as grammar
 
 # Kinds match type_terms: 1 nominal, 2 slice, 3 dynamic array, 4 fixed
@@ -145,9 +145,14 @@ public classify request: TypeClassificationRequest -> [Int; ~] {
 # Resolves and globally interns recursive annotation types across source files.
 # Nominal equality uses declaration identity, not source spelling.
 public resolve sources: [Text; ~] -> SemanticTypeSet {
+    sources -> analysis.analyze => package
+    package -> resolveAnalyzed
+}
+
+public resolveAnalyzed package: analysis.PackageAnalysis -> SemanticTypeSet {
     ["Unit", "Text", "Int", "Int8", "Int16", "Int32", "Int64", "Long", "UInt8", "UInt16", "UInt32", "UInt64", "Size", "UIntSize", "CodePoint", "Arena", "Arguments", "MappedBytes", "MutableMappedBytes", "Float", "Float32", "Float64", "Double", "Bool", ~] => builtinNames!
-    sources -> modules.identities => identities!
-    sources -> qualified.resolve => qualifiedResults!
+    package -> modules.identitiesAnalyzed => identities!
+    package -> qualified.resolveAnalyzed => qualifiedResults!
     [SemanticType; ~] => semanticTypes!
     [TypeReference; ~] => references!
     [NominalField; ~] => fields!
@@ -172,27 +177,24 @@ public resolve sources: [Text; ~] -> SemanticTypeSet {
     }
 
     0 => sourceIndex!
-    sourceIndex! < (sources -> len) -> while {
-        sources[sourceIndex!] => source
-        source -> ast.lower => nodes!
-        source -> lexer.lex => tokens!
-        nodes! -> symbols.collectPrepared => table!
-        source -> typeTerms.lower => terms!
+    sourceIndex! < (package.sources -> len) -> while {
+        package.sources[sourceIndex!] => source
+        package.ranges[sourceIndex!] => sourceRange
         [Int; ~] => mapped!
         0 => mapSeed!
-        mapSeed! < (terms! -> len) -> while {
+        mapSeed! < sourceRange.termCount -> while {
             mapped! -> push(-1)
             mapSeed! + 1 => mapSeed!
         }
 
         0 => completed!
         true => changed!
-        (completed! < (terms! -> len) and changed!) -> while {
+        (completed! < sourceRange.termCount and changed!) -> while {
             false => changed!
             0 => termIndex!
-            termIndex! < (terms! -> len) -> while {
+            termIndex! < sourceRange.termCount -> while {
                 mapped![termIndex!] < 0 -> if {
-                    terms![termIndex!] => term
+                    package.terms[sourceRange.termStart + termIndex!] => term
                     (term.firstArgument < 0 or mapped![term.firstArgument] >= 0) => firstReady
                     (term.secondArgument < 0 or mapped![term.secondArgument] >= 0) => secondReady
                     (firstReady and secondReady) -> if {
@@ -212,7 +214,7 @@ public resolve sources: [Text; ~] -> SemanticTypeSet {
                                         ancestor! == term.astNode -> if {
                                             true => belongsToTerm!
                                         } else {
-                                            nodes![ancestor!].parent => ancestor!
+                                            package.nodes[sourceRange.astStart + ancestor!].parent => ancestor!
                                         }
                                     }
                                     belongsToTerm! -> if { qualifiedSearch! => qualifiedIndex! }
@@ -226,7 +228,7 @@ public resolve sources: [Text; ~] -> SemanticTypeSet {
                                 imported.targetSymbol => targetSymbol!
                                 imported.status => status!
                             } else {
-                                tokens![term.nameToken] => name
+                                package.tokens[sourceRange.tokenStart + term.nameToken] => name
                                 -1 => builtinIndex!
                                 0 => builtinSearch!
                                 (builtinSearch! < (builtinNames! -> len) and builtinIndex! < 0) -> while {
@@ -248,24 +250,24 @@ public resolve sources: [Text; ~] -> SemanticTypeSet {
                                     builtinIndex! => targetSymbol!
                                 } else {
                                     -1 => ownerFunction!
-                                    nodes![term.astNode].parent => ownerAst!
+                                    package.nodes[sourceRange.astStart + term.astNode].parent => ownerAst!
                                     (ownerAst! >= 0 and ownerFunction! < 0) -> while {
                                         0 => ownerSymbolIndex!
-                                        ownerSymbolIndex! < (table! -> len) -> while {
-                                            table![ownerSymbolIndex!] => ownerCandidate
+                                        ownerSymbolIndex! < sourceRange.symbolCount -> while {
+                                            package.symbols[sourceRange.symbolStart + ownerSymbolIndex!] => ownerCandidate
                                             (ownerCandidate.kind == 7 and ownerCandidate.astNode == ownerAst!) -> if {
                                                 ownerSymbolIndex! => ownerFunction!
                                             }
                                             ownerSymbolIndex! + 1 => ownerSymbolIndex!
                                         }
-                                        ownerFunction! < 0 -> if { nodes![ownerAst!].parent => ownerAst! }
+                                        ownerFunction! < 0 -> if { package.nodes[sourceRange.astStart + ownerAst!].parent => ownerAst! }
                                     }
                                     -1 => localSymbol!
                                     0 => symbolIndex!
-                                    (symbolIndex! < (table! -> len) and localSymbol! < 0) -> while {
-                                        table![symbolIndex!] => candidate
+                                    (symbolIndex! < sourceRange.symbolCount and localSymbol! < 0) -> while {
+                                        package.symbols[sourceRange.symbolStart + symbolIndex!] => candidate
                                         ((candidate.parent < 0 and (candidate.kind == 3 or candidate.kind == 4)) or (candidate.kind == 32 and candidate.parent == ownerFunction!)) -> if {
-                                            tokens![candidate.nameToken] => candidateName
+                                            package.tokens[sourceRange.tokenStart + candidate.nameToken] => candidateName
                                             name.span.length == candidateName.span.length => equal!
                                             UIntSize(0) => localByte!
                                             (equal! and localByte! < name.span.length) -> while {
@@ -279,7 +281,7 @@ public resolve sources: [Text; ~] -> SemanticTypeSet {
                                         symbolIndex! + 1 => symbolIndex!
                                     }
                                     localSymbol! >= 0 -> if {
-                                        table![localSymbol!].kind == 32 -> if { 3 => origin! } else { 0 => origin! }
+                                        package.symbols[sourceRange.symbolStart + localSymbol!].kind == 32 -> if { 3 => origin! } else { 0 => origin! }
                                         sourceIndex! => targetModule!
                                         localSymbol! => targetSymbol!
                                     } else {
@@ -291,7 +293,7 @@ public resolve sources: [Text; ~] -> SemanticTypeSet {
                         term.kind == 7 -> if {
                             4 => origin!
                             -1 => targetModule!
-                            tokens![term.nameToken] => constructorName
+                            package.tokens[sourceRange.tokenStart + term.nameToken] => constructorName
                             constructorName.span.length == UIntSize(6) -> if {
                                 source -> byte(constructorName.span.start) => byte0
                                 source -> byte(constructorName.span.start + UIntSize(1)) => byte1
@@ -325,7 +327,7 @@ public resolve sources: [Text; ~] -> SemanticTypeSet {
                         -1 => lengthValue!
                         term.lengthToken >= 0 -> if {
                             UInt64(1469598103934665603) => lengthHash!
-                            tokens![term.lengthToken] => length
+                            package.tokens[sourceRange.tokenStart + term.lengthToken] => length
                             length.kind == grammar.tokenIdNumber -> if { 0 => lengthValue! }
                             UIntSize(0) => lengthByte!
                             lengthByte! < length.span.length -> while {
@@ -376,8 +378,8 @@ public resolve sources: [Text; ~] -> SemanticTypeSet {
             }
         }
         0 => fieldSymbolIndex!
-        fieldSymbolIndex! < (table! -> len) -> while {
-            table![fieldSymbolIndex!] => fieldSymbol
+        fieldSymbolIndex! < sourceRange.symbolCount -> while {
+            package.symbols[sourceRange.symbolStart + fieldSymbolIndex!] => fieldSymbol
             (fieldSymbol.kind == 26 and fieldSymbol.parent >= 0 and fieldSymbol.typeNode >= 0) -> if {
                 -1 => ownerType!
                 0 => ownerTypeSearch!
@@ -405,8 +407,8 @@ public resolve sources: [Text; ~] -> SemanticTypeSet {
                 }
                 -1 => fieldType!
                 0 => fieldTermSearch!
-                fieldTermSearch! < (terms! -> len) -> while {
-                    (terms![fieldTermSearch!].astNode == fieldSymbol.typeNode and mapped![fieldTermSearch!] >= 0) -> if {
+                fieldTermSearch! < sourceRange.termCount -> while {
+                    (package.terms[sourceRange.termStart + fieldTermSearch!].astNode == fieldSymbol.typeNode and mapped![fieldTermSearch!] >= 0) -> if {
                         mapped![fieldTermSearch!] => fieldType!
                     }
                     fieldTermSearch! + 1 => fieldTermSearch!
@@ -414,7 +416,7 @@ public resolve sources: [Text; ~] -> SemanticTypeSet {
                 0 => fieldOrdinal!
                 0 => priorFieldIndex!
                 priorFieldIndex! < fieldSymbolIndex! -> while {
-                    table![priorFieldIndex!] => priorField
+                    package.symbols[sourceRange.symbolStart + priorFieldIndex!] => priorField
                     (priorField.kind == 26 and priorField.parent == fieldSymbol.parent) -> if { fieldOrdinal! + 1 => fieldOrdinal! }
                     priorFieldIndex! + 1 => priorFieldIndex!
                 }

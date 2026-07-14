@@ -1,6 +1,7 @@
 namespace smalllang.compiler.semantic.type_resolve
 
 import smalllang.compiler.ast as ast
+import smalllang.compiler.semantic.analysis as analysis
 import smalllang.compiler.semantic.qualified as qualified
 import smalllang.compiler.semantic.types as types
 
@@ -16,17 +17,20 @@ public struct ResolvedType {
 # Links source-local canonical type uses to module-qualified nominal symbols.
 # Status follows qualified resolution: 0 public, 2 missing, 3 non-public.
 public resolve sources: [Text; ~] -> [ResolvedType; ~] {
-    sources -> qualified.resolve => qualifiedResults!
+    sources -> analysis.analyze => package
+    package -> resolveAnalyzed
+}
+
+public resolveAnalyzed package: analysis.PackageAnalysis -> [ResolvedType; ~] {
+    package -> qualified.resolveAnalyzed => qualifiedResults!
     [ResolvedType; ~] => results!
-    sources -> len => sourceCount
+    package.sources -> len => sourceCount
     0 => sourceIndex!
     sourceIndex! < sourceCount -> while {
-        sources[sourceIndex!] => source
-        source -> ast.lower => nodes!
-        source -> types.canonicalize => typeUses!
+        package.ranges[sourceIndex!] => sourceRange
         0 => typeIndex!
-        typeIndex! < (typeUses! -> len) -> while {
-            typeUses![typeIndex!] => typeUse
+        typeIndex! < sourceRange.typeCount -> while {
+            package.typeUses[sourceRange.typeStart + typeIndex!] => typeUse
             0 => qualifiedIndex!
             qualifiedIndex! < (qualifiedResults! -> len) -> while {
                 qualifiedResults![qualifiedIndex!] => candidate
@@ -37,7 +41,7 @@ public resolve sources: [Text; ~] -> [ResolvedType; ~] {
                         ancestor! == typeUse.astNode -> if {
                             true => belongsToType!
                         } else {
-                            nodes![ancestor!].parent => ancestor!
+                            package.nodes[sourceRange.astStart + ancestor!].parent => ancestor!
                         }
                     }
                     belongsToType! -> if {

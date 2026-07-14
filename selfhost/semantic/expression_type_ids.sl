@@ -12,6 +12,8 @@ import smalllang.compiler.semantic.qualified
 import smalllang.compiler.semantic.resolve as resolution
 import smalllang.compiler.semantic.symbols
 import smalllang.compiler.semantic.type_ids as typeIds
+import smalllang.compiler.semantic.type_terms as typeTerms
+import smalllang.compiler.semantic.types as semanticTypes
 import smalllang.compiler.syntax
 import syntax.generated.smalllang as grammar
 
@@ -500,6 +502,8 @@ public resolvePrepared request: move ExpressionTypeIdRequest -> ExpressionTypeId
     request.analysisNames -> each name { names! -> push(name) }
     [nominalTypes.NominalType; ~] => nominal!
     [compositeTypes.CompositeType; ~] => composite!
+    [typeTerms.TypeTerm; ~] => terms!
+    [semanticTypes.TypeUse; ~] => typeUses!
     semanticContext.CompilationContext {
         sources: sources!
         types: types!
@@ -515,6 +519,8 @@ public resolvePrepared request: move ExpressionTypeIdRequest -> ExpressionTypeId
         tokens: tokens!
         symbols: symbolTable!
         names: names!
+        terms: terms!
+        typeUses: typeUses!
     } => prepared!
     prepared! -> resolveContext => result!
     result!

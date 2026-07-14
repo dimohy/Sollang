@@ -672,15 +672,17 @@ missing (48.5/60, 80.8%).
 
 One borrowed `CompilationContext` now carries canonical type/reference/field,
 nominal, composite, module, qualified-name, resolved-call, and flattened
-per-source AST/token/symbol/resolved-name products. Source ranges preserve local
-indexes while allowing type checking, shallow inference, recursive expression
-IDs, typed IR, and LLVM orchestration to read one aggregate without copying its
-owned arrays. Module/import/qualified/call resolution also consumes those flat
-products. Compatibility wrappers remain public. Canonical type-term/ID,
-nominal, composite, and imported-type resolution still prepare source-local
-products before the context is complete; ownership/effect, drop, and remaining
-LLVM scans also need migration. The first full context run is correctness
-evidence, not a speed claim, until those older preparations are removed.
+per-source AST/token/symbol/resolved-name/type-term/type-use products. Source
+ranges preserve local indexes while allowing type checking, shallow inference,
+recursive expression IDs, typed IR, and LLVM orchestration to read one aggregate
+without rebuilding those products. Module/import/qualified/call resolution and
+canonical type-ID, nominal, composite, and imported-type resolution consume the
+same package. Source-only APIs remain thin compatibility wrappers, while the
+type-term and type-use lowerers expose prepared syntax entry points. Ownership/
+effect products, recursive drop, and remaining LLVM source scans still need
+migration. The context is a correctness and architecture improvement; current
+409-case and single-example timings remain effectively flat, so it is not yet
+claimed as a speed win.
 
 Self-hosted LLVM text selects descriptors implemented in the file module
 `smalllang.compiler.llvm.target`. Windows x64/COFF, Linux x64/ELF, and

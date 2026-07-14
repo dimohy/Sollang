@@ -2,6 +2,7 @@ namespace smalllang.compiler.semantic.type_terms
 
 import smalllang.compiler.ast
 import smalllang.compiler.lexer
+import smalllang.compiler.syntax as syntax
 import syntax.generated.smalllang as grammar
 
 # A semantic type is a canonical, index-addressed tree. Argument fields point
@@ -18,6 +19,12 @@ public struct TypeTerm {
     secondArgument: Int
     lengthToken: Int
     lengthId: Int
+}
+
+public struct TypeTermRequest {
+    source: Text
+    nodes: [ast.AstNode; ~]
+    tokens: [syntax.SyntaxToken; ~]
 }
 
 public struct SubstitutionRequest {
@@ -37,22 +44,27 @@ public struct SubstitutionResult {
 public lower source: Text -> [TypeTerm; ~] {
     source -> ast.lower => nodes!
     source -> lexer.lex => tokens!
+    TypeTermRequest { source: source, nodes: nodes!, tokens: tokens! } => request!
+    request! -> lowerPrepared
+}
+
+public lowerPrepared request: TypeTermRequest -> [TypeTerm; ~] {
     [TypeTerm; ~] => terms!
     [Int; ~] => astToTerm!
     0 => astMapIndex!
-    astMapIndex! < (nodes! -> len) -> while {
+    astMapIndex! < (request.nodes -> len) -> while {
         astToTerm! -> push(-1)
         astMapIndex! + 1 => astMapIndex!
     }
 
     0 => astIndex!
-    astIndex! < (nodes! -> len) -> while {
-        nodes![astIndex!] => node
+    astIndex! < (request.nodes -> len) -> while {
+        request.nodes[astIndex!] => node
         node.kind == 12 -> if {
             node.firstToken => firstToken!
             true => findingFirst!
             (firstToken! < node.firstToken + node.tokenCount and findingFirst!) -> while {
-                (tokens![firstToken!].kind == grammar.triviaIdWhitespace or tokens![firstToken!].kind == grammar.triviaIdComment) -> if {
+                (request.tokens[firstToken!].kind == grammar.triviaIdWhitespace or request.tokens[firstToken!].kind == grammar.triviaIdComment) -> if {
                     firstToken! + 1 => firstToken!
                 } else {
                     false => findingFirst!
@@ -61,18 +73,18 @@ public lower source: Text -> [TypeTerm; ~] {
             1 => kind!
             -1 => nameToken!
             -1 => lengthToken!
-            tokens![firstToken!].kind == grammar.tokenIdLeftBracket -> if {
+            request.tokens[firstToken!].kind == grammar.tokenIdLeftBracket -> if {
                 2 => kind!
                 0 => depth!
                 false => outerSemicolon!
                 false => outerTilde!
                 firstToken! => shapeToken!
                 shapeToken! < node.firstToken + node.tokenCount -> while {
-                    tokens![shapeToken!].kind == grammar.tokenIdLeftBracket -> if { depth! + 1 => depth! }
-                    tokens![shapeToken!].kind == grammar.tokenIdRightBracket -> if { depth! - 1 => depth! }
-                    (depth! == 1 and tokens![shapeToken!].kind == grammar.tokenIdSemicolon) -> if { true => outerSemicolon! }
-                    (depth! == 1 and tokens![shapeToken!].kind == grammar.tokenIdTilde) -> if { true => outerTilde! }
-                    (outerSemicolon! and lengthToken! < 0 and depth! == 1 and (tokens![shapeToken!].kind == grammar.tokenIdIdentifier or tokens![shapeToken!].kind == grammar.tokenIdNumber)) -> if {
+                    request.tokens[shapeToken!].kind == grammar.tokenIdLeftBracket -> if { depth! + 1 => depth! }
+                    request.tokens[shapeToken!].kind == grammar.tokenIdRightBracket -> if { depth! - 1 => depth! }
+                    (depth! == 1 and request.tokens[shapeToken!].kind == grammar.tokenIdSemicolon) -> if { true => outerSemicolon! }
+                    (depth! == 1 and request.tokens[shapeToken!].kind == grammar.tokenIdTilde) -> if { true => outerTilde! }
+                    (outerSemicolon! and lengthToken! < 0 and depth! == 1 and (request.tokens[shapeToken!].kind == grammar.tokenIdIdentifier or request.tokens[shapeToken!].kind == grammar.tokenIdNumber)) -> if {
                         shapeToken! => lengthToken!
                     }
                     shapeToken! + 1 => shapeToken!
@@ -81,16 +93,16 @@ public lower source: Text -> [TypeTerm; ~] {
                     outerTilde! -> if { 3 => kind! } else { 4 => kind! }
                 }
             } else {
-                tokens![firstToken!].kind == grammar.tokenIdLeftBrace -> if {
+                request.tokens[firstToken!].kind == grammar.tokenIdLeftBrace -> if {
                     5 => kind!
                 } else {
-                    tokens![firstToken!].kind == grammar.tokenIdIdentifier -> if {
+                    request.tokens[firstToken!].kind == grammar.tokenIdIdentifier -> if {
                         firstToken! => nameToken!
-                        tokens![firstToken!] => firstName
+                        request.tokens[firstToken!] => firstName
                         firstName.span.length == UIntSize(3) -> if {
-                            source -> byte(firstName.span.start) => boxByte0
-                            source -> byte(firstName.span.start + UIntSize(1)) => boxByte1
-                            source -> byte(firstName.span.start + UIntSize(2)) => boxByte2
+                            request.source -> byte(firstName.span.start) => boxByte0
+                            request.source -> byte(firstName.span.start + UIntSize(1)) => boxByte1
+                            request.source -> byte(firstName.span.start + UIntSize(2)) => boxByte2
                             (boxByte0 == UInt8(98) and boxByte1 == UInt8(111) and boxByte2 == UInt8(120)) -> if {
                                 6 => kind!
                                 -1 => nameToken!
@@ -127,15 +139,15 @@ public lower source: Text -> [TypeTerm; ~] {
         0 => childIndex!
         childIndex! < (terms! -> len) -> while {
             terms![childIndex!] => child
-            nodes![child.astNode].parent == term!.astNode -> if {
+            request.nodes[child.astNode].parent == term!.astNode -> if {
                 firstChild! < 0 -> if {
                     childIndex! => firstChild!
                 } else {
-                    nodes![child.astNode].firstToken < nodes![terms![firstChild!].astNode].firstToken -> if {
+                    request.nodes[child.astNode].firstToken < request.nodes[terms![firstChild!].astNode].firstToken -> if {
                         firstChild! => secondChild!
                         childIndex! => firstChild!
                     } else {
-                        (secondChild! < 0 or nodes![child.astNode].firstToken < nodes![terms![secondChild!].astNode].firstToken) -> if {
+                        (secondChild! < 0 or request.nodes[child.astNode].firstToken < request.nodes[terms![secondChild!].astNode].firstToken) -> if {
                             childIndex! => secondChild!
                         }
                     }
@@ -152,13 +164,13 @@ public lower source: Text -> [TypeTerm; ~] {
             0 => priorNameIndex!
             (priorNameIndex! < termIndex! and term!.nameId == termIndex!) -> while {
                 terms![priorNameIndex!].nameToken >= 0 -> if {
-                    tokens![term!.nameToken] => currentName
-                    tokens![terms![priorNameIndex!].nameToken] => priorName
+                    request.tokens[term!.nameToken] => currentName
+                    request.tokens[terms![priorNameIndex!].nameToken] => priorName
                     currentName.span.length == priorName.span.length => sameName!
                     UIntSize(0) => nameByte!
                     (sameName! and nameByte! < currentName.span.length) -> while {
-                        source -> byte(currentName.span.start + nameByte!) => currentByte
-                        source -> byte(priorName.span.start + nameByte!) => priorByte
+                        request.source -> byte(currentName.span.start + nameByte!) => currentByte
+                        request.source -> byte(priorName.span.start + nameByte!) => priorByte
                         currentByte != priorByte -> if { false => sameName! }
                         nameByte! + UIntSize(1) => nameByte!
                     }
@@ -172,13 +184,13 @@ public lower source: Text -> [TypeTerm; ~] {
             0 => priorLengthIndex!
             (priorLengthIndex! < termIndex! and term!.lengthId == termIndex!) -> while {
                 terms![priorLengthIndex!].lengthToken >= 0 -> if {
-                    tokens![term!.lengthToken] => currentLength
-                    tokens![terms![priorLengthIndex!].lengthToken] => priorLength
+                    request.tokens[term!.lengthToken] => currentLength
+                    request.tokens[terms![priorLengthIndex!].lengthToken] => priorLength
                     currentLength.span.length == priorLength.span.length => sameLength!
                     UIntSize(0) => lengthByte!
                     (sameLength! and lengthByte! < currentLength.span.length) -> while {
-                        source -> byte(currentLength.span.start + lengthByte!) => currentByte
-                        source -> byte(priorLength.span.start + lengthByte!) => priorByte
+                        request.source -> byte(currentLength.span.start + lengthByte!) => currentByte
+                        request.source -> byte(priorLength.span.start + lengthByte!) => priorByte
                         currentByte != priorByte -> if { false => sameLength! }
                         lengthByte! + UIntSize(1) => lengthByte!
                     }

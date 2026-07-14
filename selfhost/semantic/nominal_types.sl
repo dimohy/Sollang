@@ -2,6 +2,7 @@ namespace smalllang.compiler.semantic.nominal_types
 
 import smalllang.compiler.ast as ast
 import smalllang.compiler.lexer as lexer
+import smalllang.compiler.semantic.analysis as analysis
 import smalllang.compiler.semantic.symbols as symbols
 import smalllang.compiler.semantic.type_resolve as typeResolve
 import smalllang.compiler.semantic.types as types
@@ -20,19 +21,21 @@ public struct NominalType {
 # Origins: 0 local declaration, 1 builtin, 2 imported declaration.
 # Status: 0 resolved, 2 missing, 3 non-public imported declaration.
 public resolve sources: [Text; ~] -> [NominalType; ~] {
+    sources -> analysis.analyze => package
+    package -> resolveAnalyzed
+}
+
+public resolveAnalyzed package: analysis.PackageAnalysis -> [NominalType; ~] {
     ["Unit", "Text", "Int", "Int8", "Int16", "Int32", "Int64", "Long", "UInt8", "UInt16", "UInt32", "UInt64", "Size", "UIntSize", "CodePoint", "Arena", "Arguments", "MappedBytes", "MutableMappedBytes", "Float", "Float32", "Float64", "Double", "Bool", ~] => builtinNames!
-    sources -> typeResolve.resolve => importedTypes!
+    package -> typeResolve.resolveAnalyzed => importedTypes!
     [NominalType; ~] => results!
     0 => sourceIndex!
-    sourceIndex! < (sources -> len) -> while {
-        sources[sourceIndex!] => source
-        source -> ast.lower => nodes!
-        source -> lexer.lex => tokens!
-        source -> types.canonicalize => typeUses!
-        nodes! -> symbols.collectPrepared => table!
+    sourceIndex! < (package.sources -> len) -> while {
+        package.sources[sourceIndex!] => source
+        package.ranges[sourceIndex!] => sourceRange
         0 => typeIndex!
-        typeIndex! < (typeUses! -> len) -> while {
-            typeUses![typeIndex!] => typeUse
+        typeIndex! < sourceRange.typeCount -> while {
+            package.typeUses[sourceRange.typeStart + typeIndex!] => typeUse
             typeUse.kind == 1 -> if {
                 -1 => importedIndex!
                 0 => importedSearch!
@@ -56,16 +59,16 @@ public resolve sources: [Text; ~] -> [NominalType; ~] {
                     } => importedResult
                     results! -> push(importedResult)
                 } else {
-                    nodes![typeUse.astNode] => typeNode
+                    package.nodes[sourceRange.astStart + typeUse.astNode] => typeNode
                     -1 => nameToken!
                     typeNode.firstToken => tokenIndex!
                     (tokenIndex! < typeNode.firstToken + typeNode.tokenCount and nameToken! < 0) -> while {
-                        tokens![tokenIndex!].kind == grammar.tokenIdIdentifier -> if {
+                        package.tokens[sourceRange.tokenStart + tokenIndex!].kind == grammar.tokenIdIdentifier -> if {
                             tokenIndex! => nameToken!
                         }
                         tokenIndex! + 1 => tokenIndex!
                     }
-                    tokens![nameToken!] => name
+                    package.tokens[sourceRange.tokenStart + nameToken!] => name
                     -1 => builtinIndex!
                     0 => builtinSearch!
                     (builtinSearch! < (builtinNames! -> len) and builtinIndex! < 0) -> while {
@@ -94,24 +97,24 @@ public resolve sources: [Text; ~] -> [NominalType; ~] {
                         results! -> push(builtinResult)
                     } else {
                         -1 => typeOwnerFunction!
-                        nodes![typeUse.astNode].parent => ownerAst!
+                        package.nodes[sourceRange.astStart + typeUse.astNode].parent => ownerAst!
                         (ownerAst! >= 0 and typeOwnerFunction! < 0) -> while {
                             0 => ownerSymbolIndex!
-                            ownerSymbolIndex! < (table! -> len) -> while {
-                                table![ownerSymbolIndex!] => ownerCandidate
+                            ownerSymbolIndex! < sourceRange.symbolCount -> while {
+                                package.symbols[sourceRange.symbolStart + ownerSymbolIndex!] => ownerCandidate
                                 (ownerCandidate.kind == 7 and ownerCandidate.astNode == ownerAst!) -> if {
                                     ownerSymbolIndex! => typeOwnerFunction!
                                 }
                                 ownerSymbolIndex! + 1 => ownerSymbolIndex!
                             }
-                            typeOwnerFunction! < 0 -> if { nodes![ownerAst!].parent => ownerAst! }
+                            typeOwnerFunction! < 0 -> if { package.nodes[sourceRange.astStart + ownerAst!].parent => ownerAst! }
                         }
                         -1 => localSymbol!
                         0 => symbolIndex!
-                        (symbolIndex! < (table! -> len) and localSymbol! < 0) -> while {
-                            table![symbolIndex!] => candidate
+                        (symbolIndex! < sourceRange.symbolCount and localSymbol! < 0) -> while {
+                            package.symbols[sourceRange.symbolStart + symbolIndex!] => candidate
                             ((candidate.parent < 0 and (candidate.kind == 3 or candidate.kind == 4)) or (candidate.kind == 32 and candidate.parent == typeOwnerFunction!)) -> if {
-                                tokens![candidate.nameToken] => candidateName
+                                package.tokens[sourceRange.tokenStart + candidate.nameToken] => candidateName
                                 name.span.length == candidateName.span.length => equal!
                                 UIntSize(0) => nameByte!
                                 (equal! and nameByte! < name.span.length) -> while {
@@ -126,7 +129,7 @@ public resolve sources: [Text; ~] -> [NominalType; ~] {
                         }
                         0 => localOrigin!
                         localSymbol! >= 0 -> if {
-                            table![localSymbol!].kind == 32 -> if { 3 => localOrigin! }
+                            package.symbols[sourceRange.symbolStart + localSymbol!].kind == 32 -> if { 3 => localOrigin! }
                         }
                         NominalType {
                             sourceModule: sourceIndex!

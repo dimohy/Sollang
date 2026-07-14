@@ -2,6 +2,7 @@ namespace smalllang.compiler.semantic.composite_types
 
 import smalllang.compiler.ast as ast
 import smalllang.compiler.lexer as lexer
+import smalllang.compiler.semantic.analysis as analysis
 import smalllang.compiler.semantic.symbols as symbols
 import smalllang.compiler.semantic.type_resolve as typeResolve
 import smalllang.compiler.semantic.types as types
@@ -27,26 +28,28 @@ public struct CompositeType {
 
 # Component origins match nominal_types: 0 local, 1 builtin, 3 generic.
 public resolve sources: [Text; ~] -> [CompositeType; ~] {
+    sources -> analysis.analyze => package
+    package -> resolveAnalyzed
+}
+
+public resolveAnalyzed package: analysis.PackageAnalysis -> [CompositeType; ~] {
     ["Unit", "Text", "Int", "Int8", "Int16", "Int32", "Int64", "Long", "UInt8", "UInt16", "UInt32", "UInt64", "Size", "UIntSize", "CodePoint", "Arena", "Arguments", "MappedBytes", "MutableMappedBytes", "Float", "Float32", "Float64", "Double", "Bool", ~] => builtinNames!
     [CompositeType; ~] => results!
-    sources -> typeResolve.resolve => importedTypes!
+    package -> typeResolve.resolveAnalyzed => importedTypes!
     0 => sourceIndex!
-    sourceIndex! < (sources -> len) -> while {
-        sources[sourceIndex!] => source
-        source -> ast.lower => nodes!
-        source -> lexer.lex => tokens!
-        nodes! -> symbols.collectPrepared => table!
-        source -> types.canonicalize => typeUses!
+    sourceIndex! < (package.sources -> len) -> while {
+        package.sources[sourceIndex!] => source
+        package.ranges[sourceIndex!] => sourceRange
         0 => typeIndex!
-        typeIndex! < (typeUses! -> len) -> while {
-            typeUses![typeIndex!] => typeUse
+        typeIndex! < sourceRange.typeCount -> while {
+            package.typeUses[sourceRange.typeStart + typeIndex!] => typeUse
             (typeUse.kind >= 2 and typeUse.kind <= 6) -> if {
                 [-1, -1, -1, ~] => componentTokens!
-                nodes![typeUse.astNode] => typeNode
+                package.nodes[sourceRange.astStart + typeUse.astNode] => typeNode
                 0 => identifierOrdinal!
                 typeNode.firstToken => tokenIndex!
                 tokenIndex! < typeNode.firstToken + typeNode.tokenCount -> while {
-                    tokens![tokenIndex!].kind == grammar.tokenIdIdentifier -> if {
+                    package.tokens[sourceRange.tokenStart + tokenIndex!].kind == grammar.tokenIdIdentifier -> if {
                         typeUse.kind == 5 -> if {
                             identifierOrdinal! == 0 -> if { tokenIndex! => componentTokens![1] }
                             identifierOrdinal! == 1 -> if { tokenIndex! => componentTokens![2] }
@@ -66,12 +69,12 @@ public resolve sources: [Text; ~] -> [CompositeType; ~] {
                 typeNode.parent => ownerAst!
                 (ownerAst! >= 0 and typeOwnerFunction! < 0) -> while {
                     0 => ownerSymbolIndex!
-                    ownerSymbolIndex! < (table! -> len) -> while {
-                        table![ownerSymbolIndex!] => ownerCandidate
+                    ownerSymbolIndex! < sourceRange.symbolCount -> while {
+                        package.symbols[sourceRange.symbolStart + ownerSymbolIndex!] => ownerCandidate
                         (ownerCandidate.kind == 7 and ownerCandidate.astNode == ownerAst!) -> if { ownerSymbolIndex! => typeOwnerFunction! }
                         ownerSymbolIndex! + 1 => ownerSymbolIndex!
                     }
-                    typeOwnerFunction! < 0 -> if { nodes![ownerAst!].parent => ownerAst! }
+                    typeOwnerFunction! < 0 -> if { package.nodes[sourceRange.astStart + ownerAst!].parent => ownerAst! }
                 }
 
                 [-1, -1, -1, ~] => componentOrigins!
@@ -81,7 +84,7 @@ public resolve sources: [Text; ~] -> [CompositeType; ~] {
                 0 => componentSlot!
                 componentSlot! < 3 -> while {
                     componentTokens![componentSlot!] >= 0 -> if {
-                        tokens![componentTokens![componentSlot!]] => componentName
+                        package.tokens[sourceRange.tokenStart + componentTokens![componentSlot!]] => componentName
                         -1 => builtinIndex!
                         0 => builtinSearch!
                         (builtinSearch! < (builtinNames! -> len) and builtinIndex! < 0) -> while {
@@ -104,10 +107,10 @@ public resolve sources: [Text; ~] -> [CompositeType; ~] {
                         } else {
                             -1 => componentSymbol!
                             0 => symbolIndex!
-                            (symbolIndex! < (table! -> len) and componentSymbol! < 0) -> while {
-                                table![symbolIndex!] => candidate
+                            (symbolIndex! < sourceRange.symbolCount and componentSymbol! < 0) -> while {
+                                package.symbols[sourceRange.symbolStart + symbolIndex!] => candidate
                                 ((candidate.parent < 0 and (candidate.kind == 3 or candidate.kind == 4)) or (candidate.kind == 32 and candidate.parent == typeOwnerFunction!)) -> if {
-                                    tokens![candidate.nameToken] => candidateName
+                                    package.tokens[sourceRange.tokenStart + candidate.nameToken] => candidateName
                                     componentName.span.length == candidateName.span.length => equal!
                                     UIntSize(0) => nameByte!
                                     (equal! and nameByte! < componentName.span.length) -> while {
@@ -121,7 +124,7 @@ public resolve sources: [Text; ~] -> [CompositeType; ~] {
                                 symbolIndex! + 1 => symbolIndex!
                             }
                             componentSymbol! >= 0 -> if {
-                                table![componentSymbol!].kind == 32 -> if { 3 } else { 0 } => componentOrigin
+                                package.symbols[sourceRange.symbolStart + componentSymbol!].kind == 32 -> if { 3 } else { 0 } => componentOrigin
                                 componentOrigin => componentOrigins![componentSlot!]
                                 sourceIndex! => componentModules![componentSlot!]
                                 componentSymbol! => componentSymbols![componentSlot!]

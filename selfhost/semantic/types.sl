@@ -2,6 +2,7 @@ namespace smalllang.compiler.semantic.types
 
 import smalllang.compiler.ast as ast
 import smalllang.compiler.lexer as lexer
+import smalllang.compiler.semantic.type_terms as typeTerms
 import syntax.generated.smalllang as grammar
 
 public struct TypeUse {
@@ -20,21 +21,26 @@ public struct TypeUse {
 public canonicalize source: Text -> [TypeUse; ~] {
     source -> ast.lower => nodes!
     source -> lexer.lex => tokens!
+    typeTerms.TypeTermRequest { source: source, nodes: nodes!, tokens: tokens! } => request!
+    request! -> canonicalizePrepared
+}
+
+public canonicalizePrepared request: typeTerms.TypeTermRequest -> [TypeUse; ~] {
     [TypeUse; ~] => uses!
     [Int; ~] => representatives!
-    nodes! -> len => astCount
+    request.nodes -> len => astCount
     0 => astIndex!
 
     astIndex! < astCount -> while {
-        nodes![astIndex!] => node
-        (node.kind == 12 and (node.parent < 0 or nodes![node.parent].kind != 12)) -> if {
+        request.nodes[astIndex!] => node
+        (node.kind == 12 and (node.parent < 0 or request.nodes[node.parent].kind != 12)) -> if {
             node.firstToken => firstSignificant!
             true => findingFirst!
             (firstSignificant! < node.firstToken + node.tokenCount and findingFirst!) -> while {
-                tokens![firstSignificant!].kind == grammar.triviaIdWhitespace -> if {
+                request.tokens[firstSignificant!].kind == grammar.triviaIdWhitespace -> if {
                     firstSignificant! + 1 => firstSignificant!
                 } else {
-                    tokens![firstSignificant!].kind == grammar.triviaIdComment -> if {
+                    request.tokens[firstSignificant!].kind == grammar.triviaIdComment -> if {
                         firstSignificant! + 1 => firstSignificant!
                     } else {
                         false => findingFirst!
@@ -47,19 +53,19 @@ public canonicalize source: Text -> [TypeUse; ~] {
             -1 => keyToken!
             -1 => valueToken!
             -1 => lengthToken!
-            tokens![firstSignificant!].kind == grammar.tokenIdLeftBracket -> if {
+            request.tokens[firstSignificant!].kind == grammar.tokenIdLeftBracket -> if {
                 2 => typeKind!
                 false => hasSemicolon!
                 false => hasTilde!
                 firstSignificant! => shapeToken!
                 shapeToken! < node.firstToken + node.tokenCount -> while {
-                    tokens![shapeToken!].kind == grammar.tokenIdSemicolon -> if { true => hasSemicolon! }
-                    tokens![shapeToken!].kind == grammar.tokenIdTilde -> if { true => hasTilde! }
-                    (elementToken! < 0 and tokens![shapeToken!].kind == grammar.tokenIdIdentifier) -> if {
+                    request.tokens[shapeToken!].kind == grammar.tokenIdSemicolon -> if { true => hasSemicolon! }
+                    request.tokens[shapeToken!].kind == grammar.tokenIdTilde -> if { true => hasTilde! }
+                    (elementToken! < 0 and request.tokens[shapeToken!].kind == grammar.tokenIdIdentifier) -> if {
                         shapeToken! => elementToken!
                     }
                     hasSemicolon! -> if {
-                        (tokens![shapeToken!].kind == grammar.tokenIdIdentifier or tokens![shapeToken!].kind == grammar.tokenIdNumber) -> if {
+                        (request.tokens[shapeToken!].kind == grammar.tokenIdIdentifier or request.tokens[shapeToken!].kind == grammar.tokenIdNumber) -> if {
                             shapeToken! != elementToken! -> if { shapeToken! => lengthToken! }
                         }
                     }
@@ -69,15 +75,15 @@ public canonicalize source: Text -> [TypeUse; ~] {
                     hasTilde! -> if { 3 => typeKind! } else { 4 => typeKind! }
                 }
             } else {
-                tokens![firstSignificant!].kind == grammar.tokenIdLeftBrace -> if {
+                request.tokens[firstSignificant!].kind == grammar.tokenIdLeftBrace -> if {
                     5 => typeKind!
                     false => afterTypeColon!
                     firstSignificant! => dictionaryToken!
                     dictionaryToken! < node.firstToken + node.tokenCount -> while {
-                        tokens![dictionaryToken!].kind == grammar.tokenIdColon -> if {
+                        request.tokens[dictionaryToken!].kind == grammar.tokenIdColon -> if {
                             true => afterTypeColon!
                         } else {
-                            tokens![dictionaryToken!].kind == grammar.tokenIdIdentifier -> if {
+                            request.tokens[dictionaryToken!].kind == grammar.tokenIdIdentifier -> if {
                                 afterTypeColon! -> if {
                                     valueToken! < 0 -> if { dictionaryToken! => valueToken! }
                                 } else {
@@ -88,18 +94,18 @@ public canonicalize source: Text -> [TypeUse; ~] {
                         dictionaryToken! + 1 => dictionaryToken!
                     }
                 } else {
-                    tokens![firstSignificant!] => firstTypeToken
+                    request.tokens[firstSignificant!] => firstTypeToken
                     firstTypeToken.kind == grammar.tokenIdIdentifier -> if {
                         firstTypeToken.span.length == UIntSize(3) -> if {
-                            source -> byte(firstTypeToken.span.start) => boxByte0
-                            source -> byte(firstTypeToken.span.start + UIntSize(1)) => boxByte1
-                            source -> byte(firstTypeToken.span.start + UIntSize(2)) => boxByte2
+                            request.source -> byte(firstTypeToken.span.start) => boxByte0
+                            request.source -> byte(firstTypeToken.span.start + UIntSize(1)) => boxByte1
+                            request.source -> byte(firstTypeToken.span.start + UIntSize(2)) => boxByte2
                             (boxByte0 == UInt8(98) and boxByte1 == UInt8(111) and boxByte2 == UInt8(120)) -> if {
                                 6 => typeKind!
                                 firstSignificant! + 1 => boxElementToken!
                                 true => findingBoxElement!
                                 (boxElementToken! < node.firstToken + node.tokenCount and findingBoxElement!) -> while {
-                                    tokens![boxElementToken!].kind == grammar.tokenIdIdentifier -> if {
+                                    request.tokens[boxElementToken!].kind == grammar.tokenIdIdentifier -> if {
                                         boxElementToken! => elementToken!
                                         false => findingBoxElement!
                                     } else {
@@ -115,7 +121,7 @@ public canonicalize source: Text -> [TypeUse; ~] {
             -1 => canonical!
             0 => representativeIndex!
             (representativeIndex! < (representatives! -> len) and canonical! < 0) -> while {
-                nodes![representatives![representativeIndex!]] => representative
+                request.nodes[representatives![representativeIndex!]] => representative
                 node.firstToken => leftCursor!
                 node.firstToken + node.tokenCount => leftEnd
                 representative.firstToken => rightCursor!
@@ -125,10 +131,10 @@ public canonicalize source: Text -> [TypeUse; ~] {
                 (equal! and not comparedAll!) -> while {
                     true => skipLeft!
                     (leftCursor! < leftEnd and skipLeft!) -> while {
-                        tokens![leftCursor!].kind == grammar.triviaIdWhitespace -> if {
+                        request.tokens[leftCursor!].kind == grammar.triviaIdWhitespace -> if {
                             leftCursor! + 1 => leftCursor!
                         } else {
-                            tokens![leftCursor!].kind == grammar.triviaIdComment -> if {
+                            request.tokens[leftCursor!].kind == grammar.triviaIdComment -> if {
                                 leftCursor! + 1 => leftCursor!
                             } else {
                                 false => skipLeft!
@@ -137,10 +143,10 @@ public canonicalize source: Text -> [TypeUse; ~] {
                     }
                     true => skipRight!
                     (rightCursor! < rightEnd and skipRight!) -> while {
-                        tokens![rightCursor!].kind == grammar.triviaIdWhitespace -> if {
+                        request.tokens[rightCursor!].kind == grammar.triviaIdWhitespace -> if {
                             rightCursor! + 1 => rightCursor!
                         } else {
-                            tokens![rightCursor!].kind == grammar.triviaIdComment -> if {
+                            request.tokens[rightCursor!].kind == grammar.triviaIdComment -> if {
                                 rightCursor! + 1 => rightCursor!
                             } else {
                                 false => skipRight!
@@ -153,15 +159,15 @@ public canonicalize source: Text -> [TypeUse; ~] {
                         (leftCursor! >= leftEnd or rightCursor! >= rightEnd) -> if {
                             false => equal!
                         } else {
-                            tokens![leftCursor!] => leftToken
-                            tokens![rightCursor!] => rightToken
+                            request.tokens[leftCursor!] => leftToken
+                            request.tokens[rightCursor!] => rightToken
                             (leftToken.kind != rightToken.kind or leftToken.span.length != rightToken.span.length) -> if {
                                 false => equal!
                             } else {
                                 UIntSize(0) => typeByte!
                                 (equal! and typeByte! < leftToken.span.length) -> while {
-                                    source -> byte(leftToken.span.start + typeByte!) => leftByte
-                                    source -> byte(rightToken.span.start + typeByte!) => rightByte
+                                    request.source -> byte(leftToken.span.start + typeByte!) => leftByte
+                                    request.source -> byte(rightToken.span.start + typeByte!) => rightByte
                                     leftByte != rightByte -> if { false => equal! }
                                     typeByte! + UIntSize(1) => typeByte!
                                 }
@@ -204,11 +210,11 @@ public canonicalize source: Text -> [TypeUse; ~] {
     seedUseIndex! < useCount -> while {
         uses![seedUseIndex!] => seedUse
         seedUse.kind == 1 -> if {
-            nodes![seedUse.astNode] => seedAst
+            request.nodes[seedUse.astNode] => seedAst
             seedAst.firstToken => seedToken!
             true => findingSeed!
             (seedToken! < seedAst.firstToken + seedAst.tokenCount and findingSeed!) -> while {
-                tokens![seedToken!].kind == grammar.tokenIdIdentifier -> if {
+                request.tokens[seedToken!].kind == grammar.tokenIdIdentifier -> if {
                     componentTokens! -> push(seedToken!)
                     componentCanonicals! -> push(seedUse.canonical)
                     false => findingSeed!
@@ -233,13 +239,13 @@ public canonicalize source: Text -> [TypeUse; ~] {
                 -1 => componentCanonical!
                 0 => knownComponentIndex!
                 (knownComponentIndex! < (componentTokens! -> len) and componentCanonical! < 0) -> while {
-                    tokens![componentToken!] => componentName
-                    tokens![componentTokens![knownComponentIndex!]] => knownName
+                    request.tokens[componentToken!] => componentName
+                    request.tokens[componentTokens![knownComponentIndex!]] => knownName
                     componentName.span.length == knownName.span.length => componentEqual!
                     UIntSize(0) => componentByte!
                     (componentEqual! and componentByte! < componentName.span.length) -> while {
-                        source -> byte(componentName.span.start + componentByte!) => componentLeftByte
-                        source -> byte(knownName.span.start + componentByte!) => componentRightByte
+                        request.source -> byte(componentName.span.start + componentByte!) => componentLeftByte
+                        request.source -> byte(knownName.span.start + componentByte!) => componentRightByte
                         componentLeftByte != componentRightByte -> if { false => componentEqual! }
                         componentByte! + UIntSize(1) => componentByte!
                     }
