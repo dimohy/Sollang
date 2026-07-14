@@ -180,7 +180,7 @@ ordering. Effect-set enforcement remains unchecked.
 - [x] Focused parser, semantic, ownership, and LLVM tests pass.
 - [x] The full regression suite passes with zero build warnings and errors.
 - [x] The roadmap records exact completed, partial, and missing gate counts.
-- [ ] The implementation is committed as a reproducible baseline.
+- [x] The implementation is committed as a reproducible baseline.
 
 Parser evidence: [`276-selfhost-result-role-block-parser.sl`](../examples/276-selfhost-result-role-block-parser.sl)
 executes the generated grammar through the SL lexer/parser VM. The grammar
@@ -193,6 +193,7 @@ cases plus three intentionally updated deterministic grammar/AST snapshots;
 the three updated snapshots then passed together with grammar determinism.
 The canonical roadmap remains 42 complete, 13 partial, and 5 missing gates
 (48.5/60, 80.8%). This partial role-block slice does not promote a roadmap gate.
+The common foundation baseline is commit `d2b07db`.
 
 ## Definition of Done
 
