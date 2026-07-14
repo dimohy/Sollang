@@ -1430,14 +1430,123 @@ emitCore context: move EmitContext -> Unit uses Console {
                 ", ptr %slot$(mutableRegionRoot), align " -> print
                 "$(regionNode -> storageAlign)" -> println
             }
-            (regionNode.kind == 9 and regionNode.typeSymbol == 13) -> if {
-                false => regionArgumentsLength!
-                0 => regionArgumentsLengthChildSearch!
-                regionArgumentsLengthChildSearch! < (context.ir -> len) -> while {
-                    (context.ir[regionArgumentsLengthChildSearch!].parent == regionNodeIndex! and context.ir[regionArgumentsLengthChildSearch!].typeSymbol == 16) -> if { true => regionArgumentsLength! }
-                    regionArgumentsLengthChildSearch! + 1 => regionArgumentsLengthChildSearch!
+            regionNode.kind == 13 -> if {
+                (regionNode.typeOrigin == 1 and regionNode.typeSymbol == 16) -> if {
+                } else {
+                context.ir[regionNode.operand0] => regionMemberBase
+                regionMemberBase.typeOrigin => regionMemberCurrentOrigin!
+                regionMemberBase.typeModule => regionMemberCurrentModule!
+                regionMemberBase.typeSymbol => regionMemberCurrentSymbol!
+                regionNode -> sourceNode => regionMemberAst
+                0 => regionMemberIdentifierCount!
+                regionMemberAst.firstToken => regionMemberTokenIndex!
+                regionMemberTokenIndex! < regionMemberAst.firstToken + regionMemberAst.tokenCount -> while {
+                    context.tokens[context.ranges[regionNode.sourceModule].tokenStart + regionMemberTokenIndex!].kind == grammar.tokenIdIdentifier -> if { regionMemberIdentifierCount! + 1 => regionMemberIdentifierCount! }
+                    regionMemberTokenIndex! + 1 => regionMemberTokenIndex!
                 }
-                regionArgumentsLength! -> if { "  %v$(regionNodeIndex!) = call i64 @sl_argument_count()" -> println }
+                0 => regionMemberIdentifierOrdinal!
+                0 => regionMemberProjectionOrdinal!
+                regionMemberAst.firstToken => regionMemberTokenIndex!
+                regionMemberTokenIndex! < regionMemberAst.firstToken + regionMemberAst.tokenCount -> while {
+                    context.tokens[context.ranges[regionNode.sourceModule].tokenStart + regionMemberTokenIndex!].kind == grammar.tokenIdIdentifier -> if {
+                        regionMemberIdentifierOrdinal! > 0 -> if {
+                            regionMemberCurrentModule! => regionOwnerSourceModule!
+                            regionMemberCurrentOrigin! == 2 -> if { context.modules[regionMemberCurrentModule!].sourceIndex => regionOwnerSourceModule! }
+                            context.ranges[regionOwnerSourceModule!] => regionOwnerRange
+                            -1 => regionFieldOrdinal!
+                            0 => regionCandidateFieldOrdinal!
+                            0 => regionMemberFieldSearch!
+                            regionMemberFieldSearch! < regionOwnerRange.symbolCount -> while {
+                                context.symbols[regionOwnerRange.symbolStart + regionMemberFieldSearch!] => regionMemberField
+                                (regionMemberField.kind == 26 and regionMemberField.parent == regionMemberCurrentSymbol!) -> if {
+                                    context.tokens[context.ranges[regionNode.sourceModule].tokenStart + regionMemberTokenIndex!] => regionMemberName
+                                    context.tokens[regionOwnerRange.tokenStart + regionMemberField.nameToken] => regionFieldName
+                                    regionMemberName.span.length == regionFieldName.span.length => regionFieldEqual!
+                                    UIntSize(0) => regionFieldNameByte!
+                                    (regionFieldEqual! and regionFieldNameByte! < regionMemberName.span.length) -> while {
+                                        context.sources[regionNode.sourceModule] -> byte(regionMemberName.span.start + regionFieldNameByte!) => regionMemberByte
+                                        context.sources[regionOwnerSourceModule!] -> byte(regionFieldName.span.start + regionFieldNameByte!) => regionFieldByte
+                                        regionMemberByte != regionFieldByte -> if { false => regionFieldEqual! }
+                                        regionFieldNameByte! + UIntSize(1) => regionFieldNameByte!
+                                    }
+                                    regionFieldEqual! -> if {
+                                        regionCandidateFieldOrdinal! => regionFieldOrdinal!
+                                        -1 => regionMemberFieldTypeIndex!
+                                        0 => regionMemberFieldTypeSearch!
+                                        regionMemberFieldTypeSearch! < (context.nominal -> len) -> while {
+                                            (context.nominal[regionMemberFieldTypeSearch!].sourceModule == regionOwnerSourceModule! and context.nominal[regionMemberFieldTypeSearch!].typeAst == regionMemberField.typeNode) -> if { regionMemberFieldTypeSearch! => regionMemberFieldTypeIndex! }
+                                            regionMemberFieldTypeSearch! + 1 => regionMemberFieldTypeSearch!
+                                        }
+                                        -1 => regionMemberNextOrigin!
+                                        -1 => regionMemberNextModule!
+                                        -1 => regionMemberNextSymbol!
+                                        regionMemberFieldTypeIndex! >= 0 -> if {
+                                            context.nominal[regionMemberFieldTypeIndex!] => regionMemberFieldType
+                                            regionMemberFieldType.origin => regionMemberNextOrigin!
+                                            regionMemberFieldType.targetModule => regionMemberNextModule!
+                                            regionMemberFieldType.targetSymbol => regionMemberNextSymbol!
+                                        } else {
+                                            0 => regionMemberCompositeSearch!
+                                            regionMemberCompositeSearch! < (context.composite -> len) -> while {
+                                                context.composite[regionMemberCompositeSearch!] => regionMemberCompositeType
+                                                (regionMemberCompositeType.sourceModule == regionOwnerSourceModule! and regionMemberCompositeType.typeAst == regionMemberField.typeNode) -> if {
+                                                    10 + regionMemberCompositeType.kind => regionMemberNextOrigin!
+                                                    regionMemberCompositeType.kind == 5 -> if {
+                                                        regionMemberCompositeType.keySymbol => regionMemberNextModule!
+                                                        regionMemberCompositeType.valueSymbol => regionMemberNextSymbol!
+                                                    } else {
+                                                        regionMemberCompositeType.elementModule => regionMemberNextModule!
+                                                        regionMemberCompositeType.elementSymbol => regionMemberNextSymbol!
+                                                    }
+                                                }
+                                                regionMemberCompositeSearch! + 1 => regionMemberCompositeSearch!
+                                            }
+                                        }
+                                        "  " -> print
+                                        regionMemberIdentifierOrdinal! == regionMemberIdentifierCount! - 1 -> if { "%v$(regionNodeIndex!)" -> print } else { "%v$(regionNodeIndex!)_m$(regionMemberProjectionOrdinal!)" -> print }
+                                        " = extractvalue %sl.struct.m$(regionOwnerSourceModule!)_s$(regionMemberCurrentSymbol!) " -> print
+                                        regionMemberProjectionOrdinal! == 0 -> if {
+                                            (regionMemberBase.kind == 5 and ownerIndex! >= 0 and context.ir[ownerIndex!].operand1 >= 0 and regionMemberBase.symbol == context.ir[context.ir[ownerIndex!].operand1].symbol) -> if { "%arg" -> print } else { "%v$(regionNode.operand0)" -> print }
+                                        } else { "%v$(regionNodeIndex!)_m$(regionMemberProjectionOrdinal! - 1)" -> print }
+                                        ", $(regionFieldOrdinal!)" -> println
+                                        regionMemberNextOrigin! => regionMemberCurrentOrigin!
+                                        regionMemberNextModule! => regionMemberCurrentModule!
+                                        regionMemberNextSymbol! => regionMemberCurrentSymbol!
+                                        regionMemberProjectionOrdinal! + 1 => regionMemberProjectionOrdinal!
+                                    }
+                                    regionCandidateFieldOrdinal! + 1 => regionCandidateFieldOrdinal!
+                                }
+                                regionMemberFieldSearch! + 1 => regionMemberFieldSearch!
+                            }
+                        }
+                        regionMemberIdentifierOrdinal! + 1 => regionMemberIdentifierOrdinal!
+                    }
+                    regionMemberTokenIndex! + 1 => regionMemberTokenIndex!
+                }
+                }
+            }
+            (regionNode.kind == 9 and regionNode.opcode == -201 and regionNode.operand0 >= 0) -> if {
+                context.ir[regionNode.operand0] => regionLengthBase
+                (regionLengthBase.typeOrigin == 1 and regionLengthBase.typeSymbol == 16) -> if {
+                    "  %v$(regionNodeIndex!) = call i64 @sl_argument_count()" -> println
+                } else {
+                    "  %v$(regionNodeIndex!) = extractvalue " -> print
+                    regionLengthBase -> writeType
+                    " %v$(regionNode.operand0), " -> print
+                    regionLengthBase.typeOrigin == 15 -> if { "2" -> println } else { "1" -> println }
+                }
+            }
+            (regionNode.kind == 9 and regionNode.opcode == -202 and regionNode.operand0 >= 0 and regionNode.operand1 >= 0) -> if {
+                "  %v$(regionNodeIndex!)_base = extractvalue %sl.text %v$(regionNode.operand0), 0" -> println
+                "  %v$(regionNodeIndex!)_address = getelementptr i8, ptr %v$(regionNodeIndex!)_base, i64 %v$(regionNode.operand1)" -> println
+                "  %v$(regionNodeIndex!) = load i8, ptr %v$(regionNodeIndex!)_address, align 1" -> println
+            }
+            (regionNode.kind == 9 and regionNode.opcode == -203 and regionNode.operand0 >= 0 and regionNode.operand1 >= 0) -> if {
+                context.ir[regionNode.operand1].nextOperand => regionSliceLength
+                "  %v$(regionNodeIndex!)_base = extractvalue %sl.text %v$(regionNode.operand0), 0" -> println
+                "  %v$(regionNodeIndex!)_start = getelementptr i8, ptr %v$(regionNodeIndex!)_base, i64 %v$(regionNode.operand1)" -> println
+                "  %v$(regionNodeIndex!)_ptr = insertvalue %sl.text poison, ptr %v$(regionNodeIndex!)_start, 0" -> println
+                "  %v$(regionNodeIndex!) = insertvalue %sl.text %v$(regionNodeIndex!)_ptr, i64 %v$(regionSliceLength), 1" -> println
             }
             (regionNode.kind == 14 and regionNode.typeOrigin == 13) -> if {
                 0 => regionArrayLength!
@@ -2002,14 +2111,30 @@ emitCore context: move EmitContext -> Unit uses Console {
                         }
                     }
                 }
-                (expression.kind == 9 and expression.typeSymbol == 13) -> if {
-                    false => argumentsLength!
-                    expressionStart => argumentsLengthChildSearch!
-                    argumentsLengthChildSearch! < functionEnd! -> while {
-                        (context.ir[argumentsLengthChildSearch!].parent == expressionIndex! and context.ir[argumentsLengthChildSearch!].typeSymbol == 16) -> if { true => argumentsLength! }
-                        argumentsLengthChildSearch! + 1 => argumentsLengthChildSearch!
+                (expression.kind == 9 and expression.opcode == -201 and expression.operand0 >= 0) -> if {
+                    context.ir[expression.operand0] => lengthBase
+                    (lengthBase.typeOrigin == 1 and lengthBase.typeSymbol == 16) -> if {
+                        "  %v$(expressionIndex!) = call i64 @sl_argument_count()" -> println
+                    } else {
+                        "  %v$(expressionIndex!) = extractvalue " -> print
+                        lengthBase -> writeType
+                        " " -> print
+                        (lengthBase.kind == 5 and function.operand1 >= 0 and lengthBase.symbol == context.ir[function.operand1].symbol) -> if { "%arg" -> print } else { "%v$(expression.operand0)" -> print }
+                        ", " -> print
+                        lengthBase.typeOrigin == 15 -> if { "2" -> println } else { "1" -> println }
                     }
-                    argumentsLength! -> if { "  %v$(expressionIndex!) = call i64 @sl_argument_count()" -> println }
+                }
+                (expression.kind == 9 and expression.opcode == -202 and expression.operand0 >= 0 and expression.operand1 >= 0) -> if {
+                    "  %v$(expressionIndex!)_base = extractvalue %sl.text %v$(expression.operand0), 0" -> println
+                    "  %v$(expressionIndex!)_address = getelementptr i8, ptr %v$(expressionIndex!)_base, i64 %v$(expression.operand1)" -> println
+                    "  %v$(expressionIndex!) = load i8, ptr %v$(expressionIndex!)_address, align 1" -> println
+                }
+                (expression.kind == 9 and expression.opcode == -203 and expression.operand0 >= 0 and expression.operand1 >= 0) -> if {
+                    context.ir[expression.operand1].nextOperand => sliceLength
+                    "  %v$(expressionIndex!)_base = extractvalue %sl.text %v$(expression.operand0), 0" -> println
+                    "  %v$(expressionIndex!)_start = getelementptr i8, ptr %v$(expressionIndex!)_base, i64 %v$(expression.operand1)" -> println
+                    "  %v$(expressionIndex!)_ptr = insertvalue %sl.text poison, ptr %v$(expressionIndex!)_start, 0" -> println
+                    "  %v$(expressionIndex!) = insertvalue %sl.text %v$(expressionIndex!)_ptr, i64 %v$(sliceLength), 1" -> println
                 }
                 (expression.kind == 17 and expression.flags == 1) -> if {
                     expressionIndex! -> mutableBindingRoot => mutableRoot
@@ -3038,14 +3163,28 @@ emitCore context: move EmitContext -> Unit uses Console {
                             }
                         }
                     }
-                    (entryExpression.kind == 9 and entryExpression.typeSymbol == 13) -> if {
-                        false => entryArgumentsLength!
-                        functionIndex! + 1 => entryArgumentsLengthChildSearch!
-                        entryArgumentsLengthChildSearch! < entryEnd! -> while {
-                            (context.ir[entryArgumentsLengthChildSearch!].parent == entryExpressionIndex! and context.ir[entryArgumentsLengthChildSearch!].typeSymbol == 16) -> if { true => entryArgumentsLength! }
-                            entryArgumentsLengthChildSearch! + 1 => entryArgumentsLengthChildSearch!
+                    (entryExpression.kind == 9 and entryExpression.opcode == -201 and entryExpression.operand0 >= 0) -> if {
+                        context.ir[entryExpression.operand0] => entryLengthBase
+                        (entryLengthBase.typeOrigin == 1 and entryLengthBase.typeSymbol == 16) -> if {
+                            "  %v$(entryExpressionIndex!) = call i64 @sl_argument_count()" -> println
+                        } else {
+                            "  %v$(entryExpressionIndex!) = extractvalue " -> print
+                            entryLengthBase -> writeType
+                            " %v$(entryExpression.operand0), " -> print
+                            entryLengthBase.typeOrigin == 15 -> if { "2" -> println } else { "1" -> println }
                         }
-                        entryArgumentsLength! -> if { "  %v$(entryExpressionIndex!) = call i64 @sl_argument_count()" -> println }
+                    }
+                    (entryExpression.kind == 9 and entryExpression.opcode == -202 and entryExpression.operand0 >= 0 and entryExpression.operand1 >= 0) -> if {
+                        "  %v$(entryExpressionIndex!)_base = extractvalue %sl.text %v$(entryExpression.operand0), 0" -> println
+                        "  %v$(entryExpressionIndex!)_address = getelementptr i8, ptr %v$(entryExpressionIndex!)_base, i64 %v$(entryExpression.operand1)" -> println
+                        "  %v$(entryExpressionIndex!) = load i8, ptr %v$(entryExpressionIndex!)_address, align 1" -> println
+                    }
+                    (entryExpression.kind == 9 and entryExpression.opcode == -203 and entryExpression.operand0 >= 0 and entryExpression.operand1 >= 0) -> if {
+                        context.ir[entryExpression.operand1].nextOperand => entrySliceLength
+                        "  %v$(entryExpressionIndex!)_base = extractvalue %sl.text %v$(entryExpression.operand0), 0" -> println
+                        "  %v$(entryExpressionIndex!)_start = getelementptr i8, ptr %v$(entryExpressionIndex!)_base, i64 %v$(entryExpression.operand1)" -> println
+                        "  %v$(entryExpressionIndex!)_ptr = insertvalue %sl.text poison, ptr %v$(entryExpressionIndex!)_start, 0" -> println
+                        "  %v$(entryExpressionIndex!) = insertvalue %sl.text %v$(entryExpressionIndex!)_ptr, i64 %v$(entrySliceLength), 1" -> println
                     }
                     (entryExpression.kind == 17 and entryExpression.flags == 1) -> if {
                         entryExpressionIndex! -> mutableBindingRoot => entryMutableRoot

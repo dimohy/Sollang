@@ -144,14 +144,15 @@ public inferContext prepared: semanticContext.CompilationContext -> [ExpressionT
                 }
             }
             node.kind == 10 -> if {
-                -1 => flowLastIdentifier!
-                node.firstToken => flowTokenIndex!
-                flowTokenIndex! < node.firstToken + node.tokenCount -> while {
-                    prepared.tokens[sourceRange.tokenStart + flowTokenIndex!].kind == grammar.tokenIdIdentifier -> if { flowTokenIndex! => flowLastIdentifier! }
-                    flowTokenIndex! + 1 => flowTokenIndex!
+                -1 => flowMethodToken!
+                0 => flowChildSearch!
+                flowChildSearch! < sourceRange.astCount -> while {
+                    prepared.nodes[sourceRange.astStart + flowChildSearch!] => flowChild
+                    (flowChild.parent == astIndex! and flowChild.kind == 16) -> if { flowChild.payloadToken => flowMethodToken! }
+                    flowChildSearch! + 1 => flowChildSearch!
                 }
-                flowLastIdentifier! >= 0 -> if {
-                    prepared.tokens[sourceRange.tokenStart + flowLastIdentifier!] => flowName
+                flowMethodToken! >= 0 -> if {
+                    prepared.tokens[sourceRange.tokenStart + flowMethodToken!] => flowName
                     TextMatchRequest { source: source, start: flowName.span.start, length: flowName.span.length, expected: "len" } -> textMatches -> if {
                         inferred! -> push(ExpressionType { sourceModule: sourceIndex!, astNode: astIndex!, origin: 1, targetModule: -1, targetSymbol: 13, keyOrigin: -1, keyModule: -1, valueOrigin: -1, valueModule: -1 })
                     }

@@ -122,6 +122,25 @@ public struct TypedIrRequest {
     analysisNames: [resolution.ResolvedName; ~]
 }
 
+struct IntrinsicNameRequest {
+    source: Text
+    token: syntax.SyntaxToken
+}
+
+intrinsicOpcode request: IntrinsicNameRequest -> Int {
+    -1 => opcode!
+    request.token.span.length == UIntSize(3) -> if {
+        ((request.source -> byte(request.token.span.start)) == UInt8(108) and (request.source -> byte(request.token.span.start + UIntSize(1))) == UInt8(101) and (request.source -> byte(request.token.span.start + UIntSize(2))) == UInt8(110)) -> if { -201 => opcode! }
+    }
+    request.token.span.length == UIntSize(4) -> if {
+        ((request.source -> byte(request.token.span.start)) == UInt8(98) and (request.source -> byte(request.token.span.start + UIntSize(1))) == UInt8(121) and (request.source -> byte(request.token.span.start + UIntSize(2))) == UInt8(116) and (request.source -> byte(request.token.span.start + UIntSize(3))) == UInt8(101)) -> if { -202 => opcode! }
+    }
+    request.token.span.length == UIntSize(5) -> if {
+        ((request.source -> byte(request.token.span.start)) == UInt8(115) and (request.source -> byte(request.token.span.start + UIntSize(1))) == UInt8(108) and (request.source -> byte(request.token.span.start + UIntSize(2))) == UInt8(105) and (request.source -> byte(request.token.span.start + UIntSize(3))) == UInt8(99) and (request.source -> byte(request.token.span.start + UIntSize(4))) == UInt8(101)) -> if { -203 => opcode! }
+    }
+    opcode!
+}
+
 public lowerContext prepared: semanticContext.CompilationContext -> [TypedIrNode; ~] {
     prepared -> expressionTypeIds.resolveContext => recursiveTypes
     [typeIds.SemanticType; ~] => recursiveSemanticTypes!
@@ -553,6 +572,17 @@ public lowerContext prepared: semanticContext.CompilationContext -> [TypedIrNode
                                 -1 => expressionSymbol!
                                 -1 => expressionTargetModule!
                                 expression.flags => expressionFlags!
+                                expression.operatorKind => expressionOpcode!
+                                expression.kind == 10 -> if {
+                                    0 => intrinsicChildSearch!
+                                    intrinsicChildSearch! < sourceRange.astCount -> while {
+                                        prepared.nodes[sourceRange.astStart + intrinsicChildSearch!] => intrinsicChild
+                                        (intrinsicChild.parent == expressionAstIndex! and intrinsicChild.kind == 16) -> if {
+                                            IntrinsicNameRequest { source: source, token: prepared.tokens[sourceRange.tokenStart + intrinsicChild.payloadToken] } -> intrinsicOpcode => expressionOpcode!
+                                        }
+                                        intrinsicChildSearch! + 1 => intrinsicChildSearch!
+                                    }
+                                }
                                 expressionKind! == 5 -> if {
                                     0 => nameResolutionSearch!
                                     nameResolutionSearch! < (resolvedNames! -> len) -> while {
@@ -592,7 +622,7 @@ public lowerContext prepared: semanticContext.CompilationContext -> [TypedIrNode
                                     typeKind: recursiveExpressionTypeId! < 0 -> if { -1 } else { recursiveSemanticTypes![recursiveExpressionTypeId!].kind }
                                     typeFlags: recursiveExpressionTypeId! < 0 -> if { 0 } else { recursiveTypeFlags![recursiveExpressionTypeId!] }
                                     payloadToken: expression.payloadToken
-                                    opcode: expression.operatorKind
+                                    opcode: expressionOpcode!
                                     operand0: -1
                                     operand1: -1
                                     nextOperand: -1
@@ -623,7 +653,7 @@ public lowerContext prepared: semanticContext.CompilationContext -> [TypedIrNode
                     expressionIrStart => operandIrIndex!
                     operandIrIndex! < expressionIrEnd -> while {
                         results![operandIrIndex!] => operatorIr!
-                        (operatorIr!.kind == 6 or operatorIr!.kind == 7 or operatorIr!.kind == 8 or operatorIr!.kind == 13 or operatorIr!.kind == 15 or operatorIr!.kind == 17 or operatorIr!.kind == 22 or operatorIr!.kind == 23) -> if {
+                        (operatorIr!.kind == 6 or operatorIr!.kind == 7 or operatorIr!.kind == 8 or (operatorIr!.kind == 9 and operatorIr!.opcode <= -201 and operatorIr!.opcode >= -203) or operatorIr!.kind == 13 or operatorIr!.kind == 15 or operatorIr!.kind == 17 or operatorIr!.kind == 22 or operatorIr!.kind == 23) -> if {
                             -1 => firstOperand!
                             -1 => secondOperand!
                             UIntSize(0) => firstStart!
@@ -648,7 +678,7 @@ public lowerContext prepared: semanticContext.CompilationContext -> [TypedIrNode
                                 childIrIndex! + 1 => childIrIndex!
                             }
                             firstOperand! => operatorIr!.operand0
-                            (operatorIr!.kind == 6 or operatorIr!.kind == 8 or operatorIr!.kind == 15) -> if { secondOperand! => operatorIr!.operand1 }
+                            (operatorIr!.kind == 6 or operatorIr!.kind == 8 or (operatorIr!.kind == 9 and operatorIr!.opcode <= -201 and operatorIr!.opcode >= -203) or operatorIr!.kind == 15) -> if { secondOperand! => operatorIr!.operand1 }
                             operatorIr!.kind == 22 -> if {
                                 -1 => operatorIr!.operand0
                                 firstOperand! => operatorIr!.operand1
@@ -1075,6 +1105,17 @@ public lowerContext prepared: semanticContext.CompilationContext -> [TypedIrNode
                                 -1 => entryExpressionSymbol!
                                 -1 => entryExpressionTargetModule!
                                 entryExpression.flags => entryExpressionFlags!
+                                entryExpression.operatorKind => entryExpressionOpcode!
+                                entryExpression.kind == 10 -> if {
+                                    0 => entryIntrinsicChildSearch!
+                                    entryIntrinsicChildSearch! < sourceRange.astCount -> while {
+                                        prepared.nodes[sourceRange.astStart + entryIntrinsicChildSearch!] => entryIntrinsicChild
+                                        (entryIntrinsicChild.parent == entryExpressionAst! and entryIntrinsicChild.kind == 16) -> if {
+                                            IntrinsicNameRequest { source: source, token: prepared.tokens[sourceRange.tokenStart + entryIntrinsicChild.payloadToken] } -> intrinsicOpcode => entryExpressionOpcode!
+                                        }
+                                        entryIntrinsicChildSearch! + 1 => entryIntrinsicChildSearch!
+                                    }
+                                }
                                 entryExpressionKind! == 5 -> if {
                                     0 => entryNameSearch!
                                     entryNameSearch! < (resolvedNames! -> len) -> while {
@@ -1114,7 +1155,7 @@ public lowerContext prepared: semanticContext.CompilationContext -> [TypedIrNode
                                     typeKind: recursiveEntryExpressionTypeId! < 0 -> if { -1 } else { recursiveSemanticTypes![recursiveEntryExpressionTypeId!].kind }
                                     typeFlags: recursiveEntryExpressionTypeId! < 0 -> if { 0 } else { recursiveTypeFlags![recursiveEntryExpressionTypeId!] }
                                     payloadToken: entryExpression.payloadToken
-                                    opcode: entryExpression.operatorKind
+                                    opcode: entryExpressionOpcode!
                                     operand0: -1
                                     operand1: -1
                                     nextOperand: -1
@@ -1141,7 +1182,7 @@ public lowerContext prepared: semanticContext.CompilationContext -> [TypedIrNode
                     entryExpressionStart => entryOperandIr!
                     entryOperandIr! < entryExpressionEnd -> while {
                         results![entryOperandIr!] => entryOperator!
-                        (entryOperator!.kind == 6 or entryOperator!.kind == 7 or entryOperator!.kind == 8 or entryOperator!.kind == 17 or entryOperator!.kind == 22 or entryOperator!.kind == 23) -> if {
+                        (entryOperator!.kind == 6 or entryOperator!.kind == 7 or entryOperator!.kind == 8 or (entryOperator!.kind == 9 and entryOperator!.opcode <= -201 and entryOperator!.opcode >= -203) or entryOperator!.kind == 17 or entryOperator!.kind == 22 or entryOperator!.kind == 23) -> if {
                             -1 => entryFirstOperand!
                             -1 => entrySecondOperand!
                             UIntSize(0) => entryFirstStart!
@@ -1164,7 +1205,7 @@ public lowerContext prepared: semanticContext.CompilationContext -> [TypedIrNode
                                 entryChildIr! + 1 => entryChildIr!
                             }
                             entryFirstOperand! => entryOperator!.operand0
-                            (entryOperator!.kind == 6 or entryOperator!.kind == 8) -> if { entrySecondOperand! => entryOperator!.operand1 }
+                            (entryOperator!.kind == 6 or entryOperator!.kind == 8 or (entryOperator!.kind == 9 and entryOperator!.opcode <= -201 and entryOperator!.opcode >= -203)) -> if { entrySecondOperand! => entryOperator!.operand1 }
                             entryOperator!.kind == 22 -> if {
                                 -1 => entryOperator!.operand0
                                 entryFirstOperand! => entryOperator!.operand1
