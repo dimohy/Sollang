@@ -585,6 +585,40 @@ public inferContext prepared: semanticContext.CompilationContext -> [ExpressionT
                                 }
                                 compositeSearch! + 1 => compositeSearch!
                             }
+                            returnCompositeIndex! >= 0 -> if {
+                                prepared.composite[returnCompositeIndex!] => directReturnComposite
+                                directReturnComposite.kind == 5 -> if {
+                                    (directReturnComposite.keyOrigin != 3 and directReturnComposite.valueOrigin != 3) -> if {
+                                        inferred! -> push(ExpressionType {
+                                            sourceModule: sourceIndex!
+                                            astNode: call.callAst
+                                            origin: 10 + directReturnComposite.kind
+                                            targetModule: directReturnComposite.keySymbol
+                                            targetSymbol: directReturnComposite.valueSymbol
+                                            keyOrigin: directReturnComposite.keyOrigin
+                                            keyModule: directReturnComposite.keyModule
+                                            valueOrigin: directReturnComposite.valueOrigin
+                                            valueModule: directReturnComposite.valueModule
+                                        })
+                                        true => changed!
+                                    }
+                                } else {
+                                    directReturnComposite.elementOrigin != 3 -> if {
+                                        inferred! -> push(ExpressionType {
+                                            sourceModule: sourceIndex!
+                                            astNode: call.callAst
+                                            origin: 10 + directReturnComposite.kind
+                                            targetModule: directReturnComposite.elementModule
+                                            targetSymbol: directReturnComposite.elementSymbol
+                                            keyOrigin: -1
+                                            keyModule: -1
+                                            valueOrigin: -1
+                                            valueModule: -1
+                                        })
+                                        true => changed!
+                                    }
+                                }
+                            }
                             (returnCompositeIndex! >= 0 and inputCompositeIndex! >= 0) -> if {
                                 prepared.composite[returnCompositeIndex!] => returnComposite
                                 prepared.composite[inputCompositeIndex!] => inputComposite
@@ -845,8 +879,7 @@ public inferContext prepared: semanticContext.CompilationContext -> [ExpressionT
                         valueType.sourceModule == sourceIndex! -> if {
                             prepared.nodes[sourceRange.astStart + valueType.astNode].parent => ancestor!
                             1 => distance!
-                            valueType.astNode == bindingSymbol.astNode => belongsToBinding!
-                            belongsToBinding! -> if { 0 => distance! }
+                            false => belongsToBinding!
                             (ancestor! >= 0 and not belongsToBinding!) -> while {
                                 ancestor! == bindingSymbol.astNode -> if {
                                     true => belongsToBinding!
@@ -985,8 +1018,21 @@ public inferContext prepared: semanticContext.CompilationContext -> [ExpressionT
                                 baseType.valueOrigin => memberCurrentValueOrigin!
                                 baseType.valueModule => memberCurrentValueModule!
                                 true => memberPathValid!
-                                0 => memberIdentifierOrdinal!
+                                # Resolve only identifiers after the already-typed base
+                                # expression. This keeps identifiers inside an index
+                                # expression out of the member path in values[index].field.
+                                1 => memberIdentifierOrdinal!
+                                prepared.nodes[sourceRange.astStart + baseType.astNode] => memberBase
+                                memberBase.start + memberBase.length => memberBaseEnd
                                 member.firstToken => memberTokenIndex!
+                                true => beforeMemberBaseEnd!
+                                (beforeMemberBaseEnd! and memberTokenIndex! < member.firstToken + member.tokenCount) -> while {
+                                    prepared.tokens[sourceRange.tokenStart + memberTokenIndex!].span.start < memberBaseEnd -> if {
+                                        memberTokenIndex! + 1 => memberTokenIndex!
+                                    } else {
+                                        false => beforeMemberBaseEnd!
+                                    }
+                                }
                                 (memberPathValid! and memberTokenIndex! < member.firstToken + member.tokenCount) -> while {
                                     prepared.tokens[sourceRange.tokenStart + memberTokenIndex!].kind == grammar.tokenIdIdentifier -> if {
                                         memberIdentifierOrdinal! > 0 -> if {

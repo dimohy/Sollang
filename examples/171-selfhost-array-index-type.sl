@@ -6,11 +6,16 @@ main {
     [
         """
         struct Store { values: [Int; ~] }
+        struct Item { value: Int }
         first store: Store -> Int => store.values[0]
+        firstValue items: [Item; ~] -> Int => items[0].value
         main {
             [1, 2, ~] => values
             values![0]
             values[0]
+            [Item { value: 1 }, ~] => items
+            0 => index
+            items[index].value
         }
         """,
         ~

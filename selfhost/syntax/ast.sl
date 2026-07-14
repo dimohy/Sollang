@@ -127,6 +127,8 @@ lowerFrom request: LowerRequest -> [AstNode; ~] {
         -1 => operatorKind!
         -1 => operatorPayloadToken!
         -1 => memberDotToken!
+        -1 => indexBracketToken!
+        -1 => trailingMemberDotToken!
         node.firstToken => operatorTokenIndex!
         node.firstToken + node.tokenCount => operatorTokenEnd
         0 => operatorGroupDepth!
@@ -160,6 +162,13 @@ lowerFrom request: LowerRequest -> [AstNode; ~] {
             }
             (operatorGroupDepth! == 0 and astKind! == 36 and candidateOperator == grammar.tokenIdLeftBracket and operatorTokenIndex! > node.firstToken) -> if {
                 41 => astKind!
+                candidateOperator => operatorKind!
+                operatorTokenIndex! => operatorPayloadToken!
+                operatorTokenIndex! => indexBracketToken!
+            }
+            (operatorGroupDepth! == 0 and astKind! == 41 and candidateOperator == grammar.tokenIdDot and trailingMemberDotToken! < 0) -> if {
+                operatorTokenIndex! => trailingMemberDotToken!
+                36 => astKind!
                 candidateOperator => operatorKind!
                 operatorTokenIndex! => operatorPayloadToken!
             }
@@ -310,6 +319,46 @@ lowerFrom request: LowerRequest -> [AstNode; ~] {
                 indexedMemberParents! -> push(astIndex)
                 indexedMemberNodes! -> push(indexedMemberNode)
                 indexedMemberBracketStarts! -> push(tokens![operatorPayloadToken!].span.start)
+            }
+            (astKind! == 36 and trailingMemberDotToken! >= 0 and indexBracketToken! >= 0) -> if {
+                ast! -> len => trailingIndexNode
+                ast! -> push(AstNode {
+                    kind: 41
+                    parent: astIndex
+                    cstRuleId: node.ruleId
+                    operatorKind: grammar.tokenIdLeftBracket
+                    payloadToken: indexBracketToken!
+                    secondaryToken: -1
+                    tertiaryToken: -1
+                    flags: 0
+                    firstToken: astFirstToken!
+                    tokenCount: trailingMemberDotToken! - astFirstToken!
+                    start: astStart!
+                    length: tokens![trailingMemberDotToken!].span.start - astStart!
+                })
+                indexedMemberParents! -> push(astIndex)
+                indexedMemberNodes! -> push(trailingIndexNode)
+                indexedMemberBracketStarts! -> push(tokens![trailingMemberDotToken!].span.start)
+                memberDotToken! >= 0 -> if {
+                    ast! -> len => trailingIndexedMemberNode
+                    ast! -> push(AstNode {
+                        kind: 36
+                        parent: trailingIndexNode
+                        cstRuleId: node.ruleId
+                        operatorKind: grammar.tokenIdDot
+                        payloadToken: memberDotToken!
+                        secondaryToken: -1
+                        tertiaryToken: -1
+                        flags: 0
+                        firstToken: astFirstToken!
+                        tokenCount: indexBracketToken! - astFirstToken!
+                        start: astStart!
+                        length: tokens![indexBracketToken!].span.start - astStart!
+                    })
+                    indexedMemberParents! -> push(trailingIndexNode)
+                    indexedMemberNodes! -> push(trailingIndexedMemberNode)
+                    indexedMemberBracketStarts! -> push(tokens![indexBracketToken!].span.start)
+                }
             }
         }
         cstIndex! + 1 => cstIndex!

@@ -211,7 +211,7 @@ if (expectedFiles.Any(IsReusableSelfHostCompilerTest))
             "-o", selfHostDriverPath,
             "--target", "windows-x64",
             "--llvm", llvmDir,
-            "-O0"
+            "-O1"
         ]);
         var driverBuild = Run("dotnet", driverArguments, input: null, repoRoot);
         if (driverBuild.ExitCode != 0)

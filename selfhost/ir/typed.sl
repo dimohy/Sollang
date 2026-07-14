@@ -452,15 +452,13 @@ public lowerContext prepared: semanticContext.CompilationContext -> [TypedIrNode
                             expressionTypeSearch! + 1 => expressionTypeSearch!
                         }
                         -1 => recursiveExpressionTypeId!
-                        expressionTypeIndex! < 0 -> if {
-                            0 => recursiveExpressionSearch!
-                            recursiveExpressionSearch! < (recursiveExpressions! -> len) -> while {
-                                recursiveExpressions![recursiveExpressionSearch!] => recursiveExpressionCandidate
-                                (recursiveExpressionCandidate.status == 0 and recursiveExpressionCandidate.sourceModule == sourceIndex! and recursiveExpressionCandidate.astNode == expressionAstIndex!) -> if {
-                                    recursiveExpressionCandidate.typeId => recursiveExpressionTypeId!
-                                }
-                                recursiveExpressionSearch! + 1 => recursiveExpressionSearch!
+                        0 => recursiveExpressionSearch!
+                        recursiveExpressionSearch! < (recursiveExpressions! -> len) -> while {
+                            recursiveExpressions![recursiveExpressionSearch!] => recursiveExpressionCandidate
+                            (recursiveExpressionCandidate.status == 0 and recursiveExpressionCandidate.sourceModule == sourceIndex! and recursiveExpressionCandidate.astNode == expressionAstIndex!) -> if {
+                                recursiveExpressionCandidate.typeId => recursiveExpressionTypeId!
                             }
+                            recursiveExpressionSearch! + 1 => recursiveExpressionSearch!
                         }
                         1 => expressionTypeOrigin!
                         -1 => expressionTypeModule!
@@ -471,7 +469,7 @@ public lowerContext prepared: semanticContext.CompilationContext -> [TypedIrNode
                             legacyExpressionType.targetModule => expressionTypeModule!
                             legacyExpressionType.targetSymbol => expressionTypeSymbol!
                         }
-                        (expressionTypeIndex! < 0 and recursiveExpressionTypeId! >= 0) -> if {
+                        recursiveExpressionTypeId! >= 0 -> if {
                             recursiveSemanticTypes![recursiveExpressionTypeId!] => recursiveExpressionType
                             recursiveExpressionType.origin => expressionTypeOrigin!
                             recursiveExpressionType.module => expressionTypeModule!
@@ -1018,15 +1016,13 @@ public lowerContext prepared: semanticContext.CompilationContext -> [TypedIrNode
                             entryExpressionTypeSearch! + 1 => entryExpressionTypeSearch!
                         }
                         -1 => recursiveEntryExpressionTypeId!
-                        entryExpressionTypeIndex! < 0 -> if {
-                            0 => recursiveEntryExpressionSearch!
-                            recursiveEntryExpressionSearch! < (recursiveExpressions! -> len) -> while {
-                                recursiveExpressions![recursiveEntryExpressionSearch!] => recursiveEntryExpressionCandidate
-                                (recursiveEntryExpressionCandidate.status == 0 and recursiveEntryExpressionCandidate.sourceModule == sourceIndex! and recursiveEntryExpressionCandidate.astNode == entryExpressionAst!) -> if {
-                                    recursiveEntryExpressionCandidate.typeId => recursiveEntryExpressionTypeId!
-                                }
-                                recursiveEntryExpressionSearch! + 1 => recursiveEntryExpressionSearch!
+                        0 => recursiveEntryExpressionSearch!
+                        recursiveEntryExpressionSearch! < (recursiveExpressions! -> len) -> while {
+                            recursiveExpressions![recursiveEntryExpressionSearch!] => recursiveEntryExpressionCandidate
+                            (recursiveEntryExpressionCandidate.status == 0 and recursiveEntryExpressionCandidate.sourceModule == sourceIndex! and recursiveEntryExpressionCandidate.astNode == entryExpressionAst!) -> if {
+                                recursiveEntryExpressionCandidate.typeId => recursiveEntryExpressionTypeId!
                             }
+                            recursiveEntryExpressionSearch! + 1 => recursiveEntryExpressionSearch!
                         }
                         1 => entryExpressionTypeOrigin!
                         -1 => entryExpressionTypeModule!
@@ -1037,7 +1033,7 @@ public lowerContext prepared: semanticContext.CompilationContext -> [TypedIrNode
                             legacyEntryExpressionType.targetModule => entryExpressionTypeModule!
                             legacyEntryExpressionType.targetSymbol => entryExpressionTypeSymbol!
                         }
-                        (entryExpressionTypeIndex! < 0 and recursiveEntryExpressionTypeId! >= 0) -> if {
+                        recursiveEntryExpressionTypeId! >= 0 -> if {
                             recursiveSemanticTypes![recursiveEntryExpressionTypeId!] => recursiveEntryExpressionType
                             recursiveEntryExpressionType.origin => entryExpressionTypeOrigin!
                             recursiveEntryExpressionType.module => entryExpressionTypeModule!
@@ -1472,8 +1468,21 @@ public lowerContext prepared: semanticContext.CompilationContext -> [TypedIrNode
             prepared.sources[member!.sourceModule] -> ast.lowerSource => memberNodes!
             prepared.sources[member!.sourceModule] -> lexer.lexSource => memberTokens!
             memberNodes![member!.astNode] => memberAst
-            0 => memberIdentifierOrdinal!
+            # The operand already represents the complete typed base. Resolve
+            # only the trailing path, so an identifier inside values[index]
+            # cannot be mistaken for a field in values[index].field.
+            1 => memberIdentifierOrdinal!
+            memberNodes![memberBase.astNode] => memberBaseAst
+            memberBaseAst.start + memberBaseAst.length => memberBaseEnd
             memberAst.firstToken => memberTokenIndex!
+            true => beforeMemberBaseEnd!
+            (beforeMemberBaseEnd! and memberTokenIndex! < memberAst.firstToken + memberAst.tokenCount) -> while {
+                memberTokens![memberTokenIndex!].span.start < memberBaseEnd -> if {
+                    memberTokenIndex! + 1 => memberTokenIndex!
+                } else {
+                    false => beforeMemberBaseEnd!
+                }
+            }
             memberTokenIndex! < memberAst.firstToken + memberAst.tokenCount -> while {
                 memberTokens![memberTokenIndex!].kind == grammar.tokenIdIdentifier -> if {
                     memberIdentifierOrdinal! > 0 -> if {

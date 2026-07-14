@@ -1,0 +1,18 @@
+import smalllang.compiler.parser as parser
+
+main {
+    """
+    main {
+        Point { x: 1, y: 2 }
+    }
+    """ -> parser.parseEvents => events!
+    false => accepted!
+    events! -> each event {
+        event.kind == 3 -> if { event.value == 1 => accepted! }
+    }
+    accepted! -> if {
+        "inline struct fields = true" -> println
+    } else {
+        "inline struct fields = false" -> println
+    }
+}

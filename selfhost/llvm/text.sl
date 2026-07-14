@@ -1150,7 +1150,7 @@ emitCore context: move EmitContext -> Unit uses Console {
                                             localPreviousMemberSearch! + 1 => localPreviousMemberSearch!
                                         }
                                     }
-                                    (localCandidate.kind != 20 and localCandidate.operand0 >= 0) -> if {
+                                    (localCandidate.kind != 20 and localCandidate.operand0 >= 0 and (localCandidate.kind != 5 or context.ir[localCandidate.operand0].flags % 2 == 0)) -> if {
                                         context.ir[localCandidate.operand0].parent => localOperandAncestor!
                                         false => localOperandBelongs!
                                         (localOperandAncestor! >= 0 and not localOperandBelongs!) -> while {
@@ -1165,6 +1165,15 @@ emitCore context: move EmitContext -> Unit uses Console {
                                             localSecondAncestor! == regionTaskNode -> if { true => localSecondBelongs! } else { context.ir[localSecondAncestor!].parent => localSecondAncestor! }
                                         }
                                         (localSecondBelongs! and not localScheduled![localCandidate.operand1]) -> if { false => localReady! }
+                                    }
+                                    (localCandidate.kind == 9 and localCandidate.opcode == -203 and localCandidate.operand1 >= 0 and context.ir[localCandidate.operand1].nextOperand >= 0) -> if {
+                                        context.ir[localCandidate.operand1].nextOperand => localSliceLength!
+                                        context.ir[localSliceLength!].parent => localSliceLengthAncestor!
+                                        false => localSliceLengthBelongs!
+                                        (localSliceLengthAncestor! >= 0 and not localSliceLengthBelongs!) -> while {
+                                            localSliceLengthAncestor! == regionTaskNode -> if { true => localSliceLengthBelongs! } else { context.ir[localSliceLengthAncestor!].parent => localSliceLengthAncestor! }
+                                        }
+                                        (localSliceLengthBelongs! and not localScheduled![localSliceLength!]) -> if { false => localReady! }
                                     }
                                     (localCandidate.kind == 12 or localCandidate.kind == 14 or localCandidate.kind == 16) -> if {
                                         localCandidate.operand0 => localAggregateOperand!
@@ -1681,10 +1690,11 @@ emitCore context: move EmitContext -> Unit uses Console {
                 }
                 regionNode.kind == 7 -> if {
                     regionNode.opcode == -26 -> if { ", true" -> println } else {
+                        ", " -> print
                         (regionLeft.kind == 3 or regionLeft.kind == 4) -> if {
                             regionLeft -> sourceToken => regionUnaryToken
                             context.sources[regionLeft.sourceModule] -> slice(regionUnaryToken.span.start, regionUnaryToken.span.length) -> println
-                        } else { ", %v$(regionNode.operand0)" -> println }
+                        } else { "%v$(regionNode.operand0)" -> println }
                     }
                 } else {
                     ", " -> print
@@ -2050,8 +2060,9 @@ emitCore context: move EmitContext -> Unit uses Console {
                             true => scheduleProgress!
                         }
                         not (insideControlRegion! or scheduleNode.kind == 19) => scheduleReady!
-                        (scheduleReady! and scheduleNode.operand0 >= expressionStart and scheduleNode.operand0 < functionEnd! and not expressionScheduled![scheduleNode.operand0]) -> if { false => scheduleReady! }
+                        (scheduleReady! and scheduleNode.operand0 >= expressionStart and scheduleNode.operand0 < functionEnd! and (scheduleNode.kind != 5 or context.ir[scheduleNode.operand0].flags % 2 == 0) and not expressionScheduled![scheduleNode.operand0]) -> if { false => scheduleReady! }
                         (scheduleReady! and scheduleNode.kind != 18 and scheduleNode.kind != 20 and scheduleNode.operand1 >= expressionStart and scheduleNode.operand1 < functionEnd! and not expressionScheduled![scheduleNode.operand1]) -> if { false => scheduleReady! }
+                        (scheduleReady! and scheduleNode.kind == 9 and scheduleNode.opcode == -203 and scheduleNode.operand1 >= 0 and context.ir[scheduleNode.operand1].nextOperand >= expressionStart and context.ir[scheduleNode.operand1].nextOperand < functionEnd! and not expressionScheduled![context.ir[scheduleNode.operand1].nextOperand]) -> if { false => scheduleReady! }
                         (scheduleReady! and (scheduleNode.kind == 12 or scheduleNode.kind == 14 or scheduleNode.kind == 16)) -> if {
                             scheduleNode.operand0 => scheduleSibling!
                             scheduleSibling! >= 0 -> while {
@@ -3107,8 +3118,9 @@ emitCore context: move EmitContext -> Unit uses Console {
                                 true => entryScheduleProgress!
                             }
                             not (entryInsideControlRegion! or entryScheduleNode.kind == 19) => entryScheduleReady!
-                            (entryScheduleReady! and entryScheduleNode.operand0 > functionIndex! and entryScheduleNode.operand0 < entryEnd! and not entryScheduled![entryScheduleNode.operand0]) -> if { false => entryScheduleReady! }
+                            (entryScheduleReady! and entryScheduleNode.operand0 > functionIndex! and entryScheduleNode.operand0 < entryEnd! and (entryScheduleNode.kind != 5 or context.ir[entryScheduleNode.operand0].flags % 2 == 0) and not entryScheduled![entryScheduleNode.operand0]) -> if { false => entryScheduleReady! }
                             (entryScheduleReady! and entryScheduleNode.kind != 18 and entryScheduleNode.kind != 20 and entryScheduleNode.operand1 > functionIndex! and entryScheduleNode.operand1 < entryEnd! and not entryScheduled![entryScheduleNode.operand1]) -> if { false => entryScheduleReady! }
+                            (entryScheduleReady! and entryScheduleNode.kind == 9 and entryScheduleNode.opcode == -203 and entryScheduleNode.operand1 >= 0 and context.ir[entryScheduleNode.operand1].nextOperand > functionIndex! and context.ir[entryScheduleNode.operand1].nextOperand < entryEnd! and not entryScheduled![context.ir[entryScheduleNode.operand1].nextOperand]) -> if { false => entryScheduleReady! }
                             (entryScheduleReady! and entryScheduleNode.kind == 5) -> if {
                                 false => entryMutableRead!
                                 functionIndex! + 1 => entryMutableReadBindingSearch!
