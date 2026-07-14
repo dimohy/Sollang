@@ -4913,4 +4913,39 @@ zero warnings and errors. The coordinated eight-worker full suite passed all
 despite one added case; it is recorded as an observed full-run improvement,
 not as proof of an isolated consumer microbenchmark.
 
+## D153 - LLVM Emission Uses Flat Package Syntax Products
+
+Status: direct emitter AST, token, and symbol rebuilding removed
+Date: 2026-07-14
+
+`smalllang.compiler.llvm.text` no longer calls `lexer.lex`, `ast.lower`, or
+`symbols.collect` while emitting a prepared package. Its 67 direct source
+reanalysis sites now translate each typed-IR node's source-local indexes through
+`SourceAnalysisRange` and read the flat `EmitContext` AST, token, and symbol
+tables. Small helpers cover typed-IR payload tokens and AST starts; member-field
+and interpolation-name searches use the declaring source's explicit token and
+symbol ranges so imported layouts retain source-local identity.
+
+This migration covers function and `main` scheduling, mutable-read/effect
+ordering, region and return cleanup, literal and container operands, nested
+conditionals, calls, member projections, interpolation value lookup, and
+recursive partial-move comparisons. Source bytes remain intentionally present:
+token spans point into the original UTF-8 source and LLVM literal emission must
+still read those bytes. `ir.interpolation.lower` also still builds its own
+source-level syntax products before parsing embedded expression fragments; a
+future package interpolation product should remove that indirect repetition.
+
+No formal language gate is promoted. This is an analysis-reuse boundary, not
+completion of capability/effect enforcement, canonical container-child
+lowering, generic nominal-application layout, or all-exit cleanup. The canonical
+count remains 42 complete, 13 partial, and 5 missing: 48.5/60 (80.8%).
+
+Regression evidence on 2026-07-14: example 188 passed independently in 56.62
+seconds. The single coordinated eight-worker suite then passed 410/410 in
+395.4 seconds with flushed monotonic `n/410` progress. That is within normal
+full-run variation of the preceding 388.7-second run, so no isolated speedup is
+claimed. The Release solution build completed with zero warnings and errors,
+and source inspection finds zero direct `lexer.lex`, `ast.lower`, or
+`symbols.collect` calls in the LLVM text emitter.
+
 

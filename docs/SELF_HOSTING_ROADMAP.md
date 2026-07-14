@@ -683,10 +683,15 @@ type diagnostics and partial-move ownership diagnostics now consume the same
 context. Coroutine suspension, frame-slot, and destruction tables are produced
 together from one typed IR in `CoroutinePlan`; recursive/partial-move LLVM drop
 glue reads the flat AST/token/symbol tables instead of rebuilding them. Effect
-enforcement and the remaining LLVM source scans still need migration. The first
-410-case run after these consumers moved passed in 388.7 seconds, an observed
-6.9 percent reduction from the preceding 417.7-second 409-case run, although a
-single full-run comparison is not treated as an isolated benchmark proof.
+enforcement still needs migration. The LLVM text emitter's 67 direct
+`lexer.lex`, `ast.lower`, and `symbols.collect` sites now read these flat package
+products through source ranges, covering scheduling, control flow, cleanup,
+operands, member layout, and interpolation name lookup. The interpolation IR
+builder still reconstructs source-level syntax before parsing embedded
+expression fragments and remains the next reuse target. The first 410-case run
+after diagnostics/coroutines moved passed in 388.7 seconds; the emitter reuse
+run passed 410/410 in 395.4 seconds. Both are treated as full-run observations,
+not isolated benchmark proof.
 
 Self-hosted LLVM text selects descriptors implemented in the file module
 `smalllang.compiler.llvm.target`. Windows x64/COFF, Linux x64/ELF, and

@@ -3,7 +3,6 @@ namespace smalllang.compiler.llvm.text
 import smalllang.compiler.ast as ast
 import smalllang.compiler.ir.interpolation as interpolation
 import smalllang.compiler.ir.typed as typedIr
-import smalllang.compiler.lexer as lexer
 import smalllang.compiler.llvm.target as llvmTarget
 import smalllang.compiler.semantic.analysis as analysis
 import smalllang.compiler.semantic.composite_types as compositeTypes
@@ -345,6 +344,15 @@ prepare request: move PrepareRequest -> EmitContext {
 }
 
 emitCore context: move EmitContext -> Unit {
+    sourceToken node: typedIr.TypedIrNode -> syntax.SyntaxToken {
+        context.tokens[context.ranges[node.sourceModule].tokenStart + node.payloadToken]
+    }
+    sourceNode node: typedIr.TypedIrNode -> ast.AstNode {
+        context.nodes[context.ranges[node.sourceModule].astStart + node.astNode]
+    }
+    sourceStart node: typedIr.TypedIrNode -> UIntSize {
+        context.nodes[context.ranges[node.sourceModule].astStart + node.astNode].start
+    }
     emitDropValueName request: DropGlueRequest -> Unit {
         request.valueKind == 0 -> if { "%v$(request.valueIndex)" -> print } else {
             request.valueKind == 1 -> if { "%arg" -> print } else { "%dropg$(request.nameRoot)_p$(request.pathCode)" -> print }
@@ -628,11 +636,9 @@ emitCore context: move EmitContext -> Unit {
         (bindingOwner! >= 0 and context.ir[bindingOwner!].kind != 0 and context.ir[bindingOwner!].kind != 11) -> while {
             context.ir[bindingOwner!].parent => bindingOwner!
         }
-        context.sources[binding.sourceModule] -> lexer.lex => bindingTokens!
-        bindingTokens![binding.payloadToken] => bindingName
-        context.sources[binding.sourceModule] -> ast.lower => bindingNodes!
+        binding -> sourceToken => bindingName
         bindingIndex => rootIndex!
-        bindingNodes![binding.astNode].start => rootStart!
+        binding -> sourceStart => rootStart!
         0 => candidateIndex!
         candidateIndex! < (context.ir -> len) -> while {
             context.ir[candidateIndex!] => candidate
@@ -642,7 +648,7 @@ emitCore context: move EmitContext -> Unit {
                     context.ir[candidateOwner!].parent => candidateOwner!
                 }
                 candidateOwner! == bindingOwner! -> if {
-                    bindingTokens![candidate.payloadToken] => candidateName
+                    candidate -> sourceToken => candidateName
                     candidateName.span.length == bindingName.span.length => sameName!
                     UIntSize(0) => nameByte!
                     (sameName! and nameByte! < bindingName.span.length) -> while {
@@ -652,7 +658,7 @@ emitCore context: move EmitContext -> Unit {
                         nameByte! + UIntSize(1) => nameByte!
                     }
                     sameName! -> if {
-                        bindingNodes![candidate.astNode].start => candidateStart
+                        candidate -> sourceStart => candidateStart
                         candidateStart < rootStart! -> if {
                             candidateIndex! => rootIndex!
                             candidateStart => rootStart!
@@ -667,8 +673,7 @@ emitCore context: move EmitContext -> Unit {
     writeWhileValue request: WhileValueRequest -> Unit {
         context.ir[request.nodeIndex] => value
         (value.kind == 3 or value.kind == 4) -> if {
-            context.sources[value.sourceModule] -> lexer.lex => valueTokens!
-            valueTokens![value.payloadToken] => valueToken
+            value -> sourceToken => valueToken
             value.kind == 3 -> if {
                 context.sources[value.sourceModule] -> slice(valueToken.span.start, valueToken.span.length) -> print
             } else {
@@ -808,8 +813,7 @@ emitCore context: move EmitContext -> Unit {
                                             valueNode -> writeType
                                             " " -> print
                                             (bindingOperand.kind == 3 or bindingOperand.kind == 4) -> if {
-                                                context.sources[bindingOperand.sourceModule] -> lexer.lex => bindingTokens!
-                                                bindingTokens![bindingOperand.payloadToken] => bindingToken
+                                                bindingOperand -> sourceToken => bindingToken
                                                 bindingOperand.kind == 3 -> if { context.sources[bindingOperand.sourceModule] -> slice(bindingToken.span.start, bindingToken.span.length) -> print } else { ((context.sources[bindingOperand.sourceModule] -> byte(bindingToken.span.start)) == UInt8(116)) -> if { "1" } else { "0" } -> print }
                                             } else { "%v$(valueBinding.operand0)" -> print }
                                             "" -> println
@@ -888,16 +892,15 @@ emitCore context: move EmitContext -> Unit {
     }
     emitOwnedDrops request: OwnedDropRequest -> Unit {
         context.ir[request.regionIndex] => dropRegion
-        context.sources[dropRegion.sourceModule] -> ast.lower => dropAst!
         UIntSize(0) => dropBeforeStart!
-        request.beforeAst >= 0 -> if { dropAst![request.beforeAst].start => dropBeforeStart! }
+        request.beforeAst >= 0 -> if { context.nodes[context.ranges[dropRegion.sourceModule].astStart + request.beforeAst].start => dropBeforeStart! }
         context.ir -> len => ownedDropIndex!
         ownedDropIndex! > 0 -> while {
             ownedDropIndex! - 1 => ownedDropIndex!
             context.ir[ownedDropIndex!] => ownedDropCandidate
             true => ownedDropBeforeEdge!
             request.beforeAst >= 0 -> if {
-                dropAst![ownedDropCandidate.astNode].start >= dropBeforeStart! -> if { false => ownedDropBeforeEdge! }
+                (ownedDropCandidate -> sourceStart) >= dropBeforeStart! -> if { false => ownedDropBeforeEdge! }
             }
             false => ownedDropMoved!
             false => ownedDropHasPartialMoves!
@@ -910,9 +913,9 @@ emitCore context: move EmitContext -> Unit {
                         context.ir[ownedMove.siteIr] => ownedMoveCall
                         true => ownedMoveBeforeEdge!
                         request.beforeAst >= 0 -> if {
-                            dropAst![ownedMoveCall.astNode].start >= dropBeforeStart! -> if { false => ownedMoveBeforeEdge! }
+                            (ownedMoveCall -> sourceStart) >= dropBeforeStart! -> if { false => ownedMoveBeforeEdge! }
                         }
-                        (dropAst![ownedMoveCall.astNode].start > dropAst![ownedDropCandidate.astNode].start and ownedMoveBeforeEdge!) -> if { true => ownedDropMoved! }
+                        ((ownedMoveCall -> sourceStart) > (ownedDropCandidate -> sourceStart) and ownedMoveBeforeEdge!) -> if { true => ownedDropMoved! }
                     }
                     ownedMoveIndex! + 1 => ownedMoveIndex!
                 }
@@ -957,7 +960,6 @@ emitCore context: move EmitContext -> Unit {
     }
     emitRegion regionIndex: Int -> Unit {
         context.ir[regionIndex] => region
-        context.sources[region.sourceModule] -> ast.lower => regionAst!
         region.parent => ownerIndex!
         (ownerIndex! >= 0 and context.ir[ownerIndex!].kind != 0 and context.ir[ownerIndex!].kind != 11) -> while { context.ir[ownerIndex!].parent => ownerIndex! }
         [Int; ~] => regionEventKinds!
@@ -1023,8 +1025,8 @@ emitCore context: move EmitContext -> Unit {
                                     0 => localRootSearch!
                                     localRootSearch! < (context.ir -> len) -> while {
                                         context.ir[localRootSearch!] => localRootCandidate
-                                        (localRootCandidate.parent == regionTaskNode and regionAst![localRootCandidate.astNode].start < regionAst![context.ir[localStatementRoot!].astNode].start) -> if {
-                                            regionAst![localRootCandidate.astNode].start => localRootCandidateStart
+                                        (localRootCandidate.parent == regionTaskNode and (localRootCandidate -> sourceStart) < (context.ir[localStatementRoot!] -> sourceStart)) -> if {
+                                            localRootCandidate -> sourceStart => localRootCandidateStart
                                             (localPreviousRoot! < 0 or localRootCandidateStart > localPreviousRootStart!) -> if {
                                                 localRootSearch! => localPreviousRoot!
                                                 localRootCandidateStart => localPreviousRootStart!
@@ -1228,8 +1230,7 @@ emitCore context: move EmitContext -> Unit {
                         " " -> print
                         context.ir[regionNode.operand0] => returnedValue
                         (returnedValue.kind == 3 or returnedValue.kind == 4) -> if {
-                            context.sources[returnedValue.sourceModule] -> lexer.lex => returnValueTokens!
-                            returnValueTokens![returnedValue.payloadToken] => returnValueToken
+                            returnedValue -> sourceToken => returnValueToken
                             returnedValue.kind == 3 -> if { context.sources[returnedValue.sourceModule] -> slice(returnValueToken.span.start, returnValueToken.span.length) -> print } else {
                                 ((context.sources[returnedValue.sourceModule] -> byte(returnValueToken.span.start)) == UInt8(116)) -> if { "1" } else { "0" } -> print
                             }
@@ -1245,8 +1246,7 @@ emitCore context: move EmitContext -> Unit {
                 context.ir[regionNode.operand1] => guardCondition
                 "  br i1 " -> print
                 guardCondition.kind == 4 -> if {
-                    context.sources[guardCondition.sourceModule] -> lexer.lex => guardConditionTokens!
-                    guardConditionTokens![guardCondition.payloadToken] => guardConditionToken
+                    guardCondition -> sourceToken => guardConditionToken
                     ((context.sources[guardCondition.sourceModule] -> byte(guardConditionToken.span.start)) == UInt8(116)) -> if { "1" } else { "0" } -> print
                 } else {
                     (ownerIndex! >= 0 and context.ir[ownerIndex!].kind == 0 and context.ir[ownerIndex!].operand1 >= 0 and guardCondition.kind == 5 and guardCondition.symbol == context.ir[context.ir[ownerIndex!].operand1].symbol) -> if { "%arg" -> print } else { "%v$(regionNode.operand1)" -> print }
@@ -1307,8 +1307,7 @@ emitCore context: move EmitContext -> Unit {
                         regionNode -> writeType
                         " " -> print
                         (regionBindingValue.kind == 3 or regionBindingValue.kind == 4) -> if {
-                            context.sources[regionBindingValue.sourceModule] -> lexer.lex => regionBindingTokens!
-                            regionBindingTokens![regionBindingValue.payloadToken] => regionBindingToken
+                            regionBindingValue -> sourceToken => regionBindingToken
                             regionBindingValue.kind == 3 -> if { context.sources[regionBindingValue.sourceModule] -> slice(regionBindingToken.span.start, regionBindingToken.span.length) -> print } else {
                                 ((context.sources[regionBindingValue.sourceModule] -> byte(regionBindingToken.span.start)) == UInt8(116)) -> if { "1" } else { "0" } -> print
                             }
@@ -1324,8 +1323,7 @@ emitCore context: move EmitContext -> Unit {
                 regionNode -> writeType
                 " " -> print
                 (mutableRegionValue.kind == 3 or mutableRegionValue.kind == 4) -> if {
-                    context.sources[mutableRegionValue.sourceModule] -> lexer.lex => mutableRegionTokens!
-                    mutableRegionTokens![mutableRegionValue.payloadToken] => mutableRegionToken
+                    mutableRegionValue -> sourceToken => mutableRegionToken
                     mutableRegionValue.kind == 3 -> if { context.sources[mutableRegionValue.sourceModule] -> slice(mutableRegionToken.span.start, mutableRegionToken.span.length) -> print } else {
                         ((context.sources[mutableRegionValue.sourceModule] -> byte(mutableRegionToken.span.start)) == UInt8(116)) -> if { "1" } else { "0" } -> print
                     }
@@ -1349,8 +1347,7 @@ emitCore context: move EmitContext -> Unit {
                     "  %v$(regionNodeIndex!)_ptr$(regionArrayElementPosition!) = getelementptr i32, ptr %v$(regionNodeIndex!)_data, i64 $(regionArrayElementPosition!)" -> println
                     "  store i32 " -> print
                     regionArrayElement.kind == 3 -> if {
-                        context.sources[regionArrayElement.sourceModule] -> lexer.lex => regionArrayElementTokens!
-                        regionArrayElementTokens![regionArrayElement.payloadToken] => regionArrayElementToken
+                        regionArrayElement -> sourceToken => regionArrayElementToken
                         context.sources[regionArrayElement.sourceModule] -> slice(regionArrayElementToken.span.start, regionArrayElementToken.span.length) -> print
                     } else { "%v$(regionArrayElementIndex!)" -> print }
                     ", ptr %v$(regionNodeIndex!)_ptr$(regionArrayElementPosition!), align 4" -> println
@@ -1387,8 +1384,7 @@ emitCore context: move EmitContext -> Unit {
                     regionDictionaryItemSymbol -> llvmType -> print
                     " " -> print
                     (regionDictionaryItem.kind == 3 or regionDictionaryItem.kind == 4) -> if {
-                        context.sources[regionDictionaryItem.sourceModule] -> lexer.lex => regionDictionaryItemTokens!
-                        regionDictionaryItemTokens![regionDictionaryItem.payloadToken] => regionDictionaryItemToken
+                        regionDictionaryItem -> sourceToken => regionDictionaryItemToken
                         regionDictionaryItem.kind == 3 -> if {
                             context.sources[regionDictionaryItem.sourceModule] -> slice(regionDictionaryItemToken.span.start, regionDictionaryItemToken.span.length) -> print
                         } else {
@@ -1429,8 +1425,7 @@ emitCore context: move EmitContext -> Unit {
                 " " -> print
                 (regionNode.kind == 7 and regionNode.opcode != -26) -> if { "0" -> print } else {
                     (regionLeft.kind == 3 or regionLeft.kind == 4) -> if {
-                        context.sources[regionLeft.sourceModule] -> lexer.lex => regionLeftTokens!
-                        regionLeftTokens![regionLeft.payloadToken] => regionLeftToken
+                        regionLeft -> sourceToken => regionLeftToken
                         regionLeft.kind == 3 -> if { context.sources[regionLeft.sourceModule] -> slice(regionLeftToken.span.start, regionLeftToken.span.length) -> print } else {
                             ((context.sources[regionLeft.sourceModule] -> byte(regionLeftToken.span.start)) == UInt8(116)) -> if { "1" } else { "0" } -> print
                         }
@@ -1441,8 +1436,7 @@ emitCore context: move EmitContext -> Unit {
                 regionNode.kind == 7 -> if {
                     regionNode.opcode == -26 -> if { ", true" -> println } else {
                         (regionLeft.kind == 3 or regionLeft.kind == 4) -> if {
-                            context.sources[regionLeft.sourceModule] -> lexer.lex => regionUnaryTokens!
-                            regionUnaryTokens![regionLeft.payloadToken] => regionUnaryToken
+                            regionLeft -> sourceToken => regionUnaryToken
                             context.sources[regionLeft.sourceModule] -> slice(regionUnaryToken.span.start, regionUnaryToken.span.length) -> println
                         } else { ", %v$(regionNode.operand0)" -> println }
                     }
@@ -1450,8 +1444,7 @@ emitCore context: move EmitContext -> Unit {
                     ", " -> print
                     context.ir[regionNode.operand1] => regionRight
                     (regionRight.kind == 3 or regionRight.kind == 4) -> if {
-                        context.sources[regionRight.sourceModule] -> lexer.lex => regionRightTokens!
-                        regionRightTokens![regionRight.payloadToken] => regionRightToken
+                        regionRight -> sourceToken => regionRightToken
                         regionRight.kind == 3 -> if { context.sources[regionRight.sourceModule] -> slice(regionRightToken.span.start, regionRightToken.span.length) -> println } else {
                             ((context.sources[regionRight.sourceModule] -> byte(regionRightToken.span.start)) == UInt8(116)) -> if { "1" } else { "0" } -> println
                         }
@@ -1462,8 +1455,7 @@ emitCore context: move EmitContext -> Unit {
                 (regionNode.symbol == -101 or regionNode.symbol == -102) -> if {
                     context.ir[regionNode.operand0] => regionArgument
                     regionArgument.kind == 2 -> if {
-                        context.sources[regionArgument.sourceModule] -> lexer.lex => regionArgumentTokens!
-                        regionArgumentTokens![regionArgument.payloadToken] => regionArgumentToken
+                        regionArgument -> sourceToken => regionArgumentToken
                         Int(regionArgumentToken.span.length) - 2 => regionArgumentLength
                         "  call void @sl_runtime_print(ptr @sl_str_$(regionNode.operand0), i64 $regionArgumentLength, i1 " -> print
                         regionNode.symbol == -102 -> if { "true)" -> println } else { "false)" -> println }
@@ -1477,8 +1469,7 @@ emitCore context: move EmitContext -> Unit {
                         regionCallArgument -> writeType
                         " " -> print
                         (regionCallArgument.kind == 3 or regionCallArgument.kind == 4) -> if {
-                            context.sources[regionCallArgument.sourceModule] -> lexer.lex => regionCallTokens!
-                            regionCallTokens![regionCallArgument.payloadToken] => regionCallToken
+                            regionCallArgument -> sourceToken => regionCallToken
                             regionCallArgument.kind == 3 -> if { context.sources[regionCallArgument.sourceModule] -> slice(regionCallToken.span.start, regionCallToken.span.length) -> print } else {
                                 ((context.sources[regionCallArgument.sourceModule] -> byte(regionCallToken.span.start)) == UInt8(116)) -> if { "1" } else { "0" } -> print
                             }
@@ -1498,8 +1489,7 @@ emitCore context: move EmitContext -> Unit {
                 context.ir[regionNode.operand0] => nestedCondition
                 "  br i1 " -> print
                 nestedCondition.kind == 4 -> if {
-                    context.sources[nestedCondition.sourceModule] -> lexer.lex => nestedConditionTokens!
-                    nestedConditionTokens![nestedCondition.payloadToken] => nestedConditionToken
+                    nestedCondition -> sourceToken => nestedConditionToken
                     ((context.sources[nestedCondition.sourceModule] -> byte(nestedConditionToken.span.start)) == UInt8(116)) -> if { "1" } else { "0" } -> print
                 } else {
                     (ownerIndex! >= 0 and context.ir[ownerIndex!].kind == 0 and context.ir[ownerIndex!].operand1 >= 0 and nestedCondition.kind == 5 and nestedCondition.symbol == context.ir[context.ir[ownerIndex!].operand1].symbol) -> if { "%arg" -> print } else { "%v$(regionNode.operand0)" -> print }
@@ -1549,8 +1539,7 @@ emitCore context: move EmitContext -> Unit {
                     regionNode -> writeType
                     " [ " -> print
                     (nestedThenValue.kind == 3 or nestedThenValue.kind == 4) -> if {
-                        context.sources[nestedThenValue.sourceModule] -> lexer.lex => nestedThenValueTokens!
-                        nestedThenValueTokens![nestedThenValue.payloadToken] => nestedThenValueToken
+                        nestedThenValue -> sourceToken => nestedThenValueToken
                         nestedThenValue.kind == 3 -> if { context.sources[nestedThenValue.sourceModule] -> slice(nestedThenValueToken.span.start, nestedThenValueToken.span.length) -> print } else {
                             ((context.sources[nestedThenValue.sourceModule] -> byte(nestedThenValueToken.span.start)) == UInt8(116)) -> if { "1" } else { "0" } -> print
                         }
@@ -1559,8 +1548,7 @@ emitCore context: move EmitContext -> Unit {
                     nestedThenValue.kind == 18 -> if { "$(nestedThenRegion.operand1)_merge" -> print } else { "$(regionNodeIndex!)_then" -> print }
                     " ], [ " -> print
                     (nestedElseValue.kind == 3 or nestedElseValue.kind == 4) -> if {
-                        context.sources[nestedElseValue.sourceModule] -> lexer.lex => nestedElseValueTokens!
-                        nestedElseValueTokens![nestedElseValue.payloadToken] => nestedElseValueToken
+                        nestedElseValue -> sourceToken => nestedElseValueToken
                         nestedElseValue.kind == 3 -> if { context.sources[nestedElseValue.sourceModule] -> slice(nestedElseValueToken.span.start, nestedElseValueToken.span.length) -> print } else {
                             ((context.sources[nestedElseValue.sourceModule] -> byte(nestedElseValueToken.span.start)) == UInt8(116)) -> if { "1" } else { "0" } -> print
                         }
@@ -1666,8 +1654,7 @@ emitCore context: move EmitContext -> Unit {
         textGlobalIndex! < (context.ir -> len) -> while {
             context.ir[textGlobalIndex!] => textConstant
             textConstant.kind == 2 -> if {
-                context.sources[textConstant.sourceModule] -> lexer.lex => textTokens!
-                textTokens![textConstant.payloadToken] => textToken
+                textConstant -> sourceToken => textToken
                 textToken.span.length - UIntSize(2) => textLength
                 "@sl_str_$(textGlobalIndex!) = private unnamed_addr constant [$textLength x i8] c" -> print
                 context.sources[textConstant.sourceModule] -> slice(textToken.span.start, UIntSize(1)) -> print
@@ -1762,11 +1749,10 @@ emitCore context: move EmitContext -> Unit {
                                 mutableReadBindingSearch! + 1 => mutableReadBindingSearch!
                             }
                             mutableRead! -> if {
-                                context.sources[scheduleNode.sourceModule] -> ast.lower => mutableReadAst!
                                 expressionStart => mutableReadBarrierSearch!
                                 mutableReadBarrierSearch! < functionEnd! -> while {
                                     context.ir[mutableReadBarrierSearch!] => mutableReadBarrier
-                                    (not expressionScheduled![mutableReadBarrierSearch!] and (mutableReadBarrier.kind == 20 or (mutableReadBarrier.kind == 17 and mutableReadBarrier.flags == 1)) and mutableReadAst![mutableReadBarrier.astNode].start < mutableReadAst![scheduleNode.astNode].start) -> if {
+                                    (not expressionScheduled![mutableReadBarrierSearch!] and (mutableReadBarrier.kind == 20 or (mutableReadBarrier.kind == 17 and mutableReadBarrier.flags == 1)) and (mutableReadBarrier -> sourceStart) < (scheduleNode -> sourceStart)) -> if {
                                         false => scheduleReady!
                                     }
                                     mutableReadBarrierSearch! + 1 => mutableReadBarrierSearch!
@@ -1780,11 +1766,10 @@ emitCore context: move EmitContext -> Unit {
                                 (context.ir[effectAncestor!].kind == 6 or context.ir[effectAncestor!].kind == 18 or context.ir[effectAncestor!].kind == 20 or (context.ir[effectAncestor!].kind == 17 and context.ir[effectAncestor!].flags == 1)) -> if { false => rootEffect! } else { context.ir[effectAncestor!].parent => effectAncestor! }
                             }
                             rootEffect! -> if {
-                                context.sources[scheduleNode.sourceModule] -> ast.lower => effectAst!
                                 expressionStart => earlierEffectSearch!
                                 earlierEffectSearch! < functionEnd! -> while {
                                     context.ir[earlierEffectSearch!] => earlierEffect
-                                (not expressionScheduled![earlierEffectSearch!] and (earlierEffect.kind == 6 or earlierEffect.kind == 18 or earlierEffect.kind == 20 or (earlierEffect.kind == 17 and earlierEffect.flags == 1)) and effectAst![earlierEffect.astNode].start < effectAst![scheduleNode.astNode].start) -> if {
+                                (not expressionScheduled![earlierEffectSearch!] and (earlierEffect.kind == 6 or earlierEffect.kind == 18 or earlierEffect.kind == 20 or (earlierEffect.kind == 17 and earlierEffect.flags == 1)) and (earlierEffect -> sourceStart) < (scheduleNode -> sourceStart)) -> if {
                                         earlierEffect.parent => earlierEffectAncestor!
                                         true => earlierRootEffect!
                                         false => earlierInsideRegion!
@@ -1833,8 +1818,7 @@ emitCore context: move EmitContext -> Unit {
                             expression -> writeType
                             " " -> print
                             (bindingOperand.kind == 3 or bindingOperand.kind == 4) -> if {
-                                context.sources[bindingOperand.sourceModule] -> lexer.lex => bindingOperandTokens!
-                                bindingOperandTokens![bindingOperand.payloadToken] => bindingOperandToken
+                                bindingOperand -> sourceToken => bindingOperandToken
                                 bindingOperand.kind == 3 -> if { context.sources[bindingOperand.sourceModule] -> slice(bindingOperandToken.span.start, bindingOperandToken.span.length) -> print } else {
                                     ((context.sources[bindingOperand.sourceModule] -> byte(bindingOperandToken.span.start)) == UInt8(116)) -> if { "1" } else { "0" } -> print
                                 }
@@ -1850,8 +1834,7 @@ emitCore context: move EmitContext -> Unit {
                     expression -> writeType
                     " " -> print
                     (mutableValue.kind == 3 or mutableValue.kind == 4) -> if {
-                        context.sources[mutableValue.sourceModule] -> lexer.lex => mutableTokens!
-                        mutableTokens![mutableValue.payloadToken] => mutableToken
+                        mutableValue -> sourceToken => mutableToken
                         mutableValue.kind == 3 -> if { context.sources[mutableValue.sourceModule] -> slice(mutableToken.span.start, mutableToken.span.length) -> print } else {
                             ((context.sources[mutableValue.sourceModule] -> byte(mutableToken.span.start)) == UInt8(116)) -> if { "1" } else { "0" } -> print
                         }
@@ -1860,8 +1843,7 @@ emitCore context: move EmitContext -> Unit {
                     "$(expression -> storageAlign)" -> println
                 }
                 expression.kind == 2 -> if {
-                    context.sources[expression.sourceModule] -> lexer.lex => expressionTokens!
-                    expressionTokens![expression.payloadToken] => expressionToken
+                    expression -> sourceToken => expressionToken
                     expressionToken.span.length - UIntSize(2) => expressionLength
                     "  %v$(expressionIndex!)_ptr = insertvalue %sl.text poison, ptr @sl_str_$(expressionIndex!), 0" -> println
                     "  %v$(expressionIndex!) = insertvalue %sl.text %v$(expressionIndex!)_ptr, i64 $expressionLength, 1" -> println
@@ -1881,8 +1863,7 @@ emitCore context: move EmitContext -> Unit {
                         fieldValue -> writeType
                         " " -> print
                         (fieldValue.kind == 3 or fieldValue.kind == 4) -> if {
-                            context.sources[fieldValue.sourceModule] -> lexer.lex => fieldTokens!
-                            fieldTokens![fieldValue.payloadToken] => fieldToken
+                            fieldValue -> sourceToken => fieldToken
                             fieldValue.kind == 3 -> if {
                                 context.sources[fieldValue.sourceModule] -> slice(fieldToken.span.start, fieldToken.span.length) -> print
                             } else {
@@ -1901,33 +1882,30 @@ emitCore context: move EmitContext -> Unit {
                     memberBase.typeOrigin => memberCurrentOrigin!
                     memberBase.typeModule => memberCurrentModule!
                     memberBase.typeSymbol => memberCurrentSymbol!
-                    context.sources[expression.sourceModule] -> ast.lower => memberNodes!
-                    context.sources[expression.sourceModule] -> lexer.lex => memberTokens!
-                    memberNodes![expression.astNode] => memberAst
+                    expression -> sourceNode => memberAst
                     0 => memberIdentifierCount!
                     memberAst.firstToken => memberTokenIndex!
                     memberTokenIndex! < memberAst.firstToken + memberAst.tokenCount -> while {
-                        memberTokens![memberTokenIndex!].kind == grammar.tokenIdIdentifier -> if { memberIdentifierCount! + 1 => memberIdentifierCount! }
+                        context.tokens[context.ranges[expression.sourceModule].tokenStart + memberTokenIndex!].kind == grammar.tokenIdIdentifier -> if { memberIdentifierCount! + 1 => memberIdentifierCount! }
                         memberTokenIndex! + 1 => memberTokenIndex!
                     }
                     0 => memberIdentifierOrdinal!
                     0 => memberProjectionOrdinal!
                     memberAst.firstToken => memberTokenIndex!
                     memberTokenIndex! < memberAst.firstToken + memberAst.tokenCount -> while {
-                        memberTokens![memberTokenIndex!].kind == grammar.tokenIdIdentifier -> if {
+                        context.tokens[context.ranges[expression.sourceModule].tokenStart + memberTokenIndex!].kind == grammar.tokenIdIdentifier -> if {
                             memberIdentifierOrdinal! > 0 -> if {
                                 memberCurrentModule! => ownerSourceModule!
                                 memberCurrentOrigin! == 2 -> if { context.modules[memberCurrentModule!].sourceIndex => ownerSourceModule! }
-                                context.sources[ownerSourceModule!] -> symbols.collect => ownerTable!
-                                context.sources[ownerSourceModule!] -> lexer.lex => ownerTokens!
+                                context.ranges[ownerSourceModule!] => ownerRange
                                 -1 => fieldOrdinal!
                                 0 => candidateFieldOrdinal!
                                 0 => memberFieldSearch!
-                                memberFieldSearch! < (ownerTable! -> len) -> while {
-                                    ownerTable![memberFieldSearch!] => memberField
+                                memberFieldSearch! < ownerRange.symbolCount -> while {
+                                    context.symbols[ownerRange.symbolStart + memberFieldSearch!] => memberField
                                     (memberField.kind == 26 and memberField.parent == memberCurrentSymbol!) -> if {
-                                        memberTokens![memberTokenIndex!] => memberName
-                                        ownerTokens![memberField.nameToken] => fieldName
+                                        context.tokens[context.ranges[expression.sourceModule].tokenStart + memberTokenIndex!] => memberName
+                                        context.tokens[ownerRange.tokenStart + memberField.nameToken] => fieldName
                                         memberName.span.length == fieldName.span.length => equal!
                                         UIntSize(0) => fieldNameByte!
                                         (equal! and fieldNameByte! < memberName.span.length) -> while {
@@ -2007,8 +1985,7 @@ emitCore context: move EmitContext -> Unit {
                         "  %v$(expressionIndex!)_ptr$(arrayElementPosition!) = getelementptr i32, ptr %v$(expressionIndex!)_data, i64 $(arrayElementPosition!)" -> println
                         "  store i32 " -> print
                         arrayElement.kind == 3 -> if {
-                            context.sources[arrayElement.sourceModule] -> lexer.lex => arrayElementTokens!
-                            arrayElementTokens![arrayElement.payloadToken] => arrayElementToken
+                            arrayElement -> sourceToken => arrayElementToken
                             context.sources[arrayElement.sourceModule] -> slice(arrayElementToken.span.start, arrayElementToken.span.length) -> print
                         } else {
                             (arrayElement.kind == 5 and function.operand1 >= 0 and arrayElement.symbol == context.ir[function.operand1].symbol) -> if { "%arg" -> print } else { "%v$(arrayElementIndex!)" -> print }
@@ -2047,8 +2024,7 @@ emitCore context: move EmitContext -> Unit {
                         dictionaryItemSymbol -> llvmType -> print
                         " " -> print
                         (dictionaryItem.kind == 3 or dictionaryItem.kind == 4) -> if {
-                            context.sources[dictionaryItem.sourceModule] -> lexer.lex => dictionaryItemTokens!
-                            dictionaryItemTokens![dictionaryItem.payloadToken] => dictionaryItemToken
+                            dictionaryItem -> sourceToken => dictionaryItemToken
                             dictionaryItem.kind == 3 -> if {
                                 context.sources[dictionaryItem.sourceModule] -> slice(dictionaryItemToken.span.start, dictionaryItemToken.span.length) -> print
                             } else {
@@ -2097,8 +2073,7 @@ emitCore context: move EmitContext -> Unit {
                         indexedArray.typeModule -> llvmType -> print
                         " %v$(expressionIndex!)_key, " -> print
                         (arrayIndex.kind == 3 or arrayIndex.kind == 4) -> if {
-                            context.sources[arrayIndex.sourceModule] -> lexer.lex => dictionaryIndexTokens!
-                            dictionaryIndexTokens![arrayIndex.payloadToken] => dictionaryIndexToken
+                            arrayIndex -> sourceToken => dictionaryIndexToken
                             arrayIndex.kind == 3 -> if {
                                 context.sources[arrayIndex.sourceModule] -> slice(dictionaryIndexToken.span.start, dictionaryIndexToken.span.length) -> println
                             } else {
@@ -2132,8 +2107,7 @@ emitCore context: move EmitContext -> Unit {
                     }
                     "  %v$(expressionIndex!)_ptr = getelementptr i32, ptr %v$(expressionIndex!)_data, i64 " -> print
                     arrayIndex.kind == 3 -> if {
-                        context.sources[arrayIndex.sourceModule] -> lexer.lex => indexTokens!
-                        indexTokens![arrayIndex.payloadToken] => indexToken
+                        arrayIndex -> sourceToken => indexToken
                         context.sources[arrayIndex.sourceModule] -> slice(indexToken.span.start, indexToken.span.length) -> println
                     } else {
                         "%v$(expressionIndex!)_index" -> println
@@ -2171,8 +2145,7 @@ emitCore context: move EmitContext -> Unit {
                     " " -> print
                     (expression.kind == 7 and expression.opcode != -26) -> if { "0" -> print } else {
                         (leftOperand.kind == 3 or leftOperand.kind == 4) -> if {
-                            context.sources[leftOperand.sourceModule] -> lexer.lex => leftTokens!
-                            leftTokens![leftOperand.payloadToken] => leftToken
+                            leftOperand -> sourceToken => leftToken
                             leftOperand.kind == 3 -> if {
                                 context.sources[leftOperand.sourceModule] -> slice(leftToken.span.start, leftToken.span.length) -> print
                             } else {
@@ -2186,8 +2159,7 @@ emitCore context: move EmitContext -> Unit {
                     expression.kind == 7 -> if {
                         expression.opcode == -26 -> if { "true" -> println } else {
                             (leftOperand.kind == 3 or leftOperand.kind == 4) -> if {
-                                context.sources[leftOperand.sourceModule] -> lexer.lex => unaryTokens!
-                                unaryTokens![leftOperand.payloadToken] => unaryToken
+                                leftOperand -> sourceToken => unaryToken
                                 context.sources[leftOperand.sourceModule] -> slice(unaryToken.span.start, unaryToken.span.length) -> println
                             } else {
                                 (leftOperand.kind == 5 and function.operand1 >= 0 and leftOperand.symbol == context.ir[function.operand1].symbol) -> if { "%arg" -> println } else { "%v$(expression.operand0)" -> println }
@@ -2196,8 +2168,7 @@ emitCore context: move EmitContext -> Unit {
                     } else {
                         context.ir[expression.operand1] => rightOperand
                         (rightOperand.kind == 3 or rightOperand.kind == 4) -> if {
-                            context.sources[rightOperand.sourceModule] -> lexer.lex => rightTokens!
-                            rightTokens![rightOperand.payloadToken] => rightToken
+                            rightOperand -> sourceToken => rightToken
                             rightOperand.kind == 3 -> if {
                                 context.sources[rightOperand.sourceModule] -> slice(rightToken.span.start, rightToken.span.length) -> println
                             } else {
@@ -2212,8 +2183,7 @@ emitCore context: move EmitContext -> Unit {
                     (expression.symbol == -101 or expression.symbol == -102) -> if {
                         context.ir[expression.operand0] => runtimeArgument
                         runtimeArgument.kind == 2 -> if {
-                            context.sources[runtimeArgument.sourceModule] -> lexer.lex => runtimeArgumentTokens!
-                            runtimeArgumentTokens![runtimeArgument.payloadToken] => runtimeArgumentToken
+                            runtimeArgument -> sourceToken => runtimeArgumentToken
                             Int(runtimeArgumentToken.span.length) - 2 => runtimeArgumentLength
                             context.sources[runtimeArgument.sourceModule] -> interpolation.lower => functionExpressionInterpolation!
                             false => hasFunctionExpressionInterpolation!
@@ -2284,8 +2254,7 @@ emitCore context: move EmitContext -> Unit {
                                                             functionExpressionLeftBinding! >= 0 -> if {
                                                                 context.ir[context.ir[functionExpressionLeftBinding!].operand0] => functionExpressionLeftValue
                                                                 functionExpressionLeftValue.kind == 3 -> if {
-                                                                    context.sources[functionExpressionLeftValue.sourceModule] -> lexer.lex => functionExpressionLeftTokens!
-                                                                    functionExpressionLeftTokens![functionExpressionLeftValue.payloadToken] => functionExpressionLeftToken
+                                                                    functionExpressionLeftValue -> sourceToken => functionExpressionLeftToken
                                                                     context.sources[functionExpressionLeftValue.sourceModule] -> slice(functionExpressionLeftToken.span.start, functionExpressionLeftToken.span.length) -> print
                                                                 } else { "%v$(context.ir[functionExpressionLeftBinding!].operand0)" -> print }
                                                             }
@@ -2313,8 +2282,7 @@ emitCore context: move EmitContext -> Unit {
                                                             functionExpressionUnaryBinding! >= 0 -> if {
                                                                 context.ir[context.ir[functionExpressionUnaryBinding!].operand0] => functionExpressionUnaryValue
                                                                 functionExpressionUnaryValue.kind == 3 -> if {
-                                                                    context.sources[functionExpressionUnaryValue.sourceModule] -> lexer.lex => functionExpressionUnaryTokens!
-                                                                    functionExpressionUnaryTokens![functionExpressionUnaryValue.payloadToken] => functionExpressionUnaryToken
+                                                                    functionExpressionUnaryValue -> sourceToken => functionExpressionUnaryToken
                                                                     context.sources[functionExpressionUnaryValue.sourceModule] -> slice(functionExpressionUnaryToken.span.start, functionExpressionUnaryToken.span.length) -> println
                                                                 } else { "%v$(context.ir[functionExpressionUnaryBinding!].operand0)" -> println }
                                                             }
@@ -2340,8 +2308,7 @@ emitCore context: move EmitContext -> Unit {
                                                             functionExpressionRightBinding! >= 0 -> if {
                                                                 context.ir[context.ir[functionExpressionRightBinding!].operand0] => functionExpressionRightValue
                                                                 functionExpressionRightValue.kind == 3 -> if {
-                                                                    context.sources[functionExpressionRightValue.sourceModule] -> lexer.lex => functionExpressionRightTokens!
-                                                                    functionExpressionRightTokens![functionExpressionRightValue.payloadToken] => functionExpressionRightToken
+                                                                    functionExpressionRightValue -> sourceToken => functionExpressionRightToken
                                                                     context.sources[functionExpressionRightValue.sourceModule] -> slice(functionExpressionRightToken.span.start, functionExpressionRightToken.span.length) -> println
                                                                 } else { "%v$(context.ir[functionExpressionRightBinding!].operand0)" -> println }
                                                             }
@@ -2377,8 +2344,7 @@ emitCore context: move EmitContext -> Unit {
                                                 functionExpressionRootBinding! >= 0 -> if {
                                                     context.ir[context.ir[functionExpressionRootBinding!].operand0] => functionExpressionRootValue
                                                     (functionExpressionRootValue.kind == 3 or functionExpressionRootValue.kind == 4) -> if {
-                                                        context.sources[functionExpressionRootValue.sourceModule] -> lexer.lex => functionExpressionRootTokens!
-                                                        functionExpressionRootTokens![functionExpressionRootValue.payloadToken] => functionExpressionRootToken
+                                                        functionExpressionRootValue -> sourceToken => functionExpressionRootToken
                                                         functionExpressionRootValue.kind == 4 -> if {
                                                             (context.sources[functionExpressionRootValue.sourceModule] -> byte(functionExpressionRootToken.span.start)) == UInt8(116) -> if { "1" -> print } else { "0" -> print }
                                                         } else { context.sources[functionExpressionRootValue.sourceModule] -> slice(functionExpressionRootToken.span.start, functionExpressionRootToken.span.length) -> print }
@@ -2421,12 +2387,12 @@ emitCore context: move EmitContext -> Unit {
                                             } else { false => functionInterpolationNameContinues! }
                                         }
                                         functionInterpolationNameEnd! > functionInterpolationNameStart -> if {
-                                            context.sources[runtimeArgument.sourceModule] -> symbols.collect => functionInterpolationSymbols!
+                                            context.ranges[runtimeArgument.sourceModule] => functionInterpolationRange
                                             0 => functionInterpolationSymbolIndex!
-                                            functionInterpolationSymbolIndex! < (functionInterpolationSymbols! -> len) -> while {
-                                                functionInterpolationSymbols![functionInterpolationSymbolIndex!] => functionInterpolationSymbol
+                                            functionInterpolationSymbolIndex! < functionInterpolationRange.symbolCount -> while {
+                                                context.symbols[functionInterpolationRange.symbolStart + functionInterpolationSymbolIndex!] => functionInterpolationSymbol
                                                 (functionInterpolationSymbol.kind == 9 or functionInterpolationSymbol.kind == 35) -> if {
-                                                    runtimeArgumentTokens![functionInterpolationSymbol.nameToken] => functionInterpolationSymbolToken
+                                                    context.tokens[functionInterpolationRange.tokenStart + functionInterpolationSymbol.nameToken] => functionInterpolationSymbolToken
                                                     functionInterpolationSymbolToken.span.length == functionInterpolationNameEnd! - functionInterpolationNameStart => functionInterpolationNameEqual!
                                                     UIntSize(0) => functionInterpolationNameByteIndex!
                                                     (functionInterpolationNameEqual! and functionInterpolationNameByteIndex! < functionInterpolationSymbolToken.span.length) -> while {
@@ -2465,8 +2431,7 @@ emitCore context: move EmitContext -> Unit {
                                         context.ir[functionInterpolationBindingIr!] => functionInterpolationBinding
                                         context.ir[functionInterpolationBinding.operand0] => functionInterpolationValue
                                         functionInterpolationValue.kind == 3 -> if {
-                                            context.sources[functionInterpolationValue.sourceModule] -> lexer.lex => functionInterpolationValueTokens!
-                                            functionInterpolationValueTokens![functionInterpolationValue.payloadToken] => functionInterpolationValueToken
+                                            functionInterpolationValue -> sourceToken => functionInterpolationValueToken
                                             context.sources[functionInterpolationValue.sourceModule] -> slice(functionInterpolationValueToken.span.start, functionInterpolationValueToken.span.length) -> print
                                         } else { "%v$(functionInterpolationBinding.operand0)" -> print }
                                     }
@@ -2504,8 +2469,7 @@ emitCore context: move EmitContext -> Unit {
                         argument -> writeType
                         " " -> print
                         (argument.kind == 3 or argument.kind == 4) -> if {
-                            context.sources[argument.sourceModule] -> lexer.lex => argumentTokens!
-                            argumentTokens![argument.payloadToken] => argumentToken
+                            argument -> sourceToken => argumentToken
                             argument.kind == 3 -> if {
                                 context.sources[argument.sourceModule] -> slice(argumentToken.span.start, argumentToken.span.length) -> print
                             } else {
@@ -2522,8 +2486,7 @@ emitCore context: move EmitContext -> Unit {
                     context.ir[expression.operand0] => ifCondition
                     "  br i1 " -> print
                     ifCondition.kind == 4 -> if {
-                        context.sources[ifCondition.sourceModule] -> lexer.lex => ifConditionTokens!
-                        ifConditionTokens![ifCondition.payloadToken] => ifConditionToken
+                        ifCondition -> sourceToken => ifConditionToken
                         ((context.sources[ifCondition.sourceModule] -> byte(ifConditionToken.span.start)) == UInt8(116)) -> if { "1" } else { "0" } -> print
                     } else {
                         (ifCondition.kind == 5 and function.operand1 >= 0 and ifCondition.symbol == context.ir[function.operand1].symbol) -> if { "%arg" -> print } else { "%v$(expression.operand0)" -> print }
@@ -2554,8 +2517,7 @@ emitCore context: move EmitContext -> Unit {
                         expression -> writeType
                         " [ " -> print
                         (thenValue.kind == 3 or thenValue.kind == 4) -> if {
-                            context.sources[thenValue.sourceModule] -> lexer.lex => thenValueTokens!
-                            thenValueTokens![thenValue.payloadToken] => thenValueToken
+                            thenValue -> sourceToken => thenValueToken
                             thenValue.kind == 3 -> if { context.sources[thenValue.sourceModule] -> slice(thenValueToken.span.start, thenValueToken.span.length) -> print } else {
                                 ((context.sources[thenValue.sourceModule] -> byte(thenValueToken.span.start)) == UInt8(116)) -> if { "1" } else { "0" } -> print
                             }
@@ -2564,8 +2526,7 @@ emitCore context: move EmitContext -> Unit {
                         thenValue.kind == 18 -> if { "$(thenRegion.operand1)_merge" -> print } else { "$(expressionIndex!)_then" -> print }
                         " ], [ " -> print
                         (elseValue.kind == 3 or elseValue.kind == 4) -> if {
-                            context.sources[elseValue.sourceModule] -> lexer.lex => elseValueTokens!
-                            elseValueTokens![elseValue.payloadToken] => elseValueToken
+                            elseValue -> sourceToken => elseValueToken
                             elseValue.kind == 3 -> if { context.sources[elseValue.sourceModule] -> slice(elseValueToken.span.start, elseValueToken.span.length) -> print } else {
                                 ((context.sources[elseValue.sourceModule] -> byte(elseValueToken.span.start)) == UInt8(116)) -> if { "1" } else { "0" } -> print
                             }
@@ -2600,9 +2561,8 @@ emitCore context: move EmitContext -> Unit {
                         context.moves[dropMoveIndex!] => dropMove
                         (dropMove.memberIr >= 0 and dropMove.sourceModule == dropCandidate.sourceModule and dropMove.symbol == dropCandidate.symbol) -> if { true => dropCandidateHasPartialMoves! }
                         (dropMove.memberIr < 0 and dropMove.sourceModule == dropCandidate.sourceModule and dropMove.symbol == dropCandidate.symbol and dropMove.regionIr == function.operand0) -> if {
-                            context.sources[dropCandidate.sourceModule] -> ast.lower => dropCandidateAst!
                             context.ir[dropMove.siteIr] => dropMoveCall
-                            dropCandidateAst![dropMoveCall.astNode].start > dropCandidateAst![dropCandidate.astNode].start -> if { true => dropCandidateMoved! }
+                            (dropMoveCall -> sourceStart) > (dropCandidate -> sourceStart) -> if { true => dropCandidateMoved! }
                         }
                         dropMoveIndex! + 1 => dropMoveIndex!
                     }
@@ -2711,8 +2671,7 @@ emitCore context: move EmitContext -> Unit {
             function -> writeType
             " " -> print
             (returnOperand.kind == 3 or returnOperand.kind == 4) -> if {
-                context.sources[returnOperand.sourceModule] -> lexer.lex => returnTokens!
-                returnTokens![returnOperand.payloadToken] => returnToken
+                returnOperand -> sourceToken => returnToken
                 returnOperand.kind == 3 -> if {
                     context.sources[returnOperand.sourceModule] -> slice(returnToken.span.start, returnToken.span.length) -> println
                 } else {
@@ -2777,11 +2736,10 @@ emitCore context: move EmitContext -> Unit {
                                     entryMutableReadBindingSearch! + 1 => entryMutableReadBindingSearch!
                                 }
                                 entryMutableRead! -> if {
-                                    context.sources[entryScheduleNode.sourceModule] -> ast.lower => entryMutableReadAst!
                                     functionIndex! + 1 => entryMutableReadBarrierSearch!
                                     entryMutableReadBarrierSearch! < entryEnd! -> while {
                                         context.ir[entryMutableReadBarrierSearch!] => entryMutableReadBarrier
-                                        (not entryScheduled![entryMutableReadBarrierSearch!] and (entryMutableReadBarrier.kind == 20 or (entryMutableReadBarrier.kind == 17 and entryMutableReadBarrier.flags == 1)) and entryMutableReadAst![entryMutableReadBarrier.astNode].start < entryMutableReadAst![entryScheduleNode.astNode].start) -> if {
+                                        (not entryScheduled![entryMutableReadBarrierSearch!] and (entryMutableReadBarrier.kind == 20 or (entryMutableReadBarrier.kind == 17 and entryMutableReadBarrier.flags == 1)) and (entryMutableReadBarrier -> sourceStart) < (entryScheduleNode -> sourceStart)) -> if {
                                             false => entryScheduleReady!
                                         }
                                         entryMutableReadBarrierSearch! + 1 => entryMutableReadBarrierSearch!
@@ -2795,11 +2753,10 @@ emitCore context: move EmitContext -> Unit {
                                     (context.ir[entryEffectAncestor!].kind == 6 or context.ir[entryEffectAncestor!].kind == 18 or context.ir[entryEffectAncestor!].kind == 20 or (context.ir[entryEffectAncestor!].kind == 17 and context.ir[entryEffectAncestor!].flags == 1)) -> if { false => entryRootEffect! } else { context.ir[entryEffectAncestor!].parent => entryEffectAncestor! }
                                 }
                                 entryRootEffect! -> if {
-                                    context.sources[entryScheduleNode.sourceModule] -> ast.lower => entryEffectAst!
                                     functionIndex! + 1 => entryEarlierEffectSearch!
                                     entryEarlierEffectSearch! < entryEnd! -> while {
                                         context.ir[entryEarlierEffectSearch!] => entryEarlierEffect
-                                        (not entryScheduled![entryEarlierEffectSearch!] and (entryEarlierEffect.kind == 6 or entryEarlierEffect.kind == 18 or entryEarlierEffect.kind == 20 or (entryEarlierEffect.kind == 17 and entryEarlierEffect.flags == 1)) and entryEffectAst![entryEarlierEffect.astNode].start < entryEffectAst![entryScheduleNode.astNode].start) -> if {
+                                        (not entryScheduled![entryEarlierEffectSearch!] and (entryEarlierEffect.kind == 6 or entryEarlierEffect.kind == 18 or entryEarlierEffect.kind == 20 or (entryEarlierEffect.kind == 17 and entryEarlierEffect.flags == 1)) and (entryEarlierEffect -> sourceStart) < (entryScheduleNode -> sourceStart)) -> if {
                                             entryEarlierEffect.parent => entryEarlierEffectAncestor!
                                             true => entryEarlierRootEffect!
                                             false => entryEarlierInsideRegion!
@@ -2828,8 +2785,7 @@ emitCore context: move EmitContext -> Unit {
                     entryOrder![entryOrderIndex!] => entryExpressionIndex!
                     context.ir[entryExpressionIndex!] => entryExpression
                     (entryExpression.kind == 2 and entryExpression.parent >= 0 and context.ir[entryExpression.parent].kind == 17) -> if {
-                        context.sources[entryExpression.sourceModule] -> lexer.lex => entryExpressionTokens!
-                        entryExpressionTokens![entryExpression.payloadToken] => entryExpressionToken
+                        entryExpression -> sourceToken => entryExpressionToken
                         entryExpressionToken.span.length - UIntSize(2) => entryExpressionLength
                         "  %v$(entryExpressionIndex!)_ptr = insertvalue %sl.text poison, ptr @sl_str_$(entryExpressionIndex!), 0" -> println
                         "  %v$(entryExpressionIndex!) = insertvalue %sl.text %v$(entryExpressionIndex!)_ptr, i64 $entryExpressionLength, 1" -> println
@@ -2855,8 +2811,7 @@ emitCore context: move EmitContext -> Unit {
                                 entryExpression -> writeType
                                 " " -> print
                                 (entryBindingOperand.kind == 3 or entryBindingOperand.kind == 4) -> if {
-                                    context.sources[entryBindingOperand.sourceModule] -> lexer.lex => entryBindingOperandTokens!
-                                    entryBindingOperandTokens![entryBindingOperand.payloadToken] => entryBindingOperandToken
+                                    entryBindingOperand -> sourceToken => entryBindingOperandToken
                                     entryBindingOperand.kind == 3 -> if { context.sources[entryBindingOperand.sourceModule] -> slice(entryBindingOperandToken.span.start, entryBindingOperandToken.span.length) -> print } else {
                                         ((context.sources[entryBindingOperand.sourceModule] -> byte(entryBindingOperandToken.span.start)) == UInt8(116)) -> if { "1" } else { "0" } -> print
                                     }
@@ -2872,8 +2827,7 @@ emitCore context: move EmitContext -> Unit {
                         entryExpression -> writeType
                         " " -> print
                         (entryMutableValue.kind == 3 or entryMutableValue.kind == 4) -> if {
-                            context.sources[entryMutableValue.sourceModule] -> lexer.lex => entryMutableTokens!
-                            entryMutableTokens![entryMutableValue.payloadToken] => entryMutableToken
+                            entryMutableValue -> sourceToken => entryMutableToken
                             entryMutableValue.kind == 3 -> if { context.sources[entryMutableValue.sourceModule] -> slice(entryMutableToken.span.start, entryMutableToken.span.length) -> print } else {
                                 ((context.sources[entryMutableValue.sourceModule] -> byte(entryMutableToken.span.start)) == UInt8(116)) -> if { "1" } else { "0" } -> print
                             }
@@ -2906,8 +2860,7 @@ emitCore context: move EmitContext -> Unit {
                         " " -> print
                         (entryExpression.kind == 7 and entryExpression.opcode != -26) -> if { "0" -> print } else {
                             (entryLeft.kind == 3 or entryLeft.kind == 4) -> if {
-                                context.sources[entryLeft.sourceModule] -> lexer.lex => entryLeftTokens!
-                                entryLeftTokens![entryLeft.payloadToken] => entryLeftToken
+                                entryLeft -> sourceToken => entryLeftToken
                                 entryLeft.kind == 3 -> if { context.sources[entryLeft.sourceModule] -> slice(entryLeftToken.span.start, entryLeftToken.span.length) -> print } else {
                                     ((context.sources[entryLeft.sourceModule] -> byte(entryLeftToken.span.start)) == UInt8(116)) -> if { "1" } else { "0" } -> print
                                 }
@@ -2917,16 +2870,14 @@ emitCore context: move EmitContext -> Unit {
                         entryExpression.kind == 7 -> if {
                             entryExpression.opcode == -26 -> if { "true" -> println } else {
                                 (entryLeft.kind == 3 or entryLeft.kind == 4) -> if {
-                                    context.sources[entryLeft.sourceModule] -> lexer.lex => entryUnaryTokens!
-                                    entryUnaryTokens![entryLeft.payloadToken] => entryUnaryToken
+                                    entryLeft -> sourceToken => entryUnaryToken
                                     context.sources[entryLeft.sourceModule] -> slice(entryUnaryToken.span.start, entryUnaryToken.span.length) -> println
                                 } else { "%v$(entryExpression.operand0)" -> println }
                             }
                         } else {
                             context.ir[entryExpression.operand1] => entryRight
                             (entryRight.kind == 3 or entryRight.kind == 4) -> if {
-                                context.sources[entryRight.sourceModule] -> lexer.lex => entryRightTokens!
-                                entryRightTokens![entryRight.payloadToken] => entryRightToken
+                                entryRight -> sourceToken => entryRightToken
                                 entryRight.kind == 3 -> if { context.sources[entryRight.sourceModule] -> slice(entryRightToken.span.start, entryRightToken.span.length) -> println } else {
                                     ((context.sources[entryRight.sourceModule] -> byte(entryRightToken.span.start)) == UInt8(116)) -> if { "1" } else { "0" } -> println
                                 }
@@ -2937,8 +2888,7 @@ emitCore context: move EmitContext -> Unit {
                         (entryExpression.symbol == -101 or entryExpression.symbol == -102) -> if {
                             context.ir[entryExpression.operand0] => runtimeArgument
                             runtimeArgument.kind == 2 -> if {
-                                context.sources[runtimeArgument.sourceModule] -> lexer.lex => runtimeArgumentTokens!
-                                runtimeArgumentTokens![runtimeArgument.payloadToken] => runtimeArgumentToken
+                                runtimeArgument -> sourceToken => runtimeArgumentToken
                                 Int(runtimeArgumentToken.span.length) - 2 => runtimeArgumentLength
                                 context.sources[runtimeArgument.sourceModule] -> interpolation.lower => entryExpressionInterpolation!
                                 false => hasEntryExpressionInterpolation!
@@ -3007,8 +2957,7 @@ emitCore context: move EmitContext -> Unit {
                                                             entryExpressionLeftBinding! >= 0 -> if {
                                                                 context.ir[context.ir[entryExpressionLeftBinding!].operand0] => entryExpressionLeftValue
                                                                 entryExpressionLeftValue.kind == 3 -> if {
-                                                                    context.sources[entryExpressionLeftValue.sourceModule] -> lexer.lex => entryExpressionLeftTokens!
-                                                                    entryExpressionLeftTokens![entryExpressionLeftValue.payloadToken] => entryExpressionLeftToken
+                                                                    entryExpressionLeftValue -> sourceToken => entryExpressionLeftToken
                                                                     context.sources[entryExpressionLeftValue.sourceModule] -> slice(entryExpressionLeftToken.span.start, entryExpressionLeftToken.span.length) -> print
                                                                 } else { "%v$(context.ir[entryExpressionLeftBinding!].operand0)" -> print }
                                                             }
@@ -3034,8 +2983,7 @@ emitCore context: move EmitContext -> Unit {
                                                             entryExpressionUnaryBinding! >= 0 -> if {
                                                                 context.ir[context.ir[entryExpressionUnaryBinding!].operand0] => entryExpressionUnaryValue
                                                                 entryExpressionUnaryValue.kind == 3 -> if {
-                                                                    context.sources[entryExpressionUnaryValue.sourceModule] -> lexer.lex => entryExpressionUnaryTokens!
-                                                                    entryExpressionUnaryTokens![entryExpressionUnaryValue.payloadToken] => entryExpressionUnaryToken
+                                                                    entryExpressionUnaryValue -> sourceToken => entryExpressionUnaryToken
                                                                     context.sources[entryExpressionUnaryValue.sourceModule] -> slice(entryExpressionUnaryToken.span.start, entryExpressionUnaryToken.span.length) -> println
                                                                 } else { "%v$(context.ir[entryExpressionUnaryBinding!].operand0)" -> println }
                                                             }
@@ -3059,8 +3007,7 @@ emitCore context: move EmitContext -> Unit {
                                                             entryExpressionRightBinding! >= 0 -> if {
                                                                 context.ir[context.ir[entryExpressionRightBinding!].operand0] => entryExpressionRightValue
                                                                 entryExpressionRightValue.kind == 3 -> if {
-                                                                    context.sources[entryExpressionRightValue.sourceModule] -> lexer.lex => entryExpressionRightTokens!
-                                                                    entryExpressionRightTokens![entryExpressionRightValue.payloadToken] => entryExpressionRightToken
+                                                                    entryExpressionRightValue -> sourceToken => entryExpressionRightToken
                                                                     context.sources[entryExpressionRightValue.sourceModule] -> slice(entryExpressionRightToken.span.start, entryExpressionRightToken.span.length) -> println
                                                                 } else { "%v$(context.ir[entryExpressionRightBinding!].operand0)" -> println }
                                                             }
@@ -3090,8 +3037,7 @@ emitCore context: move EmitContext -> Unit {
                                                 entryExpressionRootBinding! >= 0 -> if {
                                                     context.ir[context.ir[entryExpressionRootBinding!].operand0] => entryExpressionRootValue
                                                     (entryExpressionRootValue.kind == 3 or entryExpressionRootValue.kind == 4) -> if {
-                                                        context.sources[entryExpressionRootValue.sourceModule] -> lexer.lex => entryExpressionRootTokens!
-                                                        entryExpressionRootTokens![entryExpressionRootValue.payloadToken] => entryExpressionRootToken
+                                                        entryExpressionRootValue -> sourceToken => entryExpressionRootToken
                                                         entryExpressionRootValue.kind == 4 -> if {
                                                             (context.sources[entryExpressionRootValue.sourceModule] -> byte(entryExpressionRootToken.span.start)) == UInt8(116) -> if { "1" -> print } else { "0" -> print }
                                                         } else { context.sources[entryExpressionRootValue.sourceModule] -> slice(entryExpressionRootToken.span.start, entryExpressionRootToken.span.length) -> print }
@@ -3132,12 +3078,12 @@ emitCore context: move EmitContext -> Unit {
                                                 } else { false => interpolationNameContinues! }
                                             }
                                             interpolationNameEnd! > interpolationNameStart -> if {
-                                                context.sources[runtimeArgument.sourceModule] -> symbols.collect => interpolationSymbols!
+                                                context.ranges[runtimeArgument.sourceModule] => interpolationRange
                                                 0 => interpolationSymbolIndex!
-                                                interpolationSymbolIndex! < (interpolationSymbols! -> len) -> while {
-                                                    interpolationSymbols![interpolationSymbolIndex!] => interpolationSymbol
+                                                interpolationSymbolIndex! < interpolationRange.symbolCount -> while {
+                                                    context.symbols[interpolationRange.symbolStart + interpolationSymbolIndex!] => interpolationSymbol
                                                     interpolationSymbol.kind == 9 -> if {
-                                                        runtimeArgumentTokens![interpolationSymbol.nameToken] => interpolationSymbolToken
+                                                        context.tokens[interpolationRange.tokenStart + interpolationSymbol.nameToken] => interpolationSymbolToken
                                                         interpolationSymbolToken.span.length == interpolationNameEnd! - interpolationNameStart => interpolationNameEqual!
                                                         UIntSize(0) => interpolationNameByteIndex!
                                                         (interpolationNameEqual! and interpolationNameByteIndex! < interpolationSymbolToken.span.length) -> while {
@@ -3170,8 +3116,7 @@ emitCore context: move EmitContext -> Unit {
                                         context.ir[interpolationBinding.operand0] => interpolationValue
                                         "  call void @sl_runtime_print_i32(i32 " -> print
                                         interpolationValue.kind == 3 -> if {
-                                            context.sources[interpolationValue.sourceModule] -> lexer.lex => interpolationValueTokens!
-                                            interpolationValueTokens![interpolationValue.payloadToken] => interpolationValueToken
+                                            interpolationValue -> sourceToken => interpolationValueToken
                                             context.sources[interpolationValue.sourceModule] -> slice(interpolationValueToken.span.start, interpolationValueToken.span.length) -> print
                                         } else { "%v$(interpolationBinding.operand0)" -> print }
                                         ", i1 false)" -> println
@@ -3204,14 +3149,12 @@ emitCore context: move EmitContext -> Unit {
                             entryArgument -> writeType
                             " " -> print
                             entryArgument.kind == 2 -> if {
-                                context.sources[entryArgument.sourceModule] -> lexer.lex => entryArgumentTokens!
-                                entryArgumentTokens![entryArgument.payloadToken] => entryArgumentToken
+                                entryArgument -> sourceToken => entryArgumentToken
                                 Int(entryArgumentToken.span.length) - 2 => entryArgumentLength
                                 "{ ptr @sl_str_$(entryExpression.operand0), i64 $entryArgumentLength }" -> print
                             } else {
                             (entryArgument.kind == 3 or entryArgument.kind == 4) -> if {
-                                context.sources[entryArgument.sourceModule] -> lexer.lex => entryArgumentTokens!
-                                entryArgumentTokens![entryArgument.payloadToken] => entryArgumentToken
+                                entryArgument -> sourceToken => entryArgumentToken
                                 entryArgument.kind == 3 -> if {
                                     context.sources[entryArgument.sourceModule] -> slice(entryArgumentToken.span.start, entryArgumentToken.span.length) -> print
                                 } else {
@@ -3227,8 +3170,7 @@ emitCore context: move EmitContext -> Unit {
                         context.ir[entryExpression.operand0] => entryIfCondition
                         "  br i1 " -> print
                         entryIfCondition.kind == 4 -> if {
-                            context.sources[entryIfCondition.sourceModule] -> lexer.lex => entryIfConditionTokens!
-                            entryIfConditionTokens![entryIfCondition.payloadToken] => entryIfConditionToken
+                            entryIfCondition -> sourceToken => entryIfConditionToken
                             ((context.sources[entryIfCondition.sourceModule] -> byte(entryIfConditionToken.span.start)) == UInt8(116)) -> if { "1" } else { "0" } -> print
                         } else { "%v$(entryExpression.operand0)" -> print }
                         entryExpression.nextOperand >= 0 -> if {
@@ -3254,8 +3196,7 @@ emitCore context: move EmitContext -> Unit {
                             entryExpression -> writeType
                             " [ " -> print
                             (entryThenValue.kind == 3 or entryThenValue.kind == 4) -> if {
-                                context.sources[entryThenValue.sourceModule] -> lexer.lex => entryThenValueTokens!
-                                entryThenValueTokens![entryThenValue.payloadToken] => entryThenValueToken
+                                entryThenValue -> sourceToken => entryThenValueToken
                                 entryThenValue.kind == 3 -> if { context.sources[entryThenValue.sourceModule] -> slice(entryThenValueToken.span.start, entryThenValueToken.span.length) -> print } else {
                                     ((context.sources[entryThenValue.sourceModule] -> byte(entryThenValueToken.span.start)) == UInt8(116)) -> if { "1" } else { "0" } -> print
                                 }
@@ -3264,8 +3205,7 @@ emitCore context: move EmitContext -> Unit {
                             entryThenValue.kind == 18 -> if { "$(entryThenRegion.operand1)_merge" -> print } else { "$(entryExpressionIndex!)_then" -> print }
                             " ], [ " -> print
                             (entryElseValue.kind == 3 or entryElseValue.kind == 4) -> if {
-                                context.sources[entryElseValue.sourceModule] -> lexer.lex => entryElseValueTokens!
-                                entryElseValueTokens![entryElseValue.payloadToken] => entryElseValueToken
+                                entryElseValue -> sourceToken => entryElseValueToken
                                 entryElseValue.kind == 3 -> if { context.sources[entryElseValue.sourceModule] -> slice(entryElseValueToken.span.start, entryElseValueToken.span.length) -> print } else {
                                     ((context.sources[entryElseValue.sourceModule] -> byte(entryElseValueToken.span.start)) == UInt8(116)) -> if { "1" } else { "0" } -> print
                                 }
@@ -3314,8 +3254,7 @@ usesIntInterpolation context: EmitContext -> Bool {
         context.ir[nodeIndex!] => node
         (node.kind == 6 and (node.symbol == -101 or node.symbol == -102) and node.operand0 >= 0 and context.ir[node.operand0].kind == 2) -> if {
             context.ir[node.operand0] => argument
-            context.sources[argument.sourceModule] -> lexer.lex => tokens!
-            tokens![argument.payloadToken] => token
+            context.tokens[context.ranges[argument.sourceModule].tokenStart + argument.payloadToken] => token
             token.span.start + UIntSize(1) => byteIndex!
             token.span.start + token.span.length - UIntSize(1) => byteEnd
             byteIndex! < byteEnd -> while {
