@@ -9,6 +9,7 @@ import smalllang.compiler.semantic.composite_types as compositeTypes
 import smalllang.compiler.semantic.modules as modules
 import smalllang.compiler.semantic.nominal_types as nominalTypes
 import smalllang.compiler.semantic.symbols as symbols
+import smalllang.compiler.semantic.type_ids as typeIds
 import syntax.generated.smalllang as grammar
 
 # First LLVM text backend slice. Names are derived only from stable module and
@@ -63,6 +64,173 @@ struct EmitContext {
     nominal: [nominalTypes.NominalType; ~]
     composite: [compositeTypes.CompositeType; ~]
     modules: [modules.ModuleIdentity; ~]
+    types: [typeIds.SemanticType; ~]
+    fields: [typeIds.NominalField; ~]
+    typeSizes: [Int; ~]
+    typeAligns: [Int; ~]
+    typeLayoutStatuses: [Int; ~]
+    pointerBitWidth: Int
+}
+
+struct PrepareRequest {
+    sources: [Text; ~]
+    pointerBitWidth: Int
+}
+
+public struct TypeLayoutRequest {
+    types: [typeIds.SemanticType; ~]
+    fields: [typeIds.NominalField; ~]
+    typeId: Int
+    pointerBitWidth: Int
+}
+
+public struct TypeLayout {
+    size: Int
+    align: Int
+    # 0 known, 1 unresolved recursive dependency, 2 unsupported type.
+    status: Int
+}
+
+public struct TypeLayouts {
+    sizes: [Int; ~]
+    aligns: [Int; ~]
+    statuses: [Int; ~]
+}
+
+# Computes target-aware storage facts from canonical recursive identity. Nominal
+# layouts are a fixed point over owner-to-field edges, so declaration order does
+# not affect nested structs and box indirection terminates recursive layouts.
+public layoutsFor request: TypeLayoutRequest -> TypeLayouts {
+    request.pointerBitWidth / 8 => pointerSize
+    [Int; ~] => sizes!
+    [Int; ~] => aligns!
+    [Int; ~] => statuses!
+    0 => seedIndex!
+    seedIndex! < (request.types -> len) -> while {
+        request.types[seedIndex!] => current
+        -1 => size!
+        1 => align!
+        1 => status!
+        current.status != 0 -> if { 2 => status! } else {
+            current.kind == 1 -> if {
+                current.origin == 1 -> if {
+                    current.symbol == 0 -> if {
+                        0 => size!
+                        0 => status!
+                    }
+                    current.symbol == 1 -> if {
+                        pointerSize * 2 => size!
+                        pointerSize => align!
+                        0 => status!
+                    }
+                    (current.symbol == 2 or current.symbol == 5 or current.symbol == 10 or current.symbol == 14 or current.symbol == 19 or current.symbol == 20) -> if {
+                        4 => size!
+                        4 => align!
+                        0 => status!
+                    }
+                    (current.symbol == 3 or current.symbol == 8 or current.symbol == 23) -> if {
+                        1 => size!
+                        1 => align!
+                        0 => status!
+                    }
+                    (current.symbol == 4 or current.symbol == 9) -> if {
+                        2 => size!
+                        2 => align!
+                        0 => status!
+                    }
+                    (current.symbol == 6 or current.symbol == 7 or current.symbol == 11 or current.symbol == 21 or current.symbol == 22) -> if {
+                        8 => size!
+                        8 => align!
+                        0 => status!
+                    }
+                    (current.symbol == 12 or current.symbol == 13) -> if {
+                        pointerSize => size!
+                        pointerSize => align!
+                        0 => status!
+                    }
+                }
+            }
+            current.kind == 2 -> if {
+                pointerSize * 2 => size!
+                pointerSize => align!
+                0 => status!
+            }
+            current.kind == 3 -> if {
+                pointerSize + 16 => size!
+                pointerSize => align!
+                0 => status!
+            }
+            current.kind == 5 -> if {
+                pointerSize * 2 + 16 => size!
+                pointerSize => align!
+                0 => status!
+            }
+            current.kind == 6 -> if {
+                pointerSize => size!
+                pointerSize => align!
+                0 => status!
+            }
+            current.kind == 7 -> if { 2 => status! }
+        }
+        sizes! -> push(size!)
+        aligns! -> push(align!)
+        statuses! -> push(status!)
+        seedIndex! + 1 => seedIndex!
+    }
+    true => changed!
+    changed! -> while {
+        false => changed!
+        0 => typeIndex!
+        typeIndex! < (request.types -> len) -> while {
+            statuses![typeIndex!] == 1 -> if {
+                request.types[typeIndex!] => current
+                current.kind == 4 -> if {
+                    (current.first >= 0 and statuses![current.first] == 0 and current.length >= 0) -> if {
+                        sizes![current.first] * current.length => sizes![typeIndex!]
+                        aligns![current.first] => aligns![typeIndex!]
+                        0 => statuses![typeIndex!]
+                        true => changed!
+                    }
+                }
+                (current.kind == 1 and (current.origin == 0 or current.origin == 2)) -> if {
+                    0 => size!
+                    1 => align!
+                    true => ready!
+                    0 => fieldIndex!
+                    fieldIndex! < (request.fields -> len) -> while {
+                        request.fields[fieldIndex!] => field
+                        (field.status == 0 and field.ownerType == typeIndex!) -> if {
+                            (field.fieldType < 0 or statuses![field.fieldType] != 0) -> if { false => ready! } else {
+                                aligns![field.fieldType] > align! -> if { aligns![field.fieldType] => align! }
+                                ((size! + aligns![field.fieldType] - 1) / aligns![field.fieldType]) * aligns![field.fieldType] => size!
+                                size! + sizes![field.fieldType] => size!
+                            }
+                        }
+                        fieldIndex! + 1 => fieldIndex!
+                    }
+                    ready! -> if {
+                        ((size! + align! - 1) / align!) * align! => sizes![typeIndex!]
+                        align! => aligns![typeIndex!]
+                        0 => statuses![typeIndex!]
+                        true => changed!
+                    }
+                }
+            }
+            typeIndex! + 1 => typeIndex!
+        }
+    }
+    TypeLayouts { sizes: sizes!, aligns: aligns!, statuses: statuses! } => result!
+    result!
+}
+
+public layoutOf request: TypeLayoutRequest -> TypeLayout {
+    request.typeId => requestedType
+    request -> layoutsFor => layouts
+    (requestedType >= 0 and requestedType < (layouts.sizes -> len)) -> if {
+        TypeLayout { size: layouts.sizes[requestedType], align: layouts.aligns[requestedType], status: layouts.statuses[requestedType] }
+    } else {
+        TypeLayout { size: -1, align: 1, status: 2 }
+    }
 }
 
 isDynamicArrayType node: typedIr.TypedIrNode -> Bool {
@@ -112,8 +280,27 @@ public writeType node: typedIr.TypedIrNode -> Unit {
     }
 }
 
-prepare sources: move [Text; ~] -> EmitContext {
+prepare request: move PrepareRequest -> EmitContext {
+    request.pointerBitWidth => pointerBitWidth
+    request.sources => sources
     sources -> typedIr.lower => ir!
+    sources -> typeIds.resolve => semanticSet
+    [typeIds.SemanticType; ~] => semanticTypes!
+    semanticSet.types -> each semanticType { semanticTypes! -> push(semanticType) }
+    [typeIds.NominalField; ~] => semanticFields!
+    semanticSet.fields -> each semanticField { semanticFields! -> push(semanticField) }
+    [typeIds.SemanticType; ~] => layoutTypes!
+    semanticTypes! -> each layoutType { layoutTypes! -> push(layoutType) }
+    [typeIds.NominalField; ~] => layoutFields!
+    semanticFields! -> each layoutField { layoutFields! -> push(layoutField) }
+    TypeLayoutRequest { types: layoutTypes!, fields: layoutFields!, typeId: -1, pointerBitWidth: pointerBitWidth } => layoutRequest!
+    layoutRequest! -> layoutsFor => layouts
+    [Int; ~] => typeSizes!
+    layouts.sizes -> each typeSize { typeSizes! -> push(typeSize) }
+    [Int; ~] => typeAligns!
+    layouts.aligns -> each typeAlign { typeAligns! -> push(typeAlign) }
+    [Int; ~] => typeLayoutStatuses!
+    layouts.statuses -> each layoutStatus { typeLayoutStatuses! -> push(layoutStatus) }
     ir! -> typedIr.movesFrom => moves!
     sources -> nominalTypes.resolve => nominal!
     sources -> compositeTypes.resolve => composite!
@@ -125,6 +312,12 @@ prepare sources: move [Text; ~] -> EmitContext {
         nominal: nominal!
         composite: composite!
         modules: moduleIdentities!
+        types: semanticTypes!
+        fields: semanticFields!
+        typeSizes: typeSizes!
+        typeAligns: typeAligns!
+        typeLayoutStatuses: typeLayoutStatuses!
+        pointerBitWidth: pointerBitWidth
     } => context!
     context!
 }
@@ -328,6 +521,46 @@ emitCore context: move EmitContext -> Unit {
         dropTaskIndex! + 1 => dropTaskIndex!
         }
     }
+    writeSemanticTypeId typeId: Int -> Unit {
+        [typeId, ~] => typeTasks!
+        typeTasks! -> len => typeTaskSize!
+        typeTaskSize! > 0 -> while {
+            typeTaskSize! - 1 => typeTaskSize!
+            typeTasks![typeTaskSize!] => typeTask
+            typeTask < 0 -> if { "]" -> print } else {
+                context.types[typeTask] => current
+                current.kind == 2 -> if { "{ ptr, i64 }" -> print }
+                current.kind == 3 -> if { "%sl.array.i32" -> print }
+                current.kind == 5 -> if { "%sl.dict" -> print }
+                current.kind == 6 -> if { "ptr" -> print }
+                current.kind == 4 -> if {
+                    "[$(current.length) x " -> print
+                    typeTaskSize! == (typeTasks! -> len) -> if { typeTasks! -> push(-1) } else { -1 => typeTasks![typeTaskSize!] }
+                    typeTaskSize! + 1 => typeTaskSize!
+                    typeTaskSize! == (typeTasks! -> len) -> if { typeTasks! -> push(current.first) } else { current.first => typeTasks![typeTaskSize!] }
+                    typeTaskSize! + 1 => typeTaskSize!
+                }
+                current.kind == 1 -> if {
+                    (current.origin == 0 or current.origin == 2) -> if {
+                        "%sl.struct.m$(current.module)_s$(current.symbol)" -> print
+                    } else {
+                        current.symbol == 0 -> if { "void" -> print }
+                        current.symbol == 1 -> if { "%sl.text" -> print }
+                        (current.symbol == 2 or current.symbol == 5 or current.symbol == 10 or current.symbol == 14) -> if { "i32" -> print }
+                        (current.symbol == 3 or current.symbol == 8) -> if { "i8" -> print }
+                        (current.symbol == 4 or current.symbol == 9) -> if { "i16" -> print }
+                        (current.symbol == 6 or current.symbol == 7 or current.symbol == 11) -> if { "i64" -> print }
+                        (current.symbol == 12 or current.symbol == 13) -> if {
+                            context.pointerBitWidth == 32 -> if { "i32" -> print } else { "i64" -> print }
+                        }
+                        (current.symbol == 19 or current.symbol == 20) -> if { "float" -> print }
+                        (current.symbol == 21 or current.symbol == 22) -> if { "double" -> print }
+                        current.symbol == 23 -> if { "i1" -> print }
+                    }
+                }
+            }
+        }
+    }
     llvmType symbol: Int -> Text => when {
         symbol == 1 => "%sl.text"
         symbol == 2 => "i32"
@@ -339,10 +572,17 @@ emitCore context: move EmitContext -> Unit {
         symbol == 23 => 1
         else => 4
     }
-    storageAlign symbol: Int -> Int => when {
+    legacyStorageAlign symbol: Int -> Int => when {
         symbol == 1 => 8
         symbol == 23 => 1
         else => 4
+    }
+    storageAlign node: typedIr.TypedIrNode -> Int {
+        node.typeId >= 0 -> if {
+            context.typeLayoutStatuses[node.typeId] == 0 -> if { context.typeAligns[node.typeId] } else { 1 }
+        } else {
+            node.typeSymbol -> legacyStorageAlign
+        }
     }
     hexDigit value: Int -> Text => when {
         value == 0 => "0"
@@ -541,7 +781,7 @@ emitCore context: move EmitContext -> Unit {
                                             valueBindingIndex! -> mutableBindingRoot => valueRoot
                                             "  %while$(whileIndex)_v$(valueNodeIndex) = load " -> print
                                             valueNode -> writeType
-                                            ", ptr %slot$(valueRoot), align $(valueNode.typeSymbol -> storageAlign)" -> println
+                                            ", ptr %slot$(valueRoot), align $(valueNode -> storageAlign)" -> println
                                         } else {
                                             context.ir[valueBinding.operand0] => bindingOperand
                                             "  %while$(whileIndex)_v$(valueNodeIndex) = freeze " -> print
@@ -1040,7 +1280,7 @@ emitCore context: move EmitContext -> Unit {
                         "  %v$(regionNodeIndex!) = load " -> print
                         regionNode -> writeType
                         ", ptr %slot$(regionBindingRoot), align " -> print
-                        "$(regionNode.typeSymbol -> storageAlign)" -> println
+                        "$(regionNode -> storageAlign)" -> println
                     } else {
                         context.ir[regionBinding.operand0] => regionBindingValue
                         "  %v$(regionNodeIndex!) = freeze " -> print
@@ -1071,7 +1311,7 @@ emitCore context: move EmitContext -> Unit {
                     }
                 } else { "%v$(regionNode.operand0)" -> print }
                 ", ptr %slot$(mutableRegionRoot), align " -> print
-                "$(regionNode.typeSymbol -> storageAlign)" -> println
+                "$(regionNode -> storageAlign)" -> println
             }
             (regionNode.kind == 14 and regionNode.typeOrigin == 13) -> if {
                 0 => regionArrayLength!
@@ -1135,7 +1375,7 @@ emitCore context: move EmitContext -> Unit {
                             ((context.sources[regionDictionaryItem.sourceModule] -> byte(regionDictionaryItemToken.span.start)) == UInt8(116)) -> if { "1" } else { "0" } -> print
                         }
                     } else { "%v$(regionDictionaryItemIndex!)" -> print }
-                    ", ptr %v$(regionNodeIndex!)_$(regionDictionarySide)_ptr$(regionDictionaryEntryPosition), align $(regionDictionaryItemSymbol -> storageAlign)" -> println
+                    ", ptr %v$(regionNodeIndex!)_$(regionDictionarySide)_ptr$(regionDictionaryEntryPosition), align $(regionDictionaryItemSymbol -> legacyStorageAlign)" -> println
                     regionDictionaryItem.nextOperand => regionDictionaryItemIndex!
                     regionDictionaryItemPosition! + 1 => regionDictionaryItemPosition!
                 }
@@ -1339,59 +1579,30 @@ emitCore context: move EmitContext -> Unit {
             regionOrderIndex! + 1 => regionOrderIndex!
         }
     }
-    0 => structSourceIndex!
-    structSourceIndex! < (context.sources -> len) -> while {
-        context.sources[structSourceIndex!] -> symbols.collect => structTable!
-        0 => structSymbolIndex!
-        structSymbolIndex! < (structTable! -> len) -> while {
-            structTable![structSymbolIndex!] => structSymbol
-            (structSymbol.kind == 3 and structSymbol.parent < 0) -> if {
-                "%sl.struct.m$(structSourceIndex!)_s$(structSymbolIndex!) = type { " -> print
-                true => firstField!
-                0 => fieldSymbolIndex!
-                fieldSymbolIndex! < (structTable! -> len) -> while {
-                    structTable![fieldSymbolIndex!] => fieldSymbol
-                    (fieldSymbol.kind == 26 and fieldSymbol.parent == structSymbolIndex!) -> if {
-                        not firstField! -> if { ", " -> print }
-                        -1 => fieldTypeIndex!
-                        0 => fieldTypeSearch!
-                        fieldTypeSearch! < (context.nominal -> len) -> while {
-                            context.nominal[fieldTypeSearch!] => fieldTypeCandidate
-                            (fieldTypeCandidate.sourceModule == structSourceIndex! and fieldTypeCandidate.typeAst == fieldSymbol.typeNode) -> if { fieldTypeSearch! => fieldTypeIndex! }
-                            fieldTypeSearch! + 1 => fieldTypeSearch!
-                        }
-                        fieldTypeIndex! >= 0 -> if {
-                            context.nominal[fieldTypeIndex!] => fieldType
-                            (fieldType.origin == 0 or fieldType.origin == 2) -> if {
-                                "%sl.struct.m$(fieldType.targetModule)_s$(fieldType.targetSymbol)" -> print
-                            } else {
-                                fieldType.targetSymbol -> llvmType -> print
-                            }
-                        } else {
-                            0 => fieldCompositeIndex!
-                            fieldCompositeIndex! < (context.composite -> len) -> while {
-                                context.composite[fieldCompositeIndex!] => fieldComposite
-                                (fieldComposite.sourceModule == structSourceIndex! and fieldComposite.typeAst == fieldSymbol.typeNode) -> if {
-                                    fieldComposite.kind == 3 -> if { "%sl.array.i32" -> print }
-                                    fieldComposite.kind == 5 -> if { "%sl.dict" -> print }
-                                }
-                                fieldCompositeIndex! + 1 => fieldCompositeIndex!
-                            }
-                        }
-                        false => firstField!
-                    }
-                    fieldSymbolIndex! + 1 => fieldSymbolIndex!
+    0 => structTypeIndex!
+    structTypeIndex! < (context.types -> len) -> while {
+        context.types[structTypeIndex!] => structType
+        (structType.status == 0 and structType.kind == 1 and (structType.origin == 0 or structType.origin == 2)) -> if {
+            "%sl.struct.m$(structType.module)_s$(structType.symbol) = type { " -> print
+            true => firstField!
+            0 => canonicalFieldIndex!
+            canonicalFieldIndex! < (context.fields -> len) -> while {
+                context.fields[canonicalFieldIndex!] => canonicalField
+                (canonicalField.status == 0 and canonicalField.ownerType == structTypeIndex!) -> if {
+                    not firstField! -> if { ", " -> print }
+                    canonicalField.fieldType -> writeSemanticTypeId
+                    false => firstField!
                 }
-                " }" -> println
+                canonicalFieldIndex! + 1 => canonicalFieldIndex!
             }
-            structSymbolIndex! + 1 => structSymbolIndex!
+            " }" -> println
         }
-        structSourceIndex! + 1 => structSourceIndex!
+        structTypeIndex! + 1 => structTypeIndex!
     }
     false => usesDynamicArray!
     0 => arrayTypeSearch!
     arrayTypeSearch! < (context.ir -> len) -> while {
-        context.ir[arrayTypeSearch!].typeOrigin == 13 -> if { true => usesDynamicArray! }
+        context.ir[arrayTypeSearch!] -> isDynamicArrayType -> if { true => usesDynamicArray! }
         arrayTypeSearch! + 1 => arrayTypeSearch!
     }
     0 => arrayCompositeSearch!
@@ -1407,7 +1618,7 @@ emitCore context: move EmitContext -> Unit {
     false => usesDictionary!
     0 => dictionaryTypeSearch!
     dictionaryTypeSearch! < (context.ir -> len) -> while {
-        context.ir[dictionaryTypeSearch!].typeOrigin == 15 -> if { true => usesDictionary! }
+        context.ir[dictionaryTypeSearch!] -> isDictionaryType -> if { true => usesDictionary! }
         dictionaryTypeSearch! + 1 => dictionaryTypeSearch!
     }
     0 => dictionaryCompositeSearch!
@@ -1485,7 +1696,7 @@ emitCore context: move EmitContext -> Unit {
                     mutableSlotRoot == mutableSlotIndex! -> if {
                         "  %slot$(mutableSlotRoot) = alloca " -> print
                         mutableSlotCandidate -> writeType
-                        ", align $(mutableSlotCandidate.typeSymbol -> storageAlign)" -> println
+                        ", align $(mutableSlotCandidate -> storageAlign)" -> println
                     }
                 }
                 mutableSlotIndex! + 1 => mutableSlotIndex!
@@ -1595,7 +1806,7 @@ emitCore context: move EmitContext -> Unit {
                             "  %v$(expressionIndex!) = load " -> print
                             expression -> writeType
                             ", ptr %slot$(bindingRoot), align " -> print
-                            "$(expression.typeSymbol -> storageAlign)" -> println
+                            "$(expression -> storageAlign)" -> println
                         } else {
                             context.ir[bindingValue.operand0] => bindingOperand
                             "  %v$(expressionIndex!) = freeze " -> print
@@ -1626,7 +1837,7 @@ emitCore context: move EmitContext -> Unit {
                         }
                     } else { "%v$(expression.operand0)" -> print }
                     ", ptr %slot$(mutableRoot), align " -> print
-                    "$(expression.typeSymbol -> storageAlign)" -> println
+                    "$(expression -> storageAlign)" -> println
                 }
                 expression.kind == 2 -> if {
                     context.sources[expression.sourceModule] -> lexer.lex => expressionTokens!
@@ -1826,7 +2037,7 @@ emitCore context: move EmitContext -> Unit {
                         } else {
                             (dictionaryItem.kind == 5 and function.operand1 >= 0 and dictionaryItem.symbol == context.ir[function.operand1].symbol) -> if { "%arg" -> print } else { "%v$(dictionaryItemIndex!)" -> print }
                         }
-                        ", ptr %v$(expressionIndex!)_$(dictionarySide)_ptr$(dictionaryEntryPosition), align $(dictionaryItemSymbol -> storageAlign)" -> println
+                        ", ptr %v$(expressionIndex!)_$(dictionarySide)_ptr$(dictionaryEntryPosition), align $(dictionaryItemSymbol -> legacyStorageAlign)" -> println
                         dictionaryItem.nextOperand => dictionaryItemIndex!
                         dictionaryItemPosition! + 1 => dictionaryItemPosition!
                     }
@@ -1861,7 +2072,7 @@ emitCore context: move EmitContext -> Unit {
                         ", ptr %v$(expressionIndex!)_keys, i64 %v$(expressionIndex!)_slot" -> println
                         "  %v$(expressionIndex!)_key = load " -> print
                         indexedArray.typeModule -> llvmType -> print
-                        ", ptr %v$(expressionIndex!)_key_ptr, align $(indexedArray.typeModule -> storageAlign)" -> println
+                        ", ptr %v$(expressionIndex!)_key_ptr, align $(indexedArray.typeModule -> legacyStorageAlign)" -> println
                         "  %v$(expressionIndex!)_found = icmp eq " -> print
                         indexedArray.typeModule -> llvmType -> print
                         " %v$(expressionIndex!)_key, " -> print
@@ -1889,7 +2100,7 @@ emitCore context: move EmitContext -> Unit {
                         ", ptr %v$(expressionIndex!)_values, i64 %v$(expressionIndex!)_slot" -> println
                         "  %v$(expressionIndex!) = load " -> print
                         indexedArray.typeSymbol -> llvmType -> print
-                        ", ptr %v$(expressionIndex!)_value_ptr, align $(indexedArray.typeSymbol -> storageAlign)" -> println
+                        ", ptr %v$(expressionIndex!)_value_ptr, align $(indexedArray.typeSymbol -> legacyStorageAlign)" -> println
                     } else {
                     "  %v$(expressionIndex!)_data = extractvalue %sl.array.i32 " -> print
                     (indexedArray.kind == 5 and function.operand1 >= 0 and indexedArray.symbol == context.ir[function.operand1].symbol) -> if { "%arg" -> print } else { "%v$(expression.operand0)" -> print }
@@ -2507,7 +2718,7 @@ emitCore context: move EmitContext -> Unit {
                         entryMutableSlotRoot == entryMutableSlotIndex! -> if {
                             "  %slot$(entryMutableSlotRoot) = alloca " -> print
                             entryMutableSlotCandidate -> writeType
-                            ", align $(entryMutableSlotCandidate.typeSymbol -> storageAlign)" -> println
+                            ", align $(entryMutableSlotCandidate -> storageAlign)" -> println
                         }
                     }
                     entryMutableSlotIndex! + 1 => entryMutableSlotIndex!
@@ -2617,7 +2828,7 @@ emitCore context: move EmitContext -> Unit {
                                 "  %v$(entryExpressionIndex!) = load " -> print
                                 entryExpression -> writeType
                                 ", ptr %slot$(entryBindingRoot), align " -> print
-                                "$(entryExpression.typeSymbol -> storageAlign)" -> println
+                                "$(entryExpression -> storageAlign)" -> println
                             } else {
                                 context.ir[entryBindingValue.operand0] => entryBindingOperand
                                 "  %v$(entryExpressionIndex!) = freeze " -> print
@@ -2648,7 +2859,7 @@ emitCore context: move EmitContext -> Unit {
                             }
                         } else { "%v$(entryExpression.operand0)" -> print }
                         ", ptr %slot$(entryMutableRoot), align " -> print
-                        "$(entryExpression.typeSymbol -> storageAlign)" -> println
+                        "$(entryExpression -> storageAlign)" -> println
                     }
                     (entryExpression.kind == 7 or entryExpression.kind == 8) -> if {
                         context.ir[entryExpression.operand0] => entryLeft
@@ -3269,7 +3480,8 @@ public emit sources: move [Text; ~] -> Unit {
     llvmTarget.windowsX64 => target
     target.dataLayoutLine -> println
     target.tripleLine -> println
-    sources -> prepare => context!
+    PrepareRequest { sources: sources, pointerBitWidth: target.pointerBitWidth } => prepareRequest!
+    prepareRequest! -> prepare => context!
     context! -> usesTextRuntime -> if { emitWindowsTextRuntime }
     context! -> usesIntInterpolation -> if { emitIntTextRuntime }
     context! -> usesBoolInterpolation -> if { emitBoolTextRuntime }
@@ -3280,7 +3492,8 @@ public emitLinux sources: move [Text; ~] -> Unit {
     llvmTarget.linuxX64 => target
     target.dataLayoutLine -> println
     target.tripleLine -> println
-    sources -> prepare => context!
+    PrepareRequest { sources: sources, pointerBitWidth: target.pointerBitWidth } => prepareRequest!
+    prepareRequest! -> prepare => context!
     context! -> usesTextRuntime -> if { emitLinuxTextRuntime }
     context! -> usesIntInterpolation -> if { emitIntTextRuntime }
     context! -> usesBoolInterpolation -> if { emitBoolTextRuntime }
@@ -3291,7 +3504,8 @@ public emitWasm sources: move [Text; ~] -> Unit {
     llvmTarget.wasm32Browser => target
     target.dataLayoutLine -> println
     target.tripleLine -> println
-    sources -> prepare => context!
+    PrepareRequest { sources: sources, pointerBitWidth: target.pointerBitWidth } => prepareRequest!
+    prepareRequest! -> prepare => context!
     context! -> usesTextRuntime -> if { emitWasmTextRuntime }
     context! -> usesIntInterpolation -> if { emitIntTextRuntime }
     context! -> usesBoolInterpolation -> if { emitBoolTextRuntime }

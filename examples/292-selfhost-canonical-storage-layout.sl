@@ -1,0 +1,72 @@
+import smalllang.compiler.llvm.text as llvm
+import smalllang.compiler.semantic.type_ids as typeIds
+
+main {
+    [
+        """
+        namespace sample.model
+
+        public struct Point {
+            data: [Int; ~]
+            flag: Bool
+            count: Int64
+        }
+
+        """,
+        """
+        namespace app.main
+        import sample.model as model
+
+        keep value: Result<[model.Point; ~], {Text: box model.Point}> -> Result<[model.Point; ~], {Text: box model.Point}> => value
+
+        main { }
+        """,
+        ~
+    ] => sources!
+
+    sources! -> typeIds.resolve => semantic
+    [typeIds.SemanticType; ~] => x64Types!
+    [typeIds.SemanticType; ~] => wasmTypes!
+    semantic.types -> each currentType {
+        x64Types! -> push(currentType)
+        wasmTypes! -> push(currentType)
+    }
+    x64Types! -> len => fixedTypeId
+    typeIds.SemanticType {
+        kind: 4
+        origin: -1
+        module: -1
+        symbol: -1
+        first: 4
+        second: -1
+        length: 3
+        lengthHash: UInt64(1)
+        containsParameter: false
+        status: 0
+    } => fixedType
+    x64Types! -> push(fixedType)
+    wasmTypes! -> push(fixedType)
+    [typeIds.NominalField; ~] => x64Fields!
+    [typeIds.NominalField; ~] => wasmFields!
+    semantic.fields -> each currentField {
+        x64Fields! -> push(currentField)
+        wasmFields! -> push(currentField)
+    }
+    llvm.TypeLayoutRequest { types: x64Types!, fields: x64Fields!, typeId: -1, pointerBitWidth: 64 } => x64Request!
+    llvm.TypeLayoutRequest { types: wasmTypes!, fields: wasmFields!, typeId: -1, pointerBitWidth: 32 } => wasmRequest!
+    x64Request! -> llvm.layoutsFor => x64
+    wasmRequest! -> llvm.layoutsFor => wasm
+    0 => packetLayouts!
+    (x64.statuses[fixedTypeId] == 0 and x64.sizes[fixedTypeId] == 6 and x64.aligns[fixedTypeId] == 2 and wasm.sizes[fixedTypeId] == 6 and wasm.aligns[fixedTypeId] == 2) -> if { 1 } else { 0 } => fixedLayouts
+    0 => typeIndex!
+    typeIndex! < (semantic.types -> len) -> while {
+        semantic.types[typeIndex!] => current
+        (current.kind == 1 and (current.origin == 0 or current.origin == 2)) -> if {
+            (x64.sizes[typeIndex!] == 40 and x64.aligns[typeIndex!] == 8 and wasm.sizes[typeIndex!] == 32 and wasm.aligns[typeIndex!] == 8) -> if {
+                packetLayouts! + 1 => packetLayouts!
+            }
+        }
+        typeIndex! + 1 => typeIndex!
+    }
+    "fixed=$fixedLayouts, packet=$(packetLayouts!)" -> println
+}

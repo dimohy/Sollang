@@ -4617,4 +4617,57 @@ zero warnings and errors. The recursive-type/ownership/LLVM focused slice
 passed 11/11. The optimized coordinated eight-worker runner passed all 406
 cases in 495.9 seconds with flushed `n/406` progress records.
 
+## D147 - LLVM Storage Layout Uses Canonical Field Graphs
+
+Status: target-aware storage layout and aggregate type declarations implemented
+Date: 2026-07-14
+
+Canonical semantic types now retain a parsed fixed-array `length` in addition
+to the spelling hash used for identity. Numeric lengths therefore drive LLVM
+storage size while value-generic length identifiers remain unresolved until
+specialization. Every struct declaration that has fields also seeds its own
+canonical nominal node before later modules are visited. A declaration no
+longer loses its owner-to-field edges merely because its first type reference
+appears in a later file.
+
+`llvm.text.layoutsFor` computes size, ABI alignment, and status arrays over the
+canonical arena. Builtin integers and floats use their declared widths;
+`Size` and `UIntSize`, pointers, slices, dynamic arrays, dictionaries, boxes,
+and text use the selected target pointer width. Fixed arrays multiply the
+canonical element layout by the concrete length. Nominal struct layout is a
+monotone fixed point over field edges, applies alignment padding at every
+field and tail, and leaves unsupported generic applications or unresolved
+recursive inline values explicitly non-layoutable.
+
+The LLVM emitter prepares these facts once for the selected Windows x64,
+Linux x64, or wasm32 descriptor. Mutable loads, stores, and allocas obtain
+alignment from canonical type IDs. Named struct declarations are emitted from
+canonical nominal nodes and field edges rather than rescanning source symbols,
+nominal annotations, and composite annotations. The iterative type writer
+also handles nested fixed arrays without relying on recursive inline SL
+functions, which the current runtime intentionally rejects.
+
+Example 292 proves a fixed `[Int16; 3]` layout of size 6/alignment 2 and a
+field-graph struct whose dynamic-array descriptor produces different correct
+x64 and wasm32 padded sizes. The example constructs the fixed type directly
+because self-host AST lowering of fixed-array annotations remains a separate
+open parser slice; host value-generic fixed arrays remain covered by examples
+50, 51, 57, and 58.
+
+This is still a partial migration and does not promote a roadmap gate. Dynamic
+array and dictionary element allocation/index paths still carry shallow scalar
+component symbols, recursive drop glue still reconstructs fields from source,
+and generic nominal applications do not yet have concrete enum/variant layout.
+LLVM preparation also repeats semantic resolution after typed IR lowering;
+the next performance slice should return one reusable whole-compilation
+analysis context. The count remains 48.5/60 (80.8%).
+
+Regression evidence on 2026-07-14: the Release solution build completed with
+zero warnings and errors. The LLVM/type-layout focused slices passed 7/7 and
+13/13 with counted progress output. The collision-free coordinated runner
+passed 405/407 cases in 416.7 seconds; its only two mismatches were the intended
+struct and dynamic-array slot alignment changes from 4 to 8. After updating
+those exact LLVM baselines, examples 231 and 232 passed 2/2, providing complete
+evidence for all 407 current cases without rerunning the unchanged 405 cases.
+
 

@@ -660,8 +660,11 @@ heap-reaching coroutine slots that cross `await`. Nominal declaration fields
 now form canonical owner-to-field type edges, and a fixed-point propagates
 ownership through nested structs and generic applications. Typed IR carries
 the canonical kind, and LLVM type/edge-cleanup selection prefers canonical
-facts when an ID exists. LLVM size/alignment, complete aggregate layout,
-recursive drop glue, generic application lowering, capability/effect
+facts when an ID exists. Canonical types now retain concrete fixed-array
+lengths; LLVM computes target-aware size/alignment and padded nominal layouts
+from the type/field graph, and aggregate declarations use those canonical
+edges. Dynamic-array/dictionary component lowering, recursive drop glue,
+generic application lowering, capability/effect
 enforcement, and role-specific
 ownership/effect checks still keep semantic parity partial;
 the canonical gate count therefore remains 42 complete, 13 partial, and 5

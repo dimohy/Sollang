@@ -148,6 +148,7 @@ public resolve sources: [Text; ~] -> ExpressionTypeIdSet {
                             symbol: literalTargetSymbol!
                             first: -1
                             second: -1
+                            length: -1
                             lengthHash: UInt64(0)
                             containsParameter: false
                             status: 0
@@ -329,6 +330,7 @@ public resolve sources: [Text; ~] -> ExpressionTypeIdSet {
                                 symbol: -1
                                 first: firstChildType!
                                 second: secondChildType!
+                                length: -1
                                 lengthHash: UInt64(0)
                                 containsParameter: containsParameter or secondContainsParameter
                                 status: 0

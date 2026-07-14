@@ -19,6 +19,7 @@ public struct SemanticType {
     symbol: Int
     first: Int
     second: Int
+    length: Int
     lengthHash: UInt64
     containsParameter: Bool
     status: Int
@@ -162,6 +163,7 @@ public resolve sources: [Text; ~] -> SemanticTypeSet {
             symbol: builtinSeed!
             first: -1
             second: -1
+            length: -1
             lengthHash: UInt64(0)
             containsParameter: false
             status: 0
@@ -320,13 +322,16 @@ public resolve sources: [Text; ~] -> SemanticTypeSet {
                             semanticTypes![secondType].containsParameter -> if { true => containsParameter! }
                         }
                         UInt64(0) => lengthHash!
+                        -1 => lengthValue!
                         term.lengthToken >= 0 -> if {
                             UInt64(1469598103934665603) => lengthHash!
                             tokens![term.lengthToken] => length
+                            length.kind == grammar.tokenIdNumber -> if { 0 => lengthValue! }
                             UIntSize(0) => lengthByte!
                             lengthByte! < length.span.length -> while {
                                 source -> byte(length.span.start + lengthByte!) => value
                                 lengthHash! * UInt64(1099511628211) + UInt64(value) => lengthHash!
+                                lengthValue! >= 0 -> if { lengthValue! * 10 + Int(value - UInt8(48)) => lengthValue! }
                                 lengthByte! + UIntSize(1) => lengthByte!
                             }
                         }
@@ -350,6 +355,7 @@ public resolve sources: [Text; ~] -> SemanticTypeSet {
                                 symbol: targetSymbol!
                                 first: firstType
                                 second: secondType
+                                length: lengthValue!
                                 lengthHash: lengthHash!
                                 containsParameter: containsParameter!
                                 status: status!
@@ -381,6 +387,21 @@ public resolve sources: [Text; ~] -> SemanticTypeSet {
                         ownerTypeSearch! => ownerType!
                     }
                     ownerTypeSearch! + 1 => ownerTypeSearch!
+                }
+                ownerType! < 0 -> if {
+                    semanticTypes! -> len => ownerType!
+                    semanticTypes! -> push(SemanticType {
+                        kind: 1
+                        origin: 0
+                        module: sourceIndex!
+                        symbol: fieldSymbol.parent
+                        first: -1
+                        second: -1
+                        length: -1
+                        lengthHash: UInt64(0)
+                        containsParameter: false
+                        status: 0
+                    })
                 }
                 -1 => fieldType!
                 0 => fieldTermSearch!
@@ -529,6 +550,7 @@ public specialize request: SpecializationRequest -> SpecializationResult {
                             symbol: current.symbol
                             first: first
                             second: second
+                            length: current.length
                             lengthHash: current.lengthHash
                             containsParameter: containsParameter!
                             status: current.status
