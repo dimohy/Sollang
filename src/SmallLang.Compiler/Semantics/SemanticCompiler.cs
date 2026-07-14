@@ -1381,6 +1381,9 @@ internal sealed class SemanticCompiler
                     var movedExpressionSourceName = GetMoveConsumingContainerSourceName(
                         expressionStatement.Expression);
                     var effect = InferExpressionStatement(expressionStatement.Expression, functions, bindings, mutableBindings, yieldInputType);
+                    var pushedOwnedSourceNames = GetOwnedPushConsumedSourceNames(
+                        expressionStatement.Expression,
+                        bindings);
                     if (effect is FlowBindingEffect bindingEffect)
                     {
                         ValidateBindingName(
@@ -1411,6 +1414,11 @@ internal sealed class SemanticCompiler
                     {
                         bindings.Remove(movedExpressionSourceName);
                         mutableBindings.Remove(movedExpressionSourceName);
+                    }
+                    foreach (var pushedOwnedSourceName in pushedOwnedSourceNames)
+                    {
+                        bindings.Remove(pushedOwnedSourceName);
+                        mutableBindings.Remove(pushedOwnedSourceName);
                     }
 
                     break;
@@ -4153,15 +4161,6 @@ internal sealed class SemanticCompiler
                         target.Arguments[0].Column,
                         $"push expects {FormatType(expectedPushedType)}, got {FormatType(pushedType)}");
                 }
-                if (_types.ContainsOwnedStorage(expectedPushedType)
-                    && target.Arguments[0] is NameExpression)
-                {
-                    throw Error(
-                        target.Arguments[0].Line,
-                        target.Arguments[0].Column,
-                        "pushing an owned element requires a freshly created value until explicit move arguments are implemented");
-                }
-
                 result = new FlowResult(BoundType.Unit, FlowEffect.None);
                 return true;
             case "append":
@@ -6712,6 +6711,38 @@ internal sealed class SemanticCompiler
                 argument.Column,
                 $"function '{functionName}' borrows a heap container for the call, so the argument must be a named owner");
         }
+    }
+
+    private IReadOnlyList<string> GetOwnedPushConsumedSourceNames(
+        Expression expression,
+        IReadOnlyDictionary<string, BoundType> bindings)
+    {
+        if (expression is not FlowExpression flow
+            || flow.Source is not NameExpression arrayName
+            || !bindings.TryGetValue(arrayName.Name, out var arrayType)
+            || !_types.IsDynamicArray(arrayType))
+        {
+            return [];
+        }
+
+        var elementType = _types.GetDynamicArray(arrayType).ElementType;
+        if (!_types.ContainsOwnedStorage(elementType))
+        {
+            return [];
+        }
+
+        var consumed = new List<string>();
+        foreach (var target in flow.Targets)
+        {
+            if (target.Path.Count == 1
+                && target.Path[0] == "push"
+                && target.Arguments.Count == 1
+                && target.Arguments[0] is NameExpression sourceName)
+            {
+                consumed.Add(sourceName.Name);
+            }
+        }
+        return consumed;
     }
 
     private IReadOnlyList<string> GetOwnedParameterConsumedSourceNames(

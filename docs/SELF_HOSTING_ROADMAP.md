@@ -213,7 +213,9 @@ ordinary reference-compiler path.
   owned elements.
 - Partial (1): dictionary function contracts preserve concrete K/V types and
   dynamic-array function contracts preserve element types. Owned-element move
-  extraction, fixed-array generic contracts, general
+  insertion now transfers a named owner into a dynamic array and invalidates
+  the source binding; owned-element index extraction, fixed-array generic
+  contracts, general
   two-operand equality methods, and owned nominal dictionary keys remain.
 - Missing (1): explicit `dyn Trait`.
 

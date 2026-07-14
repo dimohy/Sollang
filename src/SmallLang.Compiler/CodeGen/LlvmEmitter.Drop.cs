@@ -286,6 +286,16 @@ internal sealed partial class LlvmEmitter
 
     private void EmitOwnedDropCall(BoundType type, string valueName)
     {
+        if (type is BoundType.MappedBytes or BoundType.MutableMappedBytes)
+        {
+            var basePointer = NextTemp("drop_mapped_base");
+            EmitAssign(basePointer, $"extractvalue %smalllang.mapped_bytes {valueName}, 2");
+            var mappedLength = NextTemp("drop_mapped_length");
+            EmitAssign(mappedLength, $"extractvalue %smalllang.mapped_bytes {valueName}, 3");
+            EmitCall(target: null, "void", "smalllang_mapped_unmap",
+                $"ptr {basePointer}, i64 {mappedLength}");
+            return;
+        }
         EmitCall(target: null, "void", DropSymbol(type)[1..], $"{LlvmType(type)} {valueName}");
     }
 

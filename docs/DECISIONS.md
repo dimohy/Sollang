@@ -5186,3 +5186,24 @@ Measured verification: cold driver bootstrap took 56.7 seconds. With the driver
 current, all 39 self-host LLVM tests passed in 4.1 seconds; individual emitter
 fixtures completed in roughly 0.02-0.26 seconds. This replaces repeated
 whole-compiler compilation with the intended bootstrap-once architecture.
+
+## D162 - Owned Array Push Transfers Rather Than Copies
+
+Status: reference semantic and LLVM lowering implemented
+Date: 2026-07-15
+
+Pushing a named value whose type owns storage into `[T; ~]` is a move. The
+array receives the exact aggregate bits, the source binding becomes unavailable
+immediately, and only the array drops the element. This replaces the former
+restriction that accepted only freshly constructed owned arguments. It also
+makes affine mapped-file owners collectable for a future file-based self-host
+compiler without copying mappings or weakening deterministic unmapping.
+
+The LLVM representation of `MappedBytes` and `MutableMappedBytes` is now a
+first-class `%smalllang.mapped_bytes` aggregate inside generic arrays. Array
+growth copies the aggregate, source-owner removal suppresses the old drop, and
+element cleanup extracts the base mapping and length before unmapping exactly
+once. Example 300 proves a mapped source owner array; example 301 proves a boxed
+user value move; the negative diagnostic proves use-after-move rejection.
+Owned element extraction by index remains separate work, so the formal gate
+count remains 42 complete, 13 partial, 5 missing (48.5/60, 80.8%).
