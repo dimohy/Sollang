@@ -4489,4 +4489,41 @@ including the two-module recursive case, and the single coordinated
 eight-worker runner passed all 402 cases in 378.5 seconds with flushed
 `n/402` progress records.
 
+## D144 - Recursive Generic Calls Specialize Canonical Type IDs
+
+Status: call-site specialization and typed IR boundary implemented
+Date: 2026-07-14
+
+Generic call specialization now operates on complete canonical type trees.
+The input template is structurally unified with the concrete argument, using
+the declaring module and symbol as each type parameter's identity. Repeated
+parameters must bind consistently, multiple parameters are independent, and
+substitution rebuilds and interns every changed ancestor from the leaves to
+the result root. A call such as
+`Result<[T; ~], {Text: box T}> -> Result<[T; ~], {Text: box T}>` therefore
+produces one concrete result ID without container-specific special cases.
+
+The recursive expression pass now canonicalizes local and imported struct
+literals plus dynamic-array, dictionary, and box literals. Type checking uses
+the specialized input and result IDs, emits one argument diagnostic for an
+inconsistent binding, and avoids a secondary return mismatch caused only by
+the failed call. Qualified and role-call wrappers retain the same behavior.
+
+`TypedIrNode.typeId` carries the canonical expression ID alongside the legacy
+shallow fields during migration. Successful generic calls reach typed IR with
+a fully concrete ID; a call whose substitution fails keeps `-1`. Example 288
+proves deep repeated substitution, two-parameter swapping, literal-driven
+array/dictionary/box specialization, one intentional mismatch, and five
+concrete generic call IDs in typed IR across two modules.
+
+This remains a partial migration and does not promote a roadmap gate. Fixed
+array length identity, ownership/effect consumers, and self-host LLVM layout
+and lowering still need to use canonical IDs before the shallow type fields
+can be removed. The count remains 48.5/60 (80.8%).
+
+Regression evidence on 2026-07-14: the Release solution build completed with
+zero warnings and errors. The representative typed-IR/generic slice passed
+9/9, and the coordinated eight-worker runner passed all 403 cases in 411.8
+seconds with flushed `n/403` progress records.
+
 

@@ -167,11 +167,17 @@ public analyze sources: [Text; ~] -> [TypeCheckDiagnostic; ~] {
                     recursiveTypes.types[expectedReference.typeId] => expectedType
                     recursiveTypes.types[actualReference.typeId] => actualType
                     nodes![actualReference.astNode].parent == function.astNode => directRecursiveReturn
-                    (directRecursiveReturn and expectedReference.status == 0 and actualReference.status == 0 and not expectedType.containsParameter and not actualType.containsParameter) -> if {
+                    (nodes![actualReference.astNode].kind == 11 or nodes![actualReference.astNode].kind == 48) => recursiveCallReturn
+                    ((directRecursiveReturn or recursiveCallReturn) and expectedReference.status == 0 and actualReference.status == 0 and not expectedType.containsParameter and not actualType.containsParameter) -> if {
                         true => recursiveReturnChecked!
                         expectedReference.typeId != actualReference.typeId -> if {
                             true => recursiveReturnMismatch!
                         }
+                    }
+                    (recursiveCallReturn and expectedReference.status == 0 and not expectedType.containsParameter and actualType.containsParameter) -> if {
+                        # An unspecialized generic call is diagnosed at its
+                        # argument boundary; avoid a cascading return error.
+                        true => recursiveReturnChecked!
                     }
                 }
                 ((not recursiveReturnChecked! or recursiveReturnMismatch!) and expectedIndex! >= 0 and returnExpressionType! >= 0) -> if {
@@ -402,6 +408,40 @@ public analyze sources: [Text; ~] -> [TypeCheckDiagnostic; ~] {
                         ((directRecursiveArgument or sameRecursiveArgumentSurface) and expectedReference.status == 0 and actualReference.status == 0 and not expectedType.containsParameter and not actualType.containsParameter) -> if {
                             true => recursiveArgumentChecked!
                             expectedReference.typeId != actualReference.typeId -> if {
+                                true => recursiveArgumentMismatch!
+                            }
+                        }
+                    }
+                    (not recursiveArgumentChecked! and expectedInputReference! >= 0) -> if {
+                        recursiveTypes.references[expectedInputReference!] => genericExpectedReference
+                        recursiveTypes.types[genericExpectedReference.typeId] => genericExpectedType
+                        genericExpectedType.containsParameter -> if {
+                            false => concreteGenericArgument!
+                            recursiveArgumentExpression! >= 0 -> if {
+                                recursiveTypes.expressions[recursiveArgumentExpression!] => genericArgumentReference
+                                recursiveTypes.types[genericArgumentReference.typeId] => genericArgumentType
+                                (genericArgumentReference.status == 0 and not genericArgumentType.containsParameter) -> if {
+                                    true => concreteGenericArgument!
+                                }
+                            }
+                            -1 => specializedCallExpression!
+                            0 => specializedCallSearch!
+                            (specializedCallSearch! < (recursiveTypes.expressions -> len) and specializedCallExpression! < 0) -> while {
+                                recursiveTypes.expressions[specializedCallSearch!] => candidate
+                                (candidate.sourceModule == sourceIndex! and candidate.astNode == call.callAst) -> if {
+                                    specializedCallSearch! => specializedCallExpression!
+                                }
+                                specializedCallSearch! + 1 => specializedCallSearch!
+                            }
+                            specializedCallExpression! >= 0 -> if {
+                                recursiveTypes.expressions[specializedCallExpression!] => specializedCall
+                                recursiveTypes.types[specializedCall.typeId] => specializedCallType
+                                (specializedCall.status == 0 and not specializedCallType.containsParameter) -> if {
+                                    true => recursiveArgumentChecked!
+                                }
+                            }
+                            (not recursiveArgumentChecked! and concreteGenericArgument!) -> if {
+                                true => recursiveArgumentChecked!
                                 true => recursiveArgumentMismatch!
                             }
                         }
@@ -736,6 +776,23 @@ public analyze sources: [Text; ~] -> [TypeCheckDiagnostic; ~] {
         memberDiagnosticIndex! < (nodes! -> len) -> while {
             nodes![memberDiagnosticIndex!] => member
             member.kind == 36 -> if {
+                false => resolvedCallMember!
+                0 => memberCallSearch!
+                memberCallSearch! < (moduleCalls! -> len) -> while {
+                    moduleCalls![memberCallSearch!] => memberCall
+                    (memberCall.sourceModule == sourceIndex! and memberCall.status == 0) -> if {
+                        memberCall.callAst => callAncestor!
+                        (callAncestor! >= 0 and not resolvedCallMember!) -> while {
+                            callAncestor! == memberDiagnosticIndex! -> if {
+                                true => resolvedCallMember!
+                            } else {
+                                nodes![callAncestor!].parent => callAncestor!
+                            }
+                        }
+                    }
+                    memberCallSearch! + 1 => memberCallSearch!
+                }
+                not resolvedCallMember! -> if {
                 -1 => baseTypeIndex!
                 1000000 => baseDistance!
                 0 => baseSearch!
@@ -807,6 +864,7 @@ public analyze sources: [Text; ~] -> [TypeCheckDiagnostic; ~] {
                             })
                         }
                     }
+                }
                 }
             }
             memberDiagnosticIndex! + 1 => memberDiagnosticIndex!

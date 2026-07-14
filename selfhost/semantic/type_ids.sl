@@ -36,6 +36,19 @@ public struct SemanticTypeSet {
     references: [TypeReference; ~]
 }
 
+public struct SpecializationRequest {
+    types: [SemanticType; ~]
+    inputTemplate: Int
+    actualInput: Int
+    resultTemplate: Int
+}
+
+public struct SpecializationResult {
+    types: [SemanticType; ~]
+    root: Int
+    status: Int
+}
+
 # Resolves and globally interns recursive annotation types across source files.
 # Nominal equality uses declaration identity, not source spelling.
 public resolve sources: [Text; ~] -> SemanticTypeSet {
@@ -266,5 +279,135 @@ public resolve sources: [Text; ~] -> SemanticTypeSet {
         sourceIndex! + 1 => sourceIndex!
     }
     SemanticTypeSet { types: semanticTypes!, references: references! } => result!
+    result!
+}
+
+# Structurally unifies a generic input template with one concrete argument,
+# then rebuilds and interns the complete result template in the same arena.
+public specialize request: SpecializationRequest -> SpecializationResult {
+    request.inputTemplate => inputTemplate
+    request.actualInput => actualInput
+    request.resultTemplate => resultTemplate
+    [SemanticType; ~] => types!
+    request.types -> each semanticType {
+        types! -> push(semanticType)
+    }
+    [Int; ~] => templateStack!
+    [Int; ~] => actualStack!
+    [Int; ~] => parameterModules!
+    [Int; ~] => parameterSymbols!
+    [Int; ~] => replacements!
+    0 => status!
+    (inputTemplate < 0 or inputTemplate >= (types! -> len) or actualInput < 0 or actualInput >= (types! -> len) or resultTemplate < 0 or resultTemplate >= (types! -> len)) -> if {
+        2 => status!
+    } else {
+        templateStack! -> push(inputTemplate)
+        actualStack! -> push(actualInput)
+    }
+
+    0 => workIndex!
+    (status! == 0 and workIndex! < (templateStack! -> len)) -> while {
+        templateStack![workIndex!] => templateId
+        actualStack![workIndex!] => actualId
+        types![templateId] => template
+        types![actualId] => actual
+        (template.kind == 1 and template.origin == 3) -> if {
+            -1 => parameterIndex!
+            0 => parameterSearch!
+            (parameterSearch! < (parameterSymbols! -> len) and parameterIndex! < 0) -> while {
+                (parameterModules![parameterSearch!] == template.module and parameterSymbols![parameterSearch!] == template.symbol) -> if {
+                    parameterSearch! => parameterIndex!
+                }
+                parameterSearch! + 1 => parameterSearch!
+            }
+            parameterIndex! >= 0 -> if {
+                replacements![parameterIndex!] != actualId -> if { 2 => status! }
+            } else {
+                parameterModules! -> push(template.module)
+                parameterSymbols! -> push(template.symbol)
+                replacements! -> push(actualId)
+            }
+        } else {
+            template.kind != actual.kind -> if { 2 => status! }
+            (status! == 0 and template.kind == 1 and templateId != actualId) -> if { 2 => status! }
+            (status! == 0 and template.kind == 7 and (template.origin != actual.origin or template.module != actual.module or template.symbol != actual.symbol)) -> if { 2 => status! }
+            (status! == 0 and template.kind == 4 and template.lengthHash != actual.lengthHash) -> if { 2 => status! }
+            status! == 0 -> if {
+                (template.first < 0 and actual.first >= 0) -> if { 2 => status! }
+                (template.first >= 0 and actual.first < 0) -> if { 2 => status! }
+                (template.second < 0 and actual.second >= 0) -> if { 2 => status! }
+                (template.second >= 0 and actual.second < 0) -> if { 2 => status! }
+            }
+            (status! == 0 and template.first >= 0) -> if {
+                templateStack! -> push(template.first)
+                actualStack! -> push(actual.first)
+            }
+            (status! == 0 and template.second >= 0) -> if {
+                templateStack! -> push(template.second)
+                actualStack! -> push(actual.second)
+            }
+        }
+        workIndex! + 1 => workIndex!
+    }
+
+    -1 => specializedRoot!
+    status! == 0 -> if {
+        types! -> len => originalCount
+        [Int; ~] => substituted!
+        0 => typeIndex!
+        typeIndex! < originalCount -> while {
+            types![typeIndex!] => current
+            -1 => replacementType!
+            (current.kind == 1 and current.origin == 3) -> if {
+                0 => replacementSearch!
+                (replacementSearch! < (parameterSymbols! -> len) and replacementType! < 0) -> while {
+                    (parameterModules![replacementSearch!] == current.module and parameterSymbols![replacementSearch!] == current.symbol) -> if {
+                        replacements![replacementSearch!] => replacementType!
+                    }
+                    replacementSearch! + 1 => replacementSearch!
+                }
+            }
+            replacementType! < 0 -> if {
+                current.first < 0 -> if { -1 } else { substituted![current.first] } => first
+                current.second < 0 -> if { -1 } else { substituted![current.second] } => second
+                (first == current.first and second == current.second) -> if {
+                    typeIndex! => replacementType!
+                } else {
+                    current.origin == 3 => containsParameter!
+                    first >= 0 -> if { types![first].containsParameter -> if { true => containsParameter! } }
+                    second >= 0 -> if { types![second].containsParameter -> if { true => containsParameter! } }
+                    -1 => existing!
+                    0 => existingSearch!
+                    (existingSearch! < (types! -> len) and existing! < 0) -> while {
+                        types![existingSearch!] => known
+                        (known.kind == current.kind and known.origin == current.origin and known.module == current.module and known.symbol == current.symbol and known.first == first and known.second == second and known.lengthHash == current.lengthHash and known.status == current.status) -> if {
+                            existingSearch! => existing!
+                        }
+                        existingSearch! + 1 => existingSearch!
+                    }
+                    existing! < 0 -> if {
+                        types! -> len => existing!
+                        types! -> push(SemanticType {
+                            kind: current.kind
+                            origin: current.origin
+                            module: current.module
+                            symbol: current.symbol
+                            first: first
+                            second: second
+                            lengthHash: current.lengthHash
+                            containsParameter: containsParameter!
+                            status: current.status
+                        })
+                    }
+                    existing! => replacementType!
+                }
+            }
+            substituted! -> push(replacementType!)
+            typeIndex! + 1 => typeIndex!
+        }
+        substituted![resultTemplate] => specializedRoot!
+    }
+
+    SpecializationResult { types: types!, root: specializedRoot!, status: status! } => result!
     result!
 }

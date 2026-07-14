@@ -649,7 +649,11 @@ identity across modules, seeds stable builtin IDs, and gives annotation-backed
 name and call expressions their complete recursive type ID. Return and call
 argument checking now uses exact recursive IDs for fully concrete annotated
 values across module boundaries, while retaining the older diagnostic path for
-not-yet-specialized generic expressions. Generic call substitution, IR,
+not-yet-specialized generic expressions. Generic calls now structurally unify
+complete input trees, consistently bind repeated and multiple parameters,
+rebuild canonical result trees, and carry successful concrete expression IDs
+into typed IR. Dynamic-array, dictionary, box, and local/imported struct
+literals participate in this boundary. Fixed-array length identity,
 ownership/effects, and LLVM still need to consume that ID consistently, and
 role-specific ownership/effect checks still keep semantic parity partial;
 the canonical gate count therefore remains 42 complete, 13 partial, and 5

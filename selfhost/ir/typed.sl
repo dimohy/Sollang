@@ -4,6 +4,7 @@ import smalllang.compiler.ast as ast
 import smalllang.compiler.lexer as lexer
 import smalllang.compiler.semantic.calls as calls
 import smalllang.compiler.semantic.composite_types as compositeTypes
+import smalllang.compiler.semantic.expression_type_ids as expressionTypeIds
 import smalllang.compiler.semantic.expression_types as expressionTypes
 import smalllang.compiler.semantic.modules as modules
 import smalllang.compiler.semantic.nominal_types as nominalTypes
@@ -32,6 +33,7 @@ public struct TypedIrNode {
     typeOrigin: Int
     typeModule: Int
     typeSymbol: Int
+    typeId: Int
     payloadToken: Int
     opcode: Int
     operand0: Int
@@ -81,6 +83,7 @@ public struct CoroutineFrameSlot {
 }
 
 public lower sources: [Text; ~] -> [TypedIrNode; ~] {
+    sources -> expressionTypeIds.resolve => recursiveTypes
     sources -> expressionTypes.infer => inferred!
     sources -> nominalTypes.resolve => nominal!
     sources -> compositeTypes.resolve => composite!
@@ -224,6 +227,7 @@ public lower sources: [Text; ~] -> [TypedIrNode; ~] {
                         typeOrigin: functionResultOrigin!
                         typeModule: functionResultModule!
                         typeSymbol: functionResultSymbol!
+                        typeId: -1
                         payloadToken: function.nameToken
                         opcode: -1
                         operand0: returnIr
@@ -241,6 +245,7 @@ public lower sources: [Text; ~] -> [TypedIrNode; ~] {
                         typeOrigin: functionResultOrigin!
                         typeModule: functionResultModule!
                         typeSymbol: functionResultSymbol!
+                        typeId: -1
                         payloadToken: -1
                         opcode: -1
                         operand0: -1
@@ -260,6 +265,7 @@ public lower sources: [Text; ~] -> [TypedIrNode; ~] {
                             typeOrigin: parameterOrigin!
                             typeModule: parameterModule!
                             typeSymbol: parameterTypeSymbol!
+                            typeId: -1
                             payloadToken: parameter.nameToken
                             opcode: -1
                             operand0: -1
@@ -329,6 +335,7 @@ public lower sources: [Text; ~] -> [TypedIrNode; ~] {
                                         typeOrigin: bindingType.origin
                                         typeModule: bindingType.targetModule
                                         typeSymbol: bindingType.targetSymbol
+                                        typeId: -1
                                         payloadToken: bindingAst.kind == 48 -> if { bindingAst.secondaryToken } else { bindingAst.payloadToken }
                                         opcode: -1
                                         operand0: -1
@@ -393,6 +400,7 @@ public lower sources: [Text; ~] -> [TypedIrNode; ~] {
                                     typeOrigin: controlTypeOrigin!
                                     typeModule: controlTypeModule!
                                     typeSymbol: controlTypeSymbol!
+                                    typeId: -1
                                     payloadToken: expression.payloadToken
                                     opcode: controlOpcode!
                                     operand0: -1
@@ -473,6 +481,7 @@ public lower sources: [Text; ~] -> [TypedIrNode; ~] {
                                     typeOrigin: expressionType.origin
                                     typeModule: expressionType.targetModule
                                     typeSymbol: expressionType.targetSymbol
+                                    typeId: -1
                                     payloadToken: expression.payloadToken
                                     opcode: expression.operatorKind
                                     operand0: -1
@@ -735,6 +744,7 @@ public lower sources: [Text; ~] -> [TypedIrNode; ~] {
                     typeOrigin: 1
                     typeModule: -1
                     typeSymbol: 2
+                    typeId: -1
                     payloadToken: -1
                     opcode: -1
                     operand0: -1
@@ -803,6 +813,7 @@ public lower sources: [Text; ~] -> [TypedIrNode; ~] {
                                         typeOrigin: entryBindingType.origin
                                         typeModule: entryBindingType.targetModule
                                         typeSymbol: entryBindingType.targetSymbol
+                                        typeId: -1
                                         payloadToken: entryBindingAst.kind == 48 -> if { entryBindingAst.secondaryToken } else { entryBindingAst.payloadToken }
                                         opcode: -1
                                         operand0: -1
@@ -865,6 +876,7 @@ public lower sources: [Text; ~] -> [TypedIrNode; ~] {
                                     typeOrigin: entryControlTypeOrigin!
                                     typeModule: entryControlTypeModule!
                                     typeSymbol: entryControlTypeSymbol!
+                                    typeId: -1
                                     payloadToken: entryExpression.payloadToken
                                     opcode: entryControlOpcode!
                                     operand0: -1
@@ -945,6 +957,7 @@ public lower sources: [Text; ~] -> [TypedIrNode; ~] {
                                     typeOrigin: entryExpressionType.origin
                                     typeModule: entryExpressionType.targetModule
                                     typeSymbol: entryExpressionType.targetSymbol
+                                    typeId: -1
                                     payloadToken: entryExpression.payloadToken
                                     opcode: entryExpression.operatorKind
                                     operand0: -1
@@ -1281,6 +1294,17 @@ public lower sources: [Text; ~] -> [TypedIrNode; ~] {
             loopExit! => results![loopExitIndex!]
         }
         loopExitIndex! + 1 => loopExitIndex!
+    }
+    0 => recursiveIrIndex!
+    recursiveIrIndex! < (results! -> len) -> while {
+        results![recursiveIrIndex!] => recursiveIr!
+        recursiveTypes.expressions -> each recursiveExpression {
+            (recursiveExpression.status == 0 and recursiveExpression.sourceModule == recursiveIr!.sourceModule and recursiveExpression.astNode == recursiveIr!.astNode) -> if {
+                recursiveExpression.typeId => recursiveIr!.typeId
+            }
+        }
+        recursiveIr! => results![recursiveIrIndex!]
+        recursiveIrIndex! + 1 => recursiveIrIndex!
     }
     results!
 }
