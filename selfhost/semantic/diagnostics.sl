@@ -29,7 +29,7 @@ public analyze source: Text -> [SemanticDiagnostic; ~] {
         0 => candidateIndex!
         (candidateIndex! < symbolIndex! and duplicateOf! < 0) -> while {
             table![candidateIndex!] => candidate
-            current.parent == candidate.parent -> if {
+            (current.kind != 48 and candidate.kind != 48 and current.parent == candidate.parent) -> if {
                 tokens![current.nameToken] => currentName
                 tokens![candidate.nameToken] => candidateName
                 currentName.span.length == candidateName.span.length => namesEqual!

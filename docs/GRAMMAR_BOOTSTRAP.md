@@ -282,8 +282,13 @@ projects that result as a normal binding, call resolution and expression
 inference propagate the role's declared return type, and typed IR represents
 the invocation as kind 6 plus a kind-17 binding while reconnecting nested body
 operations beneath the call. Example 279 exercises the complete self-host
-AST-to-typed-IR path. Block-input type checking and ownership/effect contracts
-remain later semantic work.
+AST-to-typed-IR path. The role call is now a lexical scope: its item parameter
+is visible only in the caller body, while the trailing result binding belongs
+to the outer scope. Type checking selects the source expression only before the
+role target, validates its declared nominal or composite input type, and emits
+code 17 when role syntax targets a function without a block input. Example 280
+covers both source mismatch and invalid-target diagnostics. Generic block-item
+specialization and ownership/effect contracts remain later semantic work.
 Self-hosted compiler examples embed their input modules as raw multiline
 strings. This keeps tested SL source readable as source, removes duplicated
 newline escaping, and continuously exercises raw-string lexing in the bootstrap

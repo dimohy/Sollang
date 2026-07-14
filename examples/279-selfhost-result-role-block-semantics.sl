@@ -5,6 +5,7 @@ import smalllang.compiler.semantic.calls as calls
 import smalllang.compiler.semantic.expression_types as expressionTypes
 import smalllang.compiler.semantic.resolve as resolution
 import smalllang.compiler.semantic.symbols as symbols
+import smalllang.compiler.semantic.type_check as typeCheck
 
 main {
     """
@@ -15,7 +16,7 @@ main {
 
     main {
         10 -> build field {
-            1 => local
+            field + 1 => local
             local -> println
         } => built
         built + 2
@@ -29,6 +30,7 @@ main {
     roleSource -> resolution.resolve => resolvedNames!
     [roleSource, ~] => sources!
     sources! -> expressionTypes.infer => inferred!
+    sources! -> typeCheck.analyze => typeErrors!
     sources! -> typedIr.lower => ir!
 
     false => astOk!
@@ -36,7 +38,10 @@ main {
     false => callOk!
     false => typeOk!
     false => referenceOk!
+    false => blockTypeOk!
+    (typeErrors! -> len) == 0 => typeCheckOk!
     -1 => roleReferenceAst!
+    -1 => blockReferenceAst!
     false => irCallOk!
     false => irBindingOk!
     false => irBodyOk!
@@ -63,6 +68,9 @@ main {
         (resolvedSymbol.kind == 9 and nodes![resolvedSymbol.astNode].kind == 48) -> if {
             resolved.astNode => roleReferenceAst!
         }
+        (resolvedSymbol.kind == 35 and nodes![resolvedSymbol.astNode].kind == 48) -> if {
+            resolved.astNode => blockReferenceAst!
+        }
     }
     inferred! -> each item {
         (nodes![item.astNode].kind == 48 and item.origin == 1 and item.targetSymbol == 2) -> if {
@@ -70,6 +78,9 @@ main {
         }
         (item.astNode == roleReferenceAst! and item.origin == 1 and item.targetSymbol == 2) -> if {
             true => referenceOk!
+        }
+        (item.astNode == blockReferenceAst! and item.origin == 1 and item.targetSymbol == 2) -> if {
+            true => blockTypeOk!
         }
     }
     ir! -> each node {
@@ -84,7 +95,7 @@ main {
         }
     }
 
-    (astOk! and symbolOk! and callOk! and typeOk! and referenceOk! and irCallOk! and irBindingOk! and irBodyOk!) -> if {
+    (astOk! and symbolOk! and callOk! and typeOk! and referenceOk! and blockTypeOk! and typeCheckOk! and irCallOk! and irBindingOk! and irBodyOk!) -> if {
         "role semantics = valid"
     } else {
         "role semantics = invalid"

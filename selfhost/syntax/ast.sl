@@ -14,6 +14,7 @@ public struct AstNode {
     operatorKind: Int
     payloadToken: Int
     secondaryToken: Int
+    tertiaryToken: Int
     flags: Int
     firstToken: Int
     tokenCount: Int
@@ -111,6 +112,9 @@ lowerFrom request: LowerRequest -> [AstNode; ~] {
     cstIndex! < greenCount -> while {
         green![cstIndex!] => node
         node.ruleId -> classify => astKind!
+        (node.ruleId == grammar.ruleIdTypeName and node.parent >= 0 and green![node.parent].ruleId == grammar.ruleIdBlockFunctionBody) -> if {
+            12 => astKind!
+        }
         -1 => operatorKind!
         -1 => operatorPayloadToken!
         node.firstToken => operatorTokenIndex!
@@ -266,6 +270,7 @@ lowerFrom request: LowerRequest -> [AstNode; ~] {
                 operatorKind: operatorKind!
                 payloadToken: payloadToken!
                 secondaryToken: -1
+                tertiaryToken: -1
                 flags: 0
                 firstToken: astFirstToken!
                 tokenCount: astTokenCount!
@@ -400,6 +405,41 @@ lowerFrom request: LowerRequest -> [AstNode; ~] {
                 }
             }
         }
+        (declaration!.kind == 7 or declaration!.kind == 31) -> if {
+            declaration!.firstToken => blockHeaderToken!
+            declaration!.firstToken + declaration!.tokenCount => blockHeaderEnd!
+            false => blockKeywordFound!
+            false => blockNameFound!
+            false => blockSignatureArrowSeen!
+            (blockHeaderToken! < blockHeaderEnd! and not blockNameFound!) -> while {
+                tokens![blockHeaderToken!].kind == grammar.tokenIdLeftBrace -> if {
+                    blockHeaderEnd! => blockHeaderToken!
+                } else {
+                    tokens![blockHeaderToken!].kind == grammar.tokenIdArrow -> if {
+                        true => blockSignatureArrowSeen!
+                    }
+                    tokens![blockHeaderToken!].kind == grammar.tokenIdIdentifier -> if {
+                        tokens![blockHeaderToken!] => blockHeaderIdentifier
+                        (blockSignatureArrowSeen! and not blockKeywordFound!) -> if {
+                            blockHeaderIdentifier.span.length == UIntSize(5) -> if {
+                                source -> byte(blockHeaderIdentifier.span.start) => blockByte0
+                                source -> byte(blockHeaderIdentifier.span.start + UIntSize(1)) => blockByte1
+                                source -> byte(blockHeaderIdentifier.span.start + UIntSize(2)) => blockByte2
+                                source -> byte(blockHeaderIdentifier.span.start + UIntSize(3)) => blockByte3
+                                source -> byte(blockHeaderIdentifier.span.start + UIntSize(4)) => blockByte4
+                                (blockByte0 == UInt8(98) and blockByte1 == UInt8(108) and blockByte2 == UInt8(111) and blockByte3 == UInt8(99) and blockByte4 == UInt8(107)) -> if {
+                                    true => blockKeywordFound!
+                                }
+                            }
+                        } else {
+                            blockHeaderToken! => declaration!.tertiaryToken
+                            true => blockNameFound!
+                        }
+                    }
+                    blockHeaderToken! + 1 => blockHeaderToken!
+                }
+            }
+        }
         declaration!.kind == 9 -> if {
             declaration!.firstToken => bindingToken!
             declaration!.firstToken + declaration!.tokenCount => bindingEnd!
@@ -437,6 +477,7 @@ lowerFrom request: LowerRequest -> [AstNode; ~] {
             false => afterRoleResultArrow!
             false => roleBodySeen!
             0 => roleBraceDepth!
+            false => afterRoleDot!
             roleToken! < roleEnd! -> while {
                 tokens![roleToken!].kind == grammar.tokenIdLeftBrace -> if {
                     true => roleBodySeen!
@@ -448,10 +489,21 @@ lowerFrom request: LowerRequest -> [AstNode; ~] {
                 (not roleBodySeen! and tokens![roleToken!].kind == grammar.tokenIdArrow) -> if {
                     not roleNameFound! -> if { true => afterRoleArrow! }
                 }
-                (afterRoleArrow! and not roleNameFound! and tokens![roleToken!].kind == grammar.tokenIdIdentifier) -> if {
-                    roleToken! => declaration!.payloadToken
-                    true => roleNameFound!
-                    false => afterRoleArrow!
+                (afterRoleArrow! and not roleBodySeen! and tokens![roleToken!].kind == grammar.tokenIdDot) -> if {
+                    true => afterRoleDot!
+                }
+                (afterRoleArrow! and not roleBodySeen! and tokens![roleToken!].kind == grammar.tokenIdIdentifier) -> if {
+                    not roleNameFound! -> if {
+                        roleToken! => declaration!.payloadToken
+                        true => roleNameFound!
+                    } else {
+                        afterRoleDot! -> if {
+                            roleToken! => declaration!.payloadToken
+                        } else {
+                            declaration!.tertiaryToken < 0 -> if { roleToken! => declaration!.tertiaryToken }
+                        }
+                    }
+                    false => afterRoleDot!
                 }
                 (roleNameFound! and roleBodySeen! and roleBraceDepth! == 0 and tokens![roleToken!].kind == grammar.tokenIdFatArrow) -> if {
                     true => afterRoleResultArrow!

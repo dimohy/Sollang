@@ -58,7 +58,7 @@ public resolve source: Text -> [ResolvedName; ~] {
                 0 => candidateSymbolIndex!
                 candidateSymbolIndex! < symbolCount -> while {
                     table![candidateSymbolIndex!] => candidate
-                    candidate.parent == searchScope! -> if {
+                    (candidate.kind != 48 and candidate.parent == searchScope!) -> if {
                         tokens![nameAst.payloadToken] => referenceName
                         tokens![candidate.nameToken] => candidateName
                         referenceName.span.length == candidateName.span.length => namesEqual!

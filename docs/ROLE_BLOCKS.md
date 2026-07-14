@@ -190,19 +190,26 @@ the bootstrap parser's deterministic dispatch order.
 Partial semantic/IR evidence:
 [`279-selfhost-result-role-block-semantics.sl`](../examples/279-selfhost-result-role-block-semantics.sl)
 proves that the SL compiler's own AST records the role target and result name,
-its symbol/call/type passes resolve and propagate the result, and flat typed IR
-retains the call, result binding, and nested body operation. The semantic
-checkbox remains open until block-input contracts, ownership/capability escape,
-and effect rules have matching self-host diagnostics.
+its symbol/call/type passes resolve and propagate the result and typed block
+item, its type checker accepts the declared source/item contract, and flat
+typed IR retains the call, result binding, and nested body operation.
+[`280-selfhost-role-block-contract-check.sl`](../examples/280-selfhost-role-block-contract-check.sl)
+proves that the source expression is selected only from the region before the
+role target, a mismatched source emits code 6, and role syntax targeting an
+ordinary function without a block input emits code 17. Runtime calls nested in
+the caller block are excluded from source-module lookup. The semantic checkbox
+remains open until generic block-item specialization, ownership/capability
+escape, and effect rules have matching self-host diagnostics.
 
 Regression evidence on 2026-07-14: the Release solution build completed with
-zero warnings and errors. After adding the self-host semantic/IR slice, the
-coordinated eight-worker runner passed all 392 cases plus byte-for-byte grammar
-table determinism in 391.2 seconds.
+zero warnings and errors. After adding lexical block items and the self-host
+block-input contract slice, the coordinated eight-worker runner passed all 393
+cases plus byte-for-byte grammar table determinism in 369.3 seconds.
 The canonical roadmap remains 42 complete, 13 partial, and 5 missing gates
 (48.5/60, 80.8%). This partial role-block slice does not promote a roadmap gate.
 The common foundation baseline is commit `d2b07db`; self-host semantic/IR
-recognition is covered by example 279.
+recognition and the first block-input contract slice are covered by examples
+279 and 280.
 
 ## Definition of Done
 

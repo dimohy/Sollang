@@ -86,6 +86,71 @@ public infer sources: [Text; ~] -> [ExpressionType; ~] {
                 }
                 (not booleanLiteral! and resolvedNameIndex! >= 0) -> if {
                     table![resolvedNames![resolvedNameIndex!].symbol] => valueSymbol
+                    false => blockValueInferred!
+                    (valueSymbol.kind == 35 and nodes![valueSymbol.astNode].kind == 48) -> if {
+                        -1 => blockCallResolution!
+                        0 => blockCallSearch!
+                        blockCallSearch! < (moduleCalls! -> len) -> while {
+                            moduleCalls![blockCallSearch!] => blockCallCandidate
+                            (blockCallCandidate.sourceModule == sourceIndex! and blockCallCandidate.callAst == valueSymbol.astNode and blockCallCandidate.status == 0) -> if {
+                                blockCallSearch! => blockCallResolution!
+                            }
+                            blockCallSearch! + 1 => blockCallSearch!
+                        }
+                        blockCallResolution! >= 0 -> if {
+                            moduleCalls![blockCallResolution!] => blockCall
+                            sources[blockCall.targetSourceModule] -> symbols.collect => blockTargetTable!
+                            blockTargetTable![blockCall.functionSymbol] => blockTargetFunction
+                            blockTargetFunction.blockTypeNode >= 0 -> if {
+                                -1 => blockNominalIndex!
+                                0 => blockNominalSearch!
+                                blockNominalSearch! < (nominal! -> len) -> while {
+                                    nominal![blockNominalSearch!] => blockNominalCandidate
+                                    (blockNominalCandidate.sourceModule == blockCall.targetSourceModule and blockNominalCandidate.typeAst == blockTargetFunction.blockTypeNode) -> if {
+                                        blockNominalSearch! => blockNominalIndex!
+                                    }
+                                    blockNominalSearch! + 1 => blockNominalSearch!
+                                }
+                                blockNominalIndex! >= 0 -> if {
+                                    nominal![blockNominalIndex!] => blockValueType
+                                    inferred! -> push(ExpressionType {
+                                        sourceModule: sourceIndex!
+                                        astNode: astIndex!
+                                        origin: blockValueType.origin
+                                        targetModule: blockValueType.targetModule
+                                        targetSymbol: blockValueType.targetSymbol
+                                        keyOrigin: -1
+                                        keyModule: -1
+                                        valueOrigin: -1
+                                        valueModule: -1
+                                    })
+                                    true => blockValueInferred!
+                                }
+                                not blockValueInferred! -> if {
+                                    0 => blockCompositeSearch!
+                                    blockCompositeSearch! < (composite! -> len) -> while {
+                                        composite![blockCompositeSearch!] => blockComposite
+                                        (blockComposite.sourceModule == blockCall.targetSourceModule and blockComposite.typeAst == blockTargetFunction.blockTypeNode) -> if {
+                                            inferred! -> push(ExpressionType {
+                                                sourceModule: sourceIndex!
+                                                astNode: astIndex!
+                                                origin: 10 + blockComposite.kind
+                                                targetModule: blockComposite.kind == 5 -> if { blockComposite.keySymbol } else { blockComposite.elementModule }
+                                                targetSymbol: blockComposite.kind == 5 -> if { blockComposite.valueSymbol } else { blockComposite.elementSymbol }
+                                                keyOrigin: blockComposite.kind == 5 -> if { blockComposite.keyOrigin } else { -1 }
+                                                keyModule: blockComposite.kind == 5 -> if { blockComposite.keyModule } else { -1 }
+                                                valueOrigin: blockComposite.kind == 5 -> if { blockComposite.valueOrigin } else { -1 }
+                                                valueModule: blockComposite.kind == 5 -> if { blockComposite.valueModule } else { -1 }
+                                            })
+                                            true => blockValueInferred!
+                                        }
+                                        blockCompositeSearch! + 1 => blockCompositeSearch!
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    not blockValueInferred! -> if {
                     -1 => nominalIndex!
                     0 => typeSearch!
                     typeSearch! < (nominal! -> len) -> while {
@@ -130,6 +195,7 @@ public infer sources: [Text; ~] -> [ExpressionType; ~] {
                                 valueModule: valueComposite.kind == 5 -> if { valueComposite.valueModule } else { -1 }
                             })
                         }
+                    }
                     }
                 }
             }
@@ -274,6 +340,14 @@ public infer sources: [Text; ~] -> [ExpressionType; ~] {
                                             argumentSearch! < (inferred! -> len) -> while {
                                                 inferred![argumentSearch!] => argumentType
                                                 argumentType.sourceModule == sourceIndex! -> if {
+                                                    true => beforeRoleTarget!
+                                                    nodes![call.callAst] => genericCallNode
+                                                    genericCallNode.kind == 48 -> if {
+                                                        nodes![argumentType.astNode] => genericArgumentNode
+                                                        genericArgumentNode.start + genericArgumentNode.length > tokens![genericCallNode.payloadToken].span.start -> if {
+                                                            false => beforeRoleTarget!
+                                                        }
+                                                    }
                                                     nodes![argumentType.astNode].parent => argumentAncestor!
                                                     1 => distance!
                                                     false => belongsToCall!
@@ -283,7 +357,7 @@ public infer sources: [Text; ~] -> [ExpressionType; ~] {
                                                             distance! + 1 => distance!
                                                         }
                                                     }
-                                                    (belongsToCall! and distance! < argumentDistance!) -> if {
+                                                    (belongsToCall! and beforeRoleTarget! and distance! < argumentDistance!) -> if {
                                                         argumentSearch! => argumentTypeIndex!
                                                         distance! => argumentDistance!
                                                     }
@@ -347,6 +421,14 @@ public infer sources: [Text; ~] -> [ExpressionType; ~] {
                                     compositeArgumentSearch! < (inferred! -> len) -> while {
                                         inferred![compositeArgumentSearch!] => argumentType
                                         argumentType.sourceModule == sourceIndex! -> if {
+                                            true => compositeBeforeRoleTarget!
+                                            nodes![call.callAst] => compositeCallNode
+                                            compositeCallNode.kind == 48 -> if {
+                                                nodes![argumentType.astNode] => compositeArgumentNode
+                                                compositeArgumentNode.start + compositeArgumentNode.length > tokens![compositeCallNode.payloadToken].span.start -> if {
+                                                    false => compositeBeforeRoleTarget!
+                                                }
+                                            }
                                             nodes![argumentType.astNode].parent => argumentAncestor!
                                             1 => distance!
                                             false => belongsToCall!
@@ -356,7 +438,7 @@ public infer sources: [Text; ~] -> [ExpressionType; ~] {
                                                     distance! + 1 => distance!
                                                 }
                                             }
-                                            (belongsToCall! and distance! < compositeArgumentDistance!) -> if {
+                                            (belongsToCall! and compositeBeforeRoleTarget! and distance! < compositeArgumentDistance!) -> if {
                                                 compositeArgumentSearch! => compositeArgumentIndex!
                                                 distance! => compositeArgumentDistance!
                                             }

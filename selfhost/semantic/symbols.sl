@@ -11,6 +11,8 @@ public struct Symbol {
     nameToken: Int
     typeNode: Int
     secondaryTypeNode: Int
+    blockNameToken: Int
+    blockTypeNode: Int
     flags: Int
 }
 
@@ -29,7 +31,7 @@ public collect source: Text -> [Symbol; ~] {
             node.kind <= 7 -> if { true => isSymbol! }
         }
         node.kind == 9 -> if { true => isSymbol! }
-        (node.kind == 48 and node.secondaryToken >= 0) -> if { true => isSymbol! }
+        node.kind == 48 -> if { true => isSymbol! }
         node.kind >= 26 -> if {
             node.kind <= 34 -> if { true => isSymbol! }
         }
@@ -45,12 +47,14 @@ public collect source: Text -> [Symbol; ~] {
                 }
             }
             Symbol {
-                kind: node.kind == 48 -> if { 9 } else { node.kind }
+                kind: node.kind
                 parent: parentSymbol!
                 astNode: astIndex!
-                nameToken: node.kind == 48 -> if { node.secondaryToken } else { node.payloadToken }
+                nameToken: node.payloadToken
                 typeNode: -1
                 secondaryTypeNode: -1
+                blockNameToken: node.tertiaryToken
+                blockTypeNode: -1
                 flags: node.flags
             } => symbol
             symbols! -> len => symbolIndex
@@ -78,11 +82,36 @@ public collect source: Text -> [Symbol; ~] {
             }
             typeOwnerSymbol! >= 0 -> if {
                 symbols![typeOwnerSymbol!] => owner!
-                owner!.typeNode < 0 -> if {
-                    typeAstIndex! => owner!.typeNode
+                nodes![owner!.astNode] => ownerAst
+                owner!.kind == 7 and ownerAst.tertiaryToken >= 0 -> if {
+                    owner!.typeNode < 0 -> if {
+                        typeAstIndex! => owner!.typeNode
+                    } else {
+                        ownerAst.secondaryToken >= 0 -> if {
+                            owner!.secondaryTypeNode < 0 -> if {
+                                typeAstIndex! => owner!.secondaryTypeNode
+                            } else {
+                                owner!.blockTypeNode < 0 -> if { typeAstIndex! => owner!.blockTypeNode }
+                            }
+                        } else {
+                            owner!.blockTypeNode < 0 -> if { typeAstIndex! => owner!.blockTypeNode }
+                        }
+                    }
                 } else {
-                    owner!.secondaryTypeNode < 0 -> if {
-                        typeAstIndex! => owner!.secondaryTypeNode
+                    owner!.kind == 31 and ownerAst.tertiaryToken >= 0 -> if {
+                        owner!.typeNode < 0 -> if {
+                            typeAstIndex! => owner!.typeNode
+                        } else {
+                            owner!.blockTypeNode < 0 -> if { typeAstIndex! => owner!.blockTypeNode }
+                        }
+                    } else {
+                        owner!.typeNode < 0 -> if {
+                            typeAstIndex! => owner!.typeNode
+                        } else {
+                            owner!.secondaryTypeNode < 0 -> if {
+                                typeAstIndex! => owner!.secondaryTypeNode
+                            }
+                        }
                     }
                 }
                 owner! => symbols![typeOwnerSymbol!]
@@ -105,6 +134,8 @@ public collect source: Text -> [Symbol; ~] {
                     nameToken: nodes![genericSymbol.astNode].secondaryToken
                     typeNode: -1
                     secondaryTypeNode: -1
+                    blockNameToken: -1
+                    blockTypeNode: -1
                     flags: 0
                 })
             }
@@ -132,12 +163,65 @@ public collect source: Text -> [Symbol; ~] {
                     nameToken: declarationAst.secondaryToken
                     typeNode: parameterTypeNode!
                     secondaryTypeNode: -1
+                    blockNameToken: -1
+                    blockTypeNode: -1
                     flags: declarationSymbol.flags
                 } => parameterSymbol
                 symbols! -> push(parameterSymbol)
             }
         }
+        ((declarationSymbol.kind == 7 or declarationSymbol.kind == 31) and declarationSymbol.blockNameToken >= 0 and declarationSymbol.blockTypeNode >= 0) -> if {
+            symbols! -> push(Symbol {
+                kind: 35
+                parent: declarationSymbolIndex!
+                astNode: declarationSymbol.astNode
+                nameToken: declarationSymbol.blockNameToken
+                typeNode: declarationSymbol.blockTypeNode
+                secondaryTypeNode: -1
+                blockNameToken: -1
+                blockTypeNode: -1
+                flags: 0
+            })
+        }
         declarationSymbolIndex! + 1 => declarationSymbolIndex!
+    }
+
+    # A role call is a lexical scope. Its block item is visible only inside the
+    # caller body, while the trailing result binding belongs to the outer scope.
+    symbols! -> len => roleScopeCount
+    0 => roleScopeIndex!
+    roleScopeIndex! < roleScopeCount -> while {
+        symbols![roleScopeIndex!] => roleScope
+        roleScope.kind == 48 -> if {
+            nodes![roleScope.astNode] => roleAst
+            roleAst.secondaryToken >= 0 -> if {
+                symbols! -> push(Symbol {
+                    kind: 9
+                    parent: roleScope.parent
+                    astNode: roleScope.astNode
+                    nameToken: roleAst.secondaryToken
+                    typeNode: -1
+                    secondaryTypeNode: -1
+                    blockNameToken: -1
+                    blockTypeNode: -1
+                    flags: roleAst.flags
+                })
+            }
+            roleAst.tertiaryToken >= 0 -> if {
+                symbols! -> push(Symbol {
+                    kind: 35
+                    parent: roleScopeIndex!
+                    astNode: roleScope.astNode
+                    nameToken: roleAst.tertiaryToken
+                    typeNode: -1
+                    secondaryTypeNode: -1
+                    blockNameToken: -1
+                    blockTypeNode: -1
+                    flags: 0
+                })
+            }
+        }
+        roleScopeIndex! + 1 => roleScopeIndex!
     }
 
     symbols!

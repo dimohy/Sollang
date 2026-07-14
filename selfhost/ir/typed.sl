@@ -313,7 +313,7 @@ public lower sources: [Text; ~] -> [TypedIrNode; ~] {
                                     -1 => bindingSymbol!
                                     0 => bindingSymbolSearch!
                                     bindingSymbolSearch! < (table! -> len) -> while {
-                                        table![bindingSymbolSearch!].astNode == bindingAstIndex! -> if { bindingSymbolSearch! => bindingSymbol! }
+                                        (table![bindingSymbolSearch!].kind == 9 and table![bindingSymbolSearch!].astNode == bindingAstIndex!) -> if { bindingSymbolSearch! => bindingSymbol! }
                                         bindingSymbolSearch! + 1 => bindingSymbolSearch!
                                     }
                                     inferred![bindingTypeIndex!] => bindingType
@@ -787,7 +787,7 @@ public lower sources: [Text; ~] -> [TypedIrNode; ~] {
                                     -1 => entryBindingSymbol!
                                     0 => entryBindingSymbolSearch!
                                     entryBindingSymbolSearch! < (table! -> len) -> while {
-                                        table![entryBindingSymbolSearch!].astNode == entryBindingAstIndex! -> if { entryBindingSymbolSearch! => entryBindingSymbol! }
+                                        (table![entryBindingSymbolSearch!].kind == 9 and table![entryBindingSymbolSearch!].astNode == entryBindingAstIndex!) -> if { entryBindingSymbolSearch! => entryBindingSymbol! }
                                         entryBindingSymbolSearch! + 1 => entryBindingSymbolSearch!
                                     }
                                     inferred![entryBindingTypeIndex!] => entryBindingType

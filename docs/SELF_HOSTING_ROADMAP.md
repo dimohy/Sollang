@@ -634,8 +634,11 @@ self-host AST now assigns kind 48 to result-producing block calls, records the
 role target and optional result binding, resolves the role as an ordinary
 function, propagates its return type through the bound name, and lowers the
 call, binding, and body operations into flat typed IR. Block-input contract
-checking and role-specific ownership/effect checks still keep semantic parity
-partial;
+checking now gives the caller item a lexical parameter type, restricts source
+selection to the expression before the role target, validates nominal and
+composite source types, and rejects ordinary functions used as roles. Generic
+block-item specialization and role-specific ownership/effect checks still keep
+semantic parity partial;
 the canonical gate count therefore remains 42 complete, 13 partial, and 5
 missing (48.5/60, 80.8%).
 

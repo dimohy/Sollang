@@ -34,7 +34,9 @@ public struct TypeCheckDiagnostic {
 # unknown struct initializer field, code 12 is a field value type mismatch, and
 # code 13 identifies a required field missing from a struct literal. Code 14 is
 # an unknown value member on a resolved struct type. Code 15 identifies an
-# indexed value that is not array-like, and code 16 identifies a non-Int index.
+# indexed value that is not array-like, code 16 identifies a non-Int index,
+# and code 17 identifies role syntax targeting a function without a block
+# input contract.
 public analyze sources: [Text; ~] -> [TypeCheckDiagnostic; ~] {
     sources -> nominalTypes.resolve => nominal!
     sources -> compositeTypes.resolve => composite!
@@ -187,10 +189,28 @@ public analyze sources: [Text; ~] -> [TypeCheckDiagnostic; ~] {
         0 => callIndex!
         callIndex! < (moduleCalls! -> len) -> while {
             moduleCalls![callIndex!] => call
-            (call.sourceModule == sourceIndex! and call.status == 0) -> if {
+            (call.sourceModule == sourceIndex! and call.status == 0 and call.targetSourceModule >= 0) -> if {
                 sources[call.targetSourceModule] -> symbols.collect => targetTable!
                 targetTable![call.functionSymbol] => targetFunction
                 nodes![call.callAst] => callNode
+                false => invalidRoleTarget!
+                (callNode.kind == 48 and targetFunction.blockTypeNode < 0) -> if {
+                    true => invalidRoleTarget!
+                    diagnostics! -> push(TypeCheckDiagnostic {
+                        code: 17
+                        sourceModule: sourceIndex!
+                        functionSymbol: call.functionSymbol
+                        expectedOrigin: -1
+                        expectedModule: call.targetModule
+                        expectedSymbol: -1
+                        actualOrigin: -1
+                        actualModule: -1
+                        actualSymbol: -1
+                        actualBuiltin: -1
+                        span: syntax.SourceSpan { fileId: sourceIndex!, start: callNode.start, length: callNode.length }
+                    })
+                }
+                not invalidRoleTarget! -> if {
                 false => afterLeftParen!
                 false => hasArgument!
                 callNode.firstToken => callTokenIndex!
@@ -204,6 +224,7 @@ public analyze sources: [Text; ~] -> [TypeCheckDiagnostic; ~] {
                     }
                     callTokenIndex! + 1 => callTokenIndex!
                 }
+                callNode.kind == 48 -> if { true => hasArgument! }
                 targetFunction.secondaryTypeNode >= 0 -> if {
                     -1 => expectedInputIndex!
                     -1 => expectedInputCompositeIndex!
@@ -229,6 +250,13 @@ public analyze sources: [Text; ~] -> [TypeCheckDiagnostic; ~] {
                     argumentSearch! < (expressionTypeTable! -> len) -> while {
                         expressionTypeTable![argumentSearch!] => argumentType
                         argumentType.sourceModule == sourceIndex! -> if {
+                            true => beforeRoleTarget!
+                            callNode.kind == 48 -> if {
+                                nodes![argumentType.astNode] => argumentNode
+                                argumentNode.start + argumentNode.length > tokens![callNode.payloadToken].span.start -> if {
+                                    false => beforeRoleTarget!
+                                }
+                            }
                             nodes![argumentType.astNode].parent => argumentAncestor!
                             1 => distance!
                             false => belongsToCall!
@@ -240,7 +268,7 @@ public analyze sources: [Text; ~] -> [TypeCheckDiagnostic; ~] {
                                     distance! + 1 => distance!
                                 }
                             }
-                            (belongsToCall! and distance! < argumentDistance!) -> if {
+                            (belongsToCall! and beforeRoleTarget! and distance! < argumentDistance!) -> if {
                                 argumentSearch! => actualArgumentIndex!
                                 distance! => argumentDistance!
                             }
@@ -338,8 +366,9 @@ public analyze sources: [Text; ~] -> [TypeCheckDiagnostic; ~] {
                         })
                     }
                 }
+                }
             } else {
-                call.sourceModule == sourceIndex! -> if {
+                (call.sourceModule == sourceIndex! and call.targetSourceModule >= 0) -> if {
                 nodes![call.callAst] => unresolvedCall
                 diagnostics! -> push(TypeCheckDiagnostic {
                     code: call.status == 3 -> if { 9 } else { 7 }

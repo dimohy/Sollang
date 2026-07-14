@@ -4248,7 +4248,40 @@ structure for scoped cleanup and effect analysis.
 
 Example 279 proves AST payloads, lexical binding, call resolution, result-type
 propagation, and typed-IR parentage. This decision does not mark role semantics
-complete: the self-host checker must still validate the block-input contract,
-capability escape, ownership on every exit edge, and handled effect sets.
+complete: capability escape, ownership on every exit edge, generic block-item
+specialization, and handled effect sets remain.
+
+## D137 - Role Input Is Selected Before Its Lexical Caller Block
+
+Status: first self-host block-input contract slice implemented
+Date: 2026-07-14
+
+For `source -> role item { ... } => result`, the role call itself is a lexical
+scope. `item` is a synthetic typed parameter owned by that scope and is visible
+only inside the caller block. `result` is an ordinary binding in the enclosing
+scope. This prevents the item capability from becoming visible after the role
+call before ownership and capture analysis even begins.
+
+The self-host type checker derives the role argument only from inferred
+expressions whose source span ends before the role target token. Expressions in
+the caller block can therefore never be mistaken for `source`, even when they
+are closer descendants in the flat AST. The same boundary is used by generic
+call-result inference. A nominal or composite source mismatch uses the existing
+call-argument diagnostic code 6. If the resolved target has no declared
+`block` input, role syntax emits code 17 over the complete role call instead of
+silently treating an ordinary function as a role.
+
+Runtime calls such as `println` have no source-module symbol table and are
+excluded from module-backed type checking. This is required for runtime effects
+inside role bodies and removes the invalid `sources[-1]` lookup exposed by the
+new success example.
+
+Examples 279 and 280 are the executable evidence. This decision deliberately
+does not claim full self-host role parity: generic block-item specialization,
+capability escape checking, effect-set enforcement, all-exit cleanup, and LLVM
+role lowering remain open in [`ROLE_BLOCKS.md`](ROLE_BLOCKS.md). The Release
+solution build completed with zero warnings and errors, and the single
+coordinated eight-worker runner passed grammar/table determinism plus all 393
+examples in 369.3 seconds.
 
 
