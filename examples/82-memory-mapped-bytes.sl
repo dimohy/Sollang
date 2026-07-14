@@ -1,4 +1,4 @@
-checkLargeMapInference: -> UIntSize {
+checkLargeMapInference: -> UIntSize uses File {
     # Explicit UInt64(4_000_000_000) and UIntSize(64) remain valid too.
     map read "unused-large-file.bin" at 4_000_000_000 for 64 => unused
     unused -> len

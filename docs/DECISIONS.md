@@ -4985,3 +4985,39 @@ again within the recent 388.7-395.4-second range and is not claimed as an
 isolated speedup.
 
 
+## D155 - Functions Declare Closed Capability Effect Sets
+
+Status: reference compiler propagation implemented; self-host product pending
+Date: 2026-07-14
+
+SmallLang functions are pure by default and place a closed capability set after
+the return type: `-> Unit uses Console` or `-> Result<T, Text> uses File,
+Clock`. The initial names are `Console`, `File`, `Clock`, `Random`, `Process`,
+and `Environment`. Unknown and duplicate names are rejected. Every ordinary,
+local, generic, block, member, zero-input, and imported call checks that the
+caller contains the callee's required set. `main` is the unrestricted program
+boundary. Memory-map construction and mapped-view `flush` require `File`
+directly because they are syntax forms rather than function calls.
+
+`async` remains an execution/suspension property, not an authority token. This
+keeps CPU-pure scheduling separate from clock or I/O permission and leaves a
+clean future path for `handle` role blocks to discharge handled effects. The
+standard library declares its public capability contracts, and the self-host
+LLVM emitter declares `Console` through its nested output helpers. Generic
+specialization validation now snapshots and restores the caller semantic
+context; without that restoration, validating a pure specialization could
+incorrectly erase the enclosing caller's effect set.
+
+Examples and diagnostics cover positive transitive propagation, missing direct
+and transitive Console effects, unknown and duplicate effects, File-backed map
+syntax, async Clock functions, generic-call context restoration, role blocks,
+and owned file APIs. This slice does not promote a formal roadmap gate because
+the flat self-host effect analysis product and handler discharge are not yet
+implemented. The canonical count remains 42 complete, 13 partial, and 5
+missing: 48.5/60 (80.8%).
+
+Regression evidence on 2026-07-14: the focused effect set passed 5/5, file and
+mapped-I/O migration passed 7/7, grammar/effect snapshot corrections passed
+5/5, and the coordinated eight-worker full suite passed 416/416 in 393.2
+seconds with flushed monotonic `n/416` progress. The Release solution build
+completed with zero warnings and errors.

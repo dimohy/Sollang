@@ -268,7 +268,7 @@ ownsType node: typedIr.TypedIrNode -> Bool {
 # Transitional public boundary used by the emitter and regressions. Canonical
 # kind/ownership wins whenever a type ID exists; the shallow branch remains
 # only for IR nodes whose migration is not complete yet.
-public writeType node: typedIr.TypedIrNode -> Unit {
+public writeType node: typedIr.TypedIrNode -> Unit uses Console {
     node -> isDynamicArrayType -> if {
         "%sl.array.i32" -> print
     } else {
@@ -392,7 +392,7 @@ prepare request: move PrepareRequest -> EmitContext {
     context!
 }
 
-emitCore context: move EmitContext -> Unit {
+emitCore context: move EmitContext -> Unit uses Console {
     sourceToken node: typedIr.TypedIrNode -> syntax.SyntaxToken {
         context.tokens[context.ranges[node.sourceModule].tokenStart + node.payloadToken]
     }
@@ -416,15 +416,15 @@ emitCore context: move EmitContext -> Unit {
         }
         sourceNodes!
     }
-    emitDropValueName request: DropGlueRequest -> Unit {
+    emitDropValueName request: DropGlueRequest -> Unit uses Console {
         request.valueKind == 0 -> if { "%v$(request.valueIndex)" -> print } else {
             request.valueKind == 1 -> if { "%arg" -> print } else { "%dropg$(request.nameRoot)_p$(request.pathCode)" -> print }
         }
     }
-    emitDropPathName request: DropGlueRequest -> Unit {
+    emitDropPathName request: DropGlueRequest -> Unit uses Console {
         "%dropg$(request.nameRoot)_p$(request.pathCode)" -> print
     }
-    emitDropGlue request: DropGlueRequest -> Unit {
+    emitDropGlue request: DropGlueRequest -> Unit uses Console {
         [request, ~] => dropTasks!
         0 => dropTaskIndex!
         dropTaskIndex! < (dropTasks! -> len) -> while {
@@ -612,7 +612,7 @@ emitCore context: move EmitContext -> Unit {
         dropTaskIndex! + 1 => dropTaskIndex!
         }
     }
-    writeSemanticTypeId typeId: Int -> Unit {
+    writeSemanticTypeId typeId: Int -> Unit uses Console {
         [typeId, ~] => typeTasks!
         typeTasks! -> len => typeTaskSize!
         typeTaskSize! > 0 -> while {
@@ -733,7 +733,7 @@ emitCore context: move EmitContext -> Unit {
         }
         rootIndex!
     }
-    writeWhileValue request: WhileValueRequest -> Unit {
+    writeWhileValue request: WhileValueRequest -> Unit uses Console {
         context.ir[request.nodeIndex] => value
         (value.kind == 3 or value.kind == 4) -> if {
             value -> sourceToken => valueToken
@@ -750,7 +750,7 @@ emitCore context: move EmitContext -> Unit {
             }
         }
     }
-    emitWhileBranch request: WhileBranchRequest -> Unit {
+    emitWhileBranch request: WhileBranchRequest -> Unit uses Console {
         request.whileIndex => whileIndex
         request.ownerIndex => ownerIndex
         context.ir[whileIndex] => whileNode
@@ -953,7 +953,7 @@ emitCore context: move EmitContext -> Unit {
             }
         }
     }
-    emitOwnedDrops request: OwnedDropRequest -> Unit {
+    emitOwnedDrops request: OwnedDropRequest -> Unit uses Console {
         context.ir[request.regionIndex] => dropRegion
         UIntSize(0) => dropBeforeStart!
         request.beforeAst >= 0 -> if { context.nodes[context.ranges[dropRegion.sourceModule].astStart + request.beforeAst].start => dropBeforeStart! }
@@ -1021,7 +1021,7 @@ emitCore context: move EmitContext -> Unit {
         }
         returns!
     }
-    emitRegion regionIndex: Int -> Unit {
+    emitRegion regionIndex: Int -> Unit uses Console {
         context.ir[regionIndex] => region
         region.parent => ownerIndex!
         (ownerIndex! >= 0 and context.ir[ownerIndex!].kind != 0 and context.ir[ownerIndex!].kind != 11) -> while { context.ir[ownerIndex!].parent => ownerIndex! }
@@ -3380,7 +3380,7 @@ usesBoolInterpolation context: EmitContext -> Bool {
     usesInterpolation!
 }
 
-emitIntTextRuntime: -> Unit {
+emitIntTextRuntime: -> Unit uses Console {
     """
     define internal void @sl_runtime_print_i32(i32 %value, i1 %newline) {
     entry:
@@ -3419,7 +3419,7 @@ emitIntTextRuntime: -> Unit {
     """ -> println
 }
 
-emitBoolTextRuntime: -> Unit {
+emitBoolTextRuntime: -> Unit uses Console {
     """
     @sl_runtime_bool_true = private constant [4 x i8] c"true"
     @sl_runtime_bool_false = private constant [5 x i8] c"false"
@@ -3433,7 +3433,7 @@ emitBoolTextRuntime: -> Unit {
     """ -> println
 }
 
-emitWindowsTextRuntime: -> Unit {
+emitWindowsTextRuntime: -> Unit uses Console {
     """
     @sl_runtime_newline = private constant [1 x i8] c"\0A"
     declare i32 @putchar(i32)
@@ -3462,7 +3462,7 @@ emitWindowsTextRuntime: -> Unit {
     """ -> println
 }
 
-emitLinuxTextRuntime: -> Unit {
+emitLinuxTextRuntime: -> Unit uses Console {
     """
     @sl_runtime_newline = private constant [1 x i8] c"\0A"
     declare i64 @write(i32, ptr, i64)
@@ -3479,7 +3479,7 @@ emitLinuxTextRuntime: -> Unit {
     """ -> println
 }
 
-emitWasmTextRuntime: -> Unit {
+emitWasmTextRuntime: -> Unit uses Console {
     """"
     @sl_runtime_newline = private constant [1 x i8] c"\0A"
     declare void @smalllang_browser_write(ptr, i32) #1
@@ -3498,7 +3498,7 @@ emitWasmTextRuntime: -> Unit {
     """" -> println
 }
 
-public emit sources: move [Text; ~] -> Unit {
+public emit sources: move [Text; ~] -> Unit uses Console {
     llvmTarget.windowsX64 => target
     target.dataLayoutLine -> println
     target.tripleLine -> println
@@ -3510,7 +3510,7 @@ public emit sources: move [Text; ~] -> Unit {
     context! -> emitCore
 }
 
-public emitLinux sources: move [Text; ~] -> Unit {
+public emitLinux sources: move [Text; ~] -> Unit uses Console {
     llvmTarget.linuxX64 => target
     target.dataLayoutLine -> println
     target.tripleLine -> println
@@ -3522,7 +3522,7 @@ public emitLinux sources: move [Text; ~] -> Unit {
     context! -> emitCore
 }
 
-public emitWasm sources: move [Text; ~] -> Unit {
+public emitWasm sources: move [Text; ~] -> Unit uses Console {
     llvmTarget.wasm32Browser => target
     target.dataLayoutLine -> println
     target.tripleLine -> println

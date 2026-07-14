@@ -78,7 +78,8 @@ internal sealed record FunctionDeclaration(
     bool HasValueGenericFixedArrayInput = false,
     string ModuleName = "",
     bool IsPublic = false,
-    bool IsAsync = false);
+    bool IsAsync = false,
+    IReadOnlyList<string>? Effects = null);
 
 internal enum FunctionInputOwnership
 {

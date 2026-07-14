@@ -1,18 +1,18 @@
-build seed: Int -> Int block field: Int {
+build seed: Int -> Int uses Console block field: Int {
     "build:begin" -> println
     seed -> yield
     "build:end" -> println
     seed + 1
 }
 
-with resource: Int -> Int block context: Int {
+with resource: Int -> Int uses Console block context: Int {
     "with:acquire" -> println
     resource -> yield
     "with:release" -> println
     resource * 2
 }
 
-handle operation: Int -> Int block effect: Int {
+handle operation: Int -> Int uses Console block effect: Int {
     "handle:install" -> println
     operation -> yield
     "handle:resolve" -> println

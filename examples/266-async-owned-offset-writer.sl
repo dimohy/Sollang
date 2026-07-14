@@ -13,7 +13,7 @@ valueOrZero result: Result<Option<UInt16>, Text> -> Int => result -> when {
     Result<Option<UInt16>, Text>.Err(error) => 0
 }
 
-writeFixture path: Text -> async Bool {
+writeFixture path: Text -> async Bool uses File {
     file.openWrite(path) => opened
     opened -> when {
         Result<file.FileWriter, Text>.Ok(writer) {

@@ -14,7 +14,7 @@ make flag: Bool -> [Int; ~] {
     values
 }
 
-stop early: Bool -> Unit {
+stop early: Bool -> Unit uses Console {
     box 42 => owned
     early -> if {
         return

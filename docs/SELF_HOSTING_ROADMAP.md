@@ -664,7 +664,7 @@ facts when an ID exists. Canonical types now retain concrete fixed-array
 lengths; LLVM computes target-aware size/alignment and padded nominal layouts
 from the type/field graph, and aggregate declarations use those canonical
 edges. Dynamic-array/dictionary component lowering, recursive drop glue,
-generic application lowering, capability/effect
+generic application lowering, self-host capability/effect
 enforcement, and role-specific
 ownership/effect checks still keep semantic parity partial;
 the canonical gate count therefore remains 42 complete, 13 partial, and 5
@@ -682,8 +682,12 @@ type-term and type-use lowerers expose prepared syntax entry points. Ownership/
 type diagnostics and partial-move ownership diagnostics now consume the same
 context. Coroutine suspension, frame-slot, and destruction tables are produced
 together from one typed IR in `CoroutinePlan`; recursive/partial-move LLVM drop
-glue reads the flat AST/token/symbol tables instead of rebuilding them. Effect
-enforcement still needs migration. The LLVM text emitter's 67 direct
+glue reads the flat AST/token/symbol tables instead of rebuilding them. The
+reference compiler now parses closed `uses` sets, enforces transitive callee
+capabilities, treats `main` as the root boundary, and covers Console, File,
+Clock, Random, Process, Environment, mapped files, generics, and role blocks.
+A flat self-host effect product and role-handler discharge still need
+migration. The LLVM text emitter's 67 direct
 `lexer.lex`, `ast.lower`, and `symbols.collect` sites now read these flat package
 products through source ranges, covering scheduling, control flow, cleanup,
 operands, member layout, and interpolation name lookup. Interpolation lowering
@@ -693,6 +697,9 @@ interpolation table with a source range per module and reuses it for functions,
 for each call. Only the embedded `$(expression)` fragment itself is parsed.
 The recent coordinated 410-case runs passed in 388.7, 395.4, and 398.0 seconds;
 these are treated as full-run observations, not isolated benchmark proof.
+The reference effect-set slice then passed the coordinated 416-case suite in
+393.2 seconds with flushed monotonic progress; the formal gate count remains
+unchanged until the flat self-host effect product exists.
 
 Self-hosted LLVM text selects descriptors implemented in the file module
 `smalllang.compiler.llvm.target`. Windows x64/COFF, Linux x64/ELF, and

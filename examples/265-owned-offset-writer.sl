@@ -21,7 +21,7 @@ boolOrFalse result: Result<Option<Bool>, Text> -> Bool => result -> when {
     Err(error) => false
 }
 
-writeFixture path: Text -> Bool {
+writeFixture path: Text -> Bool uses File {
     file.openWrite(path) => openedWriter
     openedWriter -> when {
         Ok(writer) {

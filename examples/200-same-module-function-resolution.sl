@@ -6,7 +6,7 @@ double value: Int -> Int => value * 2
 
 identity<T> value: T -> T => value
 
-public run: -> Unit {
+public run: -> Unit uses Console {
     answer => value
     double(value) => direct
     5 -> double => flowed

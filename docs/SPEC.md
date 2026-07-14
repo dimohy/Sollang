@@ -1477,6 +1477,36 @@ Interpolation rules:
   surface because literal braces are common in JSON-like text, CSS-like text,
   blocks, and future dictionary/set syntax.
 
+## Effect Sets And Capability Boundaries
+
+Every function is pure by default. A function that performs an external effect
+declares the required capability set after its return type:
+
+```smalllang
+announce text: Text -> Unit uses Console {
+    text -> println
+}
+
+archive path: Text -> Result<file.File, Text> uses File, Clock {
+    path -> file.openRead
+}
+```
+
+The initial closed set is `Console`, `File`, `Clock`, `Random`, `Process`, and
+`Environment`. Unknown or duplicate names are compile errors. Calling an
+effectful function requires the caller to declare every callee effect, so the
+set propagates through ordinary, local, generic, block, member, and imported
+calls. `map` and mapped-view `flush` require `File` even though they are
+language forms rather than ordinary functions. `main` is the unrestricted root
+capability boundary.
+
+`async` is intentionally separate: it describes suspension and scheduling,
+not permission to access the clock, filesystem, console, or process state. An
+async timer therefore declares both parts, for example
+`delayed: -> async Int uses Clock`. Future `handle` role blocks may discharge a
+handled effect from the surrounding set; the current implementation only
+checks declared propagation and does not silently infer or erase effects.
+
 ## Output Surface Semantics
 
 `sys.io.print` and `sys.io.println` are standard library functions. The compiler

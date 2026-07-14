@@ -28,7 +28,7 @@ describeBool result: Result<Option<Bool>, Text> -> Text {
     }
 }
 
-readFirst: -> async Result<Option<UInt16>, Text> {
+readFirst: -> async Result<Option<UInt16>, Text> uses File {
     file.readAsync<UInt16> => pending
     pending -> await => result
     result

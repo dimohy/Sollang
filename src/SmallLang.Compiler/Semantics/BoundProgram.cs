@@ -44,7 +44,8 @@ internal sealed record BoundFunction(
     string ModuleName = "",
     bool IsPublic = false,
     bool IsAsync = false,
-    string? BlockInputTypeTemplate = null);
+    string? BlockInputTypeTemplate = null,
+    IReadOnlySet<string>? Effects = null);
 
 internal sealed record BoundTraitMethod(
     string Name,

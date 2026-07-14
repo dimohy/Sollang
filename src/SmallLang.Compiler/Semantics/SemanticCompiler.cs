@@ -22,6 +22,7 @@ internal sealed class SemanticCompiler
     private IReadOnlyDictionary<string, BoundType>? _currentFunctionOuterBindings;
     private bool _currentFunctionAllowsEarlyReturn;
     private bool _currentFunctionIsAsync;
+    private IReadOnlySet<string>? _currentFunctionEffects;
     private readonly int _pointerBitWidth;
     private int _loopDepth;
 
@@ -352,6 +353,7 @@ internal sealed class SemanticCompiler
             throw Error(function.Line, function.Column, "associated type bindings require a trait impl");
         }
         var inputOwnership = BindFunctionInputOwnership(function, inputType);
+        var effects = BindFunctionEffects(function);
         var isAsyncRuntimeIntrinsic = function.IsStandardLibrary
             && function.IsIntrinsic
             && function.Name is "sys.time.sleep"
@@ -401,7 +403,29 @@ internal sealed class SemanticCompiler
             ModuleName: function.ModuleName,
             IsPublic: function.IsPublic || function.IsStandardLibrary,
             IsAsync: function.IsAsync,
-            BlockInputTypeTemplate: blockInputTypeTemplate);
+            BlockInputTypeTemplate: blockInputTypeTemplate,
+            Effects: effects);
+    }
+
+    private IReadOnlySet<string> BindFunctionEffects(FunctionDeclaration function)
+    {
+        string[] supportedEffects = ["Clock", "Console", "Environment", "File", "Process", "Random"];
+        var effects = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var effect in function.Effects ?? [])
+        {
+            if (!supportedEffects.Contains(effect, StringComparer.Ordinal))
+            {
+                throw Error(
+                    function.Line,
+                    function.Column,
+                    $"unknown effect '{effect}'; supported effects: {string.Join(", ", supportedEffects)}");
+            }
+            if (!effects.Add(effect))
+            {
+                throw Error(function.Line, function.Column, $"effect '{effect}' is declared more than once");
+            }
+        }
+        return effects;
     }
 
     private BoundFunctionInputOwnership BindFunctionInputOwnership(
@@ -566,6 +590,7 @@ internal sealed class SemanticCompiler
         _currentFunctionOuterBindings = returnOuterBindings;
         _currentFunctionAllowsEarlyReturn = !function.IsLocal;
         _currentFunctionIsAsync = function.IsAsync;
+        _currentFunctionEffects = function.Effects;
 
         var mutableBindings = new HashSet<string>(StringComparer.Ordinal);
         if (FunctionMutablyBorrowsInput(function))
@@ -622,6 +647,40 @@ internal sealed class SemanticCompiler
 
     }
 
+    private void ValidateGenericSpecialization(
+        BoundFunction function,
+        IReadOnlyDictionary<string, BoundFunction> parentFunctions)
+    {
+        var previousModuleName = _currentModuleName;
+        var previousTypeScopeName = _currentTypeScopeName;
+        var previousReturnType = _currentFunctionReturnType;
+        var previousMoveInputName = _currentMoveInputName;
+        var previousOuterBindings = _currentFunctionOuterBindings;
+        var previousAllowsEarlyReturn = _currentFunctionAllowsEarlyReturn;
+        var previousIsAsync = _currentFunctionIsAsync;
+        var previousEffects = _currentFunctionEffects;
+        var previousLoopDepth = _loopDepth;
+        try
+        {
+            ValidateUserFunction(
+                function,
+                parentFunctions,
+                new Dictionary<string, BoundType>(StringComparer.Ordinal));
+        }
+        finally
+        {
+            _currentModuleName = previousModuleName;
+            _currentTypeScopeName = previousTypeScopeName;
+            _currentFunctionReturnType = previousReturnType;
+            _currentMoveInputName = previousMoveInputName;
+            _currentFunctionOuterBindings = previousOuterBindings;
+            _currentFunctionAllowsEarlyReturn = previousAllowsEarlyReturn;
+            _currentFunctionIsAsync = previousIsAsync;
+            _currentFunctionEffects = previousEffects;
+            _loopDepth = previousLoopDepth;
+        }
+    }
+
     private void ValidateUserBlockFunction(
         BoundFunction function,
         IReadOnlyDictionary<string, BoundFunction> parentFunctions,
@@ -655,6 +714,7 @@ internal sealed class SemanticCompiler
             : null;
         _currentFunctionOuterBindings = new Dictionary<string, BoundType>(bodyBindings, StringComparer.Ordinal);
         _currentFunctionAllowsEarlyReturn = false;
+        _currentFunctionEffects = function.Effects;
 
         var mutableBindings = new HashSet<string>(StringComparer.Ordinal);
         if (FunctionMutablyBorrowsInput(function))
@@ -1098,6 +1158,7 @@ internal sealed class SemanticCompiler
         _currentFunctionOuterBindings = null;
         _currentFunctionAllowsEarlyReturn = false;
         _currentFunctionIsAsync = true;
+        _currentFunctionEffects = null;
         var bindings = new Dictionary<string, BoundType>(StringComparer.Ordinal);
         var mutableBindings = new HashSet<string>(StringComparer.Ordinal);
         BindStatements(_program.Statements, functions, bindings, mutableBindings);
@@ -2507,6 +2568,11 @@ internal sealed class SemanticCompiler
             && zeroArgumentFunction.InputType is null)
         {
             EnsureFunctionVisible(zeroArgumentFunction, expression.Line, expression.Column);
+            EnsureAsyncRuntimeCallable(
+                zeroArgumentFunction,
+                expression.Line,
+                expression.Column,
+                functionOwner.Name + "." + expression.FieldName);
             if (IsMainOnlyRuntimeWrapper(zeroArgumentFunction) && !allowReadIntCall)
             {
                 throw Error(expression.Line, expression.Column,
@@ -2698,6 +2764,7 @@ internal sealed class SemanticCompiler
         IReadOnlyDictionary<string, BoundType> bindings,
         bool allowReadIntCall)
     {
+        EnsureEffectAllowed("File", expression.Line, expression.Column, "map");
         var pathType = InferExpression(expression.Path, functions, bindings,
             allowPrintCall: false, allowReadIntCall, allowFlowBindingTarget: false);
         if (pathType != BoundType.Text)
@@ -3879,6 +3946,7 @@ internal sealed class SemanticCompiler
                 {
                     throw Error(target.Line, target.Column, "flush must be final and takes no arguments");
                 }
+                EnsureEffectAllowed("File", target.Line, target.Column, "flush");
                 EnsureMutableContainerSource(expression.Source, "flush", mutableBindings);
                 result = new FlowResult(BoundType.Unit, FlowEffect.None);
                 return true;
@@ -4643,10 +4711,7 @@ internal sealed class SemanticCompiler
             if (specialization.Kind is BoundFunctionKind.User or BoundFunctionKind.UserBlock
                 && _validatingGenericSpecializations.Add(specialization))
             {
-                ValidateUserFunction(
-                    specialization,
-                    _boundFunctions,
-                    new Dictionary<string, BoundType>(StringComparer.Ordinal));
+                ValidateGenericSpecialization(specialization, _boundFunctions);
             }
         }
 
@@ -4691,6 +4756,7 @@ internal sealed class SemanticCompiler
             throw Error(expression.Line, expression.Column, $"unknown generic function '{path}'");
         }
         EnsureFunctionVisible(template, expression.Line, expression.Column);
+        EnsureAsyncRuntimeCallable(template, expression.Line, expression.Column, path);
         if (template.GenericParameterName is null || template.SpecializedType is not null)
         {
             throw Error(expression.Line, expression.Column, $"function '{path}' is not generic");
@@ -4748,10 +4814,7 @@ internal sealed class SemanticCompiler
             _boundFunctions.Add(specializedName, specialization);
             if (_validatingGenericSpecializations.Add(specialization))
             {
-                ValidateUserFunction(
-                    specialization,
-                    _boundFunctions,
-                    new Dictionary<string, BoundType>(StringComparer.Ordinal));
+                ValidateGenericSpecialization(specialization, _boundFunctions);
             }
         }
 
@@ -5265,6 +5328,7 @@ internal sealed class SemanticCompiler
 
     private void EnsureAsyncRuntimeCallable(BoundFunction function, int line, int column, string path)
     {
+        EnsureFunctionEffects(function, line, column, path);
         if (!_currentFunctionIsAsync || _currentFunctionReturnType is null)
         {
             return;
@@ -5287,6 +5351,66 @@ internal sealed class SemanticCompiler
             line,
             column,
             $"async function '{path}' is outside the CPU-pure first runtime slice");
+    }
+
+    private void EnsureFunctionEffects(BoundFunction function, int line, int column, string path)
+    {
+        foreach (var required in RequiredEffects(function))
+        {
+            EnsureEffectAllowed(required, line, column, $"function '{path}'");
+        }
+    }
+
+    private void EnsureEffectAllowed(string effect, int line, int column, string operation)
+    {
+        if (_currentFunctionReturnType is null || (_currentFunctionEffects?.Contains(effect) ?? false))
+        {
+            return;
+        }
+
+        throw Error(
+            line,
+            column,
+            $"{operation} requires effect {effect}; add 'uses {effect}' to the caller signature");
+    }
+
+    private static IEnumerable<string> RequiredEffects(BoundFunction function)
+    {
+        if (function.Kind is BoundFunctionKind.User or BoundFunctionKind.UserBlock)
+        {
+            return function.Effects is { } effects ? effects : Array.Empty<string>();
+        }
+
+        return function.Kind switch
+        {
+            BoundFunctionKind.RuntimePrint
+                or BoundFunctionKind.RuntimePrintLine
+                or BoundFunctionKind.RuntimeReadInt => ["Console"],
+            BoundFunctionKind.RuntimeSeedRandom
+                or BoundFunctionKind.RuntimeRandomBelow => ["Random"],
+            BoundFunctionKind.RuntimeNowMillis
+                or BoundFunctionKind.RuntimeSleep => ["Clock"],
+            BoundFunctionKind.RuntimeArguments
+                or BoundFunctionKind.RuntimeRunProcess => ["Process"],
+            BoundFunctionKind.RuntimeEnvironment => ["Environment"],
+            BoundFunctionKind.RuntimeOpenIntWriter
+                or BoundFunctionKind.RuntimeWriteInt
+                or BoundFunctionKind.RuntimeCloseIntWriter
+                or BoundFunctionKind.RuntimeOpenIntReader
+                or BoundFunctionKind.RuntimeClosestInt
+                or BoundFunctionKind.RuntimeCloseIntReader
+                or BoundFunctionKind.RuntimeWriteScalar
+                or BoundFunctionKind.RuntimeReadScalar
+                or BoundFunctionKind.RuntimeReadScalarAsync
+                or BoundFunctionKind.RuntimeOpenFile
+                or BoundFunctionKind.RuntimeOpenWriteFile
+                or BoundFunctionKind.RuntimeOpenFileAsync
+                or BoundFunctionKind.RuntimeOpenWriteFileAsync
+                or BoundFunctionKind.RuntimeWriteScalarAt
+                or BoundFunctionKind.RuntimeWriteScalarAtAsync
+                or BoundFunctionKind.RuntimeSyncFileAsync => ["File"],
+            _ => []
+        };
     }
 
     private bool IsReservedName(string name)

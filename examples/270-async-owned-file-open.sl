@@ -18,7 +18,7 @@ openFailed result: Result<file.File, Text> -> Bool => result -> when {
     Result<file.File, Text>.Err(error) => true
 }
 
-writeFixture path: Text -> async Bool {
+writeFixture path: Text -> async Bool uses File {
     file.openWriteAsync(path) => opening
     opening -> await -> when {
         Result<file.FileWriter, Text>.Ok(writer) {

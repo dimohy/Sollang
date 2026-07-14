@@ -1,14 +1,14 @@
-delayed value: Int -> async Int {
+delayed value: Int -> async Int uses Clock {
     25 -> milliseconds -> sleep -> await
     value
 }
 
-quick value: Int -> async Int {
+quick value: Int -> async Int uses Clock {
     1 -> milliseconds -> sleep -> await
     value
 }
 
-veryDelayed value: Int -> async Int {
+veryDelayed value: Int -> async Int uses Clock {
     1000 -> milliseconds -> sleep -> await
     value
 }

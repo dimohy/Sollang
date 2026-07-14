@@ -14,8 +14,8 @@ public seconds value: Long -> Duration {
     Duration { millis: value * Long(1000) }
 }
 
-public sleep duration: Duration -> async Unit = intrinsic
+public sleep duration: Duration -> async Unit uses Clock = intrinsic
 
-nowMillis: -> Long {
+nowMillis: -> Long uses Clock {
     rt.nowMillis
 }

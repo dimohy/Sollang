@@ -1,4 +1,4 @@
-work value: Int -> async Int {
+work value: Int -> async Int uses Console {
     "working" -> println
     value
 }

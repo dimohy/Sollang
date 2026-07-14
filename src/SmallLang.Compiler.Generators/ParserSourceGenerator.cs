@@ -677,6 +677,16 @@ internal static class ParserEmitter
         builder.AppendLine("            isAsync = true;");
         builder.AppendLine("        }");
         builder.AppendLine("        var returnType = ParseTypeAnnotation();");
+        builder.AppendLine("        var effects = new List<string>();");
+        builder.AppendLine("        if (CheckIdentifier(\"uses\"))");
+        builder.AppendLine("        {");
+        builder.AppendLine("            ExpectIdentifier(\"uses\");");
+        builder.AppendLine("            effects.Add(ExpectIdentifier().Text);");
+        builder.AppendLine("            while (Match(TokenKind.Comma, out _))");
+        builder.AppendLine("            {");
+        builder.AppendLine("                effects.Add(ExpectIdentifier().Text);");
+        builder.AppendLine("            }");
+        builder.AppendLine("        }");
         builder.AppendLine("        if (methodOwner is not null && returnType == \"Self\")");
         builder.AppendLine("        {");
         builder.AppendLine("            returnType = methodOwner;");
@@ -738,7 +748,7 @@ internal static class ParserEmitter
         builder.AppendLine("        }");
         builder.AppendLine();
         builder.AppendLine("        _activeGenericParameterNames.Clear();");
-        builder.AppendLine("        return new FunctionDeclaration(functionName, inputName?.Text, inputType, inputOwnership, returnType, blockInputName?.Text, blockInputType, localFunctions, body, blockBody, name.Line, name.Column, isIntrinsic, isStandardLibrary, traitName, genericParameterName, secondaryGenericParameterName, genericTraitBound, genericAssociatedTypeName, genericAssociatedTypeConstraint, implAssociatedTypes, isValueGeneric, hasValueGenericFixedArrayInput, string.Join('.', _namespacePath), isPublic, isAsync);");
+        builder.AppendLine("        return new FunctionDeclaration(functionName, inputName?.Text, inputType, inputOwnership, returnType, blockInputName?.Text, blockInputType, localFunctions, body, blockBody, name.Line, name.Column, isIntrinsic, isStandardLibrary, traitName, genericParameterName, secondaryGenericParameterName, genericTraitBound, genericAssociatedTypeName, genericAssociatedTypeConstraint, implAssociatedTypes, isValueGeneric, hasValueGenericFixedArrayInput, string.Join('.', _namespacePath), isPublic, isAsync, effects);");
         builder.AppendLine("    }");
         builder.AppendLine();
         builder.AppendLine("    private FunctionInputSignature ParseOptionalSelfSignature(string ownerType, out Token? inputName)");
