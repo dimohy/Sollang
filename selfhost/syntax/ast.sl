@@ -153,7 +153,7 @@ lowerFrom request: LowerRequest -> [AstNode; ~] {
                 candidateOperator => operatorKind!
                 operatorTokenIndex! => operatorPayloadToken!
             }
-            (operatorGroupDepth! == 0 and astKind! == 36 and candidateOperator == grammar.tokenIdLeftBracket and operatorTokenIndex! > node.firstToken and tokens![operatorTokenIndex! - 1].kind == grammar.tokenIdBang) -> if {
+            (operatorGroupDepth! == 0 and astKind! == 36 and candidateOperator == grammar.tokenIdLeftBracket and operatorTokenIndex! > node.firstToken) -> if {
                 41 => astKind!
                 candidateOperator => operatorKind!
                 operatorTokenIndex! => operatorPayloadToken!

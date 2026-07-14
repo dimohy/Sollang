@@ -13,6 +13,7 @@ main {
         main {
             Point { value: 7 } => point
             makeArray => values!
+            UIntSize(1) => size!
         }
         """,
         ~
@@ -20,6 +21,7 @@ main {
     sources! -> typedIr.lower => ir!
     false => wroteArray!
     false => wroteStruct!
+    false => wroteSize!
     ir! -> each node {
         (not wroteArray! and node.typeId >= 0 and node.typeKind == 3) -> if {
             node => canonicalArray!
@@ -37,6 +39,12 @@ main {
             canonicalStruct! -> llvm.writeType
             "" -> println
             true => wroteStruct!
+        }
+        (not wroteSize! and node.typeSymbol == 13) -> if {
+            "size=" -> print
+            node -> llvm.writeType
+            "" -> println
+            true => wroteSize!
         }
     }
 }

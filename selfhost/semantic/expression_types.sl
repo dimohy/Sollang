@@ -45,6 +45,26 @@ public struct ExpressionTypeRequest {
     analysisNames: [resolution.ResolvedName; ~]
 }
 
+struct TextMatchRequest {
+    source: Text
+    start: UIntSize
+    length: UIntSize
+    expected: Text
+}
+
+textMatches request: TextMatchRequest -> Bool {
+    request.expected -> len => expectedLength
+    request.length == expectedLength => matches!
+    UIntSize(0) => byteIndex!
+    (matches! and byteIndex! < request.length) -> while {
+        request.source -> byte(request.start + byteIndex!) => actual
+        request.expected -> byte(byteIndex!) => expected
+        actual != expected -> if { false => matches! }
+        byteIndex! + UIntSize(1) => byteIndex!
+    }
+    matches!
+}
+
 # Bottom-up expression inference over the flat AST. Builtin ids use the stable
 # nominal table: Text 1, Int 2, Bool 23.
 public inferContext prepared: semanticContext.CompilationContext -> [ExpressionType; ~] {
@@ -77,6 +97,71 @@ public inferContext prepared: semanticContext.CompilationContext -> [ExpressionT
             }
             (node.kind == 46 or node.kind == 47) -> if {
                 inferred! -> push(ExpressionType { sourceModule: sourceIndex!, astNode: astIndex!, origin: 1, targetModule: -1, targetSymbol: 0, keyOrigin: -1, keyModule: -1, valueOrigin: -1, valueModule: -1 })
+            }
+            node.kind == 36 -> if {
+                node.length == UIntSize(17) -> if {
+                    TextMatchRequest { source: source, start: node.start, length: node.length, expected: "process.arguments" } -> textMatches -> if {
+                        inferred! -> push(ExpressionType { sourceModule: sourceIndex!, astNode: astIndex!, origin: 1, targetModule: -1, targetSymbol: 16, keyOrigin: -1, keyModule: -1, valueOrigin: -1, valueModule: -1 })
+                    }
+                }
+            }
+            node.kind == 11 -> if {
+                prepared.tokens[sourceRange.tokenStart + node.payloadToken] => callName
+                -1 => builtinConversionSymbol!
+                TextMatchRequest { source: source, start: callName.span.start, length: callName.span.length, expected: "Int" } -> textMatches -> if { 2 => builtinConversionSymbol! }
+                TextMatchRequest { source: source, start: callName.span.start, length: callName.span.length, expected: "UInt8" } -> textMatches -> if { 3 => builtinConversionSymbol! }
+                TextMatchRequest { source: source, start: callName.span.start, length: callName.span.length, expected: "UInt16" } -> textMatches -> if { 4 => builtinConversionSymbol! }
+                TextMatchRequest { source: source, start: callName.span.start, length: callName.span.length, expected: "UInt32" } -> textMatches -> if { 5 => builtinConversionSymbol! }
+                TextMatchRequest { source: source, start: callName.span.start, length: callName.span.length, expected: "UInt64" } -> textMatches -> if { 6 => builtinConversionSymbol! }
+                TextMatchRequest { source: source, start: callName.span.start, length: callName.span.length, expected: "Int8" } -> textMatches -> if { 8 => builtinConversionSymbol! }
+                TextMatchRequest { source: source, start: callName.span.start, length: callName.span.length, expected: "Int16" } -> textMatches -> if { 9 => builtinConversionSymbol! }
+                TextMatchRequest { source: source, start: callName.span.start, length: callName.span.length, expected: "Int32" } -> textMatches -> if { 10 => builtinConversionSymbol! }
+                TextMatchRequest { source: source, start: callName.span.start, length: callName.span.length, expected: "Int64" } -> textMatches -> if { 11 => builtinConversionSymbol! }
+                callName.span.length == UIntSize(8) -> if {
+                    TextMatchRequest { source: source, start: callName.span.start, length: callName.span.length, expected: "UIntSize" } -> textMatches -> if {
+                        13 => builtinConversionSymbol!
+                    }
+                }
+                builtinConversionSymbol! >= 0 -> if {
+                    inferred! -> push(ExpressionType { sourceModule: sourceIndex!, astNode: astIndex!, origin: 1, targetModule: -1, targetSymbol: builtinConversionSymbol!, keyOrigin: -1, keyModule: -1, valueOrigin: -1, valueModule: -1 })
+                }
+            }
+            node.kind == 37 -> if {
+                -1 => typedArrayNameToken!
+                false => typedArrayMarker!
+                node.firstToken => typedArrayTokenIndex!
+                typedArrayTokenIndex! < node.firstToken + node.tokenCount -> while {
+                    prepared.tokens[sourceRange.tokenStart + typedArrayTokenIndex!] => typedArrayToken
+                    (typedArrayNameToken! < 0 and typedArrayToken.kind == grammar.tokenIdIdentifier) -> if { typedArrayTokenIndex! => typedArrayNameToken! }
+                    typedArrayToken.kind == grammar.tokenIdSemicolon -> if { true => typedArrayMarker! }
+                    typedArrayTokenIndex! + 1 => typedArrayTokenIndex!
+                }
+                (typedArrayMarker! and typedArrayNameToken! >= 0) -> if {
+                    prepared.tokens[sourceRange.tokenStart + typedArrayNameToken!] => typedArrayName
+                    TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "Text" } -> textMatches -> if {
+                        inferred! -> push(ExpressionType { sourceModule: sourceIndex!, astNode: astIndex!, origin: 13, targetModule: -1, targetSymbol: 1, keyOrigin: -1, keyModule: -1, valueOrigin: -1, valueModule: -1 })
+                    }
+                }
+            }
+            node.kind == 10 -> if {
+                -1 => flowLastIdentifier!
+                node.firstToken => flowTokenIndex!
+                flowTokenIndex! < node.firstToken + node.tokenCount -> while {
+                    prepared.tokens[sourceRange.tokenStart + flowTokenIndex!].kind == grammar.tokenIdIdentifier -> if { flowTokenIndex! => flowLastIdentifier! }
+                    flowTokenIndex! + 1 => flowTokenIndex!
+                }
+                flowLastIdentifier! >= 0 -> if {
+                    prepared.tokens[sourceRange.tokenStart + flowLastIdentifier!] => flowName
+                    TextMatchRequest { source: source, start: flowName.span.start, length: flowName.span.length, expected: "len" } -> textMatches -> if {
+                        inferred! -> push(ExpressionType { sourceModule: sourceIndex!, astNode: astIndex!, origin: 1, targetModule: -1, targetSymbol: 13, keyOrigin: -1, keyModule: -1, valueOrigin: -1, valueModule: -1 })
+                    }
+                    TextMatchRequest { source: source, start: flowName.span.start, length: flowName.span.length, expected: "byte" } -> textMatches -> if {
+                        inferred! -> push(ExpressionType { sourceModule: sourceIndex!, astNode: astIndex!, origin: 1, targetModule: -1, targetSymbol: 3, keyOrigin: -1, keyModule: -1, valueOrigin: -1, valueModule: -1 })
+                    }
+                    TextMatchRequest { source: source, start: flowName.span.start, length: flowName.span.length, expected: "slice" } -> textMatches -> if {
+                        inferred! -> push(ExpressionType { sourceModule: sourceIndex!, astNode: astIndex!, origin: 1, targetModule: -1, targetSymbol: 1, keyOrigin: -1, keyModule: -1, valueOrigin: -1, valueModule: -1 })
+                    }
+                }
             }
             node.kind == 15 -> if {
                 prepared.tokens[sourceRange.tokenStart + node.payloadToken] => nameToken
@@ -703,6 +788,33 @@ public inferContext prepared: semanticContext.CompilationContext -> [ExpressionT
                     }
                     bindingValueIndex! >= 0 -> if {
                         inferred![bindingValueIndex!] => bindingType
+                        bindingType.origin => bindingOrigin!
+                        bindingType.targetModule => bindingModule!
+                        bindingType.targetSymbol => bindingResultSymbol!
+                        prepared.nodes[sourceRange.astStart + bindingSymbol.astNode] => bindingAst
+                        UIntSize(0) => bindingIntrinsicOffset!
+                        bindingIntrinsicOffset! + UIntSize(5) <= bindingAst.length -> while {
+                            TextMatchRequest { source: source, start: bindingAst.start + bindingIntrinsicOffset!, length: UIntSize(5), expected: "byte(" } -> textMatches -> if {
+                                1 => bindingOrigin!
+                                -1 => bindingModule!
+                                3 => bindingResultSymbol!
+                            }
+                            TextMatchRequest { source: source, start: bindingAst.start + bindingIntrinsicOffset!, length: UIntSize(5), expected: "len =>" } -> textMatches -> if {
+                                1 => bindingOrigin!
+                                -1 => bindingModule!
+                                13 => bindingResultSymbol!
+                            }
+                            bindingIntrinsicOffset! + UIntSize(1) => bindingIntrinsicOffset!
+                        }
+                        UIntSize(0) => bindingSliceOffset!
+                        bindingSliceOffset! + UIntSize(6) <= bindingAst.length -> while {
+                            TextMatchRequest { source: source, start: bindingAst.start + bindingSliceOffset!, length: UIntSize(6), expected: "slice(" } -> textMatches -> if {
+                                1 => bindingOrigin!
+                                -1 => bindingModule!
+                                1 => bindingResultSymbol!
+                            }
+                            bindingSliceOffset! + UIntSize(1) => bindingSliceOffset!
+                        }
                         0 => referenceIndex!
                         referenceIndex! < (resolvedNames! -> len) -> while {
                             resolvedNames![referenceIndex!] => reference
@@ -722,9 +834,9 @@ public inferContext prepared: semanticContext.CompilationContext -> [ExpressionT
                                     inferred! -> push(ExpressionType {
                                         sourceModule: sourceIndex!
                                         astNode: reference.astNode
-                                        origin: bindingType.origin
-                                        targetModule: bindingType.targetModule
-                                        targetSymbol: bindingType.targetSymbol
+                                        origin: bindingOrigin!
+                                        targetModule: bindingModule!
+                                        targetSymbol: bindingResultSymbol!
                                         keyOrigin: bindingType.keyOrigin
                                         keyModule: bindingType.keyModule
                                         valueOrigin: bindingType.valueOrigin
@@ -733,10 +845,10 @@ public inferContext prepared: semanticContext.CompilationContext -> [ExpressionT
                                     true => changed!
                                 } else {
                                     inferred![referenceInferredIndex!] => existingReference!
-                                    (existingReference!.origin != bindingType.origin or existingReference!.targetModule != bindingType.targetModule or existingReference!.targetSymbol != bindingType.targetSymbol or existingReference!.keyOrigin != bindingType.keyOrigin or existingReference!.keyModule != bindingType.keyModule or existingReference!.valueOrigin != bindingType.valueOrigin or existingReference!.valueModule != bindingType.valueModule) -> if {
-                                        bindingType.origin => existingReference!.origin
-                                        bindingType.targetModule => existingReference!.targetModule
-                                        bindingType.targetSymbol => existingReference!.targetSymbol
+                                    (existingReference!.origin != bindingOrigin! or existingReference!.targetModule != bindingModule! or existingReference!.targetSymbol != bindingResultSymbol! or existingReference!.keyOrigin != bindingType.keyOrigin or existingReference!.keyModule != bindingType.keyModule or existingReference!.valueOrigin != bindingType.valueOrigin or existingReference!.valueModule != bindingType.valueModule) -> if {
+                                        bindingOrigin! => existingReference!.origin
+                                        bindingModule! => existingReference!.targetModule
+                                        bindingResultSymbol! => existingReference!.targetSymbol
                                         bindingType.keyOrigin => existingReference!.keyOrigin
                                         bindingType.keyModule => existingReference!.keyModule
                                         bindingType.valueOrigin => existingReference!.valueOrigin
@@ -908,7 +1020,7 @@ public inferContext prepared: semanticContext.CompilationContext -> [ExpressionT
                     indexTypeSearch! < (inferred! -> len) -> while {
                         inferred![indexTypeSearch!] => indexType
                         (indexType.sourceModule == sourceIndex! and indexType.astNode == indexIndex!) -> if { true => indexInferred! }
-                        (indexType.sourceModule == sourceIndex! and indexType.origin >= 12 and indexType.origin <= 15) -> if {
+                        (indexType.sourceModule == sourceIndex! and ((indexType.origin >= 12 and indexType.origin <= 15) or (indexType.origin == 1 and indexType.targetSymbol == 16))) -> if {
                             prepared.nodes[sourceRange.astStart + indexType.astNode].parent => indexAncestor!
                             1 => indexDistance!
                             false => belongsToIndex!
@@ -929,6 +1041,11 @@ public inferContext prepared: semanticContext.CompilationContext -> [ExpressionT
                         inferred![indexedTypeIndex!] => indexedType
                         0 => elementOrigin!
                         indexedType.targetModule => elementModule!
+                        (indexedType.origin == 1 and indexedType.targetSymbol == 16) -> if {
+                            1 => elementOrigin!
+                            -1 => elementModule!
+                            1 => elementSymbol!
+                        } else {
                         indexedType.origin == 15 -> if {
                             indexedType.valueOrigin => elementOrigin!
                             indexedType.valueModule => elementModule!
@@ -937,12 +1054,13 @@ public inferContext prepared: semanticContext.CompilationContext -> [ExpressionT
                                 indexedType.targetModule == sourceIndex! -> if { 0 => elementOrigin! } else { 2 => elementOrigin! }
                             }
                         }
+                        }
                         inferred! -> push(ExpressionType {
                             sourceModule: sourceIndex!
                             astNode: indexIndex!
                             origin: elementOrigin!
                             targetModule: elementModule!
-                            targetSymbol: indexedType.targetSymbol
+                            targetSymbol: (indexedType.origin == 1 and indexedType.targetSymbol == 16) -> if { 1 } else { indexedType.targetSymbol }
                             keyOrigin: -1
                             keyModule: -1
                             valueOrigin: -1

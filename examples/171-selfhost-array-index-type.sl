@@ -8,6 +8,7 @@ main {
         main {
             [1, 2, ~] => values
             values![0]
+            values[0]
         }
         """,
         ~
