@@ -107,6 +107,8 @@ internal sealed record BlockFunctionCallStatement(
     IReadOnlyList<string> Target,
     string ItemName,
     IReadOnlyList<Statement> Body,
+    string? ResultName,
+    bool ResultIsMutable,
     int Line,
     int Column,
     bool UsesDefaultItemName)

@@ -4171,4 +4171,34 @@ References: [Swift packages](https://docs.swift.org/swiftpm/documentation/packag
 [Cargo workspaces](https://doc.rust-lang.org/cargo/reference/workspaces.html),
 [Zig build system](https://ziglang.org/learn/build-system/).
 
+## D134 - Typed Roles Reuse Result-Producing Block Functions
+
+Status: accepted; common foundation implemented, role libraries in progress
+Date: 2026-07-14
+
+Builders, scoped contexts, and handlers use one typed block-function mechanism:
+
+```smalllang
+source -> build item {
+    # normal SmallLang statements
+} => result
+```
+
+`build`, `with`, and `handle` are ordinary resolvable function names rather
+than keywords. The block function's final expression produces `result`; its
+`yield` operations execute the caller-provided Unit block with a typed item.
+This preserves `TypeName { field: value }` exclusively as struct construction,
+keeps block contents in the normal AST, and avoids a macro-only sublanguage or
+context-sensitive parser.
+
+The implementation and evidence checklist is maintained in
+[`ROLE_BLOCKS.md`](ROLE_BLOCKS.md). A role is not reported complete until its
+semantic, ownership, LLVM, self-host, and cross-target checklist entries pass.
+
+References: [Kotlin type-safe builders](https://kotlinlang.org/docs/type-safe-builders.html),
+[Kotlin context parameters](https://kotlinlang.org/docs/context-parameters.html),
+[Swift result builders](https://docs.swift.org/swift-book/documentation/the-swift-programming-language/attributes/#resultBuilder),
+[Scala scoped capabilities](https://docs.scala-lang.org/scala3/reference/experimental/capture-checking/scoped-capabilities.html),
+[Effekt effect handlers](https://effekt-lang.org/docs/concepts/effect-handlers).
+
 

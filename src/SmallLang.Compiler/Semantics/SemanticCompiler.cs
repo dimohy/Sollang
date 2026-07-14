@@ -499,11 +499,6 @@ internal sealed class SemanticCompiler
             ValidateBindingName(function.BlockInputName, function.Line, function.Column);
         }
 
-        if (function.BlockInputName is not null && function.ReturnType != "Unit")
-        {
-            throw Error(function.Line, function.Column, "block functions must declare Unit return type");
-        }
-
     }
 
     private IReadOnlyDictionary<string, BoundFunction> BindLocalFunctions(FunctionDeclaration owner)
@@ -648,7 +643,56 @@ internal sealed class SemanticCompiler
             ValidateUserFunction(localFunction, scopedFunctions, bodyBindings);
         }
 
-        BindStatements(function.BlockBody, scopedFunctions, bodyBindings, yieldInputType: function.BlockInputType.Value);
+        _currentFunctionReturnType = function.ReturnType;
+        _currentMoveInputName = FunctionMovesOwnedHeapInput(function)
+            ? function.InputName ?? "it"
+            : null;
+        _currentFunctionOuterBindings = new Dictionary<string, BoundType>(bodyBindings, StringComparer.Ordinal);
+        _currentFunctionAllowsEarlyReturn = false;
+
+        var mutableBindings = new HashSet<string>(StringComparer.Ordinal);
+        if (FunctionMutablyBorrowsInput(function))
+        {
+            mutableBindings.Add(function.InputName ?? "it");
+        }
+
+        BindStatements(
+            function.BlockBody,
+            scopedFunctions,
+            bodyBindings,
+            mutableBindings,
+            yieldInputType: function.BlockInputType.Value,
+            allowContainerBindings: true);
+
+        var bodyType = function.Body is null
+            ? BoundType.Unit
+            : InferExpression(
+                function.Body,
+                scopedFunctions,
+                bodyBindings,
+                allowPrintCall: false,
+                allowReadIntCall: function.IsStandardLibrary,
+                allowFlowBindingTarget: false,
+                yieldInputType: function.BlockInputType.Value,
+                mutableBindings: mutableBindings);
+        if (bodyType != function.ReturnType)
+        {
+            throw Error(
+                function.Line,
+                function.Column,
+                $"block function '{function.Name}' returns {FormatType(bodyType)} but declares {FormatType(function.ReturnType)}");
+        }
+
+        if (function.Body is not null && IsContainerType(bodyType))
+        {
+            EnsureOwnedContainerCanLeaveBlock(
+                function.Body,
+                _currentFunctionOuterBindings,
+                bodyBindings,
+                null);
+        }
+
+        _functionBindings[function] = new Dictionary<string, BoundType>(bodyBindings, StringComparer.Ordinal);
     }
 
     private IReadOnlyDictionary<string, BoundFunction> CreateFunctionScope(
@@ -1486,18 +1530,23 @@ internal sealed class SemanticCompiler
         switch (target)
         {
             case "each":
+                RejectBuiltInBlockResult(call, target);
                 BindEachBlockFunctionCall(call, functions, bindings, mutableBindings, yieldInputType);
                 return;
             case "eachKey":
+                RejectBuiltInBlockResult(call, target);
                 BindDictionaryEachBlockFunctionCall(call, functions, bindings, mutableBindings, yieldInputType, bindKey: true);
                 return;
             case "eachValue":
+                RejectBuiltInBlockResult(call, target);
                 BindDictionaryEachBlockFunctionCall(call, functions, bindings, mutableBindings, yieldInputType, bindKey: false);
                 return;
             case "repeat":
+                RejectBuiltInBlockResult(call, target);
                 BindRepeatBlockFunctionCall(call, functions, bindings, mutableBindings, yieldInputType);
                 return;
             case "while":
+                RejectBuiltInBlockResult(call, target);
                 BindWhileBlockFunctionCall(call, functions, bindings, mutableBindings, yieldInputType);
                 return;
             default:
@@ -1509,6 +1558,14 @@ internal sealed class SemanticCompiler
                 }
 
                 throw Error(call.Line, call.Column, $"unknown block function '{target}'");
+        }
+    }
+
+    private void RejectBuiltInBlockResult(BlockFunctionCallStatement call, string target)
+    {
+        if (call.ResultName is not null)
+        {
+            throw Error(call.Line, call.Column, $"Unit block function '{target}' cannot bind a result");
         }
     }
 
@@ -1673,6 +1730,37 @@ internal sealed class SemanticCompiler
             bodyBindings,
             new HashSet<string>(mutableBindings, StringComparer.Ordinal),
             allowContainerBindings: true);
+
+        if (call.ResultName is null)
+        {
+            if (function.ReturnType != BoundType.Unit && IsContainerType(function.ReturnType))
+            {
+                throw Error(call.Line, call.Column,
+                    $"owned result of block function '{target}' must be bound with '=> name'");
+            }
+            return;
+        }
+
+        ValidateBindingName(call.ResultName, call.Line, call.Column);
+        if (function.ReturnType == BoundType.Unit)
+        {
+            throw Error(call.Line, call.Column, $"Unit block function '{target}' cannot bind a result");
+        }
+        if (bindings.ContainsKey(call.ResultName))
+        {
+            throw Error(call.Line, call.Column, $"binding '{call.ResultName}' already exists in this scope");
+        }
+        if (function.ReturnType == BoundType.MutableMappedBytes && !call.ResultIsMutable)
+        {
+            throw Error(call.Line, call.Column,
+                "map write requires a mutable owner binding; use '=> name!'");
+        }
+
+        bindings.Add(call.ResultName, function.ReturnType);
+        if (call.ResultIsMutable)
+        {
+            mutableBindings.Add(call.ResultName);
+        }
     }
 
     private void BindDictionaryEachBlockFunctionCall(

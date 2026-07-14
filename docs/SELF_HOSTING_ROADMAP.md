@@ -607,6 +607,19 @@ within the same structured region. Nested static field moves now retain sibling
 drop obligations. Field reinitialization and nested owned aggregate member
 mutation remain.
 
+Result-producing block functions now reuse the ordinary function tail
+expression and bind their result after the caller block with `=> name`.
+`build`, `with`, and `handle` therefore remain ordinary resolvable function
+names rather than parser keywords. Unit block functions are source-compatible,
+owned results transfer exactly once, and the generated grammar gives explicit
+control-flow expressions priority before user block calls so `if`/`while`
+retain their self-host AST kind. The accepted design and evidence checklist are
+tracked in [`ROLE_BLOCKS.md`](ROLE_BLOCKS.md). The common foundation is
+implemented, while builder mutation, scoped capability escape checking,
+effect-set enforcement, and self-host semantic/LLVM lowering remain partial;
+the canonical gate count therefore remains 42 complete, 13 partial, and 5
+missing (48.5/60, 80.8%).
+
 Self-hosted LLVM text selects descriptors implemented in the file module
 `smalllang.compiler.llvm.target`. Windows x64/COFF, Linux x64/ELF, and
 Wasm32/WebAssembly values each own their pinned-Clang triple, data layout,

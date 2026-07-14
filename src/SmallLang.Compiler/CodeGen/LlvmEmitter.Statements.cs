@@ -554,16 +554,57 @@ internal sealed partial class LlvmEmitter
             callerFunctions);
         _currentFunctions = CreateFunctionScope(_currentFunctions, function.LocalFunctions);
         RestoreLocals(blockLocals);
+        RuntimeValue result = RuntimeUnit.Instance;
         try
         {
             EmitStatements(function.BlockBody);
-            DropOwnedLocalsCreatedSince(blockLocals, transferredOwnerName: null);
+            result = function.Body is null
+                ? RuntimeUnit.Instance
+                : EmitExpression(function.Body);
+            EnsureRuntimeType(result, function.ReturnType, function.Name);
+            var transferredOwnerName = statement.ResultName is not null
+                && function.Body is not null
+                && IsOwnedContainerRuntimeValue(result)
+                    ? GetFunctionResultTransferredOwnerName(function, function.Body)
+                    : null;
+            DropOwnedLocalsCreatedSince(blockLocals, transferredOwnerName);
         }
         finally
         {
             _currentBlockInvocation = previousInvocation;
             _currentFunctions = previousFunctions;
             RestoreLocals(callerLocals);
+        }
+
+        if (statement.ResultName is null)
+        {
+            return;
+        }
+
+        if (RequiresHeapAllocation(result) && !_platform.SupportsHeapAllocation)
+        {
+            throw new SmallLangException(
+                "dynamic arrays and dictionaries require heap allocation; wasm32-browser does not support them yet");
+        }
+
+        _locals.Add(statement.ResultName, result);
+        if (statement.ResultIsMutable)
+        {
+            _mutableLocals.Add(statement.ResultName);
+            if (result is RuntimeStruct structure)
+            {
+                CreateMutableStructSlot(statement.ResultName, structure);
+            }
+            else
+            {
+                var binding = new BindingStatement(
+                    statement.ResultName,
+                    statement.Source,
+                    statement.Line,
+                    statement.Column,
+                    IsMutable: true);
+                CreateMutableContainerSlot(binding, result);
+            }
         }
     }
 
