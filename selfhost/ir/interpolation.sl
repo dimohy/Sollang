@@ -3,6 +3,7 @@ namespace smalllang.compiler.ir.interpolation
 import smalllang.compiler.ast as ast
 import smalllang.compiler.lexer as lexer
 import smalllang.compiler.semantic.symbols as symbols
+import smalllang.compiler.syntax as syntax
 import syntax.generated.smalllang as grammar
 
 # Relocatable interpolation IR. Segment offsets are relative to the first byte
@@ -29,16 +30,27 @@ public struct InterpolationNode {
     typeSymbol: Int
 }
 
-public lower source: Text -> [InterpolationNode; ~] {
-    source -> lexer.lex => sourceTokens!
-    source -> ast.lower => sourceAst!
-    sourceAst! -> symbols.collectPrepared => table!
+public struct InterpolationSourceRange {
+    sourceModule: Int
+    nodeStart: Int
+    nodeCount: Int
+}
+
+public struct PreparedInterpolationRequest {
+    source: Text
+    nodes: [ast.AstNode; ~]
+    tokens: [syntax.SyntaxToken; ~]
+    symbols: [symbols.Symbol; ~]
+}
+
+public lowerPrepared request: move PreparedInterpolationRequest -> [InterpolationNode; ~] {
     [InterpolationNode; ~] => nodes!
+    request.source => source
     0 => segmentIndex!
 
     0 => stringTokenIndex!
-    stringTokenIndex! < (sourceTokens! -> len) -> while {
-        sourceTokens![stringTokenIndex!] => stringToken
+    stringTokenIndex! < (request.tokens -> len) -> while {
+        request.tokens[stringTokenIndex!] => stringToken
         stringToken.kind == grammar.tokenIdString -> if {
             stringToken.span.start + UIntSize(1) => contentStart
             stringToken.span.start + stringToken.span.length - UIntSize(1) => contentEnd
@@ -110,12 +122,12 @@ public lower source: Text -> [InterpolationNode; ~] {
                                     fragmentTokens![fragmentNode.payloadToken] => fragmentName
                                     -1 => ownerSymbol!
                                     0 => ownerAstSearch!
-                                    ownerAstSearch! < (sourceAst! -> len) -> while {
-                                        sourceAst![ownerAstSearch!] => ownerCandidateAst
+                                    ownerAstSearch! < (request.nodes -> len) -> while {
+                                        request.nodes[ownerAstSearch!] => ownerCandidateAst
                                         (ownerCandidateAst.kind == 7 and stringToken.span.start >= ownerCandidateAst.start and stringToken.span.start < ownerCandidateAst.start + ownerCandidateAst.length) -> if {
                                             0 => ownerSearch!
-                                            ownerSearch! < (table! -> len) -> while {
-                                                (table![ownerSearch!].kind == 7 and table![ownerSearch!].astNode == ownerAstSearch!) -> if {
+                                            ownerSearch! < (request.symbols -> len) -> while {
+                                                (request.symbols[ownerSearch!].kind == 7 and request.symbols[ownerSearch!].astNode == ownerAstSearch!) -> if {
                                                     ownerSearch! => ownerSymbol!
                                                 }
                                                 ownerSearch! + 1 => ownerSearch!
@@ -125,10 +137,10 @@ public lower source: Text -> [InterpolationNode; ~] {
                                     }
                                     ownerSymbol! => resolvedOwner!
                                     0 => candidateSymbol!
-                                    candidateSymbol! < (table! -> len) -> while {
-                                        table![candidateSymbol!] => candidate
+                                    candidateSymbol! < (request.symbols -> len) -> while {
+                                        request.symbols[candidateSymbol!] => candidate
                                         ((candidate.kind == 9 or candidate.kind == 35) and candidate.parent == ownerSymbol!) -> if {
-                                            sourceTokens![candidate.nameToken] => candidateName
+                                            request.tokens[candidate.nameToken] => candidateName
                                             candidateName.span.length == fragmentName.span.length => nameEqual!
                                             UIntSize(0) => nameByte!
                                             (nameEqual! and nameByte! < fragmentName.span.length) -> while {
@@ -198,4 +210,17 @@ public lower source: Text -> [InterpolationNode; ~] {
     }
 
     nodes!
+}
+
+public lower source: Text -> [InterpolationNode; ~] {
+    source -> lexer.lex => sourceTokens!
+    source -> ast.lower => sourceAst!
+    sourceAst! -> symbols.collectPrepared => table!
+    PreparedInterpolationRequest {
+        source: source
+        nodes: sourceAst!
+        tokens: sourceTokens!
+        symbols: table!
+    } => request!
+    request! -> lowerPrepared
 }

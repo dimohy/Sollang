@@ -65,6 +65,8 @@ struct EmitContext {
     nodes: [ast.AstNode; ~]
     tokens: [syntax.SyntaxToken; ~]
     symbols: [symbols.Symbol; ~]
+    interpolationRanges: [interpolation.InterpolationSourceRange; ~]
+    interpolations: [interpolation.InterpolationNode; ~]
     ir: [typedIr.TypedIrNode; ~]
     moves: [typedIr.MoveEvent; ~]
     nominal: [nominalTypes.NominalType; ~]
@@ -308,6 +310,51 @@ prepare request: move PrepareRequest -> EmitContext {
     prepared.tokens -> each token { analysisTokens! -> push(token) }
     [symbols.Symbol; ~] => analysisSymbols!
     prepared.symbols -> each symbol { analysisSymbols! -> push(symbol) }
+    [interpolation.InterpolationSourceRange; ~] => analysisInterpolationRanges!
+    [interpolation.InterpolationNode; ~] => analysisInterpolations!
+    0 => interpolationSourceIndex!
+    interpolationSourceIndex! < (prepared.sources -> len) -> while {
+        prepared.ranges[interpolationSourceIndex!] => interpolationSourceRange
+        [ast.AstNode; ~] => interpolationNodes!
+        0 => interpolationAstIndex!
+        interpolationAstIndex! < interpolationSourceRange.astCount -> while {
+            interpolationNodes! -> push(prepared.nodes[interpolationSourceRange.astStart + interpolationAstIndex!])
+            interpolationAstIndex! + 1 => interpolationAstIndex!
+        }
+        [syntax.SyntaxToken; ~] => interpolationTokens!
+        0 => interpolationTokenIndex!
+        interpolationTokenIndex! < interpolationSourceRange.tokenCount -> while {
+            interpolationTokens! -> push(prepared.tokens[interpolationSourceRange.tokenStart + interpolationTokenIndex!])
+            interpolationTokenIndex! + 1 => interpolationTokenIndex!
+        }
+        [symbols.Symbol; ~] => interpolationSymbols!
+        0 => interpolationSymbolIndex!
+        interpolationSymbolIndex! < interpolationSourceRange.symbolCount -> while {
+            interpolationSymbols! -> push(prepared.symbols[interpolationSourceRange.symbolStart + interpolationSymbolIndex!])
+            interpolationSymbolIndex! + 1 => interpolationSymbolIndex!
+        }
+        interpolation.PreparedInterpolationRequest {
+            source: prepared.sources[interpolationSourceIndex!]
+            nodes: interpolationNodes!
+            tokens: interpolationTokens!
+            symbols: interpolationSymbols!
+        } => interpolationRequest!
+        interpolationRequest! -> interpolation.lowerPrepared => sourceInterpolations!
+        analysisInterpolations! -> len => interpolationStart
+        analysisInterpolationRanges! -> push(interpolation.InterpolationSourceRange {
+            sourceModule: interpolationSourceIndex!
+            nodeStart: interpolationStart
+            nodeCount: sourceInterpolations! -> len
+        })
+        sourceInterpolations! -> each sourceInterpolation {
+            sourceInterpolation => globalInterpolation!
+            globalInterpolation!.parent >= 0 -> if { globalInterpolation!.parent + interpolationStart => globalInterpolation!.parent }
+            globalInterpolation!.operand0 >= 0 -> if { globalInterpolation!.operand0 + interpolationStart => globalInterpolation!.operand0 }
+            globalInterpolation!.operand1 >= 0 -> if { globalInterpolation!.operand1 + interpolationStart => globalInterpolation!.operand1 }
+            analysisInterpolations! -> push(globalInterpolation!)
+        }
+        interpolationSourceIndex! + 1 => interpolationSourceIndex!
+    }
     request.sources => sources
     [typeIds.SemanticType; ~] => layoutTypes!
     semanticTypes! -> each layoutType { layoutTypes! -> push(layoutType) }
@@ -328,6 +375,8 @@ prepare request: move PrepareRequest -> EmitContext {
         nodes: analysisNodes!
         tokens: analysisTokens!
         symbols: analysisSymbols!
+        interpolationRanges: analysisInterpolationRanges!
+        interpolations: analysisInterpolations!
         ir: ir!
         moves: moves!
         nominal: nominal!
@@ -352,6 +401,20 @@ emitCore context: move EmitContext -> Unit {
     }
     sourceStart node: typedIr.TypedIrNode -> UIntSize {
         context.nodes[context.ranges[node.sourceModule].astStart + node.astNode].start
+    }
+    sourceInterpolations node: typedIr.TypedIrNode -> [interpolation.InterpolationNode; ~] {
+        context.interpolationRanges[node.sourceModule] => interpolationRange
+        [interpolation.InterpolationNode; ~] => sourceNodes!
+        0 => interpolationIndex!
+        interpolationIndex! < interpolationRange.nodeCount -> while {
+            context.interpolations[interpolationRange.nodeStart + interpolationIndex!] => interpolationNode!
+            interpolationNode!.parent >= 0 -> if { interpolationNode!.parent - interpolationRange.nodeStart => interpolationNode!.parent }
+            interpolationNode!.operand0 >= 0 -> if { interpolationNode!.operand0 - interpolationRange.nodeStart => interpolationNode!.operand0 }
+            interpolationNode!.operand1 >= 0 -> if { interpolationNode!.operand1 - interpolationRange.nodeStart => interpolationNode!.operand1 }
+            sourceNodes! -> push(interpolationNode!)
+            interpolationIndex! + 1 => interpolationIndex!
+        }
+        sourceNodes!
     }
     emitDropValueName request: DropGlueRequest -> Unit {
         request.valueKind == 0 -> if { "%v$(request.valueIndex)" -> print } else {
@@ -2185,7 +2248,7 @@ emitCore context: move EmitContext -> Unit {
                         runtimeArgument.kind == 2 -> if {
                             runtimeArgument -> sourceToken => runtimeArgumentToken
                             Int(runtimeArgumentToken.span.length) - 2 => runtimeArgumentLength
-                            context.sources[runtimeArgument.sourceModule] -> interpolation.lower => functionExpressionInterpolation!
+                            runtimeArgument -> sourceInterpolations => functionExpressionInterpolation!
                             false => hasFunctionExpressionInterpolation!
                             0 => functionExpressionSearch!
                             functionExpressionSearch! < (functionExpressionInterpolation! -> len) -> while {
@@ -2890,7 +2953,7 @@ emitCore context: move EmitContext -> Unit {
                             runtimeArgument.kind == 2 -> if {
                                 runtimeArgument -> sourceToken => runtimeArgumentToken
                                 Int(runtimeArgumentToken.span.length) - 2 => runtimeArgumentLength
-                                context.sources[runtimeArgument.sourceModule] -> interpolation.lower => entryExpressionInterpolation!
+                                runtimeArgument -> sourceInterpolations => entryExpressionInterpolation!
                                 false => hasEntryExpressionInterpolation!
                                 0 => entryExpressionInterpolationSearch!
                                 entryExpressionInterpolationSearch! < (entryExpressionInterpolation! -> len) -> while {
@@ -3264,10 +3327,10 @@ usesIntInterpolation context: EmitContext -> Bool {
                 }
                 byteIndex! + UIntSize(1) => byteIndex!
             }
-            context.sources[argument.sourceModule] -> interpolation.lower => interpolationNodes!
+            context.interpolationRanges[argument.sourceModule] => interpolationRange
             0 => interpolationIndex!
-            interpolationIndex! < (interpolationNodes! -> len) -> while {
-                interpolationNodes![interpolationIndex!] => interpolationNode
+            interpolationIndex! < interpolationRange.nodeCount -> while {
+                context.interpolations[interpolationRange.nodeStart + interpolationIndex!] => interpolationNode
                 (interpolationNode.sourceToken == argument.payloadToken and interpolationNode.parent < 0) -> if {
                     interpolationNode.typeSymbol == 2 -> if { true => usesInterpolation! }
                     interpolationNode.kind == 1 -> if {
@@ -3294,10 +3357,10 @@ usesBoolInterpolation context: EmitContext -> Bool {
         context.ir[nodeIndex!] => node
         (node.kind == 6 and (node.symbol == -101 or node.symbol == -102) and node.operand0 >= 0 and context.ir[node.operand0].kind == 2) -> if {
             context.ir[node.operand0] => argument
-            context.sources[argument.sourceModule] -> interpolation.lower => interpolationNodes!
+            context.interpolationRanges[argument.sourceModule] => interpolationRange
             0 => interpolationIndex!
-            interpolationIndex! < (interpolationNodes! -> len) -> while {
-                interpolationNodes![interpolationIndex!] => interpolationNode
+            interpolationIndex! < interpolationRange.nodeCount -> while {
+                context.interpolations[interpolationRange.nodeStart + interpolationIndex!] => interpolationNode
                 (interpolationNode.sourceToken == argument.payloadToken and interpolationNode.parent < 0) -> if {
                     interpolationNode.typeSymbol == 23 -> if { true => usesInterpolation! }
                     interpolationNode.kind == 1 -> if {

@@ -4931,9 +4931,9 @@ ordering, region and return cleanup, literal and container operands, nested
 conditionals, calls, member projections, interpolation value lookup, and
 recursive partial-move comparisons. Source bytes remain intentionally present:
 token spans point into the original UTF-8 source and LLVM literal emission must
-still read those bytes. `ir.interpolation.lower` also still builds its own
-source-level syntax products before parsing embedded expression fragments; a
-future package interpolation product should remove that indirect repetition.
+still read those bytes. At this decision's boundary `ir.interpolation.lower`
+still built its own source-level syntax products; D154 removes that remaining
+indirect repetition.
 
 No formal language gate is promoted. This is an analysis-reuse boundary, not
 completion of capability/effect enforcement, canonical container-child
@@ -4947,5 +4947,41 @@ full-run variation of the preceding 388.7-second run, so no isolated speedup is
 claimed. The Release solution build completed with zero warnings and errors,
 and source inspection finds zero direct `lexer.lex`, `ast.lower`, or
 `symbols.collect` calls in the LLVM text emitter.
+
+## D154 - Interpolation Reuses Prepared Source Syntax
+
+Status: interpolation source analysis prepared once for LLVM emission
+Date: 2026-07-14
+
+`smalllang.compiler.ir.interpolation` now exposes `lowerPrepared`. It accepts
+the source's already prepared AST, token, and symbol products and performs only
+the interpolation-specific work. The compatible `lower source` entry point
+still builds those inputs for standalone callers such as example 209, then
+delegates to the same implementation.
+
+LLVM preparation creates one relocatable interpolation range per source and
+stores all `InterpolationNode` records in one flat table. Parent and operand
+indexes are shifted to package-global offsets while stored, then a source-local
+view is reconstructed only where the existing expression emitter needs local
+indexes. Runtime helper detection reads root nodes directly by range. Function
+and `main` emission, integer/bool helper selection, and repeated string
+references therefore no longer invoke `interpolation.lower` and no longer
+re-lex, re-lower, or recollect the enclosing source.
+
+Embedded `$(expression)` fragments still require their own expression-fragment
+lexing and parsing because they are text inside a string token and are not part
+of the enclosing module AST. That is semantic work unique to interpolation,
+not duplicate module analysis. The current preparation makes source-local AST,
+token, and symbol copies because affine arrays do not yet expose borrowed
+slices; replacing those copies with range views remains an allocation
+optimization, not a correctness gap.
+
+This reuse slice does not promote a formal language gate. Progress remains 42
+complete, 13 partial, and 5 missing: 48.5/60 (80.8%). Focused compatibility and
+LLVM checks passed 2/2, the interpolation/LLVM group passed 9/9, the coordinated
+eight-worker suite passed 410/410 in 398.0 seconds with monotonic progress, and
+the Release build completed with zero warnings and errors. The full time is
+again within the recent 388.7-395.4-second range and is not claimed as an
+isolated speedup.
 
 

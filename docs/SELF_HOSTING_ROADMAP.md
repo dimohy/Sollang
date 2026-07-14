@@ -686,12 +686,13 @@ glue reads the flat AST/token/symbol tables instead of rebuilding them. Effect
 enforcement still needs migration. The LLVM text emitter's 67 direct
 `lexer.lex`, `ast.lower`, and `symbols.collect` sites now read these flat package
 products through source ranges, covering scheduling, control flow, cleanup,
-operands, member layout, and interpolation name lookup. The interpolation IR
-builder still reconstructs source-level syntax before parsing embedded
-expression fragments and remains the next reuse target. The first 410-case run
-after diagnostics/coroutines moved passed in 388.7 seconds; the emitter reuse
-run passed 410/410 in 395.4 seconds. Both are treated as full-run observations,
-not isolated benchmark proof.
+operands, member layout, and interpolation name lookup. Interpolation lowering
+now also accepts prepared source AST/token/symbol tables. LLVM builds one flat
+interpolation table with a source range per module and reuses it for functions,
+`main`, and runtime-helper selection instead of rebuilding the enclosing source
+for each call. Only the embedded `$(expression)` fragment itself is parsed.
+The recent coordinated 410-case runs passed in 388.7, 395.4, and 398.0 seconds;
+these are treated as full-run observations, not isolated benchmark proof.
 
 Self-hosted LLVM text selects descriptors implemented in the file module
 `smalllang.compiler.llvm.target`. Windows x64/COFF, Linux x64/ELF, and
