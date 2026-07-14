@@ -399,6 +399,9 @@ native executable for every Windows, Linux, and Wasm fixture. The driver is
 rebuilt only when its compiler, manifest, SL sources, or standard library inputs
 are newer; a current driver reports `[selfhost bootstrap] REUSE`. Thus the suite
 does not compile the same self-host compiler modules once per fixture.
+The generated parser commits successful optional/repeated branches and keeps a
+per-rule negative-result table for the current token stream. Large self-host
+modules therefore do not repeat the same failed parse from the same token.
 Bootstrap phases are printed as `[bootstrap n/total]`. Every scheduled case is
 printed as `[start n/total]`, and every completion is flushed immediately as
 `[n/total] PASS|FAIL name (seconds)`, so long LLVM runs never appear idle.

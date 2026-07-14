@@ -5292,3 +5292,29 @@ remains 42 complete, 13 partial, 5 missing (48.5/60, 80.8%).
 Final coordinated verification passed 428/428 examples and diagnostics with
 eight workers in 37.0 seconds. The Release solution build completed with zero
 warnings and zero errors.
+
+## D165 - Deterministic Grammar VM with Failure Memoization
+
+Status: implemented and regression-tested
+Date: 2026-07-15
+
+Generated optional and repeated productions now commit after a successful
+match, matching the existing committed-alternative bytecode instead of leaving
+successful choice points available to unrelated caller failures. The grammar
+VM also memoizes failed `(rule, token)` pairs in a collision-free table sized
+to the current token stream. This bounds repeated negative parsing while
+preserving the lossless event rollback used by CST construction.
+
+Deterministic repetition exposed `else` as the only contextual terminator that
+could also parse as a general identifier expression. Grammar opcode 8 and the
+`notKeyword("else")` predicate now guard subject and expression `when` arms
+without consuming input. The contextual enum-pattern and CFG suspension tests
+cover both forms.
+
+The reusable native stage-1 compiler remains an `-O0` bootstrap because it
+builds in about 2.3 seconds and is cached until compiler inputs change. In the
+compiler-sized 27-module probe, the corrected `-O0` executable reached the
+known stage-2 emitter trap in 26.3 seconds; an independently cached `-O2`
+stage-1 reached the same point in 8.9 seconds, but cost 83.5 seconds to rebuild.
+The ordinary test loop therefore keeps the fast cold bootstrap, while a stable
+optimized stage-1 is useful for repeated full-compiler work.

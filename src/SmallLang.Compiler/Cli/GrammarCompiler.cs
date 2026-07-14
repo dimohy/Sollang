@@ -15,6 +15,7 @@ internal static class GrammarCompiler
     private const int Commit = 5;
     private const int Jump = 6;
     private const int LookaheadToken = 7;
+    private const int RejectKeyword = 8;
 
     public static void Build(string[] args)
     {
@@ -190,6 +191,9 @@ internal static class GrammarCompiler
                     RequireOperand(program, ref pc, value => value >= 0 && value < tokenCount, "keyword token id");
                     RequireOperand(program, ref pc, value => value >= 0 && value < stringCount, "keyword string id");
                     break;
+                case RejectKeyword:
+                    RequireOperand(program, ref pc, value => value >= 0 && value < stringCount, "rejected keyword string id");
+                    break;
                 case CallRule:
                     RequireOperand(program, ref pc, value => value >= 0 && value < ruleCount, "rule id");
                     break;
@@ -227,10 +231,14 @@ internal static class GrammarCompiler
             case OptionalNode optional:
             {
                 program.Add(Choice);
-                var target = program.Count;
+                var emptyTarget = program.Count;
                 program.Add(0);
                 Emit(optional.Item, program);
-                program[target] = program.Count;
+                program.Add(Commit);
+                var endTarget = program.Count;
+                program.Add(0);
+                program[emptyTarget] = program.Count;
+                program[endTarget] = program.Count;
                 break;
             }
             case RepeatNode repeat:
@@ -238,12 +246,12 @@ internal static class GrammarCompiler
                 if (repeat.AtLeastOne) Emit(repeat.Item, program);
                 var start = program.Count;
                 program.Add(Choice);
-                var target = program.Count;
+                var endTarget = program.Count;
                 program.Add(0);
                 Emit(repeat.Item, program);
-                program.Add(Jump);
+                program.Add(Commit);
                 program.Add(start);
-                program[target] = program.Count;
+                program[endTarget] = program.Count;
                 break;
             }
             case TokenNode token:
@@ -262,6 +270,10 @@ internal static class GrammarCompiler
             case LookaheadNode lookahead:
                 program.Add(LookaheadToken);
                 program.Add(lookahead.TokenId);
+                break;
+            case RejectKeywordNode rejectKeyword:
+                program.Add(RejectKeyword);
+                program.Add(rejectKeyword.StringId);
                 break;
             default:
                 throw new InvalidOperationException($"unknown grammar node {node.GetType().Name}");
@@ -298,7 +310,7 @@ internal static class GrammarCompiler
         builder.AppendLine($"# Grammar source: {Path.GetFileName(grammarPath)}");
         builder.AppendLine($"# Source SHA-256: {sourceHash}");
         builder.AppendLine("# Opcodes: 0 return, 1 token, 2 keyword, 3 call, 4 choice,");
-        builder.AppendLine("# 5 commit, 6 jump, 7 token lookahead.");
+        builder.AppendLine("# 5 commit, 6 jump, 7 token lookahead, 8 reject keyword.");
         builder.AppendLine("# Lexer kinds: 0 whitespace, 1 line comment, 2 identifier,");
         builder.AppendLine("# 3 quoted string, 4 number, 5 newline, 6 end, 7 literal.");
         builder.AppendLine();
@@ -400,6 +412,7 @@ internal static class GrammarCompiler
     private sealed record KeywordNode(int TokenId, int StringId) : Node;
     private sealed record CallNode(int RuleId) : Node;
     private sealed record LookaheadNode(int TokenId) : Node;
+    private sealed record RejectKeywordNode(int StringId) : Node;
 
     private sealed class ProductionParser(
         string text,
@@ -470,6 +483,12 @@ internal static class GrammarCompiler
                     var token = ReadIdentifier();
                     Require(')');
                     return new LookaheadNode(RequireToken(token));
+                }
+                if (name == "notKeyword")
+                {
+                    var value = ReadString();
+                    Require(')');
+                    return new RejectKeywordNode(getStringId(value));
                 }
                 if (name == "Identifier")
                 {

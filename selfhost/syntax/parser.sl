@@ -34,6 +34,8 @@ public parseRuleEvents request: ParseRequest -> [ParseEvent; ~] {
     [Int; ~] => choiceCallDepths!
     [Int; ~] => choiceEventDepths!
     [Int; ~] => activeRules!
+    [Int; ~] => activeRuleStarts!
+    [Int; ~] => failedRuleTokens!
     [Int; ~] => expectedCodes!
     [ParseEvent; ~] => events!
     0 => callDepth!
@@ -49,10 +51,22 @@ public parseRuleEvents request: ParseRequest -> [ParseEvent; ~] {
     0 => furthestToken!
     -1 => expectedAtToken!
     0 => expectedCount!
+    1 => failureCacheWidth!
+    failureCacheWidth! < (tokens! -> len) -> while {
+        failureCacheWidth! * 2 => failureCacheWidth!
+    }
+    ruleOffsets! -> len => failureRuleCount
+    failureRuleCount * failureCacheWidth! => failureCacheSize
+    0 => failureCacheIndex!
+    failureCacheIndex! < failureCacheSize -> while {
+        failedRuleTokens! -> push(-1)
+        failureCacheIndex! + 1 => failureCacheIndex!
+    }
 
     ParseEvent { kind: 0, value: startRule, tokenIndex: tokenIndex! } => startEvent
     events! -> push(startEvent)
     activeRules! -> push(startRule)
+    activeRuleStarts! -> push(0)
     1 => eventDepth!
 
     running! -> while {
@@ -133,6 +147,15 @@ public parseRuleEvents request: ParseRequest -> [ParseEvent; ~] {
                             expectedCount! + 1 => expectedCount!
                         }
                     }
+                    choiceDepth! > 0 -> if { choiceCallDepths![choiceDepth! - 1] + 1 } else { 0 } => failedFromDepth
+                    failedFromDepth => failedDepth!
+                    failedDepth! <= callDepth! -> while {
+                        activeRules![failedDepth!] => failedRule
+                        activeRuleStarts![failedDepth!] => failedToken
+                        failedRule * failureCacheWidth! + failedToken => failedSlot
+                        failedToken => failedRuleTokens![failedSlot]
+                        failedDepth! + 1 => failedDepth!
+                    }
                     choiceDepth! > 0 -> if {
                         choiceDepth! - 1 => choiceDepth!
                         choicePcs![choiceDepth!] => pc!
@@ -196,6 +219,15 @@ public parseRuleEvents request: ParseRequest -> [ParseEvent; ~] {
                                 expectedCount! + 1 => expectedCount!
                             }
                         }
+                        choiceDepth! > 0 -> if { choiceCallDepths![choiceDepth! - 1] + 1 } else { 0 } => keywordFailedFromDepth
+                        keywordFailedFromDepth => keywordFailedDepth!
+                        keywordFailedDepth! <= callDepth! -> while {
+                            activeRules![keywordFailedDepth!] => keywordFailedRule
+                            activeRuleStarts![keywordFailedDepth!] => keywordFailedToken
+                            keywordFailedRule * failureCacheWidth! + keywordFailedToken => keywordFailedSlot
+                            keywordFailedToken => failedRuleTokens![keywordFailedSlot]
+                            keywordFailedDepth! + 1 => keywordFailedDepth!
+                        }
                         choiceDepth! > 0 -> if {
                             choiceDepth! - 1 => choiceDepth!
                             choicePcs![choiceDepth!] => pc!
@@ -209,27 +241,50 @@ public parseRuleEvents request: ParseRequest -> [ParseEvent; ~] {
                 } else {
                     opcode == 3 -> if {
                         program![pc! + 1] => rule
-                        returnPcs! -> len => returnCount
-                        callDepth! < returnCount -> if {
-                            pc! + 2 => returnPcs![callDepth!]
+                        rule * failureCacheWidth! + tokenIndex! => failureSlot
+                        failedRuleTokens![failureSlot] == tokenIndex! -> if {
+                            choiceDepth! > 0 -> if {
+                                choiceDepth! - 1 => choiceDepth!
+                                choicePcs![choiceDepth!] => pc!
+                                choiceTokens![choiceDepth!] => tokenIndex!
+                                choiceCallDepths![choiceDepth!] => callDepth!
+                                choiceEventDepths![choiceDepth!] => eventDepth!
+                            } else {
+                                0 => failedDepth!
+                                failedDepth! <= callDepth! -> while {
+                                    activeRules![failedDepth!] => failedRule
+                                    activeRuleStarts![failedDepth!] => failedToken
+                                    failedRule * failureCacheWidth! + failedToken => failedSlot
+                                    failedToken => failedRuleTokens![failedSlot]
+                                    failedDepth! + 1 => failedDepth!
+                                }
+                                false => running!
+                            }
                         } else {
-                            returnPcs! -> push(pc! + 2)
+                            returnPcs! -> len => returnCount
+                            callDepth! < returnCount -> if {
+                                pc! + 2 => returnPcs![callDepth!]
+                            } else {
+                                returnPcs! -> push(pc! + 2)
+                            }
+                            callDepth! + 1 => callDepth!
+                            activeRules! -> len => activeRuleCount
+                            callDepth! < activeRuleCount -> if {
+                                rule => activeRules![callDepth!]
+                                tokenIndex! => activeRuleStarts![callDepth!]
+                            } else {
+                                activeRules! -> push(rule)
+                                activeRuleStarts! -> push(tokenIndex!)
+                            }
+                            ParseEvent { kind: 0, value: rule, tokenIndex: tokenIndex! } => enterEvent
+                            eventDepth! < (events! -> len) -> if {
+                                enterEvent => events![eventDepth!]
+                            } else {
+                                events! -> push(enterEvent)
+                            }
+                            eventDepth! + 1 => eventDepth!
+                            ruleOffsets![rule] => pc!
                         }
-                        callDepth! + 1 => callDepth!
-                        activeRules! -> len => activeRuleCount
-                        callDepth! < activeRuleCount -> if {
-                            rule => activeRules![callDepth!]
-                        } else {
-                            activeRules! -> push(rule)
-                        }
-                        ParseEvent { kind: 0, value: rule, tokenIndex: tokenIndex! } => enterEvent
-                        eventDepth! < (events! -> len) -> if {
-                            enterEvent => events![eventDepth!]
-                        } else {
-                            events! -> push(enterEvent)
-                        }
-                        eventDepth! + 1 => eventDepth!
-                        ruleOffsets![rule] => pc!
                     } else {
                         opcode == 4 -> if {
                             choicePcs! -> len => choiceCount
@@ -281,6 +336,15 @@ public parseRuleEvents request: ParseRequest -> [ParseEvent; ~] {
                                                     expectedCount! + 1 => expectedCount!
                                                 }
                                             }
+                                            choiceDepth! > 0 -> if { choiceCallDepths![choiceDepth! - 1] + 1 } else { 0 } => lookaheadFailedFromDepth
+                                            lookaheadFailedFromDepth => lookaheadFailedDepth!
+                                            lookaheadFailedDepth! <= callDepth! -> while {
+                                                activeRules![lookaheadFailedDepth!] => lookaheadFailedRule
+                                                activeRuleStarts![lookaheadFailedDepth!] => lookaheadFailedToken
+                                                lookaheadFailedRule * failureCacheWidth! + lookaheadFailedToken => lookaheadFailedSlot
+                                                lookaheadFailedToken => failedRuleTokens![lookaheadFailedSlot]
+                                                lookaheadFailedDepth! + 1 => lookaheadFailedDepth!
+                                            }
                                             choiceDepth! > 0 -> if {
                                                 choiceDepth! - 1 => choiceDepth!
                                                 choicePcs![choiceDepth!] => pc!
@@ -292,7 +356,48 @@ public parseRuleEvents request: ParseRequest -> [ParseEvent; ~] {
                                             }
                                         }
                                     } else {
-                                        false => running!
+                                        opcode == 8 -> if {
+                                            program![pc! + 1] => rejectedKeywordIndex
+                                            tokens![tokenIndex!] => rejectedToken
+                                            source -> slice(rejectedToken.span.start, rejectedToken.span.length) => rejectedTokenText
+                                            keywords![rejectedKeywordIndex] => rejectedText
+                                            rejectedTokenText -> len => rejectedTokenLength
+                                            rejectedText -> len => rejectedTextLength
+                                            rejectedTokenLength == rejectedTextLength => rejectedKeywordMatches!
+                                            UIntSize(0) => rejectedKeywordByte!
+                                            (rejectedKeywordMatches! and rejectedKeywordByte! < rejectedTokenLength) -> while {
+                                                rejectedTokenText -> byte(rejectedKeywordByte!) => rejectedActualByte
+                                                rejectedText -> byte(rejectedKeywordByte!) => rejectedExpectedByte
+                                                rejectedActualByte != rejectedExpectedByte -> if {
+                                                    false => rejectedKeywordMatches!
+                                                }
+                                                rejectedKeywordByte! + UIntSize(1) => rejectedKeywordByte!
+                                            }
+                                            not rejectedKeywordMatches! -> if {
+                                                pc! + 2 => pc!
+                                            } else {
+                                                choiceDepth! > 0 -> if { choiceCallDepths![choiceDepth! - 1] + 1 } else { 0 } => rejectedFailedFromDepth
+                                                rejectedFailedFromDepth => rejectedFailedDepth!
+                                                rejectedFailedDepth! <= callDepth! -> while {
+                                                    activeRules![rejectedFailedDepth!] => rejectedFailedRule
+                                                    activeRuleStarts![rejectedFailedDepth!] => rejectedFailedToken
+                                                    rejectedFailedRule * failureCacheWidth! + rejectedFailedToken => rejectedFailedSlot
+                                                    rejectedFailedToken => failedRuleTokens![rejectedFailedSlot]
+                                                    rejectedFailedDepth! + 1 => rejectedFailedDepth!
+                                                }
+                                                choiceDepth! > 0 -> if {
+                                                    choiceDepth! - 1 => choiceDepth!
+                                                    choicePcs![choiceDepth!] => pc!
+                                                    choiceTokens![choiceDepth!] => tokenIndex!
+                                                    choiceCallDepths![choiceDepth!] => callDepth!
+                                                    choiceEventDepths![choiceDepth!] => eventDepth!
+                                                } else {
+                                                    false => running!
+                                                }
+                                            }
+                                        } else {
+                                            false => running!
+                                        }
                                     }
                                 }
                             }

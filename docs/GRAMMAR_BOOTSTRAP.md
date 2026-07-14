@@ -62,6 +62,7 @@ leave stale tables behind.
 | 5 | `commit target` | Discard the saved alternative after success |
 | 6 | `jump target` | Continue at an absolute instruction offset |
 | 7 | `lookahead token` | Check a token without consuming it |
+| 8 | `reject-keyword text` | Fail when the current token has the specified keyword text |
 
 `?`, `*`, `+`, grouping, and alternatives compile to these operations. The
 current SmallLang grammar already represents expression precedence as layered
