@@ -1,0 +1,305 @@
+namespace smalllang.compiler.semantic.type_terms
+
+import smalllang.compiler.ast
+import smalllang.compiler.lexer
+import syntax.generated.smalllang as grammar
+
+# A semantic type is a canonical, index-addressed tree. Argument fields point
+# back into the same arena, so nested types do not require recursive objects.
+# Kinds: 1 nominal, 2 slice, 3 dynamic array, 4 fixed array,
+# 5 dictionary, 6 box, 7 nominal application.
+public struct TypeTerm {
+    astNode: Int
+    canonical: Int
+    kind: Int
+    nameToken: Int
+    nameId: Int
+    firstArgument: Int
+    secondArgument: Int
+    lengthToken: Int
+    lengthId: Int
+}
+
+public struct SubstitutionRequest {
+    terms: [TypeTerm; ~]
+    root: Int
+    parameter: Int
+    replacement: Int
+}
+
+public struct SubstitutionResult {
+    terms: [TypeTerm; ~]
+    root: Int
+    status: Int
+}
+
+# Lowers every TypeAnnotation, including nested children, into one arena.
+public lower source: Text -> [TypeTerm; ~] {
+    source -> ast.lower => nodes!
+    source -> lexer.lex => tokens!
+    [TypeTerm; ~] => terms!
+    [Int; ~] => astToTerm!
+    0 => astMapIndex!
+    astMapIndex! < (nodes! -> len) -> while {
+        astToTerm! -> push(-1)
+        astMapIndex! + 1 => astMapIndex!
+    }
+
+    0 => astIndex!
+    astIndex! < (nodes! -> len) -> while {
+        nodes![astIndex!] => node
+        node.kind == 12 -> if {
+            node.firstToken => firstToken!
+            true => findingFirst!
+            (firstToken! < node.firstToken + node.tokenCount and findingFirst!) -> while {
+                (tokens![firstToken!].kind == grammar.triviaIdWhitespace or tokens![firstToken!].kind == grammar.triviaIdComment) -> if {
+                    firstToken! + 1 => firstToken!
+                } else {
+                    false => findingFirst!
+                }
+            }
+            1 => kind!
+            -1 => nameToken!
+            -1 => lengthToken!
+            tokens![firstToken!].kind == grammar.tokenIdLeftBracket -> if {
+                2 => kind!
+                0 => depth!
+                false => outerSemicolon!
+                false => outerTilde!
+                firstToken! => shapeToken!
+                shapeToken! < node.firstToken + node.tokenCount -> while {
+                    tokens![shapeToken!].kind == grammar.tokenIdLeftBracket -> if { depth! + 1 => depth! }
+                    tokens![shapeToken!].kind == grammar.tokenIdRightBracket -> if { depth! - 1 => depth! }
+                    (depth! == 1 and tokens![shapeToken!].kind == grammar.tokenIdSemicolon) -> if { true => outerSemicolon! }
+                    (depth! == 1 and tokens![shapeToken!].kind == grammar.tokenIdTilde) -> if { true => outerTilde! }
+                    (outerSemicolon! and lengthToken! < 0 and depth! == 1 and (tokens![shapeToken!].kind == grammar.tokenIdIdentifier or tokens![shapeToken!].kind == grammar.tokenIdNumber)) -> if {
+                        shapeToken! => lengthToken!
+                    }
+                    shapeToken! + 1 => shapeToken!
+                }
+                outerSemicolon! -> if {
+                    outerTilde! -> if { 3 => kind! } else { 4 => kind! }
+                }
+            } else {
+                tokens![firstToken!].kind == grammar.tokenIdLeftBrace -> if {
+                    5 => kind!
+                } else {
+                    tokens![firstToken!].kind == grammar.tokenIdIdentifier -> if {
+                        firstToken! => nameToken!
+                        tokens![firstToken!] => firstName
+                        firstName.span.length == UIntSize(3) -> if {
+                            source -> byte(firstName.span.start) => boxByte0
+                            source -> byte(firstName.span.start + UIntSize(1)) => boxByte1
+                            source -> byte(firstName.span.start + UIntSize(2)) => boxByte2
+                            (boxByte0 == UInt8(98) and boxByte1 == UInt8(111) and boxByte2 == UInt8(120)) -> if {
+                                6 => kind!
+                                -1 => nameToken!
+                            }
+                        }
+                    }
+                }
+            }
+            TypeTerm {
+                astNode: astIndex!
+                canonical: -1
+                kind: kind!
+                nameToken: nameToken!
+                nameId: -1
+                firstArgument: -1
+                secondArgument: -1
+                lengthToken: lengthToken!
+                lengthId: -1
+            } => term
+            terms! -> len => termIndex
+            terms! -> push(term)
+            termIndex => astToTerm![astIndex!]
+        }
+        astIndex! + 1 => astIndex!
+    }
+
+    # Link direct type children in source order. The grammar permits at most
+    # two generic arguments, matching dictionary and Result-like applications.
+    0 => termIndex!
+    termIndex! < (terms! -> len) -> while {
+        terms![termIndex!] => term!
+        -1 => firstChild!
+        -1 => secondChild!
+        0 => childIndex!
+        childIndex! < (terms! -> len) -> while {
+            terms![childIndex!] => child
+            nodes![child.astNode].parent == term!.astNode -> if {
+                firstChild! < 0 -> if {
+                    childIndex! => firstChild!
+                } else {
+                    nodes![child.astNode].firstToken < nodes![terms![firstChild!].astNode].firstToken -> if {
+                        firstChild! => secondChild!
+                        childIndex! => firstChild!
+                    } else {
+                        (secondChild! < 0 or nodes![child.astNode].firstToken < nodes![terms![secondChild!].astNode].firstToken) -> if {
+                            childIndex! => secondChild!
+                        }
+                    }
+                }
+            }
+            childIndex! + 1 => childIndex!
+        }
+        firstChild! => term!.firstArgument
+        secondChild! => term!.secondArgument
+        (term!.kind == 1 and firstChild! >= 0) -> if { 7 => term!.kind }
+
+        term!.nameToken >= 0 -> if {
+            termIndex! => term!.nameId
+            0 => priorNameIndex!
+            (priorNameIndex! < termIndex! and term!.nameId == termIndex!) -> while {
+                terms![priorNameIndex!].nameToken >= 0 -> if {
+                    tokens![term!.nameToken] => currentName
+                    tokens![terms![priorNameIndex!].nameToken] => priorName
+                    currentName.span.length == priorName.span.length => sameName!
+                    UIntSize(0) => nameByte!
+                    (sameName! and nameByte! < currentName.span.length) -> while {
+                        source -> byte(currentName.span.start + nameByte!) => currentByte
+                        source -> byte(priorName.span.start + nameByte!) => priorByte
+                        currentByte != priorByte -> if { false => sameName! }
+                        nameByte! + UIntSize(1) => nameByte!
+                    }
+                    sameName! -> if { terms![priorNameIndex!].nameId => term!.nameId }
+                }
+                priorNameIndex! + 1 => priorNameIndex!
+            }
+        }
+        term!.lengthToken >= 0 -> if {
+            termIndex! => term!.lengthId
+            0 => priorLengthIndex!
+            (priorLengthIndex! < termIndex! and term!.lengthId == termIndex!) -> while {
+                terms![priorLengthIndex!].lengthToken >= 0 -> if {
+                    tokens![term!.lengthToken] => currentLength
+                    tokens![terms![priorLengthIndex!].lengthToken] => priorLength
+                    currentLength.span.length == priorLength.span.length => sameLength!
+                    UIntSize(0) => lengthByte!
+                    (sameLength! and lengthByte! < currentLength.span.length) -> while {
+                        source -> byte(currentLength.span.start + lengthByte!) => currentByte
+                        source -> byte(priorLength.span.start + lengthByte!) => priorByte
+                        currentByte != priorByte -> if { false => sameLength! }
+                        lengthByte! + UIntSize(1) => lengthByte!
+                    }
+                    sameLength! -> if { terms![priorLengthIndex!].lengthId => term!.lengthId }
+                }
+                priorLengthIndex! + 1 => priorLengthIndex!
+            }
+        }
+        term! => terms![termIndex!]
+        termIndex! + 1 => termIndex!
+    }
+
+    # Canonicalize bottom-up. A parent becomes ready after its child terms have
+    # canonical ids; structurally equal trees reuse the first representative.
+    0 => canonicalized!
+    true => changed!
+    (canonicalized! < (terms! -> len) and changed!) -> while {
+        false => changed!
+        0 => candidateIndex!
+        candidateIndex! < (terms! -> len) -> while {
+            terms![candidateIndex!] => candidate!
+            candidate!.canonical < 0 -> if {
+                (candidate!.firstArgument < 0 or terms![candidate!.firstArgument].canonical >= 0) => firstReady
+                (candidate!.secondArgument < 0 or terms![candidate!.secondArgument].canonical >= 0) => secondReady
+                (firstReady and secondReady) -> if {
+                    candidateIndex! => candidate!.canonical
+                    0 => representativeIndex!
+                    (representativeIndex! < candidateIndex! and candidate!.canonical == candidateIndex!) -> while {
+                        terms![representativeIndex!] => representative
+                        representative.canonical >= 0 -> if {
+                            candidate!.firstArgument < 0 -> if { -1 } else { terms![candidate!.firstArgument].canonical } => candidateFirst
+                            representative.firstArgument < 0 -> if { -1 } else { terms![representative.firstArgument].canonical } => representativeFirst
+                            candidate!.secondArgument < 0 -> if { -1 } else { terms![candidate!.secondArgument].canonical } => candidateSecond
+                            representative.secondArgument < 0 -> if { -1 } else { terms![representative.secondArgument].canonical } => representativeSecond
+                            (candidate!.kind == representative.kind and candidate!.nameId == representative.nameId and candidate!.lengthId == representative.lengthId and candidateFirst == representativeFirst and candidateSecond == representativeSecond) -> if {
+                                representative.canonical => candidate!.canonical
+                            }
+                        }
+                        representativeIndex! + 1 => representativeIndex!
+                    }
+                    candidate! => terms![candidateIndex!]
+                    canonicalized! + 1 => canonicalized!
+                    true => changed!
+                }
+            }
+            candidateIndex! + 1 => candidateIndex!
+        }
+    }
+    terms!
+}
+
+# Performs a structural substitution without recursion. Status 0 is success;
+# status 1 reports an invalid index and status 2 an unresolved/cyclic arena.
+public substitute request: move SubstitutionRequest -> SubstitutionResult {
+    [TypeTerm; ~] => output!
+    [Int; ~] => mapped!
+    0 => mapIndex!
+    mapIndex! < (request.terms -> len) -> while {
+        mapped! -> push(-1)
+        mapIndex! + 1 => mapIndex!
+    }
+    0 => status!
+    (request.root < 0 or request.root >= (request.terms -> len) or request.parameter < 0 or request.parameter >= (request.terms -> len) or request.replacement < 0 or request.replacement >= (request.terms -> len)) -> if {
+        1 => status!
+    }
+    status! == 0 -> if {
+        0 => completed!
+        true => changed!
+        (completed! < (request.terms -> len) and changed!) -> while {
+            false => changed!
+            0 => sourceIndex!
+            sourceIndex! < (request.terms -> len) -> while {
+                mapped![sourceIndex!] < 0 -> if {
+                    request.terms[sourceIndex!] => sourceTerm
+                    sourceTerm.canonical == request.terms[request.parameter].canonical -> if {
+                        mapped![request.replacement] >= 0 -> if {
+                            mapped![request.replacement] => mapped![sourceIndex!]
+                            completed! + 1 => completed!
+                            true => changed!
+                        }
+                    } else {
+                        (sourceTerm.firstArgument < 0 or mapped![sourceTerm.firstArgument] >= 0) => firstReady
+                        (sourceTerm.secondArgument < 0 or mapped![sourceTerm.secondArgument] >= 0) => secondReady
+                        (firstReady and secondReady) -> if {
+                            sourceTerm.firstArgument < 0 -> if { -1 } else { mapped![sourceTerm.firstArgument] } => mappedFirst
+                            sourceTerm.secondArgument < 0 -> if { -1 } else { mapped![sourceTerm.secondArgument] } => mappedSecond
+                            -1 => existing!
+                            0 => outputIndex!
+                            (outputIndex! < (output! -> len) and existing! < 0) -> while {
+                                output![outputIndex!] => outputTerm
+                                (outputTerm.kind == sourceTerm.kind and outputTerm.nameId == sourceTerm.nameId and outputTerm.lengthId == sourceTerm.lengthId and outputTerm.firstArgument == mappedFirst and outputTerm.secondArgument == mappedSecond) -> if {
+                                    outputIndex! => existing!
+                                }
+                                outputIndex! + 1 => outputIndex!
+                            }
+                            existing! < 0 -> if {
+                                output! -> len => existing!
+                                output! -> push(TypeTerm {
+                                    astNode: sourceTerm.astNode
+                                    canonical: existing!
+                                    kind: sourceTerm.kind
+                                    nameToken: sourceTerm.nameToken
+                                    nameId: sourceTerm.nameId
+                                    firstArgument: mappedFirst
+                                    secondArgument: mappedSecond
+                                    lengthToken: sourceTerm.lengthToken
+                                    lengthId: sourceTerm.lengthId
+                                })
+                            }
+                            existing! => mapped![sourceIndex!]
+                            completed! + 1 => completed!
+                            true => changed!
+                        }
+                    }
+                }
+                sourceIndex! + 1 => sourceIndex!
+            }
+        }
+        completed! < (request.terms -> len) -> if { 2 => status! }
+    }
+    status! == 0 -> if { mapped![request.root] } else { -1 } => resultRoot
+    SubstitutionResult { terms: output!, root: resultRoot, status: status! } => result!
+    result!
+}

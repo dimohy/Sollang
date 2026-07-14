@@ -200,16 +200,22 @@ ordinary function without a block input emits code 17. Runtime calls nested in
 the caller block are excluded from source-module lookup.
 [`281-selfhost-generic-role-specialization.sl`](../examples/281-selfhost-generic-role-specialization.sl)
 proves outside-in generic specialization for scalar `T`, `[T; ~] -> item: T`,
-an imported role reached through a default import alias, caller-body operators,
-and typed IR. The semantic checkbox remains open until arbitrary nested generic
-substitution, ownership/capability escape, and effect rules have matching
-self-host diagnostics.
+`T -> items: [T; ~]`, an imported role reached through a default import alias,
+caller-body operators, and typed IR.
+[`283-selfhost-recursive-type-terms.sl`](../examples/283-selfhost-recursive-type-terms.sl)
+proves recursive canonical type terms and full-depth substitution independent
+of the former shallow component slots.
+[`284-generic-composite-role-block.sl`](../examples/284-generic-composite-role-block.sl)
+proves reference semantic specialization, `yield`, caller binding, LLVM
+execution, and owned cleanup for a composite generic item; the matching
+diagnostic rejects a specialized `yield` mismatch. The semantic checkbox
+remains open until every expression/type consumer uses the recursive arena and
+ownership/capability escape and effect rules have matching self-host diagnostics.
 
 Regression evidence on 2026-07-14: the Release solution build completed with
-zero warnings and errors. After adding generic role-item specialization,
-default import aliases, and counted test progress, the coordinated eight-worker
-runner passed all 396 cases plus byte-for-byte grammar table determinism in
-390.6 seconds.
+zero warnings and errors. After adding recursive semantic type terms and
+generic composite role items, the coordinated eight-worker runner passed all
+399 cases plus byte-for-byte grammar table determinism in 389.8 seconds.
 The canonical roadmap remains 42 complete, 13 partial, and 5 missing gates
 (48.5/60, 80.8%). This partial role-block slice does not promote a roadmap gate.
 The common foundation baseline is commit `d2b07db`; self-host semantic/IR

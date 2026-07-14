@@ -388,8 +388,9 @@ internal sealed partial class LlvmEmitter
                 EmitWhileBlockFunctionCall(statement);
                 return;
             default:
-                if (TryResolveFunction(statement.Target, out var function)
-                    && function.Kind == BoundFunctionKind.UserBlock)
+                var resolvedGeneric = _program.ResolvedGenericCalls.TryGetValue(statement, out var function);
+                if ((resolvedGeneric || TryResolveFunction(statement.Target, out function))
+                    && function is { Kind: BoundFunctionKind.UserBlock })
                 {
                     EmitUserBlockFunctionCall(statement, function);
                     return;

@@ -597,6 +597,15 @@ public infer sources: [Text; ~] -> [ExpressionType; ~] {
                                         }
                                     }
                                 }
+                                (specializedRoleOrigin! < 0 and roleInputNominalIndex! >= 0 and roleBlockCompositeIndex! >= 0) -> if {
+                                    nominal![roleInputNominalIndex!] => roleInputNominal
+                                    composite![roleBlockCompositeIndex!] => roleBlockComposite
+                                    (roleInputNominal.origin == 3 and roleBlockComposite.kind != 5 and roleBlockComposite.elementOrigin == 3 and roleInputNominal.targetSymbol == roleBlockComposite.elementSymbol) -> if {
+                                        10 + roleBlockComposite.kind => specializedRoleOrigin!
+                                        roleSourceType.targetModule => specializedRoleModule!
+                                        roleSourceType.targetSymbol => specializedRoleSymbol!
+                                    }
+                                }
                                 (specializedRoleOrigin! < 0 and roleBlockCompositeIndex! >= 0 and roleInputCompositeIndex! >= 0) -> if {
                                     composite![roleBlockCompositeIndex!] => roleBlockComposite
                                     composite![roleInputCompositeIndex!] => roleInputComposite

@@ -325,7 +325,12 @@ internal sealed class SemanticCompiler
             throw Error(function.Line, function.Column, "readonly Int view returns are not implemented yet");
         }
 
-        var blockInputType = function.BlockInputType is null
+        var blockInputTypeTemplate = function.BlockInputType is not null
+            && (TypeSyntaxReferencesParameter(function.BlockInputType, function.GenericParameterName)
+                || TypeSyntaxReferencesParameter(function.BlockInputType, function.SecondaryGenericParameterName))
+                ? function.BlockInputType
+                : null;
+        var blockInputType = function.BlockInputType is null || blockInputTypeTemplate is not null
             ? (BoundType?)null
             : ParseType(function.BlockInputType, function.Line, function.Column);
         var genericAssociatedTypeConstraint = function.GenericAssociatedTypeConstraint is null
@@ -395,7 +400,8 @@ internal sealed class SemanticCompiler
             HasValueGenericFixedArrayInput: function.HasValueGenericFixedArrayInput,
             ModuleName: function.ModuleName,
             IsPublic: function.IsPublic || function.IsStandardLibrary,
-            IsAsync: function.IsAsync);
+            IsAsync: function.IsAsync,
+            BlockInputTypeTemplate: blockInputTypeTemplate);
     }
 
     private BoundFunctionInputOwnership BindFunctionInputOwnership(
@@ -1689,11 +1695,6 @@ internal sealed class SemanticCompiler
         HashSet<string> mutableBindings,
         string target)
     {
-        if (function.InputType is null || function.BlockInputType is null)
-        {
-            throw Error(call.Line, call.Column, $"block function '{target}' is not callable");
-        }
-
         if (!call.UsesDefaultItemName)
         {
             ValidateBindingName(call.ItemName, call.Line, call.Column);
@@ -1712,6 +1713,16 @@ internal sealed class SemanticCompiler
             allowReadIntCall: true,
             allowFlowBindingTarget: false,
             mutableBindings: mutableBindings);
+        if (function.GenericParameterName is not null
+            && function.SpecializedType is null
+            && function.SpecializedValue is null)
+        {
+            function = ResolveGenericSpecialization(function, inputType, functions, call);
+        }
+        if (function.InputType is null || function.BlockInputType is null)
+        {
+            throw Error(call.Line, call.Column, $"block function '{target}' is not callable");
+        }
         if (inputType != function.InputType.Value)
         {
             throw Error(
@@ -4613,6 +4624,18 @@ internal sealed class SemanticCompiler
                 Name = specializedName,
                 InputType = template.InputType is null ? null : actualType,
                 ReturnType = SubstituteGenericType(template.ReturnType, actualType, inferredSecondaryType),
+                BlockInputType = template.BlockInputTypeTemplate is null
+                    ? template.BlockInputType is null
+                        ? null
+                        : SubstituteGenericType(template.BlockInputType.Value, actualType, inferredSecondaryType)
+                    : ParseSpecializedFunctionType(
+                        template.BlockInputTypeTemplate,
+                        template.GenericParameterName,
+                        actualType,
+                        template.SecondaryGenericParameterName,
+                        inferredSecondaryType,
+                        template.Line,
+                        template.Column),
                 SpecializedType = actualType,
                 SpecializedSecondaryType = inferredSecondaryType
             };
@@ -5824,6 +5847,133 @@ internal sealed class SemanticCompiler
         }
 
         return ParseType(typeName, line, column);
+    }
+
+    private BoundType ParseSpecializedFunctionType(
+        string typeName,
+        string? genericParameterName,
+        BoundType primaryType,
+        string? secondaryGenericParameterName,
+        BoundType? secondaryType,
+        int line,
+        int column)
+    {
+        typeName = typeName.Trim();
+        if (genericParameterName is not null && typeName == genericParameterName)
+        {
+            return primaryType;
+        }
+        if (secondaryGenericParameterName is not null && typeName == secondaryGenericParameterName)
+        {
+            return secondaryType ?? throw Error(
+                line,
+                column,
+                $"cannot infer type parameter '{secondaryGenericParameterName}'");
+        }
+        if (typeName.StartsWith("Option<", StringComparison.Ordinal) && typeName.EndsWith('>'))
+        {
+            var value = ParseSpecializedFunctionType(
+                typeName[7..^1], genericParameterName, primaryType,
+                secondaryGenericParameterName, secondaryType, line, column);
+            return _types.GetOrAddOption(value, $"Option<{FormatType(value)}>");
+        }
+        if (typeName.StartsWith("Result<", StringComparison.Ordinal) && typeName.EndsWith('>'))
+        {
+            var arguments = typeName[7..^1];
+            var separator = FindTopLevelTypeComma(arguments);
+            if (separator < 0)
+            {
+                throw Error(line, column, "Result requires success and error types");
+            }
+            var ok = ParseSpecializedFunctionType(
+                arguments[..separator], genericParameterName, primaryType,
+                secondaryGenericParameterName, secondaryType, line, column);
+            var error = ParseSpecializedFunctionType(
+                arguments[(separator + 1)..], genericParameterName, primaryType,
+                secondaryGenericParameterName, secondaryType, line, column);
+            return _types.GetOrAddResult(ok, error, $"Result<{FormatType(ok)}, {FormatType(error)}>");
+        }
+        if (typeName.StartsWith('[', StringComparison.Ordinal)
+            && typeName.EndsWith("; ~]", StringComparison.Ordinal))
+        {
+            var element = ParseSpecializedFunctionType(
+                typeName[1..^4], genericParameterName, primaryType,
+                secondaryGenericParameterName, secondaryType, line, column);
+            if (element == BoundType.Unit || IsNestedContainerElementType(element))
+            {
+                throw Error(line, column, "growable array elements must be inline scalar or user values");
+            }
+            return element == BoundType.Int
+                ? BoundType.DynamicIntArray
+                : _types.GetOrAddDynamicArray(element);
+        }
+        if (typeName.Length >= 5 && typeName[0] == '{' && typeName[^1] == '}')
+        {
+            var separator = FindTopLevelTypeColon(typeName.AsSpan(1, typeName.Length - 2));
+            if (separator >= 0)
+            {
+                var contents = typeName[1..^1];
+                var key = ParseSpecializedFunctionType(
+                    contents[..separator], genericParameterName, primaryType,
+                    secondaryGenericParameterName, secondaryType, line, column);
+                var value = ParseSpecializedFunctionType(
+                    contents[(separator + 1)..], genericParameterName, primaryType,
+                    secondaryGenericParameterName, secondaryType, line, column);
+                if (!IsSupportedDictionaryKeyType(key))
+                {
+                    throw Error(line, column,
+                        $"dictionary key type {FormatType(key)} must implement Hash.hash: self -> Int and Eq.eq: self -> Int");
+                }
+                return key == BoundType.Int && value == BoundType.Int
+                    ? BoundType.IntDictionary
+                    : _types.GetOrAddDictionary(key, value);
+            }
+        }
+        return ParseType(typeName, line, column);
+    }
+
+    private static int FindTopLevelTypeColon(ReadOnlySpan<char> text)
+    {
+        var depth = 0;
+        for (var index = 0; index < text.Length; index++)
+        {
+            depth += text[index] switch
+            {
+                '[' or '{' or '<' => 1,
+                ']' or '}' or '>' => -1,
+                _ => 0
+            };
+            if (text[index] == ':' && depth == 0)
+            {
+                return index;
+            }
+        }
+        return -1;
+    }
+
+    private static bool TypeSyntaxReferencesParameter(string typeName, string? parameterName)
+    {
+        if (parameterName is null)
+        {
+            return false;
+        }
+        for (var index = 0; index <= typeName.Length - parameterName.Length; index++)
+        {
+            if (!typeName.AsSpan(index, parameterName.Length).SequenceEqual(parameterName))
+            {
+                continue;
+            }
+            var startsIdentifier = index > 0
+                && (char.IsLetterOrDigit(typeName[index - 1]) || typeName[index - 1] == '_');
+            var endsIdentifier = index + parameterName.Length < typeName.Length
+                && (char.IsLetterOrDigit(typeName[index + parameterName.Length])
+                    || typeName[index + parameterName.Length] == '_');
+            if (!startsIdentifier && !endsIdentifier)
+            {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static int FindTopLevelTypeComma(string text)

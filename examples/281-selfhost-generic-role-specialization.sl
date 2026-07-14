@@ -20,6 +20,12 @@ main {
             values![0] -> yield
             1
         }
+
+        public collect<T> value: T -> Int block items: [T; ~] {
+            [value, ~] => yielded!
+            yielded! -> yield
+            1
+        }
         """,
         """
         namespace app.main
@@ -32,7 +38,10 @@ main {
             [1, 2, ~] -> roles.visit element {
                 element + 1
             } => visited
-            relayed + visited
+            9 -> roles.collect items {
+                items![0] + 1
+            } => collected
+            relayed + visited + collected
         }
         """,
         ~
@@ -46,6 +55,7 @@ main {
     sources! -> typedIr.lower => ir!
 
     0 => specializedItems!
+    0 => specializedCompositeItems!
     0 => typedBodyOperators!
     0 => resolvedRoles!
     0 => resolvedIndex!
@@ -58,6 +68,9 @@ main {
                 inferred![itemTypeIndex!] => itemType
                 (itemType.sourceModule == 1 and itemType.astNode == resolved.astNode and itemType.origin == 1 and itemType.targetSymbol == 2) -> if {
                     specializedItems! + 1 => specializedItems!
+                }
+                (itemType.sourceModule == 1 and itemType.astNode == resolved.astNode and itemType.origin == 13 and itemType.targetModule == -1 and itemType.targetSymbol == 2) -> if {
+                    specializedCompositeItems! + 1 => specializedCompositeItems!
                 }
                 itemTypeIndex! + 1 => itemTypeIndex!
             }
@@ -75,7 +88,12 @@ main {
         }
     }
 
-    ((errors! -> len) == 0 and specializedItems! == 2 and resolvedRoles! == 2 and typedBodyOperators! >= 2) -> if {
+    specializedItems! => scalarCount
+    specializedCompositeItems! => compositeCount
+    resolvedRoles! => roleCount
+    typedBodyOperators! => operatorCount
+    "generic role counts = errors:$((errors! -> len)),scalar:$scalarCount,composite:$compositeCount,roles:$roleCount,operators:$operatorCount" -> println
+    ((errors! -> len) == 0 and specializedItems! == 2 and specializedCompositeItems! == 1 and resolvedRoles! == 3 and typedBodyOperators! >= 3) -> if {
         "generic role specialization = valid"
     } else {
         "generic role specialization = invalid"

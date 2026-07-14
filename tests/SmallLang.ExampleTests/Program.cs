@@ -167,9 +167,8 @@ void ReportCompleted(string name, bool passed, TimeSpan elapsed)
     lock (progressLock)
     {
         var current = Interlocked.Increment(ref completed);
-        var writer = passed ? Console.Out : Console.Error;
-        writer.WriteLine($"[{current}/{totalTests}] {(passed ? "PASS" : "FAIL")} {name} ({elapsed.TotalSeconds:F2}s)");
-        writer.Flush();
+        Console.WriteLine($"[{current}/{totalTests}] {(passed ? "PASS" : "FAIL")} {name} ({elapsed.TotalSeconds:F2}s)");
+        Console.Out.Flush();
     }
 }
 

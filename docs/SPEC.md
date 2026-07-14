@@ -725,13 +725,15 @@ Because the code block is the argument, these forms are written
 `-> each i { ... }` and `-> repeat turn { ... }`, not `-> each() { ... }` or
 `-> repeat() { ... }`.
 
-Users can define block functions with a `block` parameter. The block-function
-body calls the passed executable block with `value -> yield()`:
+Users can define block functions with a typed `block` parameter. Its type is a
+full `TypeAnnotation`, so generic and composite capabilities such as `[T; ~]`
+are legal. The block-function body calls the passed executable block with
+`value -> yield`:
 
 ```smalllang
 runTimes count: Int -> Unit block turn: Int {
     1..count -> each turn {
-        turn -> yield()
+        turn -> yield
     }
 }
 
@@ -1210,6 +1212,11 @@ args -> each argument {
     "argument = $argument" -> println
 }
 ```
+
+Generic block types are specialized from the ordinary input before either the
+function's `yield` sites or the caller body are checked. For example,
+`block items: [T; ~]` becomes `[Int; ~]` when an `Int` source fixes `T = Int`.
+The caller body cannot feed constraints back into that choice.
 
 `Arguments` is a copyable, process-lifetime, read-only view rather than an owned
 `[Text; ~]`. Its `len` and index use `UIntSize`; indexing returns borrowed

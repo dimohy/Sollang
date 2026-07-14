@@ -43,7 +43,8 @@ internal sealed record BoundFunction(
     bool HasValueGenericFixedArrayInput = false,
     string ModuleName = "",
     bool IsPublic = false,
-    bool IsAsync = false);
+    bool IsAsync = false,
+    string? BlockInputTypeTemplate = null);
 
 internal sealed record BoundTraitMethod(
     string Name,

@@ -4337,10 +4337,12 @@ likewise infers one concrete closure parameter type from its use context.
 The self-host fixed-point pass now substitutes a matching nominal generic,
 extracts a matching array/box element or dictionary key/value generic from the
 source expression, and reuses a source composite when input and item generic
-shapes match. The specialized item then feeds ordinary operator inference and
-typed IR. Example 281 proves scalar, array-element, imported-role, result, and
-body-operation propagation. Recursive nested composites and reshaping such as
-`T -> [T; ~]` remain explicit follow-up work rather than being claimed complete.
+shapes match. It also reconstructs a one-level composite item such as
+`T -> [T; ~]`. The specialized item then feeds ordinary operator inference and
+typed IR. Example 281 proves scalar, array-element, reconstructed-array,
+imported-role, result, and body-operation propagation. Recursive term-arena
+integration across every consumer remains explicit follow-up work rather than
+being claimed complete.
 
 References: [Kotlin builder inference](https://kotlinlang.org/docs/using-builders-with-builder-inference.html),
 [Rust closure type inference](https://doc.rust-lang.org/book/ch13-01-closures.html#inferring-and-annotating-closure-types).
@@ -4354,7 +4356,9 @@ The example runner must never remain visually silent while expensive self-host
 LLVM tests run. Bootstrap build and grammar verification use explicit
 `[bootstrap n/total]` phase messages. Test scheduling prints
 `[start n/total] name`; completion prints `[n/total] PASS|FAIL name (seconds)`.
-Both stdout and stderr are flushed after each progress record.
+Progress records all use stdout and are flushed immediately. Detailed failure
+diagnostics remain on stderr; using two streams for counters is forbidden
+because a merged terminal can reorder otherwise correctly locked records.
 
 Started and completed counts use separate atomic counters because up to eight
 workers run concurrently. A lock keeps each progress record intact, while the
@@ -4369,5 +4373,48 @@ zero warnings and errors. The coordinated eight-worker runner passed
 grammar/table determinism and all 396 cases in 390.6 seconds. A focused
 parallel check also verified that both emitted start and completion counters
 form the exact monotonic sequence `1..total`.
+
+## D141 - Semantic Types Use Recursive Canonical Terms
+
+Status: recursive arena and generic block specialization foundation implemented
+Date: 2026-07-14
+
+Syntax types and semantic types are distinct. The AST preserves exact spelling
+and source locations, while semantic analysis lowers every nested type into a
+flat, index-addressed `TypeTerm` arena. Each term has a kind and up to two child
+indexes; structural canonicalization interns equivalent complete trees. This
+follows rustc's separation between syntax-level HIR types and canonical
+interned semantic `Ty` values, while retaining a representation SL can
+bootstrap without recursive heap objects.
+
+Substitution is bottom-up over the arena. Replacing `T` in
+`Result<[T; ~], {Text: box T}>` rebuilds and interns every affected ancestor,
+so no container-specific string replacement or fixed nesting limit is needed.
+Example 283 executes this algorithm in SL. The older nominal/composite tables
+remain temporarily for existing consumers; the arena is the migration target,
+not a second permanent type system.
+
+Block-function item declarations now accept a complete `TypeAnnotation` rather
+than a nominal-only `TypeName`. The reference compiler retains a generic block
+type template, fixes `T` from the ordinary source, recursively materializes the
+concrete block type, validates the specialized function and caller, and records
+the specialization for LLVM emission. Example 284 executes `T -> [T; ~]`; the
+`generic-composite-role-yield-mismatch` diagnostic proves the `yield` body is
+checked after specialization. The self-host fixed-point pass performs the same
+one-level reconstruction today and will consume the recursive arena as the
+remaining shallow expression-type representation is migrated.
+
+This is a partial semantic-infrastructure advance and does not promote a
+roadmap gate. Full completion still requires recursive type ids in expression
+inference, type checking, typed IR, ownership/effects, and self-host LLVM
+lowering.
+
+References: [rustc type representation](https://rustc-dev-guide.rust-lang.org/ty.html),
+[Mojo generics](https://mojolang.org/docs/manual/generics/).
+
+Regression evidence on 2026-07-14: the Release solution build completed with
+zero warnings and errors. The generic/block/grammar/type focused slice passed
+75/75, and the single coordinated eight-worker runner passed byte-for-byte
+grammar determinism plus all 399 cases in 389.8 seconds.
 
 

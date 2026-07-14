@@ -155,6 +155,13 @@ bytes, assigns stable canonical ids, and classifies named, slice, dynamic/fixed
 array, dictionary, and box layouts. Array/box element and dictionary key/value
 names are interned as canonical nominal ids; fixed arrays retain their value-
 generic length token.
+`selfhost/semantic/type_terms.sl` is the recursive successor foundation. It
+lowers every nested type annotation into an index-addressed term arena,
+structurally interns equivalent trees, and performs bottom-up generic
+substitution without recursive objects or recursive compiler calls. Example
+283 substitutes `T = Int` through `Result<[T; ~], {Text: box T}>` and verifies
+the complete resulting tree. Existing shallow semantic tables remain while
+their consumers migrate to this arena.
 `selfhost/semantic/modules.sl` accepts multiple source texts, hashes qualified
 namespace paths into deterministic 64-bit identities, and emits import edges
 with source-module indexes, target identities, path spans, and alias tokens. If
