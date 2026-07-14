@@ -3,6 +3,7 @@ namespace smalllang.compiler.semantic.ownership_check
 import smalllang.compiler.ast as ast
 import smalllang.compiler.ir.typed as typedIr
 import smalllang.compiler.lexer as lexer
+import smalllang.compiler.semantic.context as semanticContext
 import smalllang.compiler.syntax as syntax
 import syntax.generated.smalllang as grammar
 
@@ -22,7 +23,12 @@ public struct OwnershipDiagnostic {
 
 # Code 17 identifies whole-owner or overlapping-field use after a partial move.
 public analyze sources: [Text; ~] -> [OwnershipDiagnostic; ~] {
-    sources -> typedIr.lower => typed!
+    sources -> semanticContext.prepare => prepared
+    prepared -> analyzeContext
+}
+
+public analyzeContext prepared: semanticContext.CompilationContext -> [OwnershipDiagnostic; ~] {
+    prepared -> typedIr.lowerContext => typed!
     typed! -> typedIr.movesFrom => moves!
     [OwnershipDiagnostic; ~] => diagnostics!
     0 => partialMoveIndex!
@@ -30,21 +36,20 @@ public analyze sources: [Text; ~] -> [OwnershipDiagnostic; ~] {
         moves![partialMoveIndex!] => partialMove
         partialMove.memberIr >= 0 -> if {
             typed![partialMove.siteIr] => partialMoveSite
-            sources[partialMove.sourceModule] -> ast.lower => moveNodes!
-            sources[partialMove.sourceModule] -> lexer.lex => moveTokens!
-            moveNodes![partialMoveSite.astNode].start => partialMoveStart
+            prepared.ranges[partialMove.sourceModule] => sourceRange
+            prepared.nodes[sourceRange.astStart + partialMoveSite.astNode].start => partialMoveStart
             typed![partialMove.memberIr] => movedMember
-            moveNodes![movedMember.astNode] => movedMemberAst
+            prepared.nodes[sourceRange.astStart + movedMember.astNode] => movedMemberAst
             0 => movedIdentifierCount!
             movedMemberAst.firstToken => movedTokenIndex!
             movedTokenIndex! < movedMemberAst.firstToken + movedMemberAst.tokenCount -> while {
-                moveTokens![movedTokenIndex!].kind == grammar.tokenIdIdentifier -> if { movedIdentifierCount! + 1 => movedIdentifierCount! }
+                prepared.tokens[sourceRange.tokenStart + movedTokenIndex!].kind == grammar.tokenIdIdentifier -> if { movedIdentifierCount! + 1 => movedIdentifierCount! }
                 movedTokenIndex! + 1 => movedTokenIndex!
             }
             0 => movedUseIndex!
             movedUseIndex! < (typed! -> len) -> while {
                 typed![movedUseIndex!] => movedUse
-                (movedUse.kind == 5 and movedUse.sourceModule == partialMove.sourceModule and movedUse.symbol == partialMove.symbol and moveNodes![movedUse.astNode].start > partialMoveStart) -> if {
+                (movedUse.kind == 5 and movedUse.sourceModule == partialMove.sourceModule and movedUse.symbol == partialMove.symbol and prepared.nodes[sourceRange.astStart + movedUse.astNode].start > partialMoveStart) -> if {
                     movedUse.parent => movedUseAncestor!
                     -1 => movedUseMember!
                     (movedUseAncestor! >= 0 and movedUseMember! < 0) -> while {
@@ -53,11 +58,11 @@ public analyze sources: [Text; ~] -> [OwnershipDiagnostic; ~] {
                     movedUseMember! < 0 => invalidMovedUse!
                     movedUseMember! >= 0 -> if {
                         typed![movedUseMember!] => useMember
-                        moveNodes![useMember.astNode] => useMemberAst
+                        prepared.nodes[sourceRange.astStart + useMember.astNode] => useMemberAst
                         0 => useIdentifierCount!
                         useMemberAst.firstToken => useTokenIndex!
                         useTokenIndex! < useMemberAst.firstToken + useMemberAst.tokenCount -> while {
-                            moveTokens![useTokenIndex!].kind == grammar.tokenIdIdentifier -> if { useIdentifierCount! + 1 => useIdentifierCount! }
+                            prepared.tokens[sourceRange.tokenStart + useTokenIndex!].kind == grammar.tokenIdIdentifier -> if { useIdentifierCount! + 1 => useIdentifierCount! }
                             useTokenIndex! + 1 => useTokenIndex!
                         }
                         movedIdentifierCount! < useIdentifierCount! -> if { movedIdentifierCount! } else { useIdentifierCount! } => sharedIdentifierCount
@@ -69,7 +74,7 @@ public analyze sources: [Text; ~] -> [OwnershipDiagnostic; ~] {
                             0 => movedIdentifierOrdinal!
                             movedMemberAst.firstToken => movedTokenIndex!
                             (movedTokenIndex! < movedMemberAst.firstToken + movedMemberAst.tokenCount and movedIdentifierToken! < 0) -> while {
-                                moveTokens![movedTokenIndex!].kind == grammar.tokenIdIdentifier -> if {
+                                prepared.tokens[sourceRange.tokenStart + movedTokenIndex!].kind == grammar.tokenIdIdentifier -> if {
                                     movedIdentifierOrdinal! == sharedIdentifierOrdinal! -> if { movedTokenIndex! => movedIdentifierToken! }
                                     movedIdentifierOrdinal! + 1 => movedIdentifierOrdinal!
                                 }
@@ -78,19 +83,19 @@ public analyze sources: [Text; ~] -> [OwnershipDiagnostic; ~] {
                             0 => useIdentifierOrdinal!
                             useMemberAst.firstToken => useTokenIndex!
                             (useTokenIndex! < useMemberAst.firstToken + useMemberAst.tokenCount and useIdentifierToken! < 0) -> while {
-                                moveTokens![useTokenIndex!].kind == grammar.tokenIdIdentifier -> if {
+                                prepared.tokens[sourceRange.tokenStart + useTokenIndex!].kind == grammar.tokenIdIdentifier -> if {
                                     useIdentifierOrdinal! == sharedIdentifierOrdinal! -> if { useTokenIndex! => useIdentifierToken! }
                                     useIdentifierOrdinal! + 1 => useIdentifierOrdinal!
                                 }
                                 useTokenIndex! + 1 => useTokenIndex!
                             }
-                            moveTokens![movedIdentifierToken!] => movedIdentifier
-                            moveTokens![useIdentifierToken!] => useIdentifier
+                            prepared.tokens[sourceRange.tokenStart + movedIdentifierToken!] => movedIdentifier
+                            prepared.tokens[sourceRange.tokenStart + useIdentifierToken!] => useIdentifier
                             movedIdentifier.span.length == useIdentifier.span.length => sameIdentifier!
                             UIntSize(0) => identifierByte!
                             (sameIdentifier! and identifierByte! < movedIdentifier.span.length) -> while {
-                                sources[partialMove.sourceModule] -> byte(movedIdentifier.span.start + identifierByte!) => movedByte
-                                sources[partialMove.sourceModule] -> byte(useIdentifier.span.start + identifierByte!) => useByte
+                                prepared.sources[partialMove.sourceModule] -> byte(movedIdentifier.span.start + identifierByte!) => movedByte
+                                prepared.sources[partialMove.sourceModule] -> byte(useIdentifier.span.start + identifierByte!) => useByte
                                 movedByte != useByte -> if { false => sameIdentifier! }
                                 identifierByte! + UIntSize(1) => identifierByte!
                             }
@@ -104,7 +109,7 @@ public analyze sources: [Text; ~] -> [OwnershipDiagnostic; ~] {
                         0 => moveDiagnosticIndex!
                         moveDiagnosticIndex! < (diagnostics! -> len) -> while {
                             diagnostics![moveDiagnosticIndex!] => existingMoveDiagnostic
-                            (existingMoveDiagnostic.code == 17 and existingMoveDiagnostic.span.fileId == partialMove.sourceModule and existingMoveDiagnostic.span.start == moveNodes![movedUse.astNode].start) -> if { true => duplicateMoveDiagnostic! }
+                            (existingMoveDiagnostic.code == 17 and existingMoveDiagnostic.span.fileId == partialMove.sourceModule and existingMoveDiagnostic.span.start == prepared.nodes[sourceRange.astStart + movedUse.astNode].start) -> if { true => duplicateMoveDiagnostic! }
                             moveDiagnosticIndex! + 1 => moveDiagnosticIndex!
                         }
                         not duplicateMoveDiagnostic! -> if {
@@ -119,7 +124,7 @@ public analyze sources: [Text; ~] -> [OwnershipDiagnostic; ~] {
                                 actualModule: -1
                                 actualSymbol: -1
                                 actualBuiltin: -1
-                                span: syntax.SourceSpan { fileId: partialMove.sourceModule, start: moveNodes![movedUse.astNode].start, length: moveNodes![movedUse.astNode].length }
+                                span: syntax.SourceSpan { fileId: partialMove.sourceModule, start: prepared.nodes[sourceRange.astStart + movedUse.astNode].start, length: prepared.nodes[sourceRange.astStart + movedUse.astNode].length }
                             })
                         }
                     }

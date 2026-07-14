@@ -5,12 +5,14 @@ import smalllang.compiler.ir.interpolation as interpolation
 import smalllang.compiler.ir.typed as typedIr
 import smalllang.compiler.lexer as lexer
 import smalllang.compiler.llvm.target as llvmTarget
+import smalllang.compiler.semantic.analysis as analysis
 import smalllang.compiler.semantic.composite_types as compositeTypes
 import smalllang.compiler.semantic.context as semanticContext
 import smalllang.compiler.semantic.modules as modules
 import smalllang.compiler.semantic.nominal_types as nominalTypes
 import smalllang.compiler.semantic.symbols as symbols
 import smalllang.compiler.semantic.type_ids as typeIds
+import smalllang.compiler.syntax as syntax
 import syntax.generated.smalllang as grammar
 
 # First LLVM text backend slice. Names are derived only from stable module and
@@ -60,6 +62,10 @@ struct DropGlueRequest {
 
 struct EmitContext {
     sources: [Text; ~]
+    ranges: [analysis.SourceAnalysisRange; ~]
+    nodes: [ast.AstNode; ~]
+    tokens: [syntax.SyntaxToken; ~]
+    symbols: [symbols.Symbol; ~]
     ir: [typedIr.TypedIrNode; ~]
     moves: [typedIr.MoveEvent; ~]
     nominal: [nominalTypes.NominalType; ~]
@@ -295,6 +301,14 @@ prepare request: move PrepareRequest -> EmitContext {
     prepared.composite -> each compositeType { composite! -> push(compositeType) }
     [modules.ModuleIdentity; ~] => moduleIdentities!
     prepared.modules -> each moduleIdentity { moduleIdentities! -> push(moduleIdentity) }
+    [analysis.SourceAnalysisRange; ~] => analysisRanges!
+    prepared.ranges -> each sourceRange { analysisRanges! -> push(sourceRange) }
+    [ast.AstNode; ~] => analysisNodes!
+    prepared.nodes -> each node { analysisNodes! -> push(node) }
+    [syntax.SyntaxToken; ~] => analysisTokens!
+    prepared.tokens -> each token { analysisTokens! -> push(token) }
+    [symbols.Symbol; ~] => analysisSymbols!
+    prepared.symbols -> each symbol { analysisSymbols! -> push(symbol) }
     request.sources => sources
     [typeIds.SemanticType; ~] => layoutTypes!
     semanticTypes! -> each layoutType { layoutTypes! -> push(layoutType) }
@@ -311,6 +325,10 @@ prepare request: move PrepareRequest -> EmitContext {
     ir! -> typedIr.movesFrom => moves!
     EmitContext {
         sources: sources
+        ranges: analysisRanges!
+        nodes: analysisNodes!
+        tokens: analysisTokens!
+        symbols: analysisSymbols!
         ir: ir!
         moves: moves!
         nominal: nominal!
@@ -343,9 +361,9 @@ emitCore context: move EmitContext -> Unit {
         false => dropTaskMoved!
         (dropTask.bindingIndex >= 0 and dropTask.hasPartialMoves) -> if {
             context.ir[dropTask.bindingIndex] => dropGlueBinding
-            context.sources[dropGlueBinding.sourceModule] -> ast.lower => dropGlueAst!
+            context.ranges[dropGlueBinding.sourceModule] => dropGlueRange
             UIntSize(0) => dropGlueBeforeStart!
-            dropTask.beforeAst >= 0 -> if { dropGlueAst![dropTask.beforeAst].start => dropGlueBeforeStart! }
+            dropTask.beforeAst >= 0 -> if { context.nodes[dropGlueRange.astStart + dropTask.beforeAst].start => dropGlueBeforeStart! }
             0 => dropGlueMoveIndex!
             (dropGlueMoveIndex! < (context.moves -> len) and not dropTaskMoved!) -> while {
                 context.moves[dropGlueMoveIndex!] => dropGlueMove
@@ -353,9 +371,9 @@ emitCore context: move EmitContext -> Unit {
                     context.ir[dropGlueMove.siteIr] => dropGlueSite
                     true => dropGlueMoveBeforeEdge!
                     dropTask.beforeAst >= 0 -> if {
-                        dropGlueAst![dropGlueSite.astNode].start >= dropGlueBeforeStart! -> if { false => dropGlueMoveBeforeEdge! }
+                        context.nodes[dropGlueRange.astStart + dropGlueSite.astNode].start >= dropGlueBeforeStart! -> if { false => dropGlueMoveBeforeEdge! }
                     }
-                    dropGlueAst![dropGlueSite.astNode].start <= dropGlueAst![dropGlueBinding.astNode].start -> if { false => dropGlueMoveBeforeEdge! }
+                    context.nodes[dropGlueRange.astStart + dropGlueSite.astNode].start <= context.nodes[dropGlueRange.astStart + dropGlueBinding.astNode].start -> if { false => dropGlueMoveBeforeEdge! }
                     0 => dropTaskDepth!
                     dropTaskIndex! => dropTaskCursor!
                     (dropTaskCursor! >= 0 and dropTasks![dropTaskCursor!].fieldOrdinal >= 0) -> while {
@@ -363,13 +381,12 @@ emitCore context: move EmitContext -> Unit {
                         dropTasks![dropTaskCursor!].parentTask => dropTaskCursor!
                     }
                     context.ir[dropGlueMove.memberIr] => dropMoveMember
-                    context.sources[dropMoveMember.sourceModule] -> ast.lower => dropMoveNodes!
-                    context.sources[dropMoveMember.sourceModule] -> lexer.lex => dropMoveTokens!
-                    dropMoveNodes![dropMoveMember.astNode] => dropMoveAst
+                    context.ranges[dropMoveMember.sourceModule] => dropMoveRange
+                    context.nodes[dropMoveRange.astStart + dropMoveMember.astNode] => dropMoveAst
                     -1 => dropMoveDepth!
                     dropMoveAst.firstToken => dropMoveTokenIndex!
                     dropMoveTokenIndex! < dropMoveAst.firstToken + dropMoveAst.tokenCount -> while {
-                        dropMoveTokens![dropMoveTokenIndex!].kind == grammar.tokenIdIdentifier -> if { dropMoveDepth! + 1 => dropMoveDepth! }
+                        context.tokens[dropMoveRange.tokenStart + dropMoveTokenIndex!].kind == grammar.tokenIdIdentifier -> if { dropMoveDepth! + 1 => dropMoveDepth! }
                         dropMoveTokenIndex! + 1 => dropMoveTokenIndex!
                     }
                     dropTaskDepth! == dropMoveDepth! => sameDropPath!
@@ -379,21 +396,20 @@ emitCore context: move EmitContext -> Unit {
                     0 => dropMoveIdentifierOrdinal!
                     dropMoveAst.firstToken => dropMoveTokenIndex!
                     (sameDropPath! and dropMoveTokenIndex! < dropMoveAst.firstToken + dropMoveAst.tokenCount) -> while {
-                        dropMoveTokens![dropMoveTokenIndex!].kind == grammar.tokenIdIdentifier -> if {
+                        context.tokens[dropMoveRange.tokenStart + dropMoveTokenIndex!].kind == grammar.tokenIdIdentifier -> if {
                             dropMoveIdentifierOrdinal! > 0 -> if {
                                 dropMoveCurrentModule! => dropMoveOwnerSource!
                                 dropMoveCurrentOrigin! == 2 -> if { context.modules[dropMoveCurrentModule!].sourceIndex => dropMoveOwnerSource! }
-                                context.sources[dropMoveOwnerSource!] -> symbols.collect => dropMoveOwnerTable!
-                                context.sources[dropMoveOwnerSource!] -> lexer.lex => dropMoveOwnerTokens!
+                                context.ranges[dropMoveOwnerSource!] => dropMoveOwnerRange
                                 -1 => dropMoveFieldOrdinal!
                                 -1 => dropMoveFieldTypeNode!
                                 0 => dropMoveCandidateOrdinal!
                                 0 => dropMoveFieldIndex!
-                                dropMoveFieldIndex! < (dropMoveOwnerTable! -> len) -> while {
-                                    dropMoveOwnerTable![dropMoveFieldIndex!] => dropMoveField
+                                dropMoveFieldIndex! < dropMoveOwnerRange.symbolCount -> while {
+                                    context.symbols[dropMoveOwnerRange.symbolStart + dropMoveFieldIndex!] => dropMoveField
                                     (dropMoveField.kind == 26 and dropMoveField.parent == dropMoveCurrentSymbol!) -> if {
-                                        dropMoveTokens![dropMoveTokenIndex!] => dropMoveName
-                                        dropMoveOwnerTokens![dropMoveField.nameToken] => dropMoveFieldName
+                                        context.tokens[dropMoveRange.tokenStart + dropMoveTokenIndex!] => dropMoveName
+                                        context.tokens[dropMoveOwnerRange.tokenStart + dropMoveField.nameToken] => dropMoveFieldName
                                         dropMoveName.span.length == dropMoveFieldName.span.length => dropMoveEqual!
                                         UIntSize(0) => dropMoveNameByte!
                                         (dropMoveEqual! and dropMoveNameByte! < dropMoveName.span.length) -> while {
@@ -466,11 +482,11 @@ emitCore context: move EmitContext -> Unit {
             "_values)" -> println
         } else {
         (not dropTaskMoved! and (dropTask.typeOrigin == 0 or dropTask.typeOrigin == 2)) -> if {
-            context.sources[dropTask.typeModule] -> symbols.collect => dropStructTable!
+            context.ranges[dropTask.typeModule] => dropStructRange
             0 => dropFieldOrdinal!
             0 => dropFieldIndex!
-            dropFieldIndex! < (dropStructTable! -> len) -> while {
-                dropStructTable![dropFieldIndex!] => dropField
+            dropFieldIndex! < dropStructRange.symbolCount -> while {
+                context.symbols[dropStructRange.symbolStart + dropFieldIndex!] => dropField
                 (dropField.kind == 26 and dropField.parent == dropTask.typeSymbol) -> if {
                     -1 => dropFieldOrigin!
                     -1 => dropFieldModule!

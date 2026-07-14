@@ -4865,4 +4865,52 @@ sit within the preceding context range (415.5-421.2 seconds full and roughly
 63.5-64.1 seconds single), so the change is recorded as architectural reuse,
 not a demonstrated performance improvement.
 
+## D152 - Diagnostics, Coroutines, and Drop Glue Share Analysis
+
+Status: ownership/type diagnostics and coroutine/drop consumers connected
+Date: 2026-07-14
+
+Type diagnostics no longer call nominal and composite source-only resolvers
+independently or lower the AST again for spans. `analyzeContext` reads the
+already resolved nominal/composite tables and flat AST ranges from one
+`CompilationContext`. Partial-move ownership diagnostics similarly call
+`typedIr.lowerContext` once and compare member paths against the context's
+source-local AST/token ranges rather than parsing and lexing for each move.
+Their source-only `analyze` entry points remain thin compatible wrappers.
+
+Coroutine analysis now has one aggregate boundary. `CoroutinePlan` contains
+typed IR, suspension points, live frame slots, and deterministic destruction
+slots. `coroutinePlanContext` lowers typed IR once and derives all three side
+tables from the same flat AST/token products. The legacy `suspensions`,
+`frameSlots`, and `destroySlots` functions copy the corresponding table from a
+single plan for compatibility. Example 242 uses the aggregate directly, so its
+three requested tables no longer trigger six typed-IR lowerings.
+
+LLVM `EmitContext` now retains the package ranges, AST, token, and symbol tables
+needed after semantic preparation. Recursive struct drop and partial-member
+move filtering use these records directly. They no longer call AST lowering,
+lexing, or symbol collection while walking recursive drop tasks. The remaining
+emitter still contains other source scans; those are an explicit next migration
+target rather than being hidden by this decision.
+
+Example 295 prepares one context and passes it to type diagnostics, ownership
+diagnostics, and coroutine planning. Its executable result proves zero type
+errors, one overlapping partial-move error, two suspension points, six live
+frame slots, and five destruction entries from the shared products. Existing
+diagnostic and async compatibility paths remain covered independently.
+
+This migration does not promote a formal language gate. It changes reuse and
+orchestration, not the completeness of effect enforcement, all-exit cleanup,
+generic nominal layout, or canonical container-child lowering. Progress stays
+42 complete, 13 partial, 5 missing: 48.5/60 (80.8%).
+
+Regression evidence on 2026-07-14: type/ownership diagnostic tests passed 6/6,
+the async/ownership/context slice passed 12/12, recursive and partial-move LLVM
+drop tests passed 6/6, and example 295 passed independently. Release build had
+zero warnings and errors. The coordinated eight-worker full suite passed all
+410 cases in 388.7 seconds with monotonic flushed `n/410` progress. This is
+29.0 seconds, or 6.9 percent, below the preceding 417.7-second 409-case run
+despite one added case; it is recorded as an observed full-run improvement,
+not as proof of an isolated consumer microbenchmark.
+
 

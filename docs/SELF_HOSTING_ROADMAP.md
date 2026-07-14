@@ -679,10 +679,14 @@ without rebuilding those products. Module/import/qualified/call resolution and
 canonical type-ID, nominal, composite, and imported-type resolution consume the
 same package. Source-only APIs remain thin compatibility wrappers, while the
 type-term and type-use lowerers expose prepared syntax entry points. Ownership/
-effect products, recursive drop, and remaining LLVM source scans still need
-migration. The context is a correctness and architecture improvement; current
-409-case and single-example timings remain effectively flat, so it is not yet
-claimed as a speed win.
+type diagnostics and partial-move ownership diagnostics now consume the same
+context. Coroutine suspension, frame-slot, and destruction tables are produced
+together from one typed IR in `CoroutinePlan`; recursive/partial-move LLVM drop
+glue reads the flat AST/token/symbol tables instead of rebuilding them. Effect
+enforcement and the remaining LLVM source scans still need migration. The first
+410-case run after these consumers moved passed in 388.7 seconds, an observed
+6.9 percent reduction from the preceding 417.7-second 409-case run, although a
+single full-run comparison is not treated as an isolated benchmark proof.
 
 Self-hosted LLVM text selects descriptors implemented in the file module
 `smalllang.compiler.llvm.target`. Windows x64/COFF, Linux x64/ELF, and

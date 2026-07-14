@@ -2,6 +2,7 @@ namespace smalllang.compiler.semantic.type_diagnostics
 
 import smalllang.compiler.ast as ast
 import smalllang.compiler.semantic.composite_types as compositeTypes
+import smalllang.compiler.semantic.context as semanticContext
 import smalllang.compiler.semantic.nominal_types as nominalTypes
 import smalllang.compiler.syntax as syntax
 
@@ -17,15 +18,18 @@ public struct TypeDiagnostic {
 # Code 3 identifies a missing imported nominal type.
 # Code 4 identifies an imported nominal type that is not public.
 public analyze sources: [Text; ~] -> [TypeDiagnostic; ~] {
-    sources -> nominalTypes.resolve => resolvedTypes!
-    sources -> compositeTypes.resolve => composite!
+    sources -> semanticContext.prepare => prepared
+    prepared -> analyzeContext
+}
+
+public analyzeContext prepared: semanticContext.CompilationContext -> [TypeDiagnostic; ~] {
     [TypeDiagnostic; ~] => diagnostics!
     0 => resolvedIndex!
-    resolvedIndex! < (resolvedTypes! -> len) -> while {
-        resolvedTypes![resolvedIndex!] => resolved
+    resolvedIndex! < (prepared.nominal -> len) -> while {
+        prepared.nominal[resolvedIndex!] => resolved
         (resolved.status == 2 or resolved.status == 3) -> if {
-            sources[resolved.sourceModule] -> ast.lower => sourceNodes!
-            sourceNodes![resolved.typeAst] => typeNode
+            prepared.ranges[resolved.sourceModule] => sourceRange
+            prepared.nodes[sourceRange.astStart + resolved.typeAst] => typeNode
             syntax.SourceSpan {
                 fileId: resolved.sourceModule
                 start: typeNode.start
@@ -44,11 +48,11 @@ public analyze sources: [Text; ~] -> [TypeDiagnostic; ~] {
         resolvedIndex! + 1 => resolvedIndex!
     }
     0 => compositeIndex!
-    compositeIndex! < (composite! -> len) -> while {
-        composite![compositeIndex!] => resolvedComposite
+    compositeIndex! < (prepared.composite -> len) -> while {
+        prepared.composite[compositeIndex!] => resolvedComposite
         resolvedComposite.status == 2 -> if {
-            sources[resolvedComposite.sourceModule] -> ast.lower => sourceNodes!
-            sourceNodes![resolvedComposite.typeAst] => typeNode
+            prepared.ranges[resolvedComposite.sourceModule] => sourceRange
+            prepared.nodes[sourceRange.astStart + resolvedComposite.typeAst] => typeNode
             diagnostics! -> push(TypeDiagnostic {
                 code: 3
                 sourceModule: resolvedComposite.sourceModule

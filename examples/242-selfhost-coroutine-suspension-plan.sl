@@ -22,16 +22,14 @@ main {
         ~
     ] => sources!
 
-    sources! -> typedIr.suspensions => points!
-    sources! -> typedIr.frameSlots => slots!
-    sources! -> typedIr.destroySlots => destroys!
+    sources! -> typedIr.coroutinePlan => plan
     0 => taskSlots!
     0 => ownedSlots!
     0 => slotIndex!
-    slotIndex! < (slots! -> len) -> while {
-        ((slots![slotIndex!].flags / 4) % 2 == 1) -> if { taskSlots! + 1 => taskSlots! }
-        ((slots![slotIndex!].flags / 2) % 2 == 1) -> if { ownedSlots! + 1 => ownedSlots! }
+    slotIndex! < (plan.slots -> len) -> while {
+        ((plan.slots[slotIndex!].flags / 4) % 2 == 1) -> if { taskSlots! + 1 => taskSlots! }
+        ((plan.slots[slotIndex!].flags / 2) % 2 == 1) -> if { ownedSlots! + 1 => ownedSlots! }
         slotIndex! + 1 => slotIndex!
     }
-    "suspensions=$(points! -> len),states=$(points![0].state)/$(points![1].state),slots=$(slots! -> len),taskSlots=$(taskSlots!),ownedSlots=$(ownedSlots!),destroySlots=$(destroys! -> len)" -> println
+    "suspensions=$(plan.points -> len),states=$(plan.points[0].state)/$(plan.points[1].state),slots=$(plan.slots -> len),taskSlots=$(taskSlots!),ownedSlots=$(ownedSlots!),destroySlots=$(plan.destroys -> len)" -> println
 }

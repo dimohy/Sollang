@@ -94,6 +94,15 @@ public struct CoroutineFrameSlot {
     flags: Int
 }
 
+# One lowering produces every coroutine side table. Consumers that need more
+# than one table keep this aggregate and avoid rebuilding typed IR.
+public struct CoroutinePlan {
+    ir: [TypedIrNode; ~]
+    points: [CoroutineSuspendPoint; ~]
+    slots: [CoroutineFrameSlot; ~]
+    destroys: [CoroutineFrameSlot; ~]
+}
+
 public struct TypedIrRequest {
     sources: [Text; ~]
     types: [typeIds.SemanticType; ~]
@@ -1583,21 +1592,20 @@ public moves sources: [Text; ~] -> [MoveEvent; ~] {
     sources -> lower -> movesFrom
 }
 
-public suspensions sources: [Text; ~] -> [CoroutineSuspendPoint; ~] {
-    sources -> lower => ir!
+public coroutinePlanContext prepared: semanticContext.CompilationContext -> CoroutinePlan {
+    prepared -> lowerContext => ir!
     [CoroutineSuspendPoint; ~] => points!
     0 => sourceIndex!
-    sourceIndex! < (sources -> len) -> while {
-        sources[sourceIndex!] => source
-        source -> ast.lower => astNodes!
-        source -> lexer.lex => tokens!
+    sourceIndex! < (prepared.sources -> len) -> while {
+        prepared.sources[sourceIndex!] => source
+        prepared.ranges[sourceIndex!] => sourceRange
         0 => awaitAstIndex!
-        awaitAstIndex! < (astNodes! -> len) -> while {
-            astNodes![awaitAstIndex!] => awaitAst
+        awaitAstIndex! < sourceRange.astCount -> while {
+            prepared.nodes[sourceRange.astStart + awaitAstIndex!] => awaitAst
             false => isAwait!
             false => isYield!
-            (awaitAst.kind == 16 and awaitAst.parent >= 0 and astNodes![awaitAst.parent].kind == 10 and awaitAst.payloadToken >= 0) -> if {
-                tokens![awaitAst.payloadToken] => awaitToken
+            (awaitAst.kind == 16 and awaitAst.parent >= 0 and prepared.nodes[sourceRange.astStart + awaitAst.parent].kind == 10 and awaitAst.payloadToken >= 0) -> if {
+                prepared.tokens[sourceRange.tokenStart + awaitAst.payloadToken] => awaitToken
                 awaitToken.span.length == UIntSize(5) -> if {
                     source -> byte(awaitToken.span.start) => awaitByte0
                     source -> byte(awaitToken.span.start + UIntSize(1)) => awaitByte1
@@ -1610,7 +1618,7 @@ public suspensions sources: [Text; ~] -> [CoroutineSuspendPoint; ~] {
                 }
             }
             (awaitAst.kind == 15 and awaitAst.payloadToken >= 0) -> if {
-                tokens![awaitAst.payloadToken] => yieldToken
+                prepared.tokens[sourceRange.tokenStart + awaitAst.payloadToken] => yieldToken
                 yieldToken.span.length == UIntSize(5) -> if {
                     source -> byte(yieldToken.span.start) => yieldByte0
                     source -> byte(yieldToken.span.start + UIntSize(1)) => yieldByte1
@@ -1624,10 +1632,10 @@ public suspensions sources: [Text; ~] -> [CoroutineSuspendPoint; ~] {
             }
             (isAwait! or isYield!) -> if {
                 awaitAst.parent => functionAstIndex!
-                (functionAstIndex! >= 0 and astNodes![functionAstIndex!].kind != 7) -> while {
-                    astNodes![functionAstIndex!].parent => functionAstIndex!
+                (functionAstIndex! >= 0 and prepared.nodes[sourceRange.astStart + functionAstIndex!].kind != 7) -> while {
+                    prepared.nodes[sourceRange.astStart + functionAstIndex!].parent => functionAstIndex!
                 }
-                (functionAstIndex! >= 0 and (astNodes![functionAstIndex!].flags / 8) % 2 == 1) -> if {
+                (functionAstIndex! >= 0 and (prepared.nodes[sourceRange.astStart + functionAstIndex!].flags / 8) % 2 == 1) -> if {
                     -1 => functionIr!
                     -1 => awaitIr!
                     0 => irIndex!
@@ -1663,22 +1671,16 @@ public suspensions sources: [Text; ~] -> [CoroutineSuspendPoint; ~] {
         }
         sourceIndex! + 1 => sourceIndex!
     }
-    points!
-}
-
-public frameSlots sources: [Text; ~] -> [CoroutineFrameSlot; ~] {
-    sources -> lower => ir!
-    sources -> suspensions => points!
     [CoroutineFrameSlot; ~] => slots!
     0 => pointIndex!
     pointIndex! < (points! -> len) -> while {
         points![pointIndex!] => point
-        sources[point.sourceModule] -> ast.lower => astNodes!
+        prepared.ranges[point.sourceModule] => sourceRange
         ir![point.functionIr].astNode => functionAst
-        astNodes![point.awaitAst].start => awaitStart
+        prepared.nodes[sourceRange.astStart + point.awaitAst].start => awaitStart
         point.awaitAst => awaitBindingAst!
-        (awaitBindingAst! >= 0 and astNodes![awaitBindingAst!].kind != 9) -> while {
-            astNodes![awaitBindingAst!].parent => awaitBindingAst!
+        (awaitBindingAst! >= 0 and prepared.nodes[sourceRange.astStart + awaitBindingAst!].kind != 9) -> while {
+            prepared.nodes[sourceRange.astStart + awaitBindingAst!].parent => awaitBindingAst!
         }
         0 => definitionIndex!
         definitionIndex! < (ir! -> len) -> while {
@@ -1687,20 +1689,20 @@ public frameSlots sources: [Text; ~] -> [CoroutineFrameSlot; ~] {
             definition.astNode => definitionAncestor!
             (definitionAncestor! >= 0 and not belongsToFunction!) -> while {
                 definitionAncestor! == functionAst -> if { true => belongsToFunction! } else {
-                    astNodes![definitionAncestor!].parent => definitionAncestor!
+                    prepared.nodes[sourceRange.astStart + definitionAncestor!].parent => definitionAncestor!
                 }
             }
-            (definition.kind == 17 and definition.sourceModule == point.sourceModule and definition.symbol >= 0 and definition.astNode != awaitBindingAst! and belongsToFunction! and astNodes![definition.astNode].start < awaitStart) -> if {
+            (definition.kind == 17 and definition.sourceModule == point.sourceModule and definition.symbol >= 0 and definition.astNode != awaitBindingAst! and belongsToFunction! and prepared.nodes[sourceRange.astStart + definition.astNode].start < awaitStart) -> if {
                 false => usedAfterAwait!
                 0 => useIndex!
                 (useIndex! < (ir! -> len) and not usedAfterAwait!) -> while {
                     ir![useIndex!] => use
-                    (use.kind == 5 and use.sourceModule == point.sourceModule and use.symbol == definition.symbol and use.astNode >= 0 and astNodes![use.astNode].start > awaitStart) -> if {
+                    (use.kind == 5 and use.sourceModule == point.sourceModule and use.symbol == definition.symbol and use.astNode >= 0 and prepared.nodes[sourceRange.astStart + use.astNode].start > awaitStart) -> if {
                         false => useBelongsToFunction!
                         use.astNode => useAncestor!
                         (useAncestor! >= 0 and not useBelongsToFunction!) -> while {
                             useAncestor! == functionAst -> if { true => useBelongsToFunction! } else {
-                                astNodes![useAncestor!].parent => useAncestor!
+                                prepared.nodes[sourceRange.astStart + useAncestor!].parent => useAncestor!
                             }
                         }
                         useBelongsToFunction! -> if { true => usedAfterAwait! }
@@ -1721,7 +1723,7 @@ public frameSlots sources: [Text; ~] -> [CoroutineFrameSlot; ~] {
                             false => belongsToDefinition!
                             (taskAncestor! >= 0 and not belongsToDefinition!) -> while {
                                 taskAncestor! == definition.astNode -> if { true => belongsToDefinition! } else {
-                                    astNodes![taskAncestor!].parent => taskAncestor!
+                                    prepared.nodes[sourceRange.astStart + taskAncestor!].parent => taskAncestor!
                                 }
                             }
                             belongsToDefinition! -> if { true => isTaskSlot! }
@@ -1748,19 +1750,10 @@ public frameSlots sources: [Text; ~] -> [CoroutineFrameSlot; ~] {
         }
         pointIndex! + 1 => pointIndex!
     }
-    slots!
-}
-
-# Destruction order is explicit and deterministic. Each state starts with a
-# synthetic active-child entry (symbol -1, Task bit set), followed by initialized
-# owned frame slots in reverse definition order. Scalar-only slots need no drop.
-public destroySlots sources: [Text; ~] -> [CoroutineFrameSlot; ~] {
-    sources -> suspensions => points!
-    sources -> frameSlots => slots!
     [CoroutineFrameSlot; ~] => destroys!
-    0 => pointIndex!
-    pointIndex! < (points! -> len) -> while {
-        points![pointIndex!] => point
+    0 => destroyPointIndex!
+    destroyPointIndex! < (points! -> len) -> while {
+        points![destroyPointIndex!] => point
         destroys! -> push(CoroutineFrameSlot {
             functionIr: point.functionIr
             state: point.state
@@ -1782,7 +1775,37 @@ public destroySlots sources: [Text; ~] -> [CoroutineFrameSlot; ~] {
                 destroys! -> push(slot)
             }
         }
-        pointIndex! + 1 => pointIndex!
+        destroyPointIndex! + 1 => destroyPointIndex!
     }
+    CoroutinePlan { ir: ir!, points: points!, slots: slots!, destroys: destroys! } => plan!
+    plan!
+}
+
+public coroutinePlan sources: [Text; ~] -> CoroutinePlan {
+    sources -> semanticContext.prepare => prepared
+    prepared -> coroutinePlanContext
+}
+
+public suspensions sources: [Text; ~] -> [CoroutineSuspendPoint; ~] {
+    sources -> coroutinePlan => plan
+    [CoroutineSuspendPoint; ~] => points!
+    plan.points -> each point { points! -> push(point) }
+    points!
+}
+
+public frameSlots sources: [Text; ~] -> [CoroutineFrameSlot; ~] {
+    sources -> coroutinePlan => plan
+    [CoroutineFrameSlot; ~] => slots!
+    plan.slots -> each slot { slots! -> push(slot) }
+    slots!
+}
+
+# Destruction order is explicit and deterministic. Each state starts with a
+# synthetic active-child entry (symbol -1, Task bit set), followed by initialized
+# owned frame slots in reverse definition order. Scalar-only slots need no drop.
+public destroySlots sources: [Text; ~] -> [CoroutineFrameSlot; ~] {
+    sources -> coroutinePlan => plan
+    [CoroutineFrameSlot; ~] => destroys!
+    plan.destroys -> each slot { destroys! -> push(slot) }
     destroys!
 }
