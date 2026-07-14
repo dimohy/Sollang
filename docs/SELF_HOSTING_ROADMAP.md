@@ -686,7 +686,10 @@ glue reads the flat AST/token/symbol tables instead of rebuilding them. The
 reference compiler now parses closed `uses` sets, enforces transitive callee
 capabilities, treats `main` as the root boundary, and covers Console, File,
 Clock, Random, Process, Environment, mapped files, generics, and role blocks.
-A flat self-host effect product and role-handler discharge still need
+The self-host semantic layer now derives flat source-qualified `FunctionEffect`
+and `EffectDiagnostic` products from one borrowed `CompilationContext`. It
+checks local, imported, and builtin-alias calls without rebuilding syntax.
+Role-handler discharge and self-host map/flush syntax effects still need
 migration. The LLVM text emitter's 67 direct
 `lexer.lex`, `ast.lower`, and `symbols.collect` sites now read these flat package
 products through source ranges, covering scheduling, control flow, cleanup,
@@ -698,8 +701,11 @@ for each call. Only the embedded `$(expression)` fragment itself is parsed.
 The recent coordinated 410-case runs passed in 388.7, 395.4, and 398.0 seconds;
 these are treated as full-run observations, not isolated benchmark proof.
 The reference effect-set slice then passed the coordinated 416-case suite in
-393.2 seconds with flushed monotonic progress; the formal gate count remains
-unchanged until the flat self-host effect product exists.
+393.2 seconds with flushed monotonic progress. Example 297 adds executable
+self-host effect-product evidence; its focused call/grammar/effect set passed
+22/22 and the coordinated suite passed 417/417 in 397.4 seconds with flushed
+monotonic progress. The formal gate count remains unchanged until handler
+discharge and syntax-level map/flush parity exist.
 
 Self-hosted LLVM text selects descriptors implemented in the file module
 `smalllang.compiler.llvm.target`. Windows x64/COFF, Linux x64/ELF, and

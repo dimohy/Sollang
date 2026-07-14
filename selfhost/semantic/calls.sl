@@ -6,6 +6,7 @@ import smalllang.compiler.semantic.analysis as analysis
 import smalllang.compiler.semantic.modules as modules
 import smalllang.compiler.semantic.qualified as qualified
 import smalllang.compiler.semantic.symbols as symbols
+import smalllang.compiler.syntax as syntax
 import syntax.generated.smalllang as grammar
 
 public struct CallResolution {
@@ -30,6 +31,57 @@ public struct ModuleCallRequest {
     qualified: [qualified.QualifiedResolution; ~]
 }
 
+struct TokenNameRequest {
+    source: Text
+    token: syntax.SyntaxToken
+    expected: Text
+}
+
+struct RuntimeNameRequest {
+    source: Text
+    token: syntax.SyntaxToken
+}
+
+tokenNameIs request: TokenNameRequest -> Bool {
+    request.token.span.length == (request.expected -> len) => equal!
+    UIntSize(0) => index!
+    (equal! and index! < request.token.span.length) -> while {
+        (request.source -> byte(request.token.span.start + index!)) != (request.expected -> byte(index!)) -> if { false => equal! }
+        index! + UIntSize(1) => index!
+    }
+    equal!
+}
+
+# Negative symbols are stable built-in aliases used before stdlib-qualified
+# resolution. -101/-102 are retained for typed-IR compatibility.
+runtimeFunctionSymbol request: RuntimeNameRequest -> Int {
+    TokenNameRequest { source: request.source, token: request.token, expected: "print" } -> tokenNameIs -> if { -101 } else {
+    TokenNameRequest { source: request.source, token: request.token, expected: "println" } -> tokenNameIs -> if { -102 } else {
+    TokenNameRequest { source: request.source, token: request.token, expected: "readInt" } -> tokenNameIs -> if { -103 } else {
+    TokenNameRequest { source: request.source, token: request.token, expected: "seedRandom" } -> tokenNameIs -> if { -104 } else {
+    TokenNameRequest { source: request.source, token: request.token, expected: "randomBelow" } -> tokenNameIs -> if { -105 } else {
+    TokenNameRequest { source: request.source, token: request.token, expected: "openIntWriter" } -> tokenNameIs -> if { -106 } else {
+    TokenNameRequest { source: request.source, token: request.token, expected: "writeInt" } -> tokenNameIs -> if { -107 } else {
+    TokenNameRequest { source: request.source, token: request.token, expected: "closeIntWriter" } -> tokenNameIs -> if { -108 } else {
+    TokenNameRequest { source: request.source, token: request.token, expected: "openIntReader" } -> tokenNameIs -> if { -109 } else {
+    TokenNameRequest { source: request.source, token: request.token, expected: "closestInt" } -> tokenNameIs -> if { -110 } else {
+    TokenNameRequest { source: request.source, token: request.token, expected: "closeIntReader" } -> tokenNameIs -> if { -111 } else {
+    TokenNameRequest { source: request.source, token: request.token, expected: "nowMillis" } -> tokenNameIs -> if { -112 } else {
+    TokenNameRequest { source: request.source, token: request.token, expected: "sleep" } -> tokenNameIs -> if { -113 } else { -1 }
+    }
+    }
+    }
+    }
+    }
+    }
+    }
+    }
+    }
+    }
+    }
+    }
+}
+
 # Status 0 is a resolved local function and 2 is an unresolved call target.
 public resolve source: Text -> [CallResolution; ~] {
     source -> ast.lower => nodes!
@@ -41,6 +93,7 @@ public resolve source: Text -> [CallResolution; ~] {
         nodes![astIndex!] => node
         false => hasControlTarget!
         false => hasFlowCallTarget!
+        false => hasQualifiedFlowTarget!
         0 => controlTargetSearch!
         controlTargetSearch! < (nodes! -> len) -> while {
             (nodes![controlTargetSearch!].parent == astIndex! and (nodes![controlTargetSearch!].kind == 42 or nodes![controlTargetSearch!].kind == 44)) -> if { true => hasControlTarget! }
@@ -49,6 +102,7 @@ public resolve source: Text -> [CallResolution; ~] {
         node.firstToken => flowTokenIndex!
         (node.kind == 10 and flowTokenIndex! < node.firstToken + node.tokenCount) -> while {
             tokens![flowTokenIndex!].kind == grammar.tokenIdArrow -> if { true => hasFlowCallTarget! }
+            tokens![flowTokenIndex!].kind == grammar.tokenIdDot -> if { true => hasQualifiedFlowTarget! }
             flowTokenIndex! + 1 => flowTokenIndex!
         }
         ((node.kind == 10 and hasFlowCallTarget! and not hasControlTarget!) or (node.kind == 11 and (node.cstRuleId == grammar.ruleIdCallExpression or node.cstRuleId == grammar.ruleIdTypeApplicationExpression)) or node.kind == 15 or node.kind == 48) -> if {
@@ -67,10 +121,26 @@ public resolve source: Text -> [CallResolution; ~] {
             }
             callNameToken! >= 0 -> if {
             -1 => functionSymbol!
+            node.parent => callerAst!
+            -1 => callerFunctionAst!
+            (callerAst! >= 0 and callerFunctionAst! < 0) -> while {
+                nodes![callerAst!] => callerNode
+                callerNode.kind == 7 -> if { callerAst! => callerFunctionAst! } else { callerNode.parent => callerAst! }
+            }
+            -1 => callerFunctionSymbol!
+            0 => callerSymbolSearch!
+            (callerSymbolSearch! < (table! -> len) and callerFunctionSymbol! < 0) -> while {
+                (table![callerSymbolSearch!].kind == 7 and table![callerSymbolSearch!].astNode == callerFunctionAst!) -> if { callerSymbolSearch! => callerFunctionSymbol! }
+                callerSymbolSearch! + 1 => callerSymbolSearch!
+            }
+            -1 => localOwnerSymbol!
+            callerFunctionSymbol! >= 0 -> if {
+                table![callerFunctionSymbol!].parent >= 0 -> if { table![callerFunctionSymbol!].parent => localOwnerSymbol! } else { callerFunctionSymbol! => localOwnerSymbol! }
+            }
             0 => symbolIndex!
             (symbolIndex! < (table! -> len) and functionSymbol! < 0) -> while {
                 table![symbolIndex!] => candidate
-                (candidate.kind == 7 and candidate.parent < 0) -> if {
+                (candidate.kind == 7 and (candidate.parent < 0 or candidate.parent == localOwnerSymbol!)) -> if {
                     tokens![callNameToken!] => callName
                     tokens![candidate.nameToken] => functionName
                     callName.span.length == functionName.span.length => equal!
@@ -85,7 +155,7 @@ public resolve source: Text -> [CallResolution; ~] {
                 }
                 symbolIndex! + 1 => symbolIndex!
             }
-            (node.kind == 11 or node.kind == 48 or functionSymbol! >= 0) -> if {
+            ((node.kind == 10 and hasQualifiedFlowTarget!) or node.kind == 11 or node.kind == 48 or functionSymbol! >= 0) -> if {
                 resolved! -> push(CallResolution {
                     callAst: astIndex!
                     functionSymbol: functionSymbol!
@@ -120,6 +190,7 @@ public resolveModulesPrepared request: move ModuleCallRequest -> [ModuleCallReso
             nodes![callAstIndex!] => callNode
             false => moduleHasControlTarget!
             false => moduleHasFlowCallTarget!
+            false => moduleHasQualifiedFlowTarget!
             0 => moduleControlTargetSearch!
             moduleControlTargetSearch! < (nodes! -> len) -> while {
                 (nodes![moduleControlTargetSearch!].parent == callAstIndex! and (nodes![moduleControlTargetSearch!].kind == 42 or nodes![moduleControlTargetSearch!].kind == 44)) -> if { true => moduleHasControlTarget! }
@@ -128,6 +199,7 @@ public resolveModulesPrepared request: move ModuleCallRequest -> [ModuleCallReso
             callNode.firstToken => moduleFlowTokenIndex!
             (callNode.kind == 10 and moduleFlowTokenIndex! < callNode.firstToken + callNode.tokenCount) -> while {
                 tokens![moduleFlowTokenIndex!].kind == grammar.tokenIdArrow -> if { true => moduleHasFlowCallTarget! }
+                tokens![moduleFlowTokenIndex!].kind == grammar.tokenIdDot -> if { true => moduleHasQualifiedFlowTarget! }
                 moduleFlowTokenIndex! + 1 => moduleFlowTokenIndex!
             }
             ((callNode.kind == 10 and moduleHasFlowCallTarget! and not moduleHasControlTarget!) or (callNode.kind == 11 and (callNode.cstRuleId == grammar.ruleIdCallExpression or callNode.cstRuleId == grammar.ruleIdTypeApplicationExpression)) or callNode.kind == 15 or callNode.kind == 48) -> if {
@@ -146,10 +218,26 @@ public resolveModulesPrepared request: move ModuleCallRequest -> [ModuleCallReso
                 }
                 callNameToken! >= 0 -> if {
                 -1 => localFunctionSymbol!
+                callNode.parent => callerAst!
+                -1 => callerFunctionAst!
+                (callerAst! >= 0 and callerFunctionAst! < 0) -> while {
+                    nodes![callerAst!] => callerNode
+                    callerNode.kind == 7 -> if { callerAst! => callerFunctionAst! } else { callerNode.parent => callerAst! }
+                }
+                -1 => callerFunctionSymbol!
+                0 => callerSymbolSearch!
+                (callerSymbolSearch! < (table! -> len) and callerFunctionSymbol! < 0) -> while {
+                    (table![callerSymbolSearch!].kind == 7 and table![callerSymbolSearch!].astNode == callerFunctionAst!) -> if { callerSymbolSearch! => callerFunctionSymbol! }
+                    callerSymbolSearch! + 1 => callerSymbolSearch!
+                }
+                -1 => localOwnerSymbol!
+                callerFunctionSymbol! >= 0 -> if {
+                    table![callerFunctionSymbol!].parent >= 0 -> if { table![callerFunctionSymbol!].parent => localOwnerSymbol! } else { callerFunctionSymbol! => localOwnerSymbol! }
+                }
                 0 => localSymbolIndex!
                 (localSymbolIndex! < (table! -> len) and localFunctionSymbol! < 0) -> while {
                     table![localSymbolIndex!] => localCandidate
-                    (localCandidate.kind == 7 and localCandidate.parent < 0) -> if {
+                    (localCandidate.kind == 7 and (localCandidate.parent < 0 or localCandidate.parent == localOwnerSymbol!)) -> if {
                         tokens![callNameToken!] => callName
                         tokens![localCandidate.nameToken] => functionName
                         callName.span.length == functionName.span.length => localEqual!
@@ -164,32 +252,11 @@ public resolveModulesPrepared request: move ModuleCallRequest -> [ModuleCallReso
                     }
                     localSymbolIndex! + 1 => localSymbolIndex!
                 }
-                ((callNode.kind == 10 or callNode.kind == 11) and localFunctionSymbol! < 0) -> if {
-                    tokens![callNameToken!] => runtimeName
-                    runtimeName.span.length == UIntSize(5) -> if {
-                        source -> byte(runtimeName.span.start) => runtimeByte0
-                        source -> byte(runtimeName.span.start + UIntSize(1)) => runtimeByte1
-                        source -> byte(runtimeName.span.start + UIntSize(2)) => runtimeByte2
-                        source -> byte(runtimeName.span.start + UIntSize(3)) => runtimeByte3
-                        source -> byte(runtimeName.span.start + UIntSize(4)) => runtimeByte4
-                        (runtimeByte0 == UInt8(112) and runtimeByte1 == UInt8(114) and runtimeByte2 == UInt8(105) and runtimeByte3 == UInt8(110) and runtimeByte4 == UInt8(116)) -> if {
-                            -101 => localFunctionSymbol!
-                        }
-                    }
-                    runtimeName.span.length == UIntSize(7) -> if {
-                        source -> byte(runtimeName.span.start) => runtimeByte0
-                        source -> byte(runtimeName.span.start + UIntSize(1)) => runtimeByte1
-                        source -> byte(runtimeName.span.start + UIntSize(2)) => runtimeByte2
-                        source -> byte(runtimeName.span.start + UIntSize(3)) => runtimeByte3
-                        source -> byte(runtimeName.span.start + UIntSize(4)) => runtimeByte4
-                        source -> byte(runtimeName.span.start + UIntSize(5)) => runtimeByte5
-                        source -> byte(runtimeName.span.start + UIntSize(6)) => runtimeByte6
-                        (runtimeByte0 == UInt8(112) and runtimeByte1 == UInt8(114) and runtimeByte2 == UInt8(105) and runtimeByte3 == UInt8(110) and runtimeByte4 == UInt8(116) and runtimeByte5 == UInt8(108) and runtimeByte6 == UInt8(110)) -> if {
-                            -102 => localFunctionSymbol!
-                        }
-                    }
+                ((callNode.kind == 10 or callNode.kind == 11 or callNode.kind == 15) and localFunctionSymbol! < 0) -> if {
+                    RuntimeNameRequest { source: source, token: tokens![callNameToken!] } -> runtimeFunctionSymbol => runtimeSymbol
+                    runtimeSymbol < -1 -> if { runtimeSymbol => localFunctionSymbol! }
                 }
-                (callNode.kind == 11 or callNode.kind == 48 or localFunctionSymbol! != -1) -> if {
+                ((callNode.kind == 10 and moduleHasQualifiedFlowTarget!) or callNode.kind == 11 or callNode.kind == 48 or localFunctionSymbol! != -1) -> if {
                     localCalls! -> push(CallResolution {
                         callAst: callAstIndex!
                         functionSymbol: localFunctionSymbol!
@@ -299,6 +366,7 @@ public resolveModulesAnalyzed package: analysis.PackageAnalysis -> [ModuleCallRe
             package.nodes[sourceRange.astStart + callAstIndex!] => callNode
             false => moduleHasControlTarget!
             false => moduleHasFlowCallTarget!
+            false => moduleHasQualifiedFlowTarget!
             0 => moduleControlTargetSearch!
             moduleControlTargetSearch! < sourceRange.astCount -> while {
                 (package.nodes[sourceRange.astStart + moduleControlTargetSearch!].parent == callAstIndex! and (package.nodes[sourceRange.astStart + moduleControlTargetSearch!].kind == 42 or package.nodes[sourceRange.astStart + moduleControlTargetSearch!].kind == 44)) -> if { true => moduleHasControlTarget! }
@@ -307,6 +375,7 @@ public resolveModulesAnalyzed package: analysis.PackageAnalysis -> [ModuleCallRe
             callNode.firstToken => moduleFlowTokenIndex!
             (callNode.kind == 10 and moduleFlowTokenIndex! < callNode.firstToken + callNode.tokenCount) -> while {
                 package.tokens[sourceRange.tokenStart + moduleFlowTokenIndex!].kind == grammar.tokenIdArrow -> if { true => moduleHasFlowCallTarget! }
+                package.tokens[sourceRange.tokenStart + moduleFlowTokenIndex!].kind == grammar.tokenIdDot -> if { true => moduleHasQualifiedFlowTarget! }
                 moduleFlowTokenIndex! + 1 => moduleFlowTokenIndex!
             }
             ((callNode.kind == 10 and moduleHasFlowCallTarget! and not moduleHasControlTarget!) or (callNode.kind == 11 and (callNode.cstRuleId == grammar.ruleIdCallExpression or callNode.cstRuleId == grammar.ruleIdTypeApplicationExpression)) or callNode.kind == 15 or callNode.kind == 48) -> if {
@@ -325,10 +394,28 @@ public resolveModulesAnalyzed package: analysis.PackageAnalysis -> [ModuleCallRe
                 }
                 callNameToken! >= 0 -> if {
                 -1 => localFunctionSymbol!
+                callNode.parent => callerAst!
+                -1 => callerFunctionAst!
+                (callerAst! >= 0 and callerFunctionAst! < 0) -> while {
+                    package.nodes[sourceRange.astStart + callerAst!] => callerNode
+                    callerNode.kind == 7 -> if { callerAst! => callerFunctionAst! } else { callerNode.parent => callerAst! }
+                }
+                -1 => callerFunctionSymbol!
+                0 => callerSymbolSearch!
+                (callerSymbolSearch! < sourceRange.symbolCount and callerFunctionSymbol! < 0) -> while {
+                    package.symbols[sourceRange.symbolStart + callerSymbolSearch!] => callerCandidate
+                    (callerCandidate.kind == 7 and callerCandidate.astNode == callerFunctionAst!) -> if { callerSymbolSearch! => callerFunctionSymbol! }
+                    callerSymbolSearch! + 1 => callerSymbolSearch!
+                }
+                -1 => localOwnerSymbol!
+                callerFunctionSymbol! >= 0 -> if {
+                    package.symbols[sourceRange.symbolStart + callerFunctionSymbol!] => callerFunction
+                    callerFunction.parent >= 0 -> if { callerFunction.parent => localOwnerSymbol! } else { callerFunctionSymbol! => localOwnerSymbol! }
+                }
                 0 => localSymbolIndex!
                 (localSymbolIndex! < sourceRange.symbolCount and localFunctionSymbol! < 0) -> while {
                     package.symbols[sourceRange.symbolStart + localSymbolIndex!] => localCandidate
-                    (localCandidate.kind == 7 and localCandidate.parent < 0) -> if {
+                    (localCandidate.kind == 7 and (localCandidate.parent < 0 or localCandidate.parent == localOwnerSymbol!)) -> if {
                         package.tokens[sourceRange.tokenStart + callNameToken!] => callName
                         package.tokens[sourceRange.tokenStart + localCandidate.nameToken] => functionName
                         callName.span.length == functionName.span.length => localEqual!
@@ -343,32 +430,11 @@ public resolveModulesAnalyzed package: analysis.PackageAnalysis -> [ModuleCallRe
                     }
                     localSymbolIndex! + 1 => localSymbolIndex!
                 }
-                ((callNode.kind == 10 or callNode.kind == 11) and localFunctionSymbol! < 0) -> if {
-                    package.tokens[sourceRange.tokenStart + callNameToken!] => runtimeName
-                    runtimeName.span.length == UIntSize(5) -> if {
-                        source -> byte(runtimeName.span.start) => runtimeByte0
-                        source -> byte(runtimeName.span.start + UIntSize(1)) => runtimeByte1
-                        source -> byte(runtimeName.span.start + UIntSize(2)) => runtimeByte2
-                        source -> byte(runtimeName.span.start + UIntSize(3)) => runtimeByte3
-                        source -> byte(runtimeName.span.start + UIntSize(4)) => runtimeByte4
-                        (runtimeByte0 == UInt8(112) and runtimeByte1 == UInt8(114) and runtimeByte2 == UInt8(105) and runtimeByte3 == UInt8(110) and runtimeByte4 == UInt8(116)) -> if {
-                            -101 => localFunctionSymbol!
-                        }
-                    }
-                    runtimeName.span.length == UIntSize(7) -> if {
-                        source -> byte(runtimeName.span.start) => runtimeByte0
-                        source -> byte(runtimeName.span.start + UIntSize(1)) => runtimeByte1
-                        source -> byte(runtimeName.span.start + UIntSize(2)) => runtimeByte2
-                        source -> byte(runtimeName.span.start + UIntSize(3)) => runtimeByte3
-                        source -> byte(runtimeName.span.start + UIntSize(4)) => runtimeByte4
-                        source -> byte(runtimeName.span.start + UIntSize(5)) => runtimeByte5
-                        source -> byte(runtimeName.span.start + UIntSize(6)) => runtimeByte6
-                        (runtimeByte0 == UInt8(112) and runtimeByte1 == UInt8(114) and runtimeByte2 == UInt8(105) and runtimeByte3 == UInt8(110) and runtimeByte4 == UInt8(116) and runtimeByte5 == UInt8(108) and runtimeByte6 == UInt8(110)) -> if {
-                            -102 => localFunctionSymbol!
-                        }
-                    }
+                ((callNode.kind == 10 or callNode.kind == 11 or callNode.kind == 15) and localFunctionSymbol! < 0) -> if {
+                    RuntimeNameRequest { source: source, token: package.tokens[sourceRange.tokenStart + callNameToken!] } -> runtimeFunctionSymbol => runtimeSymbol
+                    runtimeSymbol < -1 -> if { runtimeSymbol => localFunctionSymbol! }
                 }
-                (callNode.kind == 11 or callNode.kind == 48 or localFunctionSymbol! != -1) -> if {
+                ((callNode.kind == 10 and moduleHasQualifiedFlowTarget!) or callNode.kind == 11 or callNode.kind == 48 or localFunctionSymbol! != -1) -> if {
                     localCalls! -> push(CallResolution {
                         callAst: callAstIndex!
                         functionSymbol: localFunctionSymbol!

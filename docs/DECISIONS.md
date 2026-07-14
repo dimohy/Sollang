@@ -5021,3 +5021,40 @@ mapped-I/O migration passed 7/7, grammar/effect snapshot corrections passed
 5/5, and the coordinated eight-worker full suite passed 416/416 in 393.2
 seconds with flushed monotonic `n/416` progress. The Release solution build
 completed with zero warnings and errors.
+
+## D156 - Self-Host Effects Are A Flat Context-Derived Product
+
+Status: declaration and call propagation implemented; handler discharge pending
+Date: 2026-07-14
+
+`smalllang.compiler.semantic.effects` derives one source-qualified
+`FunctionEffect` record per function and structured `EffectDiagnostic` records
+from a borrowed `CompilationContext`. Effect masks use stable bits for Console,
+File, Clock, Random, Process, and Environment. The pass reads the context's
+flat source ranges, AST, tokens, symbols, and resolved calls; it does not lex,
+parse, collect symbols, or resolve modules again. Unknown and duplicate
+declarations are recorded before missing-caller diagnostics, and `main` remains
+the unrestricted root boundary.
+
+The prepared call product now retains unresolved flow calls long enough to
+match qualified imports, resolves lexical local functions by owner symbol, and
+assigns stable negative symbols to global runtime aliases including console,
+file, random, and clock operations. This closes two pre-existing self-host
+gaps exposed by effect propagation. The grammar VM also now permits newlines
+after local function declarations, matching the reference parser's existing
+behavior.
+
+Example 297 prepares one `CompilationContext` and passes it to
+`effects.analyzeContext`. It proves pure, multi-effect, local, imported, and
+builtin-alias facts and diagnostics across all six initial capability names.
+The design follows the subset rule used by Unison abilities and Koka effect
+types, while retaining a separate future `handle` discharge step like Unison
+and Effekt handlers. Handler subtraction, user-defined effect operations, and
+self-host syntax-level map/flush effects remain explicit gaps, so no formal
+gate is promoted and progress remains 48.5/60 (80.8%).
+
+Regression evidence on 2026-07-14: the call/grammar/effect focused set passed
+22/22, including the generic-role `yield` regression and example 297. The
+coordinated eight-worker full suite then passed 417/417 in 397.4 seconds with
+flushed monotonic `n/417` progress. The Release solution build completed with
+zero warnings and errors.

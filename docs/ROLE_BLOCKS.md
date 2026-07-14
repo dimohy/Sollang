@@ -168,7 +168,10 @@ Control-flow cleanup and capability escape analysis remain unchecked.
 
 Current evidence: example 277 proves that `handle` is an ordinary user-defined
 result block with statically typed input and deterministic install/body/resolve
-ordering. Effect-set enforcement remains unchecked.
+ordering. Example 297 now proves flat self-host effect declarations plus
+missing local/imported/builtin capability diagnostics. Handler installation
+does not yet subtract a handled capability, so the handler checkboxes remain
+open.
 
 ### E. Self-hosting and release evidence
 
