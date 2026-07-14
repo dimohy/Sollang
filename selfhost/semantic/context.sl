@@ -14,11 +14,12 @@ import smalllang.compiler.semantic.type_ids as typeIds
 import smalllang.compiler.semantic.type_terms as typeTerms
 import smalllang.compiler.semantic.types as semanticTypes
 import smalllang.compiler.syntax as syntax
+import sys.file as file
 
 # Immutable whole-compilation facts. Consumers borrow this aggregate, so its
 # owned flat arrays are built once and are not copied between semantic passes.
 public struct CompilationContext {
-    sources: [Text; ~]
+    sources: [file.SourceText; ~]
     types: [typeIds.SemanticType; ~]
     references: [typeIds.TypeReference; ~]
     fields: [typeIds.NominalField; ~]
@@ -38,8 +39,17 @@ public struct CompilationContext {
     typeUses: [semanticTypes.TypeUse; ~]
 }
 
-public prepare sources: [Text; ~] -> CompilationContext {
-    sources -> analysis.analyze => packageAnalysis
+public prepareSources sources: move [file.SourceText; ~] -> CompilationContext {
+    [Text; ~] => sourceViews!
+    0 => sourceIndex!
+    sourceIndex! < (sources -> len) -> while {
+        sources[sourceIndex!] -> len => sourceLength
+        sources[sourceIndex!] -> slice(UIntSize(0), sourceLength) => sourceView
+        sourceViews! -> push(sourceView)
+        sourceIndex! + 1 => sourceIndex!
+    }
+
+    sourceViews! -> analysis.analyze => packageAnalysis
     packageAnalysis -> typeIds.resolveAnalyzed => semanticSet
     packageAnalysis -> nominalTypes.resolveAnalyzed => nominalTypes!
     packageAnalysis -> compositeTypes.resolveAnalyzed => compositeTypes!
@@ -49,8 +59,6 @@ public prepare sources: [Text; ~] -> CompilationContext {
     packageAnalysis -> qualified.resolveAnalyzed => qualifiedResults!
     packageAnalysis -> calls.resolveModulesAnalyzed => resolvedCalls!
 
-    [Text; ~] => contextSources!
-    sources -> each source { contextSources! -> push(source) }
     [typeIds.SemanticType; ~] => contextTypes!
     semanticSet.types -> each semanticType { contextTypes! -> push(semanticType) }
     [typeIds.TypeReference; ~] => contextReferences!
@@ -73,7 +81,7 @@ public prepare sources: [Text; ~] -> CompilationContext {
     packageAnalysis.typeUses -> each typeUse { contextTypeUses! -> push(typeUse) }
 
     CompilationContext {
-        sources: contextSources!
+        sources: sources
         types: contextTypes!
         references: contextReferences!
         fields: contextFields!
@@ -93,4 +101,22 @@ public prepare sources: [Text; ~] -> CompilationContext {
         typeUses: contextTypeUses!
     } => result!
     result!
+}
+
+public prepare sources: [Text; ~] -> CompilationContext {
+    [file.SourceText; ~] => ownedSources!
+    sources -> each source {
+        source -> file.borrowText => ownedSource!
+        ownedSources! -> push(ownedSource!)
+    }
+    ownedSources! -> prepareSources
+}
+
+public prepareFiles paths: [Text; ~] -> CompilationContext uses File {
+    [file.SourceText; ~] => ownedSources!
+    paths -> each path {
+        path -> file.mapText => ownedSource!
+        ownedSources! -> push(ownedSource!)
+    }
+    ownedSources! -> prepareSources
 }

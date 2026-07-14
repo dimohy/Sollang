@@ -3,6 +3,7 @@ namespace smalllang.compiler.cst
 import smalllang.compiler.lexer as lexer
 import smalllang.compiler.parser as parser
 import syntax.generated.smalllang as grammar
+import sys.file as file
 
 # Flat green nodes use stable array indexes instead of pointers. Parent links
 # and token ranges make the tree traversable without per-node heap allocation.
@@ -143,16 +144,30 @@ public buildRule request: BuildRequest -> [GreenNode; ~] {
     nodes!
 }
 
-public build source: Text -> [GreenNode; ~] {
+public buildSource source: file.SourceText -> [GreenNode; ~] {
+    source -> len => sourceLength
+    source -> slice(UIntSize(0), sourceLength) => view
     BuildRequest {
-        source: source
+        source: view
         startRule: grammar.startRule
     } -> buildRule
 }
 
-public buildExpression source: Text -> [GreenNode; ~] {
+public buildSourceExpression source: file.SourceText -> [GreenNode; ~] {
+    source -> len => sourceLength
+    source -> slice(UIntSize(0), sourceLength) => view
     BuildRequest {
-        source: source
+        source: view
         startRule: grammar.ruleIdExpression
     } -> buildRule
+}
+
+public build source: Text -> [GreenNode; ~] {
+    source -> file.borrowText => borrowed!
+    borrowed! -> buildSource
+}
+
+public buildExpression source: Text -> [GreenNode; ~] {
+    source -> file.borrowText => borrowed!
+    borrowed! -> buildSourceExpression
 }

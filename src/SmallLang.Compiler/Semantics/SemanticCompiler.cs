@@ -3513,9 +3513,11 @@ internal sealed class SemanticCompiler
         IReadOnlySet<string>? mutableBindings = null)
     {
         var firstTargetReadonlyBorrows = expression.Targets.Count > 0
-            && TryGetFunction(expression.Targets[0].Path, functions, out var firstFunction)
-            && firstFunction.InputType is not null
-            && firstFunction.InputOwnership == BoundFunctionInputOwnership.Default;
+            && ((expression.Targets[0].Path.Count == 1
+                    && expression.Targets[0].Path[0] is "len" or "byte" or "slice")
+                || (TryGetFunction(expression.Targets[0].Path, functions, out var firstFunction)
+                    && firstFunction.InputType is not null
+                    && firstFunction.InputOwnership == BoundFunctionInputOwnership.Default));
         var currentType = InferFlowSource(
             expression.Source,
             functions,

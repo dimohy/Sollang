@@ -3,6 +3,7 @@ namespace smalllang.compiler.ast
 import smalllang.compiler.cst as cst
 import smalllang.compiler.lexer as lexer
 import syntax.generated.smalllang as grammar
+import sys.file as file
 
 # The bootstrap AST is flat and index-addressed like the green CST. Later
 # lowering slices will add declaration/expression payload tables without
@@ -609,16 +610,30 @@ lowerFrom request: LowerRequest -> [AstNode; ~] {
     ast!
 }
 
-public lower source: Text -> [AstNode; ~] {
+public lowerSource source: file.SourceText -> [AstNode; ~] {
+    source -> len => sourceLength
+    source -> slice(UIntSize(0), sourceLength) => view
     LowerRequest {
-        source: source
+        source: view
         startRule: grammar.startRule
     } -> lowerFrom
 }
 
-public lowerExpression source: Text -> [AstNode; ~] {
+public lowerSourceExpression source: file.SourceText -> [AstNode; ~] {
+    source -> len => sourceLength
+    source -> slice(UIntSize(0), sourceLength) => view
     LowerRequest {
-        source: source
+        source: view
         startRule: grammar.ruleIdExpression
     } -> lowerFrom
+}
+
+public lower source: Text -> [AstNode; ~] {
+    source -> file.borrowText => borrowed!
+    borrowed! -> lowerSource
+}
+
+public lowerExpression source: Text -> [AstNode; ~] {
+    source -> file.borrowText => borrowed!
+    borrowed! -> lowerSourceExpression
 }

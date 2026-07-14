@@ -2,6 +2,7 @@ namespace smalllang.compiler.parser
 
 import smalllang.compiler.lexer as lexer
 import syntax.generated.smalllang as grammar
+import sys.file as file
 
 # Parser events are lossless building blocks for a green CST. Enter/exit events
 # carry rule ids, token events carry token indexes, and the final outcome event
@@ -376,16 +377,30 @@ public parseRuleEvents request: ParseRequest -> [ParseEvent; ~] {
     result!
 }
 
-public parseEvents source: Text -> [ParseEvent; ~] {
+public parseSourceEvents source: file.SourceText -> [ParseEvent; ~] {
+    source -> len => sourceLength
+    source -> slice(UIntSize(0), sourceLength) => view
     ParseRequest {
-        source: source
+        source: view
         startRule: grammar.startRule
     } -> parseRuleEvents
 }
 
-public parseExpressionEvents source: Text -> [ParseEvent; ~] {
+public parseSourceExpressionEvents source: file.SourceText -> [ParseEvent; ~] {
+    source -> len => sourceLength
+    source -> slice(UIntSize(0), sourceLength) => view
     ParseRequest {
-        source: source
+        source: view
         startRule: grammar.ruleIdExpression
     } -> parseRuleEvents
+}
+
+public parseEvents source: Text -> [ParseEvent; ~] {
+    source -> file.borrowText => borrowed!
+    borrowed! -> parseSourceEvents
+}
+
+public parseExpressionEvents source: Text -> [ParseEvent; ~] {
+    source -> file.borrowText => borrowed!
+    borrowed! -> parseSourceExpressionEvents
 }

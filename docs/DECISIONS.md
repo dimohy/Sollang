@@ -5177,8 +5177,9 @@ Thirty-seven emitter fixtures formerly rebuilt the same multi-file self-host
 compiler through the C# reference compiler. One representative split measured
 56.05 seconds for that outer build, 0.02 seconds for the generated compiler to
 emit LLVM, and 0.01 seconds for `llvm-as`. The runner now bootstraps one native
-SL driver, passes target mode and one or more source modules as literal process
-arguments, and reuses it across Windows, Linux, and Wasm cases. Freshness covers
+SL driver and reuses it across Windows, Linux, and Wasm cases. The original
+bootstrap passed source modules as literal process arguments; D163 replaces
+that temporary boundary with mapped source-file paths. Freshness covers
 the reference compiler output, driver manifest, listed SL sources, and standard
 library. The two non-emitter introspection cases keep their original path.
 
@@ -5207,3 +5208,38 @@ once. Example 300 proves a mapped source owner array; example 301 proves a boxed
 user value move; the negative diagnostic proves use-after-move rejection.
 Owned element extraction by index remains separate work, so the formal gate
 count remains 42 complete, 13 partial, 5 missing (48.5/60, 80.8%).
+
+## D163 - Native slc Owns Mapped Source Files
+
+Status: file-backed stage-1 emission and reusable test bootstrap implemented;
+toolchain invocation and stage-2 comparison pending
+Date: 2026-07-15
+
+`sys.file.SourceText` is the affine owner for compiler input. It stores a
+bounded UTF-8 view plus the hidden base mapping needed for deterministic
+unmapping. Syntax entry points accept `SourceText` directly, and
+`semantic.context.prepareFiles` owns all module mappings for the lifetime of a
+single immutable `CompilationContext`. Compatibility entry points for borrowed
+`Text` remain available.
+
+The native `selfhost-slc-driver` accepts a target mode followed by source-file
+paths. It maps every module, creates non-escaping `Text` views for the existing
+LLVM emitter, and keeps the mapping owners alive until emission completes. The
+example runner builds this stage-1 executable only when its compiler, manifest,
+SL modules, or standard library inputs are newer; all emitter fixtures then
+reuse it and pass materialized source paths rather than embedding whole source
+programs in process arguments.
+
+This path exposed a latent Windows runtime defect: generated functions larger
+than one committed stack page called an empty `__chkstk`. The runtime now probes
+each 4096-byte page while preserving the Windows x64 `__chkstk` register
+contract. The 234KB self-host `emitCore` frame therefore grows the guarded
+stack safely. A Windows stage-1 executable compiled two source files to LLVM,
+exited with code 0, and the result passed `llvm-as`; the same pipeline passed
+under Linux ASan. A cold focused test took 59.7 seconds including bootstrap,
+while the current native `slc` warm path took 1.1 seconds total and 0.12 seconds
+for self-host compilation.
+
+The formal roadmap score remains 42 complete, 13 partial, 5 missing
+(48.5/60, 80.8%): stage 1 emits valid LLVM from files, but it does not yet
+invoke the platform linker itself or prove a reproducible stage-2 compiler.

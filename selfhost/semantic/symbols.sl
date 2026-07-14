@@ -1,6 +1,7 @@
 namespace smalllang.compiler.semantic.symbols
 
 import smalllang.compiler.ast as ast
+import sys.file as file
 
 # Symbol and AST indexes are stable offsets into owned arrays. This keeps the
 # semantic graph relocatable and avoids one heap allocation per declaration.
@@ -229,6 +230,12 @@ public collectPrepared nodes: [ast.AstNode; ~] -> [Symbol; ~] {
 
 public collect source: Text -> [Symbol; ~] {
     source -> ast.lower => nodes!
+    nodes! -> collectPrepared => symbols!
+    symbols!
+}
+
+public collectSource source: file.SourceText -> [Symbol; ~] {
+    source -> ast.lowerSource => nodes!
     nodes! -> collectPrepared => symbols!
     symbols!
 }

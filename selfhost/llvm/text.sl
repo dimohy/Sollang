@@ -13,6 +13,7 @@ import smalllang.compiler.semantic.symbols as symbols
 import smalllang.compiler.semantic.type_ids as typeIds
 import smalllang.compiler.syntax as syntax
 import syntax.generated.smalllang as grammar
+import sys.file as file
 
 # First LLVM text backend slice. Names are derived only from stable module and
 # symbol indexes; SSA registers are derived from typed-IR indexes.
@@ -333,8 +334,10 @@ prepare request: move PrepareRequest -> EmitContext {
             interpolationSymbols! -> push(prepared.symbols[interpolationSourceRange.symbolStart + interpolationSymbolIndex!])
             interpolationSymbolIndex! + 1 => interpolationSymbolIndex!
         }
+        prepared.sources[interpolationSourceIndex!] -> len => interpolationSourceLength
+        prepared.sources[interpolationSourceIndex!] -> slice(UIntSize(0), interpolationSourceLength) => interpolationSource
         interpolation.PreparedInterpolationRequest {
-            source: prepared.sources[interpolationSourceIndex!]
+            source: interpolationSource
             nodes: interpolationNodes!
             tokens: interpolationTokens!
             symbols: interpolationSymbols!
@@ -355,7 +358,6 @@ prepare request: move PrepareRequest -> EmitContext {
         }
         interpolationSourceIndex! + 1 => interpolationSourceIndex!
     }
-    request.sources => sources
     [typeIds.SemanticType; ~] => layoutTypes!
     semanticTypes! -> each layoutType { layoutTypes! -> push(layoutType) }
     [typeIds.NominalField; ~] => layoutFields!
@@ -369,6 +371,7 @@ prepare request: move PrepareRequest -> EmitContext {
     [Int; ~] => typeLayoutStatuses!
     layouts.statuses -> each layoutStatus { typeLayoutStatuses! -> push(layoutStatus) }
     ir! -> typedIr.movesFrom => moves!
+    request.sources => sources
     EmitContext {
         sources: sources
         ranges: analysisRanges!
@@ -3532,4 +3535,58 @@ public emitWasm sources: move [Text; ~] -> Unit uses Console {
     context! -> usesIntInterpolation -> if { emitIntTextRuntime }
     context! -> usesBoolInterpolation -> if { emitBoolTextRuntime }
     context! -> emitCore
+}
+
+public emitFiles paths: [Text; ~] -> Unit uses Console, File {
+    [file.SourceText; ~] => owners!
+    paths -> each path {
+        path -> file.mapText => owner!
+        owners! -> push(owner!)
+    }
+    [Text; ~] => sources!
+    0 => sourceIndex!
+    sourceIndex! < (owners! -> len) -> while {
+        owners![sourceIndex!] -> len => sourceLength
+        owners![sourceIndex!] -> slice(UIntSize(0), sourceLength) => source
+        sources! -> push(source)
+        sourceIndex! + 1 => sourceIndex!
+    }
+    sources! -> emit
+    owners! -> len => ownerCount
+}
+
+public emitLinuxFiles paths: [Text; ~] -> Unit uses Console, File {
+    [file.SourceText; ~] => owners!
+    paths -> each path {
+        path -> file.mapText => owner!
+        owners! -> push(owner!)
+    }
+    [Text; ~] => sources!
+    0 => sourceIndex!
+    sourceIndex! < (owners! -> len) -> while {
+        owners![sourceIndex!] -> len => sourceLength
+        owners![sourceIndex!] -> slice(UIntSize(0), sourceLength) => source
+        sources! -> push(source)
+        sourceIndex! + 1 => sourceIndex!
+    }
+    sources! -> emitLinux
+    owners! -> len => ownerCount
+}
+
+public emitWasmFiles paths: [Text; ~] -> Unit uses Console, File {
+    [file.SourceText; ~] => owners!
+    paths -> each path {
+        path -> file.mapText => owner!
+        owners! -> push(owner!)
+    }
+    [Text; ~] => sources!
+    0 => sourceIndex!
+    sourceIndex! < (owners! -> len) -> while {
+        owners![sourceIndex!] -> len => sourceLength
+        owners![sourceIndex!] -> slice(UIntSize(0), sourceLength) => source
+        sources! -> push(source)
+        sourceIndex! + 1 => sourceIndex!
+    }
+    sources! -> emitWasm
+    owners! -> len => ownerCount
 }

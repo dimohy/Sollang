@@ -19,6 +19,7 @@ import smalllang.compiler.semantic.type_terms as typeTerms
 import smalllang.compiler.semantic.types as semanticTypes
 import smalllang.compiler.syntax as syntax
 import syntax.generated.smalllang as grammar
+import sys.file as file
 
 # Stable, flat typed IR. Indexes are relocatable array offsets so later LLVM
 # lowering can consume the table without allocating an object graph.
@@ -145,7 +146,8 @@ public lowerContext prepared: semanticContext.CompilationContext -> [TypedIrNode
     [TypedIrNode; ~] => results!
     0 => sourceIndex!
     sourceIndex! < (prepared.sources -> len) -> while {
-        prepared.sources[sourceIndex!] => source
+        prepared.sources[sourceIndex!] -> len => sourceLength
+        prepared.sources[sourceIndex!] -> slice(UIntSize(0), sourceLength) => source
         prepared.ranges[sourceIndex!] => sourceRange
         [resolution.ResolvedName; ~] => resolvedNames!
         0 => sourceNameOffset!
@@ -567,7 +569,7 @@ public lowerContext prepared: semanticContext.CompilationContext -> [TypedIrNode
                                             resolvedCall.functionSymbol => expressionSymbol!
                                             resolvedCall.targetSourceModule => expressionTargetModule!
                                             (resolvedCall.functionSymbol >= 0 and resolvedCall.targetSourceModule >= 0) -> if {
-                                                prepared.sources[resolvedCall.targetSourceModule] -> symbols.collect => expressionTargetTable!
+                                                prepared.sources[resolvedCall.targetSourceModule] -> symbols.collectSource => expressionTargetTable!
                                                 ((expressionTargetTable![resolvedCall.functionSymbol].flags / 8) % 2 == 1 and (expressionFlags! / 8) % 2 == 0) -> if {
                                                     expressionFlags! + 8 => expressionFlags!
                                                 }
@@ -1089,7 +1091,7 @@ public lowerContext prepared: semanticContext.CompilationContext -> [TypedIrNode
                                             entryResolvedCall.functionSymbol => entryExpressionSymbol!
                                             entryResolvedCall.targetSourceModule => entryExpressionTargetModule!
                                             (entryResolvedCall.functionSymbol >= 0 and entryResolvedCall.targetSourceModule >= 0) -> if {
-                                                prepared.sources[entryResolvedCall.targetSourceModule] -> symbols.collect => entryExpressionTargetTable!
+                                                prepared.sources[entryResolvedCall.targetSourceModule] -> symbols.collectSource => entryExpressionTargetTable!
                                                 ((entryExpressionTargetTable![entryResolvedCall.functionSymbol].flags / 8) % 2 == 1 and (entryExpressionFlags! / 8) % 2 == 0) -> if {
                                                     entryExpressionFlags! + 8 => entryExpressionFlags!
                                                 }
@@ -1360,8 +1362,8 @@ public lowerContext prepared: semanticContext.CompilationContext -> [TypedIrNode
             memberBase.typeOrigin => memberCurrentOrigin!
             memberBase.typeModule => memberCurrentModule!
             memberBase.typeSymbol => memberCurrentSymbol!
-            prepared.sources[member!.sourceModule] -> ast.lower => memberNodes!
-            prepared.sources[member!.sourceModule] -> lexer.lex => memberTokens!
+            prepared.sources[member!.sourceModule] -> ast.lowerSource => memberNodes!
+            prepared.sources[member!.sourceModule] -> lexer.lexSource => memberTokens!
             memberNodes![member!.astNode] => memberAst
             0 => memberIdentifierOrdinal!
             memberAst.firstToken => memberTokenIndex!
@@ -1370,8 +1372,8 @@ public lowerContext prepared: semanticContext.CompilationContext -> [TypedIrNode
                     memberIdentifierOrdinal! > 0 -> if {
                         memberCurrentModule! => memberOwnerSource!
                         memberCurrentOrigin! == 2 -> if { prepared.modules[memberCurrentModule!].sourceIndex => memberOwnerSource! }
-                        prepared.sources[memberOwnerSource!] -> symbols.collect => memberOwnerTable!
-                        prepared.sources[memberOwnerSource!] -> lexer.lex => memberOwnerTokens!
+                        prepared.sources[memberOwnerSource!] -> symbols.collectSource => memberOwnerTable!
+                        prepared.sources[memberOwnerSource!] -> lexer.lexSource => memberOwnerTokens!
                         0 => memberFieldOrdinal!
                         0 => memberFieldIndex!
                         memberFieldIndex! < (memberOwnerTable! -> len) -> while {
@@ -1486,8 +1488,11 @@ public lowerContext prepared: semanticContext.CompilationContext -> [TypedIrNode
 }
 
 public lowerPrepared request: move TypedIrRequest -> [TypedIrNode; ~] {
-    [Text; ~] => sources!
-    request.sources -> each source { sources! -> push(source) }
+    [file.SourceText; ~] => sources!
+    request.sources -> each source {
+        source -> file.borrowText => ownedSource!
+        sources! -> push(ownedSource!)
+    }
     [typeIds.SemanticType; ~] => types!
     request.types -> each semanticType { types! -> push(semanticType) }
     [typeIds.TypeReference; ~] => references!
@@ -1600,7 +1605,8 @@ public coroutinePlanContext prepared: semanticContext.CompilationContext -> Coro
     [CoroutineSuspendPoint; ~] => points!
     0 => sourceIndex!
     sourceIndex! < (prepared.sources -> len) -> while {
-        prepared.sources[sourceIndex!] => source
+        prepared.sources[sourceIndex!] -> len => sourceLength
+        prepared.sources[sourceIndex!] -> slice(UIntSize(0), sourceLength) => source
         prepared.ranges[sourceIndex!] => sourceRange
         0 => awaitAstIndex!
         awaitAstIndex! < sourceRange.astCount -> while {

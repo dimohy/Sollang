@@ -17,6 +17,7 @@ import smalllang.compiler.semantic.type_terms as typeTerms
 import smalllang.compiler.semantic.types as semanticTypes
 import smalllang.compiler.syntax
 import syntax.generated.smalllang as grammar
+import sys.file as file
 
 public struct ExpressionTypeId {
     sourceModule: Int
@@ -61,7 +62,8 @@ public resolveContext prepared: semanticContext.CompilationContext -> Expression
 
     0 => sourceIndex!
     sourceIndex! < (prepared.sources -> len) -> while {
-        prepared.sources[sourceIndex!] => source
+        prepared.sources[sourceIndex!] -> len => sourceLength
+        prepared.sources[sourceIndex!] -> slice(UIntSize(0), sourceLength) => source
         prepared.ranges[sourceIndex!] => sourceRange
         [resolution.ResolvedName; ~] => resolvedNames!
         0 => sourceNameOffset!
@@ -230,7 +232,8 @@ public resolveContext prepared: semanticContext.CompilationContext -> Expression
         false => compositeChanged!
         0 => compositeSourceIndex!
         compositeSourceIndex! < (prepared.sources -> len) -> while {
-            prepared.sources[compositeSourceIndex!] => compositeSource
+            prepared.sources[compositeSourceIndex!] -> len => compositeSourceLength
+            prepared.sources[compositeSourceIndex!] -> slice(UIntSize(0), compositeSourceLength) => compositeSource
             compositeSource -> ast.lower => compositeNodes!
             compositeSource -> lexer.lex => compositeTokens!
             0 => compositeAstIndex!
@@ -369,7 +372,7 @@ public resolveContext prepared: semanticContext.CompilationContext -> Expression
 
     prepared.calls -> each call {
         (call.status == 0 and call.targetSourceModule >= 0) -> if {
-            prepared.sources[call.targetSourceModule] -> symbols.collect => targetTable!
+            prepared.sources[call.targetSourceModule] -> symbols.collectSource => targetTable!
             targetTable![call.functionSymbol] => function
             function.secondaryTypeNode >= 0 -> if { function.secondaryTypeNode } else { function.typeNode } => returnTypeAst
             returnTypeAst >= 0 -> if {
@@ -400,8 +403,8 @@ public resolveContext prepared: semanticContext.CompilationContext -> Expression
                         }
                         -1 => argumentExpression!
                         1000000 => argumentDistance!
-                        prepared.sources[call.sourceModule] -> ast.lower => callNodes!
-                        prepared.sources[call.sourceModule] -> lexer.lex => callTokens!
+                        prepared.sources[call.sourceModule] -> ast.lowerSource => callNodes!
+                        prepared.sources[call.sourceModule] -> lexer.lexSource => callTokens!
                         callNodes![call.callAst] => callNode
                         0 => argumentSearch!
                         argumentSearch! < (expressions! -> len) -> while {
@@ -477,8 +480,11 @@ public resolveContext prepared: semanticContext.CompilationContext -> Expression
 }
 
 public resolvePrepared request: move ExpressionTypeIdRequest -> ExpressionTypeIdSet {
-    [Text; ~] => sources!
-    request.sources -> each source { sources! -> push(source) }
+    [file.SourceText; ~] => sources!
+    request.sources -> each source {
+        source -> file.borrowText => ownedSource!
+        sources! -> push(ownedSource!)
+    }
     [typeIds.SemanticType; ~] => types!
     request.types -> each semanticType { types! -> push(semanticType) }
     [typeIds.TypeReference; ~] => references!

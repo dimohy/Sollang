@@ -2,8 +2,9 @@ namespace smalllang.compiler.lexer
 
 import smalllang.compiler.syntax as syntax
 import syntax.generated.smalllang as grammar
+import sys.file as file
 
-public lex source: Text -> [syntax.SyntaxToken; ~] {
+public lexSource source: file.SourceText -> [syntax.SyntaxToken; ~] {
     isDigit value: UInt8 -> Bool {
         value >= UInt8(48) and value <= UInt8(57)
     }
@@ -192,4 +193,9 @@ public lex source: Text -> [syntax.SyntaxToken; ~] {
     } => endToken
     tokens! -> push(endToken)
     tokens!
+}
+
+public lex source: Text -> [syntax.SyntaxToken; ~] {
+    source -> file.borrowText => borrowed!
+    borrowed! -> lexSource
 }

@@ -17,6 +17,7 @@ import smalllang.compiler.semantic.type_terms as typeTerms
 import smalllang.compiler.semantic.types as semanticTypes
 import smalllang.compiler.syntax as syntax
 import syntax.generated.smalllang as grammar
+import sys.file as file
 
 public struct ExpressionType {
     sourceModule: Int
@@ -50,7 +51,8 @@ public inferContext prepared: semanticContext.CompilationContext -> [ExpressionT
     [ExpressionType; ~] => inferred!
     0 => sourceIndex!
     sourceIndex! < (prepared.sources -> len) -> while {
-        prepared.sources[sourceIndex!] => source
+        prepared.sources[sourceIndex!] -> len => sourceLength
+        prepared.sources[sourceIndex!] -> slice(UIntSize(0), sourceLength) => source
         prepared.ranges[sourceIndex!] => sourceRange
         [resolution.ResolvedName; ~] => resolvedNames!
         0 => sourceNameOffset!
@@ -118,7 +120,7 @@ public inferContext prepared: semanticContext.CompilationContext -> [ExpressionT
                         }
                         blockCallResolution! >= 0 -> if {
                             prepared.calls[blockCallResolution!] => blockCall
-                            prepared.sources[blockCall.targetSourceModule] -> symbols.collect => blockTargetTable!
+                            prepared.sources[blockCall.targetSourceModule] -> symbols.collectSource => blockTargetTable!
                             blockTargetTable![blockCall.functionSymbol] => blockTargetFunction
                             blockTargetFunction.blockTypeNode >= 0 -> if {
                                 -1 => blockNominalIndex!
@@ -321,7 +323,7 @@ public inferContext prepared: semanticContext.CompilationContext -> [ExpressionT
                             })
                             true => changed!
                         } else {
-                        prepared.sources[call.targetSourceModule] -> symbols.collect => targetTable!
+                        prepared.sources[call.targetSourceModule] -> symbols.collectSource => targetTable!
                         targetTable![call.functionSymbol] => function
                         function.secondaryTypeNode >= 0 -> if { function.secondaryTypeNode } else { function.typeNode } => returnTypeAst
                         -1 => returnNominalIndex!
@@ -517,7 +519,7 @@ public inferContext prepared: semanticContext.CompilationContext -> [ExpressionT
                     }
                     (roleValueTypeIndex! >= 0 and roleCallIndex! >= 0) -> if {
                         prepared.calls[roleCallIndex!] => roleCall
-                        prepared.sources[roleCall.targetSourceModule] -> symbols.collect => roleTargetTable!
+                        prepared.sources[roleCall.targetSourceModule] -> symbols.collectSource => roleTargetTable!
                         roleTargetTable![roleCall.functionSymbol] => roleFunction
                         (roleFunction.secondaryTypeNode >= 0 and roleFunction.blockTypeNode >= 0) -> if {
                             -1 => roleSourceTypeIndex!
@@ -802,8 +804,8 @@ public inferContext prepared: semanticContext.CompilationContext -> [ExpressionT
                                         memberIdentifierOrdinal! > 0 -> if {
                                             memberCurrentModule! => targetSourceModule!
                                             memberCurrentOrigin! == 2 -> if { prepared.modules[memberCurrentModule!].sourceIndex => targetSourceModule! }
-                                            prepared.sources[targetSourceModule!] -> symbols.collect => targetTable!
-                                            prepared.sources[targetSourceModule!] -> lexer.lex => targetTokens!
+                                            prepared.sources[targetSourceModule!] -> symbols.collectSource => targetTable!
+                                            prepared.sources[targetSourceModule!] -> lexer.lexSource => targetTokens!
                                             -1 => fieldSymbol!
                                             0 => fieldSearch!
                                             (fieldSearch! < (targetTable! -> len) and fieldSymbol! < 0) -> while {
@@ -1356,8 +1358,11 @@ public inferContext prepared: semanticContext.CompilationContext -> [ExpressionT
 }
 
 public inferPrepared request: move ExpressionTypeRequest -> [ExpressionType; ~] {
-    [Text; ~] => sources!
-    request.sources -> each source { sources! -> push(source) }
+    [file.SourceText; ~] => sources!
+    request.sources -> each source {
+        source -> file.borrowText => ownedSource!
+        sources! -> push(ownedSource!)
+    }
     [nominalTypes.NominalType; ~] => nominal!
     request.nominal -> each nominalType { nominal! -> push(nominalType) }
     [compositeTypes.CompositeType; ~] => composite!

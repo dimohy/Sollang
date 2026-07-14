@@ -95,7 +95,8 @@ public analyzeContext prepared: semanticContext.CompilationContext -> EffectAnal
     # First build one source-qualified effect fact for every function symbol.
     0 => sourceIndex!
     sourceIndex! < (prepared.sources -> len) -> while {
-        prepared.sources[sourceIndex!] => source
+        prepared.sources[sourceIndex!] -> len => sourceLength
+        prepared.sources[sourceIndex!] -> slice(UIntSize(0), sourceLength) => source
         prepared.ranges[sourceIndex!] => sourceRange
         0 => symbolIndex!
         symbolIndex! < sourceRange.symbolCount -> while {

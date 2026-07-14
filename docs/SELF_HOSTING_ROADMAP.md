@@ -1,7 +1,7 @@
 # SmallLang Self-Hosting Roadmap
 
 Status: active
-Updated: 2026-07-14
+Updated: 2026-07-15
 
 The end state is an SL compiler written in SL that reads a multi-file SL
 program, performs lexical, syntactic, type, ownership, and module analysis,
@@ -185,12 +185,21 @@ The coordinated regression runner has stable `reference`, `semantic`,
 `selfhost`, `llvm`, `fast`, and `full` layers plus exact-name and affected-source
 selection. Self-host LLVM fixtures no longer rebuild the same compiler modules
 for every case: one native SL compiler driver accepts target mode and source
-modules through process arguments, then emits Windows, Linux, or Wasm LLVM.
+file paths, memory-maps every module, then emits Windows, Linux, or Wasm LLVM.
 Its timestamp fingerprint covers the compiler, source manifest, all listed SL
-modules, and the standard library. On the same checkout and machine, a current
-driver ran all 39 self-host LLVM cases in 4.1 seconds; the one-time cold driver
-bootstrap took 56.7 seconds. Two specialized introspection examples retain the
-ordinary reference-compiler path.
+modules, and the standard library. A focused warm invocation completed in 1.1
+seconds, including 0.12 seconds in the self-host compiler; the one-time cold
+bootstrap completed in 59.7 seconds. Two specialized introspection examples
+retain the ordinary reference-compiler path.
+
+Current native bootstrap chain:
+
+- [x] Build one reusable native stage-1 `slc` with the C# bootstrap compiler.
+- [x] Read and own multiple source files through affine `SourceText` mappings.
+- [x] Compile those modules with the SL frontend and emit valid target LLVM IR.
+- [x] Reuse the current stage-1 executable across self-host LLVM fixtures.
+- [ ] Invoke `clang`/`lld` from `slc` and produce the final executable directly.
+- [ ] Rebuild `slc` with stage 1 and compare a reproducible stage-2 artifact.
 
 ## Gate Inventory
 

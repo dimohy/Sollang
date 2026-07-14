@@ -769,9 +769,10 @@ internal sealed class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
     public override void EmitIoPrimitives(StringBuilder functions)
     {
         functions.AppendLine("""
-            define dso_local void @__chkstk() #0 {
+            define dso_local void @__chkstk() naked nounwind {
             entry:
-              ret void
+              call void asm sideeffect inteldialect "push rcx\0Apush rax\0Alea rcx, [rsp + 24]\0Acmp rax, 4096\0Ajb .Lsmalllang_chkstk_tail\0A.Lsmalllang_chkstk_loop:\0Asub rcx, 4096\0Atest byte ptr [rcx], 0\0Asub rax, 4096\0Acmp rax, 4096\0Ajae .Lsmalllang_chkstk_loop\0A.Lsmalllang_chkstk_tail:\0Asub rcx, rax\0Atest byte ptr [rcx], 0\0Apop rax\0Apop rcx\0Aret", "~{memory},~{flags}"()
+              unreachable
             }
 
             define internal i32 @smalllang_write(ptr %stdout, ptr %data, i64 %len64, ptr %written) #0 {

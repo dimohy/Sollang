@@ -179,13 +179,13 @@ if (expectedFiles.Length + diagnosticFiles.Length == 0)
     return 2;
 }
 
-var selfHostDriverPath = Path.Combine(artifactsDir, "selfhost-compiler-driver.exe");
+var selfHostDriverPath = Path.Combine(artifactsDir, "selfhost-slc-driver.exe");
 var selfHostDriverSourcesPath = Path.Combine(
     repoRoot,
     "tests",
     "SmallLang.ExampleTests",
     "Fixtures",
-    "selfhost-compiler-driver.sources.txt");
+    "selfhost-slc-driver.sources.txt");
 if (expectedFiles.Any(IsReusableSelfHostCompilerTest))
 {
     var selfHostDriverSources = File.ReadLines(selfHostDriverSourcesPath)
@@ -202,7 +202,7 @@ if (expectedFiles.Any(IsReusableSelfHostCompilerTest))
         .ToArray();
     if (!IsOutputCurrent(selfHostDriverPath, selfHostDriverInputs))
     {
-        Console.WriteLine("[selfhost bootstrap] Building the reusable SL compiler driver...");
+        Console.WriteLine("[selfhost bootstrap] Building the reusable native slc...");
         Console.Out.Flush();
         var driverArguments = new List<string> { compilerDll, "build" };
         driverArguments.AddRange(selfHostDriverSources);
@@ -215,16 +215,16 @@ if (expectedFiles.Any(IsReusableSelfHostCompilerTest))
         var driverBuild = Run("dotnet", driverArguments, input: null, repoRoot);
         if (driverBuild.ExitCode != 0)
         {
-            Console.Error.WriteLine("FAIL reusable self-host compiler bootstrap");
+            Console.Error.WriteLine("FAIL reusable native slc bootstrap");
             Console.Error.WriteLine(driverBuild.Stdout);
             Console.Error.WriteLine(driverBuild.Stderr);
             return 1;
         }
-        Console.WriteLine("[selfhost bootstrap] PASS reusable SL compiler driver");
+        Console.WriteLine("[selfhost bootstrap] PASS reusable native slc");
     }
     else
     {
-        Console.WriteLine("[selfhost bootstrap] REUSE current SL compiler driver");
+        Console.WriteLine("[selfhost bootstrap] REUSE current native slc");
     }
     Console.Out.Flush();
 }
@@ -296,8 +296,10 @@ Parallel.ForEach(
         {
             SelfHostTargetMode(File.ReadAllText(sourcePath, Encoding.UTF8))
         };
-        driverArguments.AddRange(ExtractRawMultilineStrings(
-            File.ReadAllText(sourcePath, Encoding.UTF8)));
+        driverArguments.AddRange(MaterializeSelfHostSources(
+            name,
+            ExtractRawMultilineStrings(File.ReadAllText(sourcePath, Encoding.UTF8)),
+            artifactsDir));
         run = Run(selfHostDriverPath, driverArguments, input: null, repoRoot);
     }
     else
@@ -708,6 +710,21 @@ static IEnumerable<string> ExtractRawMultilineStrings(string source)
         yield return string.Join('\n', lines.Select(line =>
             line.Length >= indentation ? line[indentation..] : string.Empty));
     }
+}
+
+static string[] MaterializeSelfHostSources(
+    string testName,
+    IEnumerable<string> sources,
+    string artifactsDir)
+{
+    var sourceDirectory = Path.Combine(artifactsDir, "selfhost-inputs", testName);
+    Directory.CreateDirectory(sourceDirectory);
+    return sources.Select((source, index) =>
+    {
+        var sourcePath = Path.Combine(sourceDirectory, $"source-{index}.sl");
+        File.WriteAllText(sourcePath, source, new UTF8Encoding(false));
+        return sourcePath;
+    }).ToArray();
 }
 
 static bool IsOutputCurrent(string outputPath, IEnumerable<string> inputPaths)
