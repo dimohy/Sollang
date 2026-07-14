@@ -29,6 +29,9 @@ public struct ExpressionTypeIdRequest {
     types: [typeIds.SemanticType; ~]
     references: [typeIds.TypeReference; ~]
     fields: [typeIds.NominalField; ~]
+    modules: [modules.ModuleIdentity; ~]
+    qualified: [qualified.QualifiedResolution; ~]
+    calls: [calls.ModuleCallResolution; ~]
 }
 
 # Bridges the existing shallow expression pass into the canonical recursive
@@ -47,10 +50,13 @@ public resolvePrepared request: move ExpressionTypeIdRequest -> ExpressionTypeId
     request.fields -> each field {
         fields! -> push(field)
     }
+    [modules.ModuleIdentity; ~] => moduleIdentities!
+    request.modules -> each moduleIdentity { moduleIdentities! -> push(moduleIdentity) }
+    [qualified.QualifiedResolution; ~] => qualifiedResults!
+    request.qualified -> each qualifiedResult { qualifiedResults! -> push(qualifiedResult) }
+    [calls.ModuleCallResolution; ~] => moduleCalls!
+    request.calls -> each moduleCall { moduleCalls! -> push(moduleCall) }
     request.sources => sources
-    sources -> calls.resolveModules => moduleCalls!
-    sources -> modules.identities => moduleIdentities!
-    sources -> qualified.resolve => qualifiedResults!
     [ExpressionTypeId; ~] => expressions!
 
     0 => sourceIndex!
@@ -58,7 +64,7 @@ public resolvePrepared request: move ExpressionTypeIdRequest -> ExpressionTypeId
         sources[sourceIndex!] => source
         source -> ast.lower => nodes!
         source -> lexer.lex => tokens!
-        source -> symbols.collect => table!
+        nodes! -> symbols.collectPrepared => table!
         source -> resolution.resolve => resolvedNames!
 
         0 => astIndex!
@@ -469,6 +475,20 @@ public resolvePrepared request: move ExpressionTypeIdRequest -> ExpressionTypeId
 
 public resolve sources: [Text; ~] -> ExpressionTypeIdSet {
     sources -> typeIds.resolve => semantic
+    sources -> modules.identities => moduleIdentities!
+    sources -> qualified.resolve => qualifiedResults!
+    [Text; ~] => callSources!
+    sources -> each callSource { callSources! -> push(callSource) }
+    [modules.ModuleIdentity; ~] => callModules!
+    moduleIdentities! -> each callModule { callModules! -> push(callModule) }
+    [qualified.QualifiedResolution; ~] => callQualified!
+    qualifiedResults! -> each callResolution { callQualified! -> push(callResolution) }
+    calls.ModuleCallRequest {
+        sources: callSources!
+        modules: callModules!
+        qualified: callQualified!
+    } => callRequest!
+    callRequest! -> calls.resolveModulesPrepared => moduleCalls!
     [Text; ~] => preparedSources!
     sources -> each preparedSource { preparedSources! -> push(preparedSource) }
     [typeIds.SemanticType; ~] => preparedTypes!
@@ -482,6 +502,9 @@ public resolve sources: [Text; ~] -> ExpressionTypeIdSet {
         types: preparedTypes!
         references: preparedReferences!
         fields: preparedFields!
+        modules: moduleIdentities!
+        qualified: qualifiedResults!
+        calls: moduleCalls!
     } => request!
     request! -> resolvePrepared => result!
     result!

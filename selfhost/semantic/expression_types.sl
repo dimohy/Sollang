@@ -23,21 +23,36 @@ public struct ExpressionType {
     valueModule: Int
 }
 
+public struct ExpressionTypeRequest {
+    sources: [Text; ~]
+    nominal: [nominalTypes.NominalType; ~]
+    composite: [compositeTypes.CompositeType; ~]
+    qualified: [qualified.QualifiedResolution; ~]
+    modules: [modules.ModuleIdentity; ~]
+    calls: [calls.ModuleCallResolution; ~]
+}
+
 # Bottom-up expression inference over the flat AST. Builtin ids use the stable
 # nominal table: Text 1, Int 2, Bool 23.
-public infer sources: [Text; ~] -> [ExpressionType; ~] {
-    sources -> nominalTypes.resolve => nominal!
-    sources -> compositeTypes.resolve => composite!
-    sources -> qualified.resolve => qualifiedResults!
-    sources -> modules.identities => moduleIdentities!
-    sources -> calls.resolveModules => moduleCalls!
+public inferPrepared request: move ExpressionTypeRequest -> [ExpressionType; ~] {
+    [nominalTypes.NominalType; ~] => nominal!
+    request.nominal -> each nominalType { nominal! -> push(nominalType) }
+    [compositeTypes.CompositeType; ~] => composite!
+    request.composite -> each compositeType { composite! -> push(compositeType) }
+    [qualified.QualifiedResolution; ~] => qualifiedResults!
+    request.qualified -> each qualifiedResult { qualifiedResults! -> push(qualifiedResult) }
+    [modules.ModuleIdentity; ~] => moduleIdentities!
+    request.modules -> each moduleIdentity { moduleIdentities! -> push(moduleIdentity) }
+    [calls.ModuleCallResolution; ~] => moduleCalls!
+    request.calls -> each moduleCall { moduleCalls! -> push(moduleCall) }
+    request.sources => sources
     [ExpressionType; ~] => inferred!
     0 => sourceIndex!
     sourceIndex! < (sources -> len) -> while {
         sources[sourceIndex!] => source
         source -> ast.lower => nodes!
         source -> lexer.lex => tokens!
-        source -> symbols.collect => table!
+        nodes! -> symbols.collectPrepared => table!
         source -> resolution.resolve => resolvedNames!
         0 => astIndex!
         astIndex! < (nodes! -> len) -> while {
@@ -1333,5 +1348,36 @@ public infer sources: [Text; ~] -> [ExpressionType; ~] {
         }
         sourceIndex! + 1 => sourceIndex!
     }
+    inferred!
+}
+
+public infer sources: [Text; ~] -> [ExpressionType; ~] {
+    sources -> nominalTypes.resolve => nominal!
+    sources -> compositeTypes.resolve => composite!
+    sources -> qualified.resolve => qualifiedResults!
+    sources -> modules.identities => moduleIdentities!
+    [Text; ~] => callSources!
+    sources -> each source { callSources! -> push(source) }
+    [modules.ModuleIdentity; ~] => callModules!
+    moduleIdentities! -> each moduleIdentity { callModules! -> push(moduleIdentity) }
+    [qualified.QualifiedResolution; ~] => callQualified!
+    qualifiedResults! -> each qualifiedResult { callQualified! -> push(qualifiedResult) }
+    calls.ModuleCallRequest {
+        sources: callSources!
+        modules: callModules!
+        qualified: callQualified!
+    } => callRequest!
+    callRequest! -> calls.resolveModulesPrepared => moduleCalls!
+    [Text; ~] => preparedSources!
+    sources -> each preparedSource { preparedSources! -> push(preparedSource) }
+    ExpressionTypeRequest {
+        sources: preparedSources!
+        nominal: nominal!
+        composite: composite!
+        qualified: qualifiedResults!
+        modules: moduleIdentities!
+        calls: moduleCalls!
+    } => request!
+    request! -> inferPrepared => inferred!
     inferred!
 }

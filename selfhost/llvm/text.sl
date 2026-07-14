@@ -5,9 +5,11 @@ import smalllang.compiler.ir.interpolation as interpolation
 import smalllang.compiler.ir.typed as typedIr
 import smalllang.compiler.lexer as lexer
 import smalllang.compiler.llvm.target as llvmTarget
+import smalllang.compiler.semantic.calls as calls
 import smalllang.compiler.semantic.composite_types as compositeTypes
 import smalllang.compiler.semantic.modules as modules
 import smalllang.compiler.semantic.nominal_types as nominalTypes
+import smalllang.compiler.semantic.qualified as qualified
 import smalllang.compiler.semantic.symbols as symbols
 import smalllang.compiler.semantic.type_ids as typeIds
 import syntax.generated.smalllang as grammar
@@ -320,6 +322,23 @@ prepare request: move PrepareRequest -> EmitContext {
         moduleIdentities! -> push(moduleIdentity)
         typedModules! -> push(moduleIdentity)
     }
+    request.sources -> qualified.resolve => resolvedQualified!
+    [qualified.QualifiedResolution; ~] => typedQualified!
+    [qualified.QualifiedResolution; ~] => callQualified!
+    resolvedQualified! -> each qualifiedResult {
+        typedQualified! -> push(qualifiedResult)
+        callQualified! -> push(qualifiedResult)
+    }
+    [Text; ~] => callSources!
+    request.sources -> each callSource { callSources! -> push(callSource) }
+    [modules.ModuleIdentity; ~] => callModules!
+    moduleIdentities! -> each callModule { callModules! -> push(callModule) }
+    calls.ModuleCallRequest {
+        sources: callSources!
+        modules: callModules!
+        qualified: callQualified!
+    } => callRequest!
+    callRequest! -> calls.resolveModulesPrepared => resolvedCalls!
     typedIr.TypedIrRequest {
         sources: typedSources!
         types: typedTypes!
@@ -328,6 +347,8 @@ prepare request: move PrepareRequest -> EmitContext {
         nominal: typedNominal!
         composite: typedComposite!
         modules: typedModules!
+        qualified: typedQualified!
+        calls: resolvedCalls!
     } => typedRequest!
     typedRequest! -> typedIr.lowerPrepared => ir!
     request.sources => sources

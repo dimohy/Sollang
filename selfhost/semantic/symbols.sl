@@ -16,15 +16,14 @@ public struct Symbol {
     flags: Int
 }
 
-public collect source: Text -> [Symbol; ~] {
-    source -> ast.lower => nodes!
+public collectPrepared nodes: [ast.AstNode; ~] -> [Symbol; ~] {
     [Symbol; ~] => symbols!
     [Int; ~] => astToSymbol!
-    nodes! -> len => astCount
+    nodes -> len => astCount
     0 => astIndex!
 
     astIndex! < astCount -> while {
-        nodes![astIndex!] => node
+        nodes[astIndex!] => node
         astToSymbol! -> push(-1)
         false => isSymbol!
         node.kind >= 3 -> if {
@@ -43,7 +42,7 @@ public collect source: Text -> [Symbol; ~] {
                 mappedParent >= 0 -> if {
                     mappedParent => parentSymbol!
                 } else {
-                    nodes![parentAst!].parent => parentAst!
+                    nodes[parentAst!].parent => parentAst!
                 }
             }
             Symbol {
@@ -68,8 +67,8 @@ public collect source: Text -> [Symbol; ~] {
     # prevents a field or method type from being mistaken for its owner type.
     0 => typeAstIndex!
     typeAstIndex! < astCount -> while {
-        nodes![typeAstIndex!] => typeAst
-        (typeAst.kind == 12 and (typeAst.parent < 0 or nodes![typeAst.parent].kind != 12)) -> if {
+        nodes[typeAstIndex!] => typeAst
+        (typeAst.kind == 12 and (typeAst.parent < 0 or nodes[typeAst.parent].kind != 12)) -> if {
             typeAst.parent => typeParentAst!
             -1 => typeOwnerSymbol!
             (typeParentAst! >= 0 and typeOwnerSymbol! < 0) -> while {
@@ -77,12 +76,12 @@ public collect source: Text -> [Symbol; ~] {
                 mappedOwner >= 0 -> if {
                     mappedOwner => typeOwnerSymbol!
                 } else {
-                    nodes![typeParentAst!].parent => typeParentAst!
+                    nodes[typeParentAst!].parent => typeParentAst!
                 }
             }
             typeOwnerSymbol! >= 0 -> if {
                 symbols![typeOwnerSymbol!] => owner!
-                nodes![owner!.astNode] => ownerAst
+                nodes[owner!.astNode] => ownerAst
                 owner!.kind == 7 and ownerAst.tertiaryToken >= 0 -> if {
                     owner!.typeNode < 0 -> if {
                         typeAstIndex! => owner!.typeNode
@@ -126,12 +125,12 @@ public collect source: Text -> [Symbol; ~] {
     genericSymbolIndex! < beforeSecondaryGenerics -> while {
         symbols![genericSymbolIndex!] => genericSymbol
         genericSymbol.kind == 32 -> if {
-            nodes![genericSymbol.astNode].secondaryToken >= 0 -> if {
+            nodes[genericSymbol.astNode].secondaryToken >= 0 -> if {
                 symbols! -> push(Symbol {
                     kind: 32
                     parent: genericSymbol.parent
                     astNode: genericSymbol.astNode
-                    nameToken: nodes![genericSymbol.astNode].secondaryToken
+                    nameToken: nodes[genericSymbol.astNode].secondaryToken
                     typeNode: -1
                     secondaryTypeNode: -1
                     blockNameToken: -1
@@ -149,7 +148,7 @@ public collect source: Text -> [Symbol; ~] {
     0 => declarationSymbolIndex!
     declarationSymbolIndex! < declaredSymbolCount -> while {
         symbols![declarationSymbolIndex!] => declarationSymbol
-        nodes![declarationSymbol.astNode] => declarationAst
+        nodes[declarationSymbol.astNode] => declarationAst
         declarationAst.secondaryToken >= 0 -> if {
             ((declarationSymbol.kind == 7 and declarationSymbol.secondaryTypeNode >= 0) or declarationSymbol.kind == 29 or declarationSymbol.kind == 31) -> if {
                 -1 => parameterTypeNode!
@@ -193,7 +192,7 @@ public collect source: Text -> [Symbol; ~] {
     roleScopeIndex! < roleScopeCount -> while {
         symbols![roleScopeIndex!] => roleScope
         roleScope.kind == 48 -> if {
-            nodes![roleScope.astNode] => roleAst
+            nodes[roleScope.astNode] => roleAst
             roleAst.secondaryToken >= 0 -> if {
                 symbols! -> push(Symbol {
                     kind: 9
@@ -224,5 +223,11 @@ public collect source: Text -> [Symbol; ~] {
         roleScopeIndex! + 1 => roleScopeIndex!
     }
 
+    symbols!
+}
+
+public collect source: Text -> [Symbol; ~] {
+    source -> ast.lower => nodes!
+    nodes! -> collectPrepared => symbols!
     symbols!
 }

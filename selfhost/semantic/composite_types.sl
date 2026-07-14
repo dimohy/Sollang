@@ -35,7 +35,7 @@ public resolve sources: [Text; ~] -> [CompositeType; ~] {
         sources[sourceIndex!] => source
         source -> ast.lower => nodes!
         source -> lexer.lex => tokens!
-        source -> symbols.collect => table!
+        nodes! -> symbols.collectPrepared => table!
         source -> types.canonicalize => typeUses!
         0 => typeIndex!
         typeIndex! < (typeUses! -> len) -> while {

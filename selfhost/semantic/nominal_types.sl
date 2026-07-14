@@ -29,7 +29,7 @@ public resolve sources: [Text; ~] -> [NominalType; ~] {
         source -> ast.lower => nodes!
         source -> lexer.lex => tokens!
         source -> types.canonicalize => typeUses!
-        source -> symbols.collect => table!
+        nodes! -> symbols.collectPrepared => table!
         0 => typeIndex!
         typeIndex! < (typeUses! -> len) -> while {
             typeUses![typeIndex!] => typeUse

@@ -17,7 +17,8 @@ public struct SemanticDiagnostic {
 # Code 2 identifies an unresolved name expression.
 # Code 3 identifies break/continue without an enclosing while.
 public analyze source: Text -> [SemanticDiagnostic; ~] {
-    source -> symbols.collect => table!
+    source -> ast.lower => nodes!
+    nodes! -> symbols.collectPrepared => table!
     source -> lexer.lex => tokens!
     [SemanticDiagnostic; ~] => diagnostics!
     table! -> len => symbolCount
@@ -63,7 +64,6 @@ public analyze source: Text -> [SemanticDiagnostic; ~] {
         symbolIndex! + 1 => symbolIndex!
     }
 
-    source -> ast.lower => nodes!
     source -> resolution.resolve => resolved!
     nodes! -> len => astCount
     resolved! -> len => resolvedCount

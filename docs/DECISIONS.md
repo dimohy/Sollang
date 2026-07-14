@@ -4714,4 +4714,48 @@ seconds with flushed `n/408` progress records. Compared with the preceding
 collision-free 416.7-second 407-case run, total wall time fell by 20.2 seconds
 despite adding one case.
 
+## D149 - Prepared Resolution Products Flow Through Typed IR
+
+Status: module-call and qualified-resolution reuse implemented
+Date: 2026-07-14
+
+The prepared semantic boundary now includes module-qualified names and resolved
+calls. `ModuleCallRequest` accepts existing module identities and qualified
+results, `ExpressionTypeRequest` accepts nominal, composite, module, qualified,
+and call tables, and `ExpressionTypeIdRequest` consumes the same package-level
+products. `TypedIrRequest` carries all of them. The LLVM orchestrator computes
+qualified resolution and module calls once and supplies those immutable flat
+records to shallow inference, recursive expression IDs, and typed IR instead
+of allowing every layer to resolve them again. Compatible `resolve`, `infer`,
+and `lower` wrappers still construct the complete request for direct clients.
+
+Source-local preparation also gained two lower-level boundaries.
+`symbols.collectPrepared` builds a symbol table from an existing AST, and all
+semantic passes that already own AST nodes use it instead of parsing the same
+source again. `resolution.resolvePrepared` accepts existing AST, token, and
+symbol products; its compatible wrapper preserves the old source-only API.
+The latter is the contract for the next package cache, while broad consumers
+still need to retain or copy those owned arrays before they can use it.
+
+Example 293 now explicitly prepares qualified and call products and still
+proves byte-for-byte semantic equivalence at the typed-IR boundary. The
+single-worker LLVM example 188 improved from 63.8 to 58.6 seconds, another
+8.2 percent reduction and 30.0 percent below the earlier 83.7-second baseline.
+The coordinated eight-worker full run remained effectively flat at 397.9
+seconds versus 396.5 seconds because eight simultaneous self-host LLVM cases
+are dominated by shared CPU and linker contention rather than this serial
+semantic slice.
+
+This remains a partial migration and does not promote a roadmap gate. A true
+package analysis context must own flattened per-source AST, token, symbol, and
+resolved-name ranges so consumers can borrow them without repeated copying.
+Type checking, ownership/effects, drop glue, and several LLVM source scans must
+then consume that context. The count remains 48.5/60 (80.8%).
+
+Regression evidence on 2026-07-14: the Release solution build completed with
+zero warnings and errors. The recursive type/ownership/layout prepared slice
+passed 7/7, example 188 passed in 58.6 seconds, and the single coordinated
+eight-worker runner passed all 408 cases in 397.9 seconds with monotonic
+`n/408` progress records.
+
 

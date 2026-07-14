@@ -671,11 +671,15 @@ the canonical gate count therefore remains 42 complete, 13 partial, and 5
 missing (48.5/60, 80.8%).
 
 LLVM orchestration now passes one prepared canonical type/reference/field set,
-plus nominal, composite, and module tables, into expression type IDs and typed
-IR. Compatibility wrappers remain public, while `resolvePrepared` and
-`lowerPrepared` prevent those semantic passes from being rerun by the emitter.
-The next context layer still needs per-source AST, token, symbol, qualified-call,
-shallow-expression, ownership, and effect products.
+plus nominal, composite, module, qualified-name, and resolved-call tables, into
+shallow expression inference, recursive expression type IDs, and typed IR.
+Compatibility wrappers remain public, while prepared call, inference,
+expression-ID, and lowering entry points prevent those package-level semantic
+passes from being rerun by the emitter. Symbol collection also accepts an
+existing AST, and name resolution exposes an AST/token/symbol prepared boundary.
+The next context layer still needs flattened per-source AST, token, symbol, and
+resolved-name ranges that all checking, ownership/effect, drop, and LLVM
+consumers can borrow without copying.
 
 Self-hosted LLVM text selects descriptors implemented in the file module
 `smalllang.compiler.llvm.target`. Windows x64/COFF, Linux x64/ELF, and

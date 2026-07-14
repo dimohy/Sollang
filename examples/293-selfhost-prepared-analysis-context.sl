@@ -1,7 +1,9 @@
 import smalllang.compiler.ir.typed as typedIr
+import smalllang.compiler.semantic.calls as calls
 import smalllang.compiler.semantic.composite_types as compositeTypes
 import smalllang.compiler.semantic.modules as modules
 import smalllang.compiler.semantic.nominal_types as nominalTypes
+import smalllang.compiler.semantic.qualified as qualified
 import smalllang.compiler.semantic.type_ids as typeIds
 
 main {
@@ -24,6 +26,19 @@ main {
     sources! -> nominalTypes.resolve => nominal!
     sources! -> compositeTypes.resolve => composite!
     sources! -> modules.identities => moduleIdentities!
+    sources! -> qualified.resolve => qualifiedResults!
+    [Text; ~] => callSources!
+    sources! -> each callSource { callSources! -> push(callSource) }
+    [modules.ModuleIdentity; ~] => callModules!
+    moduleIdentities! -> each callModule { callModules! -> push(callModule) }
+    [qualified.QualifiedResolution; ~] => callQualified!
+    qualifiedResults! -> each callQualifiedResult { callQualified! -> push(callQualifiedResult) }
+    calls.ModuleCallRequest {
+        sources: callSources!
+        modules: callModules!
+        qualified: callQualified!
+    } => callRequest!
+    callRequest! -> calls.resolveModulesPrepared => resolvedCalls!
     [Text; ~] => preparedSources!
     sources! -> each preparedSource { preparedSources! -> push(preparedSource) }
     [typeIds.SemanticType; ~] => preparedTypes!
@@ -40,6 +55,8 @@ main {
         nominal: nominal!
         composite: composite!
         modules: moduleIdentities!
+        qualified: qualifiedResults!
+        calls: resolvedCalls!
     } => request!
     request! -> typedIr.lowerPrepared => prepared!
     sources! -> typedIr.lower => baseline!

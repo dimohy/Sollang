@@ -176,7 +176,7 @@ public resolve sources: [Text; ~] -> SemanticTypeSet {
         sources[sourceIndex!] => source
         source -> ast.lower => nodes!
         source -> lexer.lex => tokens!
-        source -> symbols.collect => table!
+        nodes! -> symbols.collectPrepared => table!
         source -> typeTerms.lower => terms!
         [Int; ~] => mapped!
         0 => mapSeed!

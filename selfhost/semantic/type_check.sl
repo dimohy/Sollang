@@ -51,7 +51,7 @@ public analyze sources: [Text; ~] -> [TypeCheckDiagnostic; ~] {
         sources[sourceIndex!] => source
         source -> ast.lower => nodes!
         source -> lexer.lex => tokens!
-        source -> symbols.collect => table!
+        nodes! -> symbols.collectPrepared => table!
         0 => symbolIndex!
         symbolIndex! < (table! -> len) -> while {
             table![symbolIndex!] => function

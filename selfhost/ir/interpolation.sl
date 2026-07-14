@@ -32,7 +32,7 @@ public struct InterpolationNode {
 public lower source: Text -> [InterpolationNode; ~] {
     source -> lexer.lex => sourceTokens!
     source -> ast.lower => sourceAst!
-    source -> symbols.collect => table!
+    sourceAst! -> symbols.collectPrepared => table!
     [InterpolationNode; ~] => nodes!
     0 => segmentIndex!
 

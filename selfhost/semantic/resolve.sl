@@ -3,6 +3,7 @@ namespace smalllang.compiler.semantic.resolve
 import smalllang.compiler.ast as ast
 import smalllang.compiler.lexer as lexer
 import smalllang.compiler.semantic.symbols as symbols
+import smalllang.compiler.syntax as syntax
 
 public struct ResolvedName {
     astNode: Int
@@ -10,24 +11,28 @@ public struct ResolvedName {
     nameToken: Int
 }
 
-public resolve source: Text -> [ResolvedName; ~] {
-    source -> ast.lower => nodes!
-    source -> symbols.collect => table!
-    source -> lexer.lex => tokens!
+public struct ResolutionRequest {
+    source: Text
+    nodes: [ast.AstNode; ~]
+    symbols: [symbols.Symbol; ~]
+    tokens: [syntax.SyntaxToken; ~]
+}
+
+public resolvePrepared request: ResolutionRequest -> [ResolvedName; ~] {
     [ResolvedName; ~] => resolved!
-    nodes! -> len => astCount
-    table! -> len => symbolCount
+    request.nodes -> len => astCount
+    request.symbols -> len => symbolCount
     0 => nameAstIndex!
 
     nameAstIndex! < astCount -> while {
-        nodes![nameAstIndex!] => nameAst
+        request.nodes[nameAstIndex!] => nameAst
         nameAst.kind == 15 -> if {
             -1 => lexicalScope!
             nameAst.parent => ownerAst!
             (ownerAst! >= 0 and lexicalScope! < 0) -> while {
                 0 => ownerSymbolIndex!
                 ownerSymbolIndex! < symbolCount -> while {
-                    table![ownerSymbolIndex!] => ownerCandidate
+                    request.symbols[ownerSymbolIndex!] => ownerCandidate
                     (ownerCandidate.kind != 35 and ownerCandidate.astNode == ownerAst!) -> if {
                         ownerSymbolIndex! => lexicalScope!
                         symbolCount => ownerSymbolIndex!
@@ -36,7 +41,7 @@ public resolve source: Text -> [ResolvedName; ~] {
                     }
                 }
                 lexicalScope! < 0 -> if {
-                    nodes![ownerAst!].parent => ownerAst!
+                    request.nodes[ownerAst!].parent => ownerAst!
                 }
             }
 
@@ -49,28 +54,28 @@ public resolve source: Text -> [ResolvedName; ~] {
                 -1 => bindingOwnerAst!
                 nameAst.parent => referenceOwnerAst!
                 (referenceOwnerAst! >= 0 and bindingOwnerAst! < 0) -> while {
-                    nodes![referenceOwnerAst!].kind == 9 -> if {
+                    request.nodes[referenceOwnerAst!].kind == 9 -> if {
                         referenceOwnerAst! => bindingOwnerAst!
                     } else {
-                        nodes![referenceOwnerAst!].parent => referenceOwnerAst!
+                        request.nodes[referenceOwnerAst!].parent => referenceOwnerAst!
                     }
                 }
                 0 => candidateSymbolIndex!
                 candidateSymbolIndex! < symbolCount -> while {
-                    table![candidateSymbolIndex!] => candidate
+                    request.symbols[candidateSymbolIndex!] => candidate
                     (candidate.kind != 48 and candidate.parent == searchScope!) -> if {
-                        tokens![nameAst.payloadToken] => referenceName
-                        tokens![candidate.nameToken] => candidateName
+                        request.tokens[nameAst.payloadToken] => referenceName
+                        request.tokens[candidate.nameToken] => candidateName
                         referenceName.span.length == candidateName.span.length => namesEqual!
                         UIntSize(0) => nameByte!
                         (namesEqual! and nameByte! < referenceName.span.length) -> while {
-                            source -> byte(referenceName.span.start + nameByte!) => referenceByte
-                            source -> byte(candidateName.span.start + nameByte!) => candidateByte
+                            request.source -> byte(referenceName.span.start + nameByte!) => referenceByte
+                            request.source -> byte(candidateName.span.start + nameByte!) => candidateByte
                             referenceByte != candidateByte -> if { false => namesEqual! }
                             nameByte! + UIntSize(1) => nameByte!
                         }
                         namesEqual! -> if {
-                            nodes![candidate.astNode].start => candidateStart
+                            request.nodes[candidate.astNode].start => candidateStart
                             ((candidate.kind == 35 or candidateStart < nameAst.start) and candidate.astNode != bindingOwnerAst!) -> if {
                                 (nearestSymbol! < 0 or candidateStart >= nearestStart!) -> if {
                                     candidateSymbolIndex! => nearestSymbol!
@@ -86,7 +91,7 @@ public resolve source: Text -> [ResolvedName; ~] {
                 }
                 resolvedSymbol! < 0 -> if {
                     searchScope! >= 0 -> if {
-                        table![searchScope!].parent => searchScope!
+                        request.symbols[searchScope!].parent => searchScope!
                     } else {
                         true => scopesDone!
                     }
@@ -105,5 +110,14 @@ public resolve source: Text -> [ResolvedName; ~] {
         nameAstIndex! + 1 => nameAstIndex!
     }
 
+    resolved!
+}
+
+public resolve source: Text -> [ResolvedName; ~] {
+    source -> ast.lower => nodes!
+    nodes! -> symbols.collectPrepared => table!
+    source -> lexer.lex => tokens!
+    ResolutionRequest { source: source, nodes: nodes!, symbols: table!, tokens: tokens! } => request!
+    request! -> resolvePrepared => resolved!
     resolved!
 }

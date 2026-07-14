@@ -8,6 +8,7 @@ import smalllang.compiler.semantic.expression_type_ids as expressionTypeIds
 import smalllang.compiler.semantic.expression_types as expressionTypes
 import smalllang.compiler.semantic.modules as modules
 import smalllang.compiler.semantic.nominal_types as nominalTypes
+import smalllang.compiler.semantic.qualified as qualified
 import smalllang.compiler.semantic.resolve as resolution
 import smalllang.compiler.semantic.symbols as symbols
 import smalllang.compiler.semantic.type_ids as typeIds
@@ -96,6 +97,8 @@ public struct TypedIrRequest {
     nominal: [nominalTypes.NominalType; ~]
     composite: [compositeTypes.CompositeType; ~]
     modules: [modules.ModuleIdentity; ~]
+    qualified: [qualified.QualifiedResolution; ~]
+    calls: [calls.ModuleCallResolution; ~]
 }
 
 public lowerPrepared request: move TypedIrRequest -> [TypedIrNode; ~] {
@@ -108,16 +111,47 @@ public lowerPrepared request: move TypedIrRequest -> [TypedIrNode; ~] {
     [typeIds.NominalField; ~] => expressionFields!
     request.fields -> each expressionField { expressionFields! -> push(expressionField) }
     [nominalTypes.NominalType; ~] => nominal!
-    request.nominal -> each nominalType { nominal! -> push(nominalType) }
+    [nominalTypes.NominalType; ~] => inferredNominal!
+    request.nominal -> each nominalType {
+        nominal! -> push(nominalType)
+        inferredNominal! -> push(nominalType)
+    }
     [compositeTypes.CompositeType; ~] => composite!
-    request.composite -> each compositeType { composite! -> push(compositeType) }
+    [compositeTypes.CompositeType; ~] => inferredComposite!
+    request.composite -> each compositeType {
+        composite! -> push(compositeType)
+        inferredComposite! -> push(compositeType)
+    }
     [modules.ModuleIdentity; ~] => moduleIdentities!
-    request.modules -> each moduleIdentity { moduleIdentities! -> push(moduleIdentity) }
+    [modules.ModuleIdentity; ~] => expressionModules!
+    [modules.ModuleIdentity; ~] => inferredModules!
+    request.modules -> each moduleIdentity {
+        moduleIdentities! -> push(moduleIdentity)
+        expressionModules! -> push(moduleIdentity)
+        inferredModules! -> push(moduleIdentity)
+    }
+    [qualified.QualifiedResolution; ~] => expressionQualified!
+    [qualified.QualifiedResolution; ~] => inferredQualified!
+    request.qualified -> each qualifiedResult {
+        expressionQualified! -> push(qualifiedResult)
+        inferredQualified! -> push(qualifiedResult)
+    }
+    [calls.ModuleCallResolution; ~] => expressionCalls!
+    [calls.ModuleCallResolution; ~] => inferredCalls!
+    [calls.ModuleCallResolution; ~] => resolvedCalls!
+    request.calls -> each resolvedCall {
+        expressionCalls! -> push(resolvedCall)
+        inferredCalls! -> push(resolvedCall)
+        resolvedCalls! -> push(resolvedCall)
+    }
     expressionTypeIds.ExpressionTypeIdRequest {
         sources: expressionSources!
         types: expressionTypesPrepared!
         references: expressionReferences!
         fields: expressionFields!
+        modules: expressionModules!
+        qualified: expressionQualified!
+        calls: expressionCalls!
     } => expressionRequest!
     expressionRequest! -> expressionTypeIds.resolvePrepared => recursiveTypes
     request.sources => sources
@@ -139,14 +173,23 @@ public lowerPrepared request: move TypedIrRequest -> [TypedIrNode; ~] {
     recursiveTypes.expressions -> each recursiveExpression {
         recursiveExpressions! -> push(recursiveExpression)
     }
-    sources -> expressionTypes.infer => inferred!
-    sources -> calls.resolveModules => resolvedCalls!
+    [Text; ~] => inferredSources!
+    sources -> each inferredSource { inferredSources! -> push(inferredSource) }
+    expressionTypes.ExpressionTypeRequest {
+        sources: inferredSources!
+        nominal: inferredNominal!
+        composite: inferredComposite!
+        qualified: inferredQualified!
+        modules: inferredModules!
+        calls: inferredCalls!
+    } => inferredRequest!
+    inferredRequest! -> expressionTypes.inferPrepared => inferred!
     [TypedIrNode; ~] => results!
     0 => sourceIndex!
     sourceIndex! < (sources -> len) -> while {
         sources[sourceIndex!] => source
         source -> ast.lower => nodes!
-        source -> symbols.collect => table!
+        nodes! -> symbols.collectPrepared => table!
         source -> resolution.resolve => resolvedNames!
         0 => symbolIndex!
         symbolIndex! < (table! -> len) -> while {
@@ -1493,6 +1536,19 @@ public lower sources: [Text; ~] -> [TypedIrNode; ~] {
     sources -> nominalTypes.resolve => nominal!
     sources -> compositeTypes.resolve => composite!
     sources -> modules.identities => moduleIdentities!
+    sources -> qualified.resolve => qualifiedResults!
+    [Text; ~] => callSources!
+    sources -> each callSource { callSources! -> push(callSource) }
+    [modules.ModuleIdentity; ~] => callModules!
+    moduleIdentities! -> each callModule { callModules! -> push(callModule) }
+    [qualified.QualifiedResolution; ~] => callQualified!
+    qualifiedResults! -> each callQualifiedResult { callQualified! -> push(callQualifiedResult) }
+    calls.ModuleCallRequest {
+        sources: callSources!
+        modules: callModules!
+        qualified: callQualified!
+    } => callRequest!
+    callRequest! -> calls.resolveModulesPrepared => resolvedCalls!
     TypedIrRequest {
         sources: preparedSources!
         types: preparedTypes!
@@ -1501,6 +1557,8 @@ public lower sources: [Text; ~] -> [TypedIrNode; ~] {
         nominal: nominal!
         composite: composite!
         modules: moduleIdentities!
+        qualified: qualifiedResults!
+        calls: resolvedCalls!
     } => request!
     request! -> lowerPrepared => result!
     result!

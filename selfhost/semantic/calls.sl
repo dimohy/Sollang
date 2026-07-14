@@ -23,11 +23,17 @@ public struct ModuleCallResolution {
     status: Int
 }
 
+public struct ModuleCallRequest {
+    sources: [Text; ~]
+    modules: [modules.ModuleIdentity; ~]
+    qualified: [qualified.QualifiedResolution; ~]
+}
+
 # Status 0 is a resolved local function and 2 is an unresolved call target.
 public resolve source: Text -> [CallResolution; ~] {
     source -> ast.lower => nodes!
     source -> lexer.lex => tokens!
-    source -> symbols.collect => table!
+    nodes! -> symbols.collectPrepared => table!
     [CallResolution; ~] => resolved!
     0 => astIndex!
     astIndex! < (nodes! -> len) -> while {
@@ -94,16 +100,19 @@ public resolve source: Text -> [CallResolution; ~] {
 
 # Origins: 0 local function, 1 imported function. Imported statuses preserve
 # qualified lookup: 0 public, 2 missing/non-function, 3 non-public.
-public resolveModules sources: [Text; ~] -> [ModuleCallResolution; ~] {
-    sources -> modules.identities => identities!
-    sources -> qualified.resolve => qualifiedResults!
+public resolveModulesPrepared request: move ModuleCallRequest -> [ModuleCallResolution; ~] {
+    [modules.ModuleIdentity; ~] => identities!
+    request.modules -> each identity { identities! -> push(identity) }
+    [qualified.QualifiedResolution; ~] => qualifiedResults!
+    request.qualified -> each qualifiedResult { qualifiedResults! -> push(qualifiedResult) }
+    request.sources => sources
     [ModuleCallResolution; ~] => results!
     0 => sourceIndex!
     sourceIndex! < (sources -> len) -> while {
         sources[sourceIndex!] => source
         source -> ast.lower => nodes!
         source -> lexer.lex => tokens!
-        source -> symbols.collect => table!
+        nodes! -> symbols.collectPrepared => table!
         [CallResolution; ~] => localCalls!
         0 => callAstIndex!
         callAstIndex! < (nodes! -> len) -> while {
@@ -258,5 +267,19 @@ public resolveModules sources: [Text; ~] -> [ModuleCallResolution; ~] {
         }
         sourceIndex! + 1 => sourceIndex!
     }
+    results!
+}
+
+public resolveModules sources: [Text; ~] -> [ModuleCallResolution; ~] {
+    sources -> modules.identities => identities!
+    sources -> qualified.resolve => qualifiedResults!
+    [Text; ~] => preparedSources!
+    sources -> each preparedSource { preparedSources! -> push(preparedSource) }
+    ModuleCallRequest {
+        sources: preparedSources!
+        modules: identities!
+        qualified: qualifiedResults!
+    } => request!
+    request! -> resolveModulesPrepared => results!
     results!
 }
