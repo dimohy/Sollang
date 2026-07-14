@@ -400,7 +400,8 @@ public infer sources: [Text; ~] -> [ExpressionType; ~] {
                         valueType.sourceModule == sourceIndex! -> if {
                             nodes![valueType.astNode].parent => ancestor!
                             1 => distance!
-                            false => belongsToBinding!
+                            valueType.astNode == bindingSymbol.astNode => belongsToBinding!
+                            belongsToBinding! -> if { 0 => distance! }
                             (ancestor! >= 0 and not belongsToBinding!) -> while {
                                 ancestor! == bindingSymbol.astNode -> if {
                                     true => belongsToBinding!

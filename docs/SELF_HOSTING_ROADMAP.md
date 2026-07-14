@@ -1,7 +1,7 @@
 # SmallLang Self-Hosting Roadmap
 
 Status: active
-Updated: 2026-07-13
+Updated: 2026-07-14
 
 The end state is an SL compiler written in SL that reads a multi-file SL
 program, performs lexical, syntactic, type, ownership, and module analysis,
@@ -28,6 +28,11 @@ The design deliberately combines a small set of compatible ideas:
   sites; SL uses angle brackets to keep this separate from arrays. See
   [generics](https://docs.modular.com/mojo/manual/generics/) and
   [parameterization](https://docs.modular.com/mojo/manual/parameters/).
+- Mojo's current ownership model defaults function inputs to immutable `read`
+  borrows and separates `mut`, owned `var`, and lifetime-tracked `ref`
+  conventions. This supports SL's existing readonly-by-default, explicit
+  mutable-borrow, and explicit ownership-transfer direction without importing
+  Mojo's surface syntax. See Mojo [ownership](https://docs.modular.com/mojo/manual/values/ownership/).
 - Zig: an explicit root-module dependency graph and declaration discovery from
   reachable imports. See the official
   [compilation model](https://ziglang.org/documentation/master/#Compilation-Model).
@@ -77,6 +82,14 @@ The design deliberately combines a small set of compatible ideas:
   See Rust [`args_os`](https://doc.rust-lang.org/std/env/fn.args_os.html),
   Swift [`Process`](https://developer.apple.com/documentation/foundation/process),
   and Mojo [`subprocess`](https://docs.modular.com/mojo/std/subprocess/).
+- Rust incremental compilation identifies dependency nodes with stable
+  fingerprints that do not contain session-local ids, while Clang module caches
+  rebuild a module when one of its source inputs or imported modules changes.
+  SL's future module/interface cache will therefore key artifacts by compiler
+  ABI, target configuration, source/interface content, and dependency
+  fingerprints rather than timestamps alone. See rustc
+  [dependency-node fingerprints](https://doc.rust-lang.org/stable/nightly-rustc/rustc_query_system/dep_graph/dep_node/index.html)
+  and Clang [module caches](https://clang.llvm.org/docs/Modules.html#compilation-model).
 
 SL keeps its own expression-first `=>` binding and fluent `->` application
 syntax. It does not adopt class inheritance, implicit null, implicit garbage
@@ -616,7 +629,13 @@ control-flow expressions priority before user block calls so `if`/`while`
 retain their self-host AST kind. The accepted design and evidence checklist are
 tracked in [`ROLE_BLOCKS.md`](ROLE_BLOCKS.md). The common foundation is
 implemented, while builder mutation, scoped capability escape checking,
-effect-set enforcement, and self-host semantic/LLVM lowering remain partial;
+effect-set enforcement, and self-host LLVM lowering remain partial. The
+self-host AST now assigns kind 48 to result-producing block calls, records the
+role target and optional result binding, resolves the role as an ordinary
+function, propagates its return type through the bound name, and lowers the
+call, binding, and body operations into flat typed IR. Block-input contract
+checking and role-specific ownership/effect checks still keep semantic parity
+partial;
 the canonical gate count therefore remains 42 complete, 13 partial, and 5
 missing (48.5/60, 80.8%).
 
@@ -747,5 +766,6 @@ code 10; zero-input functions remain property calls such as `now`, not `now()`.
    (implemented for fixed/growable arrays and Swiss-table dictionaries by
    examples 56-71; fixed-array generic contracts remain).
 7. `Option`/`Result` and compiler-grade byte/text/source-span libraries
-   (`Option`, `Result`, bytes, Unicode code points, and byte arenas implemented;
-   reusable source spans remain).
+   (implemented for `Option`, `Result`, bytes, Unicode code points, byte arenas,
+   and reusable lexer/CST/parser source spans; multi-error continuation and
+   broader string processing remain).

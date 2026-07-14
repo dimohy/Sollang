@@ -44,12 +44,13 @@ public resolve source: Text -> [CallResolution; ~] {
             tokens![flowTokenIndex!].kind == grammar.tokenIdArrow -> if { true => hasFlowCallTarget! }
             flowTokenIndex! + 1 => flowTokenIndex!
         }
-        ((node.kind == 10 and hasFlowCallTarget! and not hasControlTarget!) or (node.kind == 11 and (node.cstRuleId == grammar.ruleIdCallExpression or node.cstRuleId == grammar.ruleIdTypeApplicationExpression)) or node.kind == 15) -> if {
+        ((node.kind == 10 and hasFlowCallTarget! and not hasControlTarget!) or (node.kind == 11 and (node.cstRuleId == grammar.ruleIdCallExpression or node.cstRuleId == grammar.ruleIdTypeApplicationExpression)) or node.kind == 15 or node.kind == 48) -> if {
             -1 => callNameToken!
+            node.kind == 48 -> if { node.payloadToken => callNameToken! }
             node.firstToken => tokenIndex!
             false => inFlowTypeArgument!
             false => inFlowCallArguments!
-            (tokenIndex! < node.firstToken + node.tokenCount and (node.kind == 10 or callNameToken! < 0)) -> while {
+            (tokenIndex! < node.firstToken + node.tokenCount and node.kind != 48 and (node.kind == 10 or callNameToken! < 0)) -> while {
                 tokens![tokenIndex!].kind == grammar.tokenIdLess -> if { true => inFlowTypeArgument! }
                 tokens![tokenIndex!].kind == grammar.tokenIdGreater -> if { false => inFlowTypeArgument! }
                 tokens![tokenIndex!].kind == grammar.tokenIdLeftParen -> if { true => inFlowCallArguments! }
@@ -73,11 +74,11 @@ public resolve source: Text -> [CallResolution; ~] {
                         callByte != functionByte -> if { false => equal! }
                         nameByte! + UIntSize(1) => nameByte!
                     }
-                    (equal! and (node.kind == 10 or node.kind == 11 or candidate.secondaryTypeNode < 0)) -> if { symbolIndex! => functionSymbol! }
+                    (equal! and (node.kind == 10 or node.kind == 11 or node.kind == 48 or candidate.secondaryTypeNode < 0)) -> if { symbolIndex! => functionSymbol! }
                 }
                 symbolIndex! + 1 => symbolIndex!
             }
-            (node.kind == 11 or functionSymbol! >= 0) -> if {
+            (node.kind == 11 or node.kind == 48 or functionSymbol! >= 0) -> if {
                 resolved! -> push(CallResolution {
                     callAst: astIndex!
                     functionSymbol: functionSymbol!
@@ -119,12 +120,13 @@ public resolveModules sources: [Text; ~] -> [ModuleCallResolution; ~] {
                 tokens![moduleFlowTokenIndex!].kind == grammar.tokenIdArrow -> if { true => moduleHasFlowCallTarget! }
                 moduleFlowTokenIndex! + 1 => moduleFlowTokenIndex!
             }
-            ((callNode.kind == 10 and moduleHasFlowCallTarget! and not moduleHasControlTarget!) or (callNode.kind == 11 and (callNode.cstRuleId == grammar.ruleIdCallExpression or callNode.cstRuleId == grammar.ruleIdTypeApplicationExpression)) or callNode.kind == 15) -> if {
+            ((callNode.kind == 10 and moduleHasFlowCallTarget! and not moduleHasControlTarget!) or (callNode.kind == 11 and (callNode.cstRuleId == grammar.ruleIdCallExpression or callNode.cstRuleId == grammar.ruleIdTypeApplicationExpression)) or callNode.kind == 15 or callNode.kind == 48) -> if {
                 -1 => callNameToken!
+                callNode.kind == 48 -> if { callNode.payloadToken => callNameToken! }
                 callNode.firstToken => callTokenIndex!
                 false => moduleInFlowTypeArgument!
                 false => moduleInFlowCallArguments!
-                (callTokenIndex! < callNode.firstToken + callNode.tokenCount and (callNode.kind == 10 or callNameToken! < 0)) -> while {
+                (callTokenIndex! < callNode.firstToken + callNode.tokenCount and callNode.kind != 48 and (callNode.kind == 10 or callNameToken! < 0)) -> while {
                     tokens![callTokenIndex!].kind == grammar.tokenIdLess -> if { true => moduleInFlowTypeArgument! }
                     tokens![callTokenIndex!].kind == grammar.tokenIdGreater -> if { false => moduleInFlowTypeArgument! }
                     tokens![callTokenIndex!].kind == grammar.tokenIdLeftParen -> if { true => moduleInFlowCallArguments! }
@@ -148,7 +150,7 @@ public resolveModules sources: [Text; ~] -> [ModuleCallResolution; ~] {
                             callByte != functionByte -> if { false => localEqual! }
                             localNameByte! + UIntSize(1) => localNameByte!
                         }
-                        (localEqual! and (callNode.kind == 10 or callNode.kind == 11 or localCandidate.secondaryTypeNode < 0)) -> if { localSymbolIndex! => localFunctionSymbol! }
+                        (localEqual! and (callNode.kind == 10 or callNode.kind == 11 or callNode.kind == 48 or localCandidate.secondaryTypeNode < 0)) -> if { localSymbolIndex! => localFunctionSymbol! }
                     }
                     localSymbolIndex! + 1 => localSymbolIndex!
                 }
@@ -177,7 +179,7 @@ public resolveModules sources: [Text; ~] -> [ModuleCallResolution; ~] {
                         }
                     }
                 }
-                (callNode.kind == 11 or localFunctionSymbol! != -1) -> if {
+                (callNode.kind == 11 or callNode.kind == 48 or localFunctionSymbol! != -1) -> if {
                     localCalls! -> push(CallResolution {
                         callAst: callAstIndex!
                         functionSymbol: localFunctionSymbol!

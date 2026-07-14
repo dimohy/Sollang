@@ -4227,4 +4227,28 @@ construction remains qualified because a constructor has no subject from which
 to infer its type. The same rule applies to user enums and permits forms such
 as `Value(value)`, `Some(value)`, `Missing`, and `None`.
 
+## D136 - Self-Hosted Role Calls Remain Ordinary Typed Calls
+
+Status: implemented through self-host typed IR; full role contracts remain partial
+Date: 2026-07-14
+
+The self-host compiler assigns result-producing block-function calls a distinct
+AST kind only so their caller body and trailing result binding remain
+recoverable. Semantic resolution does not introduce a special `build`, `with`,
+or `handle` namespace: AST kind 48 resolves its payload token through the same
+ordinary function symbol table as direct and fluent calls.
+
+When `source -> role item { ... } => result` has a result binding, the self-host
+symbol table projects `result` as a normal lexical binding. Expression
+inference gives the call the role function's return type and propagates that
+type to later references. Flat typed IR emits an ordinary kind-6 call, a
+kind-17 binding, and reconnects typed body operations beneath the call. This
+keeps later LLVM lowering independent of surface sugar while retaining enough
+structure for scoped cleanup and effect analysis.
+
+Example 279 proves AST payloads, lexical binding, call resolution, result-type
+propagation, and typed-IR parentage. This decision does not mark role semantics
+complete: the self-host checker must still validate the block-input contract,
+capability escape, ownership on every exit edge, and handled effect sets.
+
 

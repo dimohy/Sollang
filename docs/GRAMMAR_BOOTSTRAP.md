@@ -275,6 +275,15 @@ origin/module/symbol identities through bindings, generic calls, and member
 access. Dictionary indexing validates the inferred key identity and propagates
 the value identity as the result expression type; code 16 reports a mismatched
 dictionary key as well as a non-`Int` array index.
+Result-producing block-function calls lower as AST kind 48. The payload token
+identifies the ordinary role function and the secondary token identifies an
+optional result binding after the closing brace. The self-host symbol table
+projects that result as a normal binding, call resolution and expression
+inference propagate the role's declared return type, and typed IR represents
+the invocation as kind 6 plus a kind-17 binding while reconnecting nested body
+operations beneath the call. Example 279 exercises the complete self-host
+AST-to-typed-IR path. Block-input type checking and ownership/effect contracts
+remain later semantic work.
 Self-hosted compiler examples embed their input modules as raw multiline
 strings. This keeps tested SL source readable as source, removes duplicated
 newline escaping, and continuously exercises raw-string lexing in the bootstrap

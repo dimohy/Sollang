@@ -37,7 +37,8 @@ struct LowerRequest {
 # 38 dictionary expression, 39 struct literal, 40 struct field initializer,
 # 41 index access, 42 if flow target, 43 control-flow region,
 # 44 while flow target, 45 loop control statement,
-# 46 guarded loop control statement, 47 explicit return statement.
+# 46 guarded loop control statement, 47 explicit return statement,
+# 48 result-producing block-function call.
 # Function flags: 1 move input, 2 mutable input, 4 public, 8 async.
 # Keyword operator codes use the same
 # -(keywordIndex + 1) representation as syntax diagnostics.
@@ -92,6 +93,7 @@ lowerFrom request: LowerRequest -> [AstNode; ~] {
         rule == grammar.ruleIdLoopControlStatement => 45
         rule == grammar.ruleIdGuardLoopControlStatement => 46
         rule == grammar.ruleIdReturnStatement => 47
+        rule == grammar.ruleIdBlockFunctionCallStatement => 48
         else => -1
     }
     request.source => source
@@ -425,6 +427,50 @@ lowerFrom request: LowerRequest -> [AstNode; ~] {
             }
             (bindingSuffixToken! < bindingEnd! and tokens![bindingSuffixToken!].kind == grammar.tokenIdBang) -> if {
                 1 => declaration!.flags
+            }
+        }
+        declaration!.kind == 48 -> if {
+            declaration!.firstToken => roleToken!
+            declaration!.firstToken + declaration!.tokenCount => roleEnd!
+            false => afterRoleArrow!
+            false => roleNameFound!
+            false => afterRoleResultArrow!
+            false => roleBodySeen!
+            0 => roleBraceDepth!
+            roleToken! < roleEnd! -> while {
+                tokens![roleToken!].kind == grammar.tokenIdLeftBrace -> if {
+                    true => roleBodySeen!
+                    roleBraceDepth! + 1 => roleBraceDepth!
+                }
+                tokens![roleToken!].kind == grammar.tokenIdRightBrace -> if {
+                    roleBraceDepth! - 1 => roleBraceDepth!
+                }
+                (not roleBodySeen! and tokens![roleToken!].kind == grammar.tokenIdArrow) -> if {
+                    not roleNameFound! -> if { true => afterRoleArrow! }
+                }
+                (afterRoleArrow! and not roleNameFound! and tokens![roleToken!].kind == grammar.tokenIdIdentifier) -> if {
+                    roleToken! => declaration!.payloadToken
+                    true => roleNameFound!
+                    false => afterRoleArrow!
+                }
+                (roleNameFound! and roleBodySeen! and roleBraceDepth! == 0 and tokens![roleToken!].kind == grammar.tokenIdFatArrow) -> if {
+                    true => afterRoleResultArrow!
+                } else {
+                    (afterRoleResultArrow! and tokens![roleToken!].kind == grammar.tokenIdIdentifier) -> if {
+                        roleToken! => declaration!.secondaryToken
+                        false => afterRoleResultArrow!
+                    }
+                }
+                roleToken! + 1 => roleToken!
+            }
+            declaration!.secondaryToken >= 0 -> if {
+                declaration!.secondaryToken + 1 => roleSuffixToken!
+                (roleSuffixToken! < roleEnd! and (tokens![roleSuffixToken!].kind == grammar.triviaIdWhitespace or tokens![roleSuffixToken!].kind == grammar.triviaIdComment)) -> while {
+                    roleSuffixToken! + 1 => roleSuffixToken!
+                }
+                (roleSuffixToken! < roleEnd! and tokens![roleSuffixToken!].kind == grammar.tokenIdBang) -> if {
+                    1 => declaration!.flags
+                }
             }
         }
         declaration!.kind == 32 -> if {

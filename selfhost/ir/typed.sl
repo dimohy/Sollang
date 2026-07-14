@@ -20,7 +20,8 @@ import syntax.generated.smalllang as grammar
 # 18 structured if, 19 control-flow region, 20 structured while,
 # 21 loop exit, 22 guarded loop exit (opcode 0 break, 1 continue;
 # operand0 targets the while, guarded operand1 is the Bool condition),
-# 23 explicit return (operand0 is the optional returned value).
+# 23 explicit return (operand0 is the optional returned value). AST kind 48
+# lowers to an ordinary call node; its child operations preserve the role body.
 public struct TypedIrNode {
     kind: Int
     parent: Int
@@ -278,7 +279,7 @@ public lower sources: [Text; ~] -> [TypedIrNode; ~] {
                     0 => bindingAstIndex!
                     bindingAstIndex! < (nodes! -> len) -> while {
                         nodes![bindingAstIndex!] => bindingAst
-                        bindingAst.kind == 9 -> if {
+                        (bindingAst.kind == 9 or (bindingAst.kind == 48 and bindingAst.secondaryToken >= 0)) -> if {
                             bindingAst.parent => bindingAncestor!
                             false => bindingBelongsToFunction!
                             (bindingAncestor! >= 0 and not bindingBelongsToFunction!) -> while {
@@ -293,7 +294,8 @@ public lower sources: [Text; ~] -> [TypedIrNode; ~] {
                                     bindingTypeCandidate.sourceModule == sourceIndex! -> if {
                                         nodes![bindingTypeCandidate.astNode].parent => bindingTypeAncestor!
                                         1 => bindingDistance!
-                                        false => belongsToBinding!
+                                        bindingTypeCandidate.astNode == bindingAstIndex! => belongsToBinding!
+                                        belongsToBinding! -> if { 0 => bindingDistance! }
                                         (bindingTypeAncestor! >= 0 and not belongsToBinding!) -> while {
                                             bindingTypeAncestor! == bindingAstIndex! -> if { true => belongsToBinding! } else {
                                                 nodes![bindingTypeAncestor!].parent => bindingTypeAncestor!
@@ -327,7 +329,7 @@ public lower sources: [Text; ~] -> [TypedIrNode; ~] {
                                         typeOrigin: bindingType.origin
                                         typeModule: bindingType.targetModule
                                         typeSymbol: bindingType.targetSymbol
-                                        payloadToken: bindingAst.payloadToken
+                                        payloadToken: bindingAst.kind == 48 -> if { bindingAst.secondaryToken } else { bindingAst.payloadToken }
                                         opcode: -1
                                         operand0: -1
                                         operand1: -1
@@ -416,7 +418,7 @@ public lower sources: [Text; ~] -> [TypedIrNode; ~] {
                                         expressionIsBoolLiteral! -> if { 4 => expressionKind! }
                                     }
                                 }
-                                expression.kind == 11 -> if { 6 => expressionKind! }
+                                (expression.kind == 11 or expression.kind == 48) -> if { 6 => expressionKind! }
                                 expression.kind == 22 -> if { 7 => expressionKind! }
                                 (expression.kind >= 18 and expression.kind <= 21) -> if { 8 => expressionKind! }
                                 (expression.kind == 24 or expression.kind == 25) -> if { 8 => expressionKind! }
@@ -751,7 +753,7 @@ public lower sources: [Text; ~] -> [TypedIrNode; ~] {
                     0 => entryBindingAstIndex!
                     entryBindingAstIndex! < (nodes! -> len) -> while {
                         nodes![entryBindingAstIndex!] => entryBindingAst
-                        entryBindingAst.kind == 9 -> if {
+                        (entryBindingAst.kind == 9 or (entryBindingAst.kind == 48 and entryBindingAst.secondaryToken >= 0)) -> if {
                             entryBindingAst.parent => entryBindingAncestor!
                             false => entryBindingBelongs!
                             (entryBindingAncestor! >= 0 and not entryBindingBelongs!) -> while {
@@ -766,7 +768,8 @@ public lower sources: [Text; ~] -> [TypedIrNode; ~] {
                                     entryBindingTypeCandidate.sourceModule == sourceIndex! -> if {
                                         nodes![entryBindingTypeCandidate.astNode].parent => entryBindingTypeAncestor!
                                         1 => entryBindingDistance!
-                                        false => entryBelongsToBinding!
+                                        entryBindingTypeCandidate.astNode == entryBindingAstIndex! => entryBelongsToBinding!
+                                        entryBelongsToBinding! -> if { 0 => entryBindingDistance! }
                                         (entryBindingTypeAncestor! >= 0 and not entryBelongsToBinding!) -> while {
                                             entryBindingTypeAncestor! == entryBindingAstIndex! -> if { true => entryBelongsToBinding! } else {
                                                 nodes![entryBindingTypeAncestor!].parent => entryBindingTypeAncestor!
@@ -800,7 +803,7 @@ public lower sources: [Text; ~] -> [TypedIrNode; ~] {
                                         typeOrigin: entryBindingType.origin
                                         typeModule: entryBindingType.targetModule
                                         typeSymbol: entryBindingType.targetSymbol
-                                        payloadToken: entryBindingAst.payloadToken
+                                        payloadToken: entryBindingAst.kind == 48 -> if { entryBindingAst.secondaryToken } else { entryBindingAst.payloadToken }
                                         opcode: -1
                                         operand0: -1
                                         operand1: -1
@@ -887,7 +890,7 @@ public lower sources: [Text; ~] -> [TypedIrNode; ~] {
                                         entryExpressionIsBoolLiteral! -> if { 4 => entryExpressionKind! }
                                     }
                                 }
-                                entryExpression.kind == 11 -> if { 6 => entryExpressionKind! }
+                                (entryExpression.kind == 11 or entryExpression.kind == 48) -> if { 6 => entryExpressionKind! }
                                 entryExpression.kind == 22 -> if { 7 => entryExpressionKind! }
                                 (entryExpression.kind >= 18 and entryExpression.kind <= 21) -> if { 8 => entryExpressionKind! }
                                 (entryExpression.kind == 24 or entryExpression.kind == 25) -> if { 8 => entryExpressionKind! }

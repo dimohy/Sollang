@@ -29,6 +29,7 @@ public collect source: Text -> [Symbol; ~] {
             node.kind <= 7 -> if { true => isSymbol! }
         }
         node.kind == 9 -> if { true => isSymbol! }
+        (node.kind == 48 and node.secondaryToken >= 0) -> if { true => isSymbol! }
         node.kind >= 26 -> if {
             node.kind <= 34 -> if { true => isSymbol! }
         }
@@ -44,10 +45,10 @@ public collect source: Text -> [Symbol; ~] {
                 }
             }
             Symbol {
-                kind: node.kind
+                kind: node.kind == 48 -> if { 9 } else { node.kind }
                 parent: parentSymbol!
                 astNode: astIndex!
-                nameToken: node.payloadToken
+                nameToken: node.kind == 48 -> if { node.secondaryToken } else { node.payloadToken }
                 typeNode: -1
                 secondaryTypeNode: -1
                 flags: node.flags
