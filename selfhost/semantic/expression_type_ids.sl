@@ -1,8 +1,8 @@
 namespace smalllang.compiler.semantic.expression_type_ids
 
 import smalllang.compiler.ast
+import smalllang.compiler.lexer
 import smalllang.compiler.semantic.calls
-import smalllang.compiler.semantic.expression_types as expressionTypes
 import smalllang.compiler.semantic.resolve as resolution
 import smalllang.compiler.semantic.symbols
 import smalllang.compiler.semantic.type_ids as typeIds
@@ -16,6 +16,7 @@ public struct ExpressionTypeId {
 
 public struct ExpressionTypeIdSet {
     types: [typeIds.SemanticType; ~]
+    references: [typeIds.TypeReference; ~]
     expressions: [ExpressionTypeId; ~]
 }
 
@@ -24,27 +25,52 @@ public struct ExpressionTypeIdSet {
 # builtin expressions use the stable builtin id directly.
 public resolve sources: [Text; ~] -> ExpressionTypeIdSet {
     sources -> typeIds.resolve => semantic!
-    sources -> expressionTypes.infer => shallow!
     sources -> calls.resolveModules => moduleCalls!
     [ExpressionTypeId; ~] => expressions!
-
-    shallow! -> each expression {
-        (expression.origin == 1 and expression.targetModule < 0 and expression.targetSymbol >= 0) -> if {
-            expressions! -> push(ExpressionTypeId {
-                sourceModule: expression.sourceModule
-                astNode: expression.astNode
-                typeId: expression.targetSymbol
-                status: 0
-            })
-        }
-    }
 
     0 => sourceIndex!
     sourceIndex! < (sources -> len) -> while {
         sources[sourceIndex!] => source
         source -> ast.lower => nodes!
+        source -> lexer.lex => tokens!
         source -> symbols.collect => table!
         source -> resolution.resolve => resolvedNames!
+
+        0 => astIndex!
+        astIndex! < (nodes! -> len) -> while {
+            nodes![astIndex!] => node
+            -1 => builtinTypeId!
+            node.kind == 13 -> if { 1 => builtinTypeId! }
+            node.kind == 14 -> if { 2 => builtinTypeId! }
+            (node.kind >= 44 and node.kind <= 47) -> if { 0 => builtinTypeId! }
+            node.kind == 15 -> if {
+                tokens![node.payloadToken] => name
+                name.span.length == UIntSize(4) -> if {
+                    source -> byte(name.span.start) => byte0
+                    source -> byte(name.span.start + UIntSize(1)) => byte1
+                    source -> byte(name.span.start + UIntSize(2)) => byte2
+                    source -> byte(name.span.start + UIntSize(3)) => byte3
+                    (byte0 == UInt8(116) and byte1 == UInt8(114) and byte2 == UInt8(117) and byte3 == UInt8(101)) -> if { 23 => builtinTypeId! }
+                }
+                name.span.length == UIntSize(5) -> if {
+                    source -> byte(name.span.start) => byte0
+                    source -> byte(name.span.start + UIntSize(1)) => byte1
+                    source -> byte(name.span.start + UIntSize(2)) => byte2
+                    source -> byte(name.span.start + UIntSize(3)) => byte3
+                    source -> byte(name.span.start + UIntSize(4)) => byte4
+                    (byte0 == UInt8(102) and byte1 == UInt8(97) and byte2 == UInt8(108) and byte3 == UInt8(115) and byte4 == UInt8(101)) -> if { 23 => builtinTypeId! }
+                }
+            }
+            builtinTypeId! >= 0 -> if {
+                expressions! -> push(ExpressionTypeId {
+                    sourceModule: sourceIndex!
+                    astNode: astIndex!
+                    typeId: builtinTypeId!
+                    status: 0
+                })
+            }
+            astIndex! + 1 => astIndex!
+        }
 
         resolvedNames! -> each resolvedName {
             table![resolvedName.symbol] => valueSymbol
@@ -117,6 +143,10 @@ public resolve sources: [Text; ~] -> ExpressionTypeIdSet {
     semantic!.types -> each semanticType {
         outputTypes! -> push(semanticType)
     }
-    ExpressionTypeIdSet { types: outputTypes!, expressions: expressions! } => result!
+    [typeIds.TypeReference; ~] => outputReferences!
+    semantic!.references -> each reference {
+        outputReferences! -> push(reference)
+    }
+    ExpressionTypeIdSet { types: outputTypes!, references: outputReferences!, expressions: expressions! } => result!
     result!
 }

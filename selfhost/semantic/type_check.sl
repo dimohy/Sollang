@@ -5,6 +5,7 @@ import smalllang.compiler.lexer as lexer
 import smalllang.compiler.semantic.calls as calls
 import smalllang.compiler.semantic.composite_types as compositeTypes
 import smalllang.compiler.semantic.expression_types as expressionTypes
+import smalllang.compiler.semantic.expression_type_ids as expressionTypeIds
 import smalllang.compiler.semantic.modules as modules
 import smalllang.compiler.semantic.nominal_types as nominalTypes
 import smalllang.compiler.semantic.symbols as symbols
@@ -41,6 +42,7 @@ public analyze sources: [Text; ~] -> [TypeCheckDiagnostic; ~] {
     sources -> nominalTypes.resolve => nominal!
     sources -> compositeTypes.resolve => composite!
     sources -> expressionTypes.infer => expressionTypeTable!
+    sources -> expressionTypeIds.resolve => recursiveTypes
     sources -> calls.resolveModules => moduleCalls!
     sources -> modules.identities => moduleIdentities!
     [TypeCheckDiagnostic; ~] => diagnostics!
@@ -126,7 +128,53 @@ public analyze sources: [Text; ~] -> [TypeCheckDiagnostic; ~] {
                         -1 => returnExpressionAst!
                     }
                 }
-                (expectedIndex! >= 0 and returnExpressionType! >= 0) -> if {
+                -1 => expectedRecursiveReference!
+                0 => expectedRecursiveSearch!
+                (expectedRecursiveSearch! < (recursiveTypes.references -> len) and expectedRecursiveReference! < 0) -> while {
+                    recursiveTypes.references[expectedRecursiveSearch!] => candidate
+                    (candidate.sourceModule == sourceIndex! and candidate.typeAst == returnTypeAst) -> if {
+                        expectedRecursiveSearch! => expectedRecursiveReference!
+                    }
+                    expectedRecursiveSearch! + 1 => expectedRecursiveSearch!
+                }
+                -1 => recursiveReturnExpression!
+                1000000 => recursiveReturnDistance!
+                0 => recursiveReturnSearch!
+                recursiveReturnSearch! < (recursiveTypes.expressions -> len) -> while {
+                    recursiveTypes.expressions[recursiveReturnSearch!] => candidate
+                    candidate.sourceModule == sourceIndex! -> if {
+                        nodes![candidate.astNode].parent => ancestor!
+                        1 => distance!
+                        false => belongsToFunction!
+                        (ancestor! >= 0 and not belongsToFunction!) -> while {
+                            ancestor! == function.astNode -> if { true => belongsToFunction! } else {
+                                nodes![ancestor!].parent => ancestor!
+                                distance! + 1 => distance!
+                            }
+                        }
+                        (belongsToFunction! and (distance! < recursiveReturnDistance! or (distance! == recursiveReturnDistance! and (recursiveReturnExpression! < 0 or nodes![candidate.astNode].start > nodes![recursiveTypes.expressions[recursiveReturnExpression!].astNode].start)))) -> if {
+                            recursiveReturnSearch! => recursiveReturnExpression!
+                            distance! => recursiveReturnDistance!
+                        }
+                    }
+                    recursiveReturnSearch! + 1 => recursiveReturnSearch!
+                }
+                false => recursiveReturnChecked!
+                false => recursiveReturnMismatch!
+                (expectedRecursiveReference! >= 0 and recursiveReturnExpression! >= 0) -> if {
+                    recursiveTypes.references[expectedRecursiveReference!] => expectedReference
+                    recursiveTypes.expressions[recursiveReturnExpression!] => actualReference
+                    recursiveTypes.types[expectedReference.typeId] => expectedType
+                    recursiveTypes.types[actualReference.typeId] => actualType
+                    nodes![actualReference.astNode].parent == function.astNode => directRecursiveReturn
+                    (directRecursiveReturn and expectedReference.status == 0 and actualReference.status == 0 and not expectedType.containsParameter and not actualType.containsParameter) -> if {
+                        true => recursiveReturnChecked!
+                        expectedReference.typeId != actualReference.typeId -> if {
+                            true => recursiveReturnMismatch!
+                        }
+                    }
+                }
+                ((not recursiveReturnChecked! or recursiveReturnMismatch!) and expectedIndex! >= 0 and returnExpressionType! >= 0) -> if {
                     nominal![expectedIndex!] => expected
                     nodes![returnExpressionAst!] => returnExpression
                     expressionTypeTable![returnExpressionType!] => actualType
@@ -151,7 +199,7 @@ public analyze sources: [Text; ~] -> [TypeCheckDiagnostic; ~] {
                         diagnostics! -> push(diagnostic)
                     }
                 }
-                (expectedCompositeIndex! >= 0 and returnExpressionType! >= 0) -> if {
+                ((not recursiveReturnChecked! or recursiveReturnMismatch!) and expectedCompositeIndex! >= 0 and returnExpressionType! >= 0) -> if {
                     composite![expectedCompositeIndex!] => expectedComposite
                     expressionTypeTable![returnExpressionType!] => actualType
                     10 + expectedComposite.kind => expectedShape
@@ -178,6 +226,37 @@ public analyze sources: [Text; ~] -> [TypeCheckDiagnostic; ~] {
                             actualModule: actualType.targetModule
                             actualSymbol: actualType.targetSymbol
                             actualBuiltin: -1
+                            span: syntax.SourceSpan { fileId: sourceIndex!, start: returnExpression.start, length: returnExpression.length }
+                        })
+                    }
+                }
+                recursiveReturnMismatch! -> if {
+                    false => existingReturnDiagnostic!
+                    0 => existingReturnSearch!
+                    existingReturnSearch! < (diagnostics! -> len) -> while {
+                        diagnostics![existingReturnSearch!] => existing
+                        (existing.code == 5 and existing.sourceModule == sourceIndex! and existing.functionSymbol == symbolIndex!) -> if {
+                            true => existingReturnDiagnostic!
+                        }
+                        existingReturnSearch! + 1 => existingReturnSearch!
+                    }
+                    not existingReturnDiagnostic! -> if {
+                        recursiveTypes.references[expectedRecursiveReference!] => expectedReference
+                        recursiveTypes.expressions[recursiveReturnExpression!] => actualReference
+                        recursiveTypes.types[expectedReference.typeId] => expectedType
+                        recursiveTypes.types[actualReference.typeId] => actualType
+                        nodes![actualReference.astNode] => returnExpression
+                        diagnostics! -> push(TypeCheckDiagnostic {
+                            code: 5
+                            sourceModule: sourceIndex!
+                            functionSymbol: symbolIndex!
+                            expectedOrigin: expectedType.kind == 1 -> if { expectedType.origin } else { 10 + expectedType.kind }
+                            expectedModule: expectedType.module
+                            expectedSymbol: expectedType.symbol
+                            actualOrigin: actualType.kind == 1 -> if { actualType.origin } else { 10 + actualType.kind }
+                            actualModule: actualType.module
+                            actualSymbol: actualType.symbol
+                            actualBuiltin: (actualType.kind == 1 and actualType.origin == 1) -> if { actualType.symbol } else { -1 }
                             span: syntax.SourceSpan { fileId: sourceIndex!, start: returnExpression.start, length: returnExpression.length }
                         })
                     }
@@ -275,7 +354,59 @@ public analyze sources: [Text; ~] -> [TypeCheckDiagnostic; ~] {
                         }
                         argumentSearch! + 1 => argumentSearch!
                     }
-                    (expectedInputIndex! >= 0 and actualArgumentIndex! >= 0) -> if {
+                    -1 => expectedInputReference!
+                    0 => expectedInputReferenceSearch!
+                    (expectedInputReferenceSearch! < (recursiveTypes.references -> len) and expectedInputReference! < 0) -> while {
+                        recursiveTypes.references[expectedInputReferenceSearch!] => candidate
+                        (candidate.sourceModule == call.targetSourceModule and candidate.typeAst == targetFunction.typeNode) -> if {
+                            expectedInputReferenceSearch! => expectedInputReference!
+                        }
+                        expectedInputReferenceSearch! + 1 => expectedInputReferenceSearch!
+                    }
+                    -1 => recursiveArgumentExpression!
+                    1000000 => recursiveArgumentDistance!
+                    0 => recursiveArgumentSearch!
+                    recursiveArgumentSearch! < (recursiveTypes.expressions -> len) -> while {
+                        recursiveTypes.expressions[recursiveArgumentSearch!] => candidate
+                        candidate.sourceModule == sourceIndex! -> if {
+                            true => beforeRoleTarget!
+                            callNode.kind == 48 -> if {
+                                nodes![candidate.astNode] => argumentNode
+                                argumentNode.start + argumentNode.length > tokens![callNode.payloadToken].span.start -> if { false => beforeRoleTarget! }
+                            }
+                            nodes![candidate.astNode].parent => argumentAncestor!
+                            1 => distance!
+                            false => belongsToCall!
+                            (argumentAncestor! >= 0 and not belongsToCall!) -> while {
+                                argumentAncestor! == call.callAst -> if { true => belongsToCall! } else {
+                                    nodes![argumentAncestor!].parent => argumentAncestor!
+                                    distance! + 1 => distance!
+                                }
+                            }
+                            (belongsToCall! and beforeRoleTarget! and distance! < recursiveArgumentDistance!) -> if {
+                                recursiveArgumentSearch! => recursiveArgumentExpression!
+                                distance! => recursiveArgumentDistance!
+                            }
+                        }
+                        recursiveArgumentSearch! + 1 => recursiveArgumentSearch!
+                    }
+                    false => recursiveArgumentChecked!
+                    false => recursiveArgumentMismatch!
+                    (expectedInputReference! >= 0 and recursiveArgumentExpression! >= 0) -> if {
+                        recursiveTypes.references[expectedInputReference!] => expectedReference
+                        recursiveTypes.expressions[recursiveArgumentExpression!] => actualReference
+                        recursiveTypes.types[expectedReference.typeId] => expectedType
+                        recursiveTypes.types[actualReference.typeId] => actualType
+                        nodes![actualReference.astNode].parent == call.callAst => directRecursiveArgument
+                        (actualArgumentIndex! >= 0 and expressionTypeTable![actualArgumentIndex!].astNode == actualReference.astNode) => sameRecursiveArgumentSurface
+                        ((directRecursiveArgument or sameRecursiveArgumentSurface) and expectedReference.status == 0 and actualReference.status == 0 and not expectedType.containsParameter and not actualType.containsParameter) -> if {
+                            true => recursiveArgumentChecked!
+                            expectedReference.typeId != actualReference.typeId -> if {
+                                true => recursiveArgumentMismatch!
+                            }
+                        }
+                    }
+                    ((not recursiveArgumentChecked! or recursiveArgumentMismatch!) and expectedInputIndex! >= 0 and actualArgumentIndex! >= 0) -> if {
                         nominal![expectedInputIndex!] => expected
                         expressionTypeTable![actualArgumentIndex!] => actual
                         (expected.origin != 3 and (expected.origin != actual.origin or expected.targetModule != actual.targetModule or expected.targetSymbol != actual.targetSymbol)) -> if {
@@ -299,7 +430,7 @@ public analyze sources: [Text; ~] -> [TypeCheckDiagnostic; ~] {
                             })
                         }
                     }
-                    (expectedInputCompositeIndex! >= 0 and actualArgumentIndex! >= 0) -> if {
+                    ((not recursiveArgumentChecked! or recursiveArgumentMismatch!) and expectedInputCompositeIndex! >= 0 and actualArgumentIndex! >= 0) -> if {
                         composite![expectedInputCompositeIndex!] => expectedComposite
                         expressionTypeTable![actualArgumentIndex!] => actual
                         10 + expectedComposite.kind => expectedShape
@@ -330,6 +461,37 @@ public analyze sources: [Text; ~] -> [TypeCheckDiagnostic; ~] {
                                 actualModule: actual.targetModule
                                 actualSymbol: actual.targetSymbol
                                 actualBuiltin: -1
+                                span: syntax.SourceSpan { fileId: sourceIndex!, start: argumentExpression.start, length: argumentExpression.length }
+                            })
+                        }
+                    }
+                    recursiveArgumentMismatch! -> if {
+                        false => existingArgumentDiagnostic!
+                        0 => existingArgumentSearch!
+                        existingArgumentSearch! < (diagnostics! -> len) -> while {
+                            diagnostics![existingArgumentSearch!] => existing
+                            (existing.code == 6 and existing.sourceModule == sourceIndex! and existing.span.start >= callNode.start and existing.span.start + existing.span.length <= callNode.start + callNode.length) -> if {
+                                true => existingArgumentDiagnostic!
+                            }
+                            existingArgumentSearch! + 1 => existingArgumentSearch!
+                        }
+                        not existingArgumentDiagnostic! -> if {
+                            recursiveTypes.references[expectedInputReference!] => expectedReference
+                            recursiveTypes.expressions[recursiveArgumentExpression!] => actualReference
+                            recursiveTypes.types[expectedReference.typeId] => expectedType
+                            recursiveTypes.types[actualReference.typeId] => actualType
+                            nodes![actualReference.astNode] => argumentExpression
+                            diagnostics! -> push(TypeCheckDiagnostic {
+                                code: 6
+                                sourceModule: sourceIndex!
+                                functionSymbol: call.functionSymbol
+                                expectedOrigin: expectedType.kind == 1 -> if { expectedType.origin } else { 10 + expectedType.kind }
+                                expectedModule: expectedType.module
+                                expectedSymbol: expectedType.symbol
+                                actualOrigin: actualType.kind == 1 -> if { actualType.origin } else { 10 + actualType.kind }
+                                actualModule: actualType.module
+                                actualSymbol: actualType.symbol
+                                actualBuiltin: (actualType.kind == 1 and actualType.origin == 1) -> if { actualType.symbol } else { -1 }
                                 span: syntax.SourceSpan { fileId: sourceIndex!, start: argumentExpression.start, length: argumentExpression.length }
                             })
                         }

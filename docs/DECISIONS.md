@@ -4450,4 +4450,43 @@ zero warnings and errors. The focused 285/286 slice passed 2/2, and the single
 coordinated eight-worker runner passed all 401 cases in 376.7 seconds with
 flushed `n/401` progress records.
 
+## D143 - Concrete Recursive IDs Govern Return And Argument Equality
+
+Status: concrete annotation boundary implemented
+Date: 2026-07-14
+
+The self-host type checker now compares canonical recursive IDs for concrete
+annotation-backed return expressions and call arguments. Equality therefore
+includes every nested array, dictionary, box, and nominal-application child;
+matching only the outer `Result` and its first component is no longer enough.
+Example 287 proves that a two-module call accepts
+`Result<[model.Point; ~], {Text: box model.Point}>` and rejects the otherwise
+shape-identical type whose deepest nominal is `model.Other`. The same complete
+comparison rejects a mismatching function return.
+
+Recursive checking augments rather than blindly replaces the established
+checker. A node records whether its tree still contains a generic parameter.
+Only fully concrete expected and actual trees use exact ID equality; generic
+call results remain on the existing specialization path until call-site
+substitution also produces a canonical ID. When the old checker already emits
+a mismatch, its stable diagnostic metadata is retained. An exact recursive
+match can suppress a shallow cross-module false positive, and an exact
+mismatch is added only when no older diagnostic covers that call or function.
+
+`expression_type_ids.sl` maps builtin literals directly from the AST instead
+of invoking the complete legacy expression inference pass a second time. This
+keeps the migration bridge linear in the input representation and avoids
+duplicating the dominant semantic pass inside `type_check`.
+
+This is still a partial migration and does not promote a roadmap gate. Generic
+call-site substitution must produce canonical IDs, and typed IR,
+ownership/effects, and LLVM must consume them before the shallow representation
+can be removed.
+
+Regression evidence on 2026-07-14: the Release solution build completed with
+zero warnings and errors. The complete self-host type-check slice passed 45/45,
+including the two-module recursive case, and the single coordinated
+eight-worker runner passed all 402 cases in 378.5 seconds with flushed
+`n/402` progress records.
+
 

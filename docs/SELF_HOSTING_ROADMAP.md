@@ -646,9 +646,11 @@ nested trees and performs full-depth structural substitution, with
 checking, IR, and LLVM consumers from the older shallow fields remains. The
 first migration boundary now globally interns annotation types by declaration
 identity across modules, seeds stable builtin IDs, and gives annotation-backed
-name and call expressions their complete recursive type ID. Type checking,
-generic call substitution, IR, ownership/effects, and LLVM still need to
-consume that ID consistently, and
+name and call expressions their complete recursive type ID. Return and call
+argument checking now uses exact recursive IDs for fully concrete annotated
+values across module boundaries, while retaining the older diagnostic path for
+not-yet-specialized generic expressions. Generic call substitution, IR,
+ownership/effects, and LLVM still need to consume that ID consistently, and
 role-specific ownership/effect checks still keep semantic parity partial;
 the canonical gate count therefore remains 42 complete, 13 partial, and 5
 missing (48.5/60, 80.8%).

@@ -20,6 +20,7 @@ public struct SemanticType {
     first: Int
     second: Int
     lengthHash: UInt64
+    containsParameter: Bool
     status: Int
 }
 
@@ -56,6 +57,7 @@ public resolve sources: [Text; ~] -> SemanticTypeSet {
             first: -1
             second: -1
             lengthHash: UInt64(0)
+            containsParameter: false
             status: 0
         })
         builtinSeed! + 1 => builtinSeed!
@@ -204,6 +206,13 @@ public resolve sources: [Text; ~] -> SemanticTypeSet {
 
                         term.firstArgument < 0 -> if { -1 } else { mapped![term.firstArgument] } => firstType
                         term.secondArgument < 0 -> if { -1 } else { mapped![term.secondArgument] } => secondType
+                        origin! == 3 => containsParameter!
+                        firstType >= 0 -> if {
+                            semanticTypes![firstType].containsParameter -> if { true => containsParameter! }
+                        }
+                        secondType >= 0 -> if {
+                            semanticTypes![secondType].containsParameter -> if { true => containsParameter! }
+                        }
                         UInt64(0) => lengthHash!
                         term.lengthToken >= 0 -> if {
                             UInt64(1469598103934665603) => lengthHash!
@@ -236,6 +245,7 @@ public resolve sources: [Text; ~] -> SemanticTypeSet {
                                 first: firstType
                                 second: secondType
                                 lengthHash: lengthHash!
+                                containsParameter: containsParameter!
                                 status: status!
                             })
                         }
