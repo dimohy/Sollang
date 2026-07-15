@@ -5318,3 +5318,42 @@ known stage-2 emitter trap in 26.3 seconds; an independently cached `-O2`
 stage-1 reached the same point in 8.9 seconds, but cost 83.5 seconds to rebuild.
 The ordinary test loop therefore keeps the fast cold bootstrap, while a stable
 optimized stage-1 is useful for repeated full-compiler work.
+
+## D166 - Fast Regression Reuses Stage 1; Stage 2 Is a Separate Gate
+
+Status: reusable regression path complete; stage-2 LLVM assembly pending
+Date: 2026-07-15
+
+The example runner treats the native `selfhost-slc-driver` as a freshness-keyed
+stage-1 artifact. It is rebuilt only when the driver manifest, compiler DLL,
+self-host modules, standard library, or bootstrap configuration changes. All
+self-host LLVM fixtures then invoke that executable directly and may run in
+parallel. A current emitter-affected selection passed 40/40 in 7.9 seconds,
+with most native cases taking 0.02-0.20 seconds. The full regression passed
+432/432 in 49.8 seconds while reusing the current driver.
+
+Compiler self-reproduction remains a deliberately separate, expensive gate.
+One stage-1 process now owns a flat `CompilationContext`, analyzes all 27
+compiler modules once, and emits the complete stage-2 module without rebuilding
+the compiler per source or per fixture. The latest completed emission produced
+47,574 LLVM lines in 340.1 seconds. This is not part of the ordinary edit-test
+loop: bootstrap/release verification regenerates it only when its freshness key
+changes, then runs `llvm-as`, the platform linker, and the multi-file smoke
+program.
+
+The stage-2 emitter now covers imported composite return inference, transparent
+operator operands, mutable initializer scheduling, loop-local member/length/
+index recomputation, target-width length conversion, and struct literals inside
+control-flow regions. LLVM assembly is still an open checklist item; a completed
+text emission alone must not promote the self-hosting gate.
+
+Checklist:
+
+- [x] Reuse one native stage-1 compiler across self-host LLVM fixtures.
+- [x] Rebuild the artifact only when a declared freshness input changes.
+- [x] Share one borrowed flat `CompilationContext` across the 27-module build.
+- [x] Keep monotonic `n/total` output and parallel affected/full regression.
+- [x] Complete stage-2 text emission without a native crash.
+- [ ] Assemble the complete stage-2 IR with `llvm-as`.
+- [ ] Link and run the stage-2 compiler.
+- [ ] Compile and execute a multi-file SL smoke program with stage 2.

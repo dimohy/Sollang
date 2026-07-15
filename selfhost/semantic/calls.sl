@@ -101,19 +101,30 @@ public resolve source: Text -> [CallResolution; ~] {
             (nodes![controlTargetSearch!].parent == astIndex! and (nodes![controlTargetSearch!].kind == 42 or nodes![controlTargetSearch!].kind == 44)) -> if { true => hasControlTarget! }
             controlTargetSearch! + 1 => controlTargetSearch!
         }
+        0 => flowTargetSearch!
+        flowTargetSearch! < (nodes! -> len) -> while {
+            (nodes![flowTargetSearch!].parent == astIndex! and nodes![flowTargetSearch!].kind == 16) -> if { true => hasFlowCallTarget! }
+            flowTargetSearch! + 1 => flowTargetSearch!
+        }
         node.firstToken => flowTokenIndex!
         (node.kind == 10 and flowTokenIndex! < node.firstToken + node.tokenCount) -> while {
-            tokens![flowTokenIndex!].kind == grammar.tokenIdArrow -> if { true => hasFlowCallTarget! }
             tokens![flowTokenIndex!].kind == grammar.tokenIdDot -> if { true => hasQualifiedFlowTarget! }
             flowTokenIndex! + 1 => flowTokenIndex!
         }
-        ((node.kind == 10 and hasFlowCallTarget! and not hasControlTarget!) or (node.kind == 11 and (node.cstRuleId == grammar.ruleIdCallExpression or node.cstRuleId == grammar.ruleIdTypeApplicationExpression)) or node.kind == 15 or node.kind == 48) -> if {
+        ((node.kind == 10 and hasFlowCallTarget!) or (node.kind == 11 and (node.cstRuleId == grammar.ruleIdCallExpression or node.cstRuleId == grammar.ruleIdTypeApplicationExpression)) or node.kind == 15 or node.kind == 48) -> if {
             -1 => callNameToken!
             node.kind == 48 -> if { node.payloadToken => callNameToken! }
+            node.kind == 10 -> if {
+                0 => flowNameSearch!
+                flowNameSearch! < (nodes! -> len) -> while {
+                    (nodes![flowNameSearch!].parent == astIndex! and nodes![flowNameSearch!].kind == 16) -> if { nodes![flowNameSearch!].payloadToken => callNameToken! }
+                    flowNameSearch! + 1 => flowNameSearch!
+                }
+            }
             node.firstToken => tokenIndex!
             false => inFlowTypeArgument!
             false => inFlowCallArguments!
-            (tokenIndex! < node.firstToken + node.tokenCount and node.kind != 48 and (node.kind == 10 or callNameToken! < 0)) -> while {
+            (tokenIndex! < node.firstToken + node.tokenCount and node.kind != 48 and callNameToken! < 0) -> while {
                 tokens![tokenIndex!].kind == grammar.tokenIdLess -> if { true => inFlowTypeArgument! }
                 tokens![tokenIndex!].kind == grammar.tokenIdGreater -> if { false => inFlowTypeArgument! }
                 tokens![tokenIndex!].kind == grammar.tokenIdLeftParen -> if { true => inFlowCallArguments! }
@@ -198,19 +209,30 @@ public resolveModulesPrepared request: move ModuleCallRequest -> [ModuleCallReso
                 (nodes![moduleControlTargetSearch!].parent == callAstIndex! and (nodes![moduleControlTargetSearch!].kind == 42 or nodes![moduleControlTargetSearch!].kind == 44)) -> if { true => moduleHasControlTarget! }
                 moduleControlTargetSearch! + 1 => moduleControlTargetSearch!
             }
+            0 => moduleFlowTargetSearch!
+            moduleFlowTargetSearch! < (nodes! -> len) -> while {
+                (nodes![moduleFlowTargetSearch!].parent == callAstIndex! and nodes![moduleFlowTargetSearch!].kind == 16) -> if { true => moduleHasFlowCallTarget! }
+                moduleFlowTargetSearch! + 1 => moduleFlowTargetSearch!
+            }
             callNode.firstToken => moduleFlowTokenIndex!
             (callNode.kind == 10 and moduleFlowTokenIndex! < callNode.firstToken + callNode.tokenCount) -> while {
-                tokens![moduleFlowTokenIndex!].kind == grammar.tokenIdArrow -> if { true => moduleHasFlowCallTarget! }
                 tokens![moduleFlowTokenIndex!].kind == grammar.tokenIdDot -> if { true => moduleHasQualifiedFlowTarget! }
                 moduleFlowTokenIndex! + 1 => moduleFlowTokenIndex!
             }
-            ((callNode.kind == 10 and moduleHasFlowCallTarget! and not moduleHasControlTarget!) or (callNode.kind == 11 and (callNode.cstRuleId == grammar.ruleIdCallExpression or callNode.cstRuleId == grammar.ruleIdTypeApplicationExpression)) or callNode.kind == 15 or callNode.kind == 48) -> if {
+            ((callNode.kind == 10 and moduleHasFlowCallTarget!) or (callNode.kind == 11 and (callNode.cstRuleId == grammar.ruleIdCallExpression or callNode.cstRuleId == grammar.ruleIdTypeApplicationExpression)) or callNode.kind == 15 or callNode.kind == 48) -> if {
                 -1 => callNameToken!
                 callNode.kind == 48 -> if { callNode.payloadToken => callNameToken! }
+                callNode.kind == 10 -> if {
+                    0 => moduleFlowNameSearch!
+                    moduleFlowNameSearch! < (nodes! -> len) -> while {
+                        (nodes![moduleFlowNameSearch!].parent == callAstIndex! and nodes![moduleFlowNameSearch!].kind == 16) -> if { nodes![moduleFlowNameSearch!].payloadToken => callNameToken! }
+                        moduleFlowNameSearch! + 1 => moduleFlowNameSearch!
+                    }
+                }
                 callNode.firstToken => callTokenIndex!
                 false => moduleInFlowTypeArgument!
                 false => moduleInFlowCallArguments!
-                (callTokenIndex! < callNode.firstToken + callNode.tokenCount and callNode.kind != 48 and (callNode.kind == 10 or callNameToken! < 0)) -> while {
+                (callTokenIndex! < callNode.firstToken + callNode.tokenCount and callNode.kind != 48 and callNameToken! < 0) -> while {
                     tokens![callTokenIndex!].kind == grammar.tokenIdLess -> if { true => moduleInFlowTypeArgument! }
                     tokens![callTokenIndex!].kind == grammar.tokenIdGreater -> if { false => moduleInFlowTypeArgument! }
                     tokens![callTokenIndex!].kind == grammar.tokenIdLeftParen -> if { true => moduleInFlowCallArguments! }
@@ -374,19 +396,30 @@ public resolveModulesAnalyzed package: analysis.PackageAnalysis -> [ModuleCallRe
                 (package.nodes[sourceRange.astStart + moduleControlTargetSearch!].parent == callAstIndex! and (package.nodes[sourceRange.astStart + moduleControlTargetSearch!].kind == 42 or package.nodes[sourceRange.astStart + moduleControlTargetSearch!].kind == 44)) -> if { true => moduleHasControlTarget! }
                 moduleControlTargetSearch! + 1 => moduleControlTargetSearch!
             }
+            0 => moduleFlowTargetSearch!
+            moduleFlowTargetSearch! < sourceRange.astCount -> while {
+                (package.nodes[sourceRange.astStart + moduleFlowTargetSearch!].parent == callAstIndex! and package.nodes[sourceRange.astStart + moduleFlowTargetSearch!].kind == 16) -> if { true => moduleHasFlowCallTarget! }
+                moduleFlowTargetSearch! + 1 => moduleFlowTargetSearch!
+            }
             callNode.firstToken => moduleFlowTokenIndex!
             (callNode.kind == 10 and moduleFlowTokenIndex! < callNode.firstToken + callNode.tokenCount) -> while {
-                package.tokens[sourceRange.tokenStart + moduleFlowTokenIndex!].kind == grammar.tokenIdArrow -> if { true => moduleHasFlowCallTarget! }
                 package.tokens[sourceRange.tokenStart + moduleFlowTokenIndex!].kind == grammar.tokenIdDot -> if { true => moduleHasQualifiedFlowTarget! }
                 moduleFlowTokenIndex! + 1 => moduleFlowTokenIndex!
             }
-            ((callNode.kind == 10 and moduleHasFlowCallTarget! and not moduleHasControlTarget!) or (callNode.kind == 11 and (callNode.cstRuleId == grammar.ruleIdCallExpression or callNode.cstRuleId == grammar.ruleIdTypeApplicationExpression)) or callNode.kind == 15 or callNode.kind == 48) -> if {
+            ((callNode.kind == 10 and moduleHasFlowCallTarget!) or (callNode.kind == 11 and (callNode.cstRuleId == grammar.ruleIdCallExpression or callNode.cstRuleId == grammar.ruleIdTypeApplicationExpression)) or callNode.kind == 15 or callNode.kind == 48) -> if {
                 -1 => callNameToken!
                 callNode.kind == 48 -> if { callNode.payloadToken => callNameToken! }
+                callNode.kind == 10 -> if {
+                    0 => moduleFlowNameSearch!
+                    moduleFlowNameSearch! < sourceRange.astCount -> while {
+                        (package.nodes[sourceRange.astStart + moduleFlowNameSearch!].parent == callAstIndex! and package.nodes[sourceRange.astStart + moduleFlowNameSearch!].kind == 16) -> if { package.nodes[sourceRange.astStart + moduleFlowNameSearch!].payloadToken => callNameToken! }
+                        moduleFlowNameSearch! + 1 => moduleFlowNameSearch!
+                    }
+                }
                 callNode.firstToken => callTokenIndex!
                 false => moduleInFlowTypeArgument!
                 false => moduleInFlowCallArguments!
-                (callTokenIndex! < callNode.firstToken + callNode.tokenCount and callNode.kind != 48 and (callNode.kind == 10 or callNameToken! < 0)) -> while {
+                (callTokenIndex! < callNode.firstToken + callNode.tokenCount and callNode.kind != 48 and callNameToken! < 0) -> while {
                     package.tokens[sourceRange.tokenStart + callTokenIndex!].kind == grammar.tokenIdLess -> if { true => moduleInFlowTypeArgument! }
                     package.tokens[sourceRange.tokenStart + callTokenIndex!].kind == grammar.tokenIdGreater -> if { false => moduleInFlowTypeArgument! }
                     package.tokens[sourceRange.tokenStart + callTokenIndex!].kind == grammar.tokenIdLeftParen -> if { true => moduleInFlowCallArguments! }

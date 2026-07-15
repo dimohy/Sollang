@@ -565,6 +565,16 @@ public lowerContext prepared: semanticContext.CompilationContext -> [TypedIrNode
                                     (propertyCall.sourceModule == sourceIndex! and propertyCall.callAst == expressionAstIndex! and propertyCall.status == 0) -> if { 6 => expressionKind! }
                                     propertyCallSearch! + 1 => propertyCallSearch!
                                 }
+                                false => transparentExpression!
+                                (expression.kind >= 18 and expression.kind <= 21) -> if {
+                                    0 => transparentChildSearch!
+                                    transparentChildSearch! < sourceRange.astCount -> while {
+                                        prepared.nodes[sourceRange.astStart + transparentChildSearch!] => transparentChild
+                                        (transparentChild.parent == expressionAstIndex! and transparentChild.start == expression.start and transparentChild.length == expression.length) -> if { true => transparentExpression! }
+                                        transparentChildSearch! + 1 => transparentChildSearch!
+                                    }
+                                }
+                                not transparentExpression! -> if {
                                 results! -> len => expressionIr
                                 expressionIr => astToIr![expressionAstIndex!]
                                 -1 => expressionSymbol!
@@ -614,8 +624,9 @@ public lowerContext prepared: semanticContext.CompilationContext -> [TypedIrNode
                                             resolvedCall.functionSymbol => expressionSymbol!
                                             resolvedCall.targetSourceModule => expressionTargetModule!
                                             (resolvedCall.functionSymbol >= 0 and resolvedCall.targetSourceModule >= 0) -> if {
-                                                prepared.sources[resolvedCall.targetSourceModule] -> symbols.collectSource => expressionTargetTable!
-                                                ((expressionTargetTable![resolvedCall.functionSymbol].flags / 8) % 2 == 1 and (expressionFlags! / 8) % 2 == 0) -> if {
+                                                prepared.ranges[resolvedCall.targetSourceModule] => expressionTargetRange
+                                                prepared.symbols[expressionTargetRange.symbolStart + resolvedCall.functionSymbol] => expressionTargetFunction
+                                                ((expressionTargetFunction.flags / 8) % 2 == 1 and (expressionFlags! / 8) % 2 == 0) -> if {
                                                     expressionFlags! + 8 => expressionFlags!
                                                 }
                                             }
@@ -643,6 +654,7 @@ public lowerContext prepared: semanticContext.CompilationContext -> [TypedIrNode
                                     nextOperand: -1
                                     flags: expressionFlags!
                                 })
+                                }
                                 }
                             }
                         }
@@ -785,7 +797,7 @@ public lowerContext prepared: semanticContext.CompilationContext -> [TypedIrNode
                                         candidateConditionDistance! + 1 => candidateConditionDistance!
                                     }
                                 }
-                                (conditionBelongsToFlow! and prepared.nodes[sourceRange.astStart + conditionCandidate.astNode].start < prepared.nodes[sourceRange.astStart + control!.astNode].start) -> if {
+                                (conditionBelongsToFlow! and ((conditionCandidate.typeOrigin == 1 and conditionCandidate.typeSymbol == 23) or (conditionCandidate.typeId >= 0 and recursiveSemanticTypes![conditionCandidate.typeId].origin == 1 and recursiveSemanticTypes![conditionCandidate.typeId].symbol == 23)) and prepared.nodes[sourceRange.astStart + conditionCandidate.astNode].start < prepared.nodes[sourceRange.astStart + control!.astNode].start) -> if {
                                     prepared.nodes[sourceRange.astStart + conditionCandidate.astNode].start => candidateStart
                                     (conditionIr! < 0 or candidateConditionDistance! < conditionDistance! or (candidateConditionDistance! == conditionDistance! and candidateStart > conditionStart!)) -> if {
                                         conditionSearch! => conditionIr!
@@ -795,7 +807,7 @@ public lowerContext prepared: semanticContext.CompilationContext -> [TypedIrNode
                                 }
                             conditionSearch! + 1 => conditionSearch!
                         }
-                        (conditionIr! < 0 and control!.parent >= expressionIrStart and results![control!.parent].kind != 19) -> if {
+                        (conditionIr! < 0 and control!.parent >= expressionIrStart and results![control!.parent].kind != 19 and ((results![control!.parent].typeOrigin == 1 and results![control!.parent].typeSymbol == 23) or (results![control!.parent].typeId >= 0 and recursiveSemanticTypes![results![control!.parent].typeId].origin == 1 and recursiveSemanticTypes![results![control!.parent].typeId].symbol == 23))) -> if {
                             control!.parent => enclosingConditionIr!
                             results![enclosingConditionIr!].parent => control!.parent
                             enclosingConditionIr! => conditionIr!
@@ -875,6 +887,26 @@ public lowerContext prepared: semanticContext.CompilationContext -> [TypedIrNode
 
                     results![returnIr] => returnNode!
                     astToIr![resultType.astNode] => returnOperandIr!
+                    returnOperandIr! < 0 -> if {
+                        1000000 => returnOperandDistance!
+                        expressionIrStart => returnOperandSearch!
+                        returnOperandSearch! < expressionIrEnd -> while {
+                            prepared.nodes[sourceRange.astStart + results![returnOperandSearch!].astNode].parent => returnOperandAncestor!
+                            1 => returnCandidateDistance!
+                            false => returnCandidateBelongs!
+                            (returnOperandAncestor! >= 0 and not returnCandidateBelongs!) -> while {
+                                returnOperandAncestor! == resultType.astNode -> if { true => returnCandidateBelongs! } else {
+                                    prepared.nodes[sourceRange.astStart + returnOperandAncestor!].parent => returnOperandAncestor!
+                                    returnCandidateDistance! + 1 => returnCandidateDistance!
+                                }
+                            }
+                            (returnCandidateBelongs! and returnCandidateDistance! < returnOperandDistance!) -> if {
+                                returnOperandSearch! => returnOperandIr!
+                                returnCandidateDistance! => returnOperandDistance!
+                            }
+                            returnOperandSearch! + 1 => returnOperandSearch!
+                        }
+                    }
                     (returnOperandIr! >= 0 and results![returnOperandIr!].kind == 9) -> if {
                         expressionIrStart => returnControlSearch!
                         returnControlSearch! < expressionIrEnd -> while {
@@ -1140,6 +1172,16 @@ public lowerContext prepared: semanticContext.CompilationContext -> [TypedIrNode
                                     (entryPropertyCall.sourceModule == sourceIndex! and entryPropertyCall.callAst == entryExpressionAst! and entryPropertyCall.status == 0) -> if { 6 => entryExpressionKind! }
                                     entryPropertyCallSearch! + 1 => entryPropertyCallSearch!
                                 }
+                                false => transparentEntryExpression!
+                                (entryExpression.kind >= 18 and entryExpression.kind <= 21) -> if {
+                                    0 => transparentEntryChildSearch!
+                                    transparentEntryChildSearch! < sourceRange.astCount -> while {
+                                        prepared.nodes[sourceRange.astStart + transparentEntryChildSearch!] => transparentEntryChild
+                                        (transparentEntryChild.parent == entryExpressionAst! and transparentEntryChild.start == entryExpression.start and transparentEntryChild.length == entryExpression.length) -> if { true => transparentEntryExpression! }
+                                        transparentEntryChildSearch! + 1 => transparentEntryChildSearch!
+                                    }
+                                }
+                                not transparentEntryExpression! -> if {
                                 results! -> len => entryExpressionIr
                                 entryExpressionIr => entryAstToIr![entryExpressionAst!]
                                 -1 => entryExpressionSymbol!
@@ -1189,8 +1231,9 @@ public lowerContext prepared: semanticContext.CompilationContext -> [TypedIrNode
                                             entryResolvedCall.functionSymbol => entryExpressionSymbol!
                                             entryResolvedCall.targetSourceModule => entryExpressionTargetModule!
                                             (entryResolvedCall.functionSymbol >= 0 and entryResolvedCall.targetSourceModule >= 0) -> if {
-                                                prepared.sources[entryResolvedCall.targetSourceModule] -> symbols.collectSource => entryExpressionTargetTable!
-                                                ((entryExpressionTargetTable![entryResolvedCall.functionSymbol].flags / 8) % 2 == 1 and (entryExpressionFlags! / 8) % 2 == 0) -> if {
+                                                prepared.ranges[entryResolvedCall.targetSourceModule] => entryExpressionTargetRange
+                                                prepared.symbols[entryExpressionTargetRange.symbolStart + entryResolvedCall.functionSymbol] => entryExpressionTargetFunction
+                                                ((entryExpressionTargetFunction.flags / 8) % 2 == 1 and (entryExpressionFlags! / 8) % 2 == 0) -> if {
                                                     entryExpressionFlags! + 8 => entryExpressionFlags!
                                                 }
                                             }
@@ -1218,6 +1261,7 @@ public lowerContext prepared: semanticContext.CompilationContext -> [TypedIrNode
                                     nextOperand: -1
                                     flags: entryExpressionFlags!
                                 })
+                                }
                                 }
                             }
                         }
@@ -1352,7 +1396,7 @@ public lowerContext prepared: semanticContext.CompilationContext -> [TypedIrNode
                                         entryCandidateConditionDistance! + 1 => entryCandidateConditionDistance!
                                     }
                                 }
-                                (entryConditionBelongsToFlow! and prepared.nodes[sourceRange.astStart + entryConditionCandidate.astNode].start < prepared.nodes[sourceRange.astStart + entryControl!.astNode].start) -> if {
+                                (entryConditionBelongsToFlow! and ((entryConditionCandidate.typeOrigin == 1 and entryConditionCandidate.typeSymbol == 23) or (entryConditionCandidate.typeId >= 0 and recursiveSemanticTypes![entryConditionCandidate.typeId].origin == 1 and recursiveSemanticTypes![entryConditionCandidate.typeId].symbol == 23)) and prepared.nodes[sourceRange.astStart + entryConditionCandidate.astNode].start < prepared.nodes[sourceRange.astStart + entryControl!.astNode].start) -> if {
                                     prepared.nodes[sourceRange.astStart + entryConditionCandidate.astNode].start => entryCandidateStart
                                     (entryConditionIr! < 0 or entryCandidateConditionDistance! < entryConditionDistance! or (entryCandidateConditionDistance! == entryConditionDistance! and entryCandidateStart > entryConditionStart!)) -> if {
                                         entryConditionSearch! => entryConditionIr!
@@ -1362,7 +1406,7 @@ public lowerContext prepared: semanticContext.CompilationContext -> [TypedIrNode
                                 }
                                 entryConditionSearch! + 1 => entryConditionSearch!
                             }
-                            (entryConditionIr! < 0 and entryControl!.parent >= entryExpressionStart and results![entryControl!.parent].kind != 19) -> if {
+                            (entryConditionIr! < 0 and entryControl!.parent >= entryExpressionStart and results![entryControl!.parent].kind != 19 and ((results![entryControl!.parent].typeOrigin == 1 and results![entryControl!.parent].typeSymbol == 23) or (results![entryControl!.parent].typeId >= 0 and recursiveSemanticTypes![results![entryControl!.parent].typeId].origin == 1 and recursiveSemanticTypes![results![entryControl!.parent].typeId].symbol == 23))) -> if {
                                 entryControl!.parent => entryEnclosingConditionIr!
                                 results![entryEnclosingConditionIr!].parent => entryControl!.parent
                                 entryEnclosingConditionIr! => entryConditionIr!
@@ -1439,6 +1483,26 @@ public lowerContext prepared: semanticContext.CompilationContext -> [TypedIrNode
                     }
                     results![entryIr!] => entryNode!
                     entryAstToIr![inferred![entryResultTypeIndex!].astNode] => entryResultIr!
+                    entryResultIr! < 0 -> if {
+                        1000000 => entryResultOperandDistance!
+                        entryExpressionStart => entryResultOperandSearch!
+                        entryResultOperandSearch! < entryExpressionEnd -> while {
+                            prepared.nodes[sourceRange.astStart + results![entryResultOperandSearch!].astNode].parent => entryResultOperandAncestor!
+                            1 => entryResultCandidateDistance!
+                            false => entryResultCandidateBelongs!
+                            (entryResultOperandAncestor! >= 0 and not entryResultCandidateBelongs!) -> while {
+                                entryResultOperandAncestor! == inferred![entryResultTypeIndex!].astNode -> if { true => entryResultCandidateBelongs! } else {
+                                    prepared.nodes[sourceRange.astStart + entryResultOperandAncestor!].parent => entryResultOperandAncestor!
+                                    entryResultCandidateDistance! + 1 => entryResultCandidateDistance!
+                                }
+                            }
+                            (entryResultCandidateBelongs! and entryResultCandidateDistance! < entryResultOperandDistance!) -> if {
+                                entryResultOperandSearch! => entryResultIr!
+                                entryResultCandidateDistance! => entryResultOperandDistance!
+                            }
+                            entryResultOperandSearch! + 1 => entryResultOperandSearch!
+                        }
+                    }
                     (entryResultIr! >= 0 and results![entryResultIr!].kind == 9) -> if {
                         entryExpressionStart => entryResultControlSearch!
                         entryResultControlSearch! < entryExpressionEnd -> while {
@@ -1487,38 +1551,36 @@ public lowerContext prepared: semanticContext.CompilationContext -> [TypedIrNode
             memberBase.typeOrigin => memberCurrentOrigin!
             memberBase.typeModule => memberCurrentModule!
             memberBase.typeSymbol => memberCurrentSymbol!
-            prepared.sources[member!.sourceModule] -> ast.lowerSource => memberNodes!
-            prepared.sources[member!.sourceModule] -> lexer.lexSource => memberTokens!
-            memberNodes![member!.astNode] => memberAst
+            prepared.ranges[member!.sourceModule] => memberSourceRange
+            prepared.nodes[memberSourceRange.astStart + member!.astNode] => memberAst
             # The operand already represents the complete typed base. Resolve
             # only the trailing path, so an identifier inside values[index]
             # cannot be mistaken for a field in values[index].field.
             1 => memberIdentifierOrdinal!
-            memberNodes![memberBase.astNode] => memberBaseAst
+            prepared.nodes[memberSourceRange.astStart + memberBase.astNode] => memberBaseAst
             memberBaseAst.start + memberBaseAst.length => memberBaseEnd
             memberAst.firstToken => memberTokenIndex!
             true => beforeMemberBaseEnd!
             (beforeMemberBaseEnd! and memberTokenIndex! < memberAst.firstToken + memberAst.tokenCount) -> while {
-                memberTokens![memberTokenIndex!].span.start < memberBaseEnd -> if {
+                prepared.tokens[memberSourceRange.tokenStart + memberTokenIndex!].span.start < memberBaseEnd -> if {
                     memberTokenIndex! + 1 => memberTokenIndex!
                 } else {
                     false => beforeMemberBaseEnd!
                 }
             }
             memberTokenIndex! < memberAst.firstToken + memberAst.tokenCount -> while {
-                memberTokens![memberTokenIndex!].kind == grammar.tokenIdIdentifier -> if {
+                prepared.tokens[memberSourceRange.tokenStart + memberTokenIndex!].kind == grammar.tokenIdIdentifier -> if {
                     memberIdentifierOrdinal! > 0 -> if {
                         memberCurrentModule! => memberOwnerSource!
                         memberCurrentOrigin! == 2 -> if { prepared.modules[memberCurrentModule!].sourceIndex => memberOwnerSource! }
-                        prepared.sources[memberOwnerSource!] -> symbols.collectSource => memberOwnerTable!
-                        prepared.sources[memberOwnerSource!] -> lexer.lexSource => memberOwnerTokens!
+                        prepared.ranges[memberOwnerSource!] => memberOwnerRange
                         0 => memberFieldOrdinal!
                         0 => memberFieldIndex!
-                        memberFieldIndex! < (memberOwnerTable! -> len) -> while {
-                            memberOwnerTable![memberFieldIndex!] => memberField
+                        memberFieldIndex! < memberOwnerRange.symbolCount -> while {
+                            prepared.symbols[memberOwnerRange.symbolStart + memberFieldIndex!] => memberField
                             (memberField.kind == 26 and memberField.parent == memberCurrentSymbol!) -> if {
-                                memberTokens![memberTokenIndex!] => memberName
-                                memberOwnerTokens![memberField.nameToken] => memberFieldName
+                                prepared.tokens[memberSourceRange.tokenStart + memberTokenIndex!] => memberName
+                                prepared.tokens[memberOwnerRange.tokenStart + memberField.nameToken] => memberFieldName
                                 memberName.span.length == memberFieldName.span.length => memberEqual!
                                 UIntSize(0) => memberNameByte!
                                 (memberEqual! and memberNameByte! < memberName.span.length) -> while {

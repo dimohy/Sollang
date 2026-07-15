@@ -872,8 +872,8 @@ emitCore context: move EmitContext -> Unit uses Console {
                             0 - valueNodeIndex - 1 => emitValueTask
                             valueTaskSize! == (valueTasks! -> len) -> if { valueTasks! -> push(emitValueTask) } else { emitValueTask => valueTasks![valueTaskSize!] }
                             valueTaskSize! + 1 => valueTaskSize!
-                            (valueNode.kind == 6 or valueNode.kind == 7 or valueNode.kind == 8) -> if {
-                                (valueNode.kind == 8 and valueNode.operand1 >= 0) -> if {
+                            (valueNode.kind == 6 or valueNode.kind == 7 or valueNode.kind == 8 or valueNode.kind == 9 or valueNode.kind == 13 or valueNode.kind == 15) -> if {
+                                ((valueNode.kind == 8 or valueNode.kind == 15) and valueNode.operand1 >= 0) -> if {
                                     valueNode.operand1 + 1 => secondValueTask
                                     valueTaskSize! == (valueTasks! -> len) -> if { valueTasks! -> push(secondValueTask) } else { secondValueTask => valueTasks![valueTaskSize!] }
                                     valueTaskSize! + 1 => valueTaskSize!
@@ -930,6 +930,52 @@ emitCore context: move EmitContext -> Unit uses Console {
                                     WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: valueNode.operand0 } -> writeWhileValue
                                 }
                                 ")" -> println
+                            }
+                            (valueNode.kind == 9 and valueNode.opcode == -201 and valueNode.operand0 >= 0) -> if {
+                                context.ir[valueNode.operand0] => whileLengthBase
+                                "  %while$(whileIndex)_v$(valueNodeIndex)" -> print
+                                valueNode.typeSymbol == 2 -> if { "_raw" -> print }
+                                " = extractvalue " -> print
+                                whileLengthBase -> writeType
+                                " " -> print
+                                WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: valueNode.operand0 } -> writeWhileValue
+                                ", " -> print
+                                whileLengthBase.typeOrigin == 15 -> if { "2" -> println } else { "1" -> println }
+                                valueNode.typeSymbol == 2 -> if {
+                                    "  %while$(whileIndex)_v$(valueNodeIndex) = trunc i64 %while$(whileIndex)_v$(valueNodeIndex)_raw to i32" -> println
+                                }
+                            }
+                            (valueNode.kind == 13 and valueNode.operand0 >= 0) -> if {
+                                context.ir[valueNode.operand0] => whileMemberBase
+                                "  %while$(whileIndex)_v$(valueNodeIndex) = extractvalue " -> print
+                                whileMemberBase -> writeType
+                                " " -> print
+                                WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: valueNode.operand0 } -> writeWhileValue
+                                ", $(valueNode.symbol)" -> println
+                            }
+                            (valueNode.kind == 15 and valueNode.operand0 >= 0 and valueNode.operand1 >= 0) -> if {
+                                context.ir[valueNode.operand0] => whileIndexedArray
+                                context.ir[valueNode.operand1] => whileIndexValue
+                                "  %while$(whileIndex)_v$(valueNodeIndex)_data = extractvalue " -> print
+                                whileIndexedArray -> writeType
+                                " " -> print
+                                WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: valueNode.operand0 } -> writeWhileValue
+                                ", 0" -> println
+                                whileIndexValue.typeSymbol == 13 -> if {
+                                    "  %while$(whileIndex)_v$(valueNodeIndex)_index = add i64 0, " -> print
+                                } else {
+                                    "  %while$(whileIndex)_v$(valueNodeIndex)_index = sext " -> print
+                                    whileIndexValue -> writeType
+                                    " " -> print
+                                }
+                                WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: valueNode.operand1 } -> writeWhileValue
+                                whileIndexValue.typeSymbol == 13 -> if { "" -> println } else { " to i64" -> println }
+                                "  %while$(whileIndex)_v$(valueNodeIndex)_ptr = getelementptr " -> print
+                                valueNode -> writeType
+                                ", ptr %while$(whileIndex)_v$(valueNodeIndex)_data, i64 %while$(whileIndex)_v$(valueNodeIndex)_index" -> println
+                                "  %while$(whileIndex)_v$(valueNodeIndex) = load " -> print
+                                valueNode -> writeType
+                                ", ptr %while$(whileIndex)_v$(valueNodeIndex)_ptr, align $(valueNode -> storageAlign)" -> println
                             }
                             (valueNode.kind == 7 or valueNode.kind == 8) -> if {
                                 context.ir[valueNode.operand0] => left
@@ -1393,7 +1439,7 @@ emitCore context: move EmitContext -> Unit uses Console {
                 true => regionTerminated!
             }
             (regionNode.kind != 21 and regionNode.kind != 22 and regionNode.kind != 23) -> if {
-            (regionNode.kind == 5 and regionNode.typeSymbol != 16 and ownerIndex! >= 0 and not (context.ir[ownerIndex!].kind == 0 and context.ir[ownerIndex!].operand1 >= 0 and regionNode.symbol == context.ir[context.ir[ownerIndex!].operand1].symbol)) -> if {
+            (regionNode.kind == 5 and not (regionNode.typeOrigin == 1 and regionNode.typeSymbol == 16) and ownerIndex! >= 0 and not (context.ir[ownerIndex!].kind == 0 and context.ir[ownerIndex!].operand1 >= 0 and regionNode.symbol == context.ir[context.ir[ownerIndex!].operand1].symbol)) -> if {
                 -1 => regionBindingIndex!
                 0 => regionBindingSearch!
                 regionBindingSearch! < (context.ir -> len) -> while {
@@ -1439,6 +1485,35 @@ emitCore context: move EmitContext -> Unit uses Console {
                 ", ptr %slot$(mutableRegionRoot), align " -> print
                 "$(regionNode -> storageAlign)" -> println
             }
+            regionNode.kind == 12 -> if {
+                regionNode.operand0 => regionFieldValueIndex!
+                0 => regionFieldPosition!
+                regionFieldValueIndex! >= 0 -> while {
+                    context.ir[regionFieldValueIndex!] => regionFieldValue
+                    "  " -> print
+                    regionFieldValue.nextOperand < 0 -> if { "%v$(regionNodeIndex!)" -> print } else { "%v$(regionNodeIndex!)_f$(regionFieldPosition!)" -> print }
+                    " = insertvalue " -> print
+                    regionNode -> writeType
+                    " " -> print
+                    regionFieldPosition! == 0 -> if { "poison" -> print } else { "%v$(regionNodeIndex!)_f$(regionFieldPosition! - 1)" -> print }
+                    ", " -> print
+                    regionFieldValue -> writeType
+                    " " -> print
+                    (regionFieldValue.kind == 3 or regionFieldValue.kind == 4) -> if {
+                        regionFieldValue -> sourceToken => regionFieldToken
+                        regionFieldValue.kind == 3 -> if {
+                            context.sources[regionFieldValue.sourceModule] -> slice(regionFieldToken.span.start, regionFieldToken.span.length) -> print
+                        } else {
+                            ((context.sources[regionFieldValue.sourceModule] -> byte(regionFieldToken.span.start)) == UInt8(116)) -> if { "1" } else { "0" } -> print
+                        }
+                    } else {
+                        (regionFieldValue.kind == 5 and ownerIndex! >= 0 and context.ir[ownerIndex!].operand1 >= 0 and regionFieldValue.symbol == context.ir[context.ir[ownerIndex!].operand1].symbol) -> if { "%arg" -> print } else { "%v$(regionFieldValueIndex!)" -> print }
+                    }
+                    ", $(regionFieldPosition!)" -> println
+                    regionFieldValue.nextOperand => regionFieldValueIndex!
+                    regionFieldPosition! + 1 => regionFieldPosition!
+                }
+            }
             regionNode.kind == 13 -> if {
                 (regionNode.typeOrigin == 1 and regionNode.typeSymbol == 16) -> if {
                 } else {
@@ -1447,15 +1522,24 @@ emitCore context: move EmitContext -> Unit uses Console {
                 regionMemberBase.typeModule => regionMemberCurrentModule!
                 regionMemberBase.typeSymbol => regionMemberCurrentSymbol!
                 regionNode -> sourceNode => regionMemberAst
-                0 => regionMemberIdentifierCount!
+                regionMemberBase -> sourceNode => regionMemberBaseAst
+                regionMemberBaseAst.start + regionMemberBaseAst.length => regionMemberBaseEnd
+                1 => regionMemberIdentifierCount!
                 regionMemberAst.firstToken => regionMemberTokenIndex!
+                true => beforeRegionMemberBaseEnd!
+                (beforeRegionMemberBaseEnd! and regionMemberTokenIndex! < regionMemberAst.firstToken + regionMemberAst.tokenCount) -> while {
+                    context.tokens[context.ranges[regionNode.sourceModule].tokenStart + regionMemberTokenIndex!].span.start < regionMemberBaseEnd -> if {
+                        regionMemberTokenIndex! + 1 => regionMemberTokenIndex!
+                    } else { false => beforeRegionMemberBaseEnd! }
+                }
+                regionMemberTokenIndex! => regionMemberPathTokenStart
                 regionMemberTokenIndex! < regionMemberAst.firstToken + regionMemberAst.tokenCount -> while {
                     context.tokens[context.ranges[regionNode.sourceModule].tokenStart + regionMemberTokenIndex!].kind == grammar.tokenIdIdentifier -> if { regionMemberIdentifierCount! + 1 => regionMemberIdentifierCount! }
                     regionMemberTokenIndex! + 1 => regionMemberTokenIndex!
                 }
-                0 => regionMemberIdentifierOrdinal!
+                1 => regionMemberIdentifierOrdinal!
                 0 => regionMemberProjectionOrdinal!
-                regionMemberAst.firstToken => regionMemberTokenIndex!
+                regionMemberPathTokenStart => regionMemberTokenIndex!
                 regionMemberTokenIndex! < regionMemberAst.firstToken + regionMemberAst.tokenCount -> while {
                     context.tokens[context.ranges[regionNode.sourceModule].tokenStart + regionMemberTokenIndex!].kind == grammar.tokenIdIdentifier -> if {
                         regionMemberIdentifierOrdinal! > 0 -> if {
@@ -1539,10 +1623,13 @@ emitCore context: move EmitContext -> Unit uses Console {
                 (regionLengthBase.typeOrigin == 1 and regionLengthBase.typeSymbol == 16) -> if {
                     "  %v$(regionNodeIndex!) = call i64 @sl_argument_count()" -> println
                 } else {
-                    "  %v$(regionNodeIndex!) = extractvalue " -> print
+                    "  %v$(regionNodeIndex!)" -> print
+                    regionNode.typeSymbol == 2 -> if { "_raw" -> print }
+                    " = extractvalue " -> print
                     regionLengthBase -> writeType
                     " %v$(regionNode.operand0), " -> print
                     regionLengthBase.typeOrigin == 15 -> if { "2" -> println } else { "1" -> println }
+                    regionNode.typeSymbol == 2 -> if { "  %v$(regionNodeIndex!) = trunc i64 %v$(regionNodeIndex!)_raw to i32" -> println }
                 }
             }
             (regionNode.kind == 9 and regionNode.opcode == -202 and regionNode.operand0 >= 0 and regionNode.operand1 >= 0) -> if {
@@ -1972,7 +2059,7 @@ emitCore context: move EmitContext -> Unit uses Console {
     false => usesArguments!
     0 => argumentsTypeSearch!
     argumentsTypeSearch! < (context.ir -> len) -> while {
-        context.ir[argumentsTypeSearch!].typeSymbol == 16 -> if { true => usesArguments! }
+        (context.ir[argumentsTypeSearch!].typeOrigin == 1 and context.ir[argumentsTypeSearch!].typeSymbol == 16) -> if { true => usesArguments! }
         argumentsTypeSearch! + 1 => argumentsTypeSearch!
     }
     usesArguments! -> if {
@@ -2081,7 +2168,14 @@ emitCore context: move EmitContext -> Unit uses Console {
                                 expressionStart => mutableReadBarrierSearch!
                                 mutableReadBarrierSearch! < functionEnd! -> while {
                                     context.ir[mutableReadBarrierSearch!] => mutableReadBarrier
-                                    (not expressionScheduled![mutableReadBarrierSearch!] and (mutableReadBarrier.kind == 20 or (mutableReadBarrier.kind == 17 and mutableReadBarrier.flags == 1)) and (mutableReadBarrier -> sourceStart) < (scheduleNode -> sourceStart)) -> if {
+                                    false => mutableReadInsideBarrier!
+                                    scheduleNode.parent => mutableReadBarrierAncestor!
+                                    (mutableReadBarrierAncestor! >= expressionStart and not mutableReadInsideBarrier!) -> while {
+                                        mutableReadBarrierAncestor! == mutableReadBarrierSearch! -> if { true => mutableReadInsideBarrier! } else {
+                                            context.ir[mutableReadBarrierAncestor!].parent => mutableReadBarrierAncestor!
+                                        }
+                                    }
+                                    (not mutableReadInsideBarrier! and not expressionScheduled![mutableReadBarrierSearch!] and (mutableReadBarrier.kind == 20 or (mutableReadBarrier.kind == 17 and mutableReadBarrier.flags == 1)) and (mutableReadBarrier -> sourceStart) < (scheduleNode -> sourceStart)) -> if {
                                         false => scheduleReady!
                                     }
                                     mutableReadBarrierSearch! + 1 => mutableReadBarrierSearch!
@@ -2126,7 +2220,7 @@ emitCore context: move EmitContext -> Unit uses Console {
             expressionOrderIndex! < (expressionOrder! -> len) -> while {
                 expressionOrder![expressionOrderIndex!] => expressionIndex!
                 context.ir[expressionIndex!] => expression
-                (expression.kind == 5 and expression.typeSymbol != 16 and not (function.operand1 >= 0 and expression.symbol == context.ir[function.operand1].symbol)) -> if {
+                (expression.kind == 5 and not (expression.typeOrigin == 1 and expression.typeSymbol == 16) and not (function.operand1 >= 0 and expression.symbol == context.ir[function.operand1].symbol)) -> if {
                     -1 => bindingValueIr!
                     expressionStart => bindingValueSearch!
                     bindingValueSearch! < functionEnd! -> while {
@@ -2161,12 +2255,15 @@ emitCore context: move EmitContext -> Unit uses Console {
                     (lengthBase.typeOrigin == 1 and lengthBase.typeSymbol == 16) -> if {
                         "  %v$(expressionIndex!) = call i64 @sl_argument_count()" -> println
                     } else {
-                        "  %v$(expressionIndex!) = extractvalue " -> print
+                        "  %v$(expressionIndex!)" -> print
+                        expression.typeSymbol == 2 -> if { "_raw" -> print }
+                        " = extractvalue " -> print
                         lengthBase -> writeType
                         " " -> print
                         (lengthBase.kind == 5 and function.operand1 >= 0 and lengthBase.symbol == context.ir[function.operand1].symbol) -> if { "%arg" -> print } else { "%v$(expression.operand0)" -> print }
                         ", " -> print
                         lengthBase.typeOrigin == 15 -> if { "2" -> println } else { "1" -> println }
+                        expression.typeSymbol == 2 -> if { "  %v$(expressionIndex!) = trunc i64 %v$(expressionIndex!)_raw to i32" -> println }
                     }
                 }
                 (expression.kind == 9 and expression.opcode == -202 and expression.operand0 >= 0 and expression.operand1 >= 0) -> if {
@@ -2239,15 +2336,24 @@ emitCore context: move EmitContext -> Unit uses Console {
                     memberBase.typeModule => memberCurrentModule!
                     memberBase.typeSymbol => memberCurrentSymbol!
                     expression -> sourceNode => memberAst
-                    0 => memberIdentifierCount!
+                    memberBase -> sourceNode => memberBaseAst
+                    memberBaseAst.start + memberBaseAst.length => memberBaseEnd
+                    1 => memberIdentifierCount!
                     memberAst.firstToken => memberTokenIndex!
+                    true => beforeMemberBaseEnd!
+                    (beforeMemberBaseEnd! and memberTokenIndex! < memberAst.firstToken + memberAst.tokenCount) -> while {
+                        context.tokens[context.ranges[expression.sourceModule].tokenStart + memberTokenIndex!].span.start < memberBaseEnd -> if {
+                            memberTokenIndex! + 1 => memberTokenIndex!
+                        } else { false => beforeMemberBaseEnd! }
+                    }
+                    memberTokenIndex! => memberPathTokenStart
                     memberTokenIndex! < memberAst.firstToken + memberAst.tokenCount -> while {
                         context.tokens[context.ranges[expression.sourceModule].tokenStart + memberTokenIndex!].kind == grammar.tokenIdIdentifier -> if { memberIdentifierCount! + 1 => memberIdentifierCount! }
                         memberTokenIndex! + 1 => memberTokenIndex!
                     }
-                    0 => memberIdentifierOrdinal!
+                    1 => memberIdentifierOrdinal!
                     0 => memberProjectionOrdinal!
-                    memberAst.firstToken => memberTokenIndex!
+                    memberPathTokenStart => memberTokenIndex!
                     memberTokenIndex! < memberAst.firstToken + memberAst.tokenCount -> while {
                         context.tokens[context.ranges[expression.sourceModule].tokenStart + memberTokenIndex!].kind == grammar.tokenIdIdentifier -> if {
                             memberIdentifierOrdinal! > 0 -> if {
@@ -3132,7 +3238,14 @@ emitCore context: move EmitContext -> Unit uses Console {
                                     functionIndex! + 1 => entryMutableReadBarrierSearch!
                                     entryMutableReadBarrierSearch! < entryEnd! -> while {
                                         context.ir[entryMutableReadBarrierSearch!] => entryMutableReadBarrier
-                                        (not entryScheduled![entryMutableReadBarrierSearch!] and (entryMutableReadBarrier.kind == 20 or (entryMutableReadBarrier.kind == 17 and entryMutableReadBarrier.flags == 1)) and (entryMutableReadBarrier -> sourceStart) < (entryScheduleNode -> sourceStart)) -> if {
+                                        false => entryMutableReadInsideBarrier!
+                                        entryScheduleNode.parent => entryMutableReadBarrierAncestor!
+                                        (entryMutableReadBarrierAncestor! > functionIndex! and not entryMutableReadInsideBarrier!) -> while {
+                                            entryMutableReadBarrierAncestor! == entryMutableReadBarrierSearch! -> if { true => entryMutableReadInsideBarrier! } else {
+                                                context.ir[entryMutableReadBarrierAncestor!].parent => entryMutableReadBarrierAncestor!
+                                            }
+                                        }
+                                        (not entryMutableReadInsideBarrier! and not entryScheduled![entryMutableReadBarrierSearch!] and (entryMutableReadBarrier.kind == 20 or (entryMutableReadBarrier.kind == 17 and entryMutableReadBarrier.flags == 1)) and (entryMutableReadBarrier -> sourceStart) < (entryScheduleNode -> sourceStart)) -> if {
                                             false => entryScheduleReady!
                                         }
                                         entryMutableReadBarrierSearch! + 1 => entryMutableReadBarrierSearch!
@@ -3183,7 +3296,7 @@ emitCore context: move EmitContext -> Unit uses Console {
                         "  %v$(entryExpressionIndex!)_ptr = insertvalue %sl.text poison, ptr @sl_str_$(entryExpressionIndex!), 0" -> println
                         "  %v$(entryExpressionIndex!) = insertvalue %sl.text %v$(entryExpressionIndex!)_ptr, i64 $entryExpressionLength, 1" -> println
                     }
-                    (entryExpression.kind == 5 and entryExpression.typeSymbol != 16) -> if {
+                    (entryExpression.kind == 5 and not (entryExpression.typeOrigin == 1 and entryExpression.typeSymbol == 16)) -> if {
                         -1 => entryBindingValueIr!
                         functionIndex! + 1 => entryBindingValueSearch!
                         entryBindingValueSearch! < entryEnd! -> while {
@@ -3218,10 +3331,13 @@ emitCore context: move EmitContext -> Unit uses Console {
                         (entryLengthBase.typeOrigin == 1 and entryLengthBase.typeSymbol == 16) -> if {
                             "  %v$(entryExpressionIndex!) = call i64 @sl_argument_count()" -> println
                         } else {
-                            "  %v$(entryExpressionIndex!) = extractvalue " -> print
+                            "  %v$(entryExpressionIndex!)" -> print
+                            entryExpression.typeSymbol == 2 -> if { "_raw" -> print }
+                            " = extractvalue " -> print
                             entryLengthBase -> writeType
                             " %v$(entryExpression.operand0), " -> print
                             entryLengthBase.typeOrigin == 15 -> if { "2" -> println } else { "1" -> println }
+                            entryExpression.typeSymbol == 2 -> if { "  %v$(entryExpressionIndex!) = trunc i64 %v$(entryExpressionIndex!)_raw to i32" -> println }
                         }
                     }
                     (entryExpression.kind == 9 and entryExpression.opcode == -202 and entryExpression.operand0 >= 0 and entryExpression.operand1 >= 0) -> if {

@@ -232,13 +232,10 @@ public resolveContext prepared: semanticContext.CompilationContext -> Expression
         false => compositeChanged!
         0 => compositeSourceIndex!
         compositeSourceIndex! < (prepared.sources -> len) -> while {
-            prepared.sources[compositeSourceIndex!] -> len => compositeSourceLength
-            prepared.sources[compositeSourceIndex!] -> slice(UIntSize(0), compositeSourceLength) => compositeSource
-            compositeSource -> ast.lower => compositeNodes!
-            compositeSource -> lexer.lex => compositeTokens!
+            prepared.ranges[compositeSourceIndex!] => compositeRange
             0 => compositeAstIndex!
-            compositeAstIndex! < (compositeNodes! -> len) -> while {
-                compositeNodes![compositeAstIndex!] => compositeNode
+            compositeAstIndex! < compositeRange.astCount -> while {
+                prepared.nodes[compositeRange.astStart + compositeAstIndex!] => compositeNode
                 false => alreadyTyped!
                 0 => existingExpressionSearch!
                 existingExpressionSearch! < (expressions! -> len) -> while {
@@ -253,12 +250,12 @@ public resolveContext prepared: semanticContext.CompilationContext -> Expression
                     childDistanceSearch! < (expressions! -> len) -> while {
                         expressions![childDistanceSearch!] => childCandidate
                         childCandidate.sourceModule == compositeSourceIndex! -> if {
-                            compositeNodes![childCandidate.astNode].parent => childAncestor!
+                            prepared.nodes[compositeRange.astStart + childCandidate.astNode].parent => childAncestor!
                             1 => distance!
                             false => belongsToComposite!
                             (childAncestor! >= 0 and not belongsToComposite!) -> while {
                                 childAncestor! == compositeAstIndex! -> if { true => belongsToComposite! } else {
-                                    compositeNodes![childAncestor!].parent => childAncestor!
+                                    prepared.nodes[compositeRange.astStart + childAncestor!].parent => childAncestor!
                                     distance! + 1 => distance!
                                 }
                             }
@@ -274,12 +271,12 @@ public resolveContext prepared: semanticContext.CompilationContext -> Expression
                     childSearch! < (expressions! -> len) -> while {
                         expressions![childSearch!] => childCandidate
                         childCandidate.sourceModule == compositeSourceIndex! -> if {
-                            compositeNodes![childCandidate.astNode].parent => childAncestor!
+                            prepared.nodes[compositeRange.astStart + childCandidate.astNode].parent => childAncestor!
                             1 => distance!
                             false => belongsToComposite!
                             (childAncestor! >= 0 and not belongsToComposite!) -> while {
                                 childAncestor! == compositeAstIndex! -> if { true => belongsToComposite! } else {
-                                    compositeNodes![childAncestor!].parent => childAncestor!
+                                    prepared.nodes[compositeRange.astStart + childAncestor!].parent => childAncestor!
                                     distance! + 1 => distance!
                                 }
                             }
@@ -308,7 +305,7 @@ public resolveContext prepared: semanticContext.CompilationContext -> Expression
                     compositeNode.kind == 37 -> if {
                         compositeNode.firstToken => compositeTokenIndex!
                         compositeTokenIndex! < compositeNode.firstToken + compositeNode.tokenCount -> while {
-                            compositeTokens![compositeTokenIndex!].kind == grammar.tokenIdTilde -> if { true => dynamicArray! }
+                            prepared.tokens[compositeRange.tokenStart + compositeTokenIndex!].kind == grammar.tokenIdTilde -> if { true => dynamicArray! }
                             compositeTokenIndex! + 1 => compositeTokenIndex!
                         }
                     }
@@ -372,8 +369,8 @@ public resolveContext prepared: semanticContext.CompilationContext -> Expression
 
     prepared.calls -> each call {
         (call.status == 0 and call.targetSourceModule >= 0) -> if {
-            prepared.sources[call.targetSourceModule] -> symbols.collectSource => targetTable!
-            targetTable![call.functionSymbol] => function
+            prepared.ranges[call.targetSourceModule] => targetRange
+            prepared.symbols[targetRange.symbolStart + call.functionSymbol] => function
             function.secondaryTypeNode >= 0 -> if { function.secondaryTypeNode } else { function.typeNode } => returnTypeAst
             returnTypeAst >= 0 -> if {
                 -1 => returnReference!
@@ -403,24 +400,23 @@ public resolveContext prepared: semanticContext.CompilationContext -> Expression
                         }
                         -1 => argumentExpression!
                         1000000 => argumentDistance!
-                        prepared.sources[call.sourceModule] -> ast.lowerSource => callNodes!
-                        prepared.sources[call.sourceModule] -> lexer.lexSource => callTokens!
-                        callNodes![call.callAst] => callNode
+                        prepared.ranges[call.sourceModule] => callRange
+                        prepared.nodes[callRange.astStart + call.callAst] => callNode
                         0 => argumentSearch!
                         argumentSearch! < (expressions! -> len) -> while {
                             expressions![argumentSearch!] => argumentCandidate
                             argumentCandidate.sourceModule == call.sourceModule -> if {
                                 true => beforeRoleTarget!
                                 callNode.kind == 48 -> if {
-                                    callNodes![argumentCandidate.astNode] => argumentNode
-                                    argumentNode.start + argumentNode.length > callTokens![callNode.payloadToken].span.start -> if { false => beforeRoleTarget! }
+                                    prepared.nodes[callRange.astStart + argumentCandidate.astNode] => argumentNode
+                                    argumentNode.start + argumentNode.length > prepared.tokens[callRange.tokenStart + callNode.payloadToken].span.start -> if { false => beforeRoleTarget! }
                                 }
-                                callNodes![argumentCandidate.astNode].parent => ancestor!
+                                prepared.nodes[callRange.astStart + argumentCandidate.astNode].parent => ancestor!
                                 1 => distance!
                                 false => belongsToCall!
                                 (ancestor! >= 0 and not belongsToCall!) -> while {
                                     ancestor! == call.callAst -> if { true => belongsToCall! } else {
-                                        callNodes![ancestor!].parent => ancestor!
+                                        prepared.nodes[callRange.astStart + ancestor!].parent => ancestor!
                                         distance! + 1 => distance!
                                     }
                                 }

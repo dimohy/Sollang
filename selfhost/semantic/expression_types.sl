@@ -69,6 +69,7 @@ textMatches request: TextMatchRequest -> Bool {
 # nominal table: Text 1, Int 2, Bool 23.
 public inferContext prepared: semanticContext.CompilationContext -> [ExpressionType; ~] {
     [ExpressionType; ~] => inferred!
+    ["Unit", "Text", "Int", "Int8", "Int16", "Int32", "Int64", "Long", "UInt8", "UInt16", "UInt32", "UInt64", "Size", "UIntSize", "CodePoint", "Arena", "Arguments", "MappedBytes", "MutableMappedBytes", "Float", "Float32", "Float64", "Double", "Bool", ~] => builtinNames!
     0 => sourceIndex!
     sourceIndex! < (prepared.sources -> len) -> while {
         prepared.sources[sourceIndex!] -> len => sourceLength
@@ -120,13 +121,36 @@ public inferContext prepared: semanticContext.CompilationContext -> [ExpressionT
                     prepared.symbols[qualifiedTargetRange.symbolStart + qualifiedPath.targetSymbol] => qualifiedTargetSymbol
                     (qualifiedTargetSymbol.kind == 7 and qualifiedTargetSymbol.secondaryTypeNode < 0) -> if {
                         qualifiedTargetSymbol.typeNode => qualifiedReturnTypeAst
+                        false => qualifiedReturnInferred!
                         0 => qualifiedReturnSearch!
                         qualifiedReturnSearch! < (prepared.nominal -> len) -> while {
                             prepared.nominal[qualifiedReturnSearch!] => qualifiedReturnType
                             (qualifiedReturnType.sourceModule == qualifiedTargetSource and qualifiedReturnType.typeAst == qualifiedReturnTypeAst) -> if {
                                 inferred! -> push(ExpressionType { sourceModule: sourceIndex!, astNode: astIndex!, origin: qualifiedReturnType.origin, targetModule: qualifiedReturnType.targetModule, targetSymbol: qualifiedReturnType.targetSymbol, keyOrigin: -1, keyModule: -1, valueOrigin: -1, valueModule: -1 })
+                                true => qualifiedReturnInferred!
                             }
                             qualifiedReturnSearch! + 1 => qualifiedReturnSearch!
+                        }
+                        not qualifiedReturnInferred! -> if {
+                            0 => qualifiedCompositeSearch!
+                            qualifiedCompositeSearch! < (prepared.composite -> len) -> while {
+                                prepared.composite[qualifiedCompositeSearch!] => qualifiedComposite
+                                (qualifiedComposite.sourceModule == qualifiedTargetSource and qualifiedComposite.typeAst == qualifiedReturnTypeAst) -> if {
+                                    inferred! -> push(ExpressionType {
+                                        sourceModule: sourceIndex!
+                                        astNode: astIndex!
+                                        origin: 10 + qualifiedComposite.kind
+                                        targetModule: qualifiedComposite.kind == 5 -> if { qualifiedComposite.keySymbol } else { qualifiedComposite.elementModule }
+                                        targetSymbol: qualifiedComposite.kind == 5 -> if { qualifiedComposite.valueSymbol } else { qualifiedComposite.elementSymbol }
+                                        keyOrigin: qualifiedComposite.kind == 5 -> if { qualifiedComposite.keyOrigin } else { -1 }
+                                        keyModule: qualifiedComposite.kind == 5 -> if { qualifiedComposite.keyModule } else { -1 }
+                                        valueOrigin: qualifiedComposite.kind == 5 -> if { qualifiedComposite.valueOrigin } else { -1 }
+                                        valueModule: qualifiedComposite.kind == 5 -> if { qualifiedComposite.valueModule } else { -1 }
+                                    })
+                                    true => qualifiedReturnInferred!
+                                }
+                                qualifiedCompositeSearch! + 1 => qualifiedCompositeSearch!
+                            }
                         }
                     }
                 }
@@ -154,7 +178,14 @@ public inferContext prepared: semanticContext.CompilationContext -> [ExpressionT
             }
             node.kind == 37 -> if {
                 -1 => typedArrayNameToken!
+                -1 => typedArrayPathAst!
                 false => typedArrayMarker!
+                0 => typedArrayPathSearch!
+                typedArrayPathSearch! < sourceRange.astCount -> while {
+                    prepared.nodes[sourceRange.astStart + typedArrayPathSearch!] => typedArrayPathCandidate
+                    (typedArrayPathCandidate.parent == astIndex! and typedArrayPathCandidate.kind == 16) -> if { typedArrayPathSearch! => typedArrayPathAst! }
+                    typedArrayPathSearch! + 1 => typedArrayPathSearch!
+                }
                 node.firstToken => typedArrayTokenIndex!
                 typedArrayTokenIndex! < node.firstToken + node.tokenCount -> while {
                     prepared.tokens[sourceRange.tokenStart + typedArrayTokenIndex!] => typedArrayToken
@@ -211,8 +242,31 @@ public inferContext prepared: semanticContext.CompilationContext -> [ExpressionT
                         typedArrayLocalSymbol! >= 0 -> if {
                             inferred! -> push(ExpressionType { sourceModule: sourceIndex!, astNode: astIndex!, origin: 13, targetModule: sourceIndex!, targetSymbol: typedArrayLocalSymbol!, keyOrigin: -1, keyModule: -1, valueOrigin: -1, valueModule: -1 })
                         } else {
-                            TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "Text" } -> textMatches -> if {
-                                inferred! -> push(ExpressionType { sourceModule: sourceIndex!, astNode: astIndex!, origin: 13, targetModule: -1, targetSymbol: 1, keyOrigin: -1, keyModule: -1, valueOrigin: -1, valueModule: -1 })
+                            -1 => typedArrayQualifiedIndex!
+                            0 => typedArrayQualifiedSearch!
+                            typedArrayQualifiedSearch! < (prepared.qualified -> len) -> while {
+                                prepared.qualified[typedArrayQualifiedSearch!] => typedArrayQualifiedCandidate
+                                (typedArrayQualifiedCandidate.sourceModule == sourceIndex! and typedArrayQualifiedCandidate.pathAst == typedArrayPathAst! and typedArrayQualifiedCandidate.status == 0) -> if {
+                                    typedArrayQualifiedSearch! => typedArrayQualifiedIndex!
+                                }
+                                typedArrayQualifiedSearch! + 1 => typedArrayQualifiedSearch!
+                            }
+                            typedArrayQualifiedIndex! >= 0 -> if {
+                                prepared.qualified[typedArrayQualifiedIndex!] => typedArrayQualified
+                                inferred! -> push(ExpressionType { sourceModule: sourceIndex!, astNode: astIndex!, origin: 13, targetModule: typedArrayQualified.targetModule, targetSymbol: typedArrayQualified.targetSymbol, keyOrigin: -1, keyModule: -1, valueOrigin: -1, valueModule: -1 })
+                            } else {
+                            -1 => typedArrayBuiltinSymbol!
+                            0 => typedArrayBuiltinSearch!
+                            (typedArrayBuiltinSearch! < (builtinNames! -> len) and typedArrayBuiltinSymbol! < 0) -> while {
+                                builtinNames![typedArrayBuiltinSearch!] => typedArrayBuiltinName
+                                TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: typedArrayBuiltinName } -> textMatches -> if {
+                                    typedArrayBuiltinSearch! => typedArrayBuiltinSymbol!
+                                }
+                                typedArrayBuiltinSearch! + 1 => typedArrayBuiltinSearch!
+                            }
+                            typedArrayBuiltinSymbol! >= 0 -> if {
+                                inferred! -> push(ExpressionType { sourceModule: sourceIndex!, astNode: astIndex!, origin: 13, targetModule: -1, targetSymbol: typedArrayBuiltinSymbol!, keyOrigin: -1, keyModule: -1, valueOrigin: -1, valueModule: -1 })
+                            }
                             }
                         }
                     }
@@ -281,8 +335,8 @@ public inferContext prepared: semanticContext.CompilationContext -> [ExpressionT
                         }
                         blockCallResolution! >= 0 -> if {
                             prepared.calls[blockCallResolution!] => blockCall
-                            prepared.sources[blockCall.targetSourceModule] -> symbols.collectSource => blockTargetTable!
-                            blockTargetTable![blockCall.functionSymbol] => blockTargetFunction
+                            prepared.ranges[blockCall.targetSourceModule] => blockTargetRange
+                            prepared.symbols[blockTargetRange.symbolStart + blockCall.functionSymbol] => blockTargetFunction
                             blockTargetFunction.blockTypeNode >= 0 -> if {
                                 -1 => blockNominalIndex!
                                 0 => blockNominalSearch!
@@ -484,8 +538,8 @@ public inferContext prepared: semanticContext.CompilationContext -> [ExpressionT
                             })
                             true => changed!
                         } else {
-                        prepared.sources[call.targetSourceModule] -> symbols.collectSource => targetTable!
-                        targetTable![call.functionSymbol] => function
+                        prepared.ranges[call.targetSourceModule] => targetRange
+                        prepared.symbols[targetRange.symbolStart + call.functionSymbol] => function
                         function.secondaryTypeNode >= 0 -> if { function.secondaryTypeNode } else { function.typeNode } => returnTypeAst
                         -1 => returnNominalIndex!
                         0 => returnSearch!
@@ -703,6 +757,74 @@ public inferContext prepared: semanticContext.CompilationContext -> [ExpressionT
                         }
                         roleValueTypeSearch! + 1 => roleValueTypeSearch!
                     }
+                    false => intrinsicEachRole!
+                    prepared.nodes[sourceRange.astStart + roleValueSymbol.astNode] => intrinsicRoleAst
+                    intrinsicRoleAst.payloadToken >= 0 -> if {
+                        prepared.tokens[sourceRange.tokenStart + intrinsicRoleAst.payloadToken] => intrinsicRoleName
+                        TextMatchRequest { source: source, start: intrinsicRoleName.span.start, length: intrinsicRoleName.span.length, expected: "each" } -> textMatches -> if { true => intrinsicEachRole! }
+                    }
+                    intrinsicEachRole! -> if {
+                        -1 => intrinsicRoleSourceTypeIndex!
+                        1000000 => intrinsicRoleSourceDistance!
+                        0 => intrinsicRoleSourceSearch!
+                        intrinsicRoleSourceSearch! < (inferred! -> len) -> while {
+                            inferred![intrinsicRoleSourceSearch!] => intrinsicRoleSourceCandidate
+                            intrinsicRoleSourceCandidate.sourceModule == sourceIndex! -> if {
+                                prepared.nodes[sourceRange.astStart + intrinsicRoleSourceCandidate.astNode] => intrinsicRoleSourceNode
+                                intrinsicRoleSourceNode.start + intrinsicRoleSourceNode.length <= prepared.tokens[sourceRange.tokenStart + intrinsicRoleAst.payloadToken].span.start -> if {
+                                    intrinsicRoleSourceNode.parent => intrinsicRoleSourceAncestor!
+                                    1 => intrinsicRoleDistance!
+                                    false => intrinsicRoleBelongs!
+                                    (intrinsicRoleSourceAncestor! >= 0 and not intrinsicRoleBelongs!) -> while {
+                                        intrinsicRoleSourceAncestor! == roleValueSymbol.astNode -> if { true => intrinsicRoleBelongs! } else {
+                                            prepared.nodes[sourceRange.astStart + intrinsicRoleSourceAncestor!].parent => intrinsicRoleSourceAncestor!
+                                            intrinsicRoleDistance! + 1 => intrinsicRoleDistance!
+                                        }
+                                    }
+                                    (intrinsicRoleBelongs! and intrinsicRoleDistance! < intrinsicRoleSourceDistance!) -> if {
+                                        intrinsicRoleSourceSearch! => intrinsicRoleSourceTypeIndex!
+                                        intrinsicRoleDistance! => intrinsicRoleSourceDistance!
+                                    }
+                                }
+                            }
+                            intrinsicRoleSourceSearch! + 1 => intrinsicRoleSourceSearch!
+                        }
+                        intrinsicRoleSourceTypeIndex! >= 0 -> if {
+                            inferred![intrinsicRoleSourceTypeIndex!] => intrinsicRoleSourceType
+                            (intrinsicRoleSourceType.origin >= 12 and intrinsicRoleSourceType.origin <= 14) -> if {
+                                intrinsicRoleSourceType.targetModule == -1 -> if { 1 } else {
+                                    intrinsicRoleSourceType.targetModule == sourceIndex! -> if { 0 } else { 2 }
+                                } => intrinsicRoleElementOrigin
+                                roleValueTypeIndex! >= 0 -> if {
+                                    inferred![roleValueTypeIndex!] => intrinsicRoleValueType!
+                                    (intrinsicRoleValueType!.origin != intrinsicRoleElementOrigin or intrinsicRoleValueType!.targetModule != intrinsicRoleSourceType.targetModule or intrinsicRoleValueType!.targetSymbol != intrinsicRoleSourceType.targetSymbol) -> if {
+                                        intrinsicRoleElementOrigin => intrinsicRoleValueType!.origin
+                                        intrinsicRoleSourceType.targetModule => intrinsicRoleValueType!.targetModule
+                                        intrinsicRoleSourceType.targetSymbol => intrinsicRoleValueType!.targetSymbol
+                                        -1 => intrinsicRoleValueType!.keyOrigin
+                                        -1 => intrinsicRoleValueType!.keyModule
+                                        -1 => intrinsicRoleValueType!.valueOrigin
+                                        -1 => intrinsicRoleValueType!.valueModule
+                                        intrinsicRoleValueType! => inferred![roleValueTypeIndex!]
+                                        true => changed!
+                                    }
+                                } else {
+                                    inferred! -> push(ExpressionType {
+                                        sourceModule: sourceIndex!
+                                        astNode: roleReference.astNode
+                                        origin: intrinsicRoleElementOrigin
+                                        targetModule: intrinsicRoleSourceType.targetModule
+                                        targetSymbol: intrinsicRoleSourceType.targetSymbol
+                                        keyOrigin: -1
+                                        keyModule: -1
+                                        valueOrigin: -1
+                                        valueModule: -1
+                                    })
+                                    true => changed!
+                                }
+                            }
+                        }
+                    }
                     -1 => roleCallIndex!
                     0 => roleCallSearch!
                     roleCallSearch! < (prepared.calls -> len) -> while {
@@ -714,8 +836,8 @@ public inferContext prepared: semanticContext.CompilationContext -> [ExpressionT
                     }
                     (roleValueTypeIndex! >= 0 and roleCallIndex! >= 0) -> if {
                         prepared.calls[roleCallIndex!] => roleCall
-                        prepared.sources[roleCall.targetSourceModule] -> symbols.collectSource => roleTargetTable!
-                        roleTargetTable![roleCall.functionSymbol] => roleFunction
+                        prepared.ranges[roleCall.targetSourceModule] => roleTargetRange
+                        prepared.symbols[roleTargetRange.symbolStart + roleCall.functionSymbol] => roleFunction
                         (roleFunction.secondaryTypeNode >= 0 and roleFunction.blockTypeNode >= 0) -> if {
                             -1 => roleSourceTypeIndex!
                             1000000 => roleSourceDistance!
@@ -908,11 +1030,6 @@ public inferContext prepared: semanticContext.CompilationContext -> [ExpressionT
                                 -1 => bindingModule!
                                 3 => bindingResultSymbol!
                             }
-                            TextMatchRequest { source: source, start: bindingAst.start + bindingIntrinsicOffset!, length: UIntSize(5), expected: "len =>" } -> textMatches -> if {
-                                1 => bindingOrigin!
-                                -1 => bindingModule!
-                                13 => bindingResultSymbol!
-                            }
                             bindingIntrinsicOffset! + UIntSize(1) => bindingIntrinsicOffset!
                         }
                         UIntSize(0) => bindingSliceOffset!
@@ -987,6 +1104,7 @@ public inferContext prepared: semanticContext.CompilationContext -> [ExpressionT
                     not memberInferred! -> if {
                         -1 => baseTypeIndex!
                         1000000 => baseDistance!
+                        UIntSize(0) => baseStart!
                         0 => baseSearch!
                         baseSearch! < (inferred! -> len) -> while {
                             inferred![baseSearch!] => baseType
@@ -1000,9 +1118,13 @@ public inferContext prepared: semanticContext.CompilationContext -> [ExpressionT
                                         distance! + 1 => distance!
                                     }
                                 }
-                                (belongsToMember! and distance! < baseDistance!) -> if {
-                                    baseSearch! => baseTypeIndex!
-                                    distance! => baseDistance!
+                                belongsToMember! -> if {
+                                    prepared.nodes[sourceRange.astStart + baseType.astNode].start => baseCandidateStart
+                                    (distance! < baseDistance! or (distance! == baseDistance! and (baseTypeIndex! < 0 or baseCandidateStart < baseStart!))) -> if {
+                                        baseSearch! => baseTypeIndex!
+                                        distance! => baseDistance!
+                                        baseCandidateStart => baseStart!
+                                    }
                                 }
                             }
                             baseSearch! + 1 => baseSearch!
@@ -1045,15 +1167,14 @@ public inferContext prepared: semanticContext.CompilationContext -> [ExpressionT
                                                 }
                                             }
                                             (memberPathValid! and targetSourceModule! >= 0 and targetSourceModule! < (prepared.sources -> len)) -> if {
-                                            prepared.sources[targetSourceModule!] -> symbols.collectSource => targetTable!
-                                            prepared.sources[targetSourceModule!] -> lexer.lexSource => targetTokens!
+                                            prepared.ranges[targetSourceModule!] => targetRange
                                             -1 => fieldSymbol!
                                             0 => fieldSearch!
-                                            (fieldSearch! < (targetTable! -> len) and fieldSymbol! < 0) -> while {
-                                                targetTable![fieldSearch!] => field
+                                            (fieldSearch! < targetRange.symbolCount and fieldSymbol! < 0) -> while {
+                                                prepared.symbols[targetRange.symbolStart + fieldSearch!] => field
                                                 (field.kind == 26 and field.parent == memberCurrentSymbol!) -> if {
                                                     prepared.tokens[sourceRange.tokenStart + memberTokenIndex!] => memberName
-                                                    targetTokens![field.nameToken] => fieldName
+                                                    prepared.tokens[targetRange.tokenStart + field.nameToken] => fieldName
                                                     memberName.span.length == fieldName.span.length => equal!
                                                     UIntSize(0) => fieldByte!
                                                     (equal! and fieldByte! < memberName.span.length) -> while {
@@ -1067,7 +1188,7 @@ public inferContext prepared: semanticContext.CompilationContext -> [ExpressionT
                                                 fieldSearch! + 1 => fieldSearch!
                                             }
                                             fieldSymbol! >= 0 -> if {
-                                                targetTable![fieldSymbol!] => field
+                                                prepared.symbols[targetRange.symbolStart + fieldSymbol!] => field
                                                 -1 => fieldNominalIndex!
                                                 -1 => fieldCompositeIndex!
                                                 0 => fieldTypeSearch!
@@ -1194,17 +1315,86 @@ public inferContext prepared: semanticContext.CompilationContext -> [ExpressionT
                 indexIndex! + 1 => indexIndex!
             }
 
+            # Container lengths are Int, while byte-addressed/runtime lengths
+            # (Text, SourceText, Arguments, mapped bytes) remain UIntSize.
+            # The receiver type becomes available during the fixed point, so
+            # specialize the initially conservative len result before operators.
+            0 => lengthFlowIndex!
+            lengthFlowIndex! < sourceRange.astCount -> while {
+                prepared.nodes[sourceRange.astStart + lengthFlowIndex!] => lengthFlow
+                lengthFlow.kind == 10 -> if {
+                    -1 => lengthMethodToken!
+                    0 => lengthChildSearch!
+                    lengthChildSearch! < sourceRange.astCount -> while {
+                        prepared.nodes[sourceRange.astStart + lengthChildSearch!] => lengthChild
+                        (lengthChild.parent == lengthFlowIndex! and lengthChild.kind == 16) -> if { lengthChild.payloadToken => lengthMethodToken! }
+                        lengthChildSearch! + 1 => lengthChildSearch!
+                    }
+                    false => isLengthFlow!
+                    lengthMethodToken! >= 0 -> if {
+                        prepared.tokens[sourceRange.tokenStart + lengthMethodToken!] => lengthMethodName
+                        TextMatchRequest { source: source, start: lengthMethodName.span.start, length: lengthMethodName.span.length, expected: "len" } -> textMatches -> if { true => isLengthFlow! }
+                    }
+                    isLengthFlow! -> if {
+                        -1 => lengthResultTypeIndex!
+                        -1 => lengthReceiverTypeIndex!
+                        0 => lengthTypeSearch!
+                        lengthTypeSearch! < (inferred! -> len) -> while {
+                            inferred![lengthTypeSearch!] => lengthTypeCandidate
+                            lengthTypeCandidate.sourceModule == sourceIndex! -> if {
+                                lengthTypeCandidate.astNode == lengthFlowIndex! -> if { lengthTypeSearch! => lengthResultTypeIndex! }
+                                prepared.nodes[sourceRange.astStart + lengthTypeCandidate.astNode].parent == lengthFlowIndex! -> if {
+                                    prepared.nodes[sourceRange.astStart + lengthTypeCandidate.astNode].start < prepared.tokens[sourceRange.tokenStart + lengthMethodToken!].span.start -> if {
+                                        lengthTypeSearch! => lengthReceiverTypeIndex!
+                                    }
+                                }
+                            }
+                            lengthTypeSearch! + 1 => lengthTypeSearch!
+                        }
+                        (lengthResultTypeIndex! >= 0 and lengthReceiverTypeIndex! >= 0) -> if {
+                            inferred![lengthReceiverTypeIndex!] => lengthReceiverType
+                            (lengthReceiverType.origin >= 12 and lengthReceiverType.origin <= 15) -> if {
+                                inferred![lengthResultTypeIndex!] => lengthResultType!
+                                lengthResultType!.targetSymbol != 2 -> if {
+                                    2 => lengthResultType!.targetSymbol
+                                    lengthResultType! => inferred![lengthResultTypeIndex!]
+                                    true => changed!
+                                }
+                            }
+                        }
+                    }
+                }
+                lengthFlowIndex! + 1 => lengthFlowIndex!
+            }
+
             0 => operatorIndex!
             operatorIndex! < sourceRange.astCount -> while {
                 prepared.nodes[sourceRange.astStart + operatorIndex!] => operator
                 (operator.kind >= 18 and operator.kind <= 25) -> if {
                     false => alreadyInferred!
+                    -1 => sameSpanChildTypeIndex!
                     0 => existingIndex!
                     existingIndex! < (inferred! -> len) -> while {
                         inferred![existingIndex!] => existing
                         (existing.sourceModule == sourceIndex! and existing.astNode == operatorIndex!) -> if { true => alreadyInferred! }
-                        (existing.sourceModule == sourceIndex! and prepared.nodes[sourceRange.astStart + existing.astNode].start == operator.start and prepared.nodes[sourceRange.astStart + existing.astNode].length == operator.length) -> if { true => alreadyInferred! }
+                        (existing.sourceModule == sourceIndex! and prepared.nodes[sourceRange.astStart + existing.astNode].parent == operatorIndex! and prepared.nodes[sourceRange.astStart + existing.astNode].start == operator.start and prepared.nodes[sourceRange.astStart + existing.astNode].length == operator.length) -> if { existingIndex! => sameSpanChildTypeIndex! }
                         existingIndex! + 1 => existingIndex!
+                    }
+                    (not alreadyInferred! and sameSpanChildTypeIndex! >= 0) -> if {
+                        inferred![sameSpanChildTypeIndex!] => sameSpanChildType
+                        inferred! -> push(ExpressionType {
+                            sourceModule: sourceIndex!
+                            astNode: operatorIndex!
+                            origin: sameSpanChildType.origin
+                            targetModule: sameSpanChildType.targetModule
+                            targetSymbol: sameSpanChildType.targetSymbol
+                            keyOrigin: sameSpanChildType.keyOrigin
+                            keyModule: sameSpanChildType.keyModule
+                            valueOrigin: sameSpanChildType.valueOrigin
+                            valueModule: sameSpanChildType.valueModule
+                        })
+                        true => alreadyInferred!
+                        true => changed!
                     }
                     not alreadyInferred! -> if {
                         -1 => firstChild!
@@ -1212,8 +1402,20 @@ public inferContext prepared: semanticContext.CompilationContext -> [ExpressionT
                         0 => childSearch!
                         childSearch! < (inferred! -> len) -> while {
                             inferred![childSearch!] => child
-                            (child.sourceModule == sourceIndex! and prepared.nodes[sourceRange.astStart + child.astNode].parent == operatorIndex!) -> if {
-                                firstChild! < 0 -> if { childSearch! => firstChild! } else { childSearch! => secondChild! }
+                            child.sourceModule == sourceIndex! -> if {
+                                prepared.nodes[sourceRange.astStart + child.astNode].parent => childParent!
+                                (childParent! >= 0 and childParent! != operatorIndex! and prepared.nodes[sourceRange.astStart + childParent!].kind == 10) -> while {
+                                    prepared.nodes[sourceRange.astStart + childParent!] => transparentChildParent
+                                    prepared.nodes[sourceRange.astStart + child.astNode] => typedChildNode
+                                    (transparentChildParent.start == typedChildNode.start and transparentChildParent.length == typedChildNode.length) -> if {
+                                        transparentChildParent.parent => childParent!
+                                    } else {
+                                        -1 => childParent!
+                                    }
+                                }
+                                childParent! == operatorIndex! -> if {
+                                    firstChild! < 0 -> if { childSearch! => firstChild! } else { childSearch! => secondChild! }
+                                }
                             }
                             childSearch! + 1 => childSearch!
                         }
