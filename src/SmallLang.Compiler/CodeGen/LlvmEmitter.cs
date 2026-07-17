@@ -15,6 +15,14 @@ internal sealed partial class LlvmEmitter
     private readonly bool _usesChildProcesses;
     private readonly bool _usesAsync;
     private readonly bool _usesAsyncFile;
+    private readonly bool _usesParallel;
+    private sealed record ParallelCallbackInfo(
+        string Name,
+        BoundFunction Target,
+        IReadOnlyList<KeyValuePair<string, BoundType>> Captures);
+
+    private readonly Dictionary<BlockFunctionCallStatement, ParallelCallbackInfo> _parallelCallbacks =
+        new(ReferenceEqualityComparer.Instance);
     private bool UsesProcessRuntime => _usesProcessArguments || _usesProcessEnvironment || _usesChildProcesses;
     private readonly List<string> _globals = [];
     private readonly List<string> _functions = [];
@@ -25,6 +33,8 @@ internal sealed partial class LlvmEmitter
     private readonly Dictionary<string, MutableContainerSlot> _mutableContainerSlots = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> _mutableStructSlots = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> _mutableScalarSlots = new(StringComparer.Ordinal);
+    private readonly Dictionary<BoundFunction, IReadOnlyDictionary<string, BoundFunction>> _functionScopes =
+        new(ReferenceEqualityComparer.Instance);
     private readonly List<BoundFunction> _inlineFunctionStack = [];
     private StackFramePlan _currentStackFramePlan = StackFramePlan.Empty;
     private RuntimeBlockInvocation? _currentBlockInvocation;
@@ -48,6 +58,7 @@ internal sealed partial class LlvmEmitter
         _program = program;
         _platform = platform;
         _currentFunctions = program.Functions;
+        RecordFunctionScopes(program.Functions.Values, program.Functions);
         _usesProcessArguments = program.MainStatements.Any(UsesProcessArguments);
         _usesProcessEnvironment = program.MainStatements.Any(UsesProcessEnvironment)
             || program.Functions.Values.Where(function => !function.IsStandardLibrary).Any(function =>
@@ -63,6 +74,9 @@ internal sealed partial class LlvmEmitter
                 or BoundFunctionKind.RuntimeSyncFileAsync
                 or BoundFunctionKind.RuntimeOpenFileAsync
                 or BoundFunctionKind.RuntimeOpenWriteFileAsync);
+        _usesParallel = _platform.SupportsComputePool
+            && program.ResolvedGenericCalls.Values.Any(function =>
+                function.Kind == BoundFunctionKind.RuntimeParallel);
         _usesAsync = program.Functions.Values.Any(function => function.IsAsync && !function.IsStandardLibrary)
             || _usesAsyncFile
             || program.MainStatements.Any(UsesRuntimeSleep)
@@ -71,6 +85,19 @@ internal sealed partial class LlvmEmitter
                 || function.BlockBody.Any(UsesRuntimeSleep));
         _platform.UsesAsyncFile = _usesAsyncFile;
         _platform.UsesProcessRuntime = UsesProcessRuntime;
+        _platform.UsesComputePool = _usesParallel;
+    }
+
+    private void RecordFunctionScopes(
+        IEnumerable<BoundFunction> functions,
+        IReadOnlyDictionary<string, BoundFunction> parentScope)
+    {
+        foreach (var function in functions)
+        {
+            var scope = CreateFunctionScope(parentScope, function.LocalFunctions);
+            _functionScopes[function] = scope;
+            RecordFunctionScopes(function.LocalFunctions.Values, scope);
+        }
     }
 
     private bool UsesChildProcess(Statement statement) => statement switch
@@ -369,6 +396,7 @@ internal sealed partial class LlvmEmitter
             %smalllang.process_result = type { i32, i32 }
             %smalllang.task = type { ptr, ptr }
             %smalllang.task_control = type { ptr, ptr, ptr, ptr, i32, i32, ptr, ptr, i64, ptr, ptr, i32, i32, i64, i64, i32, ptr, i64, i64, i32, i32 }
+            %smalllang.compute_group = type { ptr, ptr, ptr, i64, ptr }
 
             """;
         header += EmitStructTypeDefinitions();
@@ -392,6 +420,15 @@ internal sealed partial class LlvmEmitter
             EmitGlobalLine("@smalllang_file_worker_stopping = internal global i32 0");
             EmitGlobalLine("@smalllang_file_outstanding = internal global i64 0");
         }
+        if (_usesParallel)
+        {
+            EmitGlobalLine("@smalllang_compute_group_current = internal global ptr null");
+            EmitGlobalLine("@smalllang_compute_next = internal global i64 0");
+            EmitGlobalLine("@smalllang_compute_active = internal global i32 0");
+            EmitGlobalLine("@smalllang_compute_running = internal global i32 0");
+            EmitGlobalLine("@smalllang_compute_peak = internal global i32 0");
+            EmitGlobalLine("@smalllang_compute_stopping = internal global i32 0");
+        }
         EmitGlobalLine();
 
         EmitPlatformFunctionBlock(_platform.EmitExternalDeclarations);
@@ -399,6 +436,10 @@ internal sealed partial class LlvmEmitter
         if (_usesAsync)
         {
             EmitPlatformFunctionBlock(_platform.EmitAsyncPrimitives);
+        }
+        if (_usesParallel)
+        {
+            EmitPlatformFunctionBlock(_platform.EmitComputePrimitives);
         }
         EmitFunctionLine("declare void @llvm.trap()");
         EmitFunctionLine("declare void @llvm.memset.p0.i64(ptr nocapture writeonly, i8, i64, i1 immarg)");
@@ -408,6 +449,7 @@ internal sealed partial class LlvmEmitter
         EmitFunctionLine();
 
         EmitOwnedDropHelpers();
+        EmitParallelCallbacks();
         EmitUserFunctions();
         EmitRuntimeHelpers();
         EmitMain();

@@ -7,5 +7,5 @@ main {
         ~
     ] => paths
     paths -> context.prepareFiles => prepared!
-    "file context = $(prepared!.sources -> len),$(prepared!.modules -> len),$(prepared!.tokens -> len)" -> println
+    "file context = $(prepared!.package.sources -> len),$(prepared!.modules -> len),$(prepared!.package.tokens -> len)" -> println
 }

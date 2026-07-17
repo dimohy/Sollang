@@ -80,9 +80,14 @@ Source -> Result block Item -> Unit
   the yielded item using ordinary statements.
 - `Result` is the role function's final expression and is bound by `=> name`.
 
-This first model deliberately keeps `yield` one-way. A future callback-result
-extension may add `Block<Item, YieldResult>`, but it is not required for the
-three accepted roles and is not part of this checklist.
+The original model keeps `yield` one-way. The deterministic parallel-compilation
+work now adds the compatible callback-result declaration
+`block item: Item -> YieldResult`. In that form the caller block's final
+expression is returned from `yield`; omitting `-> YieldResult` preserves the
+existing Unit callback exactly. Reference semantic analysis and LLVM execution
+plus self-host grammar parsing are covered by examples 324 and 325. Self-host
+semantic and LLVM parity remain tracked in
+[`PARALLEL_COMPILATION.md`](PARALLEL_COMPILATION.md).
 
 ### Builder
 

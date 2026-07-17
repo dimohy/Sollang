@@ -82,11 +82,9 @@ internal static class StoragePlacementAnalyzer
 
         var functions = CreateFunctionScope(parentFunctions, function.LocalFunctions);
         if (function.Kind == BoundFunctionKind.User
-            && !function.IsLocal
             && !function.IsStandardLibrary)
         {
-            var inlineFunctions = DistinctFunctions(
-                EnumerateLocalFunctions(function.LocalFunctions.Values).Concat(standardInlineFunctions));
+            IReadOnlyList<BoundFunction> inlineFunctions = standardInlineFunctions;
             functionFrames.Add(
                 function,
                 function.IsAsync

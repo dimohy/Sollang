@@ -1,0 +1,48 @@
+import smalllang.compiler.ir.typed as typedIr
+
+main {
+    [
+        """
+        namespace app.main
+        import sample.ast as ast
+        import sample.resolve as resolution
+
+        main {
+            [ast.Node; ~] => nodes!
+            resolution.Request { source: "main { }", nodes: nodes! } => request
+            0 => index!
+            request.nodes[index!] => node
+            node.kind => nodeKind
+        }
+        """,
+        """
+        namespace sample.ast
+
+        public struct Node {
+            kind: Int
+        }
+        """,
+        """
+        namespace sample.resolve
+        import sample.ast as ast
+
+        public struct Request {
+            source: Text
+            nodes: [ast.Node; ~]
+        }
+        """,
+        ~
+    ] => sources!
+    sources! -> typedIr.lower => ir!
+    ir! -> each node {
+        (node.sourceModule == 0 and node.kind == 15) -> if {
+            "index=$(node.typeOrigin),$(node.typeModule),$(node.typeSymbol),$(node.typeKind)" -> println
+        }
+        (node.sourceModule == 0 and node.kind == 17 and node.operand0 >= 0 and ir![node.operand0].kind == 15) -> if {
+            "binding=$(node.typeOrigin),$(node.typeModule),$(node.typeSymbol),$(node.typeKind)" -> println
+        }
+        (node.sourceModule == 0 and node.kind == 5 and node.operand0 >= 0 and ir![node.operand0].kind == 17 and ir![node.operand0].operand0 >= 0 and ir![ir![node.operand0].operand0].kind == 15) -> if {
+            "reference=$(node.typeOrigin),$(node.typeModule),$(node.typeSymbol),$(node.typeKind)" -> println
+        }
+    }
+}

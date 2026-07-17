@@ -1,0 +1,18 @@
+import smalllang.compiler.llvm.text as llvm
+
+main {
+    [
+        """
+        outer context: Int -> Int {
+            inner value: Int -> Int {
+                context + value
+            }
+            3 -> inner
+        }
+
+        main { }
+        """,
+        ~
+    ] => sources!
+    sources! -> llvm.emit
+}

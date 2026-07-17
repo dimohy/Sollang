@@ -5354,6 +5354,40 @@ Checklist:
 - [x] Share one borrowed flat `CompilationContext` across the 27-module build.
 - [x] Keep monotonic `n/total` output and parallel affected/full regression.
 - [x] Complete stage-2 text emission without a native crash.
-- [ ] Assemble the complete stage-2 IR with `llvm-as`.
+- [x] Assemble the complete stage-2 IR with `llvm-as`.
 - [ ] Link and run the stage-2 compiler.
 - [ ] Compile and execute a multi-file SL smoke program with stage 2.
+
+## D167 - Lift Local Functions Before Parallel Native Optimization
+
+Status: reference closure conversion and parallel native build implemented;
+stage-2 runtime linkage and parallel frontend analysis pending
+Date: 2026-07-17
+
+Local SL functions previously remained inline in the reference LLVM emitter.
+The compiler-sized `emitCore` therefore became one roughly 830-thousand-line
+LLVM function. Splitting the module into 24 partitions did not split that
+function: 23 small partitions completed quickly while one Clang process used a
+single core for more than 904 seconds and exceeded 9 GB working set.
+
+Semantic analysis now preserves each function's lexical capture types.
+Code generation closure-converts ordinary local functions into uniquely named
+LLVM functions, passes captures as hidden aggregate parameters, restores the
+complete lexical sibling scope, and gives every lifted function its own stack
+placement plan. Read-only slices and dictionary views are valid capture ABI
+values. User block functions remain inline because their caller block is a
+distinct callback-like contract.
+
+After lifting, all 24 `-O1` partitions of the reusable native stage-1 compiler
+completed during a cold test bootstrap in seconds instead of hitting the
+904-second timeout. The fast regression passed 392/392 with eight workers in
+44.46 seconds. The optimized stage-1 emitted the complete 4,651,009-byte
+stage-2 LLVM module in 293.32 seconds; `llvm-as` produced a valid 1,345,496-byte
+bitcode module, and its 24 native object partitions compiled in 1.17 seconds.
+
+The remaining stage-2 gate is runtime/product linkage. The assembled module
+does not yet provide the Windows entry shim and all runtime/stdlib definitions,
+so `smalllang_start`, allocation/printing helpers, and imported SL module
+symbols remain unresolved at final link. Frontend semantic and typed-IR work
+also remains sequential; its 293-second emission time is separate from the now
+parallel native backend.

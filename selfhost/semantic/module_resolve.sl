@@ -26,7 +26,8 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> [ResolvedImport; ~] 
     0 => edgeIndex!
     edgeIndex! < importCount -> while {
         imports![edgeIndex!] => edge
-        package.sources[edge.sourceModule] => edgeSource
+        package.sources[edge.sourceModule] -> len => edgeSourceLength
+        package.sources[edge.sourceModule] -> slice(UIntSize(0), edgeSourceLength) => edgeSource
         package.ranges[edge.sourceModule] => sourceRange
         package.tokens[sourceRange.tokenStart + edge.aliasToken] => edgeAlias
         false => duplicateAlias!

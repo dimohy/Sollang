@@ -13,15 +13,16 @@ internal sealed partial class LlvmEmitter
             throw new SmallLangException($"function '{function.Name}' has no body");
         }
         var previousFunctions = _currentFunctions;
-        _currentFunctions = CreateFunctionScope(_program.Functions, function.LocalFunctions);
+        _currentFunctions = FunctionScope(function);
         ClearLocalState();
         SelectStackFrame(function);
         try
         {
-            EmitFunctionLine($"define internal %smalllang.dynamic_int_array {SymbolForFunction(function.Name)}({ParameterListForFunction(function)}) #0 {{");
+            EmitFunctionLine($"define internal %smalllang.dynamic_int_array {SymbolForFunction(function)}({ParameterListForFunction(function)}) #0 {{");
             EmitFunctionLine("entry:");
             EmitStackFrameAllocations();
             _currentBlockLabel = "entry";
+            BindFunctionCaptures(function);
             var functionLocals = CaptureLocals();
             BindFunctionParameter(function);
             EmitStatements(function.BlockBody);
@@ -45,7 +46,7 @@ internal sealed partial class LlvmEmitter
     private RuntimeArena EmitArenaFunctionCall(BoundFunction function, RuntimeValue? argument)
     {
         var aggregate = NextTemp("arena_call");
-        EmitCall(aggregate, "%smalllang.dynamic_int_array", SymbolForFunction(function.Name)[1..],
+        EmitCall(aggregate, "%smalllang.dynamic_int_array", SymbolForFunction(function)[1..],
             FunctionCallArgumentList(function, argument));
         var pointer = NextTemp("arena_ptr");
         EmitAssign(pointer, $"extractvalue %smalllang.dynamic_int_array {aggregate}, 0");

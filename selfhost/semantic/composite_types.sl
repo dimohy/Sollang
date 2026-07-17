@@ -3,7 +3,9 @@ namespace smalllang.compiler.semantic.composite_types
 import smalllang.compiler.ast as ast
 import smalllang.compiler.lexer as lexer
 import smalllang.compiler.semantic.analysis as analysis
+import smalllang.compiler.semantic.modules as modules
 import smalllang.compiler.semantic.symbols as symbols
+import smalllang.compiler.semantic.type_ids as typeIds
 import smalllang.compiler.semantic.type_resolve as typeResolve
 import smalllang.compiler.semantic.types as types
 import syntax.generated.smalllang as grammar
@@ -33,12 +35,14 @@ public resolve sources: [Text; ~] -> [CompositeType; ~] {
 }
 
 public resolveAnalyzed package: analysis.PackageAnalysis -> [CompositeType; ~] {
-    ["Unit", "Text", "Int", "Int8", "Int16", "Int32", "Int64", "Long", "UInt8", "UInt16", "UInt32", "UInt64", "Size", "UIntSize", "CodePoint", "Arena", "Arguments", "MappedBytes", "MutableMappedBytes", "Float", "Float32", "Float64", "Double", "Bool", ~] => builtinNames!
+    ["Unit", "Text", "Int", "Int8", "Int16", "Int32", "Int64", "Long", "UInt8", "UInt16", "UInt32", "UInt64", "Size", "UIntSize", "CodePoint", "Arena", "Arguments", "MappedBytes", "MutableMappedBytes", "Float", "Float32", "Float64", "Double", "Bool", "SourceText", ~] => builtinNames!
     [CompositeType; ~] => results!
     package -> typeResolve.resolveAnalyzed => importedTypes!
+    package -> modules.identitiesAnalyzed => identities!
     0 => sourceIndex!
     sourceIndex! < (package.sources -> len) -> while {
-        package.sources[sourceIndex!] => source
+        package.sources[sourceIndex!] -> len => sourceLength
+        package.sources[sourceIndex!] -> slice(UIntSize(0), sourceLength) => source
         package.ranges[sourceIndex!] => sourceRange
         0 => typeIndex!
         typeIndex! < sourceRange.typeCount -> while {
@@ -124,8 +128,11 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> [CompositeType; ~] {
                                 symbolIndex! + 1 => symbolIndex!
                             }
                             componentSymbol! >= 0 -> if {
-                                package.symbols[sourceRange.symbolStart + componentSymbol!].kind == 32 -> if { 3 } else { 0 } => componentOrigin
-                                componentOrigin => componentOrigins![componentSlot!]
+                                0 => componentOrigin!
+                                package.symbols[sourceRange.symbolStart + componentSymbol!].kind == 32 -> if {
+                                    3 => componentOrigin!
+                                }
+                                componentOrigin! => componentOrigins![componentSlot!]
                                 sourceIndex! => componentModules![componentSlot!]
                                 componentSymbol! => componentSymbols![componentSlot!]
                             } else {
@@ -140,9 +147,16 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> [CompositeType; ~] {
                     importedTypeIndex! < (importedTypes! -> len) -> while {
                         importedTypes![importedTypeIndex!] => importedType
                         (importedType.sourceModule == sourceIndex! and importedType.typeAst == typeUse.astNode and importedType.status == 0) -> if {
-                            2 => componentOrigins![0]
-                            importedType.targetModule => componentModules![0]
-                            importedType.targetSymbol => componentSymbols![0]
+                            typeIds.IntrinsicNominalRequest { package: package, identities: identities!, targetModule: importedType.targetModule, targetSymbol: importedType.targetSymbol } -> typeIds.intrinsicNominalSymbol => intrinsicSymbol
+                            intrinsicSymbol >= 0 -> if {
+                                1 => componentOrigins![0]
+                                -1 => componentModules![0]
+                                intrinsicSymbol => componentSymbols![0]
+                            } else {
+                                2 => componentOrigins![0]
+                                importedType.targetModule => componentModules![0]
+                                importedType.targetSymbol => componentSymbols![0]
+                            }
                             0 => status!
                         }
                         importedTypeIndex! + 1 => importedTypeIndex!

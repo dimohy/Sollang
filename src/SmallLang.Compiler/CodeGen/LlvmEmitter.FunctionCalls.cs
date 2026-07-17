@@ -80,6 +80,24 @@ internal sealed partial class LlvmEmitter
             return EmitRuntimeNowMillisIntrinsic(path);
         }
 
+        if (function.Kind == BoundFunctionKind.RuntimeParallelWorkers)
+        {
+            if (expression.Arguments.Count != 0)
+            {
+                throw new SmallLangException($"{path} does not accept arguments");
+            }
+            return EmitRuntimeParallelWorkersIntrinsic(path);
+        }
+
+        if (function.Kind == BoundFunctionKind.RuntimeParallelPeakWorkers)
+        {
+            if (expression.Arguments.Count != 0)
+            {
+                throw new SmallLangException($"{path} does not accept arguments");
+            }
+            return EmitRuntimeParallelPeakWorkersIntrinsic(path);
+        }
+
         if (function.Kind == BoundFunctionKind.RuntimeSleep)
         {
             if (expression.Arguments.Count != 1)
@@ -633,6 +651,24 @@ internal sealed partial class LlvmEmitter
             return EmitRuntimeNowMillisIntrinsic(function.Name);
         }
 
+        if (function.Kind == BoundFunctionKind.RuntimeParallelWorkers)
+        {
+            if (argument is not null)
+            {
+                throw new SmallLangException($"{function.Name} does not accept an argument");
+            }
+            return EmitRuntimeParallelWorkersIntrinsic(function.Name);
+        }
+
+        if (function.Kind == BoundFunctionKind.RuntimeParallelPeakWorkers)
+        {
+            if (argument is not null)
+            {
+                throw new SmallLangException($"{function.Name} does not accept an argument");
+            }
+            return EmitRuntimeParallelPeakWorkersIntrinsic(function.Name);
+        }
+
         if (function.Kind == BoundFunctionKind.RuntimeSleep)
         {
             if (argument is null)
@@ -764,7 +800,7 @@ internal sealed partial class LlvmEmitter
             throw new SmallLangException($"function '{function.Name}' does not produce a runtime value");
         }
 
-        if (function.IsStandardLibrary || function.IsLocal)
+        if (function.IsStandardLibrary || function.Kind == BoundFunctionKind.UserBlock)
         {
             return EmitInlineFunctionCall(function, argument);
         }
@@ -803,14 +839,14 @@ internal sealed partial class LlvmEmitter
         var value = NextTemp("struct_call");
         var arguments = FunctionCallArgumentList(function, argument);
         var llvmType = LlvmType(function.ReturnType);
-        EmitCall(value, llvmType, SymbolForFunction(function.Name)[1..], arguments);
+        EmitCall(value, llvmType, SymbolForFunction(function)[1..], arguments);
         return DematerializeAggregateValue(function.ReturnType, value);
     }
 
     private RuntimeUnit EmitUnitFunctionCall(BoundFunction function, RuntimeValue? argument)
     {
         var arguments = FunctionCallArgumentList(function, argument);
-        EmitCall(target: null, "void", SymbolForFunction(function.Name)[1..], arguments);
+        EmitCall(target: null, "void", SymbolForFunction(function)[1..], arguments);
         return RuntimeUnit.Instance;
     }
 
@@ -818,7 +854,7 @@ internal sealed partial class LlvmEmitter
     {
         var aggregate = NextTemp("text");
         var arguments = FunctionCallArgumentList(function, argument);
-        EmitCall(aggregate, "%smalllang.text", SymbolForFunction(function.Name)[1..], arguments);
+        EmitCall(aggregate, "%smalllang.text", SymbolForFunction(function)[1..], arguments);
 
         var pointer = NextTemp("text_ptr");
         EmitAssign(pointer, $"extractvalue %smalllang.text {aggregate}, 0");
@@ -833,7 +869,7 @@ internal sealed partial class LlvmEmitter
     {
         var value = NextTemp("call");
         var arguments = FunctionCallArgumentList(function, argument);
-        EmitCall(value, "i64", SymbolForFunction(function.Name)[1..], arguments);
+        EmitCall(value, "i64", SymbolForFunction(function)[1..], arguments);
         return new RuntimeInt(value);
     }
 
@@ -841,7 +877,7 @@ internal sealed partial class LlvmEmitter
     {
         var value = NextTemp("numeric_call");
         var arguments = FunctionCallArgumentList(function, argument);
-        EmitCall(value, LlvmType(function.ReturnType), SymbolForFunction(function.Name)[1..], arguments);
+        EmitCall(value, LlvmType(function.ReturnType), SymbolForFunction(function)[1..], arguments);
         return IsIntegerType(function.ReturnType)
             ? new RuntimeInt(function.ReturnType, value)
             : new RuntimeFloat(function.ReturnType, value);
@@ -851,7 +887,7 @@ internal sealed partial class LlvmEmitter
     {
         var value = NextTemp("call");
         var arguments = FunctionCallArgumentList(function, argument);
-        EmitCall(value, "i1", SymbolForFunction(function.Name)[1..], arguments);
+        EmitCall(value, "i1", SymbolForFunction(function)[1..], arguments);
         return new RuntimeBool(value);
     }
 
@@ -859,7 +895,7 @@ internal sealed partial class LlvmEmitter
     {
         var aggregate = NextTemp("array");
         var arguments = FunctionCallArgumentList(function, argument);
-        EmitCall(aggregate, "%smalllang.dynamic_int_array", SymbolForFunction(function.Name)[1..], arguments);
+        EmitCall(aggregate, "%smalllang.dynamic_int_array", SymbolForFunction(function)[1..], arguments);
 
         var pointer = NextTemp("array_ptr");
         EmitAssign(pointer, $"extractvalue %smalllang.dynamic_int_array {aggregate}, 0");
@@ -876,7 +912,7 @@ internal sealed partial class LlvmEmitter
     private RuntimeDynamicInlineArray EmitDynamicInlineArrayFunctionCall(BoundFunction function, RuntimeValue? argument)
     {
         var aggregate = NextTemp("generic_array");
-        EmitCall(aggregate, "%smalllang.dynamic_int_array", SymbolForFunction(function.Name)[1..],
+        EmitCall(aggregate, "%smalllang.dynamic_int_array", SymbolForFunction(function)[1..],
             FunctionCallArgumentList(function, argument));
         var pointer = NextTemp("generic_array_ptr");
         EmitAssign(pointer, $"extractvalue %smalllang.dynamic_int_array {aggregate}, 0");
@@ -893,7 +929,7 @@ internal sealed partial class LlvmEmitter
     {
         var aggregate = NextTemp("dict");
         var arguments = FunctionCallArgumentList(function, argument);
-        EmitCall(aggregate, "%smalllang.int_dictionary", SymbolForFunction(function.Name)[1..], arguments);
+        EmitCall(aggregate, "%smalllang.int_dictionary", SymbolForFunction(function)[1..], arguments);
 
         var pointer = NextTemp("dict_ptr");
         EmitAssign(pointer, $"extractvalue %smalllang.int_dictionary {aggregate}, 0");
@@ -910,7 +946,7 @@ internal sealed partial class LlvmEmitter
     private RuntimeInlineDictionary EmitInlineDictionaryFunctionCall(BoundFunction function, RuntimeValue? argument)
     {
         var aggregate = NextTemp("generic_dict");
-        EmitCall(aggregate, "%smalllang.int_dictionary", SymbolForFunction(function.Name)[1..],
+        EmitCall(aggregate, "%smalllang.int_dictionary", SymbolForFunction(function)[1..],
             FunctionCallArgumentList(function, argument));
         var pointer = NextTemp("generic_dict_ptr");
         EmitAssign(pointer, $"extractvalue %smalllang.int_dictionary {aggregate}, 0");
@@ -926,10 +962,29 @@ internal sealed partial class LlvmEmitter
     private string FunctionCallArgumentList(BoundFunction function, RuntimeValue? argument)
     {
         const string runtimeContext = "ptr %stdin, ptr %stdout, ptr %written, ptr %read, ptr %ok_state";
-        var explicitArguments = ExplicitFunctionCallArgumentList(function, argument);
+        var explicitArguments = string.Join(", ", new[]
+            {
+                CaptureFunctionCallArgumentList(function),
+                ExplicitFunctionCallArgumentList(function, argument)
+            }
+            .Where(static part => part.Length > 0));
         return explicitArguments.Length == 0
             ? runtimeContext
             : $"{runtimeContext}, {explicitArguments}";
+    }
+
+    private string CaptureFunctionCallArgumentList(BoundFunction function)
+    {
+        var arguments = new List<string>();
+        foreach (var capture in CapturedBindingsForFunction(function))
+        {
+            var value = ResolveLocal(capture.Key);
+            EnsureRuntimeType(value, capture.Value, function.Name);
+            var materialized = MaterializeAggregateValue(value);
+            arguments.Add($"{materialized.TypeName} {materialized.ValueName}");
+        }
+
+        return string.Join(", ", arguments);
     }
 
     private string ExplicitFunctionCallArgumentList(BoundFunction function, RuntimeValue? argument)

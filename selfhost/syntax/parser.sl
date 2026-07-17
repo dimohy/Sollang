@@ -81,7 +81,8 @@ public parseRuleEvents request: ParseRequest -> [ParseEvent; ~] {
             ParseEvent { kind: 2, value: triviaKind, tokenIndex: tokenIndex! } => triviaEvent
             eventDepth! < (events! -> len) -> if {
                 triviaEvent => events![eventDepth!]
-            } else {
+            }
+            eventDepth! >= (events! -> len) -> if {
                 events! -> push(triviaEvent)
             }
             eventDepth! + 1 => eventDepth!
@@ -99,7 +100,8 @@ public parseRuleEvents request: ParseRequest -> [ParseEvent; ~] {
             } => exitEvent
             eventDepth! < (events! -> len) -> if {
                 exitEvent => events![eventDepth!]
-            } else {
+            }
+            eventDepth! >= (events! -> len) -> if {
                 events! -> push(exitEvent)
             }
             eventDepth! + 1 => eventDepth!
@@ -118,7 +120,8 @@ public parseRuleEvents request: ParseRequest -> [ParseEvent; ~] {
                     ParseEvent { kind: 2, value: expectedKind, tokenIndex: tokenIndex! } => tokenEvent
                     eventDepth! < (events! -> len) -> if {
                         tokenEvent => events![eventDepth!]
-                    } else {
+                    }
+                    eventDepth! >= (events! -> len) -> if {
                         events! -> push(tokenEvent)
                     }
                     eventDepth! + 1 => eventDepth!
@@ -141,14 +144,16 @@ public parseRuleEvents request: ParseRequest -> [ParseEvent; ~] {
                         not tokenExpectedExists! -> if {
                             expectedCount! < (expectedCodes! -> len) -> if {
                                 expectedKind => expectedCodes![expectedCount!]
-                            } else {
+                            }
+                            expectedCount! >= (expectedCodes! -> len) -> if {
                                 expectedCodes! -> push(expectedKind)
                             }
                             expectedCount! + 1 => expectedCount!
                         }
                     }
-                    choiceDepth! > 0 -> if { choiceCallDepths![choiceDepth! - 1] + 1 } else { 0 } => failedFromDepth
-                    failedFromDepth => failedDepth!
+                    0 => failedFromDepth!
+                    choiceDepth! > 0 -> if { choiceCallDepths![choiceDepth! - 1] + 1 => failedFromDepth! }
+                    failedFromDepth! => failedDepth!
                     failedDepth! <= callDepth! -> while {
                         activeRules![failedDepth!] => failedRule
                         activeRuleStarts![failedDepth!] => failedToken
@@ -174,7 +179,7 @@ public parseRuleEvents request: ParseRequest -> [ParseEvent; ~] {
                     source -> slice(token.span.start, token.span.length) => tokenText
                     keywords![keywordIndex] => expectedText
                     tokenText -> len => tokenTextLength
-                    expectedText -> len => expectedTextLength
+                    UIntSize(expectedText -> len) => expectedTextLength
                     tokenTextLength == expectedTextLength => keywordMatches!
                     UIntSize(0) => keywordByte!
                     (keywordMatches! and keywordByte! < tokenTextLength) -> while {
@@ -189,7 +194,8 @@ public parseRuleEvents request: ParseRequest -> [ParseEvent; ~] {
                         ParseEvent { kind: 2, value: expectedKind, tokenIndex: tokenIndex! } => keywordEvent
                         eventDepth! < (events! -> len) -> if {
                             keywordEvent => events![eventDepth!]
-                        } else {
+                        }
+                        eventDepth! >= (events! -> len) -> if {
                             events! -> push(keywordEvent)
                         }
                         eventDepth! + 1 => eventDepth!
@@ -213,14 +219,16 @@ public parseRuleEvents request: ParseRequest -> [ParseEvent; ~] {
                             not keywordExpectedExists! -> if {
                                 expectedCount! < (expectedCodes! -> len) -> if {
                                     expectedKeywordCode => expectedCodes![expectedCount!]
-                                } else {
+                                }
+                                expectedCount! >= (expectedCodes! -> len) -> if {
                                     expectedCodes! -> push(expectedKeywordCode)
                                 }
                                 expectedCount! + 1 => expectedCount!
                             }
                         }
-                        choiceDepth! > 0 -> if { choiceCallDepths![choiceDepth! - 1] + 1 } else { 0 } => keywordFailedFromDepth
-                        keywordFailedFromDepth => keywordFailedDepth!
+                        0 => keywordFailedFromDepth!
+                        choiceDepth! > 0 -> if { choiceCallDepths![choiceDepth! - 1] + 1 => keywordFailedFromDepth! }
+                        keywordFailedFromDepth! => keywordFailedDepth!
                         keywordFailedDepth! <= callDepth! -> while {
                             activeRules![keywordFailedDepth!] => keywordFailedRule
                             activeRuleStarts![keywordFailedDepth!] => keywordFailedToken
@@ -264,7 +272,8 @@ public parseRuleEvents request: ParseRequest -> [ParseEvent; ~] {
                             returnPcs! -> len => returnCount
                             callDepth! < returnCount -> if {
                                 pc! + 2 => returnPcs![callDepth!]
-                            } else {
+                            }
+                            callDepth! >= returnCount -> if {
                                 returnPcs! -> push(pc! + 2)
                             }
                             callDepth! + 1 => callDepth!
@@ -272,14 +281,16 @@ public parseRuleEvents request: ParseRequest -> [ParseEvent; ~] {
                             callDepth! < activeRuleCount -> if {
                                 rule => activeRules![callDepth!]
                                 tokenIndex! => activeRuleStarts![callDepth!]
-                            } else {
+                            }
+                            callDepth! >= activeRuleCount -> if {
                                 activeRules! -> push(rule)
                                 activeRuleStarts! -> push(tokenIndex!)
                             }
                             ParseEvent { kind: 0, value: rule, tokenIndex: tokenIndex! } => enterEvent
                             eventDepth! < (events! -> len) -> if {
                                 enterEvent => events![eventDepth!]
-                            } else {
+                            }
+                            eventDepth! >= (events! -> len) -> if {
                                 events! -> push(enterEvent)
                             }
                             eventDepth! + 1 => eventDepth!
@@ -293,7 +304,8 @@ public parseRuleEvents request: ParseRequest -> [ParseEvent; ~] {
                                 tokenIndex! => choiceTokens![choiceDepth!]
                                 callDepth! => choiceCallDepths![choiceDepth!]
                                 eventDepth! => choiceEventDepths![choiceDepth!]
-                            } else {
+                            }
+                            choiceDepth! >= choiceCount -> if {
                                 choicePcs! -> push(program![pc! + 1])
                                 choiceTokens! -> push(tokenIndex!)
                                 choiceCallDepths! -> push(callDepth!)
@@ -330,14 +342,16 @@ public parseRuleEvents request: ParseRequest -> [ParseEvent; ~] {
                                                 not lookaheadExpectedExists! -> if {
                                                     expectedCount! < (expectedCodes! -> len) -> if {
                                                         expectedKind => expectedCodes![expectedCount!]
-                                                    } else {
+                                                    }
+                                                    expectedCount! >= (expectedCodes! -> len) -> if {
                                                         expectedCodes! -> push(expectedKind)
                                                     }
                                                     expectedCount! + 1 => expectedCount!
                                                 }
                                             }
-                                            choiceDepth! > 0 -> if { choiceCallDepths![choiceDepth! - 1] + 1 } else { 0 } => lookaheadFailedFromDepth
-                                            lookaheadFailedFromDepth => lookaheadFailedDepth!
+                                            0 => lookaheadFailedFromDepth!
+                                            choiceDepth! > 0 -> if { choiceCallDepths![choiceDepth! - 1] + 1 => lookaheadFailedFromDepth! }
+                                            lookaheadFailedFromDepth! => lookaheadFailedDepth!
                                             lookaheadFailedDepth! <= callDepth! -> while {
                                                 activeRules![lookaheadFailedDepth!] => lookaheadFailedRule
                                                 activeRuleStarts![lookaheadFailedDepth!] => lookaheadFailedToken
@@ -362,7 +376,7 @@ public parseRuleEvents request: ParseRequest -> [ParseEvent; ~] {
                                             source -> slice(rejectedToken.span.start, rejectedToken.span.length) => rejectedTokenText
                                             keywords![rejectedKeywordIndex] => rejectedText
                                             rejectedTokenText -> len => rejectedTokenLength
-                                            rejectedText -> len => rejectedTextLength
+                                            UIntSize(rejectedText -> len) => rejectedTextLength
                                             rejectedTokenLength == rejectedTextLength => rejectedKeywordMatches!
                                             UIntSize(0) => rejectedKeywordByte!
                                             (rejectedKeywordMatches! and rejectedKeywordByte! < rejectedTokenLength) -> while {
@@ -376,8 +390,9 @@ public parseRuleEvents request: ParseRequest -> [ParseEvent; ~] {
                                             not rejectedKeywordMatches! -> if {
                                                 pc! + 2 => pc!
                                             } else {
-                                                choiceDepth! > 0 -> if { choiceCallDepths![choiceDepth! - 1] + 1 } else { 0 } => rejectedFailedFromDepth
-                                                rejectedFailedFromDepth => rejectedFailedDepth!
+                                                0 => rejectedFailedFromDepth!
+                                                choiceDepth! > 0 -> if { choiceCallDepths![choiceDepth! - 1] + 1 => rejectedFailedFromDepth! }
+                                                rejectedFailedFromDepth! => rejectedFailedDepth!
                                                 rejectedFailedDepth! <= callDepth! -> while {
                                                     activeRules![rejectedFailedDepth!] => rejectedFailedRule
                                                     activeRuleStarts![rejectedFailedDepth!] => rejectedFailedToken
@@ -418,7 +433,8 @@ public parseRuleEvents request: ParseRequest -> [ParseEvent; ~] {
             } => expectedEvent
             eventDepth! < (events! -> len) -> if {
                 expectedEvent => events![eventDepth!]
-            } else {
+            }
+            eventDepth! >= (events! -> len) -> if {
                 events! -> push(expectedEvent)
             }
             eventDepth! + 1 => eventDepth!
@@ -427,15 +443,17 @@ public parseRuleEvents request: ParseRequest -> [ParseEvent; ~] {
     }
 
     not accepted! -> if {
-        firstInvalidToken! >= 0 -> if { firstInvalidToken! } else { furthestToken! } => recoveryStart
-        recoveryStart => recoveryEnd!
+        furthestToken! => recoveryStart!
+        firstInvalidToken! >= 0 -> if { firstInvalidToken! => recoveryStart! }
+        recoveryStart! => recoveryEnd!
         (recoveryEnd! < (tokens! -> len) and tokens![recoveryEnd!].kind != grammar.tokenIdNewLine and tokens![recoveryEnd!].kind != grammar.tokenIdRightBrace and tokens![recoveryEnd!].kind != grammar.tokenIdEnd) -> while {
             recoveryEnd! + 1 => recoveryEnd!
         }
-        ParseEvent { kind: 5, value: recoveryEnd!, tokenIndex: recoveryStart } => errorRangeEvent
+        ParseEvent { kind: 5, value: recoveryEnd!, tokenIndex: recoveryStart! } => errorRangeEvent
         eventDepth! < (events! -> len) -> if {
             errorRangeEvent => events![eventDepth!]
-        } else {
+        }
+        eventDepth! >= (events! -> len) -> if {
             events! -> push(errorRangeEvent)
         }
         eventDepth! + 1 => eventDepth!
@@ -449,7 +467,8 @@ public parseRuleEvents request: ParseRequest -> [ParseEvent; ~] {
             } => recoveryTailEvent
             eventDepth! < (events! -> len) -> if {
                 recoveryTailEvent => events![eventDepth!]
-            } else {
+            }
+            eventDepth! >= (events! -> len) -> if {
                 events! -> push(recoveryTailEvent)
             }
             eventDepth! + 1 => eventDepth!
@@ -457,18 +476,22 @@ public parseRuleEvents request: ParseRequest -> [ParseEvent; ~] {
         }
     }
 
+    0 => outcomeValue!
+    furthestToken! => outcomeTokenIndex!
+    firstInvalidToken! >= 0 -> if { firstInvalidToken! => outcomeTokenIndex! }
+    accepted! -> if {
+        1 => outcomeValue!
+        tokenIndex! => outcomeTokenIndex!
+    }
     ParseEvent {
         kind: 3
-        value: accepted! -> if { 1 } else { 0 }
-        tokenIndex: accepted! -> if {
-            tokenIndex!
-        } else {
-            firstInvalidToken! >= 0 -> if { firstInvalidToken! } else { furthestToken! }
-        }
+        value: outcomeValue!
+        tokenIndex: outcomeTokenIndex!
     } => outcome
     eventDepth! < (events! -> len) -> if {
         outcome => events![eventDepth!]
-    } else {
+    }
+    eventDepth! >= (events! -> len) -> if {
         events! -> push(outcome)
     }
     eventDepth! + 1 => eventDepth!
@@ -485,27 +508,35 @@ public parseRuleEvents request: ParseRequest -> [ParseEvent; ~] {
 public parseSourceEvents source: file.SourceText -> [ParseEvent; ~] {
     source -> len => sourceLength
     source -> slice(UIntSize(0), sourceLength) => view
+    grammar.startRule => sourceStartRule
     ParseRequest {
         source: view
-        startRule: grammar.startRule
+        startRule: sourceStartRule
     } -> parseRuleEvents
 }
 
 public parseSourceExpressionEvents source: file.SourceText -> [ParseEvent; ~] {
     source -> len => sourceLength
     source -> slice(UIntSize(0), sourceLength) => view
+    grammar.ruleIdExpression => expressionStartRule
     ParseRequest {
         source: view
-        startRule: grammar.ruleIdExpression
+        startRule: expressionStartRule
     } -> parseRuleEvents
 }
 
 public parseEvents source: Text -> [ParseEvent; ~] {
-    source -> file.borrowText => borrowed!
-    borrowed! -> parseSourceEvents
+    grammar.startRule => sourceStartRule
+    ParseRequest {
+        source: source
+        startRule: sourceStartRule
+    } -> parseRuleEvents
 }
 
 public parseExpressionEvents source: Text -> [ParseEvent; ~] {
-    source -> file.borrowText => borrowed!
-    borrowed! -> parseSourceExpressionEvents
+    grammar.ruleIdExpression => expressionStartRule
+    ParseRequest {
+        source: source
+        startRule: expressionStartRule
+    } -> parseRuleEvents
 }

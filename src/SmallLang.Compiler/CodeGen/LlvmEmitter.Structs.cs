@@ -159,6 +159,12 @@ internal sealed partial class LlvmEmitter
             RuntimeDynamicInlineArray array => (
                 "%smalllang.dynamic_int_array",
                 BuildDynamicArrayAggregate(array.PointerName, array.LengthName, array.CapacityName)),
+            RuntimeIntSlice slice => (
+                "%smalllang.int_slice",
+                BuildIntSliceAggregate(slice.PointerName, slice.LengthName)),
+            RuntimeIntDictionaryView dictionary => (
+                "%smalllang.int_dictionary",
+                BuildDictionaryAggregate(dictionary.PointerName, dictionary.LengthName, dictionary.CapacityName)),
             RuntimeIntDictionary dictionary => (
                 "%smalllang.int_dictionary",
                 BuildDictionaryAggregate(dictionary.PointerName, dictionary.LengthName, dictionary.CapacityName)),
@@ -221,6 +227,19 @@ internal sealed partial class LlvmEmitter
             var (pointer, length, capacity) = ExtractDictionaryAggregate(valueName);
             return new RuntimeIntDictionary(pointer, length, capacity);
         }
+        if (type == BoundType.IntDictionaryView)
+        {
+            var (pointer, length, capacity) = ExtractDictionaryAggregate(valueName);
+            return new RuntimeIntDictionaryView(pointer, length, capacity);
+        }
+        if (type == BoundType.IntSlice)
+        {
+            var pointer = NextTemp("slice_ptr");
+            EmitAssign(pointer, $"extractvalue %smalllang.int_slice {valueName}, 0");
+            var length = NextTemp("slice_len");
+            EmitAssign(length, $"extractvalue %smalllang.int_slice {valueName}, 1");
+            return new RuntimeIntSlice(pointer, length);
+        }
         if (_program.Types.IsDictionary(type))
         {
             var definition = _program.Types.GetDictionary(type);
@@ -251,6 +270,15 @@ internal sealed partial class LlvmEmitter
         EmitAssign(aggregate0, $"insertvalue %smalllang.text poison, ptr {text.PointerName}, 0");
         var aggregate1 = NextTemp("text_value");
         EmitAssign(aggregate1, $"insertvalue %smalllang.text {aggregate0}, i64 {text.LengthName}, 1");
+        return aggregate1;
+    }
+
+    private string BuildIntSliceAggregate(string pointer, string length)
+    {
+        var aggregate0 = NextTemp("slice_value");
+        EmitAssign(aggregate0, $"insertvalue %smalllang.int_slice poison, ptr {pointer}, 0");
+        var aggregate1 = NextTemp("slice_value");
+        EmitAssign(aggregate1, $"insertvalue %smalllang.int_slice {aggregate0}, i64 {length}, 1");
         return aggregate1;
     }
 

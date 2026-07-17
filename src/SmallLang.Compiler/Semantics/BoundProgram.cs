@@ -10,6 +10,7 @@ internal sealed record BoundProgram(
     IReadOnlyList<Statement> MainStatements,
     IReadOnlyDictionary<string, BoundType> MainBindings,
     IReadOnlyDictionary<BoundFunction, IReadOnlyDictionary<string, BoundType>> FunctionBindings,
+    IReadOnlyDictionary<BoundFunction, IReadOnlyDictionary<string, BoundType>> FunctionCapturedBindings,
     StackFramePlan MainStackFrame,
     IReadOnlyDictionary<BoundFunction, StackFramePlan> FunctionStackFrames);
 
@@ -45,7 +46,11 @@ internal sealed record BoundFunction(
     bool IsPublic = false,
     bool IsAsync = false,
     string? BlockInputTypeTemplate = null,
-    IReadOnlySet<string>? Effects = null);
+    IReadOnlySet<string>? Effects = null,
+    BoundType? BlockResultType = null,
+    string? BlockResultTypeTemplate = null,
+    string? InputTypeTemplate = null,
+    string? ReturnTypeTemplate = null);
 
 internal sealed record BoundTraitMethod(
     string Name,
@@ -92,6 +97,9 @@ internal enum BoundFunctionKind
     RuntimeSleep,
     RuntimeArguments,
     RuntimeEnvironment,
+    RuntimeParallel,
+    RuntimeParallelWorkers,
+    RuntimeParallelPeakWorkers,
     RuntimeRunProcess,
     RuntimeRunProcessToFile,
     RuntimeBorrowSourceText,

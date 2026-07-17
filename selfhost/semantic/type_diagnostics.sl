@@ -28,8 +28,8 @@ public analyzeContext prepared: semanticContext.CompilationContext -> [TypeDiagn
     resolvedIndex! < (prepared.nominal -> len) -> while {
         prepared.nominal[resolvedIndex!] => resolved
         (resolved.status == 2 or resolved.status == 3) -> if {
-            prepared.ranges[resolved.sourceModule] => sourceRange
-            prepared.nodes[sourceRange.astStart + resolved.typeAst] => typeNode
+            prepared.package.ranges[resolved.sourceModule] => sourceRange
+            prepared.package.nodes[sourceRange.astStart + resolved.typeAst] => typeNode
             syntax.SourceSpan {
                 fileId: resolved.sourceModule
                 start: typeNode.start
@@ -51,8 +51,8 @@ public analyzeContext prepared: semanticContext.CompilationContext -> [TypeDiagn
     compositeIndex! < (prepared.composite -> len) -> while {
         prepared.composite[compositeIndex!] => resolvedComposite
         resolvedComposite.status == 2 -> if {
-            prepared.ranges[resolvedComposite.sourceModule] => sourceRange
-            prepared.nodes[sourceRange.astStart + resolvedComposite.typeAst] => typeNode
+            prepared.package.ranges[resolvedComposite.sourceModule] => sourceRange
+            prepared.package.nodes[sourceRange.astStart + resolvedComposite.typeAst] => typeNode
             diagnostics! -> push(TypeDiagnostic {
                 code: 3
                 sourceModule: resolvedComposite.sourceModule

@@ -84,11 +84,18 @@ internal sealed partial class LlvmEmitter
         return functions;
     }
 
+    private IReadOnlyDictionary<string, BoundFunction> FunctionScope(BoundFunction function)
+    {
+        return _functionScopes.TryGetValue(function, out var scope)
+            ? scope
+            : CreateFunctionScope(_program.Functions, function.LocalFunctions);
+    }
+
     private RuntimeValue ResolveLocal(string name)
     {
         var value = _locals.TryGetValue(name, out var local)
             ? local
-            : throw new SmallLangException($"unknown runtime binding '{name}'");
+            : throw new SmallLangException($"unknown runtime binding '{name}' while emitting '{_currentFunction?.Name ?? "main"}'");
 
         if (_mutableStructSlots.TryGetValue(name, out var pointer))
         {
@@ -106,7 +113,7 @@ internal sealed partial class LlvmEmitter
         return LoadMutableContainer(name, value);
     }
 
-    private void EmitYield(RuntimeValue value, RuntimeBlockInvocation invocation)
+    private RuntimeValue EmitYield(RuntimeValue value, RuntimeBlockInvocation invocation)
     {
         var blockFunctionLocals = CaptureLocals();
         var blockFunctionFunctions = _currentFunctions;
@@ -114,16 +121,38 @@ internal sealed partial class LlvmEmitter
         _locals[invocation.ItemName] = value;
         var yieldedBlockLocals = CaptureLocals();
         _currentFunctions = invocation.CallerFunctions;
+        RuntimeValue result = RuntimeUnit.Instance;
         try
         {
-            EmitStatements(invocation.Body);
-            DropOwnedLocalsCreatedSince(yieldedBlockLocals, transferredOwnerName: null);
+            if (invocation.ResultType == BoundType.Unit)
+            {
+                EmitStatements(invocation.Body);
+                DropOwnedLocalsCreatedSince(yieldedBlockLocals, transferredOwnerName: null);
+            }
+            else
+            {
+                if (invocation.Body.Count == 0
+                    || invocation.Body[^1] is not ExpressionStatement callbackResult)
+                {
+                    throw new SmallLangException("result-producing block callback requires a final expression");
+                }
+
+                EmitStatements(invocation.Body.Take(invocation.Body.Count - 1).ToArray());
+                result = EmitExpression(callbackResult.Expression);
+                EnsureRuntimeType(result, invocation.ResultType, "block callback");
+                var transferredOwnerName = IsOwnedContainerRuntimeValue(result)
+                    ? GetMoveConsumingContainerSourceName(callbackResult.Expression)
+                    : null;
+                DropOwnedLocalsCreatedSince(yieldedBlockLocals, transferredOwnerName);
+            }
         }
         finally
         {
             _currentFunctions = blockFunctionFunctions;
             RestoreLocals(blockFunctionLocals);
         }
+
+        return result;
     }
 
     private LocalScope CaptureLocals()
@@ -870,6 +899,16 @@ internal sealed partial class LlvmEmitter
         return "@smalllang_fn_" + string.Concat(name.Select(static c => char.IsLetterOrDigit(c) || c == '_' ? c : '_'));
     }
 
+    private static string SymbolForFunction(BoundFunction function)
+    {
+        var baseSymbol = SymbolForFunction(function.Name);
+        var module = string.Concat(function.ModuleName.Select(
+            static c => char.IsLetterOrDigit(c) || c == '_' ? c : '_'));
+        return function.IsLocal
+            ? $"{baseSymbol}_local_m{module}_{function.Line.ToString(CultureInfo.InvariantCulture)}_{function.Column.ToString(CultureInfo.InvariantCulture)}"
+            : baseSymbol;
+    }
+
     private string NextTemp(string prefix)
     {
         var name = "%" + prefix + _tempId.ToString(CultureInfo.InvariantCulture);
@@ -1066,6 +1105,7 @@ internal sealed partial class LlvmEmitter
         string ItemName,
         IReadOnlyList<Statement> Body,
         LocalScope CallerLocals,
-        IReadOnlyDictionary<string, BoundFunction> CallerFunctions);
+        IReadOnlyDictionary<string, BoundFunction> CallerFunctions,
+        BoundType ResultType);
 }
 

@@ -63,6 +63,22 @@ internal sealed partial class LlvmEmitter
         return new RuntimeInt(BoundType.Int64, value);
     }
 
+    private RuntimeInt EmitRuntimeParallelWorkersIntrinsic(string path)
+    {
+        _ = path;
+        var value = NextTemp("parallel_workers");
+        EmitCall(value, "i32", "smalllang_compute_workers", "");
+        return new RuntimeInt(value);
+    }
+
+    private RuntimeInt EmitRuntimeParallelPeakWorkersIntrinsic(string path)
+    {
+        _ = path;
+        var value = NextTemp("parallel_peak_workers");
+        EmitCall(value, "i32", "smalllang_compute_peak_workers", "");
+        return new RuntimeInt(value);
+    }
+
     private RuntimeTask EmitRuntimeSleepIntrinsic(
         BoundFunction function,
         RuntimeValue argument,

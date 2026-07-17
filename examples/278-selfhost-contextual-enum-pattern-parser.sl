@@ -17,6 +17,11 @@ main {
         else => 1
     }
 
+    exhaustiveValue result: Result<Int, Text> -> Int => result -> when {
+        Ok(value) => value
+        Err(error) => 0
+    }
+
     main {
     }
     """ => contextualSource

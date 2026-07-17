@@ -94,19 +94,19 @@ public analyzeContext prepared: semanticContext.CompilationContext -> EffectAnal
 
     # First build one source-qualified effect fact for every function symbol.
     0 => sourceIndex!
-    sourceIndex! < (prepared.sources -> len) -> while {
-        prepared.sources[sourceIndex!] -> len => sourceLength
-        prepared.sources[sourceIndex!] -> slice(UIntSize(0), sourceLength) => source
-        prepared.ranges[sourceIndex!] => sourceRange
+    sourceIndex! < (prepared.package.sources -> len) -> while {
+        prepared.package.sources[sourceIndex!] -> len => sourceLength
+        prepared.package.sources[sourceIndex!] -> slice(UIntSize(0), sourceLength) => source
+        prepared.package.ranges[sourceIndex!] => sourceRange
         0 => symbolIndex!
         symbolIndex! < sourceRange.symbolCount -> while {
-            prepared.symbols[sourceRange.symbolStart + symbolIndex!] => symbol
+            prepared.package.symbols[sourceRange.symbolStart + symbolIndex!] => symbol
             symbol.kind == 7 -> if {
-                prepared.nodes[sourceRange.astStart + symbol.astNode] => functionNode
+                prepared.package.nodes[sourceRange.astStart + symbol.astNode] => functionNode
                 -1 => signatureAst!
                 0 => childIndex!
                 (childIndex! < sourceRange.astCount and signatureAst! < 0) -> while {
-                    prepared.nodes[sourceRange.astStart + childIndex!] => child
+                    prepared.package.nodes[sourceRange.astStart + childIndex!] => child
                     (child.parent == symbol.astNode and child.kind == 17) -> if { childIndex! => signatureAst! }
                     childIndex! + 1 => childIndex!
                 }
@@ -114,10 +114,10 @@ public analyzeContext prepared: semanticContext.CompilationContext -> EffectAnal
                 0 => mask!
                 false => afterUses!
                 signatureAst! >= 0 -> if {
-                    prepared.nodes[sourceRange.astStart + signatureAst!] => signature
+                    prepared.package.nodes[sourceRange.astStart + signatureAst!] => signature
                     signature.firstToken => tokenIndex!
                     tokenIndex! < signature.firstToken + signature.tokenCount -> while {
-                        prepared.tokens[sourceRange.tokenStart + tokenIndex!] => token
+                        prepared.package.tokens[sourceRange.tokenStart + tokenIndex!] => token
                         TokenTextRequest { source: source, token: token, expected: "uses" } -> tokenTextIs -> if {
                             true => afterUses!
                         } else {
@@ -127,7 +127,7 @@ public analyzeContext prepared: semanticContext.CompilationContext -> EffectAnal
                                     -1 => effectReferenceAst!
                                     0 => effectReferenceSearch!
                                     (effectReferenceSearch! < sourceRange.astCount and effectReferenceAst! < 0) -> while {
-                                        prepared.nodes[sourceRange.astStart + effectReferenceSearch!] => effectReferenceCandidate
+                                        prepared.package.nodes[sourceRange.astStart + effectReferenceSearch!] => effectReferenceCandidate
                                         (effectReferenceCandidate.kind == 52 and tokenIndex! >= effectReferenceCandidate.firstToken and tokenIndex! < effectReferenceCandidate.firstToken + effectReferenceCandidate.tokenCount) -> if {
                                             effectReferenceSearch! => effectReferenceAst!
                                         }
@@ -136,11 +136,11 @@ public analyzeContext prepared: semanticContext.CompilationContext -> EffectAnal
                                     -1 => effectReferenceLastToken!
                                     false => qualifiedEffectReference!
                                     effectReferenceAst! >= 0 -> if {
-                                        prepared.nodes[sourceRange.astStart + effectReferenceAst!] => effectReference
+                                        prepared.package.nodes[sourceRange.astStart + effectReferenceAst!] => effectReference
                                         effectReference.firstToken => effectReferenceToken!
                                         effectReferenceToken! < effectReference.firstToken + effectReference.tokenCount -> while {
-                                            prepared.tokens[sourceRange.tokenStart + effectReferenceToken!].kind == grammar.tokenIdIdentifier -> if { effectReferenceToken! => effectReferenceLastToken! }
-                                            prepared.tokens[sourceRange.tokenStart + effectReferenceToken!].kind == grammar.tokenIdDot -> if { true => qualifiedEffectReference! }
+                                            prepared.package.tokens[sourceRange.tokenStart + effectReferenceToken!].kind == grammar.tokenIdIdentifier -> if { effectReferenceToken! => effectReferenceLastToken! }
+                                            prepared.package.tokens[sourceRange.tokenStart + effectReferenceToken!].kind == grammar.tokenIdDot -> if { true => qualifiedEffectReference! }
                                             effectReferenceToken! + 1 => effectReferenceToken!
                                         }
                                     }
@@ -148,9 +148,9 @@ public analyzeContext prepared: semanticContext.CompilationContext -> EffectAnal
                                     tokenIndex! == effectReferenceLastToken! -> if {
                                         0 => localEffectSearch!
                                         localEffectSearch! < sourceRange.symbolCount -> while {
-                                            prepared.symbols[sourceRange.symbolStart + localEffectSearch!] => localEffect
+                                            prepared.package.symbols[sourceRange.symbolStart + localEffectSearch!] => localEffect
                                             (localEffect.kind == 50 and localEffect.parent < 0) -> if {
-                                                prepared.tokens[sourceRange.tokenStart + localEffect.nameToken] => localEffectName
+                                                prepared.package.tokens[sourceRange.tokenStart + localEffect.nameToken] => localEffectName
                                                 token.span.length == localEffectName.span.length => sameEffectName!
                                                 UIntSize(0) => effectNameByte!
                                                 (sameEffectName! and effectNameByte! < token.span.length) -> while {
@@ -169,14 +169,14 @@ public analyzeContext prepared: semanticContext.CompilationContext -> EffectAnal
                                                 false => belongsToEffectReference!
                                                 (importedEffectAncestor! >= 0 and not belongsToEffectReference!) -> while {
                                                     importedEffectAncestor! == effectReferenceAst! -> if { true => belongsToEffectReference! } else {
-                                                        prepared.nodes[sourceRange.astStart + importedEffectAncestor!].parent => importedEffectAncestor!
+                                                        prepared.package.nodes[sourceRange.astStart + importedEffectAncestor!].parent => importedEffectAncestor!
                                                     }
                                                 }
                                                 belongsToEffectReference! -> if {
                                                     prepared.modules[importedEffect.targetModule].sourceIndex => importedEffectSource
                                                     importedEffect.targetSymbol >= 0 -> if {
-                                                        prepared.ranges[importedEffectSource] => importedEffectRange
-                                                        prepared.symbols[importedEffectRange.symbolStart + importedEffect.targetSymbol].kind == 50 -> if { true => knownUserEffect! }
+                                                        prepared.package.ranges[importedEffectSource] => importedEffectRange
+                                                        prepared.package.symbols[importedEffectRange.symbolStart + importedEffect.targetSymbol].kind == 50 -> if { true => knownUserEffect! }
                                                     }
                                                 }
                                             }
@@ -232,12 +232,12 @@ public analyzeContext prepared: semanticContext.CompilationContext -> EffectAnal
     callIndex! < (prepared.calls -> len) -> while {
         prepared.calls[callIndex!] => call
         call.status == 0 -> if {
-            prepared.ranges[call.sourceModule] => sourceRange
-            prepared.nodes[sourceRange.astStart + call.callAst] => callNode
+            prepared.package.ranges[call.sourceModule] => sourceRange
+            prepared.package.nodes[sourceRange.astStart + call.callAst] => callNode
             callNode.parent => ancestor!
             -1 => callerAst!
             (ancestor! >= 0 and callerAst! < 0) -> while {
-                prepared.nodes[sourceRange.astStart + ancestor!] => ancestorNode
+                prepared.package.nodes[sourceRange.astStart + ancestor!] => ancestorNode
                 ancestorNode.kind == 7 -> if {
                     ancestor! => callerAst!
                 } else {
@@ -254,7 +254,7 @@ public analyzeContext prepared: semanticContext.CompilationContext -> EffectAnal
                 -1 => callerSymbol!
                 0 => callerSymbolSearch!
                 (callerSymbolSearch! < sourceRange.symbolCount and callerSymbol! < 0) -> while {
-                    prepared.symbols[sourceRange.symbolStart + callerSymbolSearch!] => callerCandidate
+                    prepared.package.symbols[sourceRange.symbolStart + callerSymbolSearch!] => callerCandidate
                     (callerCandidate.kind == 7 and callerCandidate.astNode == callerAst!) -> if {
                         callerSymbolSearch! => callerSymbol!
                     }
@@ -331,16 +331,16 @@ public analyzeContext prepared: semanticContext.CompilationContext -> EffectAnal
     # it directly from the prepared AST. Mapped-view flush uses runtime alias
     # -114 above and therefore follows the ordinary resolved-call path.
     0 => mapSourceIndex!
-    mapSourceIndex! < (prepared.sources -> len) -> while {
-        prepared.ranges[mapSourceIndex!] => mapSourceRange
+    mapSourceIndex! < (prepared.package.sources -> len) -> while {
+        prepared.package.ranges[mapSourceIndex!] => mapSourceRange
         0 => mapAstIndex!
         mapAstIndex! < mapSourceRange.astCount -> while {
-            prepared.nodes[mapSourceRange.astStart + mapAstIndex!] => mapNode
+            prepared.package.nodes[mapSourceRange.astStart + mapAstIndex!] => mapNode
             mapNode.kind == 49 -> if {
                 mapNode.parent => mapAncestor!
                 -1 => mapCallerAst!
                 (mapAncestor! >= 0 and mapCallerAst! < 0) -> while {
-                    prepared.nodes[mapSourceRange.astStart + mapAncestor!] => mapAncestorNode
+                    prepared.package.nodes[mapSourceRange.astStart + mapAncestor!] => mapAncestorNode
                     mapAncestorNode.kind == 7 -> if {
                         mapAncestor! => mapCallerAst!
                     } else {
@@ -355,7 +355,7 @@ public analyzeContext prepared: semanticContext.CompilationContext -> EffectAnal
                     -1 => mapCallerSymbol!
                     0 => mapSymbolSearch!
                     (mapSymbolSearch! < mapSourceRange.symbolCount and mapCallerSymbol! < 0) -> while {
-                        prepared.symbols[mapSourceRange.symbolStart + mapSymbolSearch!] => mapCandidate
+                        prepared.package.symbols[mapSourceRange.symbolStart + mapSymbolSearch!] => mapCandidate
                         (mapCandidate.kind == 7 and mapCandidate.astNode == mapCallerAst!) -> if {
                             mapSymbolSearch! => mapCallerSymbol!
                         }

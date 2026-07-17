@@ -79,9 +79,9 @@ internal sealed partial class LlvmEmitter
                     throw new SmallLangException("yield must be the final value-flow target");
                 }
 
-                EmitYield(current, _currentBlockInvocation);
+                var yielded = EmitYield(current, _currentBlockInvocation);
                 return new RuntimeFlowResult(
-                    Value: null,
+                    Value: yielded is RuntimeUnit ? null : yielded,
                     Binding: null,
                     Ok: ok);
             }

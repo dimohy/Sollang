@@ -79,7 +79,8 @@ internal sealed record FunctionDeclaration(
     string ModuleName = "",
     bool IsPublic = false,
     bool IsAsync = false,
-    IReadOnlyList<string>? Effects = null);
+    IReadOnlyList<string>? Effects = null,
+    string? BlockResultType = null);
 
 internal enum FunctionInputOwnership
 {

@@ -23,15 +23,16 @@ internal sealed partial class LlvmEmitter
     private void EmitUserFunctions()
     {
         var emitted = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var function in _program.Functions.Values)
+        var emittedFunctions = new HashSet<BoundFunction>(ReferenceEqualityComparer.Instance);
+        foreach (var function in EnumerateEmittableFunctions(_program.Functions.Values))
         {
             if (function.Kind != BoundFunctionKind.User
                 || function.IsStandardLibrary
-                || function.IsLocal
                 || (function.GenericParameterName is not null
                     && function.SpecializedType is null
                     && function.SpecializedValue is null)
-                || !emitted.Add(function.Name))
+                || !emittedFunctions.Add(function)
+                || (!function.IsLocal && !emitted.Add(function.Name)))
             {
                 continue;
             }
@@ -96,6 +97,19 @@ internal sealed partial class LlvmEmitter
         _currentFunction = null;
     }
 
+    private static IEnumerable<BoundFunction> EnumerateEmittableFunctions(
+        IEnumerable<BoundFunction> functions)
+    {
+        foreach (var function in functions)
+        {
+            yield return function;
+            foreach (var local in EnumerateEmittableFunctions(function.LocalFunctions.Values))
+            {
+                yield return local;
+            }
+        }
+    }
+
     private void EmitStructFunction(BoundFunction function)
     {
         if (function.Body is null)
@@ -104,16 +118,17 @@ internal sealed partial class LlvmEmitter
         }
 
         var previousFunctions = _currentFunctions;
-        _currentFunctions = CreateFunctionScope(_program.Functions, function.LocalFunctions);
+        _currentFunctions = FunctionScope(function);
         ClearLocalState();
         SelectStackFrame(function);
         try
         {
             var llvmType = LlvmType(function.ReturnType);
-            EmitFunctionLine($"define internal {llvmType} {SymbolForFunction(function.Name)}({ParameterListForFunction(function)}) #0 {{");
+            EmitFunctionLine($"define internal {llvmType} {SymbolForFunction(function)}({ParameterListForFunction(function)}) #0 {{");
             EmitFunctionLine("entry:");
             EmitStackFrameAllocations();
             _currentBlockLabel = "entry";
+            BindFunctionCaptures(function);
             var functionLocals = CaptureLocals();
             BindFunctionParameter(function);
 
@@ -139,15 +154,16 @@ internal sealed partial class LlvmEmitter
     private void EmitUnitFunction(BoundFunction function)
     {
         var previousFunctions = _currentFunctions;
-        _currentFunctions = CreateFunctionScope(_program.Functions, function.LocalFunctions);
+        _currentFunctions = FunctionScope(function);
         ClearLocalState();
         SelectStackFrame(function);
         try
         {
-            EmitFunctionLine($"define internal void {SymbolForFunction(function.Name)}({ParameterListForFunction(function)}) #0 {{");
+            EmitFunctionLine($"define internal void {SymbolForFunction(function)}({ParameterListForFunction(function)}) #0 {{");
             EmitFunctionLine("entry:");
             EmitStackFrameAllocations();
             _currentBlockLabel = "entry";
+            BindFunctionCaptures(function);
             var functionLocals = CaptureLocals();
             BindFunctionParameter(function);
 
@@ -178,15 +194,16 @@ internal sealed partial class LlvmEmitter
         }
 
         var previousFunctions = _currentFunctions;
-        _currentFunctions = CreateFunctionScope(_program.Functions, function.LocalFunctions);
+        _currentFunctions = FunctionScope(function);
         ClearLocalState();
         SelectStackFrame(function);
         try
         {
-            EmitFunctionLine($"define internal %smalllang.text {SymbolForFunction(function.Name)}({ParameterListForFunction(function)}) #0 {{");
+            EmitFunctionLine($"define internal %smalllang.text {SymbolForFunction(function)}({ParameterListForFunction(function)}) #0 {{");
             EmitFunctionLine("entry:");
             EmitStackFrameAllocations();
             _currentBlockLabel = "entry";
+            BindFunctionCaptures(function);
             var functionLocals = CaptureLocals();
             BindFunctionParameter(function);
 
@@ -218,15 +235,16 @@ internal sealed partial class LlvmEmitter
         }
 
         var previousFunctions = _currentFunctions;
-        _currentFunctions = CreateFunctionScope(_program.Functions, function.LocalFunctions);
+        _currentFunctions = FunctionScope(function);
         ClearLocalState();
         SelectStackFrame(function);
         try
         {
-            EmitFunctionLine($"define internal i64 {SymbolForFunction(function.Name)}({ParameterListForFunction(function)}) #0 {{");
+            EmitFunctionLine($"define internal i64 {SymbolForFunction(function)}({ParameterListForFunction(function)}) #0 {{");
             EmitFunctionLine("entry:");
             EmitStackFrameAllocations();
             _currentBlockLabel = "entry";
+            BindFunctionCaptures(function);
             var functionLocals = CaptureLocals();
             BindFunctionParameter(function);
 
@@ -252,15 +270,16 @@ internal sealed partial class LlvmEmitter
         }
 
         var previousFunctions = _currentFunctions;
-        _currentFunctions = CreateFunctionScope(_program.Functions, function.LocalFunctions);
+        _currentFunctions = FunctionScope(function);
         ClearLocalState();
         SelectStackFrame(function);
         try
         {
-            EmitFunctionLine($"define internal i1 {SymbolForFunction(function.Name)}({ParameterListForFunction(function)}) #0 {{");
+            EmitFunctionLine($"define internal i1 {SymbolForFunction(function)}({ParameterListForFunction(function)}) #0 {{");
             EmitFunctionLine("entry:");
             EmitStackFrameAllocations();
             _currentBlockLabel = "entry";
+            BindFunctionCaptures(function);
             var functionLocals = CaptureLocals();
             BindFunctionParameter(function);
 
@@ -285,16 +304,17 @@ internal sealed partial class LlvmEmitter
             throw new SmallLangException($"function '{function.Name}' has no body");
         }
         var previousFunctions = _currentFunctions;
-        _currentFunctions = CreateFunctionScope(_program.Functions, function.LocalFunctions);
+        _currentFunctions = FunctionScope(function);
         ClearLocalState();
         SelectStackFrame(function);
         try
         {
             var llvmType = LlvmType(function.ReturnType);
-            EmitFunctionLine($"define internal {llvmType} {SymbolForFunction(function.Name)}({ParameterListForFunction(function)}) #0 {{");
+            EmitFunctionLine($"define internal {llvmType} {SymbolForFunction(function)}({ParameterListForFunction(function)}) #0 {{");
             EmitFunctionLine("entry:");
             EmitStackFrameAllocations();
             _currentBlockLabel = "entry";
+            BindFunctionCaptures(function);
             var functionLocals = CaptureLocals();
             BindFunctionParameter(function);
             EmitStatements(function.BlockBody);
@@ -326,15 +346,16 @@ internal sealed partial class LlvmEmitter
         }
 
         var previousFunctions = _currentFunctions;
-        _currentFunctions = CreateFunctionScope(_program.Functions, function.LocalFunctions);
+        _currentFunctions = FunctionScope(function);
         ClearLocalState();
         SelectStackFrame(function);
         try
         {
-            EmitFunctionLine($"define internal %smalllang.dynamic_int_array {SymbolForFunction(function.Name)}({ParameterListForFunction(function)}) #0 {{");
+            EmitFunctionLine($"define internal %smalllang.dynamic_int_array {SymbolForFunction(function)}({ParameterListForFunction(function)}) #0 {{");
             EmitFunctionLine("entry:");
             EmitStackFrameAllocations();
             _currentBlockLabel = "entry";
+            BindFunctionCaptures(function);
             var functionLocals = CaptureLocals();
             BindFunctionParameter(function);
 
@@ -368,15 +389,16 @@ internal sealed partial class LlvmEmitter
             throw new SmallLangException($"function '{function.Name}' has no body");
         }
         var previousFunctions = _currentFunctions;
-        _currentFunctions = CreateFunctionScope(_program.Functions, function.LocalFunctions);
+        _currentFunctions = FunctionScope(function);
         ClearLocalState();
         SelectStackFrame(function);
         try
         {
-            EmitFunctionLine($"define internal %smalllang.dynamic_int_array {SymbolForFunction(function.Name)}({ParameterListForFunction(function)}) #0 {{");
+            EmitFunctionLine($"define internal %smalllang.dynamic_int_array {SymbolForFunction(function)}({ParameterListForFunction(function)}) #0 {{");
             EmitFunctionLine("entry:");
             EmitStackFrameAllocations();
             _currentBlockLabel = "entry";
+            BindFunctionCaptures(function);
             var functionLocals = CaptureLocals();
             BindFunctionParameter(function);
             EmitStatements(function.BlockBody);
@@ -405,15 +427,16 @@ internal sealed partial class LlvmEmitter
         }
 
         var previousFunctions = _currentFunctions;
-        _currentFunctions = CreateFunctionScope(_program.Functions, function.LocalFunctions);
+        _currentFunctions = FunctionScope(function);
         ClearLocalState();
         SelectStackFrame(function);
         try
         {
-            EmitFunctionLine($"define internal %smalllang.int_dictionary {SymbolForFunction(function.Name)}({ParameterListForFunction(function)}) #0 {{");
+            EmitFunctionLine($"define internal %smalllang.int_dictionary {SymbolForFunction(function)}({ParameterListForFunction(function)}) #0 {{");
             EmitFunctionLine("entry:");
             EmitStackFrameAllocations();
             _currentBlockLabel = "entry";
+            BindFunctionCaptures(function);
             var functionLocals = CaptureLocals();
             BindFunctionParameter(function);
 
@@ -447,15 +470,16 @@ internal sealed partial class LlvmEmitter
             throw new SmallLangException($"function '{function.Name}' has no body");
         }
         var previousFunctions = _currentFunctions;
-        _currentFunctions = CreateFunctionScope(_program.Functions, function.LocalFunctions);
+        _currentFunctions = FunctionScope(function);
         ClearLocalState();
         SelectStackFrame(function);
         try
         {
-            EmitFunctionLine($"define internal %smalllang.int_dictionary {SymbolForFunction(function.Name)}({ParameterListForFunction(function)}) #0 {{");
+            EmitFunctionLine($"define internal %smalllang.int_dictionary {SymbolForFunction(function)}({ParameterListForFunction(function)}) #0 {{");
             EmitFunctionLine("entry:");
             EmitStackFrameAllocations();
             _currentBlockLabel = "entry";
+            BindFunctionCaptures(function);
             var functionLocals = CaptureLocals();
             BindFunctionParameter(function);
             EmitStatements(function.BlockBody);
@@ -479,10 +503,31 @@ internal sealed partial class LlvmEmitter
     private string ParameterListForFunction(BoundFunction function)
     {
         const string runtimeContext = "ptr %stdin, ptr %stdout, ptr %written, ptr %read, ptr %ok_state";
-        var explicitParameters = ExplicitParameterListForFunction(function);
+        var parameters = new[]
+            {
+                CaptureParameterListForFunction(function),
+                ExplicitParameterListForFunction(function)
+            }
+            .Where(static part => part.Length > 0);
+        var explicitParameters = string.Join(", ", parameters);
         return explicitParameters.Length == 0
             ? runtimeContext
             : $"{runtimeContext}, {explicitParameters}";
+    }
+
+    private string CaptureParameterListForFunction(BoundFunction function)
+    {
+        return string.Join(", ", CapturedBindingsForFunction(function)
+            .Select((binding, index) =>
+                $"{LlvmType(binding.Value)} %capture_{index.ToString(CultureInfo.InvariantCulture)}"));
+    }
+
+    private IReadOnlyList<KeyValuePair<string, BoundType>> CapturedBindingsForFunction(
+        BoundFunction function)
+    {
+        return _program.FunctionCapturedBindings.TryGetValue(function, out var captures)
+            ? captures.OrderBy(static binding => binding.Key, StringComparer.Ordinal).ToArray()
+            : [];
     }
 
     private string ExplicitParameterListForFunction(BoundFunction function)
@@ -543,6 +588,23 @@ internal sealed partial class LlvmEmitter
             BoundType.Arena => "%smalllang.dynamic_int_array %it",
             _ => throw new SmallLangException("unsupported function input type")
         };
+    }
+
+    private void BindFunctionCaptures(BoundFunction function)
+    {
+        var captures = CapturedBindingsForFunction(function);
+        for (var index = 0; index < captures.Count; index++)
+        {
+            var capture = captures[index];
+            var value = DematerializeAggregateValue(
+                capture.Value,
+                $"%capture_{index.ToString(CultureInfo.InvariantCulture)}");
+            _locals.Add(capture.Key, value);
+            if (_program.Types.ContainsOwnedStorage(capture.Value))
+            {
+                _borrowedOwnedLocals.Add(capture.Key);
+            }
+        }
     }
 
     private void BindFunctionParameter(BoundFunction function)

@@ -3,7 +3,9 @@ namespace smalllang.compiler.semantic.nominal_types
 import smalllang.compiler.ast as ast
 import smalllang.compiler.lexer as lexer
 import smalllang.compiler.semantic.analysis as analysis
+import smalllang.compiler.semantic.modules as modules
 import smalllang.compiler.semantic.symbols as symbols
+import smalllang.compiler.semantic.type_ids as typeIds
 import smalllang.compiler.semantic.type_resolve as typeResolve
 import smalllang.compiler.semantic.types as types
 import syntax.generated.smalllang as grammar
@@ -26,12 +28,14 @@ public resolve sources: [Text; ~] -> [NominalType; ~] {
 }
 
 public resolveAnalyzed package: analysis.PackageAnalysis -> [NominalType; ~] {
-    ["Unit", "Text", "Int", "Int8", "Int16", "Int32", "Int64", "Long", "UInt8", "UInt16", "UInt32", "UInt64", "Size", "UIntSize", "CodePoint", "Arena", "Arguments", "MappedBytes", "MutableMappedBytes", "Float", "Float32", "Float64", "Double", "Bool", ~] => builtinNames!
+    ["Unit", "Text", "Int", "Int8", "Int16", "Int32", "Int64", "Long", "UInt8", "UInt16", "UInt32", "UInt64", "Size", "UIntSize", "CodePoint", "Arena", "Arguments", "MappedBytes", "MutableMappedBytes", "Float", "Float32", "Float64", "Double", "Bool", "SourceText", ~] => builtinNames!
     package -> typeResolve.resolveAnalyzed => importedTypes!
+    package -> modules.identitiesAnalyzed => identities!
     [NominalType; ~] => results!
     0 => sourceIndex!
     sourceIndex! < (package.sources -> len) -> while {
-        package.sources[sourceIndex!] => source
+        package.sources[sourceIndex!] -> len => sourceLength
+        package.sources[sourceIndex!] -> slice(UIntSize(0), sourceLength) => source
         package.ranges[sourceIndex!] => sourceRange
         0 => typeIndex!
         typeIndex! < sourceRange.typeCount -> while {
@@ -48,13 +52,25 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> [NominalType; ~] {
                 }
                 importedIndex! >= 0 -> if {
                     importedTypes![importedIndex!] => imported
+                    -1 => intrinsicSymbol!
+                    imported.status == 0 -> if {
+                        typeIds.IntrinsicNominalRequest { package: package, identities: identities!, targetModule: imported.targetModule, targetSymbol: imported.targetSymbol } -> typeIds.intrinsicNominalSymbol => intrinsicSymbol!
+                    }
+                    2 => importedOrigin!
+                    imported.targetModule => importedTargetModule!
+                    imported.targetSymbol => importedTargetSymbol!
+                    intrinsicSymbol! >= 0 -> if {
+                        1 => importedOrigin!
+                        -1 => importedTargetModule!
+                        intrinsicSymbol! => importedTargetSymbol!
+                    }
                     NominalType {
                         sourceModule: sourceIndex!
                         typeAst: typeUse.astNode
                         canonical: typeUse.canonical
-                        origin: 2
-                        targetModule: imported.targetModule
-                        targetSymbol: imported.targetSymbol
+                        origin: importedOrigin!
+                        targetModule: importedTargetModule!
+                        targetSymbol: importedTargetSymbol!
                         status: imported.status
                     } => importedResult
                     results! -> push(importedResult)
@@ -131,6 +147,8 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> [NominalType; ~] {
                         localSymbol! >= 0 -> if {
                             package.symbols[sourceRange.symbolStart + localSymbol!].kind == 32 -> if { 3 => localOrigin! }
                         }
+                        2 => localStatus!
+                        localSymbol! >= 0 -> if { 0 => localStatus! }
                         NominalType {
                             sourceModule: sourceIndex!
                             typeAst: typeUse.astNode
@@ -138,7 +156,7 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> [NominalType; ~] {
                             origin: localOrigin!
                             targetModule: sourceIndex!
                             targetSymbol: localSymbol!
-                            status: localSymbol! >= 0 -> if { 0 } else { 2 }
+                            status: localStatus!
                         } => localResult
                         results! -> push(localResult)
                     }

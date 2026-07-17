@@ -48,39 +48,279 @@ public struct ExpressionTypeIdRequest {
     analysisNames: [resolution.ResolvedName; ~]
 }
 
+struct TextMatchRequest {
+    source: Text
+    start: UIntSize
+    length: UIntSize
+    expected: Text
+}
+
+textMatches request: TextMatchRequest -> Bool {
+    request.expected -> len => expectedLength
+    request.length == expectedLength => matches!
+    UIntSize(0) => byteIndex!
+    (matches! and byteIndex! < request.length) -> while {
+        request.source -> byte(request.start + byteIndex!) => actual
+        request.expected -> byte(byteIndex!) => expected
+        actual != expected -> if { false => matches! }
+        byteIndex! + UIntSize(1) => byteIndex!
+    }
+    matches!
+}
+
 # Bridges the existing shallow expression pass into the canonical recursive
 # type arena. Annotation-backed names and call results retain their full type;
 # builtin expressions use the stable builtin id directly.
 public resolveContext prepared: semanticContext.CompilationContext -> ExpressionTypeIdSet {
     [typeIds.SemanticType; ~] => types!
-    prepared.types -> each semanticType { types! -> push(semanticType) }
+    0 => semanticTypeCopyIndex56!
+    semanticTypeCopyIndex56! < (prepared.semantic.types -> len) -> while {
+        prepared.semantic.types[semanticTypeCopyIndex56!] => semanticType
+        types! -> push(semanticType)
+        semanticTypeCopyIndex56! + 1 => semanticTypeCopyIndex56!
+    }
+    # Imported spellings of the affine sys.file.SourceText declaration must
+    # share the builtin type id semantics. Keeping a second nominal shape here
+    # makes arrays project the declaration's token field instead of the native
+    # { data, length, mapping, mappedLength } representation.
+    -1 => sourceTextModule!
+    -1 => sourceTextSymbol!
+    0 => sourceTextModuleSearch!
+    sourceTextModuleSearch! < (prepared.modules -> len) -> while {
+        prepared.modules[sourceTextModuleSearch!] => sourceTextIdentity
+        prepared.package.sources[sourceTextIdentity.sourceIndex] -> len => sourceTextSourceLength
+        prepared.package.sources[sourceTextIdentity.sourceIndex] -> slice(UIntSize(0), sourceTextSourceLength) => sourceTextSource
+        sourceTextIdentity.pathLength == UIntSize(8) => sourceTextNamespaceEqual!
+        "sys.file" => sourceTextNamespace
+        UIntSize(0) => sourceTextNamespaceByte!
+        (sourceTextNamespaceEqual! and sourceTextNamespaceByte! < sourceTextIdentity.pathLength) -> while {
+            (sourceTextSource -> byte(sourceTextIdentity.pathStart + sourceTextNamespaceByte!)) != (sourceTextNamespace -> byte(sourceTextNamespaceByte!)) -> if { false => sourceTextNamespaceEqual! }
+            sourceTextNamespaceByte! + UIntSize(1) => sourceTextNamespaceByte!
+        }
+        sourceTextNamespaceEqual! -> if {
+            prepared.package.ranges[sourceTextIdentity.sourceIndex] => sourceTextRange
+            0 => sourceTextSymbolSearch!
+            sourceTextSymbolSearch! < sourceTextRange.symbolCount -> while {
+                prepared.package.symbols[sourceTextRange.symbolStart + sourceTextSymbolSearch!] => sourceTextCandidate
+                (sourceTextCandidate.kind == 3 and sourceTextCandidate.parent < 0) -> if {
+                    prepared.package.tokens[sourceTextRange.tokenStart + sourceTextCandidate.nameToken] => sourceTextCandidateName
+                    sourceTextCandidateName.span.length == UIntSize(10) => sourceTextNameEqual!
+                    "SourceText" => sourceTextName
+                    UIntSize(0) => sourceTextNameByte!
+                    (sourceTextNameEqual! and sourceTextNameByte! < sourceTextCandidateName.span.length) -> while {
+                        (sourceTextSource -> byte(sourceTextCandidateName.span.start + sourceTextNameByte!)) != (sourceTextName -> byte(sourceTextNameByte!)) -> if { false => sourceTextNameEqual! }
+                        sourceTextNameByte! + UIntSize(1) => sourceTextNameByte!
+                    }
+                    sourceTextNameEqual! -> if {
+                        sourceTextIdentity.sourceIndex => sourceTextModule!
+                        sourceTextSymbolSearch! => sourceTextSymbol!
+                    }
+                }
+                sourceTextSymbolSearch! + 1 => sourceTextSymbolSearch!
+            }
+        }
+        sourceTextModuleSearch! + 1 => sourceTextModuleSearch!
+    }
+    0 => sourceTextTypeIndex!
+    sourceTextTypeIndex! < (types! -> len) -> while {
+        types![sourceTextTypeIndex!] => sourceTextType
+        (sourceTextType.kind == 1 and sourceTextType.module == sourceTextModule! and sourceTextType.symbol == sourceTextSymbol!) -> if {
+            typeIds.SemanticType {
+                kind: 1
+                origin: 1
+                module: -1
+                symbol: 24
+                first: -1
+                second: -1
+                length: -1
+                lengthHash: UInt64(0)
+                containsParameter: false
+                status: 0
+            } => types![sourceTextTypeIndex!]
+        }
+        sourceTextTypeIndex! + 1 => sourceTextTypeIndex!
+    }
     [typeIds.TypeReference; ~] => references!
-    prepared.references -> each reference { references! -> push(reference) }
+    0 => referenceCopyIndex119!
+    referenceCopyIndex119! < (prepared.semantic.references -> len) -> while {
+        prepared.semantic.references[referenceCopyIndex119!] => reference
+        references! -> push(reference)
+        referenceCopyIndex119! + 1 => referenceCopyIndex119!
+    }
     [typeIds.NominalField; ~] => fields!
-    prepared.fields -> each field { fields! -> push(field) }
+    0 => fieldCopyIndex121!
+    fieldCopyIndex121! < (prepared.semantic.fields -> len) -> while {
+        prepared.semantic.fields[fieldCopyIndex121!] => field
+        fields! -> push(field)
+        fieldCopyIndex121! + 1 => fieldCopyIndex121!
+    }
     [ExpressionTypeId; ~] => expressions!
+    [Int; ~] => expressionIndexByAst!
+    [Int; ~] => referenceIndexByTypeAst!
+    0 => typeIndexSeed!
+    typeIndexSeed! < (prepared.package.nodes -> len) -> while {
+        expressionIndexByAst! -> push(-1)
+        referenceIndexByTypeAst! -> push(-1)
+        typeIndexSeed! + 1 => typeIndexSeed!
+    }
+    0 => referenceMapIndex!
+    referenceMapIndex! < (references! -> len) -> while {
+        references![referenceMapIndex!] => mappedReference
+        (mappedReference.sourceModule >= 0 and mappedReference.sourceModule < (prepared.package.ranges -> len)) -> if {
+            prepared.package.ranges[mappedReference.sourceModule] => mappedReferenceRange
+            (mappedReference.typeAst >= 0 and mappedReference.typeAst < mappedReferenceRange.astCount) -> if {
+                referenceMapIndex! => referenceIndexByTypeAst![mappedReferenceRange.astStart + mappedReference.typeAst]
+            }
+        }
+        referenceMapIndex! + 1 => referenceMapIndex!
+    }
+    [Bool; ~] => controlOwnerByAst!
+    0 => controlOwnerSeed!
+    controlOwnerSeed! < (prepared.package.nodes -> len) -> while {
+        controlOwnerByAst! -> push(false)
+        controlOwnerSeed! + 1 => controlOwnerSeed!
+    }
+    0 => controlOwnerSource!
+    controlOwnerSource! < (prepared.package.ranges -> len) -> while {
+        prepared.package.ranges[controlOwnerSource!] => controlOwnerRange
+        0 => controlOwnerAst!
+        controlOwnerAst! < controlOwnerRange.astCount -> while {
+            prepared.package.nodes[controlOwnerRange.astStart + controlOwnerAst!] => controlOwnerCandidate
+            (controlOwnerCandidate.kind == 42 and controlOwnerCandidate.parent >= 0) -> if {
+                true => controlOwnerByAst![controlOwnerRange.astStart + controlOwnerCandidate.parent]
+            }
+            controlOwnerAst! + 1 => controlOwnerAst!
+        }
+        controlOwnerSource! + 1 => controlOwnerSource!
+    }
 
     0 => sourceIndex!
-    sourceIndex! < (prepared.sources -> len) -> while {
-        prepared.sources[sourceIndex!] -> len => sourceLength
-        prepared.sources[sourceIndex!] -> slice(UIntSize(0), sourceLength) => source
-        prepared.ranges[sourceIndex!] => sourceRange
+    sourceIndex! < (prepared.package.sources -> len) -> while {
+        prepared.package.sources[sourceIndex!] -> len => sourceLength
+        prepared.package.sources[sourceIndex!] -> slice(UIntSize(0), sourceLength) => source
+        prepared.package.ranges[sourceIndex!] => sourceRange
         [resolution.ResolvedName; ~] => resolvedNames!
         0 => sourceNameOffset!
         sourceNameOffset! < sourceRange.nameCount -> while {
-            resolvedNames! -> push(prepared.names[sourceRange.nameStart + sourceNameOffset!])
+            resolvedNames! -> push(prepared.package.names[sourceRange.nameStart + sourceNameOffset!])
             sourceNameOffset! + 1 => sourceNameOffset!
         }
 
         0 => astIndex!
         astIndex! < sourceRange.astCount -> while {
-            prepared.nodes[sourceRange.astStart + astIndex!] => node
+            prepared.package.nodes[sourceRange.astStart + astIndex!] => node
             -1 => builtinTypeId!
             node.kind == 13 -> if { 1 => builtinTypeId! }
             node.kind == 14 -> if { 2 => builtinTypeId! }
             (node.kind >= 44 and node.kind <= 47) -> if { 0 => builtinTypeId! }
+            node.kind == 54 -> if { 0 => builtinTypeId! }
+            # A typed empty dynamic-array expression, such as
+            # `[file.SourceText; ~]`, is also its type syntax. The recursive
+            # type pass has already resolved that AST through TypeReference;
+            # retain the ID so local owner bindings do not fall back to a
+            # shallow element module/symbol projection.
+            node.kind == 37 -> if {
+                0 => arrayReferenceSearch!
+                arrayReferenceSearch! < (references! -> len) -> while {
+                    references![arrayReferenceSearch!] => arrayReference
+                    (arrayReference.status == 0 and arrayReference.sourceModule == sourceIndex! and types![arrayReference.typeId].kind == 3) -> if {
+                        (arrayReference.typeAst == astIndex! or prepared.package.nodes[sourceRange.astStart + arrayReference.typeAst].parent == astIndex!) -> if {
+                            arrayReference.typeId => builtinTypeId!
+                        }
+                    }
+                    arrayReferenceSearch! + 1 => arrayReferenceSearch!
+                }
+                builtinTypeId! < 0 -> if {
+                    -1 => typedArrayPathAst!
+                    0 => typedArrayChildSearch!
+                    typedArrayChildSearch! < sourceRange.astCount -> while {
+                        prepared.package.nodes[sourceRange.astStart + typedArrayChildSearch!] => typedArrayChild
+                        (typedArrayChild.parent == astIndex! and typedArrayChild.kind == 16) -> if { typedArrayChildSearch! => typedArrayPathAst! }
+                        typedArrayChildSearch! + 1 => typedArrayChildSearch!
+                    }
+                    -1 => typedArrayElementType!
+                    -1 => typedArrayNameToken!
+                    node.firstToken => typedArrayTokenIndex!
+                    (typedArrayTokenIndex! < node.firstToken + node.tokenCount and typedArrayNameToken! < 0) -> while {
+                        prepared.package.tokens[sourceRange.tokenStart + typedArrayTokenIndex!] => typedArrayToken
+                        typedArrayToken.kind == grammar.tokenIdIdentifier -> if { typedArrayTokenIndex! => typedArrayNameToken! }
+                        typedArrayTokenIndex! + 1 => typedArrayTokenIndex!
+                    }
+                    typedArrayNameToken! >= 0 -> if {
+                        prepared.package.tokens[sourceRange.tokenStart + typedArrayNameToken!] => typedArrayName
+                        TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "Unit" } -> textMatches -> if { 0 => typedArrayElementType! }
+                        TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "Text" } -> textMatches -> if { 1 => typedArrayElementType! }
+                        TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "Int" } -> textMatches -> if { 2 => typedArrayElementType! }
+                        TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "UInt8" } -> textMatches -> if { 3 => typedArrayElementType! }
+                        TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "UInt16" } -> textMatches -> if { 4 => typedArrayElementType! }
+                        TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "UInt32" } -> textMatches -> if { 5 => typedArrayElementType! }
+                        TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "UInt64" } -> textMatches -> if { 6 => typedArrayElementType! }
+                        TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "Long" } -> textMatches -> if { 7 => typedArrayElementType! }
+                        TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "Int8" } -> textMatches -> if { 8 => typedArrayElementType! }
+                        TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "Int16" } -> textMatches -> if { 9 => typedArrayElementType! }
+                        TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "Int32" } -> textMatches -> if { 10 => typedArrayElementType! }
+                        TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "Int64" } -> textMatches -> if { 11 => typedArrayElementType! }
+                        TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "Size" } -> textMatches -> if { 12 => typedArrayElementType! }
+                        TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "UIntSize" } -> textMatches -> if { 13 => typedArrayElementType! }
+                        TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "CodePoint" } -> textMatches -> if { 14 => typedArrayElementType! }
+                        TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "Arena" } -> textMatches -> if { 15 => typedArrayElementType! }
+                        TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "Arguments" } -> textMatches -> if { 16 => typedArrayElementType! }
+                        TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "MappedBytes" } -> textMatches -> if { 17 => typedArrayElementType! }
+                        TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "MutableMappedBytes" } -> textMatches -> if { 18 => typedArrayElementType! }
+                        TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "Float" } -> textMatches -> if { 19 => typedArrayElementType! }
+                        TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "Float32" } -> textMatches -> if { 20 => typedArrayElementType! }
+                        TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "Float64" } -> textMatches -> if { 21 => typedArrayElementType! }
+                        TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "Double" } -> textMatches -> if { 22 => typedArrayElementType! }
+                        TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "Bool" } -> textMatches -> if { 23 => typedArrayElementType! }
+                        TextMatchRequest { source: source, start: typedArrayName.span.start, length: typedArrayName.span.length, expected: "SourceText" } -> textMatches -> if { 24 => typedArrayElementType! }
+                    }
+                    typedArrayElementType! < 0 -> if {
+                        -1 => typedArrayQualifiedIndex!
+                        0 => typedArrayQualifiedSearch!
+                        typedArrayQualifiedSearch! < (prepared.qualified -> len) -> while {
+                            prepared.qualified[typedArrayQualifiedSearch!] => typedArrayQualifiedCandidate
+                            (typedArrayQualifiedCandidate.sourceModule == sourceIndex! and typedArrayQualifiedCandidate.pathAst == typedArrayPathAst! and typedArrayQualifiedCandidate.status == 0) -> if { typedArrayQualifiedSearch! => typedArrayQualifiedIndex! }
+                            typedArrayQualifiedSearch! + 1 => typedArrayQualifiedSearch!
+                        }
+                        typedArrayQualifiedIndex! >= 0 -> if {
+                            prepared.qualified[typedArrayQualifiedIndex!] => typedArrayQualified
+                            0 => typedArrayElementSearch!
+                            typedArrayElementSearch! < (types! -> len) -> while {
+                                types![typedArrayElementSearch!] => typedArrayElementCandidate
+                                (typedArrayElementCandidate.kind == 1 and typedArrayElementCandidate.module == typedArrayQualified.targetModule and typedArrayElementCandidate.symbol == typedArrayQualified.targetSymbol) -> if { typedArrayElementSearch! => typedArrayElementType! }
+                                typedArrayElementSearch! + 1 => typedArrayElementSearch!
+                            }
+                        }
+                    }
+                    typedArrayElementType! >= 0 -> if {
+                            -1 => typedArrayType!
+                            0 => typedArrayTypeSearch!
+                            typedArrayTypeSearch! < (types! -> len) -> while {
+                                types![typedArrayTypeSearch!] => typedArrayCandidate
+                                (typedArrayCandidate.kind == 3 and typedArrayCandidate.first == typedArrayElementType! and typedArrayCandidate.status == 0) -> if { typedArrayTypeSearch! => typedArrayType! }
+                                typedArrayTypeSearch! + 1 => typedArrayTypeSearch!
+                            }
+                            typedArrayType! < 0 -> if {
+                                types! -> len => typedArrayType!
+                                types! -> push(typeIds.SemanticType {
+                                    kind: 3
+                                    origin: -1
+                                    module: -1
+                                    symbol: -1
+                                    first: typedArrayElementType!
+                                    second: -1
+                                    length: -1
+                                    lengthHash: UInt64(0)
+                                    containsParameter: types![typedArrayElementType!].containsParameter
+                                    status: 0
+                                })
+                            }
+                            typedArrayType! => builtinTypeId!
+                    }
+                }
+            }
             node.kind == 15 -> if {
-                prepared.tokens[sourceRange.tokenStart + node.payloadToken] => name
+                prepared.package.tokens[sourceRange.tokenStart + node.payloadToken] => name
                 name.span.length == UIntSize(4) -> if {
                     source -> byte(name.span.start) => byte0
                     source -> byte(name.span.start + UIntSize(1)) => byte1
@@ -97,21 +337,101 @@ public resolveContext prepared: semanticContext.CompilationContext -> Expression
                     (byte0 == UInt8(102) and byte1 == UInt8(97) and byte2 == UInt8(108) and byte3 == UInt8(115) and byte4 == UInt8(101)) -> if { 23 => builtinTypeId! }
                 }
             }
+            node.kind == 10 -> if {
+                node.firstToken => flowTokenIndex!
+                flowTokenIndex! < node.firstToken + node.tokenCount -> while {
+                    prepared.package.tokens[sourceRange.tokenStart + flowTokenIndex!] => flowToken
+                    flowToken.kind == grammar.tokenIdIdentifier -> if {
+                        flowToken.span.length == UIntSize(3) -> if {
+                            source -> byte(flowToken.span.start) => flowByte0
+                            source -> byte(flowToken.span.start + UIntSize(1)) => flowByte1
+                            source -> byte(flowToken.span.start + UIntSize(2)) => flowByte2
+                            (flowByte0 == UInt8(108) and flowByte1 == UInt8(101) and flowByte2 == UInt8(110)) -> if { 13 => builtinTypeId! }
+                        }
+                        flowToken.span.length == UIntSize(4) -> if {
+                            source -> byte(flowToken.span.start) => flowByte0
+                            source -> byte(flowToken.span.start + UIntSize(1)) => flowByte1
+                            source -> byte(flowToken.span.start + UIntSize(2)) => flowByte2
+                            source -> byte(flowToken.span.start + UIntSize(3)) => flowByte3
+                            (flowByte0 == UInt8(98) and flowByte1 == UInt8(121) and flowByte2 == UInt8(116) and flowByte3 == UInt8(101)) -> if { 3 => builtinTypeId! }
+                        }
+                        flowToken.span.length == UIntSize(5) -> if {
+                            source -> byte(flowToken.span.start) => flowByte0
+                            source -> byte(flowToken.span.start + UIntSize(1)) => flowByte1
+                            source -> byte(flowToken.span.start + UIntSize(2)) => flowByte2
+                            source -> byte(flowToken.span.start + UIntSize(3)) => flowByte3
+                            source -> byte(flowToken.span.start + UIntSize(4)) => flowByte4
+                            (flowByte0 == UInt8(115) and flowByte1 == UInt8(108) and flowByte2 == UInt8(105) and flowByte3 == UInt8(99) and flowByte4 == UInt8(101)) -> if { 1 => builtinTypeId! }
+                        }
+                    }
+                    flowTokenIndex! + 1 => flowTokenIndex!
+                }
+                (builtinTypeId! < 0 and controlOwnerByAst![sourceRange.astStart + astIndex!]) -> if { 0 => builtinTypeId! }
+            }
+            node.kind == 11 -> if {
+                prepared.package.tokens[sourceRange.tokenStart + node.payloadToken] => conversionName
+                TextMatchRequest { source: source, start: conversionName.span.start, length: conversionName.span.length, expected: "Int" } -> textMatches -> if { 2 => builtinTypeId! }
+                TextMatchRequest { source: source, start: conversionName.span.start, length: conversionName.span.length, expected: "UInt8" } -> textMatches -> if { 3 => builtinTypeId! }
+                TextMatchRequest { source: source, start: conversionName.span.start, length: conversionName.span.length, expected: "UInt16" } -> textMatches -> if { 4 => builtinTypeId! }
+                TextMatchRequest { source: source, start: conversionName.span.start, length: conversionName.span.length, expected: "UInt32" } -> textMatches -> if { 5 => builtinTypeId! }
+                TextMatchRequest { source: source, start: conversionName.span.start, length: conversionName.span.length, expected: "UInt64" } -> textMatches -> if { 6 => builtinTypeId! }
+                TextMatchRequest { source: source, start: conversionName.span.start, length: conversionName.span.length, expected: "Int8" } -> textMatches -> if { 8 => builtinTypeId! }
+                TextMatchRequest { source: source, start: conversionName.span.start, length: conversionName.span.length, expected: "Int16" } -> textMatches -> if { 9 => builtinTypeId! }
+                TextMatchRequest { source: source, start: conversionName.span.start, length: conversionName.span.length, expected: "Int32" } -> textMatches -> if { 10 => builtinTypeId! }
+                TextMatchRequest { source: source, start: conversionName.span.start, length: conversionName.span.length, expected: "Int64" } -> textMatches -> if { 11 => builtinTypeId! }
+                TextMatchRequest { source: source, start: conversionName.span.start, length: conversionName.span.length, expected: "Long" } -> textMatches -> if { 7 => builtinTypeId! }
+                TextMatchRequest { source: source, start: conversionName.span.start, length: conversionName.span.length, expected: "Size" } -> textMatches -> if { 12 => builtinTypeId! }
+                TextMatchRequest { source: source, start: conversionName.span.start, length: conversionName.span.length, expected: "UIntSize" } -> textMatches -> if { 13 => builtinTypeId! }
+                TextMatchRequest { source: source, start: conversionName.span.start, length: conversionName.span.length, expected: "CodePoint" } -> textMatches -> if { 14 => builtinTypeId! }
+            }
+            # A qualified path may denote an argument-free module function,
+            # which SmallLang exposes as a property value. Resolve its return
+            # type directly so constants such as grammar.tokenIdIdentifier do
+            # not disappear from binary-expression operands.
+            node.kind == 36 -> if {
+                node.length == UIntSize(17) -> if {
+                    TextMatchRequest { source: source, start: node.start, length: node.length, expected: "process.arguments" } -> textMatches -> if { 16 => builtinTypeId! }
+                }
+                builtinTypeId! < 0 -> if {
+                    -1 => qualifiedValueIndex!
+                    0 => qualifiedValueSearch!
+                    qualifiedValueSearch! < (prepared.qualified -> len) -> while {
+                        prepared.qualified[qualifiedValueSearch!] => qualifiedValueCandidate
+                        (qualifiedValueCandidate.sourceModule == sourceIndex! and qualifiedValueCandidate.pathAst == astIndex! and qualifiedValueCandidate.status == 0) -> if {
+                            qualifiedValueSearch! => qualifiedValueIndex!
+                        }
+                        qualifiedValueSearch! + 1 => qualifiedValueSearch!
+                    }
+                    qualifiedValueIndex! >= 0 -> if {
+                        prepared.qualified[qualifiedValueIndex!] => qualifiedValue
+                        prepared.modules[qualifiedValue.targetModule].sourceIndex => qualifiedValueTargetSource
+                        prepared.package.ranges[qualifiedValueTargetSource] => qualifiedValueTargetRange
+                        prepared.package.symbols[qualifiedValueTargetRange.symbolStart + qualifiedValue.targetSymbol] => qualifiedValueTargetSymbol
+                        (qualifiedValueTargetSymbol.kind == 7 and qualifiedValueTargetSymbol.secondaryTypeNode < 0 and qualifiedValueTargetSymbol.typeNode >= 0) -> if {
+                            referenceIndexByTypeAst![qualifiedValueTargetRange.astStart + qualifiedValueTargetSymbol.typeNode] => qualifiedValueReference!
+                            qualifiedValueReference! >= 0 -> if {
+                                references![qualifiedValueReference!] => qualifiedValueReturn
+                                qualifiedValueReturn.status == 0 -> if { qualifiedValueReturn.typeId => builtinTypeId! }
+                            }
+                        }
+                    }
+                }
+            }
             node.kind == 39 -> if {
                 -1 => typeNameToken!
                 node.firstToken => literalTokenIndex!
                 (literalTokenIndex! < node.firstToken + node.tokenCount and typeNameToken! < 0) -> while {
-                    prepared.tokens[sourceRange.tokenStart + literalTokenIndex!].kind == grammar.tokenIdIdentifier -> if { literalTokenIndex! => typeNameToken! }
+                    prepared.package.tokens[sourceRange.tokenStart + literalTokenIndex!].kind == grammar.tokenIdIdentifier -> if { literalTokenIndex! => typeNameToken! }
                     literalTokenIndex! + 1 => literalTokenIndex!
                 }
                 -1 => literalTargetModule!
                 -1 => literalTargetSymbol!
                 0 => localStructSearch!
                 (localStructSearch! < sourceRange.symbolCount and literalTargetSymbol! < 0) -> while {
-                    prepared.symbols[sourceRange.symbolStart + localStructSearch!] => candidateStruct
+                    prepared.package.symbols[sourceRange.symbolStart + localStructSearch!] => candidateStruct
                     (candidateStruct.kind == 3 and candidateStruct.parent < 0) -> if {
-                        prepared.tokens[sourceRange.tokenStart + typeNameToken!] => literalName
-                        prepared.tokens[sourceRange.tokenStart + candidateStruct.nameToken] => declarationName
+                        prepared.package.tokens[sourceRange.tokenStart + typeNameToken!] => literalName
+                        prepared.package.tokens[sourceRange.tokenStart + candidateStruct.nameToken] => declarationName
                         literalName.span.length == declarationName.span.length => equal!
                         UIntSize(0) => nameByte!
                         (equal! and nameByte! < literalName.span.length) -> while {
@@ -132,14 +452,8 @@ public resolveContext prepared: semanticContext.CompilationContext -> Expression
                     qualifiedSearch! < (prepared.qualified -> len) -> while {
                         prepared.qualified[qualifiedSearch!] => importedCandidate
                         (importedCandidate.sourceModule == sourceIndex! and importedCandidate.status == 0) -> if {
-                            importedCandidate.pathAst => importedAncestor!
-                            false => belongsToLiteral!
-                            (importedAncestor! >= 0 and not belongsToLiteral!) -> while {
-                                importedAncestor! == astIndex! -> if { true => belongsToLiteral! } else {
-                                    prepared.nodes[sourceRange.astStart + importedAncestor!].parent => importedAncestor!
-                                }
-                            }
-                            belongsToLiteral! -> if {
+                            prepared.package.nodes[sourceRange.astStart + importedCandidate.pathAst] => importedPath
+                            (typeNameToken! >= importedPath.firstToken and typeNameToken! < importedPath.firstToken + importedPath.tokenCount) -> if {
                                 prepared.modules[importedCandidate.targetModule].sourceIndex => literalTargetModule!
                                 importedCandidate.targetSymbol => literalTargetSymbol!
                             }
@@ -159,9 +473,11 @@ public resolveContext prepared: semanticContext.CompilationContext -> Expression
                     }
                     nominalTypeId! < 0 -> if {
                         types! -> len => nominalTypeId!
+                        2 => literalOrigin!
+                        literalTargetModule! == sourceIndex! -> if { 0 => literalOrigin! }
                         types! -> push(typeIds.SemanticType {
                             kind: 1
-                            origin: literalTargetModule! == sourceIndex! -> if { 0 } else { 2 }
+                            origin: literalOrigin!
                             module: literalTargetModule!
                             symbol: literalTargetSymbol!
                             first: -1
@@ -176,38 +492,27 @@ public resolveContext prepared: semanticContext.CompilationContext -> Expression
                 }
             }
             builtinTypeId! >= 0 -> if {
+                expressions! -> len => literalExpressionIndex
                 expressions! -> push(ExpressionTypeId {
                     sourceModule: sourceIndex!
                     astNode: astIndex!
                     typeId: builtinTypeId!
                     status: 0
                 })
+                literalExpressionIndex => expressionIndexByAst![sourceRange.astStart + astIndex!]
             }
             astIndex! + 1 => astIndex!
         }
 
-        resolvedNames! -> each resolvedName {
-            prepared.symbols[sourceRange.symbolStart + resolvedName.symbol] => valueSymbol
+        0 => resolvedNameIndex!
+        resolvedNameIndex! < (resolvedNames! -> len) -> while {
+            resolvedNames![resolvedNameIndex!] => resolvedName
+            prepared.package.symbols[sourceRange.symbolStart + resolvedName.symbol] => valueSymbol
             valueSymbol.typeNode >= 0 -> if {
-                -1 => referenceIndex!
-                0 => referenceSearch!
-                (referenceSearch! < (references! -> len) and referenceIndex! < 0) -> while {
-                    references![referenceSearch!] => candidate
-                    (candidate.sourceModule == sourceIndex! and candidate.typeAst == valueSymbol.typeNode) -> if {
-                        referenceSearch! => referenceIndex!
-                    }
-                    referenceSearch! + 1 => referenceSearch!
-                }
+                referenceIndexByTypeAst![sourceRange.astStart + valueSymbol.typeNode] => referenceIndex!
                 referenceIndex! >= 0 -> if {
                     references![referenceIndex!] => reference
-                    -1 => existingIndex!
-                    0 => existingSearch!
-                    (existingSearch! < (expressions! -> len) and existingIndex! < 0) -> while {
-                        (expressions![existingSearch!].sourceModule == sourceIndex! and expressions![existingSearch!].astNode == resolvedName.astNode) -> if {
-                            existingSearch! => existingIndex!
-                        }
-                        existingSearch! + 1 => existingSearch!
-                    }
+                    expressionIndexByAst![sourceRange.astStart + resolvedName.astNode] => existingIndex!
                     ExpressionTypeId {
                         sourceModule: sourceIndex!
                         astNode: resolvedName.astNode
@@ -217,10 +522,13 @@ public resolveContext prepared: semanticContext.CompilationContext -> Expression
                     existingIndex! >= 0 -> if {
                         exactType => expressions![existingIndex!]
                     } else {
+                        expressions! -> len => exactExpressionIndex
                         expressions! -> push(exactType)
+                        exactExpressionIndex => expressionIndexByAst![sourceRange.astStart + resolvedName.astNode]
                     }
                 }
             }
+            resolvedNameIndex! + 1 => resolvedNameIndex!
         }
         sourceIndex! + 1 => sourceIndex!
     }
@@ -230,82 +538,80 @@ public resolveContext prepared: semanticContext.CompilationContext -> Expression
     true => compositeChanged!
     compositeChanged! -> while {
         false => compositeChanged!
+        [Int; ~] => compositeChildDistance!
+        [Int; ~] => compositeFirstChildType!
+        [Int; ~] => compositeSecondChildType!
+        [Int; ~] => compositeChildCount!
+        [Bool; ~] => compositeHomogeneous!
+        0 => compositeSeed!
+        compositeSeed! < (prepared.package.nodes -> len) -> while {
+            compositeChildDistance! -> push(1000000)
+            compositeFirstChildType! -> push(-1)
+            compositeSecondChildType! -> push(-1)
+            compositeChildCount! -> push(0)
+            compositeHomogeneous! -> push(true)
+            compositeSeed! + 1 => compositeSeed!
+        }
+        0 => childCandidateIndex!
+        childCandidateIndex! < (expressions! -> len) -> while {
+            expressions![childCandidateIndex!] => childCandidate
+            prepared.package.ranges[childCandidate.sourceModule] => childRange
+            prepared.package.nodes[childRange.astStart + childCandidate.astNode].parent => childAncestor!
+            1 => childDistance!
+            childAncestor! >= 0 -> while {
+                prepared.package.nodes[childRange.astStart + childAncestor!] => childAncestorNode
+                childRange.astStart + childAncestor! => childAncestorGlobal
+                ((childAncestorNode.kind == 23 or childAncestorNode.kind == 37 or childAncestorNode.kind == 38) and expressionIndexByAst![childAncestorGlobal] < 0) -> if {
+                    childDistance! < compositeChildDistance![childAncestorGlobal] -> if {
+                        childDistance! => compositeChildDistance![childAncestorGlobal]
+                        -1 => compositeFirstChildType![childAncestorGlobal]
+                        -1 => compositeSecondChildType![childAncestorGlobal]
+                        0 => compositeChildCount![childAncestorGlobal]
+                        true => compositeHomogeneous![childAncestorGlobal]
+                    }
+                    childDistance! == compositeChildDistance![childAncestorGlobal] -> if {
+                        compositeChildCount![childAncestorGlobal] => childPosition
+                        childAncestorNode.kind == 38 -> if {
+                            childPosition % 2 == 0 -> if {
+                                compositeFirstChildType![childAncestorGlobal] < 0 -> if { childCandidate.typeId => compositeFirstChildType![childAncestorGlobal] } else {
+                                    childCandidate.typeId != compositeFirstChildType![childAncestorGlobal] -> if { false => compositeHomogeneous![childAncestorGlobal] }
+                                }
+                            } else {
+                                compositeSecondChildType![childAncestorGlobal] < 0 -> if { childCandidate.typeId => compositeSecondChildType![childAncestorGlobal] } else {
+                                    childCandidate.typeId != compositeSecondChildType![childAncestorGlobal] -> if { false => compositeHomogeneous![childAncestorGlobal] }
+                                }
+                            }
+                        } else {
+                            compositeFirstChildType![childAncestorGlobal] < 0 -> if { childCandidate.typeId => compositeFirstChildType![childAncestorGlobal] } else {
+                                childCandidate.typeId != compositeFirstChildType![childAncestorGlobal] -> if { false => compositeHomogeneous![childAncestorGlobal] }
+                            }
+                        }
+                        childPosition + 1 => compositeChildCount![childAncestorGlobal]
+                    }
+                }
+                childAncestorNode.parent => childAncestor!
+                childDistance! + 1 => childDistance!
+            }
+            childCandidateIndex! + 1 => childCandidateIndex!
+        }
         0 => compositeSourceIndex!
-        compositeSourceIndex! < (prepared.sources -> len) -> while {
-            prepared.ranges[compositeSourceIndex!] => compositeRange
+        compositeSourceIndex! < (prepared.package.sources -> len) -> while {
+            prepared.package.ranges[compositeSourceIndex!] => compositeRange
             0 => compositeAstIndex!
             compositeAstIndex! < compositeRange.astCount -> while {
-                prepared.nodes[compositeRange.astStart + compositeAstIndex!] => compositeNode
-                false => alreadyTyped!
-                0 => existingExpressionSearch!
-                existingExpressionSearch! < (expressions! -> len) -> while {
-                    (expressions![existingExpressionSearch!].sourceModule == compositeSourceIndex! and expressions![existingExpressionSearch!].astNode == compositeAstIndex!) -> if {
-                        true => alreadyTyped!
-                    }
-                    existingExpressionSearch! + 1 => existingExpressionSearch!
-                }
+                prepared.package.nodes[compositeRange.astStart + compositeAstIndex!] => compositeNode
+                compositeRange.astStart + compositeAstIndex! => compositeGlobalAst
+                expressionIndexByAst![compositeGlobalAst] >= 0 => alreadyTyped!
                 ((compositeNode.kind == 23 or compositeNode.kind == 37 or compositeNode.kind == 38) and not alreadyTyped!) -> if {
-                    1000000 => childDistance!
-                    0 => childDistanceSearch!
-                    childDistanceSearch! < (expressions! -> len) -> while {
-                        expressions![childDistanceSearch!] => childCandidate
-                        childCandidate.sourceModule == compositeSourceIndex! -> if {
-                            prepared.nodes[compositeRange.astStart + childCandidate.astNode].parent => childAncestor!
-                            1 => distance!
-                            false => belongsToComposite!
-                            (childAncestor! >= 0 and not belongsToComposite!) -> while {
-                                childAncestor! == compositeAstIndex! -> if { true => belongsToComposite! } else {
-                                    prepared.nodes[compositeRange.astStart + childAncestor!].parent => childAncestor!
-                                    distance! + 1 => distance!
-                                }
-                            }
-                            (belongsToComposite! and distance! < childDistance!) -> if { distance! => childDistance! }
-                        }
-                        childDistanceSearch! + 1 => childDistanceSearch!
-                    }
-                    -1 => firstChildType!
-                    -1 => secondChildType!
-                    0 => childPosition!
-                    true => homogeneousComposite!
-                    0 => childSearch!
-                    childSearch! < (expressions! -> len) -> while {
-                        expressions![childSearch!] => childCandidate
-                        childCandidate.sourceModule == compositeSourceIndex! -> if {
-                            prepared.nodes[compositeRange.astStart + childCandidate.astNode].parent => childAncestor!
-                            1 => distance!
-                            false => belongsToComposite!
-                            (childAncestor! >= 0 and not belongsToComposite!) -> while {
-                                childAncestor! == compositeAstIndex! -> if { true => belongsToComposite! } else {
-                                    prepared.nodes[compositeRange.astStart + childAncestor!].parent => childAncestor!
-                                    distance! + 1 => distance!
-                                }
-                            }
-                            (belongsToComposite! and distance! == childDistance!) -> if {
-                                compositeNode.kind == 38 -> if {
-                                    childPosition! % 2 == 0 -> if {
-                                        firstChildType! < 0 -> if { childCandidate.typeId => firstChildType! } else {
-                                            childCandidate.typeId != firstChildType! -> if { false => homogeneousComposite! }
-                                        }
-                                    } else {
-                                        secondChildType! < 0 -> if { childCandidate.typeId => secondChildType! } else {
-                                            childCandidate.typeId != secondChildType! -> if { false => homogeneousComposite! }
-                                        }
-                                    }
-                                } else {
-                                    firstChildType! < 0 -> if { childCandidate.typeId => firstChildType! } else {
-                                        childCandidate.typeId != firstChildType! -> if { false => homogeneousComposite! }
-                                    }
-                                }
-                                childPosition! + 1 => childPosition!
-                            }
-                        }
-                        childSearch! + 1 => childSearch!
-                    }
+                    compositeFirstChildType![compositeGlobalAst] => firstChildType!
+                    compositeSecondChildType![compositeGlobalAst] => secondChildType!
+                    compositeChildCount![compositeGlobalAst] => childPosition!
+                    compositeHomogeneous![compositeGlobalAst] => homogeneousComposite!
                     false => dynamicArray!
                     compositeNode.kind == 37 -> if {
                         compositeNode.firstToken => compositeTokenIndex!
                         compositeTokenIndex! < compositeNode.firstToken + compositeNode.tokenCount -> while {
-                            prepared.tokens[compositeRange.tokenStart + compositeTokenIndex!].kind == grammar.tokenIdTilde -> if { true => dynamicArray! }
+                            prepared.package.tokens[compositeRange.tokenStart + compositeTokenIndex!].kind == grammar.tokenIdTilde -> if { true => dynamicArray! }
                             compositeTokenIndex! + 1 => compositeTokenIndex!
                         }
                     }
@@ -337,8 +643,10 @@ public resolveContext prepared: semanticContext.CompilationContext -> Expression
                         }
                         existingType! < 0 -> if {
                             types! -> len => existingType!
-                            firstChildType! >= 0 -> if { types![firstChildType!].containsParameter } else { false } => containsParameter
-                            secondChildType! >= 0 -> if { types![secondChildType!].containsParameter } else { false } => secondContainsParameter
+                            false => containsParameter!
+                            firstChildType! >= 0 -> if { types![firstChildType!].containsParameter => containsParameter! }
+                            false => secondContainsParameter!
+                            secondChildType! >= 0 -> if { types![secondChildType!].containsParameter => secondContainsParameter! }
                             types! -> push(typeIds.SemanticType {
                                 kind: compositeKind!
                                 origin: -1
@@ -348,16 +656,18 @@ public resolveContext prepared: semanticContext.CompilationContext -> Expression
                                 second: secondChildType!
                                 length: -1
                                 lengthHash: UInt64(0)
-                                containsParameter: containsParameter or secondContainsParameter
+                                containsParameter: containsParameter! or secondContainsParameter!
                                 status: 0
                             })
                         }
+                        expressions! -> len => compositeExpressionIndex
                         expressions! -> push(ExpressionTypeId {
                             sourceModule: compositeSourceIndex!
                             astNode: compositeAstIndex!
                             typeId: existingType!
                             status: 0
                         })
+                        compositeExpressionIndex => expressionIndexByAst![compositeGlobalAst]
                         true => compositeChanged!
                     }
                 }
@@ -367,21 +677,16 @@ public resolveContext prepared: semanticContext.CompilationContext -> Expression
         }
     }
 
-    prepared.calls -> each call {
+    0 => callIndex!
+    callIndex! < (prepared.calls -> len) -> while {
+        prepared.calls[callIndex!] => call
         (call.status == 0 and call.targetSourceModule >= 0) -> if {
-            prepared.ranges[call.targetSourceModule] => targetRange
-            prepared.symbols[targetRange.symbolStart + call.functionSymbol] => function
-            function.secondaryTypeNode >= 0 -> if { function.secondaryTypeNode } else { function.typeNode } => returnTypeAst
-            returnTypeAst >= 0 -> if {
-                -1 => returnReference!
-                0 => returnSearch!
-                (returnSearch! < (references! -> len) and returnReference! < 0) -> while {
-                    references![returnSearch!] => candidate
-                    (candidate.sourceModule == call.targetSourceModule and candidate.typeAst == returnTypeAst) -> if {
-                        returnSearch! => returnReference!
-                    }
-                    returnSearch! + 1 => returnSearch!
-                }
+            prepared.package.ranges[call.targetSourceModule] => targetRange
+            prepared.package.symbols[targetRange.symbolStart + call.functionSymbol] => function
+            function.typeNode => returnTypeAst!
+            function.secondaryTypeNode >= 0 -> if { function.secondaryTypeNode => returnTypeAst! }
+            returnTypeAst! >= 0 -> if {
+                referenceIndexByTypeAst![targetRange.astStart + returnTypeAst!] => returnReference!
                 returnReference! >= 0 -> if {
                     references![returnReference!] => reference
                     reference.typeId => resultTypeId!
@@ -390,33 +695,26 @@ public resolveContext prepared: semanticContext.CompilationContext -> Expression
                     returnTemplateType.containsParameter => resultContainsParameter
                     resultContainsParameter -> if {
                         -1 => inputReference!
-                        0 => inputReferenceSearch!
-                        (inputReferenceSearch! < (references! -> len) and inputReference! < 0) -> while {
-                            references![inputReferenceSearch!] => inputCandidate
-                            (inputCandidate.sourceModule == call.targetSourceModule and inputCandidate.typeAst == function.typeNode) -> if {
-                                inputReferenceSearch! => inputReference!
-                            }
-                            inputReferenceSearch! + 1 => inputReferenceSearch!
-                        }
+                        function.typeNode >= 0 -> if { referenceIndexByTypeAst![targetRange.astStart + function.typeNode] => inputReference! }
                         -1 => argumentExpression!
                         1000000 => argumentDistance!
-                        prepared.ranges[call.sourceModule] => callRange
-                        prepared.nodes[callRange.astStart + call.callAst] => callNode
+                        prepared.package.ranges[call.sourceModule] => callRange
+                        prepared.package.nodes[callRange.astStart + call.callAst] => callNode
                         0 => argumentSearch!
                         argumentSearch! < (expressions! -> len) -> while {
                             expressions![argumentSearch!] => argumentCandidate
                             argumentCandidate.sourceModule == call.sourceModule -> if {
                                 true => beforeRoleTarget!
                                 callNode.kind == 48 -> if {
-                                    prepared.nodes[callRange.astStart + argumentCandidate.astNode] => argumentNode
-                                    argumentNode.start + argumentNode.length > prepared.tokens[callRange.tokenStart + callNode.payloadToken].span.start -> if { false => beforeRoleTarget! }
+                                    prepared.package.nodes[callRange.astStart + argumentCandidate.astNode] => argumentNode
+                                    argumentNode.start + argumentNode.length > prepared.package.tokens[callRange.tokenStart + callNode.payloadToken].span.start -> if { false => beforeRoleTarget! }
                                 }
-                                prepared.nodes[callRange.astStart + argumentCandidate.astNode].parent => ancestor!
+                                prepared.package.nodes[callRange.astStart + argumentCandidate.astNode].parent => ancestor!
                                 1 => distance!
                                 false => belongsToCall!
                                 (ancestor! >= 0 and not belongsToCall!) -> while {
                                     ancestor! == call.callAst -> if { true => belongsToCall! } else {
-                                        prepared.nodes[callRange.astStart + ancestor!].parent => ancestor!
+                                        prepared.package.nodes[callRange.astStart + ancestor!].parent => ancestor!
                                         distance! + 1 => distance!
                                     }
                                 }
@@ -435,8 +733,10 @@ public resolveContext prepared: semanticContext.CompilationContext -> Expression
                         }
                         (inputReference! >= 0 and concreteArgument!) -> if {
                             [typeIds.SemanticType; ~] => requestTypes!
-                            types! -> each currentType {
-                                requestTypes! -> push(currentType)
+                            0 => currentTypeIndex!
+                            currentTypeIndex! < (types! -> len) -> while {
+                                requestTypes! -> push(types![currentTypeIndex!])
+                                currentTypeIndex! + 1 => currentTypeIndex!
                             }
                             references![inputReference!].typeId => inputTemplateTypeId
                             expressions![argumentExpression!].typeId => actualInputTypeId
@@ -460,14 +760,247 @@ public resolveContext prepared: semanticContext.CompilationContext -> Expression
                             }
                         }
                     }
+                    prepared.package.ranges[call.sourceModule] => resultCallRange
+                    expressions! -> len => callExpressionIndex
                     expressions! -> push(ExpressionTypeId {
                         sourceModule: call.sourceModule
                         astNode: call.callAst
                         typeId: resultTypeId!
                         status: resultStatus!
                     })
+                    callExpressionIndex => expressionIndexByAst![resultCallRange.astStart + call.callAst]
                 }
             }
+        }
+        callIndex! + 1 => callIndex!
+    }
+
+    # Resolve member and index paths from the canonical type-id arena. Each
+    # round walks typed expressions once and records the nearest usable base
+    # for every still-untyped path, avoiding the legacy AST x expression scan.
+    [Int; ~] => bindingSymbolByAst!
+    0 => bindingAstSeed!
+    bindingAstSeed! < (prepared.package.nodes -> len) -> while {
+        bindingSymbolByAst! -> push(-1)
+        bindingAstSeed! + 1 => bindingAstSeed!
+    }
+    0 => bindingMapSource!
+    bindingMapSource! < (prepared.package.ranges -> len) -> while {
+        prepared.package.ranges[bindingMapSource!] => bindingMapRange
+        0 => bindingMapSymbol!
+        bindingMapSymbol! < bindingMapRange.symbolCount -> while {
+            prepared.package.symbols[bindingMapRange.symbolStart + bindingMapSymbol!] => bindingMapCandidate
+            (bindingMapCandidate.kind == 9 and bindingMapCandidate.astNode >= 0) -> if {
+                bindingMapRange.symbolStart + bindingMapSymbol! => bindingSymbolByAst![bindingMapRange.astStart + bindingMapCandidate.astNode]
+            }
+            bindingMapSymbol! + 1 => bindingMapSymbol!
+        }
+        bindingMapSource! + 1 => bindingMapSource!
+    }
+    true => pathChanged!
+    pathChanged! -> while {
+        false => pathChanged!
+        [Int; ~] => bindingValueType!
+        [Int; ~] => bindingValueDistance!
+        0 => bindingValueSeed!
+        bindingValueSeed! < (prepared.package.symbols -> len) -> while {
+            bindingValueType! -> push(-1)
+            bindingValueDistance! -> push(1000000)
+            bindingValueSeed! + 1 => bindingValueSeed!
+        }
+        0 => bindingCandidateIndex!
+        bindingCandidateIndex! < (expressions! -> len) -> while {
+            expressions![bindingCandidateIndex!] => bindingCandidate
+            (bindingCandidate.status == 0 and bindingCandidate.typeId >= 0) -> if {
+                prepared.package.ranges[bindingCandidate.sourceModule] => bindingCandidateRange
+                prepared.package.nodes[bindingCandidateRange.astStart + bindingCandidate.astNode].parent => bindingAncestor!
+                1 => bindingDistance!
+                bindingAncestor! >= 0 -> while {
+                    bindingCandidateRange.astStart + bindingAncestor! => bindingAncestorGlobal
+                    bindingSymbolByAst![bindingAncestorGlobal] => bindingGlobalSymbol
+                    (bindingGlobalSymbol >= 0 and bindingDistance! < bindingValueDistance![bindingGlobalSymbol]) -> if {
+                        bindingCandidate.typeId => bindingValueType![bindingGlobalSymbol]
+                        bindingDistance! => bindingValueDistance![bindingGlobalSymbol]
+                    }
+                    prepared.package.nodes[bindingAncestorGlobal].parent => bindingAncestor!
+                    bindingDistance! + 1 => bindingDistance!
+                }
+            }
+            bindingCandidateIndex! + 1 => bindingCandidateIndex!
+        }
+        0 => bindingReferenceSource!
+        bindingReferenceSource! < (prepared.package.ranges -> len) -> while {
+            prepared.package.ranges[bindingReferenceSource!] => bindingReferenceRange
+            0 => bindingReferenceIndex!
+            bindingReferenceIndex! < bindingReferenceRange.nameCount -> while {
+                prepared.package.names[bindingReferenceRange.nameStart + bindingReferenceIndex!] => bindingReference
+                bindingReferenceRange.symbolStart + bindingReference.symbol => bindingReferenceGlobalSymbol
+                bindingValueType![bindingReferenceGlobalSymbol] >= 0 -> if {
+                    bindingReferenceRange.astStart + bindingReference.astNode => bindingReferenceGlobalAst
+                    expressionIndexByAst![bindingReferenceGlobalAst] => bindingExistingExpression!
+                    bindingExistingExpression! < 0 -> if {
+                        expressions! -> len => bindingExpressionIndex
+                        expressions! -> push(ExpressionTypeId {
+                            sourceModule: bindingReferenceSource!
+                            astNode: bindingReference.astNode
+                            typeId: bindingValueType![bindingReferenceGlobalSymbol]
+                            status: 0
+                        })
+                        bindingExpressionIndex => expressionIndexByAst![bindingReferenceGlobalAst]
+                        true => pathChanged!
+                    } else {
+                        expressions![bindingExistingExpression!] => existingBindingExpression!
+                        existingBindingExpression!.typeId != bindingValueType![bindingReferenceGlobalSymbol] -> if {
+                            bindingValueType![bindingReferenceGlobalSymbol] => existingBindingExpression!.typeId
+                            0 => existingBindingExpression!.status
+                            existingBindingExpression! => expressions![bindingExistingExpression!]
+                            true => pathChanged!
+                        }
+                    }
+                }
+                bindingReferenceIndex! + 1 => bindingReferenceIndex!
+            }
+            bindingReferenceSource! + 1 => bindingReferenceSource!
+        }
+        [Int; ~] => pathBaseExpression!
+        [Int; ~] => pathBaseDistance!
+        0 => pathSeed!
+        pathSeed! < (prepared.package.nodes -> len) -> while {
+            pathBaseExpression! -> push(-1)
+            pathBaseDistance! -> push(1000000)
+            pathSeed! + 1 => pathSeed!
+        }
+        0 => pathCandidateIndex!
+        pathCandidateIndex! < (expressions! -> len) -> while {
+            expressions![pathCandidateIndex!] => pathCandidate
+            (pathCandidate.status == 0 and pathCandidate.typeId >= 0 and pathCandidate.typeId < (types! -> len)) -> if {
+                prepared.package.ranges[pathCandidate.sourceModule] => pathCandidateRange
+                prepared.package.nodes[pathCandidateRange.astStart + pathCandidate.astNode].parent => pathAncestor!
+                1 => pathDistance!
+                pathAncestor! >= 0 -> while {
+                    pathCandidateRange.astStart + pathAncestor! => pathAncestorGlobal
+                    prepared.package.nodes[pathAncestorGlobal] => pathAncestorNode
+                    expressionIndexByAst![pathAncestorGlobal] < 0 -> if {
+                        false => usablePathBase!
+                        pathAncestorNode.kind == 36 -> if { true => usablePathBase! }
+                        pathAncestorNode.kind == 41 -> if {
+                            types![pathCandidate.typeId] => indexedCandidateType
+                            ((indexedCandidateType.kind >= 2 and indexedCandidateType.kind <= 5) or (indexedCandidateType.kind == 1 and indexedCandidateType.origin == 1 and (indexedCandidateType.symbol == 16 or indexedCandidateType.symbol == 24))) -> if { true => usablePathBase! }
+                        }
+                        (usablePathBase! and pathDistance! < pathBaseDistance![pathAncestorGlobal]) -> if {
+                            pathCandidateIndex! => pathBaseExpression![pathAncestorGlobal]
+                            pathDistance! => pathBaseDistance![pathAncestorGlobal]
+                        }
+                    }
+                    pathAncestorNode.parent => pathAncestor!
+                    pathDistance! + 1 => pathDistance!
+                }
+            }
+            pathCandidateIndex! + 1 => pathCandidateIndex!
+        }
+        0 => pathSourceIndex!
+        pathSourceIndex! < (prepared.package.sources -> len) -> while {
+            prepared.package.sources[pathSourceIndex!] -> len => pathSourceLength
+            prepared.package.sources[pathSourceIndex!] -> slice(UIntSize(0), pathSourceLength) => pathSource
+            prepared.package.ranges[pathSourceIndex!] => pathRange
+            0 => pathAstIndex!
+            pathAstIndex! < pathRange.astCount -> while {
+                pathRange.astStart + pathAstIndex! => pathGlobalAst
+                prepared.package.nodes[pathGlobalAst] => pathNode
+                pathBaseExpression![pathGlobalAst] >= 0 -> if {
+                    expressions![pathBaseExpression![pathGlobalAst]] => baseExpression
+                    pathNode.kind == 36 -> if {
+                        baseExpression.typeId => memberCurrentType!
+                        true => memberPathValid!
+                        false => memberResolvedField!
+                        prepared.package.nodes[pathRange.astStart + baseExpression.astNode] => memberBaseNode
+                        memberBaseNode.start + memberBaseNode.length => memberBaseEnd
+                        pathNode.firstToken => memberTokenIndex!
+                        memberTokenIndex! < pathNode.firstToken + pathNode.tokenCount -> while {
+                            prepared.package.tokens[pathRange.tokenStart + memberTokenIndex!] => memberToken
+                            (memberPathValid! and memberToken.kind == grammar.tokenIdIdentifier and memberToken.span.start >= memberBaseEnd) -> if {
+                                -1 => matchedFieldType!
+                                0 => memberFieldIndex!
+                                memberFieldIndex! < (fields! -> len) -> while {
+                                    fields![memberFieldIndex!] => memberField
+                                    (memberField.status == 0 and memberField.ownerType == memberCurrentType!) -> if {
+                                        prepared.package.ranges[memberField.sourceModule] => memberFieldRange
+                                        prepared.package.sources[memberField.sourceModule] -> len => memberFieldSourceLength
+                                        prepared.package.sources[memberField.sourceModule] -> slice(UIntSize(0), memberFieldSourceLength) => memberFieldSource
+                                        prepared.package.symbols[memberFieldRange.symbolStart + memberField.fieldSymbol] => memberFieldSymbol
+                                        prepared.package.tokens[memberFieldRange.tokenStart + memberFieldSymbol.nameToken] => memberFieldName
+                                        memberToken.span.length == memberFieldName.span.length => memberNameEqual!
+                                        UIntSize(0) => memberNameByte!
+                                        (memberNameEqual! and memberNameByte! < memberToken.span.length) -> while {
+                                            pathSource -> byte(memberToken.span.start + memberNameByte!) => memberLeftByte
+                                            memberFieldSource -> byte(memberFieldName.span.start + memberNameByte!) => memberRightByte
+                                            memberLeftByte != memberRightByte -> if { false => memberNameEqual! }
+                                            memberNameByte! + UIntSize(1) => memberNameByte!
+                                        }
+                                        memberNameEqual! -> if { memberField.fieldType => matchedFieldType! }
+                                    }
+                                    memberFieldIndex! + 1 => memberFieldIndex!
+                                }
+                                matchedFieldType! >= 0 -> if {
+                                    matchedFieldType! => memberCurrentType!
+                                    true => memberResolvedField!
+                                } else {
+                                    false => memberPathValid!
+                                }
+                            }
+                            memberTokenIndex! + 1 => memberTokenIndex!
+                        }
+                        (memberPathValid! and memberResolvedField!) -> if {
+                            expressions! -> len => memberExpressionIndex
+                            expressions! -> push(ExpressionTypeId { sourceModule: pathSourceIndex!, astNode: pathAstIndex!, typeId: memberCurrentType!, status: 0 })
+                            memberExpressionIndex => expressionIndexByAst![pathGlobalAst]
+                            true => pathChanged!
+                        }
+                    }
+                    pathNode.kind == 41 -> if {
+                        types![baseExpression.typeId] => indexedBaseType
+                        -1 => indexedElementType!
+                        (indexedBaseType.kind >= 2 and indexedBaseType.kind <= 4) -> if { indexedBaseType.first => indexedElementType! }
+                        indexedBaseType.kind == 5 -> if { indexedBaseType.second => indexedElementType! }
+                        (indexedBaseType.kind == 1 and indexedBaseType.origin == 1 and indexedBaseType.symbol == 16) -> if { 1 => indexedElementType! }
+                        (indexedBaseType.kind == 1 and indexedBaseType.origin == 1 and indexedBaseType.symbol == 24) -> if { 3 => indexedElementType! }
+                        indexedElementType! >= 0 -> if {
+                            expressions! -> len => indexExpressionIndex
+                            expressions! -> push(ExpressionTypeId { sourceModule: pathSourceIndex!, astNode: pathAstIndex!, typeId: indexedElementType!, status: 0 })
+                            indexExpressionIndex => expressionIndexByAst![pathGlobalAst]
+                            true => pathChanged!
+                        }
+                    }
+                }
+                pathAstIndex! + 1 => pathAstIndex!
+            }
+            pathSourceIndex! + 1 => pathSourceIndex!
+        }
+    }
+
+    # Generic specialization and literal inference can append semantic types
+    # after the initial imported-SourceText normalization. Canonicalize the
+    # completed arena as well so composites created by those later passes
+    # cannot retain a second nominal identity for the intrinsic owner.
+    (sourceTextModule! >= 0 and sourceTextSymbol! >= 0) -> if {
+        0 => finalSourceTextTypeIndex!
+        finalSourceTextTypeIndex! < (types! -> len) -> while {
+            types![finalSourceTextTypeIndex!] => finalSourceTextType
+            (finalSourceTextType.kind == 1 and finalSourceTextType.module == sourceTextModule! and finalSourceTextType.symbol == sourceTextSymbol!) -> if {
+                typeIds.SemanticType {
+                    kind: 1
+                    origin: 1
+                    module: -1
+                    symbol: 24
+                    first: -1
+                    second: -1
+                    length: -1
+                    lengthHash: UInt64(0)
+                    containsParameter: false
+                    status: 0
+                } => types![finalSourceTextTypeIndex!]
+            }
+            finalSourceTextTypeIndex! + 1 => finalSourceTextTypeIndex!
         }
     }
 
@@ -477,48 +1010,97 @@ public resolveContext prepared: semanticContext.CompilationContext -> Expression
 
 public resolvePrepared request: move ExpressionTypeIdRequest -> ExpressionTypeIdSet {
     [file.SourceText; ~] => sources!
-    request.sources -> each source {
-        source -> file.borrowText => ownedSource!
-        sources! -> push(ownedSource!)
+    0 => sourceIndex!
+    sourceIndex! < (request.sources -> len) -> while {
+        request.sources[sourceIndex!] => source
+        source -> file.borrowText => ownedSource
+        sources! -> push(ownedSource)
+        sourceIndex! + 1 => sourceIndex!
     }
     [typeIds.SemanticType; ~] => types!
-    request.types -> each semanticType { types! -> push(semanticType) }
+    0 => semanticTypeCopyIndex599!
+    semanticTypeCopyIndex599! < (request.types -> len) -> while {
+        request.types[semanticTypeCopyIndex599!] => semanticType
+        types! -> push(semanticType)
+        semanticTypeCopyIndex599! + 1 => semanticTypeCopyIndex599!
+    }
     [typeIds.TypeReference; ~] => references!
-    request.references -> each reference { references! -> push(reference) }
+    0 => referenceCopyIndex601!
+    referenceCopyIndex601! < (request.references -> len) -> while {
+        request.references[referenceCopyIndex601!] => reference
+        references! -> push(reference)
+        referenceCopyIndex601! + 1 => referenceCopyIndex601!
+    }
     [typeIds.NominalField; ~] => fields!
-    request.fields -> each field { fields! -> push(field) }
+    0 => fieldCopyIndex603!
+    fieldCopyIndex603! < (request.fields -> len) -> while {
+        request.fields[fieldCopyIndex603!] => field
+        fields! -> push(field)
+        fieldCopyIndex603! + 1 => fieldCopyIndex603!
+    }
     [modules.ModuleIdentity; ~] => moduleIdentities!
-    request.modules -> each moduleIdentity { moduleIdentities! -> push(moduleIdentity) }
+    0 => moduleIdentityCopyIndex605!
+    moduleIdentityCopyIndex605! < (request.modules -> len) -> while {
+        request.modules[moduleIdentityCopyIndex605!] => moduleIdentity
+        moduleIdentities! -> push(moduleIdentity)
+        moduleIdentityCopyIndex605! + 1 => moduleIdentityCopyIndex605!
+    }
     [qualified.QualifiedResolution; ~] => qualifiedResults!
-    request.qualified -> each qualifiedResult { qualifiedResults! -> push(qualifiedResult) }
+    0 => qualifiedResultCopyIndex607!
+    qualifiedResultCopyIndex607! < (request.qualified -> len) -> while {
+        request.qualified[qualifiedResultCopyIndex607!] => qualifiedResult
+        qualifiedResults! -> push(qualifiedResult)
+        qualifiedResultCopyIndex607! + 1 => qualifiedResultCopyIndex607!
+    }
     [calls.ModuleCallResolution; ~] => moduleCalls!
-    request.calls -> each moduleCall { moduleCalls! -> push(moduleCall) }
+    0 => moduleCallCopyIndex609!
+    moduleCallCopyIndex609! < (request.calls -> len) -> while {
+        request.calls[moduleCallCopyIndex609!] => moduleCall
+        moduleCalls! -> push(moduleCall)
+        moduleCallCopyIndex609! + 1 => moduleCallCopyIndex609!
+    }
     [analysis.SourceAnalysisRange; ~] => ranges!
-    request.analysisRanges -> each sourceRange { ranges! -> push(sourceRange) }
+    0 => sourceRangeCopyIndex611!
+    sourceRangeCopyIndex611! < (request.analysisRanges -> len) -> while {
+        request.analysisRanges[sourceRangeCopyIndex611!] => sourceRange
+        ranges! -> push(sourceRange)
+        sourceRangeCopyIndex611! + 1 => sourceRangeCopyIndex611!
+    }
     [ast.AstNode; ~] => nodes!
-    request.analysisNodes -> each node { nodes! -> push(node) }
+    0 => nodeCopyIndex613!
+    nodeCopyIndex613! < (request.analysisNodes -> len) -> while {
+        request.analysisNodes[nodeCopyIndex613!] => node
+        nodes! -> push(node)
+        nodeCopyIndex613! + 1 => nodeCopyIndex613!
+    }
     [syntax.SyntaxToken; ~] => tokens!
-    request.analysisTokens -> each token { tokens! -> push(token) }
+    0 => tokenCopyIndex615!
+    tokenCopyIndex615! < (request.analysisTokens -> len) -> while {
+        request.analysisTokens[tokenCopyIndex615!] => token
+        tokens! -> push(token)
+        tokenCopyIndex615! + 1 => tokenCopyIndex615!
+    }
     [symbols.Symbol; ~] => symbolTable!
-    request.analysisSymbols -> each symbol { symbolTable! -> push(symbol) }
+    0 => symbolCopyIndex617!
+    symbolCopyIndex617! < (request.analysisSymbols -> len) -> while {
+        request.analysisSymbols[symbolCopyIndex617!] => symbol
+        symbolTable! -> push(symbol)
+        symbolCopyIndex617! + 1 => symbolCopyIndex617!
+    }
     [resolution.ResolvedName; ~] => names!
-    request.analysisNames -> each name { names! -> push(name) }
+    0 => nameCopyIndex619!
+    nameCopyIndex619! < (request.analysisNames -> len) -> while {
+        request.analysisNames[nameCopyIndex619!] => name
+        names! -> push(name)
+        nameCopyIndex619! + 1 => nameCopyIndex619!
+    }
     [nominalTypes.NominalType; ~] => nominal!
     [compositeTypes.CompositeType; ~] => composite!
     [typeTerms.TypeTerm; ~] => terms!
     [semanticTypes.TypeUse; ~] => typeUses!
-    semanticContext.CompilationContext {
+    typeIds.SemanticTypeSet { types: types!, references: references!, fields: fields! } => contextSemantic!
+    analysis.PackageAnalysis {
         sources: sources!
-        types: types!
-        references: references!
-        fields: fields!
-        nominal: nominal!
-        composite: composite!
-        modules: moduleIdentities!
-        imports: [modules.ImportEdge; ~]
-        resolvedImports: [moduleResolve.ResolvedImport; ~]
-        qualified: qualifiedResults!
-        calls: moduleCalls!
         ranges: ranges!
         nodes: nodes!
         tokens: tokens!
@@ -526,6 +1108,17 @@ public resolvePrepared request: move ExpressionTypeIdRequest -> ExpressionTypeId
         names: names!
         terms: terms!
         typeUses: typeUses!
+    } => contextPackage!
+    semanticContext.CompilationContext {
+        semantic: contextSemantic!
+        package: contextPackage!
+        nominal: nominal!
+        composite: composite!
+        modules: moduleIdentities!
+        imports: [modules.ImportEdge; ~]
+        resolvedImports: [moduleResolve.ResolvedImport; ~]
+        qualified: qualifiedResults!
+        calls: moduleCalls!
     } => prepared!
     prepared! -> resolveContext => result!
     result!

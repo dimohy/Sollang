@@ -221,11 +221,15 @@ public lowerPrepared request: TypeTermRequest -> [TypeTerm; ~] {
                     (representativeIndex! < candidateIndex! and candidate!.canonical == candidateIndex!) -> while {
                         terms![representativeIndex!] => representative
                         representative.canonical >= 0 -> if {
-                            candidate!.firstArgument < 0 -> if { -1 } else { terms![candidate!.firstArgument].canonical } => candidateFirst
-                            representative.firstArgument < 0 -> if { -1 } else { terms![representative.firstArgument].canonical } => representativeFirst
-                            candidate!.secondArgument < 0 -> if { -1 } else { terms![candidate!.secondArgument].canonical } => candidateSecond
-                            representative.secondArgument < 0 -> if { -1 } else { terms![representative.secondArgument].canonical } => representativeSecond
-                            (candidate!.kind == representative.kind and candidate!.nameId == representative.nameId and candidate!.lengthId == representative.lengthId and candidateFirst == representativeFirst and candidateSecond == representativeSecond) -> if {
+                            -1 => candidateFirst!
+                            candidate!.firstArgument >= 0 -> if { terms![candidate!.firstArgument].canonical => candidateFirst! }
+                            -1 => representativeFirst!
+                            representative.firstArgument >= 0 -> if { terms![representative.firstArgument].canonical => representativeFirst! }
+                            -1 => candidateSecond!
+                            candidate!.secondArgument >= 0 -> if { terms![candidate!.secondArgument].canonical => candidateSecond! }
+                            -1 => representativeSecond!
+                            representative.secondArgument >= 0 -> if { terms![representative.secondArgument].canonical => representativeSecond! }
+                            (candidate!.kind == representative.kind and candidate!.nameId == representative.nameId and candidate!.lengthId == representative.lengthId and candidateFirst! == representativeFirst! and candidateSecond! == representativeSecond!) -> if {
                                 representative.canonical => candidate!.canonical
                             }
                         }
@@ -275,13 +279,15 @@ public substitute request: move SubstitutionRequest -> SubstitutionResult {
                         (sourceTerm.firstArgument < 0 or mapped![sourceTerm.firstArgument] >= 0) => firstReady
                         (sourceTerm.secondArgument < 0 or mapped![sourceTerm.secondArgument] >= 0) => secondReady
                         (firstReady and secondReady) -> if {
-                            sourceTerm.firstArgument < 0 -> if { -1 } else { mapped![sourceTerm.firstArgument] } => mappedFirst
-                            sourceTerm.secondArgument < 0 -> if { -1 } else { mapped![sourceTerm.secondArgument] } => mappedSecond
+                            -1 => mappedFirst!
+                            sourceTerm.firstArgument >= 0 -> if { mapped![sourceTerm.firstArgument] => mappedFirst! }
+                            -1 => mappedSecond!
+                            sourceTerm.secondArgument >= 0 -> if { mapped![sourceTerm.secondArgument] => mappedSecond! }
                             -1 => existing!
                             0 => outputIndex!
                             (outputIndex! < (output! -> len) and existing! < 0) -> while {
                                 output![outputIndex!] => outputTerm
-                                (outputTerm.kind == sourceTerm.kind and outputTerm.nameId == sourceTerm.nameId and outputTerm.lengthId == sourceTerm.lengthId and outputTerm.firstArgument == mappedFirst and outputTerm.secondArgument == mappedSecond) -> if {
+                                (outputTerm.kind == sourceTerm.kind and outputTerm.nameId == sourceTerm.nameId and outputTerm.lengthId == sourceTerm.lengthId and outputTerm.firstArgument == mappedFirst! and outputTerm.secondArgument == mappedSecond!) -> if {
                                     outputIndex! => existing!
                                 }
                                 outputIndex! + 1 => outputIndex!
@@ -294,8 +300,8 @@ public substitute request: move SubstitutionRequest -> SubstitutionResult {
                                     kind: sourceTerm.kind
                                     nameToken: sourceTerm.nameToken
                                     nameId: sourceTerm.nameId
-                                    firstArgument: mappedFirst
-                                    secondArgument: mappedSecond
+                                    firstArgument: mappedFirst!
+                                    secondArgument: mappedSecond!
                                     lengthToken: sourceTerm.lengthToken
                                     lengthId: sourceTerm.lengthId
                                 })
@@ -311,7 +317,8 @@ public substitute request: move SubstitutionRequest -> SubstitutionResult {
         }
         completed! < (request.terms -> len) -> if { 2 => status! }
     }
-    status! == 0 -> if { mapped![request.root] } else { -1 } => resultRoot
-    SubstitutionResult { terms: output!, root: resultRoot, status: status! } => result!
+    -1 => resultRoot!
+    status! == 0 -> if { mapped![request.root] => resultRoot! }
+    SubstitutionResult { terms: output!, root: resultRoot!, status: status! } => result!
     result!
 }

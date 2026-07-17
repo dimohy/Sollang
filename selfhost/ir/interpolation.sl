@@ -10,7 +10,9 @@ import syntax.generated.smalllang as grammar
 # inside the source string token. Expression-node indexes are global offsets in
 # one owned table, matching the rest of the self-hosted compiler IR.
 # Kinds: 0 integer literal, 1 lexical name, 2 unary, 3 binary,
-# 4 boolean literal. Builtin result ids match the nominal table.
+# 4 boolean literal, 5 member access. Builtin result ids match the nominal
+# table. Member nodes retain their absolute source span and point at the
+# lexical base through operand0 so code generation can project the field.
 public struct InterpolationNode {
     kind: Int
     segment: Int
@@ -108,6 +110,7 @@ public lowerPrepared request: move PreparedInterpolationRequest -> [Interpolatio
                                 fragmentBooleanLiteral! -> if { 4 => loweredKind! } else { 1 => loweredKind! }
                             }
                             fragmentNode.kind == 22 -> if { 2 => loweredKind! }
+                            fragmentNode.kind == 36 -> if { 5 => loweredKind! }
                             (fragmentChildCount! >= 2 and ((fragmentNode.kind >= 18 and fragmentNode.kind <= 21) or fragmentNode.kind == 24 or fragmentNode.kind == 25)) -> if { 3 => loweredKind! }
                             loweredKind! >= 0 -> if {
                                 -1 => loweredParent!
@@ -141,9 +144,11 @@ public lowerPrepared request: move PreparedInterpolationRequest -> [Interpolatio
                                         request.symbols[candidateSymbol!] => candidate
                                         ((candidate.kind == 9 or candidate.kind == 35) and candidate.parent == ownerSymbol!) -> if {
                                             request.tokens[candidate.nameToken] => candidateName
-                                            candidateName.span.length == fragmentName.span.length => nameEqual!
+                                            candidateName.span.length => candidateNameLength
+                                            fragmentName.span.length => fragmentNameLength
+                                            candidateNameLength == fragmentNameLength => nameEqual!
                                             UIntSize(0) => nameByte!
-                                            (nameEqual! and nameByte! < fragmentName.span.length) -> while {
+                                            (nameEqual! and nameByte! < fragmentNameLength) -> while {
                                                 (fragment -> byte(fragmentName.span.start + nameByte!)) != (source -> byte(candidateName.span.start + nameByte!)) -> if { false => nameEqual! }
                                                 nameByte! + UIntSize(1) => nameByte!
                                             }
@@ -185,19 +190,6 @@ public lowerPrepared request: move PreparedInterpolationRequest -> [Interpolatio
                             }
                             fragmentAstIndex! + 1 => fragmentAstIndex!
                         }
-                        firstNode => nodeIndex!
-                        nodeIndex! < (nodes! -> len) -> while {
-                            nodes![nodeIndex!] => node!
-                            firstNode => childIndex!
-                            childIndex! < (nodes! -> len) -> while {
-                                nodes![childIndex!].parent == nodeIndex! -> if {
-                                    node!.operand0 < 0 -> if { childIndex! => node!.operand0 } else { childIndex! => node!.operand1 }
-                                }
-                                childIndex! + 1 => childIndex!
-                            }
-                            node! => nodes![nodeIndex!]
-                            nodeIndex! + 1 => nodeIndex!
-                        }
                         segmentIndex! + 1 => segmentIndex!
                         fragmentEnd! + UIntSize(1) => literalStart!
                         fragmentEnd! => cursor!
@@ -209,7 +201,42 @@ public lowerPrepared request: move PreparedInterpolationRequest -> [Interpolatio
         stringTokenIndex! + 1 => stringTokenIndex!
     }
 
-    nodes!
+    [InterpolationNode; ~] => wiredNodes!
+    0 => nodeIndex!
+    nodeIndex! < (nodes! -> len) -> while {
+        nodes![nodeIndex!] => node
+        node.operand0 => operand0!
+        node.operand1 => operand1!
+        0 => childIndex!
+        childIndex! < (nodes! -> len) -> while {
+            nodes![childIndex!].parent == nodeIndex! -> if {
+                operand0! < 0 => firstOperand
+                firstOperand -> if { childIndex! => operand0! }
+                not firstOperand -> if { childIndex! => operand1! }
+            }
+            childIndex! + 1 => childIndex!
+        }
+        wiredNodes! -> push(InterpolationNode {
+            kind: node.kind
+            segment: node.segment
+            parent: node.parent
+            symbol: node.symbol
+            ownerSymbol: node.ownerSymbol
+            opcode: node.opcode
+            payloadStart: node.payloadStart
+            payloadLength: node.payloadLength
+            operand0: operand0!
+            operand1: operand1!
+            sourceToken: node.sourceToken
+            literalStart: node.literalStart
+            literalLength: node.literalLength
+            expressionStart: node.expressionStart
+            expressionLength: node.expressionLength
+            typeSymbol: node.typeSymbol
+        })
+        nodeIndex! + 1 => nodeIndex!
+    }
+    wiredNodes!
 }
 
 public lower source: Text -> [InterpolationNode; ~] {

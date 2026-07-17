@@ -32,7 +32,9 @@ public buildRule request: BuildRequest -> [GreenNode; ~] {
     [Int; ~] => nodeStack!
     0 => stackDepth!
 
-    events! -> each event {
+    0 => eventIndex!
+    eventIndex! < (events! -> len) -> while {
+        events![eventIndex!] => event
         event.kind == 0 -> if {
             -1 => parent!
             stackDepth! > 0 -> if {
@@ -128,6 +130,7 @@ public buildRule request: BuildRequest -> [GreenNode; ~] {
                 }
             }
         }
+        eventIndex! + 1 => eventIndex!
     }
 
     # The root is the lossless file envelope even when parser recovery had to
@@ -147,27 +150,35 @@ public buildRule request: BuildRequest -> [GreenNode; ~] {
 public buildSource source: file.SourceText -> [GreenNode; ~] {
     source -> len => sourceLength
     source -> slice(UIntSize(0), sourceLength) => view
+    grammar.startRule => sourceStartRule
     BuildRequest {
         source: view
-        startRule: grammar.startRule
+        startRule: sourceStartRule
     } -> buildRule
 }
 
 public buildSourceExpression source: file.SourceText -> [GreenNode; ~] {
     source -> len => sourceLength
     source -> slice(UIntSize(0), sourceLength) => view
+    grammar.ruleIdExpression => expressionStartRule
     BuildRequest {
         source: view
-        startRule: grammar.ruleIdExpression
+        startRule: expressionStartRule
     } -> buildRule
 }
 
 public build source: Text -> [GreenNode; ~] {
-    source -> file.borrowText => borrowed!
-    borrowed! -> buildSource
+    grammar.startRule => sourceStartRule
+    BuildRequest {
+        source: source
+        startRule: sourceStartRule
+    } -> buildRule
 }
 
 public buildExpression source: Text -> [GreenNode; ~] {
-    source -> file.borrowText => borrowed!
-    borrowed! -> buildSourceExpression
+    grammar.ruleIdExpression => expressionStartRule
+    BuildRequest {
+        source: source
+        startRule: expressionStartRule
+    } -> buildRule
 }

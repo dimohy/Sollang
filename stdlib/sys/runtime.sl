@@ -1,25 +1,31 @@
 namespace sys.runtime
 
-print value: Text -> Unit = intrinsic
+public print value: Text -> Unit = intrinsic
 
-println value: Text -> Unit = intrinsic
+public println value: Text -> Unit = intrinsic
 
-readInt prompt: Text -> Int = intrinsic
+public readInt prompt: Text -> Int = intrinsic
 
-seedRandom value: Int -> Unit = intrinsic
+public seedRandom value: Int -> Unit = intrinsic
 
-randomBelow maxExclusive: Int -> Int = intrinsic
+public randomBelow maxExclusive: Int -> Int = intrinsic
 
-openIntWriter path: Text -> Unit = intrinsic
+public openIntWriter path: Text -> Unit = intrinsic
 
-writeInt value: Int -> Unit = intrinsic
+public writeInt value: Int -> Unit = intrinsic
 
-closeIntWriter: -> Unit = intrinsic
+public closeIntWriter: -> Unit = intrinsic
 
-openIntReader path: Text -> Unit = intrinsic
+public openIntReader path: Text -> Unit = intrinsic
 
-closestInt target: Int -> Int = intrinsic
+public closestInt target: Int -> Int = intrinsic
 
-closeIntReader: -> Unit = intrinsic
+public closeIntReader: -> Unit = intrinsic
 
-nowMillis: -> Long = intrinsic
+public nowMillis: -> Long = intrinsic
+
+public parallel<T, R> values: [T; ~] -> [R; ~] block item: T -> R = intrinsic
+
+public parallelWorkers: -> Int = intrinsic
+
+public parallelPeakWorkers: -> Int = intrinsic

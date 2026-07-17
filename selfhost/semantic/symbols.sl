@@ -14,6 +14,7 @@ public struct Symbol {
     secondaryTypeNode: Int
     blockNameToken: Int
     blockTypeNode: Int
+    blockResultTypeNode: Int
     flags: Int
 }
 
@@ -56,6 +57,7 @@ public collectPrepared nodes: [ast.AstNode; ~] -> [Symbol; ~] {
                 secondaryTypeNode: -1
                 blockNameToken: node.tertiaryToken
                 blockTypeNode: -1
+                blockResultTypeNode: -1
                 flags: node.flags
             } => symbol
             symbols! -> len => symbolIndex
@@ -92,10 +94,18 @@ public collectPrepared nodes: [ast.AstNode; ~] -> [Symbol; ~] {
                             owner!.secondaryTypeNode < 0 -> if {
                                 typeAstIndex! => owner!.secondaryTypeNode
                             } else {
-                                owner!.blockTypeNode < 0 -> if { typeAstIndex! => owner!.blockTypeNode }
+                                owner!.blockTypeNode < 0 -> if {
+                                    typeAstIndex! => owner!.blockTypeNode
+                                } else {
+                                    owner!.blockResultTypeNode < 0 -> if { typeAstIndex! => owner!.blockResultTypeNode }
+                                }
                             }
                         } else {
-                            owner!.blockTypeNode < 0 -> if { typeAstIndex! => owner!.blockTypeNode }
+                            owner!.blockTypeNode < 0 -> if {
+                                typeAstIndex! => owner!.blockTypeNode
+                            } else {
+                                owner!.blockResultTypeNode < 0 -> if { typeAstIndex! => owner!.blockResultTypeNode }
+                            }
                         }
                     }
                 } else {
@@ -103,7 +113,11 @@ public collectPrepared nodes: [ast.AstNode; ~] -> [Symbol; ~] {
                         owner!.typeNode < 0 -> if {
                             typeAstIndex! => owner!.typeNode
                         } else {
-                            owner!.blockTypeNode < 0 -> if { typeAstIndex! => owner!.blockTypeNode }
+                            owner!.blockTypeNode < 0 -> if {
+                                typeAstIndex! => owner!.blockTypeNode
+                            } else {
+                                owner!.blockResultTypeNode < 0 -> if { typeAstIndex! => owner!.blockResultTypeNode }
+                            }
                         }
                     } else {
                         owner!.typeNode < 0 -> if {
@@ -137,6 +151,7 @@ public collectPrepared nodes: [ast.AstNode; ~] -> [Symbol; ~] {
                     secondaryTypeNode: -1
                     blockNameToken: -1
                     blockTypeNode: -1
+                    blockResultTypeNode: -1
                     flags: 0
                 })
             }
@@ -166,6 +181,7 @@ public collectPrepared nodes: [ast.AstNode; ~] -> [Symbol; ~] {
                     secondaryTypeNode: -1
                     blockNameToken: -1
                     blockTypeNode: -1
+                    blockResultTypeNode: -1
                     flags: declarationSymbol.flags
                 } => parameterSymbol
                 symbols! -> push(parameterSymbol)
@@ -181,6 +197,7 @@ public collectPrepared nodes: [ast.AstNode; ~] -> [Symbol; ~] {
                 secondaryTypeNode: -1
                 blockNameToken: -1
                 blockTypeNode: -1
+                blockResultTypeNode: -1
                 flags: 0
             })
         }
@@ -205,6 +222,7 @@ public collectPrepared nodes: [ast.AstNode; ~] -> [Symbol; ~] {
                     secondaryTypeNode: -1
                     blockNameToken: -1
                     blockTypeNode: -1
+                    blockResultTypeNode: -1
                     flags: roleAst.flags
                 })
             }
@@ -218,6 +236,7 @@ public collectPrepared nodes: [ast.AstNode; ~] -> [Symbol; ~] {
                     secondaryTypeNode: -1
                     blockNameToken: -1
                     blockTypeNode: -1
+                    blockResultTypeNode: -1
                     flags: 0
                 })
             }

@@ -36,20 +36,20 @@ public analyzeContext prepared: semanticContext.CompilationContext -> [Ownership
         moves![partialMoveIndex!] => partialMove
         partialMove.memberIr >= 0 -> if {
             typed![partialMove.siteIr] => partialMoveSite
-            prepared.ranges[partialMove.sourceModule] => sourceRange
-            prepared.nodes[sourceRange.astStart + partialMoveSite.astNode].start => partialMoveStart
+            prepared.package.ranges[partialMove.sourceModule] => sourceRange
+            prepared.package.nodes[sourceRange.astStart + partialMoveSite.astNode].start => partialMoveStart
             typed![partialMove.memberIr] => movedMember
-            prepared.nodes[sourceRange.astStart + movedMember.astNode] => movedMemberAst
+            prepared.package.nodes[sourceRange.astStart + movedMember.astNode] => movedMemberAst
             0 => movedIdentifierCount!
             movedMemberAst.firstToken => movedTokenIndex!
             movedTokenIndex! < movedMemberAst.firstToken + movedMemberAst.tokenCount -> while {
-                prepared.tokens[sourceRange.tokenStart + movedTokenIndex!].kind == grammar.tokenIdIdentifier -> if { movedIdentifierCount! + 1 => movedIdentifierCount! }
+                prepared.package.tokens[sourceRange.tokenStart + movedTokenIndex!].kind == grammar.tokenIdIdentifier -> if { movedIdentifierCount! + 1 => movedIdentifierCount! }
                 movedTokenIndex! + 1 => movedTokenIndex!
             }
             0 => movedUseIndex!
             movedUseIndex! < (typed! -> len) -> while {
                 typed![movedUseIndex!] => movedUse
-                (movedUse.kind == 5 and movedUse.sourceModule == partialMove.sourceModule and movedUse.symbol == partialMove.symbol and prepared.nodes[sourceRange.astStart + movedUse.astNode].start > partialMoveStart) -> if {
+                (movedUse.kind == 5 and movedUse.sourceModule == partialMove.sourceModule and movedUse.symbol == partialMove.symbol and prepared.package.nodes[sourceRange.astStart + movedUse.astNode].start > partialMoveStart) -> if {
                     movedUse.parent => movedUseAncestor!
                     -1 => movedUseMember!
                     (movedUseAncestor! >= 0 and movedUseMember! < 0) -> while {
@@ -58,11 +58,11 @@ public analyzeContext prepared: semanticContext.CompilationContext -> [Ownership
                     movedUseMember! < 0 => invalidMovedUse!
                     movedUseMember! >= 0 -> if {
                         typed![movedUseMember!] => useMember
-                        prepared.nodes[sourceRange.astStart + useMember.astNode] => useMemberAst
+                        prepared.package.nodes[sourceRange.astStart + useMember.astNode] => useMemberAst
                         0 => useIdentifierCount!
                         useMemberAst.firstToken => useTokenIndex!
                         useTokenIndex! < useMemberAst.firstToken + useMemberAst.tokenCount -> while {
-                            prepared.tokens[sourceRange.tokenStart + useTokenIndex!].kind == grammar.tokenIdIdentifier -> if { useIdentifierCount! + 1 => useIdentifierCount! }
+                            prepared.package.tokens[sourceRange.tokenStart + useTokenIndex!].kind == grammar.tokenIdIdentifier -> if { useIdentifierCount! + 1 => useIdentifierCount! }
                             useTokenIndex! + 1 => useTokenIndex!
                         }
                         movedIdentifierCount! < useIdentifierCount! -> if { movedIdentifierCount! } else { useIdentifierCount! } => sharedIdentifierCount
@@ -74,7 +74,7 @@ public analyzeContext prepared: semanticContext.CompilationContext -> [Ownership
                             0 => movedIdentifierOrdinal!
                             movedMemberAst.firstToken => movedTokenIndex!
                             (movedTokenIndex! < movedMemberAst.firstToken + movedMemberAst.tokenCount and movedIdentifierToken! < 0) -> while {
-                                prepared.tokens[sourceRange.tokenStart + movedTokenIndex!].kind == grammar.tokenIdIdentifier -> if {
+                                prepared.package.tokens[sourceRange.tokenStart + movedTokenIndex!].kind == grammar.tokenIdIdentifier -> if {
                                     movedIdentifierOrdinal! == sharedIdentifierOrdinal! -> if { movedTokenIndex! => movedIdentifierToken! }
                                     movedIdentifierOrdinal! + 1 => movedIdentifierOrdinal!
                                 }
@@ -83,19 +83,19 @@ public analyzeContext prepared: semanticContext.CompilationContext -> [Ownership
                             0 => useIdentifierOrdinal!
                             useMemberAst.firstToken => useTokenIndex!
                             (useTokenIndex! < useMemberAst.firstToken + useMemberAst.tokenCount and useIdentifierToken! < 0) -> while {
-                                prepared.tokens[sourceRange.tokenStart + useTokenIndex!].kind == grammar.tokenIdIdentifier -> if {
+                                prepared.package.tokens[sourceRange.tokenStart + useTokenIndex!].kind == grammar.tokenIdIdentifier -> if {
                                     useIdentifierOrdinal! == sharedIdentifierOrdinal! -> if { useTokenIndex! => useIdentifierToken! }
                                     useIdentifierOrdinal! + 1 => useIdentifierOrdinal!
                                 }
                                 useTokenIndex! + 1 => useTokenIndex!
                             }
-                            prepared.tokens[sourceRange.tokenStart + movedIdentifierToken!] => movedIdentifier
-                            prepared.tokens[sourceRange.tokenStart + useIdentifierToken!] => useIdentifier
+                            prepared.package.tokens[sourceRange.tokenStart + movedIdentifierToken!] => movedIdentifier
+                            prepared.package.tokens[sourceRange.tokenStart + useIdentifierToken!] => useIdentifier
                             movedIdentifier.span.length == useIdentifier.span.length => sameIdentifier!
                             UIntSize(0) => identifierByte!
                             (sameIdentifier! and identifierByte! < movedIdentifier.span.length) -> while {
-                                prepared.sources[partialMove.sourceModule] -> byte(movedIdentifier.span.start + identifierByte!) => movedByte
-                                prepared.sources[partialMove.sourceModule] -> byte(useIdentifier.span.start + identifierByte!) => useByte
+                                prepared.package.sources[partialMove.sourceModule] -> byte(movedIdentifier.span.start + identifierByte!) => movedByte
+                                prepared.package.sources[partialMove.sourceModule] -> byte(useIdentifier.span.start + identifierByte!) => useByte
                                 movedByte != useByte -> if { false => sameIdentifier! }
                                 identifierByte! + UIntSize(1) => identifierByte!
                             }
@@ -109,7 +109,7 @@ public analyzeContext prepared: semanticContext.CompilationContext -> [Ownership
                         0 => moveDiagnosticIndex!
                         moveDiagnosticIndex! < (diagnostics! -> len) -> while {
                             diagnostics![moveDiagnosticIndex!] => existingMoveDiagnostic
-                            (existingMoveDiagnostic.code == 17 and existingMoveDiagnostic.span.fileId == partialMove.sourceModule and existingMoveDiagnostic.span.start == prepared.nodes[sourceRange.astStart + movedUse.astNode].start) -> if { true => duplicateMoveDiagnostic! }
+                            (existingMoveDiagnostic.code == 17 and existingMoveDiagnostic.span.fileId == partialMove.sourceModule and existingMoveDiagnostic.span.start == prepared.package.nodes[sourceRange.astStart + movedUse.astNode].start) -> if { true => duplicateMoveDiagnostic! }
                             moveDiagnosticIndex! + 1 => moveDiagnosticIndex!
                         }
                         not duplicateMoveDiagnostic! -> if {
@@ -124,7 +124,7 @@ public analyzeContext prepared: semanticContext.CompilationContext -> [Ownership
                                 actualModule: -1
                                 actualSymbol: -1
                                 actualBuiltin: -1
-                                span: syntax.SourceSpan { fileId: partialMove.sourceModule, start: prepared.nodes[sourceRange.astStart + movedUse.astNode].start, length: prepared.nodes[sourceRange.astStart + movedUse.astNode].length }
+                                span: syntax.SourceSpan { fileId: partialMove.sourceModule, start: prepared.package.nodes[sourceRange.astStart + movedUse.astNode].start, length: prepared.package.nodes[sourceRange.astStart + movedUse.astNode].length }
                             })
                         }
                     }

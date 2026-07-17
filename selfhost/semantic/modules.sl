@@ -34,7 +34,8 @@ public identitiesAnalyzed package: analysis.PackageAnalysis -> [ModuleIdentity; 
     package.sources -> len => sourceCount
     0 => sourceIndex!
     sourceIndex! < sourceCount -> while {
-        package.sources[sourceIndex!] => source
+        package.sources[sourceIndex!] -> len => sourceLength
+        package.sources[sourceIndex!] -> slice(UIntSize(0), sourceLength) => source
         package.ranges[sourceIndex!] => sourceRange
         UInt64(0) => pathHash!
         UIntSize(0) => pathStart!
@@ -98,7 +99,8 @@ public importsAnalyzed package: analysis.PackageAnalysis -> [ImportEdge; ~] {
     package.sources -> len => sourceCount
     0 => sourceIndex!
     sourceIndex! < sourceCount -> while {
-        package.sources[sourceIndex!] => source
+        package.sources[sourceIndex!] -> len => sourceLength
+        package.sources[sourceIndex!] -> slice(UIntSize(0), sourceLength) => source
         package.ranges[sourceIndex!] => sourceRange
         sourceRange.astCount => nodeCount
         0 => nodeIndex!

@@ -76,7 +76,25 @@ public resolvePrepared request: ResolutionRequest -> [ResolvedName; ~] {
                         }
                         namesEqual! -> if {
                             request.nodes[candidate.astNode].start => candidateStart
-                            ((candidate.kind == 35 or candidateStart < nameAst.start) and candidate.astNode != bindingOwnerAst!) -> if {
+                            candidate.kind == 35 => candidateVisible!
+                            candidate.kind != 35 -> if {
+                                -1 => candidateBlockAst!
+                                candidate.astNode => candidateOwnerAst!
+                                (candidateOwnerAst! >= 0 and candidateBlockAst! < 0) -> while {
+                                    request.nodes[candidateOwnerAst!].kind == 43 -> if {
+                                        candidateOwnerAst! => candidateBlockAst!
+                                    } else {
+                                        request.nodes[candidateOwnerAst!].parent => candidateOwnerAst!
+                                    }
+                                }
+                                candidateBlockAst! < 0 => candidateVisible!
+                                nameAst.parent => referenceBlockSearch!
+                                referenceBlockSearch! >= 0 -> while {
+                                    referenceBlockSearch! == candidateBlockAst! -> if { true => candidateVisible! }
+                                    request.nodes[referenceBlockSearch!].parent => referenceBlockSearch!
+                                }
+                            }
+                            (candidateVisible! and (candidate.kind == 35 or candidateStart < nameAst.start) and candidate.astNode != bindingOwnerAst!) -> if {
                                 (nearestSymbol! < 0 or candidateStart >= nearestStart!) -> if {
                                     candidateSymbolIndex! => nearestSymbol!
                                     candidateStart => nearestStart!

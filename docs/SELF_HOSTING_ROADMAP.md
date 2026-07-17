@@ -1,7 +1,7 @@
 # SmallLang Self-Hosting Roadmap
 
 Status: active
-Updated: 2026-07-15
+Updated: 2026-07-17
 
 The end state is an SL compiler written in SL that reads a multi-file SL
 program, performs lexical, syntactic, type, ownership, and module analysis,
@@ -40,6 +40,10 @@ The design deliberately combines a small set of compatible ideas:
   are internal by default, and public API is opt-in. See
   [access control](https://docs.swift.org/swift-book/documentation/the-swift-programming-language/accesscontrol/)
   and [packages](https://docs.swift.org/swiftpm/documentation/packagemanagerdocs/introducingpackages/).
+- Swift structured task groups and sendability plus Mojo's indexed CPU
+  `parallelize` shape the deterministic compiler worker design. SL uses bounded
+  native workers, disjoint indexed result slots, structured join, and canonical
+  ordered merge. See [Deterministic Parallel Compilation](PARALLEL_COMPILATION.md).
 - Rust and Swift separate UTF-8 code units, Unicode scalar values, and
   user-perceived grapheme clusters. SL adopts Rust's fixed-width scalar model
   for compiler work while reserving grapheme segmentation for a library layer.
@@ -114,6 +118,13 @@ not lines of code.
 | **Total** | **60** | **42** | **13** | **5** | **48.5 / 60** |
 
 Current count-based progress: **80.8% (48.5 of 60 equivalent gates)**.
+
+The frontend parallel-compilation subproject is **14/28 checks (50.0%)**. Its
+source-local product boundary, typed callback-result role slice, nested-call
+identity regression, Windows native compute pool, and source-local parallel
+frontend execution are complete. Linux parity and the global semantic,
+typed-IR, and LLVM-body parallel stages remain pending. This subproject does
+not promote a roadmap gate yet.
 There are **11.5 equivalent gates remaining**. Because the remaining compiler
 primitives are harder than early syntax gates, this is not an elapsed-time
 estimate.
@@ -198,7 +209,11 @@ Current native bootstrap chain:
 - [x] Read and own multiple source files through affine `SourceText` mappings.
 - [x] Compile those modules with the SL frontend and emit valid target LLVM IR.
 - [x] Reuse the current stage-1 executable across self-host LLVM fixtures.
-- [ ] Invoke `clang`/`lld` from `slc` and produce the final executable directly.
+- [x] Invoke `clang`/`lld` from `slc` and produce ordinary final executables directly.
+- [x] Closure-convert local compiler functions so native optimization partitions use all cores.
+- [x] Emit and assemble the complete stage-2 module with `llvm-as`.
+- [ ] Link stage 2 with the platform entry shim, runtime, and imported stdlib definitions.
+- [ ] Run stage 2 and compile a multi-file SL smoke program with it.
 - [ ] Rebuild `slc` with stage 1 and compare a reproducible stage-2 artifact.
 
 ## Gate Inventory

@@ -14,6 +14,8 @@ internal sealed class SemanticCompiler
     private readonly HashSet<BoundFunction> _validatingGenericSpecializations = new(ReferenceEqualityComparer.Instance);
     private readonly Dictionary<BoundFunction, IReadOnlyDictionary<string, BoundType>> _functionBindings =
         new(ReferenceEqualityComparer.Instance);
+    private readonly Dictionary<BoundFunction, IReadOnlyDictionary<string, BoundType>> _functionCapturedBindings =
+        new(ReferenceEqualityComparer.Instance);
     private Dictionary<string, BoundFunction>? _boundFunctions;
     private string _currentModuleName = "";
     private string? _currentTypeScopeName;
@@ -23,6 +25,8 @@ internal sealed class SemanticCompiler
     private bool _currentFunctionAllowsEarlyReturn;
     private bool _currentFunctionIsAsync;
     private IReadOnlySet<string>? _currentFunctionEffects;
+    private BoundType? _currentBlockYieldResultType;
+    private HashSet<string>? _collectingLocalCalls;
     private readonly int _pointerBitWidth;
     private int _loopDepth;
 
@@ -47,6 +51,7 @@ internal sealed class SemanticCompiler
             _program.Statements,
             mainBindings,
             _functionBindings,
+            _functionCapturedBindings,
             storagePlacement.MainFrame,
             storagePlacement.FunctionFrames);
     }
@@ -301,7 +306,14 @@ internal sealed class SemanticCompiler
             }
         }
 
-        var inputType = function.InputType is null
+        var inputTypeTemplate = function.Name == "sys.runtime.parallel"
+            && function.InputType is not null
+            && function.InputType != function.GenericParameterName
+            && (TypeSyntaxReferencesParameter(function.InputType, function.GenericParameterName)
+                || TypeSyntaxReferencesParameter(function.InputType, function.SecondaryGenericParameterName))
+                ? function.InputType
+                : null;
+        var inputType = function.InputType is null || inputTypeTemplate is not null
             ? (BoundType?)null
             : ParseFunctionType(
                 function.InputType,
@@ -315,12 +327,21 @@ internal sealed class SemanticCompiler
             inputType = BoundType.IntDictionaryView;
         }
 
-        var returnType = ParseFunctionType(
-            function.ReturnType,
-            function.GenericParameterName,
-            function.SecondaryGenericParameterName,
-            function.Line,
-            function.Column);
+        var returnTypeTemplate = function.Name == "sys.runtime.parallel"
+            && function.ReturnType != function.GenericParameterName
+            && function.ReturnType != function.SecondaryGenericParameterName
+            && (TypeSyntaxReferencesParameter(function.ReturnType, function.GenericParameterName)
+                || TypeSyntaxReferencesParameter(function.ReturnType, function.SecondaryGenericParameterName))
+                ? function.ReturnType
+                : null;
+        var returnType = returnTypeTemplate is null
+            ? ParseFunctionType(
+                function.ReturnType,
+                function.GenericParameterName,
+                function.SecondaryGenericParameterName,
+                function.Line,
+                function.Column)
+            : BoundType.Unit;
         if (returnType == BoundType.IntSlice)
         {
             throw Error(function.Line, function.Column, "readonly Int view returns are not implemented yet");
@@ -334,6 +355,23 @@ internal sealed class SemanticCompiler
         var blockInputType = function.BlockInputType is null || blockInputTypeTemplate is not null
             ? (BoundType?)null
             : ParseType(function.BlockInputType, function.Line, function.Column);
+        var blockResultTypeTemplate = function.BlockResultType is not null
+            && (TypeSyntaxReferencesParameter(function.BlockResultType, function.GenericParameterName)
+                || TypeSyntaxReferencesParameter(function.BlockResultType, function.SecondaryGenericParameterName))
+                ? function.BlockResultType
+                : null;
+        var blockResultType = function.BlockInputType is null
+            ? (BoundType?)null
+            : function.BlockResultType is null
+                ? BoundType.Unit
+                : blockResultTypeTemplate is not null
+                    ? null
+                    : ParseFunctionType(
+                        function.BlockResultType,
+                        function.GenericParameterName,
+                        function.SecondaryGenericParameterName,
+                        function.Line,
+                        function.Column);
         var genericAssociatedTypeConstraint = function.GenericAssociatedTypeConstraint is null
             ? (TypeId?)null
             : ParseFunctionType(
@@ -404,7 +442,11 @@ internal sealed class SemanticCompiler
             IsPublic: function.IsPublic || function.IsStandardLibrary,
             IsAsync: function.IsAsync,
             BlockInputTypeTemplate: blockInputTypeTemplate,
-            Effects: effects);
+            Effects: effects,
+            BlockResultType: blockResultType,
+            BlockResultTypeTemplate: blockResultTypeTemplate,
+            InputTypeTemplate: inputTypeTemplate,
+            ReturnTypeTemplate: returnTypeTemplate);
     }
 
     private IReadOnlySet<string> BindFunctionEffects(FunctionDeclaration function)
@@ -474,13 +516,16 @@ internal sealed class SemanticCompiler
     {
         if (function.GenericParameterName is not null)
         {
+            var allowsCompositeGenericInput = function.IsStandardLibrary
+                && function.Name == "sys.runtime.parallel";
             if (isLocal || function.TraitName is not null)
             {
                 throw Error(function.Line, function.Column, "generic local and impl functions are not implemented yet");
             }
             if (!function.IsValueGeneric
                 && function.InputType is not null
-                && function.InputType != function.GenericParameterName)
+                && function.InputType != function.GenericParameterName
+                && !allowsCompositeGenericInput)
             {
                 throw Error(
                     function.Line,
@@ -551,20 +596,339 @@ internal sealed class SemanticCompiler
         return functions;
     }
 
+    private IReadOnlyDictionary<string, BoundType> SelectCapturedBindings(
+        BoundFunction function,
+        IReadOnlyDictionary<string, BoundType> candidates,
+        out HashSet<string> calledFunctions)
+    {
+        calledFunctions = new HashSet<string>(StringComparer.Ordinal);
+        if (candidates.Count == 0)
+        {
+            return candidates;
+        }
+
+        var locals = new HashSet<string>(StringComparer.Ordinal);
+        if (function.InputName is not null)
+        {
+            locals.Add(function.InputName);
+        }
+        if (function.BlockInputName is not null)
+        {
+            locals.Add(function.BlockInputName);
+        }
+
+        var referenced = new HashSet<string>(StringComparer.Ordinal);
+        var previousCalls = _collectingLocalCalls;
+        _collectingLocalCalls = calledFunctions;
+        CollectCapturedNames(function.BlockBody, locals, candidates, referenced);
+        if (function.Body is not null)
+        {
+            CollectCapturedNames(function.Body, locals, candidates, referenced);
+        }
+        _collectingLocalCalls = previousCalls;
+
+        return candidates
+            .Where(binding => referenced.Contains(binding.Key))
+            .ToDictionary(binding => binding.Key, binding => binding.Value, StringComparer.Ordinal);
+    }
+
+    private void CollectCapturedNames(
+        IReadOnlyList<Statement> statements,
+        HashSet<string> locals,
+        IReadOnlyDictionary<string, BoundType> candidates,
+        HashSet<string> referenced)
+    {
+        foreach (var statement in statements)
+        {
+            switch (statement)
+            {
+                case BindingStatement binding:
+                    CollectCapturedNames(binding.Value, locals, candidates, referenced);
+                    locals.Add(binding.Name);
+                    break;
+                case IndexAssignmentStatement assignment:
+                    CollectCapturedName(assignment.Name, locals, candidates, referenced);
+                    CollectCapturedNames(assignment.Index, locals, candidates, referenced);
+                    CollectCapturedNames(assignment.Value, locals, candidates, referenced);
+                    break;
+                case FieldAssignmentStatement assignment:
+                    CollectCapturedName(assignment.Name, locals, candidates, referenced);
+                    CollectCapturedNames(assignment.Value, locals, candidates, referenced);
+                    break;
+                case BlockFunctionCallStatement block:
+                    CollectCapturedNames(block.Source, locals, candidates, referenced);
+                    if (block.Target.Count == 1)
+                    {
+                        _collectingLocalCalls?.Add(block.Target[0]);
+                    }
+                    var blockLocals = new HashSet<string>(locals, StringComparer.Ordinal)
+                    {
+                        block.ItemName
+                    };
+                    CollectCapturedNames(block.Body, blockLocals, candidates, referenced);
+                    if (block.ResultName is not null)
+                    {
+                        locals.Add(block.ResultName);
+                    }
+                    break;
+                case ExpressionStatement expression:
+                    CollectCapturedNames(expression.Expression, locals, candidates, referenced);
+                    break;
+                case GuardLoopControlStatement guard:
+                    CollectCapturedNames(guard.Condition, locals, candidates, referenced);
+                    break;
+                case ReturnStatement { Value: { } value }:
+                    CollectCapturedNames(value, locals, candidates, referenced);
+                    break;
+            }
+        }
+    }
+
+    private void CollectCapturedNames(
+        BlockBody body,
+        HashSet<string> locals,
+        IReadOnlyDictionary<string, BoundType> candidates,
+        HashSet<string> referenced)
+    {
+        CollectCapturedNames(body.Statements, locals, candidates, referenced);
+        if (body.Value is not null)
+        {
+            CollectCapturedNames(body.Value, locals, candidates, referenced);
+        }
+    }
+
+    private void CollectCapturedNames(
+        Expression expression,
+        HashSet<string> locals,
+        IReadOnlyDictionary<string, BoundType> candidates,
+        HashSet<string> referenced)
+    {
+        switch (expression)
+        {
+            case NameExpression name:
+                _collectingLocalCalls?.Add(name.Name);
+                CollectCapturedName(name.Name, locals, candidates, referenced);
+                break;
+            case StringExpression text:
+                foreach (var interpolation in text.Segments.OfType<InterpolationSegment>())
+                {
+                    CollectCapturedNames(interpolation.Expression, locals, candidates, referenced);
+                }
+                break;
+            case AddExpression binary:
+                CollectCapturedBinary(binary.Left, binary.Right, locals, candidates, referenced);
+                break;
+            case SubtractExpression binary:
+                CollectCapturedBinary(binary.Left, binary.Right, locals, candidates, referenced);
+                break;
+            case MultiplyExpression binary:
+                CollectCapturedBinary(binary.Left, binary.Right, locals, candidates, referenced);
+                break;
+            case DivideExpression binary:
+                CollectCapturedBinary(binary.Left, binary.Right, locals, candidates, referenced);
+                break;
+            case ModuloExpression binary:
+                CollectCapturedBinary(binary.Left, binary.Right, locals, candidates, referenced);
+                break;
+            case CompareExpression binary:
+                CollectCapturedBinary(binary.Left, binary.Right, locals, candidates, referenced);
+                break;
+            case AndExpression binary:
+                CollectCapturedBinary(binary.Left, binary.Right, locals, candidates, referenced);
+                break;
+            case OrExpression binary:
+                CollectCapturedBinary(binary.Left, binary.Right, locals, candidates, referenced);
+                break;
+            case NegateExpression unary:
+                CollectCapturedNames(unary.Value, locals, candidates, referenced);
+                break;
+            case NotExpression unary:
+                CollectCapturedNames(unary.Value, locals, candidates, referenced);
+                break;
+            case RangeExpression range:
+                CollectCapturedBinary(range.Start, range.End, locals, candidates, referenced);
+                break;
+            case CompileTimeEachExpression each:
+                CollectCapturedNames(each.Source, locals, candidates, referenced);
+                var eachLocals = new HashSet<string>(locals, StringComparer.Ordinal) { each.ItemName };
+                CollectCapturedNames(each.Selector, eachLocals, candidates, referenced);
+                if (each.DictionaryValueSelector is not null)
+                {
+                    CollectCapturedNames(each.DictionaryValueSelector, eachLocals, candidates, referenced);
+                }
+                break;
+            case FoldExpression fold:
+                CollectCapturedNames(fold.Source, locals, candidates, referenced);
+                CollectCapturedNames(fold.Initial, locals, candidates, referenced);
+                var foldLocals = new HashSet<string>(locals, StringComparer.Ordinal)
+                {
+                    fold.AccumulatorName,
+                    fold.ItemName
+                };
+                CollectCapturedNames(fold.Body, foldLocals, candidates, referenced);
+                break;
+            case IfExpression conditional:
+                CollectCapturedNames(conditional.Condition, locals, candidates, referenced);
+                CollectCapturedNames(conditional.Then, new HashSet<string>(locals, StringComparer.Ordinal), candidates, referenced);
+                if (conditional.Else is not null)
+                {
+                    CollectCapturedNames(conditional.Else, new HashSet<string>(locals, StringComparer.Ordinal), candidates, referenced);
+                }
+                break;
+            case WhenExpression whenExpression:
+                if (whenExpression.Subject is not null)
+                {
+                    CollectCapturedNames(whenExpression.Subject, locals, candidates, referenced);
+                }
+                foreach (var arm in whenExpression.Arms)
+                {
+                    CollectCapturedWhenArm(arm, locals, candidates, referenced);
+                }
+                CollectCapturedNames(whenExpression.Else, new HashSet<string>(locals, StringComparer.Ordinal), candidates, referenced);
+                break;
+            case FlowExpression flow:
+                CollectCapturedNames(flow.Source, locals, candidates, referenced);
+                foreach (var target in flow.Targets)
+                {
+                    if (target.Path.Count == 1)
+                    {
+                        _collectingLocalCalls?.Add(target.Path[0]);
+                    }
+                    foreach (var argument in target.Arguments)
+                    {
+                        CollectCapturedNames(argument, locals, candidates, referenced);
+                    }
+                }
+                break;
+            case CallExpression call:
+                if (call.Path.Count == 1)
+                {
+                    _collectingLocalCalls?.Add(call.Path[0]);
+                }
+                foreach (var argument in call.Arguments)
+                {
+                    CollectCapturedNames(argument, locals, candidates, referenced);
+                }
+                break;
+            case ArrayLiteralExpression array:
+                foreach (var element in array.Elements)
+                {
+                    CollectCapturedNames(element, locals, candidates, referenced);
+                }
+                break;
+            case ArrayRepeatExpression repeat:
+                CollectCapturedNames(repeat.Value, locals, candidates, referenced);
+                if (repeat.CountParameterName is not null)
+                {
+                    CollectCapturedName(repeat.CountParameterName, locals, candidates, referenced);
+                }
+                break;
+            case DictionaryLiteralExpression dictionary:
+                foreach (var entry in dictionary.Entries)
+                {
+                    CollectCapturedBinary(entry.Key, entry.Value, locals, candidates, referenced);
+                }
+                break;
+            case IndexExpression index:
+                CollectCapturedBinary(index.Source, index.Index, locals, candidates, referenced);
+                break;
+            case StructLiteralExpression structure:
+                foreach (var field in structure.Fields)
+                {
+                    CollectCapturedNames(field.Value, locals, candidates, referenced);
+                }
+                break;
+            case FieldAccessExpression field:
+                CollectCapturedNames(field.Source, locals, candidates, referenced);
+                break;
+            case TryExpression attempt:
+                CollectCapturedNames(attempt.Value, locals, candidates, referenced);
+                break;
+            case BoxExpression box:
+                CollectCapturedNames(box.Value, locals, candidates, referenced);
+                break;
+            case MapExpression map:
+                CollectCapturedNames(map.Path, locals, candidates, referenced);
+                if (map.Offset is not null) CollectCapturedNames(map.Offset, locals, candidates, referenced);
+                if (map.Length is not null) CollectCapturedNames(map.Length, locals, candidates, referenced);
+                if (map.FileSize is not null) CollectCapturedNames(map.FileSize, locals, candidates, referenced);
+                break;
+            case EnumMatchExpression match:
+                CollectCapturedNames(match.Subject, locals, candidates, referenced);
+                foreach (var arm in match.Arms)
+                {
+                    CollectCapturedWhenArm(arm, locals, candidates, referenced);
+                }
+                if (match.Else is not null)
+                {
+                    CollectCapturedNames(match.Else, new HashSet<string>(locals, StringComparer.Ordinal), candidates, referenced);
+                }
+                break;
+            case SubjectCompareExpression comparison:
+                CollectCapturedNames(comparison.Right, locals, candidates, referenced);
+                break;
+            case SubjectRangeExpression range:
+                CollectCapturedBinary(range.Start, range.End, locals, candidates, referenced);
+                break;
+        }
+    }
+
+    private void CollectCapturedWhenArm(
+        WhenArm arm,
+        HashSet<string> locals,
+        IReadOnlyDictionary<string, BoundType> candidates,
+        HashSet<string> referenced)
+    {
+        CollectCapturedNames(arm.Condition, locals, candidates, referenced);
+        var armLocals = new HashSet<string>(locals, StringComparer.Ordinal);
+        if (arm.Condition is EnumPatternExpression { BindingName: { } bindingName })
+        {
+            armLocals.Add(bindingName);
+        }
+        CollectCapturedNames(arm.Body, armLocals, candidates, referenced);
+    }
+
+    private void CollectCapturedBinary(
+        Expression left,
+        Expression right,
+        HashSet<string> locals,
+        IReadOnlyDictionary<string, BoundType> candidates,
+        HashSet<string> referenced)
+    {
+        CollectCapturedNames(left, locals, candidates, referenced);
+        CollectCapturedNames(right, locals, candidates, referenced);
+    }
+
+    private void CollectCapturedName(
+        string name,
+        HashSet<string> locals,
+        IReadOnlyDictionary<string, BoundType> candidates,
+        HashSet<string> referenced)
+    {
+        if (!locals.Contains(name) && candidates.ContainsKey(name))
+        {
+            referenced.Add(name);
+        }
+    }
+
     private void ValidateUserFunction(
         BoundFunction function,
         IReadOnlyDictionary<string, BoundFunction> parentFunctions,
         IReadOnlyDictionary<string, BoundType> capturedBindings)
     {
+        var selectedCapturedBindings = SelectCapturedBindings(function, capturedBindings, out var calledFunctions);
+        _functionCapturedBindings[function] = new Dictionary<string, BoundType>(
+            selectedCapturedBindings,
+            StringComparer.Ordinal);
         _currentModuleName = function.ModuleName;
         _currentTypeScopeName = ResolveFunctionTypeScope(function.Name);
         if (function.Kind == BoundFunctionKind.UserBlock)
         {
-            ValidateUserBlockFunction(function, parentFunctions, capturedBindings);
+            ValidateUserBlockFunction(function, parentFunctions, selectedCapturedBindings);
             return;
         }
 
-        var bodyBindings = new Dictionary<string, BoundType>(capturedBindings, StringComparer.Ordinal);
+        var bodyBindings = new Dictionary<string, BoundType>(selectedCapturedBindings, StringComparer.Ordinal);
         if (function.InputType is { } inputType)
         {
             bodyBindings[function.InputName ?? "it"] = inputType;
@@ -579,10 +943,6 @@ internal sealed class SemanticCompiler
         var returnOuterBindings = new Dictionary<string, BoundType>(bodyBindings, StringComparer.Ordinal);
 
         var scopedFunctions = CreateFunctionScope(parentFunctions, function.LocalFunctions);
-        foreach (var localFunction in function.LocalFunctions.Values)
-        {
-            ValidateUserFunction(localFunction, scopedFunctions, bodyBindings);
-        }
         _currentFunctionReturnType = function.ReturnType;
         _currentMoveInputName = FunctionMovesOwnedHeapInput(function)
             ? function.InputName ?? "it"
@@ -604,6 +964,43 @@ internal sealed class SemanticCompiler
                 : null;
 
         BindStatements(function.BlockBody, scopedFunctions, bodyBindings, mutableBindings, allowContainerBindings: true);
+        foreach (var localFunction in function.LocalFunctions.Values)
+        {
+            ValidateUserFunction(localFunction, scopedFunctions, bodyBindings);
+        }
+        var effectiveCapturedBindings = new Dictionary<string, BoundType>(selectedCapturedBindings, StringComparer.Ordinal);
+        foreach (var calledFunctionName in calledFunctions)
+        {
+            if (!scopedFunctions.TryGetValue(calledFunctionName, out var calledFunction)
+                || ReferenceEquals(calledFunction, function)
+                || !_functionCapturedBindings.TryGetValue(calledFunction, out var calledCaptures))
+            {
+                continue;
+            }
+            foreach (var calledCapture in calledCaptures)
+            {
+                if (capturedBindings.ContainsKey(calledCapture.Key))
+                {
+                    effectiveCapturedBindings[calledCapture.Key] = calledCapture.Value;
+                }
+            }
+        }
+        _functionCapturedBindings[function] = effectiveCapturedBindings;
+
+        // Local functions may capture readonly parent bindings declared in the
+        // parent's statement body. Their validation changes the active semantic
+        // context, so restore the parent before inferring its final expression.
+        _currentModuleName = function.ModuleName;
+        _currentTypeScopeName = ResolveFunctionTypeScope(function.Name);
+        _currentFunctionReturnType = function.ReturnType;
+        _currentMoveInputName = FunctionMovesOwnedHeapInput(function)
+            ? function.InputName ?? "it"
+            : null;
+        _currentFunctionOuterBindings = returnOuterBindings;
+        _currentFunctionAllowsEarlyReturn = !function.IsLocal;
+        _currentFunctionIsAsync = function.IsAsync;
+        _currentFunctionEffects = function.Effects;
+        _loopDepth = 0;
         var bodyType = function.Body is null
             ? BoundType.Unit
             : InferExpression(
@@ -698,7 +1095,12 @@ internal sealed class SemanticCompiler
         IReadOnlyDictionary<string, BoundFunction> parentFunctions,
         IReadOnlyDictionary<string, BoundType> capturedBindings)
     {
+        _functionCapturedBindings[function] = new Dictionary<string, BoundType>(
+            capturedBindings,
+            StringComparer.Ordinal);
         _currentFunctionIsAsync = false;
+        var previousBlockYieldResultType = _currentBlockYieldResultType;
+        _currentBlockYieldResultType = function.BlockResultType ?? BoundType.Unit;
         if (function.InputType is null)
         {
             throw Error(function.Line, function.Column, $"block function '{function.Name}' requires an input");
@@ -771,6 +1173,7 @@ internal sealed class SemanticCompiler
         }
 
         _functionBindings[function] = new Dictionary<string, BoundType>(bodyBindings, StringComparer.Ordinal);
+        _currentBlockYieldResultType = previousBlockYieldResultType;
     }
 
     private IReadOnlyDictionary<string, BoundFunction> CreateFunctionScope(
@@ -905,6 +1308,21 @@ internal sealed class SemanticCompiler
                 expectedInputType: null,
                 BoundType.Int64,
                 BoundFunctionKind.RuntimeNowMillis),
+            "sys.runtime.parallel" => RequireParallelIntrinsicSignature(function),
+            "sys.runtime.parallelWorkers" => RequireIntrinsicSignature(
+                function,
+                inputType,
+                returnType,
+                expectedInputType: null,
+                BoundType.Int,
+                BoundFunctionKind.RuntimeParallelWorkers),
+            "sys.runtime.parallelPeakWorkers" => RequireIntrinsicSignature(
+                function,
+                inputType,
+                returnType,
+                expectedInputType: null,
+                BoundType.Int,
+                BoundFunctionKind.RuntimeParallelPeakWorkers),
             "sys.time.sleep" => RequireSleepIntrinsicSignature(
                 function,
                 inputType,
@@ -990,6 +1408,24 @@ internal sealed class SemanticCompiler
                 BoundFunctionKind.RuntimeCloseIntReader),
             _ => throw Error(function.Line, function.Column, $"unknown intrinsic function '{function.Name}'")
         };
+    }
+
+    private BoundFunctionKind RequireParallelIntrinsicSignature(FunctionDeclaration function)
+    {
+        if (function.GenericParameterName is null
+            || function.SecondaryGenericParameterName is null
+            || function.InputType != $"[{function.GenericParameterName}; ~]"
+            || function.ReturnType != $"[{function.SecondaryGenericParameterName}; ~]"
+            || function.BlockInputType != function.GenericParameterName
+            || function.BlockResultType != function.SecondaryGenericParameterName)
+        {
+            throw Error(
+                function.Line,
+                function.Column,
+                "intrinsic parallel<T, R> must be [T; ~] -> [R; ~] block item: T -> R");
+        }
+
+        return BoundFunctionKind.RuntimeParallel;
     }
 
     private BoundFunctionKind RequireSleepIntrinsicSignature(
@@ -1182,6 +1618,9 @@ internal sealed class SemanticCompiler
         AddGlobalAlias(functions, "milliseconds", "sys.time.milliseconds");
         AddGlobalAlias(functions, "seconds", "sys.time.seconds");
         AddGlobalAlias(functions, "sleep", "sys.time.sleep");
+        AddGlobalAlias(functions, "parallel", "sys.runtime.parallel");
+        AddGlobalAlias(functions, "parallelWorkers", "sys.runtime.parallelWorkers");
+        AddGlobalAlias(functions, "parallelPeakWorkers", "sys.runtime.parallelPeakWorkers");
     }
 
     private void AddGlobalAlias(
@@ -1679,7 +2118,7 @@ internal sealed class SemanticCompiler
                 return;
             default:
                 if (functions.TryGetValue(target, out var function)
-                    && function.Kind == BoundFunctionKind.UserBlock)
+                    && function.Kind is BoundFunctionKind.UserBlock or BoundFunctionKind.RuntimeParallel)
                 {
                     BindUserBlockFunctionCall(call, function, functions, bindings, mutableBindings, target);
                     return;
@@ -1835,6 +2274,48 @@ internal sealed class SemanticCompiler
             allowReadIntCall: true,
             allowFlowBindingTarget: false,
             mutableBindings: mutableBindings);
+        if (function.Kind == BoundFunctionKind.RuntimeParallel
+            && function.SpecializedType is null)
+        {
+            if (!_types.IsDynamicArray(inputType) && inputType != BoundType.DynamicIntArray)
+            {
+                throw Error(call.Source.Line, call.Source.Column, "parallel expects a growable array");
+            }
+            if (call.Body.Count == 0 || call.Body[^1] is not ExpressionStatement parallelResult)
+            {
+                throw Error(call.Line, call.Column, "parallel callback must end with a result expression");
+            }
+
+            var parallelItemType = inputType == BoundType.DynamicIntArray
+                ? BoundType.Int
+                : _types.GetDynamicArray(inputType).ElementType;
+            var parallelBindings = new Dictionary<string, BoundType>(bindings, StringComparer.Ordinal)
+            {
+                [call.ItemName] = parallelItemType
+            };
+            var parallelMutableBindings = new HashSet<string>(mutableBindings, StringComparer.Ordinal);
+            BindStatements(
+                call.Body.Take(call.Body.Count - 1).ToArray(),
+                functions,
+                parallelBindings,
+                parallelMutableBindings,
+                allowContainerBindings: true);
+            var parallelResultType = InferExpression(
+                parallelResult.Expression,
+                functions,
+                parallelBindings,
+                allowPrintCall: false,
+                allowReadIntCall: true,
+                allowFlowBindingTarget: false,
+                mutableBindings: parallelMutableBindings);
+            function = ResolveGenericSpecialization(
+                function,
+                parallelItemType,
+                functions,
+                call,
+                specializedInputType: inputType,
+                explicitSecondaryType: parallelResultType);
+        }
         if (function.GenericParameterName is not null
             && function.SpecializedType is null
             && function.SpecializedValue is null)
@@ -1857,12 +2338,49 @@ internal sealed class SemanticCompiler
         {
             [call.ItemName] = function.BlockInputType.Value
         };
-        BindStatements(
-            call.Body,
-            functions,
-            bodyBindings,
-            new HashSet<string>(mutableBindings, StringComparer.Ordinal),
-            allowContainerBindings: true);
+        var callbackMutableBindings = new HashSet<string>(mutableBindings, StringComparer.Ordinal);
+        var callbackResultType = function.BlockResultType ?? BoundType.Unit;
+        if (callbackResultType == BoundType.Unit)
+        {
+            BindStatements(
+                call.Body,
+                functions,
+                bodyBindings,
+                callbackMutableBindings,
+                allowContainerBindings: true);
+        }
+        else
+        {
+            if (call.Body.Count == 0 || call.Body[^1] is not ExpressionStatement callbackResult)
+            {
+                throw Error(
+                    call.Line,
+                    call.Column,
+                    $"block callback for '{target}' must end with {FormatType(callbackResultType)}");
+            }
+
+            BindStatements(
+                call.Body.Take(call.Body.Count - 1).ToArray(),
+                functions,
+                bodyBindings,
+                callbackMutableBindings,
+                allowContainerBindings: true);
+            var actualCallbackResultType = InferExpression(
+                callbackResult.Expression,
+                functions,
+                bodyBindings,
+                allowPrintCall: false,
+                allowReadIntCall: true,
+                allowFlowBindingTarget: false,
+                mutableBindings: callbackMutableBindings);
+            if (actualCallbackResultType != callbackResultType)
+            {
+                throw Error(
+                    callbackResult.Expression.Line,
+                    callbackResult.Expression.Column,
+                    $"block callback for '{target}' returns {FormatType(actualCallbackResultType)} but expects {FormatType(callbackResultType)}");
+            }
+        }
 
         if (call.ResultName is null)
         {
@@ -3621,7 +4139,7 @@ internal sealed class SemanticCompiler
                         $"yield expects {FormatType(yieldInputType.Value)} but received {FormatType(currentType)}");
                 }
 
-                return new FlowResult(BoundType.Unit, FlowEffect.None);
+                return new FlowResult(_currentBlockYieldResultType ?? BoundType.Unit, FlowEffect.None);
             }
 
             if (TryGetFunction(path, functions, out var function)
@@ -4604,6 +5122,8 @@ internal sealed class SemanticCompiler
 
                 return BoundType.Unit;
             case BoundFunctionKind.RuntimeNowMillis:
+            case BoundFunctionKind.RuntimeParallelWorkers:
+            case BoundFunctionKind.RuntimeParallelPeakWorkers:
             case BoundFunctionKind.RuntimeArguments:
                 EnsureRuntimeIntrinsicAllowed(function, allowReadIntCall, expression.Line, expression.Column, path);
                 if (expression.Arguments.Count != 0)
@@ -4696,7 +5216,9 @@ internal sealed class SemanticCompiler
         BoundFunction template,
         BoundType actualType,
         IReadOnlyDictionary<string, BoundFunction> functions,
-        object callSite)
+        object callSite,
+        BoundType? specializedInputType = null,
+        BoundType? explicitSecondaryType = null)
     {
         if (template.Kind is BoundFunctionKind.RuntimeWriteScalar
                 or BoundFunctionKind.RuntimeReadScalar
@@ -4728,7 +5250,7 @@ internal sealed class SemanticCompiler
             throw new SmallLangException(
                 $"type {FormatType(actualType)} does not implement trait '{traitBound}' required by '{template.Name}'");
         }
-        BoundType? inferredSecondaryType = null;
+        BoundType? inferredSecondaryType = explicitSecondaryType;
         if (template.GenericTraitBound is { } constrainedTrait
             && template.GenericAssociatedTypeName is { } associatedTypeName
             && template.GenericAssociatedTypeConstraint is { } associatedTypeConstraint)
@@ -4745,7 +5267,8 @@ internal sealed class SemanticCompiler
                     $"type {FormatType(actualType)} does not satisfy associated type constraint "
                     + $"'{constrainedTrait}<{associatedTypeName} = {FormatType(associatedTypeConstraint)}>' required by '{template.Name}'");
             }
-            if (associatedTypeConstraint == BoundType.SecondaryGenericParameter)
+            if (associatedTypeConstraint == BoundType.SecondaryGenericParameter
+                && inferredSecondaryType is null)
             {
                 inferredSecondaryType = actualAssociatedType;
             }
@@ -4771,14 +5294,42 @@ internal sealed class SemanticCompiler
             specialization = template with
             {
                 Name = specializedName,
-                InputType = template.InputType is null ? null : actualType,
-                ReturnType = SubstituteGenericType(template.ReturnType, actualType, inferredSecondaryType),
+                InputType = template.InputTypeTemplate is null
+                    ? template.InputType is null ? null : specializedInputType ?? actualType
+                    : ParseSpecializedFunctionType(
+                        template.InputTypeTemplate,
+                        template.GenericParameterName,
+                        actualType,
+                        template.SecondaryGenericParameterName,
+                        inferredSecondaryType,
+                        template.Line,
+                        template.Column),
+                ReturnType = template.ReturnTypeTemplate is null
+                    ? SubstituteGenericType(template.ReturnType, actualType, inferredSecondaryType)
+                    : ParseSpecializedFunctionType(
+                        template.ReturnTypeTemplate,
+                        template.GenericParameterName,
+                        actualType,
+                        template.SecondaryGenericParameterName,
+                        inferredSecondaryType,
+                        template.Line,
+                        template.Column),
                 BlockInputType = template.BlockInputTypeTemplate is null
                     ? template.BlockInputType is null
                         ? null
                         : SubstituteGenericType(template.BlockInputType.Value, actualType, inferredSecondaryType)
                     : ParseSpecializedFunctionType(
                         template.BlockInputTypeTemplate,
+                        template.GenericParameterName,
+                        actualType,
+                        template.SecondaryGenericParameterName,
+                        inferredSecondaryType,
+                        template.Line,
+                        template.Column),
+                BlockResultType = template.BlockResultTypeTemplate is null
+                    ? template.BlockResultType
+                    : ParseSpecializedFunctionType(
+                        template.BlockResultTypeTemplate,
                         template.GenericParameterName,
                         actualType,
                         template.SecondaryGenericParameterName,

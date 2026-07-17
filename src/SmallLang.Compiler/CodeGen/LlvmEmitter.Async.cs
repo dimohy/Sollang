@@ -15,7 +15,7 @@ internal sealed partial class LlvmEmitter
         }
 
         var previousFunctions = _currentFunctions;
-        _currentFunctions = CreateFunctionScope(_program.Functions, function.LocalFunctions);
+        _currentFunctions = FunctionScope(function);
         ClearLocalState();
         SelectStackFrame(function);
         try
@@ -51,6 +51,7 @@ internal sealed partial class LlvmEmitter
                     AsyncStorageLlvmType(inputType), RuntimeAlignment(inputType));
             }
 
+            BindFunctionCaptures(function);
             var functionLocals = CaptureLocals();
             BindFunctionParameter(function);
             if (hasCfgSuspension)
@@ -76,7 +77,7 @@ internal sealed partial class LlvmEmitter
             EmitAsyncCancelFunction(function, hasTailAwait, statefulAwaitPlan, cfgSuspendPlan);
 
             ClearLocalState();
-            EmitFunctionLine($"define internal %smalllang.task {SymbolForFunction(function.Name)}({ParameterListForFunction(function)}) #0 {{");
+            EmitFunctionLine($"define internal %smalllang.task {SymbolForFunction(function)}({ParameterListForFunction(function)}) #0 {{");
             EmitLabel("entry");
             var context = NextTemp("async_context");
             EmitCall(context, "ptr", "smalllang_alloc", $"i64 {AsyncContextSize(function.InputType, function.ReturnType)}");
@@ -1161,7 +1162,7 @@ internal sealed partial class LlvmEmitter
         EmitCall(
             aggregate,
             "%smalllang.task",
-            SymbolForFunction(function.Name)[1..],
+            SymbolForFunction(function)[1..],
             FunctionCallArgumentList(function, argument));
         var handle = NextTemp("task_handle");
         EmitAssign(handle, $"extractvalue %smalllang.task {aggregate}, 0");
@@ -1342,10 +1343,10 @@ internal sealed partial class LlvmEmitter
         checked((value + alignment - 1) / alignment * alignment);
 
     private static string AsyncWorkerSymbol(BoundFunction function) =>
-        SymbolForFunction(function.Name)[1..] + "_async_worker";
+        SymbolForFunction(function)[1..] + "_async_worker";
 
     private static string AsyncCancelSymbol(BoundFunction function) =>
-        SymbolForFunction(function.Name)[1..] + "_async_cancel";
+        SymbolForFunction(function)[1..] + "_async_cancel";
 
     private sealed record AsyncStateMachinePlan(IReadOnlyList<AsyncAwaitPoint> Awaits);
 

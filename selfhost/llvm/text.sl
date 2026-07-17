@@ -4,9 +4,11 @@ import smalllang.compiler.ast as ast
 import smalllang.compiler.ir.interpolation as interpolation
 import smalllang.compiler.ir.typed as typedIr
 import smalllang.compiler.llvm.target as llvmTarget
+import smalllang.compiler.llvm.runtime as llvmRuntime
 import smalllang.compiler.semantic.analysis as analysis
 import smalllang.compiler.semantic.composite_types as compositeTypes
 import smalllang.compiler.semantic.context as semanticContext
+import smalllang.compiler.semantic.expression_type_ids as expressionTypeIds
 import smalllang.compiler.semantic.modules as modules
 import smalllang.compiler.semantic.nominal_types as nominalTypes
 import smalllang.compiler.semantic.symbols as symbols
@@ -31,6 +33,26 @@ struct WhileValueRequest {
 struct BindingOwnerRequest {
     bindingIndex: Int
     ownerIndex: Int
+}
+
+struct IntegerPromotionRequest {
+    expressionIndex: Int
+    operandIndex: Int
+    targetWidth: Int
+    ownerIndex: Int
+    right: Bool
+}
+
+struct CallEnvironmentRequest {
+    callerIndex: Int
+    targetModule: Int
+    targetSymbol: Int
+    hasArgument: Bool
+}
+
+struct TextLiteralRequest {
+    sourceModule: Int
+    token: syntax.SyntaxToken
 }
 
 struct WhileBoolTask {
@@ -162,6 +184,11 @@ public layoutsFor request: TypeLayoutRequest -> TypeLayouts {
                         pointerSize => align!
                         0 => status!
                     }
+                    current.symbol == 24 -> if {
+                        pointerSize * 4 => size!
+                        pointerSize => align!
+                        0 => status!
+                    }
                 }
             }
             current.kind == 2 -> if {
@@ -248,7 +275,9 @@ public layoutOf request: TypeLayoutRequest -> TypeLayout {
 }
 
 isDynamicArrayType node: typedIr.TypedIrNode -> Bool {
-    node.typeId >= 0 -> if { node.typeKind == 3 } else { node.typeOrigin == 13 }
+    (node.typeOrigin == 13 or node.typeOrigin == 14) -> if { true } else {
+        node.typeId >= 0 -> if { node.typeKind == 3 } else { false }
+    }
 }
 
 isDictionaryType node: typedIr.TypedIrNode -> Bool {
@@ -257,17 +286,34 @@ isDictionaryType node: typedIr.TypedIrNode -> Bool {
 
 isNominalStructType node: typedIr.TypedIrNode -> Bool {
     node.typeId >= 0 -> if {
-        node.typeKind == 1 and node.typeFlags % 2 == 1
+        # Canonical nominal types always retain their defining module. Builtin
+        # scalars also have kind 1, but have no module. Ownership is separate:
+        # plain value structs and affine structs share the same LLVM shape.
+        node.typeKind == 1 and node.typeModule >= 0
     } else {
         node.typeOrigin == 0 or node.typeOrigin == 2
     }
 }
 
+isSourceTextType node: typedIr.TypedIrNode -> Bool {
+    node.typeId >= 0 -> if {
+        node.typeKind == 1 and node.typeOrigin == 1 and node.typeSymbol == 24
+    } else {
+        node.typeOrigin == 1 and node.typeSymbol == 24
+    }
+}
+
+writeTextLikeType node: typedIr.TypedIrNode -> Unit uses Console {
+    node -> isSourceTextType -> if { "%sl.source_text" -> print } else { "%sl.text" -> print }
+}
+
 ownsType node: typedIr.TypedIrNode -> Bool {
+    (node.typeOrigin == 13 or node.typeOrigin == 14 or node.typeOrigin == 15) -> if { true } else {
     node.typeId >= 0 -> if {
         node.typeFlags % 2 == 1
     } else {
         node.typeOrigin == 13 or node.typeOrigin == 15 or node.typeOrigin == 0 or node.typeOrigin == 2
+    }
     }
 }
 
@@ -290,8 +336,10 @@ public writeType node: typedIr.TypedIrNode -> Unit uses Console {
                     (node.typeSymbol == 4 or node.typeSymbol == 9) -> if { "i16" -> print } else {
                         (node.typeSymbol == 6 or node.typeSymbol == 7 or node.typeSymbol == 11 or node.typeSymbol == 12 or node.typeSymbol == 13) -> if { "i64" -> print } else {
                             (node.typeSymbol == 19 or node.typeSymbol == 20) -> if { "float" -> print } else {
-                                (node.typeSymbol == 21 or node.typeSymbol == 22) -> if { "double" -> print } else {
-                                    node.typeSymbol == 23 -> if { "i1" -> print } else { "void" -> print }
+                            (node.typeSymbol == 21 or node.typeSymbol == 22) -> if { "double" -> print } else {
+                                    node.typeSymbol == 23 -> if { "i1" -> print } else {
+                                        node.typeSymbol == 24 -> if { "%sl.source_text" -> print } else { "void" -> print }
+                                    }
                                 }
                             }
                         }
@@ -308,49 +356,95 @@ prepare request: move PrepareRequest -> EmitContext {
     request.pointerBitWidth => pointerBitWidth
     request.sources -> semanticContext.prepare => prepared
     prepared -> typedIr.lowerContext => ir!
+    prepared -> expressionTypeIds.resolveContext => recursiveTypes
     [typeIds.SemanticType; ~] => semanticTypes!
-    prepared.types -> each semanticType { semanticTypes! -> push(semanticType) }
+    0 => semanticTypeCopyIndex351!
+    semanticTypeCopyIndex351! < (recursiveTypes.types -> len) -> while {
+        recursiveTypes.types[semanticTypeCopyIndex351!] => semanticType
+        semanticTypes! -> push(semanticType)
+        semanticTypeCopyIndex351! + 1 => semanticTypeCopyIndex351!
+    }
     [typeIds.NominalField; ~] => semanticFields!
-    prepared.fields -> each semanticField { semanticFields! -> push(semanticField) }
+    0 => semanticFieldCopyIndex353!
+    semanticFieldCopyIndex353! < (recursiveTypes.fields -> len) -> while {
+        recursiveTypes.fields[semanticFieldCopyIndex353!] => semanticField
+        semanticFields! -> push(semanticField)
+        semanticFieldCopyIndex353! + 1 => semanticFieldCopyIndex353!
+    }
     [nominalTypes.NominalType; ~] => nominal!
-    prepared.nominal -> each nominalType { nominal! -> push(nominalType) }
+    0 => nominalTypeCopyIndex355!
+    nominalTypeCopyIndex355! < (prepared.nominal -> len) -> while {
+        prepared.nominal[nominalTypeCopyIndex355!] => nominalType
+        nominal! -> push(nominalType)
+        nominalTypeCopyIndex355! + 1 => nominalTypeCopyIndex355!
+    }
     [compositeTypes.CompositeType; ~] => composite!
-    prepared.composite -> each compositeType { composite! -> push(compositeType) }
+    0 => compositeTypeCopyIndex357!
+    compositeTypeCopyIndex357! < (prepared.composite -> len) -> while {
+        prepared.composite[compositeTypeCopyIndex357!] => compositeType
+        composite! -> push(compositeType)
+        compositeTypeCopyIndex357! + 1 => compositeTypeCopyIndex357!
+    }
     [modules.ModuleIdentity; ~] => moduleIdentities!
-    prepared.modules -> each moduleIdentity { moduleIdentities! -> push(moduleIdentity) }
+    0 => moduleIdentityCopyIndex359!
+    moduleIdentityCopyIndex359! < (prepared.modules -> len) -> while {
+        prepared.modules[moduleIdentityCopyIndex359!] => moduleIdentity
+        moduleIdentities! -> push(moduleIdentity)
+        moduleIdentityCopyIndex359! + 1 => moduleIdentityCopyIndex359!
+    }
     [analysis.SourceAnalysisRange; ~] => analysisRanges!
-    prepared.ranges -> each sourceRange { analysisRanges! -> push(sourceRange) }
+    0 => sourceRangeCopyIndex361!
+    sourceRangeCopyIndex361! < (prepared.package.ranges -> len) -> while {
+        prepared.package.ranges[sourceRangeCopyIndex361!] => sourceRange
+        analysisRanges! -> push(sourceRange)
+        sourceRangeCopyIndex361! + 1 => sourceRangeCopyIndex361!
+    }
     [ast.AstNode; ~] => analysisNodes!
-    prepared.nodes -> each node { analysisNodes! -> push(node) }
+    0 => nodeCopyIndex363!
+    nodeCopyIndex363! < (prepared.package.nodes -> len) -> while {
+        prepared.package.nodes[nodeCopyIndex363!] => node
+        analysisNodes! -> push(node)
+        nodeCopyIndex363! + 1 => nodeCopyIndex363!
+    }
     [syntax.SyntaxToken; ~] => analysisTokens!
-    prepared.tokens -> each token { analysisTokens! -> push(token) }
+    0 => tokenCopyIndex365!
+    tokenCopyIndex365! < (prepared.package.tokens -> len) -> while {
+        prepared.package.tokens[tokenCopyIndex365!] => token
+        analysisTokens! -> push(token)
+        tokenCopyIndex365! + 1 => tokenCopyIndex365!
+    }
     [symbols.Symbol; ~] => analysisSymbols!
-    prepared.symbols -> each symbol { analysisSymbols! -> push(symbol) }
+    0 => symbolCopyIndex367!
+    symbolCopyIndex367! < (prepared.package.symbols -> len) -> while {
+        prepared.package.symbols[symbolCopyIndex367!] => symbol
+        analysisSymbols! -> push(symbol)
+        symbolCopyIndex367! + 1 => symbolCopyIndex367!
+    }
     [interpolation.InterpolationSourceRange; ~] => analysisInterpolationRanges!
     [interpolation.InterpolationNode; ~] => analysisInterpolations!
     0 => interpolationSourceIndex!
-    interpolationSourceIndex! < (prepared.sources -> len) -> while {
-        prepared.ranges[interpolationSourceIndex!] => interpolationSourceRange
+    interpolationSourceIndex! < (prepared.package.sources -> len) -> while {
+        prepared.package.ranges[interpolationSourceIndex!] => interpolationSourceRange
         [ast.AstNode; ~] => interpolationNodes!
         0 => interpolationAstIndex!
         interpolationAstIndex! < interpolationSourceRange.astCount -> while {
-            interpolationNodes! -> push(prepared.nodes[interpolationSourceRange.astStart + interpolationAstIndex!])
+            interpolationNodes! -> push(prepared.package.nodes[interpolationSourceRange.astStart + interpolationAstIndex!])
             interpolationAstIndex! + 1 => interpolationAstIndex!
         }
         [syntax.SyntaxToken; ~] => interpolationTokens!
         0 => interpolationTokenIndex!
         interpolationTokenIndex! < interpolationSourceRange.tokenCount -> while {
-            interpolationTokens! -> push(prepared.tokens[interpolationSourceRange.tokenStart + interpolationTokenIndex!])
+            interpolationTokens! -> push(prepared.package.tokens[interpolationSourceRange.tokenStart + interpolationTokenIndex!])
             interpolationTokenIndex! + 1 => interpolationTokenIndex!
         }
         [symbols.Symbol; ~] => interpolationSymbols!
         0 => interpolationSymbolIndex!
         interpolationSymbolIndex! < interpolationSourceRange.symbolCount -> while {
-            interpolationSymbols! -> push(prepared.symbols[interpolationSourceRange.symbolStart + interpolationSymbolIndex!])
+            interpolationSymbols! -> push(prepared.package.symbols[interpolationSourceRange.symbolStart + interpolationSymbolIndex!])
             interpolationSymbolIndex! + 1 => interpolationSymbolIndex!
         }
-        prepared.sources[interpolationSourceIndex!] -> len => interpolationSourceLength
-        prepared.sources[interpolationSourceIndex!] -> slice(UIntSize(0), interpolationSourceLength) => interpolationSource
+        prepared.package.sources[interpolationSourceIndex!] -> len => interpolationSourceLength
+        prepared.package.sources[interpolationSourceIndex!] -> slice(UIntSize(0), interpolationSourceLength) => interpolationSource
         interpolation.PreparedInterpolationRequest {
             source: interpolationSource
             nodes: interpolationNodes!
@@ -364,27 +458,54 @@ prepare request: move PrepareRequest -> EmitContext {
             nodeStart: interpolationStart
             nodeCount: sourceInterpolations! -> len
         })
-        sourceInterpolations! -> each sourceInterpolation {
-            sourceInterpolation => globalInterpolation!
+        0 => sourceInterpolationIndex!
+        sourceInterpolationIndex! < (sourceInterpolations! -> len) -> while {
+            sourceInterpolations![sourceInterpolationIndex!] => globalInterpolation!
             globalInterpolation!.parent >= 0 -> if { globalInterpolation!.parent + interpolationStart => globalInterpolation!.parent }
             globalInterpolation!.operand0 >= 0 -> if { globalInterpolation!.operand0 + interpolationStart => globalInterpolation!.operand0 }
             globalInterpolation!.operand1 >= 0 -> if { globalInterpolation!.operand1 + interpolationStart => globalInterpolation!.operand1 }
             analysisInterpolations! -> push(globalInterpolation!)
+            sourceInterpolationIndex! + 1 => sourceInterpolationIndex!
         }
         interpolationSourceIndex! + 1 => interpolationSourceIndex!
     }
     [typeIds.SemanticType; ~] => layoutTypes!
-    semanticTypes! -> each layoutType { layoutTypes! -> push(layoutType) }
+    0 => layoutTypeCopyIndex418!
+    layoutTypeCopyIndex418! < (semanticTypes! -> len) -> while {
+        semanticTypes![layoutTypeCopyIndex418!] => layoutType
+        layoutTypes! -> push(layoutType)
+        layoutTypeCopyIndex418! + 1 => layoutTypeCopyIndex418!
+    }
     [typeIds.NominalField; ~] => layoutFields!
-    semanticFields! -> each layoutField { layoutFields! -> push(layoutField) }
+    0 => layoutFieldCopyIndex420!
+    layoutFieldCopyIndex420! < (semanticFields! -> len) -> while {
+        semanticFields![layoutFieldCopyIndex420!] => layoutField
+        layoutFields! -> push(layoutField)
+        layoutFieldCopyIndex420! + 1 => layoutFieldCopyIndex420!
+    }
     TypeLayoutRequest { types: layoutTypes!, fields: layoutFields!, typeId: -1, pointerBitWidth: pointerBitWidth } => layoutRequest!
     layoutRequest! -> layoutsFor => layouts
     [Int; ~] => typeSizes!
-    layouts.sizes -> each typeSize { typeSizes! -> push(typeSize) }
+    0 => typeSizeCopyIndex424!
+    typeSizeCopyIndex424! < (layouts.sizes -> len) -> while {
+        layouts.sizes[typeSizeCopyIndex424!] => typeSize
+        typeSizes! -> push(typeSize)
+        typeSizeCopyIndex424! + 1 => typeSizeCopyIndex424!
+    }
     [Int; ~] => typeAligns!
-    layouts.aligns -> each typeAlign { typeAligns! -> push(typeAlign) }
+    0 => typeAlignCopyIndex426!
+    typeAlignCopyIndex426! < (layouts.aligns -> len) -> while {
+        layouts.aligns[typeAlignCopyIndex426!] => typeAlign
+        typeAligns! -> push(typeAlign)
+        typeAlignCopyIndex426! + 1 => typeAlignCopyIndex426!
+    }
     [Int; ~] => typeLayoutStatuses!
-    layouts.statuses -> each layoutStatus { typeLayoutStatuses! -> push(layoutStatus) }
+    0 => layoutStatusCopyIndex428!
+    layoutStatusCopyIndex428! < (layouts.statuses -> len) -> while {
+        layouts.statuses[layoutStatusCopyIndex428!] => layoutStatus
+        typeLayoutStatuses! -> push(layoutStatus)
+        layoutStatusCopyIndex428! + 1 => layoutStatusCopyIndex428!
+    }
     ir! -> typedIr.movesFrom => moves!
     request.sources => sources
     EmitContext {
@@ -410,9 +531,162 @@ prepare request: move PrepareRequest -> EmitContext {
     context!
 }
 
+writeDecimal value: Int -> Unit uses Console {
+    "$(value)" -> print
+}
+
+writeDecimalLine value: Int -> Unit uses Console {
+    "$(value)" -> println
+}
+
 emitCore context: move EmitContext -> Unit uses Console {
+    emitCallEnvironment request: CallEnvironmentRequest -> Bool uses Console {
+        context.ranges[request.targetModule] => targetSourceRange
+        context.symbols[targetSourceRange.symbolStart + request.targetSymbol] => targetFunctionSymbol
+        targetFunctionSymbol.parent => targetParentSymbol
+        -1 => targetParentFunctionIr!
+        -1 => targetParentParameterIr!
+        targetParentSymbol >= 0 -> if {
+            0 => targetParentSearch!
+            (targetParentSearch! < (context.ir -> len) and targetParentFunctionIr! < 0) -> while {
+                context.ir[targetParentSearch!] => targetParentCandidate
+                (targetParentCandidate.kind == 0 and targetParentCandidate.sourceModule == request.targetModule and targetParentCandidate.symbol == targetParentSymbol) -> if {
+                    targetParentSearch! => targetParentFunctionIr!
+                    targetParentCandidate.operand1 => targetParentParameterIr!
+                }
+                targetParentSearch! + 1 => targetParentSearch!
+            }
+        }
+        targetParentParameterIr! >= 0 => hasEnvironment!
+        hasEnvironment! -> if {
+            context.ir[targetParentParameterIr!] -> writeIrType
+            " " -> print
+            context.ir[request.callerIndex] => callerFunction
+            context.ranges[callerFunction.sourceModule] => callerSourceRange
+            context.symbols[callerSourceRange.symbolStart + callerFunction.symbol] => callerFunctionSymbol
+            callerFunction.symbol == targetParentSymbol -> if { "%arg" -> print } else {
+                callerFunctionSymbol.parent == targetParentSymbol -> if { "%env" -> print } else { "poison" -> print }
+            }
+            request.hasArgument -> if { ", " -> print }
+        }
+        hasEnvironment!
+    }
     sourceToken node: typedIr.TypedIrNode -> syntax.SyntaxToken {
         context.tokens[context.ranges[node.sourceModule].tokenStart + node.payloadToken]
+    }
+    aggregateValueIndex wrapperIndex: Int -> Int {
+        wrapperIndex => resolved!
+        (wrapperIndex >= 0 and context.ir[wrapperIndex].kind == 9) -> if {
+            0 => controlSearch!
+            controlSearch! < (context.ir -> len) -> while {
+                (context.ir[controlSearch!].kind == 18 and context.ir[controlSearch!].parent == wrapperIndex) -> if { controlSearch! => resolved! }
+                controlSearch! + 1 => controlSearch!
+            }
+        }
+        resolved! => result
+        result
+    }
+    textLiteralIsRaw request: TextLiteralRequest -> Bool {
+        request.token.span.length >= UIntSize(6) and (context.sources[request.sourceModule] -> byte(request.token.span.start)) == UInt8(34) and (context.sources[request.sourceModule] -> byte(request.token.span.start + UIntSize(1))) == UInt8(34) and (context.sources[request.sourceModule] -> byte(request.token.span.start + UIntSize(2))) == UInt8(34)
+    }
+    textLiteralStart request: TextLiteralRequest -> UIntSize {
+        request.token.span.start + UIntSize(1) => start!
+        request -> textLiteralIsRaw -> if {
+            request.token.span.start + UIntSize(3) => start!
+            start! < request.token.span.start + request.token.span.length -> if {
+                context.sources[request.sourceModule] -> byte(start!) => first
+                first == UInt8(13) -> if {
+                    start! + UIntSize(1) => start!
+                    (start! < request.token.span.start + request.token.span.length and (context.sources[request.sourceModule] -> byte(start!)) == UInt8(10)) -> if { start! + UIntSize(1) => start! }
+                } else {
+                    first == UInt8(10) -> if { start! + UIntSize(1) => start! }
+                }
+            }
+        }
+        start!
+    }
+    textLiteralClosingLineStart request: TextLiteralRequest -> UIntSize {
+        request.token.span.start + request.token.span.length - UIntSize(3) => closing!
+        request -> textLiteralIsRaw -> if {
+            closing! => cursor!
+            (cursor! > request.token.span.start and (context.sources[request.sourceModule] -> byte(cursor! - UIntSize(1))) != UInt8(10)) -> while { cursor! - UIntSize(1) => cursor! }
+            cursor! => closing!
+        }
+        closing! => result
+        result
+    }
+    textLiteralEnd request: TextLiteralRequest -> UIntSize {
+        request.token.span.start + request.token.span.length - UIntSize(1) => end!
+        request -> textLiteralIsRaw -> if {
+            request.token.span.start + request.token.span.length - UIntSize(3) => rawEnd
+            request -> textLiteralClosingLineStart => closingLineStart
+            closingLineStart < rawEnd -> if {
+                closingLineStart - UIntSize(1) => end!
+                (end! > request.token.span.start and (context.sources[request.sourceModule] -> byte(end! - UIntSize(1))) == UInt8(13)) -> if { end! - UIntSize(1) => end! }
+            } else { rawEnd => end! }
+        }
+        end!
+    }
+    textLiteralIndent request: TextLiteralRequest -> UIntSize {
+        UIntSize(0) => indentation!
+        request -> textLiteralIsRaw -> if {
+            request.token.span.start + request.token.span.length - UIntSize(3) => rawEnd
+            request -> textLiteralClosingLineStart => closingLineStart
+            closingLineStart < rawEnd -> if { rawEnd - closingLineStart => indentation! }
+        }
+        indentation!
+    }
+    textLiteralLength request: TextLiteralRequest -> UIntSize {
+        request -> textLiteralStart => byteIndex!
+        request -> textLiteralEnd => byteEnd
+        request -> textLiteralIndent => indentation
+        UIntSize(0) => length!
+        true => lineStart!
+        byteIndex! < byteEnd -> while {
+            lineStart! -> if {
+                UIntSize(0) => skipped!
+                (skipped! < indentation and byteIndex! < byteEnd) -> while {
+                    context.sources[request.sourceModule] -> byte(byteIndex!) => indentByte
+                    (indentByte == UInt8(32) or indentByte == UInt8(9)) -> if {
+                        byteIndex! + UIntSize(1) => byteIndex!
+                        skipped! + UIntSize(1) => skipped!
+                    } else { indentation => skipped! }
+                }
+                false => lineStart!
+            }
+            byteIndex! < byteEnd -> if {
+                context.sources[request.sourceModule] -> byte(byteIndex!) => currentByte
+                (currentByte == UInt8(13) and byteIndex! + UIntSize(1) < byteEnd and (context.sources[request.sourceModule] -> byte(byteIndex! + UIntSize(1))) == UInt8(10)) -> if {
+                    length! + UIntSize(1) => length!
+                    true => lineStart!
+                    byteIndex! + UIntSize(1) => byteIndex!
+                } else {
+                    length! + UIntSize(1) => length!
+                    currentByte == UInt8(10) -> if { true => lineStart! }
+                }
+                byteIndex! + UIntSize(1) => byteIndex!
+            }
+        }
+        length! => result
+        result
+    }
+    emitIntegerPromotion request: IntegerPromotionRequest -> Bool uses Console {
+        context.ir[request.operandIndex] => operand
+        0 => operandWidth!
+        operand.typeOrigin == 1 -> if { operand.typeSymbol -> integerWidth => operandWidth! }
+        (operandWidth! > 0 and operandWidth! < request.targetWidth and operand.kind != 3 and operand.kind != 4) => promoted!
+        promoted! -> if {
+            "  %v$(request.expressionIndex)_" -> print
+            request.right -> if { "right" -> print } else { "left" -> print }
+            "_wide = " -> print
+            operand -> integerNodeSigned -> if { "sext" -> print } else { "zext" -> print }
+            " i$(operandWidth!) " -> print
+            false => parameterOperand!
+            (request.ownerIndex >= 0 and context.ir[request.ownerIndex].kind == 0 and context.ir[request.ownerIndex].operand1 >= 0 and operand.kind == 5 and operand.symbol == context.ir[context.ir[request.ownerIndex].operand1].symbol) -> if { true => parameterOperand! }
+            parameterOperand! -> if { "%arg" -> print } else { "%v$(request.operandIndex)" -> print }
+            " to i$(request.targetWidth)" -> println
+        }
+        promoted!
     }
     sourceNode node: typedIr.TypedIrNode -> ast.AstNode {
         context.nodes[context.ranges[node.sourceModule].astStart + node.astNode]
@@ -542,7 +816,7 @@ emitCore context: move EmitContext -> Unit uses Console {
                 dropGlueMoveIndex! + 1 => dropGlueMoveIndex!
             }
         }
-        (not dropTaskMoved! and dropTask.typeOrigin == 13) -> if {
+        (not dropTaskMoved! and (dropTask.typeOrigin == 13 or dropTask.typeOrigin == 14)) -> if {
             "  " -> print
             dropTask -> emitDropPathName
             "_data = extractvalue %sl.array.i32 " -> print
@@ -665,35 +939,92 @@ emitCore context: move EmitContext -> Unit uses Console {
                         (current.symbol == 19 or current.symbol == 20) -> if { "float" -> print }
                         (current.symbol == 21 or current.symbol == 22) -> if { "double" -> print }
                         current.symbol == 23 -> if { "i1" -> print }
+                        current.symbol == 24 -> if { "%sl.source_text" -> print }
                     }
                 }
             }
         }
     }
-    llvmType symbol: Int -> Text => when {
-        symbol == 1 => "%sl.text"
-        symbol == 2 or symbol == 5 or symbol == 10 or symbol == 14 => "i32"
-        symbol == 3 or symbol == 8 => "i8"
-        symbol == 4 or symbol == 9 => "i16"
-        symbol == 6 or symbol == 7 or symbol == 11 or symbol == 12 or symbol == 13 => "i64"
-        symbol == 19 or symbol == 20 => "float"
-        symbol == 21 or symbol == 22 => "double"
-        symbol == 23 => "i1"
-        else => "void"
+    writeIrType node: typedIr.TypedIrNode -> Unit uses Console {
+        # Recursive semantic identity is authoritative. The legacy projection
+        # can still carry a stale imported nominal module on region nodes, so
+        # consulting it first reintroduces sys.file.SourceText as an unrelated
+        # user struct even when typeId already names the canonical builtin.
+        node.typeId >= 0 -> if { node.typeId -> writeSemanticTypeId } else { node -> writeType }
     }
-    storageSize symbol: Int -> Int => when {
-        symbol == 1 => 16
-        symbol == 3 or symbol == 8 or symbol == 23 => 1
-        symbol == 4 or symbol == 9 => 2
-        symbol == 6 or symbol == 7 or symbol == 11 or symbol == 12 or symbol == 13 or symbol == 21 or symbol == 22 => 8
-        else => 4
+    llvmType symbol: Int -> Text {
+        "void" => result!
+        symbol == 1 -> if { "%sl.text" => result! }
+        (symbol == 2 or symbol == 5 or symbol == 10 or symbol == 14) -> if { "i32" => result! }
+        (symbol == 3 or symbol == 8) -> if { "i8" => result! }
+        (symbol == 4 or symbol == 9) -> if { "i16" => result! }
+        (symbol == 6 or symbol == 7 or symbol == 11 or symbol == 12 or symbol == 13) -> if { "i64" => result! }
+        (symbol == 19 or symbol == 20) -> if { "float" => result! }
+        (symbol == 21 or symbol == 22) -> if { "double" => result! }
+        symbol == 23 -> if { "i1" => result! }
+        symbol == 24 -> if { "%sl.source_text" => result! }
+        result! => selected
+        selected
     }
-    legacyStorageAlign symbol: Int -> Int => when {
-        symbol == 1 => 8
-        symbol == 3 or symbol == 8 or symbol == 23 => 1
-        symbol == 4 or symbol == 9 => 2
-        symbol == 6 or symbol == 7 or symbol == 11 or symbol == 12 or symbol == 13 or symbol == 21 or symbol == 22 => 8
-        else => 4
+    storageSize symbol: Int -> Int {
+        4 => result!
+        symbol == 1 -> if { 16 => result! }
+        (symbol == 3 or symbol == 8 or symbol == 23) -> if { 1 => result! }
+        symbol == 24 -> if { context.pointerBitWidth / 8 * 4 => result! }
+        (symbol == 4 or symbol == 9) -> if { 2 => result! }
+        (symbol == 6 or symbol == 7 or symbol == 11 or symbol == 12 or symbol == 13 or symbol == 21 or symbol == 22) -> if { 8 => result! }
+        result! => selected
+        selected
+    }
+    integerWidth symbol: Int -> Int {
+        0 => result!
+        (symbol == 3 or symbol == 8) -> if { 8 => result! }
+        (symbol == 4 or symbol == 9) -> if { 16 => result! }
+        (symbol == 2 or symbol == 5 or symbol == 10 or symbol == 14) -> if { 32 => result! }
+        (symbol == 6 or symbol == 7 or symbol == 11 or symbol == 12 or symbol == 13) -> if { 64 => result! }
+        result! => selected
+        selected
+    }
+    integerSigned symbol: Int -> Bool {
+        symbol == 2 or symbol == 3 or symbol == 4 or symbol == 5 or symbol == 6 or symbol == 7
+    }
+    integerNodeSigned node: typedIr.TypedIrNode -> Bool {
+        node.typeSymbol => symbol!
+        (node.typeId >= 0 and node.typeId < (context.types -> len)) -> if {
+            context.types[node.typeId] => canonicalType
+            (canonicalType.kind == 1 and canonicalType.origin == 1) -> if {
+                canonicalType.symbol => symbol!
+            }
+        }
+        symbol! => canonicalSymbol
+        canonicalSymbol -> integerSigned
+    }
+    integerComparisonOperation expression: typedIr.TypedIrNode -> Text {
+        context.ir[expression.operand0] => operand
+        operand -> integerNodeSigned => signed
+        expression.opcode == grammar.tokenIdLess -> if {
+            signed -> if { "icmp slt" } else { "icmp ult" }
+        } else {
+            expression.opcode == grammar.tokenIdLessEqual -> if {
+                signed -> if { "icmp sle" } else { "icmp ule" }
+            } else {
+                expression.opcode == grammar.tokenIdGreater -> if {
+                    signed -> if { "icmp sgt" } else { "icmp ugt" }
+                } else {
+                    signed -> if { "icmp sge" } else { "icmp uge" }
+                }
+            }
+        }
+    }
+    legacyStorageAlign symbol: Int -> Int {
+        4 => result!
+        symbol == 1 -> if { 8 => result! }
+        (symbol == 3 or symbol == 8 or symbol == 23) -> if { 1 => result! }
+        symbol == 24 -> if { context.pointerBitWidth / 8 => result! }
+        (symbol == 4 or symbol == 9) -> if { 2 => result! }
+        (symbol == 6 or symbol == 7 or symbol == 11 or symbol == 12 or symbol == 13 or symbol == 21 or symbol == 22) -> if { 8 => result! }
+        result! => selected
+        selected
     }
     storageAlign node: typedIr.TypedIrNode -> Int {
         node.typeId >= 0 -> if {
@@ -702,29 +1033,106 @@ emitCore context: move EmitContext -> Unit uses Console {
             node.typeSymbol -> legacyStorageAlign
         }
     }
-    hexDigit value: Int -> Text => when {
-        value == 0 => "0"
-        value == 1 => "1"
-        value == 2 => "2"
-        value == 3 => "3"
-        value == 4 => "4"
-        value == 5 => "5"
-        value == 6 => "6"
-        value == 7 => "7"
-        value == 8 => "8"
-        value == 9 => "9"
-        value == 10 => "A"
-        value == 11 => "B"
-        value == 12 => "C"
-        value == 13 => "D"
-        value == 14 => "E"
-        else => "F"
+    arrayElementTypeId node: typedIr.TypedIrNode -> Int {
+        -1 => elementTypeId!
+        node.typeId >= 0 -> if {
+            context.types[node.typeId].kind == 3 -> if { context.types[node.typeId].first => elementTypeId! }
+        } else {
+            # The legacy array projection stores a nominal element as
+            # typeModule/typeSymbol. Recover its canonical ID so arrays of
+            # user structs do not fall through to builtin symbol 0 (Unit).
+            node.typeModule >= 0 -> if {
+                0 => legacyElementSearch!
+                legacyElementSearch! < (context.types -> len) -> while {
+                    context.types[legacyElementSearch!] => legacyElementCandidate
+                    (legacyElementCandidate.kind == 1 and (legacyElementCandidate.origin == 0 or legacyElementCandidate.origin == 2) and legacyElementCandidate.module == node.typeModule and legacyElementCandidate.symbol == node.typeSymbol) -> if {
+                        legacyElementSearch! => elementTypeId!
+                    }
+                    legacyElementSearch! + 1 => legacyElementSearch!
+                }
+            }
+        }
+        elementTypeId!
+    }
+    arrayElementSize node: typedIr.TypedIrNode -> Int {
+        node -> arrayElementTypeId => elementTypeId
+        elementTypeId >= 0 -> if { context.typeSizes[elementTypeId] } else { node.typeSymbol -> storageSize }
+    }
+    arrayElementAlign node: typedIr.TypedIrNode -> Int {
+        node -> arrayElementTypeId => elementTypeId
+        elementTypeId >= 0 -> if { context.typeAligns[elementTypeId] } else { node.typeSymbol -> legacyStorageAlign }
+    }
+    writeArrayElementType node: typedIr.TypedIrNode -> Unit uses Console {
+        node -> arrayElementTypeId => elementTypeId
+        elementTypeId >= 0 -> if { elementTypeId -> writeSemanticTypeId } else { node.typeSymbol -> llvmType -> print }
+    }
+    hexDigit value: Int -> Text {
+        "F" => result!
+        value == 0 -> if { "0" => result! }
+        value == 1 -> if { "1" => result! }
+        value == 2 -> if { "2" => result! }
+        value == 3 -> if { "3" => result! }
+        value == 4 -> if { "4" => result! }
+        value == 5 -> if { "5" => result! }
+        value == 6 -> if { "6" => result! }
+        value == 7 -> if { "7" => result! }
+        value == 8 -> if { "8" => result! }
+        value == 9 -> if { "9" => result! }
+        value == 10 -> if { "A" => result! }
+        value == 11 -> if { "B" => result! }
+        value == 12 -> if { "C" => result! }
+        value == 13 -> if { "D" => result! }
+        value == 14 -> if { "E" => result! }
+        result! => selected
+        selected
+    }
+    emitTextLiteralConstant request: TextLiteralRequest -> Unit uses Console {
+        "c" -> print
+        context.sources[request.sourceModule] -> slice(request.token.span.start, UIntSize(1)) -> print
+        request -> textLiteralStart => byteIndex!
+        request -> textLiteralEnd => byteEnd
+        request -> textLiteralIndent => indentation
+        true => lineStart!
+        byteIndex! < byteEnd -> while {
+            lineStart! -> if {
+                UIntSize(0) => skipped!
+                (skipped! < indentation and byteIndex! < byteEnd) -> while {
+                    context.sources[request.sourceModule] -> byte(byteIndex!) => indentByte
+                    (indentByte == UInt8(32) or indentByte == UInt8(9)) -> if {
+                        byteIndex! + UIntSize(1) => byteIndex!
+                        skipped! + UIntSize(1) => skipped!
+                    } else { indentation => skipped! }
+                }
+                false => lineStart!
+            }
+            byteIndex! < byteEnd -> if {
+                context.sources[request.sourceModule] -> byte(byteIndex!) => textByte!
+                (textByte! == UInt8(13) and byteIndex! + UIntSize(1) < byteEnd and (context.sources[request.sourceModule] -> byte(byteIndex! + UIntSize(1))) == UInt8(10)) -> if {
+                    UInt8(10) => textByte!
+                    byteIndex! + UIntSize(1) => byteIndex!
+                }
+                (textByte! >= UInt8(32) and textByte! <= UInt8(126) and textByte! != UInt8(34) and textByte! != UInt8(92)) -> if {
+                    context.sources[request.sourceModule] -> slice(byteIndex!, UIntSize(1)) -> print
+                } else {
+                    "\\" -> print
+                    Int(textByte!) / 16 -> hexDigit -> print
+                    Int(textByte!) % 16 -> hexDigit -> print
+                }
+                textByte! == UInt8(10) -> if { true => lineStart! }
+                byteIndex! + UIntSize(1) => byteIndex!
+            }
+        }
+        context.sources[request.sourceModule] -> slice(request.token.span.start, UIntSize(1)) -> println
     }
     mutableBindingRoot bindingIndex: Int -> Int {
         context.ir[bindingIndex] => binding
         binding.parent => bindingOwner!
-        (bindingOwner! >= 0 and context.ir[bindingOwner!].kind != 0 and context.ir[bindingOwner!].kind != 11) -> while {
+        (bindingOwner! >= 0 and context.ir[bindingOwner!].kind != 0 and context.ir[bindingOwner!].kind != 1 and context.ir[bindingOwner!].kind != 11) -> while {
             context.ir[bindingOwner!].parent => bindingOwner!
+        }
+        binding.parent => bindingScope!
+        (bindingScope! >= 0 and context.ir[bindingScope!].kind != 0 and context.ir[bindingScope!].kind != 1 and context.ir[bindingScope!].kind != 11 and context.ir[bindingScope!].kind != 19) -> while {
+            context.ir[bindingScope!].parent => bindingScope!
         }
         binding -> sourceToken => bindingName
         bindingIndex => rootIndex!
@@ -732,12 +1140,30 @@ emitCore context: move EmitContext -> Unit uses Console {
         0 => candidateIndex!
         candidateIndex! < (context.ir -> len) -> while {
             context.ir[candidateIndex!] => candidate
+            # Mutable rebindings can receive a fresh semantic symbol even
+            # though they target the same lexical name. Function ownership,
+            # ancestor visibility, and the byte-exact name comparison below
+            # identify the storage root without merging sibling scopes.
             (candidate.kind == 17 and candidate.flags == 1 and candidate.sourceModule == binding.sourceModule) -> if {
                 candidate.parent => candidateOwner!
-                (candidateOwner! >= 0 and context.ir[candidateOwner!].kind != 0 and context.ir[candidateOwner!].kind != 11) -> while {
+                (candidateOwner! >= 0 and context.ir[candidateOwner!].kind != 0 and context.ir[candidateOwner!].kind != 1 and context.ir[candidateOwner!].kind != 11) -> while {
                     context.ir[candidateOwner!].parent => candidateOwner!
                 }
                 candidateOwner! == bindingOwner! -> if {
+                    candidate.parent => candidateScope!
+                    (candidateScope! >= 0 and context.ir[candidateScope!].kind != 0 and context.ir[candidateScope!].kind != 1 and context.ir[candidateScope!].kind != 11 and context.ir[candidateScope!].kind != 19) -> while {
+                        context.ir[candidateScope!].parent => candidateScope!
+                    }
+                    false => candidateVisible!
+                    bindingScope! => visibleScope!
+                    (visibleScope! >= 0 and not candidateVisible!) -> while {
+                        visibleScope! == candidateScope! -> if { true => candidateVisible! } else {
+                            context.ir[visibleScope!].parent => visibleScope!
+                            (visibleScope! >= 0 and context.ir[visibleScope!].kind != 0 and context.ir[visibleScope!].kind != 1 and context.ir[visibleScope!].kind != 11 and context.ir[visibleScope!].kind != 19) -> while {
+                                context.ir[visibleScope!].parent => visibleScope!
+                            }
+                        }
+                    }
                     candidate -> sourceToken => candidateName
                     candidateName.span.length == bindingName.span.length => sameName!
                     UIntSize(0) => nameByte!
@@ -747,7 +1173,7 @@ emitCore context: move EmitContext -> Unit uses Console {
                         bindingByte != candidateByte -> if { false => sameName! }
                         nameByte! + UIntSize(1) => nameByte!
                     }
-                    sameName! -> if {
+                    (sameName! and candidateVisible!) -> if {
                         candidate -> sourceStart => candidateStart
                         candidateStart < rootStart! -> if {
                             candidateIndex! => rootIndex!
@@ -767,6 +1193,51 @@ emitCore context: move EmitContext -> Unit uses Console {
         }
         bindingOwner! == request.ownerIndex
     }
+    emitArrayPush request: WhileValueRequest -> Unit uses Console {
+        request.whileIndex => pushIndex
+        context.ir[pushIndex] => pushNode
+        context.ir[pushNode.operand0] => pushSource
+        context.ir[pushNode.operand1] => pushValue
+        pushNode.operand0 -> mutableBindingRoot => pushRoot
+        "  %push$(pushIndex)_data = extractvalue %sl.array.i32 " -> print
+        (request.ownerIndex >= 0 and context.ir[request.ownerIndex].kind == 0 and context.ir[request.ownerIndex].operand1 >= 0 and pushSource.kind == 5 and pushSource.symbol == context.ir[context.ir[request.ownerIndex].operand1].symbol) -> if { "%arg" -> print } else { "%v$(pushNode.operand0)" -> print }
+        ", 0" -> println
+        "  %push$(pushIndex)_length = extractvalue %sl.array.i32 " -> print
+        (request.ownerIndex >= 0 and context.ir[request.ownerIndex].kind == 0 and context.ir[request.ownerIndex].operand1 >= 0 and pushSource.kind == 5 and pushSource.symbol == context.ir[context.ir[request.ownerIndex].operand1].symbol) -> if { "%arg" -> print } else { "%v$(pushNode.operand0)" -> print }
+        ", 1" -> println
+        "  %push$(pushIndex)_capacity = extractvalue %sl.array.i32 " -> print
+        (request.ownerIndex >= 0 and context.ir[request.ownerIndex].kind == 0 and context.ir[request.ownerIndex].operand1 >= 0 and pushSource.kind == 5 and pushSource.symbol == context.ir[context.ir[request.ownerIndex].operand1].symbol) -> if { "%arg" -> print } else { "%v$(pushNode.operand0)" -> print }
+        ", 2" -> println
+        "  %push$(pushIndex)_full = icmp eq i64 %push$(pushIndex)_length, %push$(pushIndex)_capacity" -> println
+        "  %push$(pushIndex)_empty = icmp eq i64 %push$(pushIndex)_capacity, 0" -> println
+        "  %push$(pushIndex)_doubled = mul i64 %push$(pushIndex)_capacity, 2" -> println
+        "  %push$(pushIndex)_grown_capacity = select i1 %push$(pushIndex)_empty, i64 4, i64 %push$(pushIndex)_doubled" -> println
+        "  %push$(pushIndex)_append_capacity = select i1 %push$(pushIndex)_full, i64 %push$(pushIndex)_grown_capacity, i64 %push$(pushIndex)_capacity" -> println
+        pushSource -> arrayElementSize => pushElementSize
+        "  %push$(pushIndex)_append_bytes = mul i64 %push$(pushIndex)_append_capacity, $pushElementSize" -> println
+        "  %push$(pushIndex)_append_data = call ptr @realloc(ptr %push$(pushIndex)_data, i64 %push$(pushIndex)_append_bytes)" -> println
+        "  %push$(pushIndex)_slot = getelementptr " -> print
+        pushSource -> writeArrayElementType
+        ", ptr %push$(pushIndex)_append_data, i64 %push$(pushIndex)_length" -> println
+        "  store " -> print
+        pushSource -> writeArrayElementType
+        " " -> print
+        (pushValue.kind == 3 or pushValue.kind == 4) -> if {
+            pushValue -> sourceToken => pushValueToken
+            pushValue.kind == 3 -> if { context.sources[pushValue.sourceModule] -> slice(pushValueToken.span.start, pushValueToken.span.length) -> print } else {
+                ((context.sources[pushValue.sourceModule] -> byte(pushValueToken.span.start)) == UInt8(116)) -> if { "1" -> print } else { "0" -> print }
+            }
+        } else {
+            (request.ownerIndex >= 0 and context.ir[request.ownerIndex].kind == 0 and context.ir[request.ownerIndex].operand1 >= 0 and pushValue.kind == 5 and pushValue.symbol == context.ir[context.ir[request.ownerIndex].operand1].symbol) -> if { "%arg" -> print } else { "%v$(pushNode.operand1)" -> print }
+        }
+        pushSource -> arrayElementAlign => pushElementAlign
+        ", ptr %push$(pushIndex)_slot, align $pushElementAlign" -> println
+        "  %push$(pushIndex)_new_length = add i64 %push$(pushIndex)_length, 1" -> println
+        "  %push$(pushIndex)_array0 = insertvalue %sl.array.i32 poison, ptr %push$(pushIndex)_append_data, 0" -> println
+        "  %push$(pushIndex)_array1 = insertvalue %sl.array.i32 %push$(pushIndex)_array0, i64 %push$(pushIndex)_new_length, 1" -> println
+        "  %push$(pushIndex)_array2 = insertvalue %sl.array.i32 %push$(pushIndex)_array1, i64 %push$(pushIndex)_append_capacity, 2" -> println
+        "  store %sl.array.i32 %push$(pushIndex)_array2, ptr %slot$(pushRoot), align 8" -> println
+    }
     writeWhileValue request: WhileValueRequest -> Unit uses Console {
         context.ir[request.nodeIndex] => value
         (value.kind == 3 or value.kind == 4) -> if {
@@ -774,14 +1245,241 @@ emitCore context: move EmitContext -> Unit uses Console {
             value.kind == 3 -> if {
                 context.sources[value.sourceModule] -> slice(valueToken.span.start, valueToken.span.length) -> print
             } else {
-                ((context.sources[value.sourceModule] -> byte(valueToken.span.start)) == UInt8(116)) -> if { "1" } else { "0" } -> print
+                ((context.sources[value.sourceModule] -> byte(valueToken.span.start)) == UInt8(116)) -> if { "1" -> print } else { "0" -> print }
             }
         } else {
             (request.ownerIndex >= 0 and context.ir[request.ownerIndex].kind == 0 and context.ir[request.ownerIndex].operand1 >= 0 and value.kind == 5 and value.symbol == context.ir[context.ir[request.ownerIndex].operand1].symbol) -> if {
                 "%arg" -> print
             } else {
-                "%while$(request.whileIndex)_v$(request.nodeIndex)" -> print
+                false => capturedWhileValue!
+                (request.ownerIndex >= 0 and context.ir[request.ownerIndex].kind == 0 and value.kind == 5 and value.operand0 < 0) -> if {
+                    context.ir[request.ownerIndex] => whileOwnerFunction
+                    context.ranges[whileOwnerFunction.sourceModule] => whileOwnerRange
+                    context.symbols[whileOwnerRange.symbolStart + whileOwnerFunction.symbol] => whileOwnerSymbol
+                    whileOwnerSymbol.parent >= 0 -> if {
+                        0 => whileParentSearch!
+                        (whileParentSearch! < (context.ir -> len) and not capturedWhileValue!) -> while {
+                            context.ir[whileParentSearch!] => whileParentCandidate
+                            (whileParentCandidate.kind == 0 and whileParentCandidate.sourceModule == whileOwnerFunction.sourceModule and whileParentCandidate.symbol == whileOwnerSymbol.parent and whileParentCandidate.operand1 >= 0 and context.ir[whileParentCandidate.operand1].symbol == value.symbol) -> if {
+                                true => capturedWhileValue!
+                            }
+                            whileParentSearch! + 1 => whileParentSearch!
+                        }
+                    }
+                }
+                capturedWhileValue! -> if { "%v$(request.nodeIndex)" -> print } else { "%while$(request.whileIndex)_v$(request.nodeIndex)" -> print }
             }
+        }
+    }
+    emitIndexAssignment request: WhileValueRequest -> Unit uses Console {
+        context.ir[request.nodeIndex] => assignment
+        assignment.operand0 >= 0 -> if {
+            assignment.operand1 >= 0 -> if {
+                request.nodeIndex -> mutableBindingRoot => assignmentRoot
+                context.ir[assignmentRoot] => assignmentBinding
+                context.ir[assignment.operand0] => assignmentValue
+                context.ir[assignment.operand1] => assignmentIndex
+                "  %assign$(request.nodeIndex)_array = load %sl.array.i32, ptr %slot$(assignmentRoot), align 4" -> println
+                "  %assign$(request.nodeIndex)_data = extractvalue %sl.array.i32 %assign$(request.nodeIndex)_array, 0" -> println
+                assignmentIndex.typeSymbol == 13 -> if {
+                    "  %assign$(request.nodeIndex)_index = add i64 0, " -> print
+                    WhileValueRequest { whileIndex: request.nodeIndex, ownerIndex: request.ownerIndex, nodeIndex: assignment.operand1 } -> writeWhileValue
+                    "" -> println
+                } else {
+                    assignmentIndex.typeSymbol -> integerWidth => assignmentIndexWidth
+                    "  %assign$(request.nodeIndex)_index = " -> print
+                    assignmentIndex -> integerNodeSigned -> if { "sext" -> print } else { "zext" -> print }
+                    " i$(assignmentIndexWidth) " -> print
+                    assignmentIndex.kind == 3 -> if {
+                        assignmentIndex -> sourceToken => assignmentIndexToken
+                        context.sources[assignmentIndex.sourceModule] -> slice(assignmentIndexToken.span.start, assignmentIndexToken.span.length) -> print
+                    } else {
+                        (request.ownerIndex >= 0 and context.ir[request.ownerIndex].kind == 0 and context.ir[request.ownerIndex].operand1 >= 0 and assignmentIndex.kind == 5 and assignmentIndex.symbol == context.ir[context.ir[request.ownerIndex].operand1].symbol) -> if { "%arg" -> print } else { "%v$(assignment.operand1)" -> print }
+                    }
+                    " to i64" -> println
+                }
+                "  %assign$(request.nodeIndex)_ptr = getelementptr " -> print
+                assignmentBinding -> writeArrayElementType
+                ", ptr %assign$(request.nodeIndex)_data, i64 %assign$(request.nodeIndex)_index" -> println
+                "  store " -> print
+                assignmentBinding -> writeArrayElementType
+                " " -> print
+                (assignmentValue.kind == 3 or assignmentValue.kind == 4) -> if {
+                    assignmentValue -> sourceToken => assignmentValueToken
+                    assignmentValue.kind == 3 -> if { context.sources[assignmentValue.sourceModule] -> slice(assignmentValueToken.span.start, assignmentValueToken.span.length) -> print } else {
+                        ((context.sources[assignmentValue.sourceModule] -> byte(assignmentValueToken.span.start)) == UInt8(116)) -> if { "1" -> print } else { "0" -> print }
+                    }
+                } else {
+                    (request.ownerIndex >= 0 and context.ir[request.ownerIndex].kind == 0 and context.ir[request.ownerIndex].operand1 >= 0 and assignmentValue.kind == 5 and assignmentValue.symbol == context.ir[context.ir[request.ownerIndex].operand1].symbol) -> if { "%arg" -> print } else { "%v$(assignment.operand0)" -> print }
+                }
+                ", ptr %assign$(request.nodeIndex)_ptr, align " -> print
+                assignmentBinding -> arrayElementAlign -> writeDecimalLine
+            }
+        }
+    }
+    emitMemberAssignment request: WhileValueRequest -> Unit uses Console {
+        context.ir[request.nodeIndex] => assignment
+        (assignment.operand0 >= 0 and assignment.operand1 >= 0) -> if {
+            assignment.operand1 -> mutableBindingRoot => assignmentRoot
+            context.ir[assignmentRoot] => assignmentBinding
+            context.ir[assignment.operand0] => assignmentValue
+            assignmentBinding.typeModule => assignmentOwnerSource!
+            assignmentBinding.typeOrigin == 2 -> if {
+                context.modules[assignmentBinding.typeModule].sourceIndex => assignmentOwnerSource!
+            }
+            context.ranges[assignmentOwnerSource!] => assignmentOwnerRange
+            assignment -> sourceNode => assignmentAst
+            context.tokens[context.ranges[assignment.sourceModule].tokenStart + assignmentAst.secondaryToken] => assignmentMemberName
+            -1 => assignmentFieldOrdinal!
+            0 => assignmentCandidateOrdinal!
+            0 => assignmentFieldSearch!
+            assignmentFieldSearch! < assignmentOwnerRange.symbolCount -> while {
+                context.symbols[assignmentOwnerRange.symbolStart + assignmentFieldSearch!] => assignmentField
+                (assignmentField.kind == 26 and assignmentField.parent == assignmentBinding.typeSymbol) -> if {
+                    context.tokens[assignmentOwnerRange.tokenStart + assignmentField.nameToken] => assignmentFieldName
+                    assignmentMemberName.span.length == assignmentFieldName.span.length => assignmentFieldEqual!
+                    UIntSize(0) => assignmentFieldByte!
+                    (assignmentFieldEqual! and assignmentFieldByte! < assignmentMemberName.span.length) -> while {
+                        context.sources[assignment.sourceModule] -> byte(assignmentMemberName.span.start + assignmentFieldByte!) => assignmentMemberByte
+                        context.sources[assignmentOwnerSource!] -> byte(assignmentFieldName.span.start + assignmentFieldByte!) => assignmentFieldNameByte
+                        assignmentMemberByte != assignmentFieldNameByte -> if { false => assignmentFieldEqual! }
+                        assignmentFieldByte! + UIntSize(1) => assignmentFieldByte!
+                    }
+                    assignmentFieldEqual! -> if { assignmentCandidateOrdinal! => assignmentFieldOrdinal! }
+                    assignmentCandidateOrdinal! + 1 => assignmentCandidateOrdinal!
+                }
+                assignmentFieldSearch! + 1 => assignmentFieldSearch!
+            }
+            assignmentFieldOrdinal! >= 0 -> if {
+                "  %member_assign$(request.nodeIndex)_current = load %sl.struct.m$(assignmentOwnerSource!)_s$(assignmentBinding.typeSymbol), ptr %slot$(assignmentRoot), align " -> print
+                assignmentBinding -> storageAlign -> writeDecimalLine
+                "  %member_assign$(request.nodeIndex)_updated = insertvalue %sl.struct.m$(assignmentOwnerSource!)_s$(assignmentBinding.typeSymbol) %member_assign$(request.nodeIndex)_current, " -> print
+                assignmentValue -> writeIrType
+                " " -> print
+                (assignmentValue.kind == 3 or assignmentValue.kind == 4) -> if {
+                    assignmentValue -> sourceToken => assignmentValueToken
+                    assignmentValue.kind == 3 -> if {
+                        context.sources[assignmentValue.sourceModule] -> slice(assignmentValueToken.span.start, assignmentValueToken.span.length) -> print
+                    } else {
+                        ((context.sources[assignmentValue.sourceModule] -> byte(assignmentValueToken.span.start)) == UInt8(116)) -> if { "1" -> print } else { "0" -> print }
+                    }
+                } else {
+                    (request.ownerIndex >= 0 and context.ir[request.ownerIndex].kind == 0 and context.ir[request.ownerIndex].operand1 >= 0 and assignmentValue.kind == 5 and assignmentValue.symbol == context.ir[context.ir[request.ownerIndex].operand1].symbol) -> if { "%arg" -> print } else { "%v$(assignment.operand0)" -> print }
+                }
+                ", $(assignmentFieldOrdinal!)" -> println
+                "  store %sl.struct.m$(assignmentOwnerSource!)_s$(assignmentBinding.typeSymbol) %member_assign$(request.nodeIndex)_updated, ptr %slot$(assignmentRoot), align " -> print
+                assignmentBinding -> storageAlign -> writeDecimalLine
+            }
+        }
+    }
+    emitWhileMember request: WhileValueRequest -> Unit uses Console {
+        context.ir[request.nodeIndex] => member
+        context.ir[member.operand0] => memberBase
+        memberBase.typeOrigin => currentOrigin!
+        memberBase.typeModule => currentModule!
+        memberBase.typeSymbol => currentSymbol!
+        member -> sourceNode => memberAst
+        memberBase -> sourceNode => memberBaseAst
+        memberBaseAst.start + memberBaseAst.length => memberBaseEnd
+        memberAst.firstToken => memberTokenIndex!
+        true => beforeMemberBaseEnd!
+        (beforeMemberBaseEnd! and memberTokenIndex! < memberAst.firstToken + memberAst.tokenCount) -> while {
+            context.tokens[context.ranges[member.sourceModule].tokenStart + memberTokenIndex!].span.start < memberBaseEnd -> if {
+                memberTokenIndex! + 1 => memberTokenIndex!
+            } else { false => beforeMemberBaseEnd! }
+        }
+        memberTokenIndex! => memberPathTokenStart
+        1 => memberIdentifierCount!
+        memberTokenIndex! < memberAst.firstToken + memberAst.tokenCount -> while {
+            context.tokens[context.ranges[member.sourceModule].tokenStart + memberTokenIndex!].kind == grammar.tokenIdIdentifier -> if {
+                memberIdentifierCount! + 1 => memberIdentifierCount!
+            }
+            memberTokenIndex! + 1 => memberTokenIndex!
+        }
+        1 => memberIdentifierOrdinal!
+        0 => projectionOrdinal!
+        memberPathTokenStart => memberTokenIndex!
+        memberTokenIndex! < memberAst.firstToken + memberAst.tokenCount -> while {
+            context.tokens[context.ranges[member.sourceModule].tokenStart + memberTokenIndex!].kind == grammar.tokenIdIdentifier -> if {
+                memberIdentifierOrdinal! > 0 -> if {
+                    currentModule! => ownerSourceModule!
+                    currentOrigin! == 2 -> if { context.modules[currentModule!].sourceIndex => ownerSourceModule! }
+                    context.ranges[ownerSourceModule!] => ownerRange
+                    -1 => fieldOrdinal!
+                    0 => candidateFieldOrdinal!
+                    0 => fieldSearch!
+                    fieldSearch! < ownerRange.symbolCount -> while {
+                        context.symbols[ownerRange.symbolStart + fieldSearch!] => field
+                        (field.kind == 26 and field.parent == currentSymbol!) -> if {
+                            context.tokens[context.ranges[member.sourceModule].tokenStart + memberTokenIndex!] => memberName
+                            context.tokens[ownerRange.tokenStart + field.nameToken] => fieldName
+                            memberName.span.length == fieldName.span.length => equal!
+                            UIntSize(0) => fieldNameByte!
+                            (equal! and fieldNameByte! < memberName.span.length) -> while {
+                                context.sources[member.sourceModule] -> byte(memberName.span.start + fieldNameByte!) => memberByte
+                                context.sources[ownerSourceModule!] -> byte(fieldName.span.start + fieldNameByte!) => fieldByte
+                                memberByte != fieldByte -> if { false => equal! }
+                                fieldNameByte! + UIntSize(1) => fieldNameByte!
+                            }
+                            equal! -> if {
+                                candidateFieldOrdinal! => fieldOrdinal!
+                                -1 => nextOrigin!
+                                -1 => nextModule!
+                                -1 => nextSymbol!
+                                0 => nominalSearch!
+                                nominalSearch! < (context.nominal -> len) -> while {
+                                    context.nominal[nominalSearch!] => fieldType
+                                    (fieldType.sourceModule == ownerSourceModule! and fieldType.typeAst == field.typeNode) -> if {
+                                        fieldType.origin => nextOrigin!
+                                        fieldType.targetModule => nextModule!
+                                        fieldType.targetSymbol => nextSymbol!
+                                    }
+                                    nominalSearch! + 1 => nominalSearch!
+                                }
+                                nextOrigin! < 0 -> if {
+                                    0 => compositeSearch!
+                                    compositeSearch! < (context.composite -> len) -> while {
+                                        context.composite[compositeSearch!] => compositeType
+                                        (compositeType.sourceModule == ownerSourceModule! and compositeType.typeAst == field.typeNode) -> if {
+                                            10 + compositeType.kind => nextOrigin!
+                                            compositeType.kind == 5 -> if {
+                                                compositeType.keySymbol => nextModule!
+                                                compositeType.valueSymbol => nextSymbol!
+                                            } else {
+                                                compositeType.elementModule => nextModule!
+                                                compositeType.elementSymbol => nextSymbol!
+                                            }
+                                        }
+                                        compositeSearch! + 1 => compositeSearch!
+                                    }
+                                }
+                                "  " -> print
+                                memberIdentifierOrdinal! == memberIdentifierCount! - 1 -> if {
+                                    "%while$(request.whileIndex)_v$(request.nodeIndex)" -> print
+                                } else {
+                                    "%while$(request.whileIndex)_v$(request.nodeIndex)_m$(projectionOrdinal!)" -> print
+                                }
+                                " = extractvalue %sl.struct.m$(ownerSourceModule!)_s$(currentSymbol!) " -> print
+                                projectionOrdinal! == 0 -> if {
+                                    WhileValueRequest { whileIndex: request.whileIndex, ownerIndex: request.ownerIndex, nodeIndex: member.operand0 } -> writeWhileValue
+                                } else {
+                                    "%while$(request.whileIndex)_v$(request.nodeIndex)_m" -> print
+                                    projectionOrdinal! - 1 -> writeDecimal
+                                }
+                                ", $(fieldOrdinal!)" -> println
+                                nextOrigin! => currentOrigin!
+                                nextModule! => currentModule!
+                                nextSymbol! => currentSymbol!
+                                projectionOrdinal! + 1 => projectionOrdinal!
+                            }
+                            candidateFieldOrdinal! + 1 => candidateFieldOrdinal!
+                        }
+                        fieldSearch! + 1 => fieldSearch!
+                    }
+                }
+                memberIdentifierOrdinal! + 1 => memberIdentifierOrdinal!
+            }
+            memberTokenIndex! + 1 => memberTokenIndex!
         }
     }
     emitWhileBranch request: WhileBranchRequest -> Unit uses Console {
@@ -873,10 +1571,15 @@ emitCore context: move EmitContext -> Unit uses Console {
                             valueTaskSize! == (valueTasks! -> len) -> if { valueTasks! -> push(emitValueTask) } else { emitValueTask => valueTasks![valueTaskSize!] }
                             valueTaskSize! + 1 => valueTaskSize!
                             (valueNode.kind == 6 or valueNode.kind == 7 or valueNode.kind == 8 or valueNode.kind == 9 or valueNode.kind == 13 or valueNode.kind == 15) -> if {
-                                ((valueNode.kind == 8 or valueNode.kind == 15) and valueNode.operand1 >= 0) -> if {
+                                ((valueNode.kind == 8 or valueNode.kind == 15 or (valueNode.kind == 9 and (valueNode.opcode == -202 or valueNode.opcode == -203))) and valueNode.operand1 >= 0) -> if {
                                     valueNode.operand1 + 1 => secondValueTask
                                     valueTaskSize! == (valueTasks! -> len) -> if { valueTasks! -> push(secondValueTask) } else { secondValueTask => valueTasks![valueTaskSize!] }
                                     valueTaskSize! + 1 => valueTaskSize!
+                                    (valueNode.kind == 9 and valueNode.opcode == -203 and context.ir[valueNode.operand1].nextOperand >= 0) -> if {
+                                        context.ir[valueNode.operand1].nextOperand + 1 => sliceLengthTask
+                                        valueTaskSize! == (valueTasks! -> len) -> if { valueTasks! -> push(sliceLengthTask) } else { sliceLengthTask => valueTasks![valueTaskSize!] }
+                                        valueTaskSize! + 1 => valueTaskSize!
+                                    }
                                 }
                                 valueNode.operand0 >= 0 -> if {
                                     valueNode.operand0 + 1 => firstValueTask
@@ -892,27 +1595,23 @@ emitCore context: move EmitContext -> Unit uses Console {
                                 (ownerIndex >= 0 and context.ir[ownerIndex].kind == 0 and context.ir[ownerIndex].operand1 >= 0 and valueNode.symbol == context.ir[context.ir[ownerIndex].operand1].symbol) -> if { true => parameterValue! }
                                 not parameterValue! -> if {
                                     -1 => valueBindingIndex!
-                                    0 => valueBindingSearch!
-                                    valueBindingSearch! < (context.ir -> len) -> while {
-                                        BindingOwnerRequest { bindingIndex: valueBindingSearch!, ownerIndex: ownerIndex } -> bindingBelongsToOwner => valueBindingInOwner
-                                        (context.ir[valueBindingSearch!].kind == 17 and context.ir[valueBindingSearch!].symbol == valueNode.symbol and valueBindingInOwner) -> if { valueBindingSearch! => valueBindingIndex! }
-                                        valueBindingSearch! + 1 => valueBindingSearch!
-                                    }
+                                    (valueNode.operand0 >= 0 and context.ir[valueNode.operand0].kind == 17) -> if { valueNode.operand0 => valueBindingIndex! }
                                     valueBindingIndex! >= 0 -> if {
                                         context.ir[valueBindingIndex!] => valueBinding
                                         valueBinding.flags == 1 -> if {
                                             valueBindingIndex! -> mutableBindingRoot => valueRoot
                                             "  %while$(whileIndex)_v$(valueNodeIndex) = load " -> print
-                                            valueNode -> writeType
-                                            ", ptr %slot$(valueRoot), align $(valueNode -> storageAlign)" -> println
+                                            valueNode -> writeIrType
+                                            ", ptr %slot$(valueRoot), align " -> print
+                                            valueNode -> storageAlign -> writeDecimalLine
                                         } else {
                                             context.ir[valueBinding.operand0] => bindingOperand
                                             "  %while$(whileIndex)_v$(valueNodeIndex) = freeze " -> print
-                                            valueNode -> writeType
+                                            valueNode -> writeIrType
                                             " " -> print
                                             (bindingOperand.kind == 3 or bindingOperand.kind == 4) -> if {
                                                 bindingOperand -> sourceToken => bindingToken
-                                                bindingOperand.kind == 3 -> if { context.sources[bindingOperand.sourceModule] -> slice(bindingToken.span.start, bindingToken.span.length) -> print } else { ((context.sources[bindingOperand.sourceModule] -> byte(bindingToken.span.start)) == UInt8(116)) -> if { "1" } else { "0" } -> print }
+                                                bindingOperand.kind == 3 -> if { context.sources[bindingOperand.sourceModule] -> slice(bindingToken.span.start, bindingToken.span.length) -> print } else { ((context.sources[bindingOperand.sourceModule] -> byte(bindingToken.span.start)) == UInt8(116)) -> if { "1" -> print } else { "0" -> print } }
                                             } else { "%v$(valueBinding.operand0)" -> print }
                                             "" -> println
                                         }
@@ -920,23 +1619,44 @@ emitCore context: move EmitContext -> Unit uses Console {
                                 }
                             }
                             valueNode.kind == 6 -> if {
-                                "  %while$(whileIndex)_v$(valueNodeIndex) = call " -> print
-                                valueNode -> writeType
-                                " @sl_m$(valueNode.targetModule)_s$(valueNode.symbol)(" -> print
-                                valueNode.operand0 >= 0 -> if {
-                                    context.ir[valueNode.operand0] => callArgument
-                                    callArgument -> writeType
+                                (valueNode.targetModule < 0 and valueNode.typeOrigin == 1 and (valueNode.typeSymbol -> integerWidth) > 0 and valueNode.operand0 >= 0) -> if {
+                                    context.ir[valueNode.operand0] => whileIntegerArgument
+                                    valueNode.typeSymbol -> integerWidth => whileTargetWidth
+                                    whileIntegerArgument.typeSymbol -> integerWidth => whileInputWidth
+                                    "  %while$(whileIndex)_v$(valueNodeIndex) = " -> print
+                                    whileTargetWidth < whileInputWidth -> if { "trunc " -> print } else {
+                                        whileTargetWidth > whileInputWidth -> if {
+                                            whileIntegerArgument -> integerNodeSigned -> if { "sext " -> print } else { "zext " -> print }
+                                        } else { "add " -> print }
+                                    }
+                                    whileIntegerArgument -> writeIrType
                                     " " -> print
                                     WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: valueNode.operand0 } -> writeWhileValue
+                                    whileTargetWidth == whileInputWidth -> if { ", 0" -> println } else {
+                                        " to " -> print
+                                        valueNode -> writeIrType
+                                        "" -> println
+                                    }
+                                } else {
+                                    "  %while$(whileIndex)_v$(valueNodeIndex) = call " -> print
+                                    valueNode -> writeIrType
+                                    " @sl_m$(valueNode.targetModule)_s$(valueNode.symbol)(" -> print
+                                    CallEnvironmentRequest { callerIndex: ownerIndex, targetModule: valueNode.targetModule, targetSymbol: valueNode.symbol, hasArgument: valueNode.operand0 >= 0 } -> emitCallEnvironment => whileCallEnvironment
+                                    valueNode.operand0 >= 0 -> if {
+                                        context.ir[valueNode.operand0] => callArgument
+                                        callArgument -> writeIrType
+                                        " " -> print
+                                        WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: valueNode.operand0 } -> writeWhileValue
+                                    }
+                                    ")" -> println
                                 }
-                                ")" -> println
                             }
                             (valueNode.kind == 9 and valueNode.opcode == -201 and valueNode.operand0 >= 0) -> if {
                                 context.ir[valueNode.operand0] => whileLengthBase
                                 "  %while$(whileIndex)_v$(valueNodeIndex)" -> print
                                 valueNode.typeSymbol == 2 -> if { "_raw" -> print }
                                 " = extractvalue " -> print
-                                whileLengthBase -> writeType
+                                whileLengthBase -> writeIrType
                                 " " -> print
                                 WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: valueNode.operand0 } -> writeWhileValue
                                 ", " -> print
@@ -945,19 +1665,64 @@ emitCore context: move EmitContext -> Unit uses Console {
                                     "  %while$(whileIndex)_v$(valueNodeIndex) = trunc i64 %while$(whileIndex)_v$(valueNodeIndex)_raw to i32" -> println
                                 }
                             }
-                            (valueNode.kind == 13 and valueNode.operand0 >= 0) -> if {
-                                context.ir[valueNode.operand0] => whileMemberBase
-                                "  %while$(whileIndex)_v$(valueNodeIndex) = extractvalue " -> print
-                                whileMemberBase -> writeType
+                            (valueNode.kind == 9 and valueNode.opcode == -202 and valueNode.operand0 >= 0 and valueNode.operand1 >= 0) -> if {
+                                context.ir[valueNode.operand0] => whileByteBase
+                                context.ir[valueNode.operand1] => whileByteIndex
+                                whileByteIndex.typeSymbol -> integerWidth => whileByteIndexWidth
+                                "  %while$(whileIndex)_v$(valueNodeIndex)_base = extractvalue " -> print
+                                whileByteBase -> writeTextLikeType
                                 " " -> print
                                 WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: valueNode.operand0 } -> writeWhileValue
-                                ", $(valueNode.symbol)" -> println
+                                ", 0" -> println
+                                (whileByteIndexWidth > 0 and whileByteIndexWidth < 64) -> if {
+                                    "  %while$(whileIndex)_v$(valueNodeIndex)_index = " -> print
+                                    whileByteIndex -> integerNodeSigned -> if { "sext" -> print } else { "zext" -> print }
+                                    " i$(whileByteIndexWidth) " -> print
+                                    WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: valueNode.operand1 } -> writeWhileValue
+                                    " to i64" -> println
+                                }
+                                "  %while$(whileIndex)_v$(valueNodeIndex)_address = getelementptr i8, ptr %while$(whileIndex)_v$(valueNodeIndex)_base, i64 " -> print
+                                (whileByteIndexWidth > 0 and whileByteIndexWidth < 64) -> if { "%while$(whileIndex)_v$(valueNodeIndex)_index" -> print } else {
+                                    WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: valueNode.operand1 } -> writeWhileValue
+                                }
+                                "" -> println
+                                "  %while$(whileIndex)_v$(valueNodeIndex) = load i8, ptr %while$(whileIndex)_v$(valueNodeIndex)_address, align 1" -> println
+                            }
+                            (valueNode.kind == 9 and valueNode.opcode == -203 and valueNode.operand0 >= 0 and valueNode.operand1 >= 0) -> if {
+                                context.ir[valueNode.operand0] => whileSliceBase
+                                context.ir[valueNode.operand1] => whileSliceIndex
+                                whileSliceIndex.typeSymbol -> integerWidth => whileSliceIndexWidth
+                                context.ir[valueNode.operand1].nextOperand => whileSliceLength
+                                "  %while$(whileIndex)_v$(valueNodeIndex)_base = extractvalue " -> print
+                                whileSliceBase -> writeTextLikeType
+                                " " -> print
+                                WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: valueNode.operand0 } -> writeWhileValue
+                                ", 0" -> println
+                                (whileSliceIndexWidth > 0 and whileSliceIndexWidth < 64) -> if {
+                                    "  %while$(whileIndex)_v$(valueNodeIndex)_index = " -> print
+                                    whileSliceIndex -> integerNodeSigned -> if { "sext" -> print } else { "zext" -> print }
+                                    " i$(whileSliceIndexWidth) " -> print
+                                    WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: valueNode.operand1 } -> writeWhileValue
+                                    " to i64" -> println
+                                }
+                                "  %while$(whileIndex)_v$(valueNodeIndex)_start = getelementptr i8, ptr %while$(whileIndex)_v$(valueNodeIndex)_base, i64 " -> print
+                                (whileSliceIndexWidth > 0 and whileSliceIndexWidth < 64) -> if { "%while$(whileIndex)_v$(valueNodeIndex)_index" -> print } else {
+                                    WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: valueNode.operand1 } -> writeWhileValue
+                                }
+                                "" -> println
+                                "  %while$(whileIndex)_v$(valueNodeIndex)_ptr = insertvalue %sl.text poison, ptr %while$(whileIndex)_v$(valueNodeIndex)_start, 0" -> println
+                                "  %while$(whileIndex)_v$(valueNodeIndex) = insertvalue %sl.text %while$(whileIndex)_v$(valueNodeIndex)_ptr, i64 " -> print
+                                WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: whileSliceLength } -> writeWhileValue
+                                ", 1" -> println
+                            }
+                            (valueNode.kind == 13 and valueNode.operand0 >= 0) -> if {
+                                WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: valueNodeIndex } -> emitWhileMember
                             }
                             (valueNode.kind == 15 and valueNode.operand0 >= 0 and valueNode.operand1 >= 0) -> if {
                                 context.ir[valueNode.operand0] => whileIndexedArray
                                 context.ir[valueNode.operand1] => whileIndexValue
                                 "  %while$(whileIndex)_v$(valueNodeIndex)_data = extractvalue " -> print
-                                whileIndexedArray -> writeType
+                                whileIndexedArray -> writeIrType
                                 " " -> print
                                 WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: valueNode.operand0 } -> writeWhileValue
                                 ", 0" -> println
@@ -965,20 +1730,50 @@ emitCore context: move EmitContext -> Unit uses Console {
                                     "  %while$(whileIndex)_v$(valueNodeIndex)_index = add i64 0, " -> print
                                 } else {
                                     "  %while$(whileIndex)_v$(valueNodeIndex)_index = sext " -> print
-                                    whileIndexValue -> writeType
+                                    whileIndexValue -> writeIrType
                                     " " -> print
                                 }
                                 WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: valueNode.operand1 } -> writeWhileValue
                                 whileIndexValue.typeSymbol == 13 -> if { "" -> println } else { " to i64" -> println }
                                 "  %while$(whileIndex)_v$(valueNodeIndex)_ptr = getelementptr " -> print
-                                valueNode -> writeType
+                                valueNode -> writeIrType
                                 ", ptr %while$(whileIndex)_v$(valueNodeIndex)_data, i64 %while$(whileIndex)_v$(valueNodeIndex)_index" -> println
                                 "  %while$(whileIndex)_v$(valueNodeIndex) = load " -> print
-                                valueNode -> writeType
-                                ", ptr %while$(whileIndex)_v$(valueNodeIndex)_ptr, align $(valueNode -> storageAlign)" -> println
+                                valueNode -> writeIrType
+                                ", ptr %while$(whileIndex)_v$(valueNodeIndex)_ptr, align " -> print
+                                valueNode -> storageAlign -> writeDecimalLine
                             }
                             (valueNode.kind == 7 or valueNode.kind == 8) -> if {
                                 context.ir[valueNode.operand0] => left
+                                0 => whileBinaryWidth!
+                                false => whileLeftPromoted!
+                                false => whileRightPromoted!
+                                valueNode.kind == 8 -> if {
+                                    context.ir[valueNode.operand1] => whileRight
+                                    0 => whileLeftWidth!
+                                    0 => whileRightWidth!
+                                    left.typeOrigin == 1 -> if { left.typeSymbol -> integerWidth => whileLeftWidth! }
+                                    whileRight.typeOrigin == 1 -> if { whileRight.typeSymbol -> integerWidth => whileRightWidth! }
+                                    (whileLeftWidth! > 0 and whileRightWidth! > 0) -> if {
+                                        whileLeftWidth! > whileRightWidth! -> if { whileLeftWidth! => whileBinaryWidth! } else { whileRightWidth! => whileBinaryWidth! }
+                                        (whileLeftWidth! < whileBinaryWidth! and left.kind != 3 and left.kind != 4) -> if {
+                                            "  %while$(whileIndex)_v$(valueNodeIndex)_left_wide = " -> print
+                                            left -> integerNodeSigned -> if { "sext" -> print } else { "zext" -> print }
+                                            " i$(whileLeftWidth!) " -> print
+                                            WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: valueNode.operand0 } -> writeWhileValue
+                                            " to i$(whileBinaryWidth!)" -> println
+                                            true => whileLeftPromoted!
+                                        }
+                                        (whileRightWidth! < whileBinaryWidth! and whileRight.kind != 3 and whileRight.kind != 4) -> if {
+                                            "  %while$(whileIndex)_v$(valueNodeIndex)_right_wide = " -> print
+                                            whileRight -> integerNodeSigned -> if { "sext" -> print } else { "zext" -> print }
+                                            " i$(whileRightWidth!) " -> print
+                                            WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: valueNode.operand1 } -> writeWhileValue
+                                            " to i$(whileBinaryWidth!)" -> println
+                                            true => whileRightPromoted!
+                                        }
+                                    }
+                                }
                                 "  %while$(whileIndex)_v$(valueNodeIndex) = " -> print
                                 valueNode.kind == 7 -> if {
                                     valueNode.opcode == -26 -> if { "xor" -> print } else { "sub" -> print }
@@ -990,15 +1785,14 @@ emitCore context: move EmitContext -> Unit uses Console {
                                     valueNode.opcode == grammar.tokenIdPercent -> if { "srem" -> print }
                                     valueNode.opcode == grammar.tokenIdEqualEqual -> if { "icmp eq" -> print }
                                     valueNode.opcode == grammar.tokenIdBangEqual -> if { "icmp ne" -> print }
-                                    valueNode.opcode == grammar.tokenIdLess -> if { "icmp slt" -> print }
-                                    valueNode.opcode == grammar.tokenIdLessEqual -> if { "icmp sle" -> print }
-                                    valueNode.opcode == grammar.tokenIdGreater -> if { "icmp sgt" -> print }
-                                    valueNode.opcode == grammar.tokenIdGreaterEqual -> if { "icmp sge" -> print }
+                                    (valueNode.opcode == grammar.tokenIdLess or valueNode.opcode == grammar.tokenIdLessEqual or valueNode.opcode == grammar.tokenIdGreater or valueNode.opcode == grammar.tokenIdGreaterEqual) -> if {
+                                        valueNode -> integerComparisonOperation -> print
+                                    }
                                     valueNode.opcode == -24 -> if { "or" -> print }
                                     valueNode.opcode == -25 -> if { "and" -> print }
                                 }
                                 " " -> print
-                                left -> writeType
+                                whileBinaryWidth! > 0 -> if { "i$(whileBinaryWidth!)" -> print } else { left -> writeIrType }
                                 " " -> print
                                 valueNode.kind == 7 -> if {
                                     valueNode.opcode == -26 -> if {
@@ -1010,9 +1804,13 @@ emitCore context: move EmitContext -> Unit uses Console {
                                         "" -> println
                                     }
                                 } else {
-                                    WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: valueNode.operand0 } -> writeWhileValue
+                                    whileLeftPromoted! -> if { "%while$(whileIndex)_v$(valueNodeIndex)_left_wide" -> print } else {
+                                        WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: valueNode.operand0 } -> writeWhileValue
+                                    }
                                     ", " -> print
-                                    WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: valueNode.operand1 } -> writeWhileValue
+                                    whileRightPromoted! -> if { "%while$(whileIndex)_v$(valueNodeIndex)_right_wide" -> print } else {
+                                        WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: valueNode.operand1 } -> writeWhileValue
+                                    }
                                     "" -> println
                                 }
                             }
@@ -1048,6 +1846,12 @@ emitCore context: move EmitContext -> Unit uses Console {
             }
             false => ownedDropMoved!
             false => ownedDropHasPartialMoves!
+            true => ownedDropIsRoot!
+            ownedDropIndex! => ownedDropRoot!
+            (ownedDropCandidate.kind == 17 and ownedDropCandidate.parent == request.regionIndex and (ownedDropCandidate -> ownsType)) -> if {
+                ownedDropIndex! -> mutableBindingRoot => ownedDropRoot!
+                ownedDropRoot! != ownedDropIndex! -> if { false => ownedDropIsRoot! }
+            }
             (ownedDropCandidate.kind == 17 and (ownedDropCandidate -> ownsType)) -> if {
                 0 => ownedMoveIndex!
                 (ownedMoveIndex! < (context.moves -> len) and not ownedDropMoved!) -> while {
@@ -1064,24 +1868,47 @@ emitCore context: move EmitContext -> Unit uses Console {
                     ownedMoveIndex! + 1 => ownedMoveIndex!
                 }
             }
-            (ownedDropBeforeEdge! and not ownedDropMoved! and ownedDropCandidate.kind == 17 and ownedDropCandidate.parent == request.regionIndex and (ownedDropCandidate -> isDynamicArrayType) and ownedDropCandidate.symbol != request.transferredSymbol) -> if {
-                "  %cleanup$(request.edgeIndex)_b$(ownedDropIndex!) = extractvalue %sl.array.i32 %v$(ownedDropCandidate.operand0), 0" -> println
+            (ownedDropBeforeEdge! and ownedDropIsRoot! and not ownedDropMoved! and ownedDropCandidate.kind == 17 and ownedDropCandidate.parent == request.regionIndex and (ownedDropCandidate -> isDynamicArrayType) and ownedDropCandidate.symbol != request.transferredSymbol) -> if {
+                ownedDropCandidate.flags == 1 -> if {
+                    "  %cleanup$(request.edgeIndex)_b$(ownedDropIndex!)_current = load %sl.array.i32, ptr %slot$(ownedDropRoot!), align " -> print
+                    ownedDropCandidate -> storageAlign -> writeDecimalLine
+                    "  %cleanup$(request.edgeIndex)_b$(ownedDropIndex!) = extractvalue %sl.array.i32 %cleanup$(request.edgeIndex)_b$(ownedDropIndex!)_current, 0" -> println
+                } else {
+                    "  %cleanup$(request.edgeIndex)_b$(ownedDropIndex!) = extractvalue %sl.array.i32 %v$(ownedDropCandidate.operand0), 0" -> println
+                }
                 "  call void @free(ptr %cleanup$(request.edgeIndex)_b$(ownedDropIndex!))" -> println
             }
-            (ownedDropBeforeEdge! and not ownedDropMoved! and ownedDropCandidate.kind == 17 and ownedDropCandidate.parent == request.regionIndex and (ownedDropCandidate -> isDictionaryType) and ownedDropCandidate.symbol != request.transferredSymbol) -> if {
-                "  %cleanup$(request.edgeIndex)_b$(ownedDropIndex!)_keys = extractvalue %sl.dict %v$(ownedDropCandidate.operand0), 0" -> println
+            (ownedDropBeforeEdge! and ownedDropIsRoot! and not ownedDropMoved! and ownedDropCandidate.kind == 17 and ownedDropCandidate.parent == request.regionIndex and (ownedDropCandidate -> isDictionaryType) and ownedDropCandidate.symbol != request.transferredSymbol) -> if {
+                ownedDropCandidate.flags == 1 -> if {
+                    "  %cleanup$(request.edgeIndex)_b$(ownedDropIndex!)_current = load %sl.dict, ptr %slot$(ownedDropRoot!), align " -> print
+                    ownedDropCandidate -> storageAlign -> writeDecimalLine
+                    "  %cleanup$(request.edgeIndex)_b$(ownedDropIndex!)_keys = extractvalue %sl.dict %cleanup$(request.edgeIndex)_b$(ownedDropIndex!)_current, 0" -> println
+                } else {
+                    "  %cleanup$(request.edgeIndex)_b$(ownedDropIndex!)_keys = extractvalue %sl.dict %v$(ownedDropCandidate.operand0), 0" -> println
+                }
                 "  call void @free(ptr %cleanup$(request.edgeIndex)_b$(ownedDropIndex!)_keys)" -> println
-                "  %cleanup$(request.edgeIndex)_b$(ownedDropIndex!)_values = extractvalue %sl.dict %v$(ownedDropCandidate.operand0), 1" -> println
+                ownedDropCandidate.flags == 1 -> if {
+                    "  %cleanup$(request.edgeIndex)_b$(ownedDropIndex!)_values = extractvalue %sl.dict %cleanup$(request.edgeIndex)_b$(ownedDropIndex!)_current, 1" -> println
+                } else {
+                    "  %cleanup$(request.edgeIndex)_b$(ownedDropIndex!)_values = extractvalue %sl.dict %v$(ownedDropCandidate.operand0), 1" -> println
+                }
                 "  call void @free(ptr %cleanup$(request.edgeIndex)_b$(ownedDropIndex!)_values)" -> println
             }
-            (ownedDropBeforeEdge! and not ownedDropMoved! and ownedDropCandidate.kind == 17 and ownedDropCandidate.parent == request.regionIndex and (ownedDropCandidate -> isNominalStructType) and ownedDropCandidate.symbol != request.transferredSymbol) -> if {
+            (ownedDropBeforeEdge! and ownedDropIsRoot! and not ownedDropMoved! and ownedDropCandidate.kind == 17 and ownedDropCandidate.parent == request.regionIndex and (ownedDropCandidate -> isNominalStructType) and ownedDropCandidate.symbol != request.transferredSymbol) -> if {
+                request.edgeIndex * 1000 + ownedDropIndex! => ownedDropNameRoot
+                ownedDropCandidate.flags == 1 -> if {
+                    "  %dropg$(ownedDropNameRoot)_p0 = load %sl.struct.m$(ownedDropCandidate.typeModule)_s$(ownedDropCandidate.typeSymbol), ptr %slot$(ownedDropRoot!), align " -> print
+                    ownedDropCandidate -> storageAlign -> writeDecimalLine
+                }
+                0 => ownedDropValueKind!
+                ownedDropCandidate.flags == 1 -> if { 2 => ownedDropValueKind! }
                 DropGlueRequest {
                     typeOrigin: ownedDropCandidate.typeOrigin
                     typeModule: ownedDropCandidate.typeModule
                     typeSymbol: ownedDropCandidate.typeSymbol
-                    valueKind: 0
+                    valueKind: ownedDropValueKind!
                     valueIndex: ownedDropCandidate.operand0
-                    nameRoot: request.edgeIndex * 1000 + ownedDropIndex!
+                    nameRoot: ownedDropNameRoot
                     pathCode: 0
                     bindingIndex: ownedDropIndex!
                     regionIndex: request.regionIndex
@@ -1146,9 +1973,21 @@ emitCore context: move EmitContext -> Unit uses Console {
                             localCandidate.parent => localAncestor!
                             false => belongsToLocalRegion!
                             false => belongsToNestedRegion!
+                            false => bindingBelongsViaOperand!
                             (localAncestor! >= 0 and not belongsToLocalRegion! and not belongsToNestedRegion!) -> while {
                                 localAncestor! == regionTaskNode -> if { true => belongsToLocalRegion! } else {
                                     (context.ir[localAncestor!].kind == 19 or context.ir[localAncestor!].kind == 20) -> if { true => belongsToNestedRegion! } else { context.ir[localAncestor!].parent => localAncestor! }
+                                }
+                            }
+                            (localCandidate.kind == 17 and localCandidate.operand0 >= 0 and not belongsToLocalRegion! and not belongsToNestedRegion!) -> if {
+                                context.ir[localCandidate.operand0].parent => bindingOperandAncestor!
+                                (bindingOperandAncestor! >= 0 and not belongsToLocalRegion! and not belongsToNestedRegion!) -> while {
+                                    bindingOperandAncestor! == regionTaskNode -> if {
+                                        true => belongsToLocalRegion!
+                                        true => bindingBelongsViaOperand!
+                                    } else {
+                                        (context.ir[bindingOperandAncestor!].kind == 19 or context.ir[bindingOperandAncestor!].kind == 20) -> if { true => belongsToNestedRegion! } else { context.ir[bindingOperandAncestor!].parent => bindingOperandAncestor! }
+                                    }
                                 }
                             }
                             belongsToLocalRegion! -> if {
@@ -1160,6 +1999,10 @@ emitCore context: move EmitContext -> Unit uses Console {
                                     true => localReady!
                                     localCandidateIndex! => localStatementRoot!
                                     localCandidate.parent => localRootParent!
+                                    bindingBelongsViaOperand! -> if {
+                                        localCandidate.operand0 => localStatementRoot!
+                                        context.ir[localCandidate.operand0].parent => localRootParent!
+                                    }
                                     (localRootParent! >= 0 and localRootParent! != regionTaskNode) -> while {
                                         localRootParent! => localStatementRoot!
                                         context.ir[localRootParent!].parent => localRootParent!
@@ -1204,7 +2047,7 @@ emitCore context: move EmitContext -> Unit uses Console {
                                         }
                                         (localOperandBelongs! and not localScheduled![localCandidate.operand0]) -> if { false => localReady! }
                                     }
-                                    (localCandidate.kind != 18 and localCandidate.kind != 20 and localCandidate.operand1 >= 0) -> if {
+                                    (localCandidate.kind != 6 and localCandidate.kind != 18 and localCandidate.kind != 20 and localCandidate.operand1 >= 0) -> if {
                                         context.ir[localCandidate.operand1].parent => localSecondAncestor!
                                         false => localSecondBelongs!
                                         (localSecondAncestor! >= 0 and not localSecondBelongs!) -> while {
@@ -1363,7 +2206,7 @@ emitCore context: move EmitContext -> Unit uses Console {
                     returnOwner.operand1 >= 0 -> if {
                         context.ir[returnOwner.operand1] => returnParameter
                         returnParameter.symbol != returnedSymbol! -> if {
-                            (returnParameter.typeOrigin == 13 and returnParameter.flags % 2 == 1) -> if {
+                            ((returnParameter.typeOrigin == 13 or returnParameter.typeOrigin == 14) and returnParameter.flags % 2 == 1) -> if {
                                 "  %return$(regionNodeIndex!)_drop_arg = extractvalue %sl.array.i32 %arg, 0" -> println
                                 "  call void @free(ptr %return$(regionNodeIndex!)_drop_arg)" -> println
                             }
@@ -1379,13 +2222,13 @@ emitCore context: move EmitContext -> Unit uses Console {
                         "  ret void" -> println
                     } else {
                         "  ret " -> print
-                        returnOwner -> writeType
+                        returnOwner -> writeIrType
                         " " -> print
                         context.ir[regionNode.operand0] => returnedValue
                         (returnedValue.kind == 3 or returnedValue.kind == 4) -> if {
                             returnedValue -> sourceToken => returnValueToken
                             returnedValue.kind == 3 -> if { context.sources[returnedValue.sourceModule] -> slice(returnValueToken.span.start, returnValueToken.span.length) -> print } else {
-                                ((context.sources[returnedValue.sourceModule] -> byte(returnValueToken.span.start)) == UInt8(116)) -> if { "1" } else { "0" } -> print
+                                ((context.sources[returnedValue.sourceModule] -> byte(returnValueToken.span.start)) == UInt8(116)) -> if { "1" -> print } else { "0" -> print }
                             }
                         } else {
                             (returnOwner.operand1 >= 0 and returnedValue.kind == 5 and returnedValue.symbol == context.ir[returnOwner.operand1].symbol) -> if { "%arg" -> print } else { "%v$(regionNode.operand0)" -> print }
@@ -1400,7 +2243,7 @@ emitCore context: move EmitContext -> Unit uses Console {
                 "  br i1 " -> print
                 guardCondition.kind == 4 -> if {
                     guardCondition -> sourceToken => guardConditionToken
-                    ((context.sources[guardCondition.sourceModule] -> byte(guardConditionToken.span.start)) == UInt8(116)) -> if { "1" } else { "0" } -> print
+                    ((context.sources[guardCondition.sourceModule] -> byte(guardConditionToken.span.start)) == UInt8(116)) -> if { "1" -> print } else { "0" -> print }
                 } else {
                     (ownerIndex! >= 0 and context.ir[ownerIndex!].kind == 0 and context.ir[ownerIndex!].operand1 >= 0 and guardCondition.kind == 5 and guardCondition.symbol == context.ir[context.ir[ownerIndex!].operand1].symbol) -> if { "%arg" -> print } else { "%v$(regionNode.operand1)" -> print }
                 }
@@ -1439,31 +2282,32 @@ emitCore context: move EmitContext -> Unit uses Console {
                 true => regionTerminated!
             }
             (regionNode.kind != 21 and regionNode.kind != 22 and regionNode.kind != 23) -> if {
+            regionNode.kind == 2 -> if {
+                regionNode -> sourceToken => regionTextToken
+                TextLiteralRequest { sourceModule: regionNode.sourceModule, token: regionTextToken } -> textLiteralLength => regionTextLength
+                "  %v$(regionNodeIndex!)_ptr = insertvalue %sl.text poison, ptr @sl_str_$(regionNodeIndex!), 0" -> println
+                "  %v$(regionNodeIndex!) = insertvalue %sl.text %v$(regionNodeIndex!)_ptr, i64 $regionTextLength, 1" -> println
+            }
             (regionNode.kind == 5 and not (regionNode.typeOrigin == 1 and regionNode.typeSymbol == 16) and ownerIndex! >= 0 and not (context.ir[ownerIndex!].kind == 0 and context.ir[ownerIndex!].operand1 >= 0 and regionNode.symbol == context.ir[context.ir[ownerIndex!].operand1].symbol)) -> if {
                 -1 => regionBindingIndex!
-                0 => regionBindingSearch!
-                regionBindingSearch! < (context.ir -> len) -> while {
-                    BindingOwnerRequest { bindingIndex: regionBindingSearch!, ownerIndex: ownerIndex! } -> bindingBelongsToOwner => regionBindingInOwner
-                    (context.ir[regionBindingSearch!].kind == 17 and context.ir[regionBindingSearch!].symbol == regionNode.symbol and regionBindingInOwner) -> if { regionBindingSearch! => regionBindingIndex! }
-                    regionBindingSearch! + 1 => regionBindingSearch!
-                }
+                (regionNode.operand0 >= 0 and context.ir[regionNode.operand0].kind == 17) -> if { regionNode.operand0 => regionBindingIndex! }
                 regionBindingIndex! >= 0 -> if {
                     context.ir[regionBindingIndex!] => regionBinding
                     regionBinding.flags == 1 -> if {
                         regionBindingIndex! -> mutableBindingRoot => regionBindingRoot
                         "  %v$(regionNodeIndex!) = load " -> print
-                        regionNode -> writeType
+                        regionNode -> writeIrType
                         ", ptr %slot$(regionBindingRoot), align " -> print
-                        "$(regionNode -> storageAlign)" -> println
+                        regionNode -> storageAlign -> writeDecimalLine
                     } else {
                         context.ir[regionBinding.operand0] => regionBindingValue
                         "  %v$(regionNodeIndex!) = freeze " -> print
-                        regionNode -> writeType
+                        regionNode -> writeIrType
                         " " -> print
                         (regionBindingValue.kind == 3 or regionBindingValue.kind == 4) -> if {
                             regionBindingValue -> sourceToken => regionBindingToken
                             regionBindingValue.kind == 3 -> if { context.sources[regionBindingValue.sourceModule] -> slice(regionBindingToken.span.start, regionBindingToken.span.length) -> print } else {
-                                ((context.sources[regionBindingValue.sourceModule] -> byte(regionBindingToken.span.start)) == UInt8(116)) -> if { "1" } else { "0" } -> print
+                                ((context.sources[regionBindingValue.sourceModule] -> byte(regionBindingToken.span.start)) == UInt8(116)) -> if { "1" -> print } else { "0" -> print }
                             }
                         } else { "%v$(regionBinding.operand0)" -> print }
                         "" -> println
@@ -1472,42 +2316,65 @@ emitCore context: move EmitContext -> Unit uses Console {
             }
             (regionNode.kind == 17 and regionNode.flags == 1) -> if {
                 regionNodeIndex! -> mutableBindingRoot => mutableRegionRoot
+                context.ir[mutableRegionRoot] => mutableRegionBinding
                 context.ir[regionNode.operand0] => mutableRegionValue
                 "  store " -> print
-                regionNode -> writeType
+                mutableRegionBinding -> writeIrType
                 " " -> print
                 (mutableRegionValue.kind == 3 or mutableRegionValue.kind == 4) -> if {
                     mutableRegionValue -> sourceToken => mutableRegionToken
                     mutableRegionValue.kind == 3 -> if { context.sources[mutableRegionValue.sourceModule] -> slice(mutableRegionToken.span.start, mutableRegionToken.span.length) -> print } else {
-                        ((context.sources[mutableRegionValue.sourceModule] -> byte(mutableRegionToken.span.start)) == UInt8(116)) -> if { "1" } else { "0" } -> print
+                        ((context.sources[mutableRegionValue.sourceModule] -> byte(mutableRegionToken.span.start)) == UInt8(116)) -> if { "1" -> print } else { "0" -> print }
                     }
                 } else { "%v$(regionNode.operand0)" -> print }
                 ", ptr %slot$(mutableRegionRoot), align " -> print
-                "$(regionNode -> storageAlign)" -> println
+                mutableRegionBinding -> storageAlign -> writeDecimalLine
+            }
+            regionNode.kind == 24 -> if {
+                WhileValueRequest { whileIndex: regionNodeIndex!, ownerIndex: ownerIndex!, nodeIndex: regionNodeIndex! } -> emitIndexAssignment
+            }
+            regionNode.kind == 25 -> if {
+                WhileValueRequest { whileIndex: regionNodeIndex!, ownerIndex: ownerIndex!, nodeIndex: regionNodeIndex! } -> emitMemberAssignment
             }
             regionNode.kind == 12 -> if {
+                regionNode.operand0 < 0 -> if {
+                    "  %v$(regionNodeIndex!) = freeze " -> print
+                    regionNode -> writeIrType
+                    " zeroinitializer" -> println
+                }
                 regionNode.operand0 => regionFieldValueIndex!
                 0 => regionFieldPosition!
                 regionFieldValueIndex! >= 0 -> while {
                     context.ir[regionFieldValueIndex!] => regionFieldValue
+                    regionFieldValueIndex! -> aggregateValueIndex => regionEmittedFieldIndex
+                    context.ir[regionEmittedFieldIndex] => regionEmittedFieldValue
                     "  " -> print
                     regionFieldValue.nextOperand < 0 -> if { "%v$(regionNodeIndex!)" -> print } else { "%v$(regionNodeIndex!)_f$(regionFieldPosition!)" -> print }
                     " = insertvalue " -> print
-                    regionNode -> writeType
+                    regionNode -> writeIrType
                     " " -> print
-                    regionFieldPosition! == 0 -> if { "poison" -> print } else { "%v$(regionNodeIndex!)_f$(regionFieldPosition! - 1)" -> print }
+                    regionFieldPosition! == 0 -> if { "poison" -> print } else {
+                        "%v$(regionNodeIndex!)_f" -> print
+                        regionFieldPosition! - 1 -> writeDecimal
+                    }
                     ", " -> print
-                    regionFieldValue -> writeType
+                    regionEmittedFieldValue -> writeIrType
                     " " -> print
-                    (regionFieldValue.kind == 3 or regionFieldValue.kind == 4) -> if {
-                        regionFieldValue -> sourceToken => regionFieldToken
-                        regionFieldValue.kind == 3 -> if {
-                            context.sources[regionFieldValue.sourceModule] -> slice(regionFieldToken.span.start, regionFieldToken.span.length) -> print
+                    regionEmittedFieldValue.kind == 2 -> if {
+                        regionEmittedFieldValue -> sourceToken => regionFieldTextToken
+                        Int(TextLiteralRequest { sourceModule: regionEmittedFieldValue.sourceModule, token: regionFieldTextToken } -> textLiteralLength) => regionFieldTextLength
+                        "{ ptr @sl_str_$(regionEmittedFieldIndex), i64 $regionFieldTextLength }" -> print
+                    } else {
+                    (regionEmittedFieldValue.kind == 3 or regionEmittedFieldValue.kind == 4) -> if {
+                        regionEmittedFieldValue -> sourceToken => regionFieldToken
+                        regionEmittedFieldValue.kind == 3 -> if {
+                            context.sources[regionEmittedFieldValue.sourceModule] -> slice(regionFieldToken.span.start, regionFieldToken.span.length) -> print
                         } else {
-                            ((context.sources[regionFieldValue.sourceModule] -> byte(regionFieldToken.span.start)) == UInt8(116)) -> if { "1" } else { "0" } -> print
+                            ((context.sources[regionEmittedFieldValue.sourceModule] -> byte(regionFieldToken.span.start)) == UInt8(116)) -> if { "1" -> print } else { "0" -> print }
                         }
                     } else {
-                        (regionFieldValue.kind == 5 and ownerIndex! >= 0 and context.ir[ownerIndex!].operand1 >= 0 and regionFieldValue.symbol == context.ir[context.ir[ownerIndex!].operand1].symbol) -> if { "%arg" -> print } else { "%v$(regionFieldValueIndex!)" -> print }
+                        (regionEmittedFieldValue.kind == 5 and ownerIndex! >= 0 and context.ir[ownerIndex!].operand1 >= 0 and regionEmittedFieldValue.symbol == context.ir[context.ir[ownerIndex!].operand1].symbol) -> if { "%arg" -> print } else { "%v$(regionEmittedFieldIndex)" -> print }
+                    }
                     }
                     ", $(regionFieldPosition!)" -> println
                     regionFieldValue.nextOperand => regionFieldValueIndex!
@@ -1600,7 +2467,10 @@ emitCore context: move EmitContext -> Unit uses Console {
                                         " = extractvalue %sl.struct.m$(regionOwnerSourceModule!)_s$(regionMemberCurrentSymbol!) " -> print
                                         regionMemberProjectionOrdinal! == 0 -> if {
                                             (regionMemberBase.kind == 5 and ownerIndex! >= 0 and context.ir[ownerIndex!].operand1 >= 0 and regionMemberBase.symbol == context.ir[context.ir[ownerIndex!].operand1].symbol) -> if { "%arg" -> print } else { "%v$(regionNode.operand0)" -> print }
-                                        } else { "%v$(regionNodeIndex!)_m$(regionMemberProjectionOrdinal! - 1)" -> print }
+                                        } else {
+                                            "%v$(regionNodeIndex!)_m" -> print
+                                            regionMemberProjectionOrdinal! - 1 -> writeDecimal
+                                        }
                                         ", $(regionFieldOrdinal!)" -> println
                                         regionMemberNextOrigin! => regionMemberCurrentOrigin!
                                         regionMemberNextModule! => regionMemberCurrentModule!
@@ -1626,44 +2496,99 @@ emitCore context: move EmitContext -> Unit uses Console {
                     "  %v$(regionNodeIndex!)" -> print
                     regionNode.typeSymbol == 2 -> if { "_raw" -> print }
                     " = extractvalue " -> print
-                    regionLengthBase -> writeType
-                    " %v$(regionNode.operand0), " -> print
+                    regionLengthBase -> writeIrType
+                    " " -> print
+                    (regionLengthBase.kind == 5 and ownerIndex! >= 0 and context.ir[ownerIndex!].operand1 >= 0 and regionLengthBase.symbol == context.ir[context.ir[ownerIndex!].operand1].symbol) -> if { "%arg" -> print } else { "%v$(regionNode.operand0)" -> print }
+                    ", " -> print
                     regionLengthBase.typeOrigin == 15 -> if { "2" -> println } else { "1" -> println }
                     regionNode.typeSymbol == 2 -> if { "  %v$(regionNodeIndex!) = trunc i64 %v$(regionNodeIndex!)_raw to i32" -> println }
                 }
             }
             (regionNode.kind == 9 and regionNode.opcode == -202 and regionNode.operand0 >= 0 and regionNode.operand1 >= 0) -> if {
-                "  %v$(regionNodeIndex!)_base = extractvalue %sl.text %v$(regionNode.operand0), 0" -> println
-                "  %v$(regionNodeIndex!)_address = getelementptr i8, ptr %v$(regionNodeIndex!)_base, i64 %v$(regionNode.operand1)" -> println
+                context.ir[regionNode.operand0] => regionByteBase
+                context.ir[regionNode.operand1] => regionByteIndex
+                regionByteIndex.typeSymbol -> integerWidth => regionByteIndexWidth
+                "  %v$(regionNodeIndex!)_base = extractvalue " -> print
+                regionByteBase -> writeTextLikeType
+                " " -> print
+                (regionByteBase.kind == 5 and ownerIndex! >= 0 and context.ir[ownerIndex!].operand1 >= 0 and regionByteBase.symbol == context.ir[context.ir[ownerIndex!].operand1].symbol) -> if { "%arg" -> print } else { "%v$(regionNode.operand0)" -> print }
+                ", 0" -> println
+                (regionByteIndexWidth > 0 and regionByteIndexWidth < 64) -> if {
+                    "  %v$(regionNodeIndex!)_index = " -> print
+                    regionByteIndex -> integerNodeSigned -> if { "sext" -> print } else { "zext" -> print }
+                    " i$(regionByteIndexWidth) %v$(regionNode.operand1) to i64" -> println
+                }
+                "  %v$(regionNodeIndex!)_address = getelementptr i8, ptr %v$(regionNodeIndex!)_base, i64 " -> print
+                (regionByteIndexWidth > 0 and regionByteIndexWidth < 64) -> if { "%v$(regionNodeIndex!)_index" -> println } else { "%v$(regionNode.operand1)" -> println }
                 "  %v$(regionNodeIndex!) = load i8, ptr %v$(regionNodeIndex!)_address, align 1" -> println
             }
             (regionNode.kind == 9 and regionNode.opcode == -203 and regionNode.operand0 >= 0 and regionNode.operand1 >= 0) -> if {
                 context.ir[regionNode.operand1].nextOperand => regionSliceLength
-                "  %v$(regionNodeIndex!)_base = extractvalue %sl.text %v$(regionNode.operand0), 0" -> println
-                "  %v$(regionNodeIndex!)_start = getelementptr i8, ptr %v$(regionNodeIndex!)_base, i64 %v$(regionNode.operand1)" -> println
+                context.ir[regionNode.operand0] => regionSliceBase
+                context.ir[regionNode.operand1] => regionSliceIndex
+                regionSliceIndex.typeSymbol -> integerWidth => regionSliceIndexWidth
+                "  %v$(regionNodeIndex!)_base = extractvalue " -> print
+                regionSliceBase -> writeTextLikeType
+                " " -> print
+                (regionSliceBase.kind == 5 and ownerIndex! >= 0 and context.ir[ownerIndex!].operand1 >= 0 and regionSliceBase.symbol == context.ir[context.ir[ownerIndex!].operand1].symbol) -> if { "%arg" -> print } else { "%v$(regionNode.operand0)" -> print }
+                ", 0" -> println
+                (regionSliceIndexWidth > 0 and regionSliceIndexWidth < 64) -> if {
+                    "  %v$(regionNodeIndex!)_index = " -> print
+                    regionSliceIndex -> integerNodeSigned -> if { "sext" -> print } else { "zext" -> print }
+                    " i$(regionSliceIndexWidth) %v$(regionNode.operand1) to i64" -> println
+                }
+                "  %v$(regionNodeIndex!)_start = getelementptr i8, ptr %v$(regionNodeIndex!)_base, i64 " -> print
+                (regionSliceIndexWidth > 0 and regionSliceIndexWidth < 64) -> if { "%v$(regionNodeIndex!)_index" -> println } else { "%v$(regionNode.operand1)" -> println }
                 "  %v$(regionNodeIndex!)_ptr = insertvalue %sl.text poison, ptr %v$(regionNodeIndex!)_start, 0" -> println
                 "  %v$(regionNodeIndex!) = insertvalue %sl.text %v$(regionNodeIndex!)_ptr, i64 %v$(regionSliceLength), 1" -> println
             }
-            (regionNode.kind == 14 and regionNode.typeOrigin == 13) -> if {
+            (regionNode.kind == 9 and regionNode.opcode == -204 and regionNode.operand0 >= 0 and regionNode.operand1 >= 0) -> if {
+                WhileValueRequest { whileIndex: regionNodeIndex!, ownerIndex: ownerIndex!, nodeIndex: 0 } -> emitArrayPush
+            }
+            ((regionNode.kind == 9 or regionNode.kind == 6) and regionNode.opcode == -205 and regionNode.operand0 >= 0) -> if {
+                context.ir[regionNode.operand0] => regionMapPath
+                "  %v$(regionNodeIndex!) = call %sl.source_text @sl_runtime_map_text(%sl.text " -> print
+                (regionMapPath.kind == 5 and ownerIndex! >= 0 and context.ir[ownerIndex!].operand1 >= 0 and regionMapPath.symbol == context.ir[context.ir[ownerIndex!].operand1].symbol) -> if { "%arg" -> print } else { "%v$(regionNode.operand0)" -> print }
+                ")" -> println
+            }
+            ((regionNode.kind == 9 or regionNode.kind == 6) and regionNode.opcode == -206 and regionNode.operand0 >= 0) -> if {
+                context.ir[regionNode.operand0] => regionBorrowText
+                "  %v$(regionNodeIndex!)_data = extractvalue %sl.text " -> print
+                (regionBorrowText.kind == 5 and ownerIndex! >= 0 and context.ir[ownerIndex!].operand1 >= 0 and regionBorrowText.symbol == context.ir[context.ir[ownerIndex!].operand1].symbol) -> if { "%arg" -> print } else { "%v$(regionNode.operand0)" -> print }
+                ", 0" -> println
+                "  %v$(regionNodeIndex!)_length = extractvalue %sl.text " -> print
+                (regionBorrowText.kind == 5 and ownerIndex! >= 0 and context.ir[ownerIndex!].operand1 >= 0 and regionBorrowText.symbol == context.ir[context.ir[ownerIndex!].operand1].symbol) -> if { "%arg" -> print } else { "%v$(regionNode.operand0)" -> print }
+                ", 1" -> println
+                "  %v$(regionNodeIndex!)_value0 = insertvalue %sl.source_text poison, ptr %v$(regionNodeIndex!)_data, 0" -> println
+                "  %v$(regionNodeIndex!)_value1 = insertvalue %sl.source_text %v$(regionNodeIndex!)_value0, i64 %v$(regionNodeIndex!)_length, 1" -> println
+                "  %v$(regionNodeIndex!)_value2 = insertvalue %sl.source_text %v$(regionNodeIndex!)_value1, ptr null, 2" -> println
+                "  %v$(regionNodeIndex!) = insertvalue %sl.source_text %v$(regionNodeIndex!)_value2, i64 0, 3" -> println
+            }
+            (regionNode.kind == 14 and (regionNode.typeOrigin == 13 or regionNode.typeOrigin == 14 or regionNode.typeKind == 3)) -> if {
                 0 => regionArrayLength!
                 regionNode.operand0 => regionArrayCountIndex!
                 regionArrayCountIndex! >= 0 -> while {
                     regionArrayLength! + 1 => regionArrayLength!
                     context.ir[regionArrayCountIndex!].nextOperand => regionArrayCountIndex!
                 }
-                regionArrayLength! * 4 => regionArrayByteLength
+                regionArrayLength! * (regionNode -> arrayElementSize) => regionArrayByteLength
                 "  %v$(regionNodeIndex!)_data = call ptr @malloc(i64 $regionArrayByteLength)" -> println
                 regionNode.operand0 => regionArrayElementIndex!
                 0 => regionArrayElementPosition!
                 regionArrayElementIndex! >= 0 -> while {
                     context.ir[regionArrayElementIndex!] => regionArrayElement
-                    "  %v$(regionNodeIndex!)_ptr$(regionArrayElementPosition!) = getelementptr i32, ptr %v$(regionNodeIndex!)_data, i64 $(regionArrayElementPosition!)" -> println
-                    "  store i32 " -> print
+                    "  %v$(regionNodeIndex!)_ptr$(regionArrayElementPosition!) = getelementptr " -> print
+                    regionNode -> writeArrayElementType
+                    ", ptr %v$(regionNodeIndex!)_data, i64 $(regionArrayElementPosition!)" -> println
+                    "  store " -> print
+                    regionNode -> writeArrayElementType
+                    " " -> print
                     regionArrayElement.kind == 3 -> if {
                         regionArrayElement -> sourceToken => regionArrayElementToken
                         context.sources[regionArrayElement.sourceModule] -> slice(regionArrayElementToken.span.start, regionArrayElementToken.span.length) -> print
                     } else { "%v$(regionArrayElementIndex!)" -> print }
-                    ", ptr %v$(regionNodeIndex!)_ptr$(regionArrayElementPosition!), align 4" -> println
+                    ", ptr %v$(regionNodeIndex!)_ptr$(regionArrayElementPosition!), align " -> print
+                    regionNode -> arrayElementAlign -> writeDecimalLine
                     regionArrayElement.nextOperand => regionArrayElementIndex!
                     regionArrayElementPosition! + 1 => regionArrayElementPosition!
                 }
@@ -1701,10 +2626,11 @@ emitCore context: move EmitContext -> Unit uses Console {
                         regionDictionaryItem.kind == 3 -> if {
                             context.sources[regionDictionaryItem.sourceModule] -> slice(regionDictionaryItemToken.span.start, regionDictionaryItemToken.span.length) -> print
                         } else {
-                            ((context.sources[regionDictionaryItem.sourceModule] -> byte(regionDictionaryItemToken.span.start)) == UInt8(116)) -> if { "1" } else { "0" } -> print
+                            ((context.sources[regionDictionaryItem.sourceModule] -> byte(regionDictionaryItemToken.span.start)) == UInt8(116)) -> if { "1" -> print } else { "0" -> print }
                         }
                     } else { "%v$(regionDictionaryItemIndex!)" -> print }
-                    ", ptr %v$(regionNodeIndex!)_$(regionDictionarySide)_ptr$(regionDictionaryEntryPosition), align $(regionDictionaryItemSymbol -> legacyStorageAlign)" -> println
+                    ", ptr %v$(regionNodeIndex!)_$(regionDictionarySide)_ptr$(regionDictionaryEntryPosition), align " -> print
+                    regionDictionaryItemSymbol -> legacyStorageAlign -> writeDecimalLine
                     regionDictionaryItem.nextOperand => regionDictionaryItemIndex!
                     regionDictionaryItemPosition! + 1 => regionDictionaryItemPosition!
                 }
@@ -1721,15 +2647,21 @@ emitCore context: move EmitContext -> Unit uses Console {
                     regionIndexValue.kind == 3 -> if {
                         regionIndexValue -> sourceToken => regionIndexToken
                         context.sources[regionIndexValue.sourceModule] -> slice(regionIndexToken.span.start, regionIndexToken.span.length) -> print
-                    } else { "%v$(regionNode.operand1)" -> print }
+                    } else {
+                        (regionIndexValue.kind == 5 and ownerIndex! >= 0 and context.ir[ownerIndex!].kind == 0 and context.ir[ownerIndex!].operand1 >= 0 and regionIndexValue.symbol == context.ir[context.ir[ownerIndex!].operand1].symbol) -> if { "%arg" -> print } else { "%v$(regionNode.operand1)" -> print }
+                    }
                     ")" -> println
                 } else {
-                    "  %v$(regionNodeIndex!)_data = extractvalue %sl.array.i32 %v$(regionNode.operand0), 0" -> println
+                    "  %v$(regionNodeIndex!)_data = extractvalue %sl.array.i32 " -> print
+                    (regionIndexedValue.kind == 5 and ownerIndex! >= 0 and context.ir[ownerIndex!].kind == 0 and context.ir[ownerIndex!].operand1 >= 0 and regionIndexedValue.symbol == context.ir[context.ir[ownerIndex!].operand1].symbol) -> if { "%arg" -> print } else { "%v$(regionNode.operand0)" -> print }
+                    ", 0" -> println
                     regionIndexValue.kind != 3 -> if {
-                        "  %v$(regionNodeIndex!)_index = sext i32 %v$(regionNode.operand1) to i64" -> println
+                        "  %v$(regionNodeIndex!)_index = sext i32 " -> print
+                        (regionIndexValue.kind == 5 and ownerIndex! >= 0 and context.ir[ownerIndex!].kind == 0 and context.ir[ownerIndex!].operand1 >= 0 and regionIndexValue.symbol == context.ir[context.ir[ownerIndex!].operand1].symbol) -> if { "%arg" -> print } else { "%v$(regionNode.operand1)" -> print }
+                        " to i64" -> println
                     }
                     "  %v$(regionNodeIndex!)_ptr = getelementptr " -> print
-                    regionNode -> writeType
+                    regionNode -> writeIrType
                     ", ptr %v$(regionNodeIndex!)_data, i64 " -> print
                     regionIndexValue.kind == 3 -> if {
                         regionIndexValue -> sourceToken => regionIndexToken
@@ -1738,12 +2670,28 @@ emitCore context: move EmitContext -> Unit uses Console {
                         "%v$(regionNodeIndex!)_index" -> println
                     }
                     "  %v$(regionNodeIndex!) = load " -> print
-                    regionNode -> writeType
-                    ", ptr %v$(regionNodeIndex!)_ptr, align $(regionNode -> storageAlign)" -> println
+                    regionNode -> writeIrType
+                    ", ptr %v$(regionNodeIndex!)_ptr, align " -> print
+                    regionNode -> storageAlign -> writeDecimalLine
                 }
             }
             (regionNode.kind == 7 or regionNode.kind == 8) -> if {
                 context.ir[regionNode.operand0] => regionLeft
+                0 => regionBinaryWidth!
+                false => regionLeftPromoted!
+                false => regionRightPromoted!
+                regionNode.kind == 8 -> if {
+                    context.ir[regionNode.operand1] => regionRight
+                    0 => regionLeftWidth!
+                    0 => regionRightWidth!
+                    regionLeft.typeOrigin == 1 -> if { regionLeft.typeSymbol -> integerWidth => regionLeftWidth! }
+                    regionRight.typeOrigin == 1 -> if { regionRight.typeSymbol -> integerWidth => regionRightWidth! }
+                    (regionLeftWidth! > 0 and regionRightWidth! > 0) -> if {
+                        regionLeftWidth! > regionRightWidth! -> if { regionLeftWidth! => regionBinaryWidth! } else { regionRightWidth! => regionBinaryWidth! }
+                        IntegerPromotionRequest { expressionIndex: regionNodeIndex!, operandIndex: regionNode.operand0, targetWidth: regionBinaryWidth!, ownerIndex: ownerIndex!, right: false } -> emitIntegerPromotion => regionLeftPromoted!
+                        IntegerPromotionRequest { expressionIndex: regionNodeIndex!, operandIndex: regionNode.operand1, targetWidth: regionBinaryWidth!, ownerIndex: ownerIndex!, right: true } -> emitIntegerPromotion => regionRightPromoted!
+                    }
+                }
                 "" => regionOperation!
                 regionNode.kind == 7 -> if {
                     regionNode.opcode == -26 -> if { "xor" => regionOperation! } else { "sub" => regionOperation! }
@@ -1755,24 +2703,25 @@ emitCore context: move EmitContext -> Unit uses Console {
                     regionNode.opcode == grammar.tokenIdPercent -> if { "srem" => regionOperation! }
                     regionNode.opcode == grammar.tokenIdEqualEqual -> if { "icmp eq" => regionOperation! }
                     regionNode.opcode == grammar.tokenIdBangEqual -> if { "icmp ne" => regionOperation! }
-                    regionNode.opcode == grammar.tokenIdLess -> if { "icmp slt" => regionOperation! }
-                    regionNode.opcode == grammar.tokenIdLessEqual -> if { "icmp sle" => regionOperation! }
-                    regionNode.opcode == grammar.tokenIdGreater -> if { "icmp sgt" => regionOperation! }
-                    regionNode.opcode == grammar.tokenIdGreaterEqual -> if { "icmp sge" => regionOperation! }
+                    (regionNode.opcode == grammar.tokenIdLess or regionNode.opcode == grammar.tokenIdLessEqual or regionNode.opcode == grammar.tokenIdGreater or regionNode.opcode == grammar.tokenIdGreaterEqual) -> if {
+                        regionNode -> integerComparisonOperation => regionOperation!
+                    }
                     regionNode.opcode == -24 -> if { "or" => regionOperation! }
                     regionNode.opcode == -25 -> if { "and" => regionOperation! }
                 }
                 "  %v$(regionNodeIndex!) = $(regionOperation!) " -> print
-                regionLeft -> writeType
+                regionBinaryWidth! > 0 -> if { "i$(regionBinaryWidth!)" -> print } else { regionLeft -> writeIrType }
                 " " -> print
                 (regionNode.kind == 7 and regionNode.opcode != -26) -> if { "0" -> print } else {
                     (regionLeft.kind == 3 or regionLeft.kind == 4) -> if {
                         regionLeft -> sourceToken => regionLeftToken
                         regionLeft.kind == 3 -> if { context.sources[regionLeft.sourceModule] -> slice(regionLeftToken.span.start, regionLeftToken.span.length) -> print } else {
-                            ((context.sources[regionLeft.sourceModule] -> byte(regionLeftToken.span.start)) == UInt8(116)) -> if { "1" } else { "0" } -> print
+                            ((context.sources[regionLeft.sourceModule] -> byte(regionLeftToken.span.start)) == UInt8(116)) -> if { "1" -> print } else { "0" -> print }
                         }
                     } else {
-                        (ownerIndex! >= 0 and context.ir[ownerIndex!].kind == 0 and context.ir[ownerIndex!].operand1 >= 0 and regionLeft.kind == 5 and regionLeft.symbol == context.ir[context.ir[ownerIndex!].operand1].symbol) -> if { "%arg" -> print } else { "%v$(regionNode.operand0)" -> print }
+                        regionLeftPromoted! -> if { "%v$(regionNodeIndex!)_left_wide" -> print } else {
+                            (ownerIndex! >= 0 and context.ir[ownerIndex!].kind == 0 and context.ir[ownerIndex!].operand1 >= 0 and regionLeft.kind == 5 and regionLeft.symbol == context.ir[context.ir[ownerIndex!].operand1].symbol) -> if { "%arg" -> print } else { "%v$(regionNode.operand0)" -> print }
+                        }
                     }
                 }
                 regionNode.kind == 7 -> if {
@@ -1789,51 +2738,282 @@ emitCore context: move EmitContext -> Unit uses Console {
                     (regionRight.kind == 3 or regionRight.kind == 4) -> if {
                         regionRight -> sourceToken => regionRightToken
                         regionRight.kind == 3 -> if { context.sources[regionRight.sourceModule] -> slice(regionRightToken.span.start, regionRightToken.span.length) -> println } else {
-                            ((context.sources[regionRight.sourceModule] -> byte(regionRightToken.span.start)) == UInt8(116)) -> if { "1" } else { "0" } -> println
+                            ((context.sources[regionRight.sourceModule] -> byte(regionRightToken.span.start)) == UInt8(116)) -> if { "1" -> println } else { "0" -> println }
                         }
-                    } else { "%v$(regionNode.operand1)" -> println }
+                    } else {
+                        regionRightPromoted! -> if { "%v$(regionNodeIndex!)_right_wide" -> println } else {
+                            (ownerIndex! >= 0 and context.ir[ownerIndex!].kind == 0 and context.ir[ownerIndex!].operand1 >= 0 and regionRight.kind == 5 and regionRight.symbol == context.ir[context.ir[ownerIndex!].operand1].symbol) -> if { "%arg" -> println } else { "%v$(regionNode.operand1)" -> println }
+                        }
+                    }
                 }
             }
-            regionNode.kind == 6 -> if {
+            (regionNode.kind == 6 and regionNode.opcode != -205) -> if {
                 (regionNode.symbol == -101 or regionNode.symbol == -102) -> if {
                     context.ir[regionNode.operand0] => regionArgument
                     regionArgument.kind == 2 -> if {
                         regionArgument -> sourceToken => regionArgumentToken
-                        Int(regionArgumentToken.span.length) - 2 => regionArgumentLength
-                        "  call void @sl_runtime_print(ptr @sl_str_$(regionNode.operand0), i64 $regionArgumentLength, i1 " -> print
+                        Int(TextLiteralRequest { sourceModule: regionArgument.sourceModule, token: regionArgumentToken } -> textLiteralLength) => regionArgumentLength
+                        regionArgument -> sourceInterpolations => regionExpressionInterpolation!
+                        false => regionHasExpressionInterpolation!
+                        0 => regionExpressionSearch!
+                        regionExpressionSearch! < (regionExpressionInterpolation! -> len) -> while {
+                            (regionExpressionInterpolation![regionExpressionSearch!].sourceToken == regionArgument.payloadToken and regionExpressionInterpolation![regionExpressionSearch!].parent < 0) -> if { true => regionHasExpressionInterpolation! }
+                            regionExpressionSearch! + 1 => regionExpressionSearch!
+                        }
+                        regionHasExpressionInterpolation! -> if {
+                            ownerIndex! + 1 => regionOwnerStart
+                            regionOwnerStart => regionOwnerEnd!
+                            (regionOwnerEnd! < (context.ir -> len) and context.ir[regionOwnerEnd!].kind != 0 and context.ir[regionOwnerEnd!].kind != 11) -> while {
+                                regionOwnerEnd! + 1 => regionOwnerEnd!
+                            }
+                            0 => regionExpressionSegment!
+                            UIntSize(0) => regionExpressionSuffixStart!
+                            0 => regionExpressionRootSearch!
+                            regionExpressionRootSearch! < (regionExpressionInterpolation! -> len) -> while {
+                                regionExpressionInterpolation![regionExpressionRootSearch!] => regionExpressionRoot
+                                (regionExpressionRoot.sourceToken == regionArgument.payloadToken and regionExpressionRoot.parent < 0) -> if {
+                                    "  %v$(regionNodeIndex!)_expression_literal$(regionExpressionSegment!) = getelementptr i8, ptr @sl_str_$(regionNode.operand0), i64 $(regionExpressionRoot.literalStart)" -> println
+                                    "  call void @sl_runtime_print(ptr %v$(regionNodeIndex!)_expression_literal$(regionExpressionSegment!), i64 $(regionExpressionRoot.literalLength), i1 false)" -> println
+                                    regionExpressionRoot.typeSymbol => regionExpressionRootTypeSymbol!
+                                    -1 => regionExpressionRootBinding!
+                                    regionExpressionRoot.kind == 1 -> if {
+                                        (ownerIndex! >= 0 and context.ir[ownerIndex!].kind == 0 and context.ir[ownerIndex!].operand1 >= 0 and context.ir[context.ir[ownerIndex!].operand1].symbol == regionExpressionRoot.symbol) -> if {
+                                            context.ir[context.ir[ownerIndex!].operand1].typeSymbol => regionExpressionRootTypeSymbol!
+                                        } else {
+                                            regionOwnerStart => regionExpressionBindingSearch!
+                                            regionExpressionBindingSearch! < regionOwnerEnd! -> while {
+                                                (context.ir[regionExpressionBindingSearch!].kind == 17 and context.ir[regionExpressionBindingSearch!].symbol == regionExpressionRoot.symbol) -> if { regionExpressionBindingSearch! => regionExpressionRootBinding! }
+                                                regionExpressionBindingSearch! + 1 => regionExpressionBindingSearch!
+                                            }
+                                            regionExpressionRootBinding! >= 0 -> if { context.ir[regionExpressionRootBinding!].typeSymbol => regionExpressionRootTypeSymbol! }
+                                        }
+                                    }
+                                    false => regionExpressionRootMutable!
+                                    regionExpressionRootBinding! >= 0 -> if {
+                                        context.ir[regionExpressionRootBinding!] => regionExpressionRootBindingNode
+                                        regionExpressionRootBindingNode.flags == 1 -> if {
+                                            regionExpressionRootBinding! -> mutableBindingRoot => regionExpressionRootMutableRoot
+                                            "  %v$(regionNodeIndex!)_expression$(regionExpressionRootSearch!)_current = load " -> print
+                                            regionExpressionRootBindingNode -> writeIrType
+                                            ", ptr %slot$(regionExpressionRootMutableRoot), align " -> print
+                                            regionExpressionRootBindingNode -> storageAlign -> writeDecimalLine
+                                            true => regionExpressionRootMutable!
+                                        }
+                                    }
+                                    false => regionExpressionRootMember!
+                                    regionExpressionRoot.kind == 5 -> if {
+                                        regionExpressionInterpolation![regionExpressionRoot.operand0] => regionExpressionMemberBase
+                                        -1 => regionExpressionMemberBaseIr!
+                                        -1 => regionExpressionMemberBinding!
+                                        false => regionExpressionMemberBaseParameter!
+                                        (ownerIndex! >= 0 and context.ir[ownerIndex!].kind == 0 and context.ir[ownerIndex!].operand1 >= 0 and context.ir[context.ir[ownerIndex!].operand1].symbol == regionExpressionMemberBase.symbol) -> if {
+                                            context.ir[ownerIndex!].operand1 => regionExpressionMemberBaseIr!
+                                            true => regionExpressionMemberBaseParameter!
+                                        } else {
+                                            regionOwnerStart => regionExpressionMemberBindingSearch!
+                                            regionExpressionMemberBindingSearch! < regionOwnerEnd! -> while {
+                                                (context.ir[regionExpressionMemberBindingSearch!].kind == 17 and context.ir[regionExpressionMemberBindingSearch!].symbol == regionExpressionMemberBase.symbol) -> if {
+                                                    regionExpressionMemberBindingSearch! => regionExpressionMemberBinding!
+                                                    context.ir[regionExpressionMemberBindingSearch!].operand0 => regionExpressionMemberBaseIr!
+                                                }
+                                                regionExpressionMemberBindingSearch! + 1 => regionExpressionMemberBindingSearch!
+                                            }
+                                        }
+                                        regionExpressionMemberBaseIr! >= 0 -> if {
+                                            context.ir[regionExpressionMemberBaseIr!] => regionExpressionMemberBaseValue
+                                            false => regionExpressionMemberBaseMutable!
+                                            regionExpressionMemberBinding! >= 0 -> if {
+                                                context.ir[regionExpressionMemberBinding!] => regionExpressionMemberBindingNode
+                                                regionExpressionMemberBindingNode.flags == 1 -> if {
+                                                    regionExpressionMemberBinding! -> mutableBindingRoot => regionExpressionMemberMutableRoot
+                                                    "  %v$(regionNodeIndex!)_expression$(regionExpressionRootSearch!)_member_current = load " -> print
+                                                    regionExpressionMemberBaseValue -> writeIrType
+                                                    ", ptr %slot$(regionExpressionMemberMutableRoot), align " -> print
+                                                    regionExpressionMemberBindingNode -> storageAlign -> writeDecimalLine
+                                                    true => regionExpressionMemberBaseMutable!
+                                                }
+                                            }
+                                            regionExpressionMemberBaseValue.typeModule => regionExpressionMemberOwnerSource!
+                                            regionExpressionMemberBaseValue.typeOrigin == 2 -> if {
+                                                context.modules[regionExpressionMemberBaseValue.typeModule].sourceIndex => regionExpressionMemberOwnerSource!
+                                            }
+                                            context.ranges[regionExpressionMemberOwnerSource!] => regionExpressionMemberOwnerRange
+                                            regionExpressionRoot.payloadStart => regionExpressionMemberDot!
+                                            regionExpressionRoot.payloadStart + regionExpressionRoot.payloadLength => regionExpressionMemberEnd
+                                            (regionExpressionMemberDot! < regionExpressionMemberEnd and (context.sources[regionArgument.sourceModule] -> byte(regionExpressionMemberDot!)) != UInt8(46)) -> while {
+                                                regionExpressionMemberDot! + UIntSize(1) => regionExpressionMemberDot!
+                                            }
+                                            regionExpressionMemberDot! + UIntSize(1) => regionExpressionMemberNameStart
+                                            regionExpressionMemberEnd - regionExpressionMemberNameStart => regionExpressionMemberNameLength
+                                            -1 => regionExpressionMemberFieldOrdinal!
+                                            -1 => regionExpressionMemberFieldTypeAst!
+                                            0 => regionExpressionMemberCandidateOrdinal!
+                                            0 => regionExpressionMemberFieldSearch!
+                                            regionExpressionMemberFieldSearch! < regionExpressionMemberOwnerRange.symbolCount -> while {
+                                                context.symbols[regionExpressionMemberOwnerRange.symbolStart + regionExpressionMemberFieldSearch!] => regionExpressionMemberField
+                                                (regionExpressionMemberField.kind == 26 and regionExpressionMemberField.parent == regionExpressionMemberBaseValue.typeSymbol) -> if {
+                                                    context.tokens[regionExpressionMemberOwnerRange.tokenStart + regionExpressionMemberField.nameToken] => regionExpressionMemberFieldName
+                                                    regionExpressionMemberFieldName.span.length == regionExpressionMemberNameLength => regionExpressionMemberNameEqual!
+                                                    UIntSize(0) => regionExpressionMemberNameByte!
+                                                    (regionExpressionMemberNameEqual! and regionExpressionMemberNameByte! < regionExpressionMemberNameLength) -> while {
+                                                        (context.sources[regionArgument.sourceModule] -> byte(regionExpressionMemberNameStart + regionExpressionMemberNameByte!)) != (context.sources[regionExpressionMemberOwnerSource!] -> byte(regionExpressionMemberFieldName.span.start + regionExpressionMemberNameByte!)) -> if { false => regionExpressionMemberNameEqual! }
+                                                        regionExpressionMemberNameByte! + UIntSize(1) => regionExpressionMemberNameByte!
+                                                    }
+                                                    regionExpressionMemberNameEqual! -> if {
+                                                        regionExpressionMemberCandidateOrdinal! => regionExpressionMemberFieldOrdinal!
+                                                        regionExpressionMemberField.typeNode => regionExpressionMemberFieldTypeAst!
+                                                    }
+                                                    regionExpressionMemberCandidateOrdinal! + 1 => regionExpressionMemberCandidateOrdinal!
+                                                }
+                                                regionExpressionMemberFieldSearch! + 1 => regionExpressionMemberFieldSearch!
+                                            }
+                                            regionExpressionMemberFieldTypeAst! >= 0 -> if {
+                                                0 => regionExpressionMemberTypeSearch!
+                                                regionExpressionMemberTypeSearch! < (context.nominal -> len) -> while {
+                                                    context.nominal[regionExpressionMemberTypeSearch!] => regionExpressionMemberType
+                                                    (regionExpressionMemberType.sourceModule == regionExpressionMemberOwnerSource! and regionExpressionMemberType.typeAst == regionExpressionMemberFieldTypeAst! and regionExpressionMemberType.status == 0) -> if {
+                                                        regionExpressionMemberType.targetSymbol => regionExpressionRootTypeSymbol!
+                                                    }
+                                                    regionExpressionMemberTypeSearch! + 1 => regionExpressionMemberTypeSearch!
+                                                }
+                                            }
+                                            regionExpressionMemberFieldOrdinal! >= 0 -> if {
+                                                "  %v$(regionNodeIndex!)_expression$(regionExpressionRootSearch!) = extractvalue " -> print
+                                                regionExpressionMemberBaseValue -> writeIrType
+                                                " " -> print
+                                                regionExpressionMemberBaseParameter! -> if { "%arg" -> print } else {
+                                                    regionExpressionMemberBaseMutable! -> if { "%v$(regionNodeIndex!)_expression$(regionExpressionRootSearch!)_member_current" -> print } else { "%v$(regionExpressionMemberBaseIr!)" -> print }
+                                                }
+                                                ", $(regionExpressionMemberFieldOrdinal!)" -> println
+                                                true => regionExpressionRootMember!
+                                            }
+                                        }
+                                    }
+                                    regionExpressionRootTypeSymbol! == 1 -> if {
+                                        "  %v$(regionNodeIndex!)_expression$(regionExpressionRootSearch!)_text_ptr = extractvalue %sl.text " -> print
+                                        regionExpressionRoot.kind == 5 -> if {
+                                            "%v$(regionNodeIndex!)_expression$(regionExpressionRootSearch!)" -> print
+                                        } else {
+                                            (ownerIndex! >= 0 and context.ir[ownerIndex!].kind == 0 and context.ir[ownerIndex!].operand1 >= 0 and context.ir[context.ir[ownerIndex!].operand1].symbol == regionExpressionRoot.symbol) -> if { "%arg" -> print } else {
+                                                regionExpressionRootMutable! -> if { "%v$(regionNodeIndex!)_expression$(regionExpressionRootSearch!)_current" -> print } else {
+                                                    "%v" -> print
+                                                    context.ir[regionExpressionRootBinding!].operand0 -> writeDecimal
+                                                }
+                                            }
+                                        }
+                                        ", 0" -> println
+                                        "  %v$(regionNodeIndex!)_expression$(regionExpressionRootSearch!)_text_len = extractvalue %sl.text " -> print
+                                        regionExpressionRoot.kind == 5 -> if {
+                                            "%v$(regionNodeIndex!)_expression$(regionExpressionRootSearch!)" -> print
+                                        } else {
+                                            (ownerIndex! >= 0 and context.ir[ownerIndex!].kind == 0 and context.ir[ownerIndex!].operand1 >= 0 and context.ir[context.ir[ownerIndex!].operand1].symbol == regionExpressionRoot.symbol) -> if { "%arg" -> print } else {
+                                                regionExpressionRootMutable! -> if { "%v$(regionNodeIndex!)_expression$(regionExpressionRootSearch!)_current" -> print } else {
+                                                    "%v" -> print
+                                                    context.ir[regionExpressionRootBinding!].operand0 -> writeDecimal
+                                                }
+                                            }
+                                        }
+                                        ", 1" -> println
+                                        "  call void @sl_runtime_print(ptr %v$(regionNodeIndex!)_expression$(regionExpressionRootSearch!)_text_ptr, i64 %v$(regionNodeIndex!)_expression$(regionExpressionRootSearch!)_text_len, i1 false)" -> println
+                                    } else {
+                                        regionExpressionRootTypeSymbol! == 23 -> if { "  call void @sl_runtime_print_i1(i1 " -> print } else {
+                                            (regionExpressionRootTypeSymbol! -> integerWidth) == 64 -> if { "  call void @sl_runtime_print_i64(i64 " -> print } else { "  call void @sl_runtime_print_i32(i32 " -> print }
+                                        }
+                                        (regionExpressionRoot.kind == 0 or regionExpressionRoot.kind == 4) -> if {
+                                            regionExpressionRoot.kind == 4 -> if {
+                                                (context.sources[regionArgument.sourceModule] -> byte(regionExpressionRoot.payloadStart)) == UInt8(116) -> if { "1" -> print } else { "0" -> print }
+                                            } else { context.sources[regionArgument.sourceModule] -> slice(regionExpressionRoot.payloadStart, regionExpressionRoot.payloadLength) -> print }
+                                        } else {
+                                            regionExpressionRoot.kind == 5 -> if {
+                                                regionExpressionRootMember! -> if { "%v$(regionNodeIndex!)_expression$(regionExpressionRootSearch!)" -> print }
+                                            } else {
+                                                regionExpressionRoot.kind == 1 -> if {
+                                                    (ownerIndex! >= 0 and context.ir[ownerIndex!].kind == 0 and context.ir[ownerIndex!].operand1 >= 0 and context.ir[context.ir[ownerIndex!].operand1].symbol == regionExpressionRoot.symbol) -> if { "%arg" -> print } else {
+                                                        regionExpressionRootBinding! >= 0 -> if {
+                                                            context.ir[context.ir[regionExpressionRootBinding!].operand0] => regionExpressionRootValue
+                                                            regionExpressionRootMutable! -> if { "%v$(regionNodeIndex!)_expression$(regionExpressionRootSearch!)_current" -> print } else {
+                                                            (regionExpressionRootValue.kind == 3 or regionExpressionRootValue.kind == 4) -> if {
+                                                                regionExpressionRootValue -> sourceToken => regionExpressionRootToken
+                                                                regionExpressionRootValue.kind == 4 -> if {
+                                                                    (context.sources[regionExpressionRootValue.sourceModule] -> byte(regionExpressionRootToken.span.start)) == UInt8(116) -> if { "1" -> print } else { "0" -> print }
+                                                                } else { context.sources[regionExpressionRootValue.sourceModule] -> slice(regionExpressionRootToken.span.start, regionExpressionRootToken.span.length) -> print }
+                                                            } else {
+                                                                "%v" -> print
+                                                                context.ir[regionExpressionRootBinding!].operand0 -> writeDecimal
+                                                            }
+                                                            }
+                                                        }
+                                                    }
+                                                } else { "%v$(regionNodeIndex!)_expression$(regionExpressionRootSearch!)" -> print }
+                                            }
+                                        }
+                                        (regionExpressionRootTypeSymbol! -> integerWidth) == 64 -> if {
+                                            ", i1 " -> print
+                                            regionExpressionRootTypeSymbol! -> integerSigned -> if { "true" -> print } else { "false" -> print }
+                                        }
+                                        ", i1 false)" -> println
+                                    }
+                                    regionExpressionRoot.expressionStart + regionExpressionRoot.expressionLength + UIntSize(1) => regionExpressionSuffixStart!
+                                    regionExpressionSegment! + 1 => regionExpressionSegment!
+                                }
+                                regionExpressionRootSearch! + 1 => regionExpressionRootSearch!
+                            }
+                            UIntSize(regionArgumentLength) - regionExpressionSuffixStart! => regionExpressionSuffixLength
+                            "  %v$(regionNodeIndex!)_expression_suffix = getelementptr i8, ptr @sl_str_$(regionNode.operand0), i64 $(regionExpressionSuffixStart!)" -> println
+                            "  call void @sl_runtime_print(ptr %v$(regionNodeIndex!)_expression_suffix, i64 $regionExpressionSuffixLength, i1 " -> print
+                        } else {
+                            "  call void @sl_runtime_print(ptr @sl_str_$(regionNode.operand0), i64 $regionArgumentLength, i1 " -> print
+                        }
                         regionNode.symbol == -102 -> if { "true)" -> println } else { "false)" -> println }
+                    } else {
+                        (regionArgument.typeOrigin == 1 and regionArgument.typeSymbol == 2) -> if {
+                            "  call void @sl_runtime_print_i32(i32 " -> print
+                            regionArgument.kind == 3 -> if {
+                                regionArgument -> sourceToken => regionIntegerPrintToken
+                                context.sources[regionArgument.sourceModule] -> slice(regionIntegerPrintToken.span.start, regionIntegerPrintToken.span.length) -> print
+                            } else {
+                                (ownerIndex! >= 0 and context.ir[ownerIndex!].kind == 0 and context.ir[ownerIndex!].operand1 >= 0 and regionArgument.kind == 5 and regionArgument.symbol == context.ir[context.ir[ownerIndex!].operand1].symbol) -> if { "%arg" -> print } else { "%v$(regionNode.operand0)" -> print }
+                            }
+                            regionNode.symbol == -102 -> if { ", i1 true)" -> println } else { ", i1 false)" -> println }
+                        }
                     }
                 } else {
-                (regionNode.targetModule < 0 and regionNode.typeOrigin == 1 and (regionNode.typeSymbol == 3 or regionNode.typeSymbol == 13) and regionNode.operand0 >= 0) -> if {
-                    context.ir[regionNode.operand0] => regionUIntSizeArgument
-                    regionNode.typeSymbol == 3 -> if {
-                        "  %v$(regionNodeIndex!) = trunc i32 " -> print
-                    } else {
-                    regionUIntSizeArgument.typeSymbol == 13 -> if {
-                        "  %v$(regionNodeIndex!) = add i64 " -> print
-                    } else {
-                        "  %v$(regionNodeIndex!) = zext i32 " -> print
+                (regionNode.targetModule < 0 and regionNode.typeOrigin == 1 and (regionNode.typeSymbol -> integerWidth) > 0 and regionNode.operand0 >= 0) -> if {
+                    context.ir[regionNode.operand0] => regionIntegerArgument
+                    regionNode.typeSymbol -> integerWidth => regionTargetWidth
+                    regionIntegerArgument.typeSymbol -> integerWidth => regionInputWidth
+                    "  %v$(regionNodeIndex!) = " -> print
+                    regionTargetWidth < regionInputWidth -> if { "trunc " -> print } else {
+                        regionTargetWidth > regionInputWidth -> if {
+                            regionIntegerArgument -> integerNodeSigned -> if { "sext " -> print } else { "zext " -> print }
+                        } else { "add " -> print }
                     }
+                    regionIntegerArgument -> writeIrType
+                    " " -> print
+                    regionIntegerArgument.kind == 3 -> if {
+                        regionIntegerArgument -> sourceToken => regionIntegerToken
+                        context.sources[regionIntegerArgument.sourceModule] -> slice(regionIntegerToken.span.start, regionIntegerToken.span.length) -> print
+                    } else {
+                        (ownerIndex! >= 0 and context.ir[ownerIndex!].kind == 0 and context.ir[ownerIndex!].operand1 >= 0 and regionIntegerArgument.kind == 5 and regionIntegerArgument.symbol == context.ir[context.ir[ownerIndex!].operand1].symbol) -> if { "%arg" -> print } else { "%v$(regionNode.operand0)" -> print }
                     }
-                    regionUIntSizeArgument.kind == 3 -> if {
-                        regionUIntSizeArgument -> sourceToken => regionUIntSizeToken
-                        context.sources[regionUIntSizeArgument.sourceModule] -> slice(regionUIntSizeToken.span.start, regionUIntSizeToken.span.length) -> print
-                    } else { "%v$(regionNode.operand0)" -> print }
-                    regionNode.typeSymbol == 3 -> if { " to i8" -> println } else {
-                        regionUIntSizeArgument.typeSymbol == 13 -> if { ", 0" -> println } else { " to i64" -> println }
+                    regionTargetWidth == regionInputWidth -> if { ", 0" -> println } else {
+                        " to " -> print
+                        regionNode -> writeIrType
+                        "" -> println
                     }
                 } else {
                     (regionNode.typeOrigin == 1 and regionNode.typeSymbol == 0) -> if { "  call " -> print } else { "  %v$(regionNodeIndex!) = call " -> print }
-                    regionNode -> writeType
+                    regionNode -> writeIrType
                     " @sl_m$(regionNode.targetModule)_s$(regionNode.symbol)(" -> print
+                    CallEnvironmentRequest { callerIndex: ownerIndex!, targetModule: regionNode.targetModule, targetSymbol: regionNode.symbol, hasArgument: regionNode.operand0 >= 0 } -> emitCallEnvironment => regionCallEnvironment
                     regionNode.operand0 >= 0 -> if {
                         context.ir[regionNode.operand0] => regionCallArgument
-                        regionCallArgument -> writeType
+                        regionCallArgument -> writeIrType
                         " " -> print
                         (regionCallArgument.kind == 3 or regionCallArgument.kind == 4) -> if {
                             regionCallArgument -> sourceToken => regionCallToken
                             regionCallArgument.kind == 3 -> if { context.sources[regionCallArgument.sourceModule] -> slice(regionCallToken.span.start, regionCallToken.span.length) -> print } else {
-                                ((context.sources[regionCallArgument.sourceModule] -> byte(regionCallToken.span.start)) == UInt8(116)) -> if { "1" } else { "0" } -> print
+                                ((context.sources[regionCallArgument.sourceModule] -> byte(regionCallToken.span.start)) == UInt8(116)) -> if { "1" -> print } else { "0" -> print }
                             }
                         } else {
                             (ownerIndex! >= 0 and context.ir[ownerIndex!].kind == 0 and context.ir[ownerIndex!].operand1 >= 0 and regionCallArgument.kind == 5 and regionCallArgument.symbol == context.ir[context.ir[ownerIndex!].operand1].symbol) -> if { "%arg" -> print } else { "%v$(regionNode.operand0)" -> print }
@@ -1850,7 +3030,8 @@ emitCore context: move EmitContext -> Unit uses Console {
                 not regionTerminated! -> if {
                 true => ifActive![regionNodeIndex!]
                 regionNode.operand0 => nestedConditionIndex!
-                (nestedConditionIndex! >= 0 and context.ir[nestedConditionIndex!].kind == 9) -> while {
+                true => nestedConditionUnwrap!
+                (nestedConditionIndex! >= 0 and nestedConditionUnwrap! and context.ir[nestedConditionIndex!].kind == 9) -> while {
                     -1 => nestedConditionChild!
                     UIntSize(0) => nestedConditionChildStart!
                     0 => nestedConditionChildSearch!
@@ -1864,13 +3045,13 @@ emitCore context: move EmitContext -> Unit uses Console {
                         }
                         nestedConditionChildSearch! + 1 => nestedConditionChildSearch!
                     }
-                    nestedConditionChild! >= 0 -> if { nestedConditionChild! => nestedConditionIndex! } else { -1 => nestedConditionIndex! }
+                    nestedConditionChild! >= 0 -> if { nestedConditionChild! => nestedConditionIndex! } else { false => nestedConditionUnwrap! }
                 }
                 context.ir[nestedConditionIndex!] => nestedCondition
                 "  br i1 " -> print
                 nestedCondition.kind == 4 -> if {
                     nestedCondition -> sourceToken => nestedConditionToken
-                    ((context.sources[nestedCondition.sourceModule] -> byte(nestedConditionToken.span.start)) == UInt8(116)) -> if { "1" } else { "0" } -> print
+                    ((context.sources[nestedCondition.sourceModule] -> byte(nestedConditionToken.span.start)) == UInt8(116)) -> if { "1" -> print } else { "0" -> print }
                 } else {
                     (ownerIndex! >= 0 and context.ir[ownerIndex!].kind == 0 and context.ir[ownerIndex!].operand1 >= 0 and nestedCondition.kind == 5 and nestedCondition.symbol == context.ir[context.ir[ownerIndex!].operand1].symbol) -> if { "%arg" -> print } else { "%v$(nestedConditionIndex!)" -> print }
                 }
@@ -1910,29 +3091,33 @@ emitCore context: move EmitContext -> Unit uses Console {
                     "if$(regionNodeIndex!)_merge:" -> println
                     false => regionTerminated!
                 }
-                (regionNode.typeSymbol != 0 and regionNode.nextOperand >= 0) -> if {
+                (regionNode.typeSymbol != 0 and regionNode.nextOperand >= 0 and context.ir[context.ir[regionNode.operand1].operand1].typeOrigin == regionNode.typeOrigin and context.ir[context.ir[regionNode.nextOperand].operand1].typeOrigin == regionNode.typeOrigin and context.ir[context.ir[regionNode.operand1].operand1].typeSymbol == regionNode.typeSymbol and context.ir[context.ir[regionNode.nextOperand].operand1].typeSymbol == regionNode.typeSymbol) -> if {
                     context.ir[regionNode.operand1] => nestedThenRegion
                     context.ir[regionNode.nextOperand] => nestedElseRegion
                     context.ir[nestedThenRegion.operand1] => nestedThenValue
                     context.ir[nestedElseRegion.operand1] => nestedElseValue
                     "  %v$(regionNodeIndex!) = phi " -> print
-                    regionNode -> writeType
+                    regionNode -> writeIrType
                     " [ " -> print
                     (nestedThenValue.kind == 3 or nestedThenValue.kind == 4) -> if {
                         nestedThenValue -> sourceToken => nestedThenValueToken
                         nestedThenValue.kind == 3 -> if { context.sources[nestedThenValue.sourceModule] -> slice(nestedThenValueToken.span.start, nestedThenValueToken.span.length) -> print } else {
-                            ((context.sources[nestedThenValue.sourceModule] -> byte(nestedThenValueToken.span.start)) == UInt8(116)) -> if { "1" } else { "0" } -> print
+                            ((context.sources[nestedThenValue.sourceModule] -> byte(nestedThenValueToken.span.start)) == UInt8(116)) -> if { "1" -> print } else { "0" -> print }
                         }
-                    } else { "%v$(nestedThenRegion.operand1)" -> print }
+                    } else {
+                        (nestedThenValue.kind == 5 and ownerIndex! >= 0 and context.ir[ownerIndex!].operand1 >= 0 and nestedThenValue.symbol == context.ir[context.ir[ownerIndex!].operand1].symbol) -> if { "%arg" -> print } else { "%v$(nestedThenRegion.operand1)" -> print }
+                    }
                     ", %if" -> print
                     nestedThenValue.kind == 18 -> if { "$(nestedThenRegion.operand1)_merge" -> print } else { "$(regionNodeIndex!)_then" -> print }
                     " ], [ " -> print
                     (nestedElseValue.kind == 3 or nestedElseValue.kind == 4) -> if {
                         nestedElseValue -> sourceToken => nestedElseValueToken
                         nestedElseValue.kind == 3 -> if { context.sources[nestedElseValue.sourceModule] -> slice(nestedElseValueToken.span.start, nestedElseValueToken.span.length) -> print } else {
-                            ((context.sources[nestedElseValue.sourceModule] -> byte(nestedElseValueToken.span.start)) == UInt8(116)) -> if { "1" } else { "0" } -> print
+                            ((context.sources[nestedElseValue.sourceModule] -> byte(nestedElseValueToken.span.start)) == UInt8(116)) -> if { "1" -> print } else { "0" -> print }
                         }
-                    } else { "%v$(nestedElseRegion.operand1)" -> print }
+                    } else {
+                        (nestedElseValue.kind == 5 and ownerIndex! >= 0 and context.ir[ownerIndex!].operand1 >= 0 and nestedElseValue.symbol == context.ir[context.ir[ownerIndex!].operand1].symbol) -> if { "%arg" -> print } else { "%v$(nestedElseRegion.operand1)" -> print }
+                    }
                     ", %if" -> print
                     nestedElseValue.kind == 18 -> if { "$(nestedElseRegion.operand1)_merge" -> print } else { "$(regionNodeIndex!)_else" -> print }
                     " ]" -> println
@@ -1967,6 +3152,20 @@ emitCore context: move EmitContext -> Unit uses Console {
             regionOrderIndex! + 1 => regionOrderIndex!
         }
     }
+    -1 => intrinsicRuntimeModule!
+    0 => intrinsicRuntimeSearch!
+    intrinsicRuntimeSearch! < (context.modules -> len) -> while {
+        context.modules[intrinsicRuntimeSearch!] => intrinsicModuleIdentity
+        intrinsicModuleIdentity.pathHash == UInt64(12254170256457402476) -> if { intrinsicModuleIdentity.sourceIndex => intrinsicRuntimeModule! }
+        intrinsicRuntimeSearch! + 1 => intrinsicRuntimeSearch!
+    }
+    false => usesSourceText!
+    0 => sourceTextTypeSearch!
+    sourceTextTypeSearch! < (context.ir -> len) -> while {
+        context.ir[sourceTextTypeSearch!] -> isSourceTextType -> if { true => usesSourceText! }
+        sourceTextTypeSearch! + 1 => sourceTextTypeSearch!
+    }
+    usesSourceText! -> if { "%sl.source_text = type { ptr, i64, ptr, i64 }" -> println }
     0 => structTypeIndex!
     structTypeIndex! < (context.types -> len) -> while {
         context.types[structTypeIndex!] => structType
@@ -1988,9 +3187,11 @@ emitCore context: move EmitContext -> Unit uses Console {
         structTypeIndex! + 1 => structTypeIndex!
     }
     false => usesDynamicArray!
+    false => usesArrayPush!
     0 => arrayTypeSearch!
     arrayTypeSearch! < (context.ir -> len) -> while {
         context.ir[arrayTypeSearch!] -> isDynamicArrayType -> if { true => usesDynamicArray! }
+        context.ir[arrayTypeSearch!].opcode == -204 -> if { true => usesArrayPush! }
         arrayTypeSearch! + 1 => arrayTypeSearch!
     }
     0 => arrayCompositeSearch!
@@ -2000,7 +3201,10 @@ emitCore context: move EmitContext -> Unit uses Console {
     }
     usesDynamicArray! -> if {
         "%sl.array.i32 = type { ptr, i64, i64 }" -> println
+    }
+    (usesDynamicArray! or intrinsicRuntimeModule! >= 0) -> if {
         "declare ptr @malloc(i64)" -> println
+        usesArrayPush! -> if { "declare ptr @realloc(ptr, i64)" -> println }
         "declare void @free(ptr)" -> println
     }
     false => usesDictionary!
@@ -2016,8 +3220,8 @@ emitCore context: move EmitContext -> Unit uses Console {
     }
     usesDictionary! -> if {
         "%sl.dict = type { ptr, ptr, i64, i64 }" -> println
-        "declare void @llvm.trap()" -> println
-        not usesDynamicArray! -> if {
+        intrinsicRuntimeModule! < 0 -> if { "declare void @llvm.trap()" -> println }
+        (not usesDynamicArray! and intrinsicRuntimeModule! < 0) -> if {
             "declare ptr @malloc(i64)" -> println
             "declare void @free(ptr)" -> println
         }
@@ -2035,27 +3239,15 @@ emitCore context: move EmitContext -> Unit uses Console {
             context.ir[textGlobalIndex!] => textConstant
             textConstant.kind == 2 -> if {
                 textConstant -> sourceToken => textToken
-                textToken.span.length - UIntSize(2) => textLength
-                "@sl_str_$(textGlobalIndex!) = private unnamed_addr constant [$textLength x i8] c" -> print
-                context.sources[textConstant.sourceModule] -> slice(textToken.span.start, UIntSize(1)) -> print
-                textToken.span.start + UIntSize(1) => textByteIndex!
-                textToken.span.start + textToken.span.length - UIntSize(1) => textByteEnd
-                textByteIndex! < textByteEnd -> while {
-                    context.sources[textConstant.sourceModule] -> byte(textByteIndex!) => textByte
-                    (textByte >= UInt8(32) and textByte <= UInt8(126) and textByte != UInt8(34) and textByte != UInt8(92)) -> if {
-                        context.sources[textConstant.sourceModule] -> slice(textByteIndex!, UIntSize(1)) -> print
-                    } else {
-                        "\\" -> print
-                        Int(textByte) / 16 -> hexDigit -> print
-                        Int(textByte) % 16 -> hexDigit -> print
-                    }
-                    textByteIndex! + UIntSize(1) => textByteIndex!
-                }
-                context.sources[textConstant.sourceModule] -> slice(textByteEnd, UIntSize(1)) -> println
+                TextLiteralRequest { sourceModule: textConstant.sourceModule, token: textToken } => textLiteralRequest
+                textLiteralRequest -> textLiteralLength => textLength
+                "@sl_str_$(textGlobalIndex!) = private unnamed_addr constant [$textLength x i8] " -> print
+                textLiteralRequest -> emitTextLiteralConstant
             }
             textGlobalIndex! + 1 => textGlobalIndex!
         }
     }
+    (usesSourceText! and usesText! and intrinsicRuntimeModule! < 0) -> if { "declare %sl.source_text @sl_runtime_map_text(%sl.text)" -> println }
     false => usesArguments!
     0 => argumentsTypeSearch!
     argumentsTypeSearch! < (context.ir -> len) -> while {
@@ -2091,6 +3283,36 @@ emitCore context: move EmitContext -> Unit uses Console {
         "  ret %sl.text %text" -> println
         "}" -> println
     }
+    [Int; ~] => declaredExternalModules!
+    [Int; ~] => declaredExternalSymbols!
+    0 => externalCallIndex!
+    externalCallIndex! < (context.ir -> len) -> while {
+        context.ir[externalCallIndex!] => externalCall
+        (externalCall.kind == 6 and externalCall.opcode != -205 and externalCall.targetModule >= 0 and externalCall.symbol >= 0) -> if {
+            false => externalDefined!
+            0 => externalDefinitionSearch!
+            externalDefinitionSearch! < (context.ir -> len) -> while {
+                (context.ir[externalDefinitionSearch!].kind == 0 and context.ir[externalDefinitionSearch!].sourceModule == externalCall.targetModule and context.ir[externalDefinitionSearch!].symbol == externalCall.symbol) -> if { true => externalDefined! }
+                externalDefinitionSearch! + 1 => externalDefinitionSearch!
+            }
+            false => externalDeclared!
+            0 => externalDeclaredSearch!
+            externalDeclaredSearch! < (declaredExternalModules! -> len) -> while {
+                (declaredExternalModules![externalDeclaredSearch!] == externalCall.targetModule and declaredExternalSymbols![externalDeclaredSearch!] == externalCall.symbol) -> if { true => externalDeclared! }
+                externalDeclaredSearch! + 1 => externalDeclaredSearch!
+            }
+            (externalCall.targetModule != intrinsicRuntimeModule! and not externalDefined! and not externalDeclared!) -> if {
+                "declare " -> print
+                externalCall -> writeIrType
+                " @sl_m$(externalCall.targetModule)_s$(externalCall.symbol)(" -> print
+                externalCall.operand0 >= 0 -> if { context.ir[externalCall.operand0] -> writeIrType }
+                ")" -> println
+                declaredExternalModules! -> push(externalCall.targetModule)
+                declaredExternalSymbols! -> push(externalCall.symbol)
+            }
+        }
+        externalCallIndex! + 1 => externalCallIndex!
+    }
     0 => functionIndex!
     functionIndex! < (context.ir -> len) -> while {
         context.ir[functionIndex!] => function
@@ -2099,17 +3321,55 @@ emitCore context: move EmitContext -> Unit uses Console {
             (functionEnd! < (context.ir -> len) and context.ir[functionEnd!].kind != 0 and context.ir[functionEnd!].kind != 11) -> while {
                 functionEnd! + 1 => functionEnd!
             }
+            context.ranges[function.sourceModule] => functionSourceRange
+            context.symbols[functionSourceRange.symbolStart + function.symbol] => functionSymbol
+            functionSymbol.parent => functionParentSymbol
+            -1 => functionParentIr!
+            -1 => functionEnvironmentParameterIr!
+            functionParentSymbol >= 0 -> if {
+                0 => functionParentSearch!
+                (functionParentSearch! < (context.ir -> len) and functionParentIr! < 0) -> while {
+                    context.ir[functionParentSearch!] => functionParentCandidate
+                    (functionParentCandidate.kind == 0 and functionParentCandidate.sourceModule == function.sourceModule and functionParentCandidate.symbol == functionParentSymbol) -> if {
+                        functionParentSearch! => functionParentIr!
+                        functionParentCandidate.operand1 => functionEnvironmentParameterIr!
+                    }
+                    functionParentSearch! + 1 => functionParentSearch!
+                }
+            }
             "define " -> print
-            function -> writeType
-            " @sl_m$(function.sourceModule)_s$(function.symbol)(" -> print
+            function -> writeIrType
+            " @sl_m" -> print
+            function.sourceModule -> writeDecimal
+            "_s" -> print
+            function.symbol -> writeDecimal
+            "(" -> print
+            functionEnvironmentParameterIr! >= 0 -> if {
+                context.ir[functionEnvironmentParameterIr!] -> writeIrType
+                " %env" -> print
+                function.operand1 >= 0 -> if { ", " -> print }
+            }
             function.operand1 >= 0 -> if {
                 context.ir[function.operand1] => parameter
-                parameter -> writeType
+                parameter -> writeIrType
                 " %arg" -> print
             }
             ") {" -> println
             "entry:" -> println
             function.operand0 + 1 => expressionStart
+            functionEnvironmentParameterIr! >= 0 -> if {
+                context.ir[functionEnvironmentParameterIr!] => functionEnvironmentParameter
+                expressionStart => functionCaptureIndex!
+                functionCaptureIndex! < functionEnd! -> while {
+                    context.ir[functionCaptureIndex!] => functionCapture
+                    (functionCapture.kind == 5 and functionCapture.operand0 < 0 and functionCapture.symbol == functionEnvironmentParameter.symbol) -> if {
+                        "  %v$(functionCaptureIndex!) = freeze " -> print
+                        functionEnvironmentParameter -> writeIrType
+                        " %env" -> println
+                    }
+                    functionCaptureIndex! + 1 => functionCaptureIndex!
+                }
+            }
             expressionStart => mutableSlotIndex!
             mutableSlotIndex! < functionEnd! -> while {
                 context.ir[mutableSlotIndex!] => mutableSlotCandidate
@@ -2117,8 +3377,9 @@ emitCore context: move EmitContext -> Unit uses Console {
                     mutableSlotIndex! -> mutableBindingRoot => mutableSlotRoot
                     mutableSlotRoot == mutableSlotIndex! -> if {
                         "  %slot$(mutableSlotRoot) = alloca " -> print
-                        mutableSlotCandidate -> writeType
-                        ", align $(mutableSlotCandidate -> storageAlign)" -> println
+                        mutableSlotCandidate -> writeIrType
+                        ", align " -> print
+                        mutableSlotCandidate -> storageAlign -> writeDecimalLine
                     }
                 }
                 mutableSlotIndex! + 1 => mutableSlotIndex!
@@ -2140,7 +3401,13 @@ emitCore context: move EmitContext -> Unit uses Console {
                         scheduleNode.parent => scheduleAncestor!
                         scheduleNode.kind == 19 => insideControlRegion!
                         (scheduleAncestor! >= expressionStart and not insideControlRegion!) -> while {
-                            (context.ir[scheduleAncestor!].kind == 19 or context.ir[scheduleAncestor!].kind == 20) -> if { true => insideControlRegion! } else { context.ir[scheduleAncestor!].parent => scheduleAncestor! }
+                            context.ir[scheduleAncestor!].kind == 19 -> if { true => insideControlRegion! } else { context.ir[scheduleAncestor!].parent => scheduleAncestor! }
+                        }
+                        (scheduleNode.kind == 17 and scheduleNode.operand0 >= expressionStart and scheduleNode.operand0 < functionEnd! and not insideControlRegion!) -> if {
+                            context.ir[scheduleNode.operand0].parent => bindingScheduleAncestor!
+                            (bindingScheduleAncestor! >= expressionStart and not insideControlRegion!) -> while {
+                                context.ir[bindingScheduleAncestor!].kind == 19 -> if { true => insideControlRegion! } else { context.ir[bindingScheduleAncestor!].parent => bindingScheduleAncestor! }
+                            }
                         }
                         (insideControlRegion! or scheduleNode.kind == 19) -> if {
                             true => expressionScheduled![scheduleCandidate!]
@@ -2148,13 +3415,54 @@ emitCore context: move EmitContext -> Unit uses Console {
                         }
                         not (insideControlRegion! or scheduleNode.kind == 19) => scheduleReady!
                         (scheduleReady! and scheduleNode.operand0 >= expressionStart and scheduleNode.operand0 < functionEnd! and (scheduleNode.kind != 5 or context.ir[scheduleNode.operand0].flags % 2 == 0) and not expressionScheduled![scheduleNode.operand0]) -> if { false => scheduleReady! }
-                        (scheduleReady! and scheduleNode.kind != 18 and scheduleNode.kind != 20 and scheduleNode.operand1 >= expressionStart and scheduleNode.operand1 < functionEnd! and not expressionScheduled![scheduleNode.operand1]) -> if { false => scheduleReady! }
+                        (scheduleReady! and scheduleNode.kind != 6 and scheduleNode.kind != 18 and scheduleNode.kind != 20 and scheduleNode.operand1 >= expressionStart and scheduleNode.operand1 < functionEnd! and not expressionScheduled![scheduleNode.operand1]) -> if { false => scheduleReady! }
                         (scheduleReady! and scheduleNode.kind == 9 and scheduleNode.opcode == -203 and scheduleNode.operand1 >= 0 and context.ir[scheduleNode.operand1].nextOperand >= expressionStart and context.ir[scheduleNode.operand1].nextOperand < functionEnd! and not expressionScheduled![context.ir[scheduleNode.operand1].nextOperand]) -> if { false => scheduleReady! }
                         (scheduleReady! and (scheduleNode.kind == 12 or scheduleNode.kind == 14 or scheduleNode.kind == 16)) -> if {
                             scheduleNode.operand0 => scheduleSibling!
                             scheduleSibling! >= 0 -> while {
                                 not expressionScheduled![scheduleSibling!] -> if { false => scheduleReady! }
                                 context.ir[scheduleSibling!].nextOperand => scheduleSibling!
+                            }
+                        }
+                        (scheduleReady! and (scheduleNode.kind == 18 or scheduleNode.kind == 20)) -> if {
+                            expressionStart => controlDependencySearch!
+                            controlDependencySearch! < functionEnd! -> while {
+                                context.ir[controlDependencySearch!] => controlDependencyUse
+                                controlDependencyUse.parent => controlDependencyAncestor!
+                                false => controlDependencyInside!
+                                (controlDependencyAncestor! >= expressionStart and not controlDependencyInside!) -> while {
+                                    (controlDependencyAncestor! == scheduleNode.operand1 or (scheduleNode.kind == 18 and scheduleNode.nextOperand >= 0 and controlDependencyAncestor! == scheduleNode.nextOperand)) -> if { true => controlDependencyInside! } else { context.ir[controlDependencyAncestor!].parent => controlDependencyAncestor! }
+                                }
+                                (controlDependencyInside! and controlDependencyUse.kind == 5 and controlDependencyUse.operand0 >= expressionStart and controlDependencyUse.operand0 < functionEnd! and context.ir[controlDependencyUse.operand0].kind == 17) -> if {
+                                    context.ir[controlDependencyUse.operand0].operand0 => controlDependencyValue!
+                                    (controlDependencyValue! >= expressionStart and controlDependencyValue! < functionEnd!) -> if {
+                                        context.ir[controlDependencyValue!].parent => controlDependencyValueAncestor!
+                                        false => controlDependencyValueInside!
+                                        (controlDependencyValueAncestor! >= expressionStart and not controlDependencyValueInside!) -> while {
+                                            (controlDependencyValueAncestor! == scheduleNode.operand1 or (scheduleNode.kind == 18 and scheduleNode.nextOperand >= 0 and controlDependencyValueAncestor! == scheduleNode.nextOperand)) -> if { true => controlDependencyValueInside! } else { context.ir[controlDependencyValueAncestor!].parent => controlDependencyValueAncestor! }
+                                        }
+                                        (not controlDependencyValueInside! and not expressionScheduled![controlDependencyValue!]) -> if { false => scheduleReady! }
+                                    }
+                                }
+                                controlDependencyInside! -> if {
+                                    0 => controlDirectOperandIndex!
+                                    controlDirectOperandIndex! < 2 -> while {
+                                        controlDependencyUse.operand0 => controlDirectOperand!
+                                        controlDirectOperandIndex! == 1 -> if { controlDependencyUse.operand1 => controlDirectOperand! }
+                                        (controlDirectOperand! >= expressionStart and controlDirectOperand! < functionEnd!) -> if {
+                                            context.ir[controlDirectOperand!].parent => controlDirectOperandAncestor!
+                                            false => controlDirectOperandInside!
+                                            controlDirectOperand! == scheduleNode.operand1 -> if { true => controlDirectOperandInside! }
+                                            (scheduleNode.kind == 18 and scheduleNode.nextOperand >= 0 and controlDirectOperand! == scheduleNode.nextOperand) -> if { true => controlDirectOperandInside! }
+                                            (controlDirectOperandAncestor! >= expressionStart and not controlDirectOperandInside!) -> while {
+                                                (controlDirectOperandAncestor! == scheduleNode.operand1 or (scheduleNode.kind == 18 and scheduleNode.nextOperand >= 0 and controlDirectOperandAncestor! == scheduleNode.nextOperand)) -> if { true => controlDirectOperandInside! } else { context.ir[controlDirectOperandAncestor!].parent => controlDirectOperandAncestor! }
+                                            }
+                                            (not controlDirectOperandInside! and not expressionScheduled![controlDirectOperand!]) -> if { false => scheduleReady! }
+                                        }
+                                        controlDirectOperandIndex! + 1 => controlDirectOperandIndex!
+                                    }
+                                }
+                                controlDependencySearch! + 1 => controlDependencySearch!
                             }
                         }
                         (scheduleReady! and scheduleNode.kind == 5) -> if {
@@ -2175,30 +3483,30 @@ emitCore context: move EmitContext -> Unit uses Console {
                                             context.ir[mutableReadBarrierAncestor!].parent => mutableReadBarrierAncestor!
                                         }
                                     }
-                                    (not mutableReadInsideBarrier! and not expressionScheduled![mutableReadBarrierSearch!] and (mutableReadBarrier.kind == 20 or (mutableReadBarrier.kind == 17 and mutableReadBarrier.flags == 1)) and (mutableReadBarrier -> sourceStart) < (scheduleNode -> sourceStart)) -> if {
+                                    (not mutableReadInsideBarrier! and not expressionScheduled![mutableReadBarrierSearch!] and (mutableReadBarrier.kind == 18 or mutableReadBarrier.kind == 20 or mutableReadBarrier.kind == 24 or mutableReadBarrier.kind == 25 or (mutableReadBarrier.kind == 17 and mutableReadBarrier.flags == 1) or (mutableReadBarrier.kind == 9 and mutableReadBarrier.opcode == -204)) and (mutableReadBarrier -> sourceStart) < (scheduleNode -> sourceStart)) -> if {
                                         false => scheduleReady!
                                     }
                                     mutableReadBarrierSearch! + 1 => mutableReadBarrierSearch!
                                 }
                             }
                         }
-                        (scheduleReady! and (scheduleNode.kind == 6 or scheduleNode.kind == 18 or scheduleNode.kind == 20 or (scheduleNode.kind == 17 and scheduleNode.flags == 1))) -> if {
+                        (scheduleReady! and (scheduleNode.kind == 6 or scheduleNode.kind == 18 or scheduleNode.kind == 20 or scheduleNode.kind == 24 or scheduleNode.kind == 25 or (scheduleNode.kind == 17 and scheduleNode.flags == 1) or (scheduleNode.kind == 9 and (scheduleNode.opcode == -204 or scheduleNode.opcode == -205)))) -> if {
                             true => rootEffect!
                             scheduleNode.parent => effectAncestor!
                             (effectAncestor! >= expressionStart and rootEffect!) -> while {
-                                (context.ir[effectAncestor!].kind == 6 or context.ir[effectAncestor!].kind == 18 or context.ir[effectAncestor!].kind == 20 or (context.ir[effectAncestor!].kind == 17 and context.ir[effectAncestor!].flags == 1)) -> if { false => rootEffect! } else { context.ir[effectAncestor!].parent => effectAncestor! }
+                                (context.ir[effectAncestor!].kind == 6 or context.ir[effectAncestor!].kind == 18 or context.ir[effectAncestor!].kind == 20 or context.ir[effectAncestor!].kind == 24 or context.ir[effectAncestor!].kind == 25 or (context.ir[effectAncestor!].kind == 17 and context.ir[effectAncestor!].flags == 1) or (context.ir[effectAncestor!].kind == 9 and (context.ir[effectAncestor!].opcode == -204 or context.ir[effectAncestor!].opcode == -205))) -> if { false => rootEffect! } else { context.ir[effectAncestor!].parent => effectAncestor! }
                             }
                             rootEffect! -> if {
                                 expressionStart => earlierEffectSearch!
                                 earlierEffectSearch! < functionEnd! -> while {
                                     context.ir[earlierEffectSearch!] => earlierEffect
-                                (not expressionScheduled![earlierEffectSearch!] and (earlierEffect.kind == 6 or earlierEffect.kind == 18 or earlierEffect.kind == 20 or (earlierEffect.kind == 17 and earlierEffect.flags == 1)) and (earlierEffect -> sourceStart) < (scheduleNode -> sourceStart)) -> if {
+                                (not expressionScheduled![earlierEffectSearch!] and (earlierEffect.kind == 6 or earlierEffect.kind == 18 or earlierEffect.kind == 20 or earlierEffect.kind == 24 or earlierEffect.kind == 25 or (earlierEffect.kind == 17 and earlierEffect.flags == 1) or (earlierEffect.kind == 9 and (earlierEffect.opcode == -204 or earlierEffect.opcode == -205))) and (earlierEffect -> sourceStart) < (scheduleNode -> sourceStart)) -> if {
                                         earlierEffect.parent => earlierEffectAncestor!
                                         true => earlierRootEffect!
                                         false => earlierInsideRegion!
                                         (earlierEffectAncestor! >= expressionStart and earlierRootEffect! and not earlierInsideRegion!) -> while {
                                             (context.ir[earlierEffectAncestor!].kind == 19 or context.ir[earlierEffectAncestor!].kind == 20) -> if { true => earlierInsideRegion! } else {
-                                                (context.ir[earlierEffectAncestor!].kind == 6 or context.ir[earlierEffectAncestor!].kind == 18 or context.ir[earlierEffectAncestor!].kind == 20 or (context.ir[earlierEffectAncestor!].kind == 17 and context.ir[earlierEffectAncestor!].flags == 1)) -> if { false => earlierRootEffect! } else { context.ir[earlierEffectAncestor!].parent => earlierEffectAncestor! }
+                                            (context.ir[earlierEffectAncestor!].kind == 6 or context.ir[earlierEffectAncestor!].kind == 18 or context.ir[earlierEffectAncestor!].kind == 20 or context.ir[earlierEffectAncestor!].kind == 24 or context.ir[earlierEffectAncestor!].kind == 25 or (context.ir[earlierEffectAncestor!].kind == 17 and context.ir[earlierEffectAncestor!].flags == 1) or (context.ir[earlierEffectAncestor!].kind == 9 and (context.ir[earlierEffectAncestor!].opcode == -204 or context.ir[earlierEffectAncestor!].opcode == -205))) -> if { false => earlierRootEffect! } else { context.ir[earlierEffectAncestor!].parent => earlierEffectAncestor! }
                                             }
                                         }
                                         (earlierRootEffect! and not earlierInsideRegion!) -> if { false => scheduleReady! }
@@ -2222,28 +3530,24 @@ emitCore context: move EmitContext -> Unit uses Console {
                 context.ir[expressionIndex!] => expression
                 (expression.kind == 5 and not (expression.typeOrigin == 1 and expression.typeSymbol == 16) and not (function.operand1 >= 0 and expression.symbol == context.ir[function.operand1].symbol)) -> if {
                     -1 => bindingValueIr!
-                    expressionStart => bindingValueSearch!
-                    bindingValueSearch! < functionEnd! -> while {
-                        (context.ir[bindingValueSearch!].kind == 17 and context.ir[bindingValueSearch!].symbol == expression.symbol) -> if { bindingValueSearch! => bindingValueIr! }
-                        bindingValueSearch! + 1 => bindingValueSearch!
-                    }
+                    (expression.operand0 >= 0 and context.ir[expression.operand0].kind == 17) -> if { expression.operand0 => bindingValueIr! }
                     bindingValueIr! >= 0 -> if {
                         context.ir[bindingValueIr!] => bindingValue
                         bindingValue.flags == 1 -> if {
                             bindingValueIr! -> mutableBindingRoot => bindingRoot
                             "  %v$(expressionIndex!) = load " -> print
-                            expression -> writeType
+                            expression -> writeIrType
                             ", ptr %slot$(bindingRoot), align " -> print
-                            "$(expression -> storageAlign)" -> println
+                            expression -> storageAlign -> writeDecimalLine
                         } else {
                             context.ir[bindingValue.operand0] => bindingOperand
                             "  %v$(expressionIndex!) = freeze " -> print
-                            expression -> writeType
+                            expression -> writeIrType
                             " " -> print
                             (bindingOperand.kind == 3 or bindingOperand.kind == 4) -> if {
                                 bindingOperand -> sourceToken => bindingOperandToken
                                 bindingOperand.kind == 3 -> if { context.sources[bindingOperand.sourceModule] -> slice(bindingOperandToken.span.start, bindingOperandToken.span.length) -> print } else {
-                                    ((context.sources[bindingOperand.sourceModule] -> byte(bindingOperandToken.span.start)) == UInt8(116)) -> if { "1" } else { "0" } -> print
+                                    ((context.sources[bindingOperand.sourceModule] -> byte(bindingOperandToken.span.start)) == UInt8(116)) -> if { "1" -> print } else { "0" -> print }
                                 }
                             } else { "%v$(bindingValue.operand0)" -> print }
                             "" -> println
@@ -2258,7 +3562,7 @@ emitCore context: move EmitContext -> Unit uses Console {
                         "  %v$(expressionIndex!)" -> print
                         expression.typeSymbol == 2 -> if { "_raw" -> print }
                         " = extractvalue " -> print
-                        lengthBase -> writeType
+                        lengthBase -> writeIrType
                         " " -> print
                         (lengthBase.kind == 5 and function.operand1 >= 0 and lengthBase.symbol == context.ir[function.operand1].symbol) -> if { "%arg" -> print } else { "%v$(expression.operand0)" -> print }
                         ", " -> print
@@ -2267,61 +3571,134 @@ emitCore context: move EmitContext -> Unit uses Console {
                     }
                 }
                 (expression.kind == 9 and expression.opcode == -202 and expression.operand0 >= 0 and expression.operand1 >= 0) -> if {
-                    "  %v$(expressionIndex!)_base = extractvalue %sl.text %v$(expression.operand0), 0" -> println
-                    "  %v$(expressionIndex!)_address = getelementptr i8, ptr %v$(expressionIndex!)_base, i64 %v$(expression.operand1)" -> println
+                    context.ir[expression.operand0] => byteBase
+                    context.ir[expression.operand1] => byteIndex
+                    byteIndex.typeSymbol -> integerWidth => byteIndexWidth
+                    "  %v$(expressionIndex!)_base = extractvalue " -> print
+                    byteBase -> writeTextLikeType
+                    " " -> print
+                    (byteBase.kind == 5 and function.operand1 >= 0 and byteBase.symbol == context.ir[function.operand1].symbol) -> if { "%arg" -> print } else { "%v$(expression.operand0)" -> print }
+                    ", 0" -> println
+                    (byteIndexWidth > 0 and byteIndexWidth < 64) -> if {
+                        "  %v$(expressionIndex!)_index = " -> print
+                        byteIndex -> integerNodeSigned -> if { "sext" -> print } else { "zext" -> print }
+                        " i$(byteIndexWidth) %v$(expression.operand1) to i64" -> println
+                    }
+                    "  %v$(expressionIndex!)_address = getelementptr i8, ptr %v$(expressionIndex!)_base, i64 " -> print
+                    (byteIndexWidth > 0 and byteIndexWidth < 64) -> if { "%v$(expressionIndex!)_index" -> println } else { "%v$(expression.operand1)" -> println }
                     "  %v$(expressionIndex!) = load i8, ptr %v$(expressionIndex!)_address, align 1" -> println
                 }
                 (expression.kind == 9 and expression.opcode == -203 and expression.operand0 >= 0 and expression.operand1 >= 0) -> if {
                     context.ir[expression.operand1].nextOperand => sliceLength
-                    "  %v$(expressionIndex!)_base = extractvalue %sl.text %v$(expression.operand0), 0" -> println
-                    "  %v$(expressionIndex!)_start = getelementptr i8, ptr %v$(expressionIndex!)_base, i64 %v$(expression.operand1)" -> println
+                    context.ir[expression.operand0] => sliceBase
+                    context.ir[expression.operand1] => sliceIndex
+                    sliceIndex.typeSymbol -> integerWidth => sliceIndexWidth
+                    "  %v$(expressionIndex!)_base = extractvalue " -> print
+                    sliceBase -> writeTextLikeType
+                    " " -> print
+                    (sliceBase.kind == 5 and function.operand1 >= 0 and sliceBase.symbol == context.ir[function.operand1].symbol) -> if { "%arg" -> print } else { "%v$(expression.operand0)" -> print }
+                    ", 0" -> println
+                    (sliceIndexWidth > 0 and sliceIndexWidth < 64) -> if {
+                        "  %v$(expressionIndex!)_index = " -> print
+                        sliceIndex -> integerNodeSigned -> if { "sext" -> print } else { "zext" -> print }
+                        " i$(sliceIndexWidth) %v$(expression.operand1) to i64" -> println
+                    }
+                    "  %v$(expressionIndex!)_start = getelementptr i8, ptr %v$(expressionIndex!)_base, i64 " -> print
+                    (sliceIndexWidth > 0 and sliceIndexWidth < 64) -> if { "%v$(expressionIndex!)_index" -> println } else { "%v$(expression.operand1)" -> println }
                     "  %v$(expressionIndex!)_ptr = insertvalue %sl.text poison, ptr %v$(expressionIndex!)_start, 0" -> println
                     "  %v$(expressionIndex!) = insertvalue %sl.text %v$(expressionIndex!)_ptr, i64 %v$(sliceLength), 1" -> println
                 }
+                (expression.kind == 9 and expression.opcode == -204 and expression.operand0 >= 0 and expression.operand1 >= 0) -> if {
+                    WhileValueRequest { whileIndex: expressionIndex!, ownerIndex: functionIndex!, nodeIndex: 0 } -> emitArrayPush
+                }
+                ((expression.kind == 9 or expression.kind == 6) and expression.opcode == -205 and expression.operand0 >= 0) -> if {
+                    context.ir[expression.operand0] => mapPath
+                    "  %v$(expressionIndex!) = call %sl.source_text @sl_runtime_map_text(%sl.text " -> print
+                    (mapPath.kind == 5 and function.operand1 >= 0 and mapPath.symbol == context.ir[function.operand1].symbol) -> if { "%arg" -> print } else { "%v$(expression.operand0)" -> print }
+                    ")" -> println
+                }
+                ((expression.kind == 9 or expression.kind == 6) and expression.opcode == -206 and expression.operand0 >= 0) -> if {
+                    context.ir[expression.operand0] => borrowText
+                    "  %v$(expressionIndex!)_data = extractvalue %sl.text " -> print
+                    (borrowText.kind == 5 and function.operand1 >= 0 and borrowText.symbol == context.ir[function.operand1].symbol) -> if { "%arg" -> print } else { "%v$(expression.operand0)" -> print }
+                    ", 0" -> println
+                    "  %v$(expressionIndex!)_length = extractvalue %sl.text " -> print
+                    (borrowText.kind == 5 and function.operand1 >= 0 and borrowText.symbol == context.ir[function.operand1].symbol) -> if { "%arg" -> print } else { "%v$(expression.operand0)" -> print }
+                    ", 1" -> println
+                    "  %v$(expressionIndex!)_value0 = insertvalue %sl.source_text poison, ptr %v$(expressionIndex!)_data, 0" -> println
+                    "  %v$(expressionIndex!)_value1 = insertvalue %sl.source_text %v$(expressionIndex!)_value0, i64 %v$(expressionIndex!)_length, 1" -> println
+                    "  %v$(expressionIndex!)_value2 = insertvalue %sl.source_text %v$(expressionIndex!)_value1, ptr null, 2" -> println
+                    "  %v$(expressionIndex!) = insertvalue %sl.source_text %v$(expressionIndex!)_value2, i64 0, 3" -> println
+                }
                 (expression.kind == 17 and expression.flags == 1) -> if {
                     expressionIndex! -> mutableBindingRoot => mutableRoot
+                    context.ir[mutableRoot] => mutableBinding
                     context.ir[expression.operand0] => mutableValue
                     "  store " -> print
-                    expression -> writeType
+                    mutableBinding -> writeIrType
                     " " -> print
                     (mutableValue.kind == 3 or mutableValue.kind == 4) -> if {
                         mutableValue -> sourceToken => mutableToken
                         mutableValue.kind == 3 -> if { context.sources[mutableValue.sourceModule] -> slice(mutableToken.span.start, mutableToken.span.length) -> print } else {
-                            ((context.sources[mutableValue.sourceModule] -> byte(mutableToken.span.start)) == UInt8(116)) -> if { "1" } else { "0" } -> print
+                            ((context.sources[mutableValue.sourceModule] -> byte(mutableToken.span.start)) == UInt8(116)) -> if { "1" -> print } else { "0" -> print }
                         }
-                    } else { "%v$(expression.operand0)" -> print }
+                    } else {
+                        (mutableValue.kind == 5 and function.operand1 >= 0 and mutableValue.symbol == context.ir[function.operand1].symbol) -> if { "%arg" -> print } else { "%v$(expression.operand0)" -> print }
+                    }
                     ", ptr %slot$(mutableRoot), align " -> print
-                    "$(expression -> storageAlign)" -> println
+                    mutableBinding -> storageAlign -> writeDecimalLine
+                }
+                expression.kind == 24 -> if {
+                    WhileValueRequest { whileIndex: expressionIndex!, ownerIndex: functionIndex!, nodeIndex: expressionIndex! } -> emitIndexAssignment
+                }
+                expression.kind == 25 -> if {
+                    WhileValueRequest { whileIndex: expressionIndex!, ownerIndex: functionIndex!, nodeIndex: expressionIndex! } -> emitMemberAssignment
                 }
                 expression.kind == 2 -> if {
                     expression -> sourceToken => expressionToken
-                    expressionToken.span.length - UIntSize(2) => expressionLength
+                    TextLiteralRequest { sourceModule: expression.sourceModule, token: expressionToken } -> textLiteralLength => expressionLength
                     "  %v$(expressionIndex!)_ptr = insertvalue %sl.text poison, ptr @sl_str_$(expressionIndex!), 0" -> println
                     "  %v$(expressionIndex!) = insertvalue %sl.text %v$(expressionIndex!)_ptr, i64 $expressionLength, 1" -> println
                 }
                 expression.kind == 12 -> if {
+                    expression.operand0 < 0 -> if {
+                        "  %v$(expressionIndex!) = freeze " -> print
+                        expression -> writeIrType
+                        " zeroinitializer" -> println
+                    }
                     expression.operand0 => fieldValueIndex!
                     0 => fieldPosition!
                     fieldValueIndex! >= 0 -> while {
-                        context.ir[fieldValueIndex!] => fieldValue
+                    context.ir[fieldValueIndex!] => fieldValue
+                    fieldValueIndex! -> aggregateValueIndex => emittedFieldIndex
+                    context.ir[emittedFieldIndex] => emittedFieldValue
                         "  " -> print
                         fieldValue.nextOperand < 0 -> if { "%v$(expressionIndex!)" -> print } else { "%v$(expressionIndex!)_f$(fieldPosition!)" -> print }
                         " = insertvalue " -> print
-                        expression -> writeType
+                        expression -> writeIrType
                         " " -> print
-                        fieldPosition! == 0 -> if { "poison" -> print } else { "%v$(expressionIndex!)_f$(fieldPosition! - 1)" -> print }
+                        fieldPosition! == 0 -> if { "poison" -> print } else {
+                            "%v$(expressionIndex!)_f" -> print
+                            fieldPosition! - 1 -> writeDecimal
+                        }
                         ", " -> print
-                        fieldValue -> writeType
+                        emittedFieldValue -> writeIrType
                         " " -> print
-                        (fieldValue.kind == 3 or fieldValue.kind == 4) -> if {
-                            fieldValue -> sourceToken => fieldToken
-                            fieldValue.kind == 3 -> if {
-                                context.sources[fieldValue.sourceModule] -> slice(fieldToken.span.start, fieldToken.span.length) -> print
+                        emittedFieldValue.kind == 2 -> if {
+                            emittedFieldValue -> sourceToken => fieldTextToken
+                            Int(TextLiteralRequest { sourceModule: emittedFieldValue.sourceModule, token: fieldTextToken } -> textLiteralLength) => fieldTextLength
+                            "{ ptr @sl_str_$(emittedFieldIndex), i64 $fieldTextLength }" -> print
+                        } else {
+                        (emittedFieldValue.kind == 3 or emittedFieldValue.kind == 4) -> if {
+                            emittedFieldValue -> sourceToken => fieldToken
+                            emittedFieldValue.kind == 3 -> if {
+                                context.sources[emittedFieldValue.sourceModule] -> slice(fieldToken.span.start, fieldToken.span.length) -> print
                             } else {
-                                ((context.sources[fieldValue.sourceModule] -> byte(fieldToken.span.start)) == UInt8(116)) -> if { "1" } else { "0" } -> print
+                                ((context.sources[emittedFieldValue.sourceModule] -> byte(fieldToken.span.start)) == UInt8(116)) -> if { "1" -> print } else { "0" -> print }
                             }
                         } else {
-                            (fieldValue.kind == 5 and function.operand1 >= 0 and fieldValue.symbol == context.ir[function.operand1].symbol) -> if { "%arg" -> print } else { "%v$(fieldValueIndex!)" -> print }
+                            (emittedFieldValue.kind == 5 and function.operand1 >= 0 and emittedFieldValue.symbol == context.ir[function.operand1].symbol) -> if { "%arg" -> print } else { "%v$(emittedFieldIndex)" -> print }
+                        }
                         }
                         ", $(fieldPosition!)" -> println
                         fieldValue.nextOperand => fieldValueIndex!
@@ -2414,7 +3791,10 @@ emitCore context: move EmitContext -> Unit uses Console {
                                             " = extractvalue %sl.struct.m$(ownerSourceModule!)_s$(memberCurrentSymbol!) " -> print
                                             memberProjectionOrdinal! == 0 -> if {
                                                 (memberBase.kind == 5 and function.operand1 >= 0 and memberBase.symbol == context.ir[function.operand1].symbol) -> if { "%arg" -> print } else { "%v$(expression.operand0)" -> print }
-                                            } else { "%v$(expressionIndex!)_m$(memberProjectionOrdinal! - 1)" -> print }
+                                            } else {
+                                                "%v$(expressionIndex!)_m" -> print
+                                                memberProjectionOrdinal! - 1 -> writeDecimal
+                                            }
                                             ", $(fieldOrdinal!)" -> println
                                             memberNextOrigin! => memberCurrentOrigin!
                                             memberNextModule! => memberCurrentModule!
@@ -2432,28 +3812,33 @@ emitCore context: move EmitContext -> Unit uses Console {
                     }
                     }
                 }
-                (expression.kind == 14 and expression.typeOrigin == 13) -> if {
+                (expression.kind == 14 and (expression.typeOrigin == 13 or expression.typeOrigin == 14 or expression.typeKind == 3)) -> if {
                     0 => arrayLength!
                     expression.operand0 => arrayCountIndex!
                     arrayCountIndex! >= 0 -> while {
                         arrayLength! + 1 => arrayLength!
                         context.ir[arrayCountIndex!].nextOperand => arrayCountIndex!
                     }
-                    arrayLength! * 4 => arrayByteLength
+                    arrayLength! * (expression -> arrayElementSize) => arrayByteLength
                     "  %v$(expressionIndex!)_data = call ptr @malloc(i64 $arrayByteLength)" -> println
                     expression.operand0 => arrayElementIndex!
                     0 => arrayElementPosition!
                     arrayElementIndex! >= 0 -> while {
                         context.ir[arrayElementIndex!] => arrayElement
-                        "  %v$(expressionIndex!)_ptr$(arrayElementPosition!) = getelementptr i32, ptr %v$(expressionIndex!)_data, i64 $(arrayElementPosition!)" -> println
-                        "  store i32 " -> print
+                        "  %v$(expressionIndex!)_ptr$(arrayElementPosition!) = getelementptr " -> print
+                        expression -> writeArrayElementType
+                        ", ptr %v$(expressionIndex!)_data, i64 $(arrayElementPosition!)" -> println
+                        "  store " -> print
+                        expression -> writeArrayElementType
+                        " " -> print
                         arrayElement.kind == 3 -> if {
                             arrayElement -> sourceToken => arrayElementToken
                             context.sources[arrayElement.sourceModule] -> slice(arrayElementToken.span.start, arrayElementToken.span.length) -> print
                         } else {
                             (arrayElement.kind == 5 and function.operand1 >= 0 and arrayElement.symbol == context.ir[function.operand1].symbol) -> if { "%arg" -> print } else { "%v$(arrayElementIndex!)" -> print }
                         }
-                        ", ptr %v$(expressionIndex!)_ptr$(arrayElementPosition!), align 4" -> println
+                        ", ptr %v$(expressionIndex!)_ptr$(arrayElementPosition!), align " -> print
+                        expression -> arrayElementAlign -> writeDecimalLine
                         arrayElement.nextOperand => arrayElementIndex!
                         arrayElementPosition! + 1 => arrayElementPosition!
                     }
@@ -2491,12 +3876,13 @@ emitCore context: move EmitContext -> Unit uses Console {
                             dictionaryItem.kind == 3 -> if {
                                 context.sources[dictionaryItem.sourceModule] -> slice(dictionaryItemToken.span.start, dictionaryItemToken.span.length) -> print
                             } else {
-                                ((context.sources[dictionaryItem.sourceModule] -> byte(dictionaryItemToken.span.start)) == UInt8(116)) -> if { "1" } else { "0" } -> print
+                                ((context.sources[dictionaryItem.sourceModule] -> byte(dictionaryItemToken.span.start)) == UInt8(116)) -> if { "1" -> print } else { "0" -> print }
                             }
                         } else {
                             (dictionaryItem.kind == 5 and function.operand1 >= 0 and dictionaryItem.symbol == context.ir[function.operand1].symbol) -> if { "%arg" -> print } else { "%v$(dictionaryItemIndex!)" -> print }
                         }
-                        ", ptr %v$(expressionIndex!)_$(dictionarySide)_ptr$(dictionaryEntryPosition), align $(dictionaryItemSymbol -> legacyStorageAlign)" -> println
+                        ", ptr %v$(expressionIndex!)_$(dictionarySide)_ptr$(dictionaryEntryPosition), align " -> print
+                        dictionaryItemSymbol -> legacyStorageAlign -> writeDecimalLine
                         dictionaryItem.nextOperand => dictionaryItemIndex!
                         dictionaryItemPosition! + 1 => dictionaryItemPosition!
                     }
@@ -2509,8 +3895,24 @@ emitCore context: move EmitContext -> Unit uses Console {
                     context.ir[expression.operand0] => indexedArray
                     context.ir[expression.operand1] => arrayIndex
                     (indexedArray.typeOrigin == 1 and indexedArray.typeSymbol == 16) -> if {
+                        arrayIndex.typeSymbol -> integerWidth => argumentIndexWidth
+                        (arrayIndex.kind != 3 and argumentIndexWidth > 0 and argumentIndexWidth < 64) -> if {
+                            "  %v$(expressionIndex!)_argument_index = " -> print
+                            arrayIndex.typeSymbol -> integerSigned -> if { "sext " -> print } else { "zext " -> print }
+                            arrayIndex -> writeIrType
+                            " " -> print
+                            (arrayIndex.kind == 5 and function.operand1 >= 0 and arrayIndex.symbol == context.ir[function.operand1].symbol) -> if { "%arg" -> print } else { "%v$(expression.operand1)" -> print }
+                            " to i64" -> println
+                        }
                         "  %v$(expressionIndex!) = call %sl.text @sl_argument(i64 " -> print
-                        (arrayIndex.kind == 5 and function.operand1 >= 0 and arrayIndex.symbol == context.ir[function.operand1].symbol) -> if { "%arg" -> print } else { "%v$(expression.operand1)" -> print }
+                        arrayIndex.kind == 3 -> if {
+                            arrayIndex -> sourceToken => argumentIndexToken
+                            context.sources[arrayIndex.sourceModule] -> slice(argumentIndexToken.span.start, argumentIndexToken.span.length) -> print
+                        } else {
+                            (argumentIndexWidth > 0 and argumentIndexWidth < 64) -> if { "%v$(expressionIndex!)_argument_index" -> print } else {
+                                (arrayIndex.kind == 5 and function.operand1 >= 0 and arrayIndex.symbol == context.ir[function.operand1].symbol) -> if { "%arg" -> print } else { "%v$(expression.operand1)" -> print }
+                            }
+                        }
                         ")" -> println
                     } else {
                     indexedArray.typeOrigin == 15 -> if {
@@ -2536,7 +3938,8 @@ emitCore context: move EmitContext -> Unit uses Console {
                         ", ptr %v$(expressionIndex!)_keys, i64 %v$(expressionIndex!)_slot" -> println
                         "  %v$(expressionIndex!)_key = load " -> print
                         indexedArray.typeModule -> llvmType -> print
-                        ", ptr %v$(expressionIndex!)_key_ptr, align $(indexedArray.typeModule -> legacyStorageAlign)" -> println
+                        ", ptr %v$(expressionIndex!)_key_ptr, align " -> print
+                        indexedArray.typeModule -> legacyStorageAlign -> writeDecimalLine
                         "  %v$(expressionIndex!)_found = icmp eq " -> print
                         indexedArray.typeModule -> llvmType -> print
                         " %v$(expressionIndex!)_key, " -> print
@@ -2545,7 +3948,7 @@ emitCore context: move EmitContext -> Unit uses Console {
                             arrayIndex.kind == 3 -> if {
                                 context.sources[arrayIndex.sourceModule] -> slice(dictionaryIndexToken.span.start, dictionaryIndexToken.span.length) -> println
                             } else {
-                                ((context.sources[arrayIndex.sourceModule] -> byte(dictionaryIndexToken.span.start)) == UInt8(116)) -> if { "1" } else { "0" } -> println
+                                ((context.sources[arrayIndex.sourceModule] -> byte(dictionaryIndexToken.span.start)) == UInt8(116)) -> if { "1" -> println } else { "0" -> println }
                             }
                         } else {
                             (arrayIndex.kind == 5 and function.operand1 >= 0 and arrayIndex.symbol == context.ir[function.operand1].symbol) -> if { "%arg" -> println } else { "%v$(expression.operand1)" -> println }
@@ -2563,7 +3966,8 @@ emitCore context: move EmitContext -> Unit uses Console {
                         ", ptr %v$(expressionIndex!)_values, i64 %v$(expressionIndex!)_slot" -> println
                         "  %v$(expressionIndex!) = load " -> print
                         indexedArray.typeSymbol -> llvmType -> print
-                        ", ptr %v$(expressionIndex!)_value_ptr, align $(indexedArray.typeSymbol -> legacyStorageAlign)" -> println
+                        ", ptr %v$(expressionIndex!)_value_ptr, align " -> print
+                        indexedArray.typeSymbol -> legacyStorageAlign -> writeDecimalLine
                     } else {
                     "  %v$(expressionIndex!)_data = extractvalue %sl.array.i32 " -> print
                     (indexedArray.kind == 5 and function.operand1 >= 0 and indexedArray.symbol == context.ir[function.operand1].symbol) -> if { "%arg" -> print } else { "%v$(expression.operand0)" -> print }
@@ -2574,7 +3978,7 @@ emitCore context: move EmitContext -> Unit uses Console {
                         " to i64" -> println
                     }
                     "  %v$(expressionIndex!)_ptr = getelementptr " -> print
-                    expression -> writeType
+                    expression -> writeIrType
                     ", ptr %v$(expressionIndex!)_data, i64 " -> print
                     arrayIndex.kind == 3 -> if {
                         arrayIndex -> sourceToken => indexToken
@@ -2583,13 +3987,29 @@ emitCore context: move EmitContext -> Unit uses Console {
                         "%v$(expressionIndex!)_index" -> println
                     }
                     "  %v$(expressionIndex!) = load " -> print
-                    expression -> writeType
-                    ", ptr %v$(expressionIndex!)_ptr, align $(expression -> storageAlign)" -> println
+                    expression -> writeIrType
+                    ", ptr %v$(expressionIndex!)_ptr, align " -> print
+                    expression -> storageAlign -> writeDecimalLine
                     }
                     }
                 }
                 (expression.kind == 7 or expression.kind == 8) -> if {
                     context.ir[expression.operand0] => leftOperand
+                    0 => binaryWidth!
+                    false => leftPromoted!
+                    false => rightPromoted!
+                    expression.kind == 8 -> if {
+                        context.ir[expression.operand1] => rightOperand
+                        0 => leftWidth!
+                        0 => rightWidth!
+                        leftOperand.typeOrigin == 1 -> if { leftOperand.typeSymbol -> integerWidth => leftWidth! }
+                        rightOperand.typeOrigin == 1 -> if { rightOperand.typeSymbol -> integerWidth => rightWidth! }
+                        (leftWidth! > 0 and rightWidth! > 0) -> if {
+                            leftWidth! > rightWidth! -> if { leftWidth! => binaryWidth! } else { rightWidth! => binaryWidth! }
+                            IntegerPromotionRequest { expressionIndex: expressionIndex!, operandIndex: expression.operand0, targetWidth: binaryWidth!, ownerIndex: functionIndex!, right: false } -> emitIntegerPromotion => leftPromoted!
+                            IntegerPromotionRequest { expressionIndex: expressionIndex!, operandIndex: expression.operand1, targetWidth: binaryWidth!, ownerIndex: functionIndex!, right: true } -> emitIntegerPromotion => rightPromoted!
+                        }
+                    }
                     "" => operation!
                     expression.kind == 7 -> if {
                         expression.opcode == -26 -> if {
@@ -2606,15 +4026,14 @@ emitCore context: move EmitContext -> Unit uses Console {
                         expression.opcode == grammar.tokenIdPercent -> if { "srem" => operation! }
                         expression.opcode == grammar.tokenIdEqualEqual -> if { "icmp eq" => operation! }
                         expression.opcode == grammar.tokenIdBangEqual -> if { "icmp ne" => operation! }
-                        expression.opcode == grammar.tokenIdLess -> if { "icmp slt" => operation! }
-                        expression.opcode == grammar.tokenIdLessEqual -> if { "icmp sle" => operation! }
-                        expression.opcode == grammar.tokenIdGreater -> if { "icmp sgt" => operation! }
-                        expression.opcode == grammar.tokenIdGreaterEqual -> if { "icmp sge" => operation! }
+                        (expression.opcode == grammar.tokenIdLess or expression.opcode == grammar.tokenIdLessEqual or expression.opcode == grammar.tokenIdGreater or expression.opcode == grammar.tokenIdGreaterEqual) -> if {
+                            expression -> integerComparisonOperation => operation!
+                        }
                         expression.opcode == -24 -> if { "or" => operation! }
                         expression.opcode == -25 -> if { "and" => operation! }
                     }
                     "  %v$(expressionIndex!) = $(operation!) " -> print
-                    leftOperand -> writeType
+                    binaryWidth! > 0 -> if { "i$(binaryWidth!)" -> print } else { leftOperand -> writeIrType }
                     " " -> print
                     (expression.kind == 7 and expression.opcode != -26) -> if { "0" -> print } else {
                         (leftOperand.kind == 3 or leftOperand.kind == 4) -> if {
@@ -2622,10 +4041,12 @@ emitCore context: move EmitContext -> Unit uses Console {
                             leftOperand.kind == 3 -> if {
                                 context.sources[leftOperand.sourceModule] -> slice(leftToken.span.start, leftToken.span.length) -> print
                             } else {
-                                ((context.sources[leftOperand.sourceModule] -> byte(leftToken.span.start)) == UInt8(116)) -> if { "1" } else { "0" } -> print
+                                ((context.sources[leftOperand.sourceModule] -> byte(leftToken.span.start)) == UInt8(116)) -> if { "1" -> print } else { "0" -> print }
                             }
                         } else {
-                            (leftOperand.kind == 5 and function.operand1 >= 0 and leftOperand.symbol == context.ir[function.operand1].symbol) -> if { "%arg" -> print } else { "%v$(expression.operand0)" -> print }
+                            leftPromoted! -> if { "%v$(expressionIndex!)_left_wide" -> print } else {
+                                (leftOperand.kind == 5 and function.operand1 >= 0 and leftOperand.symbol == context.ir[function.operand1].symbol) -> if { "%arg" -> print } else { "%v$(expression.operand0)" -> print }
+                            }
                         }
                     }
                     ", " -> print
@@ -2645,19 +4066,21 @@ emitCore context: move EmitContext -> Unit uses Console {
                             rightOperand.kind == 3 -> if {
                                 context.sources[rightOperand.sourceModule] -> slice(rightToken.span.start, rightToken.span.length) -> println
                             } else {
-                                ((context.sources[rightOperand.sourceModule] -> byte(rightToken.span.start)) == UInt8(116)) -> if { "1" } else { "0" } -> println
+                                ((context.sources[rightOperand.sourceModule] -> byte(rightToken.span.start)) == UInt8(116)) -> if { "1" -> println } else { "0" -> println }
                             }
                         } else {
-                            (rightOperand.kind == 5 and function.operand1 >= 0 and rightOperand.symbol == context.ir[function.operand1].symbol) -> if { "%arg" -> println } else { "%v$(expression.operand1)" -> println }
+                            rightPromoted! -> if { "%v$(expressionIndex!)_right_wide" -> println } else {
+                                (rightOperand.kind == 5 and function.operand1 >= 0 and rightOperand.symbol == context.ir[function.operand1].symbol) -> if { "%arg" -> println } else { "%v$(expression.operand1)" -> println }
+                            }
                         }
                     }
                 }
-                expression.kind == 6 -> if {
+                (expression.kind == 6 and expression.opcode != -205) -> if {
                     (expression.symbol == -101 or expression.symbol == -102) -> if {
                         context.ir[expression.operand0] => runtimeArgument
                         runtimeArgument.kind == 2 -> if {
                             runtimeArgument -> sourceToken => runtimeArgumentToken
-                            Int(runtimeArgumentToken.span.length) - 2 => runtimeArgumentLength
+                            Int(TextLiteralRequest { sourceModule: runtimeArgument.sourceModule, token: runtimeArgumentToken } -> textLiteralLength) => runtimeArgumentLength
                             runtimeArgument -> sourceInterpolations => functionExpressionInterpolation!
                             false => hasFunctionExpressionInterpolation!
                             0 => functionExpressionSearch!
@@ -2729,7 +4152,10 @@ emitCore context: move EmitContext -> Unit uses Console {
                                                                 functionExpressionLeftValue.kind == 3 -> if {
                                                                     functionExpressionLeftValue -> sourceToken => functionExpressionLeftToken
                                                                     context.sources[functionExpressionLeftValue.sourceModule] -> slice(functionExpressionLeftToken.span.start, functionExpressionLeftToken.span.length) -> print
-                                                                } else { "%v$(context.ir[functionExpressionLeftBinding!].operand0)" -> print }
+                                                                } else {
+                                                                    "%v" -> print
+                                                                    context.ir[functionExpressionLeftBinding!].operand0 -> writeDecimal
+                                                                }
                                                             }
                                                         }
                                                     } else { "%v$(expressionIndex!)_expression$(functionExpressionNode.operand0)" -> print }
@@ -2757,7 +4183,10 @@ emitCore context: move EmitContext -> Unit uses Console {
                                                                 functionExpressionUnaryValue.kind == 3 -> if {
                                                                     functionExpressionUnaryValue -> sourceToken => functionExpressionUnaryToken
                                                                     context.sources[functionExpressionUnaryValue.sourceModule] -> slice(functionExpressionUnaryToken.span.start, functionExpressionUnaryToken.span.length) -> println
-                                                                } else { "%v$(context.ir[functionExpressionUnaryBinding!].operand0)" -> println }
+                                                                } else {
+                                                                    "%v" -> print
+                                                                    context.ir[functionExpressionUnaryBinding!].operand0 -> writeDecimalLine
+                                                                }
                                                             }
                                                         }
                                                     } else { "%v$(expressionIndex!)_expression$(functionExpressionNode.operand0)" -> println }
@@ -2783,7 +4212,10 @@ emitCore context: move EmitContext -> Unit uses Console {
                                                                 functionExpressionRightValue.kind == 3 -> if {
                                                                     functionExpressionRightValue -> sourceToken => functionExpressionRightToken
                                                                     context.sources[functionExpressionRightValue.sourceModule] -> slice(functionExpressionRightToken.span.start, functionExpressionRightToken.span.length) -> println
-                                                                } else { "%v$(context.ir[functionExpressionRightBinding!].operand0)" -> println }
+                                                                } else {
+                                                                    "%v" -> print
+                                                                    context.ir[functionExpressionRightBinding!].operand0 -> writeDecimalLine
+                                                                }
                                                             }
                                                         }
                                                     } else { "%v$(expressionIndex!)_expression$(functionExpressionNode.operand1)" -> println }
@@ -2806,11 +4238,114 @@ emitCore context: move EmitContext -> Unit uses Console {
                                                 functionExpressionRootBinding! >= 0 -> if { context.ir[functionExpressionRootBinding!].typeSymbol => functionExpressionRootTypeSymbol! }
                                             }
                                         }
-                                        functionExpressionRootTypeSymbol! == 23 -> if { "  call void @sl_runtime_print_i1(i1 " -> print } else { "  call void @sl_runtime_print_i32(i32 " -> print }
+                                        false => functionExpressionRootMember!
+                                        functionExpressionRoot.kind == 5 -> if {
+                                            functionExpressionInterpolation![functionExpressionRoot.operand0] => functionExpressionMemberBase
+                                            -1 => functionExpressionMemberBaseIr!
+                                            false => functionExpressionMemberBaseParameter!
+                                            (function.operand1 >= 0 and context.ir[function.operand1].symbol == functionExpressionMemberBase.symbol) -> if {
+                                                function.operand1 => functionExpressionMemberBaseIr!
+                                                true => functionExpressionMemberBaseParameter!
+                                            } else {
+                                                expressionStart => functionExpressionMemberBindingSearch!
+                                                functionExpressionMemberBindingSearch! < functionEnd! -> while {
+                                                    (context.ir[functionExpressionMemberBindingSearch!].kind == 17 and context.ir[functionExpressionMemberBindingSearch!].symbol == functionExpressionMemberBase.symbol) -> if {
+                                                        context.ir[functionExpressionMemberBindingSearch!].operand0 => functionExpressionMemberBaseIr!
+                                                    }
+                                                    functionExpressionMemberBindingSearch! + 1 => functionExpressionMemberBindingSearch!
+                                                }
+                                            }
+                                            functionExpressionMemberBaseIr! >= 0 -> if {
+                                                context.ir[functionExpressionMemberBaseIr!] => functionExpressionMemberBaseValue
+                                                functionExpressionMemberBaseValue.typeModule => functionExpressionMemberOwnerSource!
+                                                functionExpressionMemberBaseValue.typeOrigin == 2 -> if {
+                                                    context.modules[functionExpressionMemberBaseValue.typeModule].sourceIndex => functionExpressionMemberOwnerSource!
+                                                }
+                                                context.ranges[functionExpressionMemberOwnerSource!] => functionExpressionMemberOwnerRange
+                                                functionExpressionRoot.payloadStart => functionExpressionMemberDot!
+                                                functionExpressionRoot.payloadStart + functionExpressionRoot.payloadLength => functionExpressionMemberEnd
+                                                (functionExpressionMemberDot! < functionExpressionMemberEnd and (context.sources[runtimeArgument.sourceModule] -> byte(functionExpressionMemberDot!)) != UInt8(46)) -> while {
+                                                    functionExpressionMemberDot! + UIntSize(1) => functionExpressionMemberDot!
+                                                }
+                                                functionExpressionMemberDot! + UIntSize(1) => functionExpressionMemberNameStart
+                                                functionExpressionMemberEnd - functionExpressionMemberNameStart => functionExpressionMemberNameLength
+                                                -1 => functionExpressionMemberFieldOrdinal!
+                                                -1 => functionExpressionMemberFieldTypeAst!
+                                                0 => functionExpressionMemberCandidateOrdinal!
+                                                0 => functionExpressionMemberFieldSearch!
+                                                functionExpressionMemberFieldSearch! < functionExpressionMemberOwnerRange.symbolCount -> while {
+                                                    context.symbols[functionExpressionMemberOwnerRange.symbolStart + functionExpressionMemberFieldSearch!] => functionExpressionMemberField
+                                                    (functionExpressionMemberField.kind == 26 and functionExpressionMemberField.parent == functionExpressionMemberBaseValue.typeSymbol) -> if {
+                                                        context.tokens[functionExpressionMemberOwnerRange.tokenStart + functionExpressionMemberField.nameToken] => functionExpressionMemberFieldName
+                                                        functionExpressionMemberFieldName.span.length == functionExpressionMemberNameLength => functionExpressionMemberNameEqual!
+                                                        UIntSize(0) => functionExpressionMemberNameByte!
+                                                        (functionExpressionMemberNameEqual! and functionExpressionMemberNameByte! < functionExpressionMemberNameLength) -> while {
+                                                            (context.sources[runtimeArgument.sourceModule] -> byte(functionExpressionMemberNameStart + functionExpressionMemberNameByte!)) != (context.sources[functionExpressionMemberOwnerSource!] -> byte(functionExpressionMemberFieldName.span.start + functionExpressionMemberNameByte!)) -> if {
+                                                                false => functionExpressionMemberNameEqual!
+                                                            }
+                                                            functionExpressionMemberNameByte! + UIntSize(1) => functionExpressionMemberNameByte!
+                                                        }
+                                                        functionExpressionMemberNameEqual! -> if {
+                                                            functionExpressionMemberCandidateOrdinal! => functionExpressionMemberFieldOrdinal!
+                                                            functionExpressionMemberField.typeNode => functionExpressionMemberFieldTypeAst!
+                                                        }
+                                                        functionExpressionMemberCandidateOrdinal! + 1 => functionExpressionMemberCandidateOrdinal!
+                                                    }
+                                                    functionExpressionMemberFieldSearch! + 1 => functionExpressionMemberFieldSearch!
+                                                }
+                                                functionExpressionMemberFieldTypeAst! >= 0 -> if {
+                                                    0 => functionExpressionMemberTypeSearch!
+                                                    functionExpressionMemberTypeSearch! < (context.nominal -> len) -> while {
+                                                        context.nominal[functionExpressionMemberTypeSearch!] => functionExpressionMemberType
+                                                        (functionExpressionMemberType.sourceModule == functionExpressionMemberOwnerSource! and functionExpressionMemberType.typeAst == functionExpressionMemberFieldTypeAst! and functionExpressionMemberType.status == 0) -> if {
+                                                            functionExpressionMemberType.targetSymbol => functionExpressionRootTypeSymbol!
+                                                        }
+                                                        functionExpressionMemberTypeSearch! + 1 => functionExpressionMemberTypeSearch!
+                                                    }
+                                                }
+                                                functionExpressionMemberFieldOrdinal! >= 0 -> if {
+                                                    "  %v$(expressionIndex!)_expression$(functionExpressionRootSearch!) = extractvalue " -> print
+                                                    functionExpressionMemberBaseValue -> writeIrType
+                                                    " " -> print
+                                                    functionExpressionMemberBaseParameter! -> if { "%arg" -> print } else { "%v$(functionExpressionMemberBaseIr!)" -> print }
+                                                    ", $(functionExpressionMemberFieldOrdinal!)" -> println
+                                                    true => functionExpressionRootMember!
+                                                }
+                                            }
+                                        }
+                                        functionExpressionRootTypeSymbol! == 1 -> if {
+                                            "  %v$(expressionIndex!)_expression$(functionExpressionRootSearch!)_text_ptr = extractvalue %sl.text " -> print
+                                            functionExpressionRoot.kind == 5 -> if {
+                                                "%v$(expressionIndex!)_expression$(functionExpressionRootSearch!)" -> print
+                                            } else {
+                                                (function.operand1 >= 0 and context.ir[function.operand1].symbol == functionExpressionRoot.symbol) -> if { "%arg" -> print } else {
+                                                    "%v" -> print
+                                                    context.ir[functionExpressionRootBinding!].operand0 -> writeDecimal
+                                                }
+                                            }
+                                            ", 0" -> println
+                                            "  %v$(expressionIndex!)_expression$(functionExpressionRootSearch!)_text_len = extractvalue %sl.text " -> print
+                                            functionExpressionRoot.kind == 5 -> if {
+                                                "%v$(expressionIndex!)_expression$(functionExpressionRootSearch!)" -> print
+                                            } else {
+                                                (function.operand1 >= 0 and context.ir[function.operand1].symbol == functionExpressionRoot.symbol) -> if { "%arg" -> print } else {
+                                                    "%v" -> print
+                                                    context.ir[functionExpressionRootBinding!].operand0 -> writeDecimal
+                                                }
+                                            }
+                                            ", 1" -> println
+                                            "  call void @sl_runtime_print(ptr %v$(expressionIndex!)_expression$(functionExpressionRootSearch!)_text_ptr, i64 %v$(expressionIndex!)_expression$(functionExpressionRootSearch!)_text_len, i1 false)" -> println
+                                        } else {
+                                        functionExpressionRootTypeSymbol! == 23 -> if { "  call void @sl_runtime_print_i1(i1 " -> print } else {
+                                            (functionExpressionRootTypeSymbol! -> integerWidth) == 64 -> if { "  call void @sl_runtime_print_i64(i64 " -> print } else { "  call void @sl_runtime_print_i32(i32 " -> print }
+                                        }
                                         (functionExpressionRoot.kind == 0 or functionExpressionRoot.kind == 4) -> if {
                                             functionExpressionRoot.kind == 4 -> if {
                                                 (context.sources[runtimeArgument.sourceModule] -> byte(functionExpressionRoot.payloadStart)) == UInt8(116) -> if { "1" -> print } else { "0" -> print }
                                             } else { context.sources[runtimeArgument.sourceModule] -> slice(functionExpressionRoot.payloadStart, functionExpressionRoot.payloadLength) -> print }
+                                        } else {
+                                        functionExpressionRoot.kind == 5 -> if {
+                                            functionExpressionRootMember! -> if { "%v$(expressionIndex!)_expression$(functionExpressionRootSearch!)" -> print }
                                         } else {
                                         functionExpressionRoot.kind == 1 -> if {
                                             (function.operand1 >= 0 and context.ir[function.operand1].symbol == functionExpressionRoot.symbol) -> if { "%arg" -> print } else {
@@ -2821,12 +4356,21 @@ emitCore context: move EmitContext -> Unit uses Console {
                                                         functionExpressionRootValue.kind == 4 -> if {
                                                             (context.sources[functionExpressionRootValue.sourceModule] -> byte(functionExpressionRootToken.span.start)) == UInt8(116) -> if { "1" -> print } else { "0" -> print }
                                                         } else { context.sources[functionExpressionRootValue.sourceModule] -> slice(functionExpressionRootToken.span.start, functionExpressionRootToken.span.length) -> print }
-                                                    } else { "%v$(context.ir[functionExpressionRootBinding!].operand0)" -> print }
+                                                    } else {
+                                                        "%v" -> print
+                                                        context.ir[functionExpressionRootBinding!].operand0 -> writeDecimal
+                                                    }
                                                 }
                                             }
                                         } else { "%v$(expressionIndex!)_expression$(functionExpressionRootSearch!)" -> print }
                                         }
+                                        }
+                                        (functionExpressionRootTypeSymbol! -> integerWidth) == 64 -> if {
+                                            ", i1 " -> print
+                                            functionExpressionRootTypeSymbol! -> integerSigned -> if { "true" -> print } else { "false" -> print }
+                                        }
                                         ", i1 false)" -> println
+                                        }
                                         functionExpressionRoot.expressionStart + functionExpressionRoot.expressionLength + UIntSize(1) => functionExpressionSuffixStart!
                                         functionExpressionSegment! + 1 => functionExpressionSegment!
                                     }
@@ -2838,7 +4382,7 @@ emitCore context: move EmitContext -> Unit uses Console {
                             } else {
                             runtimeArgumentToken.span.start + UIntSize(1) => functionInterpolationContentStart
                             runtimeArgumentToken.span.start + runtimeArgumentToken.span.length - UIntSize(1) => functionInterpolationContentEnd
-                            functionInterpolationContentStart => functionInterpolationSegmentStart!
+                            UIntSize(functionInterpolationContentStart) => functionInterpolationSegmentStart!
                             0 => functionInterpolationPartIndex!
                             false => functionEmittedInterpolation!
                             true => functionInterpolationSegmentsRemain!
@@ -2934,38 +4478,44 @@ emitCore context: move EmitContext -> Unit uses Console {
                         }
                         expression.symbol == -102 -> if { "true)" -> println } else { "false)" -> println }
                     } else {
-                    (expression.targetModule < 0 and expression.typeOrigin == 1 and (expression.typeSymbol == 3 or expression.typeSymbol == 13) and expression.operand0 >= 0) -> if {
-                        context.ir[expression.operand0] => functionUIntSizeArgument
-                        expression.typeSymbol == 3 -> if {
-                            "  %v$(expressionIndex!) = trunc i32 " -> print
-                        } else {
-                        functionUIntSizeArgument.typeSymbol == 13 -> if {
-                            "  %v$(expressionIndex!) = add i64 " -> print
-                        } else {
-                            "  %v$(expressionIndex!) = zext i32 " -> print
+                    (expression.targetModule < 0 and expression.typeOrigin == 1 and (expression.typeSymbol -> integerWidth) > 0 and expression.operand0 >= 0) -> if {
+                        context.ir[expression.operand0] => functionIntegerArgument
+                        expression.typeSymbol -> integerWidth => functionTargetWidth
+                        functionIntegerArgument.typeSymbol -> integerWidth => functionInputWidth
+                        "  %v$(expressionIndex!) = " -> print
+                        functionTargetWidth < functionInputWidth -> if { "trunc " -> print } else {
+                            functionTargetWidth > functionInputWidth -> if {
+                                functionIntegerArgument -> integerNodeSigned -> if { "sext " -> print } else { "zext " -> print }
+                            } else { "add " -> print }
                         }
+                        functionIntegerArgument -> writeIrType
+                        " " -> print
+                        functionIntegerArgument.kind == 3 -> if {
+                            functionIntegerArgument -> sourceToken => functionIntegerToken
+                            context.sources[functionIntegerArgument.sourceModule] -> slice(functionIntegerToken.span.start, functionIntegerToken.span.length) -> print
+                        } else {
+                            (functionIntegerArgument.kind == 5 and function.operand1 >= 0 and functionIntegerArgument.symbol == context.ir[function.operand1].symbol) -> if { "%arg" -> print } else { "%v$(expression.operand0)" -> print }
                         }
-                        functionUIntSizeArgument.kind == 3 -> if {
-                            functionUIntSizeArgument -> sourceToken => functionUIntSizeToken
-                            context.sources[functionUIntSizeArgument.sourceModule] -> slice(functionUIntSizeToken.span.start, functionUIntSizeToken.span.length) -> print
-                        } else { "%v$(expression.operand0)" -> print }
-                        expression.typeSymbol == 3 -> if { " to i8" -> println } else {
-                            functionUIntSizeArgument.typeSymbol == 13 -> if { ", 0" -> println } else { " to i64" -> println }
+                        functionTargetWidth == functionInputWidth -> if { ", 0" -> println } else {
+                            " to " -> print
+                            expression -> writeIrType
+                            "" -> println
                         }
                     } else {
                     (expression.typeOrigin == 1 and expression.typeSymbol == 0) -> if { "  call " -> print } else { "  %v$(expressionIndex!) = call " -> print }
-                    expression -> writeType
+                    expression -> writeIrType
                     " @sl_m$(expression.targetModule)_s$(expression.symbol)(" -> print
+                    CallEnvironmentRequest { callerIndex: functionIndex!, targetModule: expression.targetModule, targetSymbol: expression.symbol, hasArgument: expression.operand0 >= 0 } -> emitCallEnvironment => functionCallEnvironment
                     expression.operand0 >= 0 -> if {
                         context.ir[expression.operand0] => argument
-                        argument -> writeType
+                        argument -> writeIrType
                         " " -> print
                         (argument.kind == 3 or argument.kind == 4) -> if {
                             argument -> sourceToken => argumentToken
                             argument.kind == 3 -> if {
                                 context.sources[argument.sourceModule] -> slice(argumentToken.span.start, argumentToken.span.length) -> print
                             } else {
-                                ((context.sources[argument.sourceModule] -> byte(argumentToken.span.start)) == UInt8(116)) -> if { "1" } else { "0" } -> print
+                                ((context.sources[argument.sourceModule] -> byte(argumentToken.span.start)) == UInt8(116)) -> if { "1" -> print } else { "0" -> print }
                             }
                         } else {
                             (argument.kind == 5 and function.operand1 >= 0 and argument.symbol == context.ir[function.operand1].symbol) -> if { "%arg" -> print } else { "%v$(expression.operand0)" -> print }
@@ -2980,7 +4530,7 @@ emitCore context: move EmitContext -> Unit uses Console {
                     "  br i1 " -> print
                     ifCondition.kind == 4 -> if {
                         ifCondition -> sourceToken => ifConditionToken
-                        ((context.sources[ifCondition.sourceModule] -> byte(ifConditionToken.span.start)) == UInt8(116)) -> if { "1" } else { "0" } -> print
+                        ((context.sources[ifCondition.sourceModule] -> byte(ifConditionToken.span.start)) == UInt8(116)) -> if { "1" -> print } else { "0" -> print }
                     } else {
                         (ifCondition.kind == 5 and function.operand1 >= 0 and ifCondition.symbol == context.ir[function.operand1].symbol) -> if { "%arg" -> print } else { "%v$(expression.operand0)" -> print }
                     }
@@ -3007,12 +4557,12 @@ emitCore context: move EmitContext -> Unit uses Console {
                         context.ir[thenRegion.operand1] => thenValue
                         context.ir[elseRegion.operand1] => elseValue
                         "  %v$(expressionIndex!) = phi " -> print
-                        expression -> writeType
+                        expression -> writeIrType
                         " [ " -> print
                         (thenValue.kind == 3 or thenValue.kind == 4) -> if {
                             thenValue -> sourceToken => thenValueToken
                             thenValue.kind == 3 -> if { context.sources[thenValue.sourceModule] -> slice(thenValueToken.span.start, thenValueToken.span.length) -> print } else {
-                                ((context.sources[thenValue.sourceModule] -> byte(thenValueToken.span.start)) == UInt8(116)) -> if { "1" } else { "0" } -> print
+                                ((context.sources[thenValue.sourceModule] -> byte(thenValueToken.span.start)) == UInt8(116)) -> if { "1" -> print } else { "0" -> print }
                             }
                         } else { "%v$(thenRegion.operand1)" -> print }
                         ", %if" -> print
@@ -3021,7 +4571,7 @@ emitCore context: move EmitContext -> Unit uses Console {
                         (elseValue.kind == 3 or elseValue.kind == 4) -> if {
                             elseValue -> sourceToken => elseValueToken
                             elseValue.kind == 3 -> if { context.sources[elseValue.sourceModule] -> slice(elseValueToken.span.start, elseValueToken.span.length) -> print } else {
-                                ((context.sources[elseValue.sourceModule] -> byte(elseValueToken.span.start)) == UInt8(116)) -> if { "1" } else { "0" } -> print
+                                ((context.sources[elseValue.sourceModule] -> byte(elseValueToken.span.start)) == UInt8(116)) -> if { "1" -> print } else { "0" -> print }
                             }
                         } else { "%v$(elseRegion.operand1)" -> print }
                         ", %if" -> print
@@ -3041,14 +4591,42 @@ emitCore context: move EmitContext -> Unit uses Console {
                 }
                 expressionOrderIndex! + 1 => expressionOrderIndex!
             }
+            function.operand0 => returnValueIndex!
             context.ir[function.operand0] => returnNode
-            context.ir[returnNode.operand0] => returnOperand
+            (returnNode.kind == 1 and returnNode.operand0 >= 0) -> if {
+                returnNode.operand0 => returnValueIndex!
+            }
+            (returnNode.kind == 1 and returnNode.operand0 < 0) -> if {
+                function.operand0 + 1 => returnChildSearch!
+                (returnChildSearch! < functionEnd! and returnValueIndex! == function.operand0) -> while {
+                    context.ir[returnChildSearch!].parent == function.operand0 -> if {
+                        returnChildSearch! => returnValueIndex!
+                    }
+                    returnChildSearch! + 1 => returnChildSearch!
+                }
+            }
+            returnValueIndex! => returnValueIndex
+            context.ir[returnValueIndex] => returnOperand
             expressionStart => dropIndex!
             dropIndex! < functionEnd! -> while {
                 context.ir[dropIndex!] => dropCandidate
                 false => dropCandidateMoved!
                 false => dropCandidateHasPartialMoves!
-                (dropCandidate.kind == 17 and (dropCandidate.typeOrigin == 13 or dropCandidate.typeOrigin == 15 or dropCandidate.typeOrigin == 0 or dropCandidate.typeOrigin == 2)) -> if {
+                true => dropCandidateIsRoot!
+                dropIndex! => dropCandidateRoot!
+                (dropCandidate.kind == 17 and dropCandidate.parent == function.operand0 and (dropCandidate -> ownsType)) -> if {
+                    dropIndex! -> mutableBindingRoot => dropCandidateRoot!
+                    dropCandidateRoot! != dropIndex! -> if { false => dropCandidateIsRoot! }
+                }
+                false => dropCandidateReturned!
+                (dropCandidate.kind == 17 and dropCandidateIsRoot! and returnOperand.kind == 5 and returnOperand.operand0 >= 0) -> if {
+                    context.ir[returnOperand.operand0] => returnedBindingCandidate
+                    returnedBindingCandidate.kind == 17 -> if {
+                        returnOperand.operand0 -> mutableBindingRoot => returnedBindingRoot
+                        returnedBindingRoot == dropCandidateRoot! -> if { true => dropCandidateReturned! }
+                    }
+                }
+                (dropCandidate.kind == 17 and (dropCandidate.typeOrigin == 13 or dropCandidate.typeOrigin == 14 or dropCandidate.typeOrigin == 15 or dropCandidate.typeOrigin == 0 or dropCandidate.typeOrigin == 2)) -> if {
                     0 => dropMoveIndex!
                     (dropMoveIndex! < (context.moves -> len) and not dropCandidateMoved!) -> while {
                         context.moves[dropMoveIndex!] => dropMove
@@ -3060,17 +4638,17 @@ emitCore context: move EmitContext -> Unit uses Console {
                         dropMoveIndex! + 1 => dropMoveIndex!
                     }
                 }
-                (dropCandidate.kind == 14 and dropCandidate.typeOrigin == 13 and dropCandidate.parent == function.operand0 and dropIndex! != returnNode.operand0) -> if {
+                (dropCandidate.kind == 14 and (dropCandidate.typeOrigin == 13 or dropCandidate.typeOrigin == 14) and dropCandidate.parent == function.operand0 and dropIndex! != returnValueIndex) -> if {
                     "  %drop$(dropIndex!) = extractvalue %sl.array.i32 %v$(dropIndex!), 0" -> println
                     "  call void @free(ptr %drop$(dropIndex!))" -> println
                 }
-                (dropCandidate.kind == 16 and dropCandidate.typeOrigin == 15 and dropCandidate.parent == function.operand0 and dropIndex! != returnNode.operand0) -> if {
+                (dropCandidate.kind == 16 and dropCandidate.typeOrigin == 15 and dropCandidate.parent == function.operand0 and dropIndex! != returnValueIndex) -> if {
                     "  %drop$(dropIndex!)_keys = extractvalue %sl.dict %v$(dropIndex!), 0" -> println
                     "  call void @free(ptr %drop$(dropIndex!)_keys)" -> println
                     "  %drop$(dropIndex!)_values = extractvalue %sl.dict %v$(dropIndex!), 1" -> println
                     "  call void @free(ptr %drop$(dropIndex!)_values)" -> println
                 }
-                (dropCandidate.kind == 12 and (dropCandidate.typeOrigin == 0 or dropCandidate.typeOrigin == 2) and dropCandidate.parent == function.operand0 and dropIndex! != returnNode.operand0) -> if {
+                (dropCandidate.kind == 12 and (dropCandidate.typeOrigin == 0 or dropCandidate.typeOrigin == 2) and dropCandidate.parent == function.operand0 and dropIndex! != returnValueIndex) -> if {
                     DropGlueRequest {
                         typeOrigin: dropCandidate.typeOrigin
                         typeModule: dropCandidate.typeModule
@@ -3087,22 +4665,44 @@ emitCore context: move EmitContext -> Unit uses Console {
                         hasPartialMoves: false
                     } -> emitDropGlue
                 }
-                (dropCandidate.kind == 17 and dropCandidate.typeOrigin == 13 and not dropCandidateMoved! and not (returnOperand.kind == 5 and returnOperand.symbol == dropCandidate.symbol)) -> if {
-                    "  %drop$(dropIndex!) = extractvalue %sl.array.i32 %v$(dropCandidate.operand0), 0" -> println
+                (dropCandidate.kind == 17 and dropCandidateIsRoot! and (dropCandidate.typeOrigin == 13 or dropCandidate.typeOrigin == 14) and dropCandidate.parent == function.operand0 and not dropCandidateMoved! and not dropCandidateReturned!) -> if {
+                    dropCandidate.flags == 1 -> if {
+                        "  %drop$(dropIndex!)_current = load %sl.array.i32, ptr %slot$(dropCandidateRoot!), align " -> print
+                        dropCandidate -> storageAlign -> writeDecimalLine
+                        "  %drop$(dropIndex!) = extractvalue %sl.array.i32 %drop$(dropIndex!)_current, 0" -> println
+                    } else {
+                        "  %drop$(dropIndex!) = extractvalue %sl.array.i32 %v$(dropCandidate.operand0), 0" -> println
+                    }
                     "  call void @free(ptr %drop$(dropIndex!))" -> println
                 }
-                (dropCandidate.kind == 17 and dropCandidate.typeOrigin == 15 and not dropCandidateMoved! and not (returnOperand.kind == 5 and returnOperand.symbol == dropCandidate.symbol)) -> if {
-                    "  %drop$(dropIndex!)_keys = extractvalue %sl.dict %v$(dropCandidate.operand0), 0" -> println
+                (dropCandidate.kind == 17 and dropCandidateIsRoot! and dropCandidate.typeOrigin == 15 and dropCandidate.parent == function.operand0 and not dropCandidateMoved! and not dropCandidateReturned!) -> if {
+                    dropCandidate.flags == 1 -> if {
+                        "  %drop$(dropIndex!)_current = load %sl.dict, ptr %slot$(dropCandidateRoot!), align " -> print
+                        dropCandidate -> storageAlign -> writeDecimalLine
+                        "  %drop$(dropIndex!)_keys = extractvalue %sl.dict %drop$(dropIndex!)_current, 0" -> println
+                    } else {
+                        "  %drop$(dropIndex!)_keys = extractvalue %sl.dict %v$(dropCandidate.operand0), 0" -> println
+                    }
                     "  call void @free(ptr %drop$(dropIndex!)_keys)" -> println
-                    "  %drop$(dropIndex!)_values = extractvalue %sl.dict %v$(dropCandidate.operand0), 1" -> println
+                    dropCandidate.flags == 1 -> if {
+                        "  %drop$(dropIndex!)_values = extractvalue %sl.dict %drop$(dropIndex!)_current, 1" -> println
+                    } else {
+                        "  %drop$(dropIndex!)_values = extractvalue %sl.dict %v$(dropCandidate.operand0), 1" -> println
+                    }
                     "  call void @free(ptr %drop$(dropIndex!)_values)" -> println
                 }
-                (dropCandidate.kind == 17 and (dropCandidate.typeOrigin == 0 or dropCandidate.typeOrigin == 2) and not dropCandidateMoved! and not (returnOperand.kind == 5 and returnOperand.symbol == dropCandidate.symbol)) -> if {
+                (dropCandidate.kind == 17 and dropCandidateIsRoot! and (dropCandidate.typeOrigin == 0 or dropCandidate.typeOrigin == 2) and dropCandidate.parent == function.operand0 and not dropCandidateMoved! and not dropCandidateReturned!) -> if {
+                    dropCandidate.flags == 1 -> if {
+                        "  %dropg$(dropIndex!)_p0 = load %sl.struct.m$(dropCandidate.typeModule)_s$(dropCandidate.typeSymbol), ptr %slot$(dropCandidateRoot!), align " -> print
+                        dropCandidate -> storageAlign -> writeDecimalLine
+                    }
+                    0 => dropCandidateValueKind!
+                    dropCandidate.flags == 1 -> if { 2 => dropCandidateValueKind! }
                     DropGlueRequest {
                         typeOrigin: dropCandidate.typeOrigin
                         typeModule: dropCandidate.typeModule
                         typeSymbol: dropCandidate.typeSymbol
-                        valueKind: 0
+                        valueKind: dropCandidateValueKind!
                         valueIndex: dropCandidate.operand0
                         nameRoot: dropIndex!
                         pathCode: 0
@@ -3119,19 +4719,21 @@ emitCore context: move EmitContext -> Unit uses Console {
             function.operand1 >= 0 -> if {
                 context.ir[function.operand1] => ownedParameter
                 false => ownedParameterHasPartialMoves!
+                false => ownedParameterMoved!
                 0 => ownedParameterMoveIndex!
                 ownedParameterMoveIndex! < (context.moves -> len) -> while {
                     context.moves[ownedParameterMoveIndex!] => ownedParameterMove
                     (ownedParameterMove.memberIr >= 0 and ownedParameterMove.sourceModule == ownedParameter.sourceModule and ownedParameterMove.symbol == ownedParameter.symbol) -> if { true => ownedParameterHasPartialMoves! }
+                    (ownedParameterMove.memberIr < 0 and ownedParameterMove.sourceModule == ownedParameter.sourceModule and ownedParameterMove.symbol == ownedParameter.symbol and ownedParameterMove.regionIr == function.operand0) -> if { true => ownedParameterMoved! }
                     ownedParameterMoveIndex! + 1 => ownedParameterMoveIndex!
                 }
-                (ownedParameter.typeOrigin == 13 and ownedParameter.flags % 2 == 1) -> if {
+                ((ownedParameter.typeOrigin == 13 or ownedParameter.typeOrigin == 14) and ownedParameter.flags % 2 == 1 and not ownedParameterMoved!) -> if {
                     not (returnOperand.kind == 5 and returnOperand.symbol == ownedParameter.symbol) -> if {
                         "  %drop_arg = extractvalue %sl.array.i32 %arg, 0" -> println
                         "  call void @free(ptr %drop_arg)" -> println
                     }
                 }
-                (ownedParameter.typeOrigin == 15 and ownedParameter.flags % 2 == 1) -> if {
+                (ownedParameter.typeOrigin == 15 and ownedParameter.flags % 2 == 1 and not ownedParameterMoved!) -> if {
                     not (returnOperand.kind == 5 and returnOperand.symbol == ownedParameter.symbol) -> if {
                         "  %drop_arg_keys = extractvalue %sl.dict %arg, 0" -> println
                         "  call void @free(ptr %drop_arg_keys)" -> println
@@ -3139,7 +4741,7 @@ emitCore context: move EmitContext -> Unit uses Console {
                         "  call void @free(ptr %drop_arg_values)" -> println
                     }
                 }
-                ((ownedParameter.typeOrigin == 0 or ownedParameter.typeOrigin == 2) and ownedParameter.flags % 2 == 1) -> if {
+                ((ownedParameter.typeOrigin == 0 or ownedParameter.typeOrigin == 2) and ownedParameter.flags % 2 == 1 and not ownedParameterMoved!) -> if {
                     not (returnOperand.kind == 5 and returnOperand.symbol == ownedParameter.symbol) -> if {
                         DropGlueRequest {
                             typeOrigin: ownedParameter.typeOrigin
@@ -3161,17 +4763,20 @@ emitCore context: move EmitContext -> Unit uses Console {
             }
             (function.typeOrigin == 1 and function.typeSymbol == 0) -> if { "  ret void" -> println } else {
             "  ret " -> print
-            function -> writeType
+            function -> writeIrType
             " " -> print
             (returnOperand.kind == 3 or returnOperand.kind == 4) -> if {
                 returnOperand -> sourceToken => returnToken
                 returnOperand.kind == 3 -> if {
                     context.sources[returnOperand.sourceModule] -> slice(returnToken.span.start, returnToken.span.length) -> println
                 } else {
-                    ((context.sources[returnOperand.sourceModule] -> byte(returnToken.span.start)) == UInt8(116)) -> if { "1" } else { "0" } -> println
+                    ((context.sources[returnOperand.sourceModule] -> byte(returnToken.span.start)) == UInt8(116)) -> if { "1" -> println } else { "0" -> println }
                 }
             } else {
-                (returnOperand.kind == 5 and function.operand1 >= 0 and returnOperand.symbol == context.ir[function.operand1].symbol) -> if { "%arg" -> println } else { "%v$(returnNode.operand0)" -> println }
+                (returnOperand.kind == 5 and function.operand1 >= 0 and returnOperand.symbol == context.ir[function.operand1].symbol) -> if { "%arg" -> println } else {
+                    "%v" -> print
+                    returnValueIndex -> writeDecimalLine
+                }
             }
             }
             "}" -> println
@@ -3194,8 +4799,9 @@ emitCore context: move EmitContext -> Unit uses Console {
                         entryMutableSlotIndex! -> mutableBindingRoot => entryMutableSlotRoot
                         entryMutableSlotRoot == entryMutableSlotIndex! -> if {
                             "  %slot$(entryMutableSlotRoot) = alloca " -> print
-                            entryMutableSlotCandidate -> writeType
-                            ", align $(entryMutableSlotCandidate -> storageAlign)" -> println
+                            entryMutableSlotCandidate -> writeIrType
+                            ", align " -> print
+                            entryMutableSlotCandidate -> storageAlign -> writeDecimalLine
                         }
                     }
                     entryMutableSlotIndex! + 1 => entryMutableSlotIndex!
@@ -3217,7 +4823,13 @@ emitCore context: move EmitContext -> Unit uses Console {
                             entryScheduleNode.parent => entryScheduleAncestor!
                             entryScheduleNode.kind == 19 => entryInsideControlRegion!
                             (entryScheduleAncestor! > functionIndex! and not entryInsideControlRegion!) -> while {
-                                (context.ir[entryScheduleAncestor!].kind == 19 or context.ir[entryScheduleAncestor!].kind == 20) -> if { true => entryInsideControlRegion! } else { context.ir[entryScheduleAncestor!].parent => entryScheduleAncestor! }
+                                context.ir[entryScheduleAncestor!].kind == 19 -> if { true => entryInsideControlRegion! } else { context.ir[entryScheduleAncestor!].parent => entryScheduleAncestor! }
+                            }
+                            (entryScheduleNode.kind == 17 and entryScheduleNode.operand0 > functionIndex! and entryScheduleNode.operand0 < entryEnd! and not entryInsideControlRegion!) -> if {
+                                context.ir[entryScheduleNode.operand0].parent => entryBindingScheduleAncestor!
+                                (entryBindingScheduleAncestor! > functionIndex! and not entryInsideControlRegion!) -> while {
+                                    context.ir[entryBindingScheduleAncestor!].kind == 19 -> if { true => entryInsideControlRegion! } else { context.ir[entryBindingScheduleAncestor!].parent => entryBindingScheduleAncestor! }
+                                }
                             }
                             (entryInsideControlRegion! or entryScheduleNode.kind == 19) -> if {
                                 true => entryScheduled![entryScheduleCandidate!]
@@ -3225,8 +4837,15 @@ emitCore context: move EmitContext -> Unit uses Console {
                             }
                             not (entryInsideControlRegion! or entryScheduleNode.kind == 19) => entryScheduleReady!
                             (entryScheduleReady! and entryScheduleNode.operand0 > functionIndex! and entryScheduleNode.operand0 < entryEnd! and (entryScheduleNode.kind != 5 or context.ir[entryScheduleNode.operand0].flags % 2 == 0) and not entryScheduled![entryScheduleNode.operand0]) -> if { false => entryScheduleReady! }
-                            (entryScheduleReady! and entryScheduleNode.kind != 18 and entryScheduleNode.kind != 20 and entryScheduleNode.operand1 > functionIndex! and entryScheduleNode.operand1 < entryEnd! and not entryScheduled![entryScheduleNode.operand1]) -> if { false => entryScheduleReady! }
+                            (entryScheduleReady! and entryScheduleNode.kind != 6 and entryScheduleNode.kind != 18 and entryScheduleNode.kind != 20 and entryScheduleNode.operand1 > functionIndex! and entryScheduleNode.operand1 < entryEnd! and not entryScheduled![entryScheduleNode.operand1]) -> if { false => entryScheduleReady! }
                             (entryScheduleReady! and entryScheduleNode.kind == 9 and entryScheduleNode.opcode == -203 and entryScheduleNode.operand1 >= 0 and context.ir[entryScheduleNode.operand1].nextOperand > functionIndex! and context.ir[entryScheduleNode.operand1].nextOperand < entryEnd! and not entryScheduled![context.ir[entryScheduleNode.operand1].nextOperand]) -> if { false => entryScheduleReady! }
+                            (entryScheduleReady! and (entryScheduleNode.kind == 12 or entryScheduleNode.kind == 14 or entryScheduleNode.kind == 16)) -> if {
+                                entryScheduleNode.operand0 => entryScheduleSibling!
+                                entryScheduleSibling! >= 0 -> while {
+                                    not entryScheduled![entryScheduleSibling!] -> if { false => entryScheduleReady! }
+                                    context.ir[entryScheduleSibling!].nextOperand => entryScheduleSibling!
+                                }
+                            }
                             (entryScheduleReady! and entryScheduleNode.kind == 5) -> if {
                                 false => entryMutableRead!
                                 functionIndex! + 1 => entryMutableReadBindingSearch!
@@ -3245,30 +4864,30 @@ emitCore context: move EmitContext -> Unit uses Console {
                                                 context.ir[entryMutableReadBarrierAncestor!].parent => entryMutableReadBarrierAncestor!
                                             }
                                         }
-                                        (not entryMutableReadInsideBarrier! and not entryScheduled![entryMutableReadBarrierSearch!] and (entryMutableReadBarrier.kind == 20 or (entryMutableReadBarrier.kind == 17 and entryMutableReadBarrier.flags == 1)) and (entryMutableReadBarrier -> sourceStart) < (entryScheduleNode -> sourceStart)) -> if {
+                                        (not entryMutableReadInsideBarrier! and not entryScheduled![entryMutableReadBarrierSearch!] and (entryMutableReadBarrier.kind == 18 or entryMutableReadBarrier.kind == 20 or entryMutableReadBarrier.kind == 24 or entryMutableReadBarrier.kind == 25 or (entryMutableReadBarrier.kind == 17 and entryMutableReadBarrier.flags == 1) or (entryMutableReadBarrier.kind == 9 and entryMutableReadBarrier.opcode == -204)) and (entryMutableReadBarrier -> sourceStart) < (entryScheduleNode -> sourceStart)) -> if {
                                             false => entryScheduleReady!
                                         }
                                         entryMutableReadBarrierSearch! + 1 => entryMutableReadBarrierSearch!
                                     }
                                 }
                             }
-                            (entryScheduleReady! and (entryScheduleNode.kind == 6 or entryScheduleNode.kind == 18 or entryScheduleNode.kind == 20 or (entryScheduleNode.kind == 17 and entryScheduleNode.flags == 1))) -> if {
+                            (entryScheduleReady! and (entryScheduleNode.kind == 6 or entryScheduleNode.kind == 18 or entryScheduleNode.kind == 20 or entryScheduleNode.kind == 24 or entryScheduleNode.kind == 25 or (entryScheduleNode.kind == 17 and entryScheduleNode.flags == 1) or (entryScheduleNode.kind == 9 and (entryScheduleNode.opcode == -204 or entryScheduleNode.opcode == -205)))) -> if {
                                 true => entryRootEffect!
                                 entryScheduleNode.parent => entryEffectAncestor!
                                 (entryEffectAncestor! > functionIndex! and entryRootEffect!) -> while {
-                                    (context.ir[entryEffectAncestor!].kind == 6 or context.ir[entryEffectAncestor!].kind == 18 or context.ir[entryEffectAncestor!].kind == 20 or (context.ir[entryEffectAncestor!].kind == 17 and context.ir[entryEffectAncestor!].flags == 1)) -> if { false => entryRootEffect! } else { context.ir[entryEffectAncestor!].parent => entryEffectAncestor! }
+                                    (context.ir[entryEffectAncestor!].kind == 6 or context.ir[entryEffectAncestor!].kind == 18 or context.ir[entryEffectAncestor!].kind == 20 or context.ir[entryEffectAncestor!].kind == 24 or context.ir[entryEffectAncestor!].kind == 25 or (context.ir[entryEffectAncestor!].kind == 17 and context.ir[entryEffectAncestor!].flags == 1) or (context.ir[entryEffectAncestor!].kind == 9 and (context.ir[entryEffectAncestor!].opcode == -204 or context.ir[entryEffectAncestor!].opcode == -205))) -> if { false => entryRootEffect! } else { context.ir[entryEffectAncestor!].parent => entryEffectAncestor! }
                                 }
                                 entryRootEffect! -> if {
                                     functionIndex! + 1 => entryEarlierEffectSearch!
                                     entryEarlierEffectSearch! < entryEnd! -> while {
                                         context.ir[entryEarlierEffectSearch!] => entryEarlierEffect
-                                        (not entryScheduled![entryEarlierEffectSearch!] and (entryEarlierEffect.kind == 6 or entryEarlierEffect.kind == 18 or entryEarlierEffect.kind == 20 or (entryEarlierEffect.kind == 17 and entryEarlierEffect.flags == 1)) and (entryEarlierEffect -> sourceStart) < (entryScheduleNode -> sourceStart)) -> if {
+                                        (not entryScheduled![entryEarlierEffectSearch!] and (entryEarlierEffect.kind == 6 or entryEarlierEffect.kind == 18 or entryEarlierEffect.kind == 20 or entryEarlierEffect.kind == 24 or entryEarlierEffect.kind == 25 or (entryEarlierEffect.kind == 17 and entryEarlierEffect.flags == 1) or (entryEarlierEffect.kind == 9 and (entryEarlierEffect.opcode == -204 or entryEarlierEffect.opcode == -205))) and (entryEarlierEffect -> sourceStart) < (entryScheduleNode -> sourceStart)) -> if {
                                             entryEarlierEffect.parent => entryEarlierEffectAncestor!
                                             true => entryEarlierRootEffect!
                                             false => entryEarlierInsideRegion!
                                             (entryEarlierEffectAncestor! > functionIndex! and entryEarlierRootEffect! and not entryEarlierInsideRegion!) -> while {
                                                 (context.ir[entryEarlierEffectAncestor!].kind == 19 or context.ir[entryEarlierEffectAncestor!].kind == 20) -> if { true => entryEarlierInsideRegion! } else {
-                                                    (context.ir[entryEarlierEffectAncestor!].kind == 6 or context.ir[entryEarlierEffectAncestor!].kind == 18 or context.ir[entryEarlierEffectAncestor!].kind == 20 or (context.ir[entryEarlierEffectAncestor!].kind == 17 and context.ir[entryEarlierEffectAncestor!].flags == 1)) -> if { false => entryEarlierRootEffect! } else { context.ir[entryEarlierEffectAncestor!].parent => entryEarlierEffectAncestor! }
+                                                    (context.ir[entryEarlierEffectAncestor!].kind == 6 or context.ir[entryEarlierEffectAncestor!].kind == 18 or context.ir[entryEarlierEffectAncestor!].kind == 20 or context.ir[entryEarlierEffectAncestor!].kind == 24 or context.ir[entryEarlierEffectAncestor!].kind == 25 or (context.ir[entryEarlierEffectAncestor!].kind == 17 and context.ir[entryEarlierEffectAncestor!].flags == 1) or (context.ir[entryEarlierEffectAncestor!].kind == 9 and (context.ir[entryEarlierEffectAncestor!].opcode == -204 or context.ir[entryEarlierEffectAncestor!].opcode == -205))) -> if { false => entryEarlierRootEffect! } else { context.ir[entryEarlierEffectAncestor!].parent => entryEarlierEffectAncestor! }
                                                 }
                                             }
                                             (entryEarlierRootEffect! and not entryEarlierInsideRegion!) -> if { false => entryScheduleReady! }
@@ -3290,36 +4909,32 @@ emitCore context: move EmitContext -> Unit uses Console {
                 entryOrderIndex! < (entryOrder! -> len) -> while {
                     entryOrder![entryOrderIndex!] => entryExpressionIndex!
                     context.ir[entryExpressionIndex!] => entryExpression
-                    (entryExpression.kind == 2 and entryExpression.parent >= 0 and context.ir[entryExpression.parent].kind == 17) -> if {
+                    entryExpression.kind == 2 -> if {
                         entryExpression -> sourceToken => entryExpressionToken
-                        entryExpressionToken.span.length - UIntSize(2) => entryExpressionLength
+                        TextLiteralRequest { sourceModule: entryExpression.sourceModule, token: entryExpressionToken } -> textLiteralLength => entryExpressionLength
                         "  %v$(entryExpressionIndex!)_ptr = insertvalue %sl.text poison, ptr @sl_str_$(entryExpressionIndex!), 0" -> println
                         "  %v$(entryExpressionIndex!) = insertvalue %sl.text %v$(entryExpressionIndex!)_ptr, i64 $entryExpressionLength, 1" -> println
                     }
                     (entryExpression.kind == 5 and not (entryExpression.typeOrigin == 1 and entryExpression.typeSymbol == 16)) -> if {
                         -1 => entryBindingValueIr!
-                        functionIndex! + 1 => entryBindingValueSearch!
-                        entryBindingValueSearch! < entryEnd! -> while {
-                            (context.ir[entryBindingValueSearch!].kind == 17 and context.ir[entryBindingValueSearch!].symbol == entryExpression.symbol) -> if { entryBindingValueSearch! => entryBindingValueIr! }
-                            entryBindingValueSearch! + 1 => entryBindingValueSearch!
-                        }
+                        (entryExpression.operand0 >= 0 and context.ir[entryExpression.operand0].kind == 17) -> if { entryExpression.operand0 => entryBindingValueIr! }
                         entryBindingValueIr! >= 0 -> if {
                             context.ir[entryBindingValueIr!] => entryBindingValue
                             entryBindingValue.flags == 1 -> if {
                                 entryBindingValueIr! -> mutableBindingRoot => entryBindingRoot
                                 "  %v$(entryExpressionIndex!) = load " -> print
-                                entryExpression -> writeType
+                                entryExpression -> writeIrType
                                 ", ptr %slot$(entryBindingRoot), align " -> print
-                                "$(entryExpression -> storageAlign)" -> println
+                                entryExpression -> storageAlign -> writeDecimalLine
                             } else {
                                 context.ir[entryBindingValue.operand0] => entryBindingOperand
                                 "  %v$(entryExpressionIndex!) = freeze " -> print
-                                entryExpression -> writeType
+                                entryExpression -> writeIrType
                                 " " -> print
                                 (entryBindingOperand.kind == 3 or entryBindingOperand.kind == 4) -> if {
                                     entryBindingOperand -> sourceToken => entryBindingOperandToken
                                     entryBindingOperand.kind == 3 -> if { context.sources[entryBindingOperand.sourceModule] -> slice(entryBindingOperandToken.span.start, entryBindingOperandToken.span.length) -> print } else {
-                                        ((context.sources[entryBindingOperand.sourceModule] -> byte(entryBindingOperandToken.span.start)) == UInt8(116)) -> if { "1" } else { "0" } -> print
+                                        ((context.sources[entryBindingOperand.sourceModule] -> byte(entryBindingOperandToken.span.start)) == UInt8(116)) -> if { "1" -> print } else { "0" -> print }
                                     }
                                 } else { "%v$(entryBindingValue.operand0)" -> print }
                                 "" -> println
@@ -3334,53 +4949,154 @@ emitCore context: move EmitContext -> Unit uses Console {
                             "  %v$(entryExpressionIndex!)" -> print
                             entryExpression.typeSymbol == 2 -> if { "_raw" -> print }
                             " = extractvalue " -> print
-                            entryLengthBase -> writeType
+                            entryLengthBase -> writeIrType
                             " %v$(entryExpression.operand0), " -> print
                             entryLengthBase.typeOrigin == 15 -> if { "2" -> println } else { "1" -> println }
                             entryExpression.typeSymbol == 2 -> if { "  %v$(entryExpressionIndex!) = trunc i64 %v$(entryExpressionIndex!)_raw to i32" -> println }
                         }
                     }
                     (entryExpression.kind == 9 and entryExpression.opcode == -202 and entryExpression.operand0 >= 0 and entryExpression.operand1 >= 0) -> if {
-                        "  %v$(entryExpressionIndex!)_base = extractvalue %sl.text %v$(entryExpression.operand0), 0" -> println
-                        "  %v$(entryExpressionIndex!)_address = getelementptr i8, ptr %v$(entryExpressionIndex!)_base, i64 %v$(entryExpression.operand1)" -> println
+                        context.ir[entryExpression.operand0] => entryByteBase
+                        context.ir[entryExpression.operand1] => entryByteIndex
+                        entryByteIndex.typeSymbol -> integerWidth => entryByteIndexWidth
+                        "  %v$(entryExpressionIndex!)_base = extractvalue " -> print
+                        entryByteBase -> writeTextLikeType
+                        " %v$(entryExpression.operand0), 0" -> println
+                        (entryByteIndexWidth > 0 and entryByteIndexWidth < 64) -> if {
+                            "  %v$(entryExpressionIndex!)_index = " -> print
+                            entryByteIndex -> integerNodeSigned -> if { "sext" -> print } else { "zext" -> print }
+                            " i$(entryByteIndexWidth) %v$(entryExpression.operand1) to i64" -> println
+                        }
+                        "  %v$(entryExpressionIndex!)_address = getelementptr i8, ptr %v$(entryExpressionIndex!)_base, i64 " -> print
+                        (entryByteIndexWidth > 0 and entryByteIndexWidth < 64) -> if { "%v$(entryExpressionIndex!)_index" -> println } else { "%v$(entryExpression.operand1)" -> println }
                         "  %v$(entryExpressionIndex!) = load i8, ptr %v$(entryExpressionIndex!)_address, align 1" -> println
                     }
                     (entryExpression.kind == 9 and entryExpression.opcode == -203 and entryExpression.operand0 >= 0 and entryExpression.operand1 >= 0) -> if {
                         context.ir[entryExpression.operand1].nextOperand => entrySliceLength
-                        "  %v$(entryExpressionIndex!)_base = extractvalue %sl.text %v$(entryExpression.operand0), 0" -> println
-                        "  %v$(entryExpressionIndex!)_start = getelementptr i8, ptr %v$(entryExpressionIndex!)_base, i64 %v$(entryExpression.operand1)" -> println
+                        context.ir[entryExpression.operand0] => entrySliceBase
+                        context.ir[entryExpression.operand1] => entrySliceIndex
+                        entrySliceIndex.typeSymbol -> integerWidth => entrySliceIndexWidth
+                        "  %v$(entryExpressionIndex!)_base = extractvalue " -> print
+                        entrySliceBase -> writeTextLikeType
+                        " %v$(entryExpression.operand0), 0" -> println
+                        (entrySliceIndexWidth > 0 and entrySliceIndexWidth < 64) -> if {
+                            "  %v$(entryExpressionIndex!)_index = " -> print
+                            entrySliceIndex -> integerNodeSigned -> if { "sext" -> print } else { "zext" -> print }
+                            " i$(entrySliceIndexWidth) %v$(entryExpression.operand1) to i64" -> println
+                        }
+                        "  %v$(entryExpressionIndex!)_start = getelementptr i8, ptr %v$(entryExpressionIndex!)_base, i64 " -> print
+                        (entrySliceIndexWidth > 0 and entrySliceIndexWidth < 64) -> if { "%v$(entryExpressionIndex!)_index" -> println } else { "%v$(entryExpression.operand1)" -> println }
                         "  %v$(entryExpressionIndex!)_ptr = insertvalue %sl.text poison, ptr %v$(entryExpressionIndex!)_start, 0" -> println
                         "  %v$(entryExpressionIndex!) = insertvalue %sl.text %v$(entryExpressionIndex!)_ptr, i64 %v$(entrySliceLength), 1" -> println
                     }
+                    (entryExpression.kind == 9 and entryExpression.opcode == -204 and entryExpression.operand0 >= 0 and entryExpression.operand1 >= 0) -> if {
+                        WhileValueRequest { whileIndex: entryExpressionIndex!, ownerIndex: functionIndex!, nodeIndex: 0 } -> emitArrayPush
+                    }
+                    ((entryExpression.kind == 9 or entryExpression.kind == 6) and entryExpression.opcode == -205 and entryExpression.operand0 >= 0) -> if {
+                        "  %v$(entryExpressionIndex!) = call %sl.source_text @sl_runtime_map_text(%sl.text %v$(entryExpression.operand0))" -> println
+                    }
+                    ((entryExpression.kind == 9 or entryExpression.kind == 6) and entryExpression.opcode == -206 and entryExpression.operand0 >= 0) -> if {
+                        "  %v$(entryExpressionIndex!)_data = extractvalue %sl.text %v$(entryExpression.operand0), 0" -> println
+                        "  %v$(entryExpressionIndex!)_length = extractvalue %sl.text %v$(entryExpression.operand0), 1" -> println
+                        "  %v$(entryExpressionIndex!)_value0 = insertvalue %sl.source_text poison, ptr %v$(entryExpressionIndex!)_data, 0" -> println
+                        "  %v$(entryExpressionIndex!)_value1 = insertvalue %sl.source_text %v$(entryExpressionIndex!)_value0, i64 %v$(entryExpressionIndex!)_length, 1" -> println
+                        "  %v$(entryExpressionIndex!)_value2 = insertvalue %sl.source_text %v$(entryExpressionIndex!)_value1, ptr null, 2" -> println
+                        "  %v$(entryExpressionIndex!) = insertvalue %sl.source_text %v$(entryExpressionIndex!)_value2, i64 0, 3" -> println
+                    }
+                    (entryExpression.kind == 14 and (entryExpression.typeOrigin == 13 or entryExpression.typeOrigin == 14 or entryExpression.typeKind == 3)) -> if {
+                        0 => entryArrayLength!
+                        entryExpression.operand0 => entryArrayCountIndex!
+                        entryArrayCountIndex! >= 0 -> while {
+                            entryArrayLength! + 1 => entryArrayLength!
+                            context.ir[entryArrayCountIndex!].nextOperand => entryArrayCountIndex!
+                        }
+                        entryArrayLength! * (entryExpression -> arrayElementSize) => entryArrayByteLength
+                        "  %v$(entryExpressionIndex!)_data = call ptr @malloc(i64 $entryArrayByteLength)" -> println
+                        entryExpression.operand0 => entryArrayElementIndex!
+                        0 => entryArrayElementPosition!
+                        entryArrayElementIndex! >= 0 -> while {
+                            context.ir[entryArrayElementIndex!] => entryArrayElement
+                            "  %v$(entryExpressionIndex!)_ptr$(entryArrayElementPosition!) = getelementptr " -> print
+                            entryExpression -> writeArrayElementType
+                            ", ptr %v$(entryExpressionIndex!)_data, i64 $(entryArrayElementPosition!)" -> println
+                            "  store " -> print
+                            entryExpression -> writeArrayElementType
+                            " " -> print
+                            (entryArrayElement.kind == 3 or entryArrayElement.kind == 4) -> if {
+                                entryArrayElement -> sourceToken => entryArrayElementToken
+                                entryArrayElement.kind == 3 -> if { context.sources[entryArrayElement.sourceModule] -> slice(entryArrayElementToken.span.start, entryArrayElementToken.span.length) -> print } else {
+                                    ((context.sources[entryArrayElement.sourceModule] -> byte(entryArrayElementToken.span.start)) == UInt8(116)) -> if { "1" -> print } else { "0" -> print }
+                                }
+                            } else { "%v$(entryArrayElementIndex!)" -> print }
+                            ", ptr %v$(entryExpressionIndex!)_ptr$(entryArrayElementPosition!), align " -> print
+                            entryExpression -> arrayElementAlign -> writeDecimalLine
+                            entryArrayElement.nextOperand => entryArrayElementIndex!
+                            entryArrayElementPosition! + 1 => entryArrayElementPosition!
+                        }
+                        "  %v$(entryExpressionIndex!)_0 = insertvalue %sl.array.i32 poison, ptr %v$(entryExpressionIndex!)_data, 0" -> println
+                        "  %v$(entryExpressionIndex!)_1 = insertvalue %sl.array.i32 %v$(entryExpressionIndex!)_0, i64 $(entryArrayLength!), 1" -> println
+                        "  %v$(entryExpressionIndex!) = insertvalue %sl.array.i32 %v$(entryExpressionIndex!)_1, i64 $(entryArrayLength!), 2" -> println
+                    }
                     (entryExpression.kind == 17 and entryExpression.flags == 1) -> if {
                         entryExpressionIndex! -> mutableBindingRoot => entryMutableRoot
+                        context.ir[entryMutableRoot] => entryMutableBinding
                         context.ir[entryExpression.operand0] => entryMutableValue
                         "  store " -> print
-                        entryExpression -> writeType
+                        entryMutableBinding -> writeIrType
                         " " -> print
                         (entryMutableValue.kind == 3 or entryMutableValue.kind == 4) -> if {
                             entryMutableValue -> sourceToken => entryMutableToken
                             entryMutableValue.kind == 3 -> if { context.sources[entryMutableValue.sourceModule] -> slice(entryMutableToken.span.start, entryMutableToken.span.length) -> print } else {
-                                ((context.sources[entryMutableValue.sourceModule] -> byte(entryMutableToken.span.start)) == UInt8(116)) -> if { "1" } else { "0" } -> print
+                                ((context.sources[entryMutableValue.sourceModule] -> byte(entryMutableToken.span.start)) == UInt8(116)) -> if { "1" -> print } else { "0" -> print }
                             }
                         } else { "%v$(entryExpression.operand0)" -> print }
                         ", ptr %slot$(entryMutableRoot), align " -> print
-                        "$(entryExpression -> storageAlign)" -> println
+                        entryMutableBinding -> storageAlign -> writeDecimalLine
+                    }
+                    entryExpression.kind == 24 -> if {
+                        WhileValueRequest { whileIndex: entryExpressionIndex!, ownerIndex: functionIndex!, nodeIndex: entryExpressionIndex! } -> emitIndexAssignment
+                    }
+                    entryExpression.kind == 25 -> if {
+                        WhileValueRequest { whileIndex: entryExpressionIndex!, ownerIndex: functionIndex!, nodeIndex: entryExpressionIndex! } -> emitMemberAssignment
                     }
                     entryExpression.kind == 15 -> if {
                         context.ir[entryExpression.operand0] => entryIndexedValue
                         context.ir[entryExpression.operand1] => entryIndexValue
                         (entryIndexedValue.typeOrigin == 1 and entryIndexedValue.typeSymbol == 16) -> if {
+                            entryIndexValue.typeSymbol -> integerWidth => entryArgumentIndexWidth
+                            (entryIndexValue.kind != 3 and entryArgumentIndexWidth > 0 and entryArgumentIndexWidth < 64) -> if {
+                                "  %v$(entryExpressionIndex!)_argument_index = " -> print
+                                entryIndexValue.typeSymbol -> integerSigned -> if { "sext " -> print } else { "zext " -> print }
+                                entryIndexValue -> writeIrType
+                                " %v$(entryExpression.operand1) to i64" -> println
+                            }
                             "  %v$(entryExpressionIndex!) = call %sl.text @sl_argument(i64 " -> print
                             entryIndexValue.kind == 3 -> if {
                                 entryIndexValue -> sourceToken => entryIndexToken
                                 context.sources[entryIndexValue.sourceModule] -> slice(entryIndexToken.span.start, entryIndexToken.span.length) -> print
-                            } else { "%v$(entryExpression.operand1)" -> print }
+                            } else {
+                                (entryArgumentIndexWidth > 0 and entryArgumentIndexWidth < 64) -> if { "%v$(entryExpressionIndex!)_argument_index" -> print } else { "%v$(entryExpression.operand1)" -> print }
+                            }
                             ")" -> println
                         }
                     }
                     (entryExpression.kind == 7 or entryExpression.kind == 8) -> if {
                         context.ir[entryExpression.operand0] => entryLeft
+                        0 => entryBinaryWidth!
+                        false => entryLeftPromoted!
+                        false => entryRightPromoted!
+                        entryExpression.kind == 8 -> if {
+                            context.ir[entryExpression.operand1] => entryRight
+                            0 => entryLeftWidth!
+                            0 => entryRightWidth!
+                            entryLeft.typeOrigin == 1 -> if { entryLeft.typeSymbol -> integerWidth => entryLeftWidth! }
+                            entryRight.typeOrigin == 1 -> if { entryRight.typeSymbol -> integerWidth => entryRightWidth! }
+                            (entryLeftWidth! > 0 and entryRightWidth! > 0) -> if {
+                                entryLeftWidth! > entryRightWidth! -> if { entryLeftWidth! => entryBinaryWidth! } else { entryRightWidth! => entryBinaryWidth! }
+                                IntegerPromotionRequest { expressionIndex: entryExpressionIndex!, operandIndex: entryExpression.operand0, targetWidth: entryBinaryWidth!, ownerIndex: functionIndex!, right: false } -> emitIntegerPromotion => entryLeftPromoted!
+                                IntegerPromotionRequest { expressionIndex: entryExpressionIndex!, operandIndex: entryExpression.operand1, targetWidth: entryBinaryWidth!, ownerIndex: functionIndex!, right: true } -> emitIntegerPromotion => entryRightPromoted!
+                            }
+                        }
                         "" => entryOperation!
                         entryExpression.kind == 7 -> if {
                             entryExpression.opcode == -26 -> if { "xor" => entryOperation! } else { "sub" => entryOperation! }
@@ -3392,23 +5108,24 @@ emitCore context: move EmitContext -> Unit uses Console {
                             entryExpression.opcode == grammar.tokenIdPercent -> if { "srem" => entryOperation! }
                             entryExpression.opcode == grammar.tokenIdEqualEqual -> if { "icmp eq" => entryOperation! }
                             entryExpression.opcode == grammar.tokenIdBangEqual -> if { "icmp ne" => entryOperation! }
-                            entryExpression.opcode == grammar.tokenIdLess -> if { "icmp slt" => entryOperation! }
-                            entryExpression.opcode == grammar.tokenIdLessEqual -> if { "icmp sle" => entryOperation! }
-                            entryExpression.opcode == grammar.tokenIdGreater -> if { "icmp sgt" => entryOperation! }
-                            entryExpression.opcode == grammar.tokenIdGreaterEqual -> if { "icmp sge" => entryOperation! }
+                            (entryExpression.opcode == grammar.tokenIdLess or entryExpression.opcode == grammar.tokenIdLessEqual or entryExpression.opcode == grammar.tokenIdGreater or entryExpression.opcode == grammar.tokenIdGreaterEqual) -> if {
+                                entryExpression -> integerComparisonOperation => entryOperation!
+                            }
                             entryExpression.opcode == -24 -> if { "or" => entryOperation! }
                             entryExpression.opcode == -25 -> if { "and" => entryOperation! }
                         }
                         "  %v$(entryExpressionIndex!) = $(entryOperation!) " -> print
-                        entryLeft -> writeType
+                        entryBinaryWidth! > 0 -> if { "i$(entryBinaryWidth!)" -> print } else { entryLeft -> writeIrType }
                         " " -> print
                         (entryExpression.kind == 7 and entryExpression.opcode != -26) -> if { "0" -> print } else {
                             (entryLeft.kind == 3 or entryLeft.kind == 4) -> if {
                                 entryLeft -> sourceToken => entryLeftToken
                                 entryLeft.kind == 3 -> if { context.sources[entryLeft.sourceModule] -> slice(entryLeftToken.span.start, entryLeftToken.span.length) -> print } else {
-                                    ((context.sources[entryLeft.sourceModule] -> byte(entryLeftToken.span.start)) == UInt8(116)) -> if { "1" } else { "0" } -> print
+                                    ((context.sources[entryLeft.sourceModule] -> byte(entryLeftToken.span.start)) == UInt8(116)) -> if { "1" -> print } else { "0" -> print }
                                 }
-                            } else { "%v$(entryExpression.operand0)" -> print }
+                            } else {
+                                entryLeftPromoted! -> if { "%v$(entryExpressionIndex!)_left_wide" -> print } else { "%v$(entryExpression.operand0)" -> print }
+                            }
                         }
                         ", " -> print
                         entryExpression.kind == 7 -> if {
@@ -3423,17 +5140,19 @@ emitCore context: move EmitContext -> Unit uses Console {
                             (entryRight.kind == 3 or entryRight.kind == 4) -> if {
                                 entryRight -> sourceToken => entryRightToken
                                 entryRight.kind == 3 -> if { context.sources[entryRight.sourceModule] -> slice(entryRightToken.span.start, entryRightToken.span.length) -> println } else {
-                                    ((context.sources[entryRight.sourceModule] -> byte(entryRightToken.span.start)) == UInt8(116)) -> if { "1" } else { "0" } -> println
+                                    ((context.sources[entryRight.sourceModule] -> byte(entryRightToken.span.start)) == UInt8(116)) -> if { "1" -> println } else { "0" -> println }
                                 }
-                            } else { "%v$(entryExpression.operand1)" -> println }
+                            } else {
+                                entryRightPromoted! -> if { "%v$(entryExpressionIndex!)_right_wide" -> println } else { "%v$(entryExpression.operand1)" -> println }
+                            }
                         }
                     }
-                    entryExpression.kind == 6 -> if {
+                    (entryExpression.kind == 6 and entryExpression.opcode != -205) -> if {
                         (entryExpression.symbol == -101 or entryExpression.symbol == -102) -> if {
                             context.ir[entryExpression.operand0] => runtimeArgument
                             runtimeArgument.kind == 2 -> if {
                                 runtimeArgument -> sourceToken => runtimeArgumentToken
-                                Int(runtimeArgumentToken.span.length) - 2 => runtimeArgumentLength
+                                Int(TextLiteralRequest { sourceModule: runtimeArgument.sourceModule, token: runtimeArgumentToken } -> textLiteralLength) => runtimeArgumentLength
                                 runtimeArgument -> sourceInterpolations => entryExpressionInterpolation!
                                 false => hasEntryExpressionInterpolation!
                                 0 => entryExpressionInterpolationSearch!
@@ -3503,7 +5222,10 @@ emitCore context: move EmitContext -> Unit uses Console {
                                                                 entryExpressionLeftValue.kind == 3 -> if {
                                                                     entryExpressionLeftValue -> sourceToken => entryExpressionLeftToken
                                                                     context.sources[entryExpressionLeftValue.sourceModule] -> slice(entryExpressionLeftToken.span.start, entryExpressionLeftToken.span.length) -> print
-                                                                } else { "%v$(context.ir[entryExpressionLeftBinding!].operand0)" -> print }
+                                                                } else {
+                                                                    "%v" -> print
+                                                                    context.ir[entryExpressionLeftBinding!].operand0 -> writeDecimal
+                                                                }
                                                             }
                                                         } else { "%v$(entryExpressionIndex!)_expression$(entryInterpolationNode.operand0)" -> print }
                                                         }
@@ -3529,7 +5251,10 @@ emitCore context: move EmitContext -> Unit uses Console {
                                                                 entryExpressionUnaryValue.kind == 3 -> if {
                                                                     entryExpressionUnaryValue -> sourceToken => entryExpressionUnaryToken
                                                                     context.sources[entryExpressionUnaryValue.sourceModule] -> slice(entryExpressionUnaryToken.span.start, entryExpressionUnaryToken.span.length) -> println
-                                                                } else { "%v$(context.ir[entryExpressionUnaryBinding!].operand0)" -> println }
+                                                                } else {
+                                                                    "%v" -> print
+                                                                    context.ir[entryExpressionUnaryBinding!].operand0 -> writeDecimalLine
+                                                                }
                                                             }
                                                         } else { "%v$(entryExpressionIndex!)_expression$(entryInterpolationNode.operand0)" -> println }
                                                         }
@@ -3553,7 +5278,10 @@ emitCore context: move EmitContext -> Unit uses Console {
                                                                 entryExpressionRightValue.kind == 3 -> if {
                                                                     entryExpressionRightValue -> sourceToken => entryExpressionRightToken
                                                                     context.sources[entryExpressionRightValue.sourceModule] -> slice(entryExpressionRightToken.span.start, entryExpressionRightToken.span.length) -> println
-                                                                } else { "%v$(context.ir[entryExpressionRightBinding!].operand0)" -> println }
+                                                                } else {
+                                                                    "%v" -> print
+                                                                    context.ir[entryExpressionRightBinding!].operand0 -> writeDecimalLine
+                                                                }
                                                             }
                                                         } else { "%v$(entryExpressionIndex!)_expression$(entryInterpolationNode.operand1)" -> println }
                                                         }
@@ -3571,7 +5299,24 @@ emitCore context: move EmitContext -> Unit uses Console {
                                                 }
                                                 entryExpressionRootBinding! >= 0 -> if { context.ir[entryExpressionRootBinding!].typeSymbol => entryExpressionRootTypeSymbol! }
                                             }
-                                            entryExpressionRootTypeSymbol! == 23 -> if { "  call void @sl_runtime_print_i1(i1 " -> print } else { "  call void @sl_runtime_print_i32(i32 " -> print }
+                                            entryExpressionRootTypeSymbol! == 1 -> if {
+                                                "  %v$(entryExpressionIndex!)_expression$(entryExpressionRootSearch!)_text_ptr = extractvalue %sl.text " -> print
+                                                entryExpressionRoot.kind == 1 -> if {
+                                                    "%v" -> print
+                                                    context.ir[entryExpressionRootBinding!].operand0 -> writeDecimal
+                                                } else { "%v$(entryExpressionIndex!)_expression$(entryExpressionRootSearch!)" -> print }
+                                                ", 0" -> println
+                                                "  %v$(entryExpressionIndex!)_expression$(entryExpressionRootSearch!)_text_len = extractvalue %sl.text " -> print
+                                                entryExpressionRoot.kind == 1 -> if {
+                                                    "%v" -> print
+                                                    context.ir[entryExpressionRootBinding!].operand0 -> writeDecimal
+                                                } else { "%v$(entryExpressionIndex!)_expression$(entryExpressionRootSearch!)" -> print }
+                                                ", 1" -> println
+                                                "  call void @sl_runtime_print(ptr %v$(entryExpressionIndex!)_expression$(entryExpressionRootSearch!)_text_ptr, i64 %v$(entryExpressionIndex!)_expression$(entryExpressionRootSearch!)_text_len, i1 false)" -> println
+                                            } else {
+                                            entryExpressionRootTypeSymbol! == 23 -> if { "  call void @sl_runtime_print_i1(i1 " -> print } else {
+                                                (entryExpressionRootTypeSymbol! -> integerWidth) == 64 -> if { "  call void @sl_runtime_print_i64(i64 " -> print } else { "  call void @sl_runtime_print_i32(i32 " -> print }
+                                            }
                                             (entryExpressionRoot.kind == 0 or entryExpressionRoot.kind == 4) -> if {
                                                 entryExpressionRoot.kind == 4 -> if {
                                                     (context.sources[runtimeArgument.sourceModule] -> byte(entryExpressionRoot.payloadStart)) == UInt8(116) -> if { "1" -> print } else { "0" -> print }
@@ -3585,11 +5330,19 @@ emitCore context: move EmitContext -> Unit uses Console {
                                                         entryExpressionRootValue.kind == 4 -> if {
                                                             (context.sources[entryExpressionRootValue.sourceModule] -> byte(entryExpressionRootToken.span.start)) == UInt8(116) -> if { "1" -> print } else { "0" -> print }
                                                         } else { context.sources[entryExpressionRootValue.sourceModule] -> slice(entryExpressionRootToken.span.start, entryExpressionRootToken.span.length) -> print }
-                                                    } else { "%v$(context.ir[entryExpressionRootBinding!].operand0)" -> print }
+                                                    } else {
+                                                        "%v" -> print
+                                                        context.ir[entryExpressionRootBinding!].operand0 -> writeDecimal
+                                                    }
                                                 }
                                             } else { "%v$(entryExpressionIndex!)_expression$(entryExpressionRootSearch!)" -> print }
                                             }
+                                            (entryExpressionRootTypeSymbol! -> integerWidth) == 64 -> if {
+                                                ", i1 " -> print
+                                                entryExpressionRootTypeSymbol! -> integerSigned -> if { "true" -> print } else { "false" -> print }
+                                            }
                                             ", i1 false)" -> println
+                                            }
                                             entryExpressionRoot.expressionStart + entryExpressionRoot.expressionLength + UIntSize(1) => entryExpressionSuffixStart!
                                             entryExpressionSegment! + 1 => entryExpressionSegment!
                                         }
@@ -3601,7 +5354,7 @@ emitCore context: move EmitContext -> Unit uses Console {
                                 } else {
                                 runtimeArgumentToken.span.start + UIntSize(1) => interpolationContentStart
                                 runtimeArgumentToken.span.start + runtimeArgumentToken.span.length - UIntSize(1) => interpolationContentEnd
-                                interpolationContentStart => interpolationSegmentStart!
+                                UIntSize(interpolationContentStart) => interpolationSegmentStart!
                                 0 => interpolationPartIndex!
                                 false => emittedInterpolation!
                                 true => interpolationSegmentsRemain!
@@ -3685,35 +5438,38 @@ emitCore context: move EmitContext -> Unit uses Console {
                             }
                             entryExpression.symbol == -102 -> if { "true)" -> println } else { "false)" -> println }
                         } else {
-                        (entryExpression.targetModule < 0 and entryExpression.typeOrigin == 1 and (entryExpression.typeSymbol == 3 or entryExpression.typeSymbol == 13) and entryExpression.operand0 >= 0) -> if {
-                            context.ir[entryExpression.operand0] => entryUIntSizeArgument
-                            entryExpression.typeSymbol == 3 -> if {
-                                "  %v$(entryExpressionIndex!) = trunc i32 " -> print
-                            } else {
-                            entryUIntSizeArgument.typeSymbol == 13 -> if {
-                                "  %v$(entryExpressionIndex!) = add i64 " -> print
-                            } else {
-                                "  %v$(entryExpressionIndex!) = zext i32 " -> print
+                        (entryExpression.targetModule < 0 and entryExpression.typeOrigin == 1 and (entryExpression.typeSymbol -> integerWidth) > 0 and entryExpression.operand0 >= 0) -> if {
+                            context.ir[entryExpression.operand0] => entryIntegerArgument
+                            entryExpression.typeSymbol -> integerWidth => entryTargetWidth
+                            entryIntegerArgument.typeSymbol -> integerWidth => entryInputWidth
+                            "  %v$(entryExpressionIndex!) = " -> print
+                            entryTargetWidth < entryInputWidth -> if { "trunc " -> print } else {
+                                entryTargetWidth > entryInputWidth -> if {
+                                    entryIntegerArgument -> integerNodeSigned -> if { "sext " -> print } else { "zext " -> print }
+                                } else { "add " -> print }
                             }
-                            }
-                            entryUIntSizeArgument.kind == 3 -> if {
-                                entryUIntSizeArgument -> sourceToken => entryUIntSizeToken
-                                context.sources[entryUIntSizeArgument.sourceModule] -> slice(entryUIntSizeToken.span.start, entryUIntSizeToken.span.length) -> print
+                            entryIntegerArgument -> writeIrType
+                            " " -> print
+                            entryIntegerArgument.kind == 3 -> if {
+                                entryIntegerArgument -> sourceToken => entryIntegerToken
+                                context.sources[entryIntegerArgument.sourceModule] -> slice(entryIntegerToken.span.start, entryIntegerToken.span.length) -> print
                             } else { "%v$(entryExpression.operand0)" -> print }
-                            entryExpression.typeSymbol == 3 -> if { " to i8" -> println } else {
-                                entryUIntSizeArgument.typeSymbol == 13 -> if { ", 0" -> println } else { " to i64" -> println }
+                            entryTargetWidth == entryInputWidth -> if { ", 0" -> println } else {
+                                " to " -> print
+                                entryExpression -> writeIrType
+                                "" -> println
                             }
                         } else {
                         (entryExpression.typeOrigin == 1 and entryExpression.typeSymbol == 0) -> if { "  call " -> print } else { "  %v$(entryExpressionIndex!) = call " -> print }
-                        entryExpression -> writeType
+                        entryExpression -> writeIrType
                         " @sl_m$(entryExpression.targetModule)_s$(entryExpression.symbol)(" -> print
                         entryExpression.operand0 >= 0 -> if {
                             context.ir[entryExpression.operand0] => entryArgument
-                            entryArgument -> writeType
+                            entryArgument -> writeIrType
                             " " -> print
                             entryArgument.kind == 2 -> if {
                                 entryArgument -> sourceToken => entryArgumentToken
-                                Int(entryArgumentToken.span.length) - 2 => entryArgumentLength
+                                Int(TextLiteralRequest { sourceModule: entryArgument.sourceModule, token: entryArgumentToken } -> textLiteralLength) => entryArgumentLength
                                 "{ ptr @sl_str_$(entryExpression.operand0), i64 $entryArgumentLength }" -> print
                             } else {
                             (entryArgument.kind == 3 or entryArgument.kind == 4) -> if {
@@ -3721,7 +5477,7 @@ emitCore context: move EmitContext -> Unit uses Console {
                                 entryArgument.kind == 3 -> if {
                                     context.sources[entryArgument.sourceModule] -> slice(entryArgumentToken.span.start, entryArgumentToken.span.length) -> print
                                 } else {
-                                    ((context.sources[entryArgument.sourceModule] -> byte(entryArgumentToken.span.start)) == UInt8(116)) -> if { "1" } else { "0" } -> print
+                                    ((context.sources[entryArgument.sourceModule] -> byte(entryArgumentToken.span.start)) == UInt8(116)) -> if { "1" -> print } else { "0" -> print }
                                 }
                             } else { "%v$(entryExpression.operand0)" -> print }
                             }
@@ -3735,7 +5491,7 @@ emitCore context: move EmitContext -> Unit uses Console {
                         "  br i1 " -> print
                         entryIfCondition.kind == 4 -> if {
                             entryIfCondition -> sourceToken => entryIfConditionToken
-                            ((context.sources[entryIfCondition.sourceModule] -> byte(entryIfConditionToken.span.start)) == UInt8(116)) -> if { "1" } else { "0" } -> print
+                            ((context.sources[entryIfCondition.sourceModule] -> byte(entryIfConditionToken.span.start)) == UInt8(116)) -> if { "1" -> print } else { "0" -> print }
                         } else { "%v$(entryExpression.operand0)" -> print }
                         entryExpression.nextOperand >= 0 -> if {
                             ", label %if$(entryExpressionIndex!)_then, label %if$(entryExpressionIndex!)_else" -> println
@@ -3757,12 +5513,12 @@ emitCore context: move EmitContext -> Unit uses Console {
                             context.ir[entryThenRegion.operand1] => entryThenValue
                             context.ir[entryElseRegion.operand1] => entryElseValue
                             "  %v$(entryExpressionIndex!) = phi " -> print
-                            entryExpression -> writeType
+                            entryExpression -> writeIrType
                             " [ " -> print
                             (entryThenValue.kind == 3 or entryThenValue.kind == 4) -> if {
                                 entryThenValue -> sourceToken => entryThenValueToken
                                 entryThenValue.kind == 3 -> if { context.sources[entryThenValue.sourceModule] -> slice(entryThenValueToken.span.start, entryThenValueToken.span.length) -> print } else {
-                                    ((context.sources[entryThenValue.sourceModule] -> byte(entryThenValueToken.span.start)) == UInt8(116)) -> if { "1" } else { "0" } -> print
+                                    ((context.sources[entryThenValue.sourceModule] -> byte(entryThenValueToken.span.start)) == UInt8(116)) -> if { "1" -> print } else { "0" -> print }
                                 }
                             } else { "%v$(entryThenRegion.operand1)" -> print }
                             ", %if" -> print
@@ -3771,7 +5527,7 @@ emitCore context: move EmitContext -> Unit uses Console {
                             (entryElseValue.kind == 3 or entryElseValue.kind == 4) -> if {
                                 entryElseValue -> sourceToken => entryElseValueToken
                                 entryElseValue.kind == 3 -> if { context.sources[entryElseValue.sourceModule] -> slice(entryElseValueToken.span.start, entryElseValueToken.span.length) -> print } else {
-                                    ((context.sources[entryElseValue.sourceModule] -> byte(entryElseValueToken.span.start)) == UInt8(116)) -> if { "1" } else { "0" } -> print
+                                    ((context.sources[entryElseValue.sourceModule] -> byte(entryElseValueToken.span.start)) == UInt8(116)) -> if { "1" -> print } else { "0" -> print }
                                 }
                             } else { "%v$(entryElseRegion.operand1)" -> print }
                             ", %if" -> print
@@ -3833,12 +5589,16 @@ usesIntInterpolation context: EmitContext -> Bool {
             interpolationIndex! < interpolationRange.nodeCount -> while {
                 context.interpolations[interpolationRange.nodeStart + interpolationIndex!] => interpolationNode
                 (interpolationNode.sourceToken == argument.payloadToken and interpolationNode.parent < 0) -> if {
-                    interpolationNode.typeSymbol == 2 -> if { true => usesInterpolation! }
+                    (interpolationNode.typeSymbol >= 2 and interpolationNode.typeSymbol <= 14) -> if { true => usesInterpolation! }
+                    # Member result types are resolved against the typed base during
+                    # emission, after interpolation lowering. Keep the integer
+                    # formatter available for either direct or nested members.
+                    interpolationNode.kind == 5 -> if { true => usesInterpolation! }
                     interpolationNode.kind == 1 -> if {
                         0 => valueSearch!
                         valueSearch! < (context.ir -> len) -> while {
                             context.ir[valueSearch!] => valueNode
-                            ((valueNode.kind == 10 or valueNode.kind == 17) and valueNode.sourceModule == argument.sourceModule and valueNode.symbol == interpolationNode.symbol and valueNode.typeSymbol == 2) -> if { true => usesInterpolation! }
+                            ((valueNode.kind == 10 or valueNode.kind == 17) and valueNode.sourceModule == argument.sourceModule and valueNode.symbol == interpolationNode.symbol and valueNode.typeSymbol >= 2 and valueNode.typeSymbol <= 14) -> if { true => usesInterpolation! }
                             valueSearch! + 1 => valueSearch!
                         }
                     }
@@ -3864,6 +5624,9 @@ usesBoolInterpolation context: EmitContext -> Bool {
                 context.interpolations[interpolationRange.nodeStart + interpolationIndex!] => interpolationNode
                 (interpolationNode.sourceToken == argument.payloadToken and interpolationNode.parent < 0) -> if {
                     interpolationNode.typeSymbol == 23 -> if { true => usesInterpolation! }
+                    # See usesIntInterpolation: the concrete member field type is
+                    # known only when the surrounding typed function is emitted.
+                    interpolationNode.kind == 5 -> if { true => usesInterpolation! }
                     interpolationNode.kind == 1 -> if {
                         0 => valueSearch!
                         valueSearch! < (context.ir -> len) -> while {
@@ -3891,6 +5654,42 @@ emitIntTextRuntime: -> Unit uses Console {
       %negative = icmp slt i64 %wide, 0
       %negated = sub i64 0, %wide
       %magnitude = select i1 %negative, i64 %negated, i64 %wide
+      br label %digits
+    digits:
+      %current = phi i64 [ %magnitude, %entry ], [ %quotient, %digits ]
+      %cursor = phi ptr [ %end, %entry ], [ %digit_slot, %digits ]
+      %digit = urem i64 %current, 10
+      %quotient = udiv i64 %current, 10
+      %digit_slot = getelementptr i8, ptr %cursor, i64 -1
+      %digit8 = trunc i64 %digit to i8
+      %ascii = add i8 %digit8, 48
+      store i8 %ascii, ptr %digit_slot, align 1
+      %more = icmp ne i64 %quotient, 0
+      br i1 %more, label %digits, label %digits_done
+    digits_done:
+      br i1 %negative, label %write_sign, label %emit
+    write_sign:
+      %sign_slot = getelementptr i8, ptr %digit_slot, i64 -1
+      store i8 45, ptr %sign_slot, align 1
+      br label %emit
+    emit:
+      %start = phi ptr [ %digit_slot, %digits_done ], [ %sign_slot, %write_sign ]
+      %end_address = ptrtoint ptr %end to i64
+      %start_address = ptrtoint ptr %start to i64
+      %length = sub i64 %end_address, %start_address
+      call void @sl_runtime_print(ptr %start, i64 %length, i1 %newline)
+      ret void
+    }
+    """ -> println
+    """
+    define internal void @sl_runtime_print_i64(i64 %value, i1 %signed, i1 %newline) {
+    entry:
+      %buffer = alloca [21 x i8], align 1
+      %end = getelementptr [21 x i8], ptr %buffer, i64 0, i64 21
+      %negative_value = icmp slt i64 %value, 0
+      %negative = and i1 %signed, %negative_value
+      %negated = sub i64 0, %value
+      %magnitude = select i1 %negative, i64 %negated, i64 %value
       br label %digits
     digits:
       %current = phi i64 [ %magnitude, %entry ], [ %quotient, %digits ]
@@ -4008,7 +5807,20 @@ public emit sources: move [Text; ~] -> Unit uses Console {
     context! -> usesTextRuntime -> if { emitWindowsTextRuntime }
     context! -> usesIntInterpolation -> if { emitIntTextRuntime }
     context! -> usesBoolInterpolation -> if { emitBoolTextRuntime }
+    -1 => runtimeModule!
+    false => hasFileModule!
+    0 => runtimeModuleSearch!
+    runtimeModuleSearch! < (context!.modules -> len) -> while {
+        (context!.modules)[runtimeModuleSearch!] => moduleIdentity
+        moduleIdentity.pathHash == UInt64(12254170256457402476) -> if { moduleIdentity.sourceIndex => runtimeModule! }
+        moduleIdentity.pathHash == UInt64(1560534979202565016) -> if { true => hasFileModule! }
+        runtimeModuleSearch! + 1 => runtimeModuleSearch!
+    }
     context! -> emitCore
+    runtimeModule! >= 0 -> if {
+        runtimeModule! -> llvmRuntime.emitWindows
+        hasFileModule! -> if { llvmRuntime.emitWindowsSourceText }
+    }
 }
 
 public emitLinux sources: move [Text; ~] -> Unit uses Console {
@@ -4037,9 +5849,12 @@ public emitWasm sources: move [Text; ~] -> Unit uses Console {
 
 public emitFiles paths: [Text; ~] -> Unit uses Console, File {
     [file.SourceText; ~] => owners!
-    paths -> each path {
+    0 => pathIndex!
+    pathIndex! < (paths -> len) -> while {
+        paths[pathIndex!] => path
         path -> file.mapText => owner!
         owners! -> push(owner!)
+        pathIndex! + 1 => pathIndex!
     }
     [Text; ~] => sources!
     0 => sourceIndex!
@@ -4055,9 +5870,12 @@ public emitFiles paths: [Text; ~] -> Unit uses Console, File {
 
 public emitLinuxFiles paths: [Text; ~] -> Unit uses Console, File {
     [file.SourceText; ~] => owners!
-    paths -> each path {
+    0 => pathIndex!
+    pathIndex! < (paths -> len) -> while {
+        paths[pathIndex!] => path
         path -> file.mapText => owner!
         owners! -> push(owner!)
+        pathIndex! + 1 => pathIndex!
     }
     [Text; ~] => sources!
     0 => sourceIndex!
@@ -4073,9 +5891,12 @@ public emitLinuxFiles paths: [Text; ~] -> Unit uses Console, File {
 
 public emitWasmFiles paths: [Text; ~] -> Unit uses Console, File {
     [file.SourceText; ~] => owners!
-    paths -> each path {
+    0 => pathIndex!
+    pathIndex! < (paths -> len) -> while {
+        paths[pathIndex!] => path
         path -> file.mapText => owner!
         owners! -> push(owner!)
+        pathIndex! + 1 => pathIndex!
     }
     [Text; ~] => sources!
     0 => sourceIndex!

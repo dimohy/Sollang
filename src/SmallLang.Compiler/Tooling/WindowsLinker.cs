@@ -8,26 +8,18 @@ internal sealed class WindowsLinker(LlvmToolchain toolchain)
 {
     public void LinkLlvmIr(string llPath, string outputPath, string workDir, string? optimizationLevel)
     {
-        var objectPath = Path.Combine(workDir, Path.GetFileNameWithoutExtension(outputPath) + ".obj");
+        var outputName = Path.GetFileNameWithoutExtension(outputPath);
+        var objectPath = Path.Combine(workDir, outputName + ".obj");
         var importLib = CreateKernel32ImportLibrary(workDir);
         var shellImportLib = CreateShell32ImportLibrary(workDir);
         var ucrtImportLib = CreateUcrtBaseImportLibrary(workDir);
 
-        Run(toolchain.Clang,
-        [
-            "-target",
-            "x86_64-pc-windows-msvc",
-            optimizationLevel ?? "-O3",
-            "-fno-addrsig",
-            "-mno-stack-arg-probe",
-            "-c",
-            llPath,
-            "-o",
-            objectPath
-        ]);
+        var objects = optimizationLevel == "-O0"
+            ? CompileSingleModule(llPath, objectPath, "-O0")
+            : CompilePartitioned(llPath, workDir, outputName, optimizationLevel ?? "-O3");
 
-        Run(toolchain.LldLink,
-        [
+        var linkArguments = new List<string>
+        {
             "/nologo",
             "/machine:x64",
             "/subsystem:console",
@@ -40,12 +32,66 @@ internal sealed class WindowsLinker(LlvmToolchain toolchain)
             "/merge:.rdata=.text",
             "/merge:.pdata=.text",
             "/merge:.xdata=.text",
-            objectPath,
-            importLib,
-            shellImportLib,
-            ucrtImportLib,
-            "/out:" + outputPath
+        };
+        linkArguments.AddRange(objects);
+        linkArguments.AddRange([importLib, shellImportLib, ucrtImportLib, "/out:" + outputPath]);
+        Run(toolchain.LldLink, linkArguments);
+    }
+
+    private IReadOnlyList<string> CompileSingleModule(string llPath, string objectPath, string optimizationLevel)
+    {
+        Run(toolchain.Clang,
+        [
+            "-target", "x86_64-pc-windows-msvc", optimizationLevel,
+            "-fno-addrsig", "-mno-stack-arg-probe", "-Werror", "-Wno-override-module",
+            "-c", llPath, "-o", objectPath
         ]);
+        return [objectPath];
+    }
+
+    private IReadOnlyList<string> CompilePartitioned(
+        string llPath,
+        string workDir,
+        string outputName,
+        string optimizationLevel)
+    {
+        var partitionCount = Math.Max(1, Environment.ProcessorCount);
+        var bitcodePath = Path.Combine(workDir, outputName + ".partition-input.bc");
+        var partitionPrefix = Path.Combine(workDir, outputName + ".partition.bc");
+
+        Run(toolchain.Clang,
+        [
+            "-target", "x86_64-pc-windows-msvc", "-O0", "-flto=full", "-emit-llvm",
+            "-Werror", "-Wno-override-module", "-c", llPath, "-o", bitcodePath
+        ]);
+        Run(toolchain.LlvmSplit,
+        [
+            "-j", partitionCount.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            "--round-robin", "-o", partitionPrefix, bitcodePath
+        ]);
+
+        var objectPaths = Enumerable.Range(0, partitionCount)
+            .Select(index => Path.Combine(workDir, $"{outputName}.partition.{index}.obj"))
+            .ToArray();
+        var completed = 0;
+        var progressGate = new object();
+        var tasks = Enumerable.Range(0, partitionCount).Select(index => Task.Run(() =>
+        {
+            var partitionPath = partitionPrefix + index.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            Run(toolchain.Clang,
+            [
+                "-target", "x86_64-pc-windows-msvc", optimizationLevel,
+                "-fno-addrsig", "-mno-stack-arg-probe", "-Werror", "-Wno-override-module",
+                "-x", "ir", "-c", partitionPath, "-o", objectPaths[index]
+            ]);
+            lock (progressGate)
+            {
+                completed++;
+                Console.WriteLine($"[native {completed}/{partitionCount}] optimized partition");
+            }
+        })).ToArray();
+        Task.WhenAll(tasks).GetAwaiter().GetResult();
+        return objectPaths;
     }
 
     private string CreateKernel32ImportLibrary(string workDir)
@@ -88,6 +134,10 @@ internal sealed class WindowsLinker(LlvmToolchain toolchain)
             CreateThread
             CreateEventA
             SetEvent
+            ResetEvent
+            CreateSemaphoreA
+            ReleaseSemaphore
+            GetActiveProcessorCount
             WaitForSingleObject
             """, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
 

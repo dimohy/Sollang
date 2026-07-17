@@ -10,6 +10,8 @@ internal sealed class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
 
     public override bool SupportsAsync => true;
 
+    public override bool SupportsComputePool => true;
+
     public override void EmitGlobals(StringBuilder globals)
     {
         globals.AppendLine("@smalllang_file_writer = internal global ptr null");
@@ -24,6 +26,13 @@ internal sealed class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
             globals.AppendLine("@smalllang_file_request_event = internal global ptr null");
             globals.AppendLine("@smalllang_file_completion_event = internal global ptr null");
             globals.AppendLine("@smalllang_file_worker_handle = internal global ptr null");
+        }
+        if (UsesComputePool)
+        {
+            globals.AppendLine("@smalllang_compute_semaphore = internal global ptr null");
+            globals.AppendLine("@smalllang_compute_completion_event = internal global ptr null");
+            globals.AppendLine("@smalllang_compute_worker_count = internal global i32 0");
+            globals.AppendLine("@smalllang_compute_worker_handles = internal global [64 x ptr] zeroinitializer, align 8");
         }
     }
 
@@ -60,18 +69,28 @@ internal sealed class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
             functions.AppendLine("declare dllimport i32 @CreateProcessW(ptr, ptr, ptr, ptr, i32, i32, ptr, ptr, ptr, ptr)");
             functions.AppendLine("declare dllimport i32 @GetExitCodeProcess(ptr, ptr)");
         }
-        if (UsesProcessRuntime || UsesAsyncFile)
+        if (UsesProcessRuntime || UsesAsyncFile || UsesComputePool)
         {
             functions.AppendLine("declare dllimport i32 @WaitForSingleObject(ptr, i32)");
         }
         functions.AppendLine("declare dllimport i32 @GetEnvironmentVariableW(ptr, ptr, i32)");
         functions.AppendLine("declare dllimport i32 @GetLastError()");
         functions.AppendLine("declare dllimport void @SetLastError(i32)");
-        if (UsesAsyncFile)
+        if (UsesAsyncFile || UsesComputePool)
         {
             functions.AppendLine("declare dllimport ptr @CreateThread(ptr, i64, ptr, ptr, i32, ptr)");
             functions.AppendLine("declare dllimport ptr @CreateEventA(ptr, i32, i32, ptr)");
+        }
+        if (UsesAsyncFile || UsesComputePool)
+        {
             functions.AppendLine("declare dllimport i32 @SetEvent(ptr)");
+        }
+        if (UsesComputePool)
+        {
+            functions.AppendLine("declare dllimport ptr @CreateSemaphoreA(ptr, i32, i32, ptr)");
+            functions.AppendLine("declare dllimport i32 @ReleaseSemaphore(ptr, i32, ptr)");
+            functions.AppendLine("declare dllimport i32 @ResetEvent(ptr)");
+            functions.AppendLine("declare dllimport i32 @GetActiveProcessorCount(i16)");
         }
     }
 
@@ -169,6 +188,212 @@ internal sealed class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
               store ptr null, ptr @smalllang_file_worker_handle, align 8
               store ptr null, ptr @smalllang_file_request_event, align 8
               store ptr null, ptr @smalllang_file_completion_event, align 8
+              ret void
+            }
+
+            """);
+    }
+
+    public override void EmitComputePrimitives(StringBuilder functions)
+    {
+        if (!UsesComputePool)
+        {
+            return;
+        }
+
+        functions.AppendLine("""
+            define internal i32 @smalllang_windows_compute_worker(ptr %unused) #0 {
+            entry:
+              br label %wait
+
+            wait:
+              %semaphore = load ptr, ptr @smalllang_compute_semaphore, align 8
+              %waited = call i32 @WaitForSingleObject(ptr %semaphore, i32 -1)
+              %stopping_value = load atomic i32, ptr @smalllang_compute_stopping acquire, align 4
+              %stopping = icmp ne i32 %stopping_value, 0
+              br i1 %stopping, label %stopped, label %take
+
+            take:
+              %group = load atomic ptr, ptr @smalllang_compute_group_current acquire, align 8
+              %count_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 3
+              %count = load i64, ptr %count_slot, align 8
+              br label %claim
+
+            claim:
+              %index = atomicrmw add ptr @smalllang_compute_next, i64 1 acq_rel
+              %has_work = icmp ult i64 %index, %count
+              br i1 %has_work, label %work, label %complete
+
+            work:
+              %callback_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 0
+              %callback = load ptr, ptr %callback_slot, align 8
+              %running_before = atomicrmw add ptr @smalllang_compute_running, i32 1 acq_rel
+              %running_now = add i32 %running_before, 1
+              %peak_before = atomicrmw max ptr @smalllang_compute_peak, i32 %running_now acq_rel
+              call void %callback(ptr %group, i64 %index)
+              %running_after = atomicrmw sub ptr @smalllang_compute_running, i32 1 acq_rel
+              br label %claim
+
+            complete:
+              %previous = atomicrmw sub ptr @smalllang_compute_active, i32 1 acq_rel
+              %last = icmp eq i32 %previous, 1
+              br i1 %last, label %signal, label %wait
+
+            signal:
+              %event = load ptr, ptr @smalllang_compute_completion_event, align 8
+              %signalled = call i32 @SetEvent(ptr %event)
+              br label %wait
+
+            stopped:
+              ret i32 0
+            }
+
+            define internal i1 @smalllang_compute_start() #0 {
+            entry:
+              %existing = load i32, ptr @smalllang_compute_worker_count, align 4
+              %already = icmp sgt i32 %existing, 0
+              br i1 %already, label %ready, label %create_sync
+
+            create_sync:
+              %semaphore = call ptr @CreateSemaphoreA(ptr null, i32 0, i32 64, ptr null)
+              %semaphore_ok = icmp ne ptr %semaphore, null
+              br i1 %semaphore_ok, label %create_event, label %fail
+
+            create_event:
+              store ptr %semaphore, ptr @smalllang_compute_semaphore, align 8
+              %event = call ptr @CreateEventA(ptr null, i32 1, i32 0, ptr null)
+              %event_ok = icmp ne ptr %event, null
+              br i1 %event_ok, label %count, label %fail
+
+            count:
+              store ptr %event, ptr @smalllang_compute_completion_event, align 8
+              %reported = call i32 @GetActiveProcessorCount(i16 -1)
+              %positive = icmp sgt i32 %reported, 0
+              %at_least_one = select i1 %positive, i32 %reported, i32 1
+              %too_many = icmp sgt i32 %at_least_one, 64
+              %bounded = select i1 %too_many, i32 64, i32 %at_least_one
+              br label %create_workers
+
+            create_workers:
+              %index = phi i32 [ 0, %count ], [ %next, %created ]
+              %done = icmp eq i32 %index, %bounded
+              br i1 %done, label %publish, label %create_one
+
+            create_one:
+              %worker = call ptr @CreateThread(ptr null, i64 0, ptr @smalllang_windows_compute_worker, ptr null, i32 0, ptr null)
+              %worker_ok = icmp ne ptr %worker, null
+              br i1 %worker_ok, label %created, label %publish
+
+            created:
+              %slot = getelementptr [64 x ptr], ptr @smalllang_compute_worker_handles, i32 0, i32 %index
+              store ptr %worker, ptr %slot, align 8
+              %next = add i32 %index, 1
+              br label %create_workers
+
+            publish:
+              %created_count = phi i32 [ %bounded, %create_workers ], [ %index, %create_one ]
+              store i32 %created_count, ptr @smalllang_compute_worker_count, align 4
+              %has_workers = icmp sgt i32 %created_count, 0
+              br i1 %has_workers, label %ready, label %fail
+
+            ready:
+              ret i1 true
+
+            fail:
+              ret i1 false
+            }
+
+            define internal void @smalllang_compute_execute(ptr %group) #0 {
+            entry:
+              %started = call i1 @smalllang_compute_start()
+              br i1 %started, label %submit, label %failed
+
+            submit:
+              %count_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 3
+              %count = load i64, ptr %count_slot, align 8
+              %empty = icmp eq i64 %count, 0
+              br i1 %empty, label %done, label %publish
+
+            publish:
+              store atomic i64 0, ptr @smalllang_compute_next release, align 8
+              store atomic i32 0, ptr @smalllang_compute_peak release, align 4
+              %workers = load i32, ptr @smalllang_compute_worker_count, align 4
+              store atomic i32 %workers, ptr @smalllang_compute_active release, align 4
+              store atomic ptr %group, ptr @smalllang_compute_group_current release, align 8
+              %event = load ptr, ptr @smalllang_compute_completion_event, align 8
+              %reset = call i32 @ResetEvent(ptr %event)
+              %semaphore = load ptr, ptr @smalllang_compute_semaphore, align 8
+              %released = call i32 @ReleaseSemaphore(ptr %semaphore, i32 %workers, ptr null)
+              %waited = call i32 @WaitForSingleObject(ptr %event, i32 -1)
+              store atomic ptr null, ptr @smalllang_compute_group_current release, align 8
+              br label %done
+
+            failed:
+              call void @llvm.trap()
+              unreachable
+
+            done:
+              ret void
+            }
+
+            define internal i32 @smalllang_compute_workers() #0 {
+            entry:
+              %started = call i1 @smalllang_compute_start()
+              br i1 %started, label %read, label %failed
+
+            read:
+              %workers = load i32, ptr @smalllang_compute_worker_count, align 4
+              ret i32 %workers
+
+            failed:
+              ret i32 0
+            }
+
+            define internal i32 @smalllang_compute_peak_workers() #0 {
+            entry:
+              %peak = load atomic i32, ptr @smalllang_compute_peak acquire, align 4
+              ret i32 %peak
+            }
+
+            define internal void @smalllang_compute_shutdown() #0 {
+            entry:
+              %workers = load i32, ptr @smalllang_compute_worker_count, align 4
+              %started = icmp sgt i32 %workers, 0
+              br i1 %started, label %stop, label %done
+
+            stop:
+              store atomic i32 1, ptr @smalllang_compute_stopping release, align 4
+              %semaphore = load ptr, ptr @smalllang_compute_semaphore, align 8
+              %released = call i32 @ReleaseSemaphore(ptr %semaphore, i32 %workers, ptr null)
+              br label %join
+
+            join:
+              %index = phi i32 [ 0, %stop ], [ %next, %joined ]
+              %all_joined = icmp eq i32 %index, %workers
+              br i1 %all_joined, label %cleanup, label %join_one
+
+            join_one:
+              %slot = getelementptr [64 x ptr], ptr @smalllang_compute_worker_handles, i32 0, i32 %index
+              %worker = load ptr, ptr %slot, align 8
+              %waited = call i32 @WaitForSingleObject(ptr %worker, i32 -1)
+              %closed = call i32 @CloseHandle(ptr %worker)
+              store ptr null, ptr %slot, align 8
+              br label %joined
+
+            joined:
+              %next = add i32 %index, 1
+              br label %join
+
+            cleanup:
+              %closed_semaphore = call i32 @CloseHandle(ptr %semaphore)
+              %event = load ptr, ptr @smalllang_compute_completion_event, align 8
+              %closed_event = call i32 @CloseHandle(ptr %event)
+              store ptr null, ptr @smalllang_compute_semaphore, align 8
+              store ptr null, ptr @smalllang_compute_completion_event, align 8
+              store i32 0, ptr @smalllang_compute_worker_count, align 4
+              br label %done
+
+            done:
               ret void
             }
 

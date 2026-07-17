@@ -213,7 +213,7 @@ if (expectedFiles.Any(IsReusableSelfHostCompilerTest))
             "--llvm", llvmDir,
             "-O1"
         ]);
-        var driverBuild = Run("dotnet", driverArguments, input: null, repoRoot);
+        var driverBuild = Run("dotnet", driverArguments, input: null, repoRoot, relayOutput: true);
         if (driverBuild.ExitCode != 0)
         {
             Console.Error.WriteLine("FAIL reusable native slc bootstrap");
@@ -748,7 +748,8 @@ static ProcessResult Run(
     IReadOnlyList<string> args,
     string? input,
     string workingDirectory,
-    IReadOnlyDictionary<string, string>? environment = null)
+    IReadOnlyDictionary<string, string>? environment = null,
+    bool relayOutput = false)
 {
     const int ProcessTimeoutMilliseconds = 5 * 60 * 1000;
     using var process = new Process();
@@ -781,8 +782,12 @@ static ProcessResult Run(
         process.StandardInput.Close();
     }
 
-    var stdoutTask = process.StandardOutput.ReadToEndAsync();
-    var stderrTask = process.StandardError.ReadToEndAsync();
+    var stdoutTask = relayOutput
+        ? ReadAndRelayAsync(process.StandardOutput, Console.Out)
+        : process.StandardOutput.ReadToEndAsync();
+    var stderrTask = relayOutput
+        ? ReadAndRelayAsync(process.StandardError, Console.Error)
+        : process.StandardError.ReadToEndAsync();
     if (!process.WaitForExit(ProcessTimeoutMilliseconds))
     {
         process.Kill(entireProcessTree: true);
@@ -796,6 +801,18 @@ static ProcessResult Run(
 
     Task.WaitAll(stdoutTask, stderrTask);
     return new ProcessResult(process.ExitCode, stdoutTask.Result, stderrTask.Result);
+}
+
+static async Task<string> ReadAndRelayAsync(StreamReader reader, TextWriter writer)
+{
+    var output = new StringBuilder();
+    while (await reader.ReadLineAsync() is { } line)
+    {
+        output.AppendLine(line);
+        await writer.WriteLineAsync(line);
+        await writer.FlushAsync();
+    }
+    return output.ToString();
 }
 
 static string Normalize(string value)

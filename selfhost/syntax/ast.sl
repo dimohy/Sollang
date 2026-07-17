@@ -41,68 +41,74 @@ struct LowerRequest {
 # 44 while flow target, 45 loop control statement,
 # 46 guarded loop control statement, 47 explicit return statement,
 # 48 result-producing block-function call, 49 memory-map expression,
-# 50 effect declaration, 51 effect operation, 52 effect reference.
+# 50 effect declaration, 51 effect operation, 52 effect reference,
+# 53 index assignment, 54 mutable struct member assignment.
 # Function flags: 1 move input, 2 mutable input, 4 public, 8 async.
 # Keyword operator codes use the same
 # -(keywordIndex + 1) representation as syntax diagnostics.
+classifyRule rule: Int -> Int {
+    -1 => kind!
+    rule == grammar.ruleIdSourceFile -> if { 0 => kind! }
+    rule == grammar.ruleIdNamespaceDeclaration -> if { 1 => kind! }
+    rule == grammar.ruleIdImportDeclaration -> if { 2 => kind! }
+    rule == grammar.ruleIdStructDeclaration -> if { 3 => kind! }
+    rule == grammar.ruleIdEnumDeclaration -> if { 4 => kind! }
+    rule == grammar.ruleIdTraitDeclaration -> if { 5 => kind! }
+    rule == grammar.ruleIdImplDeclaration -> if { 6 => kind! }
+    rule == grammar.ruleIdFunctionDeclaration -> if { 7 => kind! }
+    rule == grammar.ruleIdMainBlock -> if { 8 => kind! }
+    rule == grammar.ruleIdBindingStatement -> if { 9 => kind! }
+    rule == grammar.ruleIdFlowExpression -> if { 10 => kind! }
+    rule == grammar.ruleIdControlFlowExpression -> if { 10 => kind! }
+    rule == grammar.ruleIdFlowTargetCall -> if { 11 => kind! }
+    rule == grammar.ruleIdCallExpression -> if { 11 => kind! }
+    rule == grammar.ruleIdTypeApplicationExpression -> if { 11 => kind! }
+    rule == grammar.ruleIdTypeAnnotation -> if { 12 => kind! }
+    rule == grammar.ruleIdStringExpression -> if { 13 => kind! }
+    rule == grammar.ruleIdNumberExpression -> if { 14 => kind! }
+    rule == grammar.ruleIdNameExpression -> if { 15 => kind! }
+    rule == grammar.ruleIdPath -> if { 16 => kind! }
+    rule == grammar.ruleIdFunctionSignature -> if { 17 => kind! }
+    rule == grammar.ruleIdEqualityExpression -> if { 18 => kind! }
+    rule == grammar.ruleIdComparisonExpression -> if { 19 => kind! }
+    rule == grammar.ruleIdAdditiveExpression -> if { 20 => kind! }
+    rule == grammar.ruleIdMultiplicativeExpression -> if { 21 => kind! }
+    rule == grammar.ruleIdUnaryExpression -> if { 22 => kind! }
+    rule == grammar.ruleIdBoxExpression -> if { 23 => kind! }
+    rule == grammar.ruleIdLogicalOrExpression -> if { 24 => kind! }
+    rule == grammar.ruleIdLogicalAndExpression -> if { 25 => kind! }
+    rule == grammar.ruleIdStructFieldDeclaration -> if { 26 => kind! }
+    rule == grammar.ruleIdEnumVariantDeclaration -> if { 27 => kind! }
+    rule == grammar.ruleIdTraitAssociatedTypeDeclaration -> if { 28 => kind! }
+    rule == grammar.ruleIdTraitMethodDeclaration -> if { 29 => kind! }
+    rule == grammar.ruleIdImplAssociatedTypeBinding -> if { 30 => kind! }
+    rule == grammar.ruleIdMethodDeclaration -> if { 31 => kind! }
+    rule == grammar.ruleIdGenericParameterClause -> if { 32 => kind! }
+    rule == grammar.ruleIdGenericWhereClause -> if { 33 => kind! }
+    rule == grammar.ruleIdAssociatedTypeEqualityConstraint -> if { 34 => kind! }
+    rule == grammar.ruleIdPostfixExpression -> if { 36 => kind! }
+    rule == grammar.ruleIdArrayExpression -> if { 37 => kind! }
+    rule == grammar.ruleIdDictionaryExpression -> if { 38 => kind! }
+    rule == grammar.ruleIdStructLiteralExpression -> if { 39 => kind! }
+    rule == grammar.ruleIdStructFieldInitializer -> if { 40 => kind! }
+    rule == grammar.ruleIdIfFlowTarget -> if { 42 => kind! }
+    rule == grammar.ruleIdBlockBody -> if { 43 => kind! }
+    rule == grammar.ruleIdWhileFlowTarget -> if { 44 => kind! }
+    rule == grammar.ruleIdLoopControlStatement -> if { 45 => kind! }
+    rule == grammar.ruleIdGuardLoopControlStatement -> if { 46 => kind! }
+    rule == grammar.ruleIdReturnStatement -> if { 47 => kind! }
+    rule == grammar.ruleIdBlockFunctionCallStatement -> if { 48 => kind! }
+    rule == grammar.ruleIdMapExpression -> if { 49 => kind! }
+    rule == grammar.ruleIdEffectDeclaration -> if { 50 => kind! }
+    rule == grammar.ruleIdEffectOperationDeclaration -> if { 51 => kind! }
+    rule == grammar.ruleIdEffectReference -> if { 52 => kind! }
+    rule == grammar.ruleIdIndexAssignmentStatement -> if { 53 => kind! }
+    rule == grammar.ruleIdFieldAssignmentStatement -> if { 54 => kind! }
+    kind! => selected
+    selected
+}
+
 lowerFrom request: LowerRequest -> [AstNode; ~] {
-    classify rule: Int -> Int => when {
-        rule == grammar.ruleIdSourceFile => 0
-        rule == grammar.ruleIdNamespaceDeclaration => 1
-        rule == grammar.ruleIdImportDeclaration => 2
-        rule == grammar.ruleIdStructDeclaration => 3
-        rule == grammar.ruleIdEnumDeclaration => 4
-        rule == grammar.ruleIdTraitDeclaration => 5
-        rule == grammar.ruleIdImplDeclaration => 6
-        rule == grammar.ruleIdFunctionDeclaration => 7
-        rule == grammar.ruleIdMainBlock => 8
-        rule == grammar.ruleIdBindingStatement => 9
-        rule == grammar.ruleIdFlowExpression => 10
-        rule == grammar.ruleIdControlFlowExpression => 10
-        rule == grammar.ruleIdFlowTargetCall => 11
-        rule == grammar.ruleIdCallExpression => 11
-        rule == grammar.ruleIdTypeApplicationExpression => 11
-        rule == grammar.ruleIdTypeAnnotation => 12
-        rule == grammar.ruleIdStringExpression => 13
-        rule == grammar.ruleIdNumberExpression => 14
-        rule == grammar.ruleIdNameExpression => 15
-        rule == grammar.ruleIdPath => 16
-        rule == grammar.ruleIdFunctionSignature => 17
-        rule == grammar.ruleIdEqualityExpression => 18
-        rule == grammar.ruleIdComparisonExpression => 19
-        rule == grammar.ruleIdAdditiveExpression => 20
-        rule == grammar.ruleIdMultiplicativeExpression => 21
-        rule == grammar.ruleIdUnaryExpression => 22
-        rule == grammar.ruleIdBoxExpression => 23
-        rule == grammar.ruleIdLogicalOrExpression => 24
-        rule == grammar.ruleIdLogicalAndExpression => 25
-        rule == grammar.ruleIdStructFieldDeclaration => 26
-        rule == grammar.ruleIdEnumVariantDeclaration => 27
-        rule == grammar.ruleIdTraitAssociatedTypeDeclaration => 28
-        rule == grammar.ruleIdTraitMethodDeclaration => 29
-        rule == grammar.ruleIdImplAssociatedTypeBinding => 30
-        rule == grammar.ruleIdMethodDeclaration => 31
-        rule == grammar.ruleIdGenericParameterClause => 32
-        rule == grammar.ruleIdGenericWhereClause => 33
-        rule == grammar.ruleIdAssociatedTypeEqualityConstraint => 34
-        rule == grammar.ruleIdPostfixExpression => 36
-        rule == grammar.ruleIdArrayExpression => 37
-        rule == grammar.ruleIdDictionaryExpression => 38
-        rule == grammar.ruleIdStructLiteralExpression => 39
-        rule == grammar.ruleIdStructFieldInitializer => 40
-        rule == grammar.ruleIdIfFlowTarget => 42
-        rule == grammar.ruleIdBlockBody => 43
-        rule == grammar.ruleIdWhileFlowTarget => 44
-        rule == grammar.ruleIdLoopControlStatement => 45
-        rule == grammar.ruleIdGuardLoopControlStatement => 46
-        rule == grammar.ruleIdReturnStatement => 47
-        rule == grammar.ruleIdBlockFunctionCallStatement => 48
-        rule == grammar.ruleIdMapExpression => 49
-        rule == grammar.ruleIdEffectDeclaration => 50
-        rule == grammar.ruleIdEffectOperationDeclaration => 51
-        rule == grammar.ruleIdEffectReference => 52
-        else => -1
-    }
     request.source => source
     cst.BuildRequest {
         source: source
@@ -120,7 +126,7 @@ lowerFrom request: LowerRequest -> [AstNode; ~] {
     green! -> len => greenCount
     cstIndex! < greenCount -> while {
         green![cstIndex!] => node
-        node.ruleId -> classify => astKind!
+        node.ruleId -> classifyRule => astKind!
         (node.ruleId == grammar.ruleIdTypeName and node.parent >= 0 and green![node.parent].ruleId == grammar.ruleIdBlockFunctionBody) -> if {
             12 => astKind!
         }
@@ -692,6 +698,49 @@ lowerFrom request: LowerRequest -> [AstNode; ~] {
                 }
             }
         }
+        declaration!.kind == 53 -> if {
+            declaration!.firstToken => assignmentToken!
+            declaration!.firstToken + declaration!.tokenCount => assignmentEnd!
+            false => afterAssignmentArrow!
+            assignmentToken! < assignmentEnd! -> while {
+                tokens![assignmentToken!].kind == grammar.tokenIdFatArrow -> if {
+                    true => afterAssignmentArrow!
+                } else {
+                    (afterAssignmentArrow! and tokens![assignmentToken!].kind == grammar.tokenIdIdentifier) -> if {
+                        assignmentToken! => declaration!.payloadToken
+                        assignmentEnd! => assignmentToken!
+                    }
+                }
+                assignmentToken! + 1 => assignmentToken!
+            }
+        }
+        declaration!.kind == 54 -> if {
+            -1 => declaration!.payloadToken
+            -1 => declaration!.secondaryToken
+            declaration!.firstToken => fieldAssignmentToken!
+            declaration!.firstToken + declaration!.tokenCount => fieldAssignmentEnd!
+            false => afterFieldAssignmentArrow!
+            false => afterFieldAssignmentDot!
+            fieldAssignmentToken! < fieldAssignmentEnd! -> while {
+                tokens![fieldAssignmentToken!].kind == grammar.tokenIdFatArrow -> if {
+                    true => afterFieldAssignmentArrow!
+                } else {
+                    (afterFieldAssignmentArrow! and declaration!.payloadToken < 0 and tokens![fieldAssignmentToken!].kind == grammar.tokenIdIdentifier) -> if {
+                        fieldAssignmentToken! => declaration!.payloadToken
+                        1 => declaration!.flags
+                    }
+                    (afterFieldAssignmentArrow! and tokens![fieldAssignmentToken!].kind == grammar.tokenIdDot) -> if {
+                        true => afterFieldAssignmentDot!
+                    } else {
+                        (afterFieldAssignmentDot! and tokens![fieldAssignmentToken!].kind == grammar.tokenIdIdentifier) -> if {
+                            fieldAssignmentToken! => declaration!.secondaryToken
+                            fieldAssignmentEnd! => fieldAssignmentToken!
+                        }
+                    }
+                }
+                fieldAssignmentToken! + 1 => fieldAssignmentToken!
+            }
+        }
         declaration!.kind == 32 -> if {
             -1 => firstGenericToken!
             -1 => secondGenericToken!
@@ -752,27 +801,35 @@ lowerFrom request: LowerRequest -> [AstNode; ~] {
 public lowerSource source: file.SourceText -> [AstNode; ~] {
     source -> len => sourceLength
     source -> slice(UIntSize(0), sourceLength) => view
+    grammar.startRule => sourceStartRule
     LowerRequest {
         source: view
-        startRule: grammar.startRule
+        startRule: sourceStartRule
     } -> lowerFrom
 }
 
 public lowerSourceExpression source: file.SourceText -> [AstNode; ~] {
     source -> len => sourceLength
     source -> slice(UIntSize(0), sourceLength) => view
+    grammar.ruleIdExpression => expressionStartRule
     LowerRequest {
         source: view
-        startRule: grammar.ruleIdExpression
+        startRule: expressionStartRule
     } -> lowerFrom
 }
 
 public lower source: Text -> [AstNode; ~] {
-    source -> file.borrowText => borrowed!
-    borrowed! -> lowerSource
+    grammar.startRule => sourceStartRule
+    LowerRequest {
+        source: source
+        startRule: sourceStartRule
+    } -> lowerFrom
 }
 
 public lowerExpression source: Text -> [AstNode; ~] {
-    source -> file.borrowText => borrowed!
-    borrowed! -> lowerSourceExpression
+    grammar.ruleIdExpression => expressionStartRule
+    LowerRequest {
+        source: source
+        startRule: expressionStartRule
+    } -> lowerFrom
 }

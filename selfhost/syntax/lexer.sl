@@ -4,7 +4,7 @@ import smalllang.compiler.syntax as syntax
 import syntax.generated.smalllang as grammar
 import sys.file as file
 
-public lexSource source: file.SourceText -> [syntax.SyntaxToken; ~] {
+lexText source: Text -> [syntax.SyntaxToken; ~] {
     isDigit value: UInt8 -> Bool {
         value >= UInt8(48) and value <= UInt8(57)
     }
@@ -19,39 +19,43 @@ public lexSource source: file.SourceText -> [syntax.SyntaxToken; ~] {
     isHorizontalWhitespace value: UInt8 -> Bool {
         value == UInt8(32) or value == UInt8(9) or value == UInt8(13)
     }
-    pairKind value: UInt16 -> Int => when {
-        value == UInt16(11822) => grammar.tokenIdRange
-        value == UInt16(11582) => grammar.tokenIdArrow
-        value == UInt16(15678) => grammar.tokenIdFatArrow
-        value == UInt16(15677) => grammar.tokenIdEqualEqual
-        value == UInt16(8509) => grammar.tokenIdBangEqual
-        value == UInt16(15421) => grammar.tokenIdLessEqual
-        value == UInt16(15933) => grammar.tokenIdGreaterEqual
-        else => -1
+    pairKind value: UInt16 -> Int {
+        -1 => kind!
+        value == UInt16(11822) -> if { grammar.tokenIdRange => kind! }
+        value == UInt16(11582) -> if { grammar.tokenIdArrow => kind! }
+        value == UInt16(15678) -> if { grammar.tokenIdFatArrow => kind! }
+        value == UInt16(15677) -> if { grammar.tokenIdEqualEqual => kind! }
+        value == UInt16(8509) -> if { grammar.tokenIdBangEqual => kind! }
+        value == UInt16(15421) -> if { grammar.tokenIdLessEqual => kind! }
+        value == UInt16(15933) -> if { grammar.tokenIdGreaterEqual => kind! }
+        kind! => result
+        result
     }
-    singleKind value: UInt8 -> Int => when {
-        value == UInt8(123) => grammar.tokenIdLeftBrace
-        value == UInt8(125) => grammar.tokenIdRightBrace
-        value == UInt8(91) => grammar.tokenIdLeftBracket
-        value == UInt8(93) => grammar.tokenIdRightBracket
-        value == UInt8(40) => grammar.tokenIdLeftParen
-        value == UInt8(41) => grammar.tokenIdRightParen
-        value == UInt8(126) => grammar.tokenIdTilde
-        value == UInt8(46) => grammar.tokenIdDot
-        value == UInt8(44) => grammar.tokenIdComma
-        value == UInt8(59) => grammar.tokenIdSemicolon
-        value == UInt8(43) => grammar.tokenIdPlus
-        value == UInt8(45) => grammar.tokenIdMinus
-        value == UInt8(42) => grammar.tokenIdStar
-        value == UInt8(47) => grammar.tokenIdSlash
-        value == UInt8(37) => grammar.tokenIdPercent
-        value == UInt8(63) => grammar.tokenIdQuestion
-        value == UInt8(58) => grammar.tokenIdColon
-        value == UInt8(33) => grammar.tokenIdBang
-        value == UInt8(60) => grammar.tokenIdLess
-        value == UInt8(62) => grammar.tokenIdGreater
-        value == UInt8(61) => grammar.tokenIdEqual
-        else => -1
+    singleKind value: UInt8 -> Int {
+        -1 => kind!
+        value == UInt8(123) -> if { grammar.tokenIdLeftBrace => kind! }
+        value == UInt8(125) -> if { grammar.tokenIdRightBrace => kind! }
+        value == UInt8(91) -> if { grammar.tokenIdLeftBracket => kind! }
+        value == UInt8(93) -> if { grammar.tokenIdRightBracket => kind! }
+        value == UInt8(40) -> if { grammar.tokenIdLeftParen => kind! }
+        value == UInt8(41) -> if { grammar.tokenIdRightParen => kind! }
+        value == UInt8(126) -> if { grammar.tokenIdTilde => kind! }
+        value == UInt8(46) -> if { grammar.tokenIdDot => kind! }
+        value == UInt8(44) -> if { grammar.tokenIdComma => kind! }
+        value == UInt8(59) -> if { grammar.tokenIdSemicolon => kind! }
+        value == UInt8(43) -> if { grammar.tokenIdPlus => kind! }
+        value == UInt8(45) -> if { grammar.tokenIdMinus => kind! }
+        value == UInt8(42) -> if { grammar.tokenIdStar => kind! }
+        value == UInt8(47) -> if { grammar.tokenIdSlash => kind! }
+        value == UInt8(37) -> if { grammar.tokenIdPercent => kind! }
+        value == UInt8(63) -> if { grammar.tokenIdQuestion => kind! }
+        value == UInt8(58) -> if { grammar.tokenIdColon => kind! }
+        value == UInt8(33) -> if { grammar.tokenIdBang => kind! }
+        value == UInt8(60) -> if { grammar.tokenIdLess => kind! }
+        value == UInt8(62) -> if { grammar.tokenIdGreater => kind! }
+        value == UInt8(61) -> if { grammar.tokenIdEqual => kind! }
+        kind! => result
+        result
     }
     [syntax.SyntaxToken; ~] => tokens!
     UIntSize(0) => position!
@@ -195,7 +199,12 @@ public lexSource source: file.SourceText -> [syntax.SyntaxToken; ~] {
     tokens!
 }
 
+public lexSource source: file.SourceText -> [syntax.SyntaxToken; ~] {
+    source -> len => sourceLength
+    source -> slice(UIntSize(0), sourceLength) => view
+    view -> lexText
+}
+
 public lex source: Text -> [syntax.SyntaxToken; ~] {
-    source -> file.borrowText => borrowed!
-    borrowed! -> lexSource
+    source -> lexText
 }

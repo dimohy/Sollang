@@ -11,6 +11,7 @@ import syntax.generated.smalllang as grammar
 
 public struct CallResolution {
     callAst: Int
+    nameToken: Int
     functionSymbol: Int
     status: Int
 }
@@ -55,33 +56,22 @@ tokenNameIs request: TokenNameRequest -> Bool {
 # Negative symbols are stable built-in aliases used before stdlib-qualified
 # resolution. -101/-102 are retained for typed-IR compatibility.
 runtimeFunctionSymbol request: RuntimeNameRequest -> Int {
-    TokenNameRequest { source: request.source, token: request.token, expected: "print" } -> tokenNameIs -> if { -101 } else {
-    TokenNameRequest { source: request.source, token: request.token, expected: "println" } -> tokenNameIs -> if { -102 } else {
-    TokenNameRequest { source: request.source, token: request.token, expected: "readInt" } -> tokenNameIs -> if { -103 } else {
-    TokenNameRequest { source: request.source, token: request.token, expected: "seedRandom" } -> tokenNameIs -> if { -104 } else {
-    TokenNameRequest { source: request.source, token: request.token, expected: "randomBelow" } -> tokenNameIs -> if { -105 } else {
-    TokenNameRequest { source: request.source, token: request.token, expected: "openIntWriter" } -> tokenNameIs -> if { -106 } else {
-    TokenNameRequest { source: request.source, token: request.token, expected: "writeInt" } -> tokenNameIs -> if { -107 } else {
-    TokenNameRequest { source: request.source, token: request.token, expected: "closeIntWriter" } -> tokenNameIs -> if { -108 } else {
-    TokenNameRequest { source: request.source, token: request.token, expected: "openIntReader" } -> tokenNameIs -> if { -109 } else {
-    TokenNameRequest { source: request.source, token: request.token, expected: "closestInt" } -> tokenNameIs -> if { -110 } else {
-    TokenNameRequest { source: request.source, token: request.token, expected: "closeIntReader" } -> tokenNameIs -> if { -111 } else {
-    TokenNameRequest { source: request.source, token: request.token, expected: "nowMillis" } -> tokenNameIs -> if { -112 } else {
-    TokenNameRequest { source: request.source, token: request.token, expected: "sleep" } -> tokenNameIs -> if { -113 } else {
-    TokenNameRequest { source: request.source, token: request.token, expected: "flush" } -> tokenNameIs -> if { -114 } else { -1 }
-    }
-    }
-    }
-    }
-    }
-    }
-    }
-    }
-    }
-    }
-    }
-    }
-    }
+    -1 => runtimeSymbol!
+    TokenNameRequest { source: request.source, token: request.token, expected: "print" } -> tokenNameIs -> if { -101 => runtimeSymbol! }
+    TokenNameRequest { source: request.source, token: request.token, expected: "println" } -> tokenNameIs -> if { -102 => runtimeSymbol! }
+    TokenNameRequest { source: request.source, token: request.token, expected: "readInt" } -> tokenNameIs -> if { -103 => runtimeSymbol! }
+    TokenNameRequest { source: request.source, token: request.token, expected: "seedRandom" } -> tokenNameIs -> if { -104 => runtimeSymbol! }
+    TokenNameRequest { source: request.source, token: request.token, expected: "randomBelow" } -> tokenNameIs -> if { -105 => runtimeSymbol! }
+    TokenNameRequest { source: request.source, token: request.token, expected: "openIntWriter" } -> tokenNameIs -> if { -106 => runtimeSymbol! }
+    TokenNameRequest { source: request.source, token: request.token, expected: "writeInt" } -> tokenNameIs -> if { -107 => runtimeSymbol! }
+    TokenNameRequest { source: request.source, token: request.token, expected: "closeIntWriter" } -> tokenNameIs -> if { -108 => runtimeSymbol! }
+    TokenNameRequest { source: request.source, token: request.token, expected: "openIntReader" } -> tokenNameIs -> if { -109 => runtimeSymbol! }
+    TokenNameRequest { source: request.source, token: request.token, expected: "closestInt" } -> tokenNameIs -> if { -110 => runtimeSymbol! }
+    TokenNameRequest { source: request.source, token: request.token, expected: "closeIntReader" } -> tokenNameIs -> if { -111 => runtimeSymbol! }
+    TokenNameRequest { source: request.source, token: request.token, expected: "nowMillis" } -> tokenNameIs -> if { -112 => runtimeSymbol! }
+    TokenNameRequest { source: request.source, token: request.token, expected: "sleep" } -> tokenNameIs -> if { -113 => runtimeSymbol! }
+    TokenNameRequest { source: request.source, token: request.token, expected: "flush" } -> tokenNameIs -> if { -114 => runtimeSymbol! }
+    runtimeSymbol!
 }
 
 # Status 0 is a resolved local function and 2 is an unresolved call target.
@@ -169,10 +159,13 @@ public resolve source: Text -> [CallResolution; ~] {
                 symbolIndex! + 1 => symbolIndex!
             }
             ((node.kind == 10 and hasQualifiedFlowTarget!) or node.kind == 11 or node.kind == 48 or functionSymbol! >= 0) -> if {
+                2 => callStatus!
+                functionSymbol! >= 0 -> if { 0 => callStatus! }
                 resolved! -> push(CallResolution {
                     callAst: astIndex!
+                    nameToken: callNameToken!
                     functionSymbol: functionSymbol!
-                    status: functionSymbol! >= 0 -> if { 0 } else { 2 }
+                    status: callStatus!
                 })
             }
             }
@@ -186,9 +179,19 @@ public resolve source: Text -> [CallResolution; ~] {
 # qualified lookup: 0 public, 2 missing/non-function, 3 non-public.
 public resolveModulesPrepared request: move ModuleCallRequest -> [ModuleCallResolution; ~] {
     [modules.ModuleIdentity; ~] => identities!
-    request.modules -> each identity { identities! -> push(identity) }
+    0 => identityCopyIndex180!
+    identityCopyIndex180! < (request.modules -> len) -> while {
+        request.modules[identityCopyIndex180!] => identity
+        identities! -> push(identity)
+        identityCopyIndex180! + 1 => identityCopyIndex180!
+    }
     [qualified.QualifiedResolution; ~] => qualifiedResults!
-    request.qualified -> each qualifiedResult { qualifiedResults! -> push(qualifiedResult) }
+    0 => qualifiedResultCopyIndex182!
+    qualifiedResultCopyIndex182! < (request.qualified -> len) -> while {
+        request.qualified[qualifiedResultCopyIndex182!] => qualifiedResult
+        qualifiedResults! -> push(qualifiedResult)
+        qualifiedResultCopyIndex182! + 1 => qualifiedResultCopyIndex182!
+    }
     request.sources => sources
     [ModuleCallResolution; ~] => results!
     0 => sourceIndex!
@@ -281,10 +284,13 @@ public resolveModulesPrepared request: move ModuleCallRequest -> [ModuleCallReso
                     runtimeSymbol < -1 -> if { runtimeSymbol => localFunctionSymbol! }
                 }
                 ((callNode.kind == 10 and moduleHasQualifiedFlowTarget!) or callNode.kind == 11 or callNode.kind == 48 or localFunctionSymbol! != -1) -> if {
+                    2 => localCallStatus!
+                    localFunctionSymbol! != -1 -> if { 0 => localCallStatus! }
                     localCalls! -> push(CallResolution {
                         callAst: callAstIndex!
+                        nameToken: callNameToken!
                         functionSymbol: localFunctionSymbol!
-                        status: localFunctionSymbol! != -1 -> if { 0 } else { 2 }
+                        status: localCallStatus!
                     })
                 }
                 }
@@ -322,10 +328,15 @@ public resolveModulesPrepared request: move ModuleCallRequest -> [ModuleCallReso
                         }
                     }
                     nodes![candidate.pathAst] => candidatePath
-                    (belongsToCall! and candidatePath.firstToken + candidatePath.tokenCount <= callLeftParenToken!) -> if { qualifiedIndex! => importedIndex! }
+                    (belongsToCall! and candidatePath.firstToken <= local.nameToken and local.nameToken < candidatePath.firstToken + candidatePath.tokenCount and candidatePath.firstToken + candidatePath.tokenCount <= callLeftParenToken!) -> if { qualifiedIndex! => importedIndex! }
                 }
                 qualifiedIndex! + 1 => qualifiedIndex!
             }
+            0 => resolvedOrigin!
+            sourceIndex! => resolvedTargetModule!
+            sourceIndex! => resolvedTargetSource!
+            local.functionSymbol => resolvedFunctionSymbol!
+            local.status => resolvedStatus!
             importedIndex! >= 0 -> if {
                 qualifiedResults![importedIndex!] => imported
                 identities![imported.targetModule].sourceIndex => targetSourceModule
@@ -334,27 +345,27 @@ public resolveModulesPrepared request: move ModuleCallRequest -> [ModuleCallReso
                     sources[targetSourceModule] -> symbols.collect => targetSymbols!
                     targetSymbols![imported.targetSymbol].kind != 7 -> if { 2 => importedStatus! }
                 }
-                results! -> push(ModuleCallResolution {
-                    sourceModule: sourceIndex!
-                    callAst: local.callAst
-                    origin: 1
-                    targetModule: imported.targetModule
-                    targetSourceModule: targetSourceModule
-                    functionSymbol: imported.targetSymbol
-                    status: importedStatus!
-                })
+                1 => resolvedOrigin!
+                imported.targetModule => resolvedTargetModule!
+                targetSourceModule => resolvedTargetSource!
+                imported.targetSymbol => resolvedFunctionSymbol!
+                importedStatus! => resolvedStatus!
             } else {
                 local.functionSymbol < -1 => runtimeCall
-                results! -> push(ModuleCallResolution {
-                    sourceModule: sourceIndex!
-                    callAst: local.callAst
-                    origin: runtimeCall -> if { 2 } else { 0 }
-                    targetModule: sourceIndex!
-                    targetSourceModule: runtimeCall -> if { -1 } else { sourceIndex! }
-                    functionSymbol: local.functionSymbol
-                    status: local.status
-                })
+                runtimeCall -> if {
+                    2 => resolvedOrigin!
+                    -1 => resolvedTargetSource!
+                }
             }
+            results! -> push(ModuleCallResolution {
+                sourceModule: sourceIndex!
+                callAst: local.callAst
+                origin: resolvedOrigin!
+                targetModule: resolvedTargetModule!
+                targetSourceModule: resolvedTargetSource!
+                functionSymbol: resolvedFunctionSymbol!
+                status: resolvedStatus!
+            })
             localIndex! + 1 => localIndex!
         }
         sourceIndex! + 1 => sourceIndex!
@@ -366,7 +377,12 @@ public resolveModules sources: [Text; ~] -> [ModuleCallResolution; ~] {
     sources -> modules.identities => identities!
     sources -> qualified.resolve => qualifiedResults!
     [Text; ~] => preparedSources!
-    sources -> each preparedSource { preparedSources! -> push(preparedSource) }
+    0 => preparedSourceCopyIndex367!
+    preparedSourceCopyIndex367! < (sources -> len) -> while {
+        sources[preparedSourceCopyIndex367!] => preparedSource
+        preparedSources! -> push(preparedSource)
+        preparedSourceCopyIndex367! + 1 => preparedSourceCopyIndex367!
+    }
     ModuleCallRequest {
         sources: preparedSources!
         modules: identities!
@@ -382,7 +398,8 @@ public resolveModulesAnalyzed package: analysis.PackageAnalysis -> [ModuleCallRe
     [ModuleCallResolution; ~] => results!
     0 => sourceIndex!
     sourceIndex! < (package.sources -> len) -> while {
-        package.sources[sourceIndex!] => source
+        package.sources[sourceIndex!] -> len => sourceLength
+        package.sources[sourceIndex!] -> slice(UIntSize(0), sourceLength) => source
         package.ranges[sourceIndex!] => sourceRange
         [CallResolution; ~] => localCalls!
         0 => callAstIndex!
@@ -470,10 +487,13 @@ public resolveModulesAnalyzed package: analysis.PackageAnalysis -> [ModuleCallRe
                     runtimeSymbol < -1 -> if { runtimeSymbol => localFunctionSymbol! }
                 }
                 ((callNode.kind == 10 and moduleHasQualifiedFlowTarget!) or callNode.kind == 11 or callNode.kind == 48 or localFunctionSymbol! != -1) -> if {
+                    2 => localCallStatus!
+                    localFunctionSymbol! != -1 -> if { 0 => localCallStatus! }
                     localCalls! -> push(CallResolution {
                         callAst: callAstIndex!
+                        nameToken: callNameToken!
                         functionSymbol: localFunctionSymbol!
-                        status: localFunctionSymbol! != -1 -> if { 0 } else { 2 }
+                        status: localCallStatus!
                     })
                 }
                 }
@@ -511,10 +531,15 @@ public resolveModulesAnalyzed package: analysis.PackageAnalysis -> [ModuleCallRe
                         }
                     }
                     package.nodes[sourceRange.astStart + candidate.pathAst] => candidatePath
-                    (belongsToCall! and candidatePath.firstToken + candidatePath.tokenCount <= callLeftParenToken!) -> if { qualifiedIndex! => importedIndex! }
+                    (belongsToCall! and candidatePath.firstToken <= local.nameToken and local.nameToken < candidatePath.firstToken + candidatePath.tokenCount and candidatePath.firstToken + candidatePath.tokenCount <= callLeftParenToken!) -> if { qualifiedIndex! => importedIndex! }
                 }
                 qualifiedIndex! + 1 => qualifiedIndex!
             }
+            0 => resolvedOrigin!
+            sourceIndex! => resolvedTargetModule!
+            sourceIndex! => resolvedTargetSource!
+            local.functionSymbol => resolvedFunctionSymbol!
+            local.status => resolvedStatus!
             importedIndex! >= 0 -> if {
                 qualifiedResults![importedIndex!] => imported
                 identities![imported.targetModule].sourceIndex => targetSourceModule
@@ -523,27 +548,27 @@ public resolveModulesAnalyzed package: analysis.PackageAnalysis -> [ModuleCallRe
                     package.ranges[targetSourceModule] => targetRange
                     package.symbols[targetRange.symbolStart + imported.targetSymbol].kind != 7 -> if { 2 => importedStatus! }
                 }
-                results! -> push(ModuleCallResolution {
-                    sourceModule: sourceIndex!
-                    callAst: local.callAst
-                    origin: 1
-                    targetModule: imported.targetModule
-                    targetSourceModule: targetSourceModule
-                    functionSymbol: imported.targetSymbol
-                    status: importedStatus!
-                })
+                1 => resolvedOrigin!
+                imported.targetModule => resolvedTargetModule!
+                targetSourceModule => resolvedTargetSource!
+                imported.targetSymbol => resolvedFunctionSymbol!
+                importedStatus! => resolvedStatus!
             } else {
                 local.functionSymbol < -1 => runtimeCall
-                results! -> push(ModuleCallResolution {
-                    sourceModule: sourceIndex!
-                    callAst: local.callAst
-                    origin: runtimeCall -> if { 2 } else { 0 }
-                    targetModule: sourceIndex!
-                    targetSourceModule: runtimeCall -> if { -1 } else { sourceIndex! }
-                    functionSymbol: local.functionSymbol
-                    status: local.status
-                })
+                runtimeCall -> if {
+                    2 => resolvedOrigin!
+                    -1 => resolvedTargetSource!
+                }
             }
+            results! -> push(ModuleCallResolution {
+                sourceModule: sourceIndex!
+                callAst: local.callAst
+                origin: resolvedOrigin!
+                targetModule: resolvedTargetModule!
+                targetSourceModule: resolvedTargetSource!
+                functionSymbol: resolvedFunctionSymbol!
+                status: resolvedStatus!
+            })
             localIndex! + 1 => localIndex!
         }
         sourceIndex! + 1 => sourceIndex!

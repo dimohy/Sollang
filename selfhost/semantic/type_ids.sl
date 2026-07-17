@@ -48,6 +48,20 @@ public struct SemanticTypeSet {
     fields: [NominalField; ~]
 }
 
+struct SpanNameRequest {
+    source: Text
+    start: UIntSize
+    length: UIntSize
+    expected: Text
+}
+
+public struct IntrinsicNominalRequest {
+    package: analysis.PackageAnalysis
+    identities: [modules.ModuleIdentity; ~]
+    targetModule: Int
+    targetSymbol: Int
+}
+
 public struct SpecializationRequest {
     types: [SemanticType; ~]
     inputTemplate: Int
@@ -66,20 +80,58 @@ public struct TypeClassificationRequest {
     fields: [NominalField; ~]
 }
 
+spanNameIs request: SpanNameRequest -> Bool {
+    request.length == (request.expected -> len) => equal!
+    UIntSize(0) => byteIndex!
+    (equal! and byteIndex! < request.length) -> while {
+        (request.source -> byte(request.start + byteIndex!)) != (request.expected -> byte(byteIndex!)) -> if { false => equal! }
+        byteIndex! + UIntSize(1) => byteIndex!
+    }
+    equal!
+}
+
+public intrinsicNominalSymbol request: IntrinsicNominalRequest -> Int {
+    "sys.file" => fileNamespace
+    "SourceText" => sourceTextName
+    request.identities[request.targetModule] => identity
+    request.package.sources[identity.sourceIndex] -> len => sourceLength
+    request.package.sources[identity.sourceIndex] -> slice(UIntSize(0), sourceLength) => source
+    request.package.ranges[identity.sourceIndex] => sourceRange
+    request.package.symbols[sourceRange.symbolStart + request.targetSymbol] => symbol
+    request.package.tokens[sourceRange.tokenStart + symbol.nameToken] => name
+    (SpanNameRequest { source: source, start: identity.pathStart, length: identity.pathLength, expected: fileNamespace } -> spanNameIs) -> if {
+        (SpanNameRequest { source: source, start: name.span.start, length: name.span.length, expected: sourceTextName } -> spanNameIs) -> if { 24 } else { -1 }
+    } else { -1 }
+}
+
 # Canonical ownership traits derived from the recursive type arena.
 # Bit 0 means the value owns destruction responsibility. Bit 1 means that
 # responsibility reaches heap-backed storage. Child IDs always precede their
 # parents, so fixed arrays and nominal applications are classified bottom-up.
 public classify request: TypeClassificationRequest -> [Int; ~] {
     [SemanticType; ~] => types!
-    request.types -> each currentType { types! -> push(currentType) }
+    0 => copyTypeIndex!
+    copyTypeIndex! < (request.types -> len) -> while {
+        types! -> push(request.types[copyTypeIndex!])
+        copyTypeIndex! + 1 => copyTypeIndex!
+    }
     [NominalField; ~] => fields!
-    request.fields -> each currentField { fields! -> push(currentField) }
+    0 => copyFieldIndex!
+    copyFieldIndex! < (request.fields -> len) -> while {
+        fields! -> push(request.fields[copyFieldIndex!])
+        copyFieldIndex! + 1 => copyFieldIndex!
+    }
     [Int; ~] => traits!
-    types! -> each current {
+    0 => seedTypeIndex!
+    seedTypeIndex! < (types! -> len) -> while {
+        types![seedTypeIndex!] => current
         false => owns!
         false => reachesHeap!
         (current.kind == 3 or current.kind == 5 or current.kind == 6) -> if {
+            true => owns!
+            true => reachesHeap!
+        }
+        (current.kind == 1 and current.origin == 1 and current.symbol == 24) -> if {
             true => owns!
             true => reachesHeap!
         }
@@ -100,6 +152,7 @@ public classify request: TypeClassificationRequest -> [Int; ~] {
         owns! -> if { value! + 1 => value! }
         reachesHeap! -> if { value! + 2 => value! }
         traits! -> push(value!)
+        seedTypeIndex! + 1 => seedTypeIndex!
     }
     true => changed!
     changed! -> while {
@@ -150,7 +203,7 @@ public resolve sources: [Text; ~] -> SemanticTypeSet {
 }
 
 public resolveAnalyzed package: analysis.PackageAnalysis -> SemanticTypeSet {
-    ["Unit", "Text", "Int", "Int8", "Int16", "Int32", "Int64", "Long", "UInt8", "UInt16", "UInt32", "UInt64", "Size", "UIntSize", "CodePoint", "Arena", "Arguments", "MappedBytes", "MutableMappedBytes", "Float", "Float32", "Float64", "Double", "Bool", ~] => builtinNames!
+    ["Unit", "Text", "Int", "Int8", "Int16", "Int32", "Int64", "Long", "UInt8", "UInt16", "UInt32", "UInt64", "Size", "UIntSize", "CodePoint", "Arena", "Arguments", "MappedBytes", "MutableMappedBytes", "Float", "Float32", "Float64", "Double", "Bool", "SourceText", ~] => builtinNames!
     package -> modules.identitiesAnalyzed => identities!
     package -> qualified.resolveAnalyzed => qualifiedResults!
     [SemanticType; ~] => semanticTypes!
@@ -178,7 +231,8 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> SemanticTypeSet {
 
     0 => sourceIndex!
     sourceIndex! < (package.sources -> len) -> while {
-        package.sources[sourceIndex!] => source
+        package.sources[sourceIndex!] -> len => sourceLength
+        package.sources[sourceIndex!] -> slice(UIntSize(0), sourceLength) => source
         package.ranges[sourceIndex!] => sourceRange
         [Int; ~] => mapped!
         0 => mapSeed!
@@ -208,16 +262,10 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> SemanticTypeSet {
                             qualifiedSearch! < (qualifiedResults! -> len) -> while {
                                 qualifiedResults![qualifiedSearch!] => candidate
                                 candidate.sourceModule == sourceIndex! -> if {
-                                    candidate.pathAst => ancestor!
-                                    false => belongsToTerm!
-                                    (ancestor! >= 0 and not belongsToTerm!) -> while {
-                                        ancestor! == term.astNode -> if {
-                                            true => belongsToTerm!
-                                        } else {
-                                            package.nodes[sourceRange.astStart + ancestor!].parent => ancestor!
-                                        }
+                                    package.nodes[sourceRange.astStart + candidate.pathAst] => candidatePath
+                                    (term.nameToken >= candidatePath.firstToken and term.nameToken < candidatePath.firstToken + candidatePath.tokenCount) -> if {
+                                        qualifiedSearch! => qualifiedIndex!
                                     }
-                                    belongsToTerm! -> if { qualifiedSearch! => qualifiedIndex! }
                                 }
                                 qualifiedSearch! + 1 => qualifiedSearch!
                             }
@@ -227,6 +275,14 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> SemanticTypeSet {
                                 identities![imported.targetModule].sourceIndex => targetModule!
                                 imported.targetSymbol => targetSymbol!
                                 imported.status => status!
+                                imported.status == 0 -> if {
+                                    IntrinsicNominalRequest { package: package, identities: identities!, targetModule: imported.targetModule, targetSymbol: imported.targetSymbol } -> intrinsicNominalSymbol => intrinsicSymbol
+                                    intrinsicSymbol >= 0 -> if {
+                                        1 => origin!
+                                        -1 => targetModule!
+                                        intrinsicSymbol => targetSymbol!
+                                    }
+                                }
                             } else {
                                 package.tokens[sourceRange.tokenStart + term.nameToken] => name
                                 -1 => builtinIndex!
@@ -314,14 +370,16 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> SemanticTypeSet {
                             targetSymbol! < 0 -> if { 2 => status! }
                         }
 
-                        term.firstArgument < 0 -> if { -1 } else { mapped![term.firstArgument] } => firstType
-                        term.secondArgument < 0 -> if { -1 } else { mapped![term.secondArgument] } => secondType
+                        -1 => firstType!
+                        term.firstArgument >= 0 -> if { mapped![term.firstArgument] => firstType! }
+                        -1 => secondType!
+                        term.secondArgument >= 0 -> if { mapped![term.secondArgument] => secondType! }
                         origin! == 3 => containsParameter!
-                        firstType >= 0 -> if {
-                            semanticTypes![firstType].containsParameter -> if { true => containsParameter! }
+                        firstType! >= 0 -> if {
+                            semanticTypes![firstType!].containsParameter -> if { true => containsParameter! }
                         }
-                        secondType >= 0 -> if {
-                            semanticTypes![secondType].containsParameter -> if { true => containsParameter! }
+                        secondType! >= 0 -> if {
+                            semanticTypes![secondType!].containsParameter -> if { true => containsParameter! }
                         }
                         UInt64(0) => lengthHash!
                         -1 => lengthValue!
@@ -343,7 +401,7 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> SemanticTypeSet {
                             semanticTypes![semanticIndex!] => known
                             known.origin == origin! => sameOrigin!
                             (term.kind == 1 and ((known.origin == 0 and origin! == 2) or (known.origin == 2 and origin! == 0))) -> if { true => sameOrigin! }
-                            (known.kind == term.kind and sameOrigin! and known.module == targetModule! and known.symbol == targetSymbol! and known.first == firstType and known.second == secondType and known.lengthHash == lengthHash! and known.status == status!) -> if {
+                            (known.kind == term.kind and sameOrigin! and known.module == targetModule! and known.symbol == targetSymbol! and known.first == firstType! and known.second == secondType! and known.lengthHash == lengthHash! and known.status == status!) -> if {
                                 semanticIndex! => existing!
                             }
                             semanticIndex! + 1 => semanticIndex!
@@ -355,8 +413,8 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> SemanticTypeSet {
                                 origin: origin!
                                 module: targetModule!
                                 symbol: targetSymbol!
-                                first: firstType
-                                second: secondType
+                                first: firstType!
+                                second: secondType!
                                 length: lengthValue!
                                 lengthHash: lengthHash!
                                 containsParameter: containsParameter!
@@ -447,8 +505,10 @@ public specialize request: SpecializationRequest -> SpecializationResult {
     request.actualInput => actualInput
     request.resultTemplate => resultTemplate
     [SemanticType; ~] => types!
-    request.types -> each semanticType {
-        types! -> push(semanticType)
+    0 => copyTypeIndex!
+    copyTypeIndex! < (request.types -> len) -> while {
+        types! -> push(request.types[copyTypeIndex!])
+        copyTypeIndex! + 1 => copyTypeIndex!
     }
     [Int; ~] => templateStack!
     [Int; ~] => actualStack!
@@ -526,19 +586,21 @@ public specialize request: SpecializationRequest -> SpecializationResult {
                 }
             }
             replacementType! < 0 -> if {
-                current.first < 0 -> if { -1 } else { substituted![current.first] } => first
-                current.second < 0 -> if { -1 } else { substituted![current.second] } => second
-                (first == current.first and second == current.second) -> if {
+                -1 => first!
+                current.first >= 0 -> if { substituted![current.first] => first! }
+                -1 => second!
+                current.second >= 0 -> if { substituted![current.second] => second! }
+                (first! == current.first and second! == current.second) -> if {
                     typeIndex! => replacementType!
                 } else {
                     current.origin == 3 => containsParameter!
-                    first >= 0 -> if { types![first].containsParameter -> if { true => containsParameter! } }
-                    second >= 0 -> if { types![second].containsParameter -> if { true => containsParameter! } }
+                    first! >= 0 -> if { types![first!].containsParameter -> if { true => containsParameter! } }
+                    second! >= 0 -> if { types![second!].containsParameter -> if { true => containsParameter! } }
                     -1 => existing!
                     0 => existingSearch!
                     (existingSearch! < (types! -> len) and existing! < 0) -> while {
                         types![existingSearch!] => known
-                        (known.kind == current.kind and known.origin == current.origin and known.module == current.module and known.symbol == current.symbol and known.first == first and known.second == second and known.lengthHash == current.lengthHash and known.status == current.status) -> if {
+                        (known.kind == current.kind and known.origin == current.origin and known.module == current.module and known.symbol == current.symbol and known.first == first! and known.second == second! and known.lengthHash == current.lengthHash and known.status == current.status) -> if {
                             existingSearch! => existing!
                         }
                         existingSearch! + 1 => existingSearch!
@@ -550,8 +612,8 @@ public specialize request: SpecializationRequest -> SpecializationResult {
                             origin: current.origin
                             module: current.module
                             symbol: current.symbol
-                            first: first
-                            second: second
+                            first: first!
+                            second: second!
                             length: current.length
                             lengthHash: current.lengthHash
                             containsParameter: containsParameter!

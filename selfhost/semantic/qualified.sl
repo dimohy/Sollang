@@ -30,7 +30,8 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> [QualifiedResolution
     imports! -> len => importCount
     0 => sourceIndex!
     sourceIndex! < sourceCount -> while {
-        package.sources[sourceIndex!] => source
+        package.sources[sourceIndex!] -> len => sourceLength
+        package.sources[sourceIndex!] -> slice(UIntSize(0), sourceLength) => source
         package.ranges[sourceIndex!] => sourceRange
         sourceRange.astCount => astCount
         0 => pathAstIndex!
@@ -67,7 +68,8 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> [QualifiedResolution
                             aliasEqual! -> if {
                                 resolvedImport.targetModule => targetModule
                                 identities![targetModule].sourceIndex => targetSourceIndex
-                                package.sources[targetSourceIndex] => targetSource
+                                package.sources[targetSourceIndex] -> len => targetSourceLength
+                                package.sources[targetSourceIndex] -> slice(UIntSize(0), targetSourceLength) => targetSource
                                 package.ranges[targetSourceIndex] => targetRange
                                 -1 => targetSymbol!
                                 false => targetPublic!

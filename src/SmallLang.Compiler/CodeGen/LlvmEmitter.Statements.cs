@@ -35,6 +35,10 @@ internal sealed partial class LlvmEmitter
         {
             EmitCall(target: null, "void", "smalllang_async_shutdown", "");
         }
+        if (_usesParallel)
+        {
+            EmitCall(target: null, "void", "smalllang_compute_shutdown", "");
+        }
         if (_usesProcessEnvironment)
         {
             EmitPlatformFunctionBlock(_platform.EmitEnvironmentCleanup);
@@ -390,6 +394,12 @@ internal sealed partial class LlvmEmitter
             default:
                 var resolvedGeneric = _program.ResolvedGenericCalls.TryGetValue(statement, out var function);
                 if ((resolvedGeneric || TryResolveFunction(statement.Target, out function))
+                    && function is { Kind: BoundFunctionKind.RuntimeParallel })
+                {
+                    EmitParallelBlockFunctionCall(statement, function);
+                    return;
+                }
+                if ((resolvedGeneric || TryResolveFunction(statement.Target, out function))
                     && function is { Kind: BoundFunctionKind.UserBlock })
                 {
                     EmitUserBlockFunctionCall(statement, function);
@@ -552,7 +562,8 @@ internal sealed partial class LlvmEmitter
             statement.ItemName,
             statement.Body,
             callerLocals,
-            callerFunctions);
+            callerFunctions,
+            function.BlockResultType ?? BoundType.Unit);
         _currentFunctions = CreateFunctionScope(_currentFunctions, function.LocalFunctions);
         RestoreLocals(blockLocals);
         RuntimeValue result = RuntimeUnit.Instance;
@@ -607,6 +618,186 @@ internal sealed partial class LlvmEmitter
                 CreateMutableContainerSlot(binding, result);
             }
         }
+    }
+
+    private void EmitParallelBlockFunctionCall(BlockFunctionCallStatement statement, BoundFunction function)
+    {
+        var source = EmitExpression(statement.Source);
+        var length = source switch
+        {
+            RuntimeDynamicIntArray array => array.LengthName,
+            RuntimeDynamicInlineArray array => array.LengthName,
+            _ => throw new SmallLangException("parallel expects a growable array")
+        };
+        if (statement.Body.Count == 0 || statement.Body[^1] is not ExpressionStatement callbackResult)
+        {
+            throw new SmallLangException("parallel callback requires a final expression");
+        }
+
+        var resultType = function.BlockResultType
+            ?? throw new SmallLangException("parallel callback result type was not specialized");
+        RuntimeValue resultArray;
+        string outputPointer;
+        if (resultType == BoundType.Int)
+        {
+            outputPointer = EmitHeapAllocateProduct(length, "4", "parallel_result_bytes");
+            resultArray = new RuntimeDynamicIntArray(outputPointer, length, length);
+        }
+        else
+        {
+            var outputDefinition = _program.Types.GetDynamicArray(function.ReturnType);
+            outputPointer = EmitHeapAllocateProduct(
+                length,
+                outputDefinition.ElementSize.ToString(CultureInfo.InvariantCulture),
+                "parallel_result_bytes");
+            resultArray = new RuntimeDynamicInlineArray(
+                function.ReturnType,
+                resultType,
+                outputPointer,
+                length,
+                length);
+        }
+
+        if (_parallelCallbacks.TryGetValue(statement, out var callback))
+        {
+            var inputPointer = source switch
+            {
+                RuntimeDynamicIntArray array => array.PointerName,
+                RuntimeDynamicInlineArray array => array.PointerName,
+                _ => throw new SmallLangException("parallel expects a growable array")
+            };
+            var group = NextTemp("parallel_group");
+            EmitAlloca(group, "%smalllang.compute_group", 8);
+            var callbackSlot = NextTemp("parallel_callback_slot");
+            EmitInstruction($"{callbackSlot} = getelementptr %smalllang.compute_group, ptr {group}, i32 0, i32 0");
+            EmitStore("ptr", $"@{callback.Name}", callbackSlot, 8);
+            var inputSlot = NextTemp("parallel_input_slot");
+            EmitInstruction($"{inputSlot} = getelementptr %smalllang.compute_group, ptr {group}, i32 0, i32 1");
+            EmitStore("ptr", inputPointer, inputSlot, 8);
+            var outputSlot = NextTemp("parallel_output_slot");
+            EmitInstruction($"{outputSlot} = getelementptr %smalllang.compute_group, ptr {group}, i32 0, i32 2");
+            EmitStore("ptr", outputPointer, outputSlot, 8);
+            var countSlot = NextTemp("parallel_count_slot");
+            EmitInstruction($"{countSlot} = getelementptr %smalllang.compute_group, ptr {group}, i32 0, i32 3");
+            EmitStore("i64", length, countSlot, 8);
+            var captureEnvironment = "null";
+            if (callback.Captures.Count > 0)
+            {
+                var captureType = ParallelCaptureType(callback.Captures);
+                captureEnvironment = NextTemp("parallel_capture_environment");
+                EmitAlloca(captureEnvironment, captureType, 8);
+                for (var captureIndex = 0; captureIndex < callback.Captures.Count; captureIndex++)
+                {
+                    var capture = callback.Captures[captureIndex];
+                    var captureValue = ResolveLocal(capture.Key);
+                    EnsureRuntimeType(captureValue, capture.Value, callback.Target.Name);
+                    var materialized = MaterializeAggregateValue(captureValue);
+                    var captureAddress = NextTemp("parallel_capture_address");
+                    EmitInstruction($"{captureAddress} = getelementptr {captureType}, ptr {captureEnvironment}, i32 0, i32 {captureIndex.ToString(CultureInfo.InvariantCulture)}");
+                    EmitStore(
+                        materialized.TypeName,
+                        materialized.ValueName,
+                        captureAddress,
+                        RuntimeAlignment(capture.Value));
+                }
+            }
+            var captureSlot = NextTemp("parallel_capture_slot");
+            EmitInstruction($"{captureSlot} = getelementptr %smalllang.compute_group, ptr {group}, i32 0, i32 4");
+            EmitStore("ptr", captureEnvironment, captureSlot, 8);
+            EmitCall(target: null, "void", "smalllang_compute_execute", $"ptr {group}");
+            BindParallelResult(statement, resultArray);
+            return;
+        }
+
+        var bodyLabel = NextLabel("parallel_body");
+        var continueLabel = NextLabel("parallel_continue");
+        var endLabel = NextLabel("parallel_end");
+        var entryLabel = _currentBlockLabel;
+        var next = NextTemp("parallel_next");
+        var initialDone = NextTemp("parallel_done");
+        EmitCompare(initialDone, "eq", "i64", length, "0");
+        EmitConditionalBranch(initialDone, endLabel, bodyLabel);
+
+        EmitLabel(bodyLabel);
+        _currentBlockLabel = bodyLabel;
+        var index = NextTemp("parallel_i");
+        EmitPhi(index, "i64", ("0", entryLabel), (next, continueLabel));
+        RuntimeValue item = source switch
+        {
+            RuntimeDynamicIntArray array => EmitDynamicArrayLoad(array, index),
+            RuntimeDynamicInlineArray array => EmitDynamicInlineArrayLoad(array, index),
+            _ => throw new SmallLangException("parallel expects a growable array")
+        };
+
+        var outerLocals = CaptureLocals();
+        try
+        {
+            _locals[statement.ItemName] = item;
+            var callbackLocals = CaptureLocals();
+            EmitStatements(statement.Body.Take(statement.Body.Count - 1).ToArray());
+            var mapped = EmitExpression(callbackResult.Expression);
+            EnsureRuntimeType(mapped, resultType, "parallel callback");
+            switch (resultArray)
+            {
+                case RuntimeDynamicIntArray integers:
+                    EmitDynamicArrayAssign(integers, index, ((RuntimeInt)mapped).ValueName);
+                    break;
+                case RuntimeDynamicInlineArray inline:
+                    StoreDynamicInlineArrayElement(
+                        inline.PointerName,
+                        _program.Types.GetDynamicArray(inline.Type),
+                        index,
+                        mapped);
+                    break;
+            }
+            var transferred = IsOwnedContainerRuntimeValue(mapped)
+                ? GetMoveConsumingContainerSourceName(callbackResult.Expression)
+                : null;
+            DropOwnedLocalsCreatedSince(callbackLocals, transferred);
+        }
+        finally
+        {
+            RestoreLocals(outerLocals);
+        }
+        if (!_currentBlockTerminated)
+        {
+            EmitBranch(continueLabel);
+        }
+        EmitLabel(continueLabel);
+        _currentBlockLabel = continueLabel;
+        EmitBinary(next, "add", "i64", index, "1");
+        var done = NextTemp("parallel_done");
+        EmitCompare(done, "eq", "i64", next, length);
+        EmitConditionalBranch(done, endLabel, bodyLabel);
+        EmitLabel(endLabel);
+        _currentBlockLabel = endLabel;
+
+        BindParallelResult(statement, resultArray);
+    }
+
+    private void BindParallelResult(BlockFunctionCallStatement statement, RuntimeValue resultArray)
+    {
+        if (statement.ResultName is not null)
+        {
+            _locals.Add(statement.ResultName, resultArray);
+            if (statement.ResultIsMutable)
+            {
+                _mutableLocals.Add(statement.ResultName);
+                CreateMutableContainerSlot(new BindingStatement(
+                    statement.ResultName,
+                    statement.Source,
+                    statement.Line,
+                    statement.Column,
+                    IsMutable: true), resultArray);
+            }
+        }
+    }
+
+    private string EmitHeapAllocateProduct(string count, string stride, string name)
+    {
+        var bytes = NextTemp(name);
+        EmitBinary(bytes, "mul", "i64", count, stride);
+        return EmitHeapAllocate(bytes);
     }
 
     private void EmitWhileBlockFunctionCall(BlockFunctionCallStatement statement)
