@@ -251,7 +251,7 @@ legacyTypes recursive: expressionTypeIds.ExpressionTypeIdSet -> [expressionTypes
     projected!
 }
 
-public lowerContext prepared: semanticContext.CompilationContext -> [TypedIrNode; ~] {
+public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; ~] {
     lowerFunction request: FunctionLowerRequest -> SourceTypedIr {
         [TypedIrNode; ~] => results!
         request.sourceIndex => sourceIndex!
@@ -3437,7 +3437,7 @@ public lowerPrepared request: move TypedIrRequest -> [TypedIrNode; ~] {
         terms: terms!
         typeUses: typeUses!
     } => contextPackage!
-    semanticContext.CompilationContext {
+    semanticContext.SemanticSnapshot {
         semantic: contextSemantic!
         package: contextPackage!
         nominal: nominal!
@@ -3448,7 +3448,8 @@ public lowerPrepared request: move TypedIrRequest -> [TypedIrNode; ~] {
         qualified: qualifiedResults!
         calls: moduleCalls!
     } => prepared!
-    prepared! -> lowerContext => result!
+    prepared! -> semanticContext.freeze => snapshot!
+    snapshot! -> lowerContext => result!
     result!
 }
 
@@ -3522,7 +3523,7 @@ public moves sources: [Text; ~] -> [MoveEvent; ~] {
     sources -> lower -> movesFrom
 }
 
-public coroutinePlanContext prepared: semanticContext.CompilationContext -> CoroutinePlan {
+public coroutinePlanContext prepared: semanticContext.SemanticSnapshot -> CoroutinePlan {
     prepared -> lowerContext => ir!
     [CoroutineSuspendPoint; ~] => points!
     0 => sourceIndex!

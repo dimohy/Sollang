@@ -71,7 +71,7 @@ textMatches request: TextMatchRequest -> Bool {
 # Bridges the existing shallow expression pass into the canonical recursive
 # type arena. Annotation-backed names and call results retain their full type;
 # builtin expressions use the stable builtin id directly.
-public resolveContext prepared: semanticContext.CompilationContext -> ExpressionTypeIdSet {
+public resolveContext prepared: semanticContext.SemanticSnapshot -> ExpressionTypeIdSet {
     [typeIds.SemanticType; ~] => types!
     0 => semanticTypeCopyIndex56!
     semanticTypeCopyIndex56! < (prepared.semantic.types -> len) -> while {
@@ -1372,7 +1372,7 @@ public resolvePrepared request: move ExpressionTypeIdRequest -> ExpressionTypeId
         terms: terms!
         typeUses: typeUses!
     } => contextPackage!
-    semanticContext.CompilationContext {
+    semanticContext.SemanticSnapshot {
         semantic: contextSemantic!
         package: contextPackage!
         nominal: nominal!
@@ -1383,7 +1383,8 @@ public resolvePrepared request: move ExpressionTypeIdRequest -> ExpressionTypeId
         qualified: qualifiedResults!
         calls: moduleCalls!
     } => prepared!
-    prepared! -> resolveContext => result!
+    prepared! -> semanticContext.freeze => snapshot!
+    snapshot! -> resolveContext => result!
     result!
 }
 

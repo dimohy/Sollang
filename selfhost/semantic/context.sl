@@ -16,9 +16,10 @@ import smalllang.compiler.semantic.types as semanticTypes
 import smalllang.compiler.syntax as syntax
 import sys.file as file
 
-# Immutable whole-compilation facts. Consumers borrow this aggregate, so its
-# owned flat arrays are built once and are not copied between semantic passes.
-public struct CompilationContext {
+# Explicit read-only barrier for whole-compilation facts. Consumers borrow this
+# aggregate after freeze; its flat arrays move once and are never copied or
+# mutated between semantic, typed-IR, and LLVM workers.
+public struct SemanticSnapshot {
     semantic: typeIds.SemanticTypeSet
     package: analysis.PackageAnalysis
     nominal: [nominalTypes.NominalType; ~]
@@ -30,7 +31,11 @@ public struct CompilationContext {
     calls: [calls.ModuleCallResolution; ~]
 }
 
-public prepareSources sources: move [file.SourceText; ~] -> CompilationContext {
+public freeze snapshot: move SemanticSnapshot -> SemanticSnapshot {
+    snapshot
+}
+
+public prepareSources sources: move [file.SourceText; ~] -> SemanticSnapshot {
     sources -> analysis.analyzeSources => packageAnalysis!
     packageAnalysis! -> typeIds.resolveAnalyzed => semanticSet!
     packageAnalysis! -> nominalTypes.resolveAnalyzed => nominalTypes!
@@ -41,7 +46,7 @@ public prepareSources sources: move [file.SourceText; ~] -> CompilationContext {
     packageAnalysis! -> qualified.resolveAnalyzed => qualifiedResults!
     packageAnalysis! -> calls.resolveModulesAnalyzed => resolvedCalls!
 
-    CompilationContext {
+    SemanticSnapshot {
         semantic: semanticSet!
         package: packageAnalysis!
         nominal: nominalTypes!
@@ -51,11 +56,11 @@ public prepareSources sources: move [file.SourceText; ~] -> CompilationContext {
         resolvedImports: resolvedImports!
         qualified: qualifiedResults!
         calls: resolvedCalls!
-    } => result!
-    result!
+    } => snapshot!
+    snapshot! -> freeze
 }
 
-public prepare sources: [Text; ~] -> CompilationContext {
+public prepare sources: [Text; ~] -> SemanticSnapshot {
     [file.SourceText; ~] => ownedSources!
     0 => sourceIndex!
     sourceIndex! < (sources -> len) -> while {
@@ -67,7 +72,7 @@ public prepare sources: [Text; ~] -> CompilationContext {
     ownedSources! -> prepareSources
 }
 
-public prepareFiles paths: [Text; ~] -> CompilationContext uses File {
+public prepareFiles paths: [Text; ~] -> SemanticSnapshot uses File {
     [file.SourceText; ~] => ownedSources!
     0 => pathIndex!
     pathIndex! < (paths -> len) -> while {

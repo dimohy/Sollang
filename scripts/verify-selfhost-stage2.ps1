@@ -19,9 +19,16 @@ $singleSource = Join-Path $repoRoot "tests\SmallLang.ExampleTests\Fixtures\selfh
 $multiLibrarySource = Join-Path $repoRoot "tests\SmallLang.ExampleTests\Fixtures\selfhost-stage2-library-smoke.sl"
 $multiMainSource = Join-Path $repoRoot "tests\SmallLang.ExampleTests\Fixtures\selfhost-stage2-main-smoke.sl"
 $groupedNotSource = Join-Path $repoRoot "tests\SmallLang.ExampleTests\Fixtures\selfhost-stage2-grouped-not-smoke.sl"
-$expectedStage2Bytes = 7184456L
+$semanticContextSource = Join-Path $repoRoot "selfhost\semantic\context.sl"
+$expectedStage2Bytes = 7185332L
 
 New-Item -ItemType Directory -Force -Path $artifactsDir | Out-Null
+
+$semanticContextText = [System.IO.File]::ReadAllText($semanticContextSource)
+if (-not $semanticContextText.Contains("public struct SemanticSnapshot") -or
+    $semanticContextText.Contains("public struct CompilationContext")) {
+    throw "semantic workers are not separated from construction by SemanticSnapshot"
+}
 
 function Invoke-ProcessToFile {
     param(

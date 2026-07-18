@@ -5626,3 +5626,38 @@ to stage-2 at 7,184,456 bytes with SHA-256
 `DDC1D4C7DD1B363972A64EE546B12007DA5630550C0EC3A99A4AA3CB08E98740`,
 and `llvm-as` accepts the result. Parallel-compilation progress is now 22/28
 (78.6%); the canonical roadmap remains 48.5/60 (80.8%).
+
+## D176 - Freeze Global Semantic Facts Before Parallel Lowering
+
+Status: implemented and fixed-point verified
+Date: 2026-07-18
+
+Whole-compilation package, type, nominal/composite, module, import, qualified
+resolution, and call facts cross one named ownership boundary:
+`SemanticSnapshot`. Construction temporaries remain inside `semantic.context`;
+`freeze` consumes the completed aggregate, and all semantic diagnostics,
+effect/ownership analysis, typed-IR lowering, and LLVM preparation borrow the
+snapshot. The old construction-oriented `CompilationContext` type no longer
+exists, so worker-facing APIs cannot accidentally advertise a partially built
+context. Flat owned arrays move into the snapshot once; the barrier introduces
+no deep copy or reference-counted graph.
+
+This follows two compatible primary designs. Swift treats immutable data as
+isolated and allows read-only `Sendable` state to cross concurrency domains.
+rustc models compiler queries as pure functions and loads the prior dependency
+graph as immutable data before current-session work. SmallLang adopts the
+shared invariant without importing actors or a query runtime: complete global
+facts first, immutable snapshot next, disjoint indexed worker products last.
+
+- [Swift concurrency and Sendable](https://docs.swift.org/swift-book/LanguageGuide/Concurrency.html)
+- [rustc incremental query evaluation](https://rustc-dev-guide.rust-lang.org/queries/incremental-compilation-in-detail.html)
+
+Example 379 executes a two-module package through the snapshot and proves its
+package/module/import/resolved-import views. The fixed-point verifier rejects a
+return to public `CompilationContext`, then performs the existing callback,
+`--jobs`, assembly, link, execution, and C#/SL differential checks. A complete
+28-source stage-3 generation is byte-equal to stage-2 at 7,185,332 bytes with
+SHA-256
+`2E2AEFB4830A45A0C7E890AD22D7D55C0EF181C9CB0A4AEB87DCB97F9CB2776A`,
+and `llvm-as` accepts it. Self-host integration is now 6/6 and the parallel
+subproject is 23/28 (82.1%); the canonical roadmap remains 48.5/60 (80.8%).

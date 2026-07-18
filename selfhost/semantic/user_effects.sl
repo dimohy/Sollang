@@ -92,7 +92,7 @@ public analyze sources: [Text; ~] -> UserEffectAnalysis {
     prepared -> analyzeContext
 }
 
-public analyzeContext prepared: semanticContext.CompilationContext -> UserEffectAnalysis {
+public analyzeContext prepared: semanticContext.SemanticSnapshot -> UserEffectAnalysis {
     [UserEffectSignature; ~] => signatures!
     [UserEffectOperation; ~] => operations!
     [UserEffectRequirement; ~] => requirements!

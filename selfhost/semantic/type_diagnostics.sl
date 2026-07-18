@@ -22,7 +22,7 @@ public analyze sources: [Text; ~] -> [TypeDiagnostic; ~] {
     prepared -> analyzeContext
 }
 
-public analyzeContext prepared: semanticContext.CompilationContext -> [TypeDiagnostic; ~] {
+public analyzeContext prepared: semanticContext.SemanticSnapshot -> [TypeDiagnostic; ~] {
     [TypeDiagnostic; ~] => diagnostics!
     0 => resolvedIndex!
     resolvedIndex! < (prepared.nominal -> len) -> while {

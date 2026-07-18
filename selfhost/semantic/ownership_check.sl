@@ -27,7 +27,7 @@ public analyze sources: [Text; ~] -> [OwnershipDiagnostic; ~] {
     prepared -> analyzeContext
 }
 
-public analyzeContext prepared: semanticContext.CompilationContext -> [OwnershipDiagnostic; ~] {
+public analyzeContext prepared: semanticContext.SemanticSnapshot -> [OwnershipDiagnostic; ~] {
     prepared -> typedIr.lowerContext => typed!
     typed! -> typedIr.movesFrom => moves!
     [OwnershipDiagnostic; ~] => diagnostics!

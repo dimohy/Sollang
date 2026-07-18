@@ -118,11 +118,11 @@ Evidence: `selfhost/semantic/analysis.sl`; examples 182, 293, and 294.
 - [ ] Cancellation and partial-result destruction are exactly once.
 - [x] File-operation waiting remains outside the compute pool.
 
-### D. Self-host compiler integration (5/6)
+### D. Self-host compiler integration (6/6)
 
 - [x] Nested imported calls cannot overwrite the enclosing runtime call target.
 - [x] Source-local analysis uses `parallel` and ordered package assembly.
-- [ ] Global semantic facts form an explicit read-only barrier.
+- [x] Global semantic facts form an explicit read-only barrier.
 - [x] Function-local typed IR uses indexed parallel work.
 - [x] LLVM function bodies use per-function buffers and ordered emission.
 - [x] The self-host driver accepts and reports the effective worker count.
@@ -132,7 +132,10 @@ literal-returning function in the second module still emits `ret i32 42`.
 Example 378 proves the self-host worker-limit intrinsic together with native
 parallel execution. The complete stage-2 LLVM contains an indexed callback that
 invokes typed-IR `lowerFunction`, and the fixed-point verifier checks that
-callback plus identical stage-1/stage-2 `--jobs 2` output.
+callback plus identical stage-1/stage-2 `--jobs 2` output. `SemanticSnapshot`
+is the named ownership barrier consumed read-only by semantic, typed-IR,
+ownership, effect, and LLVM passes; example 379 proves the frozen package,
+module, import, and resolved-import views.
 
 ### E. Verification (5/6)
 
@@ -147,7 +150,7 @@ Evidence: example 324 executes `block item: Int -> Int`; example 325 proves the
 self-host grammar/parser accepts the same declaration and call form. The two
 `block-callback-result-*` diagnostics cover missing and mismatched results.
 
-Parallel-compilation progress is **22/28 checks (78.6%)**. This is a feature-local
+Parallel-compilation progress is **23/28 checks (82.1%)**. This is a feature-local
 metric and does not promote the canonical self-host roadmap, which remains
 **48.5/60 equivalent gates (80.8%)** until a full checklist audit proves a gate.
 
@@ -170,8 +173,8 @@ Example 377 proves 100 generations of borrowed `SourceText` input and owned
 struct/array output through native workers. Example 378 proves an explicit
 positive worker limit, while the driver reports the effective count as a valid
 LLVM comment. The complete 28-source self-host compiler reached an exact
-stage-2/stage-3 fixed point of 7,184,456 bytes with SHA-256
-`DDC1D4C7DD1B363972A64EE546B12007DA5630550C0EC3A99A4AA3CB08E98740`;
+stage-2/stage-3 fixed point of 7,185,332 bytes with SHA-256
+`2E2AEFB4830A45A0C7E890AD22D7D55C0EF181C9CB0A4AEB87DCB97F9CB2776A`;
 the stage-3 output also assembles with `llvm-as`. The preceding source-worker
 measurement used 377.77 CPU-seconds over 34.81 seconds wall time (10.85
 effective cores) and peaked at 88.7 MiB, below the 100 MiB frontend budget.

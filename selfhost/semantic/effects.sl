@@ -87,7 +87,7 @@ public analyze sources: [Text; ~] -> EffectAnalysis {
     prepared -> analyzeContext
 }
 
-public analyzeContext prepared: semanticContext.CompilationContext -> EffectAnalysis {
+public analyzeContext prepared: semanticContext.SemanticSnapshot -> EffectAnalysis {
     [FunctionEffect; ~] => functions!
     [EffectDiagnostic; ~] => diagnostics!
     [1, 2, 4, 8, 16, 32] => effectBits

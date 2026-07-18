@@ -71,7 +71,7 @@ textMatches request: TextMatchRequest -> Bool {
 
 # Bottom-up expression inference over the flat AST. Builtin ids use the stable
 # nominal table: Text 1, Int 2, Bool 23.
-public inferContext prepared: semanticContext.CompilationContext -> [ExpressionType; ~] {
+public inferContext prepared: semanticContext.SemanticSnapshot -> [ExpressionType; ~] {
     inferSource requestedSourceIndex: Int -> SourceExpressionTypes {
     [ExpressionType; ~] => inferred!
     [Int; ~] => inferredByAst!
@@ -2030,7 +2030,7 @@ public inferPrepared request: move ExpressionTypeRequest -> [ExpressionType; ~] 
         terms: terms!
         typeUses: typeUses!
     } => contextPackage!
-    semanticContext.CompilationContext {
+    semanticContext.SemanticSnapshot {
         semantic: contextSemantic!
         package: contextPackage!
         nominal: nominal!
@@ -2041,7 +2041,8 @@ public inferPrepared request: move ExpressionTypeRequest -> [ExpressionType; ~] 
         qualified: qualifiedResults!
         calls: moduleCalls!
     } => prepared!
-    prepared! -> inferContext => inferred!
+    prepared! -> semanticContext.freeze => snapshot!
+    snapshot! -> inferContext => inferred!
     inferred!
 }
 
