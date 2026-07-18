@@ -1,6 +1,11 @@
 import smalllang.compiler.llvm.text as llvm
 import sys.process as process
 
+processCode result: Result<Int, Text> -> Int => result -> when {
+    Ok(code) => code
+    Err(error) => -1
+}
+
 isJobsOption value: Text -> Bool {
     (value -> len) == UIntSize(6) => matches!
     matches! -> if {
@@ -103,22 +108,18 @@ buildWindows pathStart: UIntSize -> Unit uses Console, File, Process {
     process.RunToFileRequest {
         argv: emitArgv!
         output: arguments[2]
-    } -> process.runToFile => emitted
+    } -> process.runToFile -> processCode => emitCode
 
-    emitted -> when {
-        Ok(emitCode) {
-            emitCode == 0 -> if {
-                [arguments[4], arguments[2], "-O1", "-Wno-override-module", "-o", arguments[3], ~] => clangArgv!
-                clangArgv! -> process.run => compiled
-                compiled -> when {
-                    Ok(clangCode) => "native build = $(clangCode)" -> println
-                    Err(error) => "native compiler invocation failed" -> println
-                }
-            } else {
-                "emit failed" -> println
-            }
+    emitCode == 0 -> if {
+        [arguments[4], arguments[2], "-O1", "-Wno-override-module", "-o", arguments[3], ~] => clangArgv!
+        clangArgv! -> process.run -> processCode => clangCode
+        clangCode >= 0 -> if {
+            "native build = $(clangCode)" -> println
+        } else {
+            "native compiler invocation failed" -> println
         }
-        Err(error) => "compiler emission failed" -> println
+    } else {
+        "compiler emission failed" -> println
     }
 }
 

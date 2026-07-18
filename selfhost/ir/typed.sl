@@ -3552,6 +3552,50 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
         }
         canonicalScalarIndex! + 1 => canonicalScalarIndex!
     }
+    # Imported process intrinsics are resolved by module and symbol identity,
+    # not by the surface token on the call expression. Preserve that identity
+    # as stable backend opcodes after all per-source IR has been merged.
+    -1 => processModuleSource!
+    0 => processModuleSearch!
+    processModuleSearch! < (prepared.modules -> len) -> while {
+        prepared.modules[processModuleSearch!] => processModuleIdentity
+        processModuleIdentity.pathHash == UInt64(15528987723426532771) -> if { processModuleIdentity.sourceIndex => processModuleSource! }
+        processModuleSearch! + 1 => processModuleSearch!
+    }
+    -1 => processArgumentsSymbol!
+    -1 => processRunSymbol!
+    -1 => processRunToFileSymbol!
+    processModuleSource! >= 0 -> if {
+        prepared.package.ranges[processModuleSource!] => processSourceRange
+        prepared.package.sources[processModuleSource!] -> len => processSourceLength
+        prepared.package.sources[processModuleSource!] -> slice(UIntSize(0), processSourceLength) => processSource
+        0 => processSymbolSearch!
+        processSymbolSearch! < processSourceRange.symbolCount -> while {
+            prepared.package.symbols[processSourceRange.symbolStart + processSymbolSearch!] => processSymbol
+            (processSymbol.kind == 7 and processSymbol.parent < 0) -> if {
+                prepared.package.tokens[processSourceRange.tokenStart + processSymbol.nameToken] => processNameToken
+                processNameToken.span.length == UIntSize(3) -> if {
+                    ((processSource -> byte(processNameToken.span.start)) == UInt8(114) and (processSource -> byte(processNameToken.span.start + UIntSize(1))) == UInt8(117) and (processSource -> byte(processNameToken.span.start + UIntSize(2))) == UInt8(110)) -> if { processSymbolSearch! => processRunSymbol! }
+                }
+                processNameToken.span.length == UIntSize(9) -> if {
+                    ((processSource -> byte(processNameToken.span.start)) == UInt8(97) and (processSource -> byte(processNameToken.span.start + UIntSize(1))) == UInt8(114) and (processSource -> byte(processNameToken.span.start + UIntSize(2))) == UInt8(103) and (processSource -> byte(processNameToken.span.start + UIntSize(3))) == UInt8(117) and (processSource -> byte(processNameToken.span.start + UIntSize(4))) == UInt8(109) and (processSource -> byte(processNameToken.span.start + UIntSize(5))) == UInt8(101) and (processSource -> byte(processNameToken.span.start + UIntSize(6))) == UInt8(110) and (processSource -> byte(processNameToken.span.start + UIntSize(7))) == UInt8(116) and (processSource -> byte(processNameToken.span.start + UIntSize(8))) == UInt8(115)) -> if { processSymbolSearch! => processArgumentsSymbol! }
+                    ((processSource -> byte(processNameToken.span.start)) == UInt8(114) and (processSource -> byte(processNameToken.span.start + UIntSize(1))) == UInt8(117) and (processSource -> byte(processNameToken.span.start + UIntSize(2))) == UInt8(110) and (processSource -> byte(processNameToken.span.start + UIntSize(3))) == UInt8(84) and (processSource -> byte(processNameToken.span.start + UIntSize(4))) == UInt8(111) and (processSource -> byte(processNameToken.span.start + UIntSize(5))) == UInt8(70) and (processSource -> byte(processNameToken.span.start + UIntSize(6))) == UInt8(105) and (processSource -> byte(processNameToken.span.start + UIntSize(7))) == UInt8(108) and (processSource -> byte(processNameToken.span.start + UIntSize(8))) == UInt8(101)) -> if { processSymbolSearch! => processRunToFileSymbol! }
+                }
+            }
+            processSymbolSearch! + 1 => processSymbolSearch!
+        }
+        0 => processCallIndex!
+        processCallIndex! < (results! -> len) -> while {
+            results![processCallIndex!] => processCall!
+            (processCall!.kind == 6 and processCall!.targetModule == processModuleSource!) -> if {
+                processCall!.symbol == processArgumentsSymbol! -> if { -212 => processCall!.opcode }
+                processCall!.symbol == processRunSymbol! -> if { -210 => processCall!.opcode }
+                processCall!.symbol == processRunToFileSymbol! -> if { -211 => processCall!.opcode }
+                processCall! => results![processCallIndex!]
+            }
+            processCallIndex! + 1 => processCallIndex!
+        }
+    }
     # Collection literals returned directly from a function are contextually
     # typed by that function's declared result. Perform this after source IR
     # merging, when the final function -> return -> literal edges are stable.

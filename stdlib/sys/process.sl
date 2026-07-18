@@ -8,12 +8,12 @@ public struct RunToFileRequest {
     output: Text
 }
 
-arguments: -> Arguments uses Process = intrinsic
+public arguments: -> Arguments uses Process = intrinsic
 
-environment name: Text -> Option<Text> uses Environment = intrinsic
+public environment name: Text -> Option<Text> uses Environment = intrinsic
 
 # Runs one executable directly without a shell. The first item is the program
 # and remaining items are literal argv entries.
-run argv: [Text; ~] -> Result<Int, Text> uses Process = intrinsic
+public run argv: [Text; ~] -> Result<Int, Text> uses Process = intrinsic
 
-runToFile request: RunToFileRequest -> Result<Int, Text> uses Process, File = intrinsic
+public runToFile request: RunToFileRequest -> Result<Int, Text> uses Process, File = intrinsic

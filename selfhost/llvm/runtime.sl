@@ -13,7 +13,6 @@ public emitWindows runtimeModule: Int -> Unit uses Console {
     declare dllimport ptr @MapViewOfFile(ptr, i32, i32, i32, i64)
     declare dllimport i32 @UnmapViewOfFile(ptr)
     declare dllimport i64 @GetTickCount64()
-    declare void @llvm.trap()
     @sl_stage2_random_state = internal global i64 88172645463325252
     """ -> println
     "define void @sl_m$(runtimeModule)_s0(%sl.text %arg) {" -> println
@@ -134,7 +133,6 @@ public emitWindowsSourceTextDeclarations: -> Unit uses Console {
     declare dllimport ptr @CreateFileMappingA(ptr, ptr, i32, i32, i32, ptr)
     declare dllimport ptr @MapViewOfFile(ptr, i32, i32, i32, i64)
     declare dllimport i32 @UnmapViewOfFile(ptr)
-    declare void @llvm.trap()
     """ -> println
 }
 

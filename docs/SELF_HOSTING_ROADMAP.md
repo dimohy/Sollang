@@ -891,19 +891,25 @@ entry so unoptimized loop execution has bounded stack use.
 - [x] redirect LLVM to a file through a typed, shell-free process API;
 - [x] invoke Clang and produce a runnable native executable;
 - [x] prove the path with a multi-module SL program;
-- [ ] restore complete compiler emission after the structured native-build path;
-- [ ] rebuild `slc-stage2` from that complete module;
-- [ ] re-establish reproducible stage-1/stage-2 output comparison.
+- [x] restore complete compiler emission after the structured native-build path;
+- [x] rebuild `slc-stage2` from that complete module;
+- [x] re-establish reproducible stage-1/stage-2 output comparison.
 
-The stage-2 checklist is currently **5/8 complete (62.5%)**. The previous 8/8
-fixed point remains historical evidence, but the 2026-07-19 revalidation found
-that `buildWindows` now depends on `sys.process.run`/`runToFile` while the
-self-host input manifest omits that stdlib module. Adding the declaration alone
-resolves its `Result<Int, Text>` match subject but exposes the next missing
-piece: the self-host LLVM backend does not yet lower the process intrinsic ABI.
-The cached verifier must again prove the complete compiler link, single-file
-execution, imported multi-file execution, normalized stage-1/stage-2 LLVM
-identity, and C#/SL runtime parity before these three checks close.
+The stage-2 checklist is again **8/8 complete (100%)**. The complete input now
+includes the public `sys.process` module, and canonical typed IR identifies
+`arguments`, `run`, and `runToFile` by imported module/symbol identity. The
+self-host LLVM backend lowers the latter two through a portable process-result
+contract and materializes the language-level `Result<Int, Text>` value.
+
+The verifier builds the 7,997,972-byte Windows stage-2 compiler, compares
+single-file, grouped-Boolean, and imported multi-file LLVM from stage 1 and
+stage 2, assembles and executes every smoke module, and compares C# and native
+SL behavior. It also invokes the generated stage-2 compiler's own
+`build-windows` command: stage 2 redirects its LLVM with `runToFile`, invokes
+the pinned Clang through `run`, and the resulting executable prints
+`stage2-single-ok`. Linux process lowering is present, but a complete Linux
+self-host compiler remains separately gated by the missing Linux SourceText
+runtime.
 The formal language-capability score remains 42 complete, 13 partial, 5 missing
 (48.5/60, 80.8%) until the remaining ownership, generic-container, package,
 tooling, and library gates are implemented.

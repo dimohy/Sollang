@@ -125,6 +125,11 @@ struct TryParallelCollectRequest {
     callbackTypeId: Int
 }
 
+struct ProcessCallRequest {
+    callIndex: Int
+    ownerIndex: Int
+}
+
 struct EmitContext {
     sources: [Text; ~]
     ranges: [analysis.SourceAnalysisRange; ~]
@@ -1741,21 +1746,126 @@ emitCore context: move EmitContext -> Unit uses Console {
         constructor -> writeIrType
         ", ptr %v$(request.nodeIndex)_enum_slot, align 8" -> println
     }
+    emitProcessCall request: ProcessCallRequest -> Unit uses Console {
+        context.ir[request.callIndex] => call
+        request.callIndex -> callArgumentIndex => argumentIndex!
+        # Contextual flow conversion currently appears as the zero-value
+        # process.arguments intrinsic wrapped around the actual aggregate.
+        # It carries no runtime value, so recover the canonical operand before
+        # lowering run/runToFile.
+        (argumentIndex! >= 0 and context.ir[argumentIndex!].kind == 6 and context.ir[argumentIndex!].opcode == -212 and context.ir[argumentIndex!].operand0 >= 0) -> while {
+            context.ir[argumentIndex!].operand0 -> aggregateValueIndex => argumentIndex!
+        }
+        context.ir[argumentIndex!] => argument
+        call.opcode == -210 -> if {
+            "  %v$(request.callIndex)_process_records = extractvalue " -> print
+            argument -> writeIrType
+            " " -> print
+            (argument.kind == 5 and request.ownerIndex >= 0 and context.ir[request.ownerIndex].kind == 0 and context.ir[request.ownerIndex].operand1 >= 0 and argument.symbol == context.ir[context.ir[request.ownerIndex].operand1].symbol) -> if { "%arg" -> print } else { "%v$(argumentIndex!)" -> print }
+            ", 0" -> println
+            "  %v$(request.callIndex)_process_count = extractvalue " -> print
+            argument -> writeIrType
+            " " -> print
+            (argument.kind == 5 and request.ownerIndex >= 0 and context.ir[request.ownerIndex].kind == 0 and context.ir[request.ownerIndex].operand1 >= 0 and argument.symbol == context.ir[context.ir[request.ownerIndex].operand1].symbol) -> if { "%arg" -> print } else { "%v$(argumentIndex!)" -> print }
+            ", 1" -> println
+            "  %v$(request.callIndex)_process_raw = call %smalllang.process_result @smalllang_run_process(ptr %v$(request.callIndex)_process_records, i64 %v$(request.callIndex)_process_count)" -> println
+        } else {
+            -1 => argvFieldType!
+            -1 => outputFieldType!
+            0 => processFieldIndex!
+            processFieldIndex! < (context.fields -> len) -> while {
+                context.fields[processFieldIndex!] => processField
+                (processField.status == 0 and processField.ownerType == argument.typeId and processField.ordinal == 0) -> if { processField.fieldType => argvFieldType! }
+                (processField.status == 0 and processField.ownerType == argument.typeId and processField.ordinal == 1) -> if { processField.fieldType => outputFieldType! }
+                processFieldIndex! + 1 => processFieldIndex!
+            }
+            "  %v$(request.callIndex)_process_argv = extractvalue " -> print
+            argument -> writeIrType
+            " " -> print
+            (argument.kind == 5 and request.ownerIndex >= 0 and context.ir[request.ownerIndex].kind == 0 and context.ir[request.ownerIndex].operand1 >= 0 and argument.symbol == context.ir[context.ir[request.ownerIndex].operand1].symbol) -> if { "%arg" -> print } else { "%v$(argumentIndex!)" -> print }
+            ", 0" -> println
+            "  %v$(request.callIndex)_process_output = extractvalue " -> print
+            argument -> writeIrType
+            " " -> print
+            (argument.kind == 5 and request.ownerIndex >= 0 and context.ir[request.ownerIndex].kind == 0 and context.ir[request.ownerIndex].operand1 >= 0 and argument.symbol == context.ir[context.ir[request.ownerIndex].operand1].symbol) -> if { "%arg" -> print } else { "%v$(argumentIndex!)" -> print }
+            ", 1" -> println
+            "  %v$(request.callIndex)_process_records = extractvalue " -> print
+            argvFieldType! -> writeSemanticTypeId
+            " %v$(request.callIndex)_process_argv, 0" -> println
+            "  %v$(request.callIndex)_process_count = extractvalue " -> print
+            argvFieldType! -> writeSemanticTypeId
+            " %v$(request.callIndex)_process_argv, 1" -> println
+            "  %v$(request.callIndex)_process_output_ptr = extractvalue " -> print
+            outputFieldType! -> writeSemanticTypeId
+            " %v$(request.callIndex)_process_output, 0" -> println
+            "  %v$(request.callIndex)_process_output_len = extractvalue " -> print
+            outputFieldType! -> writeSemanticTypeId
+            " %v$(request.callIndex)_process_output, 1" -> println
+            "  %v$(request.callIndex)_process_raw = call %smalllang.process_result @smalllang_run_process_to_file(ptr %v$(request.callIndex)_process_records, i64 %v$(request.callIndex)_process_count, ptr %v$(request.callIndex)_process_output_ptr, i64 %v$(request.callIndex)_process_output_len)" -> println
+        }
+        "  %v$(request.callIndex)_process_exit = extractvalue %smalllang.process_result %v$(request.callIndex)_process_raw, 0" -> println
+        "  %v$(request.callIndex)_process_error = extractvalue %smalllang.process_result %v$(request.callIndex)_process_raw, 1" -> println
+        "  %v$(request.callIndex)_process_ok = icmp eq i32 %v$(request.callIndex)_process_error, 0" -> println
+        "  %v$(request.callIndex)_process_result_slot = alloca " -> print
+        call -> writeIrType
+        ", align 8" -> println
+        "  store " -> print
+        call -> writeIrType
+        " zeroinitializer, ptr %v$(request.callIndex)_process_result_slot, align 8" -> println
+        "  br i1 %v$(request.callIndex)_process_ok, label %process$(request.callIndex)_ok, label %process$(request.callIndex)_error" -> println
+        "process$(request.callIndex)_ok:" -> println
+        "  %v$(request.callIndex)_process_ok_tag = getelementptr inbounds " -> print
+        call -> writeIrType
+        ", ptr %v$(request.callIndex)_process_result_slot, i32 0, i32 0" -> println
+        "  store i32 0, ptr %v$(request.callIndex)_process_ok_tag, align 4" -> println
+        "  %v$(request.callIndex)_process_ok_payload = getelementptr inbounds " -> print
+        call -> writeIrType
+        ", ptr %v$(request.callIndex)_process_result_slot, i32 0, i32 1" -> println
+        "  store i32 %v$(request.callIndex)_process_exit, ptr %v$(request.callIndex)_process_ok_payload, align 4" -> println
+        "  br label %process$(request.callIndex)_merge" -> println
+        "process$(request.callIndex)_error:" -> println
+        "  %v$(request.callIndex)_process_error_tag = getelementptr inbounds " -> print
+        call -> writeIrType
+        ", ptr %v$(request.callIndex)_process_result_slot, i32 0, i32 0" -> println
+        "  store i32 1, ptr %v$(request.callIndex)_process_error_tag, align 4" -> println
+        "  %v$(request.callIndex)_process_is_wait = icmp eq i32 %v$(request.callIndex)_process_error, 2" -> println
+        "  %v$(request.callIndex)_process_is_signal = icmp eq i32 %v$(request.callIndex)_process_error, 3" -> println
+        "  %v$(request.callIndex)_process_wait_ptr = select i1 %v$(request.callIndex)_process_is_wait, ptr @smalllang_process_error_wait, ptr @smalllang_process_error_spawn" -> println
+        "  %v$(request.callIndex)_process_wait_len = select i1 %v$(request.callIndex)_process_is_wait, i64 4, i64 5" -> println
+        "  %v$(request.callIndex)_process_error_ptr = select i1 %v$(request.callIndex)_process_is_signal, ptr @smalllang_process_error_signal, ptr %v$(request.callIndex)_process_wait_ptr" -> println
+        "  %v$(request.callIndex)_process_error_len = select i1 %v$(request.callIndex)_process_is_signal, i64 6, i64 %v$(request.callIndex)_process_wait_len" -> println
+        "  %v$(request.callIndex)_process_error_text0 = insertvalue %sl.text poison, ptr %v$(request.callIndex)_process_error_ptr, 0" -> println
+        "  %v$(request.callIndex)_process_error_text = insertvalue %sl.text %v$(request.callIndex)_process_error_text0, i64 %v$(request.callIndex)_process_error_len, 1" -> println
+        "  %v$(request.callIndex)_process_error_payload = getelementptr inbounds " -> print
+        call -> writeIrType
+        ", ptr %v$(request.callIndex)_process_result_slot, i32 0, i32 1" -> println
+        "  store %sl.text %v$(request.callIndex)_process_error_text, ptr %v$(request.callIndex)_process_error_payload, align 8" -> println
+        "  br label %process$(request.callIndex)_merge" -> println
+        "process$(request.callIndex)_merge:" -> println
+        "  %v$(request.callIndex) = load " -> print
+        call -> writeIrType
+        ", ptr %v$(request.callIndex)_process_result_slot, align 8" -> println
+    }
     emitTryParallelCollect request: TryParallelCollectRequest -> Unit uses Console {
         context.types[request.callbackTypeId] => callbackResultType
         callbackResultType.first => okTypeId
         callbackResultType.second => errorTypeId
         context.typeSizes[request.callbackTypeId] => callbackStride
         context.typeSizes[okTypeId] => okStride
+        context.typeAligns[request.callbackTypeId] => callbackAlign
+        context.typeAligns[errorTypeId] => errorAlign
+        context.typeAligns[okTypeId] => okAlign
         "  %v$(request.expressionIndex)_failure_limit = load atomic i64, ptr %v$(request.expressionIndex)_failure_limit_slot acquire, align 8" -> println
         "  %v$(request.expressionIndex)_has_failure = icmp ult i64 %v$(request.expressionIndex)_failure_limit, %v$(request.expressionIndex)_length" -> println
         "  br i1 %v$(request.expressionIndex)_has_failure, label %tryparallel$(request.expressionIndex)_error, label %tryparallel$(request.expressionIndex)_success" -> println
         "tryparallel$(request.expressionIndex)_error:" -> println
-        "  %v$(request.expressionIndex)_selected_offset = mul i64 %v$(request.expressionIndex)_failure_limit, $callbackStride" -> println
+        "  %v$(request.expressionIndex)_selected_offset = mul i64 %v$(request.expressionIndex)_failure_limit, " -> print
+        callbackStride -> writeDecimalLine
         "  %v$(request.expressionIndex)_selected_ptr = getelementptr i8, ptr %v$(request.expressionIndex)_callback_results, i64 %v$(request.expressionIndex)_selected_offset" -> println
         "  %v$(request.expressionIndex)_selected = load " -> print
         request.callbackTypeId -> writeSemanticTypeId
-        ", ptr %v$(request.expressionIndex)_selected_ptr, align $(context.typeAligns[request.callbackTypeId])" -> println
+        ", ptr %v$(request.expressionIndex)_selected_ptr, align " -> print
+        callbackAlign -> writeDecimalLine
         "  %v$(request.expressionIndex)_selected_slot = alloca " -> print
         request.callbackTypeId -> writeSemanticTypeId
         ", align 8" -> println
@@ -1767,7 +1877,8 @@ emitCore context: move EmitContext -> Unit uses Console {
         ", ptr %v$(request.expressionIndex)_selected_slot, i32 0, i32 1" -> println
         "  %v$(request.expressionIndex)_error_payload = load " -> print
         errorTypeId -> writeSemanticTypeId
-        ", ptr %v$(request.expressionIndex)_selected_payload_ptr, align $(context.typeAligns[errorTypeId])" -> println
+        ", ptr %v$(request.expressionIndex)_selected_payload_ptr, align " -> print
+        errorAlign -> writeDecimalLine
         ((okTypeId -> semanticTypeOwns) or (errorTypeId -> semanticTypeOwns)) -> if {
             request.expressionIndex * 1000 + 909 => partialDropRoot
             "  %v$(request.expressionIndex)_cleanup_result_slot = alloca " -> print
@@ -1787,11 +1898,13 @@ emitCore context: move EmitContext -> Unit uses Console {
             "  %v$(request.expressionIndex)_cleanup_should_drop = and i1 %v$(request.expressionIndex)_cleanup_has_value, %v$(request.expressionIndex)_cleanup_not_selected" -> println
             "  br i1 %v$(request.expressionIndex)_cleanup_should_drop, label %tryparallel$(request.expressionIndex)_cleanup_drop, label %tryparallel$(request.expressionIndex)_cleanup_next" -> println
             "tryparallel$(request.expressionIndex)_cleanup_drop:" -> println
-            "  %v$(request.expressionIndex)_cleanup_offset = mul i64 %v$(request.expressionIndex)_cleanup_index, $callbackStride" -> println
+            "  %v$(request.expressionIndex)_cleanup_offset = mul i64 %v$(request.expressionIndex)_cleanup_index, " -> print
+            callbackStride -> writeDecimalLine
             "  %v$(request.expressionIndex)_cleanup_ptr = getelementptr i8, ptr %v$(request.expressionIndex)_callback_results, i64 %v$(request.expressionIndex)_cleanup_offset" -> println
             "  %v$(request.expressionIndex)_cleanup_result = load " -> print
             request.callbackTypeId -> writeSemanticTypeId
-            ", ptr %v$(request.expressionIndex)_cleanup_ptr, align $(context.typeAligns[request.callbackTypeId])" -> println
+            ", ptr %v$(request.expressionIndex)_cleanup_ptr, align " -> print
+            callbackAlign -> writeDecimalLine
             "  store " -> print
             request.callbackTypeId -> writeSemanticTypeId
             " %v$(request.expressionIndex)_cleanup_result, ptr %v$(request.expressionIndex)_cleanup_result_slot, align 8" -> println
@@ -1836,7 +1949,8 @@ emitCore context: move EmitContext -> Unit uses Console {
         ", ptr %v$(request.expressionIndex)_error_slot, i32 0, i32 1" -> println
         "  store " -> print
         errorTypeId -> writeSemanticTypeId
-        " %v$(request.expressionIndex)_error_payload, ptr %v$(request.expressionIndex)_outer_error_payload, align $(context.typeAligns[errorTypeId])" -> println
+        " %v$(request.expressionIndex)_error_payload, ptr %v$(request.expressionIndex)_outer_error_payload, align " -> print
+        errorAlign -> writeDecimalLine
         "  %v$(request.expressionIndex)_error_result = load " -> print
         request.outerTypeId -> writeSemanticTypeId
         ", ptr %v$(request.expressionIndex)_error_slot, align 8" -> println
@@ -1848,11 +1962,13 @@ emitCore context: move EmitContext -> Unit uses Console {
         "  %v$(request.expressionIndex)_copy_in_range = icmp ult i64 %v$(request.expressionIndex)_copy_index, %v$(request.expressionIndex)_length" -> println
         "  br i1 %v$(request.expressionIndex)_copy_in_range, label %tryparallel$(request.expressionIndex)_copy_body, label %tryparallel$(request.expressionIndex)_copy_done" -> println
         "tryparallel$(request.expressionIndex)_copy_body:" -> println
-        "  %v$(request.expressionIndex)_copy_result_offset = mul i64 %v$(request.expressionIndex)_copy_index, $callbackStride" -> println
+        "  %v$(request.expressionIndex)_copy_result_offset = mul i64 %v$(request.expressionIndex)_copy_index, " -> print
+        callbackStride -> writeDecimalLine
         "  %v$(request.expressionIndex)_copy_result_ptr = getelementptr i8, ptr %v$(request.expressionIndex)_callback_results, i64 %v$(request.expressionIndex)_copy_result_offset" -> println
         "  %v$(request.expressionIndex)_copy_result = load " -> print
         request.callbackTypeId -> writeSemanticTypeId
-        ", ptr %v$(request.expressionIndex)_copy_result_ptr, align $(context.typeAligns[request.callbackTypeId])" -> println
+        ", ptr %v$(request.expressionIndex)_copy_result_ptr, align " -> print
+        callbackAlign -> writeDecimalLine
         "  %v$(request.expressionIndex)_copy_result_slot = alloca " -> print
         request.callbackTypeId -> writeSemanticTypeId
         ", align 8" -> println
@@ -1864,12 +1980,15 @@ emitCore context: move EmitContext -> Unit uses Console {
         ", ptr %v$(request.expressionIndex)_copy_result_slot, i32 0, i32 1" -> println
         "  %v$(request.expressionIndex)_copy_payload = load " -> print
         okTypeId -> writeSemanticTypeId
-        ", ptr %v$(request.expressionIndex)_copy_payload_ptr, align $(context.typeAligns[okTypeId])" -> println
-        "  %v$(request.expressionIndex)_copy_output_offset = mul i64 %v$(request.expressionIndex)_copy_index, $okStride" -> println
+        ", ptr %v$(request.expressionIndex)_copy_payload_ptr, align " -> print
+        okAlign -> writeDecimalLine
+        "  %v$(request.expressionIndex)_copy_output_offset = mul i64 %v$(request.expressionIndex)_copy_index, " -> print
+        okStride -> writeDecimalLine
         "  %v$(request.expressionIndex)_copy_output_ptr = getelementptr i8, ptr %v$(request.expressionIndex)_data, i64 %v$(request.expressionIndex)_copy_output_offset" -> println
         "  store " -> print
         okTypeId -> writeSemanticTypeId
-        " %v$(request.expressionIndex)_copy_payload, ptr %v$(request.expressionIndex)_copy_output_ptr, align $(context.typeAligns[okTypeId])" -> println
+        " %v$(request.expressionIndex)_copy_payload, ptr %v$(request.expressionIndex)_copy_output_ptr, align " -> print
+        okAlign -> writeDecimalLine
         "  %v$(request.expressionIndex)_copy_next = add i64 %v$(request.expressionIndex)_copy_index, 1" -> println
         "  br label %tryparallel$(request.expressionIndex)_copy_header" -> println
         "tryparallel$(request.expressionIndex)_copy_done:" -> println
@@ -3924,15 +4043,19 @@ emitCore context: move EmitContext -> Unit uses Console {
                 context.ir[regionNode.operand0] => regionTryParallelSource
                 context.ir[regionNode.operand1] => regionTryParallelBodyCall
                 context.types[regionTryParallelBodyCall.typeId] => regionTryParallelCallbackType
+                context.typeSizes[regionTryParallelCallbackType.first] => regionTryParallelOkStride
+                context.typeSizes[regionTryParallelBodyCall.typeId] => regionTryParallelCallbackStride
                 "  %v$(regionNodeIndex!)_input = extractvalue %sl.array.i32 " -> print
                 (regionTryParallelSource.kind == 5 and ownerIndex! >= 0 and context.ir[ownerIndex!].kind == 0 and context.ir[ownerIndex!].operand1 >= 0 and regionTryParallelSource.symbol == context.ir[context.ir[ownerIndex!].operand1].symbol) -> if { "%arg" -> print } else { "%v$(regionNode.operand0)" -> print }
                 ", 0" -> println
                 "  %v$(regionNodeIndex!)_length = extractvalue %sl.array.i32 " -> print
                 (regionTryParallelSource.kind == 5 and ownerIndex! >= 0 and context.ir[ownerIndex!].kind == 0 and context.ir[ownerIndex!].operand1 >= 0 and regionTryParallelSource.symbol == context.ir[context.ir[ownerIndex!].operand1].symbol) -> if { "%arg" -> print } else { "%v$(regionNode.operand0)" -> print }
                 ", 1" -> println
-                "  %v$(regionNodeIndex!)_bytes = mul i64 %v$(regionNodeIndex!)_length, $(context.typeSizes[regionTryParallelCallbackType.first])" -> println
+                "  %v$(regionNodeIndex!)_bytes = mul i64 %v$(regionNodeIndex!)_length, " -> print
+                regionTryParallelOkStride -> writeDecimalLine
                 "  %v$(regionNodeIndex!)_data = call ptr @malloc(i64 %v$(regionNodeIndex!)_bytes)" -> println
-                "  %v$(regionNodeIndex!)_callback_bytes = mul i64 %v$(regionNodeIndex!)_length, $(context.typeSizes[regionTryParallelBodyCall.typeId])" -> println
+                "  %v$(regionNodeIndex!)_callback_bytes = mul i64 %v$(regionNodeIndex!)_length, " -> print
+                regionTryParallelCallbackStride -> writeDecimalLine
                 "  %v$(regionNodeIndex!)_callback_results = call ptr @malloc(i64 %v$(regionNodeIndex!)_callback_bytes)" -> println
                 "  %v$(regionNodeIndex!)_initialized = call ptr @malloc(i64 %v$(regionNodeIndex!)_length)" -> println
                 "  call void @llvm.memset.p0.i64(ptr %v$(regionNodeIndex!)_initialized, i8 0, i64 %v$(regionNodeIndex!)_length, i1 false)" -> println
@@ -4096,7 +4219,10 @@ emitCore context: move EmitContext -> Unit uses Console {
                 }
                 ")" -> println
             }
-            (regionNode.kind == 6 and regionNode.symbol != -115 and regionNode.opcode != -205 and regionNode.opcode != -207 and regionNode.opcode != -208 and regionNode.opcode != -209 and not (regionNode.parent >= 0 and context.ir[regionNode.parent].kind == 6 and (context.ir[regionNode.parent].opcode == -207 or context.ir[regionNode.parent].opcode == -209) and context.ir[regionNode.parent].operand1 == regionNodeIndex!)) -> if {
+            (regionNode.kind == 6 and (regionNode.opcode == -210 or regionNode.opcode == -211)) -> if {
+                ProcessCallRequest { callIndex: regionNodeIndex!, ownerIndex: ownerIndex! } -> emitProcessCall
+            }
+            (regionNode.kind == 6 and regionNode.symbol != -115 and regionNode.opcode != -205 and regionNode.opcode != -207 and regionNode.opcode != -208 and regionNode.opcode != -209 and regionNode.opcode != -210 and regionNode.opcode != -211 and regionNode.opcode != -212 and not (regionNode.parent >= 0 and context.ir[regionNode.parent].kind == 6 and (context.ir[regionNode.parent].opcode == -207 or context.ir[regionNode.parent].opcode == -209) and context.ir[regionNode.parent].operand1 == regionNodeIndex!)) -> if {
                 (regionNode.symbol == -101 or regionNode.symbol == -102) -> if {
                     regionNodeIndex! -> callArgumentIndex => regionArgumentIndex
                     context.ir[regionArgumentIndex] => regionArgument
@@ -5613,15 +5739,19 @@ emitCore context: move EmitContext -> Unit uses Console {
                     context.ir[expression.operand0] => tryParallelSource
                     context.ir[expression.operand1] => tryParallelBodyCall
                     context.types[tryParallelBodyCall.typeId] => tryParallelCallbackType
+                    context.typeSizes[tryParallelCallbackType.first] => tryParallelOkStride
+                    context.typeSizes[tryParallelBodyCall.typeId] => tryParallelCallbackStride
                     "  %v$(expressionIndex!)_input = extractvalue %sl.array.i32 " -> print
                     (tryParallelSource.kind == 5 and function.operand1 >= 0 and tryParallelSource.symbol == context.ir[function.operand1].symbol) -> if { "%arg" -> print } else { "%v$(expression.operand0)" -> print }
                     ", 0" -> println
                     "  %v$(expressionIndex!)_length = extractvalue %sl.array.i32 " -> print
                     (tryParallelSource.kind == 5 and function.operand1 >= 0 and tryParallelSource.symbol == context.ir[function.operand1].symbol) -> if { "%arg" -> print } else { "%v$(expression.operand0)" -> print }
                     ", 1" -> println
-                    "  %v$(expressionIndex!)_bytes = mul i64 %v$(expressionIndex!)_length, $(context.typeSizes[tryParallelCallbackType.first])" -> println
+                    "  %v$(expressionIndex!)_bytes = mul i64 %v$(expressionIndex!)_length, " -> print
+                    tryParallelOkStride -> writeDecimalLine
                     "  %v$(expressionIndex!)_data = call ptr @malloc(i64 %v$(expressionIndex!)_bytes)" -> println
-                    "  %v$(expressionIndex!)_callback_bytes = mul i64 %v$(expressionIndex!)_length, $(context.typeSizes[tryParallelBodyCall.typeId])" -> println
+                    "  %v$(expressionIndex!)_callback_bytes = mul i64 %v$(expressionIndex!)_length, " -> print
+                    tryParallelCallbackStride -> writeDecimalLine
                     "  %v$(expressionIndex!)_callback_results = call ptr @malloc(i64 %v$(expressionIndex!)_callback_bytes)" -> println
                     "  %v$(expressionIndex!)_initialized = call ptr @malloc(i64 %v$(expressionIndex!)_length)" -> println
                     "  call void @llvm.memset.p0.i64(ptr %v$(expressionIndex!)_initialized, i8 0, i64 %v$(expressionIndex!)_length, i1 false)" -> println
@@ -5789,7 +5919,10 @@ emitCore context: move EmitContext -> Unit uses Console {
                     }
                     ")" -> println
                 }
-                (expression.kind == 6 and expression.symbol != -115 and expression.opcode != -205 and expression.opcode != -207 and expression.opcode != -208 and expression.opcode != -209 and not (expression.parent >= 0 and context.ir[expression.parent].kind == 6 and (context.ir[expression.parent].opcode == -207 or context.ir[expression.parent].opcode == -209) and context.ir[expression.parent].operand1 == expressionIndex!)) -> if {
+                (expression.kind == 6 and (expression.opcode == -210 or expression.opcode == -211)) -> if {
+                    ProcessCallRequest { callIndex: expressionIndex!, ownerIndex: functionIndex! } -> emitProcessCall
+                }
+                (expression.kind == 6 and expression.symbol != -115 and expression.opcode != -205 and expression.opcode != -207 and expression.opcode != -208 and expression.opcode != -209 and expression.opcode != -210 and expression.opcode != -211 and expression.opcode != -212 and not (expression.parent >= 0 and context.ir[expression.parent].kind == 6 and (context.ir[expression.parent].opcode == -207 or context.ir[expression.parent].opcode == -209) and context.ir[expression.parent].operand1 == expressionIndex!)) -> if {
                     (expression.symbol == -101 or expression.symbol == -102) -> if {
                         expressionIndex! -> callArgumentIndex => runtimeArgumentIndex
                         context.ir[runtimeArgumentIndex] => runtimeArgument
@@ -6747,13 +6880,12 @@ emitCore context: move EmitContext -> Unit uses Console {
     }
     usesDictionary! -> if {
         "%sl.dict = type { ptr, ptr, i64, i64 }" -> println
-        intrinsicRuntimeModule! < 0 -> if { "declare void @llvm.trap()" -> println }
         (not usesDynamicArray! and intrinsicRuntimeModule! < 0) -> if {
             "declare ptr @malloc(i64)" -> println
             "declare void @free(ptr)" -> println
         }
     }
-    (usesEnumMatch! and not usesDictionary!) -> if { "declare void @llvm.trap()" -> println }
+    (usesDictionary! or usesEnumMatch! or usesSourceText!) -> if { "declare void @llvm.trap()" -> println }
     false => usesText!
     0 => textTypeSearch!
     textTypeSearch! < (context.ir -> len) -> while {
@@ -6816,7 +6948,7 @@ emitCore context: move EmitContext -> Unit uses Console {
     0 => externalCallIndex!
     externalCallIndex! < (context.ir -> len) -> while {
         context.ir[externalCallIndex!] => externalCall
-        (externalCall.kind == 6 and externalCall.opcode != -205 and externalCall.targetModule >= 0 and externalCall.symbol >= 0) -> if {
+        (externalCall.kind == 6 and externalCall.opcode != -205 and externalCall.opcode != -210 and externalCall.opcode != -211 and externalCall.opcode != -212 and externalCall.targetModule >= 0 and externalCall.symbol >= 0) -> if {
             false => externalDefined!
             externalCall.targetModule < (context.ranges -> len) -> if {
                 context.ranges[externalCall.targetModule].symbolStart + externalCall.symbol => externalGlobalSymbol
@@ -6883,7 +7015,9 @@ emitCore context: move EmitContext -> Unit uses Console {
             "  %output_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 2" -> println
             "  %output = load ptr, ptr %output_slot, align 8" -> println
             parallelExpression.opcode == -209 -> if {
-                "  %output_offset = mul i64 %index, $(context.typeSizes[parallelBodyCall.typeId])" -> println
+                context.typeSizes[parallelBodyCall.typeId] => parallelBodyResultSize
+                "  %output_offset = mul i64 %index, " -> print
+                parallelBodyResultSize -> writeDecimalLine
                 "  %output_address = getelementptr i8, ptr %output, i64 %output_offset" -> println
                 "  store " -> print
                 parallelBodyCall -> writeIrType
@@ -7359,11 +7493,15 @@ emitCore context: move EmitContext -> Unit uses Console {
                         context.ir[entryExpression.operand0] => entryTryParallelSource
                         context.ir[entryExpression.operand1] => entryTryParallelBodyCall
                         context.types[entryTryParallelBodyCall.typeId] => entryTryParallelCallbackType
+                        context.typeSizes[entryTryParallelCallbackType.first] => entryTryParallelOkStride
+                        context.typeSizes[entryTryParallelBodyCall.typeId] => entryTryParallelCallbackStride
                         "  %v$(entryExpressionIndex!)_input = extractvalue %sl.array.i32 %v$(entryExpression.operand0), 0" -> println
                         "  %v$(entryExpressionIndex!)_length = extractvalue %sl.array.i32 %v$(entryExpression.operand0), 1" -> println
-                        "  %v$(entryExpressionIndex!)_bytes = mul i64 %v$(entryExpressionIndex!)_length, $(context.typeSizes[entryTryParallelCallbackType.first])" -> println
+                        "  %v$(entryExpressionIndex!)_bytes = mul i64 %v$(entryExpressionIndex!)_length, " -> print
+                        entryTryParallelOkStride -> writeDecimalLine
                         "  %v$(entryExpressionIndex!)_data = call ptr @malloc(i64 %v$(entryExpressionIndex!)_bytes)" -> println
-                        "  %v$(entryExpressionIndex!)_callback_bytes = mul i64 %v$(entryExpressionIndex!)_length, $(context.typeSizes[entryTryParallelBodyCall.typeId])" -> println
+                        "  %v$(entryExpressionIndex!)_callback_bytes = mul i64 %v$(entryExpressionIndex!)_length, " -> print
+                        entryTryParallelCallbackStride -> writeDecimalLine
                         "  %v$(entryExpressionIndex!)_callback_results = call ptr @malloc(i64 %v$(entryExpressionIndex!)_callback_bytes)" -> println
                         "  %v$(entryExpressionIndex!)_initialized = call ptr @malloc(i64 %v$(entryExpressionIndex!)_length)" -> println
                         "  call void @llvm.memset.p0.i64(ptr %v$(entryExpressionIndex!)_initialized, i8 0, i64 %v$(entryExpressionIndex!)_length, i1 false)" -> println
@@ -7525,7 +7663,10 @@ emitCore context: move EmitContext -> Unit uses Console {
                         } else { "%v$(entryExpression.operand0)" -> print }
                         ")" -> println
                     }
-                    (entryExpression.kind == 6 and entryExpression.symbol != -115 and entryExpression.opcode != -205 and entryExpression.opcode != -207 and entryExpression.opcode != -208 and entryExpression.opcode != -209 and not (entryExpression.parent >= 0 and context.ir[entryExpression.parent].kind == 6 and (context.ir[entryExpression.parent].opcode == -207 or context.ir[entryExpression.parent].opcode == -209) and context.ir[entryExpression.parent].operand1 == entryExpressionIndex!)) -> if {
+                    (entryExpression.kind == 6 and (entryExpression.opcode == -210 or entryExpression.opcode == -211)) -> if {
+                        ProcessCallRequest { callIndex: entryExpressionIndex!, ownerIndex: functionIndex! } -> emitProcessCall
+                    }
+                    (entryExpression.kind == 6 and entryExpression.symbol != -115 and entryExpression.opcode != -205 and entryExpression.opcode != -207 and entryExpression.opcode != -208 and entryExpression.opcode != -209 and entryExpression.opcode != -210 and entryExpression.opcode != -211 and entryExpression.opcode != -212 and not (entryExpression.parent >= 0 and context.ir[entryExpression.parent].kind == 6 and (context.ir[entryExpression.parent].opcode == -207 or context.ir[entryExpression.parent].opcode == -209) and context.ir[entryExpression.parent].operand1 == entryExpressionIndex!)) -> if {
                         (entryExpression.symbol == -101 or entryExpression.symbol == -102) -> if {
                             entryExpressionIndex! -> callArgumentIndex => entryRuntimeArgumentIndex
                             context.ir[entryRuntimeArgumentIndex] => runtimeArgument
@@ -7986,6 +8127,16 @@ usesParallelRuntime context: EmitContext -> Bool {
     0 => nodeIndex!
     nodeIndex! < (context.ir -> len) -> while {
         (context.ir[nodeIndex!].opcode == -207 or context.ir[nodeIndex!].opcode == -209 or context.ir[nodeIndex!].symbol == -115) -> if { true => usesRuntime! }
+        nodeIndex! + 1 => nodeIndex!
+    }
+    usesRuntime!
+}
+
+usesProcessRuntime context: EmitContext -> Bool {
+    false => usesRuntime!
+    0 => nodeIndex!
+    nodeIndex! < (context.ir -> len) -> while {
+        (context.ir[nodeIndex!].opcode == -210 or context.ir[nodeIndex!].opcode == -211) -> if { true => usesRuntime! }
         nodeIndex! + 1 => nodeIndex!
     }
     usesRuntime!
@@ -9020,6 +9171,265 @@ emitLinuxTextRuntime capturesParallelOutput: Bool -> Unit uses Console {
     }
 }
 
+emitProcessRuntimeCommon: -> Unit uses Console {
+    """
+    define internal ptr @smalllang_process_copy_text(ptr %data, i64 %length) {
+    entry:
+      %capacity = add i64 %length, 1
+      %copy = call ptr @malloc(i64 %capacity)
+      %allocated = icmp ne ptr %copy, null
+      br i1 %allocated, label %loop, label %fail
+    loop:
+      %index = phi i64 [ 0, %entry ], [ %next, %body ]
+      %done = icmp eq i64 %index, %length
+      br i1 %done, label %terminate, label %body
+    body:
+      %source = getelementptr i8, ptr %data, i64 %index
+      %byte = load i8, ptr %source, align 1
+      %destination = getelementptr i8, ptr %copy, i64 %index
+      store i8 %byte, ptr %destination, align 1
+      %next = add i64 %index, 1
+      br label %loop
+    terminate:
+      %null_slot = getelementptr i8, ptr %copy, i64 %length
+      store i8 0, ptr %null_slot, align 1
+      ret ptr %copy
+    fail:
+      ret ptr null
+    }
+    define internal void @smalllang_process_dispose_argv(ptr %argv, i64 %count) {
+    entry:
+      br label %loop
+    loop:
+      %index = phi i64 [ 0, %entry ], [ %next, %body ]
+      %done = icmp eq i64 %index, %count
+      br i1 %done, label %finish, label %body
+    body:
+      %slot = getelementptr ptr, ptr %argv, i64 %index
+      %value = load ptr, ptr %slot, align 8
+      call void @free(ptr %value)
+      %next = add i64 %index, 1
+      br label %loop
+    finish:
+      call void @free(ptr %argv)
+      ret void
+    }
+    define internal ptr @smalllang_process_build_argv(ptr %records, i64 %count) {
+    entry:
+      %slots = add i64 %count, 1
+      %bytes = mul i64 %slots, 8
+      %argv = call ptr @malloc(i64 %bytes)
+      %allocated = icmp ne ptr %argv, null
+      br i1 %allocated, label %loop, label %fail
+    loop:
+      %index = phi i64 [ 0, %entry ], [ %next, %stored ]
+      %done = icmp eq i64 %index, %count
+      br i1 %done, label %terminate, label %copy
+    copy:
+      %record = getelementptr %sl.text, ptr %records, i64 %index
+      %data_slot = getelementptr inbounds %sl.text, ptr %record, i32 0, i32 0
+      %data = load ptr, ptr %data_slot, align 8
+      %length_slot = getelementptr inbounds %sl.text, ptr %record, i32 0, i32 1
+      %length = load i64, ptr %length_slot, align 8
+      %value = call ptr @smalllang_process_copy_text(ptr %data, i64 %length)
+      %copied = icmp ne ptr %value, null
+      br i1 %copied, label %stored, label %cleanup
+    stored:
+      %slot = getelementptr ptr, ptr %argv, i64 %index
+      store ptr %value, ptr %slot, align 8
+      %next = add i64 %index, 1
+      br label %loop
+    cleanup:
+      call void @smalllang_process_dispose_argv(ptr %argv, i64 %index)
+      ret ptr null
+    terminate:
+      %null_slot = getelementptr ptr, ptr %argv, i64 %count
+      store ptr null, ptr %null_slot, align 8
+      ret ptr %argv
+    fail:
+      ret ptr null
+    }
+    """ -> println
+}
+
+emitProcessTypeRuntime: -> Unit uses Console {
+    """
+    %smalllang.process_result = type { i32, i32 }
+    @smalllang_process_error_spawn = private constant [5 x i8] c"spawn"
+    @smalllang_process_error_wait = private constant [4 x i8] c"wait"
+    @smalllang_process_error_signal = private constant [6 x i8] c"signal"
+    """ -> println
+}
+
+emitWindowsProcessRuntime: -> Unit uses Console {
+    true -> if { emitProcessRuntimeCommon }
+    """
+    declare i64 @_spawnvp(i32, ptr, ptr)
+    declare i32 @_open(ptr, i32, i32)
+    declare i32 @_dup(i32)
+    declare i32 @_dup2(i32, i32)
+    declare i32 @_close(i32)
+    define internal %smalllang.process_result @smalllang_run_process(ptr %records, i64 %count) {
+    entry:
+      %has_program = icmp ugt i64 %count, 0
+      br i1 %has_program, label %build, label %error
+    build:
+      %argv = call ptr @smalllang_process_build_argv(ptr %records, i64 %count)
+      %built = icmp ne ptr %argv, null
+      br i1 %built, label %spawn, label %error
+    spawn:
+      %program_slot = getelementptr ptr, ptr %argv, i64 0
+      %program = load ptr, ptr %program_slot, align 8
+      %raw = call i64 @_spawnvp(i32 0, ptr %program, ptr %argv)
+      call void @smalllang_process_dispose_argv(ptr %argv, i64 %count)
+      %spawned = icmp ne i64 %raw, -1
+      br i1 %spawned, label %success, label %error
+    success:
+      %exit_code = trunc i64 %raw to i32
+      %ok0 = insertvalue %smalllang.process_result poison, i32 %exit_code, 0
+      %ok1 = insertvalue %smalllang.process_result %ok0, i32 0, 1
+      ret %smalllang.process_result %ok1
+    error:
+      %error0 = insertvalue %smalllang.process_result poison, i32 0, 0
+      %error1 = insertvalue %smalllang.process_result %error0, i32 1, 1
+      ret %smalllang.process_result %error1
+    }
+    define internal %smalllang.process_result @smalllang_run_process_to_file(ptr %records, i64 %count, ptr %path, i64 %path_length) {
+    entry:
+      %path_copy = call ptr @smalllang_process_copy_text(ptr %path, i64 %path_length)
+      %path_ok = icmp ne ptr %path_copy, null
+      br i1 %path_ok, label %open, label %error
+    open:
+      %output = call i32 @_open(ptr %path_copy, i32 33537, i32 384)
+      call void @free(ptr %path_copy)
+      %opened = icmp sge i32 %output, 0
+      br i1 %opened, label %save, label %error
+    save:
+      %saved = call i32 @_dup(i32 1)
+      %saved_ok = icmp sge i32 %saved, 0
+      br i1 %saved_ok, label %redirect, label %close_error
+    redirect:
+      %redirected = call i32 @_dup2(i32 %output, i32 1)
+      %redirect_ok = icmp eq i32 %redirected, 0
+      br i1 %redirect_ok, label %run, label %restore_error
+    run:
+      %result = call %smalllang.process_result @smalllang_run_process(ptr %records, i64 %count)
+      %restored = call i32 @_dup2(i32 %saved, i32 1)
+      %closed_saved = call i32 @_close(i32 %saved)
+      %closed_output = call i32 @_close(i32 %output)
+      ret %smalllang.process_result %result
+    restore_error:
+      %restore_failed = call i32 @_dup2(i32 %saved, i32 1)
+      %close_saved_failed = call i32 @_close(i32 %saved)
+      br label %close_error
+    close_error:
+      %close_output_failed = call i32 @_close(i32 %output)
+      br label %error
+    error:
+      %error0 = insertvalue %smalllang.process_result poison, i32 0, 0
+      %error1 = insertvalue %smalllang.process_result %error0, i32 1, 1
+      ret %smalllang.process_result %error1
+    }
+    """ -> println
+}
+
+emitLinuxProcessRuntime hasComputeRuntime: Bool -> Unit uses Console {
+    true -> if { emitProcessRuntimeCommon }
+    not hasComputeRuntime -> if { "declare i32 @close(i32)" -> println }
+    """
+    declare i32 @fork()
+    declare i32 @execvp(ptr, ptr)
+    declare i32 @waitpid(i32, ptr, i32)
+    declare void @_exit(i32)
+    declare i32 @open(ptr, i32, i32)
+    declare i32 @dup2(i32, i32)
+    define internal %smalllang.process_result @smalllang_run_process_with_output(ptr %records, i64 %count, i32 %output) {
+    entry:
+      %has_program = icmp ugt i64 %count, 0
+      br i1 %has_program, label %build, label %spawn_error
+    build:
+      %argv = call ptr @smalllang_process_build_argv(ptr %records, i64 %count)
+      %built = icmp ne ptr %argv, null
+      br i1 %built, label %fork, label %spawn_error
+    fork:
+      %pid = call i32 @fork()
+      %fork_failed = icmp slt i32 %pid, 0
+      br i1 %fork_failed, label %cleanup_spawn_error, label %forked
+    forked:
+      %child = icmp eq i32 %pid, 0
+      br i1 %child, label %child_process, label %parent
+    child_process:
+      %redirect = icmp sge i32 %output, 0
+      br i1 %redirect, label %child_redirect, label %child_exec
+    child_redirect:
+      %redirected = call i32 @dup2(i32 %output, i32 1)
+      br label %child_exec
+    child_exec:
+      %program_slot = getelementptr ptr, ptr %argv, i64 0
+      %program = load ptr, ptr %program_slot, align 8
+      %exec_result = call i32 @execvp(ptr %program, ptr %argv)
+      call void @_exit(i32 127)
+      unreachable
+    parent:
+      %status_slot = alloca i32, align 4
+      %waited = call i32 @waitpid(i32 %pid, ptr %status_slot, i32 0)
+      call void @smalllang_process_dispose_argv(ptr %argv, i64 %count)
+      %wait_ok = icmp eq i32 %waited, %pid
+      br i1 %wait_ok, label %decode, label %wait_error
+    decode:
+      %status = load i32, ptr %status_slot, align 4
+      %signal_bits = and i32 %status, 127
+      %exited = icmp eq i32 %signal_bits, 0
+      br i1 %exited, label %success, label %signal_error
+    success:
+      %shifted = ashr i32 %status, 8
+      %exit_code = and i32 %shifted, 255
+      %ok0 = insertvalue %smalllang.process_result poison, i32 %exit_code, 0
+      %ok1 = insertvalue %smalllang.process_result %ok0, i32 0, 1
+      ret %smalllang.process_result %ok1
+    cleanup_spawn_error:
+      call void @smalllang_process_dispose_argv(ptr %argv, i64 %count)
+      br label %spawn_error
+    spawn_error:
+      %spawn0 = insertvalue %smalllang.process_result poison, i32 0, 0
+      %spawn1 = insertvalue %smalllang.process_result %spawn0, i32 1, 1
+      ret %smalllang.process_result %spawn1
+    wait_error:
+      %wait0 = insertvalue %smalllang.process_result poison, i32 0, 0
+      %wait1 = insertvalue %smalllang.process_result %wait0, i32 2, 1
+      ret %smalllang.process_result %wait1
+    signal_error:
+      %signal0 = insertvalue %smalllang.process_result poison, i32 0, 0
+      %signal1 = insertvalue %smalllang.process_result %signal0, i32 3, 1
+      ret %smalllang.process_result %signal1
+    }
+    define internal %smalllang.process_result @smalllang_run_process(ptr %records, i64 %count) {
+    entry:
+      %result = call %smalllang.process_result @smalllang_run_process_with_output(ptr %records, i64 %count, i32 -1)
+      ret %smalllang.process_result %result
+    }
+    define internal %smalllang.process_result @smalllang_run_process_to_file(ptr %records, i64 %count, ptr %path, i64 %path_length) {
+    entry:
+      %path_copy = call ptr @smalllang_process_copy_text(ptr %path, i64 %path_length)
+      %path_ok = icmp ne ptr %path_copy, null
+      br i1 %path_ok, label %open_output, label %error
+    open_output:
+      %output = call i32 @open(ptr %path_copy, i32 577, i32 438)
+      call void @free(ptr %path_copy)
+      %opened = icmp sge i32 %output, 0
+      br i1 %opened, label %run, label %error
+    run:
+      %result = call %smalllang.process_result @smalllang_run_process_with_output(ptr %records, i64 %count, i32 %output)
+      %closed = call i32 @close(i32 %output)
+      ret %smalllang.process_result %result
+    error:
+      %error0 = insertvalue %smalllang.process_result poison, i32 0, 0
+      %error1 = insertvalue %smalllang.process_result %error0, i32 1, 1
+      ret %smalllang.process_result %error1
+    }
+    """ -> println
+}
+
 emitWasmTextRuntime: -> Unit uses Console {
     """"
     @sl_runtime_newline = private constant [1 x i8] c"\0A"
@@ -9051,6 +9461,7 @@ public emit sources: move [Text; ~] -> Unit uses Console {
     prepareRequest! -> prepare => context!
     context! -> usesParallelRuntime => capturesParallelOutput
     context! -> usesTextRuntime => usesTextOutput
+    context! -> usesProcessRuntime => needsProcessRuntime
     capturesParallelOutput -> if { emitMemoryOutputSinkRuntime }
     (usesTextOutput or capturesParallelOutput) -> if { capturesParallelOutput -> emitWindowsTextRuntime }
     capturesParallelOutput -> if { emitWindowsComputeRuntime }
@@ -9064,7 +9475,9 @@ public emit sources: move [Text; ~] -> Unit uses Console {
         moduleIdentity.pathHash == UInt64(12254170256457402476) -> if { moduleIdentity.sourceIndex => runtimeModule! }
         runtimeModuleSearch! + 1 => runtimeModuleSearch!
     }
+    needsProcessRuntime -> if { emitProcessTypeRuntime }
     context! -> emitCore
+    needsProcessRuntime -> if { emitWindowsProcessRuntime }
     runtimeModule! >= 0 -> if {
         runtimeModule! -> llvmRuntime.emitWindows
     }
@@ -9082,12 +9495,15 @@ public emitLinux sources: move [Text; ~] -> Unit uses Console {
     prepareRequest! -> prepare => context!
     context! -> usesParallelRuntime => capturesParallelOutput
     context! -> usesTextRuntime => usesTextOutput
+    context! -> usesProcessRuntime => needsProcessRuntime
     capturesParallelOutput -> if { emitMemoryOutputSinkRuntime }
     (usesTextOutput or capturesParallelOutput) -> if { capturesParallelOutput -> emitLinuxTextRuntime }
     capturesParallelOutput -> if { emitLinuxComputeRuntime }
     context! -> usesIntInterpolation -> if { emitIntTextRuntime }
     context! -> usesBoolInterpolation -> if { emitBoolTextRuntime }
+    needsProcessRuntime -> if { emitProcessTypeRuntime }
     context! -> emitCore
+    needsProcessRuntime -> if { capturesParallelOutput -> emitLinuxProcessRuntime }
 }
 
 public emitWasm sources: move [Text; ~] -> Unit uses Console {

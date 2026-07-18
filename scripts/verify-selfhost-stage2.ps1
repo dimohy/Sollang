@@ -20,7 +20,8 @@ $multiLibrarySource = Join-Path $repoRoot "tests\SmallLang.ExampleTests\Fixtures
 $multiMainSource = Join-Path $repoRoot "tests\SmallLang.ExampleTests\Fixtures\selfhost-stage2-main-smoke.sl"
 $groupedNotSource = Join-Path $repoRoot "tests\SmallLang.ExampleTests\Fixtures\selfhost-stage2-grouped-not-smoke.sl"
 $semanticContextSource = Join-Path $repoRoot "selfhost\semantic\context.sl"
-$expectedStage2Bytes = 7247585L
+$processSource = Join-Path $repoRoot "stdlib\sys\process.sl"
+$expectedStage2Bytes = 7997972L
 
 New-Item -ItemType Directory -Force -Path $artifactsDir | Out-Null
 
@@ -77,7 +78,7 @@ function Test-Stage2IsCurrent {
     }
 
     $stage2Time = (Get-Item $stage2Path).LastWriteTimeUtc
-    $inputs = @($stage1Path, $manifestPath)
+    $inputs = @($stage1Path, $manifestPath, $processSource)
     $inputs += Get-Content $manifestPath |
         Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
         ForEach-Object { Join-Path $repoRoot $_.Trim() }
@@ -104,6 +105,7 @@ if (Test-Stage2IsCurrent) {
     $sourcePaths = Get-Content $manifestPath |
         Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
         ForEach-Object { (Resolve-Path (Join-Path $repoRoot $_.Trim())).Path }
+    $sourcePaths += (Resolve-Path $processSource).Path
     $stage2ErrorPath = Join-Path $artifactsDir "selfhost-stage2.err.log"
     $stage2Process = Invoke-ProcessToFile `
         -FilePath $stage1Path `
@@ -186,7 +188,7 @@ if ($multiStage1Hash -ne $multiStage2Hash) {
 }
 Write-Host "[stage2 4/6] PASS $multiStage2Hash"
 
-Write-Host "[stage2 5/6] Assemble, link, and execute both stage-2 smoke modules."
+Write-Host "[stage2 5/6] Assemble, link, execute, and exercise the native build path."
 foreach ($case in @(
     @($singleStage2Llvm, "stage2-check-single.exe", "stage2-single-ok"),
     @($multiStage2Llvm, "stage2-check-multi.exe", "stage2-multi-ok"),
@@ -202,7 +204,32 @@ foreach ($case in @(
         throw "stage-2 smoke execution failed: expected '$($case[2])', actual '$actual'"
     }
 }
-Write-Host "[stage2 5/6] PASS single, grouped-not, and multi-file execution."
+
+$nativeBuildLlvm = Join-Path $artifactsDir "stage2-check-native-build.ll"
+$nativeBuildExecutable = Join-Path $artifactsDir "stage2-check-native-build.exe"
+$nativeBuildOutput = Join-Path $artifactsDir "stage2-check-native-build.stdout.txt"
+$nativeBuildError = Join-Path $artifactsDir "stage2-check-native-build.stderr.txt"
+Remove-Item -LiteralPath $nativeBuildLlvm, $nativeBuildExecutable -ErrorAction SilentlyContinue
+$nativeBuildProcess = Invoke-ProcessToFile `
+    -FilePath $stage2Path `
+    -ArgumentList @("build-windows", $nativeBuildLlvm, $nativeBuildExecutable, $clangPath, $singleSource) `
+    -OutputPath $nativeBuildOutput `
+    -ErrorPath $nativeBuildError
+Assert-ProcessSucceeded $nativeBuildProcess $nativeBuildError "stage-2 native build"
+
+$nativeBuildMessage = ([System.IO.File]::ReadAllText($nativeBuildOutput)).TrimEnd("`r", "`n")
+if ($nativeBuildMessage -ne "native build = 0") {
+    throw "stage-2 native build did not report success: '$nativeBuildMessage'"
+}
+if (-not (Test-Path $nativeBuildLlvm) -or -not (Test-Path $nativeBuildExecutable)) {
+    throw "stage-2 native build did not produce both LLVM and executable artifacts"
+}
+
+$nativeBuildActual = (& $nativeBuildExecutable | Out-String).TrimEnd("`r", "`n")
+if ($LASTEXITCODE -ne 0 -or $nativeBuildActual -ne "stage2-single-ok") {
+    throw "stage-2 native build execution failed: expected 'stage2-single-ok', actual '$nativeBuildActual'"
+}
+Write-Host "[stage2 5/6] PASS direct smoke execution and self-host runToFile/run native build."
 
 Write-Host "[stage2 6/6] Compare C# reference and native SL compiler runtime behavior."
 & dotnet run --project $runnerProject -c Release --no-build -- `

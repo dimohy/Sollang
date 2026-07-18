@@ -6066,3 +6066,39 @@ generic function contracts remain. The focused generic-container migration is
 - [Rust drop check](https://doc.rust-lang.org/nightly/nomicon/dropck.html)
 - [Swift generics implementation model](https://download.swift.org/docs/assets/generics.pdf)
 - [Mojo generic traits and containers](https://mojolang.org/docs/manual/traits/)
+
+## D189 - Lower Shell-Free Process Intrinsics in the Self-Host Backend
+
+Status: Windows stage-2 implemented and verified; Linux full compiler runtime pending
+Date: 2026-07-19
+
+The complete self-host compiler imports `stdlib/sys/process.sl`, so its process
+intrinsics are public module API rather than declarations visible only inside
+that source. Calls are canonicalized after module IR merging by the
+`sys.process` module and resolved symbol identity. Stable internal opcodes
+distinguish `run`, `runToFile`, and the contextual `arguments` conversion; the
+backend therefore does not depend on a surface token that an imported call does
+not own.
+
+Both process operations lower through `%smalllang.process_result { i32, i32 }`.
+The first field is the exit code and the second is a portable spawn, wait, or
+signal error kind. The emitter converts that pair into the canonical
+`Result<Int, Text>` enum layout. Windows builds a null-terminated argv and uses
+`_spawnvp`; `runToFile` temporarily redirects stdout through `_open`, `_dup`,
+and `_dup2`. Linux emits the corresponding `fork`, `execvp`, `waitpid`, `open`,
+and `dup2` implementation without introducing a shell.
+
+The native SL driver normalizes the process result before its control-flow
+branch, then invokes its own LLVM emission through `runToFile` and Clang through
+`run`. The durable stage-2 verifier now checks that actual `build-windows` path,
+requires both output artifacts, and executes the resulting program. The
+7,997,972-byte Windows stage-2 compiler passes all six differential phases;
+single-file, grouped-Boolean, and imported multi-file LLVM are identical across
+stage 1 and stage 2, and the self-built executable prints `stage2-single-ok`.
+This restores the native stage-2 checklist to 8/8 while leaving the canonical
+language roadmap at 48.5/60 (80.8%).
+
+The Linux process ABI itself is emitted, but a complete Linux-hosted self-host
+compiler currently reaches an independent missing `sl_runtime_map_text`
+SourceText runtime symbol. Linux stage-2 parity must not be claimed until that
+runtime gate is implemented and verified.
