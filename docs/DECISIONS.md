@@ -5869,7 +5869,7 @@ fragile function symbol ordinal.
 
 ## D183 - Give Self-Host `Option` and `Result` a Stable LLVM Value ABI
 
-Status: constructor and contextual matching executable; owned drop pending
+Status: constructor, contextual matching, and owned array payload drop executable
 Date: 2026-07-19
 
 The self-host compiler now preserves qualified generic enum constructors such
@@ -5893,7 +5893,17 @@ the native program. Contextual `when` arms now compare the runtime tag, execute
 only the selected region, and bind both `Ok(item)` integer payloads and
 `Err(error)` text payloads from the shared storage area. The focused
 grammar, enum-parser, ordered-output, tryParallel-IR, and executable Result
-regression set passes 5/5. Tag-directed owned-payload destruction and self-host
-opcode `-209` runtime lowering remain open, so the
-parallel checklist remains 26/28 (92.9%) and the canonical roadmap remains
-48.5/60 gates (80.8%).
+regression set passes 5/5. The initial constructor/match checkpoint preceded
+owned-payload destruction and self-host opcode `-209` runtime lowering.
+
+The follow-up owned payload gate normalizes nested generic type syntax before
+typed-IR scheduling, so `Result<[Int; ~], Text>.Ok(...)` no longer leaves a
+one-operand index node around its constructor. Entry points now run the same
+final owner cleanup as ordinary functions. Generic enum drop glue reads the
+runtime tag and destroys only the active `Option`/`Result` payload; dynamic
+arrays, dictionaries, boxes, `SourceText`, and owned nominal structs have
+direct payload paths. Example 391 assembles, links, and executes both an owned
+`Ok` and an inactive `Err`, and its LLVM contains one array-buffer `free` only
+on the `Ok` branch. Nested owned boxes/fixed arrays and self-host opcode `-209`
+still require the remaining recursive/runtime work, so progress does not move
+yet.

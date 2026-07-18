@@ -101,6 +101,24 @@ struct DropGlueRequest {
     hasPartialMoves: Bool
 }
 
+struct EnumDropRequest {
+    typeId: Int
+    valueKind: Int
+    valueIndex: Int
+    nameRoot: Int
+    bindingIndex: Int
+    regionIndex: Int
+}
+
+struct EnumPayloadDropRequest {
+    enumTypeId: Int
+    payloadTypeId: Int
+    nameRoot: Int
+    pointerRoot: Int
+    bindingIndex: Int
+    regionIndex: Int
+}
+
 struct EmitContext {
     sources: [Text; ~]
     ranges: [analysis.SourceAnalysisRange; ~]
@@ -315,6 +333,12 @@ isDynamicArrayType node: typedIr.TypedIrNode -> Bool {
 
 isDictionaryType node: typedIr.TypedIrNode -> Bool {
     node.typeId >= 0 -> if { node.typeKind == 5 } else { node.typeOrigin == 15 }
+}
+
+isGenericEnumType node: typedIr.TypedIrNode -> Bool {
+    node.typeId >= 0 -> if {
+        node.typeKind == 7 and (node.typeSymbol == 0 or node.typeSymbol == 1)
+    } else { false }
 }
 
 isNominalStructType node: typedIr.TypedIrNode -> Bool {
@@ -1346,6 +1370,101 @@ emitCore context: move EmitContext -> Unit uses Console {
         }
         dropTaskIndex! + 1 => dropTaskIndex!
         }
+    }
+    semanticTypeOwns typeId: Int -> Bool {
+        false => owns!
+        (typeId >= 0 and typeId < (context.types -> len)) -> if {
+            context.types[typeId] => semanticType
+            (semanticType.kind == 3 or semanticType.kind == 5 or semanticType.kind == 6) -> if { true => owns! }
+            (semanticType.kind == 1 and semanticType.origin == 1 and semanticType.symbol == 24) -> if { true => owns! }
+            (semanticType.kind == 1 and (semanticType.origin == 0 or semanticType.origin == 2)) -> if { true => owns! }
+        }
+        owns!
+    }
+    emitEnumPayloadDrop request: EnumPayloadDropRequest -> Unit uses Console {
+        context.types[request.payloadTypeId] => payloadType
+        payloadType.kind == 3 -> if {
+            "  %enumdrop$(request.nameRoot)_payload = load %sl.array.i32, ptr %enumdrop$(request.pointerRoot)_payload_ptr, align " -> print
+            context.typeAligns[request.payloadTypeId] -> writeDecimalLine
+            "  %enumdrop$(request.nameRoot)_data = extractvalue %sl.array.i32 %enumdrop$(request.nameRoot)_payload, 0" -> println
+            "  call void @free(ptr %enumdrop$(request.nameRoot)_data)" -> println
+        }
+        payloadType.kind == 5 -> if {
+            "  %enumdrop$(request.nameRoot)_payload = load %sl.dict, ptr %enumdrop$(request.pointerRoot)_payload_ptr, align " -> print
+            context.typeAligns[request.payloadTypeId] -> writeDecimalLine
+            "  %enumdrop$(request.nameRoot)_keys = extractvalue %sl.dict %enumdrop$(request.nameRoot)_payload, 0" -> println
+            "  call void @free(ptr %enumdrop$(request.nameRoot)_keys)" -> println
+            "  %enumdrop$(request.nameRoot)_values = extractvalue %sl.dict %enumdrop$(request.nameRoot)_payload, 1" -> println
+            "  call void @free(ptr %enumdrop$(request.nameRoot)_values)" -> println
+        }
+        payloadType.kind == 6 -> if {
+            "  %enumdrop$(request.nameRoot)_payload = load ptr, ptr %enumdrop$(request.pointerRoot)_payload_ptr, align " -> print
+            context.typeAligns[request.payloadTypeId] -> writeDecimalLine
+            "  call void @free(ptr %enumdrop$(request.nameRoot)_payload)" -> println
+        }
+        (payloadType.kind == 1 and payloadType.origin == 1 and payloadType.symbol == 24) -> if {
+            "  %enumdrop$(request.nameRoot)_payload = load %sl.source_text, ptr %enumdrop$(request.pointerRoot)_payload_ptr, align " -> print
+            context.typeAligns[request.payloadTypeId] -> writeDecimalLine
+            "  %enumdrop$(request.nameRoot)_owner = extractvalue %sl.source_text %enumdrop$(request.nameRoot)_payload, 2" -> println
+            "  call void @free(ptr %enumdrop$(request.nameRoot)_owner)" -> println
+        }
+        (payloadType.kind == 1 and (payloadType.origin == 0 or payloadType.origin == 2)) -> if {
+            "  %dropg$(request.nameRoot)_p0 = load %sl.struct.m$(payloadType.module)_s$(payloadType.symbol), ptr %enumdrop$(request.pointerRoot)_payload_ptr, align " -> print
+            context.typeAligns[request.payloadTypeId] -> writeDecimalLine
+            DropGlueRequest {
+                typeOrigin: payloadType.origin
+                typeModule: payloadType.module
+                typeSymbol: payloadType.symbol
+                valueKind: 2
+                valueIndex: -1
+                nameRoot: request.nameRoot
+                pathCode: 0
+                bindingIndex: request.bindingIndex
+                regionIndex: request.regionIndex
+                beforeAst: -1
+                parentTask: -1
+                fieldOrdinal: -1
+                hasPartialMoves: false
+            } -> emitDropGlue
+        }
+    }
+    emitEnumDrop request: EnumDropRequest -> Unit uses Console {
+        context.types[request.typeId] => enumType
+        request.valueKind == 2 -> if {
+            "  %enumdrop$(request.nameRoot)_value = load %sl.enum.t$(request.typeId), ptr %slot$(request.valueIndex), align " -> print
+            context.typeAligns[request.typeId] -> writeDecimalLine
+        }
+        "  %enumdrop$(request.nameRoot)_slot = alloca %sl.enum.t$(request.typeId), align 8" -> println
+        "  store %sl.enum.t$(request.typeId) " -> print
+        request.valueKind == 0 -> if { "%v$(request.valueIndex)" -> print }
+        request.valueKind == 1 -> if { "%arg" -> print }
+        request.valueKind == 2 -> if { "%enumdrop$(request.nameRoot)_value" -> print }
+        ", ptr %enumdrop$(request.nameRoot)_slot, align 8" -> println
+        "  %enumdrop$(request.nameRoot)_tag = extractvalue %sl.enum.t$(request.typeId) " -> print
+        request.valueKind == 0 -> if { "%v$(request.valueIndex)" -> print }
+        request.valueKind == 1 -> if { "%arg" -> print }
+        request.valueKind == 2 -> if { "%enumdrop$(request.nameRoot)_value" -> print }
+        ", 0" -> println
+        "  %enumdrop$(request.nameRoot)_payload_ptr = getelementptr inbounds %sl.enum.t$(request.typeId), ptr %enumdrop$(request.nameRoot)_slot, i32 0, i32 1" -> println
+        "  %enumdrop$(request.nameRoot)_is0 = icmp eq i32 %enumdrop$(request.nameRoot)_tag, 0" -> println
+        "  br i1 %enumdrop$(request.nameRoot)_is0, label %enumdrop$(request.nameRoot)_tag0, label %enumdrop$(request.nameRoot)_tag1" -> println
+        "enumdrop$(request.nameRoot)_tag0:" -> println
+        (enumType.symbol == 1 and enumType.first >= 0 and (enumType.first -> semanticTypeOwns)) -> if {
+            EnumPayloadDropRequest { enumTypeId: request.typeId, payloadTypeId: enumType.first, nameRoot: request.nameRoot * 10 + 1, pointerRoot: request.nameRoot, bindingIndex: request.bindingIndex, regionIndex: request.regionIndex } -> emitEnumPayloadDrop
+        }
+        "  br label %enumdrop$(request.nameRoot)_merge" -> println
+        "enumdrop$(request.nameRoot)_tag1:" -> println
+        enumType.symbol == 0 -> if {
+            (enumType.first >= 0 and (enumType.first -> semanticTypeOwns)) -> if {
+                EnumPayloadDropRequest { enumTypeId: request.typeId, payloadTypeId: enumType.first, nameRoot: request.nameRoot * 10 + 2, pointerRoot: request.nameRoot, bindingIndex: request.bindingIndex, regionIndex: request.regionIndex } -> emitEnumPayloadDrop
+            }
+        } else {
+            (enumType.second >= 0 and (enumType.second -> semanticTypeOwns)) -> if {
+                EnumPayloadDropRequest { enumTypeId: request.typeId, payloadTypeId: enumType.second, nameRoot: request.nameRoot * 10 + 2, pointerRoot: request.nameRoot, bindingIndex: request.bindingIndex, regionIndex: request.regionIndex } -> emitEnumPayloadDrop
+            }
+        }
+        "  br label %enumdrop$(request.nameRoot)_merge" -> println
+        "enumdrop$(request.nameRoot)_merge:" -> println
     }
     writeSemanticTypeId typeId: Int -> Unit uses Console {
         [typeId, ~] => typeTasks!
@@ -2568,6 +2687,18 @@ emitCore context: move EmitContext -> Unit uses Console {
                 }
                 "  call void @free(ptr %cleanup$(request.edgeIndex)_b$(ownedDropIndex!)_values)" -> println
             }
+            (ownedDropBeforeEdge! and ownedDropIsRoot! and not ownedDropMoved! and ownedDropCandidate.kind == 17 and ownedDropCandidate.parent == request.regionIndex and (ownedDropCandidate -> isGenericEnumType) and ownedDropCandidate.symbol != request.transferredSymbol) -> if {
+                0 => ownedEnumValueKind!
+                ownedDropCandidate.flags == 1 -> if { 2 => ownedEnumValueKind! }
+                EnumDropRequest {
+                    typeId: ownedDropCandidate.typeId
+                    valueKind: ownedEnumValueKind!
+                    valueIndex: ownedDropCandidate.flags == 1 -> if { ownedDropRoot! } else { ownedDropCandidate.operand0 }
+                    nameRoot: request.edgeIndex * 1000 + ownedDropIndex!
+                    bindingIndex: ownedDropIndex!
+                    regionIndex: request.regionIndex
+                } -> emitEnumDrop
+            }
             (ownedDropBeforeEdge! and ownedDropIsRoot! and not ownedDropMoved! and ownedDropCandidate.kind == 17 and ownedDropCandidate.parent == request.regionIndex and (ownedDropCandidate -> isNominalStructType) and ownedDropCandidate.symbol != request.transferredSymbol) -> if {
                 request.edgeIndex * 1000 + ownedDropIndex! => ownedDropNameRoot
                 ownedDropCandidate.flags == 1 -> if {
@@ -2774,7 +2905,7 @@ emitCore context: move EmitContext -> Unit uses Console {
                                             (localPushValueBelongs! and not localScheduled![localPushValue! - regionLocalStart]) -> if { false => localReady! }
                                         }
                                     }
-                                    (localCandidate.kind == 12 or localCandidate.kind == 14 or localCandidate.kind == 16 or localCandidate.kind == 26) -> if {
+                                    (localCandidate.kind == 12 or localCandidate.kind == 14 or localCandidate.kind == 16) -> if {
                                         localCandidate.operand0 => localAggregateOperand!
                                         localAggregateOperand! >= 0 -> while {
                                             localAggregateOperand! -> aggregateValueIndex => localAggregateValue
@@ -4410,7 +4541,7 @@ emitCore context: move EmitContext -> Unit uses Console {
                             scheduleNode.operand1 -> aggregateValueIndex => schedulePushValue
                             (schedulePushValue >= expressionStart and schedulePushValue < functionEnd! and not expressionScheduled![schedulePushValue - expressionStart]) -> if { false => scheduleReady! }
                         }
-                        (scheduleReady! and (scheduleNode.kind == 12 or scheduleNode.kind == 14 or scheduleNode.kind == 16 or scheduleNode.kind == 26)) -> if {
+                        (scheduleReady! and (scheduleNode.kind == 12 or scheduleNode.kind == 14 or scheduleNode.kind == 16)) -> if {
                             scheduleNode.operand0 => scheduleSibling!
                             scheduleSibling! >= 0 -> while {
                                 scheduleSibling! -> aggregateValueIndex => scheduleAggregateValue
@@ -5901,7 +6032,7 @@ emitCore context: move EmitContext -> Unit uses Console {
                         returnedBindingRoot == dropCandidateRoot! -> if { true => dropCandidateReturned! }
                     }
                 }
-                (dropCandidate.kind == 17 and (dropCandidate.typeOrigin == 13 or dropCandidate.typeOrigin == 14 or dropCandidate.typeOrigin == 15 or dropCandidate.typeOrigin == 0 or dropCandidate.typeOrigin == 2)) -> if {
+                (dropCandidate.kind == 17 and (dropCandidate -> ownsType)) -> if {
                     0 => dropMoveIndex!
                     (dropMoveIndex! < (context.moves -> len) and not dropCandidateMoved!) -> while {
                         context.moves[dropMoveIndex!] => dropMove
@@ -5966,6 +6097,18 @@ emitCore context: move EmitContext -> Unit uses Console {
                     }
                     "  call void @free(ptr %drop$(dropIndex!)_values)" -> println
                 }
+                (dropCandidate.kind == 17 and dropCandidateIsRoot! and (dropCandidate -> isGenericEnumType) and dropCandidate.parent == function.operand0 and not dropCandidateMoved! and not dropCandidateReturned!) -> if {
+                    0 => dropEnumValueKind!
+                    dropCandidate.flags == 1 -> if { 2 => dropEnumValueKind! }
+                    EnumDropRequest {
+                        typeId: dropCandidate.typeId
+                        valueKind: dropEnumValueKind!
+                        valueIndex: dropCandidate.flags == 1 -> if { dropCandidateRoot! } else { dropCandidate.operand0 }
+                        nameRoot: dropIndex! * 1000 + 7
+                        bindingIndex: dropIndex!
+                        regionIndex: function.operand0
+                    } -> emitEnumDrop
+                }
                 (dropCandidate.kind == 17 and dropCandidateIsRoot! and (dropCandidate.typeOrigin == 0 or dropCandidate.typeOrigin == 2) and dropCandidate.parent == function.operand0 and not dropCandidateMoved! and not dropCandidateReturned!) -> if {
                     dropCandidate.flags == 1 -> if {
                         "  %dropg$(dropIndex!)_p0 = load %sl.struct.m$(dropCandidate.typeModule)_s$(dropCandidate.typeSymbol), ptr %slot$(dropCandidateRoot!), align " -> print
@@ -6014,6 +6157,18 @@ emitCore context: move EmitContext -> Unit uses Console {
                         "  call void @free(ptr %drop_arg_keys)" -> println
                         "  %drop_arg_values = extractvalue %sl.dict %arg, 1" -> println
                         "  call void @free(ptr %drop_arg_values)" -> println
+                    }
+                }
+                ((ownedParameter -> isGenericEnumType) and ownedParameter.flags % 2 == 1 and not ownedParameterMoved!) -> if {
+                    not (returnOperand.kind == 5 and returnOperand.symbol == ownedParameter.symbol) -> if {
+                        EnumDropRequest {
+                            typeId: ownedParameter.typeId
+                            valueKind: 1
+                            valueIndex: -1
+                            nameRoot: functionIndex! * 1000 + 701
+                            bindingIndex: function.operand1
+                            regionIndex: function.operand0
+                        } -> emitEnumDrop
                     }
                 }
                 ((ownedParameter.typeOrigin == 0 or ownedParameter.typeOrigin == 2) and ownedParameter.flags % 2 == 1 and not ownedParameterMoved!) -> if {
@@ -6470,7 +6625,7 @@ emitCore context: move EmitContext -> Unit uses Console {
                                 entryScheduleNode.operand1 -> aggregateValueIndex => entrySchedulePushValue
                                 (entrySchedulePushValue > functionIndex! and entrySchedulePushValue < entryEnd! and not entryScheduled![entrySchedulePushValue - functionIndex! - 1]) -> if { false => entryScheduleReady! }
                             }
-                            (entryScheduleReady! and (entryScheduleNode.kind == 12 or entryScheduleNode.kind == 14 or entryScheduleNode.kind == 16 or entryScheduleNode.kind == 26)) -> if {
+                            (entryScheduleReady! and (entryScheduleNode.kind == 12 or entryScheduleNode.kind == 14 or entryScheduleNode.kind == 16)) -> if {
                                 entryScheduleNode.operand0 => entryScheduleSibling!
                                 entryScheduleSibling! >= 0 -> while {
                                     entryScheduleSibling! -> aggregateValueIndex => entryScheduleAggregateValue
@@ -7331,6 +7486,7 @@ emitCore context: move EmitContext -> Unit uses Console {
                     }
                     entryOrderIndex! + 1 => entryOrderIndex!
                 }
+                OwnedDropRequest { regionIndex: functionIndex!, beforeAst: -1, edgeIndex: functionIndex! * 10 + 6, transferredSymbol: -1 } -> emitOwnedDrops
                 context -> usesParallelRuntime -> if { "  call void @smalllang_compute_shutdown()" -> println }
                 context -> usesTextRuntime -> if { "  call void @sl_runtime_flush_stdout()" -> println }
                 "  ret i32 0" -> println

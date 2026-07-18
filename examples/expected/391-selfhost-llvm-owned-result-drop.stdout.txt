@@ -1,0 +1,133 @@
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc"
+@sl_runtime_newline = private constant [1 x i8] c"\0A"
+@sl_runtime_stdout_buffer = private global [1048576 x i8] zeroinitializer
+@sl_runtime_stdout_count = private global i64 0
+@sl_runtime_stdout_written = private global i32 0
+declare ptr @GetStdHandle(i32)
+declare i32 @WriteFile(ptr, ptr, i32, ptr, ptr)
+declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1 immarg)
+define internal void @sl_runtime_flush_stdout() {
+entry:
+  %count = load i64, ptr @sl_runtime_stdout_count, align 8
+  %has_data = icmp ugt i64 %count, 0
+  br i1 %has_data, label %write, label %done
+write:
+  %handle = call ptr @GetStdHandle(i32 -11)
+  %count32 = trunc i64 %count to i32
+  %ok = call i32 @WriteFile(ptr %handle, ptr @sl_runtime_stdout_buffer, i32 %count32, ptr @sl_runtime_stdout_written, ptr null)
+  store i64 0, ptr @sl_runtime_stdout_count, align 8
+  br label %done
+done:
+  ret void
+}
+define internal void @sl_runtime_append_stdout(ptr %data, i64 %len) {
+entry:
+  %count = load i64, ptr @sl_runtime_stdout_count, align 8
+  %total = add i64 %count, %len
+  %fits = icmp ule i64 %total, 1048576
+  br i1 %fits, label %append, label %flush
+flush:
+  call void @sl_runtime_flush_stdout()
+  %large = icmp ugt i64 %len, 1048576
+  br i1 %large, label %direct, label %append_empty
+direct:
+  %handle = call ptr @GetStdHandle(i32 -11)
+  %len32 = trunc i64 %len to i32
+  %ok = call i32 @WriteFile(ptr %handle, ptr %data, i32 %len32, ptr @sl_runtime_stdout_written, ptr null)
+  ret void
+append_empty:
+  call void @llvm.memcpy.p0.p0.i64(ptr @sl_runtime_stdout_buffer, ptr %data, i64 %len, i1 false)
+  store i64 %len, ptr @sl_runtime_stdout_count, align 8
+  ret void
+append:
+  %slot = getelementptr i8, ptr @sl_runtime_stdout_buffer, i64 %count
+  call void @llvm.memcpy.p0.p0.i64(ptr %slot, ptr %data, i64 %len, i1 false)
+  store i64 %total, ptr @sl_runtime_stdout_count, align 8
+  ret void
+}
+define internal void @sl_runtime_print(ptr %data, i64 %len, i1 %newline) {
+entry:
+  call void @sl_runtime_append_stdout(ptr %data, i64 %len)
+  br i1 %newline, label %write_newline, label %done
+write_newline:
+  call void @sl_runtime_append_stdout(ptr @sl_runtime_newline, i64 1)
+  br label %done
+done:
+  ret void
+}
+%sl.enum.t26 = type { i32, [3 x i64] }
+%sl.array.i32 = type { ptr, i64, i64 }
+declare ptr @malloc(i64)
+declare void @free(ptr)
+%sl.text = type { ptr, i64 }
+@sl_str_11 = private unnamed_addr constant [16 x i8] c"inactive payload"
+@sl_str_13 = private unnamed_addr constant [24 x i8] c"owned result constructed"
+define i32 @main() {
+entry:
+  %slot1 = alloca %sl.enum.t26, align 8
+  %slot2 = alloca %sl.enum.t26, align 8
+  %v11_ptr = insertvalue %sl.text poison, ptr @sl_str_11, 0
+  %v11 = insertvalue %sl.text %v11_ptr, i64 16, 1
+  %v13_ptr = insertvalue %sl.text poison, ptr @sl_str_13, 0
+  %v13 = insertvalue %sl.text %v13_ptr, i64 24, 1
+  %v5_data = call ptr @malloc(i64 12)
+  %v5_ptr0 = getelementptr i32, ptr %v5_data, i64 0
+  store i32 1, ptr %v5_ptr0, align 4
+  %v5_ptr1 = getelementptr i32, ptr %v5_data, i64 1
+  store i32 2, ptr %v5_ptr1, align 4
+  %v5_ptr2 = getelementptr i32, ptr %v5_data, i64 2
+  store i32 3, ptr %v5_ptr2, align 4
+  %v5_0 = insertvalue %sl.array.i32 poison, ptr %v5_data, 0
+  %v5_1 = insertvalue %sl.array.i32 %v5_0, i64 3, 1
+  %v5 = insertvalue %sl.array.i32 %v5_1, i64 3, 2
+  %v10_enum_slot = alloca %sl.enum.t26, align 8
+  store %sl.enum.t26 zeroinitializer, ptr %v10_enum_slot, align 8
+  %v10_enum_tag = getelementptr inbounds %sl.enum.t26, ptr %v10_enum_slot, i32 0, i32 0
+  store i32 1, ptr %v10_enum_tag, align 4
+  %v10_enum_payload = getelementptr inbounds %sl.enum.t26, ptr %v10_enum_slot, i32 0, i32 1
+  store %sl.text %v11, ptr %v10_enum_payload, align 8
+  %v10 = load %sl.enum.t26, ptr %v10_enum_slot, align 8
+  %v4_enum_slot = alloca %sl.enum.t26, align 8
+  store %sl.enum.t26 zeroinitializer, ptr %v4_enum_slot, align 8
+  %v4_enum_tag = getelementptr inbounds %sl.enum.t26, ptr %v4_enum_slot, i32 0, i32 0
+  store i32 0, ptr %v4_enum_tag, align 4
+  %v4_enum_payload = getelementptr inbounds %sl.enum.t26, ptr %v4_enum_slot, i32 0, i32 1
+  store %sl.array.i32 %v5, ptr %v4_enum_payload, align 8
+  %v4 = load %sl.enum.t26, ptr %v4_enum_slot, align 8
+  store %sl.enum.t26 %v4, ptr %slot1, align 8
+  store %sl.enum.t26 %v10, ptr %slot2, align 8
+  call void @sl_runtime_print(ptr @sl_str_13, i64 24, i1 true)
+  %enumdrop6002_value = load %sl.enum.t26, ptr %slot2, align 8
+  %enumdrop6002_slot = alloca %sl.enum.t26, align 8
+  store %sl.enum.t26 %enumdrop6002_value, ptr %enumdrop6002_slot, align 8
+  %enumdrop6002_tag = extractvalue %sl.enum.t26 %enumdrop6002_value, 0
+  %enumdrop6002_payload_ptr = getelementptr inbounds %sl.enum.t26, ptr %enumdrop6002_slot, i32 0, i32 1
+  %enumdrop6002_is0 = icmp eq i32 %enumdrop6002_tag, 0
+  br i1 %enumdrop6002_is0, label %enumdrop6002_tag0, label %enumdrop6002_tag1
+enumdrop6002_tag0:
+  %enumdrop60021_payload = load %sl.array.i32, ptr %enumdrop6002_payload_ptr, align 8
+  %enumdrop60021_data = extractvalue %sl.array.i32 %enumdrop60021_payload, 0
+  call void @free(ptr %enumdrop60021_data)
+  br label %enumdrop6002_merge
+enumdrop6002_tag1:
+  br label %enumdrop6002_merge
+enumdrop6002_merge:
+  %enumdrop6001_value = load %sl.enum.t26, ptr %slot1, align 8
+  %enumdrop6001_slot = alloca %sl.enum.t26, align 8
+  store %sl.enum.t26 %enumdrop6001_value, ptr %enumdrop6001_slot, align 8
+  %enumdrop6001_tag = extractvalue %sl.enum.t26 %enumdrop6001_value, 0
+  %enumdrop6001_payload_ptr = getelementptr inbounds %sl.enum.t26, ptr %enumdrop6001_slot, i32 0, i32 1
+  %enumdrop6001_is0 = icmp eq i32 %enumdrop6001_tag, 0
+  br i1 %enumdrop6001_is0, label %enumdrop6001_tag0, label %enumdrop6001_tag1
+enumdrop6001_tag0:
+  %enumdrop60011_payload = load %sl.array.i32, ptr %enumdrop6001_payload_ptr, align 8
+  %enumdrop60011_data = extractvalue %sl.array.i32 %enumdrop60011_payload, 0
+  call void @free(ptr %enumdrop60011_data)
+  br label %enumdrop6001_merge
+enumdrop6001_tag1:
+  br label %enumdrop6001_merge
+enumdrop6001_merge:
+  call void @sl_runtime_flush_stdout()
+  ret i32 0
+}

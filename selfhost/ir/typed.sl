@@ -2457,6 +2457,18 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                     entryExpressionStart => entryCanonicalIndexResultIr!
                     entryCanonicalIndexResultIr! < entryExpressionEnd -> while {
                         results![entryCanonicalIndexResultIr!] => entryCanonicalIndexResult!
+                        (entryCanonicalIndexResult!.kind == 15 and entryCanonicalIndexResult!.operand1 < 0 and entryCanonicalIndexResult!.operand0 >= entryExpressionStart and results![entryCanonicalIndexResult!.operand0].kind == 26) -> if {
+                            results![entryCanonicalIndexResult!.operand0] => entryWrappedConstructor
+                            9 => entryCanonicalIndexResult!.kind
+                            -1 => entryCanonicalIndexResult!.opcode
+                            entryWrappedConstructor.typeOrigin => entryCanonicalIndexResult!.typeOrigin
+                            entryWrappedConstructor.typeModule => entryCanonicalIndexResult!.typeModule
+                            entryWrappedConstructor.typeSymbol => entryCanonicalIndexResult!.typeSymbol
+                            entryWrappedConstructor.typeId => entryCanonicalIndexResult!.typeId
+                            entryWrappedConstructor.typeKind => entryCanonicalIndexResult!.typeKind
+                            entryWrappedConstructor.typeFlags => entryCanonicalIndexResult!.typeFlags
+                            entryCanonicalIndexResult! => results![entryCanonicalIndexResultIr!]
+                        }
                         (entryCanonicalIndexResult!.kind == 15 and entryCanonicalIndexResult!.typeId < 0 and entryCanonicalIndexResult!.operand0 >= entryExpressionStart) -> if {
                             results![entryCanonicalIndexResult!.operand0] => entryCanonicalIndexedValue
                             entryCanonicalIndexedValue.typeId >= 0 -> if {
@@ -2807,6 +2819,9 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                     entryExpressionStart => entryCanonicalBindingIr!
                     entryCanonicalBindingIr! < entryExpressionEnd -> while {
                         results![entryCanonicalBindingIr!] => entryCanonicalBinding!
+                        (entryCanonicalBinding!.kind == 17 and entryCanonicalBinding!.operand0 >= entryExpressionStart and results![entryCanonicalBinding!.operand0].kind == 9 and results![entryCanonicalBinding!.operand0].opcode == -1 and results![entryCanonicalBinding!.operand0].operand0 >= entryExpressionStart) -> if {
+                            results![entryCanonicalBinding!.operand0].operand0 => entryCanonicalBinding!.operand0
+                        }
                         (entryCanonicalBinding!.kind == 17 and entryCanonicalBinding!.operand0 >= entryExpressionStart and results![entryCanonicalBinding!.operand0].typeId >= 0) -> if {
                             results![entryCanonicalBinding!.operand0] => entryCanonicalBindingValue
                             entryCanonicalBindingValue.typeOrigin => entryCanonicalBinding!.typeOrigin
