@@ -110,14 +110,14 @@ not lines of code.
 | Area | Gates | Complete | Partial | Missing | Score |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | Core syntax and control flow | 10 | 8 | 2 | 0 | 9.0 |
-| Types, traits, and generics | 12 | 10 | 1 | 1 | 10.5 |
+| Types, traits, and generics | 12 | 11 | 0 | 1 | 11.0 |
 | Ownership and storage | 10 | 7 | 2 | 1 | 8.0 |
 | Modules, visibility, and builds | 8 | 5 | 2 | 1 | 6.0 |
 | Compiler-construction primitives | 12 | 10 | 2 | 0 | 11.0 |
 | Standard library and tooling | 8 | 2 | 4 | 2 | 4.0 |
-| **Total** | **60** | **42** | **13** | **5** | **48.5 / 60** |
+| **Total** | **60** | **43** | **12** | **5** | **49.0 / 60** |
 
-Current count-based progress: **80.8% (48.5 of 60 equivalent gates)**.
+Current count-based progress: **81.7% (49 of 60 equivalent gates)**.
 
 The frontend parallel-compilation subproject is **28/28 checks (100%)**. Its
 source-local product boundary, typed callback-result role slice, nested-call
@@ -128,7 +128,7 @@ reject mutable or structurally non-sendable captures. The submitting parent now
 helps drain its task group before the structured join. Exact cancellation and
 partial-result destruction plus full Windows/Linux suite parity are proven.
 This completed feature-local subproject does not promote a roadmap gate.
-There are **11.5 equivalent gates remaining**. Because the remaining compiler
+There are **11 equivalent gates remaining**. Because the remaining compiler
 primitives are harder than early syntax gates, this is not an elapsed-time
 estimate.
 
@@ -237,22 +237,19 @@ milestone without changing the broader 60-gate language-capability score.
 - Partial (2): general multi-parameter functions; structured early exit with
   `return`/`break`/`continue` across ownership scopes.
 
-### Types, traits, and generics — 10.5 / 12
+### Types, traits, and generics — 11.0 / 12
 
-- Complete (10): nominal structs, payload enums, exhaustive matching, impl
+- Complete (11): nominal structs, payload enums, exhaustive matching, impl
   methods, nominal traits/static dispatch, checked type/value specialization,
   associated types with equality constraints, two-parameter generic inference,
   standard `Option<T>`/`Result<T, E>` tagged values, fixed-width signed,
   unsigned, and IEEE-754 scalar layouts with stable `Int32`/`Float32` defaults
   plus `Long`/`Double` 64-bit aliases and target-ABI `Size`/`UIntSize`; arrays
   and dictionaries preserve scalar/user-value layouts and recursively drop
-  owned elements.
-- Partial (1): dictionary function contracts preserve concrete K/V types and
-  dynamic-array function contracts preserve element types. Owned-element move
-  insertion now transfers a named owner into a dynamic array and invalidates
-  the source binding; owned-element index extraction, fixed-array generic
-  contracts, general
-  two-operand equality methods, and owned nominal dictionary keys remain.
+  owned elements. Generic collection function contracts preserve concrete
+  component types, fixed arrays infer `T` from `[T; N]` while checking `N`, and
+  indexed extraction transfers owned array/dictionary elements exactly once.
+- Partial (0).
 - Missing (1): explicit `dyn Trait`.
 
 ### Ownership and storage — 8.0 / 10
@@ -1058,9 +1055,9 @@ of a shallow container spelling.
 - [x] use canonical dictionary key/value types for lookup and LLVM loads;
 - [x] recursively destroy owned dynamic-array and dictionary elements;
 - [x] implement move extraction of owned indexed elements;
-- [ ] complete fixed-array generic function contracts.
+- [x] complete fixed-array generic function contracts.
 
-This focused migration is **7/8 checks (87.5%)**. Examples 397 and 398 assemble,
+This focused migration is **8/8 checks (100%)**. Examples 397 and 398 assemble,
 link, and execute on Windows and Linux. They prove that `{UInt16: Int64}` uses
 2-byte keys and 8-byte values and that `[UInt16; ~]` uses a 2-byte stride. Before
 this correction the producer stored default `Int32` components while the
@@ -1084,8 +1081,18 @@ entry. The extracted value becomes a new owner and the shortened source owner
 retains exactly the remaining elements. The dedicated Linux verifier executes
 the reference and both self-host forms under AddressSanitizer and LeakSanitizer.
 
-The formal roadmap remains **48.5/60 (80.8%)** until fixed-array generic
-function contracts close the canonical gate.
+Example 51 now applies `[T; N]` contracts to `Int`, `Text`, user structs, and
+owned user values. Calls spell only the compile-time length, such as
+`values -> fixedLength<3>`; the element type is inferred from the fixed array.
+The host compiler monomorphizes by both length and element type while passing a
+borrowed pointer/length ABI, so the callee neither copies nor consumes owned
+elements. Example 405 proves the same structural inference in the SL semantic
+compiler and rejects a mismatched explicit length. Dynamic arrays are rejected
+by a dedicated diagnostic. Windows/Linux execution and a Linux ASan/LSan run
+cover the owned-array case.
+
+The formal roadmap is now **49/60 (81.7%)** because fixed-array generic
+function contracts close the canonical generic-container gate.
 
 Research basis:
 
@@ -1104,7 +1111,7 @@ Research basis:
 5. Multi-parameter generics (implemented by example 55).
 6. Generic collection element types and ownership/drop specialization
    (implemented for fixed/growable arrays and Swiss-table dictionaries by
-   examples 56-71; fixed-array generic contracts remain).
+   examples 51 and 56-71, including fixed-array value/type contracts).
 7. `Option`/`Result` and compiler-grade byte/text/source-span libraries
    (implemented for `Option`, `Result`, bytes, Unicode code points, byte arenas,
    and reusable lexer/CST/parser source spans; multi-error continuation and

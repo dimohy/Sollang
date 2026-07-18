@@ -6256,3 +6256,54 @@ Research basis:
 - [Rust `Vec::remove`](https://doc.rust-lang.org/std/vec/struct.Vec.html#method.remove)
 - [Rust `HashMap::remove`](https://doc.rust-lang.org/std/collections/struct.HashMap.html#method.remove)
 - [Mojo `List.pop`](https://docs.modular.com/mojo/stdlib/collections/list/List/#pop)
+
+## D194 - Infer Fixed-Array Element Types While Checking Compile-Time Lengths
+
+Fixed-array generic functions use a compile-time value parameter and an inferred
+element parameter in one structural contract:
+
+```sl
+fixedLength<N: Int, T> values: [T; N] -> Int {
+    values -> len
+}
+
+["lexer", "parser", "llvm"] => stages
+stages -> fixedLength<3>
+```
+
+The caller writes only the value argument that cannot be inferred. `T` is
+inferred from the fixed-array value, while `N` is checked against its concrete
+length. A dynamic array cannot satisfy `[T; N]`, and a call such as
+`stages -> fixedLength<4>` is rejected. This follows Rust's separation of type
+and const parameters and Mojo's compile-time parameter inference while keeping
+SL's existing fluent call syntax.
+
+The C# compiler specializes a function by both the compile-time length and the
+canonical element type. Its LLVM ABI passes fixed arrays as a borrowed
+pointer/length pair. The callee reconstructs the concrete fixed-array view, so
+`len`, indexing, and element typing remain precise without copying the array or
+transferring ownership. `Int`, `Text`, inline user structs, and structs that own
+boxes all use the same contract.
+
+The SL semantic compiler now interns inferred fixed-array literals as recursive
+`kind 4` types with a concrete length. Binding propagation therefore retains
+the whole array type rather than collapsing to its element type. Structural
+specialization treats an identifier length in `[T; N]` as a value-parameter
+wildcard, then the call checker compares the explicit numeric argument with the
+actual array length.
+
+Example 51 executes the host-generated specializations on Windows and Linux.
+Example 405 verifies self-host type inference and length rejection. Dedicated
+diagnostics cover dynamic-array input and length mismatch. The owned-element
+case also executes under Linux AddressSanitizer and LeakSanitizer without leaks
+or double frees. The Release build has zero warnings and errors, and the full
+Windows/Linux suites pass 536/536. Windows Stage2 passes 6/6 at 8,343,036 LLVM
+bytes; Linux Stage2 passes 5/5 at 8,342,898 bytes. This completes the focused
+generic-container checklist at 8/8 and promotes the canonical roadmap to 43
+complete, 12 partial, and 5 missing gates: 49/60 (81.7%).
+
+Research basis:
+
+- [Rust generic parameters](https://doc.rust-lang.org/stable/reference/items/generics.html)
+- [Mojo parameters](https://docs.modular.com/mojo/manual/parameters/)
+- [Mojo generics](https://docs.modular.com/mojo/manual/generics/)

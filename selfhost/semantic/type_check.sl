@@ -6,6 +6,7 @@ import smalllang.compiler.semantic.context as semanticContext
 import smalllang.compiler.semantic.expression_types as expressionTypes
 import smalllang.compiler.semantic.expression_type_ids as expressionTypeIds
 import smalllang.compiler.semantic.symbols as symbols
+import smalllang.compiler.semantic.type_ids as typeIds
 import smalllang.compiler.syntax as syntax
 import syntax.generated.smalllang as grammar
 
@@ -271,6 +272,40 @@ public analyze sources: [Text; ~] -> [TypeCheckDiagnostic; ~] {
                 sources[call.targetSourceModule] -> symbols.collect => targetTable!
                 targetTable![call.functionSymbol] => targetFunction
                 prepared.package.nodes[sourceRange.astStart + call.callAst] => callNode
+                callNode.start + callNode.length => callRuntimeArgumentEnd!
+                callNode.kind == 10 -> if {
+                    0 => callTargetSearch!
+                    callTargetSearch! < sourceRange.astCount -> while {
+                        prepared.package.nodes[sourceRange.astStart + callTargetSearch!] => callTargetCandidate
+                        (callTargetCandidate.parent == call.callAst and callTargetCandidate.kind == 16 and callTargetCandidate.payloadToken >= 0) -> if {
+                            prepared.package.tokens[sourceRange.tokenStart + callTargetCandidate.payloadToken].span.start => callRuntimeArgumentEnd!
+                        }
+                        callTargetSearch! + 1 => callTargetSearch!
+                    }
+                }
+                callNode.kind == 48 -> if {
+                    prepared.package.tokens[sourceRange.tokenStart + callNode.payloadToken].span.start => callRuntimeArgumentEnd!
+                }
+                -1 => callValueArgument!
+                false => inCallTypeArguments!
+                callNode.firstToken => callValueTokenIndex!
+                callValueTokenIndex! < callNode.firstToken + callNode.tokenCount -> while {
+                    prepared.package.tokens[sourceRange.tokenStart + callValueTokenIndex!] => callValueToken
+                    callValueToken.span.start >= callRuntimeArgumentEnd! -> if {
+                        callValueToken.kind == grammar.tokenIdLess -> if { true => inCallTypeArguments! }
+                        (inCallTypeArguments! and callValueArgument! < 0 and callValueToken.kind == grammar.tokenIdNumber) -> if {
+                            0 => callValueArgument!
+                            UIntSize(0) => callValueByteIndex!
+                            callValueByteIndex! < callValueToken.span.length -> while {
+                                sources[sourceIndex!] -> byte(callValueToken.span.start + callValueByteIndex!) => callValueByte
+                                callValueArgument! * 10 + Int(callValueByte - UInt8(48)) => callValueArgument!
+                                callValueByteIndex! + UIntSize(1) => callValueByteIndex!
+                            }
+                        }
+                        callValueToken.kind == grammar.tokenIdGreater -> if { false => inCallTypeArguments! }
+                    }
+                    callValueTokenIndex! + 1 => callValueTokenIndex!
+                }
                 false => invalidRoleTarget!
                 (callNode.kind == 48 and targetFunction.blockTypeNode < 0) -> if {
                     true => invalidRoleTarget!
@@ -302,7 +337,11 @@ public analyze sources: [Text; ~] -> [TypeCheckDiagnostic; ~] {
                     }
                     callTokenIndex! + 1 => callTokenIndex!
                 }
-                callNode.kind == 48 -> if { true => hasArgument! }
+                # A fluent flow always supplies its left value even when the
+                # target has no parenthesized runtime arguments. Generic value
+                # arguments such as <3> are compile-time inputs, not the
+                # runtime parameter counted here.
+                (callNode.kind == 10 or callNode.kind == 48) -> if { true => hasArgument! }
                 targetFunction.secondaryTypeNode >= 0 -> if {
                     -1 => expectedInputIndex!
                     -1 => expectedInputCompositeIndex!
@@ -329,12 +368,8 @@ public analyze sources: [Text; ~] -> [TypeCheckDiagnostic; ~] {
                         expressionTypeTable![argumentSearch!] => argumentType
                         argumentType.sourceModule == sourceIndex! -> if {
                             true => beforeRoleTarget!
-                            callNode.kind == 48 -> if {
-                                prepared.package.nodes[sourceRange.astStart + argumentType.astNode] => argumentNode
-                                argumentNode.start + argumentNode.length > prepared.package.tokens[sourceRange.tokenStart + callNode.payloadToken].span.start -> if {
-                                    false => beforeRoleTarget!
-                                }
-                            }
+                            prepared.package.nodes[sourceRange.astStart + argumentType.astNode] => argumentNode
+                            argumentNode.start + argumentNode.length > callRuntimeArgumentEnd! -> if { false => beforeRoleTarget! }
                             prepared.package.nodes[sourceRange.astStart + argumentType.astNode].parent => argumentAncestor!
                             1 => distance!
                             false => belongsToCall!
@@ -369,10 +404,8 @@ public analyze sources: [Text; ~] -> [TypeCheckDiagnostic; ~] {
                         recursiveTypes.expressions[recursiveArgumentSearch!] => candidate
                         candidate.sourceModule == sourceIndex! -> if {
                             true => beforeRoleTarget!
-                            callNode.kind == 48 -> if {
-                                prepared.package.nodes[sourceRange.astStart + candidate.astNode] => argumentNode
-                                argumentNode.start + argumentNode.length > prepared.package.tokens[sourceRange.tokenStart + callNode.payloadToken].span.start -> if { false => beforeRoleTarget! }
-                            }
+                            prepared.package.nodes[sourceRange.astStart + candidate.astNode] => argumentNode
+                            argumentNode.start + argumentNode.length > callRuntimeArgumentEnd! -> if { false => beforeRoleTarget! }
                             prepared.package.nodes[sourceRange.astStart + candidate.astNode].parent => argumentAncestor!
                             1 => distance!
                             false => belongsToCall!
@@ -410,12 +443,18 @@ public analyze sources: [Text; ~] -> [TypeCheckDiagnostic; ~] {
                         recursiveTypes.types[genericExpectedReference.typeId] => genericExpectedType
                         genericExpectedType.containsParameter -> if {
                             false => concreteGenericArgument!
+                            -1 => genericArgumentTypeId!
                             recursiveArgumentExpression! >= 0 -> if {
                                 recursiveTypes.expressions[recursiveArgumentExpression!] => genericArgumentReference
                                 recursiveTypes.types[genericArgumentReference.typeId] => genericArgumentType
                                 (genericArgumentReference.status == 0 and not genericArgumentType.containsParameter) -> if {
                                     true => concreteGenericArgument!
+                                    genericArgumentReference.typeId => genericArgumentTypeId!
                                 }
+                            }
+                            (concreteGenericArgument! and genericArgumentTypeId! >= 0 and genericExpectedType.kind == 4 and genericExpectedType.length < 0 and recursiveTypes.types[genericArgumentTypeId!].kind == 4 and recursiveTypes.types[genericArgumentTypeId!].length >= 0 and callValueArgument! >= 0 and recursiveTypes.types[genericArgumentTypeId!].length != callValueArgument!) -> if {
+                                true => recursiveArgumentChecked!
+                                true => recursiveArgumentMismatch!
                             }
                             -1 => specializedCallExpression!
                             0 => specializedCallSearch!
@@ -432,6 +471,23 @@ public analyze sources: [Text; ~] -> [TypeCheckDiagnostic; ~] {
                                 (specializedCall.status == 0 and not specializedCallType.containsParameter) -> if {
                                     true => recursiveArgumentChecked!
                                 }
+                            }
+                            (not recursiveArgumentChecked! and concreteGenericArgument!) -> if {
+                                [typeIds.SemanticType; ~] => genericCheckTypes!
+                                0 => genericCheckTypeIndex!
+                                genericCheckTypeIndex! < (recursiveTypes.types -> len) -> while {
+                                    genericCheckTypes! -> push(recursiveTypes.types[genericCheckTypeIndex!])
+                                    genericCheckTypeIndex! + 1 => genericCheckTypeIndex!
+                                }
+                                recursiveTypes.expressions[recursiveArgumentExpression!] => genericActualReference
+                                typeIds.SpecializationRequest {
+                                    types: genericCheckTypes!
+                                    inputTemplate: genericExpectedReference.typeId
+                                    actualInput: genericActualReference.typeId
+                                    resultTemplate: genericExpectedReference.typeId
+                                } => genericCheckRequest!
+                                genericCheckRequest! -> typeIds.specialize => genericCheck
+                                genericCheck.status == 0 -> if { true => recursiveArgumentChecked! }
                             }
                             (not recursiveArgumentChecked! and concreteGenericArgument!) -> if {
                                 true => recursiveArgumentChecked!

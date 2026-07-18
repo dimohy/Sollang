@@ -553,6 +553,11 @@ internal sealed partial class LlvmEmitter
             };
         }
 
+        if (function.HasValueGenericFixedArrayInput)
+        {
+            return "%smalllang.int_slice %it";
+        }
+
         if (function.InputType is { } inputType
             && (_program.Types.IsStruct(inputType)
                 || _program.Types.IsEnum(inputType)
@@ -629,6 +634,34 @@ internal sealed partial class LlvmEmitter
         if (function.InputOwnership == BoundFunctionInputOwnership.MutableBorrow)
         {
             BindMutableBorrowFunctionParameter(function);
+            return;
+        }
+
+        if (function.HasValueGenericFixedArrayInput)
+        {
+            if (function.InputType is not { } fixedArrayType
+                || function.SpecializedValue is not { } fixedArrayLength)
+            {
+                throw new SmallLangException(
+                    $"function '{function.Name}' has an unspecialized fixed-array input");
+            }
+            var pointer = NextTemp("param_fixed_array_ptr");
+            EmitAssign(pointer, "extractvalue %smalllang.int_slice %it, 0");
+            var length = NextTemp("param_fixed_array_len");
+            EmitAssign(length, "extractvalue %smalllang.int_slice %it, 1");
+            RuntimeValue value = fixedArrayType switch
+            {
+                BoundType.StaticIntArray => new RuntimeStaticIntArray(
+                    pointer, length, fixedArrayLength),
+                BoundType.StaticTextArray => new RuntimeStaticTextArray(
+                    pointer, length, fixedArrayLength),
+                _ when _program.Types.IsStaticArray(fixedArrayType) => CreateBorrowedStaticInlineArray(
+                    fixedArrayType, pointer, length, fixedArrayLength),
+                _ => throw new SmallLangException(
+                    $"function '{function.Name}' has unsupported fixed-array input type {fixedArrayType}")
+            };
+            _locals.Add(function.InputName ?? "it", value);
+            _borrowedOwnedLocals.Add(function.InputName ?? "it");
             return;
         }
 
@@ -779,6 +812,22 @@ internal sealed partial class LlvmEmitter
             default:
                 throw new SmallLangException("unsupported function input type");
         }
+    }
+
+    private RuntimeStaticInlineArray CreateBorrowedStaticInlineArray(
+        BoundType arrayType,
+        string pointer,
+        string length,
+        int fixedArrayLength)
+    {
+        var definition = _program.Types.GetStaticArray(arrayType);
+        return new RuntimeStaticInlineArray(
+            arrayType,
+            definition.ElementType,
+            pointer,
+            length,
+            fixedArrayLength,
+            fixedArrayLength);
     }
 
     private void BindMutableBorrowFunctionParameter(BoundFunction function)

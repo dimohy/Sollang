@@ -307,12 +307,13 @@ internal sealed class SemanticCompiler
         }
 
         var isParallelRole = function.Name is "sys.runtime.parallel" or "sys.runtime.tryParallel";
-        var inputTypeTemplate = isParallelRole
+        var inputTypeTemplate = (isParallelRole || function.HasValueGenericFixedArrayInput)
             && function.InputType is not null
-            && function.InputType != function.GenericParameterName
-            && (TypeSyntaxReferencesParameter(function.InputType, function.GenericParameterName)
-                || TypeSyntaxReferencesParameter(function.InputType, function.SecondaryGenericParameterName)
-                || TypeSyntaxReferencesParameter(function.InputType, function.TertiaryGenericParameterName))
+            && (function.HasValueGenericFixedArrayInput
+                || (function.InputType != function.GenericParameterName
+                    && (TypeSyntaxReferencesParameter(function.InputType, function.GenericParameterName)
+                        || TypeSyntaxReferencesParameter(function.InputType, function.SecondaryGenericParameterName)
+                        || TypeSyntaxReferencesParameter(function.InputType, function.TertiaryGenericParameterName))))
                 ? function.InputType
                 : null;
         var inputType = function.InputType is null || inputTypeTemplate is not null
@@ -5633,10 +5634,36 @@ internal sealed class SemanticCompiler
             throw new SmallLangException(
                 $"value-generic function '{template.Name}' requires an explicit compile-time Int argument");
         }
-        if (template.HasValueGenericFixedArrayInput && actualType != BoundType.StaticIntArray)
+        BoundType? fixedArrayElementType = null;
+        if (template.HasValueGenericFixedArrayInput)
         {
-            throw new SmallLangException(
-                $"value-generic function '{template.Name}' requires a fixed Int array input");
+            fixedArrayElementType = FixedArrayElementType(actualType);
+            if (fixedArrayElementType is null)
+            {
+                throw new SmallLangException(
+                    $"value-generic function '{template.Name}' requires a fixed array input");
+            }
+
+            var elementTypeSyntax = FixedArrayElementTypeSyntax(template.InputTypeTemplate!);
+            if (elementTypeSyntax == template.SecondaryGenericParameterName)
+            {
+                // The fixed array itself is sufficient to infer the element type;
+                // callers only spell the compile-time length argument.
+            }
+            else if (elementTypeSyntax == template.TertiaryGenericParameterName)
+            {
+                // Kept symmetric with the existing three-parameter generic model.
+            }
+            else
+            {
+                var expectedElementType = ParseType(elementTypeSyntax, template.Line, template.Column);
+                if (expectedElementType != fixedArrayElementType.Value)
+                {
+                    throw new SmallLangException(
+                        $"function '{template.Name}' expects [{FormatType(expectedElementType)}; {valueArgument}] "
+                        + $"but received [{FormatType(fixedArrayElementType.Value)}; N]");
+                }
+            }
         }
         if (!template.HasValueGenericFixedArrayInput && template.InputType != actualType)
         {
@@ -5651,11 +5678,33 @@ internal sealed class SemanticCompiler
         var specializedName = template.Name
             + "$v"
             + valueArgument.Value.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        if (fixedArrayElementType is { } specializedElementType)
+        {
+            specializedName += "$t" + ((int)specializedElementType).ToString(
+                System.Globalization.CultureInfo.InvariantCulture);
+        }
         if (!_boundFunctions.TryGetValue(specializedName, out var specialization))
         {
+            var secondaryType = template.SecondaryGenericParameterName is { } secondaryName
+                && FixedArrayElementTypeSyntax(template.InputTypeTemplate!) == secondaryName
+                    ? fixedArrayElementType
+                    : null;
+            var tertiaryType = template.TertiaryGenericParameterName is { } tertiaryName
+                && FixedArrayElementTypeSyntax(template.InputTypeTemplate!) == tertiaryName
+                    ? fixedArrayElementType
+                    : null;
             specialization = template with
             {
                 Name = specializedName,
+                InputType = template.HasValueGenericFixedArrayInput ? actualType : template.InputType,
+                ReturnType = SubstituteGenericType(
+                    template.ReturnType,
+                    fixedArrayElementType ?? BoundType.Int,
+                    secondaryType,
+                    tertiaryType),
+                SpecializedType = fixedArrayElementType,
+                SpecializedSecondaryType = secondaryType,
+                SpecializedTertiaryType = tertiaryType,
                 SpecializedValue = valueArgument.Value
             };
             _boundFunctions.Add(specializedName, specialization);
@@ -5667,6 +5716,23 @@ internal sealed class SemanticCompiler
 
         _resolvedGenericCalls[callSite] = specialization;
         return specialization;
+    }
+
+    private BoundType? FixedArrayElementType(BoundType type)
+    {
+        if (type == BoundType.StaticIntArray) return BoundType.Int;
+        if (type == BoundType.StaticTextArray) return BoundType.Text;
+        return _types.IsStaticArray(type) ? _types.GetStaticArray(type).ElementType : null;
+    }
+
+    private static string FixedArrayElementTypeSyntax(string inputTypeTemplate)
+    {
+        var separator = inputTypeTemplate.LastIndexOf(';');
+        if (inputTypeTemplate.Length < 4 || inputTypeTemplate[0] != '[' || separator <= 1)
+        {
+            throw new InvalidOperationException($"invalid fixed-array input template '{inputTypeTemplate}'");
+        }
+        return inputTypeTemplate[1..separator].Trim();
     }
 
     private bool TryInferArenaConstructor(

@@ -549,7 +549,11 @@ public specialize request: SpecializationRequest -> SpecializationResult {
             template.kind != actual.kind -> if { 2 => status! }
             (status! == 0 and template.kind == 1 and templateId != actualId) -> if { 2 => status! }
             (status! == 0 and template.kind == 7 and (template.origin != actual.origin or template.module != actual.module or template.symbol != actual.symbol)) -> if { 2 => status! }
-            (status! == 0 and template.kind == 4 and template.lengthHash != actual.lengthHash) -> if { 2 => status! }
+            # An identifier length in a generic fixed-array template is a
+            # compile-time value parameter. Its concrete length is checked at
+            # the call surface; structural unification must still infer the
+            # element type from [T; N] against [Concrete; literal].
+            (status! == 0 and template.kind == 4 and template.length >= 0 and template.lengthHash != actual.lengthHash) -> if { 2 => status! }
             status! == 0 -> if {
                 (template.first < 0 and actual.first >= 0) -> if { 2 => status! }
                 (template.first >= 0 and actual.first < 0) -> if { 2 => status! }

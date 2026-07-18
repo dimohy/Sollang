@@ -727,16 +727,22 @@ public resolveContext prepared: semanticContext.SemanticSnapshot -> ExpressionTy
                         3 => compositeKind!
                         true => canBuildComposite!
                     }
+                    (compositeNode.kind == 37 and not dynamicArray! and childPosition! > 0 and firstChildType! >= 0 and homogeneousComposite!) -> if {
+                        4 => compositeKind!
+                        true => canBuildComposite!
+                    }
                     (compositeNode.kind == 38 and childPosition! > 0 and childPosition! % 2 == 0 and firstChildType! >= 0 and secondChildType! >= 0 and homogeneousComposite!) -> if {
                         5 => compositeKind!
                         true => canBuildComposite!
                     }
                     canBuildComposite! -> if {
+                        -1 => compositeLength!
+                        compositeKind! == 4 -> if { childPosition! => compositeLength! }
                         -1 => existingType!
                         0 => typeSearch!
                         (typeSearch! < (types! -> len) and existingType! < 0) -> while {
                             types![typeSearch!] => known
-                            (known.kind == compositeKind! and known.origin == -1 and known.module == -1 and known.symbol == -1 and known.first == firstChildType! and known.second == secondChildType! and known.lengthHash == UInt64(0) and known.status == 0) -> if {
+                            (known.kind == compositeKind! and known.origin == -1 and known.module == -1 and known.symbol == -1 and known.first == firstChildType! and known.second == secondChildType! and known.length == compositeLength! and known.lengthHash == UInt64(0) and known.status == 0) -> if {
                                 typeSearch! => existingType!
                             }
                             typeSearch! + 1 => typeSearch!
@@ -754,7 +760,7 @@ public resolveContext prepared: semanticContext.SemanticSnapshot -> ExpressionTy
                                 symbol: -1
                                 first: firstChildType!
                                 second: secondChildType!
-                                length: -1
+                                length: compositeLength!
                                 lengthHash: UInt64(0)
                                 containsParameter: containsParameter! or secondContainsParameter!
                                 status: 0
@@ -800,15 +806,27 @@ public resolveContext prepared: semanticContext.SemanticSnapshot -> ExpressionTy
                         1000000 => argumentDistance!
                         prepared.package.ranges[call.sourceModule] => callRange
                         prepared.package.nodes[callRange.astStart + call.callAst] => callNode
+                        callNode.start + callNode.length => callRuntimeArgumentEnd!
+                        callNode.kind == 10 -> if {
+                            0 => callTargetSearch!
+                            callTargetSearch! < callRange.astCount -> while {
+                                prepared.package.nodes[callRange.astStart + callTargetSearch!] => callTargetCandidate
+                                (callTargetCandidate.parent == call.callAst and callTargetCandidate.kind == 16 and callTargetCandidate.payloadToken >= 0) -> if {
+                                    prepared.package.tokens[callRange.tokenStart + callTargetCandidate.payloadToken].span.start => callRuntimeArgumentEnd!
+                                }
+                                callTargetSearch! + 1 => callTargetSearch!
+                            }
+                        }
+                        callNode.kind == 48 -> if {
+                            prepared.package.tokens[callRange.tokenStart + callNode.payloadToken].span.start => callRuntimeArgumentEnd!
+                        }
                         0 => argumentSearch!
                         argumentSearch! < (expressions! -> len) -> while {
                             expressions![argumentSearch!] => argumentCandidate
                             argumentCandidate.sourceModule == call.sourceModule -> if {
                                 true => beforeRoleTarget!
-                                callNode.kind == 48 -> if {
-                                    prepared.package.nodes[callRange.astStart + argumentCandidate.astNode] => argumentNode
-                                    argumentNode.start + argumentNode.length > prepared.package.tokens[callRange.tokenStart + callNode.payloadToken].span.start -> if { false => beforeRoleTarget! }
-                                }
+                                prepared.package.nodes[callRange.astStart + argumentCandidate.astNode] => argumentNode
+                                argumentNode.start + argumentNode.length > callRuntimeArgumentEnd! -> if { false => beforeRoleTarget! }
                                 prepared.package.nodes[callRange.astStart + argumentCandidate.astNode].parent => ancestor!
                                 1 => distance!
                                 false => belongsToCall!

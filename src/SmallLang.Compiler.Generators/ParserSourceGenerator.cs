@@ -672,7 +672,9 @@ internal static class ParserEmitter
         builder.AppendLine("        var inputType = inputSignature.TypeName;");
         builder.AppendLine("        var inputOwnership = inputSignature.Ownership;");
         builder.AppendLine("        var hasValueGenericFixedArrayInput = isValueGeneric");
-        builder.AppendLine("            && inputType == $\"[Int; {genericParameterName}]\";");
+        builder.AppendLine("            && inputType is not null");
+        builder.AppendLine("            && inputType.StartsWith('[', StringComparison.Ordinal)");
+        builder.AppendLine("            && inputType.EndsWith($\"; {genericParameterName}]\", StringComparison.Ordinal);");
         builder.AppendLine("        if (inputName is not null && inputType is null)");
         builder.AppendLine("        {");
         builder.AppendLine("            throw Error(inputName.Value, \"function input name requires an input type\");");

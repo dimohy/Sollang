@@ -1045,18 +1045,29 @@ internal sealed partial class LlvmEmitter
 
         if (function.HasValueGenericFixedArrayInput)
         {
-            if (argument is not RuntimeStaticIntArray fixedArray)
+            var (pointer, length, actualType) = argument switch
+            {
+                RuntimeStaticIntArray array => (array.PointerName, array.LengthName, BoundType.StaticIntArray),
+                RuntimeStaticTextArray array => (array.PointerName, array.LengthName, BoundType.StaticTextArray),
+                RuntimeStaticInlineArray array => (array.PointerName, array.LengthName, array.ArrayType),
+                _ => throw new SmallLangException(
+                    $"value-generic function '{function.Name}' requires a fixed array input")
+            };
+            if (function.InputType != actualType)
             {
                 throw new SmallLangException(
-                    $"value-generic function '{function.Name}' requires a fixed Int array input");
+                    $"function '{function.Name}' expects {function.InputType!.Value} "
+                    + $"but received {actualType}");
             }
             if (function.SpecializedValue is not { } expectedLength
-                || !int.TryParse(fixedArray.LengthName, out var actualLength)
+                || !int.TryParse(length, out var actualLength)
                 || actualLength != expectedLength)
             {
                 throw new SmallLangException(
-                    $"function '{function.Name}' expects [Int; {function.SpecializedValue}] but received [Int; {fixedArray.LengthName}]");
+                    $"function '{function.Name}' expects [{StaticArrayElementType(actualType)}; {function.SpecializedValue}] "
+                    + $"but received [{StaticArrayElementType(actualType)}; {length}]");
             }
+            return BuildIntSliceArgument(pointer, length);
         }
 
         if (argument is RuntimeDynamicInlineArray inlineArray
@@ -1104,6 +1115,13 @@ internal sealed partial class LlvmEmitter
             RuntimeBox box when function.InputType == box.Type => $"ptr {box.PointerName}",
             _ => throw new SmallLangException($"function '{function.Name}' expects {function.InputType} but received {argument.Type}")
         };
+    }
+
+    private BoundType StaticArrayElementType(BoundType arrayType)
+    {
+        if (arrayType == BoundType.StaticIntArray) return BoundType.Int;
+        if (arrayType == BoundType.StaticTextArray) return BoundType.Text;
+        return _program.Types.GetStaticArray(arrayType).ElementType;
     }
 
     private RuntimeValue CreateMutableBorrowArgument(
