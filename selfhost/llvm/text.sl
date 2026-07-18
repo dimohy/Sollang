@@ -9496,6 +9496,7 @@ public emitLinux sources: move [Text; ~] -> Unit uses Console {
     context! -> usesParallelRuntime => capturesParallelOutput
     context! -> usesTextRuntime => usesTextOutput
     context! -> usesProcessRuntime => needsProcessRuntime
+    context! -> usesSourceTextRuntime => needsSourceTextRuntime
     capturesParallelOutput -> if { emitMemoryOutputSinkRuntime }
     (usesTextOutput or capturesParallelOutput) -> if { capturesParallelOutput -> emitLinuxTextRuntime }
     capturesParallelOutput -> if { emitLinuxComputeRuntime }
@@ -9504,6 +9505,12 @@ public emitLinux sources: move [Text; ~] -> Unit uses Console {
     needsProcessRuntime -> if { emitProcessTypeRuntime }
     context! -> emitCore
     needsProcessRuntime -> if { capturesParallelOutput -> emitLinuxProcessRuntime }
+    needsSourceTextRuntime -> if {
+        not needsProcessRuntime -> if { "declare i32 @open(ptr, i32, i32)" -> println }
+        (not capturesParallelOutput and not needsProcessRuntime) -> if { "declare i32 @close(i32)" -> println }
+        llvmRuntime.emitLinuxSourceTextDeclarations
+        llvmRuntime.emitLinuxSourceText
+    }
 }
 
 public emitWasm sources: move [Text; ~] -> Unit uses Console {

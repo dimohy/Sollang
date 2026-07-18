@@ -217,3 +217,84 @@ public emitWindowsSourceText: -> Unit uses Console {
     }
     """ -> println
 }
+
+public emitLinuxSourceTextDeclarations: -> Unit uses Console {
+    """
+    declare i64 @lseek(i32, i64, i32)
+    declare ptr @mmap(ptr, i64, i32, i32, i32, i64)
+    declare i32 @munmap(ptr, i64)
+    """ -> println
+}
+
+public emitLinuxSourceText: -> Unit uses Console {
+    """
+    define %sl.source_text @sl_runtime_map_text(%sl.text %path) {
+    entry:
+      %path_data = extractvalue %sl.text %path, 0
+      %path_length = extractvalue %sl.text %path, 1
+      %buffer_length = add i64 %path_length, 1
+      %buffer = call ptr @malloc(i64 %buffer_length)
+      %allocated = icmp ne ptr %buffer, null
+      br i1 %allocated, label %copy, label %failure
+    copy:
+      %index = phi i64 [ 0, %entry ], [ %next, %copy_body ]
+      %copy_done = icmp eq i64 %index, %path_length
+      br i1 %copy_done, label %terminate, label %copy_body
+    copy_body:
+      %source = getelementptr i8, ptr %path_data, i64 %index
+      %byte = load i8, ptr %source, align 1
+      %destination = getelementptr i8, ptr %buffer, i64 %index
+      store i8 %byte, ptr %destination, align 1
+      %next = add i64 %index, 1
+      br label %copy
+    terminate:
+      %terminator = getelementptr i8, ptr %buffer, i64 %path_length
+      store i8 0, ptr %terminator, align 1
+      %file = call i32 @open(ptr %buffer, i32 0, i32 0)
+      call void @free(ptr %buffer)
+      %opened = icmp sge i32 %file, 0
+      br i1 %opened, label %size, label %failure
+    size:
+      %length = call i64 @lseek(i32 %file, i64 0, i32 2)
+      %size_ok = icmp sge i64 %length, 0
+      br i1 %size_ok, label %size_known, label %close_failure
+    size_known:
+      %empty = icmp eq i64 %length, 0
+      br i1 %empty, label %empty_success, label %mapping
+    empty_success:
+      %empty_closed = call i32 @close(i32 %file)
+      ret %sl.source_text zeroinitializer
+    mapping:
+      %base = call ptr @mmap(ptr null, i64 %length, i32 1, i32 1, i32 %file, i64 0)
+      %base_value = ptrtoint ptr %base to i64
+      %base_ok = icmp ne i64 %base_value, -1
+      br i1 %base_ok, label %success, label %close_failure
+    success:
+      %file_closed = call i32 @close(i32 %file)
+      %result0 = insertvalue %sl.source_text poison, ptr %base, 0
+      %result1 = insertvalue %sl.source_text %result0, i64 %length, 1
+      %result2 = insertvalue %sl.source_text %result1, ptr %base, 2
+      %result3 = insertvalue %sl.source_text %result2, i64 %length, 3
+      ret %sl.source_text %result3
+    close_failure:
+      %failed_file_closed = call i32 @close(i32 %file)
+      br label %failure
+    failure:
+      call void @llvm.trap()
+      unreachable
+    }
+
+    define void @sl_runtime_unmap_text(%sl.source_text %source) {
+    entry:
+      %base = extractvalue %sl.source_text %source, 2
+      %length = extractvalue %sl.source_text %source, 3
+      %owned = icmp ne ptr %base, null
+      br i1 %owned, label %unmap, label %done
+    unmap:
+      %ignored = call i32 @munmap(ptr %base, i64 %length)
+      br label %done
+    done:
+      ret void
+    }
+    """ -> println
+}

@@ -6102,3 +6102,39 @@ The Linux process ABI itself is emitted, but a complete Linux-hosted self-host
 compiler currently reaches an independent missing `sl_runtime_map_text`
 SourceText runtime symbol. Linux stage-2 parity must not be claimed until that
 runtime gate is implemented and verified.
+
+## D190 - Make SourceText Ownership Native on Linux Stage 2
+
+Status: implemented and cross-target verified
+Date: 2026-07-19
+
+The self-host Linux emitter now provides the same owned SourceText contract as
+Windows without copying file contents into an SL heap array. It copies only the
+path into a temporary null-terminated buffer, opens the file read-only, obtains
+its length through `lseek`, maps the file with `mmap`, and stores the mapping
+base and length in `%sl.source_text`. Empty files produce the zero value. The
+owned drop path calls `munmap` exactly once when the base is non-null; every
+failure after open closes the descriptor before trapping.
+
+The runtime declaration boundary accounts for the compute and process
+runtimes, which may already declare `close` or `open`. SourceText therefore
+adds only the declarations that are not already owned by those feature
+runtimes, avoiding the duplicate declarations that originally obscured the
+next missing symbol.
+
+`scripts/verify-selfhost-stage2-linux.ps1` is the durable five-phase gate. It
+bootstraps or reuses stage 1, emits the complete 29-source Linux compiler,
+assembles it, cross-compiles its object, links it through WSL, then runs that
+Linux stage 2 on single and imported multi-file inputs. Stage-1 and stage-2
+normalized LLVM hashes are respectively
+`A522FB076919297BDD7A78FAEDF099DA65217F23BE7079A922DFFF3AD4B1FCE5`
+and `017126FCF6494AFC28175F5D8C555E775D1157A56C022C0EFD9C59270FFDA46E`.
+Both products assemble, link, and execute with the expected output.
+
+The complete Linux stage-2 module is 8,002,648 bytes and its verifier passes
+5/5. The corresponding Windows module is 8,002,786 bytes and its six-phase
+verifier still passes, including the shell-free native build path. The Release
+solution has zero warnings and errors, and the full Linux suite passes 526/526.
+This closes the cross-target Stage2 runtime gate but does not replace the
+remaining canonical ownership, generic-container, package, tooling, and
+library work, so the formal roadmap remains 48.5/60 (80.8%).

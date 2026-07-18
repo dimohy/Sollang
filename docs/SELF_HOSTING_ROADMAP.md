@@ -901,15 +901,30 @@ includes the public `sys.process` module, and canonical typed IR identifies
 self-host LLVM backend lowers the latter two through a portable process-result
 contract and materializes the language-level `Result<Int, Text>` value.
 
-The verifier builds the 7,997,972-byte Windows stage-2 compiler, compares
+The verifier builds the 8,002,786-byte Windows stage-2 compiler, compares
 single-file, grouped-Boolean, and imported multi-file LLVM from stage 1 and
 stage 2, assembles and executes every smoke module, and compares C# and native
 SL behavior. It also invokes the generated stage-2 compiler's own
 `build-windows` command: stage 2 redirects its LLVM with `runToFile`, invokes
 the pinned Clang through `run`, and the resulting executable prints
-`stage2-single-ok`. Linux process lowering is present, but a complete Linux
-self-host compiler remains separately gated by the missing Linux SourceText
-runtime.
+`stage2-single-ok`.
+
+Linux now has the matching SourceText owner runtime. It copies the SL path into
+a null-terminated buffer, opens the file read-only, determines its length with
+`lseek`, maps it through `mmap`, and releases the mapping with `munmap` at the
+owned value's deterministic drop. The dedicated Linux stage-2 verifier is
+**5/5 complete (100%)**:
+
+- [x] emit the complete 29-source Linux stage-2 compiler;
+- [x] assemble it and produce a Linux object;
+- [x] link and run the generated Linux compiler;
+- [x] prove stage-1/stage-2 identity for single and imported multi-file input;
+- [x] assemble, link, and execute both stage-2-produced programs.
+
+The complete Linux compiler is 8,002,648 LLVM bytes. Its generated single-file
+and imported multi-file products are byte-normalized hash-identical to stage 1
+and execute as `stage2-single-ok` and `stage2-multi-ok`. Windows Stage2 remains
+8/8 at 8,002,786 LLVM bytes, and both target suites pass 526/526.
 The formal language-capability score remains 42 complete, 13 partial, 5 missing
 (48.5/60, 80.8%) until the remaining ownership, generic-container, package,
 tooling, and library gates are implemented.
