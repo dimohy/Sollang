@@ -448,6 +448,7 @@ internal sealed partial class LlvmEmitter
         }
         if (_usesParallel)
         {
+            EmitPlatformFunctionBlock(_platform.EmitMemoryOutputSinkPrimitives);
             EmitPlatformFunctionBlock(_platform.EmitComputePrimitives);
         }
         EmitFunctionLine("declare void @llvm.trap()");

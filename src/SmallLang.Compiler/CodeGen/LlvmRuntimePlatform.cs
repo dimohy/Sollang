@@ -65,6 +65,106 @@ internal abstract class LlvmRuntimePlatform
     {
     }
 
+    public void EmitMemoryOutputSinkPrimitives(StringBuilder functions)
+    {
+        functions.AppendLine("""
+            define internal void @smalllang_memory_output_sink_append(ptr %sink, ptr %data, i64 %len) #0 {
+            entry:
+              %data_slot = getelementptr %smalllang.output_sink, ptr %sink, i32 0, i32 0
+              %length_slot = getelementptr %smalllang.output_sink, ptr %sink, i32 0, i32 1
+              %capacity_slot = getelementptr %smalllang.output_sink, ptr %sink, i32 0, i32 2
+              %length = load i64, ptr %length_slot, align 8
+              %capacity = load i64, ptr %capacity_slot, align 8
+              %required = add i64 %length, %len
+              %fits = icmp ule i64 %required, %capacity
+              br i1 %fits, label %append, label %grow
+
+            grow:
+              %doubled = shl i64 %capacity, 1
+              %minimum = icmp ult i64 %doubled, 256
+              %base_capacity = select i1 %minimum, i64 256, i64 %doubled
+              %enough = icmp uge i64 %base_capacity, %required
+              %new_capacity = select i1 %enough, i64 %base_capacity, i64 %required
+              %new_data = call ptr @smalllang_alloc(i64 %new_capacity)
+              %old_data = load ptr, ptr %data_slot, align 8
+              %has_old = icmp ne ptr %old_data, null
+              br i1 %has_old, label %copy_old, label %publish
+
+            copy_old:
+              call void @llvm.memcpy.p0.p0.i64(ptr %new_data, ptr %old_data, i64 %length, i1 false)
+              call void @smalllang_free(ptr %old_data)
+              br label %publish
+
+            publish:
+              store ptr %new_data, ptr %data_slot, align 8
+              store i64 %new_capacity, ptr %capacity_slot, align 8
+              br label %append
+
+            append:
+              %current_data = load ptr, ptr %data_slot, align 8
+              %destination = getelementptr i8, ptr %current_data, i64 %length
+              call void @llvm.memcpy.p0.p0.i64(ptr %destination, ptr %data, i64 %len, i1 false)
+              store i64 %required, ptr %length_slot, align 8
+              ret void
+            }
+
+            define internal void @smalllang_memory_output_sink_array_flush(ptr %sinks, i64 %count, ptr %context, ptr %writer) #0 {
+            entry:
+              br label %flush_loop
+
+            flush_loop:
+              %index = phi i64 [ 0, %entry ], [ %next, %flush_one_done ]
+              %done = icmp eq i64 %index, %count
+              br i1 %done, label %finish, label %flush_one
+
+            flush_one:
+              %sink = getelementptr %smalllang.output_sink, ptr %sinks, i64 %index
+              %data_slot = getelementptr %smalllang.output_sink, ptr %sink, i32 0, i32 0
+              %length_slot = getelementptr %smalllang.output_sink, ptr %sink, i32 0, i32 1
+              %data = load ptr, ptr %data_slot, align 8
+              %length = load i64, ptr %length_slot, align 8
+              %has_data = icmp ne ptr %data, null
+              br i1 %has_data, label %write, label %flush_one_done
+
+            write:
+              call void %writer(ptr %context, ptr %data, i64 %length)
+              call void @smalllang_free(ptr %data)
+              br label %flush_one_done
+
+            flush_one_done:
+              %next = add i64 %index, 1
+              br label %flush_loop
+
+            finish:
+              call void @smalllang_free(ptr %sinks)
+              ret void
+            }
+
+            define internal void @smalllang_memory_output_sink_array_dispose(ptr %sinks, i64 %count) #0 {
+            entry:
+              br label %dispose_loop
+
+            dispose_loop:
+              %index = phi i64 [ 0, %entry ], [ %next, %dispose_one ]
+              %done = icmp eq i64 %index, %count
+              br i1 %done, label %finish, label %dispose_one
+
+            dispose_one:
+              %sink = getelementptr %smalllang.output_sink, ptr %sinks, i64 %index
+              %data_slot = getelementptr %smalllang.output_sink, ptr %sink, i32 0, i32 0
+              %data = load ptr, ptr %data_slot, align 8
+              call void @smalllang_free(ptr %data)
+              %next = add i64 %index, 1
+              br label %dispose_loop
+
+            finish:
+              call void @smalllang_free(ptr %sinks)
+              ret void
+            }
+
+            """);
+    }
+
     public virtual void EmitAsyncPrimitives(StringBuilder functions)
     {
         if (UsesAsyncFile)

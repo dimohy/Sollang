@@ -974,6 +974,15 @@ cores), and the full Windows regression passes 506/506. The canonical roadmap
 remains 48.5/60 (80.8%) because this closes a feature-local parallel checklist
 item, not an additional top-level gate.
 
+The Linux bounded-pool and shared memory-output-sink revision reaches an exact
+7,217,656-byte stage-2/stage-3 fixed point with SHA-256
+`1C026529C832C88AA54ACCC55B05FE0A7358BBFA4F2A31F6F6F1F1ECEF0FD0DD`.
+Stage 3 assembles with `llvm-as`, takes 36.86 seconds wall and 407.42 CPU-seconds
+(11.05 effective cores), and peaks at 100.7 MiB. The Windows suite passes
+508/508, the focused Linux verifier passes 5/5, and stage-2 differential
+verification passes 6/6. Parallel progress is 26/28 (92.9%); the canonical
+roadmap remains 48.5/60 (80.8%).
+
 ## Immediate Implementation Order
 
 1. Multi-file compilation (implemented by example 52).

@@ -5744,3 +5744,56 @@ stage-2 differential verifier passes. Stage 2 and stage 3 are byte-identical at
 Native compute-task-group coverage is now 5/7 and the parallel subproject is
 25/28 (89.3%). The canonical self-host roadmap remains 48.5/60 equivalent gates
 (80.8%).
+
+## D179 - Use a Bounded Reusable Linux Compute Pool
+
+Status: implemented and fixed-point verified
+Date: 2026-07-18
+
+The Linux x86-64 backend now implements the same bounded reusable compute-pool
+contract as Windows. Native workers are pthreads; an `eventfd` semaphore wakes
+one worker per token, a second `eventfd` reports group completion, and an
+x86-64 futex generation barrier prevents a fast worker from consuming more than
+one token in a generation. The submitting parent drains the same atomic index
+queue before waiting. Shutdown wakes and joins every worker, deletes TLS, and
+closes both event descriptors.
+
+The self-host Linux emitter implements the same pool and pthread TLS output
+binding. Example 383 reuses the pool for 100 generations. The focused Linux
+verifier passes 5/5 in WSL2 Ubuntu, covering ordered output sinks, one-worker
+parent help, generation reuse, and execution of Linux LLVM emitted by the
+native self-host compiler.
+
+- [POSIX `pthread_create`](https://pubs.opengroup.org/onlinepubs/000095399/functions/pthread_create.html)
+- [POSIX `pthread_join`](https://pubs.opengroup.org/onlinepubs/009695399/functions/pthread_join.html)
+- [Linux `eventfd`](https://man7.org/linux/man-pages/man2/eventfd.2.html)
+
+## D180 - Share One Memory Output Sink Contract Across Platforms
+
+Status: implemented and fixed-point verified
+Date: 2026-07-18
+
+Memory output sinks now have one runtime abstraction in both the C# reference
+emitter and the self-host emitter. The common layer owns geometric growth,
+append, canonical array flush, and disposal. Windows and Linux retain only a
+small final-writer adapter and their platform-specific TLS binding. Compute
+pools no longer inspect the sink's `{data, length, capacity}` fields or duplicate
+the flush/free loop.
+
+This boundary makes sink ownership explicit: `array_flush` consumes every
+payload and the sink array, while `array_dispose` handles an unflushed or empty
+array. A writer callback receives opaque platform context, so future sinks can
+target files, diagnostics, or in-memory compiler products without copying the
+buffer-management algorithm into each runtime.
+
+The Release build has zero warnings/errors, the Windows suite passes 508/508,
+the focused Linux verifier passes 5/5, and stage-2 differential verification
+passes 6/6. Stage 2 and stage 3 are byte-identical at 7,217,656 bytes with
+SHA-256 `1C026529C832C88AA54ACCC55B05FE0A7358BBFA4F2A31F6F6F1F1ECEF0FD0DD`;
+`llvm-as` accepts stage 3. The measured stage-3 run took 36.86 seconds wall and
+407.42 CPU-seconds (11.05 effective cores), with a 100.7 MiB peak working set.
+
+Native compute-task-group coverage is now 6/7 and the parallel subproject is
+26/28 (92.9%). Cancellation/partial-result destruction and full Windows/Linux
+suite parity remain open. The canonical roadmap remains 48.5/60 equivalent
+gates (80.8%).

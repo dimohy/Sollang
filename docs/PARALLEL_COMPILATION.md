@@ -108,10 +108,10 @@ Evidence: `selfhost/semantic/analysis.sl`; examples 182, 293, and 294.
 - [x] Non-sendable captures and mutable borrows are rejected.
 - [x] Owned callback results transfer exactly once.
 
-### C. Native compute task group (5/7)
+### C. Native compute task group (6/7)
 
 - [x] Windows pool uses bounded reusable native workers.
-- [ ] Linux pool uses bounded reusable native workers.
+- [x] Linux pool uses bounded reusable native workers.
 - [x] The available processor count and explicit build override are supported.
 - [x] Workers claim indices atomically without a global result lock.
 - [x] Parent-assisted waiting and structured join are implemented.
@@ -156,7 +156,7 @@ Evidence: example 324 executes `block item: Int -> Int`; example 325 proves the
 self-host grammar/parser accepts the same declaration and call form. The two
 `block-callback-result-*` diagnostics cover missing and mismatched results.
 
-Parallel-compilation progress is **25/28 checks (89.3%)**. This is a feature-local
+Parallel-compilation progress is **26/28 checks (92.9%)**. This is a feature-local
 metric and does not promote the canonical self-host roadmap, which remains
 **48.5/60 equivalent gates (80.8%)** until a full checklist audit proves a gate.
 
@@ -185,15 +185,28 @@ all native workers, and only then flushes ordered sinks and destroys the group.
 This follows the helping-wait pattern documented by Java `ForkJoinPool` and
 oneTBB task groups.
 
+The Linux x86-64 backend now uses a bounded reusable pthread pool, `eventfd`
+work/completion signals, and a futex generation barrier. Example 383 reuses the
+same pool for 100 generations, and `scripts/verify-linux-parallel.ps1` executes
+five focused WSL checks covering ordered output, parent help, reuse, and LLVM
+emitted by the native self-host compiler. Memory-output ownership is shared by
+one runtime abstraction: platforms provide only the final writer adapter while
+the common sink owns grow, append, canonical flush, and destruction.
+
+- [POSIX `pthread_create`](https://pubs.opengroup.org/onlinepubs/000095399/functions/pthread_create.html)
+- [POSIX `pthread_join`](https://pubs.opengroup.org/onlinepubs/009695399/functions/pthread_join.html)
+- [Linux `eventfd`](https://man7.org/linux/man-pages/man2/eventfd.2.html)
+
 - [Java `ForkJoinPool.awaitQuiescence`](https://docs.oracle.com/en/java/javase/25/docs/api/java.base/java/util/concurrent/ForkJoinPool.html#awaitQuiescence(long,java.util.concurrent.TimeUnit))
 - [oneTBB `task_group`](https://uxlfoundation.github.io/oneTBB/main/specification/source/task_scheduler/task_group/task_group_cls.html)
 
 The complete 28-source self-host compiler reached an exact
-stage-2/stage-3 fixed point of 7,198,336 bytes with SHA-256
-`CBCED4918D9AF37C71AF792D99016A27C2F4CC9D4407CD123CD866BF32DB555F`;
+stage-2/stage-3 fixed point of 7,217,656 bytes with SHA-256
+`1C026529C832C88AA54ACCC55B05FE0A7358BBFA4F2A31F6F6F1F1ECEF0FD0DD`;
 the stage-3 output also assembles with `llvm-as`. The preceding source-worker
 measurement used 377.77 CPU-seconds over 34.81 seconds wall time (10.85
 effective cores). The parent-help fixed-point run used 376.91 CPU-seconds over
-34.56 seconds wall time (10.91 effective cores). The earlier capture-safety run
-peaked at 77.5 MiB, below the 100 MiB frontend budget.
-Linux full-suite parity remains the outstanding platform check.
+34.56 seconds wall time (10.91 effective cores). The Linux-pool and common-sink
+run used 407.42 CPU-seconds over 36.86 seconds wall time (11.05 effective cores)
+and peaked at 100.7 MiB. The earlier capture-safety run peaked at 77.5 MiB.
+Linux full-suite parity and exactly-once cancellation remain outstanding.

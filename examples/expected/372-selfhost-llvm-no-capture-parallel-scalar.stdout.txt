@@ -1,6 +1,85 @@
 target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
 target triple = "x86_64-pc-windows-msvc"
 %smalllang.output_sink = type { ptr, i64, i64 }
+define internal void @smalllang_memory_output_sink_append(ptr %sink, ptr %data, i64 %len) {
+entry:
+  %data_slot = getelementptr %smalllang.output_sink, ptr %sink, i32 0, i32 0
+  %length_slot = getelementptr %smalllang.output_sink, ptr %sink, i32 0, i32 1
+  %capacity_slot = getelementptr %smalllang.output_sink, ptr %sink, i32 0, i32 2
+  %length = load i64, ptr %length_slot, align 8
+  %capacity = load i64, ptr %capacity_slot, align 8
+  %required = add i64 %length, %len
+  %fits = icmp ule i64 %required, %capacity
+  br i1 %fits, label %append, label %grow
+grow:
+  %doubled = shl i64 %capacity, 1
+  %minimum = icmp ult i64 %doubled, 256
+  %base_capacity = select i1 %minimum, i64 256, i64 %doubled
+  %enough = icmp uge i64 %base_capacity, %required
+  %new_capacity = select i1 %enough, i64 %base_capacity, i64 %required
+  %new_data = call ptr @malloc(i64 %new_capacity)
+  %old_data = load ptr, ptr %data_slot, align 8
+  %has_old = icmp ne ptr %old_data, null
+  br i1 %has_old, label %copy_old, label %publish
+copy_old:
+  call void @llvm.memcpy.p0.p0.i64(ptr %new_data, ptr %old_data, i64 %length, i1 false)
+  call void @free(ptr %old_data)
+  br label %publish
+publish:
+  store ptr %new_data, ptr %data_slot, align 8
+  store i64 %new_capacity, ptr %capacity_slot, align 8
+  br label %append
+append:
+  %current_data = load ptr, ptr %data_slot, align 8
+  %destination = getelementptr i8, ptr %current_data, i64 %length
+  call void @llvm.memcpy.p0.p0.i64(ptr %destination, ptr %data, i64 %len, i1 false)
+  store i64 %required, ptr %length_slot, align 8
+  ret void
+}
+define internal void @smalllang_memory_output_sink_array_flush(ptr %sinks, i64 %count, ptr %context, ptr %writer) {
+entry:
+  br label %flush_loop
+flush_loop:
+  %index = phi i64 [ 0, %entry ], [ %next, %flush_one_done ]
+  %done = icmp eq i64 %index, %count
+  br i1 %done, label %finish, label %flush_one
+flush_one:
+  %sink = getelementptr %smalllang.output_sink, ptr %sinks, i64 %index
+  %data_slot = getelementptr %smalllang.output_sink, ptr %sink, i32 0, i32 0
+  %length_slot = getelementptr %smalllang.output_sink, ptr %sink, i32 0, i32 1
+  %data = load ptr, ptr %data_slot, align 8
+  %length = load i64, ptr %length_slot, align 8
+  %has_data = icmp ne ptr %data, null
+  br i1 %has_data, label %write, label %flush_one_done
+write:
+  call void %writer(ptr %context, ptr %data, i64 %length)
+  call void @free(ptr %data)
+  br label %flush_one_done
+flush_one_done:
+  %next = add i64 %index, 1
+  br label %flush_loop
+finish:
+  call void @free(ptr %sinks)
+  ret void
+}
+define internal void @smalllang_memory_output_sink_array_dispose(ptr %sinks, i64 %count) {
+entry:
+  br label %dispose_loop
+dispose_loop:
+  %index = phi i64 [ 0, %entry ], [ %next, %dispose_one ]
+  %done = icmp eq i64 %index, %count
+  br i1 %done, label %finish, label %dispose_one
+dispose_one:
+  %sink = getelementptr %smalllang.output_sink, ptr %sinks, i64 %index
+  %data_slot = getelementptr %smalllang.output_sink, ptr %sink, i32 0, i32 0
+  %data = load ptr, ptr %data_slot, align 8
+  call void @free(ptr %data)
+  %next = add i64 %index, 1
+  br label %dispose_loop
+finish:
+  call void @free(ptr %sinks)
+  ret void
+}
 @sl_runtime_newline = private constant [1 x i8] c"\0A"
 @sl_runtime_stdout_buffer = private global [1048576 x i8] zeroinitializer
 @sl_runtime_stdout_count = private global i64 0
@@ -11,6 +90,7 @@ declare i32 @WriteFile(ptr, ptr, i32, ptr, ptr)
 declare i32 @TlsAlloc()
 declare i32 @TlsSetValue(i32, ptr)
 declare ptr @TlsGetValue(i32)
+declare i32 @TlsFree(i32)
 declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1 immarg)
 declare void @llvm.memset.p0.i64(ptr, i8, i64, i1 immarg)
 define internal void @sl_runtime_flush_stdout() {
@@ -52,39 +132,9 @@ append:
   store i64 %total, ptr @sl_runtime_stdout_count, align 8
   ret void
 }
-define internal void @smalllang_output_sink_append(ptr %sink, ptr %data, i64 %len) {
+define internal void @smalllang_memory_output_sink_write(ptr %context, ptr %data, i64 %len) {
 entry:
-  %data_slot = getelementptr %smalllang.output_sink, ptr %sink, i32 0, i32 0
-  %length_slot = getelementptr %smalllang.output_sink, ptr %sink, i32 0, i32 1
-  %capacity_slot = getelementptr %smalllang.output_sink, ptr %sink, i32 0, i32 2
-  %length = load i64, ptr %length_slot, align 8
-  %capacity = load i64, ptr %capacity_slot, align 8
-  %required = add i64 %length, %len
-  %fits = icmp ule i64 %required, %capacity
-  br i1 %fits, label %append, label %grow
-grow:
-  %doubled = shl i64 %capacity, 1
-  %minimum = icmp ult i64 %doubled, 256
-  %base_capacity = select i1 %minimum, i64 256, i64 %doubled
-  %enough = icmp uge i64 %base_capacity, %required
-  %new_capacity = select i1 %enough, i64 %base_capacity, i64 %required
-  %new_data = call ptr @malloc(i64 %new_capacity)
-  %old_data = load ptr, ptr %data_slot, align 8
-  %has_old = icmp ne ptr %old_data, null
-  br i1 %has_old, label %copy_old, label %publish
-copy_old:
-  call void @llvm.memcpy.p0.p0.i64(ptr %new_data, ptr %old_data, i64 %length, i1 false)
-  call void @free(ptr %old_data)
-  br label %publish
-publish:
-  store ptr %new_data, ptr %data_slot, align 8
-  store i64 %new_capacity, ptr %capacity_slot, align 8
-  br label %append
-append:
-  %current_data = load ptr, ptr %data_slot, align 8
-  %destination = getelementptr i8, ptr %current_data, i64 %length
-  call void @llvm.memcpy.p0.p0.i64(ptr %destination, ptr %data, i64 %len, i1 false)
-  store i64 %required, ptr %length_slot, align 8
+  call void @sl_runtime_append_stdout_direct(ptr %data, i64 %len)
   ret void
 }
 define internal void @sl_runtime_append_stdout(ptr %data, i64 %len) {
@@ -97,7 +147,7 @@ read_sink:
   %capturing = icmp ne ptr %sink, null
   br i1 %capturing, label %capture, label %direct
 capture:
-  call void @smalllang_output_sink_append(ptr %sink, ptr %data, i64 %len)
+  call void @smalllang_memory_output_sink_append(ptr %sink, ptr %data, i64 %len)
   ret void
 direct:
   call void @sl_runtime_append_stdout_direct(ptr %data, i64 %len)
@@ -140,6 +190,10 @@ entry:
 wait:
   %semaphore = load ptr, ptr @smalllang_compute_semaphore, align 8
   %waited = call i32 @WaitForSingleObject(ptr %semaphore, i32 -1)
+  %stopping_value = load atomic i32, ptr @smalllang_compute_stopping acquire, align 4
+  %stopping = icmp ne i32 %stopping_value, 0
+  br i1 %stopping, label %stopped, label %take
+take:
   %group = load atomic ptr, ptr @smalllang_compute_group_current acquire, align 8
   %count_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 3
   %count = load i64, ptr %count_slot, align 8
@@ -176,6 +230,8 @@ signal:
   %event = load ptr, ptr @smalllang_compute_completion_event, align 8
   %signalled = call i32 @SetEvent(ptr %event)
   br label %wait
+stopped:
+  ret i32 0
 }
 define internal i1 @smalllang_compute_start() {
 entry:
@@ -263,7 +319,7 @@ submit:
 cleanup_empty:
   %empty_sinks_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 5
   %empty_sinks = load ptr, ptr %empty_sinks_slot, align 8
-  call void @free(ptr %empty_sinks)
+  call void @smalllang_memory_output_sink_array_dispose(ptr %empty_sinks, i64 0)
   br label %done
 publish:
   store atomic i64 0, ptr @smalllang_compute_next release, align 8
@@ -307,32 +363,44 @@ departure_done:
   store atomic i32 0, ptr @smalllang_compute_barrier_departed release, align 4
   %sinks_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 5
   %sinks = load ptr, ptr %sinks_slot, align 8
-  br label %flush_loop
-flush_loop:
-  %flush_index = phi i64 [ 0, %departure_done ], [ %flush_next, %flush_one_done ]
-  %flush_done = icmp eq i64 %flush_index, %count
-  br i1 %flush_done, label %flush_finish, label %flush_one
-flush_one:
-  %sink = getelementptr %smalllang.output_sink, ptr %sinks, i64 %flush_index
-  %sink_data_slot = getelementptr %smalllang.output_sink, ptr %sink, i32 0, i32 0
-  %sink_length_slot = getelementptr %smalllang.output_sink, ptr %sink, i32 0, i32 1
-  %sink_data = load ptr, ptr %sink_data_slot, align 8
-  %sink_length = load i64, ptr %sink_length_slot, align 8
-  %has_sink_data = icmp ne ptr %sink_data, null
-  br i1 %has_sink_data, label %flush_write, label %flush_one_done
-flush_write:
-  call void @sl_runtime_append_stdout_direct(ptr %sink_data, i64 %sink_length)
-  call void @free(ptr %sink_data)
-  br label %flush_one_done
-flush_one_done:
-  %flush_next = add i64 %flush_index, 1
-  br label %flush_loop
-flush_finish:
-  call void @free(ptr %sinks)
+  call void @smalllang_memory_output_sink_array_flush(ptr %sinks, i64 %count, ptr %group, ptr @smalllang_memory_output_sink_write)
   store atomic ptr null, ptr @smalllang_compute_group_current release, align 8
   br label %done
 failed:
   unreachable
+done:
+  ret void
+}
+define internal void @smalllang_compute_shutdown() {
+entry:
+  %workers = load i32, ptr @smalllang_compute_worker_count, align 4
+  %started = icmp sgt i32 %workers, 0
+  br i1 %started, label %stop, label %done
+stop:
+  store atomic i32 1, ptr @smalllang_compute_stopping release, align 4
+  %semaphore = load ptr, ptr @smalllang_compute_semaphore, align 8
+  %released = call i32 @ReleaseSemaphore(ptr %semaphore, i32 %workers, ptr null)
+  br label %join
+join:
+  %index = phi i32 [ 0, %stop ], [ %next, %joined ]
+  %all_joined = icmp eq i32 %index, %workers
+  br i1 %all_joined, label %cleanup, label %join_one
+join_one:
+  %slot = getelementptr [64 x ptr], ptr @smalllang_compute_worker_handles, i32 0, i32 %index
+  %worker = load ptr, ptr %slot, align 8
+  %waited = call i32 @WaitForSingleObject(ptr %worker, i32 -1)
+  store ptr null, ptr %slot, align 8
+  br label %joined
+joined:
+  %next = add i32 %index, 1
+  br label %join
+cleanup:
+  %tls_index = load i32, ptr @smalllang_output_sink_tls, align 4
+  %tls_freed = call i32 @TlsFree(i32 %tls_index)
+  store ptr null, ptr @smalllang_compute_semaphore, align 8
+  store ptr null, ptr @smalllang_compute_completion_event, align 8
+  store i32 0, ptr @smalllang_compute_worker_count, align 4
+  br label %done
 done:
   ret void
 }
@@ -423,6 +491,7 @@ while20_body:
   br label %while20_header
 while20_exit:
   call void @sl_runtime_print(ptr @sl_str_32, i64 24, i1 true)
+  call void @smalllang_compute_shutdown()
   call void @sl_runtime_flush_stdout()
   ret i32 0
 }

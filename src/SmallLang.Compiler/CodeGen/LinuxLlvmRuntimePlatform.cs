@@ -12,6 +12,8 @@ internal sealed class LinuxLlvmRuntimePlatform : LlvmRuntimePlatform
 
     public override bool SupportsAsync => true;
 
+    public override bool SupportsComputePool => true;
+
     public override void EmitGlobals(StringBuilder globals)
     {
         globals.AppendLine("@smalllang_file_writer_fd = internal global i32 -1");
@@ -23,6 +25,15 @@ internal sealed class LinuxLlvmRuntimePlatform : LlvmRuntimePlatform
             globals.AppendLine("@smalllang_file_request_event_fd = internal global i32 -1");
             globals.AppendLine("@smalllang_file_completion_event_fd = internal global i32 -1");
             globals.AppendLine("@smalllang_file_worker_thread = internal global i64 0");
+        }
+        if (UsesComputePool)
+        {
+            globals.AppendLine("@smalllang_compute_work_event_fd = internal global i32 -1");
+            globals.AppendLine("@smalllang_compute_completion_event_fd = internal global i32 -1");
+            globals.AppendLine("@smalllang_compute_worker_count = internal global i32 0");
+            globals.AppendLine("@smalllang_compute_worker_limit = internal global i32 0");
+            globals.AppendLine("@smalllang_compute_worker_threads = internal global [64 x i64] zeroinitializer, align 8");
+            globals.AppendLine("@smalllang_compute_generation = internal global i32 0");
         }
     }
 
@@ -47,12 +58,20 @@ internal sealed class LinuxLlvmRuntimePlatform : LlvmRuntimePlatform
         functions.AppendLine("declare ptr @getenv(ptr)");
         functions.AppendLine("declare i32 @posix_spawnp(ptr, ptr, ptr, ptr, ptr, ptr)");
         functions.AppendLine("declare i32 @waitpid(i32, ptr, i32)");
-        if (UsesAsyncFile)
+        if (UsesAsyncFile || UsesComputePool)
         {
             functions.AppendLine("declare i32 @eventfd(i32, i32)");
-            functions.AppendLine("declare i32 @poll(ptr, i64, i32)");
             functions.AppendLine("declare i32 @pthread_create(ptr, ptr, ptr, ptr)");
             functions.AppendLine("declare i32 @pthread_join(i64, ptr)");
+        }
+        if (UsesAsyncFile)
+        {
+            functions.AppendLine("declare i32 @poll(ptr, i64, i32)");
+        }
+        if (UsesComputePool)
+        {
+            functions.AppendLine("declare i64 @sysconf(i32)");
+            functions.AppendLine("declare i64 @syscall(i64, ...)");
         }
         functions.AppendLine("@environ = external global ptr");
     }
@@ -168,6 +187,288 @@ internal sealed class LinuxLlvmRuntimePlatform : LlvmRuntimePlatform
               store i64 0, ptr @smalllang_file_worker_thread, align 8
               store i32 -1, ptr @smalllang_file_request_event_fd, align 4
               store i32 -1, ptr @smalllang_file_completion_event_fd, align 4
+              ret void
+            }
+
+            """);
+    }
+
+    public override void EmitComputePrimitives(StringBuilder functions)
+    {
+        if (!UsesComputePool)
+        {
+            return;
+        }
+
+        functions.AppendLine("""
+            define internal ptr @smalllang_linux_compute_worker(ptr %unused) #0 {
+            entry:
+              %event_value = alloca i64, align 8
+              br label %wait
+
+            wait:
+              %work_fd = load i32, ptr @smalllang_compute_work_event_fd, align 4
+              %waited = call i64 @read(i32 %work_fd, ptr %event_value, i64 8)
+              %stopping_value = load atomic i32, ptr @smalllang_compute_stopping acquire, align 4
+              %stopping = icmp ne i32 %stopping_value, 0
+              br i1 %stopping, label %stopped, label %take
+
+            take:
+              %generation = load atomic i32, ptr @smalllang_compute_generation acquire, align 4
+              %group = load atomic ptr, ptr @smalllang_compute_group_current acquire, align 8
+              %count_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 3
+              %count = load i64, ptr %count_slot, align 8
+              br label %claim
+
+            claim:
+              %index = atomicrmw add ptr @smalllang_compute_next, i64 1 acq_rel
+              %has_work = icmp ult i64 %index, %count
+              br i1 %has_work, label %work, label %complete
+
+            work:
+              %callback_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 0
+              %callback = load ptr, ptr %callback_slot, align 8
+              %running_before = atomicrmw add ptr @smalllang_compute_running, i32 1 acq_rel
+              %running_now = add i32 %running_before, 1
+              %peak_before = atomicrmw max ptr @smalllang_compute_peak, i32 %running_now acq_rel
+              call void %callback(ptr %group, i64 %index)
+              %running_after = atomicrmw sub ptr @smalllang_compute_running, i32 1 acq_rel
+              br label %claim
+
+            complete:
+              %previous = atomicrmw sub ptr @smalllang_compute_active, i32 1 acq_rel
+              %last = icmp eq i32 %previous, 1
+              br i1 %last, label %signal, label %barrier_check
+
+            barrier_check:
+              %current_generation = load atomic i32, ptr @smalllang_compute_generation acquire, align 4
+              %generation_advanced = icmp ne i32 %current_generation, %generation
+              br i1 %generation_advanced, label %wait, label %barrier_wait
+
+            barrier_wait:
+              %futex_waited = call i64 (i64, ...) @syscall(i64 202, ptr @smalllang_compute_generation, i32 128, i32 %generation, ptr null, ptr null, i32 0)
+              br label %barrier_check
+
+            signal:
+              %generation_before = atomicrmw add ptr @smalllang_compute_generation, i32 1 acq_rel
+              %futex_woken = call i64 (i64, ...) @syscall(i64 202, ptr @smalllang_compute_generation, i32 129, i32 2147483647, ptr null, ptr null, i32 0)
+              store i64 1, ptr %event_value, align 8
+              %completion_fd = load i32, ptr @smalllang_compute_completion_event_fd, align 4
+              %signalled = call i64 @write(i32 %completion_fd, ptr %event_value, i64 8)
+              br label %wait
+
+            stopped:
+              ret ptr null
+            }
+
+            define internal i1 @smalllang_compute_start() #0 {
+            entry:
+              %existing = load i32, ptr @smalllang_compute_worker_count, align 4
+              %already = icmp sgt i32 %existing, 0
+              br i1 %already, label %ready, label %create_work_event
+
+            create_work_event:
+              %work_fd = call i32 @eventfd(i32 0, i32 1)
+              %work_ok = icmp sge i32 %work_fd, 0
+              br i1 %work_ok, label %create_completion_event, label %fail
+
+            create_completion_event:
+              store i32 %work_fd, ptr @smalllang_compute_work_event_fd, align 4
+              %completion_fd = call i32 @eventfd(i32 0, i32 0)
+              %completion_ok = icmp sge i32 %completion_fd, 0
+              br i1 %completion_ok, label %count, label %close_work
+
+            count:
+              store i32 %completion_fd, ptr @smalllang_compute_completion_event_fd, align 4
+              %reported = call i64 @sysconf(i32 84)
+              %positive = icmp sgt i64 %reported, 0
+              %at_least_one = select i1 %positive, i64 %reported, i64 1
+              %configured32 = load i32, ptr @smalllang_compute_worker_limit, align 4
+              %configured = sext i32 %configured32 to i64
+              %has_configured = icmp sgt i64 %configured, 0
+              %selected = select i1 %has_configured, i64 %configured, i64 %at_least_one
+              %too_many = icmp sgt i64 %selected, 64
+              %bounded64 = select i1 %too_many, i64 64, i64 %selected
+              %bounded = trunc i64 %bounded64 to i32
+              br label %create_workers
+
+            create_workers:
+              %index = phi i32 [ 0, %count ], [ %next, %created ]
+              %done = icmp eq i32 %index, %bounded
+              br i1 %done, label %publish, label %create_one
+
+            create_one:
+              %slot = getelementptr [64 x i64], ptr @smalllang_compute_worker_threads, i32 0, i32 %index
+              %create = call i32 @pthread_create(ptr %slot, ptr null, ptr @smalllang_linux_compute_worker, ptr null)
+              %worker_ok = icmp eq i32 %create, 0
+              br i1 %worker_ok, label %created, label %publish
+
+            created:
+              %next = add i32 %index, 1
+              br label %create_workers
+
+            publish:
+              %created_count = phi i32 [ %bounded, %create_workers ], [ %index, %create_one ]
+              store i32 %created_count, ptr @smalllang_compute_worker_count, align 4
+              %has_workers = icmp sgt i32 %created_count, 0
+              br i1 %has_workers, label %ready, label %close_both
+
+            close_work:
+              %closed_work_only = call i32 @close(i32 %work_fd)
+              store i32 -1, ptr @smalllang_compute_work_event_fd, align 4
+              br label %fail
+
+            close_both:
+              %closed_completion = call i32 @close(i32 %completion_fd)
+              %closed_work = call i32 @close(i32 %work_fd)
+              store i32 -1, ptr @smalllang_compute_completion_event_fd, align 4
+              store i32 -1, ptr @smalllang_compute_work_event_fd, align 4
+              br label %fail
+
+            ready:
+              ret i1 true
+
+            fail:
+              ret i1 false
+            }
+
+            define internal void @smalllang_compute_execute(ptr %group) #0 {
+            entry:
+              %started = call i1 @smalllang_compute_start()
+              br i1 %started, label %submit, label %failed
+
+            submit:
+              %count_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 3
+              %count = load i64, ptr %count_slot, align 8
+              %empty = icmp eq i64 %count, 0
+              br i1 %empty, label %cleanup_empty, label %publish
+
+            cleanup_empty:
+              %empty_sinks_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 5
+              %empty_sinks = load ptr, ptr %empty_sinks_slot, align 8
+              call void @smalllang_memory_output_sink_array_dispose(ptr %empty_sinks, i64 0)
+              br label %done
+
+            publish:
+              store atomic i64 0, ptr @smalllang_compute_next release, align 8
+              store atomic i32 0, ptr @smalllang_compute_peak release, align 4
+              %workers = load i32, ptr @smalllang_compute_worker_count, align 4
+              store atomic i32 %workers, ptr @smalllang_compute_active release, align 4
+              store atomic ptr %group, ptr @smalllang_compute_group_current release, align 8
+              %workers64 = zext i32 %workers to i64
+              %event_value = alloca i64, align 8
+              store i64 %workers64, ptr %event_value, align 8
+              %work_fd = load i32, ptr @smalllang_compute_work_event_fd, align 4
+              %released = call i64 @write(i32 %work_fd, ptr %event_value, i64 8)
+              br label %help_claim
+
+            help_claim:
+              %help_index = atomicrmw add ptr @smalllang_compute_next, i64 1 acq_rel
+              %help_has_work = icmp ult i64 %help_index, %count
+              br i1 %help_has_work, label %help_work, label %help_wait
+
+            help_work:
+              %help_callback_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 0
+              %help_callback = load ptr, ptr %help_callback_slot, align 8
+              %help_running_before = atomicrmw add ptr @smalllang_compute_running, i32 1 acq_rel
+              %help_running_now = add i32 %help_running_before, 1
+              %help_peak_before = atomicrmw max ptr @smalllang_compute_peak, i32 %help_running_now acq_rel
+              call void %help_callback(ptr %group, i64 %help_index)
+              %help_running_after = atomicrmw sub ptr @smalllang_compute_running, i32 1 acq_rel
+              br label %help_claim
+
+            help_wait:
+              %completion_fd = load i32, ptr @smalllang_compute_completion_event_fd, align 4
+              %waited = call i64 @read(i32 %completion_fd, ptr %event_value, i64 8)
+              br label %flush_prepare
+
+            flush_prepare:
+              %sinks_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 5
+              %sinks = load ptr, ptr %sinks_slot, align 8
+              call void @smalllang_memory_output_sink_array_flush(ptr %sinks, i64 %count, ptr %group, ptr @smalllang_memory_output_sink_write)
+              store atomic ptr null, ptr @smalllang_compute_group_current release, align 8
+              br label %done
+
+            failed:
+              unreachable
+
+            done:
+              ret void
+            }
+
+            define internal i32 @smalllang_compute_limit_workers(i32 %requested) #0 {
+            entry:
+              %existing = load i32, ptr @smalllang_compute_worker_count, align 4
+              %already_started = icmp sgt i32 %existing, 0
+              br i1 %already_started, label %started, label %configure
+
+            configure:
+              %positive = icmp sgt i32 %requested, 0
+              %at_least_one = select i1 %positive, i32 %requested, i32 1
+              %too_many = icmp sgt i32 %at_least_one, 64
+              %bounded = select i1 %too_many, i32 64, i32 %at_least_one
+              store i32 %bounded, ptr @smalllang_compute_worker_limit, align 4
+              %started_ok = call i1 @smalllang_compute_start()
+              br i1 %started_ok, label %read, label %failed
+
+            started:
+              ret i32 %existing
+
+            read:
+              %workers = load i32, ptr @smalllang_compute_worker_count, align 4
+              ret i32 %workers
+
+            failed:
+              ret i32 0
+            }
+
+            define internal i32 @smalllang_compute_peak_workers() #0 {
+            entry:
+              %peak = load atomic i32, ptr @smalllang_compute_peak acquire, align 4
+              ret i32 %peak
+            }
+
+            define internal void @smalllang_compute_shutdown() #0 {
+            entry:
+              %workers = load i32, ptr @smalllang_compute_worker_count, align 4
+              %started = icmp sgt i32 %workers, 0
+              br i1 %started, label %stop, label %done
+
+            stop:
+              store atomic i32 1, ptr @smalllang_compute_stopping release, align 4
+              %workers64 = zext i32 %workers to i64
+              %event_value = alloca i64, align 8
+              store i64 %workers64, ptr %event_value, align 8
+              %work_fd = load i32, ptr @smalllang_compute_work_event_fd, align 4
+              %released = call i64 @write(i32 %work_fd, ptr %event_value, i64 8)
+              br label %join
+
+            join:
+              %index = phi i32 [ 0, %stop ], [ %next, %joined ]
+              %all_joined = icmp eq i32 %index, %workers
+              br i1 %all_joined, label %cleanup, label %join_one
+
+            join_one:
+              %slot = getelementptr [64 x i64], ptr @smalllang_compute_worker_threads, i32 0, i32 %index
+              %worker = load i64, ptr %slot, align 8
+              %joined_status = call i32 @pthread_join(i64 %worker, ptr null)
+              store i64 0, ptr %slot, align 8
+              br label %joined
+
+            joined:
+              %next = add i32 %index, 1
+              br label %join
+
+            cleanup:
+              %completion_fd = load i32, ptr @smalllang_compute_completion_event_fd, align 4
+              %closed_completion = call i32 @close(i32 %completion_fd)
+              %closed_work = call i32 @close(i32 %work_fd)
+              store i32 -1, ptr @smalllang_compute_completion_event_fd, align 4
+              store i32 -1, ptr @smalllang_compute_work_event_fd, align 4
+              store i32 0, ptr @smalllang_compute_worker_count, align 4
+              br label %done
+
+            done:
               ret void
             }
 
@@ -500,7 +801,49 @@ internal sealed class LinuxLlvmRuntimePlatform : LlvmRuntimePlatform
 
     public override void EmitIoPrimitives(StringBuilder functions)
     {
-        functions.AppendLine("""
+        if (UsesComputePool)
+        {
+            functions.AppendLine("""
+            define internal i32 @smalllang_write(ptr %stdout, ptr %data, i64 %len64, ptr %written) #0 {
+            entry:
+              %stdout_value = ptrtoint ptr %stdout to i64
+              %sink_tag = and i64 %stdout_value, 1
+              %has_sink_tag = icmp ne i64 %sink_tag, 0
+              %is_stdout_fd = icmp eq i64 %stdout_value, 1
+              %not_stdout_fd = xor i1 %is_stdout_fd, true
+              %capturing = and i1 %has_sink_tag, %not_stdout_fd
+              br i1 %capturing, label %capture, label %write_direct
+
+            capture:
+              %sink_value = and i64 %stdout_value, -2
+              %sink = inttoptr i64 %sink_value to ptr
+              call void @smalllang_memory_output_sink_append(ptr %sink, ptr %data, i64 %len64)
+              %captured_len = trunc i64 %len64 to i32
+              store i32 %captured_len, ptr %written, align 4
+              ret i32 1
+
+            write_direct:
+              %written64 = call i64 @write(i32 1, ptr %data, i64 %len64)
+              %written32 = trunc i64 %written64 to i32
+              store i32 %written32, ptr %written, align 4
+              %ok1 = icmp sge i64 %written64, 0
+              %ok2 = icmp eq i64 %written64, %len64
+              %ok = and i1 %ok1, %ok2
+              %ok32 = zext i1 %ok to i32
+              ret i32 %ok32
+            }
+
+            define internal void @smalllang_memory_output_sink_write(ptr %context, ptr %data, i64 %len) #0 {
+            entry:
+              %written = call i64 @write(i32 1, ptr %data, i64 %len)
+              ret void
+            }
+
+            """);
+        }
+        else
+        {
+            functions.AppendLine("""
             define internal i32 @smalllang_write(ptr %stdout, ptr %data, i64 %len64, ptr %written) #0 {
             entry:
               %written64 = call i64 @write(i32 1, ptr %data, i64 %len64)
@@ -513,6 +856,10 @@ internal sealed class LinuxLlvmRuntimePlatform : LlvmRuntimePlatform
               ret i32 %ok32
             }
 
+            """);
+        }
+
+        functions.AppendLine("""
             define internal i32 @smalllang_read_stdin(ptr %stdin, ptr %data, i64 %len64, ptr %read) #0 {
             entry:
               %read64 = call i64 @read(i32 0, ptr %data, i64 %len64)
