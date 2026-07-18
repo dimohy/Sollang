@@ -2475,6 +2475,24 @@ public lowerContext prepared: semanticContext.CompilationContext -> [TypedIrNode
                         entryBindingControlResultIndex! + 1 => entryBindingControlResultIndex!
                     }
 
+                    # Entry bodies need the same role-result edge repair as
+                    # ordinary functions. The role call and its `=>` binding
+                    # share one AST node, so the generic child pass cannot
+                    # discover this operand.
+                    entryExpressionStart => entryRoleBindingIndex!
+                    entryRoleBindingIndex! < entryExpressionEnd -> while {
+                        results![entryRoleBindingIndex!] => entryRoleBinding!
+                        (entryRoleBinding!.kind == 17 and entryRoleBinding!.operand0 < 0 and prepared.package.nodes[sourceRange.astStart + entryRoleBinding!.astNode].kind == 48) -> if {
+                            entryExpressionStart => entryRoleCallSearch!
+                            entryRoleCallSearch! < entryExpressionEnd -> while {
+                                (results![entryRoleCallSearch!].kind == 6 and results![entryRoleCallSearch!].astNode == entryRoleBinding!.astNode and results![entryRoleCallSearch!].opcode == -207) -> if { entryRoleCallSearch! => entryRoleBinding!.operand0 }
+                                entryRoleCallSearch! + 1 => entryRoleCallSearch!
+                            }
+                            entryRoleBinding! => results![entryRoleBindingIndex!]
+                        }
+                        entryRoleBindingIndex! + 1 => entryRoleBindingIndex!
+                    }
+
                     entryExpressionStart => entryBindingNameIr!
                     entryBindingNameIr! < entryExpressionEnd -> while {
                         results![entryBindingNameIr!] => entryBindingName!

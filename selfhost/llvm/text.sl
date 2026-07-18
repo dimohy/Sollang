@@ -714,6 +714,20 @@ emitCore context: move EmitContext -> Unit uses Console {
         }
         targetFunctionIr!
     }
+    hasWorkerScalarArrayElement nodeIndex: Int -> Bool {
+        false => supported!
+        context.ir[nodeIndex] => arrayNode
+        arrayNode.typeId >= 0 -> if {
+            context.types[arrayNode.typeId] => arrayType
+            (arrayType.kind == 3 and arrayType.first >= 0) -> if {
+                context.types[arrayType.first] => elementType
+                (elementType.kind == 1 and elementType.origin == 1 and ((elementType.symbol >= 2 and elementType.symbol <= 14) or (elementType.symbol >= 19 and elementType.symbol <= 23))) -> if {
+                    true => supported!
+                }
+            }
+        }
+        supported!
+    }
     parallelUsesComputePool expressionIndex: Int -> Bool {
         false => supported!
         context.ir[expressionIndex] => parallelExpression
@@ -722,7 +736,11 @@ emitCore context: move EmitContext -> Unit uses Console {
             CallEnvironmentRequest { callerIndex: -1, callIndex: expressionIndex, targetModule: parallelCall.targetModule, targetSymbol: parallelCall.symbol, hasArgument: true } -> targetFunctionIndex => parallelTarget
             parallelTarget >= 0 -> if {
                 parallelTarget -> functionCaptures => parallelTargetCaptures!
-                (parallelTargetCaptures! -> len) > 0 -> if { true => supported! }
+                (parallelTargetCaptures! -> len) > 0 -> if { true => supported! } else {
+                    parallelExpression.operand0 -> hasWorkerScalarArrayElement => scalarInput
+                    expressionIndex -> hasWorkerScalarArrayElement => scalarOutput
+                    (scalarInput and scalarOutput) -> if { true => supported! }
+                }
                 0 => parallelTargetCaptureIndex!
                 parallelTargetCaptureIndex! < (parallelTargetCaptures! -> len) -> while {
                     not (context.ir[parallelTargetCaptures![parallelTargetCaptureIndex!]] -> ownsType) -> if { false => supported! }
@@ -6355,7 +6373,87 @@ emitCore context: move EmitContext -> Unit uses Console {
                             }
                         }
                     }
-                    (entryExpression.kind == 6 and entryExpression.opcode != -205) -> if {
+                    (entryExpression.kind == 6 and entryExpression.opcode == -207 and entryExpression.operand0 >= 0 and entryExpression.operand1 >= 0) -> if {
+                        context.ir[entryExpression.operand0] => entryParallelSource
+                        context.ir[entryExpression.operand1] => entryParallelBodyCall
+                        "  %v$(entryExpressionIndex!)_input = extractvalue %sl.array.i32 %v$(entryExpression.operand0), 0" -> println
+                        "  %v$(entryExpressionIndex!)_length = extractvalue %sl.array.i32 %v$(entryExpression.operand0), 1" -> println
+                        "  %v$(entryExpressionIndex!)_bytes = mul i64 %v$(entryExpressionIndex!)_length, " -> print
+                        entryExpression -> arrayElementSize -> writeDecimalLine
+                        "  %v$(entryExpressionIndex!)_data = call ptr @malloc(i64 %v$(entryExpressionIndex!)_bytes)" -> println
+                        entryExpressionIndex! -> parallelUsesComputePool -> if {
+                            CallEnvironmentRequest { callerIndex: functionIndex!, callIndex: entryExpressionIndex!, targetModule: entryParallelBodyCall.targetModule, targetSymbol: entryParallelBodyCall.symbol, hasArgument: true } => entryParallelEnvironmentRequest
+                            entryParallelEnvironmentRequest -> targetFunctionIndex => entryParallelTargetFunction
+                            entryParallelTargetFunction -> functionCaptures => entryParallelCallCaptures!
+                            entryParallelCallCaptures! -> len => entryParallelCallCaptureCount
+                            entryParallelEnvironmentRequest -> emitCallEnvironmentValues
+                            "  %v$(entryExpressionIndex!)_group = alloca %smalllang.compute_group, align 8" -> println
+                            "  %v$(entryExpressionIndex!)_callback_slot = getelementptr %smalllang.compute_group, ptr %v$(entryExpressionIndex!)_group, i32 0, i32 0" -> println
+                            "  store ptr @smalllang_parallel_callback_$(entryExpressionIndex!), ptr %v$(entryExpressionIndex!)_callback_slot, align 8" -> println
+                            "  %v$(entryExpressionIndex!)_input_slot = getelementptr %smalllang.compute_group, ptr %v$(entryExpressionIndex!)_group, i32 0, i32 1" -> println
+                            "  store ptr %v$(entryExpressionIndex!)_input, ptr %v$(entryExpressionIndex!)_input_slot, align 8" -> println
+                            "  %v$(entryExpressionIndex!)_output_slot = getelementptr %smalllang.compute_group, ptr %v$(entryExpressionIndex!)_group, i32 0, i32 2" -> println
+                            "  store ptr %v$(entryExpressionIndex!)_data, ptr %v$(entryExpressionIndex!)_output_slot, align 8" -> println
+                            "  %v$(entryExpressionIndex!)_count_slot = getelementptr %smalllang.compute_group, ptr %v$(entryExpressionIndex!)_group, i32 0, i32 3" -> println
+                            "  store i64 %v$(entryExpressionIndex!)_length, ptr %v$(entryExpressionIndex!)_count_slot, align 8" -> println
+                            entryParallelCallCaptureCount > 0 -> if {
+                                "  %v$(entryExpressionIndex!)_capture_environment = alloca [$(entryParallelCallCaptureCount) x ptr], align 8" -> println
+                                0 => entryParallelCaptureStoreIndex!
+                                entryParallelCaptureStoreIndex! < entryParallelCallCaptureCount -> while {
+                                    "  %v$(entryExpressionIndex!)_capture_address_$(entryParallelCaptureStoreIndex!) = getelementptr [$(entryParallelCallCaptureCount) x ptr], ptr %v$(entryExpressionIndex!)_capture_environment, i32 0, i32 $(entryParallelCaptureStoreIndex!)" -> println
+                                    "  store ptr " -> print
+                                    CaptureValueRequest { callerIndex: functionIndex!, callIndex: entryExpressionIndex!, bindingIndex: entryParallelCallCaptures![entryParallelCaptureStoreIndex!], captureIndex: entryParallelCaptureStoreIndex! } -> emitCapturePointer
+                                    ", ptr %v$(entryExpressionIndex!)_capture_address_$(entryParallelCaptureStoreIndex!), align 8" -> println
+                                    entryParallelCaptureStoreIndex! + 1 => entryParallelCaptureStoreIndex!
+                                }
+                            }
+                            "  %v$(entryExpressionIndex!)_capture_slot = getelementptr %smalllang.compute_group, ptr %v$(entryExpressionIndex!)_group, i32 0, i32 4" -> println
+                            entryParallelCallCaptureCount > 0 -> if {
+                                "  store ptr %v$(entryExpressionIndex!)_capture_environment, ptr %v$(entryExpressionIndex!)_capture_slot, align 8" -> println
+                            } else {
+                                "  store ptr null, ptr %v$(entryExpressionIndex!)_capture_slot, align 8" -> println
+                            }
+                            "  call void @smalllang_compute_execute(ptr %v$(entryExpressionIndex!)_group)" -> println
+                        } else {
+                            "  %v$(entryExpressionIndex!)_index_slot = alloca i64, align 8" -> println
+                            "  store i64 0, ptr %v$(entryExpressionIndex!)_index_slot, align 8" -> println
+                            "  br label %parallel$(entryExpressionIndex!)_header" -> println
+                            "parallel$(entryExpressionIndex!)_header:" -> println
+                            "  %v$(entryExpressionIndex!)_index = load i64, ptr %v$(entryExpressionIndex!)_index_slot, align 8" -> println
+                            "  %v$(entryExpressionIndex!)_done = icmp eq i64 %v$(entryExpressionIndex!)_index, %v$(entryExpressionIndex!)_length" -> println
+                            "  br i1 %v$(entryExpressionIndex!)_done, label %parallel$(entryExpressionIndex!)_exit, label %parallel$(entryExpressionIndex!)_body" -> println
+                            "parallel$(entryExpressionIndex!)_body:" -> println
+                            "  %v$(entryExpressionIndex!)_input_ptr = getelementptr " -> print
+                            entryParallelSource -> writeArrayElementType
+                            ", ptr %v$(entryExpressionIndex!)_input, i64 %v$(entryExpressionIndex!)_index" -> println
+                            "  %v$(entryExpressionIndex!)_item = load " -> print
+                            entryParallelSource -> writeArrayElementType
+                            ", ptr %v$(entryExpressionIndex!)_input_ptr, align " -> print
+                            entryParallelSource -> arrayElementAlign -> writeDecimalLine
+                            CallEnvironmentRequest { callerIndex: functionIndex!, callIndex: entryExpressionIndex!, targetModule: entryParallelBodyCall.targetModule, targetSymbol: entryParallelBodyCall.symbol, hasArgument: true } -> emitCallEnvironmentValues
+                            "  %v$(entryExpressionIndex!)_mapped = call " -> print
+                            entryParallelBodyCall -> writeIrType
+                            " @sl_m$(entryParallelBodyCall.targetModule)_s$(entryParallelBodyCall.symbol)(" -> print
+                            CallEnvironmentRequest { callerIndex: functionIndex!, callIndex: entryExpressionIndex!, targetModule: entryParallelBodyCall.targetModule, targetSymbol: entryParallelBodyCall.symbol, hasArgument: true } -> emitCallEnvironment => entryParallelCallHasCaptures
+                            entryParallelSource -> writeArrayElementType
+                            " %v$(entryExpressionIndex!)_item)" -> println
+                            "  %v$(entryExpressionIndex!)_output_ptr = getelementptr " -> print
+                            entryExpression -> writeArrayElementType
+                            ", ptr %v$(entryExpressionIndex!)_data, i64 %v$(entryExpressionIndex!)_index" -> println
+                            "  store " -> print
+                            entryExpression -> writeArrayElementType
+                            " %v$(entryExpressionIndex!)_mapped, ptr %v$(entryExpressionIndex!)_output_ptr, align " -> print
+                            entryExpression -> arrayElementAlign -> writeDecimalLine
+                            "  %v$(entryExpressionIndex!)_next = add i64 %v$(entryExpressionIndex!)_index, 1" -> println
+                            "  store i64 %v$(entryExpressionIndex!)_next, ptr %v$(entryExpressionIndex!)_index_slot, align 8" -> println
+                            "  br label %parallel$(entryExpressionIndex!)_header" -> println
+                            "parallel$(entryExpressionIndex!)_exit:" -> println
+                        }
+                        "  %v$(entryExpressionIndex!)_0 = insertvalue %sl.array.i32 poison, ptr %v$(entryExpressionIndex!)_data, 0" -> println
+                        "  %v$(entryExpressionIndex!)_1 = insertvalue %sl.array.i32 %v$(entryExpressionIndex!)_0, i64 %v$(entryExpressionIndex!)_length, 1" -> println
+                        "  %v$(entryExpressionIndex!) = insertvalue %sl.array.i32 %v$(entryExpressionIndex!)_1, i64 %v$(entryExpressionIndex!)_length, 2" -> println
+                    }
+                    (entryExpression.kind == 6 and entryExpression.opcode != -205 and entryExpression.opcode != -207 and entryExpression.opcode != -208 and not (entryExpression.parent >= 0 and context.ir[entryExpression.parent].kind == 6 and context.ir[entryExpression.parent].opcode == -207 and context.ir[entryExpression.parent].operand1 == entryExpressionIndex!)) -> if {
                         (entryExpression.symbol == -101 or entryExpression.symbol == -102) -> if {
                             context.ir[entryExpression.operand0] => runtimeArgument
                             runtimeArgument.kind == 2 -> if {

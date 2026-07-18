@@ -5467,3 +5467,35 @@ are exactly 6,942,593 bytes and share SHA-256
 stage-2 differential verifier pass. Function-body output is still serialized
 to preserve canonical order; a per-function sink can improve the remaining
 roughly 40-second path, but it is no longer masking quadratic global scans.
+
+## D171 - Classify No-capture Parallel Callbacks by Value ABI
+
+Status: scalar ABI and entry lowering implemented; owned-analysis and nested-region paths remain
+Date: 2026-07-18
+
+The D169 restriction treated every callback without captures as unsafe because
+the compiler-sized `SourceText -> SourceAnalysis` callback crashed on a worker.
+A focused scalar test showed that capture count itself is not the unsafe
+property. Numeric and `Bool` elements are complete values with no borrowed or
+affine storage, so no-capture scalar-input/scalar-output callbacks now use the
+Windows compute pool and pass a null capture environment. A 100-generation
+execution test verifies pool reuse and result storage.
+
+The first direct-entry test also exposed a separate self-host parity gap. A
+role call and its `=>` result binding share one AST node, but entry typed IR did
+not perform the explicit edge repair already used for ordinary functions.
+Entry lowering now repairs that edge and emits top-level `parallel` through
+either the compute pool or the deterministic serial fallback. It excludes the
+role's child callback call from ordinary call emission.
+
+The emitter-affected LLVM suite passes 74/74 and the complete stage-2
+differential verifier passes 6/6. Stage 2 and stage 3 are both 7,011,834 bytes
+with SHA-256
+`66CFB3F0551D85CDFBDEE7851020F643792FB1AD5CF4FBC8DAE7C2045B19C250`;
+stage 3 completed in 44.12 seconds and assembles with `llvm-as`.
+
+This does not declare all no-capture work safe. `SourceText` inputs returning
+owned analysis products remain serial until their worker failure is diagnosed.
+Likewise, `parallel` inside an `if` or `while` is owned by `emitRegion`, whose
+parallel lowering is not implemented yet; that is tracked as the next parity
+slice rather than silently falling through to an invalid ordinary call.

@@ -915,7 +915,10 @@ same buffered runtime, so stage 3 no longer writes LLVM one byte at a time.
 - [x] make the generated stage-2 compiler use more than one effective core;
 - [x] scope emitter scheduling state and dependency searches to one function;
 - [x] reduce compiler-sized stage-3 LLVM emission below 45 seconds;
+- [x] lower no-capture scalar-to-scalar callbacks through the compute pool;
+- [x] connect entry-body role results and lower top-level entry `parallel`;
 - [ ] make no-capture `SourceText` analysis worker-safe before parallelizing it;
+- [ ] lower `parallel` inside nested `if`/`while` regions;
 - [ ] split or buffer independent `emitCore` function bodies for parallel output.
 
 The generated stage-2 compiler now lowers capture-safe `parallel` callbacks to
@@ -937,6 +940,17 @@ Both 6,942,593-byte outputs have SHA-256
 The affected LLVM suite passes 72/72 and the six-step stage-2 differential
 verifier passes. Ordered parallel LLVM body emission remains useful, but it is
 now a secondary improvement after removing the accidental quadratic work.
+
+No-capture callbacks are no longer rejected as one broad class. Arrays whose
+input and result elements are self-contained numeric or `Bool` values use the
+compute pool without a capture environment; a 100-generation execution test
+proves the null-environment ABI. Entry-body role bindings now receive the same
+explicit call-result edge repair as ordinary functions, and top-level entry
+`parallel` has both compute-pool and serial target lowering. The compiler
+fixed point remains exact at 7,011,834 bytes with SHA-256
+`66CFB3F0551D85CDFBDEE7851020F643792FB1AD5CF4FBC8DAE7C2045B19C250`;
+stage 3 completed in 44.12 s. `SourceText`/owned-analysis callbacks and
+`parallel` nested inside control regions remain separate unchecked ABI paths.
 
 ## Immediate Implementation Order
 
