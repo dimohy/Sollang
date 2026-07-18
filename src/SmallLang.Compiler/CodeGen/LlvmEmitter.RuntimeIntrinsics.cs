@@ -71,6 +71,17 @@ internal sealed partial class LlvmEmitter
         return new RuntimeInt(value);
     }
 
+    private RuntimeInt EmitRuntimeLimitParallelWorkersIntrinsic(RuntimeValue argument, string path)
+    {
+        if (argument is not RuntimeInt integer || integer.Type != BoundType.Int)
+        {
+            throw new SmallLangException($"{path} expects Int");
+        }
+        var value = NextTemp("parallel_worker_limit");
+        EmitCall(value, "i32", "smalllang_compute_limit_workers", $"i32 {integer.ValueName}");
+        return new RuntimeInt(value);
+    }
+
     private RuntimeInt EmitRuntimeParallelPeakWorkersIntrinsic(string path)
     {
         _ = path;

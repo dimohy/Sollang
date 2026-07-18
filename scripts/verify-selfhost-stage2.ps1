@@ -19,7 +19,7 @@ $singleSource = Join-Path $repoRoot "tests\SmallLang.ExampleTests\Fixtures\selfh
 $multiLibrarySource = Join-Path $repoRoot "tests\SmallLang.ExampleTests\Fixtures\selfhost-stage2-library-smoke.sl"
 $multiMainSource = Join-Path $repoRoot "tests\SmallLang.ExampleTests\Fixtures\selfhost-stage2-main-smoke.sl"
 $groupedNotSource = Join-Path $repoRoot "tests\SmallLang.ExampleTests\Fixtures\selfhost-stage2-grouped-not-smoke.sl"
-$expectedStage2Bytes = 7142042L
+$expectedStage2Bytes = 7184456L
 
 New-Item -ItemType Directory -Force -Path $artifactsDir | Out-Null
 
@@ -119,19 +119,28 @@ if (Test-Stage2IsCurrent) {
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }
 
-Write-Host "[stage2 3/6] Compare stage-1 and stage-2 LLVM for one source file."
+$stage2Llvm = [System.IO.File]::ReadAllText($stage2LlvmPath)
+if ($stage2Llvm -notmatch '(?s)define internal void @smalllang_parallel_callback_\d+\(ptr %group, i64 %index\) \{.*?call %sl\.struct\.m5_s19 @sl_m5_s129\(.*?\r?\n\}') {
+    throw "stage-2 LLVM does not contain the function-local typed IR worker callback"
+}
+
+Write-Host "[stage2 3/6] Compare stage-1 and stage-2 LLVM with an explicit worker limit."
 $singleStage1Llvm = Join-Path $artifactsDir "stage2-check-single-stage1.ll"
 $singleStage2Llvm = Join-Path $artifactsDir "stage2-check-single-stage2.ll"
 $singleStage1Error = Join-Path $artifactsDir "stage2-check-single-stage1.err"
 $singleStage2Error = Join-Path $artifactsDir "stage2-check-single-stage2.err"
-$singleStage1Process = Invoke-ProcessToFile $stage1Path @("windows", $singleSource) $singleStage1Llvm $singleStage1Error
-$singleStage2Process = Invoke-ProcessToFile $stage2Path @("windows", $singleSource) $singleStage2Llvm $singleStage2Error
+$singleArguments = @("windows", "--jobs", "2", $singleSource)
+$singleStage1Process = Invoke-ProcessToFile $stage1Path $singleArguments $singleStage1Llvm $singleStage1Error
+$singleStage2Process = Invoke-ProcessToFile $stage2Path $singleArguments $singleStage2Llvm $singleStage2Error
 Assert-ProcessSucceeded $singleStage1Process $singleStage1Error "stage-1 single-file emission"
 Assert-ProcessSucceeded $singleStage2Process $singleStage2Error "stage-2 single-file emission"
 $singleStage1Hash = Get-NormalizedHash $singleStage1Llvm
 $singleStage2Hash = Get-NormalizedHash $singleStage2Llvm
 if ($singleStage1Hash -ne $singleStage2Hash) {
     throw "single-file normalized LLVM differs: stage1=$singleStage1Hash stage2=$singleStage2Hash"
+}
+if (-not ([System.IO.File]::ReadAllText($singleStage2Llvm).StartsWith("; smalllang workers = 2"))) {
+    throw "stage-2 compiler did not report the effective --jobs worker count"
 }
 Write-Host "[stage2 3/6] PASS $singleStage2Hash"
 

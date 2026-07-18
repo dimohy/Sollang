@@ -98,6 +98,7 @@ internal enum BoundFunctionKind
     RuntimeArguments,
     RuntimeEnvironment,
     RuntimeParallel,
+    RuntimeLimitParallelWorkers,
     RuntimeParallelWorkers,
     RuntimeParallelPeakWorkers,
     RuntimeRunProcess,

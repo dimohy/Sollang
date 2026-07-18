@@ -119,7 +119,7 @@ not lines of code.
 
 Current count-based progress: **80.8% (48.5 of 60 equivalent gates)**.
 
-The frontend parallel-compilation subproject is **19/28 checks (67.9%)**. Its
+The frontend parallel-compilation subproject is **22/28 checks (78.6%)**. Its
 source-local product boundary, typed callback-result role slice, nested-call
 identity regression, Windows native compute pool, and source-local parallel
 frontend execution are complete. Owned source-analysis results and ordered
@@ -953,12 +953,14 @@ stdout buffer; completion merges and frees sinks in source/root order. Function
 bodies before and after `main` are parallelized as separate canonical batches,
 so entry placement stays byte-identical to the former serial traversal.
 
-The compiler fixed point is now exact at 7,142,042 bytes with SHA-256
-`A71D4595F9854C1E7746F5FE1ECFDF2D82D08DB971F6C3837714B2CB07CA11AD`.
-Five stage-3 runs completed in 33.90-37.75 seconds. A separately instrumented
-run took 34.81 seconds and 377.77 CPU-seconds, averaging 10.85 effective cores
-with an 88.7 MiB peak working set. This remains 90.4% faster than the original
-360.7-second serial path while parallelizing the source-analysis boundary.
+The compiler fixed point is now exact at 7,184,456 bytes with SHA-256
+`DDC1D4C7DD1B363972A64EE546B12007DA5630550C0EC3A99A4AA3CB08E98740`;
+the complete stage-3 output assembles with `llvm-as`. The preceding
+source-worker revision completed five stage-3 runs in 33.90-37.75 seconds. A
+separately instrumented run took 34.81 seconds and 377.77 CPU-seconds, averaging
+10.85 effective cores with an 88.7 MiB peak working set. This remains 90.4%
+faster than the original 360.7-second serial path while parallelizing the
+source-analysis boundary.
 
 ## Immediate Implementation Order
 

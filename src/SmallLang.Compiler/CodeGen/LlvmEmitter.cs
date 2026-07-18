@@ -77,7 +77,8 @@ internal sealed partial class LlvmEmitter
                 or BoundFunctionKind.RuntimeOpenWriteFileAsync);
         _usesParallel = _platform.SupportsComputePool
             && program.ResolvedGenericCalls.Values.Any(function =>
-                function.Kind == BoundFunctionKind.RuntimeParallel);
+                function.Kind is BoundFunctionKind.RuntimeParallel
+                    or BoundFunctionKind.RuntimeLimitParallelWorkers);
         _usesAsync = program.Functions.Values.Any(function => function.IsAsync && !function.IsStandardLibrary)
             || _usesAsyncFile
             || program.MainStatements.Any(UsesRuntimeSleep)

@@ -1,0 +1,21 @@
+import smalllang.compiler.llvm.text as llvm
+
+main {
+    [
+        """
+        double value: Int -> Int {
+            value * 2
+        }
+
+        main {
+            2 -> limitParallelWorkers => workers
+            [1, 2, 3, 4, ~] -> parallel value {
+                value -> double
+            } => values!
+            "worker limit done" -> println
+        }
+        """,
+        ~
+    ] => sources!
+    sources! -> llvm.emit
+}

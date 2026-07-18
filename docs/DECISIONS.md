@@ -5590,3 +5590,39 @@ produce the same 7,142,042-byte LLVM with SHA-256
 Those runs took 33.90-37.75 seconds. An instrumented run recorded 34.81 seconds
 wall time, 377.77 CPU-seconds (10.85 effective cores), and an 88.7 MiB peak
 working set.
+
+## D175 - Bound and Report Self-host Compiler Workers
+
+Status: implemented and fixed-point verified
+Date: 2026-07-18
+
+The native compiler accepts `--jobs N` immediately after its target and calls
+the typed `limitParallelWorkers(Int) -> Int` runtime intrinsic before compiler
+work begins. The default remains the host's available logical processor count;
+explicit values are positive and bounded to 64 native workers. The intrinsic
+returns the number of workers actually created, and the driver reports that
+effective value as an LLVM comment so stdout remains a valid module. Invalid or
+missing values emit one diagnostic comment and do not compile input files.
+
+This surface follows established build-tool convention: Cargo exposes
+`--jobs N` and otherwise uses logical CPUs, while Zig exposes `-j<N>` and uses
+all cores by default. SmallLang uses Cargo's readable long option because the
+self-host driver is also a user-facing compiler command.
+
+- [Cargo build options](https://doc.rust-lang.org/cargo/commands/cargo-build.html)
+- [Zig build system](https://ziglang.org/learn/build-system/)
+
+The same intrinsic is resolved and emitted by both the C# reference compiler
+and the SL compiler. Compute-runtime discovery also covers an isolated limiter
+call, including its output-sink and allocator dependencies. Function-local
+typed IR already lowers `FunctionLowerRequest` values through indexed
+`parallel`; the complete generated LLVM now has an automated assertion for its
+worker callback into `lowerFunction`.
+
+Example 378 assembles, links, and executes the limiter together with native
+parallel work. The six-step differential verifier passes with `--jobs 2` for
+both stage-1 and stage-2. A complete 28-source stage-3 generation is byte-equal
+to stage-2 at 7,184,456 bytes with SHA-256
+`DDC1D4C7DD1B363972A64EE546B12007DA5630550C0EC3A99A4AA3CB08E98740`,
+and `llvm-as` accepts the result. Parallel-compilation progress is now 22/28
+(78.6%); the canonical roadmap remains 48.5/60 (80.8%).

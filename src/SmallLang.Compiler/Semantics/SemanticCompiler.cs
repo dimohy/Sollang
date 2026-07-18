@@ -1309,6 +1309,13 @@ internal sealed class SemanticCompiler
                 BoundType.Int64,
                 BoundFunctionKind.RuntimeNowMillis),
             "sys.runtime.parallel" => RequireParallelIntrinsicSignature(function),
+            "sys.runtime.limitParallelWorkers" => RequireIntrinsicSignature(
+                function,
+                inputType,
+                returnType,
+                BoundType.Int,
+                BoundType.Int,
+                BoundFunctionKind.RuntimeLimitParallelWorkers),
             "sys.runtime.parallelWorkers" => RequireIntrinsicSignature(
                 function,
                 inputType,
@@ -1619,6 +1626,7 @@ internal sealed class SemanticCompiler
         AddGlobalAlias(functions, "seconds", "sys.time.seconds");
         AddGlobalAlias(functions, "sleep", "sys.time.sleep");
         AddGlobalAlias(functions, "parallel", "sys.runtime.parallel");
+        AddGlobalAlias(functions, "limitParallelWorkers", "sys.runtime.limitParallelWorkers");
         AddGlobalAlias(functions, "parallelWorkers", "sys.runtime.parallelWorkers");
         AddGlobalAlias(functions, "parallelPeakWorkers", "sys.runtime.parallelPeakWorkers");
     }
@@ -4219,6 +4227,7 @@ internal sealed class SemanticCompiler
                         return new FlowResult(BoundType.Unit, FlowEffect.None);
                     case BoundFunctionKind.RuntimeRandomBelow:
                     case BoundFunctionKind.RuntimeClosestInt:
+                    case BoundFunctionKind.RuntimeLimitParallelWorkers:
                         EnsureRuntimeIntrinsicAllowed(function, allowReadIntCall, expression.Line, expression.Column, path);
                         EnsureRuntimeInput(currentType, function, expression.Line, expression.Column, path);
                         currentType = function.ReturnType;
@@ -5097,6 +5106,7 @@ internal sealed class SemanticCompiler
             case BoundFunctionKind.RuntimeWriteInt:
             case BoundFunctionKind.RuntimeOpenIntReader:
             case BoundFunctionKind.RuntimeClosestInt:
+            case BoundFunctionKind.RuntimeLimitParallelWorkers:
                 EnsureRuntimeIntrinsicAllowed(function, allowReadIntCall, expression.Line, expression.Column, path);
                 if (expression.Arguments.Count != 1)
                 {

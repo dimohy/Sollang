@@ -71,6 +71,7 @@ runtimeFunctionSymbol request: RuntimeNameRequest -> Int {
     TokenNameRequest { source: request.source, token: request.token, expected: "nowMillis" } -> tokenNameIs -> if { -112 => runtimeSymbol! }
     TokenNameRequest { source: request.source, token: request.token, expected: "sleep" } -> tokenNameIs -> if { -113 => runtimeSymbol! }
     TokenNameRequest { source: request.source, token: request.token, expected: "flush" } -> tokenNameIs -> if { -114 => runtimeSymbol! }
+    TokenNameRequest { source: request.source, token: request.token, expected: "limitParallelWorkers" } -> tokenNameIs -> if { -115 => runtimeSymbol! }
     runtimeSymbol!
 }
 

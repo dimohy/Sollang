@@ -26,6 +26,10 @@ public nowMillis: -> Long = intrinsic
 
 public parallel<T, R> values: [T; ~] -> [R; ~] block item: T -> R = intrinsic
 
+# Sets the bounded compute-pool size before its first use and returns the
+# effective limit. Values below one become one; values above 64 become 64.
+public limitParallelWorkers maxWorkers: Int -> Int = intrinsic
+
 public parallelWorkers: -> Int = intrinsic
 
 public parallelPeakWorkers: -> Int = intrinsic

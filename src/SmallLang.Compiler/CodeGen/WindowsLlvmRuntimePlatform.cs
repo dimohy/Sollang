@@ -35,6 +35,7 @@ internal sealed class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
             globals.AppendLine("@smalllang_compute_semaphore = internal global ptr null");
             globals.AppendLine("@smalllang_compute_completion_event = internal global ptr null");
             globals.AppendLine("@smalllang_compute_worker_count = internal global i32 0");
+            globals.AppendLine("@smalllang_compute_worker_limit = internal global i32 0");
             globals.AppendLine("@smalllang_compute_worker_handles = internal global [64 x ptr] zeroinitializer, align 8");
         }
     }
@@ -280,8 +281,11 @@ internal sealed class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
               %reported = call i32 @GetActiveProcessorCount(i16 -1)
               %positive = icmp sgt i32 %reported, 0
               %at_least_one = select i1 %positive, i32 %reported, i32 1
-              %too_many = icmp sgt i32 %at_least_one, 64
-              %bounded = select i1 %too_many, i32 64, i32 %at_least_one
+              %configured = load i32, ptr @smalllang_compute_worker_limit, align 4
+              %has_configured = icmp sgt i32 %configured, 0
+              %selected = select i1 %has_configured, i32 %configured, i32 %at_least_one
+              %too_many = icmp sgt i32 %selected, 64
+              %bounded = select i1 %too_many, i32 64, i32 %selected
               br label %create_workers
 
             create_workers:
@@ -399,6 +403,32 @@ internal sealed class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
             entry:
               %started = call i1 @smalllang_compute_start()
               br i1 %started, label %read, label %failed
+
+            read:
+              %workers = load i32, ptr @smalllang_compute_worker_count, align 4
+              ret i32 %workers
+
+            failed:
+              ret i32 0
+            }
+
+            define internal i32 @smalllang_compute_limit_workers(i32 %requested) #0 {
+            entry:
+              %existing = load i32, ptr @smalllang_compute_worker_count, align 4
+              %already_started = icmp sgt i32 %existing, 0
+              br i1 %already_started, label %started, label %configure
+
+            configure:
+              %positive = icmp sgt i32 %requested, 0
+              %at_least_one = select i1 %positive, i32 %requested, i32 1
+              %too_many = icmp sgt i32 %at_least_one, 64
+              %bounded = select i1 %too_many, i32 64, i32 %at_least_one
+              store i32 %bounded, ptr @smalllang_compute_worker_limit, align 4
+              %started_ok = call i1 @smalllang_compute_start()
+              br i1 %started_ok, label %read, label %failed
+
+            started:
+              ret i32 %existing
 
             read:
               %workers = load i32, ptr @smalllang_compute_worker_count, align 4

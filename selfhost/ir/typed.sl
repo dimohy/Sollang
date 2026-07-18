@@ -748,6 +748,12 @@ public lowerContext prepared: semanticContext.CompilationContext -> [TypedIrNode
                                     }
                                     knownCallTypeSearch! + 1 => knownCallTypeSearch!
                                 }
+                            } else {
+                                knownCall.functionSymbol == -115 -> if {
+                                    1 => expressionTypeOrigin!
+                                    -1 => expressionTypeModule!
+                                    2 => expressionTypeSymbol!
+                                }
                             }
                         }
                         knownCallSearch! + 1 => knownCallSearch!
@@ -993,6 +999,12 @@ public lowerContext prepared: semanticContext.CompilationContext -> [TypedIrNode
                                             prepared.package.symbols[expressionTargetRange.symbolStart + resolvedCall.functionSymbol] => expressionTargetFunction
                                             ((expressionTargetFunction.flags / 8) % 2 == 1 and (expressionFlags! / 8) % 2 == 0) -> if {
                                                 expressionFlags! + 8 => expressionFlags!
+                                            }
+                                        } else {
+                                            resolvedCall.functionSymbol == -115 -> if {
+                                                1 => expressionTypeOrigin!
+                                                -1 => expressionTypeModule!
+                                                2 => expressionTypeSymbol!
                                             }
                                         }
                                     }
@@ -1898,6 +1910,12 @@ public lowerContext prepared: semanticContext.CompilationContext -> [TypedIrNode
                                         }
                                         knownEntryCallTypeSearch! + 1 => knownEntryCallTypeSearch!
                                     }
+                                } else {
+                                    knownEntryCall.functionSymbol == -115 -> if {
+                                        1 => entryExpressionTypeOrigin!
+                                        -1 => entryExpressionTypeModule!
+                                        2 => entryExpressionTypeSymbol!
+                                    }
                                 }
                             }
                             knownEntryCallSearch! + 1 => knownEntryCallSearch!
@@ -2142,6 +2160,12 @@ public lowerContext prepared: semanticContext.CompilationContext -> [TypedIrNode
                                                 prepared.package.symbols[entryExpressionTargetRange.symbolStart + entryResolvedCall.functionSymbol] => entryExpressionTargetFunction
                                                 ((entryExpressionTargetFunction.flags / 8) % 2 == 1 and (entryExpressionFlags! / 8) % 2 == 0) -> if {
                                                     entryExpressionFlags! + 8 => entryExpressionFlags!
+                                                }
+                                            } else {
+                                                entryResolvedCall.functionSymbol == -115 -> if {
+                                                    1 => entryExpressionTypeOrigin!
+                                                    -1 => entryExpressionTypeModule!
+                                                    2 => entryExpressionTypeSymbol!
                                                 }
                                             }
                                         }

@@ -89,6 +89,15 @@ internal sealed partial class LlvmEmitter
             return EmitRuntimeParallelWorkersIntrinsic(path);
         }
 
+        if (function.Kind == BoundFunctionKind.RuntimeLimitParallelWorkers)
+        {
+            if (expression.Arguments.Count != 1)
+            {
+                throw new SmallLangException($"{path} expects exactly one Int argument");
+            }
+            return EmitRuntimeLimitParallelWorkersIntrinsic(EmitExpression(expression.Arguments[0]), path);
+        }
+
         if (function.Kind == BoundFunctionKind.RuntimeParallelPeakWorkers)
         {
             if (expression.Arguments.Count != 0)
@@ -658,6 +667,15 @@ internal sealed partial class LlvmEmitter
                 throw new SmallLangException($"{function.Name} does not accept an argument");
             }
             return EmitRuntimeParallelWorkersIntrinsic(function.Name);
+        }
+
+        if (function.Kind == BoundFunctionKind.RuntimeLimitParallelWorkers)
+        {
+            if (argument is null)
+            {
+                throw new SmallLangException($"{function.Name} expects exactly one Int argument");
+            }
+            return EmitRuntimeLimitParallelWorkersIntrinsic(argument, function.Name);
         }
 
         if (function.Kind == BoundFunctionKind.RuntimeParallelPeakWorkers)

@@ -3572,7 +3572,18 @@ emitCore context: move EmitContext -> Unit uses Console {
                 "  %v$(regionNodeIndex!)_1 = insertvalue %sl.array.i32 %v$(regionNodeIndex!)_0, i64 %v$(regionNodeIndex!)_length, 1" -> println
                 "  %v$(regionNodeIndex!) = insertvalue %sl.array.i32 %v$(regionNodeIndex!)_1, i64 %v$(regionNodeIndex!)_length, 2" -> println
             }
-            (regionNode.kind == 6 and regionNode.opcode != -205 and regionNode.opcode != -207 and regionNode.opcode != -208 and not (regionNode.parent >= 0 and context.ir[regionNode.parent].kind == 6 and context.ir[regionNode.parent].opcode == -207 and context.ir[regionNode.parent].operand1 == regionNodeIndex!)) -> if {
+            (regionNode.kind == 6 and regionNode.symbol == -115 and regionNode.operand0 >= 0) -> if {
+                context.ir[regionNode.operand0] => regionWorkerLimitArgument
+                "  %v$(regionNodeIndex!) = call i32 @smalllang_compute_limit_workers(i32 " -> print
+                regionWorkerLimitArgument.kind == 3 -> if {
+                    regionWorkerLimitArgument -> sourceToken => regionWorkerLimitToken
+                    context.sources[regionWorkerLimitArgument.sourceModule] -> slice(regionWorkerLimitToken.span.start, regionWorkerLimitToken.span.length) -> print
+                } else {
+                    (ownerIndex! >= 0 and context.ir[ownerIndex!].kind == 0 and context.ir[ownerIndex!].operand1 >= 0 and regionWorkerLimitArgument.kind == 5 and regionWorkerLimitArgument.symbol == context.ir[context.ir[ownerIndex!].operand1].symbol) -> if { "%arg" -> print } else { "%v$(regionNode.operand0)" -> print }
+                }
+                ")" -> println
+            }
+            (regionNode.kind == 6 and regionNode.symbol != -115 and regionNode.opcode != -205 and regionNode.opcode != -207 and regionNode.opcode != -208 and not (regionNode.parent >= 0 and context.ir[regionNode.parent].kind == 6 and context.ir[regionNode.parent].opcode == -207 and context.ir[regionNode.parent].operand1 == regionNodeIndex!)) -> if {
                 (regionNode.symbol == -101 or regionNode.symbol == -102) -> if {
                     context.ir[regionNode.operand0] => regionArgument
                     regionArgument.kind == 2 -> if {
@@ -5082,7 +5093,18 @@ emitCore context: move EmitContext -> Unit uses Console {
                     "  %v$(expressionIndex!)_1 = insertvalue %sl.array.i32 %v$(expressionIndex!)_0, i64 %v$(expressionIndex!)_length, 1" -> println
                     "  %v$(expressionIndex!) = insertvalue %sl.array.i32 %v$(expressionIndex!)_1, i64 %v$(expressionIndex!)_length, 2" -> println
                 }
-                (expression.kind == 6 and expression.opcode != -205 and expression.opcode != -207 and expression.opcode != -208 and not (expression.parent >= 0 and context.ir[expression.parent].kind == 6 and context.ir[expression.parent].opcode == -207 and context.ir[expression.parent].operand1 == expressionIndex!)) -> if {
+                (expression.kind == 6 and expression.symbol == -115 and expression.operand0 >= 0) -> if {
+                    context.ir[expression.operand0] => functionWorkerLimitArgument
+                    "  %v$(expressionIndex!) = call i32 @smalllang_compute_limit_workers(i32 " -> print
+                    functionWorkerLimitArgument.kind == 3 -> if {
+                        functionWorkerLimitArgument -> sourceToken => functionWorkerLimitToken
+                        context.sources[functionWorkerLimitArgument.sourceModule] -> slice(functionWorkerLimitToken.span.start, functionWorkerLimitToken.span.length) -> print
+                    } else {
+                        (functionWorkerLimitArgument.kind == 5 and function.operand1 >= 0 and functionWorkerLimitArgument.symbol == context.ir[function.operand1].symbol) -> if { "%arg" -> print } else { "%v$(expression.operand0)" -> print }
+                    }
+                    ")" -> println
+                }
+                (expression.kind == 6 and expression.symbol != -115 and expression.opcode != -205 and expression.opcode != -207 and expression.opcode != -208 and not (expression.parent >= 0 and context.ir[expression.parent].kind == 6 and context.ir[expression.parent].opcode == -207 and context.ir[expression.parent].operand1 == expressionIndex!)) -> if {
                     (expression.symbol == -101 or expression.symbol == -102) -> if {
                         context.ir[expression.operand0] => runtimeArgument
                         runtimeArgument.kind == 2 -> if {
@@ -5916,7 +5938,12 @@ emitCore context: move EmitContext -> Unit uses Console {
     false => usesComputePool!
     0 => computePoolSearch!
     computePoolSearch! < (context.ir -> len) -> while {
-        computePoolSearch! -> parallelUsesComputePool -> if { true => usesComputePool! }
+        context.ir[computePoolSearch!] => computePoolNode
+        (computePoolNode.kind == 6 and computePoolNode.symbol == -115) -> if {
+            true => usesComputePool!
+        } else {
+            computePoolSearch! -> parallelUsesComputePool -> if { true => usesComputePool! }
+        }
         computePoolSearch! + 1 => computePoolSearch!
     }
     usesComputePool! -> if { emitWindowsComputeRuntime }
@@ -5970,7 +5997,7 @@ emitCore context: move EmitContext -> Unit uses Console {
     usesDynamicArray! -> if {
         "%sl.array.i32 = type { ptr, i64, i64 }" -> println
     }
-    (usesDynamicArray! or usesSourceText! or intrinsicRuntimeModule! >= 0) -> if {
+    (usesDynamicArray! or usesSourceText! or usesComputePool! or intrinsicRuntimeModule! >= 0) -> if {
         "declare ptr @malloc(i64)" -> println
         usesArrayPush! -> if { "declare ptr @realloc(ptr, i64)" -> println }
         "declare void @free(ptr)" -> println
@@ -6642,7 +6669,16 @@ emitCore context: move EmitContext -> Unit uses Console {
                         "  %v$(entryExpressionIndex!)_1 = insertvalue %sl.array.i32 %v$(entryExpressionIndex!)_0, i64 %v$(entryExpressionIndex!)_length, 1" -> println
                         "  %v$(entryExpressionIndex!) = insertvalue %sl.array.i32 %v$(entryExpressionIndex!)_1, i64 %v$(entryExpressionIndex!)_length, 2" -> println
                     }
-                    (entryExpression.kind == 6 and entryExpression.opcode != -205 and entryExpression.opcode != -207 and entryExpression.opcode != -208 and not (entryExpression.parent >= 0 and context.ir[entryExpression.parent].kind == 6 and context.ir[entryExpression.parent].opcode == -207 and context.ir[entryExpression.parent].operand1 == entryExpressionIndex!)) -> if {
+                    (entryExpression.kind == 6 and entryExpression.symbol == -115 and entryExpression.operand0 >= 0) -> if {
+                        context.ir[entryExpression.operand0] => entryWorkerLimitArgument
+                        "  %v$(entryExpressionIndex!) = call i32 @smalllang_compute_limit_workers(i32 " -> print
+                        entryWorkerLimitArgument.kind == 3 -> if {
+                            entryWorkerLimitArgument -> sourceToken => entryWorkerLimitToken
+                            context.sources[entryWorkerLimitArgument.sourceModule] -> slice(entryWorkerLimitToken.span.start, entryWorkerLimitToken.span.length) -> print
+                        } else { "%v$(entryExpression.operand0)" -> print }
+                        ")" -> println
+                    }
+                    (entryExpression.kind == 6 and entryExpression.symbol != -115 and entryExpression.opcode != -205 and entryExpression.opcode != -207 and entryExpression.opcode != -208 and not (entryExpression.parent >= 0 and context.ir[entryExpression.parent].kind == 6 and context.ir[entryExpression.parent].opcode == -207 and context.ir[entryExpression.parent].operand1 == entryExpressionIndex!)) -> if {
                         (entryExpression.symbol == -101 or entryExpression.symbol == -102) -> if {
                             context.ir[entryExpression.operand0] => runtimeArgument
                             runtimeArgument.kind == 2 -> if {
@@ -7099,7 +7135,7 @@ usesParallelRuntime context: EmitContext -> Bool {
     false => usesRuntime!
     0 => nodeIndex!
     nodeIndex! < (context.ir -> len) -> while {
-        context.ir[nodeIndex!].opcode == -207 -> if { true => usesRuntime! }
+        (context.ir[nodeIndex!].opcode == -207 or context.ir[nodeIndex!].symbol == -115) -> if { true => usesRuntime! }
         nodeIndex! + 1 => nodeIndex!
     }
     usesRuntime!
@@ -7287,6 +7323,7 @@ emitWindowsComputeRuntime: -> Unit uses Console {
     @smalllang_compute_semaphore = internal global ptr null
     @smalllang_compute_completion_event = internal global ptr null
     @smalllang_compute_worker_count = internal global i32 0
+    @smalllang_compute_worker_limit = internal global i32 0
     @smalllang_compute_worker_handles = internal global [64 x ptr] zeroinitializer, align 8
     @smalllang_compute_group_current = internal global ptr null
     @smalllang_compute_next = internal global i64 0
@@ -7370,8 +7407,11 @@ emitWindowsComputeRuntime: -> Unit uses Console {
       %reported = call i32 @GetActiveProcessorCount(i16 -1)
       %positive = icmp sgt i32 %reported, 0
       %at_least_one = select i1 %positive, i32 %reported, i32 1
-      %too_many = icmp sgt i32 %at_least_one, 64
-      %bounded = select i1 %too_many, i32 64, i32 %at_least_one
+      %configured = load i32, ptr @smalllang_compute_worker_limit, align 4
+      %has_configured = icmp sgt i32 %configured, 0
+      %selected = select i1 %has_configured, i32 %configured, i32 %at_least_one
+      %too_many = icmp sgt i32 %selected, 64
+      %bounded = select i1 %too_many, i32 64, i32 %selected
       br label %create_workers
     create_workers:
       %index = phi i32 [ 0, %count ], [ %next, %created ]
@@ -7395,6 +7435,27 @@ emitWindowsComputeRuntime: -> Unit uses Console {
       ret i1 true
     fail:
       ret i1 false
+    }
+    define internal i32 @smalllang_compute_limit_workers(i32 %requested) {
+    entry:
+      %existing = load i32, ptr @smalllang_compute_worker_count, align 4
+      %already_started = icmp sgt i32 %existing, 0
+      br i1 %already_started, label %started, label %configure
+    configure:
+      %positive = icmp sgt i32 %requested, 0
+      %at_least_one = select i1 %positive, i32 %requested, i32 1
+      %too_many = icmp sgt i32 %at_least_one, 64
+      %bounded = select i1 %too_many, i32 64, i32 %at_least_one
+      store i32 %bounded, ptr @smalllang_compute_worker_limit, align 4
+      %started_ok = call i1 @smalllang_compute_start()
+      br i1 %started_ok, label %read, label %failed
+    started:
+      ret i32 %existing
+    read:
+      %workers = load i32, ptr @smalllang_compute_worker_count, align 4
+      ret i32 %workers
+    failed:
+      ret i32 0
     }
     define internal void @smalllang_compute_execute(ptr %group) {
     entry:
@@ -7693,7 +7754,8 @@ public emit sources: move [Text; ~] -> Unit uses Console {
     PrepareRequest { sources: sources, pointerBitWidth: target.pointerBitWidth, supportsComputePool: true } => prepareRequest!
     prepareRequest! -> prepare => context!
     context! -> usesParallelRuntime => capturesParallelOutput
-    context! -> usesTextRuntime -> if { capturesParallelOutput -> emitWindowsTextRuntime }
+    context! -> usesTextRuntime => usesTextOutput
+    (usesTextOutput or capturesParallelOutput) -> if { capturesParallelOutput -> emitWindowsTextRuntime }
     context! -> usesIntInterpolation -> if { emitIntTextRuntime }
     context! -> usesBoolInterpolation -> if { emitBoolTextRuntime }
     context! -> usesSourceTextRuntime => needsSourceTextRuntime

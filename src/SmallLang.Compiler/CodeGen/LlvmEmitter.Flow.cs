@@ -155,6 +155,9 @@ internal sealed partial class LlvmEmitter
                         current = EmitRuntimeIntIntrinsic(function, current, path);
                         ok = _mainOk;
                         continue;
+                    case BoundFunctionKind.RuntimeLimitParallelWorkers:
+                        current = EmitRuntimeLimitParallelWorkersIntrinsic(current, path);
+                        continue;
                     case BoundFunctionKind.RuntimeCloseIntWriter:
                     case BoundFunctionKind.RuntimeCloseIntReader:
                         throw new SmallLangException($"{path} does not accept a flowed input");

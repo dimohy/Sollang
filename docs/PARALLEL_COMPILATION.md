@@ -1,7 +1,7 @@
 # Deterministic Parallel Compilation
 
 Status: accepted direction, implementation in progress  
-Updated: 2026-07-17
+Updated: 2026-07-18
 
 This document defines SmallLang's CPU-parallel execution model and the concrete
 self-host compiler migration. A worker-count message is not implementation
@@ -108,27 +108,31 @@ Evidence: `selfhost/semantic/analysis.sl`; examples 182, 293, and 294.
 - [ ] Non-sendable captures and mutable borrows are rejected.
 - [x] Owned callback results transfer exactly once.
 
-### C. Native compute task group (3/7)
+### C. Native compute task group (4/7)
 
 - [x] Windows pool uses bounded reusable native workers.
 - [ ] Linux pool uses bounded reusable native workers.
-- [ ] The available processor count and explicit build override are supported.
+- [x] The available processor count and explicit build override are supported.
 - [x] Workers claim indices atomically without a global result lock.
 - [ ] Parent-assisted waiting and structured join are implemented.
 - [ ] Cancellation and partial-result destruction are exactly once.
 - [x] File-operation waiting remains outside the compute pool.
 
-### D. Self-host compiler integration (3/6)
+### D. Self-host compiler integration (5/6)
 
 - [x] Nested imported calls cannot overwrite the enclosing runtime call target.
 - [x] Source-local analysis uses `parallel` and ordered package assembly.
 - [ ] Global semantic facts form an explicit read-only barrier.
-- [ ] Function-local typed IR uses indexed parallel work.
+- [x] Function-local typed IR uses indexed parallel work.
 - [x] LLVM function bodies use per-function buffers and ordered emission.
-- [ ] The self-host driver accepts and reports the effective worker count.
+- [x] The self-host driver accepts and reports the effective worker count.
 
 Evidence for the completed call-identity fix: example 322. Example 323 proves a
 literal-returning function in the second module still emits `ret i32 42`.
+Example 378 proves the self-host worker-limit intrinsic together with native
+parallel execution. The complete stage-2 LLVM contains an indexed callback that
+invokes typed-IR `lowerFunction`, and the fixed-point verifier checks that
+callback plus identical stage-1/stage-2 `--jobs 2` output.
 
 ### E. Verification (5/6)
 
@@ -143,7 +147,7 @@ Evidence: example 324 executes `block item: Int -> Int`; example 325 proves the
 self-host grammar/parser accepts the same declaration and call form. The two
 `block-callback-result-*` diagnostics cover missing and mismatched results.
 
-Parallel-compilation progress is **19/28 checks (67.9%)**. This is a feature-local
+Parallel-compilation progress is **22/28 checks (78.6%)**. This is a feature-local
 metric and does not promote the canonical self-host roadmap, which remains
 **48.5/60 equivalent gates (80.8%)** until a full checklist audit proves a gate.
 
@@ -163,10 +167,12 @@ Examples 328, 329, and 294 pass together: ordered `Int -> Int` mapping, active
 worker instrumentation, and the self-host `SourceAnalysis` boundary.
 
 Example 377 proves 100 generations of borrowed `SourceText` input and owned
-struct/array output through native workers. The complete 28-source self-host
-compiler reached an exact stage-2/stage-3 fixed point of 7,142,042 bytes with
-SHA-256 `A71D4595F9854C1E7746F5FE1ECFDF2D82D08DB971F6C3837714B2CB07CA11AD`.
-Five consecutive stage-3 runs completed in 33.90-37.75 seconds with identical
-output. A measured run used 377.77 CPU-seconds over 34.81 seconds wall time
-(10.85 effective cores) and peaked at 88.7 MiB, below the 100 MiB frontend
-budget. Linux full-suite parity remains the outstanding platform check.
+struct/array output through native workers. Example 378 proves an explicit
+positive worker limit, while the driver reports the effective count as a valid
+LLVM comment. The complete 28-source self-host compiler reached an exact
+stage-2/stage-3 fixed point of 7,184,456 bytes with SHA-256
+`DDC1D4C7DD1B363972A64EE546B12007DA5630550C0EC3A99A4AA3CB08E98740`;
+the stage-3 output also assembles with `llvm-as`. The preceding source-worker
+measurement used 377.77 CPU-seconds over 34.81 seconds wall time (10.85
+effective cores) and peaked at 88.7 MiB, below the 100 MiB frontend budget.
+Linux full-suite parity remains the outstanding platform check.
