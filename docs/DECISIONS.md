@@ -5786,6 +5786,12 @@ array. A writer callback receives opaque platform context, so future sinks can
 target files, diagnostics, or in-memory compiler products without copying the
 buffer-management algorithm into each runtime.
 
+The self-host common layer also exposes `array_flush_prefix`. It writes only
+indices below the canonical prefix, but still destroys every per-index buffer
+and finally consumes the sink array. Full flush is a thin call with
+`prefix == count`. This keeps fallible parallel execution from duplicating
+buffer ownership logic when it commits output preceding the earliest failure.
+
 The Release build has zero warnings/errors, the Windows suite passes 508/508,
 the focused Linux verifier passes 5/5, and stage-2 differential verification
 passes 6/6. Stage 2 and stage 3 are byte-identical at 7,217,656 bytes with
