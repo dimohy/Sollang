@@ -951,6 +951,8 @@ same buffered runtime, so stage 3 no longer writes LLVM one byte at a time.
 - [x] lower `parallel` inside nested `if`/`while` regions;
 - [x] buffer independent `emitCore` function bodies in owned memory sinks and
   merge them in canonical root order.
+- [x] stream C# reference LLVM through composable memory/file output sinks
+  without a second complete-module string.
 
 The generated stage-2 compiler lowers capture-safe `parallel` callbacks to a
 Windows compute pool. No-capture `SourceText -> SourceAnalysis` callbacks now

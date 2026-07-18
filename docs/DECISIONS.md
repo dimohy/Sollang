@@ -6171,3 +6171,29 @@ their 6/6 and 5/5 scripts at 8,185,153 and 8,185,015 LLVM bytes respectively.
 The focused generic-container migration advances from 5/8 to 6/8 checks (75%).
 Owned indexed extraction and fixed-array generic function contracts remain, so
 the canonical roadmap stays 48.5/60 equivalent gates (80.8%).
+
+## D192 - Stream Reference LLVM Through Composable Memory Output Sinks
+
+Status: implemented and regression verified
+Date: 2026-07-19
+
+The C# reference emitter no longer retains one managed string per emitted LLVM
+line and then creates another complete concatenated LLVM string before writing
+the temporary module. `MemoryOutputSink` coalesces sequential output in
+`StringBuilder` buffers and models delayed function-entry `alloca` emission as
+an explicit child insertion sink. This removes the marker-string dictionary and
+keeps ordering structural instead of recovering it during final concatenation.
+
+`ITextOutputSink` also has a `TextWriter` adapter. The CLI now copies buffered
+sections directly into its UTF-8 LLVM file through `ReadOnlySpan<char>` chunks,
+so it does not materialize the complete module as an additional managed string.
+The string-returning generator remains available for differential tests and
+other in-memory consumers; both paths use the same emitter and insertion
+semantics.
+
+The Release solution build reports zero warnings and errors. The fast Windows
+suite passes 428/428, the owned-container extraction smoke test passes, and a
+direct CLI build emits a 45,065-byte LLVM module whose executable prints the
+expected `Hello, dimohy. square = 49`. This is a compiler memory-efficiency
+checkpoint, not a new language gate, so the canonical roadmap remains
+48.5/60 (80.8%).

@@ -8,4 +8,10 @@ internal static class LlvmIrGenerator
     {
         return new LlvmEmitter(program, LlvmRuntimePlatform.Create(target)).Emit();
     }
+
+    public static void WriteProgram(BoundProgram program, CompilationTarget target, TextWriter writer)
+    {
+        var output = new TextWriterOutputSink(writer);
+        new LlvmEmitter(program, LlvmRuntimePlatform.Create(target)).Emit(output);
+    }
 }

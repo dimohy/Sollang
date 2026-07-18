@@ -24,8 +24,8 @@ internal sealed partial class LlvmEmitter
     private readonly Dictionary<BlockFunctionCallStatement, ParallelCallbackInfo> _parallelCallbacks =
         new(ReferenceEqualityComparer.Instance);
     private bool UsesProcessRuntime => _usesProcessArguments || _usesProcessEnvironment || _usesChildProcesses;
-    private readonly List<string> _globals = [];
-    private readonly List<string> _functions = [];
+    private readonly MemoryOutputSink _globals = new();
+    private readonly MemoryOutputSink _functions = new();
     private readonly Dictionary<string, RuntimeValue> _locals = new(StringComparer.Ordinal);
     private readonly HashSet<string> _mutableLocals = new(StringComparer.Ordinal);
     private readonly HashSet<string> _borrowedMutableLocals = new(StringComparer.Ordinal);
@@ -47,9 +47,7 @@ internal sealed partial class LlvmEmitter
     private string _mainOk = "true";
     private string _currentBlockLabel = "entry";
     private bool _currentBlockTerminated;
-    private readonly Dictionary<string, List<string>> _hoistedAllocaBlocks = new(StringComparer.Ordinal);
-    private List<string>? _currentHoistedAllocas;
-    private int _allocaBlockId;
+    private MemoryOutputSink? _currentHoistedAllocas;
     private readonly Stack<LoopContext> _loopContexts = new();
     private readonly Stack<LocalScope> _asyncScopeSnapshots = new();
     private AsyncCfgLowering? _activeAsyncCfg;
@@ -373,6 +371,13 @@ internal sealed partial class LlvmEmitter
 
     public string Emit()
     {
+        var output = new MemoryOutputSink();
+        Emit(output);
+        return output.ToString();
+    }
+
+    public void Emit(ITextOutputSink output)
+    {
         if (_usesChildProcesses && !_platform.SupportsChildProcesses)
         {
             throw new SmallLangException("child processes are unavailable on the current target");
@@ -466,10 +471,8 @@ internal sealed partial class LlvmEmitter
         EmitMain();
         EmitFunctionLine("attributes #0 = { nounwind }");
 
-        var functions = string.Concat(_functions.Select(line =>
-            _hoistedAllocaBlocks.TryGetValue(line, out var allocations)
-                ? string.Concat(allocations)
-                : line));
-        return header + string.Concat(_globals) + functions;
+        output.Write(header);
+        _globals.CopyTo(output);
+        _functions.CopyTo(output);
     }
 }

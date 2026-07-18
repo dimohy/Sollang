@@ -42,7 +42,6 @@ internal static class CompilerApp
         var program = LoadProgram(options.SourcePaths, options.Project);
         var pointerBitWidth = options.Target == CompilationTarget.Wasm32Browser ? 32 : 64;
         var boundProgram = new SemanticCompiler(program, pointerBitWidth).Compile();
-        var llvmIr = LlvmIrGenerator.GenerateProgram(boundProgram, options.Target);
         var toolchain = LlvmToolchain.From(options.LlvmHome);
 
         Directory.CreateDirectory(Path.GetDirectoryName(options.OutputPath)
@@ -63,7 +62,13 @@ internal static class CompilerApp
         try
         {
             var llPath = Path.Combine(workDir, Path.GetFileNameWithoutExtension(options.OutputPath) + ".ll");
-            File.WriteAllText(llPath, llvmIr, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+            using (var writer = new StreamWriter(
+                llPath,
+                append: false,
+                new UTF8Encoding(encoderShouldEmitUTF8Identifier: false)))
+            {
+                LlvmIrGenerator.WriteProgram(boundProgram, options.Target, writer);
+            }
             LinkLlvmIr(options, toolchain, llPath, workDir);
 
             if (options.KeepTemps)

@@ -10,17 +10,17 @@ internal sealed partial class LlvmEmitter
 {
     private void EmitGlobalLine(string line = "")
     {
-        _globals.Add(line + Environment.NewLine);
+        _globals.WriteLine(line);
     }
 
     private void EmitGlobalBlock(string block)
     {
-        _globals.Add(EnsureTrailingNewLine(block));
+        _globals.Write(EnsureTrailingNewLine(block));
     }
 
     private void EmitFunctionLine(string line = "")
     {
-        _functions.Add(line + Environment.NewLine);
+        _functions.WriteLine(line);
         if (line.EndsWith(':'))
         {
             _currentBlockTerminated = false;
@@ -29,7 +29,7 @@ internal sealed partial class LlvmEmitter
 
     private void EmitFunctionBlock(string block)
     {
-        _functions.Add(EnsureTrailingNewLine(block));
+        _functions.Write(EnsureTrailingNewLine(block));
     }
 
     private void EmitPlatformGlobalBlock(Action<StringBuilder> emit)
@@ -197,11 +197,7 @@ internal sealed partial class LlvmEmitter
                 $"[{slot.Size.ToString(CultureInfo.InvariantCulture)} x i8]",
                 slot.Alignment);
         }
-        var marker = $"  ; smalllang hoisted allocas {_allocaBlockId.ToString(CultureInfo.InvariantCulture)}{Environment.NewLine}";
-        _allocaBlockId++;
-        _currentHoistedAllocas = [];
-        _hoistedAllocaBlocks.Add(marker, _currentHoistedAllocas);
-        _functions.Add(marker);
+        _currentHoistedAllocas = _functions.CreateInsertionPoint();
     }
 
     private string EmitStackLifetimeStart(object unit)
