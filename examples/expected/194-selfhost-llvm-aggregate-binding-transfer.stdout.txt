@@ -4,6 +4,22 @@ target triple = "x86_64-pc-windows-msvc"
 declare ptr @malloc(i64)
 declare void @free(ptr)
 %sl.dict = type { ptr, ptr, i64, i64 }
+define internal void @smalllang_drop_t25(%sl.array.i32 %value) {
+entry:
+  %data = extractvalue %sl.array.i32 %value, 0
+  %length = extractvalue %sl.array.i32 %value, 1
+  call void @free(ptr %data)
+  ret void
+}
+define internal void @smalllang_drop_t26(%sl.dict %value) {
+entry:
+  %keys = extractvalue %sl.dict %value, 0
+  %values = extractvalue %sl.dict %value, 1
+  %length = extractvalue %sl.dict %value, 2
+  call void @free(ptr %keys)
+  call void @free(ptr %values)
+  ret void
+}
 declare void @llvm.trap()
 define %sl.array.i32 @sl_m0_s0() {
 entry:
@@ -39,16 +55,12 @@ entry:
 }
 define i32 @sl_m0_s4(%sl.array.i32 %arg) {
 entry:
-  %drop_arg = extractvalue %sl.array.i32 %arg, 0
-  call void @free(ptr %drop_arg)
+  call void @smalllang_drop_t25(%sl.array.i32 %arg)
   ret i32 0
 }
 define i32 @sl_m0_s5(%sl.dict %arg) {
 entry:
-  %drop_arg_keys = extractvalue %sl.dict %arg, 0
-  call void @free(ptr %drop_arg_keys)
-  %drop_arg_values = extractvalue %sl.dict %arg, 1
-  call void @free(ptr %drop_arg_values)
+  call void @smalllang_drop_t26(%sl.dict %arg)
   ret i32 0
 }
 define i32 @main() {

@@ -59,6 +59,13 @@ done:
 %sl.array.i32 = type { ptr, i64, i64 }
 declare ptr @malloc(i64)
 declare void @free(ptr)
+define internal void @smalllang_drop_t25(%sl.array.i32 %value) {
+entry:
+  %data = extractvalue %sl.array.i32 %value, 0
+  %length = extractvalue %sl.array.i32 %value, 1
+  call void @free(ptr %data)
+  ret void
+}
 %sl.text = type { ptr, i64 }
 @sl_str_32 = private unnamed_addr constant [6 x i8] c"normal"
 @sl_str_34 = private unnamed_addr constant [4 x i8] c"done"
@@ -95,23 +102,20 @@ while9_body:
   %v24 = icmp eq i32 %v25, 2
   br i1 %v24, label %guard23_exit, label %guard23_next
 guard23_exit:
-  %cleanup238_b3 = extractvalue %sl.array.i32 %v14, 0
-  call void @free(ptr %cleanup238_b3)
+  call void @smalllang_drop_t25(%sl.array.i32 %v14)
   br label %while9_header
 guard23_next:
   %v29 = load i32, ptr %slot1, align 4
   %v28 = icmp eq i32 %v29, 3
   br i1 %v28, label %guard27_exit, label %guard27_next
 guard27_exit:
-  %cleanup278_b3 = extractvalue %sl.array.i32 %v14, 0
-  call void @free(ptr %cleanup278_b3)
+  call void @smalllang_drop_t25(%sl.array.i32 %v14)
   br label %while9_exit
 guard27_next:
   %v32_ptr = insertvalue %sl.text poison, ptr @sl_str_32, 0
   %v32 = insertvalue %sl.text %v32_ptr, i64 6, 1
   call void @sl_runtime_print(ptr @sl_str_32, i64 6, i1 true)
-  %cleanup93_b3 = extractvalue %sl.array.i32 %v14, 0
-  call void @free(ptr %cleanup93_b3)
+  call void @smalllang_drop_t25(%sl.array.i32 %v14)
   br label %while9_header
 while9_exit:
   call void @sl_runtime_print(ptr @sl_str_34, i64 4, i1 true)

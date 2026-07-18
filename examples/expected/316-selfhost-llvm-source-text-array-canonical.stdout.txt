@@ -4,6 +4,32 @@ target triple = "x86_64-pc-windows-msvc"
 %sl.array.i32 = type { ptr, i64, i64 }
 declare ptr @malloc(i64)
 declare void @free(ptr)
+define internal void @smalllang_drop_t24(%sl.source_text %value) {
+entry:
+  call void @sl_runtime_unmap_text(%sl.source_text %value)
+  ret void
+}
+define internal void @smalllang_drop_t25(%sl.array.i32 %value) {
+entry:
+  %data = extractvalue %sl.array.i32 %value, 0
+  %length = extractvalue %sl.array.i32 %value, 1
+  br label %loop
+loop:
+  %index = phi i64 [ 0, %entry ], [ %next, %continue ]
+  %in_range = icmp ult i64 %index, %length
+  br i1 %in_range, label %item, label %done
+item:
+  %slot = getelementptr %sl.source_text, ptr %data, i64 %index
+  %element = load %sl.source_text, ptr %slot, align 8
+  call void @smalllang_drop_t24(%sl.source_text %element)
+  br label %continue
+continue:
+  %next = add i64 %index, 1
+  br label %loop
+done:
+  call void @free(ptr %data)
+  ret void
+}
 declare void @llvm.trap()
 %sl.text = type { ptr, i64 }
 define %sl.text @sl_m0_s0(%sl.array.i32 %arg) {

@@ -901,7 +901,7 @@ includes the public `sys.process` module, and canonical typed IR identifies
 self-host LLVM backend lowers the latter two through a portable process-result
 contract and materializes the language-level `Result<Int, Text>` value.
 
-The verifier builds the 8,002,786-byte Windows stage-2 compiler, compares
+The verifier builds the 8,185,153-byte Windows stage-2 compiler, compares
 single-file, grouped-Boolean, and imported multi-file LLVM from stage 1 and
 stage 2, assembles and executes every smoke module, and compares C# and native
 SL behavior. It also invokes the generated stage-2 compiler's own
@@ -921,10 +921,10 @@ owned value's deterministic drop. The dedicated Linux stage-2 verifier is
 - [x] prove stage-1/stage-2 identity for single and imported multi-file input;
 - [x] assemble, link, and execute both stage-2-produced programs.
 
-The complete Linux compiler is 8,002,648 LLVM bytes. Its generated single-file
+The complete Linux compiler is 8,185,015 LLVM bytes. Its generated single-file
 and imported multi-file products are byte-normalized hash-identical to stage 1
 and execute as `stage2-single-ok` and `stage2-multi-ok`. Windows Stage2 remains
-8/8 at 8,002,786 LLVM bytes, and both target suites pass 526/526.
+8/8 at 8,185,153 LLVM bytes, and both target suites pass 527/527.
 The formal language-capability score remains 42 complete, 13 partial, 5 missing
 (48.5/60, 80.8%) until the remaining ownership, generic-container, package,
 tooling, and library gates are implemented.
@@ -1054,17 +1054,28 @@ of a shallow container spelling.
 - [x] specialize contextual dynamic-array return literals;
 - [x] specialize contextual dictionary return literals;
 - [x] use canonical dictionary key/value types for lookup and LLVM loads;
-- [ ] recursively destroy owned dynamic-array and dictionary elements;
+- [x] recursively destroy owned dynamic-array and dictionary elements;
 - [ ] implement move extraction of owned indexed elements;
 - [ ] complete fixed-array generic function contracts.
 
-This focused migration is **5/8 checks (62.5%)**. Examples 397 and 398 assemble,
+This focused migration is **6/8 checks (75%)**. Examples 397 and 398 assemble,
 link, and execute on Windows and Linux. They prove that `{UInt16: Int64}` uses
 2-byte keys and 8-byte values and that `[UInt16; ~]` uses a 2-byte stride. Before
 this correction the producer stored default `Int32` components while the
 consumer loaded the declared widths, producing `21474836489` instead of `9`.
-The formal roadmap remains **48.5/60 (80.8%)** until recursive container drop,
-owned extraction, and fixed-array contracts close the canonical gate.
+
+Example 400 adds the recursive ownership gate. The emitter computes the active
+owned-type dependency closure from canonical type IDs and emits one specialized
+drop witness per reachable array, fixed array, dictionary, box, nominal struct,
+`Option`, `Result`, or `SourceText` type. Dynamic arrays destroy each owned
+element before their backing allocation; dictionaries do the same for owned
+keys and values. Partial nominal moves retain field-path cleanup so an already
+moved field is never destroyed twice. `scripts/verify-recursive-container-drop.ps1`
+assembles the generated Linux LLVM and executes it under AddressSanitizer with
+leak detection enabled.
+
+The formal roadmap remains **48.5/60 (80.8%)** until owned indexed extraction
+and fixed-array contracts close the canonical gate.
 
 Research basis:
 

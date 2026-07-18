@@ -7,6 +7,32 @@ target triple = "x86_64-pc-windows-msvc"
 declare ptr @malloc(i64)
 declare ptr @realloc(ptr, i64)
 declare void @free(ptr)
+define internal void @smalllang_drop_t24(%sl.source_text %value) {
+entry:
+  call void @sl_runtime_unmap_text(%sl.source_text %value)
+  ret void
+}
+define internal void @smalllang_drop_t25(%sl.array.i32 %value) {
+entry:
+  %data = extractvalue %sl.array.i32 %value, 0
+  %length = extractvalue %sl.array.i32 %value, 1
+  br label %loop
+loop:
+  %index = phi i64 [ 0, %entry ], [ %next, %continue ]
+  %in_range = icmp ult i64 %index, %length
+  br i1 %in_range, label %item, label %done
+item:
+  %slot = getelementptr %sl.source_text, ptr %data, i64 %index
+  %element = load %sl.source_text, ptr %slot, align 8
+  call void @smalllang_drop_t24(%sl.source_text %element)
+  br label %continue
+continue:
+  %next = add i64 %index, 1
+  br label %loop
+done:
+  call void @free(ptr %data)
+  ret void
+}
 declare void @llvm.trap()
 %sl.text = type { ptr, i64 }
 define i64 @sl_m0_s0(%sl.array.i32 %arg) {
@@ -56,6 +82,7 @@ while20_body:
   %v29 = load i32, ptr %slot4, align 4
   %v28 = add i32 %v29, 1
   store i32 %v28, ptr %slot4, align 4
+  call void @smalllang_drop_t24(%sl.source_text %v22)
   br label %while20_header
 while20_exit:
   %v31 = sext i32 0 to i64
@@ -85,12 +112,12 @@ while39_body:
   %v50 = load i32, ptr %slot8, align 4
   %v49 = add i32 %v50, 1
   store i32 %v49, ptr %slot8, align 4
+  call void @smalllang_drop_t24(%sl.source_text %v41)
   br label %while39_header
 while39_exit:
   %v52 = load i64, ptr %slot7, align 8
   %drop3_current = load %sl.array.i32, ptr %slot3, align 8
-  %drop3 = extractvalue %sl.array.i32 %drop3_current, 0
-  call void @free(ptr %drop3)
+  call void @smalllang_drop_t25(%sl.array.i32 %drop3_current)
   ret i64 %v52
 }
 define i32 @main() {

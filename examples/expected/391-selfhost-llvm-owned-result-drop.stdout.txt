@@ -60,6 +60,30 @@ done:
 %sl.array.i32 = type { ptr, i64, i64 }
 declare ptr @malloc(i64)
 declare void @free(ptr)
+define internal void @smalllang_drop_t25(%sl.array.i32 %value) {
+entry:
+  %data = extractvalue %sl.array.i32 %value, 0
+  %length = extractvalue %sl.array.i32 %value, 1
+  call void @free(ptr %data)
+  ret void
+}
+define internal void @smalllang_drop_t26(%sl.enum.t26 %value) {
+entry:
+  %slot = alloca %sl.enum.t26, align 8
+  store %sl.enum.t26 %value, ptr %slot, align 8
+  %tag = extractvalue %sl.enum.t26 %value, 0
+  %payload = getelementptr inbounds %sl.enum.t26, ptr %slot, i32 0, i32 1
+  %is0 = icmp eq i32 %tag, 0
+  br i1 %is0, label %tag0, label %tag1
+tag0:
+  %first = load %sl.array.i32, ptr %payload, align 8
+  call void @smalllang_drop_t25(%sl.array.i32 %first)
+  br label %done
+tag1:
+  br label %done
+done:
+  ret void
+}
 %sl.text = type { ptr, i64 }
 @sl_str_11 = private unnamed_addr constant [16 x i8] c"inactive payload"
 @sl_str_13 = private unnamed_addr constant [24 x i8] c"owned result constructed"
@@ -98,36 +122,10 @@ entry:
   store %sl.enum.t26 %v4, ptr %slot1, align 8
   store %sl.enum.t26 %v10, ptr %slot2, align 8
   call void @sl_runtime_print(ptr @sl_str_13, i64 24, i1 true)
-  %enumdrop6002_value = load %sl.enum.t26, ptr %slot2, align 8
-  %enumdrop6002_slot = alloca %sl.enum.t26, align 8
-  store %sl.enum.t26 %enumdrop6002_value, ptr %enumdrop6002_slot, align 8
-  %enumdrop6002_tag = extractvalue %sl.enum.t26 %enumdrop6002_value, 0
-  %enumdrop6002_payload_ptr = getelementptr inbounds %sl.enum.t26, ptr %enumdrop6002_slot, i32 0, i32 1
-  %enumdrop6002_is0 = icmp eq i32 %enumdrop6002_tag, 0
-  br i1 %enumdrop6002_is0, label %enumdrop6002_tag0, label %enumdrop6002_tag1
-enumdrop6002_tag0:
-  %enumdrop60021_payload = load %sl.array.i32, ptr %enumdrop6002_payload_ptr, align 8
-  %enumdrop60021_data = extractvalue %sl.array.i32 %enumdrop60021_payload, 0
-  call void @free(ptr %enumdrop60021_data)
-  br label %enumdrop6002_merge
-enumdrop6002_tag1:
-  br label %enumdrop6002_merge
-enumdrop6002_merge:
-  %enumdrop6001_value = load %sl.enum.t26, ptr %slot1, align 8
-  %enumdrop6001_slot = alloca %sl.enum.t26, align 8
-  store %sl.enum.t26 %enumdrop6001_value, ptr %enumdrop6001_slot, align 8
-  %enumdrop6001_tag = extractvalue %sl.enum.t26 %enumdrop6001_value, 0
-  %enumdrop6001_payload_ptr = getelementptr inbounds %sl.enum.t26, ptr %enumdrop6001_slot, i32 0, i32 1
-  %enumdrop6001_is0 = icmp eq i32 %enumdrop6001_tag, 0
-  br i1 %enumdrop6001_is0, label %enumdrop6001_tag0, label %enumdrop6001_tag1
-enumdrop6001_tag0:
-  %enumdrop60011_payload = load %sl.array.i32, ptr %enumdrop6001_payload_ptr, align 8
-  %enumdrop60011_data = extractvalue %sl.array.i32 %enumdrop60011_payload, 0
-  call void @free(ptr %enumdrop60011_data)
-  br label %enumdrop6001_merge
-enumdrop6001_tag1:
-  br label %enumdrop6001_merge
-enumdrop6001_merge:
+  %cleanup6_b2_current = load %sl.enum.t26, ptr %slot2, align 8
+  call void @smalllang_drop_t26(%sl.enum.t26 %cleanup6_b2_current)
+  %cleanup6_b1_current = load %sl.enum.t26, ptr %slot1, align 8
+  call void @smalllang_drop_t26(%sl.enum.t26 %cleanup6_b1_current)
   call void @sl_runtime_flush_stdout()
   ret i32 0
 }

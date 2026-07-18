@@ -5,6 +5,26 @@ target triple = "x86_64-pc-windows-msvc"
 declare ptr @malloc(i64)
 declare void @free(ptr)
 %sl.dict = type { ptr, ptr, i64, i64 }
+define internal void @smalllang_drop_t25(%sl.struct.m0_s0 %value) {
+entry:
+  ret void
+}
+define internal void @smalllang_drop_t26(%sl.array.i32 %value) {
+entry:
+  %data = extractvalue %sl.array.i32 %value, 0
+  %length = extractvalue %sl.array.i32 %value, 1
+  call void @free(ptr %data)
+  ret void
+}
+define internal void @smalllang_drop_t27(%sl.dict %value) {
+entry:
+  %keys = extractvalue %sl.dict %value, 0
+  %values = extractvalue %sl.dict %value, 1
+  %length = extractvalue %sl.dict %value, 2
+  call void @free(ptr %keys)
+  call void @free(ptr %values)
+  ret void
+}
 declare void @llvm.trap()
 define i32 @sl_m0_s2() {
 entry:
@@ -20,8 +40,7 @@ entry:
   %v6_data = extractvalue %sl.array.i32 %v7, 0
   %v6_ptr = getelementptr i32, ptr %v6_data, i64 0
   %v6 = load i32, ptr %v6_ptr, align 4
-  %drop2 = extractvalue %sl.array.i32 %v3, 0
-  call void @free(ptr %drop2)
+  call void @smalllang_drop_t26(%sl.array.i32 %v3)
   ret i32 %v6
 }
 define i32 @sl_m0_s4() {
@@ -29,6 +48,7 @@ entry:
   %v12 = insertvalue %sl.struct.m0_s0 poison, i32 9, 0
   %v15 = freeze %sl.struct.m0_s0 %v12
   %v14 = extractvalue %sl.struct.m0_s0 %v15, 0
+  call void @smalllang_drop_t25(%sl.struct.m0_s0 %v12)
   ret i32 %v14
 }
 define i32 @sl_m0_s6() {
@@ -72,10 +92,7 @@ dict24_missing:
 dict24_hit:
   %v24_value_ptr = getelementptr i32, ptr %v24_values, i64 %v24_slot
   %v24 = load i32, ptr %v24_value_ptr, align 4
-  %drop18_keys = extractvalue %sl.dict %v19, 0
-  call void @free(ptr %drop18_keys)
-  %drop18_values = extractvalue %sl.dict %v19, 1
-  call void @free(ptr %drop18_values)
+  call void @smalllang_drop_t27(%sl.dict %v19)
   ret i32 %v24
 }
 define i32 @main() {

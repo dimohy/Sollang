@@ -86,6 +86,7 @@ struct OwnedDropRequest {
 }
 
 struct DropGlueRequest {
+    typeId: Int
     typeOrigin: Int
     typeModule: Int
     typeSymbol: Int
@@ -148,6 +149,7 @@ struct EmitContext {
     typeSizes: [Int; ~]
     typeAligns: [Int; ~]
     typeLayoutStatuses: [Int; ~]
+    typeTraits: [Int; ~]
     pointerBitWidth: Int
     supportsComputePool: Bool
 }
@@ -552,8 +554,24 @@ prepare request: move PrepareRequest -> EmitContext {
         layoutFields! -> push(layoutField)
         layoutFieldCopyIndex420! + 1 => layoutFieldCopyIndex420!
     }
+    [typeIds.SemanticType; ~] => classificationTypes!
+    0 => classificationTypeCopyIndex421!
+    classificationTypeCopyIndex421! < (semanticTypes! -> len) -> while {
+        semanticTypes![classificationTypeCopyIndex421!] => classificationType
+        classificationTypes! -> push(classificationType)
+        classificationTypeCopyIndex421! + 1 => classificationTypeCopyIndex421!
+    }
+    [typeIds.NominalField; ~] => classificationFields!
+    0 => classificationFieldCopyIndex422!
+    classificationFieldCopyIndex422! < (semanticFields! -> len) -> while {
+        semanticFields![classificationFieldCopyIndex422!] => classificationField
+        classificationFields! -> push(classificationField)
+        classificationFieldCopyIndex422! + 1 => classificationFieldCopyIndex422!
+    }
     TypeLayoutRequest { types: layoutTypes!, fields: layoutFields!, typeId: -1, pointerBitWidth: pointerBitWidth } => layoutRequest!
     layoutRequest! -> layoutsFor => layouts
+    typeIds.TypeClassificationRequest { types: classificationTypes!, fields: classificationFields! } => classificationRequest!
+    classificationRequest! -> typeIds.classify => typeTraits!
     [Int; ~] => typeSizes!
     0 => typeSizeCopyIndex424!
     typeSizeCopyIndex424! < (layouts.sizes -> len) -> while {
@@ -595,6 +613,7 @@ prepare request: move PrepareRequest -> EmitContext {
         typeSizes: typeSizes!
         typeAligns: typeAligns!
         typeLayoutStatuses: typeLayoutStatuses!
+        typeTraits: typeTraits!
         pointerBitWidth: pointerBitWidth
         supportsComputePool: supportsComputePool
     } => context!
@@ -1319,6 +1338,13 @@ emitCore context: move EmitContext -> Unit uses Console {
                 dropGlueMoveIndex! + 1 => dropGlueMoveIndex!
             }
         }
+        (not dropTaskMoved! and dropTask.typeId >= 0 and (not dropTask.hasPartialMoves or (dropTask.fieldOrdinal >= 0 and context.types[dropTask.typeId].kind != 1)) and (dropTask.typeId -> semanticTypeOwns)) -> if {
+            "  call void @smalllang_drop_t$(dropTask.typeId)(" -> print
+            dropTask.typeId -> writeSemanticTypeId
+            " " -> print
+            dropTask -> emitDropValueName
+            ")" -> println
+        } else {
         (not dropTaskMoved! and (dropTask.typeOrigin == 13 or dropTask.typeOrigin == 14)) -> if {
             "  " -> print
             dropTask -> emitDropPathName
@@ -1354,9 +1380,29 @@ emitCore context: move EmitContext -> Unit uses Console {
             dropFieldIndex! < dropStructRange.symbolCount -> while {
                 context.symbols[dropStructRange.symbolStart + dropFieldIndex!] => dropField
                 (dropField.kind == 26 and dropField.parent == dropTask.typeSymbol) -> if {
+                    -1 => dropFieldTypeId!
+                    0 => canonicalDropFieldIndex!
+                    canonicalDropFieldIndex! < (context.fields -> len) -> while {
+                        context.fields[canonicalDropFieldIndex!] => canonicalDropField
+                        (canonicalDropField.status == 0 and canonicalDropField.ownerType == dropTask.typeId and canonicalDropField.ordinal == dropFieldOrdinal!) -> if {
+                            canonicalDropField.fieldType => dropFieldTypeId!
+                        }
+                        canonicalDropFieldIndex! + 1 => canonicalDropFieldIndex!
+                    }
                     -1 => dropFieldOrigin!
                     -1 => dropFieldModule!
                     -1 => dropFieldSymbol!
+                    dropFieldTypeId! >= 0 -> if {
+                        context.types[dropFieldTypeId!] => canonicalDropFieldType
+                        canonicalDropFieldType.kind == 3 -> if { 13 => dropFieldOrigin! }
+                        canonicalDropFieldType.kind == 4 -> if { 14 => dropFieldOrigin! }
+                        canonicalDropFieldType.kind == 5 -> if { 15 => dropFieldOrigin! }
+                        canonicalDropFieldType.kind == 1 -> if {
+                            canonicalDropFieldType.origin => dropFieldOrigin!
+                            canonicalDropFieldType.module => dropFieldModule!
+                            canonicalDropFieldType.symbol => dropFieldSymbol!
+                        }
+                    }
                     0 => dropCompositeIndex!
                     dropCompositeIndex! < (context.composite -> len) -> while {
                         context.composite[dropCompositeIndex!] => dropCompositeType
@@ -1376,12 +1422,13 @@ emitCore context: move EmitContext -> Unit uses Console {
                         }
                         dropNominalIndex! + 1 => dropNominalIndex!
                     }
-                    dropFieldOrigin! >= 0 -> if {
+                    (dropFieldOrigin! >= 0 or (dropFieldTypeId! >= 0 and (dropFieldTypeId! -> semanticTypeOwns))) -> if {
                         dropTasks! -> len => dropFieldPath
                         "  %dropg$(dropTask.nameRoot)_p$dropFieldPath = extractvalue %sl.struct.m$(dropTask.typeModule)_s$(dropTask.typeSymbol) " -> print
                         dropTask -> emitDropValueName
                         ", $(dropFieldOrdinal!)" -> println
                         dropTasks! -> push(DropGlueRequest {
+                            typeId: dropFieldTypeId!
                             typeOrigin: dropFieldOrigin!
                             typeModule: dropFieldModule!
                             typeSymbol: dropFieldSymbol!
@@ -1404,18 +1451,220 @@ emitCore context: move EmitContext -> Unit uses Console {
         }
         }
         }
+        }
         dropTaskIndex! + 1 => dropTaskIndex!
         }
     }
     semanticTypeOwns typeId: Int -> Bool {
-        false => owns!
-        (typeId >= 0 and typeId < (context.types -> len)) -> if {
-            context.types[typeId] => semanticType
-            (semanticType.kind == 3 or semanticType.kind == 5 or semanticType.kind == 6) -> if { true => owns! }
-            (semanticType.kind == 1 and semanticType.origin == 1 and semanticType.symbol == 24) -> if { true => owns! }
-            (semanticType.kind == 1 and (semanticType.origin == 0 or semanticType.origin == 2)) -> if { true => owns! }
+        (typeId >= 0 and typeId < (context.typeTraits -> len)) -> if {
+            context.typeTraits[typeId] % 2 == 1
+        } else { false }
+    }
+    emitSemanticDropHelpers active: [Int; ~] -> Unit uses Console {
+        0 => dropTypeIndex!
+        dropTypeIndex! < (context.types -> len) -> while {
+            context.types[dropTypeIndex!] => dropType
+            false => supported!
+            (dropType.kind == 3 or dropType.kind == 4 or dropType.kind == 5 or dropType.kind == 6) -> if { true => supported! }
+            (dropType.kind == 1 and dropType.origin == 1 and dropType.symbol == 24) -> if { true => supported! }
+            (dropType.kind == 1 and (dropType.origin == 0 or dropType.origin == 2)) -> if { true => supported! }
+            (dropType.kind == 7 and dropType.origin == 4 and (dropType.symbol == 0 or dropType.symbol == 1)) -> if { true => supported! }
+            (active[dropTypeIndex!] == 1 and context.typeTraits[dropTypeIndex!] % 2 == 1 and supported!) -> if {
+                "define internal void @smalllang_drop_t$(dropTypeIndex!)(" -> print
+                dropTypeIndex! -> writeSemanticTypeId
+                " %value) {" -> println
+                "entry:" -> println
+                dropType.kind == 3 -> if {
+                    "  %data = extractvalue %sl.array.i32 %value, 0" -> println
+                    "  %length = extractvalue %sl.array.i32 %value, 1" -> println
+                    (dropType.first >= 0 and context.typeTraits[dropType.first] % 2 == 1) -> if {
+                        "  br label %loop" -> println
+                        "loop:" -> println
+                        "  %index = phi i64 [ 0, %entry ], [ %next, %continue ]" -> println
+                        "  %in_range = icmp ult i64 %index, %length" -> println
+                        "  br i1 %in_range, label %item, label %done" -> println
+                        "item:" -> println
+                        "  %slot = getelementptr " -> print
+                        dropType.first -> writeSemanticTypeId
+                        ", ptr %data, i64 %index" -> println
+                        "  %element = load " -> print
+                        dropType.first -> writeSemanticTypeId
+                        ", ptr %slot, align " -> print
+                        context.typeAligns[dropType.first] -> writeDecimalLine
+                        "  call void @smalllang_drop_t$(dropType.first)(" -> print
+                        dropType.first -> writeSemanticTypeId
+                        " %element)" -> println
+                        "  br label %continue" -> println
+                        "continue:" -> println
+                        "  %next = add i64 %index, 1" -> println
+                        "  br label %loop" -> println
+                        "done:" -> println
+                    }
+                    "  call void @free(ptr %data)" -> println
+                    "  ret void" -> println
+                }
+                dropType.kind == 4 -> if {
+                    "  %storage = alloca " -> print
+                    dropTypeIndex! -> writeSemanticTypeId
+                    ", align " -> print
+                    context.typeAligns[dropTypeIndex!] -> writeDecimalLine
+                    "  store " -> print
+                    dropTypeIndex! -> writeSemanticTypeId
+                    " %value, ptr %storage, align " -> print
+                    context.typeAligns[dropTypeIndex!] -> writeDecimalLine
+                    "  br label %loop" -> println
+                    "loop:" -> println
+                    "  %index = phi i64 [ 0, %entry ], [ %next, %continue ]" -> println
+                    "  %in_range = icmp ult i64 %index, " -> print
+                    dropType.length -> writeDecimalLine
+                    "  br i1 %in_range, label %item, label %done" -> println
+                    "item:" -> println
+                    "  %slot = getelementptr " -> print
+                    dropTypeIndex! -> writeSemanticTypeId
+                    ", ptr %storage, i64 0, i64 %index" -> println
+                    "  %element = load " -> print
+                    dropType.first -> writeSemanticTypeId
+                    ", ptr %slot, align " -> print
+                    context.typeAligns[dropType.first] -> writeDecimalLine
+                    "  call void @smalllang_drop_t$(dropType.first)(" -> print
+                    dropType.first -> writeSemanticTypeId
+                    " %element)" -> println
+                    "  br label %continue" -> println
+                    "continue:" -> println
+                    "  %next = add i64 %index, 1" -> println
+                    "  br label %loop" -> println
+                    "done:" -> println
+                    "  ret void" -> println
+                }
+                dropType.kind == 5 -> if {
+                    "  %keys = extractvalue %sl.dict %value, 0" -> println
+                    "  %values = extractvalue %sl.dict %value, 1" -> println
+                    "  %length = extractvalue %sl.dict %value, 2" -> println
+                    ((dropType.first >= 0 and context.typeTraits[dropType.first] % 2 == 1) or (dropType.second >= 0 and context.typeTraits[dropType.second] % 2 == 1)) -> if {
+                        "  br label %loop" -> println
+                        "loop:" -> println
+                        "  %index = phi i64 [ 0, %entry ], [ %next, %continue ]" -> println
+                        "  %in_range = icmp ult i64 %index, %length" -> println
+                        "  br i1 %in_range, label %item, label %done" -> println
+                        "item:" -> println
+                        (dropType.first >= 0 and context.typeTraits[dropType.first] % 2 == 1) -> if {
+                            "  %key_slot = getelementptr " -> print
+                            dropType.first -> writeSemanticTypeId
+                            ", ptr %keys, i64 %index" -> println
+                            "  %key = load " -> print
+                            dropType.first -> writeSemanticTypeId
+                            ", ptr %key_slot, align " -> print
+                            context.typeAligns[dropType.first] -> writeDecimalLine
+                            "  call void @smalllang_drop_t$(dropType.first)(" -> print
+                            dropType.first -> writeSemanticTypeId
+                            " %key)" -> println
+                        }
+                        (dropType.second >= 0 and context.typeTraits[dropType.second] % 2 == 1) -> if {
+                            "  %value_slot = getelementptr " -> print
+                            dropType.second -> writeSemanticTypeId
+                            ", ptr %values, i64 %index" -> println
+                            "  %item_value = load " -> print
+                            dropType.second -> writeSemanticTypeId
+                            ", ptr %value_slot, align " -> print
+                            context.typeAligns[dropType.second] -> writeDecimalLine
+                            "  call void @smalllang_drop_t$(dropType.second)(" -> print
+                            dropType.second -> writeSemanticTypeId
+                            " %item_value)" -> println
+                        }
+                        "  br label %continue" -> println
+                        "continue:" -> println
+                        "  %next = add i64 %index, 1" -> println
+                        "  br label %loop" -> println
+                        "done:" -> println
+                    }
+                    "  call void @free(ptr %keys)" -> println
+                    "  call void @free(ptr %values)" -> println
+                    "  ret void" -> println
+                }
+                dropType.kind == 6 -> if {
+                    "  %present = icmp ne ptr %value, null" -> println
+                    "  br i1 %present, label %drop, label %done" -> println
+                    "drop:" -> println
+                    (dropType.first >= 0 and context.typeTraits[dropType.first] % 2 == 1) -> if {
+                        "  %element = load " -> print
+                        dropType.first -> writeSemanticTypeId
+                        ", ptr %value, align " -> print
+                        context.typeAligns[dropType.first] -> writeDecimalLine
+                        "  call void @smalllang_drop_t$(dropType.first)(" -> print
+                        dropType.first -> writeSemanticTypeId
+                        " %element)" -> println
+                    }
+                    "  call void @free(ptr %value)" -> println
+                    "  br label %done" -> println
+                    "done:" -> println
+                    "  ret void" -> println
+                }
+                (dropType.kind == 1 and dropType.origin == 1 and dropType.symbol == 24) -> if {
+                    "  call void @sl_runtime_unmap_text(%sl.source_text %value)" -> println
+                    "  ret void" -> println
+                }
+                (dropType.kind == 1 and (dropType.origin == 0 or dropType.origin == 2)) -> if {
+                    0 => dropFieldIndex!
+                    dropFieldIndex! < (context.fields -> len) -> while {
+                        context.fields[dropFieldIndex!] => dropField
+                        (dropField.status == 0 and dropField.ownerType == dropTypeIndex! and dropField.fieldType >= 0 and context.typeTraits[dropField.fieldType] % 2 == 1) -> if {
+                            "  %field$(dropField.ordinal) = extractvalue %sl.struct.m$(dropType.module)_s$(dropType.symbol) %value, $(dropField.ordinal)" -> println
+                            "  call void @smalllang_drop_t$(dropField.fieldType)(" -> print
+                            dropField.fieldType -> writeSemanticTypeId
+                            " %field$(dropField.ordinal))" -> println
+                        }
+                        dropFieldIndex! + 1 => dropFieldIndex!
+                    }
+                    "  ret void" -> println
+                }
+                (dropType.kind == 7 and dropType.origin == 4 and (dropType.symbol == 0 or dropType.symbol == 1)) -> if {
+                    "  %slot = alloca %sl.enum.t$(dropTypeIndex!), align 8" -> println
+                    "  store %sl.enum.t$(dropTypeIndex!) %value, ptr %slot, align 8" -> println
+                    "  %tag = extractvalue %sl.enum.t$(dropTypeIndex!) %value, 0" -> println
+                    "  %payload = getelementptr inbounds %sl.enum.t$(dropTypeIndex!), ptr %slot, i32 0, i32 1" -> println
+                    "  %is0 = icmp eq i32 %tag, 0" -> println
+                    "  br i1 %is0, label %tag0, label %tag1" -> println
+                    "tag0:" -> println
+                    (dropType.symbol == 1 and dropType.first >= 0 and context.typeTraits[dropType.first] % 2 == 1) -> if {
+                        "  %first = load " -> print
+                        dropType.first -> writeSemanticTypeId
+                        ", ptr %payload, align " -> print
+                        context.typeAligns[dropType.first] -> writeDecimalLine
+                        "  call void @smalllang_drop_t$(dropType.first)(" -> print
+                        dropType.first -> writeSemanticTypeId
+                        " %first)" -> println
+                    }
+                    "  br label %done" -> println
+                    "tag1:" -> println
+                    dropType.symbol == 0 -> if {
+                        (dropType.first >= 0 and context.typeTraits[dropType.first] % 2 == 1) -> if {
+                            "  %some = load " -> print
+                            dropType.first -> writeSemanticTypeId
+                            ", ptr %payload, align " -> print
+                            context.typeAligns[dropType.first] -> writeDecimalLine
+                            "  call void @smalllang_drop_t$(dropType.first)(" -> print
+                            dropType.first -> writeSemanticTypeId
+                            " %some)" -> println
+                        }
+                    } else {
+                        (dropType.second >= 0 and context.typeTraits[dropType.second] % 2 == 1) -> if {
+                            "  %second = load " -> print
+                            dropType.second -> writeSemanticTypeId
+                            ", ptr %payload, align " -> print
+                            context.typeAligns[dropType.second] -> writeDecimalLine
+                            "  call void @smalllang_drop_t$(dropType.second)(" -> print
+                            dropType.second -> writeSemanticTypeId
+                            " %second)" -> println
+                        }
+                    }
+                    "  br label %done" -> println
+                    "done:" -> println
+                    "  ret void" -> println
+                }
+                "}" -> println
+            }
+            dropTypeIndex! + 1 => dropTypeIndex!
         }
-        owns!
     }
     emitEnumPayloadDrop request: EnumPayloadDropRequest -> Unit uses Console {
         context.types[request.payloadTypeId] => payloadType
@@ -1448,6 +1697,7 @@ emitCore context: move EmitContext -> Unit uses Console {
             "  %dropg$(request.nameRoot)_p0 = load %sl.struct.m$(payloadType.module)_s$(payloadType.symbol), ptr %enumdrop$(request.pointerRoot)_payload_ptr, align " -> print
             context.typeAligns[request.payloadTypeId] -> writeDecimalLine
             DropGlueRequest {
+                typeId: request.payloadTypeId
                 typeOrigin: payloadType.origin
                 typeModule: payloadType.module
                 typeSymbol: payloadType.symbol
@@ -1465,42 +1715,15 @@ emitCore context: move EmitContext -> Unit uses Console {
         }
     }
     emitEnumDrop request: EnumDropRequest -> Unit uses Console {
-        context.types[request.typeId] => enumType
         request.valueKind == 2 -> if {
             "  %enumdrop$(request.nameRoot)_value = load %sl.enum.t$(request.typeId), ptr %slot$(request.valueIndex), align " -> print
             context.typeAligns[request.typeId] -> writeDecimalLine
         }
-        "  %enumdrop$(request.nameRoot)_slot = alloca %sl.enum.t$(request.typeId), align 8" -> println
-        "  store %sl.enum.t$(request.typeId) " -> print
+        "  call void @smalllang_drop_t$(request.typeId)(%sl.enum.t$(request.typeId) " -> print
         request.valueKind == 0 -> if { "%v$(request.valueIndex)" -> print }
         request.valueKind == 1 -> if { "%arg" -> print }
         request.valueKind == 2 -> if { "%enumdrop$(request.nameRoot)_value" -> print }
-        ", ptr %enumdrop$(request.nameRoot)_slot, align 8" -> println
-        "  %enumdrop$(request.nameRoot)_tag = extractvalue %sl.enum.t$(request.typeId) " -> print
-        request.valueKind == 0 -> if { "%v$(request.valueIndex)" -> print }
-        request.valueKind == 1 -> if { "%arg" -> print }
-        request.valueKind == 2 -> if { "%enumdrop$(request.nameRoot)_value" -> print }
-        ", 0" -> println
-        "  %enumdrop$(request.nameRoot)_payload_ptr = getelementptr inbounds %sl.enum.t$(request.typeId), ptr %enumdrop$(request.nameRoot)_slot, i32 0, i32 1" -> println
-        "  %enumdrop$(request.nameRoot)_is0 = icmp eq i32 %enumdrop$(request.nameRoot)_tag, 0" -> println
-        "  br i1 %enumdrop$(request.nameRoot)_is0, label %enumdrop$(request.nameRoot)_tag0, label %enumdrop$(request.nameRoot)_tag1" -> println
-        "enumdrop$(request.nameRoot)_tag0:" -> println
-        (enumType.symbol == 1 and enumType.first >= 0 and (enumType.first -> semanticTypeOwns)) -> if {
-            EnumPayloadDropRequest { enumTypeId: request.typeId, payloadTypeId: enumType.first, nameRoot: request.nameRoot * 10 + 1, pointerRoot: request.nameRoot, bindingIndex: request.bindingIndex, regionIndex: request.regionIndex } -> emitEnumPayloadDrop
-        }
-        "  br label %enumdrop$(request.nameRoot)_merge" -> println
-        "enumdrop$(request.nameRoot)_tag1:" -> println
-        enumType.symbol == 0 -> if {
-            (enumType.first >= 0 and (enumType.first -> semanticTypeOwns)) -> if {
-                EnumPayloadDropRequest { enumTypeId: request.typeId, payloadTypeId: enumType.first, nameRoot: request.nameRoot * 10 + 2, pointerRoot: request.nameRoot, bindingIndex: request.bindingIndex, regionIndex: request.regionIndex } -> emitEnumPayloadDrop
-            }
-        } else {
-            (enumType.second >= 0 and (enumType.second -> semanticTypeOwns)) -> if {
-                EnumPayloadDropRequest { enumTypeId: request.typeId, payloadTypeId: enumType.second, nameRoot: request.nameRoot * 10 + 2, pointerRoot: request.nameRoot, bindingIndex: request.bindingIndex, regionIndex: request.regionIndex } -> emitEnumPayloadDrop
-            }
-        }
-        "  br label %enumdrop$(request.nameRoot)_merge" -> println
-        "enumdrop$(request.nameRoot)_merge:" -> println
+        ")" -> println
     }
     writeSemanticTypeId typeId: Int -> Unit uses Console {
         [typeId, ~] => typeTasks!
@@ -2973,7 +3196,20 @@ emitCore context: move EmitContext -> Unit uses Console {
                     ownedMoveIndex! + 1 => ownedMoveIndex!
                 }
             }
-            (ownedDropBeforeEdge! and ownedDropIsRoot! and not ownedDropMoved! and ownedDropCandidate.kind == 17 and ownedDropCandidate.parent == request.regionIndex and (ownedDropCandidate -> isDynamicArrayType) and ownedDropCandidate.symbol != request.transferredSymbol) -> if {
+            (ownedDropBeforeEdge! and ownedDropIsRoot! and not ownedDropMoved! and not ownedDropHasPartialMoves! and ownedDropCandidate.kind == 17 and ownedDropCandidate.parent == request.regionIndex and ownedDropCandidate.typeId >= 0 and (ownedDropCandidate.typeId -> semanticTypeOwns) and ownedDropCandidate.symbol != request.transferredSymbol) -> if {
+                ownedDropCandidate.flags == 1 -> if {
+                    "  %cleanup$(request.edgeIndex)_b$(ownedDropIndex!)_current = load " -> print
+                    ownedDropCandidate.typeId -> writeSemanticTypeId
+                    ", ptr %slot$(ownedDropRoot!), align " -> print
+                    ownedDropCandidate -> storageAlign -> writeDecimalLine
+                }
+                "  call void @smalllang_drop_t$(ownedDropCandidate.typeId)(" -> print
+                ownedDropCandidate.typeId -> writeSemanticTypeId
+                " " -> print
+                ownedDropCandidate.flags == 1 -> if { "%cleanup$(request.edgeIndex)_b$(ownedDropIndex!)_current" -> print } else { "%v$(ownedDropCandidate.operand0)" -> print }
+                ")" -> println
+            }
+            (ownedDropBeforeEdge! and ownedDropIsRoot! and not ownedDropMoved! and ownedDropCandidate.kind == 17 and ownedDropCandidate.parent == request.regionIndex and ownedDropCandidate.typeId < 0 and (ownedDropCandidate -> isDynamicArrayType) and ownedDropCandidate.symbol != request.transferredSymbol) -> if {
                 ownedDropCandidate.flags == 1 -> if {
                     "  %cleanup$(request.edgeIndex)_b$(ownedDropIndex!)_current = load %sl.array.i32, ptr %slot$(ownedDropRoot!), align " -> print
                     ownedDropCandidate -> storageAlign -> writeDecimalLine
@@ -2983,7 +3219,7 @@ emitCore context: move EmitContext -> Unit uses Console {
                 }
                 "  call void @free(ptr %cleanup$(request.edgeIndex)_b$(ownedDropIndex!))" -> println
             }
-            (ownedDropBeforeEdge! and ownedDropIsRoot! and not ownedDropMoved! and ownedDropCandidate.kind == 17 and ownedDropCandidate.parent == request.regionIndex and (ownedDropCandidate -> isDictionaryType) and ownedDropCandidate.symbol != request.transferredSymbol) -> if {
+            (ownedDropBeforeEdge! and ownedDropIsRoot! and not ownedDropMoved! and ownedDropCandidate.kind == 17 and ownedDropCandidate.parent == request.regionIndex and ownedDropCandidate.typeId < 0 and (ownedDropCandidate -> isDictionaryType) and ownedDropCandidate.symbol != request.transferredSymbol) -> if {
                 ownedDropCandidate.flags == 1 -> if {
                     "  %cleanup$(request.edgeIndex)_b$(ownedDropIndex!)_current = load %sl.dict, ptr %slot$(ownedDropRoot!), align " -> print
                     ownedDropCandidate -> storageAlign -> writeDecimalLine
@@ -2999,7 +3235,7 @@ emitCore context: move EmitContext -> Unit uses Console {
                 }
                 "  call void @free(ptr %cleanup$(request.edgeIndex)_b$(ownedDropIndex!)_values)" -> println
             }
-            (ownedDropBeforeEdge! and ownedDropIsRoot! and not ownedDropMoved! and ownedDropCandidate.kind == 17 and ownedDropCandidate.parent == request.regionIndex and (ownedDropCandidate -> isGenericEnumType) and ownedDropCandidate.symbol != request.transferredSymbol) -> if {
+            (ownedDropBeforeEdge! and ownedDropIsRoot! and not ownedDropMoved! and ownedDropCandidate.kind == 17 and ownedDropCandidate.parent == request.regionIndex and (ownedDropCandidate.typeId < 0 or ownedDropHasPartialMoves!) and (ownedDropCandidate -> isGenericEnumType) and ownedDropCandidate.symbol != request.transferredSymbol) -> if {
                 0 => ownedEnumValueKind!
                 ownedDropCandidate.flags == 1 -> if { 2 => ownedEnumValueKind! }
                 EnumDropRequest {
@@ -3011,7 +3247,7 @@ emitCore context: move EmitContext -> Unit uses Console {
                     regionIndex: request.regionIndex
                 } -> emitEnumDrop
             }
-            (ownedDropBeforeEdge! and ownedDropIsRoot! and not ownedDropMoved! and ownedDropCandidate.kind == 17 and ownedDropCandidate.parent == request.regionIndex and (ownedDropCandidate -> isNominalStructType) and ownedDropCandidate.symbol != request.transferredSymbol) -> if {
+            (ownedDropBeforeEdge! and ownedDropIsRoot! and not ownedDropMoved! and ownedDropCandidate.kind == 17 and ownedDropCandidate.parent == request.regionIndex and (ownedDropCandidate.typeId < 0 or ownedDropHasPartialMoves!) and (ownedDropCandidate -> isNominalStructType) and ownedDropCandidate.symbol != request.transferredSymbol) -> if {
                 request.edgeIndex * 1000 + ownedDropIndex! => ownedDropNameRoot
                 ownedDropCandidate.flags == 1 -> if {
                     "  %dropg$(ownedDropNameRoot)_p0 = load %sl.struct.m$(ownedDropCandidate.typeModule)_s$(ownedDropCandidate.typeSymbol), ptr %slot$(ownedDropRoot!), align " -> print
@@ -3019,8 +3255,9 @@ emitCore context: move EmitContext -> Unit uses Console {
                 }
                 0 => ownedDropValueKind!
                 ownedDropCandidate.flags == 1 -> if { 2 => ownedDropValueKind! }
-                DropGlueRequest {
-                    typeOrigin: ownedDropCandidate.typeOrigin
+            DropGlueRequest {
+                typeId: ownedDropCandidate.typeId
+                typeOrigin: ownedDropCandidate.typeOrigin
                     typeModule: ownedDropCandidate.typeModule
                     typeSymbol: ownedDropCandidate.typeSymbol
                     valueKind: ownedDropValueKind!
@@ -3364,11 +3601,16 @@ emitCore context: move EmitContext -> Unit uses Console {
                     returnOwner.operand1 >= 0 -> if {
                         context.ir[returnOwner.operand1] => returnParameter
                         returnParameter.symbol != returnedSymbol! -> if {
-                            ((returnParameter.typeOrigin == 13 or returnParameter.typeOrigin == 14) and returnParameter.flags % 2 == 1) -> if {
+                            (returnParameter.typeId >= 0 and (returnParameter.typeId -> semanticTypeOwns) and returnParameter.flags % 2 == 1) -> if {
+                                "  call void @smalllang_drop_t$(returnParameter.typeId)(" -> print
+                                returnParameter.typeId -> writeSemanticTypeId
+                                " %arg)" -> println
+                            }
+                            (returnParameter.typeId < 0 and (returnParameter.typeOrigin == 13 or returnParameter.typeOrigin == 14) and returnParameter.flags % 2 == 1) -> if {
                                 "  %return$(regionNodeIndex!)_drop_arg = extractvalue %sl.array.i32 %arg, 0" -> println
                                 "  call void @free(ptr %return$(regionNodeIndex!)_drop_arg)" -> println
                             }
-                            (returnParameter.typeOrigin == 15 and returnParameter.flags % 2 == 1) -> if {
+                            (returnParameter.typeId < 0 and returnParameter.typeOrigin == 15 and returnParameter.flags % 2 == 1) -> if {
                                 "  %return$(regionNodeIndex!)_drop_arg_keys = extractvalue %sl.dict %arg, 0" -> println
                                 "  call void @free(ptr %return$(regionNodeIndex!)_drop_arg_keys)" -> println
                                 "  %return$(regionNodeIndex!)_drop_arg_values = extractvalue %sl.dict %arg, 1" -> println
@@ -3855,8 +4097,21 @@ emitCore context: move EmitContext -> Unit uses Console {
                     context.ir[regionDictionaryCountIndex!].nextOperand => regionDictionaryCountIndex!
                 }
                 regionDictionaryItemCount! / 2 => regionDictionaryLength
-                regionDictionaryLength * (regionNode.typeModule -> storageSize) => regionDictionaryKeyByteLength
-                regionDictionaryLength * (regionNode.typeSymbol -> storageSize) => regionDictionaryValueByteLength
+                -1 => regionDictionaryKeyTypeId!
+                -1 => regionDictionaryValueTypeId!
+                regionNode.typeId >= 0 -> if {
+                    context.types[regionNode.typeId] => canonicalRegionDictionaryType
+                    canonicalRegionDictionaryType.kind == 5 -> if {
+                        canonicalRegionDictionaryType.first => regionDictionaryKeyTypeId!
+                        canonicalRegionDictionaryType.second => regionDictionaryValueTypeId!
+                    }
+                }
+                regionDictionaryLength * (regionNode.typeModule -> storageSize) => regionDictionaryKeyByteLength!
+                regionDictionaryLength * (regionNode.typeSymbol -> storageSize) => regionDictionaryValueByteLength!
+                regionDictionaryKeyTypeId! >= 0 -> if { regionDictionaryLength * context.typeSizes[regionDictionaryKeyTypeId!] => regionDictionaryKeyByteLength! }
+                regionDictionaryValueTypeId! >= 0 -> if { regionDictionaryLength * context.typeSizes[regionDictionaryValueTypeId!] => regionDictionaryValueByteLength! }
+                regionDictionaryKeyByteLength! => regionDictionaryKeyByteLength
+                regionDictionaryValueByteLength! => regionDictionaryValueByteLength
                 "  %v$(regionNodeIndex!)_keys = call ptr @malloc(i64 $regionDictionaryKeyByteLength)" -> println
                 "  %v$(regionNodeIndex!)_values = call ptr @malloc(i64 $regionDictionaryValueByteLength)" -> println
                 regionNode.operand0 => regionDictionaryItemIndex!
@@ -3866,11 +4121,12 @@ emitCore context: move EmitContext -> Unit uses Console {
                     regionDictionaryItemPosition! / 2 => regionDictionaryEntryPosition
                     regionDictionaryItemPosition! % 2 == 0 -> if { "keys" } else { "values" } => regionDictionarySide
                     regionDictionaryItemPosition! % 2 == 0 -> if { regionNode.typeModule } else { regionNode.typeSymbol } => regionDictionaryItemSymbol
+                    regionDictionaryItemPosition! % 2 == 0 -> if { regionDictionaryKeyTypeId! } else { regionDictionaryValueTypeId! } => regionDictionaryItemTypeId
                     "  %v$(regionNodeIndex!)_$(regionDictionarySide)_ptr$(regionDictionaryEntryPosition) = getelementptr " -> print
-                    regionDictionaryItemSymbol -> llvmType -> print
+                    regionDictionaryItemTypeId >= 0 -> if { regionDictionaryItemTypeId -> writeSemanticTypeId } else { regionDictionaryItemSymbol -> llvmType -> print }
                     ", ptr %v$(regionNodeIndex!)_$(regionDictionarySide), i64 $(regionDictionaryEntryPosition)" -> println
                     "  store " -> print
-                    regionDictionaryItemSymbol -> llvmType -> print
+                    regionDictionaryItemTypeId >= 0 -> if { regionDictionaryItemTypeId -> writeSemanticTypeId } else { regionDictionaryItemSymbol -> llvmType -> print }
                     " " -> print
                     (regionDictionaryItem.kind == 3 or regionDictionaryItem.kind == 4) -> if {
                         regionDictionaryItem -> sourceToken => regionDictionaryItemToken
@@ -3881,7 +4137,7 @@ emitCore context: move EmitContext -> Unit uses Console {
                         }
                     } else { "%v$(regionDictionaryItemIndex!)" -> print }
                     ", ptr %v$(regionNodeIndex!)_$(regionDictionarySide)_ptr$(regionDictionaryEntryPosition), align " -> print
-                    regionDictionaryItemSymbol -> legacyStorageAlign -> writeDecimalLine
+                    regionDictionaryItemTypeId >= 0 -> if { context.typeAligns[regionDictionaryItemTypeId] -> writeDecimalLine } else { regionDictionaryItemSymbol -> legacyStorageAlign -> writeDecimalLine }
                     regionDictionaryItem.nextOperand => regionDictionaryItemIndex!
                     regionDictionaryItemPosition! + 1 => regionDictionaryItemPosition!
                 }
@@ -5511,8 +5767,21 @@ emitCore context: move EmitContext -> Unit uses Console {
                         context.ir[dictionaryCountIndex!].nextOperand => dictionaryCountIndex!
                     }
                     dictionaryItemCount! / 2 => dictionaryLength
-                    dictionaryLength * (expression.typeModule -> storageSize) => dictionaryKeyByteLength
-                    dictionaryLength * (expression.typeSymbol -> storageSize) => dictionaryValueByteLength
+                    -1 => dictionaryKeyTypeId!
+                    -1 => dictionaryValueTypeId!
+                    expression.typeId >= 0 -> if {
+                        context.types[expression.typeId] => canonicalDictionaryType
+                        canonicalDictionaryType.kind == 5 -> if {
+                            canonicalDictionaryType.first => dictionaryKeyTypeId!
+                            canonicalDictionaryType.second => dictionaryValueTypeId!
+                        }
+                    }
+                    dictionaryLength * (expression.typeModule -> storageSize) => dictionaryKeyByteLength!
+                    dictionaryLength * (expression.typeSymbol -> storageSize) => dictionaryValueByteLength!
+                    dictionaryKeyTypeId! >= 0 -> if { dictionaryLength * context.typeSizes[dictionaryKeyTypeId!] => dictionaryKeyByteLength! }
+                    dictionaryValueTypeId! >= 0 -> if { dictionaryLength * context.typeSizes[dictionaryValueTypeId!] => dictionaryValueByteLength! }
+                    dictionaryKeyByteLength! => dictionaryKeyByteLength
+                    dictionaryValueByteLength! => dictionaryValueByteLength
                     "  %v$(expressionIndex!)_keys = call ptr @malloc(i64 $dictionaryKeyByteLength)" -> println
                     "  %v$(expressionIndex!)_values = call ptr @malloc(i64 $dictionaryValueByteLength)" -> println
                     expression.operand0 => dictionaryItemIndex!
@@ -5522,11 +5791,12 @@ emitCore context: move EmitContext -> Unit uses Console {
                         dictionaryItemPosition! / 2 => dictionaryEntryPosition
                         dictionaryItemPosition! % 2 == 0 -> if { "keys" } else { "values" } => dictionarySide
                         dictionaryItemPosition! % 2 == 0 -> if { expression.typeModule } else { expression.typeSymbol } => dictionaryItemSymbol
+                        dictionaryItemPosition! % 2 == 0 -> if { dictionaryKeyTypeId! } else { dictionaryValueTypeId! } => dictionaryItemTypeId
                         "  %v$(expressionIndex!)_$(dictionarySide)_ptr$(dictionaryEntryPosition) = getelementptr " -> print
-                        dictionaryItemSymbol -> llvmType -> print
+                        dictionaryItemTypeId >= 0 -> if { dictionaryItemTypeId -> writeSemanticTypeId } else { dictionaryItemSymbol -> llvmType -> print }
                         ", ptr %v$(expressionIndex!)_$(dictionarySide), i64 $(dictionaryEntryPosition)" -> println
                         "  store " -> print
-                        dictionaryItemSymbol -> llvmType -> print
+                        dictionaryItemTypeId >= 0 -> if { dictionaryItemTypeId -> writeSemanticTypeId } else { dictionaryItemSymbol -> llvmType -> print }
                         " " -> print
                         (dictionaryItem.kind == 3 or dictionaryItem.kind == 4) -> if {
                             dictionaryItem -> sourceToken => dictionaryItemToken
@@ -5539,7 +5809,7 @@ emitCore context: move EmitContext -> Unit uses Console {
                             (dictionaryItem.kind == 5 and function.operand1 >= 0 and dictionaryItem.symbol == context.ir[function.operand1].symbol) -> if { "%arg" -> print } else { "%v$(dictionaryItemIndex!)" -> print }
                         }
                         ", ptr %v$(expressionIndex!)_$(dictionarySide)_ptr$(dictionaryEntryPosition), align " -> print
-                        dictionaryItemSymbol -> legacyStorageAlign -> writeDecimalLine
+                        dictionaryItemTypeId >= 0 -> if { context.typeAligns[dictionaryItemTypeId] -> writeDecimalLine } else { dictionaryItemSymbol -> legacyStorageAlign -> writeDecimalLine }
                         dictionaryItem.nextOperand => dictionaryItemIndex!
                         dictionaryItemPosition! + 1 => dictionaryItemPosition!
                     }
@@ -6542,18 +6812,24 @@ emitCore context: move EmitContext -> Unit uses Console {
                         dropMoveIndex! + 1 => dropMoveIndex!
                     }
                 }
-                (dropCandidate.kind == 14 and (dropCandidate.typeOrigin == 13 or dropCandidate.typeOrigin == 14) and dropCandidate.parent == function.operand0 and dropIndex! != returnValueIndex) -> if {
+                ((dropCandidate.kind == 12 or dropCandidate.kind == 14 or dropCandidate.kind == 16 or dropCandidate.kind == 26) and dropCandidate.typeId >= 0 and (dropCandidate.typeId -> semanticTypeOwns) and dropCandidate.parent == function.operand0 and dropIndex! != returnValueIndex) -> if {
+                    "  call void @smalllang_drop_t$(dropCandidate.typeId)(" -> print
+                    dropCandidate.typeId -> writeSemanticTypeId
+                    " %v$(dropIndex!))" -> println
+                }
+                (dropCandidate.typeId < 0 and dropCandidate.kind == 14 and (dropCandidate.typeOrigin == 13 or dropCandidate.typeOrigin == 14) and dropCandidate.parent == function.operand0 and dropIndex! != returnValueIndex) -> if {
                     "  %drop$(dropIndex!) = extractvalue %sl.array.i32 %v$(dropIndex!), 0" -> println
                     "  call void @free(ptr %drop$(dropIndex!))" -> println
                 }
-                (dropCandidate.kind == 16 and dropCandidate.typeOrigin == 15 and dropCandidate.parent == function.operand0 and dropIndex! != returnValueIndex) -> if {
+                (dropCandidate.typeId < 0 and dropCandidate.kind == 16 and dropCandidate.typeOrigin == 15 and dropCandidate.parent == function.operand0 and dropIndex! != returnValueIndex) -> if {
                     "  %drop$(dropIndex!)_keys = extractvalue %sl.dict %v$(dropIndex!), 0" -> println
                     "  call void @free(ptr %drop$(dropIndex!)_keys)" -> println
                     "  %drop$(dropIndex!)_values = extractvalue %sl.dict %v$(dropIndex!), 1" -> println
                     "  call void @free(ptr %drop$(dropIndex!)_values)" -> println
                 }
-                (dropCandidate.kind == 12 and (dropCandidate.typeOrigin == 0 or dropCandidate.typeOrigin == 2) and dropCandidate.parent == function.operand0 and dropIndex! != returnValueIndex) -> if {
+                (dropCandidate.typeId < 0 and dropCandidate.kind == 12 and (dropCandidate.typeOrigin == 0 or dropCandidate.typeOrigin == 2) and dropCandidate.parent == function.operand0 and dropIndex! != returnValueIndex) -> if {
                     DropGlueRequest {
+                        typeId: dropCandidate.typeId
                         typeOrigin: dropCandidate.typeOrigin
                         typeModule: dropCandidate.typeModule
                         typeSymbol: dropCandidate.typeSymbol
@@ -6569,7 +6845,20 @@ emitCore context: move EmitContext -> Unit uses Console {
                         hasPartialMoves: false
                     } -> emitDropGlue
                 }
-                (dropCandidate.kind == 17 and dropCandidateIsRoot! and (dropCandidate.typeOrigin == 13 or dropCandidate.typeOrigin == 14) and dropCandidate.parent == function.operand0 and not dropCandidateMoved! and not dropCandidateReturned!) -> if {
+                (dropCandidate.kind == 17 and dropCandidateIsRoot! and dropCandidate.typeId >= 0 and (dropCandidate.typeId -> semanticTypeOwns) and dropCandidate.parent == function.operand0 and not dropCandidateMoved! and not dropCandidateReturned! and not dropCandidateHasPartialMoves!) -> if {
+                    dropCandidate.flags == 1 -> if {
+                        "  %drop$(dropIndex!)_current = load " -> print
+                        dropCandidate.typeId -> writeSemanticTypeId
+                        ", ptr %slot$(dropCandidateRoot!), align " -> print
+                        dropCandidate -> storageAlign -> writeDecimalLine
+                    }
+                    "  call void @smalllang_drop_t$(dropCandidate.typeId)(" -> print
+                    dropCandidate.typeId -> writeSemanticTypeId
+                    " " -> print
+                    dropCandidate.flags == 1 -> if { "%drop$(dropIndex!)_current" -> print } else { "%v$(dropCandidate.operand0)" -> print }
+                    ")" -> println
+                }
+                (dropCandidate.kind == 17 and dropCandidateIsRoot! and dropCandidate.typeId < 0 and (dropCandidate.typeOrigin == 13 or dropCandidate.typeOrigin == 14) and dropCandidate.parent == function.operand0 and not dropCandidateMoved! and not dropCandidateReturned!) -> if {
                     dropCandidate.flags == 1 -> if {
                         "  %drop$(dropIndex!)_current = load %sl.array.i32, ptr %slot$(dropCandidateRoot!), align " -> print
                         dropCandidate -> storageAlign -> writeDecimalLine
@@ -6579,7 +6868,7 @@ emitCore context: move EmitContext -> Unit uses Console {
                     }
                     "  call void @free(ptr %drop$(dropIndex!))" -> println
                 }
-                (dropCandidate.kind == 17 and dropCandidateIsRoot! and dropCandidate.typeOrigin == 15 and dropCandidate.parent == function.operand0 and not dropCandidateMoved! and not dropCandidateReturned!) -> if {
+                (dropCandidate.kind == 17 and dropCandidateIsRoot! and dropCandidate.typeId < 0 and dropCandidate.typeOrigin == 15 and dropCandidate.parent == function.operand0 and not dropCandidateMoved! and not dropCandidateReturned!) -> if {
                     dropCandidate.flags == 1 -> if {
                         "  %drop$(dropIndex!)_current = load %sl.dict, ptr %slot$(dropCandidateRoot!), align " -> print
                         dropCandidate -> storageAlign -> writeDecimalLine
@@ -6595,7 +6884,7 @@ emitCore context: move EmitContext -> Unit uses Console {
                     }
                     "  call void @free(ptr %drop$(dropIndex!)_values)" -> println
                 }
-                (dropCandidate.kind == 17 and dropCandidateIsRoot! and (dropCandidate -> isGenericEnumType) and dropCandidate.parent == function.operand0 and not dropCandidateMoved! and not dropCandidateReturned!) -> if {
+                (dropCandidate.kind == 17 and dropCandidateIsRoot! and (dropCandidate.typeId < 0 or dropCandidateHasPartialMoves!) and (dropCandidate -> isGenericEnumType) and dropCandidate.parent == function.operand0 and not dropCandidateMoved! and not dropCandidateReturned!) -> if {
                     0 => dropEnumValueKind!
                     dropCandidate.flags == 1 -> if { 2 => dropEnumValueKind! }
                     EnumDropRequest {
@@ -6607,7 +6896,7 @@ emitCore context: move EmitContext -> Unit uses Console {
                         regionIndex: function.operand0
                     } -> emitEnumDrop
                 }
-                (dropCandidate.kind == 17 and dropCandidateIsRoot! and (dropCandidate.typeOrigin == 0 or dropCandidate.typeOrigin == 2) and dropCandidate.parent == function.operand0 and not dropCandidateMoved! and not dropCandidateReturned!) -> if {
+                (dropCandidate.kind == 17 and dropCandidateIsRoot! and (dropCandidate.typeId < 0 or dropCandidateHasPartialMoves!) and (dropCandidate.typeOrigin == 0 or dropCandidate.typeOrigin == 2) and dropCandidate.parent == function.operand0 and not dropCandidateMoved! and not dropCandidateReturned!) -> if {
                     dropCandidate.flags == 1 -> if {
                         "  %dropg$(dropIndex!)_p0 = load %sl.struct.m$(dropCandidate.typeModule)_s$(dropCandidate.typeSymbol), ptr %slot$(dropCandidateRoot!), align " -> print
                         dropCandidate -> storageAlign -> writeDecimalLine
@@ -6615,6 +6904,7 @@ emitCore context: move EmitContext -> Unit uses Console {
                     0 => dropCandidateValueKind!
                     dropCandidate.flags == 1 -> if { 2 => dropCandidateValueKind! }
                     DropGlueRequest {
+                        typeId: dropCandidate.typeId
                         typeOrigin: dropCandidate.typeOrigin
                         typeModule: dropCandidate.typeModule
                         typeSymbol: dropCandidate.typeSymbol
@@ -6643,13 +6933,20 @@ emitCore context: move EmitContext -> Unit uses Console {
                     (ownedParameterMove.memberIr < 0 and ownedParameterMove.sourceModule == ownedParameter.sourceModule and ownedParameterMove.symbol == ownedParameter.symbol and ownedParameterMove.regionIr == function.operand0) -> if { true => ownedParameterMoved! }
                     ownedParameterMoveIndex! + 1 => ownedParameterMoveIndex!
                 }
-                ((ownedParameter.typeOrigin == 13 or ownedParameter.typeOrigin == 14) and ownedParameter.flags % 2 == 1 and not ownedParameterMoved!) -> if {
+                (ownedParameter.typeId >= 0 and (ownedParameter.typeId -> semanticTypeOwns) and ownedParameter.flags % 2 == 1 and not ownedParameterMoved! and not ownedParameterHasPartialMoves!) -> if {
+                    not (returnOperand.kind == 5 and returnOperand.symbol == ownedParameter.symbol) -> if {
+                        "  call void @smalllang_drop_t$(ownedParameter.typeId)(" -> print
+                        ownedParameter.typeId -> writeSemanticTypeId
+                        " %arg)" -> println
+                    }
+                }
+                (ownedParameter.typeId < 0 and (ownedParameter.typeOrigin == 13 or ownedParameter.typeOrigin == 14) and ownedParameter.flags % 2 == 1 and not ownedParameterMoved!) -> if {
                     not (returnOperand.kind == 5 and returnOperand.symbol == ownedParameter.symbol) -> if {
                         "  %drop_arg = extractvalue %sl.array.i32 %arg, 0" -> println
                         "  call void @free(ptr %drop_arg)" -> println
                     }
                 }
-                (ownedParameter.typeOrigin == 15 and ownedParameter.flags % 2 == 1 and not ownedParameterMoved!) -> if {
+                (ownedParameter.typeId < 0 and ownedParameter.typeOrigin == 15 and ownedParameter.flags % 2 == 1 and not ownedParameterMoved!) -> if {
                     not (returnOperand.kind == 5 and returnOperand.symbol == ownedParameter.symbol) -> if {
                         "  %drop_arg_keys = extractvalue %sl.dict %arg, 0" -> println
                         "  call void @free(ptr %drop_arg_keys)" -> println
@@ -6657,7 +6954,7 @@ emitCore context: move EmitContext -> Unit uses Console {
                         "  call void @free(ptr %drop_arg_values)" -> println
                     }
                 }
-                ((ownedParameter -> isGenericEnumType) and ownedParameter.flags % 2 == 1 and not ownedParameterMoved!) -> if {
+                ((ownedParameter.typeId < 0 or ownedParameterHasPartialMoves!) and (ownedParameter -> isGenericEnumType) and ownedParameter.flags % 2 == 1 and not ownedParameterMoved!) -> if {
                     not (returnOperand.kind == 5 and returnOperand.symbol == ownedParameter.symbol) -> if {
                         EnumDropRequest {
                             typeId: ownedParameter.typeId
@@ -6669,9 +6966,10 @@ emitCore context: move EmitContext -> Unit uses Console {
                         } -> emitEnumDrop
                     }
                 }
-                ((ownedParameter.typeOrigin == 0 or ownedParameter.typeOrigin == 2) and ownedParameter.flags % 2 == 1 and not ownedParameterMoved!) -> if {
+                ((ownedParameter.typeId < 0 or ownedParameterHasPartialMoves!) and (ownedParameter.typeOrigin == 0 or ownedParameter.typeOrigin == 2) and ownedParameter.flags % 2 == 1 and not ownedParameterMoved!) -> if {
                     not (returnOperand.kind == 5 and returnOperand.symbol == ownedParameter.symbol) -> if {
                         DropGlueRequest {
+                            typeId: ownedParameter.typeId
                             typeOrigin: ownedParameter.typeOrigin
                             typeModule: ownedParameter.typeModule
                             typeSymbol: ownedParameter.typeSymbol
@@ -6794,6 +7092,58 @@ emitCore context: move EmitContext -> Unit uses Console {
         intrinsicModuleIdentity.pathHash == UInt64(12254170256457402476) -> if { intrinsicModuleIdentity.sourceIndex => intrinsicRuntimeModule! }
         intrinsicRuntimeSearch! + 1 => intrinsicRuntimeSearch!
     }
+    [Int; ~] => dropTypeActive!
+    0 => dropTypeActiveIndex!
+    dropTypeActiveIndex! < (context.types -> len) -> while {
+        dropTypeActive! -> push(0)
+        dropTypeActiveIndex! + 1 => dropTypeActiveIndex!
+    }
+    0 => dropTypeSeedIndex!
+    dropTypeSeedIndex! < (context.ir -> len) -> while {
+        context.ir[dropTypeSeedIndex!] => dropTypeSeed
+        (dropTypeSeed.typeId >= 0 and dropTypeSeed.typeId < (dropTypeActive! -> len) and (dropTypeSeed -> ownsType)) -> if {
+            1 => dropTypeActive![dropTypeSeed.typeId]
+        }
+        dropTypeSeedIndex! + 1 => dropTypeSeedIndex!
+    }
+    true => dropTypeChanged!
+    dropTypeChanged! -> while {
+        false => dropTypeChanged!
+        0 => dropTypeClosureIndex!
+        dropTypeClosureIndex! < (context.types -> len) -> while {
+            dropTypeActive![dropTypeClosureIndex!] == 1 -> if {
+                context.types[dropTypeClosureIndex!] => dropClosureType
+                (dropClosureType.kind == 3 or dropClosureType.kind == 4 or dropClosureType.kind == 5 or dropClosureType.kind == 6 or dropClosureType.kind == 7) -> if {
+                    (dropClosureType.first >= 0 and dropClosureType.first < (dropTypeActive! -> len) and context.typeTraits[dropClosureType.first] % 2 == 1 and dropTypeActive![dropClosureType.first] == 0) -> if {
+                        1 => dropTypeActive![dropClosureType.first]
+                        true => dropTypeChanged!
+                    }
+                    (dropClosureType.second >= 0 and dropClosureType.second < (dropTypeActive! -> len) and context.typeTraits[dropClosureType.second] % 2 == 1 and dropTypeActive![dropClosureType.second] == 0) -> if {
+                        1 => dropTypeActive![dropClosureType.second]
+                        true => dropTypeChanged!
+                    }
+                }
+                (dropClosureType.kind == 1 and (dropClosureType.origin == 0 or dropClosureType.origin == 2)) -> if {
+                    0 => dropClosureFieldIndex!
+                    dropClosureFieldIndex! < (context.fields -> len) -> while {
+                        context.fields[dropClosureFieldIndex!] => dropClosureField
+                        (dropClosureField.status == 0 and dropClosureField.ownerType == dropTypeClosureIndex! and dropClosureField.fieldType >= 0 and dropClosureField.fieldType < (dropTypeActive! -> len) and context.typeTraits[dropClosureField.fieldType] % 2 == 1 and dropTypeActive![dropClosureField.fieldType] == 0) -> if {
+                            1 => dropTypeActive![dropClosureField.fieldType]
+                            true => dropTypeChanged!
+                        }
+                        dropClosureFieldIndex! + 1 => dropClosureFieldIndex!
+                    }
+                }
+            }
+            dropTypeClosureIndex! + 1 => dropTypeClosureIndex!
+        }
+    }
+    false => usesOwnedDropRuntime!
+    0 => ownedDropRuntimeIndex!
+    ownedDropRuntimeIndex! < (context.types -> len) -> while {
+        (dropTypeActive![ownedDropRuntimeIndex!] == 1 and (context.typeTraits[ownedDropRuntimeIndex!] / 2) % 2 == 1) -> if { true => usesOwnedDropRuntime! }
+        ownedDropRuntimeIndex! + 1 => ownedDropRuntimeIndex!
+    }
     false => usesSourceText!
     0 => sourceTextTypeSearch!
     sourceTextTypeSearch! < (context.ir -> len) -> while {
@@ -6856,7 +7206,7 @@ emitCore context: move EmitContext -> Unit uses Console {
     usesDynamicArray! -> if {
         "%sl.array.i32 = type { ptr, i64, i64 }" -> println
     }
-    (usesDynamicArray! or usesSourceText! or usesComputePool or intrinsicRuntimeModule! >= 0) -> if {
+    (usesDynamicArray! or usesSourceText! or usesComputePool or intrinsicRuntimeModule! >= 0 or usesOwnedDropRuntime!) -> if {
         "declare ptr @malloc(i64)" -> println
         usesArrayPush! -> if { "declare ptr @realloc(ptr, i64)" -> println }
         "declare void @free(ptr)" -> println
@@ -6880,11 +7230,12 @@ emitCore context: move EmitContext -> Unit uses Console {
     }
     usesDictionary! -> if {
         "%sl.dict = type { ptr, ptr, i64, i64 }" -> println
-        (not usesDynamicArray! and intrinsicRuntimeModule! < 0) -> if {
+        (not usesDynamicArray! and not usesSourceText! and not usesComputePool and intrinsicRuntimeModule! < 0 and not usesOwnedDropRuntime!) -> if {
             "declare ptr @malloc(i64)" -> println
             "declare void @free(ptr)" -> println
         }
     }
+    dropTypeActive! -> emitSemanticDropHelpers
     (usesDictionary! or usesEnumMatch! or usesSourceText!) -> if { "declare void @llvm.trap()" -> println }
     false => usesText!
     0 => textTypeSearch!

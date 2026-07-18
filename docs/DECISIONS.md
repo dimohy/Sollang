@@ -6138,3 +6138,36 @@ solution has zero warnings and errors, and the full Linux suite passes 526/526.
 This closes the cross-target Stage2 runtime gate but does not replace the
 remaining canonical ownership, generic-container, package, tooling, and
 library work, so the formal roadmap remains 48.5/60 (80.8%).
+
+## D191 - Generate Recursive Drop Witnesses From Canonical Type IDs
+
+Status: implemented and cross-target verified
+Date: 2026-07-19
+
+The self-host LLVM emitter derives destruction from canonical semantic type IDs
+instead of the shallow spelling carried by an individual IR value. Before
+emission it computes the dependency closure of active owned types, then emits a
+specialized `smalllang_drop_t<ID>` witness for every reachable dynamic array,
+fixed array, dictionary, box, nominal struct, `Option`, `Result`, and
+`SourceText` type. This keeps values metadata-free while giving each concrete
+generic instantiation the exact recursive ownership behavior it requires.
+
+Dynamic-array witnesses destroy owned elements before freeing the backing
+allocation. Dictionary witnesses independently destroy owned keys and values,
+then free both backing arrays. Aggregate witnesses recurse through their owned
+fields or active payload. Ordinary bindings, parameters, early returns, loop
+edges, and region cleanup invoke the same witnesses. A nominal struct with a
+partial move deliberately retains field-path cleanup; calling the whole-value
+witness there would destroy a field that has already transferred ownership.
+
+Example 400 covers a dynamic array of owned structs and a dictionary whose
+values are owned dynamic arrays. Its generated LLVM assembles and executes on
+Windows and Linux. `scripts/verify-recursive-container-drop.ps1` additionally
+runs the Linux product under AddressSanitizer and LeakSanitizer, detecting both
+leaks and double frees. The Windows and Linux full suites pass 527/527. The
+complete Stage2 modules remain differential-hash identical to Stage1 and pass
+their 6/6 and 5/5 scripts at 8,185,153 and 8,185,015 LLVM bytes respectively.
+
+The focused generic-container migration advances from 5/8 to 6/8 checks (75%).
+Owned indexed extraction and fixed-array generic function contracts remain, so
+the canonical roadmap stays 48.5/60 equivalent gates (80.8%).

@@ -431,6 +431,99 @@ done:
 declare ptr @malloc(i64)
 declare ptr @realloc(ptr, i64)
 declare void @free(ptr)
+define internal void @smalllang_drop_t24(%sl.source_text %value) {
+entry:
+  call void @sl_runtime_unmap_text(%sl.source_text %value)
+  ret void
+}
+define internal void @smalllang_drop_t25(%sl.source_text %value) {
+entry:
+  call void @sl_runtime_unmap_text(%sl.source_text %value)
+  ret void
+}
+define internal void @smalllang_drop_t26(%sl.struct.m0_s0 %value) {
+entry:
+  %field0 = extractvalue %sl.struct.m0_s0 %value, 0
+  call void @smalllang_drop_t27(%sl.array.i32 %field0)
+  ret void
+}
+define internal void @smalllang_drop_t27(%sl.array.i32 %value) {
+entry:
+  %data = extractvalue %sl.array.i32 %value, 0
+  %length = extractvalue %sl.array.i32 %value, 1
+  call void @free(ptr %data)
+  ret void
+}
+define internal void @smalllang_drop_t28(%sl.array.i32 %value) {
+entry:
+  %data = extractvalue %sl.array.i32 %value, 0
+  %length = extractvalue %sl.array.i32 %value, 1
+  br label %loop
+loop:
+  %index = phi i64 [ 0, %entry ], [ %next, %continue ]
+  %in_range = icmp ult i64 %index, %length
+  br i1 %in_range, label %item, label %done
+item:
+  %slot = getelementptr %sl.source_text, ptr %data, i64 %index
+  %element = load %sl.source_text, ptr %slot, align 8
+  call void @smalllang_drop_t25(%sl.source_text %element)
+  br label %continue
+continue:
+  %next = add i64 %index, 1
+  br label %loop
+done:
+  call void @free(ptr %data)
+  ret void
+}
+define internal void @smalllang_drop_t29(%sl.array.i32 %value) {
+entry:
+  %data = extractvalue %sl.array.i32 %value, 0
+  %length = extractvalue %sl.array.i32 %value, 1
+  br label %loop
+loop:
+  %index = phi i64 [ 0, %entry ], [ %next, %continue ]
+  %in_range = icmp ult i64 %index, %length
+  br i1 %in_range, label %item, label %done
+item:
+  %slot = getelementptr %sl.struct.m0_s0, ptr %data, i64 %index
+  %element = load %sl.struct.m0_s0, ptr %slot, align 8
+  call void @smalllang_drop_t26(%sl.struct.m0_s0 %element)
+  br label %continue
+continue:
+  %next = add i64 %index, 1
+  br label %loop
+done:
+  call void @free(ptr %data)
+  ret void
+}
+define internal void @smalllang_drop_t30(%sl.array.i32 %value) {
+entry:
+  %data = extractvalue %sl.array.i32 %value, 0
+  %length = extractvalue %sl.array.i32 %value, 1
+  call void @free(ptr %data)
+  ret void
+}
+define internal void @smalllang_drop_t31(%sl.array.i32 %value) {
+entry:
+  %data = extractvalue %sl.array.i32 %value, 0
+  %length = extractvalue %sl.array.i32 %value, 1
+  br label %loop
+loop:
+  %index = phi i64 [ 0, %entry ], [ %next, %continue ]
+  %in_range = icmp ult i64 %index, %length
+  br i1 %in_range, label %item, label %done
+item:
+  %slot = getelementptr %sl.source_text, ptr %data, i64 %index
+  %element = load %sl.source_text, ptr %slot, align 8
+  call void @smalllang_drop_t24(%sl.source_text %element)
+  br label %continue
+continue:
+  %next = add i64 %index, 1
+  br label %loop
+done:
+  call void @free(ptr %data)
+  ret void
+}
 declare void @llvm.trap()
 %sl.text = type { ptr, i64 }
 @sl_str_48 = private unnamed_addr constant [5 x i8] c"lexer"
@@ -539,8 +632,7 @@ entry:
   %v30_0 = insertvalue %sl.array.i32 poison, ptr %v30_data, 0
   %v30_1 = insertvalue %sl.array.i32 %v30_0, i64 %v30_length, 1
   %v30 = insertvalue %sl.array.i32 %v30_1, i64 %v30_length, 2
-  %drop_arg = extractvalue %sl.array.i32 %arg, 0
-  call void @free(ptr %drop_arg)
+  call void @smalllang_drop_t28(%sl.array.i32 %arg)
   ret %sl.array.i32 %v30
 }
 define i32 @main() {
@@ -627,8 +719,7 @@ while44_body:
   %v59 = add i32 %v60, 1
   store i32 %v59, ptr %slot34, align 4
   %cleanup443_b38_current = load %sl.array.i32, ptr %slot38, align 8
-  %cleanup443_b38 = extractvalue %sl.array.i32 %cleanup443_b38_current, 0
-  call void @free(ptr %cleanup443_b38)
+  call void @smalllang_drop_t29(%sl.array.i32 %cleanup443_b38_current)
   br label %while44_header
 while44_exit:
   call void @sl_runtime_print(ptr @sl_str_63, i64 27, i1 true)

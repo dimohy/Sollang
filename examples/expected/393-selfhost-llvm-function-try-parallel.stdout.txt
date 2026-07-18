@@ -430,6 +430,30 @@ done:
 %sl.array.i32 = type { ptr, i64, i64 }
 declare ptr @malloc(i64)
 declare void @free(ptr)
+define internal void @smalllang_drop_t26(%sl.array.i32 %value) {
+entry:
+  %data = extractvalue %sl.array.i32 %value, 0
+  %length = extractvalue %sl.array.i32 %value, 1
+  call void @free(ptr %data)
+  ret void
+}
+define internal void @smalllang_drop_t27(%sl.enum.t27 %value) {
+entry:
+  %slot = alloca %sl.enum.t27, align 8
+  store %sl.enum.t27 %value, ptr %slot, align 8
+  %tag = extractvalue %sl.enum.t27 %value, 0
+  %payload = getelementptr inbounds %sl.enum.t27, ptr %slot, i32 0, i32 1
+  %is0 = icmp eq i32 %tag, 0
+  br i1 %is0, label %tag0, label %tag1
+tag0:
+  %first = load %sl.array.i32, ptr %payload, align 8
+  call void @smalllang_drop_t26(%sl.array.i32 %first)
+  br label %done
+tag1:
+  br label %done
+done:
+  ret void
+}
 declare void @llvm.trap()
 %sl.text = type { ptr, i64 }
 @sl_str_36 = private unnamed_addr constant [8 x i8] c"function"
@@ -636,20 +660,7 @@ match21_merge:
   %v19_runtime_ptr = extractvalue %sl.text %v21, 0
   %v19_runtime_len = extractvalue %sl.text %v21, 1
   call void @sl_runtime_print(ptr %v19_runtime_ptr, i64 %v19_runtime_len, i1 true)
-  %enumdrop136014_slot = alloca %sl.enum.t27, align 8
-  store %sl.enum.t27 %v15, ptr %enumdrop136014_slot, align 8
-  %enumdrop136014_tag = extractvalue %sl.enum.t27 %v15, 0
-  %enumdrop136014_payload_ptr = getelementptr inbounds %sl.enum.t27, ptr %enumdrop136014_slot, i32 0, i32 1
-  %enumdrop136014_is0 = icmp eq i32 %enumdrop136014_tag, 0
-  br i1 %enumdrop136014_is0, label %enumdrop136014_tag0, label %enumdrop136014_tag1
-enumdrop136014_tag0:
-  %enumdrop1360141_payload = load %sl.array.i32, ptr %enumdrop136014_payload_ptr, align 8
-  %enumdrop1360141_data = extractvalue %sl.array.i32 %enumdrop1360141_payload, 0
-  call void @free(ptr %enumdrop1360141_data)
-  br label %enumdrop136014_merge
-enumdrop136014_tag1:
-  br label %enumdrop136014_merge
-enumdrop136014_merge:
+  call void @smalllang_drop_t27(%sl.enum.t27 %v15)
   call void @smalllang_compute_shutdown()
   call void @sl_runtime_flush_stdout()
   ret i32 0

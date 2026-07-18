@@ -5,6 +5,40 @@ target triple = "x86_64-pc-windows-msvc"
 declare ptr @malloc(i64)
 declare ptr @realloc(ptr, i64)
 declare void @free(ptr)
+define internal void @smalllang_drop_t25(%sl.array.i32 %value) {
+entry:
+  %data = extractvalue %sl.array.i32 %value, 0
+  %length = extractvalue %sl.array.i32 %value, 1
+  call void @free(ptr %data)
+  ret void
+}
+define internal void @smalllang_drop_t26(%sl.struct.m0_s0 %value) {
+entry:
+  %field0 = extractvalue %sl.struct.m0_s0 %value, 0
+  call void @smalllang_drop_t25(%sl.array.i32 %field0)
+  ret void
+}
+define internal void @smalllang_drop_t27(%sl.array.i32 %value) {
+entry:
+  %data = extractvalue %sl.array.i32 %value, 0
+  %length = extractvalue %sl.array.i32 %value, 1
+  br label %loop
+loop:
+  %index = phi i64 [ 0, %entry ], [ %next, %continue ]
+  %in_range = icmp ult i64 %index, %length
+  br i1 %in_range, label %item, label %done
+item:
+  %slot = getelementptr %sl.struct.m0_s0, ptr %data, i64 %index
+  %element = load %sl.struct.m0_s0, ptr %slot, align 8
+  call void @smalllang_drop_t26(%sl.struct.m0_s0 %element)
+  br label %continue
+continue:
+  %next = add i64 %index, 1
+  br label %loop
+done:
+  call void @free(ptr %data)
+  ret void
+}
 define i32 @sl_m0_s2() {
 entry:
   %slot2 = alloca %sl.array.i32, align 8
@@ -90,8 +124,7 @@ each15_continue:
 each15_exit:
   %v35 = load i32, ptr %slot3, align 4
   %drop2_current = load %sl.array.i32, ptr %slot2, align 8
-  %drop2 = extractvalue %sl.array.i32 %drop2_current, 0
-  call void @free(ptr %drop2)
+  call void @smalllang_drop_t27(%sl.array.i32 %drop2_current)
   ret i32 %v35
 }
 define i32 @main() {

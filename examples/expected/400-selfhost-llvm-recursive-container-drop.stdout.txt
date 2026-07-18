@@ -1,0 +1,139 @@
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu"
+@sl_runtime_newline = private constant [1 x i8] c"\0A"
+declare i64 @write(i32, ptr, i64)
+define internal void @sl_runtime_flush_stdout() {
+entry:
+  ret void
+}
+define internal void @sl_runtime_print(ptr %data, i64 %len, i1 %newline) {
+entry:
+  %written = call i64 @write(i32 1, ptr %data, i64 %len)
+  br i1 %newline, label %write_newline, label %done
+write_newline:
+  %newline_written = call i64 @write(i32 1, ptr @sl_runtime_newline, i64 1)
+  br label %done
+done:
+  ret void
+}
+%sl.struct.m0_s0 = type { %sl.array.i32 }
+%sl.array.i32 = type { ptr, i64, i64 }
+declare ptr @malloc(i64)
+declare void @free(ptr)
+%sl.dict = type { ptr, ptr, i64, i64 }
+define internal void @smalllang_drop_t25(%sl.struct.m0_s0 %value) {
+entry:
+  %field0 = extractvalue %sl.struct.m0_s0 %value, 0
+  call void @smalllang_drop_t26(%sl.array.i32 %field0)
+  ret void
+}
+define internal void @smalllang_drop_t26(%sl.array.i32 %value) {
+entry:
+  %data = extractvalue %sl.array.i32 %value, 0
+  %length = extractvalue %sl.array.i32 %value, 1
+  call void @free(ptr %data)
+  ret void
+}
+define internal void @smalllang_drop_t27(%sl.array.i32 %value) {
+entry:
+  %data = extractvalue %sl.array.i32 %value, 0
+  %length = extractvalue %sl.array.i32 %value, 1
+  br label %loop
+loop:
+  %index = phi i64 [ 0, %entry ], [ %next, %continue ]
+  %in_range = icmp ult i64 %index, %length
+  br i1 %in_range, label %item, label %done
+item:
+  %slot = getelementptr %sl.struct.m0_s0, ptr %data, i64 %index
+  %element = load %sl.struct.m0_s0, ptr %slot, align 8
+  call void @smalllang_drop_t25(%sl.struct.m0_s0 %element)
+  br label %continue
+continue:
+  %next = add i64 %index, 1
+  br label %loop
+done:
+  call void @free(ptr %data)
+  ret void
+}
+define internal void @smalllang_drop_t28(%sl.dict %value) {
+entry:
+  %keys = extractvalue %sl.dict %value, 0
+  %values = extractvalue %sl.dict %value, 1
+  %length = extractvalue %sl.dict %value, 2
+  br label %loop
+loop:
+  %index = phi i64 [ 0, %entry ], [ %next, %continue ]
+  %in_range = icmp ult i64 %index, %length
+  br i1 %in_range, label %item, label %done
+item:
+  %value_slot = getelementptr %sl.array.i32, ptr %values, i64 %index
+  %item_value = load %sl.array.i32, ptr %value_slot, align 8
+  call void @smalllang_drop_t26(%sl.array.i32 %item_value)
+  br label %continue
+continue:
+  %next = add i64 %index, 1
+  br label %loop
+done:
+  call void @free(ptr %keys)
+  call void @free(ptr %values)
+  ret void
+}
+declare void @llvm.trap()
+%sl.text = type { ptr, i64 }
+@sl_str_30 = private unnamed_addr constant [15 x i8] c"recursive drops"
+define i32 @sl_m0_s2(%sl.array.i32 %arg) {
+entry:
+  call void @smalllang_drop_t27(%sl.array.i32 %arg)
+  ret i32 1
+}
+define i32 @sl_m0_s3(%sl.dict %arg) {
+entry:
+  call void @smalllang_drop_t28(%sl.dict %arg)
+  ret i32 2
+}
+define %sl.array.i32 @sl_m0_s4() {
+entry:
+  %v12_data = call ptr @malloc(i64 8)
+  %v12_ptr0 = getelementptr i32, ptr %v12_data, i64 0
+  store i32 10, ptr %v12_ptr0, align 4
+  %v12_ptr1 = getelementptr i32, ptr %v12_data, i64 1
+  store i32 11, ptr %v12_ptr1, align 4
+  %v12_0 = insertvalue %sl.array.i32 poison, ptr %v12_data, 0
+  %v12_1 = insertvalue %sl.array.i32 %v12_0, i64 2, 1
+  %v12 = insertvalue %sl.array.i32 %v12_1, i64 2, 2
+  %v16_data = call ptr @malloc(i64 8)
+  %v16_ptr0 = getelementptr i32, ptr %v16_data, i64 0
+  store i32 12, ptr %v16_ptr0, align 4
+  %v16_ptr1 = getelementptr i32, ptr %v16_data, i64 1
+  store i32 13, ptr %v16_ptr1, align 4
+  %v16_0 = insertvalue %sl.array.i32 poison, ptr %v16_data, 0
+  %v16_1 = insertvalue %sl.array.i32 %v16_0, i64 2, 1
+  %v16 = insertvalue %sl.array.i32 %v16_1, i64 2, 2
+  %v11 = insertvalue %sl.struct.m0_s0 poison, %sl.array.i32 %v12, 0
+  %v15 = insertvalue %sl.struct.m0_s0 poison, %sl.array.i32 %v16, 0
+  %v10_data = call ptr @malloc(i64 48)
+  %v10_ptr0 = getelementptr %sl.struct.m0_s0, ptr %v10_data, i64 0
+  store %sl.struct.m0_s0 %v11, ptr %v10_ptr0, align 8
+  %v10_ptr1 = getelementptr %sl.struct.m0_s0, ptr %v10_data, i64 1
+  store %sl.struct.m0_s0 %v15, ptr %v10_ptr1, align 8
+  %v10_0 = insertvalue %sl.array.i32 poison, ptr %v10_data, 0
+  %v10_1 = insertvalue %sl.array.i32 %v10_0, i64 2, 1
+  %v10 = insertvalue %sl.array.i32 %v10_1, i64 2, 2
+  ret %sl.array.i32 %v10
+}
+define i32 @main() {
+entry:
+  %v22 = call %sl.array.i32 @sl_m0_s4()
+  %v21 = call i32 @sl_m0_s2(%sl.array.i32 %v22)
+  %v25 = freeze i32 %v21
+  %v24 = icmp eq i32 %v25, 1
+  br i1 %v24, label %if27_then, label %if27_merge
+if27_then:
+  %v30_ptr = insertvalue %sl.text poison, ptr @sl_str_30, 0
+  %v30 = insertvalue %sl.text %v30_ptr, i64 15, 1
+  call void @sl_runtime_print(ptr @sl_str_30, i64 15, i1 true)
+  br label %if27_merge
+if27_merge:
+  call void @sl_runtime_flush_stdout()
+  ret i32 0
+}
