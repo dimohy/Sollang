@@ -326,27 +326,53 @@ internal static class CompilerApp
     private static IReadOnlyList<SollangProgram> LoadStandardLibrary(string sourcePath)
     {
         var root = FindRepositoryRoot(sourcePath);
-        var paths = new[]
+        var standardLibraryRoot = Path.Combine(root, "stdlib");
+        var paths = Directory
+            .EnumerateFiles(standardLibraryRoot, "*.slg", SearchOption.AllDirectories)
+            .OrderBy(
+                path => Path.GetRelativePath(standardLibraryRoot, path),
+                StringComparer.Ordinal)
+            .ToArray();
+        if (paths.Length == 0)
         {
-            Path.Combine(root, "stdlib", "sys", "runtime.slg"),
-            Path.Combine(root, "stdlib", "sys", "io.slg"),
-            Path.Combine(root, "stdlib", "sys", "random.slg"),
-            Path.Combine(root, "stdlib", "sys", "time.slg"),
-            Path.Combine(root, "stdlib", "sys", "file.slg"),
-            Path.Combine(root, "stdlib", "sys", "process.slg")
-        };
-
-        foreach (var path in paths)
-        {
-            if (!File.Exists(path))
-            {
-                throw new SollangException($"standard library file not found: {path}");
-            }
+            throw new SollangException(
+                $"standard library contains no Sollang source modules: {standardLibraryRoot}");
         }
 
-        return paths
-            .Select(static path => ParseSourceFile(path, isStandardLibrary: true))
-            .ToArray();
+        var programs = new List<SollangProgram>(paths.Length);
+        var modules = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var path in paths)
+        {
+            var relativePath = Path.GetRelativePath(standardLibraryRoot, path);
+            var expectedModule = string.Join(
+                '.',
+                Path.ChangeExtension(relativePath, extension: null)!
+                    .Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+            var program = ParseSourceFile(path, isStandardLibrary: true);
+            var actualModule = ModuleName(program);
+            if (!string.Equals(actualModule, expectedModule, StringComparison.Ordinal))
+            {
+                throw new SollangException(
+                    $"standard library file '{path}' declares namespace '{actualModule}' "
+                    + $"but its path requires '{expectedModule}'");
+            }
+            if (program.Statements.Count > 0)
+            {
+                throw new SollangException(
+                    $"standard library module '{actualModule}' contains executable top-level statements: {path}");
+            }
+            if (modules.TryGetValue(actualModule, out var duplicatePath))
+            {
+                throw new SollangException(
+                    $"standard library module '{actualModule}' is declared by both "
+                    + $"'{duplicatePath}' and '{path}'");
+            }
+
+            modules.Add(actualModule, path);
+            programs.Add(program);
+        }
+
+        return programs;
     }
 
     private static string FindRepositoryRoot(string sourcePath)

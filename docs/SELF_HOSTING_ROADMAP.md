@@ -118,12 +118,12 @@ not lines of code.
 | Core syntax and control flow | 10 | 9 | 1 | 0 | 9.5 |
 | Types, traits, and generics | 12 | 11 | 0 | 1 | 11.0 |
 | Ownership and storage | 10 | 7 | 2 | 1 | 8.0 |
-| Modules, visibility, and builds | 8 | 5 | 2 | 1 | 6.0 |
+| Modules, visibility, and builds | 8 | 6 | 1 | 1 | 6.5 |
 | Compiler-construction primitives | 12 | 10 | 2 | 0 | 11.0 |
 | Standard library and tooling | 8 | 2 | 4 | 2 | 4.0 |
-| **Total** | **60** | **44** | **11** | **5** | **49.5 / 60** |
+| **Total** | **60** | **45** | **10** | **5** | **50.0 / 60** |
 
-Current count-based progress: **82.5% (49.5 of 60 equivalent gates)**.
+Current count-based progress: **83.3% (50 of 60 equivalent gates)**.
 
 The frontend parallel-compilation subproject is **28/28 checks (100%)**. Its
 source-local product boundary, typed callback-result role slice, nested-call
@@ -134,7 +134,7 @@ reject mutable or structurally non-sendable captures. The submitting parent now
 helps drain its task group before the structured join. Exact cancellation and
 partial-result destruction plus full Windows/Linux suite parity are proven.
 This completed feature-local subproject does not promote a roadmap gate.
-There are **10.5 equivalent gates remaining**. Because the remaining compiler
+There are **10 equivalent gates remaining**. Because the remaining compiler
 primitives are harder than early syntax gates, this is not an elapsed-time
 estimate.
 
@@ -269,17 +269,19 @@ milestone without changing the broader 60-gate language-capability score.
 - Missing (1): a complete path-sensitive borrow checker for references returned
   from functions and stored in user values.
 
-### Modules, visibility, and builds — 6.0 / 8
+### Modules, visibility, and builds — 6.5 / 8
 
-- Complete (5): file namespaces/import aliases; multiple user source files in
+- Complete (6): file namespaces/import aliases; multiple user source files in
   one compilation unit; root imports recursively discover module files with
   missing, cycle, namespace-mismatch, and duplicate-module diagnostics;
   functions, structs, enums, and traits are internal by default with explicit
   `public` exports and module-qualified nominal identity; `sollang.project`
   names a confined root source and output identity, and source-free
-  `sollang build` discovers it from ancestor directories.
-- Partial (2): stdlib loading uses a fixed bootstrap list; the package graph has
-  deterministic multiple-product selection, exact local path dependencies,
+  `sollang build` discovers it from ancestor directories; the standard library
+  recursively discovers every `.slg` module below its confined root in stable
+  relative-path order and verifies path-to-namespace identity.
+- Partial (1): the package graph has deterministic multiple-product selection,
+  exact local path dependencies,
   direct-dependency visibility, transitive resolution, and cycle/name-collision
   diagnostics, but not versions, registries, Git sources, a lock file, or
   workspaces.
@@ -1118,7 +1120,7 @@ compiler and rejects a mismatched explicit length. Dynamic arrays are rejected
 by a dedicated diagnostic. Windows/Linux execution and a Linux ASan/LSan run
 cover the owned-array case.
 
-The formal roadmap is now **49.5/60 (82.5%)**. Fixed-array generic function
+The formal roadmap is now **50/60 (83.3%)**. Fixed-array generic function
 contracts close the canonical generic-container gate, and general
 multi-parameter functions close the corresponding core syntax gate.
 
@@ -1130,6 +1132,18 @@ results. Examples 413-415 cover native LLVM execution plus the AST/symbol
 contract. The Windows suite passes 552/552 and Stage2 passes 6/6 at 8,881,548
 LLVM bytes. This is Stage2 checkpoint 4/10, so the periodic Stage3 gate remains
 deferred.
+
+Standard-library loading no longer embeds a compiler-side list of `sys`
+modules. The compiler discovers all `.slg` sources recursively below the
+confined `stdlib` root, orders them by ordinal relative path, and requires each
+file path to match its declared namespace. Duplicate namespaces and executable
+top-level statements are rejected before semantic binding. Example 416 proves
+that the newly added `sys.text` module is compiled and executed without adding
+it to a bootstrap manifest. The Release build has zero warnings and errors,
+the Windows suite passes 553/553, and Stage2 passes 6/6 at 8,881,548 LLVM bytes
+with differential hashes preserved. This is checkpoint 5/10, so Stage3 remains
+deferred. The change completes the standard-library source-set gate and raises
+the formal roadmap to **45 complete, 10 partial, 5 missing: 50/60 (83.3%)**.
 
 Examples 406-409 prove fluent/direct calls, methods, generics, independent
 readonly/`mut`/`move` modes, structured async, self-host LLVM execution, and

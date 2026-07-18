@@ -6510,3 +6510,40 @@ Research basis:
 
 - [Rust closure type inference](https://doc.rust-lang.org/stable/book/ch13-01-closures.html)
 - [Swift inferred closure signatures](https://docs.swift.org/swift-book/ReferenceManual/Expressions.html#ID544)
+
+## D200 - Deterministic Standard-Library Source-Set Discovery
+
+Status: implemented and Stage2 verified
+Date: 2026-07-19
+
+The standard library is a confined module source set rather than six filenames
+compiled into the C# driver. `sollang build` recursively discovers every
+`.slg` file below the repository `stdlib` root, sorts by ordinal relative path,
+and parses the complete deterministic set. A module's path is its structural
+identity: `stdlib/sys/text.slg` must declare `namespace sys.text`.
+
+Discovery rejects an empty standard library, path/namespace mismatches,
+duplicate namespace declarations, and executable top-level statements. This
+keeps adding a library module data-driven without letting a misplaced source
+silently change module identity or introduce a second program entry point.
+`sys.text` is the first module added without changing compiler code; its
+`byteCount` and `isEmpty` functions keep UTF-8 byte operations explicit.
+Example 416 imports the automatically discovered module and executes both
+functions.
+
+The Release build has zero warnings and errors and the complete Windows suite
+passes 553/553. Native self-host regeneration remains byte-stable and passes
+Stage2 6/6 at 8,881,548 LLVM bytes with all three differential hashes
+preserved. This is checkpoint 5/10 after the periodic Stage3 baseline, so
+Stage3 is intentionally not regenerated.
+
+The design follows Swift Package Manager's confined target source sets and
+Rust's deterministic module-path/file-path relationship while preserving
+Sollang's one namespace per file model. It completes the standard-library
+source-set gate. The formal roadmap becomes 45 complete, 10 partial, and 5
+missing: **50/60 (83.3%)**.
+
+Research basis:
+
+- [Swift Package Manager targets](https://docs.swift.org/swiftpm/documentation/packagedescription/target/)
+- [Rust module files](https://doc.rust-lang.org/reference/items/modules.html)
