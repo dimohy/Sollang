@@ -595,8 +595,15 @@ emitCore context: move EmitContext -> Unit uses Console {
             roleUse.symbol < roleRange.symbolCount -> if {
                 context.symbols[roleRange.symbolStart + roleUse.symbol] => roleSymbol
                 (roleSymbol.kind == 35 and roleSymbol.astNode >= 0) -> if {
+                    roleUse.parent => roleFunctionOwner!
+                    (roleFunctionOwner! >= 0 and context.ir[roleFunctionOwner!].kind != 0 and context.ir[roleFunctionOwner!].kind != 11) -> while { context.ir[roleFunctionOwner!].parent => roleFunctionOwner! }
                     0 => roleOwnerSearch!
-                    roleOwnerSearch! < (context.ir -> len) -> while {
+                    context.ir -> len => roleOwnerEnd!
+                    roleFunctionOwner! >= 0 -> if {
+                        roleFunctionOwner! + 1 => roleOwnerSearch!
+                        roleFunctionOwner! -> computeFunctionEnd => roleOwnerEnd!
+                    }
+                    roleOwnerSearch! < roleOwnerEnd! -> while {
                         context.ir[roleOwnerSearch!] => roleOwnerCandidate
                         (roleOwnerCandidate.kind == 6 and roleOwnerCandidate.opcode == -208 and roleOwnerCandidate.sourceModule == roleUse.sourceModule and roleOwnerCandidate.astNode == roleSymbol.astNode) -> if { roleOwnerSearch! => owner! }
                         roleOwnerSearch! + 1 => roleOwnerSearch!
@@ -866,8 +873,15 @@ emitCore context: move EmitContext -> Unit uses Console {
     aggregateValueIndex wrapperIndex: Int -> Int {
         wrapperIndex => resolved!
         (wrapperIndex >= 0 and context.ir[wrapperIndex].kind == 9) -> if {
+            context.ir[wrapperIndex].parent => controlOwner!
+            (controlOwner! >= 0 and context.ir[controlOwner!].kind != 0 and context.ir[controlOwner!].kind != 11) -> while { context.ir[controlOwner!].parent => controlOwner! }
             0 => controlSearch!
-            controlSearch! < (context.ir -> len) -> while {
+            context.ir -> len => controlEnd!
+            controlOwner! >= 0 -> if {
+                controlOwner! + 1 => controlSearch!
+                controlOwner! -> computeFunctionEnd => controlEnd!
+            }
+            controlSearch! < controlEnd! -> while {
                 context.ir[controlSearch!] => aggregateCandidate
                 # Explicit conversions around aggregate fields are represented
                 # by a value wrapper whose direct result is a call node.
@@ -1491,7 +1505,12 @@ emitCore context: move EmitContext -> Unit uses Console {
         bindingIndex => rootIndex!
         binding -> sourceStart => rootStart!
         0 => candidateIndex!
-        candidateIndex! < (context.ir -> len) -> while {
+        context.ir -> len => candidateEnd!
+        (bindingOwner! >= 0 and (context.ir[bindingOwner!].kind == 0 or context.ir[bindingOwner!].kind == 11)) -> if {
+            bindingOwner! + 1 => candidateIndex!
+            bindingOwner! -> computeFunctionEnd => candidateEnd!
+        }
+        candidateIndex! < candidateEnd! -> while {
             context.ir[candidateIndex!] => candidate
             # Mutable rebindings can receive a fresh semantic symbol even
             # though they target the same lexical name. Function ownership,
@@ -1649,13 +1668,14 @@ emitCore context: move EmitContext -> Unit uses Console {
                     context.ranges[whileOwnerFunction.sourceModule] => whileOwnerRange
                     context.symbols[whileOwnerRange.symbolStart + whileOwnerFunction.symbol] => whileOwnerSymbol
                     whileOwnerSymbol.parent >= 0 -> if {
-                        0 => whileParentSearch!
-                        (whileParentSearch! < (context.ir -> len) and not capturedWhileValue!) -> while {
-                            context.ir[whileParentSearch!] => whileParentCandidate
-                            (whileParentCandidate.kind == 0 and whileParentCandidate.sourceModule == whileOwnerFunction.sourceModule and whileParentCandidate.symbol == whileOwnerSymbol.parent and whileParentCandidate.operand1 >= 0 and context.ir[whileParentCandidate.operand1].symbol == value.symbol) -> if {
+                        whileOwnerRange.symbolStart + whileOwnerSymbol.parent => whileParentGlobalSymbol
+                        -1 => whileParentFunction!
+                        (whileParentGlobalSymbol >= 0 and whileParentGlobalSymbol < (captureFunctionBySymbol! -> len)) -> if { captureFunctionBySymbol![whileParentGlobalSymbol] => whileParentFunction! }
+                        whileParentFunction! >= 0 -> if {
+                            context.ir[whileParentFunction!] => whileParentCandidate
+                            (whileParentCandidate.operand1 >= 0 and context.ir[whileParentCandidate.operand1].symbol == value.symbol) -> if {
                                 true => capturedWhileValue!
                             }
-                            whileParentSearch! + 1 => whileParentSearch!
                         }
                     }
                 }
@@ -2385,8 +2405,11 @@ emitCore context: move EmitContext -> Unit uses Console {
     }
     regionReturns regionIndex: Int -> Bool {
         false => returns!
-        0 => returnSearch!
-        returnSearch! < (context.ir -> len) -> while {
+        context.ir[regionIndex].parent => returnOwner!
+        (returnOwner! >= 0 and context.ir[returnOwner!].kind != 0 and context.ir[returnOwner!].kind != 11) -> while { context.ir[returnOwner!].parent => returnOwner! }
+        returnOwner! + 1 => returnSearch!
+        returnOwner! -> computeFunctionEnd => returnEnd
+        returnSearch! < returnEnd -> while {
             (context.ir[returnSearch!].kind == 23 and context.ir[returnSearch!].parent == regionIndex) -> if { true => returns! }
             returnSearch! + 1 => returnSearch!
         }
@@ -2396,6 +2419,8 @@ emitCore context: move EmitContext -> Unit uses Console {
         context.ir[regionIndex] => region
         region.parent => ownerIndex!
         (ownerIndex! >= 0 and context.ir[ownerIndex!].kind != 0 and context.ir[ownerIndex!].kind != 11) -> while { context.ir[ownerIndex!].parent => ownerIndex! }
+        ownerIndex! + 1 => regionLocalStart
+        ownerIndex! -> computeFunctionEnd => regionLocalEnd
         [Int; ~] => regionEventKinds!
         [Int; ~] => regionOrder!
         [Int; ~] => regionTaskKinds!
@@ -2403,8 +2428,8 @@ emitCore context: move EmitContext -> Unit uses Console {
         [Bool; ~] => ifActive!
         [Bool; ~] => ifThenReachesMerge!
         [Bool; ~] => loopActive!
-        0 => regionStateIndex!
-        regionStateIndex! < (context.ir -> len) -> while {
+        regionLocalStart => regionStateIndex!
+        regionStateIndex! < regionLocalEnd -> while {
             ifActive! -> push(false)
             ifThenReachesMerge! -> push(false)
             loopActive! -> push(false)
@@ -2420,8 +2445,8 @@ emitCore context: move EmitContext -> Unit uses Console {
             regionTaskNodes![regionTaskSize!] => regionTaskNode
             regionTaskKind == 0 -> if {
                 [Bool; ~] => localScheduled!
-                0 => localScheduleInit!
-                localScheduleInit! < (context.ir -> len) -> while {
+                regionLocalStart => localScheduleInit!
+                localScheduleInit! < regionLocalEnd -> while {
                     localScheduled! -> push(false)
                     localScheduleInit! + 1 => localScheduleInit!
                 }
@@ -2429,9 +2454,9 @@ emitCore context: move EmitContext -> Unit uses Console {
                 true => localProgress!
                 localProgress! -> while {
                     false => localProgress!
-                    0 => localCandidateIndex!
-                    localCandidateIndex! < (context.ir -> len) -> while {
-                        not localScheduled![localCandidateIndex!] -> if {
+                    regionLocalStart => localCandidateIndex!
+                    localCandidateIndex! < regionLocalEnd -> while {
+                        not localScheduled![localCandidateIndex! - regionLocalStart] -> if {
                             context.ir[localCandidateIndex!] => localCandidate
                             localCandidate.parent => localAncestor!
                             false => belongsToLocalRegion!
@@ -2455,8 +2480,8 @@ emitCore context: move EmitContext -> Unit uses Console {
                             }
                             belongsToLocalRegion! -> if {
                                 false => localIfCondition!
-                                0 => localIfSearch!
-                                localIfSearch! < (context.ir -> len) -> while {
+                                regionLocalStart => localIfSearch!
+                                localIfSearch! < regionLocalEnd -> while {
                                     context.ir[localIfSearch!] => localIfCandidate
                                     localIfCandidate.kind == 18 -> if {
                                         context.ir[localIfCandidate.operand0] => localIfRoot
@@ -2471,11 +2496,11 @@ emitCore context: move EmitContext -> Unit uses Console {
                                     localIfSearch! + 1 => localIfSearch!
                                 }
                                 localIfCondition! -> if {
-                                    true => localScheduled![localCandidateIndex!]
+                                    true => localScheduled![localCandidateIndex! - regionLocalStart]
                                     true => localProgress!
                                 }
                                 (not localIfCondition! and localCandidate.kind == 19) -> if {
-                                    true => localScheduled![localCandidateIndex!]
+                                    true => localScheduled![localCandidateIndex! - regionLocalStart]
                                     true => localProgress!
                                 }
                                 (not localIfCondition! and localCandidate.kind != 19) -> if {
@@ -2492,8 +2517,8 @@ emitCore context: move EmitContext -> Unit uses Console {
                                     }
                                     -1 => localPreviousRoot!
                                     UIntSize(0) => localPreviousRootStart!
-                                    0 => localRootSearch!
-                                    localRootSearch! < (context.ir -> len) -> while {
+                                    regionLocalStart => localRootSearch!
+                                    localRootSearch! < regionLocalEnd -> while {
                                         context.ir[localRootSearch!] => localRootCandidate
                                         (localRootCandidate.parent == regionTaskNode and (localRootCandidate -> sourceStart) < (context.ir[localStatementRoot!] -> sourceStart)) -> if {
                                             localRootCandidate -> sourceStart => localRootCandidateStart
@@ -2505,9 +2530,9 @@ emitCore context: move EmitContext -> Unit uses Console {
                                         localRootSearch! + 1 => localRootSearch!
                                     }
                                     localPreviousRoot! >= 0 -> if {
-                                        0 => localPreviousMemberSearch!
-                                        localPreviousMemberSearch! < (context.ir -> len) -> while {
-                                            not localScheduled![localPreviousMemberSearch!] -> if {
+                                        regionLocalStart => localPreviousMemberSearch!
+                                        localPreviousMemberSearch! < regionLocalEnd -> while {
+                                            not localScheduled![localPreviousMemberSearch! - regionLocalStart] -> if {
                                                 localPreviousMemberSearch! => localPreviousMemberRoot!
                                                 context.ir[localPreviousMemberSearch!].parent => localPreviousMemberParent!
                                                 false => localPreviousMemberNested!
@@ -2528,7 +2553,7 @@ emitCore context: move EmitContext -> Unit uses Console {
                                         (localOperandAncestor! >= 0 and not localOperandBelongs!) -> while {
                                             localOperandAncestor! == regionTaskNode -> if { true => localOperandBelongs! } else { context.ir[localOperandAncestor!].parent => localOperandAncestor! }
                                         }
-                                        (localOperandBelongs! and not localScheduled![localCandidate.operand0]) -> if { false => localReady! }
+                                        (localOperandBelongs! and not localScheduled![localCandidate.operand0 - regionLocalStart]) -> if { false => localReady! }
                                     }
                                     (localCandidate.kind != 6 and localCandidate.kind != 18 and localCandidate.kind != 20 and localCandidate.operand1 >= 0) -> if {
                                         context.ir[localCandidate.operand1].parent => localSecondAncestor!
@@ -2536,7 +2561,7 @@ emitCore context: move EmitContext -> Unit uses Console {
                                         (localSecondAncestor! >= 0 and not localSecondBelongs!) -> while {
                                             localSecondAncestor! == regionTaskNode -> if { true => localSecondBelongs! } else { context.ir[localSecondAncestor!].parent => localSecondAncestor! }
                                         }
-                                        (localSecondBelongs! and not localScheduled![localCandidate.operand1]) -> if { false => localReady! }
+                                        (localSecondBelongs! and not localScheduled![localCandidate.operand1 - regionLocalStart]) -> if { false => localReady! }
                                     }
                                     (localCandidate.kind == 9 and localCandidate.opcode == -203 and localCandidate.operand1 >= 0 and context.ir[localCandidate.operand1].nextOperand >= 0) -> if {
                                         context.ir[localCandidate.operand1].nextOperand => localSliceLength!
@@ -2545,7 +2570,7 @@ emitCore context: move EmitContext -> Unit uses Console {
                                         (localSliceLengthAncestor! >= 0 and not localSliceLengthBelongs!) -> while {
                                             localSliceLengthAncestor! == regionTaskNode -> if { true => localSliceLengthBelongs! } else { context.ir[localSliceLengthAncestor!].parent => localSliceLengthAncestor! }
                                         }
-                                        (localSliceLengthBelongs! and not localScheduled![localSliceLength!]) -> if { false => localReady! }
+                                        (localSliceLengthBelongs! and not localScheduled![localSliceLength! - regionLocalStart]) -> if { false => localReady! }
                                     }
                                     (localCandidate.kind == 9 and localCandidate.opcode == -204 and localCandidate.operand1 >= 0) -> if {
                                         localCandidate.operand1 -> aggregateValueIndex => localPushValue!
@@ -2555,20 +2580,20 @@ emitCore context: move EmitContext -> Unit uses Console {
                                             (localPushValueAncestor! >= 0 and not localPushValueBelongs!) -> while {
                                                 localPushValueAncestor! == regionTaskNode -> if { true => localPushValueBelongs! } else { context.ir[localPushValueAncestor!].parent => localPushValueAncestor! }
                                             }
-                                            (localPushValueBelongs! and not localScheduled![localPushValue!]) -> if { false => localReady! }
+                                            (localPushValueBelongs! and not localScheduled![localPushValue! - regionLocalStart]) -> if { false => localReady! }
                                         }
                                     }
                                     (localCandidate.kind == 12 or localCandidate.kind == 14 or localCandidate.kind == 16) -> if {
                                         localCandidate.operand0 => localAggregateOperand!
                                         localAggregateOperand! >= 0 -> while {
                                             localAggregateOperand! -> aggregateValueIndex => localAggregateValue
-                                            not localScheduled![localAggregateValue] -> if { false => localReady! }
+                                            not localScheduled![localAggregateValue - regionLocalStart] -> if { false => localReady! }
                                             context.ir[localAggregateOperand!].nextOperand => localAggregateOperand!
                                         }
                                     }
                                     localReady! -> if {
                                         localOrder! -> push(localCandidateIndex!)
-                                        true => localScheduled![localCandidateIndex!]
+                                        true => localScheduled![localCandidateIndex! - regionLocalStart]
                                         true => localProgress!
                                     }
                                 }
@@ -3668,14 +3693,14 @@ emitCore context: move EmitContext -> Unit uses Console {
             }
             regionEventKind == 2 -> if {
                 not regionTerminated! -> if {
-                true => ifActive![regionNodeIndex!]
+                true => ifActive![regionNodeIndex! - regionLocalStart]
                 regionNode.operand0 => nestedConditionIndex!
                 true => nestedConditionUnwrap!
                 (nestedConditionIndex! >= 0 and nestedConditionUnwrap! and context.ir[nestedConditionIndex!].kind == 9) -> while {
                     -1 => nestedConditionChild!
                     UIntSize(0) => nestedConditionChildStart!
-                    0 => nestedConditionChildSearch!
-                    nestedConditionChildSearch! < (context.ir -> len) -> while {
+                    regionLocalStart => nestedConditionChildSearch!
+                    nestedConditionChildSearch! < regionLocalEnd -> while {
                         context.ir[nestedConditionChildSearch!].parent == nestedConditionIndex! -> if {
                             context.ir[nestedConditionChildSearch!] -> sourceNode => nestedConditionChildAst
                             (nestedConditionChild! < 0 or nestedConditionChildAst.start > nestedConditionChildStart!) -> if {
@@ -3716,7 +3741,7 @@ emitCore context: move EmitContext -> Unit uses Console {
                 }
             }
             regionEventKind == 3 -> if {
-                ifActive![regionNodeIndex!] -> if {
+                ifActive![regionNodeIndex! - regionLocalStart] -> if {
                     not regionTerminated! -> if {
                         (regionNode.typeSymbol != 0 and regionNode.nextOperand >= 0) -> if {
                             regionNode.operand1 -> regionResultValueIndex => nestedThenStoreIndex
@@ -3737,15 +3762,15 @@ emitCore context: move EmitContext -> Unit uses Console {
                         }
                         OwnedDropRequest { regionIndex: regionNode.operand1, beforeAst: -1, edgeIndex: regionNodeIndex! * 10 + 1, transferredSymbol: -1 } -> emitOwnedDrops
                         "  br label %if$(regionNodeIndex!)_merge" -> println
-                        true => ifThenReachesMerge![regionNodeIndex!]
+                        true => ifThenReachesMerge![regionNodeIndex! - regionLocalStart]
                     }
                     "if$(regionNodeIndex!)_else:" -> println
                     false => regionTerminated!
                 }
             }
             regionEventKind == 4 -> if {
-                ifActive![regionNodeIndex!] -> if {
-                regionNode.nextOperand < 0 -> if { true => ifThenReachesMerge![regionNodeIndex!] }
+                ifActive![regionNodeIndex! - regionLocalStart] -> if {
+                regionNode.nextOperand < 0 -> if { true => ifThenReachesMerge![regionNodeIndex! - regionLocalStart] }
                 not regionTerminated! -> if {
                     regionNode.nextOperand >= 0 -> if {
                         regionNode.typeSymbol != 0 -> if {
@@ -3770,9 +3795,9 @@ emitCore context: move EmitContext -> Unit uses Console {
                         OwnedDropRequest { regionIndex: regionNode.operand1, beforeAst: -1, edgeIndex: regionNodeIndex! * 10 + 2, transferredSymbol: -1 } -> emitOwnedDrops
                     }
                     "  br label %if$(regionNodeIndex!)_merge" -> println
-                    true => ifThenReachesMerge![regionNodeIndex!]
+                    true => ifThenReachesMerge![regionNodeIndex! - regionLocalStart]
                 }
-                ifThenReachesMerge![regionNodeIndex!] -> if {
+                ifThenReachesMerge![regionNodeIndex! - regionLocalStart] -> if {
                     "if$(regionNodeIndex!)_merge:" -> println
                     false => regionTerminated!
                     (regionNode.typeSymbol != 0 and regionNode.nextOperand >= 0) -> if {
@@ -3786,21 +3811,21 @@ emitCore context: move EmitContext -> Unit uses Console {
             }
             regionEventKind == 6 -> if {
                 not regionTerminated! -> if {
-                    true => loopActive![regionNodeIndex!]
+                    true => loopActive![regionNodeIndex! - regionLocalStart]
                     "  br label %while$(regionNodeIndex!)_header" -> println
                     "while$(regionNodeIndex!)_header:" -> println
                     false => regionTerminated!
                 }
             }
             regionEventKind == 7 -> if {
-                loopActive![regionNodeIndex!] -> if {
+                loopActive![regionNodeIndex! - regionLocalStart] -> if {
                     WhileBranchRequest { whileIndex: regionNodeIndex!, ownerIndex: ownerIndex!, conditionIndex: regionNode.operand0 } -> emitWhileBranch
                     "while$(regionNodeIndex!)_body:" -> println
                     false => regionTerminated!
                 }
             }
             regionEventKind == 8 -> if {
-                loopActive![regionNodeIndex!] -> if {
+                loopActive![regionNodeIndex! - regionLocalStart] -> if {
                     not regionTerminated! -> if {
                         OwnedDropRequest { regionIndex: regionNode.operand1, beforeAst: -1, edgeIndex: regionNodeIndex! * 10 + 3, transferredSymbol: -1 } -> emitOwnedDrops
                         "  br label %while$(regionNodeIndex!)_header" -> println
@@ -4026,10 +4051,9 @@ emitCore context: move EmitContext -> Unit uses Console {
         context.ir[externalCallIndex!] => externalCall
         (externalCall.kind == 6 and externalCall.opcode != -205 and externalCall.targetModule >= 0 and externalCall.symbol >= 0) -> if {
             false => externalDefined!
-            0 => externalDefinitionSearch!
-            externalDefinitionSearch! < (context.ir -> len) -> while {
-                (context.ir[externalDefinitionSearch!].kind == 0 and context.ir[externalDefinitionSearch!].sourceModule == externalCall.targetModule and context.ir[externalDefinitionSearch!].symbol == externalCall.symbol) -> if { true => externalDefined! }
-                externalDefinitionSearch! + 1 => externalDefinitionSearch!
+            externalCall.targetModule < (context.ranges -> len) -> if {
+                context.ranges[externalCall.targetModule].symbolStart + externalCall.symbol => externalGlobalSymbol
+                (externalGlobalSymbol >= 0 and externalGlobalSymbol < (captureFunctionBySymbol! -> len) and captureFunctionBySymbol![externalGlobalSymbol] >= 0) -> if { true => externalDefined! }
             }
             false => externalDeclared!
             0 => externalDeclaredSearch!
@@ -4140,11 +4164,11 @@ emitCore context: move EmitContext -> Unit uses Console {
                 context.ir[captureBorrowCallIndex!] => captureBorrowCall
                 (captureBorrowCall.kind == 6 and captureBorrowCall.targetModule >= 0 and captureBorrowCall.symbol >= 0) -> if {
                     -1 => captureBorrowTarget!
-                    0 => captureBorrowTargetSearch!
-                    captureBorrowTargetSearch! < (context.ir -> len) -> while {
-                        context.ir[captureBorrowTargetSearch!] => captureBorrowTargetCandidate
-                        (captureBorrowTargetCandidate.kind == 0 and captureBorrowTargetCandidate.sourceModule == captureBorrowCall.targetModule and captureBorrowTargetCandidate.symbol == captureBorrowCall.symbol) -> if { captureBorrowTargetSearch! => captureBorrowTarget! }
-                        captureBorrowTargetSearch! + 1 => captureBorrowTargetSearch!
+                    captureBorrowCall.targetModule < (context.ranges -> len) -> if {
+                        context.ranges[captureBorrowCall.targetModule].symbolStart + captureBorrowCall.symbol => captureBorrowGlobalSymbol
+                        (captureBorrowGlobalSymbol >= 0 and captureBorrowGlobalSymbol < (captureFunctionBySymbol! -> len)) -> if {
+                            captureFunctionBySymbol![captureBorrowGlobalSymbol] => captureBorrowTarget!
+                        }
                     }
                     captureBorrowTarget! >= 0 -> if {
                         captureBorrowTarget! -> functionCaptures => captureBorrowCallBindings!
@@ -4216,8 +4240,8 @@ emitCore context: move EmitContext -> Unit uses Console {
                 mutableSlotIndex! + 1 => mutableSlotIndex!
             }
             [Bool; ~] => expressionScheduled!
-            0 => scheduledInit!
-            scheduledInit! < (context.ir -> len) -> while {
+            expressionStart => scheduledInit!
+            scheduledInit! < functionEnd! -> while {
                 expressionScheduled! -> push(false)
                 scheduledInit! + 1 => scheduledInit!
             }
@@ -4236,7 +4260,7 @@ emitCore context: move EmitContext -> Unit uses Console {
                         (orderedEachBodySearch! < functionEnd! and not orderedEachHasPendingBody!) -> while {
                             NodeAncestorRequest { nodeIndex: orderedEachBodySearch!, ownerIndex: orderedEachCandidate } => orderedEachAncestorRequest
                             orderedEachAncestorRequest -> irDescendsFrom => orderedEachInside
-                            (not expressionScheduled![orderedEachBodySearch!] and orderedEachInside) -> if { true => orderedEachHasPendingBody! }
+                            (not expressionScheduled![orderedEachBodySearch! - expressionStart] and orderedEachInside) -> if { true => orderedEachHasPendingBody! }
                             orderedEachBodySearch! + 1 => orderedEachBodySearch!
                         }
                         orderedEachHasPendingBody! -> if { orderedEachCandidate => pendingEach! }
@@ -4245,7 +4269,7 @@ emitCore context: move EmitContext -> Unit uses Console {
                 }
                 expressionStart => scheduleCandidate!
                 scheduleCandidate! < functionEnd! -> while {
-                    not expressionScheduled![scheduleCandidate!] -> if {
+                    not expressionScheduled![scheduleCandidate! - expressionStart] -> if {
                         context.ir[scheduleCandidate!] => scheduleNode
                         scheduleNode.parent => scheduleAncestor!
                         scheduleNode.kind == 19 => insideControlRegion!
@@ -4276,7 +4300,7 @@ emitCore context: move EmitContext -> Unit uses Console {
                             }
                         }
                         (insideControlRegion! or scheduleNode.kind == 19) -> if {
-                            true => expressionScheduled![scheduleCandidate!]
+                            true => expressionScheduled![scheduleCandidate! - expressionStart]
                             true => scheduleProgress!
                         }
                         true => scheduleReady!
@@ -4292,23 +4316,23 @@ emitCore context: move EmitContext -> Unit uses Console {
                             scheduleNode.parent => eachScheduleAncestor!
                             (eachScheduleAncestor! >= expressionStart and scheduleReady!) -> while {
                                 context.ir[eachScheduleAncestor!] => eachScheduleOwner
-                                (eachScheduleOwner.kind == 6 and eachScheduleOwner.opcode == -208 and eachBranchChild! != eachScheduleOwner.operand0 and not expressionScheduled![eachScheduleAncestor!]) -> if { false => scheduleReady! }
+                                (eachScheduleOwner.kind == 6 and eachScheduleOwner.opcode == -208 and eachBranchChild! != eachScheduleOwner.operand0 and not expressionScheduled![eachScheduleAncestor! - expressionStart]) -> if { false => scheduleReady! }
                                 eachScheduleAncestor! => eachBranchChild!
                                 context.ir[eachScheduleAncestor!].parent => eachScheduleAncestor!
                             }
                         }
-                        (scheduleReady! and scheduleNode.operand0 >= expressionStart and scheduleNode.operand0 < functionEnd! and (scheduleNode.kind != 5 or context.ir[scheduleNode.operand0].flags % 2 == 0) and not expressionScheduled![scheduleNode.operand0]) -> if { false => scheduleReady! }
-                        (scheduleReady! and scheduleNode.kind != 6 and scheduleNode.kind != 18 and scheduleNode.kind != 20 and scheduleNode.operand1 >= expressionStart and scheduleNode.operand1 < functionEnd! and not expressionScheduled![scheduleNode.operand1]) -> if { false => scheduleReady! }
-                        (scheduleReady! and (scheduleNode.kind == 9 or scheduleNode.kind == 6) and scheduleNode.opcode == -203 and scheduleNode.operand1 >= 0 and context.ir[scheduleNode.operand1].nextOperand >= expressionStart and context.ir[scheduleNode.operand1].nextOperand < functionEnd! and not expressionScheduled![context.ir[scheduleNode.operand1].nextOperand]) -> if { false => scheduleReady! }
+                        (scheduleReady! and scheduleNode.operand0 >= expressionStart and scheduleNode.operand0 < functionEnd! and (scheduleNode.kind != 5 or context.ir[scheduleNode.operand0].flags % 2 == 0) and not expressionScheduled![scheduleNode.operand0 - expressionStart]) -> if { false => scheduleReady! }
+                        (scheduleReady! and scheduleNode.kind != 6 and scheduleNode.kind != 18 and scheduleNode.kind != 20 and scheduleNode.operand1 >= expressionStart and scheduleNode.operand1 < functionEnd! and not expressionScheduled![scheduleNode.operand1 - expressionStart]) -> if { false => scheduleReady! }
+                        (scheduleReady! and (scheduleNode.kind == 9 or scheduleNode.kind == 6) and scheduleNode.opcode == -203 and scheduleNode.operand1 >= 0 and context.ir[scheduleNode.operand1].nextOperand >= expressionStart and context.ir[scheduleNode.operand1].nextOperand < functionEnd! and not expressionScheduled![context.ir[scheduleNode.operand1].nextOperand - expressionStart]) -> if { false => scheduleReady! }
                         (scheduleReady! and scheduleNode.kind == 9 and scheduleNode.opcode == -204 and scheduleNode.operand1 >= 0) -> if {
                             scheduleNode.operand1 -> aggregateValueIndex => schedulePushValue
-                            (schedulePushValue >= expressionStart and schedulePushValue < functionEnd! and not expressionScheduled![schedulePushValue]) -> if { false => scheduleReady! }
+                            (schedulePushValue >= expressionStart and schedulePushValue < functionEnd! and not expressionScheduled![schedulePushValue - expressionStart]) -> if { false => scheduleReady! }
                         }
                         (scheduleReady! and (scheduleNode.kind == 12 or scheduleNode.kind == 14 or scheduleNode.kind == 16)) -> if {
                             scheduleNode.operand0 => scheduleSibling!
                             scheduleSibling! >= 0 -> while {
                                 scheduleSibling! -> aggregateValueIndex => scheduleAggregateValue
-                                not expressionScheduled![scheduleAggregateValue] -> if { false => scheduleReady! }
+                                not expressionScheduled![scheduleAggregateValue - expressionStart] -> if { false => scheduleReady! }
                                 context.ir[scheduleSibling!].nextOperand => scheduleSibling!
                             }
                         }
@@ -4329,7 +4353,7 @@ emitCore context: move EmitContext -> Unit uses Console {
                                         (controlDependencyValueAncestor! >= expressionStart and not controlDependencyValueInside!) -> while {
                                             (controlDependencyValueAncestor! == scheduleNode.operand1 or (scheduleNode.kind == 20 and controlDependencyValueAncestor! == scheduleNode.operand0) or (scheduleNode.kind == 18 and scheduleNode.nextOperand >= 0 and controlDependencyValueAncestor! == scheduleNode.nextOperand)) -> if { true => controlDependencyValueInside! } else { context.ir[controlDependencyValueAncestor!].parent => controlDependencyValueAncestor! }
                                         }
-                                        (not controlDependencyValueInside! and not expressionScheduled![controlDependencyValue!]) -> if { false => scheduleReady! }
+                                        (not controlDependencyValueInside! and not expressionScheduled![controlDependencyValue! - expressionStart]) -> if { false => scheduleReady! }
                                     }
                                 }
                                 controlDependencyInside! -> if {
@@ -4346,7 +4370,7 @@ emitCore context: move EmitContext -> Unit uses Console {
                                             (controlDirectOperandAncestor! >= expressionStart and not controlDirectOperandInside!) -> while {
                                                 (controlDirectOperandAncestor! == scheduleNode.operand1 or (scheduleNode.kind == 20 and controlDirectOperandAncestor! == scheduleNode.operand0) or (scheduleNode.kind == 18 and scheduleNode.nextOperand >= 0 and controlDirectOperandAncestor! == scheduleNode.nextOperand)) -> if { true => controlDirectOperandInside! } else { context.ir[controlDirectOperandAncestor!].parent => controlDirectOperandAncestor! }
                                             }
-                                            (not controlDirectOperandInside! and not expressionScheduled![controlDirectOperand!]) -> if { false => scheduleReady! }
+                                            (not controlDirectOperandInside! and not expressionScheduled![controlDirectOperand! - expressionStart]) -> if { false => scheduleReady! }
                                         }
                                         controlDirectOperandIndex! + 1 => controlDirectOperandIndex!
                                     }
@@ -4357,7 +4381,7 @@ emitCore context: move EmitContext -> Unit uses Console {
                         (scheduleReady! and (scheduleNode.kind == 18 or scheduleNode.kind == 20)) -> if {
                             expressionStart => priorControlValueSearch!
                             priorControlValueSearch! < functionEnd! -> while {
-                                (not expressionScheduled![priorControlValueSearch!] and (context.ir[priorControlValueSearch!] -> sourceStart) < (scheduleNode -> sourceStart)) -> if {
+                                (not expressionScheduled![priorControlValueSearch! - expressionStart] and (context.ir[priorControlValueSearch!] -> sourceStart) < (scheduleNode -> sourceStart)) -> if {
                                     false => scheduleReady!
                                 }
                                 priorControlValueSearch! + 1 => priorControlValueSearch!
@@ -4381,7 +4405,7 @@ emitCore context: move EmitContext -> Unit uses Console {
                                             context.ir[mutableReadBarrierAncestor!].parent => mutableReadBarrierAncestor!
                                         }
                                     }
-                                    (not mutableReadInsideBarrier! and not expressionScheduled![mutableReadBarrierSearch!] and (mutableReadBarrier.kind == 18 or mutableReadBarrier.kind == 20 or mutableReadBarrier.kind == 24 or mutableReadBarrier.kind == 25 or (mutableReadBarrier.kind == 17 and mutableReadBarrier.flags == 1) or (mutableReadBarrier.kind == 9 and mutableReadBarrier.opcode == -204)) and (mutableReadBarrier -> sourceStart) < (scheduleNode -> sourceStart)) -> if {
+                                    (not mutableReadInsideBarrier! and not expressionScheduled![mutableReadBarrierSearch! - expressionStart] and (mutableReadBarrier.kind == 18 or mutableReadBarrier.kind == 20 or mutableReadBarrier.kind == 24 or mutableReadBarrier.kind == 25 or (mutableReadBarrier.kind == 17 and mutableReadBarrier.flags == 1) or (mutableReadBarrier.kind == 9 and mutableReadBarrier.opcode == -204)) and (mutableReadBarrier -> sourceStart) < (scheduleNode -> sourceStart)) -> if {
                                         false => scheduleReady!
                                     }
                                     mutableReadBarrierSearch! + 1 => mutableReadBarrierSearch!
@@ -4398,7 +4422,7 @@ emitCore context: move EmitContext -> Unit uses Console {
                                 expressionStart => earlierEffectSearch!
                                 earlierEffectSearch! < functionEnd! -> while {
                                     context.ir[earlierEffectSearch!] => earlierEffect
-                                (not expressionScheduled![earlierEffectSearch!] and (earlierEffect.kind == 6 or earlierEffect.kind == 18 or earlierEffect.kind == 20 or earlierEffect.kind == 24 or earlierEffect.kind == 25 or (earlierEffect.kind == 17 and earlierEffect.flags == 1) or (earlierEffect.kind == 9 and (earlierEffect.opcode == -204 or earlierEffect.opcode == -205))) and (earlierEffect -> sourceStart) < (scheduleNode -> sourceStart)) -> if {
+                                (not expressionScheduled![earlierEffectSearch! - expressionStart] and (earlierEffect.kind == 6 or earlierEffect.kind == 18 or earlierEffect.kind == 20 or earlierEffect.kind == 24 or earlierEffect.kind == 25 or (earlierEffect.kind == 17 and earlierEffect.flags == 1) or (earlierEffect.kind == 9 and (earlierEffect.opcode == -204 or earlierEffect.opcode == -205))) and (earlierEffect -> sourceStart) < (scheduleNode -> sourceStart)) -> if {
                                         earlierEffect.parent => earlierEffectAncestor!
                                         true => earlierRootEffect!
                                         false => earlierInsideRegion!
@@ -4415,7 +4439,7 @@ emitCore context: move EmitContext -> Unit uses Console {
                         }
                         scheduleReady! -> if {
                             expressionOrder! -> push(scheduleCandidate!)
-                            true => expressionScheduled![scheduleCandidate!]
+                            true => expressionScheduled![scheduleCandidate! - expressionStart]
                             (scheduleNode.kind == 6 and scheduleNode.opcode == -208) -> if { scheduleCandidate! => pendingEach! }
                             true => scheduleProgress!
                         }
@@ -5950,8 +5974,8 @@ emitCore context: move EmitContext -> Unit uses Console {
                     entryMutableSlotIndex! + 1 => entryMutableSlotIndex!
                 }
                 [Bool; ~] => entryScheduled!
-                0 => entryScheduleInit!
-                entryScheduleInit! < (context.ir -> len) -> while {
+                functionIndex! + 1 => entryScheduleInit!
+                entryScheduleInit! < entryEnd! -> while {
                     entryScheduled! -> push(false)
                     entryScheduleInit! + 1 => entryScheduleInit!
                 }
@@ -5961,7 +5985,7 @@ emitCore context: move EmitContext -> Unit uses Console {
                     false => entryScheduleProgress!
                     functionIndex! + 1 => entryScheduleCandidate!
                     entryScheduleCandidate! < entryEnd! -> while {
-                        not entryScheduled![entryScheduleCandidate!] -> if {
+                        not entryScheduled![entryScheduleCandidate! - functionIndex! - 1] -> if {
                             context.ir[entryScheduleCandidate!] => entryScheduleNode
                             entryScheduleNode.parent => entryScheduleAncestor!
                             entryScheduleNode.kind == 19 => entryInsideControlRegion!
@@ -5992,30 +6016,30 @@ emitCore context: move EmitContext -> Unit uses Console {
                                 }
                             }
                             (entryInsideControlRegion! or entryScheduleNode.kind == 19) -> if {
-                                true => entryScheduled![entryScheduleCandidate!]
+                                true => entryScheduled![entryScheduleCandidate! - functionIndex! - 1]
                                 true => entryScheduleProgress!
                             }
                             true => entryScheduleReady!
                             (entryInsideControlRegion! or entryScheduleNode.kind == 19) -> if { false => entryScheduleReady! }
-                            (entryScheduleReady! and entryScheduleNode.operand0 > functionIndex! and entryScheduleNode.operand0 < entryEnd! and (entryScheduleNode.kind != 5 or context.ir[entryScheduleNode.operand0].flags % 2 == 0) and not entryScheduled![entryScheduleNode.operand0]) -> if { false => entryScheduleReady! }
-                            (entryScheduleReady! and entryScheduleNode.kind != 6 and entryScheduleNode.kind != 18 and entryScheduleNode.kind != 20 and entryScheduleNode.operand1 > functionIndex! and entryScheduleNode.operand1 < entryEnd! and not entryScheduled![entryScheduleNode.operand1]) -> if { false => entryScheduleReady! }
-                            (entryScheduleReady! and (entryScheduleNode.kind == 9 or entryScheduleNode.kind == 6) and entryScheduleNode.opcode == -203 and entryScheduleNode.operand1 >= 0 and context.ir[entryScheduleNode.operand1].nextOperand > functionIndex! and context.ir[entryScheduleNode.operand1].nextOperand < entryEnd! and not entryScheduled![context.ir[entryScheduleNode.operand1].nextOperand]) -> if { false => entryScheduleReady! }
+                            (entryScheduleReady! and entryScheduleNode.operand0 > functionIndex! and entryScheduleNode.operand0 < entryEnd! and (entryScheduleNode.kind != 5 or context.ir[entryScheduleNode.operand0].flags % 2 == 0) and not entryScheduled![entryScheduleNode.operand0 - functionIndex! - 1]) -> if { false => entryScheduleReady! }
+                            (entryScheduleReady! and entryScheduleNode.kind != 6 and entryScheduleNode.kind != 18 and entryScheduleNode.kind != 20 and entryScheduleNode.operand1 > functionIndex! and entryScheduleNode.operand1 < entryEnd! and not entryScheduled![entryScheduleNode.operand1 - functionIndex! - 1]) -> if { false => entryScheduleReady! }
+                            (entryScheduleReady! and (entryScheduleNode.kind == 9 or entryScheduleNode.kind == 6) and entryScheduleNode.opcode == -203 and entryScheduleNode.operand1 >= 0 and context.ir[entryScheduleNode.operand1].nextOperand > functionIndex! and context.ir[entryScheduleNode.operand1].nextOperand < entryEnd! and not entryScheduled![context.ir[entryScheduleNode.operand1].nextOperand - functionIndex! - 1]) -> if { false => entryScheduleReady! }
                             (entryScheduleReady! and entryScheduleNode.kind == 9 and entryScheduleNode.opcode == -204 and entryScheduleNode.operand1 >= 0) -> if {
                                 entryScheduleNode.operand1 -> aggregateValueIndex => entrySchedulePushValue
-                                (entrySchedulePushValue > functionIndex! and entrySchedulePushValue < entryEnd! and not entryScheduled![entrySchedulePushValue]) -> if { false => entryScheduleReady! }
+                                (entrySchedulePushValue > functionIndex! and entrySchedulePushValue < entryEnd! and not entryScheduled![entrySchedulePushValue - functionIndex! - 1]) -> if { false => entryScheduleReady! }
                             }
                             (entryScheduleReady! and (entryScheduleNode.kind == 12 or entryScheduleNode.kind == 14 or entryScheduleNode.kind == 16)) -> if {
                                 entryScheduleNode.operand0 => entryScheduleSibling!
                                 entryScheduleSibling! >= 0 -> while {
                                     entryScheduleSibling! -> aggregateValueIndex => entryScheduleAggregateValue
-                                    not entryScheduled![entryScheduleAggregateValue] -> if { false => entryScheduleReady! }
+                                    not entryScheduled![entryScheduleAggregateValue - functionIndex! - 1] -> if { false => entryScheduleReady! }
                                     context.ir[entryScheduleSibling!].nextOperand => entryScheduleSibling!
                                 }
                             }
                             (entryScheduleReady! and (entryScheduleNode.kind == 18 or entryScheduleNode.kind == 20)) -> if {
                                 functionIndex! + 1 => entryPriorControlValueSearch!
                                 entryPriorControlValueSearch! < entryEnd! -> while {
-                                    (not entryScheduled![entryPriorControlValueSearch!] and (context.ir[entryPriorControlValueSearch!] -> sourceStart) < (entryScheduleNode -> sourceStart)) -> if {
+                                    (not entryScheduled![entryPriorControlValueSearch! - functionIndex! - 1] and (context.ir[entryPriorControlValueSearch!] -> sourceStart) < (entryScheduleNode -> sourceStart)) -> if {
                                         false => entryScheduleReady!
                                     }
                                     entryPriorControlValueSearch! + 1 => entryPriorControlValueSearch!
@@ -6039,7 +6063,7 @@ emitCore context: move EmitContext -> Unit uses Console {
                                                 context.ir[entryMutableReadBarrierAncestor!].parent => entryMutableReadBarrierAncestor!
                                             }
                                         }
-                                        (not entryMutableReadInsideBarrier! and not entryScheduled![entryMutableReadBarrierSearch!] and (entryMutableReadBarrier.kind == 18 or entryMutableReadBarrier.kind == 20 or entryMutableReadBarrier.kind == 24 or entryMutableReadBarrier.kind == 25 or (entryMutableReadBarrier.kind == 17 and entryMutableReadBarrier.flags == 1) or (entryMutableReadBarrier.kind == 9 and entryMutableReadBarrier.opcode == -204)) and (entryMutableReadBarrier -> sourceStart) < (entryScheduleNode -> sourceStart)) -> if {
+                                        (not entryMutableReadInsideBarrier! and not entryScheduled![entryMutableReadBarrierSearch! - functionIndex! - 1] and (entryMutableReadBarrier.kind == 18 or entryMutableReadBarrier.kind == 20 or entryMutableReadBarrier.kind == 24 or entryMutableReadBarrier.kind == 25 or (entryMutableReadBarrier.kind == 17 and entryMutableReadBarrier.flags == 1) or (entryMutableReadBarrier.kind == 9 and entryMutableReadBarrier.opcode == -204)) and (entryMutableReadBarrier -> sourceStart) < (entryScheduleNode -> sourceStart)) -> if {
                                             false => entryScheduleReady!
                                         }
                                         entryMutableReadBarrierSearch! + 1 => entryMutableReadBarrierSearch!
@@ -6056,7 +6080,7 @@ emitCore context: move EmitContext -> Unit uses Console {
                                     functionIndex! + 1 => entryEarlierEffectSearch!
                                     entryEarlierEffectSearch! < entryEnd! -> while {
                                         context.ir[entryEarlierEffectSearch!] => entryEarlierEffect
-                                        (not entryScheduled![entryEarlierEffectSearch!] and (entryEarlierEffect.kind == 6 or entryEarlierEffect.kind == 18 or entryEarlierEffect.kind == 20 or entryEarlierEffect.kind == 24 or entryEarlierEffect.kind == 25 or (entryEarlierEffect.kind == 17 and entryEarlierEffect.flags == 1) or (entryEarlierEffect.kind == 9 and (entryEarlierEffect.opcode == -204 or entryEarlierEffect.opcode == -205))) and (entryEarlierEffect -> sourceStart) < (entryScheduleNode -> sourceStart)) -> if {
+                                        (not entryScheduled![entryEarlierEffectSearch! - functionIndex! - 1] and (entryEarlierEffect.kind == 6 or entryEarlierEffect.kind == 18 or entryEarlierEffect.kind == 20 or entryEarlierEffect.kind == 24 or entryEarlierEffect.kind == 25 or (entryEarlierEffect.kind == 17 and entryEarlierEffect.flags == 1) or (entryEarlierEffect.kind == 9 and (entryEarlierEffect.opcode == -204 or entryEarlierEffect.opcode == -205))) and (entryEarlierEffect -> sourceStart) < (entryScheduleNode -> sourceStart)) -> if {
                                             entryEarlierEffect.parent => entryEarlierEffectAncestor!
                                             true => entryEarlierRootEffect!
                                             false => entryEarlierInsideRegion!
@@ -6073,7 +6097,7 @@ emitCore context: move EmitContext -> Unit uses Console {
                             }
                             entryScheduleReady! -> if {
                                 entryOrder! -> push(entryScheduleCandidate!)
-                                true => entryScheduled![entryScheduleCandidate!]
+                                true => entryScheduled![entryScheduleCandidate! - functionIndex! - 1]
                                 true => entryScheduleProgress!
                             }
                         }

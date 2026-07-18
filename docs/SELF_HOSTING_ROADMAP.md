@@ -913,6 +913,8 @@ same buffered runtime, so stage 3 no longer writes LLVM one byte at a time.
 - [x] reduce the measured stage-2 verification path from about 376 s to 261 s;
 - [x] lower capture-safe `parallel` callbacks to the native compute pool;
 - [x] make the generated stage-2 compiler use more than one effective core;
+- [x] scope emitter scheduling state and dependency searches to one function;
+- [x] reduce compiler-sized stage-3 LLVM emission below 45 seconds;
 - [ ] make no-capture `SourceText` analysis worker-safe before parallelizing it;
 - [ ] split or buffer independent `emitCore` function bodies for parallel output.
 
@@ -923,9 +925,18 @@ a Windows compute pool. Stage 3 moved from 360.7 s at 0.99 effective cores to
 LLVM. No-capture `analyzeSource` remains serial because the current self-host
 ABI crashes when a large `SourceText` analysis runs on a worker; captured
 function-lowering callbacks are worker-safe and covered by a 100-generation
-execution test. The dominant remaining gate is ordered parallel LLVM body
-emission: after the frontend burst, the large `emitCore` phase returns to one
-core.
+execution test.
+
+The next measurement exposed a larger algorithmic bottleneck inside
+`emitCore`: every function and nested control region allocated scheduling
+state for the complete program IR and repeatedly searched that complete IR.
+Function-local state, bounded searches, and canonical function-symbol lookup
+reduced complete generation to 40.27 s for stage 2 and 42.72 s for stage 3.
+Both 6,942,593-byte outputs have SHA-256
+`3A82A8584A13BBA12A64DBA719A20CE52F2A3787745229C4DFFD8E3B323E5EF3`.
+The affected LLVM suite passes 72/72 and the six-step stage-2 differential
+verifier passes. Ordered parallel LLVM body emission remains useful, but it is
+now a secondary improvement after removing the accidental quadratic work.
 
 ## Immediate Implementation Order
 

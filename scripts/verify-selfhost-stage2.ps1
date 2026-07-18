@@ -19,7 +19,7 @@ $singleSource = Join-Path $repoRoot "tests\SmallLang.ExampleTests\Fixtures\selfh
 $multiLibrarySource = Join-Path $repoRoot "tests\SmallLang.ExampleTests\Fixtures\selfhost-stage2-library-smoke.sl"
 $multiMainSource = Join-Path $repoRoot "tests\SmallLang.ExampleTests\Fixtures\selfhost-stage2-main-smoke.sl"
 $groupedNotSource = Join-Path $repoRoot "tests\SmallLang.ExampleTests\Fixtures\selfhost-stage2-grouped-not-smoke.sl"
-$expectedStage2Bytes = 6730900L
+$expectedStage2Bytes = 6942593L
 
 New-Item -ItemType Directory -Force -Path $artifactsDir | Out-Null
 

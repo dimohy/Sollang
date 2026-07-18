@@ -5438,3 +5438,32 @@ the complete compiler, and stage 2 and stage 3 had the same SHA-256
 The next performance decision must address ordered parallel function-body
 emission. The compute pool now accelerates the frontend burst, but the long
 LLVM text phase still converges to one active core.
+
+## D170 - Bound Self-host Emission Work to the Current Function
+
+Status: implemented and fixed-point verified
+Date: 2026-07-18
+
+The apparent ordered-output bottleneck contained a more important algorithmic
+defect. Each emitted function allocated Boolean scheduling arrays with one slot
+for every node in the complete compiler IR. Nested control regions repeated
+the same allocation and scanned the complete IR when ordering local nodes,
+finding preceding roots, resolving aggregate wrappers, and locating called
+functions. Compiler growth therefore multiplied function and region counts by
+the total program size.
+
+Emitter scheduling arrays now use function-relative indexes. Region work is
+bounded by its owning function, aggregate and mutable-binding searches stop at
+that function boundary, and canonical module-symbol indexes replace repeated
+full-IR function lookup. This changes neither LLVM order nor public language
+semantics.
+
+On the complete 28-source self-host compiler, LLVM generation fell from the
+D169 baseline of 255.5 seconds to 40.27 seconds for stage 2 and 42.72 seconds
+for stage 3, an approximately 83% reduction from that baseline. Both outputs
+are exactly 6,942,593 bytes and share SHA-256
+`3A82A8584A13BBA12A64DBA719A20CE52F2A3787745229C4DFFD8E3B323E5EF3`.
+`llvm-as`, the 72/72 emitter-affected LLVM suite, and the complete six-step
+stage-2 differential verifier pass. Function-body output is still serialized
+to preserve canonical order; a per-function sink can improve the remaining
+roughly 40-second path, but it is no longer masking quadratic global scans.
