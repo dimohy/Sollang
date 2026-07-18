@@ -1,20 +1,42 @@
 <p align="center">
-  <img src="assets/smalllang-logo.svg" alt="SmallLang logo" width="160" />
+  <img src="assets/sollang-logo.svg" alt="Sollang logo" width="160" />
 </p>
 
-# SmallLang
+# Sollang
 
-SmallLang is a tiny native language experiment focused on simple syntax, fast
-compiler structure, and LLVM-backed executable generation.
+> **Bright code, harmonious design, clear solutions, original creation.**
 
-It currently accepts a compact `.sl` language slice, lowers it to LLVM IR, and
+Sollang is a native programming language designed to make complex ideas feel
+clear, composable, and enjoyable to express. Its name deliberately carries four
+meanings rather than reducing the language to a single metaphor:
+
+- **The language of the sun** — `Sol` is light. Sollang aims for warm,
+  transparent code whose intent is easy to see.
+- **The language of harmony** — `Sol` is a musical note. Flowing expressions,
+  balanced structure, and readable rhythm should make code pleasant to read and
+  write.
+- **The language of solutions** — `Sol` begins *solution*. Sollang exists to
+  turn complicated problems into direct, understandable programs.
+- **The language of creators** — `S·O·L` means **Simple, Original, Logical**.
+  Simple forms should give original ideas a logical, powerful implementation.
+
+These are four equal design commitments. None is merely a decorative story for
+the name; they guide syntax, diagnostics, libraries, tooling, and documentation.
+See [The Sollang Philosophy](docs/PHILOSOPHY.md).
+
+## Created With
+
+Sollang was created with **GPT-5.6 Sol Medium**. Its creator is satisfied with
+the result and records that collaboration as part of the project's history.
+
+It currently accepts a compact `.slg` language slice, lowers it to LLVM IR, and
 links minimal Windows x64 or Linux x64 executables. The language favors explicit
 value flow with `value -> target` syntax and expression-first bindings with
 `value => name`.
 
 ## Quick Look
 
-- `.sl` source files
+- `.slg` source files
 - value-flow calls and bindings, such as `"text" -> print` and
   `7 -> square => num`
 - `main { ... }` or omitted `main` with top-level executable statements
@@ -39,13 +61,13 @@ value flow with `value -> target` syntax and expression-first bindings with
   oversized fixed arrays automatically moved to owned heap storage
 - mutable owner names with `!` and checked indexed assignment
 - move-consuming container transforms, such as `values -> append(3) => values`
-- a SmallLang standard library under `stdlib/sys`
+- a Sollang standard library under `stdlib/sys`
 - source-generated lexer/parser code from compact grammar files
 - LLVM-backed Windows x64, Linux x64, and browser WebAssembly output
 
 ## Example
 
-```smalllang
+```sollang
 getName: -> Text {
     "dimohy"
 }
@@ -69,7 +91,7 @@ Hello, dimohy. square = 49
 
 Top-level executable statements can omit the `main` wrapper:
 
-```smalllang
+```sollang
 getName() => name
 7 -> square => num
 "Hello, $name. square = $num" -> sys.io.print
@@ -77,7 +99,7 @@ getName() => name
 
 A range can flow into a block function:
 
-```smalllang
+```sollang
 "n = ? " -> readInt => n
 
 1..9 -> each i {
@@ -88,7 +110,7 @@ A range can flow into a block function:
 
 Subject-style conditionals keep the tested value on the left:
 
-```smalllang
+```sollang
 95 => score
 
 score -> when {
@@ -101,7 +123,7 @@ score -> when {
 ## Run A Sample
 
 ```powershell
-.\scripts\smalllang.ps1 -Source examples\01-function-basic-hello.sl -Output artifacts\01-function-basic-hello.exe -KeepTemps
+.\scripts\sollang.ps1 -Source examples\01-function-basic-hello.slg -Output artifacts\01-function-basic-hello.exe -KeepTemps
 .\artifacts\01-function-basic-hello.exe
 ```
 
@@ -112,7 +134,7 @@ Build the browser WebAssembly sample and serve the repository root with any
 static file server:
 
 ```powershell
-.\scripts\smalllang.ps1 -Source examples\23-webassembly-browser.sl -Output artifacts\23-webassembly-browser.wasm -Target wasm32-browser -KeepTemps
+.\scripts\sollang.ps1 -Source examples\23-webassembly-browser.slg -Output artifacts\23-webassembly-browser.wasm -Target wasm32-browser -KeepTemps
 python -m http.server 5080
 ```
 
@@ -125,57 +147,57 @@ Then open `http://localhost:5080/examples/browser/`.
 - [Decision log](docs/DECISIONS.md)
 - [Self-hosting roadmap and measured progress](docs/SELF_HOSTING_ROADMAP.md)
 - [Array, dictionary, and ownership design](docs/ARRAYS.md)
-- [VS Code language support extension](tools/vscode-smalllang/README.md)
+- [VS Code language support extension](tools/vscode-sollang/README.md)
 - [Example programs](examples)
 
 ## Repository Map
 
-- `examples`: cumulative `.sl` programs that track the grammar progression
+- `examples`: cumulative `.slg` programs that track the grammar progression
 - `examples/browser`: static browser runner for the WebAssembly sample
-- `stdlib/sys`: standard library modules written in SmallLang
+- `stdlib/sys`: standard library modules written in Sollang
 - `syntax`: lexer and grammar rule sources
-- `src/SmallLang.Compiler`: compiler CLI, semantic lowering, and LLVM codegen
-- `src/SmallLang.Compiler.Generators`: source generators for lexing/parsing
-- `tests/SmallLang.ExampleTests`: expected stdout test runner
-- `tools/vscode-smalllang`: local VS Code language support extension
+- `src/Sollang.Compiler`: compiler CLI, semantic lowering, and LLVM codegen
+- `src/Sollang.Compiler.Generators`: source generators for lexing/parsing
+- `tests/Sollang.ExampleTests`: expected stdout test runner
+- `tools/vscode-sollang`: local VS Code language support extension
 
 Multiple user files can be compiled as one program. Library files contribute
 namespaced declarations, and exactly one root file may contain executable
 top-level statements:
 
 ```powershell
-dotnet run --project src/SmallLang.Compiler -- build `
-  examples/modules/52-math.sl examples/52-multi-file-modules.sl `
+dotnet run --project src/Sollang.Compiler -- build `
+  examples/modules/52-math.slg examples/52-multi-file-modules.slg `
   -o artifacts/52-multi-file-modules.exe
 ```
 
 Supplying only the root file is sufficient when imported modules follow the
-dotted-path layout: `import sample.math` discovers `sample/math.sl`.
+dotted-path layout: `import sample.math` discovers `sample/math.slg`.
 Module functions, structs, enums, and traits are internal by default; prefix
 declarations with `public` to make them usable from an importing module.
 
 A project root can be named without repeating its source path on every build:
 
-```smalllang
+```sollang
 project {
     name: "hello"
-    root: "src/main.sl"
+    root: "src/main.slg"
 }
 ```
 
-Save this as `smalllang.project`, then run `smalllang build`. The compiler
+Save this as `sollang.project`, then run `sollang build`. The compiler
 searches the current directory and its ancestors, or accepts an explicit
 `--project <file-or-directory>`. Default artifacts are written under `build/`.
 
 Projects with more than one executable or local packages can declare compact
 maps instead of repeating compiler source arguments:
 
-```smalllang
+```sollang
 project {
     name: "tools"
     products: {
-        compiler: "src/compiler.sl"
-        formatter: "src/formatter.sl"
+        compiler: "src/compiler.slg"
+        formatter: "src/formatter.slg"
     }
     dependencies: {
         syntax: "../syntax"
@@ -183,10 +205,10 @@ project {
 }
 ```
 
-Use `smalllang build --product compiler`. A dependency path points to the exact
-directory containing another `smalllang.project`; its name is also its first
+Use `sollang build --product compiler`. A dependency path points to the exact
+directory containing another `sollang.project`; its name is also its first
 import segment, for example `import syntax.tree as tree`.
 
 ## License
 
-SmallLang is licensed under the [Apache License 2.0](LICENSE).
+Sollang is licensed under the [Apache License 2.0](LICENSE).

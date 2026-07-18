@@ -1,0 +1,35 @@
+import sollang.compiler.ir.typed as typedIr
+
+main {
+    [
+        """
+        check value: Int -> Unit {
+            value > 0 -> if {
+                "positive" -> println
+            } else {
+                "non-positive" -> println
+            }
+        }
+
+        main {
+            true -> if {
+                "yes" -> println
+            } else {
+                "no" -> println
+            }
+        }
+        """,
+        ~
+    ] => sources!
+    sources! -> typedIr.lower => ir!
+    ir! -> each node {
+        node.kind == 18 -> if {
+            ir![node.operand0] => condition
+            ir![node.operand1] => thenRegion
+            ir![node.nextOperand] => elseRegion
+            ir![thenRegion.operand0] => thenExpression
+            ir![elseRegion.operand0] => elseExpression
+            "if = $(node.parent),$(condition.kind),$(condition.typeSymbol),$(thenRegion.kind),$(thenExpression.kind),$(elseRegion.kind),$(elseExpression.kind)" -> println
+        }
+    }
+}

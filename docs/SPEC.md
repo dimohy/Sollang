@@ -1,14 +1,14 @@
-# SmallLang Language Specification Draft
+# Sollang Language Specification Draft
 
 Status: draft
 Date: 2026-07-09
 
-This document is the living specification for SmallLang. It records the language
+This document is the living specification for Sollang. It records the language
 shape before implementation so design decisions do not get lost.
 
 ## Current Boundary
 
-SmallLang implementation has started for the smallest approved language slice.
+Sollang implementation has started for the smallest approved language slice.
 
 The implementation boundary is intentionally narrow:
 
@@ -39,7 +39,7 @@ The implementation boundary is intentionally narrow:
 - compact `when` arms with `condition => value`, including implicit `it` subject
   inside one-input functions
 - parenthesized calls with `function(value)`
-- SmallLang standard library functions `sys.io.print`, `sys.io.println`, and
+- Sollang standard library functions `sys.io.print`, `sys.io.println`, and
   `sys.io.readInt` through global import aliases `print`, `println`, and
   `readInt`
 - optional source-file `namespace` declaration and `import ... as ...` aliases
@@ -149,9 +149,9 @@ or expose this intermediate representation.
 
 ## First Program
 
-The first valid SmallLang program is:
+The first valid Sollang program is:
 
-```smalllang
+```sollang
 main {
     "dimohy" => name
     print("Hello, $name")
@@ -169,7 +169,7 @@ convenience.
 
 The current extended example is:
 
-```smalllang
+```sollang
 getName: -> Text {
     "dimohy"
 }
@@ -193,7 +193,7 @@ Hello, dimohy. square = 49
 
 The one-input function can also name its input explicitly:
 
-```smalllang
+```sollang
 square n: Int -> Int {
     n * n
 }
@@ -201,7 +201,7 @@ square n: Int -> Int {
 
 The current cumulative input and loop example is:
 
-```smalllang
+```sollang
 main {
     "n = ? " -> readInt => n
 
@@ -229,7 +229,7 @@ n = ? 9
 
 The same loop can omit the item name and use the default binding `it`:
 
-```smalllang
+```sollang
 main {
     "n = ? " -> readInt => n
 
@@ -243,7 +243,7 @@ main {
 The executable `main` wrapper can be omitted. These top-level statements are
 compiled as the main body:
 
-```smalllang
+```sollang
 getName() => name
 7 -> square => num
 "Hello, $name. square = $num" -> sys.io.print
@@ -252,7 +252,7 @@ getName() => name
 The input and output functions can also be addressed by their canonical module
 path:
 
-```smalllang
+```sollang
 "n = ? " -> sys.io.readInt => n
 
 1..9 -> each i {
@@ -264,7 +264,7 @@ path:
 The current conditional form keeps the condition as the value flowing into a
 block function-like control expression:
 
-```smalllang
+```sollang
 "n = ? " -> readInt => n
 
 n < 1 or n > 9 -> if {
@@ -279,7 +279,7 @@ n < 1 or n > 9 -> if {
 
 For multi-branch value selection, `when` is an expression:
 
-```smalllang
+```sollang
 grade score: Int -> Text {
     when {
         score >= 90 { "A" }
@@ -292,7 +292,7 @@ grade score: Int -> Text {
 
 When every arm compares the same value, the value can flow into `when` once:
 
-```smalllang
+```sollang
 grade score: Int -> Text {
     score -> when {
         >= 90 { "A" }
@@ -305,10 +305,10 @@ grade score: Int -> Text {
 
 ## Initial Syntax Direction
 
-SmallLang starts with an explicit `main` block instead of a fully general function
+Sollang starts with an explicit `main` block instead of a fully general function
 declaration. Local bindings do not use `let`, `var`, or a declaration keyword:
 
-```smalllang
+```sollang
 getName: -> Text {
     "dimohy"
 }
@@ -326,7 +326,7 @@ main {
 
 For short executable scripts, the `main` wrapper may be omitted:
 
-```smalllang
+```sollang
 getName() => name
 7 -> square => num
 "Hello, $name. square = $num" -> print
@@ -483,13 +483,13 @@ Notes:
   declarations. Top-level single-segment function declarations in that file are
   qualified by the namespace.
 - Imports use the path's final segment as their default alias, so
-  `import smalllang.compiler.lexer` is equivalent to
-  `import smalllang.compiler.lexer as lexer`. An explicit `as` may select a
+  `import sollang.compiler.lexer` is equivalent to
+  `import sollang.compiler.lexer as lexer`. An explicit `as` may select a
   different alias, such as `import sys.runtime as rt`. Default and explicit
   aliases share the same duplicate-alias diagnostic.
-- A `smalllang.project` manifest names the project and either one `root` source
+- A `sollang.project` manifest names the project and either one `root` source
   or a nonempty `products` map. The forms are mutually exclusive. Product roots
-  are confined existing `.sl` files. `smalllang build` searches ancestors;
+  are confined existing `.slg` files. `sollang build` searches ancestors;
   `--project` selects a manifest and `--product` selects among multiple products.
 - A manifest may contain a `dependencies` map from an import-safe project name
   to an exact relative local directory or manifest path. The key must equal the
@@ -509,7 +509,7 @@ Notes:
 
 The preferred binding syntax is:
 
-```smalllang
+```sollang
 "dimohy" => name
 n * i => value
 ```
@@ -539,7 +539,7 @@ semantics before the memory and value model are decided.
 The first function input is the fluent subject. Additional runtime inputs are
 declared after it and supplied positionally in parentheses:
 
-```smalllang
+```sollang
 square: Int -> Int {
     it * it
 }
@@ -575,7 +575,7 @@ checked for count, type, ownership, and duplicate parameter names.
 an async function starts a child task and returns an affine `Task<T>` owner;
 flowing that owner to `await` consumes it exactly once and produces `T`:
 
-```smalllang
+```sollang
 square value: Int -> async Int {
     value * value
 }
@@ -591,7 +591,7 @@ main {
 When no concurrency is needed, the temporary task can be awaited directly in
 the same left-to-right flow:
 
-```smalllang
+```sollang
 6 -> square -> await => squared
 ```
 
@@ -621,7 +621,7 @@ the task boundary without erasing their type. Owned results transfer to the
 awaiting scope; if a task leaves scope unawaited, cleanup joins it and drops the
 result before freeing the context. If native worker creation fails, a moved input
 is dropped before its context is released. The LLVM emitter calls the common
-`smalllang_task_start`, `smalllang_task_join`, and `smalllang_task_release`
+`sollang_task_start`, `sollang_task_join`, and `sollang_task_release`
 runtime boundary. Both native targets now use one cooperative FIFO ready queue;
 `await` pumps ready work until its affine target completes, and release invokes
 the context destroy entry exactly once. There is no OS thread per task and Linux
@@ -674,7 +674,7 @@ Time suspension uses the public `Duration` value type and the affine
 `sleep: Duration -> async Unit` intrinsic. `milliseconds` and `seconds` build a
 duration without losing the unit at the call site:
 
-```smalllang
+```sollang
 250 -> milliseconds -> sleep -> await
 ```
 
@@ -693,7 +693,7 @@ task groups, closure-capture analysis, and failure propagation follow.
 
 Functions may declare local helper functions before their final body expression:
 
-```smalllang
+```sollang
 scale n: Int -> Int {
     double value: Int -> Int {
         value * 2
@@ -715,10 +715,10 @@ no global LLVM symbol is emitted for `double` or `addBase`.
 
 ## Block Functions
 
-SmallLang models executable blocks as values passed to block functions at the
+Sollang models executable blocks as values passed to block functions at the
 semantic layer:
 
-```smalllang
+```sollang
 1..9 -> each i {
     n * i => value
     "$n x $i = $value" -> println
@@ -731,7 +731,7 @@ identifier names the block input for each invocation, and the brace body is the
 executable block argument. For `repeat`, an integer count flows into `repeat` and
 the block receives repeat numbers from `1` through that count:
 
-```smalllang
+```sollang
 3 -> repeat turn {
     "repeat turn $turn" -> println
 }
@@ -746,7 +746,7 @@ full `TypeAnnotation`, so generic and composite capabilities such as `[T; ~]`
 are legal. The block-function body calls the passed executable block with
 `value -> yield`:
 
-```smalllang
+```sollang
 runTimes count: Int -> Unit block turn: Int {
     1..count -> each turn {
         turn -> yield
@@ -768,9 +768,9 @@ closure object, or dynamic block dispatch.
 
 ## Standard Library Imports And Aliases
 
-The current standard library implements the `sys.io` module in SmallLang:
+The current standard library implements the `sys.io` module in Sollang:
 
-```smalllang
+```sollang
 namespace sys.io
 
 import sys.runtime as rt
@@ -791,7 +791,7 @@ readInt prompt: Text -> Int {
 The lower `sys.runtime` functions are intrinsic declarations owned by the
 standard library:
 
-```smalllang
+```sollang
 namespace sys.runtime
 
 print value: Text -> Unit = intrinsic
@@ -818,7 +818,7 @@ readInt -> sys.io.readInt
 
 Source code can use either spelling:
 
-```smalllang
+```sollang
 "Hello" -> print
 "Hello" -> sys.io.print
 "n = ? " -> readInt => n
@@ -827,14 +827,14 @@ Source code can use either spelling:
 
 These functions are resolved through the same function table as user functions.
 They are not parsed as keywords or statement-specific built-ins. Their only
-current privilege is the global alias layer. The backend inlines the SmallLang
+current privilege is the global alias layer. The backend inlines the Sollang
 `sys.io` wrappers and lowers the `sys.runtime` intrinsic boundary to the
 selected platform I/O implementation.
 
 The current purpose-oriented file and random libraries follow the same wrapper
 pattern:
 
-```smalllang
+```sollang
 seedRandom value: Int -> Unit
 randomBelow maxExclusive: Int -> Int
 
@@ -858,7 +858,7 @@ The 100,000,000-record generator avoids a separate sort by dividing
 `1..1,000,000,000` into 100,000,000 10-wide buckets and choosing one
 pseudo-random value from each bucket in increasing bucket order:
 
-```smalllang
+```sollang
 main {
     "artifacts/random-sorted-100m.i64" -> openIntWriter
     20260708 -> seedRandom
@@ -883,7 +883,7 @@ is not a uniform sample over all possible 100,000,000-element subsets of
 
 Numeric expressions use stable, fixed-width primitives:
 
-```smalllang
+```sollang
 Int8(20) + Int8(22) => small
 Float32(1.5) * Float32(2.0) => scaled
 ```
@@ -897,7 +897,7 @@ Numeric rules:
 - Constructor-like conversions such as `Int8(value)` and `Float32(value)` are
   explicit. Literal range failures are compile errors and runtime integer
   narrowing performs a bounds check.
-- Binary arithmetic requires equal operand types; SL does not silently widen,
+- Binary arithmetic requires equal operand types; Sollang does not silently widen,
   narrow, or change signedness. `%` is integer-only and unary `-` rejects
   unsigned values.
 - `*`, `/`, and `%` bind tighter than `+` and `-`; operators are
@@ -916,7 +916,7 @@ Numeric rules:
 
 Struct declarations may contain helper struct declarations:
 
-```smalllang
+```sollang
 struct Parser {
     struct Cursor {
         offset: Int
@@ -937,7 +937,7 @@ structs.
 
 Generic type and compile-time value parameters use `<...>`:
 
-```smalllang
+```sollang
 Option<Int>
 Result<Int, Text>
 identity<T> value: T -> T => value
@@ -960,7 +960,7 @@ new enum value.
 
 Constant ranges and compile-time `each` expressions can construct collections:
 
-```smalllang
+```sollang
 [1..10]
 [1..10 -> each { it + 1 }]
 {1..3 -> each { it: it * 10 }}
@@ -978,7 +978,7 @@ before generic containers and borrowing are added.
 
 Static arrays:
 
-```smalllang
+```sollang
 [1, 2, 3] => numbers
 [0; 8] => zeros
 numbers[0] => first
@@ -987,7 +987,7 @@ numbers -> len => count
 
 Dynamic arrays:
 
-```smalllang
+```sollang
 [10, 20, ~] => values!
 values! -> push(30)
 values![2] => third
@@ -1002,7 +1002,7 @@ values -> updated(0, 99) => values
 
 Dictionaries:
 
-```smalllang
+```sollang
 { 1: 100, 2: 200 } => scores!
 scores! -> put(3, 300)
 scores![3] => score
@@ -1160,7 +1160,7 @@ handle containing a backing pointer, used byte count, and capacity. `box T`
 remains different and always means an individually owned heap allocation;
 ordinary structs remain inline values.
 
-```smalllang
+```sollang
 Arena(4096) => syntax!
 syntax! -> alloc(24, 8) => nodeOffset
 syntax! -> store(nodeOffset, UInt8(1))
@@ -1177,7 +1177,7 @@ syntax! -> reset
 - Growth selects at least `max(capacity * 2, requiredEnd)`, copies only used
   bytes, and immediately frees the previous block.
 - `store(UIntSize, UInt8)` and `load(UIntSize)` perform bounds checks against
-  used bytes. Raw pointers are not exposed in safe SL.
+  used bytes. Raw pointers are not exposed in safe Sollang.
 - `reset` retains capacity and sets used bytes to zero. Existing offsets become
   logically invalid; subsequent checked access is relative to the new contents.
 - `Arena` is affine: readonly borrowing, `mut Arena`, and `move Arena` follow the
@@ -1188,9 +1188,9 @@ syntax! -> reset
 
 ## Memory-Mapped Bytes
 
-Native SL programs can map a file directly as an owned byte view:
+Native Sollang programs can map a file directly as an owned byte view:
 
-```smalllang
+```sollang
 map read "huge.dat" at 4_000_000_000 for 64_000_000 => data
 map write "index.dat" size 10_000_000 => output!
 output![0] = UInt8(42)
@@ -1218,7 +1218,7 @@ output! -> flush
 Native entry points expose their launch arguments through the standard-library
 property `sys.process.arguments`:
 
-```smalllang
+```sollang
 import sys.process as process
 
 process.arguments => args
@@ -1239,7 +1239,7 @@ The caller body cannot feed constraints back into that choice.
 `Text`; `each` binds `Text`. The first item is the executable name supplied by
 the host and must not be treated as a canonical or security-checked path.
 
-On Windows, SL uses the operating system's Unicode command-line parser and
+On Windows, Sollang uses the operating system's Unicode command-line parser and
 converts each UTF-16 item to validated UTF-8 storage retained until program
 exit. That storage is released exactly once by the runtime. On Linux, the
 native `argc`/`argv` entry ABI supplies stable byte spans directly. Browser wasm
@@ -1252,7 +1252,7 @@ for programs that do not use this host capability.
 Environment lookup uses the same module and returns an option so a present
 empty value is distinct from a missing name:
 
-```smalllang
+```sollang
 process.environment("LLVM_ROOT") -> when {
     Option<Text>.None => "LLVM_ROOT is not set"
     Option<Text>.Some(path) => path
@@ -1261,7 +1261,7 @@ process.environment("LLVM_ROOT") -> when {
 
 The input name must be valid UTF-8 without an embedded zero byte. The returned
 `Text` is a borrowed process-lifetime view. Linux borrows the stable `getenv`
-storage because safe SL currently has no environment mutation API. Windows
+storage because safe Sollang currently has no environment mutation API. Windows
 queries the Unicode environment, converts a present value to UTF-8, retains it
 in a runtime-owned allocation list, and releases the list at process exit.
 Repeated Windows lookups may retain duplicate converted values until exit; a
@@ -1275,7 +1275,7 @@ environment lookup until a host capability is explicitly supplied.
 
 `sys.process.run` executes one program directly without invoking a shell:
 
-```smalllang
+```sollang
 import sys.process as process
 
 ["clang", "module.ll", "-o", "module.exe", ~] => argv
@@ -1302,7 +1302,7 @@ Hangul, exit status, and a missing executable on Windows and Linux.
 `sys.file` provides a generic writer alongside the legacy sorted-Int64 demo
 API:
 
-```smalllang
+```sollang
 import sys.file as file
 
 "values.bin" -> file.openWriter
@@ -1325,7 +1325,7 @@ status path.
 
 The reader uses explicit zero-input type application and property-call syntax:
 
-```smalllang
+```sollang
 "values.bin" -> file.openReader
 file.read<UInt16> => value
 file.closeReader
@@ -1341,7 +1341,7 @@ serialization contract rather than implicit ABI dumping.
 
 The asynchronous counterpart is a zero-input generic property as well:
 
-```smalllang
+```sollang
 file.readAsync<UInt16> => pending
 pending -> await => value
 ```
@@ -1365,7 +1365,7 @@ asynchronous work before touching the shared cursor.
 The compatibility reader still has one process-wide cursor, but new code can
 use an affine native file owner and position-independent reads:
 
-```smalllang
+```sollang
 file.openReadAsync("values.bin") => opening
 opening -> await => opened
 opened -> when {
@@ -1393,7 +1393,7 @@ by the signed host APIs return `Err("io")`.
 Writes use a separate affine capability so a read-only handle cannot be used as
 a writer:
 
-```smalllang
+```sollang
 file.openWrite("values.bin") => opened
 opened -> when {
     Ok(writer) {
@@ -1426,7 +1426,7 @@ both reads and writes.
 file data and metadata to reach the filesystem through `FlushFileBuffers` on
 Windows and `fsync` on Linux. The operation owns a duplicate writer handle and
 shares the same FIFO worker, so earlier submitted writes complete before the
-barrier. SL deliberately calls this `sync`, not `flush`: random-access writers
+barrier. Sollang deliberately calls this `sync`, not `flush`: random-access writers
 have no hidden language buffer to empty. Deterministic scope drop closes the
 original handle immediately and does not await Tasks because every pending
 operation owns its own duplicate. A future IOCP/io_uring completion backend
@@ -1436,7 +1436,7 @@ Double-quoted UTF-8 literals decode `\n`, `\r`, `\t`, and `\\` in text
 segments and support optional identifier and expression interpolation. Unknown
 backslash sequences remain literal for backward compatibility:
 
-```smalllang
+```sollang
 "Hello World"
 "Hello, $name"
 "next = $(score + 1)"
@@ -1457,7 +1457,7 @@ Triple-quoted raw literals preserve quotes, backslashes, and `$` markers as
 ordinary text. A multiline raw literal removes its opening newline, closing
 newline, and the indentation shared with its closing delimiter:
 
-```smalllang
+```sollang
 """
 JSON and paths need no escaping: C:\data\input.json
 $(this remains text)
@@ -1465,10 +1465,10 @@ $(this remains text)
 ```
 
 The opening and closing delimiters must have matching indentation. Every
-nonblank content line must include that indentation; embedded SmallLang source
+nonblank content line must include that indentation; embedded Sollang source
 should then be indented normally relative to the delimiters:
 
-```smalllang
+```sollang
 main {
     """
     main {
@@ -1486,7 +1486,7 @@ contain a shorter quote run; opening and closing delimiter widths must match.
 Interpolation rules:
 
 - `$name` inserts the current value of the binding named `name`.
-- `$(expr)` inserts the value of a SmallLang expression.
+- `$(expr)` inserts the value of a Sollang expression.
 - Interpolating an integer value uses its invariant decimal display form.
 - `{` and `}` inside string literals are ordinary text characters.
 - The older `{name}` interpolation form is removed from the preferred language
@@ -1498,7 +1498,7 @@ Interpolation rules:
 Every function is pure by default. A function that performs an external effect
 declares the required capability set after its return type:
 
-```smalllang
+```sollang
 announce text: Text -> Unit uses Console {
     text -> println
 }
@@ -1531,7 +1531,7 @@ capability set and does not silently infer or erase authority.
 The accepted user-defined surface keeps operation types inside a module-level
 effect declaration and references that effect from `uses`:
 
-```smalllang
+```sollang
 public effect Failure {
     fail message: Text -> Int
 }
@@ -1561,7 +1561,7 @@ features at this stage.
 globally aliases them as `print` and `println` before user code is analyzed. The
 preferred source form is a value-flow call:
 
-```smalllang
+```sollang
 "Hello, $name. square = $num" -> print
 "Hello, $name. square = $num" -> println
 "Hello, $name. square = $num" -> sys.io.print
@@ -1569,7 +1569,7 @@ preferred source form is a value-flow call:
 
 The parenthesized forms remain valid and equivalent:
 
-```smalllang
+```sollang
 print("Hello, $name. square = $num")
 println("Hello, $name. square = $num")
 sys.io.print("Hello, $name. square = $num")
@@ -1591,14 +1591,14 @@ followed by a single line-feed byte in the current runtime slice.
 library and globally aliased as `readInt`. The preferred form mirrors output
 value flow:
 
-```smalllang
+```sollang
 "n = ? " -> readInt => n
 "n = ? " -> sys.io.readInt => n
 ```
 
 The parenthesized form is also valid:
 
-```smalllang
+```sollang
 n = readInt("n = ? ")
 n = sys.io.readInt("n = ? ")
 ```
@@ -1618,16 +1618,16 @@ silently fall back to an arbitrary value.
 The first loop form is implemented as the built-in block function `each`. The
 preferred explicit item form is:
 
-```smalllang
+```sollang
 1..9 -> each i {
     n * i => value
     "$n x $i = $value" -> println
 }
 ```
 
-When the item name is omitted, SmallLang provides the default binding `it`:
+When the item name is omitted, Sollang provides the default binding `it`:
 
-```smalllang
+```sollang
 1..9 -> each {
     n * it => value
     "$n x $it = $value" -> println
@@ -1636,7 +1636,7 @@ When the item name is omitted, SmallLang provides the default binding `it`:
 
 The older compatibility spelling remains accepted:
 
-```smalllang
+```sollang
 each i in 1..9 {
     n * i => value
     "$n x $i = $value" -> println
@@ -1652,14 +1652,14 @@ innermost scope.
 
 A single conditional transfer may use the guard-flow shorthand:
 
-```smalllang
+```sollang
 inner! == 2 -> if continue
 inner! == 3 -> if break
 ```
 
 The condition must be `Bool`. This is exactly the braceless form of
 `condition -> if { continue }` or `condition -> if { break }`; false continues
-with the next statement. SmallLang deliberately does not use `?` here because
+with the next statement. Sollang deliberately does not use `?` here because
 postfix `?` already means typed `Result` propagation.
 
 The self-hosted LLVM backend represents an early loop transfer as a dedicated
@@ -1670,9 +1670,9 @@ dynamic arrays release their backing pointer; dictionaries release key and
 value stores in reverse declaration order. The normal back-edge invokes the
 same scope cleanup so every iteration has identical ownership semantics.
 
-An explicit early return keeps SL's left-to-right flow:
+An explicit early return keeps Sollang's left-to-right flow:
 
-```smalllang
+```sollang
 value -> return
 return # Unit functions only
 ```
@@ -1691,7 +1691,7 @@ the loop executes zero times.
 
 `fold` uses the same range input shape but returns a value:
 
-```smalllang
+```sollang
 1..100 -> fold 0 sum, i {
     sum + i
 } -> total
@@ -1707,7 +1707,7 @@ directly to LLVM loop blocks with accumulator and item phi values.
 
 The current conditional syntax is flow-oriented:
 
-```smalllang
+```sollang
 condition -> if {
     thenBody
 } else {
@@ -1720,7 +1720,7 @@ both branches produce `Unit`; in that form the `else` branch may be omitted. Whe
 `if` is used as a value, `else` is required and both branches must produce the
 same type.
 
-```smalllang
+```sollang
 n == 9 -> if {
     "nine"
 } else {
@@ -1731,7 +1731,7 @@ n == 9 -> if {
 For multiple ordered conditions, `when` is preferred over chaining many nested
 `else if` branches:
 
-```smalllang
+```sollang
 when {
     score >= 90 { "A" }
     score >= 80 { "B" }
@@ -1747,7 +1747,7 @@ type. Branch-local bindings do not escape their branch body.
 When every arm compares the same value, the value can flow into `when` once and
 each arm can start with a comparison operator:
 
-```smalllang
+```sollang
 score -> when {
     >= 90 -> "A"
     >= 80 -> "B"
@@ -1761,7 +1761,7 @@ comparisons, but the subject expression is evaluated once before the branch
 chain. The current shorthand supports `==`, `!=`, `<`, `<=`, `>`, and `>=`.
 It also supports inclusive range arms:
 
-```smalllang
+```sollang
 score -> when {
     90..100 -> "A"
     80..89 -> "B"
@@ -1773,7 +1773,7 @@ score -> when {
 When a one-input function uses the default `it` input, the subject can be
 omitted entirely:
 
-```smalllang
+```sollang
 grade: Int -> Text => when {
     90..100 => "A"
     80..89 => "B"
@@ -1784,7 +1784,7 @@ grade: Int -> Text => when {
 
 If the input is explicitly named, pass it explicitly into `when`:
 
-```smalllang
+```sollang
 grade score: Int -> Text => score -> when {
     >= 90 => "A"
     >= 80 => "B"
@@ -1795,10 +1795,10 @@ grade score: Int -> Text => score -> when {
 
 ## Value-Flow Calls
 
-SmallLang accepts `->` as the preferred direction for function calls where the
+Sollang accepts `->` as the preferred direction for function calls where the
 input value should be visually explicit:
 
-```smalllang
+```sollang
 main {
     getName() => name
     7 -> square => num
@@ -1810,18 +1810,18 @@ The expression on the left flows into the function or callable path on the
 right. `->` is a fluent pipeline step, not a binding form. The example above is
 semantically equivalent to:
 
-```smalllang
+```sollang
 print("Hello, $name. square = $num")
 ```
 
 This makes argument flow and return flow visible without discarding normal
 parenthesized calls where they are useful. Parenthesized calls remain valid for
 ordinary calls such as `getName()`, but the value-flow form is the preferred
-SmallLang style for single-primary-input operations.
+Sollang style for single-primary-input operations.
 
 Return values are bound with `=>`:
 
-```smalllang
+```sollang
 getName() => name
 7 -> square => num
 name -> greeting => message
@@ -1829,7 +1829,7 @@ name -> greeting => message
 
 Function targets in a value-flow statement should omit empty parentheses:
 
-```smalllang
+```sollang
 7 -> square => num
 "Hello, $name. square = $num" -> print
 ```
@@ -1844,16 +1844,16 @@ the call marker: `1..9 -> each { ... }` and `1..9 -> each i { ... }` remain
 valid without `each()`.
 
 The assignment form remains valid as a compatibility syntax, but the preferred
-SmallLang style is still expression-first:
+Sollang style is still expression-first:
 
-```smalllang
+```sollang
 num = square(7)
 n * i => value
 ```
 
 The corresponding function type notation follows the same direction:
 
-```smalllang
+```sollang
 greeting: Text -> Text
 print: Text -> Io<Unit>
 stdout.write: Bytes -> Io<Int>
@@ -1861,7 +1861,7 @@ stdout.write: Bytes -> Io<Int>
 
 The current parser accepts:
 
-```smalllang
+```sollang
 value -> function
 ```
 
@@ -1869,13 +1869,13 @@ as a `FlowExpression`. Since binding is now explicit with `=>`, a bare flow
 target is never interpreted as a binding. Semantic analysis resolves each target
 as a callable path. The executable lowering remains equivalent to:
 
-```smalllang
+```sollang
 function(value)
 ```
 
 for unary calls. Chained value-flow calls are parsed left-to-right:
 
-```smalllang
+```sollang
 text -> trim -> lower -> slugify => slug
 ```
 
@@ -1949,7 +1949,7 @@ They must not silently fall back to another backend.
 
 For the current runtime sample:
 
-```smalllang
+```sollang
 getName: -> Text {
     "dimohy"
 }
@@ -1978,7 +1978,7 @@ native entry function
 -> write string literal segments directly
 -> write name as a text slice
 -> convert num to decimal bytes at runtime and write them
--> resolve print as global alias for the SmallLang function sys.io.print
+-> resolve print as global alias for the Sollang function sys.io.print
 -> inline sys.io.print to sys.runtime.print
 -> lower sys.runtime.print to selected backend output bytes
 -> return process exit code
@@ -2001,7 +2001,7 @@ Optimization requirements:
 
 The current compiler supports:
 
-```smalllang
+```sollang
 getName: -> Text {
     "dimohy"
 }
@@ -2022,10 +2022,10 @@ and the cumulative input and loop sample shown above.
 Current backend:
 
 - targets: Windows x64, Linux x64, and browser WebAssembly
-- LLVM toolchain: LLVM 22.1.8, downloaded under `.tools` by `scripts/smalllang.ps1`
-- lexer: generated from `syntax/smalllang.lexer` by a Roslyn incremental source
+- LLVM toolchain: LLVM 22.1.8, downloaded under `.tools` by `scripts/sollang.ps1`
+- lexer: generated from `syntax/sollang.lexer` by a Roslyn incremental source
   generator
-- parser: generated from `syntax/smalllang.grammar` by a Roslyn incremental source
+- parser: generated from `syntax/sollang.grammar` by a Roslyn incremental source
   generator
 - semantics: zero-argument and one-input function declarations, including
   default `it` inputs, explicit input names, local function scopes, standard
@@ -2049,7 +2049,7 @@ Current backend:
   boxed fields or enum payloads, readonly owned-value borrows, static recursive
   drop glue, and expression-first bindings are type-checked for the current slice
 - fixed array literals preserve homogeneous element type for `Int` and `Text`;
-  `Text` arrays use 16-byte `%smalllang.text` elements, checked indexing returns
+  `Text` arrays use 16-byte `%sollang.text` elements, checked indexing returns
   `Text`, and their backing storage is deterministically released
 - copyable user `struct` and `enum` elements receive an element-specific
   parametric array type and use their exact LLVM aggregate layout; arrays of
@@ -2089,20 +2089,20 @@ Current backend:
   lowering area so target-independent LLVM emission stays navigable.
 - platform runtime layer: `LlvmRuntimePlatform` owns the target triple, native
   entry point name, external OS declarations, stdin/stdout handle setup, and
-  byte-level `smalllang_write`/`smalllang_read_stdin` primitives
-- Windows entry point: `smalllang_start`
+  byte-level `sollang_write`/`sollang_read_stdin` primitives
+- Windows entry point: `sollang_start`
 - Windows imports: `GetStdHandle`, `ReadFile`, `WriteFile`
 - Windows linker: `lld-link`
 - Windows CRT: none
 - Linux entry point: `main`
 - Linux imports: `read`, `write`
 - Linux linker: WSL `cc` after producing an ELF object with Windows LLVM `clang`
-- current representative Windows executable sizes: 1,536 bytes for `01-function-basic-hello.sl`
-  and `05-function-local.sl`, 2,048 bytes for `08-block-each-default-it.sl`, and 2,560
+- current representative Windows executable sizes: 1,536 bytes for `01-function-basic-hello.slg`
+  and `05-function-local.slg`, 2,048 bytes for `08-block-each-default-it.slg`, and 2,560
   bytes for the sorted-int-file workflow samples
 
 The current runtime backend keeps source-language lowering shared across
-targets. It calls generated user SmallLang functions, inlines standard library
+targets. It calls generated user Sollang functions, inlines standard library
 `sys.io` wrappers, converts integer output to decimal bytes at runtime, and
 parses `readInt` in common LLVM IR. Only target triple selection, native entry
 point setup, external OS declarations, byte writes, byte reads, and linker choice
@@ -2119,15 +2119,15 @@ The compiler implementation is organized by responsibility:
 - `Semantics`: current binding/interpolation/I/O/loop lowering
 - `CodeGen`: shared LLVM IR generation plus target runtime platform layers
 - `Tooling`: LLVM, Windows linker, and WSL Linux linker integration
-- `stdlib/sys`: SmallLang standard library modules for I/O, random, file
+- `stdlib/sys`: Sollang standard library modules for I/O, random, file
   workflow wrappers, and intrinsic boundary declarations
-- `tests/SmallLang.ExampleTests`: executable sample expected stdout runner
+- `tests/Sollang.ExampleTests`: executable sample expected stdout runner
 
-Lexer rules are expressed in the compact `syntax/smalllang.lexer` file. The source
+Lexer rules are expressed in the compact `syntax/sollang.lexer` file. The source
 generator reads that file as an MSBuild `AdditionalFiles` input and emits
 `TokenKind` plus the deterministic lexer during C# compilation.
 
-Parser rules are expressed in the compact `syntax/smalllang.grammar` file. The
+Parser rules are expressed in the compact `syntax/sollang.grammar` file. The
 source generator validates the first approved grammar slice and emits the
 recursive descent parser during C# compilation. This keeps the grammar visible
 without introducing a separate external parser generation toolchain at this

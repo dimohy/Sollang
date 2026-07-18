@@ -10,7 +10,7 @@
 ## Applied Now
 
 1. Replaced dictionary `% capacity` slot wrapping with `and (capacity - 1)`.
-   SmallLang dictionary capacities are powers of two, so this is equivalent and cheaper.
+   Sollang dictionary capacities are powers of two, so this is equivalent and cheaper.
 
 2. Replaced `found`/`slot` stack alloca/load/store in dictionary find with SSA phi values.
    This removes a stack round-trip from put and lookup paths.
@@ -53,7 +53,7 @@ Large benchmark median:
 
 Current median from the same workload:
 
-| Section | SmallLang after | C# | Go | Rust |
+| Section | Sollang after | C# | Go | Rust |
 | --- | ---: | ---: | ---: | ---: |
 | Dictionary build | 188 ms | 156 ms | 1,187 ms | 357 ms |
 | Dictionary lookup | 94 ms | 55 ms | 259 ms | 150 ms |
@@ -61,7 +61,7 @@ Current median from the same workload:
 ## Next Targets
 
 1. Implement real group probing.
-   Current SmallLang is still scalar slot-by-slot probing. SwissTable designs compare a group of control bytes first, then only compare keys for matching H2 candidates. This should be the next major lookup optimization.
+   Current Sollang is still scalar slot-by-slot probing. SwissTable designs compare a group of control bytes first, then only compare keys for matching H2 candidates. This should be the next major lookup optimization.
 
 2. Add mirrored or sentinel control bytes.
    This avoids wrap handling at group boundaries and makes group probing simpler.
@@ -73,4 +73,4 @@ Current median from the same workload:
    Benchmarks and real workloads that know the approximate entry count should avoid repeated grow/rehash cycles.
 
 5. Add allocator counters.
-   SmallLang currently reports estimated live backing storage. Allocation-count and total-allocated-byte counters would make memory benchmarking comparable to C# allocation metrics.
+   Sollang currently reports estimated live backing storage. Allocation-count and total-allocated-byte counters would make memory benchmarking comparable to C# allocation metrics.

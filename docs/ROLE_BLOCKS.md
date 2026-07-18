@@ -3,18 +3,18 @@
 Status: accepted design, common foundation implemented; roles in progress  
 Updated: 2026-07-14
 
-This document is the canonical design and completion checklist for SmallLang
+This document is the canonical design and completion checklist for Sollang
 blocks that perform a typed role. A checkbox is completed only when the linked
 compiler path and regression evidence exist. Design agreement alone never
 counts as implementation.
 
 ## Decision
 
-SmallLang will express builders, scoped contexts, and effect handlers through
+Sollang will express builders, scoped contexts, and effect handlers through
 one result-producing block-function mechanism. `build`, `with`, and `handle`
 are ordinary function names, not reserved words and not parser extensions.
 
-```smalllang
+```sollang
 spec -> build field {
     field.name("compiler")
     field.optimize(true)
@@ -32,7 +32,7 @@ program -> handle effect {
 The declaration uses the existing block-function form. Its final expression is
 the function result, just as it is for an ordinary braced function.
 
-```smalllang
+```sollang
 build spec: BuildSpec -> Product block field: ProductBuilder {
     spec -> ProductBuilder => builder!
     builder -> yield
@@ -42,7 +42,7 @@ build spec: BuildSpec -> Product block field: ProductBuilder {
 
 Existing Unit block functions remain valid and unchanged:
 
-```smalllang
+```sollang
 runTimes count: Int -> Unit block turn: Int {
     1..count -> each turn {
         turn -> yield
@@ -57,7 +57,7 @@ runTimes count: Int -> Unit block turn: Int {
 - `=> name` after the closing brace binds the block function's return value.
 - `build`, `with`, and `handle` are resolved through normal name, import,
   generic, and trait lookup. They are never context-sensitive keywords.
-- A role body contains the normal SmallLang AST. It cannot introduce arbitrary
+- A role body contains the normal Sollang AST. It cannot introduce arbitrary
   tokens or a private subgrammar.
 - A Unit-returning block call cannot use `=> name`.
 - A non-Unit-returning block call must bind or otherwise consume its owned
@@ -125,13 +125,13 @@ separate accepted design and are not implied by the word `handle`.
 
 Evidence:
 
-- [`274-result-role-block.sl`](../examples/274-result-role-block.sl) covers a
+- [`274-result-role-block.slg`](../examples/274-result-role-block.slg) covers a
   struct literal and a user-defined `build` block in one source file.
-- [`275-owned-result-role-block.sl`](../examples/275-owned-result-role-block.sl)
+- [`275-owned-result-role-block.slg`](../examples/275-owned-result-role-block.slg)
   covers mutable owned-result transfer and subsequent use.
-- `examples/diagnostics/block-*.sl` covers Unit binding, missing result, result
+- `examples/diagnostics/block-*.slg` covers Unit binding, missing result, result
   type mismatch, and discarded owned result.
-- [`12-block-function-user-defined-yield.sl`](../examples/12-block-function-user-defined-yield.sl)
+- [`12-block-function-user-defined-yield.slg`](../examples/12-block-function-user-defined-yield.slg)
   preserves the original Unit block behavior.
 
 ### B. Builder role
@@ -143,7 +143,7 @@ Evidence:
 - [ ] Builder-only capabilities cannot escape their scope.
 - [ ] A native Windows and Linux example returns the expected built value.
 
-Current evidence: [`277-typed-role-block-forms.sl`](../examples/277-typed-role-block-forms.sl)
+Current evidence: [`277-typed-role-block-forms.slg`](../examples/277-typed-role-block-forms.slg)
 proves that `build` is an ordinary user-defined result block and that its
 before/body/after phases are ordered. Builder-specific mutation and escape
 rules remain unchecked.
@@ -184,7 +184,7 @@ are not yet matched, discharged, resumed, or lowered by a lexical handler.
 
 ### E. Self-hosting and release evidence
 
-- [x] `syntax/smalllang.grammar` and the generated SL grammar agree.
+- [x] `syntax/sollang.grammar` and the generated Sollang grammar agree.
 - [x] The self-host parser recognizes result-producing role blocks.
 - [ ] The self-host semantic phase enforces the same role contracts.
 - [ ] The self-host LLVM emitter lowers the same examples.
@@ -194,30 +194,30 @@ are not yet matched, discharged, resumed, or lowered by a lexical handler.
 - [x] The roadmap records exact completed, partial, and missing gate counts.
 - [x] The implementation is committed as a reproducible baseline.
 
-Parser evidence: [`276-selfhost-result-role-block-parser.sl`](../examples/276-selfhost-result-role-block-parser.sl)
-executes the generated grammar through the SL lexer/parser VM. The grammar
+Parser evidence: [`276-selfhost-result-role-block-parser.slg`](../examples/276-selfhost-result-role-block-parser.slg)
+executes the generated grammar through the Sollang lexer/parser VM. The grammar
 places block-function statements before general expression statements, matching
 the bootstrap parser's deterministic dispatch order.
 
 Partial semantic/IR evidence:
-[`279-selfhost-result-role-block-semantics.sl`](../examples/279-selfhost-result-role-block-semantics.sl)
-proves that the SL compiler's own AST records the role target and result name,
+[`279-selfhost-result-role-block-semantics.slg`](../examples/279-selfhost-result-role-block-semantics.slg)
+proves that the Sollang compiler's own AST records the role target and result name,
 its symbol/call/type passes resolve and propagate the result and typed block
 item, its type checker accepts the declared source/item contract, and flat
 typed IR retains the call, result binding, and nested body operation.
-[`280-selfhost-role-block-contract-check.sl`](../examples/280-selfhost-role-block-contract-check.sl)
+[`280-selfhost-role-block-contract-check.slg`](../examples/280-selfhost-role-block-contract-check.slg)
 proves that the source expression is selected only from the region before the
 role target, a mismatched source emits code 6, and role syntax targeting an
 ordinary function without a block input emits code 17. Runtime calls nested in
 the caller block are excluded from source-module lookup.
-[`281-selfhost-generic-role-specialization.sl`](../examples/281-selfhost-generic-role-specialization.sl)
+[`281-selfhost-generic-role-specialization.slg`](../examples/281-selfhost-generic-role-specialization.slg)
 proves outside-in generic specialization for scalar `T`, `[T; ~] -> item: T`,
 `T -> items: [T; ~]`, an imported role reached through a default import alias,
 caller-body operators, and typed IR.
-[`283-selfhost-recursive-type-terms.sl`](../examples/283-selfhost-recursive-type-terms.sl)
+[`283-selfhost-recursive-type-terms.slg`](../examples/283-selfhost-recursive-type-terms.slg)
 proves recursive canonical type terms and full-depth substitution independent
 of the former shallow component slots.
-[`284-generic-composite-role-block.sl`](../examples/284-generic-composite-role-block.sl)
+[`284-generic-composite-role-block.slg`](../examples/284-generic-composite-role-block.slg)
 proves reference semantic specialization, `yield`, caller binding, LLVM
 execution, and owned cleanup for a composite generic item; the matching
 diagnostic rejects a specialized `yield` mismatch. The semantic checkbox

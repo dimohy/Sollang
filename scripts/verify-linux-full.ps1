@@ -1,19 +1,24 @@
 param(
     [string]$Distribution = "Ubuntu",
     [ValidateRange(1, 4)]
-    [int]$Jobs = 4
+    [int]$Jobs = 4,
+    [switch]$SkipBuild
 )
 
 $ErrorActionPreference = "Stop"
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
-$solution = Join-Path $repoRoot "SmallLang.slnx"
-$runnerProject = Join-Path $repoRoot "tests\SmallLang.ExampleTests\SmallLang.ExampleTests.csproj"
+$solution = Join-Path $repoRoot "Sollang.slnx"
+$runnerProject = Join-Path $repoRoot "tests\Sollang.ExampleTests\Sollang.ExampleTests.csproj"
 
-Write-Host "[linux-full 1/2] Build the Release solution."
-& dotnet build $solution -c Release --no-restore
-if ($LASTEXITCODE -ne 0) {
-    throw "Release solution build failed"
+if ($SkipBuild) {
+    Write-Host "[linux-full 1/2] REUSE the existing Release build."
+} else {
+    Write-Host "[linux-full 1/2] Build the Release solution."
+    & dotnet build $solution -c Release --no-restore
+    if ($LASTEXITCODE -ne 0) {
+        throw "Release solution build failed"
+    }
 }
 Write-Host "[linux-full 1/2] PASS Release solution"
 

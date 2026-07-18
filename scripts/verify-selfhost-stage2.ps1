@@ -6,22 +6,22 @@ $ErrorActionPreference = "Stop"
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $artifactsDir = Join-Path $repoRoot "artifacts\example-tests"
-$runnerProject = Join-Path $repoRoot "tests\SmallLang.ExampleTests\SmallLang.ExampleTests.csproj"
-$manifestPath = Join-Path $repoRoot "tests\SmallLang.ExampleTests\Fixtures\selfhost-slc-driver.sources.txt"
-$stage1Path = Join-Path $artifactsDir "selfhost-slc-driver.exe"
+$runnerProject = Join-Path $repoRoot "tests\Sollang.ExampleTests\Sollang.ExampleTests.csproj"
+$manifestPath = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-sollangc-driver.sources.txt"
+$stage1Path = Join-Path $artifactsDir "selfhost-sollangc-driver.exe"
 $stage2LlvmPath = Join-Path $artifactsDir "selfhost-stage2.ll"
 $stage2BitcodePath = Join-Path $artifactsDir "selfhost-stage2.bc"
 $stage2Path = Join-Path $artifactsDir "selfhost-stage2.exe"
 $llvmDir = Join-Path $repoRoot ".tools\llvm-22.1.8"
 $llvmAsPath = Join-Path $llvmDir "bin\llvm-as.exe"
 $clangPath = Join-Path $llvmDir "bin\clang.exe"
-$singleSource = Join-Path $repoRoot "tests\SmallLang.ExampleTests\Fixtures\selfhost-stage2-single-smoke.sl"
-$multiLibrarySource = Join-Path $repoRoot "tests\SmallLang.ExampleTests\Fixtures\selfhost-stage2-library-smoke.sl"
-$multiMainSource = Join-Path $repoRoot "tests\SmallLang.ExampleTests\Fixtures\selfhost-stage2-main-smoke.sl"
-$groupedNotSource = Join-Path $repoRoot "tests\SmallLang.ExampleTests\Fixtures\selfhost-stage2-grouped-not-smoke.sl"
-$semanticContextSource = Join-Path $repoRoot "selfhost\semantic\context.sl"
-$processSource = Join-Path $repoRoot "stdlib\sys\process.sl"
-$expectedStage2Bytes = 8397917L
+$singleSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-single-smoke.slg"
+$multiLibrarySource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-library-smoke.slg"
+$multiMainSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-main-smoke.slg"
+$groupedNotSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-grouped-not-smoke.slg"
+$semanticContextSource = Join-Path $repoRoot "selfhost\semantic\context.slg"
+$processSource = Join-Path $repoRoot "stdlib\sys\process.slg"
+$expectedStage2Bytes = 8781929L
 
 New-Item -ItemType Directory -Force -Path $artifactsDir | Out-Null
 
@@ -129,7 +129,7 @@ if (Test-Stage2IsCurrent) {
 }
 
 $stage2Llvm = [System.IO.File]::ReadAllText($stage2LlvmPath)
-if ($stage2Llvm -notmatch '(?s)define internal void @smalllang_parallel_callback_\d+\(ptr %group, i64 %index\) \{.*?call %sl\.struct\.m5_s19 @sl_m5_s\d+\(.*?\r?\n\}') {
+if ($stage2Llvm -notmatch '(?s)define internal void @sollang_parallel_callback_\d+\(ptr %group, i64 %index\) \{.*?call %sollang\.struct\.m5_s19 @sollang_m5_s\d+\(.*?\r?\n\}') {
     throw "stage-2 LLVM does not contain the function-local typed IR worker callback"
 }
 
@@ -148,7 +148,7 @@ $singleStage2Hash = Get-NormalizedHash $singleStage2Llvm
 if ($singleStage1Hash -ne $singleStage2Hash) {
     throw "single-file normalized LLVM differs: stage1=$singleStage1Hash stage2=$singleStage2Hash"
 }
-if (-not ([System.IO.File]::ReadAllText($singleStage2Llvm).StartsWith("; smalllang workers = 2"))) {
+if (-not ([System.IO.File]::ReadAllText($singleStage2Llvm).StartsWith("; sollang workers = 2"))) {
     throw "stage-2 compiler did not report the effective --jobs worker count"
 }
 Write-Host "[stage2 3/6] PASS $singleStage2Hash"
@@ -231,7 +231,7 @@ if ($LASTEXITCODE -ne 0 -or $nativeBuildActual -ne "stage2-single-ok") {
 }
 Write-Host "[stage2 5/6] PASS direct smoke execution and self-host runToFile/run native build."
 
-Write-Host "[stage2 6/6] Compare C# reference and native SL compiler runtime behavior."
+Write-Host "[stage2 6/6] Compare C# reference and native Sollang compiler runtime behavior."
 & dotnet run --project $runnerProject -c Release --no-build -- `
     --skip-bootstrap `
     --compare-compilers `

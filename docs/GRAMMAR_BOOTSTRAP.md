@@ -1,39 +1,39 @@
-# SmallLang Grammar Bootstrap
+# Sollang Grammar Bootstrap
 
-Status: table generation, SL lexer, and SL parser recognizer implemented
+Status: table generation, Sollang lexer, and Sollang parser recognizer implemented
 Updated: 2026-07-12
 
 ## Goal
 
-SmallLang must eventually compile its own lexer and parser without requiring a
+Sollang must eventually compile its own lexer and parser without requiring a
 C# source generator, a Rust-style macro system, or opaque generated parser
 logic. The canonical inputs remain the concise files
-`syntax/smalllang.lexer` and `syntax/smalllang.grammar`.
+`syntax/sollang.lexer` and `syntax/sollang.grammar`.
 
 The selected architecture is:
 
 ```text
 lexer DSL + EBNF grammar
     -> grammar build
-    -> deterministic lexer descriptors + parser bytecode in ordinary .sl
-    -> one reusable SL lexer/parser VM
+    -> deterministic lexer descriptors + parser bytecode in ordinary .slg
+    -> one reusable Sollang lexer/parser VM
     -> lossless CST
-    -> ordinary SL CST-to-AST lowering
+    -> ordinary Sollang CST-to-AST lowering
 ```
 
-Grammar rules contain no embedded C#, SL, or target-specific semantic actions.
+Grammar rules contain no embedded C#, Sollang, or target-specific semantic actions.
 This keeps the grammar readable and prevents the grammar language from becoming
 a second general-purpose programming language. AST construction and validation
-remain normal, testable SL functions.
+remain normal, testable Sollang functions.
 
 ## Bootstrap Command
 
 The bootstrap compiler now exposes an explicit command:
 
 ```powershell
-dotnet run --project src/SmallLang.Compiler -- grammar build `
-  syntax/smalllang.lexer syntax/smalllang.grammar `
-  -o syntax/generated/smalllang_grammar.sl
+dotnet run --project src/Sollang.Compiler -- grammar build `
+  syntax/sollang.lexer syntax/sollang.grammar `
+  -o syntax/generated/sollang_grammar.slg
 ```
 
 The checked-in generated module contains:
@@ -65,7 +65,7 @@ leave stale tables behind.
 | 8 | `reject-keyword text` | Fail when the current token has the specified keyword text |
 
 `?`, `*`, `+`, grouping, and alternatives compile to these operations. The
-current SmallLang grammar already represents expression precedence as layered
+current Sollang grammar already represents expression precedence as layered
 non-left-recursive rules, so it does not require a more complicated LR
 generator for the first self-hosted parser.
 
@@ -76,47 +76,47 @@ path or the left side of a block call before `IfFlowTarget` is attempted. The
 canonical grammar and generated table enforce this special-before-general
 ordering. `while` likewise has a dedicated `WhileFlowTarget` rather than
 depending on the generic block-call fallback. Self-hosted regressions prevent
-the C# grammar builder and SL parser VM from drifting back to ambiguous order.
+the C# grammar builder and Sollang parser VM from drifting back to ambiguous order.
 Its rule and keyword descriptor are appended after existing grammar entries so
 previous stable rule ids and keyword operator codes do not move.
 
 ## Lexer Descriptor Kinds
 
 The first descriptor format represents whitespace, line comments, identifiers,
-quoted strings, numbers, newlines, end-of-input, and fixed literals. The SL
+quoted strings, numbers, newlines, end-of-input, and fixed literals. The Sollang
 lexer VM will implement longest fixed-literal matching before the named scalar
 patterns and will attach byte-offset spans to every token.
 
 ## CST Before AST
 
 The table VM will initially produce a lossless concrete syntax tree containing
-tokens, trivia, byte spans, rule ids, and explicit error nodes. A separate SL
+tokens, trivia, byte spans, rule ids, and explicit error nodes. A separate Sollang
 lowering layer will build the compiler AST. This same CST can later power the
 formatter and language server, avoiding a second editor-only grammar.
 
 ## Remaining Bootstrap Stages
 
 1. Reusable byte-offset `SourceSpan` and `SyntaxToken` are present in
-   `selfhost/syntax/source.sl`; add lossless CST node and diagnostic types.
-2. Expand `selfhost/syntax/lexer.sl` from the executable bootstrap lexer to full
+   `selfhost/syntax/source.slg`; add lossless CST node and diagnostic types.
+2. Expand `selfhost/syntax/lexer.slg` from the executable bootstrap lexer to full
    escape, number, trivia, and error parity with the current C# lexer.
-3. `selfhost/syntax/parser.sl` now emits deterministic enter-rule, exit-rule,
+3. `selfhost/syntax/parser.slg` now emits deterministic enter-rule, exit-rule,
    token, and outcome events while recognizing input. Backtracking rewinds and
    overwrites abandoned events before the result escapes.
-4. `selfhost/syntax/cst.sl` materializes the successful event stream into flat
+4. `selfhost/syntax/cst.slg` materializes the successful event stream into flat
    green nodes with stable indexes, parent links, token ranges, and UTF-8 byte
    spans. The lexer assigns generated trivia token ids to contiguous whitespace
    and line comments; the parser ignores them for grammar matching while
    retaining them in CST events. Unknown bytes receive a generated `Invalid`
    token id, remain in CST spans, and force a rejected parse. Add structured
-   recovery for malformed sequences. `selfhost/syntax/diagnostics.sl` reports
+   recovery for malformed sequences. `selfhost/syntax/diagnostics.slg` reports
    invalid bytes and the furthest unexpected token with stable UTF-8 spans. It
    also exposes the deduplicated set of token kinds and grammar keywords
    expected by every alternative at that furthest position. The parser emits a
    panic-mode error-range event through the next newline, right brace, or EOF;
    the CST materializer turns it into a `ruleId: -1` green node and preserves
    the complete file envelope for later recovery-aware lowering.
-5. `selfhost/syntax/ast.sl` now lowers source, namespace/import, nominal
+5. `selfhost/syntax/ast.slg` now lowers source, namespace/import, nominal
    declaration, implementation, function/signature, main, binding, flow/call,
    type, literal, name, and path rules into a flat parent-indexed AST. It skips
    non-semantic CST wrappers, reconnects each node to its nearest AST ancestor,
@@ -125,62 +125,62 @@ formatter and language server, avoiding a second editor-only grammar.
    present; each records the exact operator token and preserves precedence in
    AST parent links. Logical `or`, `and`, and `not` plus `box` use the same
    negative keyword-code convention as syntax diagnostics, with exact payload
-   token indexes. Expand this ordinary SL lowering to declaration
+   token indexes. Expand this ordinary Sollang lowering to declaration
    parameters and every remaining rule. A second lowering pass now resolves
    namespace/import/impl/function names from their nearest path child and
    extracts nominal type names, struct fields, enum variants, trait members,
    associated types, methods, and generic clauses directly from header tokens.
    Function and method nodes additionally carry a secondary parameter/`self`
    token plus flags (`1` move, `2` mutable borrow, `4` public, `8` async).
-6. Reimplement `grammar build` itself in SL and require byte-identical output.
-7. Remove the C# source generators only after the SL compiler reproduces all
+6. Reimplement `grammar build` itself in Sollang and require byte-identical output.
+7. Remove the C# source generators only after the Sollang compiler reproduces all
    parser behavior and diagnostics.
 
 ## Semantic Bootstrap
 
-`selfhost/semantic/symbols.sl` starts the semantic phase with a relocatable flat
+`selfhost/semantic/symbols.slg` starts the semantic phase with a relocatable flat
 symbol table. It collects nominal declarations, functions, fields, variants,
 trait/impl members, methods, associated types, and generic clauses; connects
 each entry to its nearest lexical owner; and stores name tokens, input/output
 type AST indexes, and ownership flags without per-symbol heap allocation.
-`selfhost/semantic/diagnostics.sl` performs UTF-8 byte-exact name comparison
+`selfhost/semantic/diagnostics.slg` performs UTF-8 byte-exact name comparison
 inside each lexical owner and reports duplicate symbols with both symbol indexes
 and the duplicate declaration's precise source span.
-`selfhost/semantic/resolve.sl` walks from each name expression's nearest symbol
+`selfhost/semantic/resolve.slg` walks from each name expression's nearest symbol
 owner toward the root and resolves the first byte-equal declaration. Function
 parameters and method `self` values are synthetic kind-35 symbols owned by their
 declaration; unresolved names become code-2 semantic diagnostics.
-`selfhost/semantic/types.sl` canonicalizes type annotations without allocating
+`selfhost/semantic/types.slg` canonicalizes type annotations without allocating
 normalized strings: it skips trivia, compares token kinds and UTF-8 payload
 bytes, assigns stable canonical ids, and classifies named, slice, dynamic/fixed
 array, dictionary, and box layouts. Array/box element and dictionary key/value
 names are interned as canonical nominal ids; fixed arrays retain their value-
 generic length token.
-`selfhost/semantic/type_terms.sl` is the recursive successor foundation. It
+`selfhost/semantic/type_terms.slg` is the recursive successor foundation. It
 lowers every nested type annotation into an index-addressed term arena,
 structurally interns equivalent trees, and performs bottom-up generic
 substitution without recursive objects or recursive compiler calls. Example
 283 substitutes `T = Int` through `Result<[T; ~], {Text: box T}>` and verifies
 the complete resulting tree. Existing shallow semantic tables remain while
 their consumers migrate to this arena.
-`selfhost/semantic/modules.sl` accepts multiple source texts, hashes qualified
+`selfhost/semantic/modules.slg` accepts multiple source texts, hashes qualified
 namespace paths into deterministic 64-bit identities, and emits import edges
 with source-module indexes, target identities, path spans, and alias tokens. If
 `as` is absent, the final identifier of the import path becomes the alias token,
 matching the reference compiler without allocating a derived name.
-`selfhost/semantic/module_resolve.sl` resolves each edge to exactly one module
+`selfhost/semantic/module_resolve.slg` resolves each edge to exactly one module
 index and distinguishes resolved, missing, duplicate target identities, and a
 duplicate default or explicit alias in one source module.
 Declaration AST/symbol flags reserve bit 4 for explicit `public` visibility.
-`selfhost/semantic/qualified.sl` matches the first segment of member-access AST
+`selfhost/semantic/qualified.slg` matches the first segment of member-access AST
 nodes to import aliases, resolves the target module, and distinguishes public,
 missing, and non-public target symbols.
-`selfhost/semantic/type_resolve.sl` walks each qualified path's AST ancestry to
+`selfhost/semantic/type_resolve.slg` walks each qualified path's AST ancestry to
 its enclosing type annotation and links the source-local canonical type id to
 the target module and nominal symbol. The link preserves missing/non-public
 statuses instead of silently treating inaccessible declarations as local
 types.
-`selfhost/semantic/type_diagnostics.sl` turns those failed links into stable
+`selfhost/semantic/type_diagnostics.slg` turns those failed links into stable
 multi-source diagnostics: code 3 is a missing imported nominal type and code 4
 is a non-public imported nominal type. Diagnostic spans use the source-module
 index as `fileId` and cover the complete qualified type annotation.
@@ -196,20 +196,20 @@ leaving a valid following entry point unreachable.
 Each repeated declaration also owns its following newlines, so multiple structs,
 enums, traits, impls, or functions in the same group remain parseable.
 
-`selfhost/semantic/nominal_types.sl` presents one resolution table for builtin,
+`selfhost/semantic/nominal_types.slg` presents one resolution table for builtin,
 local, and imported named type annotations. Builtins receive stable table ids,
 local declarations point at their module symbol, imported declarations retain
 visibility status, and unresolved local names remain explicit status-2 rows.
-`selfhost/semantic/type_check.sl` consumes that table for the first executable
+`selfhost/semantic/type_check.slg` consumes that table for the first executable
 type-checking slice. It infers integer and string literal return expressions,
 compares them with declared function return annotations, and emits code 5 with
 the exact mismatching expression span. Lexically resolved parameter names now
 carry their declared nominal type into the same return check.
-`selfhost/semantic/expression_types.sl` performs fixed-point bottom-up inference
+`selfhost/semantic/expression_types.slg` performs fixed-point bottom-up inference
 over the flat AST. It seeds literals and resolved names, propagates Int through
 arithmetic operators, and produces Bool for compatible equality/comparison and
 logical operators. Return checking consumes the outermost inferred expression.
-`selfhost/semantic/calls.sl` resolves local call targets to function symbols.
+`selfhost/semantic/calls.slg` resolves local call targets to function symbols.
 Resolved calls inherit the function's nominal return type, while type checking
 compares the outermost argument expression with the declared input type and
 emits code 6 on mismatch.
@@ -242,7 +242,7 @@ self-hosted checker.
 Unary inference recognizes operator code -26 as `not` over Bool and token id 15
 as numeric negation over Int. Incompatible operands emit code 8 with the unary
 operator's complete span and expected/actual builtin identities.
-`selfhost/semantic/composite_types.sl` resolves slice, dynamic/fixed array,
+`selfhost/semantic/composite_types.slg` resolves slice, dynamic/fixed array,
 dictionary, and box component identities. Element/key/value slots preserve
 builtin, local, or function-generic origins plus the fixed-array length token;
 an unresolved component emits code 3 over the complete composite annotation.
@@ -305,13 +305,13 @@ and an identical generic composite item specialize without block-body feedback.
 Example 281 covers local and imported roles through typed IR. Arbitrary nested
 generic substitution and ownership/effect contracts remain later semantic work.
 Self-hosted compiler examples embed their input modules as raw multiline
-strings. This keeps tested SL source readable as source, removes duplicated
+strings. This keeps tested Sollang source readable as source, removes duplicated
 newline escaping, and continuously exercises raw-string lexing in the bootstrap
-compiler while the embedded text is consumed by the SL lexer and parser. The
+compiler while the embedded text is consumed by the Sollang lexer and parser. The
 opening and closing `"""` delimiters occupy the same indentation column. Embedded
-top-level SL starts in that column after raw-string indentation removal, and
+top-level Sollang starts in that column after raw-string indentation removal, and
 each nested block adds four spaces, so fixtures follow the same layout as
-ordinary `.sl` files.
+ordinary `.slg` files.
 
 The parser VM is no longer hard-wired to the source-file start rule. Its public
 `ParseRequest` accepts any generated grammar rule, while `parseEvents` remains
@@ -322,7 +322,7 @@ the same generated precedence rules and lossless spans used by full modules.
 This mirrors the C# reference compiler's `ParseExpressionFragment` foundation
 needed by `$(expression)` rather than introducing a second interpolation-only
 parser.
-`smalllang.compiler.ir.interpolation` now consumes that fragment AST. It scans
+`sollang.compiler.ir.interpolation` now consumes that fragment AST. It scans
 balanced `$(`...`)` ranges, including nested parentheses, and lowers integer
 literals, lexical names, unary nodes, and binary nodes into one relocatable
 owned table. Names resolve to the enclosing function's real symbol indexes;
@@ -342,7 +342,7 @@ through LLVM scheduling. The lexer regression also fixes the `!=` packed-byte
 constant, so the self-hosted lexer emits one `BangEqual` token instead of
 `Bang` plus `Equal`.
 
-The first typed IR lowering lives in `selfhost/ir/typed.sl`. It emits a flat,
+The first typed IR lowering lives in `selfhost/ir/typed.slg`. It emits a flat,
 relocatable node table whose initial stable kinds are function, return, and
 typed Int/Text/Bool constants. Every node retains its source-module index, AST
 index, owning symbol, complete result identity, payload token, and operand
@@ -406,8 +406,8 @@ that free them in reverse declaration order; the normal loop back-edge uses the
 same drop routine. Early return, moves from a region, and recursive aggregate
 drop glue remain.
 
-The first self-hosted LLVM text backend lives in `selfhost/llvm/text.sl`. It
-emits stable `sl_m<module>_s<symbol>` function names, `i32`/`i1` signatures,
+The first self-hosted LLVM text backend lives in `selfhost/llvm/text.slg`. It
+emits stable `sollang_m<module>_s<symbol>` function names, `i32`/`i1` signatures,
 IR-index-derived SSA registers, constants, nested integer arithmetic,
 comparisons, Boolean negation, and returns. Its snapshot is passed through the
 pinned `llvm-as`, so the test proves LLVM syntax validity rather than text
@@ -417,7 +417,7 @@ declarations remain.
 Parameter symbols now have explicit typed-IR nodes, and resolved name
 expressions retain their lexical symbol. LLVM lowering uses those nodes for
 typed `%arg` signatures and parameter reads. Resolved call nodes emit direct
-module-qualified calls such as `@sl_m0_s0`, including a typed literal,
+module-qualified calls such as `@sollang_m0_s0`, including a typed literal,
 parameter, or SSA argument. A two-source snapshot is assembled by `llvm-as`,
 proving that file-module identities survive through executable LLVM linkage.
 
@@ -447,7 +447,7 @@ Function block grammar now parses one or more complete statements and selects
 the last nearest expression by source position as the return value. This avoids
 the PEG ambiguity where a trailing newline let the final expression be consumed
 as a statement and then replaced by recovery. Postfix grammar also describes
-SL's real `value![index]` spelling explicitly. Aggregate bindings now preserve
+Sollang's real `value![index]` spelling explicitly. Aggregate bindings now preserve
 array, struct, and dictionary values through SSA aliases; member/index reads
 produce the declared scalar return type, and discarded owned array/dictionary
 bindings free their backing stores after the final read.
@@ -460,7 +460,7 @@ array store or both dictionary stores. The LLVM snapshot fixes the absence of
 `free` in producers and its exact presence in consumers, preventing the first
 bound-aggregate double-free regression class.
 
-The backend now defines Text as `%sl.text = { ptr, i64 }`. Plain UTF-8
+The backend now defines Text as `%sollang.text = { ptr, i64 }`. Plain UTF-8
 literals become immutable byte globals and are assembled into aggregate return
 values; Text parameters and direct calls pass the same aggregate by value.
 Non-ASCII, quote, backslash, and control bytes use LLVM `\XX` escaping, with
@@ -471,8 +471,8 @@ The self-hosted LLVM emitter now selects an explicit target descriptor before
 emitting the shared module body. `emit`, `emitLinux`, and `emitWasm` produce
 Windows x64, Linux x64, and Wasm32 modules respectively, so neither the triple
 nor data layout relies on an implicit linker default. Target metadata lives in
-the ordinary SL module
-`smalllang.compiler.llvm.target`: `TargetDescriptor` groups the preformatted
+the ordinary Sollang module
+`sollang.compiler.llvm.target`: `TargetDescriptor` groups the preformatted
 triple/data-layout lines, pointer bit width, and object format. The LLVM emitter
 loads descriptors from that module instead of embedding target text, and a
 standalone example verifies all four fields. The module provides
@@ -489,14 +489,14 @@ entry points call the private shared emitter without duplicating it.
 
 Flow calls are no longer discarded merely because their target is supplied by
 the runtime rather than a user module. `print` and `println` receive stable
-typed-IR runtime symbols and lower through one `%sl.text` print ABI. The
+typed-IR runtime symbols and lower through one `%sollang.text` print ABI. The
 backend emits that ABI only when used: Windows iterates UTF-8 bytes through CRT
-`putchar`, Linux calls `write(2)`, and Wasm imports `env.smalllang_write` with a
+`putchar`, Linux calls `write(2)`, and Wasm imports `env.slg_write` with a
 32-bit byte length. All three outputs assemble; the Windows output also links
 and executes, with its stdout compared against the expected program output.
 Other fluent builtins such as `len` and `each` remain outside the function-call
 catalog, so runtime recognition does not create false unresolved-call errors.
-The same ABI now accepts dynamic `%sl.text` values: a `Text` parameter is split
+The same ABI now accepts dynamic `%sollang.text` values: a `Text` parameter is split
 with `extractvalue`, forwarded to the runtime helper, and called from `main`
 with a literal aggregate. `Unit` functions and calls lower to LLVM `void`
 without assigning a nonexistent result, completing the first effectful user-
@@ -542,7 +542,7 @@ field to its new owner. A separate ownership pass rejects later use of the whole
 owner or an overlapping ancestor/descendant path while allowing diverging
 siblings. Field reinitialization and branch-sensitive moved-path joins remain.
 
-Nominal structs now have deterministic `%sl.struct.m<module>_s<symbol>` LLVM
+Nominal structs now have deterministic `%sollang.struct.m<module>_s<symbol>` LLVM
 types. Typed IR marks struct literals and links an arbitrary number of ordered
 field operands through sibling indexes. The backend emits each field with an
 `insertvalue` chain, then passes and returns the aggregate by value. Local and
@@ -556,7 +556,7 @@ the declaration-order field ordinal, and emits `extractvalue` from a local or
 imported nominal aggregate. Local and cross-module member snapshots assemble,
 link, and run. Nested member chains are represented by the same operand graph.
 
-Dynamic Int arrays now use `%sl.array.i32 = { ptr, i64, i64 }` for data,
+Dynamic Int arrays now use `%sollang.array.i32 = { ptr, i64, i64 }` for data,
 length, and capacity. Owned literals allocate with `malloc`, initialize every
 element through typed GEP/store operations, and transfer the aggregate through
 move parameters and returns. Readonly indexing extracts the data pointer,
@@ -572,7 +572,7 @@ parameter is never referenced. Branch/path-sensitive exits and nested owned
 aggregates remain.
 
 Dynamic dictionaries now cross the self-hosted LLVM boundary through the
-type-erased `%sl.dict = { keys, values, length, capacity }` container ABI while
+type-erased `%sollang.dict = { keys, values, length, capacity }` container ABI while
 their typed IR retains concrete key/value identities. Literal storage, GEP,
 load, store, and alignment are specialized for compiler-bootstrap `Int`,
 `Bool`, and `Text` layouts; the same representation therefore handles both
@@ -592,4 +592,4 @@ same target symbol, emits code 6 for cross-module argument mismatch, and code 9
 for a non-public imported function.
 Call checking also compares the signature's zero-or-one-input shape with call
 syntax. Missing required arguments and parenthesized zero-input calls emit code
-10 over the complete call, preserving SmallLang's property-call rule.
+10 over the complete call, preserving Sollang's property-call rule.

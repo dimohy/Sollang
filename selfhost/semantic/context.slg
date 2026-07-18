@@ -1,0 +1,85 @@
+namespace sollang.compiler.semantic.context
+
+import sollang.compiler.ast as ast
+import sollang.compiler.semantic.analysis as analysis
+import sollang.compiler.semantic.calls as calls
+import sollang.compiler.semantic.composite_types as compositeTypes
+import sollang.compiler.semantic.modules as modules
+import sollang.compiler.semantic.module_resolve as moduleResolve
+import sollang.compiler.semantic.nominal_types as nominalTypes
+import sollang.compiler.semantic.qualified as qualified
+import sollang.compiler.semantic.resolve as resolution
+import sollang.compiler.semantic.symbols as symbols
+import sollang.compiler.semantic.type_ids as typeIds
+import sollang.compiler.semantic.type_terms as typeTerms
+import sollang.compiler.semantic.types as semanticTypes
+import sollang.compiler.syntax as syntax
+import sys.file as file
+
+# Explicit read-only barrier for whole-compilation facts. Consumers borrow this
+# aggregate after freeze; its flat arrays move once and are never copied or
+# mutated between semantic, typed-IR, and LLVM workers.
+public struct SemanticSnapshot {
+    semantic: typeIds.SemanticTypeSet
+    package: analysis.PackageAnalysis
+    nominal: [nominalTypes.NominalType; ~]
+    composite: [compositeTypes.CompositeType; ~]
+    modules: [modules.ModuleIdentity; ~]
+    imports: [modules.ImportEdge; ~]
+    resolvedImports: [moduleResolve.ResolvedImport; ~]
+    qualified: [qualified.QualifiedResolution; ~]
+    calls: [calls.ModuleCallResolution; ~]
+}
+
+public freeze snapshot: move SemanticSnapshot -> SemanticSnapshot {
+    snapshot
+}
+
+public prepareSources sources: move [file.SourceText; ~] -> SemanticSnapshot {
+    sources -> analysis.analyzeSources => packageAnalysis!
+    packageAnalysis! -> typeIds.resolveAnalyzed => semanticSet!
+    packageAnalysis! -> nominalTypes.resolveAnalyzed => nominalTypes!
+    packageAnalysis! -> compositeTypes.resolveAnalyzed => compositeTypes!
+    packageAnalysis! -> modules.identitiesAnalyzed => moduleIdentities!
+    packageAnalysis! -> modules.importsAnalyzed => importEdges!
+    packageAnalysis! -> moduleResolve.resolveAnalyzed => resolvedImports!
+    packageAnalysis! -> qualified.resolveAnalyzed => qualifiedResults!
+    packageAnalysis! -> calls.resolveModulesAnalyzed => resolvedCalls!
+
+    SemanticSnapshot {
+        semantic: semanticSet!
+        package: packageAnalysis!
+        nominal: nominalTypes!
+        composite: compositeTypes!
+        modules: moduleIdentities!
+        imports: importEdges!
+        resolvedImports: resolvedImports!
+        qualified: qualifiedResults!
+        calls: resolvedCalls!
+    } => snapshot!
+    snapshot! -> freeze
+}
+
+public prepare sources: [Text; ~] -> SemanticSnapshot {
+    [file.SourceText; ~] => ownedSources!
+    0 => sourceIndex!
+    sourceIndex! < (sources -> len) -> while {
+        sources[sourceIndex!] => source
+        source -> file.borrowText => ownedSource
+        ownedSources! -> push(ownedSource)
+        sourceIndex! + 1 => sourceIndex!
+    }
+    ownedSources! -> prepareSources
+}
+
+public prepareFiles paths: [Text; ~] -> SemanticSnapshot uses File {
+    [file.SourceText; ~] => ownedSources!
+    0 => pathIndex!
+    pathIndex! < (paths -> len) -> while {
+        paths[pathIndex!] => path
+        path -> file.mapText => ownedSource
+        ownedSources! -> push(ownedSource)
+        pathIndex! + 1 => pathIndex!
+    }
+    ownedSources! -> prepareSources
+}

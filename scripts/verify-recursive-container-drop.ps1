@@ -6,7 +6,7 @@ $ErrorActionPreference = "Stop"
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $artifactsDir = Join-Path $repoRoot "artifacts\example-tests"
-$runnerProject = Join-Path $repoRoot "tests\SmallLang.ExampleTests\SmallLang.ExampleTests.csproj"
+$runnerProject = Join-Path $repoRoot "tests\Sollang.ExampleTests\Sollang.ExampleTests.csproj"
 $llvmDir = Join-Path $repoRoot ".tools\llvm-22.1.8"
 $clangPath = Join-Path $llvmDir "bin\clang.exe"
 $name = "400-selfhost-llvm-recursive-container-drop"
@@ -51,7 +51,7 @@ if ($LASTEXITCODE -ne 0) {
     throw "Recursive container drop AddressSanitizer instrumentation failed"
 }
 $wslObject = Convert-ToWslPath $objectPath
-$wslExecutable = "/tmp/smalllang-recursive-container-drop-asan"
+$wslExecutable = "/tmp/sollang-recursive-container-drop-asan"
 Invoke-Wsl @(
     "gcc",
     $wslObject,

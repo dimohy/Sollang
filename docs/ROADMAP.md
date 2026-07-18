@@ -1,9 +1,9 @@
-# SmallLang Implementation Roadmap
+# Sollang Implementation Roadmap
 
 Status: active
 Updated: 2026-07-12
 
-Every completed slice must add cumulative `.sl` examples, keep safe-code leak
+Every completed slice must add cumulative `.slg` examples, keep safe-code leak
 freedom statically provable, build with zero warnings, and pass the complete
 example suite. LLVM allocation assertions are required when placement or
 ownership behavior is part of the feature.
@@ -72,12 +72,12 @@ ownership behavior is part of the feature.
 - [ ] Reusable byte-offset source spans and diagnostics
 - [x] Command-line argument and environment access
 - [x] Shell-free argv-based child-process execution with typed status/errors
-- [x] Deterministic lexer-descriptor/parser-bytecode generation into `.sl`
-- [ ] SL lexer/parser VM over generated grammar tables
+- [x] Deterministic lexer-descriptor/parser-bytecode generation into `.slg`
+- [ ] Sollang lexer/parser VM over generated grammar tables
 
 ## Design Direction
 
-SmallLang combines Rust-style ownership, `struct`/`enum`/`trait`/`impl`, and
+Sollang combines Rust-style ownership, `struct`/`enum`/`trait`/`impl`, and
 explicit dynamic dispatch with familiar object-oriented method calls and
 encapsulation. Values and static dispatch are the defaults. Reference identity,
 heap boxing, and runtime polymorphism must be explicit. Class inheritance and

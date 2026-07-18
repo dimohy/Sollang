@@ -1,13 +1,13 @@
-# SmallLang Benchmarks
+# Sollang Benchmarks
 
 ## Container Throughput
 
-`containers-throughput.sl` measures the current array and dictionary container paths with the runtime timer exposed as `nowMillis()`.
+`containers-throughput.slg` measures the current array and dictionary container paths with the runtime timer exposed as `nowMillis()`.
 
 Run:
 
 ```powershell
-.\scripts\smalllang.ps1 -Source benchmarks\containers-throughput.sl -Output artifacts\benchmarks\containers-throughput.exe -KeepTemps
+.\scripts\sollang.ps1 -Source benchmarks\containers-throughput.slg -Output artifacts\benchmarks\containers-throughput.exe -KeepTemps
 .\artifacts\benchmarks\containers-throughput.exe
 ```
 
@@ -44,6 +44,6 @@ Reported fields:
 - `*AllocatedBytes`: C# managed allocation bytes for the measured section.
 - `*Checksum`: correctness guard so the measured work cannot be removed later.
 
-The benchmark follows common public benchmark metrics: elapsed time, input/iteration count, items-per-second throughput, and memory size. Exact allocation counters should be added when the SmallLang runtime exposes allocator statistics.
+The benchmark follows common public benchmark metrics: elapsed time, input/iteration count, items-per-second throughput, and memory size. Exact allocation counters should be added when the Sollang runtime exposes allocator statistics.
 
-`containers-smoke.sl` is a smaller correctness check for `nowMillis()`, mutable array push, dictionary put, fold, and lookup.
+`containers-smoke.slg` is a smaller correctness check for `nowMillis()`, mutable array push, dictionary put, fold, and lookup.

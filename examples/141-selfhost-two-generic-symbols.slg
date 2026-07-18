@@ -1,0 +1,25 @@
+import sollang.compiler.semantic.nominal_types as nominalTypes
+import sollang.compiler.semantic.symbols as symbols
+import sollang.compiler.lexer as lexer
+
+main {
+    """
+    convert<T, E> value: T -> E => value
+
+    main { }
+    """ => source
+    [source, ~] => sources!
+    source -> symbols.collect => table!
+    source -> lexer.lex => tokens!
+    table! -> each symbol {
+        symbol.kind == 32 -> if {
+            tokens![symbol.nameToken] => token
+            source -> slice(token.span.start, token.span.length) => name
+            "generic symbol = $name,$(symbol.parent)" -> println
+        }
+    }
+    sources! -> nominalTypes.resolve => resolved!
+    resolved! -> each item {
+        "generic nominal = $(item.origin),$(item.targetSymbol),$(item.status)" -> println
+    }
+}

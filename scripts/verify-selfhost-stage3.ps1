@@ -6,8 +6,8 @@ $ErrorActionPreference = "Stop"
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $artifactsDir = Join-Path $repoRoot "artifacts\example-tests"
-$manifestPath = Join-Path $repoRoot "tests\SmallLang.ExampleTests\Fixtures\selfhost-slc-driver.sources.txt"
-$processSource = Join-Path $repoRoot "stdlib\sys\process.sl"
+$manifestPath = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-sollangc-driver.sources.txt"
+$processSource = Join-Path $repoRoot "stdlib\sys\process.slg"
 $stage2LlvmPath = Join-Path $artifactsDir "selfhost-stage2.ll"
 $stage2Path = Join-Path $artifactsDir "selfhost-stage2.exe"
 $stage3LlvmPath = Join-Path $artifactsDir "selfhost-stage3.ll"

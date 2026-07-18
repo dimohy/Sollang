@@ -6,8 +6,8 @@ $ErrorActionPreference = "Stop"
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $artifactsDir = Join-Path $repoRoot "artifacts\example-tests"
-$compilerProject = Join-Path $repoRoot "src\SmallLang.Compiler\SmallLang.Compiler.csproj"
-$runnerProject = Join-Path $repoRoot "tests\SmallLang.ExampleTests\SmallLang.ExampleTests.csproj"
+$compilerProject = Join-Path $repoRoot "src\Sollang.Compiler\Sollang.Compiler.csproj"
+$runnerProject = Join-Path $repoRoot "tests\Sollang.ExampleTests\Sollang.ExampleTests.csproj"
 $llvmDir = Join-Path $repoRoot ".tools\llvm-22.1.8"
 $clangPath = Join-Path $llvmDir "bin\clang.exe"
 
@@ -36,7 +36,7 @@ function Build-And-RunReferenceExample {
         [string]$Expected
     )
 
-    $sourcePath = Join-Path $repoRoot "examples\$Name.sl"
+    $sourcePath = Join-Path $repoRoot "examples\$Name.slg"
     $outputPath = Join-Path $artifactsDir "$Name.linux"
     & dotnet run --project $compilerProject -c Release --no-build -- build `
         $sourcePath -o $outputPath --target linux-x64 --llvm $llvmDir -O0
@@ -92,7 +92,7 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 $wslObject = Convert-ToWslPath $selfHostObject
-$wslExecutable = "/tmp/smalllang-selfhost-linux-parallel"
+$wslExecutable = "/tmp/sollang-selfhost-linux-parallel"
 Invoke-Wsl @("gcc", $wslObject, "-pthread", "-o", $wslExecutable) | Out-Null
 $selfHostActual = Invoke-Wsl @($wslExecutable)
 $selfHostExpectedPath = Join-Path $repoRoot `
@@ -113,7 +113,7 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 $wslOwnedObject = Convert-ToWslPath $ownedObject
-$wslOwnedExecutable = "/tmp/smalllang-selfhost-owned-tryparallel-asan"
+$wslOwnedExecutable = "/tmp/sollang-selfhost-owned-tryparallel-asan"
 Invoke-Wsl @(
     "gcc",
     $wslOwnedObject,

@@ -1,11 +1,11 @@
 target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
 target triple = "x86_64-unknown-linux-gnu"
-%smalllang.output_sink = type { ptr, i64, i64 }
-define internal void @smalllang_memory_output_sink_append(ptr %sink, ptr %data, i64 %len) {
+%sollang.output_sink = type { ptr, i64, i64 }
+define internal void @sollang_memory_output_sink_append(ptr %sink, ptr %data, i64 %len) {
 entry:
-  %data_slot = getelementptr %smalllang.output_sink, ptr %sink, i32 0, i32 0
-  %length_slot = getelementptr %smalllang.output_sink, ptr %sink, i32 0, i32 1
-  %capacity_slot = getelementptr %smalllang.output_sink, ptr %sink, i32 0, i32 2
+  %data_slot = getelementptr %sollang.output_sink, ptr %sink, i32 0, i32 0
+  %length_slot = getelementptr %sollang.output_sink, ptr %sink, i32 0, i32 1
+  %capacity_slot = getelementptr %sollang.output_sink, ptr %sink, i32 0, i32 2
   %length = load i64, ptr %length_slot, align 8
   %capacity = load i64, ptr %capacity_slot, align 8
   %required = add i64 %length, %len
@@ -36,7 +36,7 @@ append:
   store i64 %required, ptr %length_slot, align 8
   ret void
 }
-define internal void @smalllang_memory_output_sink_array_flush_prefix(ptr %sinks, i64 %count, i64 %prefix, ptr %context, ptr %writer) {
+define internal void @sollang_memory_output_sink_array_flush_prefix(ptr %sinks, i64 %count, i64 %prefix, ptr %context, ptr %writer) {
 entry:
   br label %flush_loop
 flush_loop:
@@ -44,9 +44,9 @@ flush_loop:
   %done = icmp eq i64 %index, %count
   br i1 %done, label %finish, label %flush_one
 flush_one:
-  %sink = getelementptr %smalllang.output_sink, ptr %sinks, i64 %index
-  %data_slot = getelementptr %smalllang.output_sink, ptr %sink, i32 0, i32 0
-  %length_slot = getelementptr %smalllang.output_sink, ptr %sink, i32 0, i32 1
+  %sink = getelementptr %sollang.output_sink, ptr %sinks, i64 %index
+  %data_slot = getelementptr %sollang.output_sink, ptr %sink, i32 0, i32 0
+  %length_slot = getelementptr %sollang.output_sink, ptr %sink, i32 0, i32 1
   %data = load ptr, ptr %data_slot, align 8
   %length = load i64, ptr %length_slot, align 8
   %has_data = icmp ne ptr %data, null
@@ -66,12 +66,12 @@ finish:
   call void @free(ptr %sinks)
   ret void
 }
-define internal void @smalllang_memory_output_sink_array_flush(ptr %sinks, i64 %count, ptr %context, ptr %writer) {
+define internal void @sollang_memory_output_sink_array_flush(ptr %sinks, i64 %count, ptr %context, ptr %writer) {
 entry:
-  call void @smalllang_memory_output_sink_array_flush_prefix(ptr %sinks, i64 %count, i64 %count, ptr %context, ptr %writer)
+  call void @sollang_memory_output_sink_array_flush_prefix(ptr %sinks, i64 %count, i64 %count, ptr %context, ptr %writer)
   ret void
 }
-define internal void @smalllang_memory_output_sink_array_dispose(ptr %sinks, i64 %count) {
+define internal void @sollang_memory_output_sink_array_dispose(ptr %sinks, i64 %count) {
 entry:
   br label %dispose_loop
 dispose_loop:
@@ -79,8 +79,8 @@ dispose_loop:
   %done = icmp eq i64 %index, %count
   br i1 %done, label %finish, label %dispose_one
 dispose_one:
-  %sink = getelementptr %smalllang.output_sink, ptr %sinks, i64 %index
-  %data_slot = getelementptr %smalllang.output_sink, ptr %sink, i32 0, i32 0
+  %sink = getelementptr %sollang.output_sink, ptr %sinks, i64 %index
+  %data_slot = getelementptr %sollang.output_sink, ptr %sink, i32 0, i32 0
   %data = load ptr, ptr %data_slot, align 8
   call void @free(ptr %data)
   %next = add i64 %index, 1
@@ -89,8 +89,8 @@ finish:
   call void @free(ptr %sinks)
   ret void
 }
-@sl_runtime_newline = private constant [1 x i8] c"\0A"
-@smalllang_output_sink_tls = internal global i32 0
+@sollang_runtime_newline = private constant [1 x i8] c"\0A"
+@sollang_output_sink_tls = internal global i32 0
 declare i64 @write(i32, ptr, i64)
 declare i32 @pthread_key_create(ptr, ptr)
 declare i32 @pthread_key_delete(i32)
@@ -98,56 +98,56 @@ declare i32 @pthread_setspecific(i32, ptr)
 declare ptr @pthread_getspecific(i32)
 declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1 immarg)
 declare void @llvm.memset.p0.i64(ptr, i8, i64, i1 immarg)
-define internal void @sl_runtime_flush_stdout() {
+define internal void @sollang_runtime_flush_stdout() {
 entry:
   ret void
 }
-define internal void @sl_runtime_append_stdout_direct(ptr %data, i64 %len) {
+define internal void @sollang_runtime_append_stdout_direct(ptr %data, i64 %len) {
 entry:
   %written = call i64 @write(i32 1, ptr %data, i64 %len)
   ret void
 }
-define internal void @smalllang_memory_output_sink_write(ptr %context, ptr %data, i64 %len) {
+define internal void @sollang_memory_output_sink_write(ptr %context, ptr %data, i64 %len) {
 entry:
-  call void @sl_runtime_append_stdout_direct(ptr %data, i64 %len)
+  call void @sollang_runtime_append_stdout_direct(ptr %data, i64 %len)
   ret void
 }
-define internal void @sl_runtime_append_stdout(ptr %data, i64 %len) {
+define internal void @sollang_runtime_append_stdout(ptr %data, i64 %len) {
 entry:
-  %tls_index = load i32, ptr @smalllang_output_sink_tls, align 4
+  %tls_index = load i32, ptr @sollang_output_sink_tls, align 4
   %sink = call ptr @pthread_getspecific(i32 %tls_index)
   %capturing = icmp ne ptr %sink, null
   br i1 %capturing, label %capture, label %direct
 capture:
-  call void @smalllang_memory_output_sink_append(ptr %sink, ptr %data, i64 %len)
+  call void @sollang_memory_output_sink_append(ptr %sink, ptr %data, i64 %len)
   ret void
 direct:
-  call void @sl_runtime_append_stdout_direct(ptr %data, i64 %len)
+  call void @sollang_runtime_append_stdout_direct(ptr %data, i64 %len)
   ret void
 }
-define internal void @sl_runtime_print(ptr %data, i64 %len, i1 %newline) {
+define internal void @sollang_runtime_print(ptr %data, i64 %len, i1 %newline) {
 entry:
-  call void @sl_runtime_append_stdout(ptr %data, i64 %len)
+  call void @sollang_runtime_append_stdout(ptr %data, i64 %len)
   br i1 %newline, label %write_newline, label %done
 write_newline:
-  call void @sl_runtime_append_stdout(ptr @sl_runtime_newline, i64 1)
+  call void @sollang_runtime_append_stdout(ptr @sollang_runtime_newline, i64 1)
   br label %done
 done:
   ret void
 }
-%smalllang.compute_group = type { ptr, ptr, ptr, i64, ptr, ptr, ptr, ptr, ptr, ptr, ptr, i64, ptr }
-@smalllang_compute_work_event_fd = internal global i32 -1
-@smalllang_compute_completion_event_fd = internal global i32 -1
-@smalllang_compute_worker_count = internal global i32 0
-@smalllang_compute_worker_limit = internal global i32 0
-@smalllang_compute_worker_threads = internal global [64 x i64] zeroinitializer, align 8
-@smalllang_compute_group_current = internal global ptr null
-@smalllang_compute_next = internal global i64 0
-@smalllang_compute_active = internal global i32 0
-@smalllang_compute_running = internal global i32 0
-@smalllang_compute_peak = internal global i32 0
-@smalllang_compute_stopping = internal global i32 0
-@smalllang_compute_generation = internal global i32 0
+%sollang.compute_group = type { ptr, ptr, ptr, i64, ptr, ptr, ptr, ptr, ptr, ptr, ptr, i64, ptr }
+@sollang_compute_work_event_fd = internal global i32 -1
+@sollang_compute_completion_event_fd = internal global i32 -1
+@sollang_compute_worker_count = internal global i32 0
+@sollang_compute_worker_limit = internal global i32 0
+@sollang_compute_worker_threads = internal global [64 x i64] zeroinitializer, align 8
+@sollang_compute_group_current = internal global ptr null
+@sollang_compute_next = internal global i64 0
+@sollang_compute_active = internal global i32 0
+@sollang_compute_running = internal global i32 0
+@sollang_compute_peak = internal global i32 0
+@sollang_compute_stopping = internal global i32 0
+@sollang_compute_generation = internal global i32 0
 declare i32 @eventfd(i32, i32)
 declare i32 @close(i32)
 declare i64 @read(i32, ptr, i64)
@@ -155,73 +155,73 @@ declare i64 @sysconf(i32)
 declare i64 @syscall(i64, ...)
 declare i32 @pthread_create(ptr, ptr, ptr, ptr)
 declare i32 @pthread_join(i64, ptr)
-define internal ptr @smalllang_linux_compute_worker(ptr %unused) {
+define internal ptr @sollang_linux_compute_worker(ptr %unused) {
 entry:
   %event_value = alloca i64, align 8
   br label %wait
 wait:
-  %work_fd = load i32, ptr @smalllang_compute_work_event_fd, align 4
+  %work_fd = load i32, ptr @sollang_compute_work_event_fd, align 4
   %waited = call i64 @read(i32 %work_fd, ptr %event_value, i64 8)
-  %stopping_value = load atomic i32, ptr @smalllang_compute_stopping acquire, align 4
+  %stopping_value = load atomic i32, ptr @sollang_compute_stopping acquire, align 4
   %stopping = icmp ne i32 %stopping_value, 0
   br i1 %stopping, label %stopped, label %take
 take:
-  %generation = load atomic i32, ptr @smalllang_compute_generation acquire, align 4
-  %group = load atomic ptr, ptr @smalllang_compute_group_current acquire, align 8
-  %count_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 3
+  %generation = load atomic i32, ptr @sollang_compute_generation acquire, align 4
+  %group = load atomic ptr, ptr @sollang_compute_group_current acquire, align 8
+  %count_slot = getelementptr %sollang.compute_group, ptr %group, i32 0, i32 3
   %count = load i64, ptr %count_slot, align 8
   br label %claim
 claim:
-  %index = atomicrmw add ptr @smalllang_compute_next, i64 1 acq_rel
+  %index = atomicrmw add ptr @sollang_compute_next, i64 1 acq_rel
   %within_count = icmp ult i64 %index, %count
-  %failure_limit_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 11
+  %failure_limit_slot = getelementptr %sollang.compute_group, ptr %group, i32 0, i32 11
   %failure_limit = load atomic i64, ptr %failure_limit_slot acquire, align 8
   %before_failure = icmp ult i64 %index, %failure_limit
   %has_work = and i1 %within_count, %before_failure
   br i1 %has_work, label %work, label %complete
 work:
-  %callback_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 0
+  %callback_slot = getelementptr %sollang.compute_group, ptr %group, i32 0, i32 0
   %callback = load ptr, ptr %callback_slot, align 8
-  %sinks_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 5
+  %sinks_slot = getelementptr %sollang.compute_group, ptr %group, i32 0, i32 5
   %sinks = load ptr, ptr %sinks_slot, align 8
-  %sink = getelementptr %smalllang.output_sink, ptr %sinks, i64 %index
-  %tls_index = load i32, ptr @smalllang_output_sink_tls, align 4
+  %sink = getelementptr %sollang.output_sink, ptr %sinks, i64 %index
+  %tls_index = load i32, ptr @sollang_output_sink_tls, align 4
   %tls_set = call i32 @pthread_setspecific(i32 %tls_index, ptr %sink)
-  %running_before = atomicrmw add ptr @smalllang_compute_running, i32 1 acq_rel
+  %running_before = atomicrmw add ptr @sollang_compute_running, i32 1 acq_rel
   %running_now = add i32 %running_before, 1
-  %peak_before = atomicrmw max ptr @smalllang_compute_peak, i32 %running_now acq_rel
+  %peak_before = atomicrmw max ptr @sollang_compute_peak, i32 %running_now acq_rel
   call void %callback(ptr %group, i64 %index)
   %tls_clear = call i32 @pthread_setspecific(i32 %tls_index, ptr null)
-  %running_after = atomicrmw sub ptr @smalllang_compute_running, i32 1 acq_rel
+  %running_after = atomicrmw sub ptr @sollang_compute_running, i32 1 acq_rel
   br label %claim
 complete:
-  %previous = atomicrmw sub ptr @smalllang_compute_active, i32 1 acq_rel
+  %previous = atomicrmw sub ptr @sollang_compute_active, i32 1 acq_rel
   %last = icmp eq i32 %previous, 1
   br i1 %last, label %signal, label %barrier_check
 barrier_check:
-  %current_generation = load atomic i32, ptr @smalllang_compute_generation acquire, align 4
+  %current_generation = load atomic i32, ptr @sollang_compute_generation acquire, align 4
   %generation_advanced = icmp ne i32 %current_generation, %generation
   br i1 %generation_advanced, label %wait, label %barrier_wait
 barrier_wait:
-  %futex_waited = call i64 (i64, ...) @syscall(i64 202, ptr @smalllang_compute_generation, i32 128, i32 %generation, ptr null, ptr null, i32 0)
+  %futex_waited = call i64 (i64, ...) @syscall(i64 202, ptr @sollang_compute_generation, i32 128, i32 %generation, ptr null, ptr null, i32 0)
   br label %barrier_check
 signal:
-  %generation_before = atomicrmw add ptr @smalllang_compute_generation, i32 1 acq_rel
-  %futex_woken = call i64 (i64, ...) @syscall(i64 202, ptr @smalllang_compute_generation, i32 129, i32 2147483647, ptr null, ptr null, i32 0)
+  %generation_before = atomicrmw add ptr @sollang_compute_generation, i32 1 acq_rel
+  %futex_woken = call i64 (i64, ...) @syscall(i64 202, ptr @sollang_compute_generation, i32 129, i32 2147483647, ptr null, ptr null, i32 0)
   store i64 1, ptr %event_value, align 8
-  %completion_fd = load i32, ptr @smalllang_compute_completion_event_fd, align 4
+  %completion_fd = load i32, ptr @sollang_compute_completion_event_fd, align 4
   %signalled = call i64 @write(i32 %completion_fd, ptr %event_value, i64 8)
   br label %wait
 stopped:
   ret ptr null
 }
-define internal i1 @smalllang_compute_start() {
+define internal i1 @sollang_compute_start() {
 entry:
-  %existing = load i32, ptr @smalllang_compute_worker_count, align 4
+  %existing = load i32, ptr @sollang_compute_worker_count, align 4
   %already = icmp sgt i32 %existing, 0
   br i1 %already, label %ready, label %create_tls
 create_tls:
-  %tls_status = call i32 @pthread_key_create(ptr @smalllang_output_sink_tls, ptr null)
+  %tls_status = call i32 @pthread_key_create(ptr @sollang_output_sink_tls, ptr null)
   %tls_ok = icmp eq i32 %tls_status, 0
   br i1 %tls_ok, label %create_work_event, label %fail
 create_work_event:
@@ -229,16 +229,16 @@ create_work_event:
   %work_ok = icmp sge i32 %work_fd, 0
   br i1 %work_ok, label %create_completion_event, label %delete_tls
 create_completion_event:
-  store i32 %work_fd, ptr @smalllang_compute_work_event_fd, align 4
+  store i32 %work_fd, ptr @sollang_compute_work_event_fd, align 4
   %completion_fd = call i32 @eventfd(i32 0, i32 0)
   %completion_ok = icmp sge i32 %completion_fd, 0
   br i1 %completion_ok, label %count, label %close_work
 count:
-  store i32 %completion_fd, ptr @smalllang_compute_completion_event_fd, align 4
+  store i32 %completion_fd, ptr @sollang_compute_completion_event_fd, align 4
   %reported = call i64 @sysconf(i32 84)
   %positive = icmp sgt i64 %reported, 0
   %at_least_one = select i1 %positive, i64 %reported, i64 1
-  %configured32 = load i32, ptr @smalllang_compute_worker_limit, align 4
+  %configured32 = load i32, ptr @sollang_compute_worker_limit, align 4
   %configured = sext i32 %configured32 to i64
   %has_configured = icmp sgt i64 %configured, 0
   %selected = select i1 %has_configured, i64 %configured, i64 %at_least_one
@@ -251,8 +251,8 @@ create_workers:
   %done = icmp eq i32 %index, %bounded
   br i1 %done, label %publish, label %create_one
 create_one:
-  %slot = getelementptr [64 x i64], ptr @smalllang_compute_worker_threads, i32 0, i32 %index
-  %create = call i32 @pthread_create(ptr %slot, ptr null, ptr @smalllang_linux_compute_worker, ptr null)
+  %slot = getelementptr [64 x i64], ptr @sollang_compute_worker_threads, i32 0, i32 %index
+  %create = call i32 @pthread_create(ptr %slot, ptr null, ptr @sollang_linux_compute_worker, ptr null)
   %worker_ok = icmp eq i32 %create, 0
   br i1 %worker_ok, label %created, label %publish
 created:
@@ -260,21 +260,21 @@ created:
   br label %create_workers
 publish:
   %created_count = phi i32 [ %bounded, %create_workers ], [ %index, %create_one ]
-  store i32 %created_count, ptr @smalllang_compute_worker_count, align 4
+  store i32 %created_count, ptr @sollang_compute_worker_count, align 4
   %has_workers = icmp sgt i32 %created_count, 0
   br i1 %has_workers, label %ready, label %close_both
 close_work:
   %closed_work_only = call i32 @close(i32 %work_fd)
-  store i32 -1, ptr @smalllang_compute_work_event_fd, align 4
+  store i32 -1, ptr @sollang_compute_work_event_fd, align 4
   br label %delete_tls
 close_both:
   %closed_completion = call i32 @close(i32 %completion_fd)
   %closed_work = call i32 @close(i32 %work_fd)
-  store i32 -1, ptr @smalllang_compute_completion_event_fd, align 4
-  store i32 -1, ptr @smalllang_compute_work_event_fd, align 4
+  store i32 -1, ptr @sollang_compute_completion_event_fd, align 4
+  store i32 -1, ptr @sollang_compute_work_event_fd, align 4
   br label %delete_tls
 delete_tls:
-  %tls_index_failed = load i32, ptr @smalllang_output_sink_tls, align 4
+  %tls_index_failed = load i32, ptr @sollang_output_sink_tls, align 4
   %tls_deleted_failed = call i32 @pthread_key_delete(i32 %tls_index_failed)
   br label %fail
 ready:
@@ -282,9 +282,9 @@ ready:
 fail:
   ret i1 false
 }
-define internal i32 @smalllang_compute_limit_workers(i32 %requested) {
+define internal i32 @sollang_compute_limit_workers(i32 %requested) {
 entry:
-  %existing = load i32, ptr @smalllang_compute_worker_count, align 4
+  %existing = load i32, ptr @sollang_compute_worker_count, align 4
   %already_started = icmp sgt i32 %existing, 0
   br i1 %already_started, label %started, label %configure
 configure:
@@ -292,96 +292,96 @@ configure:
   %at_least_one = select i1 %positive, i32 %requested, i32 1
   %too_many = icmp sgt i32 %at_least_one, 64
   %bounded = select i1 %too_many, i32 64, i32 %at_least_one
-  store i32 %bounded, ptr @smalllang_compute_worker_limit, align 4
-  %started_ok = call i1 @smalllang_compute_start()
+  store i32 %bounded, ptr @sollang_compute_worker_limit, align 4
+  %started_ok = call i1 @sollang_compute_start()
   br i1 %started_ok, label %read, label %failed
 started:
   ret i32 %existing
 read:
-  %workers = load i32, ptr @smalllang_compute_worker_count, align 4
+  %workers = load i32, ptr @sollang_compute_worker_count, align 4
   ret i32 %workers
 failed:
   ret i32 0
 }
-define internal void @smalllang_compute_execute(ptr %group) {
+define internal void @sollang_compute_execute(ptr %group) {
 entry:
-  %started = call i1 @smalllang_compute_start()
+  %started = call i1 @sollang_compute_start()
   br i1 %started, label %submit, label %failed
 submit:
-  %count_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 3
+  %count_slot = getelementptr %sollang.compute_group, ptr %group, i32 0, i32 3
   %count = load i64, ptr %count_slot, align 8
   %empty = icmp eq i64 %count, 0
   br i1 %empty, label %cleanup_empty, label %publish
 cleanup_empty:
-  %empty_sinks_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 5
+  %empty_sinks_slot = getelementptr %sollang.compute_group, ptr %group, i32 0, i32 5
   %empty_sinks = load ptr, ptr %empty_sinks_slot, align 8
-  call void @smalllang_memory_output_sink_array_dispose(ptr %empty_sinks, i64 0)
+  call void @sollang_memory_output_sink_array_dispose(ptr %empty_sinks, i64 0)
   br label %done
 publish:
-  store atomic i64 0, ptr @smalllang_compute_next release, align 8
-  store atomic i32 0, ptr @smalllang_compute_peak release, align 4
-  %workers = load i32, ptr @smalllang_compute_worker_count, align 4
-  store atomic i32 %workers, ptr @smalllang_compute_active release, align 4
-  store atomic ptr %group, ptr @smalllang_compute_group_current release, align 8
+  store atomic i64 0, ptr @sollang_compute_next release, align 8
+  store atomic i32 0, ptr @sollang_compute_peak release, align 4
+  %workers = load i32, ptr @sollang_compute_worker_count, align 4
+  store atomic i32 %workers, ptr @sollang_compute_active release, align 4
+  store atomic ptr %group, ptr @sollang_compute_group_current release, align 8
   %workers64 = zext i32 %workers to i64
   %event_value = alloca i64, align 8
   store i64 %workers64, ptr %event_value, align 8
-  %help_first_index = atomicrmw add ptr @smalllang_compute_next, i64 1 acq_rel
-  %work_fd = load i32, ptr @smalllang_compute_work_event_fd, align 4
+  %help_first_index = atomicrmw add ptr @sollang_compute_next, i64 1 acq_rel
+  %work_fd = load i32, ptr @sollang_compute_work_event_fd, align 4
   %released = call i64 @write(i32 %work_fd, ptr %event_value, i64 8)
   br label %help_work
 help_claim:
-  %help_claimed_index = atomicrmw add ptr @smalllang_compute_next, i64 1 acq_rel
+  %help_claimed_index = atomicrmw add ptr @sollang_compute_next, i64 1 acq_rel
   %help_within_count = icmp ult i64 %help_claimed_index, %count
-  %help_failure_limit_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 11
+  %help_failure_limit_slot = getelementptr %sollang.compute_group, ptr %group, i32 0, i32 11
   %help_failure_limit = load atomic i64, ptr %help_failure_limit_slot acquire, align 8
   %help_before_failure = icmp ult i64 %help_claimed_index, %help_failure_limit
   %help_has_work = and i1 %help_within_count, %help_before_failure
   br i1 %help_has_work, label %help_work, label %help_wait
 help_work:
   %help_index = phi i64 [ %help_first_index, %publish ], [ %help_claimed_index, %help_claim ]
-  %help_callback_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 0
+  %help_callback_slot = getelementptr %sollang.compute_group, ptr %group, i32 0, i32 0
   %help_callback = load ptr, ptr %help_callback_slot, align 8
-  %help_sinks_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 5
+  %help_sinks_slot = getelementptr %sollang.compute_group, ptr %group, i32 0, i32 5
   %help_sinks = load ptr, ptr %help_sinks_slot, align 8
-  %help_sink = getelementptr %smalllang.output_sink, ptr %help_sinks, i64 %help_index
-  %help_tls_index = load i32, ptr @smalllang_output_sink_tls, align 4
+  %help_sink = getelementptr %sollang.output_sink, ptr %help_sinks, i64 %help_index
+  %help_tls_index = load i32, ptr @sollang_output_sink_tls, align 4
   %help_tls_set = call i32 @pthread_setspecific(i32 %help_tls_index, ptr %help_sink)
-  %help_running_before = atomicrmw add ptr @smalllang_compute_running, i32 1 acq_rel
+  %help_running_before = atomicrmw add ptr @sollang_compute_running, i32 1 acq_rel
   %help_running_now = add i32 %help_running_before, 1
-  %help_peak_before = atomicrmw max ptr @smalllang_compute_peak, i32 %help_running_now acq_rel
+  %help_peak_before = atomicrmw max ptr @sollang_compute_peak, i32 %help_running_now acq_rel
   call void %help_callback(ptr %group, i64 %help_index)
   %help_tls_clear = call i32 @pthread_setspecific(i32 %help_tls_index, ptr null)
-  %help_running_after = atomicrmw sub ptr @smalllang_compute_running, i32 1 acq_rel
+  %help_running_after = atomicrmw sub ptr @sollang_compute_running, i32 1 acq_rel
   br label %help_claim
 help_wait:
-  %completion_fd = load i32, ptr @smalllang_compute_completion_event_fd, align 4
+  %completion_fd = load i32, ptr @sollang_compute_completion_event_fd, align 4
   %waited = call i64 @read(i32 %completion_fd, ptr %event_value, i64 8)
   br label %flush_prepare
 flush_prepare:
-  %sinks_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 5
+  %sinks_slot = getelementptr %sollang.compute_group, ptr %group, i32 0, i32 5
   %sinks = load ptr, ptr %sinks_slot, align 8
-  %flush_limit_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 11
+  %flush_limit_slot = getelementptr %sollang.compute_group, ptr %group, i32 0, i32 11
   %flush_limit = load atomic i64, ptr %flush_limit_slot acquire, align 8
-  call void @smalllang_memory_output_sink_array_flush_prefix(ptr %sinks, i64 %count, i64 %flush_limit, ptr %group, ptr @smalllang_memory_output_sink_write)
-  store atomic ptr null, ptr @smalllang_compute_group_current release, align 8
+  call void @sollang_memory_output_sink_array_flush_prefix(ptr %sinks, i64 %count, i64 %flush_limit, ptr %group, ptr @sollang_memory_output_sink_write)
+  store atomic ptr null, ptr @sollang_compute_group_current release, align 8
   br label %done
 failed:
   unreachable
 done:
   ret void
 }
-define internal void @smalllang_compute_shutdown() {
+define internal void @sollang_compute_shutdown() {
 entry:
-  %workers = load i32, ptr @smalllang_compute_worker_count, align 4
+  %workers = load i32, ptr @sollang_compute_worker_count, align 4
   %started = icmp sgt i32 %workers, 0
   br i1 %started, label %stop, label %done
 stop:
-  store atomic i32 1, ptr @smalllang_compute_stopping release, align 4
+  store atomic i32 1, ptr @sollang_compute_stopping release, align 4
   %workers64 = zext i32 %workers to i64
   %event_value = alloca i64, align 8
   store i64 %workers64, ptr %event_value, align 8
-  %work_fd = load i32, ptr @smalllang_compute_work_event_fd, align 4
+  %work_fd = load i32, ptr @sollang_compute_work_event_fd, align 4
   %released = call i64 @write(i32 %work_fd, ptr %event_value, i64 8)
   br label %join
 join:
@@ -389,7 +389,7 @@ join:
   %all_joined = icmp eq i32 %index, %workers
   br i1 %all_joined, label %cleanup, label %join_one
 join_one:
-  %slot = getelementptr [64 x i64], ptr @smalllang_compute_worker_threads, i32 0, i32 %index
+  %slot = getelementptr [64 x i64], ptr @sollang_compute_worker_threads, i32 0, i32 %index
   %worker = load i64, ptr %slot, align 8
   %joined_status = call i32 @pthread_join(i64 %worker, ptr null)
   store i64 0, ptr %slot, align 8
@@ -398,19 +398,19 @@ joined:
   %next = add i32 %index, 1
   br label %join
 cleanup:
-  %completion_fd = load i32, ptr @smalllang_compute_completion_event_fd, align 4
+  %completion_fd = load i32, ptr @sollang_compute_completion_event_fd, align 4
   %closed_completion = call i32 @close(i32 %completion_fd)
   %closed_work = call i32 @close(i32 %work_fd)
-  %tls_index = load i32, ptr @smalllang_output_sink_tls, align 4
+  %tls_index = load i32, ptr @sollang_output_sink_tls, align 4
   %tls_deleted = call i32 @pthread_key_delete(i32 %tls_index)
-  store i32 -1, ptr @smalllang_compute_completion_event_fd, align 4
-  store i32 -1, ptr @smalllang_compute_work_event_fd, align 4
-  store i32 0, ptr @smalllang_compute_worker_count, align 4
+  store i32 -1, ptr @sollang_compute_completion_event_fd, align 4
+  store i32 -1, ptr @sollang_compute_work_event_fd, align 4
+  store i32 0, ptr @sollang_compute_worker_count, align 4
   br label %done
 done:
   ret void
 }
-define internal void @sl_runtime_print_i32(i32 %value, i1 %newline) {
+define internal void @sollang_runtime_print_i32(i32 %value, i1 %newline) {
 entry:
   %buffer = alloca [12 x i8], align 1
   %end = getelementptr [12 x i8], ptr %buffer, i64 0, i64 12
@@ -441,10 +441,10 @@ emit:
   %end_address = ptrtoint ptr %end to i64
   %start_address = ptrtoint ptr %start to i64
   %length = sub i64 %end_address, %start_address
-  call void @sl_runtime_print(ptr %start, i64 %length, i1 %newline)
+  call void @sollang_runtime_print(ptr %start, i64 %length, i1 %newline)
   ret void
 }
-define internal void @sl_runtime_print_i64(i64 %value, i1 %signed, i1 %newline) {
+define internal void @sollang_runtime_print_i64(i64 %value, i1 %signed, i1 %newline) {
 entry:
   %buffer = alloca [21 x i8], align 1
   %end = getelementptr [21 x i8], ptr %buffer, i64 0, i64 21
@@ -475,53 +475,53 @@ emit:
   %end_address = ptrtoint ptr %end to i64
   %start_address = ptrtoint ptr %start to i64
   %length = sub i64 %end_address, %start_address
-  call void @sl_runtime_print(ptr %start, i64 %length, i1 %newline)
+  call void @sollang_runtime_print(ptr %start, i64 %length, i1 %newline)
   ret void
 }
-%sl.array.i32 = type { ptr, i64, i64 }
+%sollang.array.i32 = type { ptr, i64, i64 }
 declare ptr @malloc(i64)
 declare void @free(ptr)
-define internal void @smalllang_drop_t25(%sl.array.i32 %value) {
+define internal void @sollang_drop_t25(%sollang.array.i32 %value) {
 entry:
-  %data = extractvalue %sl.array.i32 %value, 0
-  %length = extractvalue %sl.array.i32 %value, 1
+  %data = extractvalue %sollang.array.i32 %value, 0
+  %length = extractvalue %sollang.array.i32 %value, 1
   call void @free(ptr %data)
   ret void
 }
-%sl.text = type { ptr, i64 }
-@sl_str_4 = private unnamed_addr constant [8 x i8] c"[$value]"
-@sl_str_25 = private unnamed_addr constant [5 x i8] c" done"
-define internal void @smalllang_parallel_callback_13(ptr %group, i64 %index) {
+%sollang.text = type { ptr, i64 }
+@sollang_str_4 = private unnamed_addr constant [8 x i8] c"[$value]"
+@sollang_str_25 = private unnamed_addr constant [5 x i8] c" done"
+define internal void @sollang_parallel_callback_13(ptr %group, i64 %index) {
 entry:
-  %input_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 1
+  %input_slot = getelementptr %sollang.compute_group, ptr %group, i32 0, i32 1
   %input = load ptr, ptr %input_slot, align 8
   %input_address = getelementptr i32, ptr %input, i64 %index
   %item = load i32, ptr %input_address, align 4
-  %mapped = call i32 @sl_m0_s0(i32 %item)
-  %output_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 2
+  %mapped = call i32 @sollang_m0_s0(i32 %item)
+  %output_slot = getelementptr %sollang.compute_group, ptr %group, i32 0, i32 2
   %output = load ptr, ptr %output_slot, align 8
   %output_address = getelementptr i32, ptr %output, i64 %index
   store i32 %mapped, ptr %output_address, align 4
   ret void
 }
-define i32 @sl_m0_s0(i32 %arg) {
+define i32 @sollang_m0_s0(i32 %arg) {
 entry:
-  %v4_ptr = insertvalue %sl.text poison, ptr @sl_str_4, 0
-  %v4 = insertvalue %sl.text %v4_ptr, i64 8, 1
-  %v3_expression_literal0 = getelementptr i8, ptr @sl_str_4, i64 0
-  call void @sl_runtime_print(ptr %v3_expression_literal0, i64 1, i1 false)
-  call void @sl_runtime_print_i32(i32 %arg, i1 false)
-  %v3_expression_suffix = getelementptr i8, ptr @sl_str_4, i64 7
-  call void @sl_runtime_print(ptr %v3_expression_suffix, i64 1, i1 false)
+  %v4_ptr = insertvalue %sollang.text poison, ptr @sollang_str_4, 0
+  %v4 = insertvalue %sollang.text %v4_ptr, i64 8, 1
+  %v3_expression_literal0 = getelementptr i8, ptr @sollang_str_4, i64 0
+  call void @sollang_runtime_print(ptr %v3_expression_literal0, i64 1, i1 false)
+  call void @sollang_runtime_print_i32(i32 %arg, i1 false)
+  %v3_expression_suffix = getelementptr i8, ptr @sollang_str_4, i64 7
+  call void @sollang_runtime_print(ptr %v3_expression_suffix, i64 1, i1 false)
   %v5 = mul i32 %arg, 2
   ret i32 %v5
 }
 define i32 @main() {
 entry:
-  %slot10 = alloca %sl.array.i32, align 8
-  %v25_ptr = insertvalue %sl.text poison, ptr @sl_str_25, 0
-  %v25 = insertvalue %sl.text %v25_ptr, i64 5, 1
-  %v11 = call i32 @smalllang_compute_limit_workers(i32 1)
+  %slot10 = alloca %sollang.array.i32, align 8
+  %v25_ptr = insertvalue %sollang.text poison, ptr @sollang_str_25, 0
+  %v25 = insertvalue %sollang.text %v25_ptr, i64 5, 1
+  %v11 = call i32 @sollang_compute_limit_workers(i32 1)
   %v14_data = call ptr @malloc(i64 32)
   %v14_ptr0 = getelementptr i32, ptr %v14_data, i64 0
   store i32 8, ptr %v14_ptr0, align 4
@@ -539,52 +539,52 @@ entry:
   store i32 5, ptr %v14_ptr6, align 4
   %v14_ptr7 = getelementptr i32, ptr %v14_data, i64 7
   store i32 4, ptr %v14_ptr7, align 4
-  %v14_0 = insertvalue %sl.array.i32 poison, ptr %v14_data, 0
-  %v14_1 = insertvalue %sl.array.i32 %v14_0, i64 8, 1
-  %v14 = insertvalue %sl.array.i32 %v14_1, i64 8, 2
-  %v13_input = extractvalue %sl.array.i32 %v14, 0
-  %v13_length = extractvalue %sl.array.i32 %v14, 1
+  %v14_0 = insertvalue %sollang.array.i32 poison, ptr %v14_data, 0
+  %v14_1 = insertvalue %sollang.array.i32 %v14_0, i64 8, 1
+  %v14 = insertvalue %sollang.array.i32 %v14_1, i64 8, 2
+  %v13_input = extractvalue %sollang.array.i32 %v14, 0
+  %v13_length = extractvalue %sollang.array.i32 %v14, 1
   %v13_bytes = mul i64 %v13_length, 4
   %v13_data = call ptr @malloc(i64 %v13_bytes)
-  %v13_group = alloca %smalllang.compute_group, align 8
-  %v13_callback_slot = getelementptr %smalllang.compute_group, ptr %v13_group, i32 0, i32 0
-  store ptr @smalllang_parallel_callback_13, ptr %v13_callback_slot, align 8
-  %v13_input_slot = getelementptr %smalllang.compute_group, ptr %v13_group, i32 0, i32 1
+  %v13_group = alloca %sollang.compute_group, align 8
+  %v13_callback_slot = getelementptr %sollang.compute_group, ptr %v13_group, i32 0, i32 0
+  store ptr @sollang_parallel_callback_13, ptr %v13_callback_slot, align 8
+  %v13_input_slot = getelementptr %sollang.compute_group, ptr %v13_group, i32 0, i32 1
   store ptr %v13_input, ptr %v13_input_slot, align 8
-  %v13_output_slot = getelementptr %smalllang.compute_group, ptr %v13_group, i32 0, i32 2
+  %v13_output_slot = getelementptr %sollang.compute_group, ptr %v13_group, i32 0, i32 2
   store ptr %v13_data, ptr %v13_output_slot, align 8
-  %v13_count_slot = getelementptr %smalllang.compute_group, ptr %v13_group, i32 0, i32 3
+  %v13_count_slot = getelementptr %sollang.compute_group, ptr %v13_group, i32 0, i32 3
   store i64 %v13_length, ptr %v13_count_slot, align 8
-  %v13_capture_slot = getelementptr %smalllang.compute_group, ptr %v13_group, i32 0, i32 4
+  %v13_capture_slot = getelementptr %sollang.compute_group, ptr %v13_group, i32 0, i32 4
   store ptr null, ptr %v13_capture_slot, align 8
   %v13_sink_bytes = mul i64 %v13_length, 24
   %v13_sinks = call ptr @malloc(i64 %v13_sink_bytes)
   call void @llvm.memset.p0.i64(ptr %v13_sinks, i8 0, i64 %v13_sink_bytes, i1 false)
-  %v13_sinks_slot = getelementptr %smalllang.compute_group, ptr %v13_group, i32 0, i32 5
+  %v13_sinks_slot = getelementptr %sollang.compute_group, ptr %v13_group, i32 0, i32 5
   store ptr %v13_sinks, ptr %v13_sinks_slot, align 8
-  %v13_runtime_slot_6 = getelementptr %smalllang.compute_group, ptr %v13_group, i32 0, i32 6
+  %v13_runtime_slot_6 = getelementptr %sollang.compute_group, ptr %v13_group, i32 0, i32 6
   store ptr null, ptr %v13_runtime_slot_6, align 8
-  %v13_runtime_slot_7 = getelementptr %smalllang.compute_group, ptr %v13_group, i32 0, i32 7
+  %v13_runtime_slot_7 = getelementptr %sollang.compute_group, ptr %v13_group, i32 0, i32 7
   store ptr null, ptr %v13_runtime_slot_7, align 8
-  %v13_runtime_slot_8 = getelementptr %smalllang.compute_group, ptr %v13_group, i32 0, i32 8
+  %v13_runtime_slot_8 = getelementptr %sollang.compute_group, ptr %v13_group, i32 0, i32 8
   store ptr null, ptr %v13_runtime_slot_8, align 8
-  %v13_runtime_slot_9 = getelementptr %smalllang.compute_group, ptr %v13_group, i32 0, i32 9
+  %v13_runtime_slot_9 = getelementptr %sollang.compute_group, ptr %v13_group, i32 0, i32 9
   store ptr null, ptr %v13_runtime_slot_9, align 8
-  %v13_runtime_slot_10 = getelementptr %smalllang.compute_group, ptr %v13_group, i32 0, i32 10
+  %v13_runtime_slot_10 = getelementptr %sollang.compute_group, ptr %v13_group, i32 0, i32 10
   store ptr null, ptr %v13_runtime_slot_10, align 8
-  %v13_failure_limit_slot = getelementptr %smalllang.compute_group, ptr %v13_group, i32 0, i32 11
+  %v13_failure_limit_slot = getelementptr %sollang.compute_group, ptr %v13_group, i32 0, i32 11
   store atomic i64 %v13_length, ptr %v13_failure_limit_slot release, align 8
-  %v13_initialized_slot = getelementptr %smalllang.compute_group, ptr %v13_group, i32 0, i32 12
+  %v13_initialized_slot = getelementptr %sollang.compute_group, ptr %v13_group, i32 0, i32 12
   store ptr null, ptr %v13_initialized_slot, align 8
-  call void @smalllang_compute_execute(ptr %v13_group)
-  %v13_0 = insertvalue %sl.array.i32 poison, ptr %v13_data, 0
-  %v13_1 = insertvalue %sl.array.i32 %v13_0, i64 %v13_length, 1
-  %v13 = insertvalue %sl.array.i32 %v13_1, i64 %v13_length, 2
-  store %sl.array.i32 %v13, ptr %slot10, align 8
-  call void @sl_runtime_print(ptr @sl_str_25, i64 5, i1 true)
-  %cleanup86_b10_current = load %sl.array.i32, ptr %slot10, align 8
-  call void @smalllang_drop_t25(%sl.array.i32 %cleanup86_b10_current)
-  call void @smalllang_compute_shutdown()
-  call void @sl_runtime_flush_stdout()
+  call void @sollang_compute_execute(ptr %v13_group)
+  %v13_0 = insertvalue %sollang.array.i32 poison, ptr %v13_data, 0
+  %v13_1 = insertvalue %sollang.array.i32 %v13_0, i64 %v13_length, 1
+  %v13 = insertvalue %sollang.array.i32 %v13_1, i64 %v13_length, 2
+  store %sollang.array.i32 %v13, ptr %slot10, align 8
+  call void @sollang_runtime_print(ptr @sollang_str_25, i64 5, i1 true)
+  %cleanup86_b10_current = load %sollang.array.i32, ptr %slot10, align 8
+  call void @sollang_drop_t25(%sollang.array.i32 %cleanup86_b10_current)
+  call void @sollang_compute_shutdown()
+  call void @sollang_runtime_flush_stdout()
   ret i32 0
 }

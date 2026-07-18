@@ -1,10 +1,10 @@
-# SmallLang Array And Ownership Design
+# Sollang Array And Ownership Design
 
 Status: implemented slice plus future design
 Date: 2026-07-09
 
 This document records the proposed static and dynamic array model for
-SmallLang and the first implemented container slice.
+Sollang and the first implemented container slice.
 
 The implemented slice is intentionally narrower than the final design. It
 supports `Int` static arrays, `Int` dynamic arrays, and `{Int: Int}`
@@ -17,7 +17,7 @@ and generic element types remain future work.
 
 ## Rust Reference Points
 
-SmallLang should use Rust as the main reference for this area, but should not
+Sollang should use Rust as the main reference for this area, but should not
 copy Rust syntax blindly.
 
 - Rust manages memory through compile-time ownership rules rather than a tracing
@@ -30,7 +30,7 @@ copy Rust syntax blindly.
   `&mut [T]`:
   <https://doc.rust-lang.org/reference/types/slice.html>
 - Rust `Vec<T>` is a contiguous growable heap allocation with length and
-  capacity. SmallLang should take the ownership model, not the `Vec` surface
+  capacity. Sollang should take the ownership model, not the `Vec` surface
   name:
   <https://doc.rust-lang.org/std/vec/>
 
@@ -50,13 +50,13 @@ Further web review changed the emphasis:
   still unconsumed at function return:
   <https://austral-lang.org/spec/spec.html#Linear-Types>
 
-Conclusion: SmallLang should keep the Rust-shaped array model, but make safe
-SmallLang stricter than Rust by removing safe `forget`/`leak`, implicit shared
+Conclusion: Sollang should keep the Rust-shaped array model, but make safe
+Sollang stricter than Rust by removing safe `forget`/`leak`, implicit shared
 ownership, and unproven cyclic ownership from the safe surface.
 
 ## Core Decision
 
-SmallLang should split array concepts by ownership:
+Sollang should split array concepts by ownership:
 
 ```text
 [T; N]      owned fixed-size array
@@ -66,10 +66,10 @@ SmallLang should split array concepts by ownership:
 ```
 
 This avoids the common GC-language ambiguity where a dynamic array value may or
-may not own its backing storage. In SmallLang, a value either owns storage or it
+may not own its backing storage. In Sollang, a value either owns storage or it
 borrows storage from another owner.
 
-The source syntax should also look like SmallLang, not Rust. `Vec<T>` is only a
+The source syntax should also look like Sollang, not Rust. `Vec<T>` is only a
 reference model for the internal ownership shape. User code should say
 `[T; ~]`, not `Vec<T>`.
 
@@ -83,7 +83,7 @@ hint, not an initial length.
 
 The current compiler implements the first `Int` container slice:
 
-```smalllang
+```sollang
 main {
     [1, 2, 3] => numbers
     numbers[0] => first
@@ -190,10 +190,10 @@ mark on the wrong meaning:
 - <https://hexdocs.pm/elixir/main/naming-conventions.html#trailing-bang-foo>
 - <https://docs.julialang.org/en/v1/manual/style-guide/#bang-convention>
 
-SmallLang should instead remove the empty-parentheses marker for value-flow
+Sollang should instead remove the empty-parentheses marker for value-flow
 calls whose only explicit input is the value on the left:
 
-```smalllang
+```sollang
 getName() => name
 7 -> square => num
 values -> len => count
@@ -202,7 +202,7 @@ values -> len => count
 Parentheses should remain only when the flow target receives additional
 arguments beyond the primary left value:
 
-```smalllang
+```sollang
 values! -> push(10)
 values! -> reserve(1024)
 ```
@@ -216,14 +216,14 @@ semantic checks are updated.
 
 Static arrays are fixed-size owned values:
 
-```smalllang
+```sollang
 [1, 2, 3] => numbers          # inferred as [Int; 3]
 [0; 8] => zeros               # inferred as [Int; 8]
 ```
 
 The type form is:
 
-```smalllang
+```sollang
 [Int; 3]
 [Text; 4]
 ```
@@ -249,7 +249,7 @@ Storage placement:
 - Large fixed arrays can be explicitly moved to heap-owned storage later with a
   flow operation:
 
-```smalllang
+```sollang
 [0; 1000000] -> heap => buffer
 ```
 
@@ -260,9 +260,9 @@ borrow and not a garbage-collected reference.
 ## Dynamic Arrays
 
 Dynamic arrays are owned growable array values. The internal model is
-Rust `Vec<T>`-like, but the SmallLang source surface uses array syntax:
+Rust `Vec<T>`-like, but the Sollang source surface uses array syntax:
 
-```smalllang
+```sollang
 [Int; ~] => values!
 [10, 20, ~] => seeded!
 values! -> push(10)
@@ -348,14 +348,14 @@ Storage placement:
 
 The type form is:
 
-```smalllang
+```sollang
 [Int; ~]
 [Text; ~]
 ```
 
 The literal form uses an open tail marker:
 
-```smalllang
+```sollang
 [1, 2, 3, ~] => values!
 ```
 
@@ -370,7 +370,7 @@ language design should keep `[T; ~]` generic from the start.
 Dictionaries use braces because braces are a natural fit for key-value data and
 because dynamic arrays stay in the `[]` family:
 
-```smalllang
+```sollang
 { 1: 100, 2: 200 } => scores!
 scores![1] => firstScore
 scores! -> put(3, 300)
@@ -380,7 +380,7 @@ scores! -> capacity => capacity
 
 The final type form should be:
 
-```smalllang
+```sollang
 {Text: Int}
 {Int: Text}
 ```
@@ -401,7 +401,7 @@ types.
 Most read-only array functions should accept a slice, not an owned dynamic
 array:
 
-```smalllang
+```sollang
 sum values: &[Int] -> Int {
     values -> fold 0 total, value {
         total + value
@@ -433,10 +433,10 @@ static array, a dynamic array, or a sub-slice without taking ownership.
 
 ## Mutability
 
-SmallLang should keep immutable bindings as the default and introduce explicit
+Sollang should keep immutable bindings as the default and introduce explicit
 mutable bindings when arrays need in-place updates:
 
-```smalllang
+```sollang
 [Int; ~] => values!
 values! -> push(10)
 values! -> push(20)
@@ -453,13 +453,13 @@ Rules:
 - Borrowing a mutable binding as `&mut` is exclusive for the duration of the
   borrow.
 
-This is Rust-inspired, but keeps the binding direction aligned with SmallLang's
+This is Rust-inspired, but keeps the binding direction aligned with Sollang's
 existing flow syntax.
 
 Immutable bindings can still produce changed values by moving the owner into a
 new owner:
 
-```smalllang
+```sollang
 [1, 2, ~] => values
 values -> append(3) => values
 values -> updated(0, 9) => values
@@ -509,7 +509,7 @@ Recommended follow-up direction:
 - Add a builder/transient form for bulk construction. A temporary unique builder
   can perform many local updates and then freeze into an immutable owner without
   copying on every step.
-- If SmallLang later needs multiple immutable versions alive with efficient
+- If Sollang later needs multiple immutable versions alive with efficient
   sharing, add a separate persistent container type based on a structural
   sharing design such as HAMT/RRB-vector. Do not hide this behind the ordinary
   growable array until ownership, reference tracking, and drop of shared nodes
@@ -521,7 +521,7 @@ Recommended follow-up direction:
 
 Indexing:
 
-```smalllang
+```sollang
 numbers[0] => first
 99 => values![1]
 ```
@@ -535,7 +535,7 @@ Rules:
 
 Iteration should extend the existing block-function model:
 
-```smalllang
+```sollang
 numbers -> each value {
     value -> println
 }
@@ -553,14 +553,14 @@ shared borrow by default or requires an explicit move/borrow iteration mode.
 
 Flow target calls accept receiver-style additional arguments:
 
-```smalllang
+```sollang
 7 -> square
 values! -> push(10)
 ```
 
 Arrays and dictionaries use this shape for mutating operations:
 
-```smalllang
+```sollang
 values! -> push(10)
 scores! -> put(3, 300)
 ```
@@ -605,7 +605,7 @@ Target notes:
 
 ## Leak Prevention
 
-SmallLang's safe language surface must make memory-leak freedom a compile-time
+Sollang's safe language surface must make memory-leak freedom a compile-time
 property. The goal is not "catch most leaks"; the goal is that any safe program
 which could leak owned memory is rejected unless the compiler can prove a unique
 owner will drop that memory on every exit path.
@@ -635,7 +635,7 @@ Compile-time checks:
 Every owned value has exactly one owner at a time. When that owner leaves its
 drop scope, the compiler emits cleanup for the value:
 
-```smalllang
+```sollang
 [Int; ~] => values!
 values! -> push(10)
 values! -> push(20)
@@ -659,7 +659,7 @@ Drop rules:
 
 Moving an owned array transfers the obligation to drop it:
 
-```smalllang
+```sollang
 [1, 2, 3, ~] => values!
 values! -> takeArray => result
 
@@ -674,7 +674,7 @@ owned value. This prevents both double-free and use-after-free.
 Borrowed slices do not own storage and therefore never deallocate it. The
 compiler must prove that a slice cannot outlive the owner it points into:
 
-```smalllang
+```sollang
 [1, 2, 3] => numbers
 numbers -> slice => view
 
@@ -706,11 +706,11 @@ The first array model has no reference-counted ownership and no implicit shared
 owners, so cyclic ownership leaks are not part of the safe surface. If shared
 ownership is added later, it must be a separate explicit type with a clear cycle
 story that preserves compile-time leak freedom. If that cannot be proven, the
-feature does not belong in safe SmallLang.
+feature does not belong in safe Sollang.
 
 ### Intentional Leaks Are Not A Default Feature
 
-Rust has APIs that can intentionally forget or leak values. SmallLang should not
+Rust has APIs that can intentionally forget or leak values. Sollang should not
 add an equivalent operation to the safe surface initially. If an explicit
 `leak` or `forget` operation is added for systems interop later, it should be
 clearly marked as unsafe or advanced and must not be used by normal array code.
@@ -719,7 +719,7 @@ clearly marked as unsafe or advanced and must not be used by normal array code.
 
 Returning a slice into a local owner is rejected:
 
-```smalllang
+```sollang
 makeView: -> &[Int] {
     [1, 2, 3] => numbers
     numbers -> slice
@@ -728,7 +728,7 @@ makeView: -> &[Int] {
 
 Mutating a dynamic array while a slice borrow is live is rejected:
 
-```smalllang
+```sollang
 [1, 2, 3, ~] => values!
 values! -> slice => view
 values! -> push(4)
@@ -739,7 +739,7 @@ The `push` can reallocate the heap buffer, so the compiler must reject it while
 
 Moving and then using the moved binding is rejected:
 
-```smalllang
+```sollang
 [1, 2, 3, ~] => values!
 values! -> consume
 values! -> len => count

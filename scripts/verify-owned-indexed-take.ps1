@@ -6,8 +6,8 @@ $ErrorActionPreference = "Stop"
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $artifactsDir = Join-Path $repoRoot "artifacts\example-tests"
-$compilerProject = Join-Path $repoRoot "src\SmallLang.Compiler\SmallLang.Compiler.csproj"
-$runnerProject = Join-Path $repoRoot "tests\SmallLang.ExampleTests\SmallLang.ExampleTests.csproj"
+$compilerProject = Join-Path $repoRoot "src\Sollang.Compiler\Sollang.Compiler.csproj"
+$runnerProject = Join-Path $repoRoot "tests\Sollang.ExampleTests\Sollang.ExampleTests.csproj"
 $llvmDir = Join-Path $repoRoot ".tools\llvm-22.1.8"
 $clangPath = Join-Path $llvmDir "bin\clang.exe"
 $names = @(
@@ -53,7 +53,7 @@ Write-Host "[owned-take 2/4] Emit the C# reference LLVM for the combined owned c
 $referenceName = "401-owned-indexed-take"
 $referenceOutput = Join-Path $artifactsDir "$referenceName-asan"
 & dotnet run --project $compilerProject -c Release --no-build -- build `
-    (Join-Path $repoRoot "examples\$referenceName.sl") `
+    (Join-Path $repoRoot "examples\$referenceName.slg") `
     -o $referenceOutput `
     --target linux-x64 `
     --llvm $llvmDir `

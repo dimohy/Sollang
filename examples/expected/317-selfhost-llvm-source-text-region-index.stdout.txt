@@ -1,27 +1,27 @@
 target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
 target triple = "x86_64-pc-windows-msvc"
-%sl.source_text = type { ptr, i64, ptr, i64 }
-%sl.array.i32 = type { ptr, i64, i64 }
+%sollang.source_text = type { ptr, i64, ptr, i64 }
+%sollang.array.i32 = type { ptr, i64, i64 }
 declare ptr @malloc(i64)
 declare void @free(ptr)
-define internal void @smalllang_drop_t24(%sl.source_text %value) {
+define internal void @sollang_drop_t24(%sollang.source_text %value) {
 entry:
-  call void @sl_runtime_unmap_text(%sl.source_text %value)
+  call void @sollang_runtime_unmap_text(%sollang.source_text %value)
   ret void
 }
-define internal void @smalllang_drop_t25(%sl.array.i32 %value) {
+define internal void @sollang_drop_t25(%sollang.array.i32 %value) {
 entry:
-  %data = extractvalue %sl.array.i32 %value, 0
-  %length = extractvalue %sl.array.i32 %value, 1
+  %data = extractvalue %sollang.array.i32 %value, 0
+  %length = extractvalue %sollang.array.i32 %value, 1
   br label %loop
 loop:
   %index = phi i64 [ 0, %entry ], [ %next, %continue ]
   %in_range = icmp ult i64 %index, %length
   br i1 %in_range, label %item, label %done
 item:
-  %slot = getelementptr %sl.source_text, ptr %data, i64 %index
-  %element = load %sl.source_text, ptr %slot, align 8
-  call void @smalllang_drop_t24(%sl.source_text %element)
+  %slot = getelementptr %sollang.source_text, ptr %data, i64 %index
+  %element = load %sollang.source_text, ptr %slot, align 8
+  call void @sollang_drop_t24(%sollang.source_text %element)
   br label %continue
 continue:
   %next = add i64 %index, 1
@@ -31,27 +31,27 @@ done:
   ret void
 }
 declare void @llvm.trap()
-%sl.text = type { ptr, i64 }
-define i64 @sl_m0_s0(%sl.array.i32 %arg) {
+%sollang.text = type { ptr, i64 }
+define i64 @sollang_m0_s0(%sollang.array.i32 %arg) {
 entry:
   %slot3 = alloca i64, align 8
   %slot4 = alloca i64, align 8
-  %v8 = sext i32 0 to i64
-  %v10 = sext i32 0 to i64
+  %v8 = add i64 0, 0
+  %v10 = add i64 0, 0
   store i64 %v8, ptr %slot3, align 8
   store i64 %v10, ptr %slot4, align 8
   br label %while17_header
 while17_header:
   %while17_v14 = load i64, ptr %slot4, align 8
-  %while17_v15 = extractvalue %sl.array.i32 %arg, 1
+  %while17_v15 = extractvalue %sollang.array.i32 %arg, 1
   %while17_v13 = icmp ult i64 %while17_v14, %while17_v15
   br i1 %while17_v13, label %while17_body, label %while17_exit
 while17_body:
   %v22 = load i64, ptr %slot4, align 8
-  %v20_data = extractvalue %sl.array.i32 %arg, 0
-  %v20_ptr = getelementptr %sl.source_text, ptr %v20_data, i64 %v22
-  %v20 = load %sl.source_text, ptr %v20_ptr, align 8
-  %v19 = extractvalue %sl.source_text %v20, 1
+  %v20_data = extractvalue %sollang.array.i32 %arg, 0
+  %v20_ptr = getelementptr %sollang.source_text, ptr %v20_data, i64 %v22
+  %v20 = load %sollang.source_text, ptr %v20_ptr, align 8
+  %v19 = extractvalue %sollang.source_text %v20, 1
   %v24 = load i64, ptr %slot3, align 8
   %v25 = freeze i64 %v19
   %v23 = add i64 %v24, %v25
@@ -74,10 +74,10 @@ declare dllimport i32 @GetFileSizeEx(ptr, ptr)
 declare dllimport ptr @CreateFileMappingA(ptr, ptr, i32, i32, i32, ptr)
 declare dllimport ptr @MapViewOfFile(ptr, i32, i32, i32, i64)
 declare dllimport i32 @UnmapViewOfFile(ptr)
-define %sl.source_text @sl_runtime_map_text(%sl.text %path) {
+define %sollang.source_text @sollang_runtime_map_text(%sollang.text %path) {
 entry:
-  %path_data = extractvalue %sl.text %path, 0
-  %path_length = extractvalue %sl.text %path, 1
+  %path_data = extractvalue %sollang.text %path, 0
+  %path_length = extractvalue %sollang.text %path, 1
   %buffer_length = add i64 %path_length, 1
   %buffer = call ptr @malloc(i64 %buffer_length)
   %allocated = icmp ne ptr %buffer, null
@@ -112,7 +112,7 @@ size_known:
   br i1 %empty, label %empty_success, label %mapping
 empty_success:
   %empty_closed = call i32 @CloseHandle(ptr %file)
-  ret %sl.source_text zeroinitializer
+  ret %sollang.source_text zeroinitializer
 mapping:
   %mapping_handle = call ptr @CreateFileMappingA(ptr %file, ptr null, i32 2, i32 0, i32 0, ptr null)
   %mapping_ok = icmp ne ptr %mapping_handle, null
@@ -124,11 +124,11 @@ view:
 success:
   %mapping_closed = call i32 @CloseHandle(ptr %mapping_handle)
   %file_closed = call i32 @CloseHandle(ptr %file)
-  %result0 = insertvalue %sl.source_text poison, ptr %base, 0
-  %result1 = insertvalue %sl.source_text %result0, i64 %length, 1
-  %result2 = insertvalue %sl.source_text %result1, ptr %base, 2
-  %result3 = insertvalue %sl.source_text %result2, i64 %length, 3
-  ret %sl.source_text %result3
+  %result0 = insertvalue %sollang.source_text poison, ptr %base, 0
+  %result1 = insertvalue %sollang.source_text %result0, i64 %length, 1
+  %result2 = insertvalue %sollang.source_text %result1, ptr %base, 2
+  %result3 = insertvalue %sollang.source_text %result2, i64 %length, 3
+  ret %sollang.source_text %result3
 mapping_failure:
   %failed_mapping_closed = call i32 @CloseHandle(ptr %mapping_handle)
   br label %close_failure
@@ -140,9 +140,9 @@ failure:
   unreachable
 }
 
-define void @sl_runtime_unmap_text(%sl.source_text %source) {
+define void @sollang_runtime_unmap_text(%sollang.source_text %source) {
 entry:
-  %base = extractvalue %sl.source_text %source, 2
+  %base = extractvalue %sollang.source_text %source, 2
   %owned = icmp ne ptr %base, null
   br i1 %owned, label %unmap, label %done
 unmap:

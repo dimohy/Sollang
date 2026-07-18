@@ -1,0 +1,170 @@
+namespace sollang.compiler.semantic.nominal_types
+
+import sollang.compiler.ast as ast
+import sollang.compiler.lexer as lexer
+import sollang.compiler.semantic.analysis as analysis
+import sollang.compiler.semantic.modules as modules
+import sollang.compiler.semantic.symbols as symbols
+import sollang.compiler.semantic.type_ids as typeIds
+import sollang.compiler.semantic.type_resolve as typeResolve
+import sollang.compiler.semantic.types as types
+import syntax.generated.slg as grammar
+
+public struct NominalType {
+    sourceModule: Int
+    typeAst: Int
+    canonical: Int
+    origin: Int
+    targetModule: Int
+    targetSymbol: Int
+    status: Int
+}
+
+# Origins: 0 local declaration, 1 builtin, 2 imported declaration.
+# Status: 0 resolved, 2 missing, 3 non-public imported declaration.
+public resolve sources: [Text; ~] -> [NominalType; ~] {
+    sources -> analysis.analyze => package
+    package -> resolveAnalyzed
+}
+
+public resolveAnalyzed package: analysis.PackageAnalysis -> [NominalType; ~] {
+    ["Unit", "Text", "Int", "Int8", "Int16", "Int32", "Int64", "Long", "UInt8", "UInt16", "UInt32", "UInt64", "Size", "UIntSize", "CodePoint", "Arena", "Arguments", "MappedBytes", "MutableMappedBytes", "Float", "Float32", "Float64", "Double", "Bool", "SourceText", ~] => builtinNames!
+    package -> typeResolve.resolveAnalyzed => importedTypes!
+    package -> modules.identitiesAnalyzed => identities!
+    [NominalType; ~] => results!
+    0 => sourceIndex!
+    sourceIndex! < (package.sources -> len) -> while {
+        package.sources[sourceIndex!] -> len => sourceLength
+        package.sources[sourceIndex!] -> slice(UIntSize(0), sourceLength) => source
+        package.ranges[sourceIndex!] => sourceRange
+        0 => typeIndex!
+        typeIndex! < sourceRange.typeCount -> while {
+            package.typeUses[sourceRange.typeStart + typeIndex!] => typeUse
+            typeUse.kind == 1 -> if {
+                -1 => importedIndex!
+                0 => importedSearch!
+                importedSearch! < (importedTypes! -> len) -> while {
+                    importedTypes![importedSearch!] => imported
+                    (imported.sourceModule == sourceIndex! and imported.typeAst == typeUse.astNode) -> if {
+                        importedSearch! => importedIndex!
+                    }
+                    importedSearch! + 1 => importedSearch!
+                }
+                importedIndex! >= 0 -> if {
+                    importedTypes![importedIndex!] => imported
+                    -1 => intrinsicSymbol!
+                    imported.status == 0 -> if {
+                        typeIds.IntrinsicNominalRequest { package: package, identities: identities!, targetModule: imported.targetModule, targetSymbol: imported.targetSymbol } -> typeIds.intrinsicNominalSymbol => intrinsicSymbol!
+                    }
+                    2 => importedOrigin!
+                    imported.targetModule => importedTargetModule!
+                    imported.targetSymbol => importedTargetSymbol!
+                    intrinsicSymbol! >= 0 -> if {
+                        1 => importedOrigin!
+                        -1 => importedTargetModule!
+                        intrinsicSymbol! => importedTargetSymbol!
+                    }
+                    NominalType {
+                        sourceModule: sourceIndex!
+                        typeAst: typeUse.astNode
+                        canonical: typeUse.canonical
+                        origin: importedOrigin!
+                        targetModule: importedTargetModule!
+                        targetSymbol: importedTargetSymbol!
+                        status: imported.status
+                    } => importedResult
+                    results! -> push(importedResult)
+                } else {
+                    package.nodes[sourceRange.astStart + typeUse.astNode] => typeNode
+                    -1 => nameToken!
+                    typeNode.firstToken => tokenIndex!
+                    (tokenIndex! < typeNode.firstToken + typeNode.tokenCount and nameToken! < 0) -> while {
+                        package.tokens[sourceRange.tokenStart + tokenIndex!].kind == grammar.tokenIdIdentifier -> if {
+                            tokenIndex! => nameToken!
+                        }
+                        tokenIndex! + 1 => tokenIndex!
+                    }
+                    package.tokens[sourceRange.tokenStart + nameToken!] => name
+                    -1 => builtinIndex!
+                    0 => builtinSearch!
+                    (builtinSearch! < (builtinNames! -> len) and builtinIndex! < 0) -> while {
+                        builtinNames![builtinSearch!] => builtinName
+                        name.span.length == (builtinName -> len) => equal!
+                        UIntSize(0) => nameByte!
+                        (equal! and nameByte! < name.span.length) -> while {
+                            source -> byte(name.span.start + nameByte!) => leftByte
+                            builtinName -> byte(nameByte!) => rightByte
+                            leftByte != rightByte -> if { false => equal! }
+                            nameByte! + UIntSize(1) => nameByte!
+                        }
+                        equal! -> if { builtinSearch! => builtinIndex! }
+                        builtinSearch! + 1 => builtinSearch!
+                    }
+                    builtinIndex! >= 0 -> if {
+                        NominalType {
+                            sourceModule: sourceIndex!
+                            typeAst: typeUse.astNode
+                            canonical: typeUse.canonical
+                            origin: 1
+                            targetModule: -1
+                            targetSymbol: builtinIndex!
+                            status: 0
+                        } => builtinResult
+                        results! -> push(builtinResult)
+                    } else {
+                        -1 => typeOwnerFunction!
+                        package.nodes[sourceRange.astStart + typeUse.astNode].parent => ownerAst!
+                        (ownerAst! >= 0 and typeOwnerFunction! < 0) -> while {
+                            0 => ownerSymbolIndex!
+                            ownerSymbolIndex! < sourceRange.symbolCount -> while {
+                                package.symbols[sourceRange.symbolStart + ownerSymbolIndex!] => ownerCandidate
+                                (ownerCandidate.kind == 7 and ownerCandidate.astNode == ownerAst!) -> if {
+                                    ownerSymbolIndex! => typeOwnerFunction!
+                                }
+                                ownerSymbolIndex! + 1 => ownerSymbolIndex!
+                            }
+                            typeOwnerFunction! < 0 -> if { package.nodes[sourceRange.astStart + ownerAst!].parent => ownerAst! }
+                        }
+                        -1 => localSymbol!
+                        0 => symbolIndex!
+                        (symbolIndex! < sourceRange.symbolCount and localSymbol! < 0) -> while {
+                            package.symbols[sourceRange.symbolStart + symbolIndex!] => candidate
+                            ((candidate.parent < 0 and (candidate.kind == 3 or candidate.kind == 4)) or (candidate.kind == 32 and candidate.parent == typeOwnerFunction!)) -> if {
+                                package.tokens[sourceRange.tokenStart + candidate.nameToken] => candidateName
+                                name.span.length == candidateName.span.length => equal!
+                                UIntSize(0) => nameByte!
+                                (equal! and nameByte! < name.span.length) -> while {
+                                    source -> byte(name.span.start + nameByte!) => leftByte
+                                    source -> byte(candidateName.span.start + nameByte!) => rightByte
+                                    leftByte != rightByte -> if { false => equal! }
+                                    nameByte! + UIntSize(1) => nameByte!
+                                }
+                                equal! -> if { symbolIndex! => localSymbol! }
+                            }
+                            symbolIndex! + 1 => symbolIndex!
+                        }
+                        0 => localOrigin!
+                        localSymbol! >= 0 -> if {
+                            package.symbols[sourceRange.symbolStart + localSymbol!].kind == 32 -> if { 3 => localOrigin! }
+                        }
+                        2 => localStatus!
+                        localSymbol! >= 0 -> if { 0 => localStatus! }
+                        NominalType {
+                            sourceModule: sourceIndex!
+                            typeAst: typeUse.astNode
+                            canonical: typeUse.canonical
+                            origin: localOrigin!
+                            targetModule: sourceIndex!
+                            targetSymbol: localSymbol!
+                            status: localStatus!
+                        } => localResult
+                        results! -> push(localResult)
+                    }
+                }
+            }
+            typeIndex! + 1 => typeIndex!
+        }
+        sourceIndex! + 1 => sourceIndex!
+    }
+    results!
+}

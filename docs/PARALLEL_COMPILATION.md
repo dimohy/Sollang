@@ -3,7 +3,7 @@
 Status: accepted direction, implementation in progress  
 Updated: 2026-07-18
 
-This document defines SmallLang's CPU-parallel execution model and the concrete
+This document defines Sollang's CPU-parallel execution model and the concrete
 self-host compiler migration. A worker-count message is not implementation
 evidence. A checkbox is complete only when the corresponding runtime behavior,
 compiler path, and regression evidence exist.
@@ -13,7 +13,7 @@ compiler path, and regression evidence exist.
 `async` remains the structured latency/concurrency abstraction. CPU-bound data
 parallelism uses an ordinary typed role named `parallel`:
 
-```smalllang
+```sollang
 sources -> parallel source {
     source -> analysis.analyzeSource
 } => analyses!
@@ -36,7 +36,7 @@ each result into the slot for that index. It joins every child before returning
 and exposes results in canonical input order. Scheduling therefore cannot alter
 source indices, symbol IDs, type IDs, diagnostic order, or emitted bytes.
 
-## Why This Fits SmallLang
+## Why This Fits Sollang
 
 - Swift task groups provide structured child lifetime and require the parent to
   await its children. Swift's `Sendable` model also rejects unsafe values that
@@ -44,7 +44,7 @@ source indices, symbol IDs, type IDs, diagnostic order, or emitted bytes.
 - Mojo's CPU `parallelize` executes indexed work items in parallel and returns
   only after all items complete. This is the right minimal runtime shape for a
   compiler's module and function arrays.
-- SmallLang already has affine ownership and compile-time sendability checks for
+- Sollang already has affine ownership and compile-time sendability checks for
   async inputs/results. The parallel role reuses those checks instead of adding
   shared mutable collections or implicit reference counting.
 
@@ -70,7 +70,7 @@ Primary references:
 7. Failure cancels unclaimed work, joins started work, and destroys every
    initialized result exactly once.
 
-The pool is bounded; SmallLang must not create one OS thread per item. File I/O
+The pool is bounded; Sollang must not create one OS thread per item. File I/O
 continues to use its separate operation worker and does not consume compute-pool
 capacity while blocked.
 
@@ -98,7 +98,7 @@ task-group primitive and ordered merge.
 - [x] `analyzeSources` consumes source-local products in source order.
 - [x] Flat package/context and LLVM module-call regressions pass.
 
-Evidence: `selfhost/semantic/analysis.sl`; examples 182, 293, and 294.
+Evidence: `selfhost/semantic/analysis.slg`; examples 182, 293, and 294.
 
 ### B. Typed role surface (5/5)
 

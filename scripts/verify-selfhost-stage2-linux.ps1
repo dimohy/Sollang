@@ -7,9 +7,9 @@ $ErrorActionPreference = "Stop"
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $artifactsDir = Join-Path $repoRoot "artifacts\example-tests"
-$runnerProject = Join-Path $repoRoot "tests\SmallLang.ExampleTests\SmallLang.ExampleTests.csproj"
-$manifestPath = Join-Path $repoRoot "tests\SmallLang.ExampleTests\Fixtures\selfhost-slc-driver.sources.txt"
-$stage1Path = Join-Path $artifactsDir "selfhost-slc-driver.exe"
+$runnerProject = Join-Path $repoRoot "tests\Sollang.ExampleTests\Sollang.ExampleTests.csproj"
+$manifestPath = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-sollangc-driver.sources.txt"
+$stage1Path = Join-Path $artifactsDir "selfhost-sollangc-driver.exe"
 $stage2LlvmPath = Join-Path $artifactsDir "selfhost-stage2-linux.ll"
 $stage2BitcodePath = Join-Path $artifactsDir "selfhost-stage2-linux.bc"
 $stage2ObjectPath = Join-Path $artifactsDir "selfhost-stage2-linux.o"
@@ -17,11 +17,11 @@ $stage2Path = Join-Path $artifactsDir "selfhost-stage2-linux"
 $llvmDir = Join-Path $repoRoot ".tools\llvm-22.1.8"
 $llvmAsPath = Join-Path $llvmDir "bin\llvm-as.exe"
 $clangPath = Join-Path $llvmDir "bin\clang.exe"
-$processSource = Join-Path $repoRoot "stdlib\sys\process.sl"
-$singleSource = Join-Path $repoRoot "tests\SmallLang.ExampleTests\Fixtures\selfhost-stage2-single-smoke.sl"
-$multiLibrarySource = Join-Path $repoRoot "tests\SmallLang.ExampleTests\Fixtures\selfhost-stage2-library-smoke.sl"
-$multiMainSource = Join-Path $repoRoot "tests\SmallLang.ExampleTests\Fixtures\selfhost-stage2-main-smoke.sl"
-$expectedStage2Bytes = 8392614L
+$processSource = Join-Path $repoRoot "stdlib\sys\process.slg"
+$singleSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-single-smoke.slg"
+$multiLibrarySource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-library-smoke.slg"
+$multiMainSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-main-smoke.slg"
+$expectedStage2Bytes = 8781688L
 
 New-Item -ItemType Directory -Force -Path $artifactsDir | Out-Null
 

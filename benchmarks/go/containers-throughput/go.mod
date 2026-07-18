@@ -1,3 +1,3 @@
-module smalllang-benchmarks/containers-throughput
+module sollang-benchmarks/containers-throughput
 
 go 1.26

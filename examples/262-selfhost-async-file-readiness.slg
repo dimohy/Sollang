@@ -1,0 +1,35 @@
+import sollang.compiler.ir.typed as typedIr
+import sollang.compiler.semantic.calls as calls
+
+main {
+    [
+        """
+        namespace sys.file
+
+        public readAsync<T>: -> async Int = intrinsic
+        """,
+        """
+        namespace sample.loader
+
+        import sys.file as file
+
+        load: -> async Int {
+            file.readAsync<UInt16> => pending
+            pending -> await
+        }
+
+        main { }
+        """,
+        ~
+    ] => sources!
+
+    sources! -> calls.resolveModules => resolved!
+    sources! -> typedIr.suspensions => points!
+    0 => importedCalls!
+    resolved! -> each call {
+        (call.sourceModule == 1 and call.origin == 1 and call.status == 0) -> if {
+            importedCalls! + 1 => importedCalls!
+        }
+    }
+    "imports=$(importedCalls!),suspensions=$(points! -> len)" -> println
+}

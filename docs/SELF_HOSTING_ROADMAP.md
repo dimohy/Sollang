@@ -1,12 +1,12 @@
-# SmallLang Self-Hosting Roadmap
+# Sollang Self-Hosting Roadmap
 
 Status: active
 Updated: 2026-07-19
 
-The end state is an SL compiler written in SL that reads a multi-file SL
+The end state is an Sollang compiler written in Sollang that reads a multi-file Sollang
 program, performs lexical, syntactic, type, ownership, and module analysis,
 emits LLVM IR, and invokes the platform toolchain. The existing C# compiler is
-the bootstrap compiler until the SL compiler passes a reproducible stage-2
+the bootstrap compiler until the Sollang compiler passes a reproducible stage-2
 comparison.
 
 ## Research Basis
@@ -19,18 +19,18 @@ The design deliberately combines a small set of compatible ideas:
   [associated items](https://doc.rust-lang.org/stable/reference/items/associated-items.html).
 - Rust tracks moves separately from values and elaborates destruction from that
   analysis; Swift makes consuming parameters part of the declaration contract.
-  SL follows the same separation with a typed-IR move-event side table, while
+  Sollang follows the same separation with a typed-IR move-event side table, while
   retaining structured regions until LLVM lowering. See rustc
   [move paths](https://rustc-dev-guide.rust-lang.org/borrow-check/moves-and-initialization/move-paths.html),
   Rust [partial moves](https://doc.rust-lang.org/rust-by-example/scope/move/partial_move.html),
   and Swift [declarations](https://docs.swift.org/swift-book/documentation/the-swift-programming-language/declarations/).
 - Mojo: compile-time type and value parameterization with specialization at use
-  sites; SL uses angle brackets to keep this separate from arrays. See
+  sites; Sollang uses angle brackets to keep this separate from arrays. See
   [generics](https://docs.modular.com/mojo/manual/generics/) and
   [parameterization](https://docs.modular.com/mojo/manual/parameters/).
 - Mojo's current ownership model defaults function inputs to immutable `read`
   borrows and separates `mut`, owned `var`, and lifetime-tracked `ref`
-  conventions. This supports SL's existing readonly-by-default, explicit
+  conventions. This supports Sollang's existing readonly-by-default, explicit
   mutable-borrow, and explicit ownership-transfer direction without importing
   Mojo's surface syntax. See Mojo [ownership](https://docs.modular.com/mojo/manual/values/ownership/).
 - Zig: an explicit root-module dependency graph and declaration discovery from
@@ -41,18 +41,18 @@ The design deliberately combines a small set of compatible ideas:
   [access control](https://docs.swift.org/swift-book/documentation/the-swift-programming-language/accesscontrol/)
   and [packages](https://docs.swift.org/swiftpm/documentation/packagemanagerdocs/introducingpackages/).
 - Swift structured task groups and sendability plus Mojo's indexed CPU
-  `parallelize` shape the deterministic compiler worker design. SL uses bounded
+  `parallelize` shape the deterministic compiler worker design. Sollang uses bounded
   native workers, disjoint indexed result slots, structured join, and canonical
   ordered merge. See [Deterministic Parallel Compilation](PARALLEL_COMPILATION.md).
 - Rust and Swift separate UTF-8 code units, Unicode scalar values, and
-  user-perceived grapheme clusters. SL adopts Rust's fixed-width scalar model
+  user-perceived grapheme clusters. Sollang adopts Rust's fixed-width scalar model
   for compiler work while reserving grapheme segmentation for a library layer.
   See Rust [`char`](https://doc.rust-lang.org/std/primitive.char.html) and
   Swift [Strings and Characters](https://docs.swift.org/swift-book/documentation/the-swift-programming-language/stringsandcharacters/).
 - Rust routes default formatting through the static `Display` trait and a
   writer-like `Formatter`; Swift lowers interpolation into typed
   `appendLiteral`/`appendInterpolation` calls; Zig validates compile-time-known
-  format descriptions in ordinary library code. SL combines those ideas:
+  format descriptions in ordinary library code. Sollang combines those ideas:
   interpolation segments and result types are fixed at compile time, builtin
   values stream directly to the output sink, and user values will use a static
   `Display` trait rather than implicit reflection or heap-built temporary Text.
@@ -60,7 +60,7 @@ The design deliberately combines a small set of compatible ideas:
   [`StringInterpolationProtocol`](https://developer.apple.com/documentation/swift/stringinterpolationprotocol),
   and the Zig [language reference](https://ziglang.org/documentation/master/).
 - Zig recommends an arena when allocations share one lifetime and can all be
-  released together; rustc describes arena allocation as a pointer bump. SL's
+  released together; rustc describes arena allocation as a pointer bump. Sollang's
   byte arena follows that lifetime model while exposing checked offsets instead
   of raw pointers. See Zig [Choosing an Allocator](https://ziglang.org/documentation/master/#Choosing-an-Allocator)
   and rustc [`rustc_arena`](https://doc.rust-lang.org/stable/nightly-rustc/rustc_arena/index.html).
@@ -68,20 +68,20 @@ The design deliberately combines a small set of compatible ideas:
   makes the later control-flow graph explicit as typed basic blocks ending in
   terminators. LLVM then lowers an `if` to a conditional branch, two branch
   blocks, a continuation block, and a `phi` only when the expression produces
-  a joined value. SL follows that staged boundary: structured regions in typed
+  a joined value. Sollang follows that staged boundary: structured regions in typed
   IR first, explicit LLVM CFG during backend lowering. See MLIR
   [SCF](https://mlir.llvm.org/docs/Dialects/SCFDialect/), the rustc guide to
   [MIR](https://rustc-dev-guide.rust-lang.org/mir/index.html), and LLVM's
   [control-flow tutorial](https://llvm.org/docs/tutorial/MyFirstLanguageFrontend/LangImpl05.html).
 - Windows file mappings and POSIX `mmap` keep large files outside ordinary heap
-  allocation while exposing bounded views. SL wraps those views in affine
+  allocation while exposing bounded views. Sollang wraps those views in affine
   ownership and aligns hidden base mappings to the host granularity. See
   Microsoft [Creating a View Within a File](https://learn.microsoft.com/en-us/windows/win32/memory/creating-a-file-view)
   and Linux [`mmap(2)`](https://man7.org/linux/man-pages/man2/munmap.2.html).
 - Rust exposes process-provided arguments separately from ordinary owned
   collections and cautions that argument zero is not a trusted executable path;
   Zig passes explicit process initialization state to `main`; Swift and Mojo
-  keep child execution in a structured process API. SL follows those boundaries
+  keep child execution in a structured process API. Sollang follows those boundaries
   with a read-only `Arguments` view and a shell-free argv-based child-process API.
   See Rust [`args_os`](https://doc.rust-lang.org/std/env/fn.args_os.html),
   Swift [`Process`](https://developer.apple.com/documentation/foundation/process),
@@ -89,13 +89,13 @@ The design deliberately combines a small set of compatible ideas:
 - Rust incremental compilation identifies dependency nodes with stable
   fingerprints that do not contain session-local ids, while Clang module caches
   rebuild a module when one of its source inputs or imported modules changes.
-  SL's future module/interface cache will therefore key artifacts by compiler
+  Sollang's future module/interface cache will therefore key artifacts by compiler
   ABI, target configuration, source/interface content, and dependency
   fingerprints rather than timestamps alone. See rustc
   [dependency-node fingerprints](https://doc.rust-lang.org/stable/nightly-rustc/rustc_query_system/dep_graph/dep_node/index.html)
   and Clang [module caches](https://clang.llvm.org/docs/Modules.html#compilation-model).
 
-SL keeps its own expression-first `=>` binding and fluent `->` application
+Sollang keeps its own expression-first `=>` binding and fluent `->` application
 syntax. It does not adopt class inheritance, implicit null, implicit garbage
 collection, implicit heap allocation, or a default runtime dispatch layer.
 
@@ -103,7 +103,7 @@ collection, implicit heap allocation, or a default runtime dispatch layer.
 
 There are 60 auditable capability gates. A complete gate scores 1, a partial
 gate scores 0.5, and a missing gate scores 0. The percentage is the score
-divided by 60. A gate becomes complete only with a cumulative `.sl` example or
+divided by 60. A gate becomes complete only with a cumulative `.slg` example or
 an automated compiler test. This count measures language/compiler capability,
 not lines of code.
 
@@ -198,9 +198,9 @@ phis for persistent loop-carried state.
 The coordinated regression runner has stable `reference`, `semantic`,
 `selfhost`, `llvm`, `fast`, and `full` layers plus exact-name and affected-source
 selection. Self-host LLVM fixtures no longer rebuild the same compiler modules
-for every case: one native SL compiler driver accepts target mode and source
+for every case: one native Sollang compiler driver accepts target mode and source
 file paths, memory-maps every module, then emits Windows, Linux, or Wasm LLVM.
-Its timestamp fingerprint covers the compiler, source manifest, all listed SL
+Its timestamp fingerprint covers the compiler, source manifest, all listed Sollang
 modules, and the standard library. A focused warm invocation completed in 1.1
 seconds, including 0.12 seconds in the self-host compiler; the one-time cold
 bootstrap completed in 59.7 seconds. Two specialized introspection examples
@@ -208,16 +208,16 @@ retain the ordinary reference-compiler path.
 
 Current native bootstrap chain:
 
-- [x] Build one reusable native stage-1 `slc` with the C# bootstrap compiler.
+- [x] Build one reusable native stage-1 `sollangc` with the C# bootstrap compiler.
 - [x] Read and own multiple source files through affine `SourceText` mappings.
-- [x] Compile those modules with the SL frontend and emit valid target LLVM IR.
+- [x] Compile those modules with the Sollang frontend and emit valid target LLVM IR.
 - [x] Reuse the current stage-1 executable across self-host LLVM fixtures.
-- [x] Invoke `clang`/`lld` from `slc` and produce ordinary final executables directly.
+- [x] Invoke `clang`/`lld` from `sollangc` and produce ordinary final executables directly.
 - [x] Closure-convert local compiler functions so native optimization partitions use all cores.
 - [x] Emit and assemble the complete stage-2 module with `llvm-as`.
 - [x] Link stage 2 with the platform entry shim, runtime, and imported stdlib definitions.
-- [x] Run stage 2 and compile single-file and imported multi-file SL smoke programs with it.
-- [x] Rebuild `slc` with stage 1 and compare reproducible stage-2 LLVM artifacts.
+- [x] Run stage 2 and compile single-file and imported multi-file Sollang smoke programs with it.
+- [x] Rebuild `sollangc` with stage 1 and compare reproducible stage-2 LLVM artifacts.
 
 The native bootstrap chain is now **10/10 complete (100%)**. The complete
 28-source compiler emits a 6,730,900-byte Windows LLVM module, which assembles
@@ -269,9 +269,9 @@ milestone without changing the broader 60-gate language-capability score.
   one compilation unit; root imports recursively discover module files with
   missing, cycle, namespace-mismatch, and duplicate-module diagnostics;
   functions, structs, enums, and traits are internal by default with explicit
-  `public` exports and module-qualified nominal identity; `smalllang.project`
+  `public` exports and module-qualified nominal identity; `sollang.project`
   names a confined root source and output identity, and source-free
-  `smalllang build` discovers it from ancestor directories.
+  `sollang build` discovers it from ancestor directories.
 - Partial (2): stdlib loading uses a fixed bootstrap list; the package graph has
   deterministic multiple-product selection, exact local path dependencies,
   direct-dependency visibility, transitive resolution, and cycle/name-collision
@@ -294,7 +294,7 @@ milestone without changing the broader 60-gate language-capability score.
   environment lookup with process-lifetime UTF-8 views. Shell-free structured
   child execution accepts an owned Text argv array and returns a typed exit or
   launch/wait/signal error on Windows and Linux. Reusable source spans now flow
-  through SL lexer tokens, flat green CST nodes, invalid-byte diagnostics, and
+  through Sollang lexer tokens, flat green CST nodes, invalid-byte diagnostics, and
   furthest-unexpected-token diagnostics.
 - Partial (2): generic arrays/dictionaries cover compiler-useful `Int`, `Text`,
   and user-value payloads plus function contracts; Text now has checked UTF-8
@@ -304,7 +304,7 @@ milestone without changing the broader 60-gate language-capability score.
 
 - Complete (2): basic `sys.io` and three LLVM-backed target link paths.
 - Partial (4): file/random/time APIs are narrow compiler intrinsics; VS Code
-  support is grammar-only; tests are example-driven without an SL unit-test
+  support is grammar-only; tests are example-driven without an Sollang unit-test
   framework. File I/O now monomorphizes canonical scalar `write<T>` and
   zero-input `read<T>` calls with explicit EOF/error results. Affine `File`
   owners and position-based `readAt<T>`/`readAtAsync<T>` remove shared-cursor
@@ -328,20 +328,20 @@ milestone without changing the broader 60-gate language-capability score.
    types, generic `Array<T>`/`Dictionary<K, V>`, `Option`, and `Result`.
 3. Add compiler data primitives: bytes, source spans, Unicode iteration, arena
    allocation, filesystem traversal, arguments, and process execution.
-4. Write the SL lexer and parser using generated bootstrap tables only where
+4. Write the Sollang lexer and parser using generated bootstrap tables only where
    necessary; compare tokens and AST snapshots against the C# compiler.
 5. Port semantic/type/ownership analysis and serialize a stable typed IR.
-6. Implement an SL LLVM IR text builder, then compile representative programs
+6. Implement an Sollang LLVM IR text builder, then compile representative programs
    with both compilers and compare normalized IR plus runtime output.
-7. Stage 1: C# compiler builds the SL compiler. Stage 2: that SL compiler builds
+7. Stage 1: C# compiler builds the Sollang compiler. Stage 2: that Sollang compiler builds
    itself. Stage 3: the stage-2 compiler rebuilds itself byte-for-byte or with
    normalized-IR equivalence, depending on target linker determinism.
 
-The grammar-bootstrap path now includes `smalllang grammar build`, an SL lexer,
-and an SL parser VM. The build command
+The grammar-bootstrap path now includes `sollang grammar build`, an Sollang lexer,
+and an Sollang parser VM. The build command
 compiles the canonical lexer/EBNF specifications into a deterministic ordinary
-SL module containing lexer descriptors and a 1,580-word parser VM program. The
-full test runner checks byte-for-byte regeneration. The SL VM consumes those
+Sollang module containing lexer descriptors and a 1,580-word parser VM program. The
+full test runner checks byte-for-byte regeneration. The Sollang VM consumes those
 tables, emits compact backtracking-aware CST events, and materializes flat green
 nodes with parent/token/span metadata. Valid-source whitespace and comment
 trivia are retained without affecting grammar matching. Unknown bytes are
@@ -354,7 +354,7 @@ complete the reusable source-span/diagnostic gate. The formal count is now
 **48.5 / 60 (80.8%)**; multi-error parser continuation remains.
 
 The lowering path is also executable: generated stable rule ids drive an
-ordinary SL module that selects module/declaration/function/main/binding/flow/
+ordinary Sollang module that selects module/declaration/function/main/binding/flow/
 call/type/literal/name/path nodes from the green CST, reconnects AST parents
 across skipped CST wrappers, and removes trivia from payload token ranges and
 spans. Equality/comparison/arithmetic/unary/box wrappers are filtered by actual
@@ -368,7 +368,7 @@ token payloads resolved in a second lowering pass. Function parameters and
 method `self` tokens carry explicit move/mutable-borrow flags for later ABI and
 ownership analysis.
 
-The semantic bootstrap has begun in a separate SL module. Its flat symbol table
+The semantic bootstrap has begun in a separate Sollang module. Its flat symbol table
 collects declarations and members, resolves nearest lexical owner symbols, and
 attaches concrete name tokens, primary/secondary type AST indexes, and
 move/mutable-borrow flags. Duplicate checking is implemented for declarations
@@ -473,7 +473,7 @@ remain.
 `true` and `false` are now recognized as Bool literals by self-hosted semantic
 analysis rather than unresolved names. They seed logical-expression inference
 and pass Bool return checking, removing a pervasive false diagnostic from the
-compiler's own SL sources.
+compiler's own Sollang sources.
 
 Unary expression typing now covers `not Bool -> Bool` and `-Int -> Int`.
 Invalid `not Int` and `-Bool` expressions produce structured code-8 diagnostics
@@ -522,7 +522,7 @@ Composite member fields preserve their structural component identities.
 Postfix index access now lowers as AST kind 41, and array, slice, and fixed-array
 index results inherit the inferred element identity for subsequent checks.
 Structured codes 15 and 16 distinguish a non-array-like indexed target from a
-non-`Int` index. The SL lexer now tokenizes raw multiline strings with matching
+non-`Int` index. The Sollang lexer now tokenizes raw multiline strings with matching
 three-or-more-quote delimiters, keeping its source envelope aligned with the
 bootstrap lexer.
 Dictionary expressions now preserve full key/value identities instead of
@@ -530,7 +530,7 @@ packing only their symbol ids. That metadata survives bindings, generic calls,
 and composite fields, allowing dictionary indexing to check its key and infer
 its value without confusing local, imported, generic, or builtin identities.
 
-Typed semantic output now has an initial stable IR contract. A flat SL-owned
+Typed semantic output now has an initial stable IR contract. A flat Sollang-owned
 node table lowers each inferred function result as `function -> return ->
 expression`, with stable kinds for Int, Text, and Bool constants and explicit
 source-module, AST, symbol, type-identity, payload-token, and operand indexes.
@@ -543,7 +543,7 @@ target source-module/function-symbol pair and their argument operand, while
 operators retain stable opcode ids. Ownership and storage placement remain
 before step 5 can be considered complete.
 
-Critical-path step 6 has an executable first slice: SL lowers zero-input
+Critical-path step 6 has an executable first slice: Sollang lowers zero-input
 Int/Bool functions, constants, nested arithmetic, comparisons, Boolean
 negation, and returns into LLVM text with deterministic module/symbol names and
 IR-index SSA registers. The example runner sends that stdout to pinned
@@ -561,7 +561,7 @@ entry lowering, and file output remain.
 Empty main blocks now lower to a typed-IR entry node and an actual `i32 @main`.
 The two-module LLVM snapshot is assembled, linked into a Windows executable,
 and run successfully by the automated suite. This proves the first complete
-SL-source -> SL semantic/typed IR -> SL LLVM text -> native linker -> process
+Sollang-source -> Sollang semantic/typed IR -> Sollang LLVM text -> native linker -> process
 execution path. Main statements, observable program behavior, Text/aggregate
 ABI, ownership/drop, runtime declarations, and direct file output remain.
 
@@ -760,7 +760,7 @@ the coordinated eight-worker suite passed 418/418 in 431.5 seconds with
 flushed monotonic progress and a zero-warning, zero-error Release build.
 
 Self-hosted LLVM text selects descriptors implemented in the file module
-`smalllang.compiler.llvm.target`. Windows x64/COFF, Linux x64/ELF, and
+`sollang.compiler.llvm.target`. Windows x64/COFF, Linux x64/ELF, and
 Wasm32/WebAssembly values each own their pinned-Clang triple, data layout,
 pointer width, and object-format identity. Public `emit`, `emitLinux`, and
 `emitWasm` entry points print the selected header and transfer their owned
@@ -780,7 +780,7 @@ Target-specific runtime declarations and ABI lowering beyond the
 currently supported shared IR subset also remain. Text `print`/`println` are
 the first completed runtime effect slice: flow calls survive semantic lowering
 as explicit runtime symbols, Windows emits a `putchar` loop, Linux emits
-`write(2)`, and Wasm declares an `env.smalllang_write` import. Runtime helpers
+`write(2)`, and Wasm declares an `env.slg_write` import. Runtime helpers
 are emitted only when referenced. Text parameters now cross effectful `Unit`
 functions, where LLVM `void` calls and returns avoid phantom SSA results.
 Main-local Text literals and immutable bindings now also form valid SSA before
@@ -807,7 +807,7 @@ For `$(expression)`, the generated parser VM, CST, and AST now accept an
 expression grammar start rule. A standalone fragment preserves precedence,
 unary operators, parent links, token payloads, and byte spans exactly as the
 full-module path does. The fragment-to-scope attachment now exists in
-`smalllang.compiler.ir.interpolation`: balanced
+`sollang.compiler.ir.interpolation`: balanced
 expression ranges lower to a flat operator tree, and parameter/local names use
 the enclosing function's symbol identity. Nested arithmetic such as
 `$((value + 1) * 2)` preserves the multiplication root and additive child.
@@ -855,7 +855,7 @@ paths, early exits, and nested owned struct fields now share the same recursive
 drop obligations. Static partial moves release one path while preserving
 siblings; reinitialization, branch joins, and general liveness remain.
 
-Owned dictionaries now have a common self-hosted `%sl.dict` LLVM ABI with
+Owned dictionaries now have a common self-hosted `%sollang.dict` LLVM ABI with
 separate key/value stores plus length/capacity, while typed IR drives concrete
 storage size, alignment, load/store, and equality lowering. `Int -> Int` and
 `Bool -> Text` snapshots cover literal construction, move parameter/return
@@ -884,13 +884,13 @@ it at `-O0`; a cold 166-case self-host verification, including that rebuild,
 passed 166/166 in 40.5 seconds. Dynamic LLVM allocas are hoisted to function
 entry so unoptimized loop execution has bounded stack use.
 
-- [x] map and own multiple SL source modules;
+- [x] map and own multiple Sollang source modules;
 - [x] emit target-specific LLVM from the cached native stage-1 compiler;
 - [x] redirect LLVM to a file through a typed, shell-free process API;
 - [x] invoke Clang and produce a runnable native executable;
-- [x] prove the path with a multi-module SL program;
+- [x] prove the path with a multi-module Sollang program;
 - [x] restore complete compiler emission after the structured native-build path;
-- [x] rebuild `slc-stage2` from that complete module;
+- [x] rebuild `sollangc-stage2` from that complete module;
 - [x] re-establish reproducible stage-1/stage-2 output comparison.
 
 The stage-2 checklist is again **8/8 complete (100%)**. The complete input now
@@ -902,12 +902,12 @@ contract and materializes the language-level `Result<Int, Text>` value.
 The verifier builds the 8,185,153-byte Windows stage-2 compiler, compares
 single-file, grouped-Boolean, and imported multi-file LLVM from stage 1 and
 stage 2, assembles and executes every smoke module, and compares C# and native
-SL behavior. It also invokes the generated stage-2 compiler's own
+Sollang behavior. It also invokes the generated stage-2 compiler's own
 `build-windows` command: stage 2 redirects its LLVM with `runToFile`, invokes
 the pinned Clang through `run`, and the resulting executable prints
 `stage2-single-ok`.
 
-Linux now has the matching SourceText owner runtime. It copies the SL path into
+Linux now has the matching SourceText owner runtime. It copies the Sollang path into
 a null-terminated buffer, opens the file read-only, determines its length with
 `lseek`, maps it through `mmap`, and releases the mapping with `munmap` at the
 owned value's deterministic drop. The dedicated Linux stage-2 verifier is
@@ -935,7 +935,8 @@ The normal feature checkpoint ends after the Windows/Linux Stage2 checks. Run
 checkpoints**, or earlier when a bootstrap, intrinsic, ABI, or compiler-emitter
 change can plausibly alter self-reproduction. An explicit Stage3 request also
 overrides the cadence. The latest fixed-point verification reset the counter to
-**0/10** on 2026-07-19.
+**0/10** on 2026-07-19. The Sollang/`.slg` migration is the first subsequent
+Stage2-verified feature checkpoint, so the current cadence is **1/10**.
 
 The compiler-sized stage-2 path now caches function captures and function-end
 boundaries, indexes call targets by canonical module symbol, and buffers
@@ -943,7 +944,7 @@ redirected Windows stdout in 1 MiB blocks. The self-host emitter generates the
 same buffered runtime, so stage 3 no longer writes LLVM one byte at a time.
 
 - [x] assemble, link, and execute the complete stage-2 compiler;
-- [x] compare C# stage 1 and SL stage 2 on single and imported multi-file LLVM;
+- [x] compare C# stage 1 and Sollang stage 2 on single and imported multi-file LLVM;
 - [x] generate stage 3 and prove byte-identical stage-2/stage-3 LLVM;
 - [x] keep compiler emission working set below 60 MiB in the measured run;
 - [x] reduce the measured stage-2 verification path from about 376 s to 261 s;
@@ -1048,7 +1049,7 @@ parallel plan; the canonical roadmap remains 48.5/60 (80.8%).
 
 ## Canonical Generic-Container Specialization Baseline (2026-07-19)
 
-SL follows a statically specialized value-witness model. A concrete collection
+Sollang follows a statically specialized value-witness model. A concrete collection
 type carries canonical component IDs into LLVM lowering; those IDs select size,
 alignment, LLVM representation, and recursive ownership traits. This keeps the
 runtime representation compact and avoids a per-value metadata pointer while
@@ -1095,7 +1096,7 @@ owned user values. Calls spell only the compile-time length, such as
 `values -> fixedLength<3>`; the element type is inferred from the fixed array.
 The host compiler monomorphizes by both length and element type while passing a
 borrowed pointer/length ABI, so the callee neither copies nor consumes owned
-elements. Example 405 proves the same structural inference in the SL semantic
+elements. Example 405 proves the same structural inference in the Sollang semantic
 compiler and rejects a mismatched explicit length. Dynamic arrays are rejected
 by a dedicated diagnostic. Windows/Linux execution and a Linux ASan/LSan run
 cover the owned-array case.

@@ -1,9 +1,9 @@
-# SmallLang Guide
+# Sollang Guide
 
 This guide keeps the longer project notes out of the README while preserving the
-details needed to build, run, and understand the current SmallLang slice.
+details needed to build, run, and understand the current Sollang slice.
 
-SmallLang is in an early compiler-building phase. The implementation is scoped
+Sollang is in an early compiler-building phase. The implementation is scoped
 to the accepted language specification and decision log.
 
 ## What Works Today
@@ -33,7 +33,7 @@ to the accepted language specification and decision log.
   `values! -> push(30)`
 - value-flow target-call syntax with `value -> function()`
 - parenthesized calls with `function(value)`
-- SmallLang standard library functions `sys.io.print`, `sys.io.println`, and
+- Sollang standard library functions `sys.io.print`, `sys.io.println`, and
   `sys.io.readInt` with global `print`, `println`, and `readInt` aliases
 - `namespace` declarations and imports whose last path segment is the default
   alias (`import sample.math`), with optional explicit renaming through
@@ -75,8 +75,8 @@ to the accepted language specification and decision log.
   `randomBelow`
 - binary sorted `Int` file writing and nearest-value lookup with
   `openIntWriter`, `writeInt`, `openIntReader`, and `closestInt`
-- source-generated lexing from `syntax/smalllang.lexer`
-- source-generated parsing from `syntax/smalllang.grammar`
+- source-generated lexing from `syntax/sollang.lexer`
+- source-generated parsing from `syntax/sollang.grammar`
 - LLVM IR generation
 - Windows x64 executable linking through `clang` and `lld-link`
 - Linux x64 executable linking through Windows LLVM object generation and WSL
@@ -84,8 +84,8 @@ to the accepted language specification and decision log.
 - browser WebAssembly module linking through `clang` and `wasm-ld`
 
 With the current Windows linker settings, representative executable sizes are
-**1,536 bytes** for `01-function-basic-hello.sl` and `05-function-local.sl`,
-**2,048 bytes** for `08-block-each-default-it.sl`, and **2,560 bytes** for the
+**1,536 bytes** for `01-function-basic-hello.slg` and `05-function-local.slg`,
+**2,048 bytes** for `08-block-each-default-it.slg`, and **2,560 bytes** for the
 container and sorted-int-file workflow samples.
 
 ## Build And Run
@@ -94,44 +94,44 @@ The examples are named so a normal filename sort follows the grammar
 progression. Start with the basic function/value-flow sample:
 
 ```powershell
-.\scripts\smalllang.ps1 -Source examples\01-function-basic-hello.sl -Output artifacts\01-function-basic-hello.exe -KeepTemps
-.\scripts\smalllang.ps1 -Source examples\02-function-named-input.sl -Output artifacts\02-function-named-input.exe -KeepTemps
-.\scripts\smalllang.ps1 -Source examples\03-flow-call-parens.sl -Output artifacts\03-flow-call-parens.exe -KeepTemps
+.\scripts\sollang.ps1 -Source examples\01-function-basic-hello.slg -Output artifacts\01-function-basic-hello.exe -KeepTemps
+.\scripts\sollang.ps1 -Source examples\02-function-named-input.slg -Output artifacts\02-function-named-input.exe -KeepTemps
+.\scripts\sollang.ps1 -Source examples\03-flow-call-parens.slg -Output artifacts\03-flow-call-parens.exe -KeepTemps
 ```
 
 Top-level statements, local functions, arithmetic, comments, and block functions
 are cumulative:
 
 ```powershell
-.\scripts\smalllang.ps1 -Source examples\04-main-omitted-top-level.sl -Output artifacts\04-main-omitted-top-level.exe -KeepTemps
-.\scripts\smalllang.ps1 -Source examples\05-function-local.sl -Output artifacts\05-function-local.exe -KeepTemps
-.\scripts\smalllang.ps1 -Source examples\06-expression-arithmetic-comments.sl -Output artifacts\06-expression-arithmetic-comments.exe -KeepTemps
-.\scripts\smalllang.ps1 -Source examples\07-block-each-explicit-item.sl -Output artifacts\07-block-each-explicit-item.exe -KeepTemps
-.\scripts\smalllang.ps1 -Source examples\08-block-each-default-it.sl -Output artifacts\08-block-each-default-it.exe -KeepTemps
-.\scripts\smalllang.ps1 -Source examples\09-namespace-sys-io.sl -Output artifacts\09-namespace-sys-io.exe -KeepTemps
-.\scripts\smalllang.ps1 -Source examples\10-block-argument-omits-parens.sl -Output artifacts\10-block-argument-omits-parens.exe -KeepTemps
-.\scripts\smalllang.ps1 -Source examples\11-block-function-exec-block-repeat.sl -Output artifacts\11-block-function-exec-block-repeat.exe -KeepTemps
-.\scripts\smalllang.ps1 -Source examples\12-block-function-user-defined-yield.sl -Output artifacts\12-block-function-user-defined-yield.exe -KeepTemps
-.\scripts\smalllang.ps1 -Source examples\13-block-fold-sum.sl -Output artifacts\13-block-fold-sum.exe -KeepTemps
+.\scripts\sollang.ps1 -Source examples\04-main-omitted-top-level.slg -Output artifacts\04-main-omitted-top-level.exe -KeepTemps
+.\scripts\sollang.ps1 -Source examples\05-function-local.slg -Output artifacts\05-function-local.exe -KeepTemps
+.\scripts\sollang.ps1 -Source examples\06-expression-arithmetic-comments.slg -Output artifacts\06-expression-arithmetic-comments.exe -KeepTemps
+.\scripts\sollang.ps1 -Source examples\07-block-each-explicit-item.slg -Output artifacts\07-block-each-explicit-item.exe -KeepTemps
+.\scripts\sollang.ps1 -Source examples\08-block-each-default-it.slg -Output artifacts\08-block-each-default-it.exe -KeepTemps
+.\scripts\sollang.ps1 -Source examples\09-namespace-sys-io.slg -Output artifacts\09-namespace-sys-io.exe -KeepTemps
+.\scripts\sollang.ps1 -Source examples\10-block-argument-omits-parens.slg -Output artifacts\10-block-argument-omits-parens.exe -KeepTemps
+.\scripts\sollang.ps1 -Source examples\11-block-function-exec-block-repeat.slg -Output artifacts\11-block-function-exec-block-repeat.exe -KeepTemps
+.\scripts\sollang.ps1 -Source examples\12-block-function-user-defined-yield.slg -Output artifacts\12-block-function-user-defined-yield.exe -KeepTemps
+.\scripts\sollang.ps1 -Source examples\13-block-fold-sum.slg -Output artifacts\13-block-fold-sum.exe -KeepTemps
 ```
 
 Conditionals are cumulative:
 
 ```powershell
-.\scripts\smalllang.ps1 -Source examples\14-condition-if.sl -Output artifacts\14-condition-if.exe -KeepTemps
-.\scripts\smalllang.ps1 -Source examples\15-condition-when.sl -Output artifacts\15-condition-when.exe -KeepTemps
-.\scripts\smalllang.ps1 -Source examples\16-condition-when-subject.sl -Output artifacts\16-condition-when-subject.exe -KeepTemps
-.\scripts\smalllang.ps1 -Source examples\17-condition-when-range.sl -Output artifacts\17-condition-when-range.exe -KeepTemps
-.\scripts\smalllang.ps1 -Source examples\18-condition-when-compact.sl -Output artifacts\18-condition-when-compact.exe -KeepTemps
+.\scripts\sollang.ps1 -Source examples\14-condition-if.slg -Output artifacts\14-condition-if.exe -KeepTemps
+.\scripts\sollang.ps1 -Source examples\15-condition-when.slg -Output artifacts\15-condition-when.exe -KeepTemps
+.\scripts\sollang.ps1 -Source examples\16-condition-when-subject.slg -Output artifacts\16-condition-when-subject.exe -KeepTemps
+.\scripts\sollang.ps1 -Source examples\17-condition-when-range.slg -Output artifacts\17-condition-when-range.exe -KeepTemps
+.\scripts\sollang.ps1 -Source examples\18-condition-when-compact.slg -Output artifacts\18-condition-when-compact.exe -KeepTemps
 ```
 
-The sorted-number workflow is also written in SmallLang. For quick verification,
+The sorted-number workflow is also written in Sollang. For quick verification,
 the demo pair uses the same algorithm at 1,000 records:
 
 ```powershell
-.\scripts\smalllang.ps1 -Source examples\19-stdlib-random-file-demo-generate.sl -Output artifacts\19-stdlib-random-file-demo-generate.exe -KeepTemps
+.\scripts\sollang.ps1 -Source examples\19-stdlib-random-file-demo-generate.slg -Output artifacts\19-stdlib-random-file-demo-generate.exe -KeepTemps
 .\artifacts\19-stdlib-random-file-demo-generate.exe
-.\scripts\smalllang.ps1 -Source examples\20-stdlib-file-demo-query.sl -Output artifacts\20-stdlib-file-demo-query.exe -KeepTemps
+.\scripts\sollang.ps1 -Source examples\20-stdlib-file-demo-query.slg -Output artifacts\20-stdlib-file-demo-query.exe -KeepTemps
 .\artifacts\20-stdlib-file-demo-query.exe
 ```
 
@@ -140,36 +140,36 @@ The full generator creates 100,000,000 sorted 64-bit integer records in
 10-wide bucket in `1..1,000,000,000`:
 
 ```powershell
-.\scripts\smalllang.ps1 -Source examples\21-stdlib-random-file-100m-generate.sl -Output artifacts\21-stdlib-random-file-100m-generate.exe -KeepTemps
+.\scripts\sollang.ps1 -Source examples\21-stdlib-random-file-100m-generate.slg -Output artifacts\21-stdlib-random-file-100m-generate.exe -KeepTemps
 .\artifacts\21-stdlib-random-file-100m-generate.exe
 
-.\scripts\smalllang.ps1 -Source examples\22-stdlib-file-100m-query.sl -Output artifacts\22-stdlib-file-100m-query.exe -KeepTemps
+.\scripts\sollang.ps1 -Source examples\22-stdlib-file-100m-query.slg -Output artifacts\22-stdlib-file-100m-query.exe -KeepTemps
 .\artifacts\22-stdlib-file-100m-query.exe
 ```
 
 Linux x64 output is available through WSL:
 
 ```powershell
-.\scripts\smalllang.ps1 -Source examples\01-function-basic-hello.sl -Output artifacts\01-function-basic-hello-linux -Target linux-x64 -KeepTemps
-wsl --exec /mnt/p/MyWorks/SmallLang/artifacts/01-function-basic-hello-linux
+.\scripts\sollang.ps1 -Source examples\01-function-basic-hello.slg -Output artifacts\01-function-basic-hello-linux -Target linux-x64 -KeepTemps
+wsl --exec /mnt/p/MyWorks/Sollang/artifacts/01-function-basic-hello-linux
 ```
 
 Structured async uses the same source syntax on Windows and Linux. For example,
 the generic sendable-input coverage can be built and executed through WSL with:
 
 ```powershell
-.\scripts\smalllang.ps1 `
-  -Source examples\238-sendable-async-inputs.sl `
+.\scripts\sollang.ps1 `
+  -Source examples\238-sendable-async-inputs.slg `
   -Output artifacts\238-sendable-async-inputs-linux `
   -Target linux-x64
-wsl --exec /mnt/p/MyWorks/SmallLang/artifacts/238-sendable-async-inputs-linux
+wsl --exec /mnt/p/MyWorks/Sollang/artifacts/238-sendable-async-inputs-linux
 ```
 
 Async calls start cooperative affine tasks. `await` consumes a task and returns
 its value; `cancel` consumes it without producing a value. Cancellation is a
 final flow target and does not use parentheses:
 
-```smalllang
+```sollang
 5 -> parent => pending
 0 -> gate => gateTask
 gateTask -> await => ready
@@ -184,7 +184,7 @@ owners.
 `await` can suspend inside an `if` or `when` branch without flattening the source
 control flow:
 
-```smalllang
+```sollang
 choose value: Int -> async Int {
     value * 10 => saved
     value > 0 -> if {
@@ -204,7 +204,7 @@ merges their resumed representation before later statements execute.
 The same suspension model applies inside `while`. Numbered states are stable
 sites, not one-shot events, so a loop can revisit one site on every iteration:
 
-```smalllang
+```sollang
 sum count: Int -> async Int {
     0 => index!
     0 => total!
@@ -222,7 +222,7 @@ The compiler carries mutable storage pointers through loop-header phis and
 spills live values only while the child is pending. `break`, `continue`, and
 their compact guarded forms preserve that state across early loop edges:
 
-```smalllang
+```sollang
 pending -> await => next
 index! + 1 => index!
 index! == 2 -> if continue
@@ -236,7 +236,7 @@ incoming edge; inconsistent consumption is a compile-time error.
 
 Long CPU work can explicitly cooperate with the executor using bare `yield`:
 
-```smalllang
+```sollang
 scan count: Int -> async Int {
     0 => index!
     index! < count -> while {
@@ -256,7 +256,7 @@ value from a user-defined block function.
 
 Use typed durations for nonblocking time suspension:
 
-```smalllang
+```sollang
 refresh: -> async Int {
     250 -> milliseconds -> sleep -> await
     1
@@ -273,7 +273,7 @@ immediately.
 Generic binary scalar reads can suspend without blocking the cooperative
 executor:
 
-```smalllang
+```sollang
 import sys.file as file
 
 readHeader: -> async Result<Option<UInt16>, Text> {
@@ -290,7 +290,7 @@ await every submitted read before closing or reopening it.
 
 For concurrent or random-access work, prefer the owned File surface:
 
-```smalllang
+```sollang
 file.openReadAsync("values.bin") => opening
 opening -> await => opened
 opened -> when {
@@ -312,7 +312,7 @@ owns its path bytes and transfers the new handle only through a successful
 
 Random-access output uses a distinct affine writer capability:
 
-```smalllang
+```sollang
 file.openWriteAsync("values.bin") => opening
 opening -> await => opened
 opened -> when {
@@ -335,11 +335,11 @@ automatically at owner-scope exit. `syncAsync` is the explicit durability
 barrier for data and metadata already submitted to the shared file worker.
 
 Browser WebAssembly output is available through the `wasm32-browser` target. The
-generated module exports `smalllang_start` and `memory`, and imports
-`env.smalllang_browser_write(ptr, len)` so the page can render stdout text:
+generated module exports `sollang_start` and `memory`, and imports
+`env.slg_browser_write(ptr, len)` so the page can render stdout text:
 
 ```powershell
-.\scripts\smalllang.ps1 -Source examples\23-webassembly-browser.sl -Output artifacts\23-webassembly-browser.wasm -Target wasm32-browser -KeepTemps
+.\scripts\sollang.ps1 -Source examples\23-webassembly-browser.slg -Output artifacts\23-webassembly-browser.wasm -Target wasm32-browser -KeepTemps
 python -m http.server 5080
 ```
 
@@ -350,7 +350,7 @@ indexing, `fold`, `push`, dictionary `put`, `len`, `capacity`, and deterministic
 native cleanup:
 
 ```powershell
-.\scripts\smalllang.ps1 -Source examples\25-arrays-dictionaries.sl -Output artifacts\25-arrays-dictionaries.exe -KeepTemps
+.\scripts\sollang.ps1 -Source examples\25-arrays-dictionaries.slg -Output artifacts\25-arrays-dictionaries.exe -KeepTemps
 .\artifacts\25-arrays-dictionaries.exe
 ```
 
@@ -358,7 +358,7 @@ Move-consuming container transforms return a new owner while consuming the
 source owner. The sample shows the short same-name form:
 
 ```powershell
-.\scripts\smalllang.ps1 -Source examples\26-immutable-containers.sl -Output artifacts\26-immutable-containers.exe -KeepTemps
+.\scripts\sollang.ps1 -Source examples\26-immutable-containers.slg -Output artifacts\26-immutable-containers.exe -KeepTemps
 .\artifacts\26-immutable-containers.exe
 ```
 
@@ -366,7 +366,7 @@ The dictionary hash-table sample exercises update, growth, rehashing, lookup,
 and capacity reporting:
 
 ```powershell
-.\scripts\smalllang.ps1 -Source examples\27-dictionary-hash-table.sl -Output artifacts\27-dictionary-hash-table.exe -KeepTemps
+.\scripts\sollang.ps1 -Source examples\27-dictionary-hash-table.slg -Output artifacts\27-dictionary-hash-table.exe -KeepTemps
 .\artifacts\27-dictionary-hash-table.exe
 ```
 
@@ -377,7 +377,7 @@ Example stdout tests compile and run the samples listed under
 `examples/expected`:
 
 ```powershell
-dotnet run --project tests\SmallLang.ExampleTests\SmallLang.ExampleTests.csproj --no-build
+dotnet run --project tests\Sollang.ExampleTests\Sollang.ExampleTests.csproj --no-build
 ```
 
 During development, repeat `--filter` for name fragments, use `--exact` for a
@@ -387,16 +387,16 @@ layer. Add `--skip-bootstrap` only after the Release compiler and generated
 grammar table have already been verified in the current checkout:
 
 ```powershell
-dotnet run --project tests\SmallLang.ExampleTests\SmallLang.ExampleTests.csproj `
+dotnet run --project tests\Sollang.ExampleTests\Sollang.ExampleTests.csproj `
   -c Release --no-build -- --filter 219 --filter 220 --skip-bootstrap
 ```
 
 The runner uses up to eight isolated test workers by default. It starts the
 remaining expensive cases first and uses a load-balancing partitioner so a
 worker that finishes a short case immediately takes the next remaining case.
-Self-host LLVM emitter tests bootstrap one SL compiler driver and then reuse its
+Self-host LLVM emitter tests bootstrap one Sollang compiler driver and then reuse its
 native executable for every Windows, Linux, and Wasm fixture. The driver is
-rebuilt only when its compiler, manifest, SL sources, or standard library inputs
+rebuilt only when its compiler, manifest, Sollang sources, or standard library inputs
 are newer; a current driver reports `[selfhost bootstrap] REUSE`. Thus the suite
 does not compile the same self-host compiler modules once per fixture.
 The generated parser commits successful optional/repeated branches and keeps a
@@ -409,15 +409,15 @@ Use `--jobs 1` for deterministic sequential diagnosis or an explicit positive
 worker count when measuring another machine. Compiler bootstrap and
 grammar-table determinism are still checked once before the parallel section.
 Add `--compare-compilers` to an executable self-host LLVM fixture when
-diagnosing backend drift. The runner materializes the fixture's embedded SL
-sources once, emits LLVM with both the C# reference compiler and the native SL
+diagnosing backend drift. The runner materializes the fixture's embedded Sollang
+sources once, emits LLVM with both the C# reference compiler and the native Sollang
 compiler, keeps both `.ll` files under `artifacts/example-tests`, links both,
 and requires identical exit codes and normalized stdout. It intentionally
-compares observable behavior rather than raw LLVM text because the C# and SL
+compares observable behavior rather than raw LLVM text because the C# and Sollang
 backends use different platform-runtime implementations.
 
-Use the dedicated stage-2 gate to prove that a C#-bootstrapped SL compiler and
-the SL compiler rebuilt by that compiler produce the same normalized LLVM:
+Use the dedicated stage-2 gate to prove that a C#-bootstrapped Sollang compiler and
+the Sollang compiler rebuilt by that compiler produce the same normalized LLVM:
 
 ```powershell
 .\scripts\verify-selfhost-stage2.ps1
@@ -426,7 +426,7 @@ the SL compiler rebuilt by that compiler produce the same normalized LLVM:
 The script reports `[stage2 n/6]`, caches the complete stage-2 executable until
 one of its 28 source inputs changes, compares normalized LLVM SHA-256 for both a
 single source and an imported two-file program, assembles and links both stage-2
-outputs, executes them, and finally runs the C#/SL runtime differential check.
+outputs, executes them, and finally runs the C#/Sollang runtime differential check.
 Pass `-Rebuild` to force the complete stage-2 emission. These gates are opt-in
 so the ordinary parallel edit loop does not pay for another full compiler
 generation.
@@ -451,25 +451,25 @@ files are merged after each file independently resolves its namespace and import
 aliases. Exactly one file may contain executable top-level statements:
 
 ```powershell
-.\scripts\smalllang.ps1 `
+.\scripts\sollang.ps1 `
   -SourcesFile examples\expected\52-multi-file-modules.sources.txt `
   -Output artifacts\52-multi-file-modules.exe
 ```
 
-The source-list file contains one repository-relative `.sl` path per line.
+The source-list file contains one repository-relative `.slg` path per line.
 Direct compiler use accepts the same files as positional arguments.
 
 For a normal project, put the root module in a compact language-shaped
-`smalllang.project` manifest:
+`sollang.project` manifest:
 
-```smalllang
+```sollang
 project {
     name: "compiler"
-    root: "src/main.sl"
+    root: "src/main.slg"
 }
 ```
 
-Running `smalllang build` without source arguments searches the current
+Running `sollang build` without source arguments searches the current
 directory and its ancestors for that manifest. `--project` accepts either the
 manifest or its directory. Relative roots are resolved inside the project and
 may not escape it. Without `-o`, artifacts are written as
@@ -480,12 +480,12 @@ explicit overrides.
 Use `products` when one project produces several executables, and use
 `dependencies` for exact local package paths:
 
-```smalllang
+```sollang
 project {
     name: "tools"
     products: {
-        compiler: "src/compiler.sl"
-        formatter: "src/formatter.sl"
+        compiler: "src/compiler.slg"
+        formatter: "src/formatter.slg"
     }
     dependencies: {
         syntax: "../syntax"
@@ -493,11 +493,11 @@ project {
 }
 ```
 
-`smalllang build --product compiler` selects one product. A project with one
+`sollang build --product compiler` selects one product. A project with one
 product needs no selection; a project with several reports the sorted choices
 instead of silently choosing. Product and dependency names are import-safe
 identifiers. Every dependency path is relative to the declaring manifest and
-must point directly to a directory or `smalllang.project` file; directory
+must point directly to a directory or `sollang.project` file; directory
 traversal looking for a coincidental package is not performed.
 
 The dependency key must equal the dependency project's `name`, and that package
@@ -510,12 +510,12 @@ Versioned registries, Git sources, lock files, and workspaces are not yet part
 of this bootstrap format.
 
 When only the root file is supplied, each non-`sys` import is mapped from its
-dotted module path to a `.sl` file relative to the root directory. For example,
-`import sample.math as math` discovers `sample/math.sl` recursively.
+dotted module path to a `.slg` file relative to the root directory. For example,
+`import sample.math as math` discovers `sample/math.slg` recursively.
 Imported module functions and nominal declarations are internal unless
 explicitly exported:
 
-```smalllang
+```sollang
 namespace sample.math
 
 public double value: Int -> Int {
@@ -530,27 +530,27 @@ The compiler itself targets .NET 11 Preview and uses C# Preview.
 
 ## VS Code Extension
 
-SmallLang includes a local VS Code language support extension:
+Sollang includes a local VS Code language support extension:
 
 ```powershell
-Push-Location tools\vscode-smalllang
+Push-Location tools\vscode-sollang
 npx --yes @vscode/vsce package --no-dependencies --allow-missing-repository
-code --install-extension .\smalllang-language-support-0.1.2.vsix
+code --install-extension .\sollang-language-support-0.1.2.vsix
 Pop-Location
 ```
 
-The extension registers `.sl`, highlights value-flow syntax, function
+The extension registers `.slg`, highlights value-flow syntax, function
 declarations, block-function calls, strings with interpolation, comments,
 conditionals, types, and operators, and includes snippets for common forms.
 
-See [tools/vscode-smalllang/README.md](../tools/vscode-smalllang/README.md) for
+See [tools/vscode-sollang/README.md](../tools/vscode-sollang/README.md) for
 extension-specific notes.
 
 ## Pipeline
 
 ```mermaid
 flowchart LR
-    Source[SmallLang source] --> Lexer[Generated lexer]
+    Source[Sollang source] --> Lexer[Generated lexer]
     Lexer --> Parser[Generated parser]
     Parser --> AST[AST]
     AST --> Semantics[Semantic lowering]
@@ -596,7 +596,7 @@ token NewLine = newline
 token End = end
 ```
 
-`src/SmallLang.Compiler.Generators` reads `syntax/smalllang.lexer` as an MSBuild
+`src/Sollang.Compiler.Generators` reads `syntax/sollang.lexer` as an MSBuild
 `AdditionalFiles` input and generates `TokenKind` and `Lexer` during the C#
 build.
 
@@ -644,7 +644,7 @@ rule TypeName = Identifier
 rule TypeAnnotation = TypeName | LeftBracket TypeName RightBracket | LeftBracket TypeName Semicolon Tilde RightBracket | LeftBrace TypeName Colon TypeName RightBrace
 ```
 
-The generator reads `syntax/smalllang.grammar` and emits the current recursive
+The generator reads `syntax/sollang.grammar` and emits the current recursive
 descent parser at compile time. Bindings use `=>`, so `n * i => value` is the
 preferred binding style for new samples. Function targets in value-flow calls
 omit empty parentheses, such as `7 -> square => num`; target parentheses are
@@ -687,8 +687,8 @@ branches and phi nodes, not runtime dispatch. The parser treats `true` and
 `1..100 -> fold 0 sum, i { sum + i }` lowers directly to LLVM loop blocks with
 an SSA accumulator phi and returns the final accumulator value.
 
-The `sys.io` module is implemented in SmallLang under `stdlib/sys/io.sl`.
-`stdlib/sys/runtime.sl` declares the lower `sys.runtime.*` intrinsic boundary.
+The `sys.io` module is implemented in Sollang under `stdlib/sys/io.slg`.
+`stdlib/sys/runtime.slg` declares the lower `sys.runtime.*` intrinsic boundary.
 These files use `namespace sys.io`, `namespace sys.runtime`, and
 `import sys.runtime as rt` so the module body avoids repeated fully qualified
 names. The compiler loads these standard library files before user code and
@@ -701,140 +701,140 @@ approved syntax.
 
 ## Repository Layout
 
-- `examples/01-function-basic-hello.sl`: first runtime function and value-flow
+- `examples/01-function-basic-hello.slg`: first runtime function and value-flow
   sample
-- `examples/02-function-named-input.sl`: cumulative explicit function
+- `examples/02-function-named-input.slg`: cumulative explicit function
   input-name sample
-- `examples/03-flow-call-parens.sl`: cumulative value-flow target `func()`
+- `examples/03-flow-call-parens.slg`: cumulative value-flow target `func()`
   sample
-- `examples/04-main-omitted-top-level.sl`: cumulative omitted-main and
+- `examples/04-main-omitted-top-level.slg`: cumulative omitted-main and
   `sys.io.print` sample
-- `examples/05-function-local.sl`: cumulative local function sample
-- `examples/06-expression-arithmetic-comments.sl`: cumulative parentheses,
+- `examples/05-function-local.slg`: cumulative local function sample
+- `examples/06-expression-arithmetic-comments.slg`: cumulative parentheses,
   arithmetic, and comment sample
-- `examples/07-block-each-explicit-item.sl`: cumulative input plus range loop
+- `examples/07-block-each-explicit-item.slg`: cumulative input plus range loop
   sample
-- `examples/08-block-each-default-it.sl`: cumulative range loop sample with
+- `examples/08-block-each-default-it.slg`: cumulative range loop sample with
   default `it`
-- `examples/09-namespace-sys-io.sl`: cumulative `sys.io.readInt` and
+- `examples/09-namespace-sys-io.slg`: cumulative `sys.io.readInt` and
   `sys.io.println` sample
-- `examples/10-block-argument-omits-parens.sl`: block-function call sample where
+- `examples/10-block-argument-omits-parens.slg`: block-function call sample where
   the brace body is the argument and `()` is omitted
-- `examples/11-block-function-exec-block-repeat.sl`: executable block argument
+- `examples/11-block-function-exec-block-repeat.slg`: executable block argument
   sample using `count -> repeat item { ... }`
-- `examples/12-block-function-user-defined-yield.sl`: user-defined
+- `examples/12-block-function-user-defined-yield.slg`: user-defined
   block-function sample using `block item: Type` and `yield()`
-- `examples/13-block-fold-sum.sl`: cumulative integer `fold` sample
-- `examples/14-condition-if.sl`: cumulative flow-oriented `if` conditional
+- `examples/13-block-fold-sum.slg`: cumulative integer `fold` sample
+- `examples/14-condition-if.slg`: cumulative flow-oriented `if` conditional
   sample
-- `examples/15-condition-when.sl`: cumulative `when` expression sample
-- `examples/16-condition-when-subject.sl`: cumulative subject-value `when`
+- `examples/15-condition-when.slg`: cumulative `when` expression sample
+- `examples/16-condition-when-subject.slg`: cumulative subject-value `when`
   sample
-- `examples/17-condition-when-range.sl`: cumulative subject-value range-arm
+- `examples/17-condition-when-range.slg`: cumulative subject-value range-arm
   `when` sample
-- `examples/18-condition-when-compact.sl`: cumulative expression-body and
+- `examples/18-condition-when-compact.slg`: cumulative expression-body and
   compact `when` sample
-- `examples/19-stdlib-random-file-demo-generate.sl`: small verification
+- `examples/19-stdlib-random-file-demo-generate.slg`: small verification
   generator using the sorted bucket algorithm
-- `examples/20-stdlib-file-demo-query.sl`: small nearest-value query sample
-- `examples/21-stdlib-random-file-100m-generate.sl`: full sorted 100,000,000
+- `examples/20-stdlib-file-demo-query.slg`: small nearest-value query sample
+- `examples/21-stdlib-random-file-100m-generate.slg`: full sorted 100,000,000
   integer binary-file generator
-- `examples/22-stdlib-file-100m-query.sl`: nearest-value query over the full
+- `examples/22-stdlib-file-100m-query.slg`: nearest-value query over the full
   generated integer file
-- `examples/23-webassembly-browser.sl`: browser WebAssembly stdout sample
-- `examples/24-string-interpolation-dollar.sl`: `$name` and `$(expr)` string
+- `examples/23-webassembly-browser.slg`: browser WebAssembly stdout sample
+- `examples/24-string-interpolation-dollar.slg`: `$name` and `$(expr)` string
   interpolation sample
-- `examples/172-raw-multiline-strings.sl`: triple-quoted raw strings with
+- `examples/172-raw-multiline-strings.slg`: triple-quoted raw strings with
   indentation trimming and literal quotes, backslashes, and `$()` text
-- `examples/25-arrays-dictionaries.sl`: static array, dynamic array,
+- `examples/25-arrays-dictionaries.slg`: static array, dynamic array,
   dictionary, and deterministic cleanup sample
-- `examples/26-immutable-containers.sl`: immutable dynamic-array and dictionary
+- `examples/26-immutable-containers.slg`: immutable dynamic-array and dictionary
   transforms that return new owners
-- `examples/28-mutable-indexing.sl`: mutable owner suffixes and checked indexed
+- `examples/28-mutable-indexing.slg`: mutable owner suffixes and checked indexed
   assignment for fixed arrays, growable arrays, and dictionaries
-- `examples/29-typed-empty-containers.sl`: typed empty growable array and
+- `examples/29-typed-empty-containers.slg`: typed empty growable array and
   dictionary literals
-- `examples/35-mutable-int-dictionary-parameters.sl`: non-owning mutable
+- `examples/35-mutable-int-dictionary-parameters.slg`: non-owning mutable
   dictionary parameters through flow and direct calls
-- `examples/36-return-moved-container-parameters.sl`: returning consumed array
+- `examples/36-return-moved-container-parameters.slg`: returning consumed array
   and dictionary parameters with direct, transformed, `if`, and `when` paths
-- `examples/37-readonly-int-dictionary-parameters.sl`: non-owning readonly
+- `examples/37-readonly-int-dictionary-parameters.slg`: non-owning readonly
   dictionary parameters through nested, flow, and direct calls
-- `examples/38-stack-promoted-dynamic-array.sl`: automatic stack placement for
+- `examples/38-stack-promoted-dynamic-array.slg`: automatic stack placement for
   a small, non-escaping, readonly growable-array literal
-- `examples/39-stack-promoted-int-dictionary.sl`: automatic stack placement for
+- `examples/39-stack-promoted-int-dictionary.slg`: automatic stack placement for
   small, non-escaping, readonly Swiss-table dictionary literals
-- `examples/40-nested-stack-slot-reuse.sl`: one function-entry stack slot reused
+- `examples/40-nested-stack-slot-reuse.slg`: one function-entry stack slot reused
   by nested branch and loop-local array/dictionary payloads
-- `examples/41-inline-function-stack-frame.sl`: a local inline function reusing
+- `examples/41-inline-function-stack-frame.slg`: a local inline function reusing
   its containing function's entry slot across loop iterations
-- `examples/42-fixed-array-placement.sl`: small fixed-array entry placement and
+- `examples/42-fixed-array-placement.slg`: small fixed-array entry placement and
   oversized fixed-array heap placement with deterministic cleanup
-- `examples/54-associated-types.sl`: static trait associated-type binding and
+- `examples/54-associated-types.slg`: static trait associated-type binding and
   a generic equality constraint specialized to `Item = Int`
-- `examples/55-multi-parameter-generics.sl`: two inferred type parameters with
+- `examples/55-multi-parameter-generics.slg`: two inferred type parameters with
   separate `Int` and `Text` LLVM monomorphizations
-- `examples/56-generic-fixed-text-array.sl`: homogeneous fixed `Text` arrays
+- `examples/56-generic-fixed-text-array.slg`: homogeneous fixed `Text` arrays
   with typed indexing and deterministic backing-storage cleanup
-- `examples/57-user-value-fixed-arrays.sl`: parametric fixed arrays of copyable
+- `examples/57-user-value-fixed-arrays.slg`: parametric fixed arrays of copyable
   user structs and payload enums with exact LLVM aggregate layouts
-- `examples/58-owned-element-fixed-arrays.sl`: owned struct elements with one
+- `examples/58-owned-element-fixed-arrays.slg`: owned struct elements with one
   recursive drop per initialized slot followed by backing-buffer cleanup
-- `examples/59-generic-dynamic-text-array.sl`: typed empty `Text` array,
+- `examples/59-generic-dynamic-text-array.slg`: typed empty `Text` array,
   aggregate-aware growth, indexing, length, and capacity
-- `examples/60-generic-dynamic-user-array.sl`: copyable user-struct dynamic
+- `examples/60-generic-dynamic-user-array.slg`: copyable user-struct dynamic
   array with typed push and growth copying
-- `examples/61-owned-generic-dynamic-array.sl`: move-only owned elements with
+- `examples/61-owned-generic-dynamic-array.slg`: move-only owned elements with
   runtime-length recursive drop
-- `examples/62-generic-text-int-dictionary.sl`: `Text` hashing/equality, typed
+- `examples/62-generic-text-int-dictionary.slg`: `Text` hashing/equality, typed
   lookup/update, capacity growth, and Swiss-table rehash
-- `examples/63-generic-int-text-dictionary.sl`: aggregate `Text` values in a
+- `examples/63-generic-int-text-dictionary.slg`: aggregate `Text` values in a
   typed `Int`-keyed dictionary
-- `examples/64-owned-generic-dictionary-values.sl`: recursive destruction of
+- `examples/64-owned-generic-dictionary-values.slg`: recursive destruction of
   owned user values stored in dictionary entries
-- `examples/65-typed-empty-text-dictionary.sl`: capacity-hinted typed-empty
+- `examples/65-typed-empty-text-dictionary.slg`: capacity-hinted typed-empty
   `{Text: Text}` construction and mutation
-- `examples/66-generic-dictionary-function-contracts.sl`: readonly, `mut`, and
+- `examples/66-generic-dictionary-function-contracts.slg`: readonly, `mut`, and
   `move` function contracts for a concrete `{Text: Int}` specialization
-- `examples/67-generic-dynamic-array-function-contracts.sl`: readonly, `mut`,
+- `examples/67-generic-dynamic-array-function-contracts.slg`: readonly, `mut`,
   and `move` function contracts for `[Text; ~]`, including callee-side growth
-- `examples/68-owned-array-function-transfer.sl`: move-return of an owned
+- `examples/68-owned-array-function-transfer.slg`: move-return of an owned
   user-element array with final recursive drop coverage
-- `examples/69-generic-array-each.sl`: type-preserving `each` over fixed Text,
+- `examples/69-generic-array-each.slg`: type-preserving `each` over fixed Text,
   dynamic user-value, and readonly-borrowed owned-element arrays
-- `examples/70-generic-dictionary-iteration.sl`: Swiss live-slot `eachKey` and
+- `examples/70-generic-dictionary-iteration.slg`: Swiss live-slot `eachKey` and
   `eachValue` with Text keys, typed user values, and borrowed owned values
-- `examples/71-user-defined-dictionary-keys.sl`: copyable nominal keys with
+- `examples/71-user-defined-dictionary-keys.slg`: copyable nominal keys with
   statically dispatched `Hash.hash` and canonical `Eq.eq` implementations,
   plus contextual lookup syntax such as `map[{ scope: 1, id: 10 }]`
-- `examples/88-grammar-table-module.sl`: compiles the generated grammar-table
+- `examples/88-grammar-table-module.slg`: compiles the generated grammar-table
   module as a separate source file and reads its public metadata
 - `examples/browser`: static HTML/JS runner for the WebAssembly sample
 - `examples/expected`: expected stdout/stdin fixtures for executable samples
-- `stdlib/sys/runtime.sl`: standard library intrinsic boundary declarations
-- `stdlib/sys/io.sl`: SmallLang implementation of `sys.io` wrappers
-- `stdlib/sys/random.sl`: SmallLang wrappers for pseudo-random runtime
+- `stdlib/sys/runtime.slg`: standard library intrinsic boundary declarations
+- `stdlib/sys/io.slg`: Sollang implementation of `sys.io` wrappers
+- `stdlib/sys/random.slg`: Sollang wrappers for pseudo-random runtime
   intrinsics
-- `stdlib/sys/file.sl`: legacy sorted-`Int` helpers plus generic canonical
+- `stdlib/sys/file.slg`: legacy sorted-`Int` helpers plus generic canonical
   scalar `write<T>` and `read<T>` file intrinsics
-- `scripts/smalllang.ps1`: local build/bootstrap script
-- `tools/vscode-smalllang`: local VS Code extension for `.sl` syntax
+- `scripts/sollang.ps1`: local build/bootstrap script
+- `tools/vscode-sollang`: local VS Code extension for `.slg` syntax
   highlighting
-- `syntax/smalllang.lexer`: concise lexer rule source
-- `syntax/smalllang.grammar`: concise parser rule source
-- `syntax/generated/smalllang_grammar.sl`: checked-in lexer descriptors and
-  parser bytecode generated by `smalllang grammar build`
-- `src/SmallLang.Compiler.Generators`: Roslyn incremental source generator
-- `src/SmallLang.Compiler/Cli`: command line orchestration
-- `src/SmallLang.Compiler/Lexing`: token model; Lexer and TokenKind are
+- `syntax/sollang.lexer`: concise lexer rule source
+- `syntax/sollang.grammar`: concise parser rule source
+- `syntax/generated/sollang_grammar.slg`: checked-in lexer descriptors and
+  parser bytecode generated by `sollang grammar build`
+- `src/Sollang.Compiler.Generators`: Roslyn incremental source generator
+- `src/Sollang.Compiler/Cli`: command line orchestration
+- `src/Sollang.Compiler/Lexing`: token model; Lexer and TokenKind are
   generated
-- `src/SmallLang.Compiler/Parsing`: parser helpers; Parser is generated
-- `src/SmallLang.Compiler/Syntax`: AST nodes
-- `src/SmallLang.Compiler/Semantics`: current semantic lowering
-- `src/SmallLang.Compiler/CodeGen`: common LLVM IR generation plus target
+- `src/Sollang.Compiler/Parsing`: parser helpers; Parser is generated
+- `src/Sollang.Compiler/Syntax`: AST nodes
+- `src/Sollang.Compiler/Semantics`: current semantic lowering
+- `src/Sollang.Compiler/CodeGen`: common LLVM IR generation plus target
   runtime platform layers
-- `src/SmallLang.Compiler/Tooling`: LLVM/lld tool integration
-- `tests/SmallLang.ExampleTests`: expected stdout test runner for samples
+- `src/Sollang.Compiler/Tooling`: LLVM/lld tool integration
+- `tests/Sollang.ExampleTests`: expected stdout test runner for samples
 - `docs/SPEC.md`: living language specification
 - `docs/DECISIONS.md`: decision log
 
