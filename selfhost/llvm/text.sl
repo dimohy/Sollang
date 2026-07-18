@@ -558,13 +558,21 @@ writeDecimalLine value: Int -> Unit uses Console {
 }
 
 emitCore context: move EmitContext -> Unit uses Console {
+    snapshotIntArray values: [Int; ~] -> [Int; ~] {
+        [Int; ~] => snapshot!
+        values -> each value {
+            snapshot! -> push(value)
+        }
+        snapshot!
+    }
+
     computeFunctionEnd functionIndex: Int -> Int {
         functionIndex + 1 => end!
         (end! < (context.ir -> len) and context.ir[end!].kind != 0 and context.ir[end!].kind != 11) -> while { end! + 1 => end! }
         end!
     }
     functionEnd functionIndex: Int -> Int {
-        functionEndCache![functionIndex]
+        frozenFunctionEnds[functionIndex]
     }
     nodeDescendsFrom request: NodeAncestorRequest -> Bool {
         false => descends!
@@ -616,7 +624,7 @@ emitCore context: move EmitContext -> Unit uses Console {
     computeFunctionCaptures functionIndex: Int -> [Int; ~] {
         [Int; ~] => captures!
         context.ir[functionIndex] => targetFunction
-        functionIndex -> functionEnd => targetEnd
+        functionIndex -> computeFunctionEnd => targetEnd
         -1 => captureOuterAst!
         targetFunction.astNode >= 0 -> if {
             context.ranges[targetFunction.sourceModule] => captureSourceRange
@@ -632,7 +640,7 @@ emitCore context: move EmitContext -> Unit uses Console {
         captureFunctionIndex! < (captureFunctions! -> len) -> while {
             captureFunctions![captureFunctionIndex!] => currentFunctionIndex
             context.ir[currentFunctionIndex] => currentFunction
-            currentFunctionIndex -> functionEnd => currentFunctionEnd
+            currentFunctionIndex -> computeFunctionEnd => currentFunctionEnd
             currentFunctionIndex + 1 => useIndex!
             useIndex! < currentFunctionEnd -> while {
                 context.ir[useIndex!] => use
@@ -696,10 +704,10 @@ emitCore context: move EmitContext -> Unit uses Console {
     }
     functionCaptures functionIndex: Int -> [Int; ~] {
         [Int; ~] => captures!
-        functionCaptureCacheOffsets![functionIndex] => cachedCaptureOffset
+        frozenFunctionCaptureOffsets[functionIndex] => cachedCaptureOffset
         0 => cachedCaptureIndex!
-        cachedCaptureIndex! < functionCaptureCacheCounts![functionIndex] -> while {
-            captures! -> push(functionCaptureCacheValues![cachedCaptureOffset + cachedCaptureIndex!])
+        cachedCaptureIndex! < frozenFunctionCaptureCounts[functionIndex] -> while {
+            captures! -> push(frozenFunctionCaptureValues[cachedCaptureOffset + cachedCaptureIndex!])
             cachedCaptureIndex! + 1 => cachedCaptureIndex!
         }
         captures!
@@ -708,8 +716,8 @@ emitCore context: move EmitContext -> Unit uses Console {
         -1 => targetFunctionIr!
         (request.targetModule >= 0 and request.targetModule < (context.ranges -> len)) -> if {
             context.ranges[request.targetModule].symbolStart + request.targetSymbol => targetGlobalSymbol
-            (targetGlobalSymbol >= 0 and targetGlobalSymbol < (captureFunctionBySymbol! -> len)) -> if {
-                captureFunctionBySymbol![targetGlobalSymbol] => targetFunctionIr!
+            (targetGlobalSymbol >= 0 and targetGlobalSymbol < (frozenCaptureFunctionsBySymbol -> len)) -> if {
+                frozenCaptureFunctionsBySymbol[targetGlobalSymbol] => targetFunctionIr!
             }
         }
         targetFunctionIr!
@@ -874,8 +882,8 @@ emitCore context: move EmitContext -> Unit uses Console {
         -1 => targetFunctionIr!
         (request.targetModule >= 0 and request.targetModule < (context.ranges -> len)) -> if {
             context.ranges[request.targetModule].symbolStart + request.targetSymbol => targetGlobalSymbol
-            (targetGlobalSymbol >= 0 and targetGlobalSymbol < (captureFunctionBySymbol! -> len)) -> if {
-                captureFunctionBySymbol![targetGlobalSymbol] => targetFunctionIr!
+            (targetGlobalSymbol >= 0 and targetGlobalSymbol < (frozenCaptureFunctionsBySymbol -> len)) -> if {
+                frozenCaptureFunctionsBySymbol[targetGlobalSymbol] => targetFunctionIr!
             }
         }
         [Int; ~] => callCaptures!
@@ -914,8 +922,8 @@ emitCore context: move EmitContext -> Unit uses Console {
         -1 => targetFunctionIr!
         (request.targetModule >= 0 and request.targetModule < (context.ranges -> len)) -> if {
             context.ranges[request.targetModule].symbolStart + request.targetSymbol => targetGlobalSymbol
-            (targetGlobalSymbol >= 0 and targetGlobalSymbol < (captureFunctionBySymbol! -> len)) -> if {
-                captureFunctionBySymbol![targetGlobalSymbol] => targetFunctionIr!
+            (targetGlobalSymbol >= 0 and targetGlobalSymbol < (frozenCaptureFunctionsBySymbol -> len)) -> if {
+                frozenCaptureFunctionsBySymbol[targetGlobalSymbol] => targetFunctionIr!
             }
         }
         [Int; ~] => callCaptures!
@@ -1766,7 +1774,7 @@ emitCore context: move EmitContext -> Unit uses Console {
                     whileOwnerSymbol.parent >= 0 -> if {
                         whileOwnerRange.symbolStart + whileOwnerSymbol.parent => whileParentGlobalSymbol
                         -1 => whileParentFunction!
-                        (whileParentGlobalSymbol >= 0 and whileParentGlobalSymbol < (captureFunctionBySymbol! -> len)) -> if { captureFunctionBySymbol![whileParentGlobalSymbol] => whileParentFunction! }
+                        (whileParentGlobalSymbol >= 0 and whileParentGlobalSymbol < (frozenCaptureFunctionsBySymbol -> len)) -> if { frozenCaptureFunctionsBySymbol[whileParentGlobalSymbol] => whileParentFunction! }
                         whileParentFunction! >= 0 -> if {
                             context.ir[whileParentFunction!] => whileParentCandidate
                             (whileParentCandidate.operand1 >= 0 and context.ir[whileParentCandidate.operand1].symbol == value.symbol) -> if {
@@ -4067,8 +4075,8 @@ emitCore context: move EmitContext -> Unit uses Console {
                     -1 => captureBorrowTarget!
                     captureBorrowCall.targetModule < (context.ranges -> len) -> if {
                         context.ranges[captureBorrowCall.targetModule].symbolStart + captureBorrowCall.symbol => captureBorrowGlobalSymbol
-                        (captureBorrowGlobalSymbol >= 0 and captureBorrowGlobalSymbol < (captureFunctionBySymbol! -> len)) -> if {
-                            captureFunctionBySymbol![captureBorrowGlobalSymbol] => captureBorrowTarget!
+                        (captureBorrowGlobalSymbol >= 0 and captureBorrowGlobalSymbol < (frozenCaptureFunctionsBySymbol -> len)) -> if {
+                            frozenCaptureFunctionsBySymbol[captureBorrowGlobalSymbol] => captureBorrowTarget!
                         }
                     }
                     captureBorrowTarget! >= 0 -> if {
@@ -5935,6 +5943,13 @@ emitCore context: move EmitContext -> Unit uses Console {
         }
         functionCaptureCacheFunctionIndex! + 1 => functionCaptureCacheFunctionIndex!
     }
+    # The indexes used by parallel emitters are constructed mutably once, then
+    # copied into immutable snapshots before worker callbacks can capture them.
+    functionEndCache! -> snapshotIntArray => frozenFunctionEnds
+    captureFunctionBySymbol! -> snapshotIntArray => frozenCaptureFunctionsBySymbol
+    functionCaptureCacheOffsets! -> snapshotIntArray => frozenFunctionCaptureOffsets
+    functionCaptureCacheCounts! -> snapshotIntArray => frozenFunctionCaptureCounts
+    functionCaptureCacheValues! -> snapshotIntArray => frozenFunctionCaptureValues
     false => usesComputePool!
     0 => computePoolSearch!
     computePoolSearch! < (context.ir -> len) -> while {
@@ -6087,7 +6102,7 @@ emitCore context: move EmitContext -> Unit uses Console {
             false => externalDefined!
             externalCall.targetModule < (context.ranges -> len) -> if {
                 context.ranges[externalCall.targetModule].symbolStart + externalCall.symbol => externalGlobalSymbol
-                (externalGlobalSymbol >= 0 and externalGlobalSymbol < (captureFunctionBySymbol! -> len) and captureFunctionBySymbol![externalGlobalSymbol] >= 0) -> if { true => externalDefined! }
+                (externalGlobalSymbol >= 0 and externalGlobalSymbol < (frozenCaptureFunctionsBySymbol -> len) and frozenCaptureFunctionsBySymbol[externalGlobalSymbol] >= 0) -> if { true => externalDefined! }
             }
             false => externalDeclared!
             0 => externalDeclaredSearch!

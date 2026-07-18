@@ -22,6 +22,8 @@ public struct OwnershipDiagnostic {
 }
 
 # Code 17 identifies whole-owner or overlapping-field use after a partial move.
+# Code 18 identifies a mutable binding captured by a parallel callback.
+# Code 19 identifies a structurally non-sendable parallel callback capture.
 public analyze sources: [Text; ~] -> [OwnershipDiagnostic; ~] {
     sources -> semanticContext.prepare => prepared
     prepared -> analyzeContext
@@ -133,6 +135,160 @@ public analyzeContext prepared: semanticContext.SemanticSnapshot -> [OwnershipDi
             }
         }
         partialMoveIndex! + 1 => partialMoveIndex!
+    }
+
+    # Parallel callbacks execute in more than one worker but join before their
+    # enclosing lexical scope resumes. Immutable structural values may
+    # therefore be borrowed read-only; mutable bindings and runtime-affine
+    # views cannot cross this boundary.
+    0 => parallelIrIndex!
+    parallelIrIndex! < (typed! -> len) -> while {
+        typed![parallelIrIndex!] => parallelCall
+        (parallelCall.kind == 6 and parallelCall.opcode == -207 and parallelCall.sourceModule >= 0 and parallelCall.astNode >= 0) -> if {
+            prepared.package.ranges[parallelCall.sourceModule] => parallelRange
+            prepared.package.nodes[parallelRange.astStart + parallelCall.astNode] => parallelAst
+            parallelAst.payloadToken >= 0 -> if {
+                prepared.package.tokens[parallelRange.tokenStart + parallelAst.payloadToken] => parallelName
+                parallelName.span.length == UIntSize(8) => isParallel!
+                "parallel" => parallelText
+                UIntSize(0) => parallelNameByte!
+                (isParallel! and parallelNameByte! < parallelName.span.length) -> while {
+                    (prepared.package.sources[parallelCall.sourceModule] -> byte(parallelName.span.start + parallelNameByte!)) != (parallelText -> byte(parallelNameByte!)) -> if { false => isParallel! }
+                    parallelNameByte! + UIntSize(1) => parallelNameByte!
+                }
+                isParallel! -> if {
+                    0 => captureUseIndex!
+                    captureUseIndex! < (typed! -> len) -> while {
+                        typed![captureUseIndex!] => captureUse
+                        (captureUse.kind == 5 and captureUse.sourceModule == parallelCall.sourceModule and captureUse.astNode >= 0) -> if {
+                            prepared.package.nodes[parallelRange.astStart + captureUse.astNode] => captureUseAst
+                            captureUseAst.parent => captureAncestor!
+                            false => insideParallel!
+                            (captureAncestor! >= 0 and not insideParallel!) -> while {
+                                captureAncestor! == parallelCall.astNode -> if { true => insideParallel! } else { prepared.package.nodes[parallelRange.astStart + captureAncestor!].parent => captureAncestor! }
+                            }
+                            # The role source precedes its `parallel` token and
+                            # stays in the parent scope; only the trailing block
+                            # is a concurrently executed callback.
+                            (insideParallel! and captureUseAst.start >= parallelName.span.start + parallelName.span.length) -> if {
+                                -1 => captureBindingIndex!
+                                (captureUse.operand0 >= 0 and captureUse.operand0 < (typed! -> len)) -> if {
+                                    typed![captureUse.operand0] => directCaptureBinding
+                                    (directCaptureBinding.kind == 10 or directCaptureBinding.kind == 17) -> if { captureUse.operand0 => captureBindingIndex! }
+                                }
+                                captureBindingIndex! < 0 -> if {
+                                    0 => captureBindingSearch!
+                                    captureBindingSearch! < (typed! -> len) -> while {
+                                        typed![captureBindingSearch!] => captureBindingCandidate
+                                        ((captureBindingCandidate.kind == 10 or captureBindingCandidate.kind == 17) and captureBindingCandidate.sourceModule == captureUse.sourceModule and captureBindingCandidate.symbol == captureUse.symbol) -> if {
+                                            captureBindingSearch! => captureBindingIndex!
+                                        }
+                                        captureBindingSearch! + 1 => captureBindingSearch!
+                                    }
+                                }
+                                captureBindingIndex! >= 0 -> if {
+                                    typed![captureBindingIndex!] => captureBinding
+                                    false => bindingInsideParallel!
+                                    captureBinding.astNode >= 0 -> if {
+                                        prepared.package.nodes[parallelRange.astStart + captureBinding.astNode].parent => bindingAncestor!
+                                        (bindingAncestor! >= 0 and not bindingInsideParallel!) -> while {
+                                            bindingAncestor! == parallelCall.astNode -> if { true => bindingInsideParallel! } else { prepared.package.nodes[parallelRange.astStart + bindingAncestor!].parent => bindingAncestor! }
+                                        }
+                                    }
+                                    not bindingInsideParallel! -> if {
+                                        captureBinding.flags == 1 -> if {
+                                            diagnostics! -> push(OwnershipDiagnostic {
+                                                code: 18
+                                                sourceModule: captureUse.sourceModule
+                                                functionSymbol: -1
+                                                expectedOrigin: -1
+                                                expectedModule: -1
+                                                expectedSymbol: -1
+                                                actualOrigin: captureBinding.typeOrigin
+                                                actualModule: captureBinding.typeModule
+                                                actualSymbol: captureBinding.typeSymbol
+                                                actualBuiltin: captureBinding.typeSymbol
+                                                span: syntax.SourceSpan { fileId: captureUse.sourceModule, start: captureUseAst.start, length: captureUseAst.length }
+                                            })
+                                        } else {
+                                            [Int; ~] => pendingTypes!
+                                            [Int; ~] => visitedTypes!
+                                            true => captureSendable!
+                                            captureBinding.typeId >= 0 -> if {
+                                                pendingTypes! -> push(captureBinding.typeId)
+                                            } else {
+                                                (captureBinding.typeOrigin == 1 and (captureBinding.typeSymbol == 15 or captureBinding.typeSymbol == 16 or captureBinding.typeSymbol == 17 or captureBinding.typeSymbol == 18 or captureBinding.typeSymbol == 24)) -> if { false => captureSendable! }
+                                            }
+                                            0 => pendingTypeIndex!
+                                            (captureSendable! and pendingTypeIndex! < (pendingTypes! -> len)) -> while {
+                                                pendingTypes![pendingTypeIndex!] => pendingTypeId
+                                                false => typeVisited!
+                                                0 => visitedTypeIndex!
+                                                visitedTypeIndex! < (visitedTypes! -> len) -> while {
+                                                    visitedTypes![visitedTypeIndex!] == pendingTypeId -> if { true => typeVisited! }
+                                                    visitedTypeIndex! + 1 => visitedTypeIndex!
+                                                }
+                                                not typeVisited! -> if {
+                                                    visitedTypes! -> push(pendingTypeId)
+                                                    (pendingTypeId < 0 or pendingTypeId >= (prepared.semantic.types -> len)) -> if {
+                                                        false => captureSendable!
+                                                    } else {
+                                                        prepared.semantic.types[pendingTypeId] => pendingType
+                                                        pendingType.status != 0 -> if { false => captureSendable! } else {
+                                                            pendingType.kind == 1 -> if {
+                                                                pendingType.origin == 1 -> if {
+                                                                    (pendingType.symbol == 15 or pendingType.symbol == 16 or pendingType.symbol == 17 or pendingType.symbol == 18 or pendingType.symbol == 24) -> if { false => captureSendable! }
+                                                                } else {
+                                                                    (pendingType.origin == 0 or pendingType.origin == 2) -> if {
+                                                                        0 => captureFieldIndex!
+                                                                        captureFieldIndex! < (prepared.semantic.fields -> len) -> while {
+                                                                            prepared.semantic.fields[captureFieldIndex!] => captureField
+                                                                            (captureField.status == 0 and captureField.ownerType == pendingTypeId) -> if { pendingTypes! -> push(captureField.fieldType) }
+                                                                            captureFieldIndex! + 1 => captureFieldIndex!
+                                                                        }
+                                                                    } else { false => captureSendable! }
+                                                                }
+                                                            } else {
+                                                                (pendingType.kind == 3 or pendingType.kind == 4 or pendingType.kind == 6) -> if {
+                                                                    pendingTypes! -> push(pendingType.first)
+                                                                } else {
+                                                                    pendingType.kind == 5 -> if {
+                                                                        pendingTypes! -> push(pendingType.first)
+                                                                        pendingTypes! -> push(pendingType.second)
+                                                                    } else { false => captureSendable! }
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                                pendingTypeIndex! + 1 => pendingTypeIndex!
+                                            }
+                                            not captureSendable! -> if {
+                                                diagnostics! -> push(OwnershipDiagnostic {
+                                                    code: 19
+                                                    sourceModule: captureUse.sourceModule
+                                                    functionSymbol: -1
+                                                    expectedOrigin: -1
+                                                    expectedModule: -1
+                                                    expectedSymbol: -1
+                                                    actualOrigin: captureBinding.typeOrigin
+                                                    actualModule: captureBinding.typeModule
+                                                    actualSymbol: captureBinding.typeSymbol
+                                                    actualBuiltin: captureBinding.typeSymbol
+                                                    span: syntax.SourceSpan { fileId: captureUse.sourceModule, start: captureUseAst.start, length: captureUseAst.length }
+                                                })
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        captureUseIndex! + 1 => captureUseIndex!
+                    }
+                }
+            }
+        }
+        parallelIrIndex! + 1 => parallelIrIndex!
     }
     diagnostics!
 }

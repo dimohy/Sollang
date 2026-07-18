@@ -5661,3 +5661,46 @@ SHA-256
 `2E2AEFB4830A45A0C7E890AD22D7D55C0EF181C9CB0A4AEB87DCB97F9CB2776A`,
 and `llvm-as` accepts it. Self-host integration is now 6/6 and the parallel
 subproject is 23/28 (82.1%); the canonical roadmap remains 48.5/60 (80.8%).
+
+## D177 - Reject Unsafe Parallel Callback Captures
+
+Status: implemented and fixed-point verified
+Date: 2026-07-18
+
+Every `parallel` callback now has a compile-time capture boundary. A mutable
+binding is rejected even when the callback only reads it, because the binding
+still permits another lexical access to the same storage. Immutable values are
+accepted only when their type is structurally sendable. Numeric values, Bool,
+Text, arrays, dictionaries, boxes, and nominal values recursively composed from
+those types are valid read-only captures. Arena, Arguments, mapped/source views,
+tasks, slices, unresolved types, and nominal values containing them are not.
+
+The reference compiler walks the inline block and follows called local
+functions transitively, preventing a mutable capture from hiding behind an
+outlined helper. The self-host ownership pass uses the shared
+`SemanticSnapshot` and typed IR to report direct mutable and non-sendable
+captures as diagnostic codes 18 and 19. Its emitter also snapshots the mutable
+function-end and capture indexes after construction; parallel LLVM-body workers
+therefore capture immutable arrays rather than construction-time `!` bindings.
+
+This follows Swift's rule that concurrently executed `@Sendable` closures may
+not capture mutable variables, together with Rust's structural distinction
+between values that can cross a thread boundary and shared references whose
+referent must be safe for concurrent access.
+
+- [Swift sendable closure captures](https://docs.swift.org/compiler/documentation/diagnostics/sendable-closure-captures/)
+- [Rust `Send`](https://doc.rust-lang.org/std/marker/trait.Send.html)
+- [Rust `Sync`](https://doc.rust-lang.org/std/marker/trait.Sync.html)
+
+Three reference diagnostics cover direct mutable, transitive mutable, and
+non-sendable captures. Example 331 retains immutable captured-state execution,
+and example 380 executes the self-host diagnostic boundary for mutable,
+non-sendable, and immutable cases. The Release build has zero warnings/errors,
+the complete Windows suite passes 505/505, and the six-step stage-2 differential
+verifier passes. Stage 2 and stage 3 are byte-identical at 7,195,817 bytes with
+SHA-256 `B57FB15B373CB0348EB16EAA7B1727D56D3B382F5FA5E01C1FF0280F3BCA7410`;
+`llvm-as` accepts stage 3. The measured stage-3 run took 38.50 seconds wall,
+400.38 CPU-seconds (10.40 effective cores), and 77.5 MiB peak memory.
+
+Typed-role coverage is now 5/5 and the parallel subproject is 24/28 (85.7%).
+The canonical self-host roadmap remains 48.5/60 equivalent gates (80.8%).

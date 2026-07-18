@@ -100,12 +100,12 @@ task-group primitive and ordered merge.
 
 Evidence: `selfhost/semantic/analysis.sl`; examples 182, 293, and 294.
 
-### B. Typed role surface (4/5)
+### B. Typed role surface (5/5)
 
 - [x] Block callbacks can return a typed result.
 - [x] `parallel` is implemented as an imported standard-library role.
 - [x] Input/item/result types are inferred through ordinary generics.
-- [ ] Non-sendable captures and mutable borrows are rejected.
+- [x] Non-sendable captures and mutable borrows are rejected.
 - [x] Owned callback results transfer exactly once.
 
 ### C. Native compute task group (4/7)
@@ -136,6 +136,12 @@ callback plus identical stage-1/stage-2 `--jobs 2` output. `SemanticSnapshot`
 is the named ownership barrier consumed read-only by semantic, typed-IR,
 ownership, effect, and LLVM passes; example 379 proves the frozen package,
 module, import, and resolved-import views.
+The reference compiler rejects direct and transitive mutable captures and
+structurally non-sendable values. The self-host ownership pass reports the same
+direct callback boundary as diagnostic codes 18 and 19; example 380 proves
+mutable, non-sendable, and immutable cases. Before its own parallel LLVM-body
+emission, the self-host emitter snapshots construction-time mutable indexes so
+worker callbacks capture only immutable arrays.
 
 ### E. Verification (5/6)
 
@@ -150,7 +156,7 @@ Evidence: example 324 executes `block item: Int -> Int`; example 325 proves the
 self-host grammar/parser accepts the same declaration and call form. The two
 `block-callback-result-*` diagnostics cover missing and mismatched results.
 
-Parallel-compilation progress is **23/28 checks (82.1%)**. This is a feature-local
+Parallel-compilation progress is **24/28 checks (85.7%)**. This is a feature-local
 metric and does not promote the canonical self-host roadmap, which remains
 **48.5/60 equivalent gates (80.8%)** until a full checklist audit proves a gate.
 
@@ -173,9 +179,11 @@ Example 377 proves 100 generations of borrowed `SourceText` input and owned
 struct/array output through native workers. Example 378 proves an explicit
 positive worker limit, while the driver reports the effective count as a valid
 LLVM comment. The complete 28-source self-host compiler reached an exact
-stage-2/stage-3 fixed point of 7,185,332 bytes with SHA-256
-`2E2AEFB4830A45A0C7E890AD22D7D55C0EF181C9CB0A4AEB87DCB97F9CB2776A`;
+stage-2/stage-3 fixed point of 7,195,817 bytes with SHA-256
+`B57FB15B373CB0348EB16EAA7B1727D56D3B382F5FA5E01C1FF0280F3BCA7410`;
 the stage-3 output also assembles with `llvm-as`. The preceding source-worker
 measurement used 377.77 CPU-seconds over 34.81 seconds wall time (10.85
-effective cores) and peaked at 88.7 MiB, below the 100 MiB frontend budget.
+effective cores). The capture-safety fixed-point run used 400.38 CPU-seconds
+over 38.50 seconds wall time (10.40 effective cores) and peaked at 77.5 MiB,
+below the 100 MiB frontend budget.
 Linux full-suite parity remains the outstanding platform check.

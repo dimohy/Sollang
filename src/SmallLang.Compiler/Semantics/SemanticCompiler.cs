@@ -911,6 +911,79 @@ internal sealed class SemanticCompiler
         }
     }
 
+    private IReadOnlyDictionary<string, BoundType> SelectParallelCapturedBindings(
+        BlockFunctionCallStatement call,
+        IReadOnlyDictionary<string, BoundFunction> functions,
+        IReadOnlyDictionary<string, BoundType> candidates)
+    {
+        var referenced = new HashSet<string>(StringComparer.Ordinal);
+        var calledFunctions = new HashSet<string>(StringComparer.Ordinal);
+        var previousCalls = _collectingLocalCalls;
+        _collectingLocalCalls = calledFunctions;
+        CollectCapturedNames(
+            call.Body,
+            new HashSet<string>(StringComparer.Ordinal) { call.ItemName },
+            candidates,
+            referenced);
+        _collectingLocalCalls = previousCalls;
+
+        // A parallel body can delegate to a nested local function. Walk those
+        // calls transitively so an unsafe outer capture cannot hide behind a
+        // helper that is outlined as the native worker callback.
+        var pending = new Queue<string>(calledFunctions);
+        var visited = new HashSet<BoundFunction>();
+        while (pending.TryDequeue(out var calledName))
+        {
+            if (!functions.TryGetValue(calledName, out var calledFunction)
+                || !calledFunction.IsLocal
+                || !visited.Add(calledFunction))
+            {
+                continue;
+            }
+
+            var captures = SelectCapturedBindings(calledFunction, candidates, out var nestedCalls);
+            referenced.UnionWith(captures.Keys);
+            foreach (var nestedCall in nestedCalls)
+            {
+                pending.Enqueue(nestedCall);
+            }
+        }
+
+        return candidates
+            .Where(binding => referenced.Contains(binding.Key))
+            .ToDictionary(binding => binding.Key, binding => binding.Value, StringComparer.Ordinal);
+    }
+
+    private void ValidateParallelCapturedBindings(
+        BlockFunctionCallStatement call,
+        IReadOnlyDictionary<string, BoundFunction> functions,
+        IReadOnlyDictionary<string, BoundType> bindings,
+        IReadOnlySet<string> mutableBindings)
+    {
+        foreach (var (name, type) in SelectParallelCapturedBindings(call, functions, bindings))
+        {
+            if (mutableBindings.Contains(name))
+            {
+                throw Error(
+                    call.Line,
+                    call.Column,
+                    $"parallel callback cannot capture mutable binding '{name}'");
+            }
+
+            // Parallel is structured and joins before the enclosing scope can
+            // resume, so immutable owned aggregates may be borrowed read-only.
+            // Reuse the structural value check to reject affine/runtime views
+            // such as Arena, mappings, SourceText, Arguments, and Task.
+            if (!IsAsyncValueTypeSupported(type))
+            {
+                throw Error(
+                    call.Line,
+                    call.Column,
+                    $"parallel callback cannot capture non-sendable binding '{name}' of type {FormatType(type)}");
+            }
+        }
+    }
+
     private void ValidateUserFunction(
         BoundFunction function,
         IReadOnlyDictionary<string, BoundFunction> parentFunctions,
@@ -2282,6 +2355,10 @@ internal sealed class SemanticCompiler
             allowReadIntCall: true,
             allowFlowBindingTarget: false,
             mutableBindings: mutableBindings);
+        if (function.Kind == BoundFunctionKind.RuntimeParallel)
+        {
+            ValidateParallelCapturedBindings(call, functions, bindings, mutableBindings);
+        }
         if (function.Kind == BoundFunctionKind.RuntimeParallel
             && function.SpecializedType is null)
         {

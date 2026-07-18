@@ -119,12 +119,13 @@ not lines of code.
 
 Current count-based progress: **80.8% (48.5 of 60 equivalent gates)**.
 
-The frontend parallel-compilation subproject is **23/28 checks (82.1%)**. Its
+The frontend parallel-compilation subproject is **24/28 checks (85.7%)**. Its
 source-local product boundary, typed callback-result role slice, nested-call
 identity regression, Windows native compute pool, and source-local parallel
 frontend execution are complete. Owned source-analysis results and ordered
-LLVM-body sinks now cross worker boundaries safely. Linux parity and the global
-semantic and typed-IR parallel stages remain pending. This subproject does
+LLVM-body sinks now cross worker boundaries safely, and parallel callbacks
+reject mutable or structurally non-sendable captures. Linux parity and task
+group completion semantics remain pending. This subproject does
 not promote a roadmap gate yet.
 There are **11.5 equivalent gates remaining**. Because the remaining compiler
 primitives are harder than early syntax gates, this is not an elapsed-time
@@ -953,14 +954,20 @@ stdout buffer; completion merges and frees sinks in source/root order. Function
 bodies before and after `main` are parallelized as separate canonical batches,
 so entry placement stays byte-identical to the former serial traversal.
 
-The compiler fixed point is now exact at 7,185,332 bytes with SHA-256
-`2E2AEFB4830A45A0C7E890AD22D7D55C0EF181C9CB0A4AEB87DCB97F9CB2776A`;
+The compiler fixed point is now exact at 7,195,817 bytes with SHA-256
+`B57FB15B373CB0348EB16EAA7B1727D56D3B382F5FA5E01C1FF0280F3BCA7410`;
 the complete stage-3 output assembles with `llvm-as`. The preceding
 source-worker revision completed five stage-3 runs in 33.90-37.75 seconds. A
 separately instrumented run took 34.81 seconds and 377.77 CPU-seconds, averaging
 10.85 effective cores with an 88.7 MiB peak working set. This remains 90.4%
 faster than the original 360.7-second serial path while parallelizing the
 source-analysis boundary.
+
+The capture-safety fixed-point run completed stage 3 in 38.50 seconds with
+400.38 CPU-seconds (10.40 effective cores) and a 77.5 MiB peak working set.
+The full Windows regression passes 505/505. The canonical roadmap remains
+48.5/60 (80.8%) because this closes a feature-local parallel checklist item,
+not an additional top-level gate.
 
 ## Immediate Implementation Order
 
