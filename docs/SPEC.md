@@ -361,7 +361,7 @@ source_file  := trivia* namespace_declaration? import_declaration* function_decl
 namespace_declaration := "namespace" path statement_end
 import_declaration := "import" path ("as" identifier)? statement_end
 function_declaration := path identifier? ":" function_signature (block_function_body | function_body)
-function_signature := "->" type_annotation | type_annotation "->" type_annotation
+function_signature := "->" type_annotation? | type_annotation? "->" type_annotation?
 block_function_body := "block" identifier ":" type_name "{" statement* "}"
 function_body := "{" function_declaration* statement* expression "}" | "=>" expression | "->" expression | "=" "intrinsic"
 main_block   := "main" block
@@ -469,8 +469,15 @@ Notes:
   `i` only inside the loop body.
 - `1..9 -> each { ... }` uses `it` as the default loop item binding.
 - Function declarations are currently expression bodies with either no input or
-  one input. A one-input function uses `it` when no input name is supplied, and
-  uses the supplied name in `square n: Int -> Int { ... }`.
+  one primary input plus explicitly typed additional inputs. A one-input
+  function uses `it` when no input name is supplied, and uses the supplied name
+  in `square n: Int -> Int { ... }`.
+- A local function may omit its primary input type, return type, or both by
+  leaving the corresponding signature slot empty: `map value: -> Int`,
+  `map value: Int ->`, or `map value: ->`. A non-public top-level function may
+  do the same only when exactly one function or `main` scope consumes it.
+  Public, generic, impl, multiply-consumed, conflicting, and underconstrained
+  signatures remain explicit.
 - Path-qualified function declarations remain valid, such as
   `sys.io.print value: Text -> Unit { ... }`, but standard library source now
   prefers file-level `namespace` declarations.
@@ -695,11 +702,11 @@ Functions may declare local helper functions before their final body expression:
 
 ```sollang
 scale n: Int -> Int {
-    double value: Int -> Int {
+    double value: -> {
         value * 2
     }
 
-    addBase value: Int -> Int {
+    addBase value: Int -> {
         value + n
     }
 
@@ -709,9 +716,11 @@ scale n: Int -> Int {
 
 Local functions use the same input naming rule as top-level functions. Their
 names are visible only inside the containing function and functions nested below
-it. They can read bindings from the containing function, such as `n` above. In
-the current backend, local functions are lowered by inlining at the call site;
-no global LLVM symbol is emitted for `double` or `addBase`.
+it. They can read bindings from the containing function, such as `n` above.
+Omitted primary input types are constrained by all calls in that lexical scope;
+omitted return types are constrained by tail expressions and explicit returns.
+All constraints must agree. Local functions lower to private LLVM functions
+with stable local symbols and explicit capture parameters.
 
 ## Block Functions
 

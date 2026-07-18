@@ -24,6 +24,12 @@ The design deliberately combines a small set of compatible ideas:
   [move paths](https://rustc-dev-guide.rust-lang.org/borrow-check/moves-and-initialization/move-paths.html),
   Rust [partial moves](https://doc.rust-lang.org/rust-by-example/scope/move/partial_move.html),
   and Swift [declarations](https://docs.swift.org/swift-book/documentation/the-swift-programming-language/declarations/).
+- Rust requires explicit types on exposed named functions but infers closure
+  inputs and results inside a narrow use context; Swift closure expressions may
+  omit either side only when context determines one answer. Sollang applies
+  that boundary to local helpers and single-consumer private functions, while
+  keeping public signatures explicit. See Rust [closure inference](https://doc.rust-lang.org/stable/book/ch13-01-closures.html)
+  and Swift [closure expressions](https://docs.swift.org/swift-book/ReferenceManual/Expressions.html#ID544).
 - Mojo: compile-time type and value parameterization with specialization at use
   sites; Sollang uses angle brackets to keep this separate from arrays. See
   [generics](https://docs.modular.com/mojo/manual/generics/) and
@@ -661,6 +667,15 @@ loop-exit edges. Whole-binding consuming calls now suppress only later cleanup
 within the same structured region. Nested static field moves now retain sibling
 drop obligations. Field reinitialization and nested owned aggregate member
 mutation remain.
+
+The reference frontend now supports context-inferred primary input and return
+types for local functions and for non-public top-level helpers consumed by one
+function or `main` scope. Empty signature slots retain the existing punctuation,
+and a fixed-point constraint pass combines call arguments, tail expressions,
+and explicit returns. Public/generic/impl declarations, multiple consumer
+scopes, conflicting calls, and underconstrained recursion are rejected. The
+self-host semantic type table still needs the corresponding inferred-signature
+records before this convenience is available through native `sollangc`.
 
 Result-producing block functions now reuse the ordinary function tail
 expression and bind their result after the caller block with `=> name`.

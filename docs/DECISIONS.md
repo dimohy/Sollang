@@ -6465,3 +6465,41 @@ Research basis:
 - [Rust destructor scopes](https://doc.rust-lang.org/reference/destructors.html)
 - [rustc move paths](https://rustc-dev-guide.rust-lang.org/borrow-check/moves-and-initialization/move-paths.html)
 - [Swift deferred actions](https://docs.swift.org/swift-book/documentation/the-swift-programming-language/controlflow/)
+
+## D199 - Context-Inferred Private Function Signatures
+
+Status: reference compiler implemented and Stage2 verified; self-host propagation pending
+Date: 2026-07-19
+
+Sollang keeps the colon and arrow as visible function boundaries while allowing
+the type names between them to be absent. `helper value: -> { ... }` infers the
+primary input and return, `helper value: Int -> { ... }` infers only the return,
+and `helper value: -> Int { ... }` infers only the input. This avoids adding an
+underscore placeholder and keeps explicit and inferred declarations visually
+aligned.
+
+Inference is intentionally visibility-bounded. Local functions always have a
+narrow lexical consumer context. A non-public top-level helper is eligible only
+when exactly one function or `main` scope consumes it. Public, standard-library,
+generic, and impl signatures remain explicit; multiple consumer scopes,
+conflicting call arguments or returns, and underconstrained signatures are
+compile-time errors. A fixed-point constraint pass combines call argument types,
+tail expressions, explicit returns, bindings, and nested calls before ordinary
+semantic binding.
+
+Example 412 covers both-sides, input-only, return-only, and zero-input return
+inference. Three diagnostics cover public ABI leakage, multiple consumers, and
+conflicting inputs. The Release build has zero warnings and errors and the full
+Windows suite passes 549/549. The generated grammar gives explicit dictionary
+and array return types priority over the omitted-return alternative. Native
+self-host compiler regeneration passes Stage2 6/6 at 8,787,176 LLVM bytes. This
+is checkpoint 3/10 after the periodic Stage3 baseline, so Stage3 is intentionally
+not regenerated. Native
+self-host propagation is tracked as the next independent checkpoint because its
+flat AST currently represents declared types by AST index and needs a canonical
+inferred-signature side table rather than fabricated type nodes.
+
+Research basis:
+
+- [Rust closure type inference](https://doc.rust-lang.org/stable/book/ch13-01-closures.html)
+- [Swift inferred closure signatures](https://docs.swift.org/swift-book/ReferenceManual/Expressions.html#ID544)

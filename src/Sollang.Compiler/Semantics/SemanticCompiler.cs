@@ -5,9 +5,9 @@ using Sollang.Compiler.Syntax;
 
 namespace Sollang.Compiler.Semantics;
 
-internal sealed class SemanticCompiler
+internal sealed partial class SemanticCompiler
 {
-    private readonly SollangProgram _program;
+    private SollangProgram _program;
     private readonly TypeDefinitionTable _types;
     private readonly IReadOnlyDictionary<string, BoundTraitDefinition> _traits;
     private readonly Dictionary<object, BoundFunction> _resolvedGenericCalls = new(ReferenceEqualityComparer.Instance);
@@ -40,6 +40,7 @@ internal sealed class SemanticCompiler
 
     public BoundProgram Compile()
     {
+        _program = InferPrivateFunctionSignatures(_program);
         var functions = BindFunctions();
         var mainBindings = BindMain(functions);
         var storagePlacement = StoragePlacementAnalyzer.Analyze(_program, functions);

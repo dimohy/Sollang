@@ -84,6 +84,11 @@ internal sealed record FunctionDeclaration(
     string? BlockResultType = null,
     IReadOnlyList<FunctionParameterDeclaration>? AdditionalParameters = null);
 
+internal static class InferredFunctionType
+{
+    public const string Name = "<inferred>";
+}
+
 internal sealed record FunctionParameterDeclaration(
     string Name,
     string TypeName,
