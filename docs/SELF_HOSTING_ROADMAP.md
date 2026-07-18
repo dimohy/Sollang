@@ -919,7 +919,8 @@ same buffered runtime, so stage 3 no longer writes LLVM one byte at a time.
 - [x] connect entry-body role results and lower top-level entry `parallel`;
 - [ ] make no-capture `SourceText` analysis worker-safe before parallelizing it;
 - [x] lower `parallel` inside nested `if`/`while` regions;
-- [ ] split or buffer independent `emitCore` function bodies for parallel output.
+- [x] buffer independent `emitCore` function bodies in owned memory sinks and
+  merge them in canonical root order.
 
 The generated stage-2 compiler now lowers capture-safe `parallel` callbacks to
 a Windows compute pool. Stage 3 moved from 360.7 s at 0.99 effective cores to
@@ -946,11 +947,18 @@ input and result elements are self-contained numeric or `Bool` values use the
 compute pool without a capture environment; a 100-generation execution test
 proves the null-environment ABI. Entry-body role bindings now receive the same
 explicit call-result edge repair as ordinary functions, and top-level entry
-`parallel` has both compute-pool and serial target lowering. The compiler
-fixed point remains exact after nested-region lowering at 7,069,022 bytes with
-SHA-256
-`B29A0DD2B778BEFF3DF96274C81314DDFE82199F7E5FCD8A462D1135CF4E32F1`;
-stage 3 completed in 46.28 s. `SourceText`/owned-analysis callbacks remain a
+`parallel` has both compute-pool and serial target lowering.
+The ordered memory-output sink gives every parallel callback index an owned
+`{data, length, capacity}` buffer. Worker output never touches the shared
+stdout buffer; completion merges and frees sinks in source/root order. Function
+bodies before and after `main` are parallelized as separate canonical batches,
+so entry placement stays byte-identical to the former serial traversal.
+
+The compiler fixed point is now exact at 7,119,957 bytes with SHA-256
+`1878B6CB90351D4037E1E6319EBDFD17797577F1157DC51F1E0797F6C7890347`.
+Stage 3 completed in 26.13 s with 213.52 CPU-seconds, or 8.17 effective cores.
+This is 43.5% faster than the 46.28 s D172 baseline and 92.8% faster than the
+original 360.7 s serial path. `SourceText`/owned-analysis callbacks remain a
 separate unchecked ABI path.
 
 ## Immediate Implementation Order

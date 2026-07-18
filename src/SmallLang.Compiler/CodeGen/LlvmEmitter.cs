@@ -397,9 +397,15 @@ internal sealed partial class LlvmEmitter
             %smalllang.process_result = type { i32, i32 }
             %smalllang.task = type { ptr, ptr }
             %smalllang.task_control = type { ptr, ptr, ptr, ptr, i32, i32, ptr, ptr, i64, ptr, ptr, i32, i32, i64, i64, i32, ptr, i64, i64, i32, i32 }
-            %smalllang.compute_group = type { ptr, ptr, ptr, i64, ptr }
-
             """;
+        if (_usesParallel)
+        {
+            header += """
+                %smalllang.output_sink = type { ptr, i64, i64 }
+                %smalllang.compute_group = type { ptr, ptr, ptr, i64, ptr, ptr, ptr, ptr, ptr, ptr, ptr }
+
+                """;
+        }
         header += EmitStructTypeDefinitions();
 
         EmitPlatformGlobalBlock(_platform.EmitGlobals);
@@ -426,6 +432,7 @@ internal sealed partial class LlvmEmitter
             EmitGlobalLine("@smalllang_compute_group_current = internal global ptr null");
             EmitGlobalLine("@smalllang_compute_next = internal global i64 0");
             EmitGlobalLine("@smalllang_compute_active = internal global i32 0");
+            EmitGlobalLine("@smalllang_compute_barrier_departed = internal global i32 0");
             EmitGlobalLine("@smalllang_compute_running = internal global i32 0");
             EmitGlobalLine("@smalllang_compute_peak = internal global i32 0");
             EmitGlobalLine("@smalllang_compute_stopping = internal global i32 0");

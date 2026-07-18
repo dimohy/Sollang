@@ -706,6 +706,21 @@ internal sealed partial class LlvmEmitter
             var captureSlot = NextTemp("parallel_capture_slot");
             EmitInstruction($"{captureSlot} = getelementptr %smalllang.compute_group, ptr {group}, i32 0, i32 4");
             EmitStore("ptr", captureEnvironment, captureSlot, 8);
+            var sinkBytes = NextTemp("parallel_sink_bytes");
+            EmitInstruction($"{sinkBytes} = mul i64 {length}, 24");
+            var sinks = NextTemp("parallel_sinks");
+            EmitCall(sinks, "ptr", "smalllang_alloc", $"i64 {sinkBytes}");
+            EmitCall(target: null, "void", "llvm.memset.p0.i64", $"ptr {sinks}, i8 0, i64 {sinkBytes}, i1 false");
+            var sinksSlot = NextTemp("parallel_sinks_slot");
+            EmitInstruction($"{sinksSlot} = getelementptr %smalllang.compute_group, ptr {group}, i32 0, i32 5");
+            EmitStore("ptr", sinks, sinksSlot, 8);
+            var runtimeValues = new[] { "%stdin", "%stdout", "%written", "%read", "%ok_state" };
+            for (var runtimeIndex = 0; runtimeIndex < runtimeValues.Length; runtimeIndex++)
+            {
+                var runtimeSlot = NextTemp("parallel_runtime_slot");
+                EmitInstruction($"{runtimeSlot} = getelementptr %smalllang.compute_group, ptr {group}, i32 0, i32 {runtimeIndex + 6}");
+                EmitStore("ptr", runtimeValues[runtimeIndex], runtimeSlot, 8);
+            }
             EmitCall(target: null, "void", "smalllang_compute_execute", $"ptr {group}");
             BindParallelResult(statement, resultArray);
             return;

@@ -241,7 +241,13 @@ internal sealed class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
             complete:
               %previous = atomicrmw sub ptr @smalllang_compute_active, i32 1 acq_rel
               %last = icmp eq i32 %previous, 1
-              br i1 %last, label %signal, label %wait
+              br i1 %last, label %signal, label %barrier
+
+            barrier:
+              %barrier_event = load ptr, ptr @smalllang_compute_completion_event, align 8
+              %barrier_waited = call i32 @WaitForSingleObject(ptr %barrier_event, i32 -1)
+              %departed_before = atomicrmw add ptr @smalllang_compute_barrier_departed, i32 1 acq_rel
+              br label %wait
 
             signal:
               %event = load ptr, ptr @smalllang_compute_completion_event, align 8
@@ -316,7 +322,13 @@ internal sealed class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
               %count_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 3
               %count = load i64, ptr %count_slot, align 8
               %empty = icmp eq i64 %count, 0
-              br i1 %empty, label %done, label %publish
+              br i1 %empty, label %cleanup_empty, label %publish
+
+            cleanup_empty:
+              %empty_sinks_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 5
+              %empty_sinks = load ptr, ptr %empty_sinks_slot, align 8
+              call void @smalllang_free(ptr %empty_sinks)
+              br label %done
 
             publish:
               store atomic i64 0, ptr @smalllang_compute_next release, align 8
@@ -329,6 +341,49 @@ internal sealed class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
               %semaphore = load ptr, ptr @smalllang_compute_semaphore, align 8
               %released = call i32 @ReleaseSemaphore(ptr %semaphore, i32 %workers, ptr null)
               %waited = call i32 @WaitForSingleObject(ptr %event, i32 -1)
+              br label %await_departure
+
+            await_departure:
+              %departed = load atomic i32, ptr @smalllang_compute_barrier_departed acquire, align 4
+              %expected_departed = sub i32 %workers, 1
+              %all_departed = icmp eq i32 %departed, %expected_departed
+              br i1 %all_departed, label %flush_prepare, label %await_departure
+
+            flush_prepare:
+              store atomic i32 0, ptr @smalllang_compute_barrier_departed release, align 4
+              %sinks_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 5
+              %sinks = load ptr, ptr %sinks_slot, align 8
+              %stdout_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 7
+              %stdout = load ptr, ptr %stdout_slot, align 8
+              %written_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 8
+              %written = load ptr, ptr %written_slot, align 8
+              br label %flush_loop
+
+            flush_loop:
+              %flush_index = phi i64 [ 0, %flush_prepare ], [ %flush_next, %flush_one_done ]
+              %flush_done = icmp eq i64 %flush_index, %count
+              br i1 %flush_done, label %flush_finish, label %flush_one
+
+            flush_one:
+              %sink = getelementptr %smalllang.output_sink, ptr %sinks, i64 %flush_index
+              %sink_data_slot = getelementptr %smalllang.output_sink, ptr %sink, i32 0, i32 0
+              %sink_length_slot = getelementptr %smalllang.output_sink, ptr %sink, i32 0, i32 1
+              %sink_data = load ptr, ptr %sink_data_slot, align 8
+              %sink_length = load i64, ptr %sink_length_slot, align 8
+              %has_sink_data = icmp ne ptr %sink_data, null
+              br i1 %has_sink_data, label %flush_write, label %flush_one_done
+
+            flush_write:
+              %write_ok = call i32 @smalllang_write(ptr %stdout, ptr %sink_data, i64 %sink_length, ptr %written)
+              call void @smalllang_free(ptr %sink_data)
+              br label %flush_one_done
+
+            flush_one_done:
+              %flush_next = add i64 %flush_index, 1
+              br label %flush_loop
+
+            flush_finish:
+              call void @smalllang_free(ptr %sinks)
               store atomic ptr null, ptr @smalllang_compute_group_current release, align 8
               br label %done
 
@@ -1233,6 +1288,52 @@ internal sealed class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
 
     public override void EmitIoPrimitives(StringBuilder functions)
     {
+        if (UsesComputePool)
+        {
+            functions.AppendLine("""
+            define internal void @smalllang_output_sink_append(ptr %sink, ptr %data, i64 %len) #0 {
+            entry:
+              %data_slot = getelementptr %smalllang.output_sink, ptr %sink, i32 0, i32 0
+              %length_slot = getelementptr %smalllang.output_sink, ptr %sink, i32 0, i32 1
+              %capacity_slot = getelementptr %smalllang.output_sink, ptr %sink, i32 0, i32 2
+              %length = load i64, ptr %length_slot, align 8
+              %capacity = load i64, ptr %capacity_slot, align 8
+              %required = add i64 %length, %len
+              %fits = icmp ule i64 %required, %capacity
+              br i1 %fits, label %append, label %grow
+
+            grow:
+              %doubled = shl i64 %capacity, 1
+              %minimum = icmp ult i64 %doubled, 256
+              %base_capacity = select i1 %minimum, i64 256, i64 %doubled
+              %enough = icmp uge i64 %base_capacity, %required
+              %new_capacity = select i1 %enough, i64 %base_capacity, i64 %required
+              %new_data = call ptr @smalllang_alloc(i64 %new_capacity)
+              %old_data = load ptr, ptr %data_slot, align 8
+              %has_old = icmp ne ptr %old_data, null
+              br i1 %has_old, label %copy_old, label %publish
+
+            copy_old:
+              call void @llvm.memcpy.p0.p0.i64(ptr %new_data, ptr %old_data, i64 %length, i1 false)
+              call void @smalllang_free(ptr %old_data)
+              br label %publish
+
+            publish:
+              store ptr %new_data, ptr %data_slot, align 8
+              store i64 %new_capacity, ptr %capacity_slot, align 8
+              br label %append
+
+            append:
+              %current_data = load ptr, ptr %data_slot, align 8
+              %destination = getelementptr i8, ptr %current_data, i64 %length
+              call void @llvm.memcpy.p0.p0.i64(ptr %destination, ptr %data, i64 %len, i1 false)
+              store i64 %required, ptr %length_slot, align 8
+              ret void
+            }
+
+            """);
+        }
+
         functions.AppendLine("""
             define dso_local void @__chkstk() naked nounwind {
             entry:
@@ -1258,8 +1359,41 @@ internal sealed class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
               ret i32 1
             }
 
+            """);
+
+        if (UsesComputePool)
+        {
+            functions.AppendLine("""
             define internal i32 @smalllang_write(ptr %stdout, ptr %data, i64 %len64, ptr %written) #0 {
             entry:
+              %stdout_value = ptrtoint ptr %stdout to i64
+              %sink_tag = and i64 %stdout_value, 1
+              %capturing = icmp ne i64 %sink_tag, 0
+              br i1 %capturing, label %capture, label %write_prepare
+
+            capture:
+              %sink_value = and i64 %stdout_value, -2
+              %sink = inttoptr i64 %sink_value to ptr
+              call void @smalllang_output_sink_append(ptr %sink, ptr %data, i64 %len64)
+              %captured_len = trunc i64 %len64 to i32
+              store i32 %captured_len, ptr %written, align 4
+              ret i32 1
+
+            write_prepare:
+            """);
+        }
+        else
+        {
+            functions.AppendLine("""
+            define internal i32 @smalllang_write(ptr %stdout, ptr %data, i64 %len64, ptr %written) #0 {
+            entry:
+              br label %write_prepare
+
+            write_prepare:
+            """);
+        }
+
+        functions.AppendLine("""
               %oversized = icmp ugt i64 %len64, 1048576
               br i1 %oversized, label %write_direct_prepare, label %buffer_prepare
 

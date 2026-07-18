@@ -113,6 +113,74 @@ write_newline:
 done:
   ret void
 }
+define internal void @sl_runtime_print_i32(i32 %value, i1 %newline) {
+entry:
+  %buffer = alloca [12 x i8], align 1
+  %end = getelementptr [12 x i8], ptr %buffer, i64 0, i64 12
+  %wide = sext i32 %value to i64
+  %negative = icmp slt i64 %wide, 0
+  %negated = sub i64 0, %wide
+  %magnitude = select i1 %negative, i64 %negated, i64 %wide
+  br label %digits
+digits:
+  %current = phi i64 [ %magnitude, %entry ], [ %quotient, %digits ]
+  %cursor = phi ptr [ %end, %entry ], [ %digit_slot, %digits ]
+  %digit = urem i64 %current, 10
+  %quotient = udiv i64 %current, 10
+  %digit_slot = getelementptr i8, ptr %cursor, i64 -1
+  %digit8 = trunc i64 %digit to i8
+  %ascii = add i8 %digit8, 48
+  store i8 %ascii, ptr %digit_slot, align 1
+  %more = icmp ne i64 %quotient, 0
+  br i1 %more, label %digits, label %digits_done
+digits_done:
+  br i1 %negative, label %write_sign, label %emit
+write_sign:
+  %sign_slot = getelementptr i8, ptr %digit_slot, i64 -1
+  store i8 45, ptr %sign_slot, align 1
+  br label %emit
+emit:
+  %start = phi ptr [ %digit_slot, %digits_done ], [ %sign_slot, %write_sign ]
+  %end_address = ptrtoint ptr %end to i64
+  %start_address = ptrtoint ptr %start to i64
+  %length = sub i64 %end_address, %start_address
+  call void @sl_runtime_print(ptr %start, i64 %length, i1 %newline)
+  ret void
+}
+define internal void @sl_runtime_print_i64(i64 %value, i1 %signed, i1 %newline) {
+entry:
+  %buffer = alloca [21 x i8], align 1
+  %end = getelementptr [21 x i8], ptr %buffer, i64 0, i64 21
+  %negative_value = icmp slt i64 %value, 0
+  %negative = and i1 %signed, %negative_value
+  %negated = sub i64 0, %value
+  %magnitude = select i1 %negative, i64 %negated, i64 %value
+  br label %digits
+digits:
+  %current = phi i64 [ %magnitude, %entry ], [ %quotient, %digits ]
+  %cursor = phi ptr [ %end, %entry ], [ %digit_slot, %digits ]
+  %digit = urem i64 %current, 10
+  %quotient = udiv i64 %current, 10
+  %digit_slot = getelementptr i8, ptr %cursor, i64 -1
+  %digit8 = trunc i64 %digit to i8
+  %ascii = add i8 %digit8, 48
+  store i8 %ascii, ptr %digit_slot, align 1
+  %more = icmp ne i64 %quotient, 0
+  br i1 %more, label %digits, label %digits_done
+digits_done:
+  br i1 %negative, label %write_sign, label %emit
+write_sign:
+  %sign_slot = getelementptr i8, ptr %digit_slot, i64 -1
+  store i8 45, ptr %sign_slot, align 1
+  br label %emit
+emit:
+  %start = phi ptr [ %digit_slot, %digits_done ], [ %sign_slot, %write_sign ]
+  %end_address = ptrtoint ptr %end to i64
+  %start_address = ptrtoint ptr %start to i64
+  %length = sub i64 %end_address, %start_address
+  call void @sl_runtime_print(ptr %start, i64 %length, i1 %newline)
+  ret void
+}
 %smalllang.compute_group = type { ptr, ptr, ptr, i64, ptr, ptr }
 @smalllang_compute_semaphore = internal global ptr null
 @smalllang_compute_completion_event = internal global ptr null
@@ -294,8 +362,9 @@ done:
 declare ptr @malloc(i64)
 declare void @free(ptr)
 %sl.text = type { ptr, i64 }
-@sl_str_16 = private unnamed_addr constant [23 x i8] c"entry role binding done"
-define internal void @smalllang_parallel_callback_8(ptr %group, i64 %index) {
+@sl_str_4 = private unnamed_addr constant [8 x i8] c"[$value]"
+@sl_str_22 = private unnamed_addr constant [5 x i8] c" done"
+define internal void @smalllang_parallel_callback_10(ptr %group, i64 %index) {
 entry:
   %input_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 1
   %input = load ptr, ptr %input_slot, align 8
@@ -310,52 +379,67 @@ entry:
 }
 define i32 @sl_m0_s0(i32 %arg) {
 entry:
-  %v3 = add i32 %arg, 1
-  ret i32 %v3
+  %v4_ptr = insertvalue %sl.text poison, ptr @sl_str_4, 0
+  %v4 = insertvalue %sl.text %v4_ptr, i64 8, 1
+  %v3_expression_literal0 = getelementptr i8, ptr @sl_str_4, i64 0
+  call void @sl_runtime_print(ptr %v3_expression_literal0, i64 1, i1 false)
+  call void @sl_runtime_print_i32(i32 %arg, i1 false)
+  %v3_expression_suffix = getelementptr i8, ptr @sl_str_4, i64 7
+  call void @sl_runtime_print(ptr %v3_expression_suffix, i64 1, i1 false)
+  %v5 = mul i32 %arg, 2
+  ret i32 %v5
 }
 define i32 @main() {
 entry:
-  %slot7 = alloca %sl.array.i32, align 8
-  %v16_ptr = insertvalue %sl.text poison, ptr @sl_str_16, 0
-  %v16 = insertvalue %sl.text %v16_ptr, i64 23, 1
-  %v9_data = call ptr @malloc(i64 16)
-  %v9_ptr0 = getelementptr i32, ptr %v9_data, i64 0
-  store i32 1, ptr %v9_ptr0, align 4
-  %v9_ptr1 = getelementptr i32, ptr %v9_data, i64 1
-  store i32 2, ptr %v9_ptr1, align 4
-  %v9_ptr2 = getelementptr i32, ptr %v9_data, i64 2
-  store i32 3, ptr %v9_ptr2, align 4
-  %v9_ptr3 = getelementptr i32, ptr %v9_data, i64 3
-  store i32 4, ptr %v9_ptr3, align 4
-  %v9_0 = insertvalue %sl.array.i32 poison, ptr %v9_data, 0
-  %v9_1 = insertvalue %sl.array.i32 %v9_0, i64 4, 1
-  %v9 = insertvalue %sl.array.i32 %v9_1, i64 4, 2
-  %v8_input = extractvalue %sl.array.i32 %v9, 0
-  %v8_length = extractvalue %sl.array.i32 %v9, 1
-  %v8_bytes = mul i64 %v8_length, 4
-  %v8_data = call ptr @malloc(i64 %v8_bytes)
-  %v8_group = alloca %smalllang.compute_group, align 8
-  %v8_callback_slot = getelementptr %smalllang.compute_group, ptr %v8_group, i32 0, i32 0
-  store ptr @smalllang_parallel_callback_8, ptr %v8_callback_slot, align 8
-  %v8_input_slot = getelementptr %smalllang.compute_group, ptr %v8_group, i32 0, i32 1
-  store ptr %v8_input, ptr %v8_input_slot, align 8
-  %v8_output_slot = getelementptr %smalllang.compute_group, ptr %v8_group, i32 0, i32 2
-  store ptr %v8_data, ptr %v8_output_slot, align 8
-  %v8_count_slot = getelementptr %smalllang.compute_group, ptr %v8_group, i32 0, i32 3
-  store i64 %v8_length, ptr %v8_count_slot, align 8
-  %v8_capture_slot = getelementptr %smalllang.compute_group, ptr %v8_group, i32 0, i32 4
-  store ptr null, ptr %v8_capture_slot, align 8
-  %v8_sink_bytes = mul i64 %v8_length, 24
-  %v8_sinks = call ptr @malloc(i64 %v8_sink_bytes)
-  call void @llvm.memset.p0.i64(ptr %v8_sinks, i8 0, i64 %v8_sink_bytes, i1 false)
-  %v8_sinks_slot = getelementptr %smalllang.compute_group, ptr %v8_group, i32 0, i32 5
-  store ptr %v8_sinks, ptr %v8_sinks_slot, align 8
-  call void @smalllang_compute_execute(ptr %v8_group)
-  %v8_0 = insertvalue %sl.array.i32 poison, ptr %v8_data, 0
-  %v8_1 = insertvalue %sl.array.i32 %v8_0, i64 %v8_length, 1
-  %v8 = insertvalue %sl.array.i32 %v8_1, i64 %v8_length, 2
-  store %sl.array.i32 %v8, ptr %slot7, align 8
-  call void @sl_runtime_print(ptr @sl_str_16, i64 23, i1 true)
+  %slot9 = alloca %sl.array.i32, align 8
+  %v22_ptr = insertvalue %sl.text poison, ptr @sl_str_22, 0
+  %v22 = insertvalue %sl.text %v22_ptr, i64 5, 1
+  %v11_data = call ptr @malloc(i64 32)
+  %v11_ptr0 = getelementptr i32, ptr %v11_data, i64 0
+  store i32 8, ptr %v11_ptr0, align 4
+  %v11_ptr1 = getelementptr i32, ptr %v11_data, i64 1
+  store i32 1, ptr %v11_ptr1, align 4
+  %v11_ptr2 = getelementptr i32, ptr %v11_data, i64 2
+  store i32 6, ptr %v11_ptr2, align 4
+  %v11_ptr3 = getelementptr i32, ptr %v11_data, i64 3
+  store i32 3, ptr %v11_ptr3, align 4
+  %v11_ptr4 = getelementptr i32, ptr %v11_data, i64 4
+  store i32 7, ptr %v11_ptr4, align 4
+  %v11_ptr5 = getelementptr i32, ptr %v11_data, i64 5
+  store i32 2, ptr %v11_ptr5, align 4
+  %v11_ptr6 = getelementptr i32, ptr %v11_data, i64 6
+  store i32 5, ptr %v11_ptr6, align 4
+  %v11_ptr7 = getelementptr i32, ptr %v11_data, i64 7
+  store i32 4, ptr %v11_ptr7, align 4
+  %v11_0 = insertvalue %sl.array.i32 poison, ptr %v11_data, 0
+  %v11_1 = insertvalue %sl.array.i32 %v11_0, i64 8, 1
+  %v11 = insertvalue %sl.array.i32 %v11_1, i64 8, 2
+  %v10_input = extractvalue %sl.array.i32 %v11, 0
+  %v10_length = extractvalue %sl.array.i32 %v11, 1
+  %v10_bytes = mul i64 %v10_length, 4
+  %v10_data = call ptr @malloc(i64 %v10_bytes)
+  %v10_group = alloca %smalllang.compute_group, align 8
+  %v10_callback_slot = getelementptr %smalllang.compute_group, ptr %v10_group, i32 0, i32 0
+  store ptr @smalllang_parallel_callback_10, ptr %v10_callback_slot, align 8
+  %v10_input_slot = getelementptr %smalllang.compute_group, ptr %v10_group, i32 0, i32 1
+  store ptr %v10_input, ptr %v10_input_slot, align 8
+  %v10_output_slot = getelementptr %smalllang.compute_group, ptr %v10_group, i32 0, i32 2
+  store ptr %v10_data, ptr %v10_output_slot, align 8
+  %v10_count_slot = getelementptr %smalllang.compute_group, ptr %v10_group, i32 0, i32 3
+  store i64 %v10_length, ptr %v10_count_slot, align 8
+  %v10_capture_slot = getelementptr %smalllang.compute_group, ptr %v10_group, i32 0, i32 4
+  store ptr null, ptr %v10_capture_slot, align 8
+  %v10_sink_bytes = mul i64 %v10_length, 24
+  %v10_sinks = call ptr @malloc(i64 %v10_sink_bytes)
+  call void @llvm.memset.p0.i64(ptr %v10_sinks, i8 0, i64 %v10_sink_bytes, i1 false)
+  %v10_sinks_slot = getelementptr %smalllang.compute_group, ptr %v10_group, i32 0, i32 5
+  store ptr %v10_sinks, ptr %v10_sinks_slot, align 8
+  call void @smalllang_compute_execute(ptr %v10_group)
+  %v10_0 = insertvalue %sl.array.i32 poison, ptr %v10_data, 0
+  %v10_1 = insertvalue %sl.array.i32 %v10_0, i64 %v10_length, 1
+  %v10 = insertvalue %sl.array.i32 %v10_1, i64 %v10_length, 2
+  store %sl.array.i32 %v10, ptr %slot9, align 8
+  call void @sl_runtime_print(ptr @sl_str_22, i64 5, i1 true)
   call void @sl_runtime_flush_stdout()
   ret i32 0
 }

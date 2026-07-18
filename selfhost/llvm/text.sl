@@ -3449,6 +3449,11 @@ emitCore context: move EmitContext -> Unit uses Console {
                     } else {
                         "  store ptr null, ptr %v$(regionNodeIndex!)_capture_slot, align 8" -> println
                     }
+                    "  %v$(regionNodeIndex!)_sink_bytes = mul i64 %v$(regionNodeIndex!)_length, 24" -> println
+                    "  %v$(regionNodeIndex!)_sinks = call ptr @malloc(i64 %v$(regionNodeIndex!)_sink_bytes)" -> println
+                    "  call void @llvm.memset.p0.i64(ptr %v$(regionNodeIndex!)_sinks, i8 0, i64 %v$(regionNodeIndex!)_sink_bytes, i1 false)" -> println
+                    "  %v$(regionNodeIndex!)_sinks_slot = getelementptr %smalllang.compute_group, ptr %v$(regionNodeIndex!)_group, i32 0, i32 5" -> println
+                    "  store ptr %v$(regionNodeIndex!)_sinks, ptr %v$(regionNodeIndex!)_sinks_slot, align 8" -> println
                     "  call void @smalllang_compute_execute(ptr %v$(regionNodeIndex!)_group)" -> println
                 } else {
                     "  %v$(regionNodeIndex!)_index_slot = alloca i64, align 8" -> println
@@ -3935,300 +3940,9 @@ emitCore context: move EmitContext -> Unit uses Console {
             regionOrderIndex! + 1 => regionOrderIndex!
         }
     }
-    [Int; ~] => functionEndCache!
-    0 => structuralCacheInit!
-    structuralCacheInit! < (context.ir -> len) -> while {
-        functionEndCache! -> push(-1)
-        structuralCacheInit! + 1 => structuralCacheInit!
-    }
-    0 => structuralFunctionIndex!
-    structuralFunctionIndex! < (context.ir -> len) -> while {
-        (context.ir[structuralFunctionIndex!].kind == 0 or context.ir[structuralFunctionIndex!].kind == 11) -> if {
-            structuralFunctionIndex! -> computeFunctionEnd => structuralFunctionEnd
-            structuralFunctionEnd => functionEndCache![structuralFunctionIndex!]
-        }
-        structuralFunctionIndex! + 1 => structuralFunctionIndex!
-    }
-    [Int; ~] => captureBindingBySymbol!
-    [Int; ~] => captureFunctionBySymbol!
-    [Int; ~] => capturePreviousBindingByIr!
-    0 => captureSymbolInit!
-    captureSymbolInit! < (context.symbols -> len) -> while {
-        captureBindingBySymbol! -> push(-1)
-        captureFunctionBySymbol! -> push(-1)
-        captureSymbolInit! + 1 => captureSymbolInit!
-    }
-    0 => captureBindingLinkInit!
-    captureBindingLinkInit! < (context.ir -> len) -> while {
-        capturePreviousBindingByIr! -> push(-1)
-        captureBindingLinkInit! + 1 => captureBindingLinkInit!
-    }
-    0 => captureSymbolNodeIndex!
-    captureSymbolNodeIndex! < (context.ir -> len) -> while {
-        context.ir[captureSymbolNodeIndex!] => captureSymbolNode
-        (captureSymbolNode.sourceModule >= 0 and captureSymbolNode.sourceModule < (context.ranges -> len) and captureSymbolNode.symbol >= 0) -> if {
-            context.ranges[captureSymbolNode.sourceModule].symbolStart + captureSymbolNode.symbol => captureGlobalSymbolIndex
-            (captureGlobalSymbolIndex >= 0 and captureGlobalSymbolIndex < (context.symbols -> len)) -> if {
-                (captureSymbolNode.kind == 17 or captureSymbolNode.kind == 10) -> if {
-                    captureBindingBySymbol![captureGlobalSymbolIndex] => capturePreviousBindingByIr![captureSymbolNodeIndex!]
-                    captureSymbolNodeIndex! => captureBindingBySymbol![captureGlobalSymbolIndex]
-                }
-                captureSymbolNode.kind == 0 -> if {
-                    captureSymbolNodeIndex! => captureFunctionBySymbol![captureGlobalSymbolIndex]
-                }
-            }
-        }
-        captureSymbolNodeIndex! + 1 => captureSymbolNodeIndex!
-    }
-    [Int; ~] => functionCaptureCacheOffsets!
-    [Int; ~] => functionCaptureCacheCounts!
-    [Int; ~] => functionCaptureCacheValues!
-    0 => functionCaptureCacheInit!
-    functionCaptureCacheInit! < (context.ir -> len) -> while {
-        functionCaptureCacheOffsets! -> push(-1)
-        functionCaptureCacheCounts! -> push(0)
-        functionCaptureCacheInit! + 1 => functionCaptureCacheInit!
-    }
-    0 => functionCaptureCacheFunctionIndex!
-    functionCaptureCacheFunctionIndex! < (context.ir -> len) -> while {
-        context.ir[functionCaptureCacheFunctionIndex!].kind == 0 -> if {
-            functionCaptureCacheFunctionIndex! -> computeFunctionCaptures => computedCaptures!
-            functionCaptureCacheValues! -> len => computedCaptureStart
-            0 => computedCaptureIndex!
-            computedCaptureIndex! < (computedCaptures! -> len) -> while {
-                functionCaptureCacheValues! -> push(computedCaptures![computedCaptureIndex!])
-                computedCaptureIndex! + 1 => computedCaptureIndex!
-            }
-            computedCaptureStart => functionCaptureCacheOffsets![functionCaptureCacheFunctionIndex!]
-            computedCaptureIndex! => functionCaptureCacheCounts![functionCaptureCacheFunctionIndex!]
-        }
-        functionCaptureCacheFunctionIndex! + 1 => functionCaptureCacheFunctionIndex!
-    }
-    false => usesComputePool!
-    0 => computePoolSearch!
-    computePoolSearch! < (context.ir -> len) -> while {
-        computePoolSearch! -> parallelUsesComputePool -> if { true => usesComputePool! }
-        computePoolSearch! + 1 => computePoolSearch!
-    }
-    usesComputePool! -> if { emitWindowsComputeRuntime }
-    -1 => intrinsicRuntimeModule!
-    0 => intrinsicRuntimeSearch!
-    intrinsicRuntimeSearch! < (context.modules -> len) -> while {
-        context.modules[intrinsicRuntimeSearch!] => intrinsicModuleIdentity
-        intrinsicModuleIdentity.pathHash == UInt64(12254170256457402476) -> if { intrinsicModuleIdentity.sourceIndex => intrinsicRuntimeModule! }
-        intrinsicRuntimeSearch! + 1 => intrinsicRuntimeSearch!
-    }
-    false => usesSourceText!
-    0 => sourceTextTypeSearch!
-    sourceTextTypeSearch! < (context.ir -> len) -> while {
-        context.ir[sourceTextTypeSearch!] -> isSourceTextType -> if { true => usesSourceText! }
-        sourceTextTypeSearch! + 1 => sourceTextTypeSearch!
-    }
-    usesSourceText! -> if { "%sl.source_text = type { ptr, i64, ptr, i64 }" -> println }
-    0 => structTypeIndex!
-    structTypeIndex! < (context.types -> len) -> while {
-        context.types[structTypeIndex!] => structType
-        (structType.status == 0 and structType.kind == 1 and (structType.origin == 0 or structType.origin == 2)) -> if {
-            "%sl.struct.m$(structType.module)_s$(structType.symbol) = type { " -> print
-            true => firstField!
-            0 => canonicalFieldIndex!
-            canonicalFieldIndex! < (context.fields -> len) -> while {
-                context.fields[canonicalFieldIndex!] => canonicalField
-                (canonicalField.status == 0 and canonicalField.ownerType == structTypeIndex!) -> if {
-                    not firstField! -> if { ", " -> print }
-                    canonicalField.fieldType -> writeSemanticTypeId
-                    false => firstField!
-                }
-                canonicalFieldIndex! + 1 => canonicalFieldIndex!
-            }
-            " }" -> println
-        }
-        structTypeIndex! + 1 => structTypeIndex!
-    }
-    false => usesDynamicArray!
-    false => usesArrayPush!
-    0 => arrayTypeSearch!
-    arrayTypeSearch! < (context.ir -> len) -> while {
-        context.ir[arrayTypeSearch!] -> isDynamicArrayType -> if { true => usesDynamicArray! }
-        context.ir[arrayTypeSearch!].opcode == -204 -> if { true => usesArrayPush! }
-        arrayTypeSearch! + 1 => arrayTypeSearch!
-    }
-    0 => arrayCompositeSearch!
-    arrayCompositeSearch! < (context.composite -> len) -> while {
-        context.composite[arrayCompositeSearch!].kind == 3 -> if { true => usesDynamicArray! }
-        arrayCompositeSearch! + 1 => arrayCompositeSearch!
-    }
-    usesDynamicArray! -> if {
-        "%sl.array.i32 = type { ptr, i64, i64 }" -> println
-    }
-    (usesDynamicArray! or usesSourceText! or intrinsicRuntimeModule! >= 0) -> if {
-        "declare ptr @malloc(i64)" -> println
-        usesArrayPush! -> if { "declare ptr @realloc(ptr, i64)" -> println }
-        "declare void @free(ptr)" -> println
-    }
-    false => usesDictionary!
-    0 => dictionaryTypeSearch!
-    dictionaryTypeSearch! < (context.ir -> len) -> while {
-        context.ir[dictionaryTypeSearch!] -> isDictionaryType -> if { true => usesDictionary! }
-        dictionaryTypeSearch! + 1 => dictionaryTypeSearch!
-    }
-    0 => dictionaryCompositeSearch!
-    dictionaryCompositeSearch! < (context.composite -> len) -> while {
-        context.composite[dictionaryCompositeSearch!].kind == 5 -> if { true => usesDictionary! }
-        dictionaryCompositeSearch! + 1 => dictionaryCompositeSearch!
-    }
-    usesDictionary! -> if {
-        "%sl.dict = type { ptr, ptr, i64, i64 }" -> println
-        intrinsicRuntimeModule! < 0 -> if { "declare void @llvm.trap()" -> println }
-        (not usesDynamicArray! and intrinsicRuntimeModule! < 0) -> if {
-            "declare ptr @malloc(i64)" -> println
-            "declare void @free(ptr)" -> println
-        }
-    }
-    false => usesText!
-    0 => textTypeSearch!
-    textTypeSearch! < (context.ir -> len) -> while {
-        context.ir[textTypeSearch!].typeSymbol == 1 -> if { true => usesText! }
-        textTypeSearch! + 1 => textTypeSearch!
-    }
-    usesSourceText! -> if { true => usesText! }
-    usesText! -> if {
-        "%sl.text = type { ptr, i64 }" -> println
-        0 => textGlobalIndex!
-        textGlobalIndex! < (context.ir -> len) -> while {
-            context.ir[textGlobalIndex!] => textConstant
-            textConstant.kind == 2 -> if {
-                textConstant -> sourceToken => textToken
-                TextLiteralRequest { sourceModule: textConstant.sourceModule, token: textToken } => textLiteralRequest
-                textLiteralRequest -> textLiteralLength => textLength
-                "@sl_str_$(textGlobalIndex!) = private unnamed_addr constant [$textLength x i8] " -> print
-                textLiteralRequest -> emitTextLiteralConstant
-            }
-            textGlobalIndex! + 1 => textGlobalIndex!
-        }
-    }
-    false => usesArguments!
-    0 => argumentsTypeSearch!
-    argumentsTypeSearch! < (context.ir -> len) -> while {
-        (context.ir[argumentsTypeSearch!].typeOrigin == 1 and context.ir[argumentsTypeSearch!].typeSymbol == 16) -> if { true => usesArguments! }
-        argumentsTypeSearch! + 1 => argumentsTypeSearch!
-    }
-    usesArguments! -> if {
-        "@sl_argc = internal global i64 0" -> println
-        "@sl_argv = internal global ptr null" -> println
-        "define i64 @sl_argument_count() {" -> println
-        "entry:" -> println
-        "  %count = load i64, ptr @sl_argc, align 8" -> println
-        "  ret i64 %count" -> println
-        "}" -> println
-        "define %sl.text @sl_argument(i64 %index) {" -> println
-        "entry:" -> println
-        "  %argv = load ptr, ptr @sl_argv, align 8" -> println
-        "  %slot = getelementptr ptr, ptr %argv, i64 %index" -> println
-        "  %value = load ptr, ptr %slot, align 8" -> println
-        "  br label %length_loop" -> println
-        "length_loop:" -> println
-        "  %length = phi i64 [ 0, %entry ], [ %next, %length_body ]" -> println
-        "  %byte_ptr = getelementptr i8, ptr %value, i64 %length" -> println
-        "  %byte = load i8, ptr %byte_ptr, align 1" -> println
-        "  %done = icmp eq i8 %byte, 0" -> println
-        "  br i1 %done, label %length_done, label %length_body" -> println
-        "length_body:" -> println
-        "  %next = add i64 %length, 1" -> println
-        "  br label %length_loop" -> println
-        "length_done:" -> println
-        "  %text_ptr = insertvalue %sl.text poison, ptr %value, 0" -> println
-        "  %text = insertvalue %sl.text %text_ptr, i64 %length, 1" -> println
-        "  ret %sl.text %text" -> println
-        "}" -> println
-    }
-    [Int; ~] => declaredExternalModules!
-    [Int; ~] => declaredExternalSymbols!
-    0 => externalCallIndex!
-    externalCallIndex! < (context.ir -> len) -> while {
-        context.ir[externalCallIndex!] => externalCall
-        (externalCall.kind == 6 and externalCall.opcode != -205 and externalCall.targetModule >= 0 and externalCall.symbol >= 0) -> if {
-            false => externalDefined!
-            externalCall.targetModule < (context.ranges -> len) -> if {
-                context.ranges[externalCall.targetModule].symbolStart + externalCall.symbol => externalGlobalSymbol
-                (externalGlobalSymbol >= 0 and externalGlobalSymbol < (captureFunctionBySymbol! -> len) and captureFunctionBySymbol![externalGlobalSymbol] >= 0) -> if { true => externalDefined! }
-            }
-            false => externalDeclared!
-            0 => externalDeclaredSearch!
-            externalDeclaredSearch! < (declaredExternalModules! -> len) -> while {
-                (declaredExternalModules![externalDeclaredSearch!] == externalCall.targetModule and declaredExternalSymbols![externalDeclaredSearch!] == externalCall.symbol) -> if { true => externalDeclared! }
-                externalDeclaredSearch! + 1 => externalDeclaredSearch!
-            }
-            (externalCall.targetModule != intrinsicRuntimeModule! and not externalDefined! and not externalDeclared!) -> if {
-                "declare " -> print
-                externalCall -> writeIrType
-                " @sl_m$(externalCall.targetModule)_s$(externalCall.symbol)(" -> print
-                externalCall.operand0 >= 0 -> if { context.ir[externalCall.operand0] -> writeIrType }
-                ")" -> println
-                declaredExternalModules! -> push(externalCall.targetModule)
-                declaredExternalSymbols! -> push(externalCall.symbol)
-            }
-        }
-        externalCallIndex! + 1 => externalCallIndex!
-    }
-    0 => parallelCallbackIndex!
-    parallelCallbackIndex! < (context.ir -> len) -> while {
-        parallelCallbackIndex! -> parallelUsesComputePool -> if {
-            context.ir[parallelCallbackIndex!] => parallelExpression
-            context.ir[parallelExpression.operand0] => parallelSource
-            context.ir[parallelExpression.operand1] => parallelBodyCall
-            CallEnvironmentRequest { callerIndex: -1, callIndex: parallelCallbackIndex!, targetModule: parallelBodyCall.targetModule, targetSymbol: parallelBodyCall.symbol, hasArgument: true } -> targetFunctionIndex => parallelTargetFunction
-            parallelTargetFunction -> functionCaptures => parallelCallbackCaptures!
-            parallelCallbackCaptures! -> len => parallelCallbackCaptureCount
-            "define internal void @smalllang_parallel_callback_$(parallelCallbackIndex!)(ptr %group, i64 %index) {" -> println
-            "entry:" -> println
-            "  %input_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 1" -> println
-            "  %input = load ptr, ptr %input_slot, align 8" -> println
-            "  %input_address = getelementptr " -> print
-            parallelSource -> writeArrayElementType
-            ", ptr %input, i64 %index" -> println
-            "  %item = load " -> print
-            parallelSource -> writeArrayElementType
-            ", ptr %input_address, align " -> print
-            parallelSource -> arrayElementAlign -> writeDecimalLine
-            parallelCallbackCaptureCount > 0 -> if {
-                "  %capture_environment_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 4" -> println
-                "  %capture_environment = load ptr, ptr %capture_environment_slot, align 8" -> println
-                0 => parallelCallbackCaptureIndex!
-                parallelCallbackCaptureIndex! < parallelCallbackCaptureCount -> while {
-                    "  %capture_address_$(parallelCallbackCaptureIndex!) = getelementptr [$(parallelCallbackCaptureCount) x ptr], ptr %capture_environment, i32 0, i32 $(parallelCallbackCaptureIndex!)" -> println
-                    "  %capture_value_$(parallelCallbackCaptureIndex!) = load ptr, ptr %capture_address_$(parallelCallbackCaptureIndex!), align 8" -> println
-                    parallelCallbackCaptureIndex! + 1 => parallelCallbackCaptureIndex!
-                }
-            }
-            "  %mapped = call " -> print
-            parallelBodyCall -> writeIrType
-            " @sl_m$(parallelBodyCall.targetModule)_s$(parallelBodyCall.symbol)(" -> print
-            0 => parallelCallbackArgumentIndex!
-            parallelCallbackArgumentIndex! < parallelCallbackCaptureCount -> while {
-                "ptr %capture_value_$(parallelCallbackArgumentIndex!), " -> print
-                parallelCallbackArgumentIndex! + 1 => parallelCallbackArgumentIndex!
-            }
-            parallelSource -> writeArrayElementType
-            " %item)" -> println
-            "  %output_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 2" -> println
-            "  %output = load ptr, ptr %output_slot, align 8" -> println
-            "  %output_address = getelementptr " -> print
-            parallelExpression -> writeArrayElementType
-            ", ptr %output, i64 %index" -> println
-            "  store " -> print
-            parallelExpression -> writeArrayElementType
-            " %mapped, ptr %output_address, align " -> print
-            parallelExpression -> arrayElementAlign -> writeDecimalLine
-            "  ret void" -> println
-            "}" -> println
-        }
-        parallelCallbackIndex! + 1 => parallelCallbackIndex!
-    }
-    0 => functionIndex!
-    functionIndex! < (context.ir -> len) -> while {
+    emitFunction requestedFunctionIndex: Int -> Int uses Console {
+        requestedFunctionIndex => functionIndex!
         context.ir[functionIndex!] => function
-        function.kind == 0 -> if {
             functionIndex! + 1 => functionEnd!
             (functionEnd! < (context.ir -> len) and context.ir[functionEnd!].kind != 0 and context.ir[functionEnd!].kind != 11) -> while {
                 functionEnd! + 1 => functionEnd!
@@ -5245,6 +4959,11 @@ emitCore context: move EmitContext -> Unit uses Console {
                         } else {
                             "  store ptr null, ptr %v$(expressionIndex!)_capture_slot, align 8" -> println
                         }
+                        "  %v$(expressionIndex!)_sink_bytes = mul i64 %v$(expressionIndex!)_length, 24" -> println
+                        "  %v$(expressionIndex!)_sinks = call ptr @malloc(i64 %v$(expressionIndex!)_sink_bytes)" -> println
+                        "  call void @llvm.memset.p0.i64(ptr %v$(expressionIndex!)_sinks, i8 0, i64 %v$(expressionIndex!)_sink_bytes, i1 false)" -> println
+                        "  %v$(expressionIndex!)_sinks_slot = getelementptr %smalllang.compute_group, ptr %v$(expressionIndex!)_group, i32 0, i32 5" -> println
+                        "  store ptr %v$(expressionIndex!)_sinks, ptr %v$(expressionIndex!)_sinks_slot, align 8" -> println
                         "  call void @smalllang_compute_execute(ptr %v$(expressionIndex!)_group)" -> println
                     } else {
                     "  %v$(expressionIndex!)_index_slot = alloca i64, align 8" -> println
@@ -6045,8 +5764,315 @@ emitCore context: move EmitContext -> Unit uses Console {
             }
             }
             "}" -> println
-            functionEnd! => functionIndex!
-        } else {
+            requestedFunctionIndex
+    }
+    [Int; ~] => functionEndCache!
+    0 => structuralCacheInit!
+    structuralCacheInit! < (context.ir -> len) -> while {
+        functionEndCache! -> push(-1)
+        structuralCacheInit! + 1 => structuralCacheInit!
+    }
+    0 => structuralFunctionIndex!
+    structuralFunctionIndex! < (context.ir -> len) -> while {
+        (context.ir[structuralFunctionIndex!].kind == 0 or context.ir[structuralFunctionIndex!].kind == 11) -> if {
+            structuralFunctionIndex! -> computeFunctionEnd => structuralFunctionEnd
+            structuralFunctionEnd => functionEndCache![structuralFunctionIndex!]
+        }
+        structuralFunctionIndex! + 1 => structuralFunctionIndex!
+    }
+    [Int; ~] => captureBindingBySymbol!
+    [Int; ~] => captureFunctionBySymbol!
+    [Int; ~] => capturePreviousBindingByIr!
+    0 => captureSymbolInit!
+    captureSymbolInit! < (context.symbols -> len) -> while {
+        captureBindingBySymbol! -> push(-1)
+        captureFunctionBySymbol! -> push(-1)
+        captureSymbolInit! + 1 => captureSymbolInit!
+    }
+    0 => captureBindingLinkInit!
+    captureBindingLinkInit! < (context.ir -> len) -> while {
+        capturePreviousBindingByIr! -> push(-1)
+        captureBindingLinkInit! + 1 => captureBindingLinkInit!
+    }
+    0 => captureSymbolNodeIndex!
+    captureSymbolNodeIndex! < (context.ir -> len) -> while {
+        context.ir[captureSymbolNodeIndex!] => captureSymbolNode
+        (captureSymbolNode.sourceModule >= 0 and captureSymbolNode.sourceModule < (context.ranges -> len) and captureSymbolNode.symbol >= 0) -> if {
+            context.ranges[captureSymbolNode.sourceModule].symbolStart + captureSymbolNode.symbol => captureGlobalSymbolIndex
+            (captureGlobalSymbolIndex >= 0 and captureGlobalSymbolIndex < (context.symbols -> len)) -> if {
+                (captureSymbolNode.kind == 17 or captureSymbolNode.kind == 10) -> if {
+                    captureBindingBySymbol![captureGlobalSymbolIndex] => capturePreviousBindingByIr![captureSymbolNodeIndex!]
+                    captureSymbolNodeIndex! => captureBindingBySymbol![captureGlobalSymbolIndex]
+                }
+                captureSymbolNode.kind == 0 -> if {
+                    captureSymbolNodeIndex! => captureFunctionBySymbol![captureGlobalSymbolIndex]
+                }
+            }
+        }
+        captureSymbolNodeIndex! + 1 => captureSymbolNodeIndex!
+    }
+    [Int; ~] => functionCaptureCacheOffsets!
+    [Int; ~] => functionCaptureCacheCounts!
+    [Int; ~] => functionCaptureCacheValues!
+    0 => functionCaptureCacheInit!
+    functionCaptureCacheInit! < (context.ir -> len) -> while {
+        functionCaptureCacheOffsets! -> push(-1)
+        functionCaptureCacheCounts! -> push(0)
+        functionCaptureCacheInit! + 1 => functionCaptureCacheInit!
+    }
+    0 => functionCaptureCacheFunctionIndex!
+    functionCaptureCacheFunctionIndex! < (context.ir -> len) -> while {
+        context.ir[functionCaptureCacheFunctionIndex!].kind == 0 -> if {
+            functionCaptureCacheFunctionIndex! -> computeFunctionCaptures => computedCaptures!
+            functionCaptureCacheValues! -> len => computedCaptureStart
+            0 => computedCaptureIndex!
+            computedCaptureIndex! < (computedCaptures! -> len) -> while {
+                functionCaptureCacheValues! -> push(computedCaptures![computedCaptureIndex!])
+                computedCaptureIndex! + 1 => computedCaptureIndex!
+            }
+            computedCaptureStart => functionCaptureCacheOffsets![functionCaptureCacheFunctionIndex!]
+            computedCaptureIndex! => functionCaptureCacheCounts![functionCaptureCacheFunctionIndex!]
+        }
+        functionCaptureCacheFunctionIndex! + 1 => functionCaptureCacheFunctionIndex!
+    }
+    false => usesComputePool!
+    0 => computePoolSearch!
+    computePoolSearch! < (context.ir -> len) -> while {
+        computePoolSearch! -> parallelUsesComputePool -> if { true => usesComputePool! }
+        computePoolSearch! + 1 => computePoolSearch!
+    }
+    usesComputePool! -> if { emitWindowsComputeRuntime }
+    -1 => intrinsicRuntimeModule!
+    0 => intrinsicRuntimeSearch!
+    intrinsicRuntimeSearch! < (context.modules -> len) -> while {
+        context.modules[intrinsicRuntimeSearch!] => intrinsicModuleIdentity
+        intrinsicModuleIdentity.pathHash == UInt64(12254170256457402476) -> if { intrinsicModuleIdentity.sourceIndex => intrinsicRuntimeModule! }
+        intrinsicRuntimeSearch! + 1 => intrinsicRuntimeSearch!
+    }
+    false => usesSourceText!
+    0 => sourceTextTypeSearch!
+    sourceTextTypeSearch! < (context.ir -> len) -> while {
+        context.ir[sourceTextTypeSearch!] -> isSourceTextType -> if { true => usesSourceText! }
+        sourceTextTypeSearch! + 1 => sourceTextTypeSearch!
+    }
+    usesSourceText! -> if { "%sl.source_text = type { ptr, i64, ptr, i64 }" -> println }
+    0 => structTypeIndex!
+    structTypeIndex! < (context.types -> len) -> while {
+        context.types[structTypeIndex!] => structType
+        (structType.status == 0 and structType.kind == 1 and (structType.origin == 0 or structType.origin == 2)) -> if {
+            "%sl.struct.m$(structType.module)_s$(structType.symbol) = type { " -> print
+            true => firstField!
+            0 => canonicalFieldIndex!
+            canonicalFieldIndex! < (context.fields -> len) -> while {
+                context.fields[canonicalFieldIndex!] => canonicalField
+                (canonicalField.status == 0 and canonicalField.ownerType == structTypeIndex!) -> if {
+                    not firstField! -> if { ", " -> print }
+                    canonicalField.fieldType -> writeSemanticTypeId
+                    false => firstField!
+                }
+                canonicalFieldIndex! + 1 => canonicalFieldIndex!
+            }
+            " }" -> println
+        }
+        structTypeIndex! + 1 => structTypeIndex!
+    }
+    false => usesDynamicArray!
+    false => usesArrayPush!
+    0 => arrayTypeSearch!
+    arrayTypeSearch! < (context.ir -> len) -> while {
+        context.ir[arrayTypeSearch!] -> isDynamicArrayType -> if { true => usesDynamicArray! }
+        context.ir[arrayTypeSearch!].opcode == -204 -> if { true => usesArrayPush! }
+        arrayTypeSearch! + 1 => arrayTypeSearch!
+    }
+    0 => arrayCompositeSearch!
+    arrayCompositeSearch! < (context.composite -> len) -> while {
+        context.composite[arrayCompositeSearch!].kind == 3 -> if { true => usesDynamicArray! }
+        arrayCompositeSearch! + 1 => arrayCompositeSearch!
+    }
+    usesDynamicArray! -> if {
+        "%sl.array.i32 = type { ptr, i64, i64 }" -> println
+    }
+    (usesDynamicArray! or usesSourceText! or intrinsicRuntimeModule! >= 0) -> if {
+        "declare ptr @malloc(i64)" -> println
+        usesArrayPush! -> if { "declare ptr @realloc(ptr, i64)" -> println }
+        "declare void @free(ptr)" -> println
+    }
+    false => usesDictionary!
+    0 => dictionaryTypeSearch!
+    dictionaryTypeSearch! < (context.ir -> len) -> while {
+        context.ir[dictionaryTypeSearch!] -> isDictionaryType -> if { true => usesDictionary! }
+        dictionaryTypeSearch! + 1 => dictionaryTypeSearch!
+    }
+    0 => dictionaryCompositeSearch!
+    dictionaryCompositeSearch! < (context.composite -> len) -> while {
+        context.composite[dictionaryCompositeSearch!].kind == 5 -> if { true => usesDictionary! }
+        dictionaryCompositeSearch! + 1 => dictionaryCompositeSearch!
+    }
+    usesDictionary! -> if {
+        "%sl.dict = type { ptr, ptr, i64, i64 }" -> println
+        intrinsicRuntimeModule! < 0 -> if { "declare void @llvm.trap()" -> println }
+        (not usesDynamicArray! and intrinsicRuntimeModule! < 0) -> if {
+            "declare ptr @malloc(i64)" -> println
+            "declare void @free(ptr)" -> println
+        }
+    }
+    false => usesText!
+    0 => textTypeSearch!
+    textTypeSearch! < (context.ir -> len) -> while {
+        context.ir[textTypeSearch!].typeSymbol == 1 -> if { true => usesText! }
+        textTypeSearch! + 1 => textTypeSearch!
+    }
+    usesSourceText! -> if { true => usesText! }
+    usesText! -> if {
+        "%sl.text = type { ptr, i64 }" -> println
+        0 => textGlobalIndex!
+        textGlobalIndex! < (context.ir -> len) -> while {
+            context.ir[textGlobalIndex!] => textConstant
+            textConstant.kind == 2 -> if {
+                textConstant -> sourceToken => textToken
+                TextLiteralRequest { sourceModule: textConstant.sourceModule, token: textToken } => textLiteralRequest
+                textLiteralRequest -> textLiteralLength => textLength
+                "@sl_str_$(textGlobalIndex!) = private unnamed_addr constant [$textLength x i8] " -> print
+                textLiteralRequest -> emitTextLiteralConstant
+            }
+            textGlobalIndex! + 1 => textGlobalIndex!
+        }
+    }
+    false => usesArguments!
+    0 => argumentsTypeSearch!
+    argumentsTypeSearch! < (context.ir -> len) -> while {
+        (context.ir[argumentsTypeSearch!].typeOrigin == 1 and context.ir[argumentsTypeSearch!].typeSymbol == 16) -> if { true => usesArguments! }
+        argumentsTypeSearch! + 1 => argumentsTypeSearch!
+    }
+    usesArguments! -> if {
+        "@sl_argc = internal global i64 0" -> println
+        "@sl_argv = internal global ptr null" -> println
+        "define i64 @sl_argument_count() {" -> println
+        "entry:" -> println
+        "  %count = load i64, ptr @sl_argc, align 8" -> println
+        "  ret i64 %count" -> println
+        "}" -> println
+        "define %sl.text @sl_argument(i64 %index) {" -> println
+        "entry:" -> println
+        "  %argv = load ptr, ptr @sl_argv, align 8" -> println
+        "  %slot = getelementptr ptr, ptr %argv, i64 %index" -> println
+        "  %value = load ptr, ptr %slot, align 8" -> println
+        "  br label %length_loop" -> println
+        "length_loop:" -> println
+        "  %length = phi i64 [ 0, %entry ], [ %next, %length_body ]" -> println
+        "  %byte_ptr = getelementptr i8, ptr %value, i64 %length" -> println
+        "  %byte = load i8, ptr %byte_ptr, align 1" -> println
+        "  %done = icmp eq i8 %byte, 0" -> println
+        "  br i1 %done, label %length_done, label %length_body" -> println
+        "length_body:" -> println
+        "  %next = add i64 %length, 1" -> println
+        "  br label %length_loop" -> println
+        "length_done:" -> println
+        "  %text_ptr = insertvalue %sl.text poison, ptr %value, 0" -> println
+        "  %text = insertvalue %sl.text %text_ptr, i64 %length, 1" -> println
+        "  ret %sl.text %text" -> println
+        "}" -> println
+    }
+    [Int; ~] => declaredExternalModules!
+    [Int; ~] => declaredExternalSymbols!
+    0 => externalCallIndex!
+    externalCallIndex! < (context.ir -> len) -> while {
+        context.ir[externalCallIndex!] => externalCall
+        (externalCall.kind == 6 and externalCall.opcode != -205 and externalCall.targetModule >= 0 and externalCall.symbol >= 0) -> if {
+            false => externalDefined!
+            externalCall.targetModule < (context.ranges -> len) -> if {
+                context.ranges[externalCall.targetModule].symbolStart + externalCall.symbol => externalGlobalSymbol
+                (externalGlobalSymbol >= 0 and externalGlobalSymbol < (captureFunctionBySymbol! -> len) and captureFunctionBySymbol![externalGlobalSymbol] >= 0) -> if { true => externalDefined! }
+            }
+            false => externalDeclared!
+            0 => externalDeclaredSearch!
+            externalDeclaredSearch! < (declaredExternalModules! -> len) -> while {
+                (declaredExternalModules![externalDeclaredSearch!] == externalCall.targetModule and declaredExternalSymbols![externalDeclaredSearch!] == externalCall.symbol) -> if { true => externalDeclared! }
+                externalDeclaredSearch! + 1 => externalDeclaredSearch!
+            }
+            (externalCall.targetModule != intrinsicRuntimeModule! and not externalDefined! and not externalDeclared!) -> if {
+                "declare " -> print
+                externalCall -> writeIrType
+                " @sl_m$(externalCall.targetModule)_s$(externalCall.symbol)(" -> print
+                externalCall.operand0 >= 0 -> if { context.ir[externalCall.operand0] -> writeIrType }
+                ")" -> println
+                declaredExternalModules! -> push(externalCall.targetModule)
+                declaredExternalSymbols! -> push(externalCall.symbol)
+            }
+        }
+        externalCallIndex! + 1 => externalCallIndex!
+    }
+    0 => parallelCallbackIndex!
+    parallelCallbackIndex! < (context.ir -> len) -> while {
+        parallelCallbackIndex! -> parallelUsesComputePool -> if {
+            context.ir[parallelCallbackIndex!] => parallelExpression
+            context.ir[parallelExpression.operand0] => parallelSource
+            context.ir[parallelExpression.operand1] => parallelBodyCall
+            CallEnvironmentRequest { callerIndex: -1, callIndex: parallelCallbackIndex!, targetModule: parallelBodyCall.targetModule, targetSymbol: parallelBodyCall.symbol, hasArgument: true } -> targetFunctionIndex => parallelTargetFunction
+            parallelTargetFunction -> functionCaptures => parallelCallbackCaptures!
+            parallelCallbackCaptures! -> len => parallelCallbackCaptureCount
+            "define internal void @smalllang_parallel_callback_$(parallelCallbackIndex!)(ptr %group, i64 %index) {" -> println
+            "entry:" -> println
+            "  %input_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 1" -> println
+            "  %input = load ptr, ptr %input_slot, align 8" -> println
+            "  %input_address = getelementptr " -> print
+            parallelSource -> writeArrayElementType
+            ", ptr %input, i64 %index" -> println
+            "  %item = load " -> print
+            parallelSource -> writeArrayElementType
+            ", ptr %input_address, align " -> print
+            parallelSource -> arrayElementAlign -> writeDecimalLine
+            parallelCallbackCaptureCount > 0 -> if {
+                "  %capture_environment_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 4" -> println
+                "  %capture_environment = load ptr, ptr %capture_environment_slot, align 8" -> println
+                0 => parallelCallbackCaptureIndex!
+                parallelCallbackCaptureIndex! < parallelCallbackCaptureCount -> while {
+                    "  %capture_address_$(parallelCallbackCaptureIndex!) = getelementptr [$(parallelCallbackCaptureCount) x ptr], ptr %capture_environment, i32 0, i32 $(parallelCallbackCaptureIndex!)" -> println
+                    "  %capture_value_$(parallelCallbackCaptureIndex!) = load ptr, ptr %capture_address_$(parallelCallbackCaptureIndex!), align 8" -> println
+                    parallelCallbackCaptureIndex! + 1 => parallelCallbackCaptureIndex!
+                }
+            }
+            "  %mapped = call " -> print
+            parallelBodyCall -> writeIrType
+            " @sl_m$(parallelBodyCall.targetModule)_s$(parallelBodyCall.symbol)(" -> print
+            0 => parallelCallbackArgumentIndex!
+            parallelCallbackArgumentIndex! < parallelCallbackCaptureCount -> while {
+                "ptr %capture_value_$(parallelCallbackArgumentIndex!), " -> print
+                parallelCallbackArgumentIndex! + 1 => parallelCallbackArgumentIndex!
+            }
+            parallelSource -> writeArrayElementType
+            " %item)" -> println
+            "  %output_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 2" -> println
+            "  %output = load ptr, ptr %output_slot, align 8" -> println
+            "  %output_address = getelementptr " -> print
+            parallelExpression -> writeArrayElementType
+            ", ptr %output, i64 %index" -> println
+            "  store " -> print
+            parallelExpression -> writeArrayElementType
+            " %mapped, ptr %output_address, align " -> print
+            parallelExpression -> arrayElementAlign -> writeDecimalLine
+            "  ret void" -> println
+            "}" -> println
+        }
+        parallelCallbackIndex! + 1 => parallelCallbackIndex!
+    }
+    [Int; ~] => functionIndicesBeforeEntry!
+    [Int; ~] => functionIndicesAfterEntry!
+    false => functionEntrySeen!
+    0 => functionIndexCollect!
+    functionIndexCollect! < (context.ir -> len) -> while {
+        context.ir[functionIndexCollect!].kind == 11 -> if { true => functionEntrySeen! }
+        context.ir[functionIndexCollect!].kind == 0 -> if {
+            functionEntrySeen! -> if { functionIndicesAfterEntry! -> push(functionIndexCollect!) } else { functionIndicesBeforeEntry! -> push(functionIndexCollect!) }
+        }
+        functionIndexCollect! + 1 => functionIndexCollect!
+    }
+    functionIndicesBeforeEntry! -> parallel functionEmitIndex {
+        functionEmitIndex -> emitFunction
+    } => functionEmissionStatusesBeforeEntry!
+    0 => functionIndex!
+    functionIndex! < (context.ir -> len) -> while {
+        context.ir[functionIndex!] => function
             function.kind == 11 -> if {
                 functionIndex! + 1 => entryEnd!
                 (entryEnd! < (context.ir -> len) and context.ir[entryEnd!].kind != 0 and context.ir[entryEnd!].kind != 11) -> while { entryEnd! + 1 => entryEnd! }
@@ -6493,6 +6519,11 @@ emitCore context: move EmitContext -> Unit uses Console {
                             } else {
                                 "  store ptr null, ptr %v$(entryExpressionIndex!)_capture_slot, align 8" -> println
                             }
+                            "  %v$(entryExpressionIndex!)_sink_bytes = mul i64 %v$(entryExpressionIndex!)_length, 24" -> println
+                            "  %v$(entryExpressionIndex!)_sinks = call ptr @malloc(i64 %v$(entryExpressionIndex!)_sink_bytes)" -> println
+                            "  call void @llvm.memset.p0.i64(ptr %v$(entryExpressionIndex!)_sinks, i8 0, i64 %v$(entryExpressionIndex!)_sink_bytes, i1 false)" -> println
+                            "  %v$(entryExpressionIndex!)_sinks_slot = getelementptr %smalllang.compute_group, ptr %v$(entryExpressionIndex!)_group, i32 0, i32 5" -> println
+                            "  store ptr %v$(entryExpressionIndex!)_sinks, ptr %v$(entryExpressionIndex!)_sinks_slot, align 8" -> println
                             "  call void @smalllang_compute_execute(ptr %v$(entryExpressionIndex!)_group)" -> println
                         } else {
                             "  %v$(entryExpressionIndex!)_index_slot = alloca i64, align 8" -> println
@@ -6970,8 +7001,10 @@ emitCore context: move EmitContext -> Unit uses Console {
             } else {
                 functionIndex! + 1 => functionIndex!
             }
-        }
     }
+    functionIndicesAfterEntry! -> parallel functionEmitIndex {
+        functionEmitIndex -> emitFunction
+    } => functionEmissionStatusesAfterEntry!
 }
 
 usesTextRuntime context: EmitContext -> Bool {
@@ -6979,6 +7012,16 @@ usesTextRuntime context: EmitContext -> Bool {
     0 => nodeIndex!
     nodeIndex! < (context.ir -> len) -> while {
         (context.ir[nodeIndex!].symbol == -101 or context.ir[nodeIndex!].symbol == -102) -> if { true => usesRuntime! }
+        nodeIndex! + 1 => nodeIndex!
+    }
+    usesRuntime!
+}
+
+usesParallelRuntime context: EmitContext -> Bool {
+    false => usesRuntime!
+    0 => nodeIndex!
+    nodeIndex! < (context.ir -> len) -> while {
+        context.ir[nodeIndex!].opcode == -207 -> if { true => usesRuntime! }
         nodeIndex! + 1 => nodeIndex!
     }
     usesRuntime!
@@ -7162,7 +7205,7 @@ emitBoolTextRuntime: -> Unit uses Console {
 
 emitWindowsComputeRuntime: -> Unit uses Console {
     """
-    %smalllang.compute_group = type { ptr, ptr, ptr, i64, ptr }
+    %smalllang.compute_group = type { ptr, ptr, ptr, i64, ptr, ptr }
     @smalllang_compute_semaphore = internal global ptr null
     @smalllang_compute_completion_event = internal global ptr null
     @smalllang_compute_worker_count = internal global i32 0
@@ -7199,10 +7242,16 @@ emitWindowsComputeRuntime: -> Unit uses Console {
     work:
       %callback_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 0
       %callback = load ptr, ptr %callback_slot, align 8
+      %sinks_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 5
+      %sinks = load ptr, ptr %sinks_slot, align 8
+      %sink = getelementptr %smalllang.output_sink, ptr %sinks, i64 %index
+      %tls_index = load i32, ptr @smalllang_output_sink_tls, align 4
+      %tls_set = call i32 @TlsSetValue(i32 %tls_index, ptr %sink)
       %running_before = atomicrmw add ptr @smalllang_compute_running, i32 1 acq_rel
       %running_now = add i32 %running_before, 1
       %peak_before = atomicrmw max ptr @smalllang_compute_peak, i32 %running_now acq_rel
       call void %callback(ptr %group, i64 %index)
+      %tls_clear = call i32 @TlsSetValue(i32 %tls_index, ptr null)
       %running_after = atomicrmw sub ptr @smalllang_compute_running, i32 1 acq_rel
       br label %claim
     complete:
@@ -7225,6 +7274,11 @@ emitWindowsComputeRuntime: -> Unit uses Console {
       %already = icmp sgt i32 %existing, 0
       br i1 %already, label %ready, label %create_sync
     create_sync:
+      %tls_index = call i32 @TlsAlloc()
+      %tls_ok = icmp ne i32 %tls_index, -1
+      br i1 %tls_ok, label %create_semaphore, label %fail
+    create_semaphore:
+      store i32 %tls_index, ptr @smalllang_output_sink_tls, align 4
       %semaphore = call ptr @CreateSemaphoreA(ptr null, i32 0, i32 64, ptr null)
       %semaphore_ok = icmp ne ptr %semaphore, null
       br i1 %semaphore_ok, label %create_event, label %fail
@@ -7272,7 +7326,12 @@ emitWindowsComputeRuntime: -> Unit uses Console {
       %count_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 3
       %count = load i64, ptr %count_slot, align 8
       %empty = icmp eq i64 %count, 0
-      br i1 %empty, label %done, label %publish
+      br i1 %empty, label %cleanup_empty, label %publish
+    cleanup_empty:
+      %empty_sinks_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 5
+      %empty_sinks = load ptr, ptr %empty_sinks_slot, align 8
+      call void @free(ptr %empty_sinks)
+      br label %done
     publish:
       store atomic i64 0, ptr @smalllang_compute_next release, align 8
       store atomic i32 0, ptr @smalllang_compute_peak release, align 4
@@ -7292,6 +7351,30 @@ emitWindowsComputeRuntime: -> Unit uses Console {
       br i1 %all_departed, label %departure_done, label %await_departure
     departure_done:
       store atomic i32 0, ptr @smalllang_compute_barrier_departed release, align 4
+      %sinks_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 5
+      %sinks = load ptr, ptr %sinks_slot, align 8
+      br label %flush_loop
+    flush_loop:
+      %flush_index = phi i64 [ 0, %departure_done ], [ %flush_next, %flush_one_done ]
+      %flush_done = icmp eq i64 %flush_index, %count
+      br i1 %flush_done, label %flush_finish, label %flush_one
+    flush_one:
+      %sink = getelementptr %smalllang.output_sink, ptr %sinks, i64 %flush_index
+      %sink_data_slot = getelementptr %smalllang.output_sink, ptr %sink, i32 0, i32 0
+      %sink_length_slot = getelementptr %smalllang.output_sink, ptr %sink, i32 0, i32 1
+      %sink_data = load ptr, ptr %sink_data_slot, align 8
+      %sink_length = load i64, ptr %sink_length_slot, align 8
+      %has_sink_data = icmp ne ptr %sink_data, null
+      br i1 %has_sink_data, label %flush_write, label %flush_one_done
+    flush_write:
+      call void @sl_runtime_append_stdout_direct(ptr %sink_data, i64 %sink_length)
+      call void @free(ptr %sink_data)
+      br label %flush_one_done
+    flush_one_done:
+      %flush_next = add i64 %flush_index, 1
+      br label %flush_loop
+    flush_finish:
+      call void @free(ptr %sinks)
       store atomic ptr null, ptr @smalllang_compute_group_current release, align 8
       br label %done
     failed:
@@ -7302,7 +7385,124 @@ emitWindowsComputeRuntime: -> Unit uses Console {
     """ -> println
 }
 
-emitWindowsTextRuntime: -> Unit uses Console {
+emitWindowsTextRuntime capturesParallelOutput: Bool -> Unit uses Console {
+    capturesParallelOutput -> if {
+    """
+    %smalllang.output_sink = type { ptr, i64, i64 }
+    @sl_runtime_newline = private constant [1 x i8] c"\0A"
+    @sl_runtime_stdout_buffer = private global [1048576 x i8] zeroinitializer
+    @sl_runtime_stdout_count = private global i64 0
+    @sl_runtime_stdout_written = private global i32 0
+    @smalllang_output_sink_tls = internal global i32 -1
+    declare ptr @GetStdHandle(i32)
+    declare i32 @WriteFile(ptr, ptr, i32, ptr, ptr)
+    declare i32 @TlsAlloc()
+    declare i32 @TlsSetValue(i32, ptr)
+    declare ptr @TlsGetValue(i32)
+    declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1 immarg)
+    declare void @llvm.memset.p0.i64(ptr, i8, i64, i1 immarg)
+    define internal void @sl_runtime_flush_stdout() {
+    entry:
+      %count = load i64, ptr @sl_runtime_stdout_count, align 8
+      %has_data = icmp ugt i64 %count, 0
+      br i1 %has_data, label %write, label %done
+    write:
+      %handle = call ptr @GetStdHandle(i32 -11)
+      %count32 = trunc i64 %count to i32
+      %ok = call i32 @WriteFile(ptr %handle, ptr @sl_runtime_stdout_buffer, i32 %count32, ptr @sl_runtime_stdout_written, ptr null)
+      store i64 0, ptr @sl_runtime_stdout_count, align 8
+      br label %done
+    done:
+      ret void
+    }
+    define internal void @sl_runtime_append_stdout_direct(ptr %data, i64 %len) {
+    entry:
+      %count = load i64, ptr @sl_runtime_stdout_count, align 8
+      %total = add i64 %count, %len
+      %fits = icmp ule i64 %total, 1048576
+      br i1 %fits, label %append, label %flush
+    flush:
+      call void @sl_runtime_flush_stdout()
+      %large = icmp ugt i64 %len, 1048576
+      br i1 %large, label %direct, label %append_empty
+    direct:
+      %handle = call ptr @GetStdHandle(i32 -11)
+      %len32 = trunc i64 %len to i32
+      %ok = call i32 @WriteFile(ptr %handle, ptr %data, i32 %len32, ptr @sl_runtime_stdout_written, ptr null)
+      ret void
+    append_empty:
+      call void @llvm.memcpy.p0.p0.i64(ptr @sl_runtime_stdout_buffer, ptr %data, i64 %len, i1 false)
+      store i64 %len, ptr @sl_runtime_stdout_count, align 8
+      ret void
+    append:
+      %slot = getelementptr i8, ptr @sl_runtime_stdout_buffer, i64 %count
+      call void @llvm.memcpy.p0.p0.i64(ptr %slot, ptr %data, i64 %len, i1 false)
+      store i64 %total, ptr @sl_runtime_stdout_count, align 8
+      ret void
+    }
+    define internal void @smalllang_output_sink_append(ptr %sink, ptr %data, i64 %len) {
+    entry:
+      %data_slot = getelementptr %smalllang.output_sink, ptr %sink, i32 0, i32 0
+      %length_slot = getelementptr %smalllang.output_sink, ptr %sink, i32 0, i32 1
+      %capacity_slot = getelementptr %smalllang.output_sink, ptr %sink, i32 0, i32 2
+      %length = load i64, ptr %length_slot, align 8
+      %capacity = load i64, ptr %capacity_slot, align 8
+      %required = add i64 %length, %len
+      %fits = icmp ule i64 %required, %capacity
+      br i1 %fits, label %append, label %grow
+    grow:
+      %doubled = shl i64 %capacity, 1
+      %minimum = icmp ult i64 %doubled, 256
+      %base_capacity = select i1 %minimum, i64 256, i64 %doubled
+      %enough = icmp uge i64 %base_capacity, %required
+      %new_capacity = select i1 %enough, i64 %base_capacity, i64 %required
+      %new_data = call ptr @malloc(i64 %new_capacity)
+      %old_data = load ptr, ptr %data_slot, align 8
+      %has_old = icmp ne ptr %old_data, null
+      br i1 %has_old, label %copy_old, label %publish
+    copy_old:
+      call void @llvm.memcpy.p0.p0.i64(ptr %new_data, ptr %old_data, i64 %length, i1 false)
+      call void @free(ptr %old_data)
+      br label %publish
+    publish:
+      store ptr %new_data, ptr %data_slot, align 8
+      store i64 %new_capacity, ptr %capacity_slot, align 8
+      br label %append
+    append:
+      %current_data = load ptr, ptr %data_slot, align 8
+      %destination = getelementptr i8, ptr %current_data, i64 %length
+      call void @llvm.memcpy.p0.p0.i64(ptr %destination, ptr %data, i64 %len, i1 false)
+      store i64 %required, ptr %length_slot, align 8
+      ret void
+    }
+    define internal void @sl_runtime_append_stdout(ptr %data, i64 %len) {
+    entry:
+      %tls_index = load i32, ptr @smalllang_output_sink_tls, align 4
+      %tls_valid = icmp ne i32 %tls_index, -1
+      br i1 %tls_valid, label %read_sink, label %direct
+    read_sink:
+      %sink = call ptr @TlsGetValue(i32 %tls_index)
+      %capturing = icmp ne ptr %sink, null
+      br i1 %capturing, label %capture, label %direct
+    capture:
+      call void @smalllang_output_sink_append(ptr %sink, ptr %data, i64 %len)
+      ret void
+    direct:
+      call void @sl_runtime_append_stdout_direct(ptr %data, i64 %len)
+      ret void
+    }
+    define internal void @sl_runtime_print(ptr %data, i64 %len, i1 %newline) {
+    entry:
+      call void @sl_runtime_append_stdout(ptr %data, i64 %len)
+      br i1 %newline, label %write_newline, label %done
+    write_newline:
+      call void @sl_runtime_append_stdout(ptr @sl_runtime_newline, i64 1)
+      br label %done
+    done:
+      ret void
+    }
+    """ -> println
+    } else {
     """
     @sl_runtime_newline = private constant [1 x i8] c"\0A"
     @sl_runtime_stdout_buffer = private global [1048576 x i8] zeroinitializer
@@ -7361,6 +7561,7 @@ emitWindowsTextRuntime: -> Unit uses Console {
       ret void
     }
     """ -> println
+    }
 }
 
 emitLinuxTextRuntime: -> Unit uses Console {
@@ -7413,7 +7614,8 @@ public emit sources: move [Text; ~] -> Unit uses Console {
     target.tripleLine -> println
     PrepareRequest { sources: sources, pointerBitWidth: target.pointerBitWidth, supportsComputePool: true } => prepareRequest!
     prepareRequest! -> prepare => context!
-    context! -> usesTextRuntime -> if { emitWindowsTextRuntime }
+    context! -> usesParallelRuntime => capturesParallelOutput
+    context! -> usesTextRuntime -> if { capturesParallelOutput -> emitWindowsTextRuntime }
     context! -> usesIntInterpolation -> if { emitIntTextRuntime }
     context! -> usesBoolInterpolation -> if { emitBoolTextRuntime }
     context! -> usesSourceTextRuntime => needsSourceTextRuntime

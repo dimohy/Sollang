@@ -1,12 +1,18 @@
 target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
 target triple = "x86_64-pc-windows-msvc"
+%smalllang.output_sink = type { ptr, i64, i64 }
 @sl_runtime_newline = private constant [1 x i8] c"\0A"
 @sl_runtime_stdout_buffer = private global [1048576 x i8] zeroinitializer
 @sl_runtime_stdout_count = private global i64 0
 @sl_runtime_stdout_written = private global i32 0
+@smalllang_output_sink_tls = internal global i32 -1
 declare ptr @GetStdHandle(i32)
 declare i32 @WriteFile(ptr, ptr, i32, ptr, ptr)
+declare i32 @TlsAlloc()
+declare i32 @TlsSetValue(i32, ptr)
+declare ptr @TlsGetValue(i32)
 declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1 immarg)
+declare void @llvm.memset.p0.i64(ptr, i8, i64, i1 immarg)
 define internal void @sl_runtime_flush_stdout() {
 entry:
   %count = load i64, ptr @sl_runtime_stdout_count, align 8
@@ -21,7 +27,7 @@ write:
 done:
   ret void
 }
-define internal void @sl_runtime_append_stdout(ptr %data, i64 %len) {
+define internal void @sl_runtime_append_stdout_direct(ptr %data, i64 %len) {
 entry:
   %count = load i64, ptr @sl_runtime_stdout_count, align 8
   %total = add i64 %count, %len
@@ -46,6 +52,57 @@ append:
   store i64 %total, ptr @sl_runtime_stdout_count, align 8
   ret void
 }
+define internal void @smalllang_output_sink_append(ptr %sink, ptr %data, i64 %len) {
+entry:
+  %data_slot = getelementptr %smalllang.output_sink, ptr %sink, i32 0, i32 0
+  %length_slot = getelementptr %smalllang.output_sink, ptr %sink, i32 0, i32 1
+  %capacity_slot = getelementptr %smalllang.output_sink, ptr %sink, i32 0, i32 2
+  %length = load i64, ptr %length_slot, align 8
+  %capacity = load i64, ptr %capacity_slot, align 8
+  %required = add i64 %length, %len
+  %fits = icmp ule i64 %required, %capacity
+  br i1 %fits, label %append, label %grow
+grow:
+  %doubled = shl i64 %capacity, 1
+  %minimum = icmp ult i64 %doubled, 256
+  %base_capacity = select i1 %minimum, i64 256, i64 %doubled
+  %enough = icmp uge i64 %base_capacity, %required
+  %new_capacity = select i1 %enough, i64 %base_capacity, i64 %required
+  %new_data = call ptr @malloc(i64 %new_capacity)
+  %old_data = load ptr, ptr %data_slot, align 8
+  %has_old = icmp ne ptr %old_data, null
+  br i1 %has_old, label %copy_old, label %publish
+copy_old:
+  call void @llvm.memcpy.p0.p0.i64(ptr %new_data, ptr %old_data, i64 %length, i1 false)
+  call void @free(ptr %old_data)
+  br label %publish
+publish:
+  store ptr %new_data, ptr %data_slot, align 8
+  store i64 %new_capacity, ptr %capacity_slot, align 8
+  br label %append
+append:
+  %current_data = load ptr, ptr %data_slot, align 8
+  %destination = getelementptr i8, ptr %current_data, i64 %length
+  call void @llvm.memcpy.p0.p0.i64(ptr %destination, ptr %data, i64 %len, i1 false)
+  store i64 %required, ptr %length_slot, align 8
+  ret void
+}
+define internal void @sl_runtime_append_stdout(ptr %data, i64 %len) {
+entry:
+  %tls_index = load i32, ptr @smalllang_output_sink_tls, align 4
+  %tls_valid = icmp ne i32 %tls_index, -1
+  br i1 %tls_valid, label %read_sink, label %direct
+read_sink:
+  %sink = call ptr @TlsGetValue(i32 %tls_index)
+  %capturing = icmp ne ptr %sink, null
+  br i1 %capturing, label %capture, label %direct
+capture:
+  call void @smalllang_output_sink_append(ptr %sink, ptr %data, i64 %len)
+  ret void
+direct:
+  call void @sl_runtime_append_stdout_direct(ptr %data, i64 %len)
+  ret void
+}
 define internal void @sl_runtime_print(ptr %data, i64 %len, i1 %newline) {
 entry:
   call void @sl_runtime_append_stdout(ptr %data, i64 %len)
@@ -56,7 +113,7 @@ write_newline:
 done:
   ret void
 }
-%smalllang.compute_group = type { ptr, ptr, ptr, i64, ptr }
+%smalllang.compute_group = type { ptr, ptr, ptr, i64, ptr, ptr }
 @smalllang_compute_semaphore = internal global ptr null
 @smalllang_compute_completion_event = internal global ptr null
 @smalllang_compute_worker_count = internal global i32 0
@@ -93,10 +150,16 @@ claim:
 work:
   %callback_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 0
   %callback = load ptr, ptr %callback_slot, align 8
+  %sinks_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 5
+  %sinks = load ptr, ptr %sinks_slot, align 8
+  %sink = getelementptr %smalllang.output_sink, ptr %sinks, i64 %index
+  %tls_index = load i32, ptr @smalllang_output_sink_tls, align 4
+  %tls_set = call i32 @TlsSetValue(i32 %tls_index, ptr %sink)
   %running_before = atomicrmw add ptr @smalllang_compute_running, i32 1 acq_rel
   %running_now = add i32 %running_before, 1
   %peak_before = atomicrmw max ptr @smalllang_compute_peak, i32 %running_now acq_rel
   call void %callback(ptr %group, i64 %index)
+  %tls_clear = call i32 @TlsSetValue(i32 %tls_index, ptr null)
   %running_after = atomicrmw sub ptr @smalllang_compute_running, i32 1 acq_rel
   br label %claim
 complete:
@@ -119,6 +182,11 @@ entry:
   %already = icmp sgt i32 %existing, 0
   br i1 %already, label %ready, label %create_sync
 create_sync:
+  %tls_index = call i32 @TlsAlloc()
+  %tls_ok = icmp ne i32 %tls_index, -1
+  br i1 %tls_ok, label %create_semaphore, label %fail
+create_semaphore:
+  store i32 %tls_index, ptr @smalllang_output_sink_tls, align 4
   %semaphore = call ptr @CreateSemaphoreA(ptr null, i32 0, i32 64, ptr null)
   %semaphore_ok = icmp ne ptr %semaphore, null
   br i1 %semaphore_ok, label %create_event, label %fail
@@ -166,7 +234,12 @@ submit:
   %count_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 3
   %count = load i64, ptr %count_slot, align 8
   %empty = icmp eq i64 %count, 0
-  br i1 %empty, label %done, label %publish
+  br i1 %empty, label %cleanup_empty, label %publish
+cleanup_empty:
+  %empty_sinks_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 5
+  %empty_sinks = load ptr, ptr %empty_sinks_slot, align 8
+  call void @free(ptr %empty_sinks)
+  br label %done
 publish:
   store atomic i64 0, ptr @smalllang_compute_next release, align 8
   store atomic i32 0, ptr @smalllang_compute_peak release, align 4
@@ -186,6 +259,30 @@ await_departure:
   br i1 %all_departed, label %departure_done, label %await_departure
 departure_done:
   store atomic i32 0, ptr @smalllang_compute_barrier_departed release, align 4
+  %sinks_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 5
+  %sinks = load ptr, ptr %sinks_slot, align 8
+  br label %flush_loop
+flush_loop:
+  %flush_index = phi i64 [ 0, %departure_done ], [ %flush_next, %flush_one_done ]
+  %flush_done = icmp eq i64 %flush_index, %count
+  br i1 %flush_done, label %flush_finish, label %flush_one
+flush_one:
+  %sink = getelementptr %smalllang.output_sink, ptr %sinks, i64 %flush_index
+  %sink_data_slot = getelementptr %smalllang.output_sink, ptr %sink, i32 0, i32 0
+  %sink_length_slot = getelementptr %smalllang.output_sink, ptr %sink, i32 0, i32 1
+  %sink_data = load ptr, ptr %sink_data_slot, align 8
+  %sink_length = load i64, ptr %sink_length_slot, align 8
+  %has_sink_data = icmp ne ptr %sink_data, null
+  br i1 %has_sink_data, label %flush_write, label %flush_one_done
+flush_write:
+  call void @sl_runtime_append_stdout_direct(ptr %sink_data, i64 %sink_length)
+  call void @free(ptr %sink_data)
+  br label %flush_one_done
+flush_one_done:
+  %flush_next = add i64 %flush_index, 1
+  br label %flush_loop
+flush_finish:
+  call void @free(ptr %sinks)
   store atomic ptr null, ptr @smalllang_compute_group_current release, align 8
   br label %done
 failed:
@@ -233,6 +330,11 @@ entry:
   store i64 %v9_length, ptr %v9_count_slot, align 8
   %v9_capture_slot = getelementptr %smalllang.compute_group, ptr %v9_group, i32 0, i32 4
   store ptr null, ptr %v9_capture_slot, align 8
+  %v9_sink_bytes = mul i64 %v9_length, 24
+  %v9_sinks = call ptr @malloc(i64 %v9_sink_bytes)
+  call void @llvm.memset.p0.i64(ptr %v9_sinks, i8 0, i64 %v9_sink_bytes, i1 false)
+  %v9_sinks_slot = getelementptr %smalllang.compute_group, ptr %v9_group, i32 0, i32 5
+  store ptr %v9_sinks, ptr %v9_sinks_slot, align 8
   call void @smalllang_compute_execute(ptr %v9_group)
   %v9_0 = insertvalue %sl.array.i32 poison, ptr %v9_data, 0
   %v9_1 = insertvalue %sl.array.i32 %v9_0, i64 %v9_length, 1

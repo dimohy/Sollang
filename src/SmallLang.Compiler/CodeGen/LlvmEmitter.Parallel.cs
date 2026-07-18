@@ -144,7 +144,23 @@ internal sealed partial class LlvmEmitter
             }
         }
         captureArguments.Add($"{LlvmType(inputType)} %item");
-        EmitFunctionLine($"  %mapped = call {LlvmType(resultType)} {SymbolForFunction(target)}(ptr null, ptr null, ptr null, ptr null, ptr null, {string.Join(", ", captureArguments)})");
+        EmitFunctionLine("  %stdin_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 6");
+        EmitFunctionLine("  %stdin = load ptr, ptr %stdin_slot, align 8");
+        EmitFunctionLine("  %stdout_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 7");
+        EmitFunctionLine("  %stdout = load ptr, ptr %stdout_slot, align 8");
+        EmitFunctionLine("  %sinks_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 5");
+        EmitFunctionLine("  %sinks = load ptr, ptr %sinks_slot, align 8");
+        EmitFunctionLine("  %sink = getelementptr %smalllang.output_sink, ptr %sinks, i64 %index");
+        EmitFunctionLine("  %sink_value = ptrtoint ptr %sink to i64");
+        EmitFunctionLine("  %sink_tagged_value = or i64 %sink_value, 1");
+        EmitFunctionLine("  %sink_stdout = inttoptr i64 %sink_tagged_value to ptr");
+        EmitFunctionLine("  %written_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 8");
+        EmitFunctionLine("  %written = load ptr, ptr %written_slot, align 8");
+        EmitFunctionLine("  %read_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 9");
+        EmitFunctionLine("  %read = load ptr, ptr %read_slot, align 8");
+        EmitFunctionLine("  %ok_state_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 10");
+        EmitFunctionLine("  %ok_state = load ptr, ptr %ok_state_slot, align 8");
+        EmitFunctionLine($"  %mapped = call {LlvmType(resultType)} {SymbolForFunction(target)}(ptr %stdin, ptr %sink_stdout, ptr %written, ptr %read, ptr %ok_state, {string.Join(", ", captureArguments)})");
         EmitFunctionLine("  %output_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 2");
         EmitFunctionLine("  %output = load ptr, ptr %output_slot, align 8");
         EmitFunctionLine($"  %output_offset = mul i64 %index, {outputSize.ToString(CultureInfo.InvariantCulture)}");
