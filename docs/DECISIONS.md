@@ -6436,3 +6436,32 @@ first checkpoint after the periodic Stage3 baseline, so the cadence is 1/10 and
 Stage3 is intentionally not regenerated for this checkpoint. The canonical
 language-capability score remains 49.5/60 (82.5%) because a rename does not
 complete a capability gate.
+
+## D198 - Explicit Return In Local Functions
+
+Status: implemented and Stage2 verified
+Date: 2026-07-19
+
+Local functions are emitted as independent LLVM functions with their own
+parameters, captured bindings, stack frame, and ownership scope. They therefore
+use the same explicit `value -> return` and Unit `return` semantics as module
+functions. The former semantic restriction treated them like inline block
+functions even though code generation already gave them an independent return
+boundary; that restriction is removed. Result-producing block functions remain
+restricted because they are genuinely lowered inside the caller's control-flow
+region.
+
+Every local owner other than the transferred return value is dropped in reverse
+declaration order before an early return. Example 411 covers both the early and
+tail paths with a local dynamic array. Release builds with zero warnings and
+errors, and the complete Windows suite passes 545/545. Windows Stage2 passes
+6/6 at 8,781,929 LLVM bytes. This is checkpoint 2/10 after the periodic Stage3
+baseline, so Stage3 is intentionally not regenerated. This slice does not yet
+promote the structured early-exit roadmap gate: moved-field reinitialization and
+branch joins remain.
+
+Research basis:
+
+- [Rust destructor scopes](https://doc.rust-lang.org/reference/destructors.html)
+- [rustc move paths](https://rustc-dev-guide.rust-lang.org/borrow-check/moves-and-initialization/move-paths.html)
+- [Swift deferred actions](https://docs.swift.org/swift-book/documentation/the-swift-programming-language/controlflow/)

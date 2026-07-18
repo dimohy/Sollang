@@ -128,7 +128,7 @@ reject mutable or structurally non-sendable captures. The submitting parent now
 helps drain its task group before the structured join. Exact cancellation and
 partial-result destruction plus full Windows/Linux suite parity are proven.
 This completed feature-local subproject does not promote a roadmap gate.
-There are **11 equivalent gates remaining**. Because the remaining compiler
+There are **10.5 equivalent gates remaining**. Because the remaining compiler
 primitives are harder than early syntax gates, this is not an elapsed-time
 estimate.
 
@@ -619,9 +619,10 @@ call omit the transferred array or dictionary without incorrectly suppressing
 cleanup on sibling paths. Struct drop obligations now recurse through nested
 struct fields into owned arrays and dictionaries on normal, moved-parameter,
 and early-return edges. Static field-level partial moves now preserve sibling
-drop obligations and reject overlapping reuse. Inline local-function returns,
-field reinitialization, and branch joins remain before the structured
-early-exit gate is complete.
+drop obligations and reject overlapping reuse. Local functions emitted as
+independent LLVM functions now accept explicit early returns and run the same
+reverse-order ownership cleanup as module functions. Field reinitialization and
+branch joins remain before the structured early-exit gate is complete.
 
 Guard-flow loop control is also cumulative: `condition -> if continue` and
 `condition -> if break` are compact Bool-guarded transfers. Both the reference
@@ -634,8 +635,9 @@ type, transfers a returned owner, and drops every other active owner before
 `ret`. The self-hosted AST and typed IR carry a dedicated return terminator;
 the LLVM slice executes an early scalar return from an `if` region and frees a
 function-local dynamic array on both the early and fallthrough paths. Static
-partial-move masks are now emitted; inline local-function returns and moved-path
-reinitialization/joins keep the structured early-exit gate partial.
+partial-move masks are now emitted. Local-function returns share that cleanup
+path; moved-path reinitialization and joins keep the structured early-exit gate
+partial.
 
 Typed IR now represents immutable local bindings explicitly and connects each
 name use by stable symbol id. LLVM materializes scalar literal bindings as SSA

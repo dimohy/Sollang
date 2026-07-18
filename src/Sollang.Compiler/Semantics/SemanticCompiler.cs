@@ -1091,7 +1091,7 @@ internal sealed class SemanticCompiler
         _currentFunctionReturnType = function.ReturnType;
         _currentMoveInputNames = MoveInputNames(function);
         _currentFunctionOuterBindings = returnOuterBindings;
-        _currentFunctionAllowsEarlyReturn = !function.IsLocal;
+        _currentFunctionAllowsEarlyReturn = true;
         _currentFunctionIsAsync = function.IsAsync;
         _currentFunctionEffects = function.Effects;
 
@@ -1142,7 +1142,7 @@ internal sealed class SemanticCompiler
         _currentFunctionReturnType = function.ReturnType;
         _currentMoveInputNames = MoveInputNames(function);
         _currentFunctionOuterBindings = returnOuterBindings;
-        _currentFunctionAllowsEarlyReturn = !function.IsLocal;
+        _currentFunctionAllowsEarlyReturn = true;
         _currentFunctionIsAsync = function.IsAsync;
         _currentFunctionEffects = function.Effects;
         _loopDepth = 0;
@@ -2004,7 +2004,7 @@ internal sealed class SemanticCompiler
                         throw Error(
                             returnStatement.Line,
                             returnStatement.Column,
-                            "explicit return from an inline local or block function is not supported yet");
+                            "explicit return from a block function is not supported yet");
                     }
 
                     var returnType = returnStatement.Value is null
