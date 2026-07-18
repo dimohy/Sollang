@@ -6365,3 +6365,32 @@ Research basis:
 - [Gleam pipelines](https://tour.gleam.run/functions/pipelines/)
 - [Swift functions](https://docs.swift.org/swift-book/documentation/the-swift-programming-language/functions/)
 - [Mojo functions](https://docs.modular.com/mojo/manual/functions/)
+
+## D196 - Batch Stage3 Fixed-Point Verification After Stage2 Checkpoints
+
+Status: implemented and fixed-point verified
+Date: 2026-07-19
+
+Stage2 remains the normal self-host verification gate. Stage3 is intentionally
+separate because regenerating the complete compiler on every feature checkpoint
+adds substantial latency while providing little extra signal between compiler
+bootstrap changes.
+
+Run Stage3 after ten Stage2-verified feature checkpoints. Run it earlier for a
+bootstrap, intrinsic, ABI, or compiler-emitter change that can affect
+self-reproduction, or when explicitly requested. A feature checkpoint, rather
+than each script invocation, advances the cadence so retries and target reruns
+do not consume the ten-check budget.
+
+The dedicated `scripts/verify-selfhost-stage3.ps1` rejects stale Stage2
+artifacts, can rebuild Stage2 explicitly, generates Stage3, compares normalized
+complete-module SHA-256 values, and assembles the result with `llvm-as`.
+Windows and Linux Stage2 verifiers do not generate Stage3.
+
+The cadence began after correcting wide integer literal conversion in the
+self-host LLVM emitter. Integer literals now materialize directly at the
+destination width rather than first becoming `i32`, which had truncated a
+64-bit module hash and made the current Stage3 diverge. The repaired Stage2 and
+Stage3 outputs are both 8,397,917 LLVM bytes with normalized SHA-256
+`143EF69D5213B05C992D43643E71318525436A60FDFF2DF315C534D00D856832`.
+That verification resets the tracked cadence to 0/10.

@@ -929,6 +929,14 @@ tooling, and library gates are implemented.
 
 ## Self-host Compile-Time Baseline (2026-07-18)
 
+Stage 3 is a periodic fixed-point gate, not part of every Stage2 verification.
+The normal feature checkpoint ends after the Windows/Linux Stage2 checks. Run
+`scripts/verify-selfhost-stage3.ps1` after **10 Stage2-verified feature
+checkpoints**, or earlier when a bootstrap, intrinsic, ABI, or compiler-emitter
+change can plausibly alter self-reproduction. An explicit Stage3 request also
+overrides the cadence. The latest fixed-point verification reset the counter to
+**0/10** on 2026-07-19.
+
 The compiler-sized stage-2 path now caches function captures and function-end
 boundaries, indexes call targets by canonical module symbol, and buffers
 redirected Windows stdout in 1 MiB blocks. The self-host emitter generates the

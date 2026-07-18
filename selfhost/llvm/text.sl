@@ -3185,6 +3185,14 @@ emitCore context: move EmitContext -> Unit uses Console {
                                     valueNode.typeSymbol -> integerWidth => whileTargetWidth
                                     whileIntegerArgument.typeSymbol -> integerWidth => whileInputWidth
                                     "  %while$(whileIndex)_v$(valueNodeIndex) = " -> print
+                                    whileIntegerArgument.kind == 3 -> if {
+                                        "add " -> print
+                                        valueNode -> writeIrType
+                                        " " -> print
+                                        whileIntegerArgument -> sourceToken => whileIntegerLiteralToken
+                                        context.sources[whileIntegerArgument.sourceModule] -> slice(whileIntegerLiteralToken.span.start, whileIntegerLiteralToken.span.length) -> print
+                                        ", 0" -> println
+                                    } else {
                                     whileTargetWidth < whileInputWidth -> if { "trunc " -> print } else {
                                         whileTargetWidth > whileInputWidth -> if {
                                             whileIntegerArgument -> integerNodeSigned -> if { "sext " -> print } else { "zext " -> print }
@@ -3197,6 +3205,7 @@ emitCore context: move EmitContext -> Unit uses Console {
                                         " to " -> print
                                         valueNode -> writeIrType
                                         "" -> println
+                                    }
                                     }
                                 } else {
                                     CallEnvironmentRequest { callerIndex: ownerIndex, callIndex: valueNodeIndex, targetModule: valueNode.targetModule, targetSymbol: valueNode.symbol, hasArgument: valueNode.operand0 >= 0 } -> emitCallEnvironmentValues
@@ -4985,6 +4994,14 @@ emitCore context: move EmitContext -> Unit uses Console {
                     regionNode.typeSymbol -> integerWidth => regionTargetWidth
                     regionIntegerArgument.typeSymbol -> integerWidth => regionInputWidth
                     "  %v$(regionNodeIndex!) = " -> print
+                    regionIntegerArgument.kind == 3 -> if {
+                        "add " -> print
+                        regionNode -> writeIrType
+                        " " -> print
+                        regionIntegerArgument -> sourceToken => regionIntegerLiteralToken
+                        context.sources[regionIntegerArgument.sourceModule] -> slice(regionIntegerLiteralToken.span.start, regionIntegerLiteralToken.span.length) -> print
+                        ", 0" -> println
+                    } else {
                     regionTargetWidth < regionInputWidth -> if { "trunc " -> print } else {
                         regionTargetWidth > regionInputWidth -> if {
                             regionIntegerArgument -> integerNodeSigned -> if { "sext " -> print } else { "zext " -> print }
@@ -5002,6 +5019,7 @@ emitCore context: move EmitContext -> Unit uses Console {
                         " to " -> print
                         regionNode -> writeIrType
                         "" -> println
+                    }
                     }
                 } else {
                     CallEnvironmentRequest { callerIndex: ownerIndex!, callIndex: regionNodeIndex!, targetModule: regionNode.targetModule, targetSymbol: regionNode.symbol, hasArgument: regionNode.operand0 >= 0 } -> emitCallEnvironmentValues
@@ -6877,6 +6895,14 @@ emitCore context: move EmitContext -> Unit uses Console {
                         expression.typeSymbol -> integerWidth => functionTargetWidth
                         functionIntegerArgument.typeSymbol -> integerWidth => functionInputWidth
                         "  %v$(expressionIndex!) = " -> print
+                        functionIntegerArgument.kind == 3 -> if {
+                            "add " -> print
+                            expression -> writeIrType
+                            " " -> print
+                            functionIntegerArgument -> sourceToken => functionIntegerLiteralToken
+                            context.sources[functionIntegerArgument.sourceModule] -> slice(functionIntegerLiteralToken.span.start, functionIntegerLiteralToken.span.length) -> print
+                            ", 0" -> println
+                        } else {
                         functionTargetWidth < functionInputWidth -> if { "trunc " -> print } else {
                             functionTargetWidth > functionInputWidth -> if {
                                 functionIntegerArgument -> integerNodeSigned -> if { "sext " -> print } else { "zext " -> print }
@@ -6894,6 +6920,7 @@ emitCore context: move EmitContext -> Unit uses Console {
                             " to " -> print
                             expression -> writeIrType
                             "" -> println
+                        }
                         }
                     } else {
                     CallEnvironmentRequest { callerIndex: functionIndex!, callIndex: expressionIndex!, targetModule: expression.targetModule, targetSymbol: expression.symbol, hasArgument: expression.operand0 >= 0 } -> emitCallEnvironmentValues
@@ -8587,6 +8614,14 @@ emitCore context: move EmitContext -> Unit uses Console {
                             entryExpression.typeSymbol -> integerWidth => entryTargetWidth
                             entryIntegerArgument.typeSymbol -> integerWidth => entryInputWidth
                             "  %v$(entryExpressionIndex!) = " -> print
+                            entryIntegerArgument.kind == 3 -> if {
+                                "add " -> print
+                                entryExpression -> writeIrType
+                                " " -> print
+                                entryIntegerArgument -> sourceToken => entryIntegerLiteralToken
+                                context.sources[entryIntegerArgument.sourceModule] -> slice(entryIntegerLiteralToken.span.start, entryIntegerLiteralToken.span.length) -> print
+                                ", 0" -> println
+                            } else {
                             entryTargetWidth < entryInputWidth -> if { "trunc " -> print } else {
                                 entryTargetWidth > entryInputWidth -> if {
                                     entryIntegerArgument -> integerNodeSigned -> if { "sext " -> print } else { "zext " -> print }
@@ -8602,6 +8637,7 @@ emitCore context: move EmitContext -> Unit uses Console {
                                 " to " -> print
                                 entryExpression -> writeIrType
                                 "" -> println
+                            }
                             }
                         } else {
                         (entryExpression.typeOrigin == 1 and entryExpression.typeSymbol == 0) -> if { "  call " -> print } else { "  %v$(entryExpressionIndex!) = call " -> print }
