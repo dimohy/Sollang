@@ -5797,3 +5797,24 @@ Native compute-task-group coverage is now 6/7 and the parallel subproject is
 26/28 (92.9%). Cancellation/partial-result destruction and full Windows/Linux
 suite parity remain open. The canonical roadmap remains 48.5/60 equivalent
 gates (80.8%).
+
+## D181 - Admit Three Named Generic Parameters for Fallible Roles
+
+Status: implemented and focused verified
+Date: 2026-07-18
+
+Fallible result-producing roles need three independently inferred types: the
+source element `T`, successful result `R`, and error `E`. Function declarations
+therefore accept a third named generic parameter. The reference compiler binds
+and specializes that parameter through nested `Option`, `Result`, growable
+array, and dictionary type templates; specialization identities include all
+three type IDs. The self-host parser and symbol collector preserve the same
+three declarations.
+
+This is a bounded prerequisite for `tryParallel<T, R, E>`, not a claim that SL
+now supports arbitrary generic arity. Examples 384 and 385 prove self-host
+symbol collection and reference declaration binding. The Release build has
+zero warnings/errors and both focused examples pass with deterministic grammar
+generation. Cancellation, partial-result destruction, and runtime lowering
+remain open, so parallel progress stays 26/28 (92.9%) and the canonical roadmap
+stays 48.5/60 (80.8%).

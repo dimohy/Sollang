@@ -862,18 +862,22 @@ lowerFrom request: LowerRequest -> [AstNode; ~] {
         declaration!.kind == 32 -> if {
             -1 => firstGenericToken!
             -1 => secondGenericToken!
-            false => afterGenericComma!
+            -1 => thirdGenericToken!
+            0 => genericCommaCount!
             declaration!.firstToken => genericToken!
             genericToken! < declaration!.firstToken + declaration!.tokenCount -> while {
                 tokens![genericToken!].kind == grammar.tokenIdComma -> if {
-                    true => afterGenericComma!
+                    genericCommaCount! + 1 => genericCommaCount!
                 } else {
                     tokens![genericToken!].kind == grammar.tokenIdIdentifier -> if {
-                        (not afterGenericComma! and firstGenericToken! < 0) -> if {
+                        (genericCommaCount! == 0 and firstGenericToken! < 0) -> if {
                             genericToken! => firstGenericToken!
                         }
-                        (afterGenericComma! and secondGenericToken! < 0) -> if {
+                        (genericCommaCount! == 1 and secondGenericToken! < 0) -> if {
                             genericToken! => secondGenericToken!
+                        }
+                        (genericCommaCount! == 2 and thirdGenericToken! < 0) -> if {
+                            genericToken! => thirdGenericToken!
                         }
                     }
                 }
@@ -881,6 +885,7 @@ lowerFrom request: LowerRequest -> [AstNode; ~] {
             }
             firstGenericToken! => declaration!.payloadToken
             secondGenericToken! => declaration!.secondaryToken
+            thirdGenericToken! => declaration!.tertiaryToken
         }
         ((declaration!.kind >= 3 and declaration!.kind <= 7) or declaration!.kind == 50) -> if {
             declaration!.firstToken => visibilityToken!

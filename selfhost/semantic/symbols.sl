@@ -135,7 +135,8 @@ public collectPrepared nodes: [ast.AstNode; ~] -> [Symbol; ~] {
         typeAstIndex! + 1 => typeAstIndex!
     }
 
-    # A two-name generic clause has one AST node but two lexical symbols.
+    # A multi-name generic clause has one AST node but one lexical symbol per
+    # parameter. The compact bootstrap AST currently stores up to three names.
     symbols! -> len => beforeSecondaryGenerics
     0 => genericSymbolIndex!
     genericSymbolIndex! < beforeSecondaryGenerics -> while {
@@ -147,6 +148,20 @@ public collectPrepared nodes: [ast.AstNode; ~] -> [Symbol; ~] {
                     parent: genericSymbol.parent
                     astNode: genericSymbol.astNode
                     nameToken: nodes[genericSymbol.astNode].secondaryToken
+                    typeNode: -1
+                    secondaryTypeNode: -1
+                    blockNameToken: -1
+                    blockTypeNode: -1
+                    blockResultTypeNode: -1
+                    flags: 0
+                })
+            }
+            nodes[genericSymbol.astNode].tertiaryToken >= 0 -> if {
+                symbols! -> push(Symbol {
+                    kind: 32
+                    parent: genericSymbol.parent
+                    astNode: genericSymbol.astNode
+                    nameToken: nodes[genericSymbol.astNode].tertiaryToken
                     typeNode: -1
                     secondaryTypeNode: -1
                     blockNameToken: -1

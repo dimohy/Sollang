@@ -33,12 +33,14 @@ internal sealed record BoundFunction(
     string? TraitName = null,
     string? GenericParameterName = null,
     string? SecondaryGenericParameterName = null,
+    string? TertiaryGenericParameterName = null,
     string? GenericTraitBound = null,
     string? GenericAssociatedTypeName = null,
     TypeId? GenericAssociatedTypeConstraint = null,
     IReadOnlyDictionary<string, TypeId>? ImplAssociatedTypes = null,
     TypeId? SpecializedType = null,
     TypeId? SpecializedSecondaryType = null,
+    TypeId? SpecializedTertiaryType = null,
     bool IsValueGeneric = false,
     int? SpecializedValue = null,
     bool HasValueGenericFixedArrayInput = false,
@@ -154,6 +156,7 @@ internal enum TypeId
     RunToFileRequest,
     GenericParameter = 512,
     SecondaryGenericParameter = 513,
+    TertiaryGenericParameter = 514,
     FirstUserDefined = 1024
 }
 
@@ -555,7 +558,7 @@ internal sealed class TypeDefinitionTable
             TypeId.SourceText => 32,
             TypeId.MappedBytes or TypeId.MutableMappedBytes => 40,
             _ when IsTask(type) => 16,
-            TypeId.GenericParameter or TypeId.SecondaryGenericParameter => 8,
+            TypeId.GenericParameter or TypeId.SecondaryGenericParameter or TypeId.TertiaryGenericParameter => 8,
             _ => throw new InvalidOperationException($"type {type} has no inline size")
         };
     }

@@ -587,6 +587,7 @@ internal static class ParserEmitter
         builder.AppendLine("        var namePath = ParsePathAfterFirstIdentifier(name);");
         builder.AppendLine("        string? genericParameterName = null;");
         builder.AppendLine("        string? secondaryGenericParameterName = null;");
+        builder.AppendLine("        string? tertiaryGenericParameterName = null;");
         builder.AppendLine("        string? genericTraitBound = null;");
         builder.AppendLine("        string? genericAssociatedTypeName = null;");
         builder.AppendLine("        string? genericAssociatedTypeConstraint = null;");
@@ -618,6 +619,14 @@ internal static class ParserEmitter
         builder.AppendLine("                if (!_activeGenericParameterNames.Add(secondaryGenericParameterName))");
         builder.AppendLine("                {");
         builder.AppendLine("                    throw Error(name, $\"generic parameter '{secondaryGenericParameterName}' already exists\");");
+        builder.AppendLine("                }");
+        builder.AppendLine("            }");
+        builder.AppendLine("            if (Match(TokenKind.Comma, out _))");
+        builder.AppendLine("            {");
+        builder.AppendLine("                tertiaryGenericParameterName = ExpectIdentifier().Text;");
+        builder.AppendLine("                if (!_activeGenericParameterNames.Add(tertiaryGenericParameterName))");
+        builder.AppendLine("                {");
+        builder.AppendLine("                    throw Error(name, $\"generic parameter '{tertiaryGenericParameterName}' already exists\");");
         builder.AppendLine("                }");
         builder.AppendLine("            }");
         builder.AppendLine("            Expect(TokenKind.Greater);");
@@ -761,7 +770,7 @@ internal static class ParserEmitter
         builder.AppendLine("        }");
         builder.AppendLine();
         builder.AppendLine("        _activeGenericParameterNames.Clear();");
-        builder.AppendLine("        return new FunctionDeclaration(functionName, inputName?.Text, inputType, inputOwnership, returnType, blockInputName?.Text, blockInputType, localFunctions, body, blockBody, name.Line, name.Column, isIntrinsic, isStandardLibrary, traitName, genericParameterName, secondaryGenericParameterName, genericTraitBound, genericAssociatedTypeName, genericAssociatedTypeConstraint, implAssociatedTypes, isValueGeneric, hasValueGenericFixedArrayInput, string.Join('.', _namespacePath), isPublic, isAsync, effects, blockResultType);");
+        builder.AppendLine("        return new FunctionDeclaration(functionName, inputName?.Text, inputType, inputOwnership, returnType, blockInputName?.Text, blockInputType, localFunctions, body, blockBody, name.Line, name.Column, isIntrinsic, isStandardLibrary, traitName, genericParameterName, secondaryGenericParameterName, tertiaryGenericParameterName, genericTraitBound, genericAssociatedTypeName, genericAssociatedTypeConstraint, implAssociatedTypes, isValueGeneric, hasValueGenericFixedArrayInput, string.Join('.', _namespacePath), isPublic, isAsync, effects, blockResultType);");
         builder.AppendLine("    }");
         builder.AppendLine();
         builder.AppendLine("    private FunctionInputSignature ParseOptionalSelfSignature(string ownerType, out Token? inputName)");
@@ -2601,6 +2610,12 @@ internal static class ParserEmitter
         builder.AppendLine("                    if (!CheckAhead(offset, TokenKind.Greater)) return false;");
         builder.AppendLine("                    offset++;");
         builder.AppendLine("                }");
+        builder.AppendLine("            }");
+        builder.AppendLine("            if (CheckAhead(offset, TokenKind.Comma))");
+        builder.AppendLine("            {");
+        builder.AppendLine("                offset++;");
+        builder.AppendLine("                if (!CheckAhead(offset, TokenKind.Identifier)) return false;");
+        builder.AppendLine("                offset++;");
         builder.AppendLine("            }");
         builder.AppendLine("            if (CheckAhead(offset, TokenKind.Comma))");
         builder.AppendLine("            {");

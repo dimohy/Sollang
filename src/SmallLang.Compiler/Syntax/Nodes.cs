@@ -70,6 +70,7 @@ internal sealed record FunctionDeclaration(
     string? TraitName = null,
     string? GenericParameterName = null,
     string? SecondaryGenericParameterName = null,
+    string? TertiaryGenericParameterName = null,
     string? GenericTraitBound = null,
     string? GenericAssociatedTypeName = null,
     string? GenericAssociatedTypeConstraint = null,
