@@ -119,11 +119,12 @@ not lines of code.
 
 Current count-based progress: **80.8% (48.5 of 60 equivalent gates)**.
 
-The frontend parallel-compilation subproject is **14/28 checks (50.0%)**. Its
+The frontend parallel-compilation subproject is **19/28 checks (67.9%)**. Its
 source-local product boundary, typed callback-result role slice, nested-call
 identity regression, Windows native compute pool, and source-local parallel
-frontend execution are complete. Linux parity and the global semantic,
-typed-IR, and LLVM-body parallel stages remain pending. This subproject does
+frontend execution are complete. Owned source-analysis results and ordered
+LLVM-body sinks now cross worker boundaries safely. Linux parity and the global
+semantic and typed-IR parallel stages remain pending. This subproject does
 not promote a roadmap gate yet.
 There are **11.5 equivalent gates remaining**. Because the remaining compiler
 primitives are harder than early syntax gates, this is not an elapsed-time
@@ -917,19 +918,17 @@ same buffered runtime, so stage 3 no longer writes LLVM one byte at a time.
 - [x] reduce compiler-sized stage-3 LLVM emission below 45 seconds;
 - [x] lower no-capture scalar-to-scalar callbacks through the compute pool;
 - [x] connect entry-body role results and lower top-level entry `parallel`;
-- [ ] make no-capture `SourceText` analysis worker-safe before parallelizing it;
+- [x] make no-capture `SourceText` analysis worker-safe before parallelizing it;
 - [x] lower `parallel` inside nested `if`/`while` regions;
 - [x] buffer independent `emitCore` function bodies in owned memory sinks and
   merge them in canonical root order.
 
-The generated stage-2 compiler now lowers capture-safe `parallel` callbacks to
-a Windows compute pool. Stage 3 moved from 360.7 s at 0.99 effective cores to
-255.5 s, with a 14.90-core peak and 1.62-core whole-run average. That is a
-105.2 s (29.2%) stage3 reduction while retaining byte-identical stage2/stage3
-LLVM. No-capture `analyzeSource` remains serial because the current self-host
-ABI crashes when a large `SourceText` analysis runs on a worker; captured
-function-lowering callbacks are worker-safe and covered by a 100-generation
-execution test.
+The generated stage-2 compiler lowers capture-safe `parallel` callbacks to a
+Windows compute pool. No-capture `SourceText -> SourceAnalysis` callbacks now
+use the same pool when their owned result graph contains only worker-transferable
+scalars, structs, and arrays. Example 377 exercises that transfer for 100
+generations. The complete 28-source stage 3 ran five times without a worker
+fault and produced the same fixed-point LLVM on every run.
 
 The next measurement exposed a larger algorithmic bottleneck inside
 `emitCore`: every function and nested control region allocated scheduling
@@ -954,12 +953,12 @@ stdout buffer; completion merges and frees sinks in source/root order. Function
 bodies before and after `main` are parallelized as separate canonical batches,
 so entry placement stays byte-identical to the former serial traversal.
 
-The compiler fixed point is now exact at 7,119,957 bytes with SHA-256
-`1878B6CB90351D4037E1E6319EBDFD17797577F1157DC51F1E0797F6C7890347`.
-Stage 3 completed in 26.13 s with 213.52 CPU-seconds, or 8.17 effective cores.
-This is 43.5% faster than the 46.28 s D172 baseline and 92.8% faster than the
-original 360.7 s serial path. `SourceText`/owned-analysis callbacks remain a
-separate unchecked ABI path.
+The compiler fixed point is now exact at 7,142,042 bytes with SHA-256
+`A71D4595F9854C1E7746F5FE1ECFDF2D82D08DB971F6C3837714B2CB07CA11AD`.
+Five stage-3 runs completed in 33.90-37.75 seconds. A separately instrumented
+run took 34.81 seconds and 377.77 CPU-seconds, averaging 10.85 effective cores
+with an 88.7 MiB peak working set. This remains 90.4% faster than the original
+360.7-second serial path while parallelizing the source-analysis boundary.
 
 ## Immediate Implementation Order
 

@@ -1,0 +1,571 @@
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc"
+%smalllang.output_sink = type { ptr, i64, i64 }
+@sl_runtime_newline = private constant [1 x i8] c"\0A"
+@sl_runtime_stdout_buffer = private global [1048576 x i8] zeroinitializer
+@sl_runtime_stdout_count = private global i64 0
+@sl_runtime_stdout_written = private global i32 0
+@smalllang_output_sink_tls = internal global i32 -1
+declare ptr @GetStdHandle(i32)
+declare i32 @WriteFile(ptr, ptr, i32, ptr, ptr)
+declare i32 @TlsAlloc()
+declare i32 @TlsSetValue(i32, ptr)
+declare ptr @TlsGetValue(i32)
+declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1 immarg)
+declare void @llvm.memset.p0.i64(ptr, i8, i64, i1 immarg)
+define internal void @sl_runtime_flush_stdout() {
+entry:
+  %count = load i64, ptr @sl_runtime_stdout_count, align 8
+  %has_data = icmp ugt i64 %count, 0
+  br i1 %has_data, label %write, label %done
+write:
+  %handle = call ptr @GetStdHandle(i32 -11)
+  %count32 = trunc i64 %count to i32
+  %ok = call i32 @WriteFile(ptr %handle, ptr @sl_runtime_stdout_buffer, i32 %count32, ptr @sl_runtime_stdout_written, ptr null)
+  store i64 0, ptr @sl_runtime_stdout_count, align 8
+  br label %done
+done:
+  ret void
+}
+define internal void @sl_runtime_append_stdout_direct(ptr %data, i64 %len) {
+entry:
+  %count = load i64, ptr @sl_runtime_stdout_count, align 8
+  %total = add i64 %count, %len
+  %fits = icmp ule i64 %total, 1048576
+  br i1 %fits, label %append, label %flush
+flush:
+  call void @sl_runtime_flush_stdout()
+  %large = icmp ugt i64 %len, 1048576
+  br i1 %large, label %direct, label %append_empty
+direct:
+  %handle = call ptr @GetStdHandle(i32 -11)
+  %len32 = trunc i64 %len to i32
+  %ok = call i32 @WriteFile(ptr %handle, ptr %data, i32 %len32, ptr @sl_runtime_stdout_written, ptr null)
+  ret void
+append_empty:
+  call void @llvm.memcpy.p0.p0.i64(ptr @sl_runtime_stdout_buffer, ptr %data, i64 %len, i1 false)
+  store i64 %len, ptr @sl_runtime_stdout_count, align 8
+  ret void
+append:
+  %slot = getelementptr i8, ptr @sl_runtime_stdout_buffer, i64 %count
+  call void @llvm.memcpy.p0.p0.i64(ptr %slot, ptr %data, i64 %len, i1 false)
+  store i64 %total, ptr @sl_runtime_stdout_count, align 8
+  ret void
+}
+define internal void @smalllang_output_sink_append(ptr %sink, ptr %data, i64 %len) {
+entry:
+  %data_slot = getelementptr %smalllang.output_sink, ptr %sink, i32 0, i32 0
+  %length_slot = getelementptr %smalllang.output_sink, ptr %sink, i32 0, i32 1
+  %capacity_slot = getelementptr %smalllang.output_sink, ptr %sink, i32 0, i32 2
+  %length = load i64, ptr %length_slot, align 8
+  %capacity = load i64, ptr %capacity_slot, align 8
+  %required = add i64 %length, %len
+  %fits = icmp ule i64 %required, %capacity
+  br i1 %fits, label %append, label %grow
+grow:
+  %doubled = shl i64 %capacity, 1
+  %minimum = icmp ult i64 %doubled, 256
+  %base_capacity = select i1 %minimum, i64 256, i64 %doubled
+  %enough = icmp uge i64 %base_capacity, %required
+  %new_capacity = select i1 %enough, i64 %base_capacity, i64 %required
+  %new_data = call ptr @malloc(i64 %new_capacity)
+  %old_data = load ptr, ptr %data_slot, align 8
+  %has_old = icmp ne ptr %old_data, null
+  br i1 %has_old, label %copy_old, label %publish
+copy_old:
+  call void @llvm.memcpy.p0.p0.i64(ptr %new_data, ptr %old_data, i64 %length, i1 false)
+  call void @free(ptr %old_data)
+  br label %publish
+publish:
+  store ptr %new_data, ptr %data_slot, align 8
+  store i64 %new_capacity, ptr %capacity_slot, align 8
+  br label %append
+append:
+  %current_data = load ptr, ptr %data_slot, align 8
+  %destination = getelementptr i8, ptr %current_data, i64 %length
+  call void @llvm.memcpy.p0.p0.i64(ptr %destination, ptr %data, i64 %len, i1 false)
+  store i64 %required, ptr %length_slot, align 8
+  ret void
+}
+define internal void @sl_runtime_append_stdout(ptr %data, i64 %len) {
+entry:
+  %tls_index = load i32, ptr @smalllang_output_sink_tls, align 4
+  %tls_valid = icmp ne i32 %tls_index, -1
+  br i1 %tls_valid, label %read_sink, label %direct
+read_sink:
+  %sink = call ptr @TlsGetValue(i32 %tls_index)
+  %capturing = icmp ne ptr %sink, null
+  br i1 %capturing, label %capture, label %direct
+capture:
+  call void @smalllang_output_sink_append(ptr %sink, ptr %data, i64 %len)
+  ret void
+direct:
+  call void @sl_runtime_append_stdout_direct(ptr %data, i64 %len)
+  ret void
+}
+define internal void @sl_runtime_print(ptr %data, i64 %len, i1 %newline) {
+entry:
+  call void @sl_runtime_append_stdout(ptr %data, i64 %len)
+  br i1 %newline, label %write_newline, label %done
+write_newline:
+  call void @sl_runtime_append_stdout(ptr @sl_runtime_newline, i64 1)
+  br label %done
+done:
+  ret void
+}
+%smalllang.compute_group = type { ptr, ptr, ptr, i64, ptr, ptr }
+@smalllang_compute_semaphore = internal global ptr null
+@smalllang_compute_completion_event = internal global ptr null
+@smalllang_compute_worker_count = internal global i32 0
+@smalllang_compute_worker_handles = internal global [64 x ptr] zeroinitializer, align 8
+@smalllang_compute_group_current = internal global ptr null
+@smalllang_compute_next = internal global i64 0
+@smalllang_compute_active = internal global i32 0
+@smalllang_compute_barrier_departed = internal global i32 0
+@smalllang_compute_running = internal global i32 0
+@smalllang_compute_peak = internal global i32 0
+@smalllang_compute_stopping = internal global i32 0
+declare dllimport i32 @WaitForSingleObject(ptr, i32)
+declare dllimport ptr @CreateThread(ptr, i64, ptr, ptr, i32, ptr)
+declare dllimport ptr @CreateEventA(ptr, i32, i32, ptr)
+declare dllimport i32 @SetEvent(ptr)
+declare dllimport ptr @CreateSemaphoreA(ptr, i32, i32, ptr)
+declare dllimport i32 @ReleaseSemaphore(ptr, i32, ptr)
+declare dllimport i32 @ResetEvent(ptr)
+declare dllimport i32 @GetActiveProcessorCount(i16)
+define internal i32 @smalllang_windows_compute_worker(ptr %unused) {
+entry:
+  br label %wait
+wait:
+  %semaphore = load ptr, ptr @smalllang_compute_semaphore, align 8
+  %waited = call i32 @WaitForSingleObject(ptr %semaphore, i32 -1)
+  %group = load atomic ptr, ptr @smalllang_compute_group_current acquire, align 8
+  %count_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 3
+  %count = load i64, ptr %count_slot, align 8
+  br label %claim
+claim:
+  %index = atomicrmw add ptr @smalllang_compute_next, i64 1 acq_rel
+  %has_work = icmp ult i64 %index, %count
+  br i1 %has_work, label %work, label %complete
+work:
+  %callback_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 0
+  %callback = load ptr, ptr %callback_slot, align 8
+  %sinks_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 5
+  %sinks = load ptr, ptr %sinks_slot, align 8
+  %sink = getelementptr %smalllang.output_sink, ptr %sinks, i64 %index
+  %tls_index = load i32, ptr @smalllang_output_sink_tls, align 4
+  %tls_set = call i32 @TlsSetValue(i32 %tls_index, ptr %sink)
+  %running_before = atomicrmw add ptr @smalllang_compute_running, i32 1 acq_rel
+  %running_now = add i32 %running_before, 1
+  %peak_before = atomicrmw max ptr @smalllang_compute_peak, i32 %running_now acq_rel
+  call void %callback(ptr %group, i64 %index)
+  %tls_clear = call i32 @TlsSetValue(i32 %tls_index, ptr null)
+  %running_after = atomicrmw sub ptr @smalllang_compute_running, i32 1 acq_rel
+  br label %claim
+complete:
+  %previous = atomicrmw sub ptr @smalllang_compute_active, i32 1 acq_rel
+  %last = icmp eq i32 %previous, 1
+  br i1 %last, label %signal, label %barrier
+barrier:
+  %barrier_event = load ptr, ptr @smalllang_compute_completion_event, align 8
+  %barrier_waited = call i32 @WaitForSingleObject(ptr %barrier_event, i32 -1)
+  %departed_before = atomicrmw add ptr @smalllang_compute_barrier_departed, i32 1 acq_rel
+  br label %wait
+signal:
+  %event = load ptr, ptr @smalllang_compute_completion_event, align 8
+  %signalled = call i32 @SetEvent(ptr %event)
+  br label %wait
+}
+define internal i1 @smalllang_compute_start() {
+entry:
+  %existing = load i32, ptr @smalllang_compute_worker_count, align 4
+  %already = icmp sgt i32 %existing, 0
+  br i1 %already, label %ready, label %create_sync
+create_sync:
+  %tls_index = call i32 @TlsAlloc()
+  %tls_ok = icmp ne i32 %tls_index, -1
+  br i1 %tls_ok, label %create_semaphore, label %fail
+create_semaphore:
+  store i32 %tls_index, ptr @smalllang_output_sink_tls, align 4
+  %semaphore = call ptr @CreateSemaphoreA(ptr null, i32 0, i32 64, ptr null)
+  %semaphore_ok = icmp ne ptr %semaphore, null
+  br i1 %semaphore_ok, label %create_event, label %fail
+create_event:
+  store ptr %semaphore, ptr @smalllang_compute_semaphore, align 8
+  %event = call ptr @CreateEventA(ptr null, i32 1, i32 0, ptr null)
+  %event_ok = icmp ne ptr %event, null
+  br i1 %event_ok, label %count, label %fail
+count:
+  store ptr %event, ptr @smalllang_compute_completion_event, align 8
+  %reported = call i32 @GetActiveProcessorCount(i16 -1)
+  %positive = icmp sgt i32 %reported, 0
+  %at_least_one = select i1 %positive, i32 %reported, i32 1
+  %too_many = icmp sgt i32 %at_least_one, 64
+  %bounded = select i1 %too_many, i32 64, i32 %at_least_one
+  br label %create_workers
+create_workers:
+  %index = phi i32 [ 0, %count ], [ %next, %created ]
+  %done = icmp eq i32 %index, %bounded
+  br i1 %done, label %publish, label %create_one
+create_one:
+  %worker = call ptr @CreateThread(ptr null, i64 0, ptr @smalllang_windows_compute_worker, ptr null, i32 0, ptr null)
+  %worker_ok = icmp ne ptr %worker, null
+  br i1 %worker_ok, label %created, label %publish
+created:
+  %slot = getelementptr [64 x ptr], ptr @smalllang_compute_worker_handles, i32 0, i32 %index
+  store ptr %worker, ptr %slot, align 8
+  %next = add i32 %index, 1
+  br label %create_workers
+publish:
+  %created_count = phi i32 [ %bounded, %create_workers ], [ %index, %create_one ]
+  store i32 %created_count, ptr @smalllang_compute_worker_count, align 4
+  %has_workers = icmp sgt i32 %created_count, 0
+  br i1 %has_workers, label %ready, label %fail
+ready:
+  ret i1 true
+fail:
+  ret i1 false
+}
+define internal void @smalllang_compute_execute(ptr %group) {
+entry:
+  %started = call i1 @smalllang_compute_start()
+  br i1 %started, label %submit, label %failed
+submit:
+  %count_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 3
+  %count = load i64, ptr %count_slot, align 8
+  %empty = icmp eq i64 %count, 0
+  br i1 %empty, label %cleanup_empty, label %publish
+cleanup_empty:
+  %empty_sinks_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 5
+  %empty_sinks = load ptr, ptr %empty_sinks_slot, align 8
+  call void @free(ptr %empty_sinks)
+  br label %done
+publish:
+  store atomic i64 0, ptr @smalllang_compute_next release, align 8
+  store atomic i32 0, ptr @smalllang_compute_peak release, align 4
+  %workers = load i32, ptr @smalllang_compute_worker_count, align 4
+  store atomic i32 %workers, ptr @smalllang_compute_active release, align 4
+  store atomic ptr %group, ptr @smalllang_compute_group_current release, align 8
+  %event = load ptr, ptr @smalllang_compute_completion_event, align 8
+  %reset = call i32 @ResetEvent(ptr %event)
+  %semaphore = load ptr, ptr @smalllang_compute_semaphore, align 8
+  %released = call i32 @ReleaseSemaphore(ptr %semaphore, i32 %workers, ptr null)
+  %waited = call i32 @WaitForSingleObject(ptr %event, i32 -1)
+  br label %await_departure
+await_departure:
+  %departed = load atomic i32, ptr @smalllang_compute_barrier_departed acquire, align 4
+  %expected_departed = sub i32 %workers, 1
+  %all_departed = icmp eq i32 %departed, %expected_departed
+  br i1 %all_departed, label %departure_done, label %await_departure
+departure_done:
+  store atomic i32 0, ptr @smalllang_compute_barrier_departed release, align 4
+  %sinks_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 5
+  %sinks = load ptr, ptr %sinks_slot, align 8
+  br label %flush_loop
+flush_loop:
+  %flush_index = phi i64 [ 0, %departure_done ], [ %flush_next, %flush_one_done ]
+  %flush_done = icmp eq i64 %flush_index, %count
+  br i1 %flush_done, label %flush_finish, label %flush_one
+flush_one:
+  %sink = getelementptr %smalllang.output_sink, ptr %sinks, i64 %flush_index
+  %sink_data_slot = getelementptr %smalllang.output_sink, ptr %sink, i32 0, i32 0
+  %sink_length_slot = getelementptr %smalllang.output_sink, ptr %sink, i32 0, i32 1
+  %sink_data = load ptr, ptr %sink_data_slot, align 8
+  %sink_length = load i64, ptr %sink_length_slot, align 8
+  %has_sink_data = icmp ne ptr %sink_data, null
+  br i1 %has_sink_data, label %flush_write, label %flush_one_done
+flush_write:
+  call void @sl_runtime_append_stdout_direct(ptr %sink_data, i64 %sink_length)
+  call void @free(ptr %sink_data)
+  br label %flush_one_done
+flush_one_done:
+  %flush_next = add i64 %flush_index, 1
+  br label %flush_loop
+flush_finish:
+  call void @free(ptr %sinks)
+  store atomic ptr null, ptr @smalllang_compute_group_current release, align 8
+  br label %done
+failed:
+  unreachable
+done:
+  ret void
+}
+%sl.source_text = type { ptr, i64, ptr, i64 }
+%sl.struct.m0_s0 = type { %sl.array.i32 }
+%sl.array.i32 = type { ptr, i64, i64 }
+declare ptr @malloc(i64)
+declare ptr @realloc(ptr, i64)
+declare void @free(ptr)
+%sl.text = type { ptr, i64 }
+@sl_str_48 = private unnamed_addr constant [5 x i8] c"lexer"
+@sl_str_53 = private unnamed_addr constant [8 x i8] c"semantic"
+@sl_str_63 = private unnamed_addr constant [27 x i8] c"source worker transfer done"
+define internal void @smalllang_parallel_callback_30(ptr %group, i64 %index) {
+entry:
+  %input_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 1
+  %input = load ptr, ptr %input_slot, align 8
+  %input_address = getelementptr %sl.source_text, ptr %input, i64 %index
+  %item = load %sl.source_text, ptr %input_address, align 8
+  %mapped = call %sl.struct.m0_s0 @sl_m0_s2(%sl.source_text %item)
+  %output_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 2
+  %output = load ptr, ptr %output_slot, align 8
+  %output_address = getelementptr %sl.struct.m0_s0, ptr %output, i64 %index
+  store %sl.struct.m0_s0 %mapped, ptr %output_address, align 8
+  ret void
+}
+define %sl.struct.m0_s0 @sl_m0_s2(%sl.source_text %arg) {
+entry:
+  %slot3 = alloca %sl.array.i32, align 8
+  %slot4 = alloca i64, align 8
+  %v6_data = call ptr @malloc(i64 0)
+  %v6_0 = insertvalue %sl.array.i32 poison, ptr %v6_data, 0
+  %v6_1 = insertvalue %sl.array.i32 %v6_0, i64 0, 1
+  %v6 = insertvalue %sl.array.i32 %v6_1, i64 0, 2
+  store %sl.array.i32 %v6, ptr %slot3, align 8
+  %v7 = sext i32 0 to i64
+  store i64 %v7, ptr %slot4, align 8
+  br label %while14_header
+while14_header:
+  %while14_v11 = load i64, ptr %slot4, align 8
+  %while14_v12 = extractvalue %sl.source_text %arg, 1
+  %while14_v10 = icmp ult i64 %while14_v11, %while14_v12
+  br i1 %while14_v10, label %while14_body, label %while14_exit
+while14_body:
+  %v17 = load %sl.array.i32, ptr %slot3, align 8
+  %v20 = load i64, ptr %slot4, align 8
+  %v18_base = extractvalue %sl.source_text %arg, 0
+  %v18_address = getelementptr i8, ptr %v18_base, i64 %v20
+  %v18 = load i8, ptr %v18_address, align 1
+  %push16_data = extractvalue %sl.array.i32 %v17, 0
+  %push16_length = extractvalue %sl.array.i32 %v17, 1
+  %push16_capacity = extractvalue %sl.array.i32 %v17, 2
+  %push16_full = icmp eq i64 %push16_length, %push16_capacity
+  %push16_empty = icmp eq i64 %push16_capacity, 0
+  %push16_doubled = mul i64 %push16_capacity, 2
+  %push16_grown_capacity = select i1 %push16_empty, i64 4, i64 %push16_doubled
+  %push16_append_capacity = select i1 %push16_full, i64 %push16_grown_capacity, i64 %push16_capacity
+  %push16_append_bytes = mul i64 %push16_append_capacity, 1
+  %push16_append_data = call ptr @realloc(ptr %push16_data, i64 %push16_append_bytes)
+  %push16_slot = getelementptr i8, ptr %push16_append_data, i64 %push16_length
+  store i8 %v18, ptr %push16_slot, align 1
+  %push16_new_length = add i64 %push16_length, 1
+  %push16_array0 = insertvalue %sl.array.i32 poison, ptr %push16_append_data, 0
+  %push16_array1 = insertvalue %sl.array.i32 %push16_array0, i64 %push16_new_length, 1
+  %push16_array2 = insertvalue %sl.array.i32 %push16_array1, i64 %push16_append_capacity, 2
+  store %sl.array.i32 %push16_array2, ptr %slot3, align 8
+  %v22 = load i64, ptr %slot4, align 8
+  %v23 = sext i32 1 to i64
+  %v21 = add i64 %v22, %v23
+  store i64 %v21, ptr %slot4, align 8
+  br label %while14_header
+while14_exit:
+  %v26 = load %sl.array.i32, ptr %slot3, align 8
+  %v25 = insertvalue %sl.struct.m0_s0 poison, %sl.array.i32 %v26, 0
+  ret %sl.struct.m0_s0 %v25
+}
+define %sl.array.i32 @sl_m0_s6(%sl.array.i32 %arg) {
+entry:
+  %v30_input = extractvalue %sl.array.i32 %arg, 0
+  %v30_length = extractvalue %sl.array.i32 %arg, 1
+  %v30_bytes = mul i64 %v30_length, 24
+  %v30_data = call ptr @malloc(i64 %v30_bytes)
+  %v30_group = alloca %smalllang.compute_group, align 8
+  %v30_callback_slot = getelementptr %smalllang.compute_group, ptr %v30_group, i32 0, i32 0
+  store ptr @smalllang_parallel_callback_30, ptr %v30_callback_slot, align 8
+  %v30_input_slot = getelementptr %smalllang.compute_group, ptr %v30_group, i32 0, i32 1
+  store ptr %v30_input, ptr %v30_input_slot, align 8
+  %v30_output_slot = getelementptr %smalllang.compute_group, ptr %v30_group, i32 0, i32 2
+  store ptr %v30_data, ptr %v30_output_slot, align 8
+  %v30_count_slot = getelementptr %smalllang.compute_group, ptr %v30_group, i32 0, i32 3
+  store i64 %v30_length, ptr %v30_count_slot, align 8
+  %v30_capture_slot = getelementptr %smalllang.compute_group, ptr %v30_group, i32 0, i32 4
+  store ptr null, ptr %v30_capture_slot, align 8
+  %v30_sink_bytes = mul i64 %v30_length, 24
+  %v30_sinks = call ptr @malloc(i64 %v30_sink_bytes)
+  call void @llvm.memset.p0.i64(ptr %v30_sinks, i8 0, i64 %v30_sink_bytes, i1 false)
+  %v30_sinks_slot = getelementptr %smalllang.compute_group, ptr %v30_group, i32 0, i32 5
+  store ptr %v30_sinks, ptr %v30_sinks_slot, align 8
+  call void @smalllang_compute_execute(ptr %v30_group)
+  %v30_0 = insertvalue %sl.array.i32 poison, ptr %v30_data, 0
+  %v30_1 = insertvalue %sl.array.i32 %v30_0, i64 %v30_length, 1
+  %v30 = insertvalue %sl.array.i32 %v30_1, i64 %v30_length, 2
+  %drop_arg = extractvalue %sl.array.i32 %arg, 0
+  call void @free(ptr %drop_arg)
+  ret %sl.array.i32 %v30
+}
+define i32 @main() {
+entry:
+  %slot34 = alloca i32, align 4
+  %slot35 = alloca %sl.array.i32, align 8
+  %slot36 = alloca %sl.source_text, align 8
+  %slot37 = alloca %sl.source_text, align 8
+  %slot38 = alloca %sl.array.i32, align 8
+  %v63_ptr = insertvalue %sl.text poison, ptr @sl_str_63, 0
+  %v63 = insertvalue %sl.text %v63_ptr, i64 27, 1
+  store i32 0, ptr %slot34, align 4
+  br label %while44_header
+while44_header:
+  %while44_v42 = load i32, ptr %slot34, align 4
+  %while44_v41 = icmp slt i32 %while44_v42, 100
+  br i1 %while44_v41, label %while44_body, label %while44_exit
+while44_body:
+  %v46_data = call ptr @malloc(i64 0)
+  %v46_0 = insertvalue %sl.array.i32 poison, ptr %v46_data, 0
+  %v46_1 = insertvalue %sl.array.i32 %v46_0, i64 0, 1
+  %v46 = insertvalue %sl.array.i32 %v46_1, i64 0, 2
+  store %sl.array.i32 %v46, ptr %slot35, align 8
+  %v48_ptr = insertvalue %sl.text poison, ptr @sl_str_48, 0
+  %v48 = insertvalue %sl.text %v48_ptr, i64 5, 1
+  %v47_data = extractvalue %sl.text %v48, 0
+  %v47_length = extractvalue %sl.text %v48, 1
+  %v47_value0 = insertvalue %sl.source_text poison, ptr %v47_data, 0
+  %v47_value1 = insertvalue %sl.source_text %v47_value0, i64 %v47_length, 1
+  %v47_value2 = insertvalue %sl.source_text %v47_value1, ptr null, 2
+  %v47 = insertvalue %sl.source_text %v47_value2, i64 0, 3
+  store %sl.source_text %v47, ptr %slot36, align 8
+  %v50 = load %sl.array.i32, ptr %slot35, align 8
+  %v51 = load %sl.source_text, ptr %slot36, align 8
+  %push49_data = extractvalue %sl.array.i32 %v50, 0
+  %push49_length = extractvalue %sl.array.i32 %v50, 1
+  %push49_capacity = extractvalue %sl.array.i32 %v50, 2
+  %push49_full = icmp eq i64 %push49_length, %push49_capacity
+  %push49_empty = icmp eq i64 %push49_capacity, 0
+  %push49_doubled = mul i64 %push49_capacity, 2
+  %push49_grown_capacity = select i1 %push49_empty, i64 4, i64 %push49_doubled
+  %push49_append_capacity = select i1 %push49_full, i64 %push49_grown_capacity, i64 %push49_capacity
+  %push49_append_bytes = mul i64 %push49_append_capacity, 32
+  %push49_append_data = call ptr @realloc(ptr %push49_data, i64 %push49_append_bytes)
+  %push49_slot = getelementptr %sl.source_text, ptr %push49_append_data, i64 %push49_length
+  store %sl.source_text %v51, ptr %push49_slot, align 8
+  %push49_new_length = add i64 %push49_length, 1
+  %push49_array0 = insertvalue %sl.array.i32 poison, ptr %push49_append_data, 0
+  %push49_array1 = insertvalue %sl.array.i32 %push49_array0, i64 %push49_new_length, 1
+  %push49_array2 = insertvalue %sl.array.i32 %push49_array1, i64 %push49_append_capacity, 2
+  store %sl.array.i32 %push49_array2, ptr %slot35, align 8
+  %v53_ptr = insertvalue %sl.text poison, ptr @sl_str_53, 0
+  %v53 = insertvalue %sl.text %v53_ptr, i64 8, 1
+  %v52_data = extractvalue %sl.text %v53, 0
+  %v52_length = extractvalue %sl.text %v53, 1
+  %v52_value0 = insertvalue %sl.source_text poison, ptr %v52_data, 0
+  %v52_value1 = insertvalue %sl.source_text %v52_value0, i64 %v52_length, 1
+  %v52_value2 = insertvalue %sl.source_text %v52_value1, ptr null, 2
+  %v52 = insertvalue %sl.source_text %v52_value2, i64 0, 3
+  store %sl.source_text %v52, ptr %slot37, align 8
+  %v55 = load %sl.array.i32, ptr %slot35, align 8
+  %v56 = load %sl.source_text, ptr %slot37, align 8
+  %push54_data = extractvalue %sl.array.i32 %v55, 0
+  %push54_length = extractvalue %sl.array.i32 %v55, 1
+  %push54_capacity = extractvalue %sl.array.i32 %v55, 2
+  %push54_full = icmp eq i64 %push54_length, %push54_capacity
+  %push54_empty = icmp eq i64 %push54_capacity, 0
+  %push54_doubled = mul i64 %push54_capacity, 2
+  %push54_grown_capacity = select i1 %push54_empty, i64 4, i64 %push54_doubled
+  %push54_append_capacity = select i1 %push54_full, i64 %push54_grown_capacity, i64 %push54_capacity
+  %push54_append_bytes = mul i64 %push54_append_capacity, 32
+  %push54_append_data = call ptr @realloc(ptr %push54_data, i64 %push54_append_bytes)
+  %push54_slot = getelementptr %sl.source_text, ptr %push54_append_data, i64 %push54_length
+  store %sl.source_text %v56, ptr %push54_slot, align 8
+  %push54_new_length = add i64 %push54_length, 1
+  %push54_array0 = insertvalue %sl.array.i32 poison, ptr %push54_append_data, 0
+  %push54_array1 = insertvalue %sl.array.i32 %push54_array0, i64 %push54_new_length, 1
+  %push54_array2 = insertvalue %sl.array.i32 %push54_array1, i64 %push54_append_capacity, 2
+  store %sl.array.i32 %push54_array2, ptr %slot35, align 8
+  %v58 = load %sl.array.i32, ptr %slot35, align 8
+  %v57 = call %sl.array.i32 @sl_m0_s6(%sl.array.i32 %v58)
+  store %sl.array.i32 %v57, ptr %slot38, align 8
+  %v60 = load i32, ptr %slot34, align 4
+  %v59 = add i32 %v60, 1
+  store i32 %v59, ptr %slot34, align 4
+  %cleanup443_b38_current = load %sl.array.i32, ptr %slot38, align 8
+  %cleanup443_b38 = extractvalue %sl.array.i32 %cleanup443_b38_current, 0
+  call void @free(ptr %cleanup443_b38)
+  br label %while44_header
+while44_exit:
+  call void @sl_runtime_print(ptr @sl_str_63, i64 27, i1 true)
+  call void @sl_runtime_flush_stdout()
+  ret i32 0
+}
+declare dllimport ptr @CreateFileA(ptr, i32, i32, ptr, i32, i32, ptr)
+declare dllimport i32 @CloseHandle(ptr)
+declare dllimport i32 @GetFileSizeEx(ptr, ptr)
+declare dllimport ptr @CreateFileMappingA(ptr, ptr, i32, i32, i32, ptr)
+declare dllimport ptr @MapViewOfFile(ptr, i32, i32, i32, i64)
+declare dllimport i32 @UnmapViewOfFile(ptr)
+declare void @llvm.trap()
+define %sl.source_text @sl_runtime_map_text(%sl.text %path) {
+entry:
+  %path_data = extractvalue %sl.text %path, 0
+  %path_length = extractvalue %sl.text %path, 1
+  %buffer_length = add i64 %path_length, 1
+  %buffer = call ptr @malloc(i64 %buffer_length)
+  %allocated = icmp ne ptr %buffer, null
+  br i1 %allocated, label %copy, label %failure
+copy:
+  %index = phi i64 [ 0, %entry ], [ %next, %copy_body ]
+  %copy_done = icmp eq i64 %index, %path_length
+  br i1 %copy_done, label %terminate, label %copy_body
+copy_body:
+  %source = getelementptr i8, ptr %path_data, i64 %index
+  %byte = load i8, ptr %source, align 1
+  %destination = getelementptr i8, ptr %buffer, i64 %index
+  store i8 %byte, ptr %destination, align 1
+  %next = add i64 %index, 1
+  br label %copy
+terminate:
+  %terminator = getelementptr i8, ptr %buffer, i64 %path_length
+  store i8 0, ptr %terminator, align 1
+  %file = call ptr @CreateFileA(ptr %buffer, i32 -2147483648, i32 1, ptr null, i32 3, i32 128, ptr null)
+  call void @free(ptr %buffer)
+  %file_value = ptrtoint ptr %file to i64
+  %opened = icmp ne i64 %file_value, -1
+  br i1 %opened, label %size, label %failure
+size:
+  %size_slot = alloca i64, align 8
+  %size_status = call i32 @GetFileSizeEx(ptr %file, ptr %size_slot)
+  %size_ok = icmp ne i32 %size_status, 0
+  br i1 %size_ok, label %size_known, label %close_failure
+size_known:
+  %length = load i64, ptr %size_slot, align 8
+  %empty = icmp eq i64 %length, 0
+  br i1 %empty, label %empty_success, label %mapping
+empty_success:
+  %empty_closed = call i32 @CloseHandle(ptr %file)
+  ret %sl.source_text zeroinitializer
+mapping:
+  %mapping_handle = call ptr @CreateFileMappingA(ptr %file, ptr null, i32 2, i32 0, i32 0, ptr null)
+  %mapping_ok = icmp ne ptr %mapping_handle, null
+  br i1 %mapping_ok, label %view, label %close_failure
+view:
+  %base = call ptr @MapViewOfFile(ptr %mapping_handle, i32 4, i32 0, i32 0, i64 %length)
+  %base_ok = icmp ne ptr %base, null
+  br i1 %base_ok, label %success, label %mapping_failure
+success:
+  %mapping_closed = call i32 @CloseHandle(ptr %mapping_handle)
+  %file_closed = call i32 @CloseHandle(ptr %file)
+  %result0 = insertvalue %sl.source_text poison, ptr %base, 0
+  %result1 = insertvalue %sl.source_text %result0, i64 %length, 1
+  %result2 = insertvalue %sl.source_text %result1, ptr %base, 2
+  %result3 = insertvalue %sl.source_text %result2, i64 %length, 3
+  ret %sl.source_text %result3
+mapping_failure:
+  %failed_mapping_closed = call i32 @CloseHandle(ptr %mapping_handle)
+  br label %close_failure
+close_failure:
+  %failed_file_closed = call i32 @CloseHandle(ptr %file)
+  br label %failure
+failure:
+  call void @llvm.trap()
+  unreachable
+}
+
+define void @sl_runtime_unmap_text(%sl.source_text %source) {
+entry:
+  %base = extractvalue %sl.source_text %source, 2
+  %owned = icmp ne ptr %base, null
+  br i1 %owned, label %unmap, label %done
+unmap:
+  %ignored = call i32 @UnmapViewOfFile(ptr %base)
+  br label %done
+done:
+  ret void
+}

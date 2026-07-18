@@ -100,13 +100,13 @@ task-group primitive and ordered merge.
 
 Evidence: `selfhost/semantic/analysis.sl`; examples 182, 293, and 294.
 
-### B. Typed role surface (3/5)
+### B. Typed role surface (4/5)
 
 - [x] Block callbacks can return a typed result.
 - [x] `parallel` is implemented as an imported standard-library role.
 - [x] Input/item/result types are inferred through ordinary generics.
 - [ ] Non-sendable captures and mutable borrows are rejected.
-- [ ] Owned callback results transfer exactly once.
+- [x] Owned callback results transfer exactly once.
 
 ### C. Native compute task group (3/7)
 
@@ -118,32 +118,32 @@ Evidence: `selfhost/semantic/analysis.sl`; examples 182, 293, and 294.
 - [ ] Cancellation and partial-result destruction are exactly once.
 - [x] File-operation waiting remains outside the compute pool.
 
-### D. Self-host compiler integration (2/6)
+### D. Self-host compiler integration (3/6)
 
 - [x] Nested imported calls cannot overwrite the enclosing runtime call target.
 - [x] Source-local analysis uses `parallel` and ordered package assembly.
 - [ ] Global semantic facts form an explicit read-only barrier.
 - [ ] Function-local typed IR uses indexed parallel work.
-- [ ] LLVM function bodies use per-function buffers and ordered emission.
+- [x] LLVM function bodies use per-function buffers and ordered emission.
 - [ ] The self-host driver accepts and reports the effective worker count.
 
 Evidence for the completed call-identity fix: example 322. Example 323 proves a
 literal-returning function in the second module still emits `ret i32 42`.
 
-### E. Verification (2/6)
+### E. Verification (5/6)
 
 - [x] A 24-processor machine shows more than two active frontend workers.
-- [ ] Frontend CPU-time/wall-time ratio materially exceeds 2.0.
-- [ ] Full self-host frontend wall time improves from the recorded baseline.
+- [x] Frontend CPU-time/wall-time ratio materially exceeds 2.0.
+- [x] Full self-host frontend wall time improves from the recorded baseline.
 - [x] Three repeated LLVM outputs are byte-for-byte identical.
-- [ ] Peak runtime memory stays within the documented budget.
+- [x] Peak runtime memory stays within the documented budget.
 - [ ] Windows and Linux full suites pass with zero warnings and errors.
 
 Evidence: example 324 executes `block item: Int -> Int`; example 325 proves the
 self-host grammar/parser accepts the same declaration and call form. The two
 `block-callback-result-*` diagnostics cover missing and mismatched results.
 
-Parallel-compilation progress is **14/28 checks (50.0%)**. This is a feature-local
+Parallel-compilation progress is **19/28 checks (67.9%)**. This is a feature-local
 metric and does not promote the canonical self-host roadmap, which remains
 **48.5/60 equivalent gates (80.8%)** until a full checklist audit proves a gate.
 
@@ -162,11 +162,11 @@ On the 24-logical-processor Windows development machine, example 329 created
 Examples 328, 329, and 294 pass together: ordered `Int -> Int` mapping, active
 worker instrumentation, and the self-host `SourceAnalysis` boundary.
 
-The reusable native self-host driver compiled example 323 three times to the
-same 242-byte LLVM output with SHA-256
-`C1B1607773224F83B30F5AEC060B65E8A8C48C076C42DE882C8C0B857C74B670`.
-A full 29-source self-host attempt reached 28 OS threads, 98.5 MiB peak working
-set, and 184.3 seconds wall time, but then hit the pre-existing stage-2 trap
-after producing 172,417 output bytes. Its whole-run CPU/wall ratio was 0.99,
-so the global semantic, typed-IR, and LLVM-body stages remain sequential and
-the wall-time/CPU-ratio verification boxes deliberately remain open.
+Example 377 proves 100 generations of borrowed `SourceText` input and owned
+struct/array output through native workers. The complete 28-source self-host
+compiler reached an exact stage-2/stage-3 fixed point of 7,142,042 bytes with
+SHA-256 `A71D4595F9854C1E7746F5FE1ECFDF2D82D08DB971F6C3837714B2CB07CA11AD`.
+Five consecutive stage-3 runs completed in 33.90-37.75 seconds with identical
+output. A measured run used 377.77 CPU-seconds over 34.81 seconds wall time
+(10.85 effective cores) and peaked at 88.7 MiB, below the 100 MiB frontend
+budget. Linux full-suite parity remains the outstanding platform check.

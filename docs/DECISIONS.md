@@ -5561,3 +5561,32 @@ suite passes 76/76. Complete stage 2 and stage 3 outputs are byte-identical at
 Stage 3 completes in 26.13 seconds with 213.52 CPU-seconds, averaging 8.17
 effective cores. Compared with D172's 46.28 seconds this is a 43.5% reduction;
 compared with the original 360.7-second serial baseline it is 92.8% lower.
+
+## D174 - Transfer Owned Source Analysis Results Across Workers
+
+Status: implemented and fixed-point verified
+Date: 2026-07-18
+
+No-capture parallel callbacks may accept borrowed `SourceText` elements when
+their result is an owned, recursively worker-transferable value graph. The
+self-host emitter accepts scalar built-ins, nominal structs, and dynamic or
+fixed arrays whose nested fields satisfy the same rule. Text, `SourceText`,
+dictionaries, boxes, and unresolved types stay on the serial path. Workers
+borrow mapped source bytes for the joined generation and transfer each owned
+result into its unique output slot; the submitting thread receives the result
+array after every worker has left the generation barrier.
+
+Enabling the real 28-source boundary exposed an existing eager-evaluation bug
+in `type_terms`: readiness expressions indexed a child array even when the
+child id was `-1`. Explicit guarded branches now ensure that no array access is
+formed until the index is valid. The failure was captured in the worker handling
+`selfhost/semantic/analysis.sl`, and the corrected stage-2 compiler no longer
+faults under heterogeneous parallel analysis.
+
+Example 377 exercises the SourceText/result ABI for 100 generations. The full
+stage-2 differential verifier passes, and five consecutive stage-3 generations
+produce the same 7,142,042-byte LLVM with SHA-256
+`A71D4595F9854C1E7746F5FE1ECFDF2D82D08DB971F6C3837714B2CB07CA11AD`.
+Those runs took 33.90-37.75 seconds. An instrumented run recorded 34.81 seconds
+wall time, 377.77 CPU-seconds (10.85 effective cores), and an 88.7 MiB peak
+working set.

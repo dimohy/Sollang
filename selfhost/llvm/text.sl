@@ -728,6 +728,81 @@ emitCore context: move EmitContext -> Unit uses Console {
         }
         supported!
     }
+    hasWorkerSourceTextArrayElement nodeIndex: Int -> Bool {
+        false => supported!
+        context.ir[nodeIndex] => arrayNode
+        arrayNode -> arrayElementTypeId => elementTypeId
+        elementTypeId >= 0 -> if {
+            context.types[elementTypeId] => elementType
+            (elementType.kind == 1 and elementType.origin == 1 and elementType.symbol == 24) -> if {
+                true => supported!
+            }
+        }
+        supported!
+    }
+    workerTransferType typeId: Int -> Bool {
+        [Int; ~] => pending!
+        [Int; ~] => visited!
+        pending! -> push(typeId)
+        true => supported!
+        0 => pendingIndex!
+        (supported! and pendingIndex! < (pending! -> len)) -> while {
+            pending![pendingIndex!] => currentTypeId
+            false => alreadyVisited!
+            0 => visitedIndex!
+            visitedIndex! < (visited! -> len) -> while {
+                visited![visitedIndex!] == currentTypeId -> if { true => alreadyVisited! }
+                visitedIndex! + 1 => visitedIndex!
+            }
+            not alreadyVisited! -> if {
+                visited! -> push(currentTypeId)
+                (currentTypeId < 0 or currentTypeId >= (context.types -> len)) -> if {
+                    false => supported!
+                } else {
+                    context.types[currentTypeId] => currentType
+                    currentType.status != 0 -> if {
+                        false => supported!
+                    } else {
+                        currentType.kind == 1 -> if {
+                            currentType.origin == 1 -> if {
+                                not ((currentType.symbol >= 2 and currentType.symbol <= 14) or (currentType.symbol >= 19 and currentType.symbol <= 23)) -> if {
+                                    false => supported!
+                                }
+                            } else {
+                                (currentType.origin == 0 or currentType.origin == 2) -> if {
+                                    0 => fieldIndex!
+                                    fieldIndex! < (context.fields -> len) -> while {
+                                        context.fields[fieldIndex!] => field
+                                        (field.status == 0 and field.ownerType == currentTypeId) -> if {
+                                            pending! -> push(field.fieldType)
+                                        }
+                                        fieldIndex! + 1 => fieldIndex!
+                                    }
+                                } else {
+                                    false => supported!
+                                }
+                            }
+                        } else {
+                            (currentType.kind == 3 or currentType.kind == 4) -> if {
+                                pending! -> push(currentType.first)
+                            } else {
+                                false => supported!
+                            }
+                        }
+                    }
+                }
+            }
+            pendingIndex! + 1 => pendingIndex!
+        }
+        supported!
+    }
+    hasWorkerTransferArrayElement nodeIndex: Int -> Bool {
+        false => supported!
+        context.ir[nodeIndex] => arrayNode
+        arrayNode -> arrayElementTypeId => elementTypeId
+        elementTypeId >= 0 -> if { elementTypeId -> workerTransferType => supported! }
+        supported!
+    }
     parallelUsesComputePool expressionIndex: Int -> Bool {
         false => supported!
         context.ir[expressionIndex] => parallelExpression
@@ -740,6 +815,9 @@ emitCore context: move EmitContext -> Unit uses Console {
                     parallelExpression.operand0 -> hasWorkerScalarArrayElement => scalarInput
                     expressionIndex -> hasWorkerScalarArrayElement => scalarOutput
                     (scalarInput and scalarOutput) -> if { true => supported! }
+                    parallelExpression.operand0 -> hasWorkerSourceTextArrayElement => sourceTextInput
+                    expressionIndex -> hasWorkerTransferArrayElement => transferableOutput
+                    (sourceTextInput and transferableOutput) -> if { true => supported! }
                 }
                 0 => parallelTargetCaptureIndex!
                 parallelTargetCaptureIndex! < (parallelTargetCaptures! -> len) -> while {

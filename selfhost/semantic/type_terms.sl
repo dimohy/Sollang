@@ -147,8 +147,12 @@ public lowerPrepared request: TypeTermRequest -> [TypeTerm; ~] {
                         firstChild! => secondChild!
                         childIndex! => firstChild!
                     } else {
-                        (secondChild! < 0 or request.nodes[child.astNode].firstToken < request.nodes[terms![secondChild!].astNode].firstToken) -> if {
+                        secondChild! < 0 -> if {
                             childIndex! => secondChild!
+                        } else {
+                            request.nodes[child.astNode].firstToken < request.nodes[terms![secondChild!].astNode].firstToken -> if {
+                                childIndex! => secondChild!
+                            }
                         }
                     }
                 }
@@ -213,9 +217,19 @@ public lowerPrepared request: TypeTermRequest -> [TypeTerm; ~] {
         candidateIndex! < (terms! -> len) -> while {
             terms![candidateIndex!] => candidate!
             candidate!.canonical < 0 -> if {
-                (candidate!.firstArgument < 0 or terms![candidate!.firstArgument].canonical >= 0) => firstReady
-                (candidate!.secondArgument < 0 or terms![candidate!.secondArgument].canonical >= 0) => secondReady
-                (firstReady and secondReady) -> if {
+                false => firstReady!
+                candidate!.firstArgument < 0 -> if {
+                    true => firstReady!
+                } else {
+                    terms![candidate!.firstArgument].canonical >= 0 => firstReady!
+                }
+                false => secondReady!
+                candidate!.secondArgument < 0 -> if {
+                    true => secondReady!
+                } else {
+                    terms![candidate!.secondArgument].canonical >= 0 => secondReady!
+                }
+                (firstReady! and secondReady!) -> if {
                     candidateIndex! => candidate!.canonical
                     0 => representativeIndex!
                     (representativeIndex! < candidateIndex! and candidate!.canonical == candidateIndex!) -> while {
@@ -276,9 +290,19 @@ public substitute request: move SubstitutionRequest -> SubstitutionResult {
                             true => changed!
                         }
                     } else {
-                        (sourceTerm.firstArgument < 0 or mapped![sourceTerm.firstArgument] >= 0) => firstReady
-                        (sourceTerm.secondArgument < 0 or mapped![sourceTerm.secondArgument] >= 0) => secondReady
-                        (firstReady and secondReady) -> if {
+                        false => firstReady!
+                        sourceTerm.firstArgument < 0 -> if {
+                            true => firstReady!
+                        } else {
+                            mapped![sourceTerm.firstArgument] >= 0 => firstReady!
+                        }
+                        false => secondReady!
+                        sourceTerm.secondArgument < 0 -> if {
+                            true => secondReady!
+                        } else {
+                            mapped![sourceTerm.secondArgument] >= 0 => secondReady!
+                        }
+                        (firstReady! and secondReady!) -> if {
                             -1 => mappedFirst!
                             sourceTerm.firstArgument >= 0 -> if { mapped![sourceTerm.firstArgument] => mappedFirst! }
                             -1 => mappedSecond!
