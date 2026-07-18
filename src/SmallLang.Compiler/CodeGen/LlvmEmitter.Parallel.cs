@@ -131,9 +131,16 @@ internal sealed partial class LlvmEmitter
             {
                 var capture = captures[captureIndex];
                 var captureTypeName = LlvmType(capture.Value);
-                EmitFunctionLine($"  %capture_address_{captureIndex.ToString(CultureInfo.InvariantCulture)} = getelementptr {captureType}, ptr %capture_environment, i32 0, i32 {captureIndex.ToString(CultureInfo.InvariantCulture)}");
-                EmitFunctionLine($"  %capture_value_{captureIndex.ToString(CultureInfo.InvariantCulture)} = load {captureTypeName}, ptr %capture_address_{captureIndex.ToString(CultureInfo.InvariantCulture)}, align {RuntimeAlignment(capture.Value).ToString(CultureInfo.InvariantCulture)}");
-                captureArguments.Add($"{captureTypeName} %capture_value_{captureIndex.ToString(CultureInfo.InvariantCulture)}");
+                var captureAddress = $"%capture_address_{captureIndex.ToString(CultureInfo.InvariantCulture)}";
+                EmitFunctionLine($"  {captureAddress} = getelementptr {captureType}, ptr %capture_environment, i32 0, i32 {captureIndex.ToString(CultureInfo.InvariantCulture)}");
+                if (CaptureUsesBorrowAbi(capture.Value))
+                {
+                    captureArguments.Add($"ptr {captureAddress}");
+                    continue;
+                }
+                var captureValue = $"%capture_value_{captureIndex.ToString(CultureInfo.InvariantCulture)}";
+                EmitFunctionLine($"  {captureValue} = load {captureTypeName}, ptr {captureAddress}, align {RuntimeAlignment(capture.Value).ToString(CultureInfo.InvariantCulture)}");
+                captureArguments.Add($"{captureTypeName} {captureValue}");
             }
         }
         captureArguments.Add($"{LlvmType(inputType)} %item");

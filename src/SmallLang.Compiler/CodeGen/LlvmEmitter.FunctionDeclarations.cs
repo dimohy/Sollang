@@ -519,8 +519,11 @@ internal sealed partial class LlvmEmitter
     {
         return string.Join(", ", CapturedBindingsForFunction(function)
             .Select((binding, index) =>
-                $"{LlvmType(binding.Value)} %capture_{index.ToString(CultureInfo.InvariantCulture)}"));
+                $"{(CaptureUsesBorrowAbi(binding.Value) ? "ptr" : LlvmType(binding.Value))} %capture_{index.ToString(CultureInfo.InvariantCulture)}"));
     }
+
+    private bool CaptureUsesBorrowAbi(BoundType type) =>
+        _program.Types.ContainsOwnedStorage(type);
 
     private IReadOnlyList<KeyValuePair<string, BoundType>> CapturedBindingsForFunction(
         BoundFunction function)
@@ -596,9 +599,23 @@ internal sealed partial class LlvmEmitter
         for (var index = 0; index < captures.Count; index++)
         {
             var capture = captures[index];
+            var captureName = $"%capture_{index.ToString(CultureInfo.InvariantCulture)}";
+            if (CaptureUsesBorrowAbi(capture.Value))
+            {
+                var loaded = NextTemp("capture_borrow");
+                EmitLoad(
+                    loaded,
+                    LlvmType(capture.Value),
+                    captureName,
+                    RuntimeAlignment(capture.Value));
+                _locals.Add(capture.Key, DematerializeAggregateValue(capture.Value, loaded));
+                _borrowedOwnedLocals.Add(capture.Key);
+                _readonlyCaptureBorrowPointers.Add(capture.Key, captureName);
+                continue;
+            }
             var value = DematerializeAggregateValue(
                 capture.Value,
-                $"%capture_{index.ToString(CultureInfo.InvariantCulture)}");
+                captureName);
             _locals.Add(capture.Key, value);
             if (_program.Types.ContainsOwnedStorage(capture.Value))
             {

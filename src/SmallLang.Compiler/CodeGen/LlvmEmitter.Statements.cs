@@ -47,6 +47,7 @@ internal sealed partial class LlvmEmitter
         {
             EmitPlatformFunctionBlock(_platform.EmitExitCleanup);
         }
+        EmitPlatformFunctionBlock(_platform.EmitExitHandles);
 
         var finalOk = NextTemp("final_ok");
         EmitLoad(finalOk, "i1", "%ok_state", 1);
@@ -555,6 +556,7 @@ internal sealed partial class LlvmEmitter
             new HashSet<string>(StringComparer.Ordinal),
             new HashSet<string>(StringComparer.Ordinal),
             new Dictionary<string, MutableContainerSlot>(StringComparer.Ordinal),
+            new Dictionary<string, string>(StringComparer.Ordinal),
             new Dictionary<string, string>(StringComparer.Ordinal),
             new Dictionary<string, string>(StringComparer.Ordinal));
 

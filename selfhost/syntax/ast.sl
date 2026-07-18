@@ -467,6 +467,92 @@ lowerFrom request: LowerRequest -> [AstNode; ~] {
         infixIndex! + 1 => infixIndex!
     }
 
+    # The grammar stores every target of a flow chain under one flat node.
+    # Normalize a -> f -> g into nested flow nodes equivalent to
+    # (a -> f) -> g so call resolution and typed IR preserve every target.
+    0 => flowAstCount!
+    flowAstCount! < (ast! -> len) -> while {
+        flowAstCount! + 1 => flowAstCount!
+    }
+    0 => appendedFlowCount!
+    0 => flowIndex!
+    flowIndex! < flowAstCount! -> while {
+        ast![flowIndex!] => flowNode!
+        flowNode!.kind == 10 -> if {
+            [Int; ~] => flowArrows!
+            flowNode!.firstToken => flowTokenIndex!
+            flowNode!.firstToken + flowNode!.tokenCount => flowTokenEnd
+            0 => flowGroupDepth!
+            flowTokenIndex! < flowTokenEnd -> while {
+                tokens![flowTokenIndex!].kind => flowTokenKind
+                (flowGroupDepth! == 0 and flowTokenKind == grammar.tokenIdArrow) -> if {
+                    flowArrows! -> push(flowTokenIndex!)
+                }
+                (flowTokenKind == grammar.tokenIdLeftParen or flowTokenKind == grammar.tokenIdLeftBracket or flowTokenKind == grammar.tokenIdLeftBrace) -> if {
+                    flowGroupDepth! + 1 => flowGroupDepth!
+                }
+                (flowTokenKind == grammar.tokenIdRightParen or flowTokenKind == grammar.tokenIdRightBracket or flowTokenKind == grammar.tokenIdRightBrace) -> if {
+                    flowGroupDepth! - 1 => flowGroupDepth!
+                }
+                flowTokenIndex! + 1 => flowTokenIndex!
+            }
+            (flowArrows! -> len) > 1 -> if {
+                flowAstCount! + appendedFlowCount! => nestedFlowStart
+                0 => nestedFlowIndex!
+                nestedFlowIndex! < (flowArrows! -> len) - 1 -> while {
+                    flowArrows![nestedFlowIndex! + 1] => nestedFlowNextArrow
+                    nestedFlowNextArrow => nestedFlowEndToken!
+                    (nestedFlowEndToken! > flowNode!.firstToken and (tokens![nestedFlowEndToken! - 1].kind == grammar.triviaIdWhitespace or tokens![nestedFlowEndToken! - 1].kind == grammar.triviaIdComment)) -> while {
+                        nestedFlowEndToken! - 1 => nestedFlowEndToken!
+                    }
+                    flowIndex! => nestedFlowParent!
+                    nestedFlowIndex! + 1 < (flowArrows! -> len) - 1 -> if {
+                        nestedFlowStart + nestedFlowIndex! + 1 => nestedFlowParent!
+                    }
+                    tokens![nestedFlowEndToken! - 1] => nestedFlowLastToken
+                    ast! -> push(AstNode {
+                        kind: 10
+                        parent: nestedFlowParent!
+                        cstRuleId: flowNode!.cstRuleId
+                        operatorKind: flowNode!.operatorKind
+                        payloadToken: flowNode!.payloadToken
+                        secondaryToken: flowNode!.secondaryToken
+                        tertiaryToken: flowNode!.tertiaryToken
+                        flags: flowNode!.flags
+                        firstToken: flowNode!.firstToken
+                        tokenCount: nestedFlowEndToken! - flowNode!.firstToken
+                        start: flowNode!.start
+                        length: nestedFlowLastToken.span.start + nestedFlowLastToken.span.length - flowNode!.start
+                    })
+                    appendedFlowCount! + 1 => appendedFlowCount!
+                    nestedFlowIndex! + 1 => nestedFlowIndex!
+                }
+                0 => flowChildIndex!
+                flowChildIndex! < flowAstCount! -> while {
+                    ast![flowChildIndex!] => flowChild!
+                    flowChild!.parent == flowIndex! -> if {
+                        0 => flowChildSegment!
+                        0 => flowArrowSearch!
+                        flowArrowSearch! < (flowArrows! -> len) -> while {
+                            flowArrows![flowArrowSearch!] < flowChild!.firstToken -> if {
+                                flowChildSegment! + 1 => flowChildSegment!
+                            }
+                            flowArrowSearch! + 1 => flowArrowSearch!
+                        }
+                        flowChildSegment! < (flowArrows! -> len) -> if {
+                            0 => flowChildNestedOffset!
+                            flowChildSegment! > 0 -> if { flowChildSegment! - 1 => flowChildNestedOffset! }
+                            nestedFlowStart + flowChildNestedOffset! => flowChild!.parent
+                            flowChild! => ast![flowChildIndex!]
+                        }
+                    }
+                    flowChildIndex! + 1 => flowChildIndex!
+                }
+            }
+        }
+        flowIndex! + 1 => flowIndex!
+    }
+
     # Resolve declaration payloads after every semantic parent/child index is
     # known. Path children provide qualified names; direct declarations scan
     # only their header token range.

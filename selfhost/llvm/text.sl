@@ -554,10 +554,13 @@ writeDecimalLine value: Int -> Unit uses Console {
 }
 
 emitCore context: move EmitContext -> Unit uses Console {
-    functionEnd functionIndex: Int -> Int {
+    computeFunctionEnd functionIndex: Int -> Int {
         functionIndex + 1 => end!
         (end! < (context.ir -> len) and context.ir[end!].kind != 0 and context.ir[end!].kind != 11) -> while { end! + 1 => end! }
         end!
+    }
+    functionEnd functionIndex: Int -> Int {
+        functionEndCache![functionIndex]
     }
     nodeDescendsFrom request: NodeAncestorRequest -> Bool {
         false => descends!
@@ -599,7 +602,7 @@ emitCore context: move EmitContext -> Unit uses Console {
         }
         owner!
     }
-    functionCaptures functionIndex: Int -> [Int; ~] {
+    computeFunctionCaptures functionIndex: Int -> [Int; ~] {
         [Int; ~] => captures!
         context.ir[functionIndex] => targetFunction
         functionIndex -> functionEnd => targetEnd
@@ -624,11 +627,18 @@ emitCore context: move EmitContext -> Unit uses Console {
                 context.ir[useIndex!] => use
                 (use.kind == 5 and use.operand0 < 0 and use.symbol >= 0 and not (currentFunction.operand1 >= 0 and use.symbol == context.ir[currentFunction.operand1].symbol)) -> if {
                     -1 => bindingIndex!
-                    0 => candidateIndex!
-                    candidateIndex! < (context.ir -> len) -> while {
-                        context.ir[candidateIndex!] => candidate
-                        ((candidate.kind == 17 or candidate.kind == 10) and candidate.sourceModule == use.sourceModule and candidate.symbol == use.symbol and (candidateIndex! < currentFunctionIndex or candidateIndex! >= currentFunctionEnd)) -> if { candidateIndex! => bindingIndex! }
-                        candidateIndex! + 1 => candidateIndex!
+                    (use.sourceModule >= 0 and use.sourceModule < (context.ranges -> len)) -> if {
+                        context.ranges[use.sourceModule].symbolStart + use.symbol => bindingSymbolIndex
+                        (bindingSymbolIndex >= 0 and bindingSymbolIndex < (captureBindingBySymbol! -> len)) -> if {
+                            captureBindingBySymbol![bindingSymbolIndex] => bindingCandidateIndex!
+                            (bindingCandidateIndex! >= 0 and bindingIndex! < 0) -> while {
+                                (bindingCandidateIndex! < currentFunctionIndex or bindingCandidateIndex! >= currentFunctionEnd) -> if {
+                                    bindingCandidateIndex! => bindingIndex!
+                                } else {
+                                    capturePreviousBindingByIr![bindingCandidateIndex!] => bindingCandidateIndex!
+                                }
+                            }
+                        }
                     }
                     (bindingIndex! >= 0 and (bindingIndex! < functionIndex or bindingIndex! >= targetEnd)) -> if {
                         false => duplicate!
@@ -642,11 +652,11 @@ emitCore context: move EmitContext -> Unit uses Console {
                 }
                 (use.kind == 6 and use.targetModule >= 0 and use.symbol >= 0) -> if {
                     -1 => calledFunctionIndex!
-                    0 => calledFunctionSearch!
-                    calledFunctionSearch! < (context.ir -> len) -> while {
-                        context.ir[calledFunctionSearch!] => calledFunctionCandidate
-                        (calledFunctionCandidate.kind == 0 and calledFunctionCandidate.sourceModule == use.targetModule and calledFunctionCandidate.symbol == use.symbol) -> if { calledFunctionSearch! => calledFunctionIndex! }
-                        calledFunctionSearch! + 1 => calledFunctionSearch!
+                    use.targetModule < (context.ranges -> len) -> if {
+                        context.ranges[use.targetModule].symbolStart + use.symbol => calledFunctionSymbolIndex
+                        (calledFunctionSymbolIndex >= 0 and calledFunctionSymbolIndex < (captureFunctionBySymbol! -> len)) -> if {
+                            captureFunctionBySymbol![calledFunctionSymbolIndex] => calledFunctionIndex!
+                        }
                     }
                     calledFunctionIndex! >= 0 -> if {
                         false => calledFunctionInClosure!
@@ -673,6 +683,16 @@ emitCore context: move EmitContext -> Unit uses Console {
         }
         captures!
     }
+    functionCaptures functionIndex: Int -> [Int; ~] {
+        [Int; ~] => captures!
+        functionCaptureCacheOffsets![functionIndex] => cachedCaptureOffset
+        0 => cachedCaptureIndex!
+        cachedCaptureIndex! < functionCaptureCacheCounts![functionIndex] -> while {
+            captures! -> push(functionCaptureCacheValues![cachedCaptureOffset + cachedCaptureIndex!])
+            cachedCaptureIndex! + 1 => cachedCaptureIndex!
+        }
+        captures!
+    }
     emitCaptureValue request: CaptureValueRequest -> Unit uses Console {
         context.ir[request.callerIndex] => caller
         context.ir[request.bindingIndex] => binding
@@ -696,22 +716,39 @@ emitCore context: move EmitContext -> Unit uses Console {
     }
     emitCallEnvironmentValues request: CallEnvironmentRequest -> Unit uses Console {
         -1 => targetFunctionIr!
-        0 => targetSearch!
-        targetSearch! < (context.ir -> len) -> while {
-            (context.ir[targetSearch!].kind == 0 and context.ir[targetSearch!].sourceModule == request.targetModule and context.ir[targetSearch!].symbol == request.targetSymbol) -> if { targetSearch! => targetFunctionIr! }
-            targetSearch! + 1 => targetSearch!
+        (request.targetModule >= 0 and request.targetModule < (context.ranges -> len)) -> if {
+            context.ranges[request.targetModule].symbolStart + request.targetSymbol => targetGlobalSymbol
+            (targetGlobalSymbol >= 0 and targetGlobalSymbol < (captureFunctionBySymbol! -> len)) -> if {
+                captureFunctionBySymbol![targetGlobalSymbol] => targetFunctionIr!
+            }
         }
-        targetFunctionIr! >= 0 -> if { targetFunctionIr! -> functionCaptures } else { [Int; ~] } => callCaptures!
+        [Int; ~] => callCaptures!
+        targetFunctionIr! >= 0 -> if {
+            targetFunctionIr! -> functionCaptures => resolvedCallCaptures!
+            0 => resolvedCaptureIndex!
+            resolvedCaptureIndex! < (resolvedCallCaptures! -> len) -> while {
+                callCaptures! -> push(resolvedCallCaptures![resolvedCaptureIndex!])
+                resolvedCaptureIndex! + 1 => resolvedCaptureIndex!
+            }
+        }
         request.callerIndex -> functionEnd => callerEnd
         0 => captureIndex!
         captureIndex! < (callCaptures! -> len) -> while {
             callCaptures![captureIndex!] => bindingIndex
             context.ir[bindingIndex] => binding
-            (bindingIndex > request.callerIndex and bindingIndex < callerEnd and binding.kind != 10 and binding.flags == 1) -> if {
+            (bindingIndex > request.callerIndex and bindingIndex < callerEnd and binding.kind != 10 and binding.flags == 1 and not (binding -> ownsType)) -> if {
                 bindingIndex -> mutableBindingRoot => bindingRoot
                 "  %callenv$(request.callIndex)_capture$(captureIndex!) = load " -> print
                 binding -> writeIrType
                 ", ptr %slot$(bindingRoot), align " -> print
+                binding -> storageAlign -> writeDecimalLine
+            }
+            ((binding -> ownsType) and bindingIndex > request.callerIndex and bindingIndex < callerEnd and not (binding.kind != 10 and binding.flags == 1)) -> if {
+                "  store " -> print
+                binding -> writeIrType
+                " " -> print
+                CaptureValueRequest { callerIndex: request.callerIndex, callIndex: request.callIndex, bindingIndex: bindingIndex, captureIndex: captureIndex! } -> emitCaptureValue
+                ", ptr %capture_borrow_binding$(bindingIndex), align " -> print
                 binding -> storageAlign -> writeDecimalLine
             }
             captureIndex! + 1 => captureIndex!
@@ -719,17 +756,50 @@ emitCore context: move EmitContext -> Unit uses Console {
     }
     emitCallEnvironment request: CallEnvironmentRequest -> Bool uses Console {
         -1 => targetFunctionIr!
-        0 => targetSearch!
-        targetSearch! < (context.ir -> len) -> while {
-            (context.ir[targetSearch!].kind == 0 and context.ir[targetSearch!].sourceModule == request.targetModule and context.ir[targetSearch!].symbol == request.targetSymbol) -> if { targetSearch! => targetFunctionIr! }
-            targetSearch! + 1 => targetSearch!
+        (request.targetModule >= 0 and request.targetModule < (context.ranges -> len)) -> if {
+            context.ranges[request.targetModule].symbolStart + request.targetSymbol => targetGlobalSymbol
+            (targetGlobalSymbol >= 0 and targetGlobalSymbol < (captureFunctionBySymbol! -> len)) -> if {
+                captureFunctionBySymbol![targetGlobalSymbol] => targetFunctionIr!
+            }
         }
-        targetFunctionIr! >= 0 -> if { targetFunctionIr! -> functionCaptures } else { [Int; ~] } => callCaptures!
+        [Int; ~] => callCaptures!
+        targetFunctionIr! >= 0 -> if {
+            targetFunctionIr! -> functionCaptures => resolvedCallCaptures!
+            0 => resolvedCaptureIndex!
+            resolvedCaptureIndex! < (resolvedCallCaptures! -> len) -> while {
+                callCaptures! -> push(resolvedCallCaptures![resolvedCaptureIndex!])
+                resolvedCaptureIndex! + 1 => resolvedCaptureIndex!
+            }
+        }
         0 => captureIndex!
         captureIndex! < (callCaptures! -> len) -> while {
-            context.ir[callCaptures![captureIndex!]] -> writeIrType
-            " " -> print
-            CaptureValueRequest { callerIndex: request.callerIndex, callIndex: request.callIndex, bindingIndex: callCaptures![captureIndex!], captureIndex: captureIndex! } -> emitCaptureValue
+            callCaptures![captureIndex!] => bindingIndex
+            context.ir[bindingIndex] => binding
+            binding -> ownsType -> if {
+                "ptr " -> print
+                request.callerIndex -> functionEnd => callerEnd
+                (bindingIndex > request.callerIndex and bindingIndex < callerEnd) -> if {
+                    (binding.kind != 10 and binding.flags == 1) -> if {
+                        bindingIndex -> mutableBindingRoot => bindingRoot
+                        "%slot$(bindingRoot)" -> print
+                    } else {
+                        "%capture_borrow_binding$(bindingIndex)" -> print
+                    }
+                } else {
+                    request.callerIndex -> functionCaptures => callerCaptures!
+                    -1 => capturePosition!
+                    0 => callerCaptureIndex!
+                    callerCaptureIndex! < (callerCaptures! -> len) -> while {
+                        context.ir[callerCaptures![callerCaptureIndex!]].symbol == binding.symbol -> if { callerCaptureIndex! => capturePosition! }
+                        callerCaptureIndex! + 1 => callerCaptureIndex!
+                    }
+                    capturePosition! >= 0 -> if { "%capture_$(capturePosition!)" -> print } else { "null" -> print }
+                }
+            } else {
+                binding -> writeIrType
+                " " -> print
+                CaptureValueRequest { callerIndex: request.callerIndex, callIndex: request.callIndex, bindingIndex: bindingIndex, captureIndex: captureIndex! } -> emitCaptureValue
+            }
             (captureIndex! + 1 < (callCaptures! -> len) or request.hasArgument) -> if { ", " -> print }
             captureIndex! + 1 => captureIndex!
         }
@@ -1344,7 +1414,7 @@ emitCore context: move EmitContext -> Unit uses Console {
                 (textByte! >= UInt8(32) and textByte! <= UInt8(126) and textByte! != UInt8(34) and textByte! != UInt8(92)) -> if {
                     context.sources[request.sourceModule] -> slice(byteIndex!, UIntSize(1)) -> print
                 } else {
-                    "\\" -> print
+                    "\" -> print
                     Int(textByte!) / 16 -> hexDigit -> print
                     Int(textByte!) % 16 -> hexDigit -> print
                 }
@@ -3689,6 +3759,75 @@ emitCore context: move EmitContext -> Unit uses Console {
             regionOrderIndex! + 1 => regionOrderIndex!
         }
     }
+    [Int; ~] => functionEndCache!
+    0 => structuralCacheInit!
+    structuralCacheInit! < (context.ir -> len) -> while {
+        functionEndCache! -> push(-1)
+        structuralCacheInit! + 1 => structuralCacheInit!
+    }
+    0 => structuralFunctionIndex!
+    structuralFunctionIndex! < (context.ir -> len) -> while {
+        (context.ir[structuralFunctionIndex!].kind == 0 or context.ir[structuralFunctionIndex!].kind == 11) -> if {
+            structuralFunctionIndex! -> computeFunctionEnd => structuralFunctionEnd
+            structuralFunctionEnd => functionEndCache![structuralFunctionIndex!]
+        }
+        structuralFunctionIndex! + 1 => structuralFunctionIndex!
+    }
+    [Int; ~] => captureBindingBySymbol!
+    [Int; ~] => captureFunctionBySymbol!
+    [Int; ~] => capturePreviousBindingByIr!
+    0 => captureSymbolInit!
+    captureSymbolInit! < (context.symbols -> len) -> while {
+        captureBindingBySymbol! -> push(-1)
+        captureFunctionBySymbol! -> push(-1)
+        captureSymbolInit! + 1 => captureSymbolInit!
+    }
+    0 => captureBindingLinkInit!
+    captureBindingLinkInit! < (context.ir -> len) -> while {
+        capturePreviousBindingByIr! -> push(-1)
+        captureBindingLinkInit! + 1 => captureBindingLinkInit!
+    }
+    0 => captureSymbolNodeIndex!
+    captureSymbolNodeIndex! < (context.ir -> len) -> while {
+        context.ir[captureSymbolNodeIndex!] => captureSymbolNode
+        (captureSymbolNode.sourceModule >= 0 and captureSymbolNode.sourceModule < (context.ranges -> len) and captureSymbolNode.symbol >= 0) -> if {
+            context.ranges[captureSymbolNode.sourceModule].symbolStart + captureSymbolNode.symbol => captureGlobalSymbolIndex
+            (captureGlobalSymbolIndex >= 0 and captureGlobalSymbolIndex < (context.symbols -> len)) -> if {
+                (captureSymbolNode.kind == 17 or captureSymbolNode.kind == 10) -> if {
+                    captureBindingBySymbol![captureGlobalSymbolIndex] => capturePreviousBindingByIr![captureSymbolNodeIndex!]
+                    captureSymbolNodeIndex! => captureBindingBySymbol![captureGlobalSymbolIndex]
+                }
+                captureSymbolNode.kind == 0 -> if {
+                    captureSymbolNodeIndex! => captureFunctionBySymbol![captureGlobalSymbolIndex]
+                }
+            }
+        }
+        captureSymbolNodeIndex! + 1 => captureSymbolNodeIndex!
+    }
+    [Int; ~] => functionCaptureCacheOffsets!
+    [Int; ~] => functionCaptureCacheCounts!
+    [Int; ~] => functionCaptureCacheValues!
+    0 => functionCaptureCacheInit!
+    functionCaptureCacheInit! < (context.ir -> len) -> while {
+        functionCaptureCacheOffsets! -> push(-1)
+        functionCaptureCacheCounts! -> push(0)
+        functionCaptureCacheInit! + 1 => functionCaptureCacheInit!
+    }
+    0 => functionCaptureCacheFunctionIndex!
+    functionCaptureCacheFunctionIndex! < (context.ir -> len) -> while {
+        context.ir[functionCaptureCacheFunctionIndex!].kind == 0 -> if {
+            functionCaptureCacheFunctionIndex! -> computeFunctionCaptures => computedCaptures!
+            functionCaptureCacheValues! -> len => computedCaptureStart
+            0 => computedCaptureIndex!
+            computedCaptureIndex! < (computedCaptures! -> len) -> while {
+                functionCaptureCacheValues! -> push(computedCaptures![computedCaptureIndex!])
+                computedCaptureIndex! + 1 => computedCaptureIndex!
+            }
+            computedCaptureStart => functionCaptureCacheOffsets![functionCaptureCacheFunctionIndex!]
+            computedCaptureIndex! => functionCaptureCacheCounts![functionCaptureCacheFunctionIndex!]
+        }
+        functionCaptureCacheFunctionIndex! + 1 => functionCaptureCacheFunctionIndex!
+    }
     -1 => intrinsicRuntimeModule!
     0 => intrinsicRuntimeSearch!
     intrinsicRuntimeSearch! < (context.modules -> len) -> while {
@@ -3868,7 +4007,8 @@ emitCore context: move EmitContext -> Unit uses Console {
             "(" -> print
             0 => functionCaptureParameterIndex!
             functionCaptureParameterIndex! < (currentFunctionCaptures! -> len) -> while {
-                context.ir[currentFunctionCaptures![functionCaptureParameterIndex!]] -> writeIrType
+                context.ir[currentFunctionCaptures![functionCaptureParameterIndex!]] => functionCaptureParameter
+                functionCaptureParameter -> ownsType -> if { "ptr" -> print } else { functionCaptureParameter -> writeIrType }
                 " %capture_$(functionCaptureParameterIndex!)" -> print
                 (functionCaptureParameterIndex! + 1 < (currentFunctionCaptures! -> len) or function.operand1 >= 0) -> if { ", " -> print }
                 functionCaptureParameterIndex! + 1 => functionCaptureParameterIndex!
@@ -3880,6 +4020,49 @@ emitCore context: move EmitContext -> Unit uses Console {
             }
             ") {" -> println
             "entry:" -> println
+            [Int; ~] => captureBorrowBindings!
+            functionIndex! + 1 => captureBorrowCallIndex!
+            captureBorrowCallIndex! < functionEnd! -> while {
+                context.ir[captureBorrowCallIndex!] => captureBorrowCall
+                (captureBorrowCall.kind == 6 and captureBorrowCall.targetModule >= 0 and captureBorrowCall.symbol >= 0) -> if {
+                    -1 => captureBorrowTarget!
+                    0 => captureBorrowTargetSearch!
+                    captureBorrowTargetSearch! < (context.ir -> len) -> while {
+                        context.ir[captureBorrowTargetSearch!] => captureBorrowTargetCandidate
+                        (captureBorrowTargetCandidate.kind == 0 and captureBorrowTargetCandidate.sourceModule == captureBorrowCall.targetModule and captureBorrowTargetCandidate.symbol == captureBorrowCall.symbol) -> if { captureBorrowTargetSearch! => captureBorrowTarget! }
+                        captureBorrowTargetSearch! + 1 => captureBorrowTargetSearch!
+                    }
+                    captureBorrowTarget! >= 0 -> if {
+                        captureBorrowTarget! -> functionCaptures => captureBorrowCallBindings!
+                        0 => captureBorrowCallBindingIndex!
+                        captureBorrowCallBindingIndex! < (captureBorrowCallBindings! -> len) -> while {
+                            captureBorrowCallBindings![captureBorrowCallBindingIndex!] => captureBorrowBindingIndex
+                            context.ir[captureBorrowBindingIndex] => captureBorrowBinding
+                            (captureBorrowBindingIndex > functionIndex! and captureBorrowBindingIndex < functionEnd! and (captureBorrowBinding -> ownsType) and not (captureBorrowBinding.kind != 10 and captureBorrowBinding.flags == 1)) -> if {
+                                false => captureBorrowDuplicate!
+                                0 => captureBorrowDuplicateIndex!
+                                captureBorrowDuplicateIndex! < (captureBorrowBindings! -> len) -> while {
+                                    captureBorrowBindings![captureBorrowDuplicateIndex!] == captureBorrowBindingIndex -> if { true => captureBorrowDuplicate! }
+                                    captureBorrowDuplicateIndex! + 1 => captureBorrowDuplicateIndex!
+                                }
+                                not captureBorrowDuplicate! -> if { captureBorrowBindings! -> push(captureBorrowBindingIndex) }
+                            }
+                            captureBorrowCallBindingIndex! + 1 => captureBorrowCallBindingIndex!
+                        }
+                    }
+                }
+                captureBorrowCallIndex! + 1 => captureBorrowCallIndex!
+            }
+            0 => captureBorrowBindingListIndex!
+            captureBorrowBindingListIndex! < (captureBorrowBindings! -> len) -> while {
+                captureBorrowBindings![captureBorrowBindingListIndex!] => captureBorrowBindingIndex
+                context.ir[captureBorrowBindingIndex] => captureBorrowBinding
+                "  %capture_borrow_binding$(captureBorrowBindingIndex) = alloca " -> print
+                captureBorrowBinding -> writeIrType
+                ", align " -> print
+                captureBorrowBinding -> storageAlign -> writeDecimalLine
+                captureBorrowBindingListIndex! + 1 => captureBorrowBindingListIndex!
+            }
             function.operand0 + 1 => expressionStart
             expressionStart => functionCaptureUseIndex!
             functionCaptureUseIndex! < functionEnd! -> while {
@@ -3888,9 +4071,16 @@ emitCore context: move EmitContext -> Unit uses Console {
                     0 => functionCaptureMatchIndex!
                     functionCaptureMatchIndex! < (currentFunctionCaptures! -> len) -> while {
                         context.ir[currentFunctionCaptures![functionCaptureMatchIndex!]].symbol == functionCaptureUse.symbol -> if {
-                            "  %v$(functionCaptureUseIndex!) = freeze " -> print
-                            functionCaptureUse -> writeIrType
-                            " %capture_$(functionCaptureMatchIndex!)" -> println
+                            functionCaptureUse -> ownsType -> if {
+                                "  %v$(functionCaptureUseIndex!) = load " -> print
+                                functionCaptureUse -> writeIrType
+                                ", ptr %capture_$(functionCaptureMatchIndex!), align " -> print
+                                functionCaptureUse -> storageAlign -> writeDecimalLine
+                            } else {
+                                "  %v$(functionCaptureUseIndex!) = freeze " -> print
+                                functionCaptureUse -> writeIrType
+                                " %capture_$(functionCaptureMatchIndex!)" -> println
+                            }
                         }
                         functionCaptureMatchIndex! + 1 => functionCaptureMatchIndex!
                     }
@@ -6422,6 +6612,7 @@ emitCore context: move EmitContext -> Unit uses Console {
                     }
                     entryOrderIndex! + 1 => entryOrderIndex!
                 }
+                context -> usesTextRuntime -> if { "  call void @sl_runtime_flush_stdout()" -> println }
                 "  ret i32 0" -> println
                 "}" -> println
                 entryEnd! => functionIndex!
@@ -6621,25 +6812,57 @@ emitBoolTextRuntime: -> Unit uses Console {
 emitWindowsTextRuntime: -> Unit uses Console {
     """
     @sl_runtime_newline = private constant [1 x i8] c"\0A"
-    declare i32 @putchar(i32)
+    @sl_runtime_stdout_buffer = private global [1048576 x i8] zeroinitializer
+    @sl_runtime_stdout_count = private global i64 0
+    @sl_runtime_stdout_written = private global i32 0
+    declare ptr @GetStdHandle(i32)
+    declare i32 @WriteFile(ptr, ptr, i32, ptr, ptr)
+    declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1 immarg)
+    define internal void @sl_runtime_flush_stdout() {
+    entry:
+      %count = load i64, ptr @sl_runtime_stdout_count, align 8
+      %has_data = icmp ugt i64 %count, 0
+      br i1 %has_data, label %write, label %done
+    write:
+      %handle = call ptr @GetStdHandle(i32 -11)
+      %count32 = trunc i64 %count to i32
+      %ok = call i32 @WriteFile(ptr %handle, ptr @sl_runtime_stdout_buffer, i32 %count32, ptr @sl_runtime_stdout_written, ptr null)
+      store i64 0, ptr @sl_runtime_stdout_count, align 8
+      br label %done
+    done:
+      ret void
+    }
+    define internal void @sl_runtime_append_stdout(ptr %data, i64 %len) {
+    entry:
+      %count = load i64, ptr @sl_runtime_stdout_count, align 8
+      %total = add i64 %count, %len
+      %fits = icmp ule i64 %total, 1048576
+      br i1 %fits, label %append, label %flush
+    flush:
+      call void @sl_runtime_flush_stdout()
+      %large = icmp ugt i64 %len, 1048576
+      br i1 %large, label %direct, label %append_empty
+    direct:
+      %handle = call ptr @GetStdHandle(i32 -11)
+      %len32 = trunc i64 %len to i32
+      %ok = call i32 @WriteFile(ptr %handle, ptr %data, i32 %len32, ptr @sl_runtime_stdout_written, ptr null)
+      ret void
+    append_empty:
+      call void @llvm.memcpy.p0.p0.i64(ptr @sl_runtime_stdout_buffer, ptr %data, i64 %len, i1 false)
+      store i64 %len, ptr @sl_runtime_stdout_count, align 8
+      ret void
+    append:
+      %slot = getelementptr i8, ptr @sl_runtime_stdout_buffer, i64 %count
+      call void @llvm.memcpy.p0.p0.i64(ptr %slot, ptr %data, i64 %len, i1 false)
+      store i64 %total, ptr @sl_runtime_stdout_count, align 8
+      ret void
+    }
     define internal void @sl_runtime_print(ptr %data, i64 %len, i1 %newline) {
     entry:
-      br label %loop
-    loop:
-      %index = phi i64 [ 0, %entry ], [ %next, %body ]
-      %in_range = icmp ult i64 %index, %len
-      br i1 %in_range, label %body, label %end
-    body:
-      %slot = getelementptr i8, ptr %data, i64 %index
-      %byte = load i8, ptr %slot, align 1
-      %value = zext i8 %byte to i32
-      %written = call i32 @putchar(i32 %value)
-      %next = add i64 %index, 1
-      br label %loop
-    end:
+      call void @sl_runtime_append_stdout(ptr %data, i64 %len)
       br i1 %newline, label %write_newline, label %done
     write_newline:
-      %newline_written = call i32 @putchar(i32 10)
+      call void @sl_runtime_append_stdout(ptr @sl_runtime_newline, i64 1)
       br label %done
     done:
       ret void
@@ -6651,6 +6874,10 @@ emitLinuxTextRuntime: -> Unit uses Console {
     """
     @sl_runtime_newline = private constant [1 x i8] c"\0A"
     declare i64 @write(i32, ptr, i64)
+    define internal void @sl_runtime_flush_stdout() {
+    entry:
+      ret void
+    }
     define internal void @sl_runtime_print(ptr %data, i64 %len, i1 %newline) {
     entry:
       %written = call i64 @write(i32 1, ptr %data, i64 %len)
@@ -6668,6 +6895,10 @@ emitWasmTextRuntime: -> Unit uses Console {
     """"
     @sl_runtime_newline = private constant [1 x i8] c"\0A"
     declare void @smalllang_browser_write(ptr, i32) #1
+    define internal void @sl_runtime_flush_stdout() {
+    entry:
+      ret void
+    }
     define internal void @sl_runtime_print(ptr %data, i64 %len, i1 %newline) {
     entry:
       %len32 = trunc i64 %len to i32

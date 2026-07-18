@@ -35,6 +35,10 @@ internal abstract class LlvmRuntimePlatform
 
     public abstract void EmitEntryHandles(StringBuilder functions);
 
+    public virtual void EmitExitHandles(StringBuilder functions)
+    {
+    }
+
     public virtual void EmitProcessEntry(StringBuilder functions)
     {
     }

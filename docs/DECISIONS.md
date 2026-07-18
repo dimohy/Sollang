@@ -5355,8 +5355,8 @@ Checklist:
 - [x] Keep monotonic `n/total` output and parallel affected/full regression.
 - [x] Complete stage-2 text emission without a native crash.
 - [x] Assemble the complete stage-2 IR with `llvm-as`.
-- [ ] Link and run the stage-2 compiler.
-- [ ] Compile and execute a multi-file SL smoke program with stage 2.
+- [x] Link and run the stage-2 compiler.
+- [x] Compile and execute a multi-file SL smoke program with stage 2.
 
 ## D167 - Lift Local Functions Before Parallel Native Optimization
 
@@ -5385,9 +5385,31 @@ completed during a cold test bootstrap in seconds instead of hitting the
 stage-2 LLVM module in 293.32 seconds; `llvm-as` produced a valid 1,345,496-byte
 bitcode module, and its 24 native object partitions compiled in 1.17 seconds.
 
-The remaining stage-2 gate is runtime/product linkage. The assembled module
-does not yet provide the Windows entry shim and all runtime/stdlib definitions,
-so `smalllang_start`, allocation/printing helpers, and imported SL module
-symbols remain unresolved at final link. Frontend semantic and typed-IR work
-also remains sequential; its 293-second emission time is separate from the now
-parallel native backend.
+Runtime/product linkage was the remaining stage-2 gate at this decision point.
+It was subsequently completed and is tracked by D168. Frontend semantic and
+typed-IR work was still sequential here; its 293-second emission time was
+separate from the parallel native backend.
+
+## D168 - Preserve Fixed-Point Output While Removing Self-host Emission I/O
+
+Status: capture/index/I/O baseline implemented; generated compute-pool lowering pending
+Date: 2026-07-18
+
+Compiler LLVM output is redirected and must be treated as bulk data rather
+than terminal text. The Windows runtime now buffers one MiB, flushes on process
+exit, and retains line flushing only for an actual console. The self-host text
+emitter produces the same contract; Linux and WebAssembly expose a compatible
+no-op flush because their current writers are already direct.
+
+Function capture discovery is computed once per function. Canonical symbol
+indexes replace repeated full-IR target lookup, and function boundaries are
+cached. These changes preserve deterministic order: complete stage 2 and stage
+3 outputs are byte-identical at 6,852,053 bytes, and `llvm-as`, link, execution,
+and the 75-case affected LLVM suite pass.
+
+The measured stage-2 verification time moved from about 376 seconds to 260.9
+seconds. A generated stage-2 compiler still takes 360.7 seconds and averages
+0.99 cores because the self-host emitter lowers its three `parallel` regions as
+serial loops. Consequently the next optimization must implement the runtime
+parallel ABI in the self-host emitter; adding more test-runner workers or LLVM
+partitions cannot accelerate that internal serial path.

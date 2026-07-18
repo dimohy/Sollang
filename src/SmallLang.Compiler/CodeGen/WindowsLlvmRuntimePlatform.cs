@@ -21,6 +21,9 @@ internal sealed class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
         globals.AppendLine("@smalllang_process_output_override = internal global ptr null");
         globals.AppendLine("@smalllang_environment_allocations = internal global ptr null");
         globals.AppendLine("@smalllang_environment_empty = internal constant [1 x i8] zeroinitializer, align 1");
+        globals.AppendLine("@smalllang_stdout_buffer = internal global [1048576 x i8] zeroinitializer, align 16");
+        globals.AppendLine("@smalllang_stdout_buffer_count = internal global i64 0");
+        globals.AppendLine("@smalllang_stdout_line_buffered = internal global i1 false");
         if (UsesAsyncFile)
         {
             globals.AppendLine("@smalllang_file_request_event = internal global ptr null");
@@ -39,6 +42,7 @@ internal sealed class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
     public override void EmitExternalDeclarations(StringBuilder functions)
     {
         functions.AppendLine("declare dllimport ptr @GetStdHandle(i32)");
+        functions.AppendLine("declare dllimport i32 @GetConsoleMode(ptr, ptr)");
         functions.AppendLine("declare dllimport i32 @WriteFile(ptr, ptr, i32, ptr, ptr)");
         functions.AppendLine("declare dllimport i32 @ReadFile(ptr, ptr, i32, ptr, ptr)");
         functions.AppendLine("declare dllimport i32 @GetOverlappedResult(ptr, ptr, ptr, i32)");
@@ -1236,11 +1240,69 @@ internal sealed class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
               unreachable
             }
 
+            define internal i32 @smalllang_flush_stdout(ptr %stdout, ptr %written) #0 {
+            entry:
+              %count64 = load i64, ptr @smalllang_stdout_buffer_count, align 8
+              %has_data = icmp ne i64 %count64, 0
+              br i1 %has_data, label %write, label %empty
+
+            write:
+              %count = trunc i64 %count64 to i32
+              %buffer = getelementptr inbounds [1048576 x i8], ptr @smalllang_stdout_buffer, i64 0, i64 0
+              %ok = call i32 @WriteFile(ptr %stdout, ptr %buffer, i32 %count, ptr %written, ptr null)
+              store i64 0, ptr @smalllang_stdout_buffer_count, align 8
+              ret i32 %ok
+
+            empty:
+              store i32 0, ptr %written, align 4
+              ret i32 1
+            }
+
             define internal i32 @smalllang_write(ptr %stdout, ptr %data, i64 %len64, ptr %written) #0 {
             entry:
-              %len = trunc i64 %len64 to i32
-              %ok = call i32 @WriteFile(ptr %stdout, ptr %data, i32 %len, ptr %written, ptr null)
-              ret i32 %ok
+              %oversized = icmp ugt i64 %len64, 1048576
+              br i1 %oversized, label %write_direct_prepare, label %buffer_prepare
+
+            write_direct_prepare:
+              %flushed_direct = call i32 @smalllang_flush_stdout(ptr %stdout, ptr %written)
+              %direct_len = trunc i64 %len64 to i32
+              %direct_ok = call i32 @WriteFile(ptr %stdout, ptr %data, i32 %direct_len, ptr %written, ptr null)
+              ret i32 %direct_ok
+
+            buffer_prepare:
+              %count = load i64, ptr @smalllang_stdout_buffer_count, align 8
+              %combined = add i64 %count, %len64
+              %needs_flush = icmp ugt i64 %combined, 1048576
+              br i1 %needs_flush, label %flush, label %append
+
+            flush:
+              %flushed = call i32 @smalllang_flush_stdout(ptr %stdout, ptr %written)
+              br label %append
+
+            append:
+              %offset = phi i64 [ %count, %buffer_prepare ], [ 0, %flush ]
+              %destination = getelementptr inbounds [1048576 x i8], ptr @smalllang_stdout_buffer, i64 0, i64 %offset
+              %copied = call ptr @memcpy(ptr %destination, ptr %data, i64 %len64)
+              %next_count = add i64 %offset, %len64
+              store i64 %next_count, ptr @smalllang_stdout_buffer_count, align 8
+              %written32 = trunc i64 %len64 to i32
+              store i32 %written32, ptr %written, align 4
+              %single_byte = icmp eq i64 %len64, 1
+              br i1 %single_byte, label %inspect_newline, label %done
+
+            inspect_newline:
+              %byte = load i8, ptr %data, align 1
+              %newline = icmp eq i8 %byte, 10
+              %line_buffered = load i1, ptr @smalllang_stdout_line_buffered, align 1
+              %flush_newline = and i1 %newline, %line_buffered
+              br i1 %flush_newline, label %flush_line, label %done
+
+            flush_line:
+              %line_ok = call i32 @smalllang_flush_stdout(ptr %stdout, ptr %written)
+              ret i32 %line_ok
+
+            done:
+              ret i32 1
             }
 
             define internal i32 @smalllang_read_stdin(ptr %stdin, ptr %data, i64 %len64, ptr %read) #0 {
@@ -1743,6 +1805,15 @@ internal sealed class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
     {
         functions.AppendLine("  %stdin = call ptr @GetStdHandle(i32 -10)");
         functions.AppendLine("  %stdout = call ptr @GetStdHandle(i32 -11)");
+        functions.AppendLine("  %stdout_mode = alloca i32, align 4");
+        functions.AppendLine("  %stdout_is_console_status = call i32 @GetConsoleMode(ptr %stdout, ptr %stdout_mode)");
+        functions.AppendLine("  %stdout_is_console = icmp ne i32 %stdout_is_console_status, 0");
+        functions.AppendLine("  store i1 %stdout_is_console, ptr @smalllang_stdout_line_buffered, align 1");
+    }
+
+    public override void EmitExitHandles(StringBuilder functions)
+    {
+        functions.AppendLine("  %stdout_flushed = call i32 @smalllang_flush_stdout(ptr %stdout, ptr %written)");
     }
 
     public override void EmitProcessEntry(StringBuilder functions)

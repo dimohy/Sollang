@@ -981,6 +981,27 @@ internal sealed partial class LlvmEmitter
             var value = ResolveLocal(capture.Key);
             EnsureRuntimeType(value, capture.Value, function.Name);
             var materialized = MaterializeAggregateValue(value);
+            if (CaptureUsesBorrowAbi(capture.Value))
+            {
+                if (_readonlyCaptureBorrowPointers.TryGetValue(capture.Key, out var existingPointer))
+                {
+                    arguments.Add($"ptr {existingPointer}");
+                    continue;
+                }
+                var pointer = NextTemp("capture_borrow_arg");
+                EmitAlloca(pointer, materialized.TypeName, RuntimeAlignment(capture.Value));
+                EmitStore(
+                    materialized.TypeName,
+                    materialized.ValueName,
+                    pointer,
+                    RuntimeAlignment(capture.Value));
+                if (!_mutableLocals.Contains(capture.Key))
+                {
+                    _readonlyCaptureBorrowPointers.Add(capture.Key, pointer);
+                }
+                arguments.Add($"ptr {pointer}");
+                continue;
+            }
             arguments.Add($"{materialized.TypeName} {materialized.ValueName}");
         }
 

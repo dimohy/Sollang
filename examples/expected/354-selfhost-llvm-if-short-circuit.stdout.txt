@@ -1,25 +1,57 @@
 target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
 target triple = "x86_64-pc-windows-msvc"
 @sl_runtime_newline = private constant [1 x i8] c"\0A"
-declare i32 @putchar(i32)
+@sl_runtime_stdout_buffer = private global [1048576 x i8] zeroinitializer
+@sl_runtime_stdout_count = private global i64 0
+@sl_runtime_stdout_written = private global i32 0
+declare ptr @GetStdHandle(i32)
+declare i32 @WriteFile(ptr, ptr, i32, ptr, ptr)
+declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1 immarg)
+define internal void @sl_runtime_flush_stdout() {
+entry:
+  %count = load i64, ptr @sl_runtime_stdout_count, align 8
+  %has_data = icmp ugt i64 %count, 0
+  br i1 %has_data, label %write, label %done
+write:
+  %handle = call ptr @GetStdHandle(i32 -11)
+  %count32 = trunc i64 %count to i32
+  %ok = call i32 @WriteFile(ptr %handle, ptr @sl_runtime_stdout_buffer, i32 %count32, ptr @sl_runtime_stdout_written, ptr null)
+  store i64 0, ptr @sl_runtime_stdout_count, align 8
+  br label %done
+done:
+  ret void
+}
+define internal void @sl_runtime_append_stdout(ptr %data, i64 %len) {
+entry:
+  %count = load i64, ptr @sl_runtime_stdout_count, align 8
+  %total = add i64 %count, %len
+  %fits = icmp ule i64 %total, 1048576
+  br i1 %fits, label %append, label %flush
+flush:
+  call void @sl_runtime_flush_stdout()
+  %large = icmp ugt i64 %len, 1048576
+  br i1 %large, label %direct, label %append_empty
+direct:
+  %handle = call ptr @GetStdHandle(i32 -11)
+  %len32 = trunc i64 %len to i32
+  %ok = call i32 @WriteFile(ptr %handle, ptr %data, i32 %len32, ptr @sl_runtime_stdout_written, ptr null)
+  ret void
+append_empty:
+  call void @llvm.memcpy.p0.p0.i64(ptr @sl_runtime_stdout_buffer, ptr %data, i64 %len, i1 false)
+  store i64 %len, ptr @sl_runtime_stdout_count, align 8
+  ret void
+append:
+  %slot = getelementptr i8, ptr @sl_runtime_stdout_buffer, i64 %count
+  call void @llvm.memcpy.p0.p0.i64(ptr %slot, ptr %data, i64 %len, i1 false)
+  store i64 %total, ptr @sl_runtime_stdout_count, align 8
+  ret void
+}
 define internal void @sl_runtime_print(ptr %data, i64 %len, i1 %newline) {
 entry:
-  br label %loop
-loop:
-  %index = phi i64 [ 0, %entry ], [ %next, %body ]
-  %in_range = icmp ult i64 %index, %len
-  br i1 %in_range, label %body, label %end
-body:
-  %slot = getelementptr i8, ptr %data, i64 %index
-  %byte = load i8, ptr %slot, align 1
-  %value = zext i8 %byte to i32
-  %written = call i32 @putchar(i32 %value)
-  %next = add i64 %index, 1
-  br label %loop
-end:
+  call void @sl_runtime_append_stdout(ptr %data, i64 %len)
   br i1 %newline, label %write_newline, label %done
 write_newline:
-  %newline_written = call i32 @putchar(i32 10)
+  call void @sl_runtime_append_stdout(ptr @sl_runtime_newline, i64 1)
   br label %done
 done:
   ret void
@@ -65,5 +97,6 @@ entry:
   %v19 = load %sl.array.i32, ptr %slot16, align 8
   call void @sl_m0_s0(%sl.array.i32 %v19)
   call void @sl_runtime_print(ptr @sl_str_21, i64 13, i1 true)
+  call void @sl_runtime_flush_stdout()
   ret i32 0
 }

@@ -1,0 +1,15 @@
+import smalllang.compiler.llvm.text as llvm
+
+main {
+    [
+        """
+        digit value: Int -> Text => "X"
+
+        main {
+            21 -> digit -> println
+        }
+        """,
+        ~
+    ] => sources!
+    sources! -> llvm.emit
+}

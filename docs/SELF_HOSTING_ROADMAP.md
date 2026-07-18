@@ -899,6 +899,30 @@ The formal language-capability score remains 42 complete, 13 partial, 5 missing
 (48.5/60, 80.8%) until the remaining ownership, generic-container, package,
 tooling, and library gates are implemented.
 
+## Self-host Compile-Time Baseline (2026-07-18)
+
+The compiler-sized stage-2 path now caches function captures and function-end
+boundaries, indexes call targets by canonical module symbol, and buffers
+redirected Windows stdout in 1 MiB blocks. The self-host emitter generates the
+same buffered runtime, so stage 3 no longer writes LLVM one byte at a time.
+
+- [x] assemble, link, and execute the complete stage-2 compiler;
+- [x] compare C# stage 1 and SL stage 2 on single and imported multi-file LLVM;
+- [x] generate stage 3 and prove byte-identical stage-2/stage-3 LLVM;
+- [x] keep compiler emission working set below 60 MiB in the measured run;
+- [x] reduce the measured stage-2 verification path from about 376 s to 261 s;
+- [ ] lower `parallel` to the native compute pool in the self-host emitter;
+- [ ] make the generated stage-2 compiler use more than one effective core;
+- [ ] split or buffer independent `emitCore` function bodies for parallel output.
+
+The current result is a measured 30.6% reduction, but it is not the final
+"dramatic" target. Stage 3 still took 360.7 s at 0.99 effective cores. That
+measurement proves the remaining bottleneck is not rebuilding the compiler or
+LLVM file I/O: the self-host emitter currently serializes `parallel` blocks and
+the large function-emission phase. The next performance gate is therefore real
+compute-pool lowering in generated SL code, followed by ordered parallel LLVM
+body emission.
+
 ## Immediate Implementation Order
 
 1. Multi-file compilation (implemented by example 52).
