@@ -21,7 +21,7 @@ $multiMainSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\self
 $groupedNotSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-grouped-not-smoke.slg"
 $semanticContextSource = Join-Path $repoRoot "selfhost\semantic\context.slg"
 $processSource = Join-Path $repoRoot "stdlib\sys\process.slg"
-$expectedStage2Bytes = 8781929L
+$expectedStage2Bytes = 8881548L
 
 New-Item -ItemType Directory -Force -Path $artifactsDir | Out-Null
 

@@ -1040,6 +1040,144 @@ public resolveContext prepared: semanticContext.SemanticSnapshot -> ExpressionTy
     true => pathChanged!
     pathChanged! -> while {
         false => pathChanged!
+        # A private function whose primary input type is omitted receives its
+        # type from the nearest typed argument at each call site. The parser
+        # records the omission in flag 16 and symbols.collectPrepared creates
+        # a synthetic parameter with no declared type node.
+        0 => inferredParameterCallIndex!
+        inferredParameterCallIndex! < (prepared.calls -> len) -> while {
+            prepared.calls[inferredParameterCallIndex!] => inferredParameterCall
+            (inferredParameterCall.status == 0 and inferredParameterCall.origin != 2 and inferredParameterCall.targetSourceModule >= 0) -> if {
+                prepared.package.ranges[inferredParameterCall.targetSourceModule] => inferredParameterTargetRange
+                prepared.package.symbols[inferredParameterTargetRange.symbolStart + inferredParameterCall.functionSymbol] => inferredParameterFunction
+                (inferredParameterFunction.flags / 16 % 2 == 1 and inferredParameterFunction.flags / 4 % 2 == 0) -> if {
+                    -1 => inferredParameterArgumentExpression!
+                    1000000 => inferredParameterArgumentDistance!
+                    prepared.package.ranges[inferredParameterCall.sourceModule] => inferredParameterCallRange
+                    0 => inferredParameterArgumentSearch!
+                    inferredParameterArgumentSearch! < (expressions! -> len) -> while {
+                        expressions![inferredParameterArgumentSearch!] => inferredParameterArgument
+                        (inferredParameterArgument.status == 0 and inferredParameterArgument.sourceModule == inferredParameterCall.sourceModule and inferredParameterArgument.astNode != inferredParameterCall.callAst) -> if {
+                            prepared.package.nodes[inferredParameterCallRange.astStart + inferredParameterArgument.astNode].parent => inferredParameterArgumentAncestor!
+                            1 => inferredParameterDistance!
+                            false => inferredParameterBelongs!
+                            (inferredParameterArgumentAncestor! >= 0 and not inferredParameterBelongs!) -> while {
+                                inferredParameterArgumentAncestor! == inferredParameterCall.callAst -> if {
+                                    true => inferredParameterBelongs!
+                                } else {
+                                    prepared.package.nodes[inferredParameterCallRange.astStart + inferredParameterArgumentAncestor!].parent => inferredParameterArgumentAncestor!
+                                    inferredParameterDistance! + 1 => inferredParameterDistance!
+                                }
+                            }
+                            (inferredParameterBelongs! and inferredParameterDistance! < inferredParameterArgumentDistance!) -> if {
+                                inferredParameterArgumentSearch! => inferredParameterArgumentExpression!
+                                inferredParameterDistance! => inferredParameterArgumentDistance!
+                            }
+                        }
+                        inferredParameterArgumentSearch! + 1 => inferredParameterArgumentSearch!
+                    }
+                    -1 => inferredParameterSymbol!
+                    0 => inferredParameterSymbolSearch!
+                    (inferredParameterSymbolSearch! < inferredParameterTargetRange.symbolCount and inferredParameterSymbol! < 0) -> while {
+                        prepared.package.symbols[inferredParameterTargetRange.symbolStart + inferredParameterSymbolSearch!] => inferredParameterCandidate
+                        (inferredParameterCandidate.kind == 35 and inferredParameterCandidate.parent == inferredParameterCall.functionSymbol and inferredParameterCandidate.astNode == inferredParameterFunction.astNode) -> if {
+                            inferredParameterSymbolSearch! => inferredParameterSymbol!
+                        }
+                        inferredParameterSymbolSearch! + 1 => inferredParameterSymbolSearch!
+                    }
+                    (inferredParameterArgumentExpression! >= 0 and inferredParameterSymbol! >= 0) -> if {
+                        expressions![inferredParameterArgumentExpression!] => inferredParameterArgumentType
+                        0 => inferredParameterNameOffset!
+                        inferredParameterNameOffset! < inferredParameterTargetRange.nameCount -> while {
+                            prepared.package.names[inferredParameterTargetRange.nameStart + inferredParameterNameOffset!] => inferredParameterName
+                            inferredParameterTargetRange.astStart + inferredParameterName.astNode => inferredParameterNameGlobalAst
+                            (inferredParameterName.symbol == inferredParameterSymbol! and expressionIndexByAst![inferredParameterNameGlobalAst] < 0) -> if {
+                                expressions! -> len => inferredParameterExpressionIndex
+                                expressions! -> push(ExpressionTypeId {
+                                    sourceModule: inferredParameterCall.targetSourceModule
+                                    astNode: inferredParameterName.astNode
+                                    typeId: inferredParameterArgumentType.typeId
+                                    status: inferredParameterArgumentType.status
+                                })
+                                inferredParameterExpressionIndex => expressionIndexByAst![inferredParameterNameGlobalAst]
+                                true => pathChanged!
+                            }
+                            inferredParameterNameOffset! + 1 => inferredParameterNameOffset!
+                        }
+                    }
+                }
+            }
+            inferredParameterCallIndex! + 1 => inferredParameterCallIndex!
+        }
+
+        # Flag 32 denotes an omitted return type. Once an expression owned by
+        # that function is typed, expose the last top-level body expression as
+        # the type of every call. Nested functions never contribute candidates.
+        0 => inferredReturnCallIndex!
+        inferredReturnCallIndex! < (prepared.calls -> len) -> while {
+            prepared.calls[inferredReturnCallIndex!] => inferredReturnCall
+            (inferredReturnCall.status == 0 and inferredReturnCall.origin != 2 and inferredReturnCall.targetSourceModule >= 0) -> if {
+                prepared.package.ranges[inferredReturnCall.sourceModule] => inferredReturnCallRange
+                inferredReturnCallRange.astStart + inferredReturnCall.callAst => inferredReturnCallGlobalAst
+                prepared.package.ranges[inferredReturnCall.targetSourceModule] => inferredReturnTargetRange
+                prepared.package.symbols[inferredReturnTargetRange.symbolStart + inferredReturnCall.functionSymbol] => inferredReturnFunction
+                (inferredReturnFunction.flags / 32 % 2 == 1 and inferredReturnFunction.flags / 4 % 2 == 0) -> if {
+                    -1 => inferredReturnExpression!
+                    UIntSize(0) => inferredReturnTopLevelStart!
+                    1000000 => inferredReturnDistance!
+                    0 => inferredReturnSearch!
+                    inferredReturnSearch! < (expressions! -> len) -> while {
+                        expressions![inferredReturnSearch!] => inferredReturnCandidate
+                        (inferredReturnCandidate.status == 0 and inferredReturnCandidate.sourceModule == inferredReturnCall.targetSourceModule) -> if {
+                            prepared.package.nodes[inferredReturnTargetRange.astStart + inferredReturnCandidate.astNode].parent => inferredReturnAncestor!
+                            inferredReturnCandidate.astNode => inferredReturnRootAst!
+                            1 => inferredReturnCandidateDistance!
+                            false => inferredReturnBelongs!
+                            false => inferredReturnNested!
+                            (inferredReturnAncestor! >= 0 and not inferredReturnBelongs! and not inferredReturnNested!) -> while {
+                                inferredReturnAncestor! == inferredReturnFunction.astNode -> if {
+                                    true => inferredReturnBelongs!
+                                } else {
+                                    prepared.package.nodes[inferredReturnTargetRange.astStart + inferredReturnAncestor!] => inferredReturnAncestorNode
+                                    (inferredReturnAncestorNode.kind == 7 or inferredReturnAncestorNode.kind == 29 or inferredReturnAncestorNode.kind == 31) -> if {
+                                        true => inferredReturnNested!
+                                    } else {
+                                        inferredReturnAncestor! => inferredReturnRootAst!
+                                        inferredReturnAncestorNode.parent => inferredReturnAncestor!
+                                        inferredReturnCandidateDistance! + 1 => inferredReturnCandidateDistance!
+                                    }
+                                }
+                            }
+                            inferredReturnBelongs! -> if {
+                                prepared.package.nodes[inferredReturnTargetRange.astStart + inferredReturnRootAst!].start => inferredReturnCandidateStart
+                                (inferredReturnExpression! < 0 or inferredReturnCandidateStart > inferredReturnTopLevelStart! or (inferredReturnCandidateStart == inferredReturnTopLevelStart! and inferredReturnCandidateDistance! < inferredReturnDistance!)) -> if {
+                                    inferredReturnSearch! => inferredReturnExpression!
+                                    inferredReturnCandidateStart => inferredReturnTopLevelStart!
+                                    inferredReturnCandidateDistance! => inferredReturnDistance!
+                                }
+                            }
+                        }
+                        inferredReturnSearch! + 1 => inferredReturnSearch!
+                    }
+                    inferredReturnExpression! >= 0 -> if {
+                        expressions![inferredReturnExpression!] => inferredReturnType
+                        expressionIndexByAst![inferredReturnCallGlobalAst] => inferredReturnExistingExpression!
+                        inferredReturnExistingExpression! < 0 -> if {
+                            expressions! -> len => inferredReturnResultIndex
+                            expressions! -> push(ExpressionTypeId {
+                                sourceModule: inferredReturnCall.sourceModule
+                                astNode: inferredReturnCall.callAst
+                                typeId: inferredReturnType.typeId
+                                status: inferredReturnType.status
+                            })
+                            inferredReturnResultIndex => expressionIndexByAst![inferredReturnCallGlobalAst]
+                            true => pathChanged!
+                        }
+                    }
+                }
+            }
+            inferredReturnCallIndex! + 1 => inferredReturnCallIndex!
+        }
         # The intrinsic each role binds its block item to the source
         # collection's element type. Repeat this with the surrounding fixed
         # point because the collection can itself be a newly inferred local.

@@ -1122,6 +1122,15 @@ The formal roadmap is now **49.5/60 (82.5%)**. Fixed-array generic function
 contracts close the canonical generic-container gate, and general
 multi-parameter functions close the corresponding core syntax gate.
 
+Private signature inference now also survives native self-host lowering. The
+flat AST marks omitted primary-input and return positions without inventing
+declared type nodes; canonical type-ID inference propagates the single-consumer
+call constraint through local parameters, bindings, function bodies, and call
+results. Examples 413-415 cover native LLVM execution plus the AST/symbol
+contract. The Windows suite passes 552/552 and Stage2 passes 6/6 at 8,881,548
+LLVM bytes. This is Stage2 checkpoint 4/10, so the periodic Stage3 gate remains
+deferred.
+
 Examples 406-409 prove fluent/direct calls, methods, generics, independent
 readonly/`mut`/`move` modes, structured async, self-host LLVM execution, and
 self-host arity/type diagnostics. The complete Windows and Linux suites pass

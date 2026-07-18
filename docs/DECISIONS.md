@@ -6468,7 +6468,7 @@ Research basis:
 
 ## D199 - Context-Inferred Private Function Signatures
 
-Status: reference compiler implemented and Stage2 verified; self-host propagation pending
+Status: implemented and Stage2 verified
 Date: 2026-07-19
 
 Sollang keeps the colon and arrow as visible function boundaries while allowing
@@ -6489,15 +6489,22 @@ semantic binding.
 
 Example 412 covers both-sides, input-only, return-only, and zero-input return
 inference. Three diagnostics cover public ABI leakage, multiple consumers, and
-conflicting inputs. The Release build has zero warnings and errors and the full
-Windows suite passes 549/549. The generated grammar gives explicit dictionary
-and array return types priority over the omitted-return alternative. Native
-self-host compiler regeneration passes Stage2 6/6 at 8,787,176 LLVM bytes. This
-is checkpoint 3/10 after the periodic Stage3 baseline, so Stage3 is intentionally
-not regenerated. Native
-self-host propagation is tracked as the next independent checkpoint because its
-flat AST currently represents declared types by AST index and needs a canonical
-inferred-signature side table rather than fabricated type nodes.
+conflicting inputs. The generated grammar gives explicit dictionary and array
+return types priority over the omitted-return alternative.
+
+The self-host AST records omitted input and return positions as declaration
+flags instead of fabricating type AST nodes. Symbol collection creates an
+untyped synthetic parameter, and the canonical expression-type-ID fixed point
+propagates call arguments into that parameter and the final owned body
+expression back to call results. The legacy expression projection follows the
+same constraints. Example 413 assembles, links, and executes LLVM containing
+both a private top-level helper and a local helper; examples 414 and 415 pin the
+flat AST and symbol representation.
+
+The Release build has zero warnings and errors and the full Windows suite passes
+552/552. Native self-host regeneration passes Stage2 6/6 at 8,881,548 LLVM
+bytes with Stage1/Stage2 hashes preserved. This is checkpoint 4/10 after the
+periodic Stage3 baseline, so Stage3 is intentionally not regenerated.
 
 Research basis:
 

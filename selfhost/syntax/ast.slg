@@ -668,6 +668,7 @@ lowerFrom request: LowerRequest -> [AstNode; ~] {
             }
         }
         (declaration!.kind == 7 or declaration!.kind == 29 or declaration!.kind == 31) -> if {
+            -1 => signatureArrowToken!
             declaration!.firstToken => signatureToken!
             declaration!.firstToken + declaration!.tokenCount => signatureEnd
             false => afterColon!
@@ -677,6 +678,7 @@ lowerFrom request: LowerRequest -> [AstNode; ~] {
                     signatureToken! + 1 => signatureToken!
                 } else {
                     tokens![signatureToken!].kind == grammar.tokenIdArrow -> if {
+                        signatureToken! => signatureArrowToken!
                         signatureToken! + 1 => asyncToken!
                         (asyncToken! < signatureEnd and (tokens![asyncToken!].kind == grammar.triviaIdWhitespace or tokens![asyncToken!].kind == grammar.triviaIdComment)) -> while {
                             asyncToken! + 1 => asyncToken!
@@ -736,6 +738,56 @@ lowerFrom request: LowerRequest -> [AstNode; ~] {
                         }
                         signatureToken! + 1 => signatureToken!
                     }
+                }
+            }
+            declaration!.kind == 7 -> if {
+                declaration!.start + declaration!.length => declarationBodyStart!
+                0 => declarationBodySearch!
+                declarationBodySearch! < (ast! -> len) -> while {
+                    ast![declarationBodySearch!] => declarationBodyCandidate
+                    (declarationBodyCandidate.parent == declarationIndex! and signatureArrowToken! >= 0 and declarationBodyCandidate.start > tokens![signatureArrowToken!].span.start and declarationBodyCandidate.kind != 12 and declarationBodyCandidate.kind != 17 and declarationBodyCandidate.start < declarationBodyStart!) -> if {
+                        declarationBodyCandidate.start => declarationBodyStart!
+                    }
+                    declarationBodySearch! + 1 => declarationBodySearch!
+                }
+                0 => declarationTypeCount!
+                UIntSize(0) => firstDeclarationTypeStart!
+                0 => declarationTypeSearch!
+                declarationTypeSearch! < (ast! -> len) -> while {
+                    ast![declarationTypeSearch!] => declarationTypeCandidate
+                    declarationTypeCandidate.kind == 12 -> if {
+                        declarationTypeCandidate.parent => declarationTypeAncestor!
+                        false => declarationTypeBelongs!
+                        false => declarationTypeNested!
+                        (declarationTypeAncestor! >= 0 and not declarationTypeBelongs! and not declarationTypeNested!) -> while {
+                            declarationTypeAncestor! == declarationIndex! -> if {
+                                true => declarationTypeBelongs!
+                            } else {
+                                ast![declarationTypeAncestor!].kind == 7 -> if {
+                                    true => declarationTypeNested!
+                                } else {
+                                    ast![declarationTypeAncestor!].parent => declarationTypeAncestor!
+                                }
+                            }
+                        }
+                        (declarationTypeBelongs! and declarationTypeCandidate.start < declarationBodyStart!) -> if {
+                            declarationTypeCount! == 0 -> if { declarationTypeCandidate.start => firstDeclarationTypeStart! }
+                            declarationTypeCount! + 1 => declarationTypeCount!
+                        }
+                    }
+                    declarationTypeSearch! + 1 => declarationTypeSearch!
+                }
+                declaration!.secondaryToken >= 0 -> if {
+                    declarationTypeCount! == 0 -> if { declaration!.flags + 48 => declaration!.flags }
+                    (declarationTypeCount! == 1 and signatureArrowToken! >= 0) -> if {
+                        firstDeclarationTypeStart! < tokens![signatureArrowToken!].span.start -> if {
+                            declaration!.flags + 32 => declaration!.flags
+                        } else {
+                            declaration!.flags + 16 => declaration!.flags
+                        }
+                    }
+                } else {
+                    declarationTypeCount! == 0 -> if { declaration!.flags + 32 => declaration!.flags }
                 }
             }
         }
