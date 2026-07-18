@@ -120,11 +120,13 @@ struct EmitContext {
     typeAligns: [Int; ~]
     typeLayoutStatuses: [Int; ~]
     pointerBitWidth: Int
+    supportsComputePool: Bool
 }
 
 struct PrepareRequest {
     sources: [Text; ~]
     pointerBitWidth: Int
+    supportsComputePool: Bool
 }
 
 public struct TypeLayoutRequest {
@@ -368,6 +370,7 @@ public writeType node: typedIr.TypedIrNode -> Unit uses Console {
 
 prepare request: move PrepareRequest -> EmitContext {
     request.pointerBitWidth => pointerBitWidth
+    request.supportsComputePool => supportsComputePool
     request.sources -> semanticContext.prepare => prepared
     prepared -> typedIr.lowerContext => ir!
     prepared -> expressionTypeIds.resolveContext => recursiveTypes
@@ -541,6 +544,7 @@ prepare request: move PrepareRequest -> EmitContext {
         typeAligns: typeAligns!
         typeLayoutStatuses: typeLayoutStatuses!
         pointerBitWidth: pointerBitWidth
+        supportsComputePool: supportsComputePool
     } => context!
     context!
 }
@@ -692,6 +696,55 @@ emitCore context: move EmitContext -> Unit uses Console {
             cachedCaptureIndex! + 1 => cachedCaptureIndex!
         }
         captures!
+    }
+    targetFunctionIndex request: CallEnvironmentRequest -> Int {
+        -1 => targetFunctionIr!
+        (request.targetModule >= 0 and request.targetModule < (context.ranges -> len)) -> if {
+            context.ranges[request.targetModule].symbolStart + request.targetSymbol => targetGlobalSymbol
+            (targetGlobalSymbol >= 0 and targetGlobalSymbol < (captureFunctionBySymbol! -> len)) -> if {
+                captureFunctionBySymbol![targetGlobalSymbol] => targetFunctionIr!
+            }
+        }
+        targetFunctionIr!
+    }
+    parallelUsesComputePool expressionIndex: Int -> Bool {
+        false => supported!
+        context.ir[expressionIndex] => parallelExpression
+        (context.supportsComputePool and parallelExpression.kind == 6 and parallelExpression.opcode == -207 and parallelExpression.operand1 >= 0) -> if {
+            context.ir[parallelExpression.operand1] => parallelCall
+            CallEnvironmentRequest { callerIndex: -1, callIndex: expressionIndex, targetModule: parallelCall.targetModule, targetSymbol: parallelCall.symbol, hasArgument: true } -> targetFunctionIndex => parallelTarget
+            parallelTarget >= 0 -> if {
+                parallelTarget -> functionCaptures => parallelTargetCaptures!
+                (parallelTargetCaptures! -> len) > 0 -> if { true => supported! }
+                0 => parallelTargetCaptureIndex!
+                parallelTargetCaptureIndex! < (parallelTargetCaptures! -> len) -> while {
+                    not (context.ir[parallelTargetCaptures![parallelTargetCaptureIndex!]] -> ownsType) -> if { false => supported! }
+                    parallelTargetCaptureIndex! + 1 => parallelTargetCaptureIndex!
+                }
+            }
+        }
+        supported!
+    }
+    emitCapturePointer request: CaptureValueRequest -> Unit uses Console {
+        request.callerIndex -> functionEnd => callerEnd
+        context.ir[request.bindingIndex] => binding
+        (request.bindingIndex > request.callerIndex and request.bindingIndex < callerEnd) -> if {
+            (binding.kind != 10 and binding.flags == 1) -> if {
+                request.bindingIndex -> mutableBindingRoot => bindingRoot
+                "%slot$(bindingRoot)" -> print
+            } else {
+                "%capture_borrow_binding$(request.bindingIndex)" -> print
+            }
+        } else {
+            request.callerIndex -> functionCaptures => callerCaptures!
+            -1 => capturePosition!
+            0 => callerCaptureIndex!
+            callerCaptureIndex! < (callerCaptures! -> len) -> while {
+                context.ir[callerCaptures![callerCaptureIndex!]].symbol == binding.symbol -> if { callerCaptureIndex! => capturePosition! }
+                callerCaptureIndex! + 1 => callerCaptureIndex!
+            }
+            capturePosition! >= 0 -> if { "%capture_$(capturePosition!)" -> print } else { "null" -> print }
+        }
     }
     emitCaptureValue request: CaptureValueRequest -> Unit uses Console {
         context.ir[request.callerIndex] => caller
@@ -3828,6 +3881,13 @@ emitCore context: move EmitContext -> Unit uses Console {
         }
         functionCaptureCacheFunctionIndex! + 1 => functionCaptureCacheFunctionIndex!
     }
+    false => usesComputePool!
+    0 => computePoolSearch!
+    computePoolSearch! < (context.ir -> len) -> while {
+        computePoolSearch! -> parallelUsesComputePool -> if { true => usesComputePool! }
+        computePoolSearch! + 1 => computePoolSearch!
+    }
+    usesComputePool! -> if { emitWindowsComputeRuntime }
     -1 => intrinsicRuntimeModule!
     0 => intrinsicRuntimeSearch!
     intrinsicRuntimeSearch! < (context.modules -> len) -> while {
@@ -3988,6 +4048,60 @@ emitCore context: move EmitContext -> Unit uses Console {
             }
         }
         externalCallIndex! + 1 => externalCallIndex!
+    }
+    0 => parallelCallbackIndex!
+    parallelCallbackIndex! < (context.ir -> len) -> while {
+        parallelCallbackIndex! -> parallelUsesComputePool -> if {
+            context.ir[parallelCallbackIndex!] => parallelExpression
+            context.ir[parallelExpression.operand0] => parallelSource
+            context.ir[parallelExpression.operand1] => parallelBodyCall
+            CallEnvironmentRequest { callerIndex: -1, callIndex: parallelCallbackIndex!, targetModule: parallelBodyCall.targetModule, targetSymbol: parallelBodyCall.symbol, hasArgument: true } -> targetFunctionIndex => parallelTargetFunction
+            parallelTargetFunction -> functionCaptures => parallelCallbackCaptures!
+            parallelCallbackCaptures! -> len => parallelCallbackCaptureCount
+            "define internal void @smalllang_parallel_callback_$(parallelCallbackIndex!)(ptr %group, i64 %index) {" -> println
+            "entry:" -> println
+            "  %input_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 1" -> println
+            "  %input = load ptr, ptr %input_slot, align 8" -> println
+            "  %input_address = getelementptr " -> print
+            parallelSource -> writeArrayElementType
+            ", ptr %input, i64 %index" -> println
+            "  %item = load " -> print
+            parallelSource -> writeArrayElementType
+            ", ptr %input_address, align " -> print
+            parallelSource -> arrayElementAlign -> writeDecimalLine
+            parallelCallbackCaptureCount > 0 -> if {
+                "  %capture_environment_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 4" -> println
+                "  %capture_environment = load ptr, ptr %capture_environment_slot, align 8" -> println
+                0 => parallelCallbackCaptureIndex!
+                parallelCallbackCaptureIndex! < parallelCallbackCaptureCount -> while {
+                    "  %capture_address_$(parallelCallbackCaptureIndex!) = getelementptr [$(parallelCallbackCaptureCount) x ptr], ptr %capture_environment, i32 0, i32 $(parallelCallbackCaptureIndex!)" -> println
+                    "  %capture_value_$(parallelCallbackCaptureIndex!) = load ptr, ptr %capture_address_$(parallelCallbackCaptureIndex!), align 8" -> println
+                    parallelCallbackCaptureIndex! + 1 => parallelCallbackCaptureIndex!
+                }
+            }
+            "  %mapped = call " -> print
+            parallelBodyCall -> writeIrType
+            " @sl_m$(parallelBodyCall.targetModule)_s$(parallelBodyCall.symbol)(" -> print
+            0 => parallelCallbackArgumentIndex!
+            parallelCallbackArgumentIndex! < parallelCallbackCaptureCount -> while {
+                "ptr %capture_value_$(parallelCallbackArgumentIndex!), " -> print
+                parallelCallbackArgumentIndex! + 1 => parallelCallbackArgumentIndex!
+            }
+            parallelSource -> writeArrayElementType
+            " %item)" -> println
+            "  %output_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 2" -> println
+            "  %output = load ptr, ptr %output_slot, align 8" -> println
+            "  %output_address = getelementptr " -> print
+            parallelExpression -> writeArrayElementType
+            ", ptr %output, i64 %index" -> println
+            "  store " -> print
+            parallelExpression -> writeArrayElementType
+            " %mapped, ptr %output_address, align " -> print
+            parallelExpression -> arrayElementAlign -> writeDecimalLine
+            "  ret void" -> println
+            "}" -> println
+        }
+        parallelCallbackIndex! + 1 => parallelCallbackIndex!
     }
     0 => functionIndex!
     functionIndex! < (context.ir -> len) -> while {
@@ -4977,6 +5091,40 @@ emitCore context: move EmitContext -> Unit uses Console {
                     "  %v$(expressionIndex!)_bytes = mul i64 %v$(expressionIndex!)_length, " -> print
                     expression -> arrayElementSize -> writeDecimalLine
                     "  %v$(expressionIndex!)_data = call ptr @malloc(i64 %v$(expressionIndex!)_bytes)" -> println
+                    expressionIndex! -> parallelUsesComputePool -> if {
+                        CallEnvironmentRequest { callerIndex: functionIndex!, callIndex: expressionIndex!, targetModule: parallelBodyCall.targetModule, targetSymbol: parallelBodyCall.symbol, hasArgument: true } => parallelEnvironmentRequest
+                        parallelEnvironmentRequest -> targetFunctionIndex => parallelTargetFunction
+                        parallelTargetFunction -> functionCaptures => parallelCallCaptures!
+                        parallelCallCaptures! -> len => parallelCallCaptureCount
+                        parallelEnvironmentRequest -> emitCallEnvironmentValues
+                        "  %v$(expressionIndex!)_group = alloca %smalllang.compute_group, align 8" -> println
+                        "  %v$(expressionIndex!)_callback_slot = getelementptr %smalllang.compute_group, ptr %v$(expressionIndex!)_group, i32 0, i32 0" -> println
+                        "  store ptr @smalllang_parallel_callback_$(expressionIndex!), ptr %v$(expressionIndex!)_callback_slot, align 8" -> println
+                        "  %v$(expressionIndex!)_input_slot = getelementptr %smalllang.compute_group, ptr %v$(expressionIndex!)_group, i32 0, i32 1" -> println
+                        "  store ptr %v$(expressionIndex!)_input, ptr %v$(expressionIndex!)_input_slot, align 8" -> println
+                        "  %v$(expressionIndex!)_output_slot = getelementptr %smalllang.compute_group, ptr %v$(expressionIndex!)_group, i32 0, i32 2" -> println
+                        "  store ptr %v$(expressionIndex!)_data, ptr %v$(expressionIndex!)_output_slot, align 8" -> println
+                        "  %v$(expressionIndex!)_count_slot = getelementptr %smalllang.compute_group, ptr %v$(expressionIndex!)_group, i32 0, i32 3" -> println
+                        "  store i64 %v$(expressionIndex!)_length, ptr %v$(expressionIndex!)_count_slot, align 8" -> println
+                        parallelCallCaptureCount > 0 -> if {
+                            "  %v$(expressionIndex!)_capture_environment = alloca [$(parallelCallCaptureCount) x ptr], align 8" -> println
+                            0 => parallelCaptureStoreIndex!
+                            parallelCaptureStoreIndex! < parallelCallCaptureCount -> while {
+                                "  %v$(expressionIndex!)_capture_address_$(parallelCaptureStoreIndex!) = getelementptr [$(parallelCallCaptureCount) x ptr], ptr %v$(expressionIndex!)_capture_environment, i32 0, i32 $(parallelCaptureStoreIndex!)" -> println
+                                "  store ptr " -> print
+                                CaptureValueRequest { callerIndex: functionIndex!, callIndex: expressionIndex!, bindingIndex: parallelCallCaptures![parallelCaptureStoreIndex!], captureIndex: parallelCaptureStoreIndex! } -> emitCapturePointer
+                                ", ptr %v$(expressionIndex!)_capture_address_$(parallelCaptureStoreIndex!), align 8" -> println
+                                parallelCaptureStoreIndex! + 1 => parallelCaptureStoreIndex!
+                            }
+                        }
+                        "  %v$(expressionIndex!)_capture_slot = getelementptr %smalllang.compute_group, ptr %v$(expressionIndex!)_group, i32 0, i32 4" -> println
+                        parallelCallCaptureCount > 0 -> if {
+                            "  store ptr %v$(expressionIndex!)_capture_environment, ptr %v$(expressionIndex!)_capture_slot, align 8" -> println
+                        } else {
+                            "  store ptr null, ptr %v$(expressionIndex!)_capture_slot, align 8" -> println
+                        }
+                        "  call void @smalllang_compute_execute(ptr %v$(expressionIndex!)_group)" -> println
+                    } else {
                     "  %v$(expressionIndex!)_index_slot = alloca i64, align 8" -> println
                     "  store i64 0, ptr %v$(expressionIndex!)_index_slot, align 8" -> println
                     "  br label %parallel$(expressionIndex!)_header" -> println
@@ -5010,6 +5158,7 @@ emitCore context: move EmitContext -> Unit uses Console {
                     "  store i64 %v$(expressionIndex!)_next, ptr %v$(expressionIndex!)_index_slot, align 8" -> println
                     "  br label %parallel$(expressionIndex!)_header" -> println
                     "parallel$(expressionIndex!)_exit:" -> println
+                    }
                     "  %v$(expressionIndex!)_0 = insertvalue %sl.array.i32 poison, ptr %v$(expressionIndex!)_data, 0" -> println
                     "  %v$(expressionIndex!)_1 = insertvalue %sl.array.i32 %v$(expressionIndex!)_0, i64 %v$(expressionIndex!)_length, 1" -> println
                     "  %v$(expressionIndex!) = insertvalue %sl.array.i32 %v$(expressionIndex!)_1, i64 %v$(expressionIndex!)_length, 2" -> println
@@ -6809,6 +6958,138 @@ emitBoolTextRuntime: -> Unit uses Console {
     """ -> println
 }
 
+emitWindowsComputeRuntime: -> Unit uses Console {
+    """
+    %smalllang.compute_group = type { ptr, ptr, ptr, i64, ptr }
+    @smalllang_compute_semaphore = internal global ptr null
+    @smalllang_compute_completion_event = internal global ptr null
+    @smalllang_compute_worker_count = internal global i32 0
+    @smalllang_compute_worker_handles = internal global [64 x ptr] zeroinitializer, align 8
+    @smalllang_compute_group_current = internal global ptr null
+    @smalllang_compute_next = internal global i64 0
+    @smalllang_compute_active = internal global i32 0
+    @smalllang_compute_running = internal global i32 0
+    @smalllang_compute_peak = internal global i32 0
+    @smalllang_compute_stopping = internal global i32 0
+    declare dllimport i32 @WaitForSingleObject(ptr, i32)
+    declare dllimport ptr @CreateThread(ptr, i64, ptr, ptr, i32, ptr)
+    declare dllimport ptr @CreateEventA(ptr, i32, i32, ptr)
+    declare dllimport i32 @SetEvent(ptr)
+    declare dllimport ptr @CreateSemaphoreA(ptr, i32, i32, ptr)
+    declare dllimport i32 @ReleaseSemaphore(ptr, i32, ptr)
+    declare dllimport i32 @ResetEvent(ptr)
+    declare dllimport i32 @GetActiveProcessorCount(i16)
+    define internal i32 @smalllang_windows_compute_worker(ptr %unused) {
+    entry:
+      br label %wait
+    wait:
+      %semaphore = load ptr, ptr @smalllang_compute_semaphore, align 8
+      %waited = call i32 @WaitForSingleObject(ptr %semaphore, i32 -1)
+      %group = load atomic ptr, ptr @smalllang_compute_group_current acquire, align 8
+      %count_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 3
+      %count = load i64, ptr %count_slot, align 8
+      br label %claim
+    claim:
+      %index = atomicrmw add ptr @smalllang_compute_next, i64 1 acq_rel
+      %has_work = icmp ult i64 %index, %count
+      br i1 %has_work, label %work, label %complete
+    work:
+      %callback_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 0
+      %callback = load ptr, ptr %callback_slot, align 8
+      %running_before = atomicrmw add ptr @smalllang_compute_running, i32 1 acq_rel
+      %running_now = add i32 %running_before, 1
+      %peak_before = atomicrmw max ptr @smalllang_compute_peak, i32 %running_now acq_rel
+      call void %callback(ptr %group, i64 %index)
+      %running_after = atomicrmw sub ptr @smalllang_compute_running, i32 1 acq_rel
+      br label %claim
+    complete:
+      %previous = atomicrmw sub ptr @smalllang_compute_active, i32 1 acq_rel
+      %last = icmp eq i32 %previous, 1
+      br i1 %last, label %signal, label %barrier
+    barrier:
+      %barrier_event = load ptr, ptr @smalllang_compute_completion_event, align 8
+      %barrier_waited = call i32 @WaitForSingleObject(ptr %barrier_event, i32 -1)
+      br label %wait
+    signal:
+      %event = load ptr, ptr @smalllang_compute_completion_event, align 8
+      %signalled = call i32 @SetEvent(ptr %event)
+      br label %wait
+    }
+    define internal i1 @smalllang_compute_start() {
+    entry:
+      %existing = load i32, ptr @smalllang_compute_worker_count, align 4
+      %already = icmp sgt i32 %existing, 0
+      br i1 %already, label %ready, label %create_sync
+    create_sync:
+      %semaphore = call ptr @CreateSemaphoreA(ptr null, i32 0, i32 64, ptr null)
+      %semaphore_ok = icmp ne ptr %semaphore, null
+      br i1 %semaphore_ok, label %create_event, label %fail
+    create_event:
+      store ptr %semaphore, ptr @smalllang_compute_semaphore, align 8
+      %event = call ptr @CreateEventA(ptr null, i32 1, i32 0, ptr null)
+      %event_ok = icmp ne ptr %event, null
+      br i1 %event_ok, label %count, label %fail
+    count:
+      store ptr %event, ptr @smalllang_compute_completion_event, align 8
+      %reported = call i32 @GetActiveProcessorCount(i16 -1)
+      %positive = icmp sgt i32 %reported, 0
+      %at_least_one = select i1 %positive, i32 %reported, i32 1
+      %too_many = icmp sgt i32 %at_least_one, 64
+      %bounded = select i1 %too_many, i32 64, i32 %at_least_one
+      br label %create_workers
+    create_workers:
+      %index = phi i32 [ 0, %count ], [ %next, %created ]
+      %done = icmp eq i32 %index, %bounded
+      br i1 %done, label %publish, label %create_one
+    create_one:
+      %worker = call ptr @CreateThread(ptr null, i64 0, ptr @smalllang_windows_compute_worker, ptr null, i32 0, ptr null)
+      %worker_ok = icmp ne ptr %worker, null
+      br i1 %worker_ok, label %created, label %publish
+    created:
+      %slot = getelementptr [64 x ptr], ptr @smalllang_compute_worker_handles, i32 0, i32 %index
+      store ptr %worker, ptr %slot, align 8
+      %next = add i32 %index, 1
+      br label %create_workers
+    publish:
+      %created_count = phi i32 [ %bounded, %create_workers ], [ %index, %create_one ]
+      store i32 %created_count, ptr @smalllang_compute_worker_count, align 4
+      %has_workers = icmp sgt i32 %created_count, 0
+      br i1 %has_workers, label %ready, label %fail
+    ready:
+      ret i1 true
+    fail:
+      ret i1 false
+    }
+    define internal void @smalllang_compute_execute(ptr %group) {
+    entry:
+      %started = call i1 @smalllang_compute_start()
+      br i1 %started, label %submit, label %failed
+    submit:
+      %count_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 3
+      %count = load i64, ptr %count_slot, align 8
+      %empty = icmp eq i64 %count, 0
+      br i1 %empty, label %done, label %publish
+    publish:
+      store atomic i64 0, ptr @smalllang_compute_next release, align 8
+      store atomic i32 0, ptr @smalllang_compute_peak release, align 4
+      %workers = load i32, ptr @smalllang_compute_worker_count, align 4
+      store atomic i32 %workers, ptr @smalllang_compute_active release, align 4
+      store atomic ptr %group, ptr @smalllang_compute_group_current release, align 8
+      %event = load ptr, ptr @smalllang_compute_completion_event, align 8
+      %reset = call i32 @ResetEvent(ptr %event)
+      %semaphore = load ptr, ptr @smalllang_compute_semaphore, align 8
+      %released = call i32 @ReleaseSemaphore(ptr %semaphore, i32 %workers, ptr null)
+      %waited = call i32 @WaitForSingleObject(ptr %event, i32 -1)
+      store atomic ptr null, ptr @smalllang_compute_group_current release, align 8
+      br label %done
+    failed:
+      unreachable
+    done:
+      ret void
+    }
+    """ -> println
+}
+
 emitWindowsTextRuntime: -> Unit uses Console {
     """
     @sl_runtime_newline = private constant [1 x i8] c"\0A"
@@ -6918,7 +7199,7 @@ public emit sources: move [Text; ~] -> Unit uses Console {
     llvmTarget.windowsX64 => target
     target.dataLayoutLine -> println
     target.tripleLine -> println
-    PrepareRequest { sources: sources, pointerBitWidth: target.pointerBitWidth } => prepareRequest!
+    PrepareRequest { sources: sources, pointerBitWidth: target.pointerBitWidth, supportsComputePool: true } => prepareRequest!
     prepareRequest! -> prepare => context!
     context! -> usesTextRuntime -> if { emitWindowsTextRuntime }
     context! -> usesIntInterpolation -> if { emitIntTextRuntime }
@@ -6945,7 +7226,7 @@ public emitLinux sources: move [Text; ~] -> Unit uses Console {
     llvmTarget.linuxX64 => target
     target.dataLayoutLine -> println
     target.tripleLine -> println
-    PrepareRequest { sources: sources, pointerBitWidth: target.pointerBitWidth } => prepareRequest!
+    PrepareRequest { sources: sources, pointerBitWidth: target.pointerBitWidth, supportsComputePool: false } => prepareRequest!
     prepareRequest! -> prepare => context!
     context! -> usesTextRuntime -> if { emitLinuxTextRuntime }
     context! -> usesIntInterpolation -> if { emitIntTextRuntime }
@@ -6957,7 +7238,7 @@ public emitWasm sources: move [Text; ~] -> Unit uses Console {
     llvmTarget.wasm32Browser => target
     target.dataLayoutLine -> println
     target.tripleLine -> println
-    PrepareRequest { sources: sources, pointerBitWidth: target.pointerBitWidth } => prepareRequest!
+    PrepareRequest { sources: sources, pointerBitWidth: target.pointerBitWidth, supportsComputePool: false } => prepareRequest!
     prepareRequest! -> prepare => context!
     context! -> usesTextRuntime -> if { emitWasmTextRuntime }
     context! -> usesIntInterpolation -> if { emitIntTextRuntime }

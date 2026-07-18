@@ -911,17 +911,21 @@ same buffered runtime, so stage 3 no longer writes LLVM one byte at a time.
 - [x] generate stage 3 and prove byte-identical stage-2/stage-3 LLVM;
 - [x] keep compiler emission working set below 60 MiB in the measured run;
 - [x] reduce the measured stage-2 verification path from about 376 s to 261 s;
-- [ ] lower `parallel` to the native compute pool in the self-host emitter;
-- [ ] make the generated stage-2 compiler use more than one effective core;
+- [x] lower capture-safe `parallel` callbacks to the native compute pool;
+- [x] make the generated stage-2 compiler use more than one effective core;
+- [ ] make no-capture `SourceText` analysis worker-safe before parallelizing it;
 - [ ] split or buffer independent `emitCore` function bodies for parallel output.
 
-The current result is a measured 30.6% reduction, but it is not the final
-"dramatic" target. Stage 3 still took 360.7 s at 0.99 effective cores. That
-measurement proves the remaining bottleneck is not rebuilding the compiler or
-LLVM file I/O: the self-host emitter currently serializes `parallel` blocks and
-the large function-emission phase. The next performance gate is therefore real
-compute-pool lowering in generated SL code, followed by ordered parallel LLVM
-body emission.
+The generated stage-2 compiler now lowers capture-safe `parallel` callbacks to
+a Windows compute pool. Stage 3 moved from 360.7 s at 0.99 effective cores to
+255.5 s, with a 14.90-core peak and 1.62-core whole-run average. That is a
+105.2 s (29.2%) stage3 reduction while retaining byte-identical stage2/stage3
+LLVM. No-capture `analyzeSource` remains serial because the current self-host
+ABI crashes when a large `SourceText` analysis runs on a worker; captured
+function-lowering callbacks are worker-safe and covered by a 100-generation
+execution test. The dominant remaining gate is ordered parallel LLVM body
+emission: after the frontend burst, the large `emitCore` phase returns to one
+core.
 
 ## Immediate Implementation Order
 

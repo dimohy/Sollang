@@ -8,12 +8,22 @@ main {
         }
 
         increment values: [Int; ~] -> [Int; ~] {
+            incrementWithOffset value: Int -> Int {
+                value + values![0]
+            }
             values -> parallel value {
-                value -> incrementOne
+                value -> incrementWithOffset
             }
         }
 
-        main { }
+        main {
+            0 => iteration!
+            iteration! < 100 -> while {
+                [1, 2, 3, 4, ~] -> increment => values!
+                iteration! + 1 => iteration!
+            }
+            "parallel done" -> println
+        }
         """,
         ~
     ] => sources!

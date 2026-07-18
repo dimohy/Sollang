@@ -1,8 +1,210 @@
 target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
 target triple = "x86_64-pc-windows-msvc"
+@sl_runtime_newline = private constant [1 x i8] c"\0A"
+@sl_runtime_stdout_buffer = private global [1048576 x i8] zeroinitializer
+@sl_runtime_stdout_count = private global i64 0
+@sl_runtime_stdout_written = private global i32 0
+declare ptr @GetStdHandle(i32)
+declare i32 @WriteFile(ptr, ptr, i32, ptr, ptr)
+declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1 immarg)
+define internal void @sl_runtime_flush_stdout() {
+entry:
+  %count = load i64, ptr @sl_runtime_stdout_count, align 8
+  %has_data = icmp ugt i64 %count, 0
+  br i1 %has_data, label %write, label %done
+write:
+  %handle = call ptr @GetStdHandle(i32 -11)
+  %count32 = trunc i64 %count to i32
+  %ok = call i32 @WriteFile(ptr %handle, ptr @sl_runtime_stdout_buffer, i32 %count32, ptr @sl_runtime_stdout_written, ptr null)
+  store i64 0, ptr @sl_runtime_stdout_count, align 8
+  br label %done
+done:
+  ret void
+}
+define internal void @sl_runtime_append_stdout(ptr %data, i64 %len) {
+entry:
+  %count = load i64, ptr @sl_runtime_stdout_count, align 8
+  %total = add i64 %count, %len
+  %fits = icmp ule i64 %total, 1048576
+  br i1 %fits, label %append, label %flush
+flush:
+  call void @sl_runtime_flush_stdout()
+  %large = icmp ugt i64 %len, 1048576
+  br i1 %large, label %direct, label %append_empty
+direct:
+  %handle = call ptr @GetStdHandle(i32 -11)
+  %len32 = trunc i64 %len to i32
+  %ok = call i32 @WriteFile(ptr %handle, ptr %data, i32 %len32, ptr @sl_runtime_stdout_written, ptr null)
+  ret void
+append_empty:
+  call void @llvm.memcpy.p0.p0.i64(ptr @sl_runtime_stdout_buffer, ptr %data, i64 %len, i1 false)
+  store i64 %len, ptr @sl_runtime_stdout_count, align 8
+  ret void
+append:
+  %slot = getelementptr i8, ptr @sl_runtime_stdout_buffer, i64 %count
+  call void @llvm.memcpy.p0.p0.i64(ptr %slot, ptr %data, i64 %len, i1 false)
+  store i64 %total, ptr @sl_runtime_stdout_count, align 8
+  ret void
+}
+define internal void @sl_runtime_print(ptr %data, i64 %len, i1 %newline) {
+entry:
+  call void @sl_runtime_append_stdout(ptr %data, i64 %len)
+  br i1 %newline, label %write_newline, label %done
+write_newline:
+  call void @sl_runtime_append_stdout(ptr @sl_runtime_newline, i64 1)
+  br label %done
+done:
+  ret void
+}
+%smalllang.compute_group = type { ptr, ptr, ptr, i64, ptr }
+@smalllang_compute_semaphore = internal global ptr null
+@smalllang_compute_completion_event = internal global ptr null
+@smalllang_compute_worker_count = internal global i32 0
+@smalllang_compute_worker_handles = internal global [64 x ptr] zeroinitializer, align 8
+@smalllang_compute_group_current = internal global ptr null
+@smalllang_compute_next = internal global i64 0
+@smalllang_compute_active = internal global i32 0
+@smalllang_compute_running = internal global i32 0
+@smalllang_compute_peak = internal global i32 0
+@smalllang_compute_stopping = internal global i32 0
+declare dllimport i32 @WaitForSingleObject(ptr, i32)
+declare dllimport ptr @CreateThread(ptr, i64, ptr, ptr, i32, ptr)
+declare dllimport ptr @CreateEventA(ptr, i32, i32, ptr)
+declare dllimport i32 @SetEvent(ptr)
+declare dllimport ptr @CreateSemaphoreA(ptr, i32, i32, ptr)
+declare dllimport i32 @ReleaseSemaphore(ptr, i32, ptr)
+declare dllimport i32 @ResetEvent(ptr)
+declare dllimport i32 @GetActiveProcessorCount(i16)
+define internal i32 @smalllang_windows_compute_worker(ptr %unused) {
+entry:
+  br label %wait
+wait:
+  %semaphore = load ptr, ptr @smalllang_compute_semaphore, align 8
+  %waited = call i32 @WaitForSingleObject(ptr %semaphore, i32 -1)
+  %group = load atomic ptr, ptr @smalllang_compute_group_current acquire, align 8
+  %count_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 3
+  %count = load i64, ptr %count_slot, align 8
+  br label %claim
+claim:
+  %index = atomicrmw add ptr @smalllang_compute_next, i64 1 acq_rel
+  %has_work = icmp ult i64 %index, %count
+  br i1 %has_work, label %work, label %complete
+work:
+  %callback_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 0
+  %callback = load ptr, ptr %callback_slot, align 8
+  %running_before = atomicrmw add ptr @smalllang_compute_running, i32 1 acq_rel
+  %running_now = add i32 %running_before, 1
+  %peak_before = atomicrmw max ptr @smalllang_compute_peak, i32 %running_now acq_rel
+  call void %callback(ptr %group, i64 %index)
+  %running_after = atomicrmw sub ptr @smalllang_compute_running, i32 1 acq_rel
+  br label %claim
+complete:
+  %previous = atomicrmw sub ptr @smalllang_compute_active, i32 1 acq_rel
+  %last = icmp eq i32 %previous, 1
+  br i1 %last, label %signal, label %barrier
+barrier:
+  %barrier_event = load ptr, ptr @smalllang_compute_completion_event, align 8
+  %barrier_waited = call i32 @WaitForSingleObject(ptr %barrier_event, i32 -1)
+  br label %wait
+signal:
+  %event = load ptr, ptr @smalllang_compute_completion_event, align 8
+  %signalled = call i32 @SetEvent(ptr %event)
+  br label %wait
+}
+define internal i1 @smalllang_compute_start() {
+entry:
+  %existing = load i32, ptr @smalllang_compute_worker_count, align 4
+  %already = icmp sgt i32 %existing, 0
+  br i1 %already, label %ready, label %create_sync
+create_sync:
+  %semaphore = call ptr @CreateSemaphoreA(ptr null, i32 0, i32 64, ptr null)
+  %semaphore_ok = icmp ne ptr %semaphore, null
+  br i1 %semaphore_ok, label %create_event, label %fail
+create_event:
+  store ptr %semaphore, ptr @smalllang_compute_semaphore, align 8
+  %event = call ptr @CreateEventA(ptr null, i32 1, i32 0, ptr null)
+  %event_ok = icmp ne ptr %event, null
+  br i1 %event_ok, label %count, label %fail
+count:
+  store ptr %event, ptr @smalllang_compute_completion_event, align 8
+  %reported = call i32 @GetActiveProcessorCount(i16 -1)
+  %positive = icmp sgt i32 %reported, 0
+  %at_least_one = select i1 %positive, i32 %reported, i32 1
+  %too_many = icmp sgt i32 %at_least_one, 64
+  %bounded = select i1 %too_many, i32 64, i32 %at_least_one
+  br label %create_workers
+create_workers:
+  %index = phi i32 [ 0, %count ], [ %next, %created ]
+  %done = icmp eq i32 %index, %bounded
+  br i1 %done, label %publish, label %create_one
+create_one:
+  %worker = call ptr @CreateThread(ptr null, i64 0, ptr @smalllang_windows_compute_worker, ptr null, i32 0, ptr null)
+  %worker_ok = icmp ne ptr %worker, null
+  br i1 %worker_ok, label %created, label %publish
+created:
+  %slot = getelementptr [64 x ptr], ptr @smalllang_compute_worker_handles, i32 0, i32 %index
+  store ptr %worker, ptr %slot, align 8
+  %next = add i32 %index, 1
+  br label %create_workers
+publish:
+  %created_count = phi i32 [ %bounded, %create_workers ], [ %index, %create_one ]
+  store i32 %created_count, ptr @smalllang_compute_worker_count, align 4
+  %has_workers = icmp sgt i32 %created_count, 0
+  br i1 %has_workers, label %ready, label %fail
+ready:
+  ret i1 true
+fail:
+  ret i1 false
+}
+define internal void @smalllang_compute_execute(ptr %group) {
+entry:
+  %started = call i1 @smalllang_compute_start()
+  br i1 %started, label %submit, label %failed
+submit:
+  %count_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 3
+  %count = load i64, ptr %count_slot, align 8
+  %empty = icmp eq i64 %count, 0
+  br i1 %empty, label %done, label %publish
+publish:
+  store atomic i64 0, ptr @smalllang_compute_next release, align 8
+  store atomic i32 0, ptr @smalllang_compute_peak release, align 4
+  %workers = load i32, ptr @smalllang_compute_worker_count, align 4
+  store atomic i32 %workers, ptr @smalllang_compute_active release, align 4
+  store atomic ptr %group, ptr @smalllang_compute_group_current release, align 8
+  %event = load ptr, ptr @smalllang_compute_completion_event, align 8
+  %reset = call i32 @ResetEvent(ptr %event)
+  %semaphore = load ptr, ptr @smalllang_compute_semaphore, align 8
+  %released = call i32 @ReleaseSemaphore(ptr %semaphore, i32 %workers, ptr null)
+  %waited = call i32 @WaitForSingleObject(ptr %event, i32 -1)
+  store atomic ptr null, ptr @smalllang_compute_group_current release, align 8
+  br label %done
+failed:
+  unreachable
+done:
+  ret void
+}
 %sl.array.i32 = type { ptr, i64, i64 }
 declare ptr @malloc(i64)
 declare void @free(ptr)
+%sl.text = type { ptr, i64 }
+@sl_str_40 = private unnamed_addr constant [13 x i8] c"parallel done"
+define internal void @smalllang_parallel_callback_9(ptr %group, i64 %index) {
+entry:
+  %input_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 1
+  %input = load ptr, ptr %input_slot, align 8
+  %input_address = getelementptr i32, ptr %input, i64 %index
+  %item = load i32, ptr %input_address, align 4
+  %capture_environment_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 4
+  %capture_environment = load ptr, ptr %capture_environment_slot, align 8
+  %capture_address_0 = getelementptr [1 x ptr], ptr %capture_environment, i32 0, i32 0
+  %capture_value_0 = load ptr, ptr %capture_address_0, align 8
+  %mapped = call i32 @sl_m0_s2(ptr %capture_value_0, i32 %item)
+  %output_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 2
+  %output = load ptr, ptr %output_slot, align 8
+  %output_address = getelementptr i32, ptr %output, i64 %index
+  store i32 %mapped, ptr %output_address, align 4
+  ret void
+}
 define i32 @sl_m0_s0(i32 %arg) {
 entry:
   %v3 = add i32 %arg, 1
@@ -10,33 +212,77 @@ entry:
 }
 define %sl.array.i32 @sl_m0_s1(%sl.array.i32 %arg) {
 entry:
+  %capture_borrow_binding8 = alloca %sl.array.i32, align 8
   %v9_input = extractvalue %sl.array.i32 %arg, 0
   %v9_length = extractvalue %sl.array.i32 %arg, 1
   %v9_bytes = mul i64 %v9_length, 4
   %v9_data = call ptr @malloc(i64 %v9_bytes)
-  %v9_index_slot = alloca i64, align 8
-  store i64 0, ptr %v9_index_slot, align 8
-  br label %parallel9_header
-parallel9_header:
-  %v9_index = load i64, ptr %v9_index_slot, align 8
-  %v9_done = icmp eq i64 %v9_index, %v9_length
-  br i1 %v9_done, label %parallel9_exit, label %parallel9_body
-parallel9_body:
-  %v9_input_ptr = getelementptr i32, ptr %v9_input, i64 %v9_index
-  %v9_item = load i32, ptr %v9_input_ptr, align 4
-  %v9_mapped = call i32 @sl_m0_s0(i32 %v9_item)
-  %v9_output_ptr = getelementptr i32, ptr %v9_data, i64 %v9_index
-  store i32 %v9_mapped, ptr %v9_output_ptr, align 4
-  %v9_next = add i64 %v9_index, 1
-  store i64 %v9_next, ptr %v9_index_slot, align 8
-  br label %parallel9_header
-parallel9_exit:
+  store %sl.array.i32 %arg, ptr %capture_borrow_binding8, align 8
+  %v9_group = alloca %smalllang.compute_group, align 8
+  %v9_callback_slot = getelementptr %smalllang.compute_group, ptr %v9_group, i32 0, i32 0
+  store ptr @smalllang_parallel_callback_9, ptr %v9_callback_slot, align 8
+  %v9_input_slot = getelementptr %smalllang.compute_group, ptr %v9_group, i32 0, i32 1
+  store ptr %v9_input, ptr %v9_input_slot, align 8
+  %v9_output_slot = getelementptr %smalllang.compute_group, ptr %v9_group, i32 0, i32 2
+  store ptr %v9_data, ptr %v9_output_slot, align 8
+  %v9_count_slot = getelementptr %smalllang.compute_group, ptr %v9_group, i32 0, i32 3
+  store i64 %v9_length, ptr %v9_count_slot, align 8
+  %v9_capture_environment = alloca [1 x ptr], align 8
+  %v9_capture_address_0 = getelementptr [1 x ptr], ptr %v9_capture_environment, i32 0, i32 0
+  store ptr %capture_borrow_binding8, ptr %v9_capture_address_0, align 8
+  %v9_capture_slot = getelementptr %smalllang.compute_group, ptr %v9_group, i32 0, i32 4
+  store ptr %v9_capture_environment, ptr %v9_capture_slot, align 8
+  call void @smalllang_compute_execute(ptr %v9_group)
   %v9_0 = insertvalue %sl.array.i32 poison, ptr %v9_data, 0
   %v9_1 = insertvalue %sl.array.i32 %v9_0, i64 %v9_length, 1
   %v9 = insertvalue %sl.array.i32 %v9_1, i64 %v9_length, 2
   ret %sl.array.i32 %v9
 }
+define i32 @sl_m0_s2(ptr %capture_0, i32 %arg) {
+entry:
+  %v18 = load %sl.array.i32, ptr %capture_0, align 8
+  %v17_data = extractvalue %sl.array.i32 %v18, 0
+  %v17_ptr = getelementptr i32, ptr %v17_data, i64 0
+  %v17 = load i32, ptr %v17_ptr, align 4
+  %v15 = add i32 %arg, %v17
+  ret i32 %v15
+}
 define i32 @main() {
 entry:
+  %slot21 = alloca i32, align 4
+  %slot22 = alloca %sl.array.i32, align 8
+  %v40_ptr = insertvalue %sl.text poison, ptr @sl_str_40, 0
+  %v40 = insertvalue %sl.text %v40_ptr, i64 13, 1
+  store i32 0, ptr %slot21, align 4
+  br label %while28_header
+while28_header:
+  %while28_v26 = load i32, ptr %slot21, align 4
+  %while28_v25 = icmp slt i32 %while28_v26, 100
+  br i1 %while28_v25, label %while28_body, label %while28_exit
+while28_body:
+  %v31_data = call ptr @malloc(i64 16)
+  %v31_ptr0 = getelementptr i32, ptr %v31_data, i64 0
+  store i32 1, ptr %v31_ptr0, align 4
+  %v31_ptr1 = getelementptr i32, ptr %v31_data, i64 1
+  store i32 2, ptr %v31_ptr1, align 4
+  %v31_ptr2 = getelementptr i32, ptr %v31_data, i64 2
+  store i32 3, ptr %v31_ptr2, align 4
+  %v31_ptr3 = getelementptr i32, ptr %v31_data, i64 3
+  store i32 4, ptr %v31_ptr3, align 4
+  %v31_0 = insertvalue %sl.array.i32 poison, ptr %v31_data, 0
+  %v31_1 = insertvalue %sl.array.i32 %v31_0, i64 4, 1
+  %v31 = insertvalue %sl.array.i32 %v31_1, i64 4, 2
+  store %sl.array.i32 %v31, ptr %slot22, align 8
+  %v30 = call %sl.array.i32 @sl_m0_s1(%sl.array.i32 %v31)
+  %v37 = load i32, ptr %slot21, align 4
+  %v36 = add i32 %v37, 1
+  store i32 %v36, ptr %slot21, align 4
+  %cleanup283_b22_current = load %sl.array.i32, ptr %slot22, align 8
+  %cleanup283_b22 = extractvalue %sl.array.i32 %cleanup283_b22_current, 0
+  call void @free(ptr %cleanup283_b22)
+  br label %while28_header
+while28_exit:
+  call void @sl_runtime_print(ptr @sl_str_40, i64 13, i1 true)
+  call void @sl_runtime_flush_stdout()
   ret i32 0
 }

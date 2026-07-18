@@ -5392,7 +5392,7 @@ separate from the parallel native backend.
 
 ## D168 - Preserve Fixed-Point Output While Removing Self-host Emission I/O
 
-Status: capture/index/I/O baseline implemented; generated compute-pool lowering pending
+Status: capture/index/I/O baseline implemented; superseded by D169 for compute-pool lowering
 Date: 2026-07-18
 
 Compiler LLVM output is redirected and must be treated as bulk data rather
@@ -5413,3 +5413,28 @@ seconds. A generated stage-2 compiler still takes 360.7 seconds and averages
 serial loops. Consequently the next optimization must implement the runtime
 parallel ABI in the self-host emitter; adding more test-runner workers or LLVM
 partitions cannot accelerate that internal serial path.
+
+## D169 - Lower Only Worker-safe Self-host Parallel Callbacks
+
+Status: implemented and fixed-point verified
+Date: 2026-07-18
+
+The self-host LLVM emitter now emits the Windows `%smalllang.compute_group`
+ABI, persistent workers, stable callback symbols derived from typed-IR indexes,
+and ordered output slots. A callback is eligible only when it has at least one
+capture and every capture uses the owned/borrowed pointer ABI. Other `parallel`
+expressions retain the deterministic serial lowering.
+
+This restriction is evidence-driven. Running large no-capture `SourceText`
+analysis on a worker reproducibly caused an access violation, even with one
+worker and a 16 MiB thread stack. Keeping that phase serial while enabling the
+captured function-lowering regions completed the 28-source compiler in 255.5
+seconds instead of 360.7 seconds. The first 15 seconds reached 14.90 effective
+cores; the whole run averaged 1.62 cores. A captured-array callback ran through
+100 pool generations, the affected LLVM suite passed 75/75, `llvm-as` accepted
+the complete compiler, and stage 2 and stage 3 had the same SHA-256
+`3A29C41670DAF137B42594A5374A68053D2599EBBFAF287043E1E99B316A7020`.
+
+The next performance decision must address ordered parallel function-body
+emission. The compute pool now accelerates the frontend burst, but the long
+LLVM text phase still converges to one active core.
