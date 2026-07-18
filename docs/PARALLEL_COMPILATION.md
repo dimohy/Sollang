@@ -108,14 +108,14 @@ Evidence: `selfhost/semantic/analysis.sl`; examples 182, 293, and 294.
 - [x] Non-sendable captures and mutable borrows are rejected.
 - [x] Owned callback results transfer exactly once.
 
-### C. Native compute task group (6/7)
+### C. Native compute task group (7/7)
 
 - [x] Windows pool uses bounded reusable native workers.
 - [x] Linux pool uses bounded reusable native workers.
 - [x] The available processor count and explicit build override are supported.
 - [x] Workers claim indices atomically without a global result lock.
 - [x] Parent-assisted waiting and structured join are implemented.
-- [ ] Cancellation and partial-result destruction are exactly once.
+- [x] Cancellation and partial-result destruction are exactly once.
 - [x] File-operation waiting remains outside the compute pool.
 
 ### D. Self-host compiler integration (6/6)
@@ -156,7 +156,7 @@ Evidence: example 324 executes `block item: Int -> Int`; example 325 proves the
 self-host grammar/parser accepts the same declaration and call form. The two
 `block-callback-result-*` diagnostics cover missing and mismatched results.
 
-Parallel-compilation progress is **26/28 checks (92.9%)**. This is a feature-local
+Parallel-compilation progress is **27/28 checks (96.4%)**. This is a feature-local
 metric and does not promote the canonical self-host roadmap, which remains
 **48.5/60 equivalent gates (80.8%)** until a full checklist audit proves a gate.
 
@@ -188,8 +188,9 @@ oneTBB task groups.
 The Linux x86-64 backend now uses a bounded reusable pthread pool, `eventfd`
 work/completion signals, and a futex generation barrier. Example 383 reuses the
 same pool for 100 generations, and `scripts/verify-linux-parallel.ps1` executes
-five focused WSL checks covering ordered output, parent help, reuse, and LLVM
-emitted by the native self-host compiler. Memory-output ownership is shared by
+six focused WSL checks covering ordered output, parent help, reuse, LLVM emitted
+by the native self-host compiler, and AddressSanitizer ownership cleanup.
+Memory-output ownership is shared by
 one runtime abstraction: platforms provide only the final writer adapter while
 the common sink owns grow, append, canonical flush, and destruction.
 
@@ -199,9 +200,11 @@ It keeps the earliest failing source index, stops new claims at that boundary,
 joins already-started callbacks, flushes only the successful output-sink prefix,
 and moves or destroys every initialized `Result` payload exactly once. The
 self-host emitter executes the same ABI from entry, ordinary-function, and
-nested-region positions (examples 392-394). The C.6 checkbox remains open
-because nested owned callback Result cleanup and the full cross-platform
-ownership proof have not yet been completed.
+nested-region positions (examples 392-394). Example 395 proves deterministic
+earliest-error selection and prefix-only output over competing failures.
+Example 396 returns owned dynamic arrays from callbacks and verifies the error
+path under Linux AddressSanitizer with leak detection enabled. This closes C.6;
+only full Windows/Linux suite parity remains open.
 
 - [POSIX `pthread_create`](https://pubs.opengroup.org/onlinepubs/000095399/functions/pthread_create.html)
 - [POSIX `pthread_join`](https://pubs.opengroup.org/onlinepubs/009695399/functions/pthread_join.html)
@@ -219,12 +222,12 @@ effective cores). The parent-help fixed-point run used 376.91 CPU-seconds over
 34.56 seconds wall time (10.91 effective cores). The Linux-pool and common-sink
 run used 407.42 CPU-seconds over 36.86 seconds wall time (11.05 effective cores)
 and peaked at 100.7 MiB. The earlier capture-safety run peaked at 77.5 MiB.
-Linux full-suite parity and exactly-once cancellation remain outstanding.
+Linux full-suite parity remains outstanding.
 
 The `tryParallel` reference-runtime checkpoint passes the complete 516-case
 Windows suite and its three runtime cases on Linux x86-64. The updated compiler
 reaches an exact 7,247,585-byte stage-2/stage-3 fixed point with SHA-256
 `C1D43534CFC873CC3BB18BA9DDE3CAF1F515FB8D9FEBA57ABDFE063F648F0723`;
 stage 3 assembles with `llvm-as` and took 35.19 seconds to emit. This evidence
-does not close the two remaining checks because executable self-host
-`Result`/generic-enum lowering and a Linux full-suite run are still pending.
+predates executable self-host owned-`Result` cleanup. That cleanup is now
+covered by example 396; a Linux full-suite run is still pending.

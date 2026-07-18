@@ -52,32 +52,34 @@ function Build-And-RunReferenceExample {
 
 New-Item -ItemType Directory -Force -Path $artifactsDir | Out-Null
 
-Write-Host "[linux 1/5] Verify WSL2 and the native Linux toolchain."
+Write-Host "[linux 1/6] Verify WSL2 and the native Linux toolchain."
 $kernel = Invoke-Wsl @("uname", "-sr")
 $gcc = Invoke-Wsl @("gcc", "--version")
-Write-Host "[linux 1/5] PASS $kernel; $($gcc.Split("`n")[0])"
+Write-Host "[linux 1/6] PASS $kernel; $($gcc.Split("`n")[0])"
 
-Write-Host "[linux 2/5] Execute ordered per-index output sinks."
+Write-Host "[linux 2/6] Execute ordered per-index output sinks."
 Build-And-RunReferenceExample `
     "375-ordered-parallel-memory-output-sink" `
     "[8][1][6][3][7][2][5][4] results=16,8"
-Write-Host "[linux 2/5] PASS ordered output sinks"
+Write-Host "[linux 2/6] PASS ordered output sinks"
 
-Write-Host "[linux 3/5] Execute parent-assisted waiting with one native worker."
+Write-Host "[linux 3/6] Execute parent-assisted waiting with one native worker."
 Build-And-RunReferenceExample `
     "381-parallel-parent-help" `
     "workers=1, parent-helped=true, results=8"
-Write-Host "[linux 3/5] PASS parent-assisted waiting"
+Write-Host "[linux 3/6] PASS parent-assisted waiting"
 
-Write-Host "[linux 4/5] Reuse the bounded pool across 100 generations."
+Write-Host "[linux 4/6] Reuse the bounded pool across 100 generations."
 Build-And-RunReferenceExample `
     "383-parallel-reusable-generations" `
     "generations=100, checksum=1800, workers=2"
-Write-Host "[linux 4/5] PASS 100 reusable generations"
+Write-Host "[linux 4/6] PASS 100 reusable generations"
 
-Write-Host "[linux 5/5] Execute LLVM emitted by the native self-host compiler."
+Write-Host "[linux 5/6] Execute LLVM emitted by the native self-host compiler."
 & dotnet run --project $runnerProject -c Release --no-build -- `
-    --exact 382-selfhost-llvm-linux-parallel-pool --jobs 1
+    --exact 382-selfhost-llvm-linux-parallel-pool `
+    --exact 396-selfhost-llvm-owned-try-parallel-cleanup `
+    --jobs 1
 if ($LASTEXITCODE -ne 0) {
     throw "Self-host Linux LLVM regression failed"
 }
@@ -99,4 +101,36 @@ $selfHostExpected = ([System.IO.File]::ReadAllText($selfHostExpectedPath)).TrimE
 if ($selfHostActual -ne $selfHostExpected) {
     throw "Self-host Linux execution mismatch.`nEXPECTED:`n$selfHostExpected`nACTUAL:`n$selfHostActual"
 }
-Write-Host "[linux 5/5] PASS self-host emitted Linux pool"
+Write-Host "[linux 5/6] PASS self-host emitted Linux pool"
+
+Write-Host "[linux 6/6] Verify owned tryParallel cleanup with AddressSanitizer."
+$ownedLlvm = Join-Path $artifactsDir "396-selfhost-llvm-owned-try-parallel-cleanup.stdout.ll"
+$ownedObject = Join-Path $artifactsDir "396-selfhost-llvm-owned-try-parallel-cleanup.asan.o"
+& $clangPath --target=x86_64-unknown-linux-gnu -c $ownedLlvm -O0 `
+    -fsanitize=address -fno-omit-frame-pointer -o $ownedObject
+if ($LASTEXITCODE -ne 0) {
+    throw "Owned tryParallel AddressSanitizer instrumentation failed"
+}
+
+$wslOwnedObject = Convert-ToWslPath $ownedObject
+$wslOwnedExecutable = "/tmp/smalllang-selfhost-owned-tryparallel-asan"
+Invoke-Wsl @(
+    "gcc",
+    $wslOwnedObject,
+    "-pthread",
+    "-fsanitize=address",
+    "-o",
+    $wslOwnedExecutable
+) | Out-Null
+$ownedActual = Invoke-Wsl @(
+    "env",
+    "ASAN_OPTIONS=detect_leaks=1:halt_on_error=1:exitcode=97",
+    $wslOwnedExecutable
+)
+$ownedExpectedPath = Join-Path $repoRoot `
+    "examples\expected\396-selfhost-llvm-owned-try-parallel-cleanup.stdout.llvm.linux.execute.txt"
+$ownedExpected = ([System.IO.File]::ReadAllText($ownedExpectedPath)).TrimEnd("`r", "`n")
+if ($ownedActual -ne $ownedExpected) {
+    throw "Owned tryParallel execution mismatch.`nEXPECTED:`n$ownedExpected`nACTUAL:`n$ownedActual"
+}
+Write-Host "[linux 6/6] PASS owned Result payloads are leak- and double-free-clean"

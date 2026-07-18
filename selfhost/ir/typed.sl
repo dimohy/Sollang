@@ -1201,6 +1201,18 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                 expressionIrStart => canonicalIndexResultIr!
                 canonicalIndexResultIr! < expressionIrEnd -> while {
                     results![canonicalIndexResultIr!] => canonicalIndexResult!
+                    (canonicalIndexResult!.kind == 15 and canonicalIndexResult!.operand1 < 0 and canonicalIndexResult!.operand0 >= expressionIrStart and results![canonicalIndexResult!.operand0].kind == 26) -> if {
+                        results![canonicalIndexResult!.operand0] => wrappedConstructor
+                        9 => canonicalIndexResult!.kind
+                        -1 => canonicalIndexResult!.opcode
+                        wrappedConstructor.typeOrigin => canonicalIndexResult!.typeOrigin
+                        wrappedConstructor.typeModule => canonicalIndexResult!.typeModule
+                        wrappedConstructor.typeSymbol => canonicalIndexResult!.typeSymbol
+                        wrappedConstructor.typeId => canonicalIndexResult!.typeId
+                        wrappedConstructor.typeKind => canonicalIndexResult!.typeKind
+                        wrappedConstructor.typeFlags => canonicalIndexResult!.typeFlags
+                        canonicalIndexResult! => results![canonicalIndexResultIr!]
+                    }
                     (canonicalIndexResult!.kind == 15 and canonicalIndexResult!.typeId < 0 and canonicalIndexResult!.operand0 >= expressionIrStart) -> if {
                         results![canonicalIndexResult!.operand0] => canonicalIndexedValue
                         canonicalIndexedValue.typeId >= 0 -> if {

@@ -3980,6 +3980,9 @@ emitCore context: move EmitContext -> Unit uses Console {
                     "  %v$(regionNodeIndex!)_initialized_slot = getelementptr %smalllang.compute_group, ptr %v$(regionNodeIndex!)_group, i32 0, i32 12" -> println
                     "  store ptr %v$(regionNodeIndex!)_initialized, ptr %v$(regionNodeIndex!)_initialized_slot, align 8" -> println
                     "  call void @smalllang_compute_execute(ptr %v$(regionNodeIndex!)_group)" -> println
+                    regionTryParallelSource.kind == 14 -> if {
+                        "  call void @free(ptr %v$(regionNodeIndex!)_input)" -> println
+                    }
                     TryParallelCollectRequest { expressionIndex: regionNodeIndex!, outerTypeId: regionNode.typeId, callbackTypeId: regionTryParallelBodyCall.typeId } -> emitTryParallelCollect
                 }
             }
@@ -5665,6 +5668,9 @@ emitCore context: move EmitContext -> Unit uses Console {
                         "  %v$(expressionIndex!)_initialized_slot = getelementptr %smalllang.compute_group, ptr %v$(expressionIndex!)_group, i32 0, i32 12" -> println
                         "  store ptr %v$(expressionIndex!)_initialized, ptr %v$(expressionIndex!)_initialized_slot, align 8" -> println
                         "  call void @smalllang_compute_execute(ptr %v$(expressionIndex!)_group)" -> println
+                        tryParallelSource.kind == 14 -> if {
+                            "  call void @free(ptr %v$(expressionIndex!)_input)" -> println
+                        }
                         TryParallelCollectRequest { expressionIndex: expressionIndex!, outerTypeId: expression.typeId, callbackTypeId: tryParallelBodyCall.typeId } -> emitTryParallelCollect
                     }
                 }
@@ -7403,6 +7409,9 @@ emitCore context: move EmitContext -> Unit uses Console {
                             "  %v$(entryExpressionIndex!)_initialized_slot = getelementptr %smalllang.compute_group, ptr %v$(entryExpressionIndex!)_group, i32 0, i32 12" -> println
                             "  store ptr %v$(entryExpressionIndex!)_initialized, ptr %v$(entryExpressionIndex!)_initialized_slot, align 8" -> println
                             "  call void @smalllang_compute_execute(ptr %v$(entryExpressionIndex!)_group)" -> println
+                            entryTryParallelSource.kind == 14 -> if {
+                                "  call void @free(ptr %v$(entryExpressionIndex!)_input)" -> println
+                            }
                             TryParallelCollectRequest { expressionIndex: entryExpressionIndex!, outerTypeId: entryExpression.typeId, callbackTypeId: entryTryParallelBodyCall.typeId } -> emitTryParallelCollect
                         }
                     }

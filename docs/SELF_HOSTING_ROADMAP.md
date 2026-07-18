@@ -989,10 +989,11 @@ The self-host generic-enum execution boundary now preserves qualified
 executes construction plus contextual `when` matching for both `Ok(Int)` and
 `Err(Text)`, including typed payload bindings. Tag-directed outer Result
 destruction and scalar self-host `tryParallel` lowering now execute in entry,
-function, and nested-region positions through the native compute pool. Nested
-owned callback-payload cleanup and Linux full-suite parity remain tracked work;
-this checkpoint therefore does not advance the 48.5/60 canonical gate count or
-the 26/28 parallel checklist.
+function, and nested-region positions through the native compute pool. Example
+395 fixes deterministic competing failures, while example 396 verifies nested
+owned callback-payload cleanup with Linux AddressSanitizer leak detection. The
+parallel checklist is now 27/28 (96.4%); Linux full-suite parity remains. This
+feature-local checkpoint does not advance the 48.5/60 canonical gate count.
 
 ## Immediate Implementation Order
 

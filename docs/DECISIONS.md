@@ -5935,3 +5935,32 @@ tag-directed owned-payload destruction hooks, but nested owned callback Results
 still need an executable leak/double-free proof. Therefore cancellation and
 partial-result destruction remain unchecked, parallel progress stays 26/28
 (92.9%), and the canonical roadmap stays 48.5/60 (80.8%).
+
+## D185 - Prove Deterministic Failure and Owned Partial Cleanup
+
+Status: implemented and executable
+Date: 2026-07-19
+
+Self-host `tryParallel` now has executable gates for the two failure properties
+left open by D184. Example 395 runs callbacks with failures at source indices 2
+and 5. The generated executable consistently selects `three`, commits only the
+outputs from indices 0 and 1, and produced the same result in 50 repeated runs.
+
+Example 396 returns an owned dynamic array from every successful callback before
+the first error. Its error path scans initialized callback Results, skips the
+selected error, dispatches by the runtime enum tag, and frees each active owned
+`Ok` payload. A missing function-body canonicalization for the one-operand
+constructor wrapper was fixed so named owned payloads no longer reach LLVM
+lowering as false index operations.
+
+LeakSanitizer initially exposed a separate 32-byte leak: the directly supplied
+eight-element `Int` input literal survived the joined operation. Entry,
+ordinary-function, and nested-region lowering now release direct temporary array
+inputs immediately after structured join. The durable Linux verifier compiles
+example 396 with AddressSanitizer and leak detection and requires clean exit and
+the exact expected error text.
+
+Cancellation and partial-result destruction are therefore proven exactly once.
+Parallel progress advances to 27/28 (96.4%). The remaining check is full
+Windows/Linux suite parity, and the canonical roadmap remains 48.5/60 (80.8%)
+because this is a feature-local checklist checkpoint.
