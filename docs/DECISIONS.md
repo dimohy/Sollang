@@ -5863,7 +5863,7 @@ fragile function symbol ordinal.
 
 ## D183 - Give Self-Host `Option` and `Result` a Stable LLVM Value ABI
 
-Status: constructor ABI implemented and executable; matching and owned drop pending
+Status: constructor and contextual matching executable; owned drop pending
 Date: 2026-07-19
 
 The self-host compiler now preserves qualified generic enum constructors such
@@ -5883,9 +5883,11 @@ are stored into the common tagged layout.
 
 Example 390 constructs both `Ok(Int)` and `Err(Text)`, calls a Result-returning
 function, assembles the generated LLVM with `llvm-as`, links it, and executes
-the native program. The focused recursive-type, enum-parser, ordered-output,
-and tryParallel-IR regression set passes 7/7, and regenerated grammar output is
-byte-identical at 2,124 words. Enum `when` lowering, tag-directed payload
-destruction, and self-host opcode `-209` runtime lowering remain open, so the
+the native program. Contextual `when` arms now compare the runtime tag, execute
+only the selected region, and bind both `Ok(item)` integer payloads and
+`Err(error)` text payloads from the shared storage area. The focused
+grammar, enum-parser, ordered-output, tryParallel-IR, and executable Result
+regression set passes 5/5. Tag-directed owned-payload destruction and self-host
+opcode `-209` runtime lowering remain open, so the
 parallel checklist remains 26/28 (92.9%) and the canonical roadmap remains
 48.5/60 gates (80.8%).

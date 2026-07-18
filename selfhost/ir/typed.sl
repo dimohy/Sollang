@@ -33,7 +33,9 @@ import sys.file as file
 # 23 explicit return (operand0 is the optional returned value), 24 index
 # assignment (operand0 is the value and operand1 is the index), 25 mutable
 # struct member assignment (operand0 is the value and operand1 is the owner
-# binding), 26 enum constructor (operand0 is the optional payload). AST kind 48
+# binding), 26 enum constructor (operand0 is the optional payload), 27 enum
+# match (operand0 subject, operand1 first arm), 29 enum payload binding. Enum
+# arms reuse kind 19 regions and carry their variant tag in opcode. AST kind 48
 # lowers to an ordinary call node; its child operations preserve the role body.
 public struct TypedIrNode {
     kind: Int
@@ -736,6 +738,52 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                             recursiveExpressionType.second >= 0 -> if { recursiveSemanticTypes![recursiveExpressionType.second].symbol => expressionTypeSymbol! }
                         }
                     }
+                    false => knownPatternReference!
+                    -1 => patternTypeAst!
+                    expression.kind == 59 -> if { expressionAstIndex! => patternTypeAst! }
+                    expression.kind == 15 -> if {
+                        0 => patternNameResolutionSearch!
+                        patternNameResolutionSearch! < (resolvedNames! -> len) -> while {
+                            resolvedNames![patternNameResolutionSearch!] => patternResolvedName
+                            patternResolvedName.astNode == expressionAstIndex! -> if {
+                                prepared.package.symbols[sourceRange.symbolStart + patternResolvedName.symbol] => patternResolvedSymbol
+                                prepared.package.nodes[sourceRange.astStart + patternResolvedSymbol.astNode].kind == 59 -> if { patternResolvedSymbol.astNode => patternTypeAst! }
+                            }
+                            patternNameResolutionSearch! + 1 => patternNameResolutionSearch!
+                        }
+                    }
+                    patternTypeAst! >= 0 -> if {
+                        prepared.package.nodes[sourceRange.astStart + patternTypeAst!] => patternTypeNode
+                        prepared.package.nodes[sourceRange.astStart + patternTypeNode.parent].parent => patternMatchAst
+                        prepared.package.nodes[sourceRange.astStart + patternMatchAst].parent => patternFlowAst
+                        -1 => patternSubjectTypeId!
+                        UIntSize(0) => patternSubjectStart!
+                        0 => patternSubjectSearch!
+                        patternSubjectSearch! < sourceRange.astCount -> while {
+                            prepared.package.nodes[sourceRange.astStart + patternSubjectSearch!] => patternSubjectAst
+                            recursiveTypeByAst![sourceRange.astStart + patternSubjectSearch!] => patternSubjectCandidateType
+                            (patternSubjectAst.parent == patternFlowAst and patternSubjectAst.start < prepared.package.nodes[sourceRange.astStart + patternMatchAst].start and patternSubjectCandidateType >= 0 and recursiveSemanticTypes![patternSubjectCandidateType].kind == 7) -> if {
+                                (patternSubjectTypeId! < 0 or patternSubjectAst.start > patternSubjectStart!) -> if {
+                                    patternSubjectCandidateType => patternSubjectTypeId!
+                                    patternSubjectAst.start => patternSubjectStart!
+                                }
+                            }
+                            patternSubjectSearch! + 1 => patternSubjectSearch!
+                        }
+                        patternSubjectTypeId! >= 0 -> if {
+                            recursiveSemanticTypes![patternSubjectTypeId!] => patternSubjectType
+                            prepared.package.tokens[sourceRange.tokenStart + patternTypeNode.payloadToken] => patternVariantToken
+                            patternSubjectType.first => recursiveExpressionTypeId!
+                            (source -> byte(patternVariantToken.span.start)) == UInt8(69) -> if { patternSubjectType.second => recursiveExpressionTypeId! }
+                            recursiveExpressionTypeId! >= 0 -> if {
+                                recursiveSemanticTypes![recursiveExpressionTypeId!] => patternPayloadType
+                                patternPayloadType.origin => expressionTypeOrigin!
+                                patternPayloadType.module => expressionTypeModule!
+                                patternPayloadType.symbol => expressionTypeSymbol!
+                                true => knownPatternReference!
+                            }
+                        }
+                    }
                     false => knownParameterReference!
                     (expression.kind == 15 and parameterSymbol! >= 0 and parameterTypeId! >= 0) -> if {
                         prepared.package.symbols[sourceRange.symbolStart + parameterSymbol!] => functionParameterSymbol
@@ -871,7 +919,7 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                         24 => expressionTypeSymbol!
                     }
                     expressionBelongsToFunction! -> if {
-                        (expression.kind == 42 or expression.kind == 43 or expression.kind == 44 or expression.kind == 45 or expression.kind == 46 or expression.kind == 47) -> if {
+                        (expression.kind == 42 or expression.kind == 43 or expression.kind == 44 or expression.kind == 45 or expression.kind == 46 or expression.kind == 47 or expression.kind == 58) -> if {
                             results! -> len => controlIr
                             controlIr => astToIr![expressionAstIndex!]
                             18 => controlKind!
@@ -880,12 +928,24 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                             expression.kind == 45 -> if { 21 => controlKind! }
                             expression.kind == 46 -> if { 22 => controlKind! }
                             expression.kind == 47 -> if { 23 => controlKind! }
+                            expression.kind == 58 -> if { 19 => controlKind! }
                             -1 => controlOpcode!
                             expression.kind == 45 -> if {
                                 0 => controlOpcode!
                                 (source -> byte(expression.start)) == UInt8(99) -> if { 1 => controlOpcode! }
                             }
                             expression.kind == 46 -> if { expression.operatorKind => controlOpcode! }
+                            expression.kind == 58 -> if {
+                                0 => patternSearch!
+                                patternSearch! < sourceRange.astCount -> while {
+                                    prepared.package.nodes[sourceRange.astStart + patternSearch!] => patternCandidate
+                                    (patternCandidate.kind == 59 and patternCandidate.parent == expressionAstIndex!) -> if {
+                                        prepared.package.tokens[sourceRange.tokenStart + patternCandidate.payloadToken] => patternVariant
+                                        (source -> byte(patternVariant.span.start)) == UInt8(69) -> if { 1 => controlOpcode! } else { 0 => controlOpcode! }
+                                    }
+                                    patternSearch! + 1 => patternSearch!
+                                }
+                            }
                             1 => controlTypeOrigin!
                             -1 => controlTypeModule!
                             0 => controlTypeSymbol!
@@ -916,7 +976,7 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                                 flags: expression.flags
                             })
                         } else {
-                            (expressionTypeIndex! >= 0 or recursiveExpressionTypeId! >= 0 or knownParameterReference! or expression.kind == 41 or (expression.kind == 15 and expression.parent >= 0 and prepared.package.nodes[sourceRange.astStart + expression.parent].kind == 41) or knownBooleanExpression! or knownCallExpression! or knownNumericExpression! or knownPushExpression! or knownMapTextExpression! or knownBorrowTextExpression! or knownIndexAssignment! or knownMemberAssignment!) -> if {
+                            (expressionTypeIndex! >= 0 or recursiveExpressionTypeId! >= 0 or knownParameterReference! or knownPatternReference! or expression.kind == 41 or expression.kind == 56 or (expression.kind == 15 and expression.parent >= 0 and prepared.package.nodes[sourceRange.astStart + expression.parent].kind == 41) or knownBooleanExpression! or knownCallExpression! or knownNumericExpression! or knownPushExpression! or knownMapTextExpression! or knownBorrowTextExpression! or knownIndexAssignment! or knownMemberAssignment!) -> if {
                             9 => expressionKind!
                             expression.kind == 13 -> if { 2 => expressionKind! }
                             expression.kind == 14 -> if { 3 => expressionKind! }
@@ -944,6 +1004,8 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                             expression.kind == 53 -> if { 24 => expressionKind! }
                             expression.kind == 54 -> if { 25 => expressionKind! }
                             expression.kind == 55 -> if { 26 => expressionKind! }
+                            expression.kind == 56 -> if { 27 => expressionKind! }
+                            expression.kind == 59 -> if { 29 => expressionKind! }
                             0 => propertyCallSearch!
                             propertyCallSearch! < (prepared.calls -> len) -> while {
                                 prepared.calls[propertyCallSearch!] => propertyCall
@@ -1015,6 +1077,14 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                                     resolvedNames![nameResolutionSearch!] => resolvedName
                                     resolvedName.astNode == expressionAstIndex! -> if { resolvedName.symbol => expressionSymbol! }
                                     nameResolutionSearch! + 1 => nameResolutionSearch!
+                                }
+                            }
+                            expressionKind! == 29 -> if {
+                                0 => patternBindingSymbolSearch!
+                                patternBindingSymbolSearch! < sourceRange.symbolCount -> while {
+                                    prepared.package.symbols[sourceRange.symbolStart + patternBindingSymbolSearch!] => patternBindingSymbol
+                                    (patternBindingSymbol.kind == 35 and patternBindingSymbol.astNode == expressionAstIndex!) -> if { patternBindingSymbolSearch! => expressionSymbol! }
+                                    patternBindingSymbolSearch! + 1 => patternBindingSymbolSearch!
                                 }
                             }
                             expressionKind! == 6 -> if {
@@ -1233,6 +1303,28 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                         lastRegionChild! => control!.operand1
                         control! => results![controlIrIndex!]
                     }
+                    control!.kind == 27 -> if {
+                        prepared.package.nodes[sourceRange.astStart + control!.astNode].parent => matchFlowAst
+                        -1 => matchSubject!
+                        UIntSize(0) => matchSubjectStart!
+                        -1 => matchFirstArm!
+                        expressionIrStart => matchSearch!
+                        matchSearch! < expressionIrEnd -> while {
+                            results![matchSearch!] => matchCandidate
+                            prepared.package.nodes[sourceRange.astStart + matchCandidate.astNode] => matchCandidateAst
+                            (matchCandidateAst.parent == matchFlowAst and matchCandidateAst.start < prepared.package.nodes[sourceRange.astStart + control!.astNode].start and matchCandidate.typeKind == 7) -> if {
+                                (matchSubject! < 0 or matchCandidateAst.start > matchSubjectStart!) -> if {
+                                    matchSearch! => matchSubject!
+                                    matchCandidateAst.start => matchSubjectStart!
+                                }
+                            }
+                            (matchCandidate.kind == 19 and matchCandidate.parent == controlIrIndex! and matchFirstArm! < 0) -> if { matchSearch! => matchFirstArm! }
+                            matchSearch! + 1 => matchSearch!
+                        }
+                        matchSubject! => control!.operand0
+                        matchFirstArm! => control!.operand1
+                        control! => results![controlIrIndex!]
+                    }
                     (control!.kind == 18 or control!.kind == 20) -> if {
                         prepared.package.nodes[sourceRange.astStart + control!.astNode].parent => controlFlowAst
                         -1 => conditionIr!
@@ -1355,6 +1447,16 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                             controlTypeNode! => results![controlTypeIndex!]
                         }
                     }
+                    (controlTypeNode!.kind == 27 and controlTypeNode!.operand1 >= expressionIrStart) -> if {
+                        results![controlTypeNode!.operand1] => matchResultArm
+                        matchResultArm.typeOrigin => controlTypeNode!.typeOrigin
+                        matchResultArm.typeModule => controlTypeNode!.typeModule
+                        matchResultArm.typeSymbol => controlTypeNode!.typeSymbol
+                        matchResultArm.typeId => controlTypeNode!.typeId
+                        matchResultArm.typeKind => controlTypeNode!.typeKind
+                        matchResultArm.typeFlags => controlTypeNode!.typeFlags
+                        controlTypeNode! => results![controlTypeIndex!]
+                    }
                     controlTypeIndex! - 1 => controlTypeIndex!
                 }
 
@@ -1411,7 +1513,7 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                     bindingName!.kind == 5 -> if {
                         expressionIrStart => bindingDefinitionSearch!
                         bindingDefinitionSearch! < expressionIrEnd -> while {
-                            (results![bindingDefinitionSearch!].kind == 17 and results![bindingDefinitionSearch!].symbol == bindingName!.symbol) -> if {
+                            ((results![bindingDefinitionSearch!].kind == 17 or results![bindingDefinitionSearch!].kind == 29) and results![bindingDefinitionSearch!].symbol == bindingName!.symbol) -> if {
                                 bindingDefinitionSearch! => bindingName!.operand0
                             }
                             bindingDefinitionSearch! + 1 => bindingDefinitionSearch!
@@ -1919,6 +2021,52 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                                 recursiveEntryExpressionType.second >= 0 -> if { recursiveSemanticTypes![recursiveEntryExpressionType.second].symbol => entryExpressionTypeSymbol! }
                             }
                         }
+                        false => knownEntryPatternReference!
+                        -1 => entryPatternTypeAst!
+                        entryExpression.kind == 59 -> if { entryExpressionAst! => entryPatternTypeAst! }
+                        entryExpression.kind == 15 -> if {
+                            0 => entryPatternNameResolutionSearch!
+                            entryPatternNameResolutionSearch! < (resolvedNames! -> len) -> while {
+                                resolvedNames![entryPatternNameResolutionSearch!] => entryPatternResolvedName
+                                entryPatternResolvedName.astNode == entryExpressionAst! -> if {
+                                    prepared.package.symbols[sourceRange.symbolStart + entryPatternResolvedName.symbol] => entryPatternResolvedSymbol
+                                    prepared.package.nodes[sourceRange.astStart + entryPatternResolvedSymbol.astNode].kind == 59 -> if { entryPatternResolvedSymbol.astNode => entryPatternTypeAst! }
+                                }
+                                entryPatternNameResolutionSearch! + 1 => entryPatternNameResolutionSearch!
+                            }
+                        }
+                        entryPatternTypeAst! >= 0 -> if {
+                            prepared.package.nodes[sourceRange.astStart + entryPatternTypeAst!] => entryPatternTypeNode
+                            prepared.package.nodes[sourceRange.astStart + entryPatternTypeNode.parent].parent => entryPatternMatchAst
+                            prepared.package.nodes[sourceRange.astStart + entryPatternMatchAst].parent => entryPatternFlowAst
+                            -1 => entryPatternSubjectTypeId!
+                            UIntSize(0) => entryPatternSubjectStart!
+                            0 => entryPatternSubjectSearch!
+                            entryPatternSubjectSearch! < sourceRange.astCount -> while {
+                                prepared.package.nodes[sourceRange.astStart + entryPatternSubjectSearch!] => entryPatternSubjectAst
+                                recursiveTypeByAst![sourceRange.astStart + entryPatternSubjectSearch!] => entryPatternSubjectCandidateType
+                                (entryPatternSubjectAst.parent == entryPatternFlowAst and entryPatternSubjectAst.start < prepared.package.nodes[sourceRange.astStart + entryPatternMatchAst].start and entryPatternSubjectCandidateType >= 0 and recursiveSemanticTypes![entryPatternSubjectCandidateType].kind == 7) -> if {
+                                    (entryPatternSubjectTypeId! < 0 or entryPatternSubjectAst.start > entryPatternSubjectStart!) -> if {
+                                        entryPatternSubjectCandidateType => entryPatternSubjectTypeId!
+                                        entryPatternSubjectAst.start => entryPatternSubjectStart!
+                                    }
+                                }
+                                entryPatternSubjectSearch! + 1 => entryPatternSubjectSearch!
+                            }
+                            entryPatternSubjectTypeId! >= 0 -> if {
+                                recursiveSemanticTypes![entryPatternSubjectTypeId!] => entryPatternSubjectType
+                                prepared.package.tokens[sourceRange.tokenStart + entryPatternTypeNode.payloadToken] => entryPatternVariantToken
+                                entryPatternSubjectType.first => recursiveEntryExpressionTypeId!
+                                (source -> byte(entryPatternVariantToken.span.start)) == UInt8(69) -> if { entryPatternSubjectType.second => recursiveEntryExpressionTypeId! }
+                                recursiveEntryExpressionTypeId! >= 0 -> if {
+                                    recursiveSemanticTypes![recursiveEntryExpressionTypeId!] => entryPatternPayloadType
+                                    entryPatternPayloadType.origin => entryExpressionTypeOrigin!
+                                    entryPatternPayloadType.module => entryExpressionTypeModule!
+                                    entryPatternPayloadType.symbol => entryExpressionTypeSymbol!
+                                    true => knownEntryPatternReference!
+                                }
+                            }
+                        }
                         false => knownEntryCallExpression!
                         0 => knownEntryCallSearch!
                         knownEntryCallSearch! < (prepared.calls -> len) -> while {
@@ -2034,7 +2182,7 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                             24 => entryExpressionTypeSymbol!
                         }
                         entryExpressionBelongs! -> if {
-                            (entryExpression.kind == 42 or entryExpression.kind == 43 or entryExpression.kind == 44 or entryExpression.kind == 45 or entryExpression.kind == 46 or entryExpression.kind == 47) -> if {
+                            (entryExpression.kind == 42 or entryExpression.kind == 43 or entryExpression.kind == 44 or entryExpression.kind == 45 or entryExpression.kind == 46 or entryExpression.kind == 47 or entryExpression.kind == 58) -> if {
                                 results! -> len => entryControlIr
                                 entryControlIr => entryAstToIr![entryExpressionAst!]
                                 18 => entryControlKind!
@@ -2043,12 +2191,24 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                                 entryExpression.kind == 45 -> if { 21 => entryControlKind! }
                                 entryExpression.kind == 46 -> if { 22 => entryControlKind! }
                                 entryExpression.kind == 47 -> if { 23 => entryControlKind! }
+                                entryExpression.kind == 58 -> if { 19 => entryControlKind! }
                                 -1 => entryControlOpcode!
                                 entryExpression.kind == 45 -> if {
                                     0 => entryControlOpcode!
                                     (source -> byte(entryExpression.start)) == UInt8(99) -> if { 1 => entryControlOpcode! }
                                 }
                                 entryExpression.kind == 46 -> if { entryExpression.operatorKind => entryControlOpcode! }
+                                entryExpression.kind == 58 -> if {
+                                    0 => entryPatternSearch!
+                                    entryPatternSearch! < sourceRange.astCount -> while {
+                                        prepared.package.nodes[sourceRange.astStart + entryPatternSearch!] => entryPatternCandidate
+                                        (entryPatternCandidate.kind == 59 and entryPatternCandidate.parent == entryExpressionAst!) -> if {
+                                            prepared.package.tokens[sourceRange.tokenStart + entryPatternCandidate.payloadToken] => entryPatternVariant
+                                            (source -> byte(entryPatternVariant.span.start)) == UInt8(69) -> if { 1 => entryControlOpcode! } else { 0 => entryControlOpcode! }
+                                        }
+                                        entryPatternSearch! + 1 => entryPatternSearch!
+                                    }
+                                }
                                 1 => entryControlTypeOrigin!
                                 -1 => entryControlTypeModule!
                                 0 => entryControlTypeSymbol!
@@ -2079,7 +2239,7 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                                     flags: entryExpression.flags
                                 })
                             } else {
-                                (entryExpressionTypeIndex! >= 0 or recursiveEntryExpressionTypeId! >= 0 or entryExpression.kind == 41 or (entryExpression.kind == 15 and entryExpression.parent >= 0 and prepared.package.nodes[sourceRange.astStart + entryExpression.parent].kind == 41) or knownEntryBooleanExpression! or knownEntryCallExpression! or knownEntryNumericExpression! or knownEntryPushExpression! or knownEntryMapTextExpression! or knownEntryBorrowTextExpression! or knownEntryIndexAssignment! or knownEntryMemberAssignment!) -> if {
+                                (entryExpressionTypeIndex! >= 0 or recursiveEntryExpressionTypeId! >= 0 or knownEntryPatternReference! or entryExpression.kind == 41 or entryExpression.kind == 56 or (entryExpression.kind == 15 and entryExpression.parent >= 0 and prepared.package.nodes[sourceRange.astStart + entryExpression.parent].kind == 41) or knownEntryBooleanExpression! or knownEntryCallExpression! or knownEntryNumericExpression! or knownEntryPushExpression! or knownEntryMapTextExpression! or knownEntryBorrowTextExpression! or knownEntryIndexAssignment! or knownEntryMemberAssignment!) -> if {
                                 9 => entryExpressionKind!
                                 entryExpression.kind == 13 -> if { 2 => entryExpressionKind! }
                                 entryExpression.kind == 14 -> if { 3 => entryExpressionKind! }
@@ -2107,6 +2267,8 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                                 entryExpression.kind == 53 -> if { 24 => entryExpressionKind! }
                                 entryExpression.kind == 54 -> if { 25 => entryExpressionKind! }
                                 entryExpression.kind == 55 -> if { 26 => entryExpressionKind! }
+                                entryExpression.kind == 56 -> if { 27 => entryExpressionKind! }
+                                entryExpression.kind == 59 -> if { 29 => entryExpressionKind! }
                                 0 => entryPropertyCallSearch!
                                 entryPropertyCallSearch! < (prepared.calls -> len) -> while {
                                     prepared.calls[entryPropertyCallSearch!] => entryPropertyCall
@@ -2177,6 +2339,14 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                                         resolvedNames![entryNameSearch!] => entryResolvedName
                                         entryResolvedName.astNode == entryExpressionAst! -> if { entryResolvedName.symbol => entryExpressionSymbol! }
                                         entryNameSearch! + 1 => entryNameSearch!
+                                    }
+                                }
+                                entryExpressionKind! == 29 -> if {
+                                    0 => entryPatternBindingSymbolSearch!
+                                    entryPatternBindingSymbolSearch! < sourceRange.symbolCount -> while {
+                                        prepared.package.symbols[sourceRange.symbolStart + entryPatternBindingSymbolSearch!] => entryPatternBindingSymbol
+                                        (entryPatternBindingSymbol.kind == 35 and entryPatternBindingSymbol.astNode == entryExpressionAst!) -> if { entryPatternBindingSymbolSearch! => entryExpressionSymbol! }
+                                        entryPatternBindingSymbolSearch! + 1 => entryPatternBindingSymbolSearch!
                                     }
                                 }
                                 entryExpressionKind! == 6 -> if {
@@ -2388,6 +2558,28 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                             entryLastRegionChild! => entryControl!.operand1
                             entryControl! => results![entryControlIrIndex!]
                         }
+                        entryControl!.kind == 27 -> if {
+                            prepared.package.nodes[sourceRange.astStart + entryControl!.astNode].parent => entryMatchFlowAst
+                            -1 => entryMatchSubject!
+                            UIntSize(0) => entryMatchSubjectStart!
+                            -1 => entryMatchFirstArm!
+                            entryExpressionStart => entryMatchSearch!
+                            entryMatchSearch! < entryExpressionEnd -> while {
+                                results![entryMatchSearch!] => entryMatchCandidate
+                                prepared.package.nodes[sourceRange.astStart + entryMatchCandidate.astNode] => entryMatchCandidateAst
+                                (entryMatchCandidateAst.parent == entryMatchFlowAst and entryMatchCandidateAst.start < prepared.package.nodes[sourceRange.astStart + entryControl!.astNode].start and entryMatchCandidate.typeKind == 7) -> if {
+                                    (entryMatchSubject! < 0 or entryMatchCandidateAst.start > entryMatchSubjectStart!) -> if {
+                                        entryMatchSearch! => entryMatchSubject!
+                                        entryMatchCandidateAst.start => entryMatchSubjectStart!
+                                    }
+                                }
+                                (entryMatchCandidate.kind == 19 and entryMatchCandidate.parent == entryControlIrIndex! and entryMatchFirstArm! < 0) -> if { entryMatchSearch! => entryMatchFirstArm! }
+                                entryMatchSearch! + 1 => entryMatchSearch!
+                            }
+                            entryMatchSubject! => entryControl!.operand0
+                            entryMatchFirstArm! => entryControl!.operand1
+                            entryControl! => results![entryControlIrIndex!]
+                        }
                         (entryControl!.kind == 18 or entryControl!.kind == 20) -> if {
                             prepared.package.nodes[sourceRange.astStart + entryControl!.astNode].parent => entryControlFlowAst
                             -1 => entryConditionIr!
@@ -2463,7 +2655,7 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                     entryExpressionEnd - 1 => entryControlTypeIndex!
                     entryControlTypeIndex! >= entryExpressionStart -> while {
                         results![entryControlTypeIndex!] => entryControlTypeNode!
-                    (entryControlTypeNode!.kind == 19 and entryControlTypeNode!.operand1 >= entryExpressionStart) -> if {
+                        (entryControlTypeNode!.kind == 19 and entryControlTypeNode!.operand1 >= entryExpressionStart) -> if {
                             false => entryControlRegionRedirected!
                             (results![entryControlTypeNode!.operand1].kind == 6 and results![entryControlTypeNode!.operand1].operand1 >= entryExpressionStart and results![results![entryControlTypeNode!.operand1].operand1].parent == entryControlTypeIndex!) -> if {
                                 results![entryControlTypeNode!.operand1].operand1 => entryControlTypeNode!.operand1
@@ -2489,6 +2681,16 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                             entryControlRegionResult.typeFlags => entryControlTypeNode!.typeFlags
                             entryControlTypeNode! => results![entryControlTypeIndex!]
                         }
+                        }
+                        (entryControlTypeNode!.kind == 27 and entryControlTypeNode!.operand1 >= entryExpressionStart) -> if {
+                            results![entryControlTypeNode!.operand1] => entryMatchResultArm
+                            entryMatchResultArm.typeOrigin => entryControlTypeNode!.typeOrigin
+                            entryMatchResultArm.typeModule => entryControlTypeNode!.typeModule
+                            entryMatchResultArm.typeSymbol => entryControlTypeNode!.typeSymbol
+                            entryMatchResultArm.typeId => entryControlTypeNode!.typeId
+                            entryMatchResultArm.typeKind => entryControlTypeNode!.typeKind
+                            entryMatchResultArm.typeFlags => entryControlTypeNode!.typeFlags
+                            entryControlTypeNode! => results![entryControlTypeIndex!]
                         }
                         false => entryControlHasNestedResult!
                         (entryControlTypeNode!.kind == 18 and entryControlTypeNode!.operand1 >= entryExpressionStart and entryControlTypeNode!.nextOperand >= entryExpressionStart) -> if {
@@ -2554,7 +2756,7 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                         entryBindingName!.kind == 5 -> if {
                             entryExpressionStart => entryBindingDefinitionSearch!
                             entryBindingDefinitionSearch! < entryExpressionEnd -> while {
-                                (results![entryBindingDefinitionSearch!].kind == 17 and results![entryBindingDefinitionSearch!].symbol == entryBindingName!.symbol) -> if {
+                                ((results![entryBindingDefinitionSearch!].kind == 17 or results![entryBindingDefinitionSearch!].kind == 29) and results![entryBindingDefinitionSearch!].symbol == entryBindingName!.symbol) -> if {
                                     entryBindingDefinitionSearch! => entryBindingName!.operand0
                                 }
                                 entryBindingDefinitionSearch! + 1 => entryBindingDefinitionSearch!

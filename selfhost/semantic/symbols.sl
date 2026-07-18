@@ -34,6 +34,7 @@ public collectPrepared nodes: [ast.AstNode; ~] -> [Symbol; ~] {
         node.kind == 9 -> if { true => isSymbol! }
         node.kind == 48 -> if { true => isSymbol! }
         (node.kind == 50 or node.kind == 51) -> if { true => isSymbol! }
+        node.kind == 58 -> if { true => isSymbol! }
         node.kind >= 26 -> if {
             node.kind <= 34 -> if { true => isSymbol! }
         }
@@ -217,6 +218,36 @@ public collectPrepared nodes: [ast.AstNode; ~] -> [Symbol; ~] {
             })
         }
         declarationSymbolIndex! + 1 => declarationSymbolIndex!
+    }
+
+    # Each enum arm is a lexical scope. A payload name belongs only to that
+    # arm and is synthesized from the pattern's secondary token.
+    symbols! -> len => enumArmScopeCount
+    0 => enumArmScopeIndex!
+    enumArmScopeIndex! < enumArmScopeCount -> while {
+        symbols![enumArmScopeIndex!] => enumArmScope
+        enumArmScope.kind == 58 -> if {
+            0 => enumPatternAstIndex!
+            enumPatternAstIndex! < astCount -> while {
+                nodes[enumPatternAstIndex!] => enumPatternAst
+                (enumPatternAst.kind == 59 and enumPatternAst.parent == enumArmScope.astNode and enumPatternAst.secondaryToken >= 0) -> if {
+                    symbols! -> push(Symbol {
+                        kind: 35
+                        parent: enumArmScopeIndex!
+                        astNode: enumPatternAstIndex!
+                        nameToken: enumPatternAst.secondaryToken
+                        typeNode: -1
+                        secondaryTypeNode: -1
+                        blockNameToken: -1
+                        blockTypeNode: -1
+                        blockResultTypeNode: -1
+                        flags: 0
+                    })
+                }
+                enumPatternAstIndex! + 1 => enumPatternAstIndex!
+            }
+        }
+        enumArmScopeIndex! + 1 => enumArmScopeIndex!
     }
 
     # A role call is a lexical scope. Its block item is visible only inside the

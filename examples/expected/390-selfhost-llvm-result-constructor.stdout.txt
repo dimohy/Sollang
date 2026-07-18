@@ -56,10 +56,80 @@ write_newline:
 done:
   ret void
 }
+define internal void @sl_runtime_print_i32(i32 %value, i1 %newline) {
+entry:
+  %buffer = alloca [12 x i8], align 1
+  %end = getelementptr [12 x i8], ptr %buffer, i64 0, i64 12
+  %wide = sext i32 %value to i64
+  %negative = icmp slt i64 %wide, 0
+  %negated = sub i64 0, %wide
+  %magnitude = select i1 %negative, i64 %negated, i64 %wide
+  br label %digits
+digits:
+  %current = phi i64 [ %magnitude, %entry ], [ %quotient, %digits ]
+  %cursor = phi ptr [ %end, %entry ], [ %digit_slot, %digits ]
+  %digit = urem i64 %current, 10
+  %quotient = udiv i64 %current, 10
+  %digit_slot = getelementptr i8, ptr %cursor, i64 -1
+  %digit8 = trunc i64 %digit to i8
+  %ascii = add i8 %digit8, 48
+  store i8 %ascii, ptr %digit_slot, align 1
+  %more = icmp ne i64 %quotient, 0
+  br i1 %more, label %digits, label %digits_done
+digits_done:
+  br i1 %negative, label %write_sign, label %emit
+write_sign:
+  %sign_slot = getelementptr i8, ptr %digit_slot, i64 -1
+  store i8 45, ptr %sign_slot, align 1
+  br label %emit
+emit:
+  %start = phi ptr [ %digit_slot, %digits_done ], [ %sign_slot, %write_sign ]
+  %end_address = ptrtoint ptr %end to i64
+  %start_address = ptrtoint ptr %start to i64
+  %length = sub i64 %end_address, %start_address
+  call void @sl_runtime_print(ptr %start, i64 %length, i1 %newline)
+  ret void
+}
+define internal void @sl_runtime_print_i64(i64 %value, i1 %signed, i1 %newline) {
+entry:
+  %buffer = alloca [21 x i8], align 1
+  %end = getelementptr [21 x i8], ptr %buffer, i64 0, i64 21
+  %negative_value = icmp slt i64 %value, 0
+  %negative = and i1 %signed, %negative_value
+  %negated = sub i64 0, %value
+  %magnitude = select i1 %negative, i64 %negated, i64 %value
+  br label %digits
+digits:
+  %current = phi i64 [ %magnitude, %entry ], [ %quotient, %digits ]
+  %cursor = phi ptr [ %end, %entry ], [ %digit_slot, %digits ]
+  %digit = urem i64 %current, 10
+  %quotient = udiv i64 %current, 10
+  %digit_slot = getelementptr i8, ptr %cursor, i64 -1
+  %digit8 = trunc i64 %digit to i8
+  %ascii = add i8 %digit8, 48
+  store i8 %ascii, ptr %digit_slot, align 1
+  %more = icmp ne i64 %quotient, 0
+  br i1 %more, label %digits, label %digits_done
+digits_done:
+  br i1 %negative, label %write_sign, label %emit
+write_sign:
+  %sign_slot = getelementptr i8, ptr %digit_slot, i64 -1
+  store i8 45, ptr %sign_slot, align 1
+  br label %emit
+emit:
+  %start = phi ptr [ %digit_slot, %digits_done ], [ %sign_slot, %write_sign ]
+  %end_address = ptrtoint ptr %end to i64
+  %start_address = ptrtoint ptr %start to i64
+  %length = sub i64 %end_address, %start_address
+  call void @sl_runtime_print(ptr %start, i64 %length, i1 %newline)
+  ret void
+}
 %sl.enum.t25 = type { i32, [2 x i64] }
+declare void @llvm.trap()
 %sl.text = type { ptr, i64 }
-@sl_str_11 = private unnamed_addr constant [3 x i8] c"bad"
-@sl_str_13 = private unnamed_addr constant [19 x i8] c"result constructors"
+@sl_str_23 = private unnamed_addr constant [4 x i8] c"none"
+@sl_str_38 = private unnamed_addr constant [3 x i8] c"bad"
+@sl_str_46 = private unnamed_addr constant [45 x i8] c"result constructors=$successCode,$failureCode"
 define %sl.enum.t25 @sl_m0_s0(i32 %arg) {
 entry:
   %v3_enum_slot = alloca %sl.enum.t25, align 8
@@ -71,21 +141,98 @@ entry:
   %v3 = load %sl.enum.t25, ptr %v3_enum_slot, align 8
   ret %sl.enum.t25 %v3
 }
+define i32 @sl_m0_s1(%sl.enum.t25 %arg) {
+entry:
+  %v9_tag = extractvalue %sl.enum.t25 %arg, 0
+  %v9_subject_slot = alloca %sl.enum.t25, align 8
+  store %sl.enum.t25 %arg, ptr %v9_subject_slot, align 8
+  %v9_result = alloca i32, align 4
+  %v9_is_arm0 = icmp eq i32 %v9_tag, 0
+  br i1 %v9_is_arm0, label %match9_arm0, label %match9_next0
+match9_arm0:
+  %v9_arm0_payload = getelementptr inbounds %sl.enum.t25, ptr %v9_subject_slot, i32 0, i32 1
+  %v11 = load i32, ptr %v9_arm0_payload, align 4
+  %v12 = freeze i32 %v11
+  store i32 %v12, ptr %v9_result, align 4
+  br label %match9_merge
+match9_next0:
+  %v9_is_arm1 = icmp eq i32 %v9_tag, 1
+  br i1 %v9_is_arm1, label %match9_arm1, label %match9_next1
+match9_arm1:
+  %v9_arm1_payload = getelementptr inbounds %sl.enum.t25, ptr %v9_subject_slot, i32 0, i32 1
+  %v14 = load %sl.text, ptr %v9_arm1_payload, align 8
+  store i32 0, ptr %v9_result, align 4
+  br label %match9_merge
+match9_next1:
+  call void @llvm.trap()
+  unreachable
+match9_merge:
+  %v9 = load i32, ptr %v9_result, align 4
+  ret i32 %v9
+}
+define %sl.text @sl_m0_s4(%sl.enum.t25 %arg) {
+entry:
+  %v20_tag = extractvalue %sl.enum.t25 %arg, 0
+  %v20_subject_slot = alloca %sl.enum.t25, align 8
+  store %sl.enum.t25 %arg, ptr %v20_subject_slot, align 8
+  %v20_result = alloca %sl.text, align 8
+  %v20_is_arm0 = icmp eq i32 %v20_tag, 0
+  br i1 %v20_is_arm0, label %match20_arm0, label %match20_next0
+match20_arm0:
+  %v20_arm0_payload = getelementptr inbounds %sl.enum.t25, ptr %v20_subject_slot, i32 0, i32 1
+  %v22 = load i32, ptr %v20_arm0_payload, align 4
+  %v23_ptr = insertvalue %sl.text poison, ptr @sl_str_23, 0
+  %v23 = insertvalue %sl.text %v23_ptr, i64 4, 1
+  store %sl.text %v23, ptr %v20_result, align 8
+  br label %match20_merge
+match20_next0:
+  %v20_is_arm1 = icmp eq i32 %v20_tag, 1
+  br i1 %v20_is_arm1, label %match20_arm1, label %match20_next1
+match20_arm1:
+  %v20_arm1_payload = getelementptr inbounds %sl.enum.t25, ptr %v20_subject_slot, i32 0, i32 1
+  %v25 = load %sl.text, ptr %v20_arm1_payload, align 8
+  %v26 = freeze %sl.text %v25
+  store %sl.text %v26, ptr %v20_result, align 8
+  br label %match20_merge
+match20_next1:
+  call void @llvm.trap()
+  unreachable
+match20_merge:
+  %v20 = load %sl.text, ptr %v20_result, align 8
+  ret %sl.text %v20
+}
 define i32 @main() {
 entry:
-  %v11_ptr = insertvalue %sl.text poison, ptr @sl_str_11, 0
-  %v11 = insertvalue %sl.text %v11_ptr, i64 3, 1
-  %v13_ptr = insertvalue %sl.text poison, ptr @sl_str_13, 0
-  %v13 = insertvalue %sl.text %v13_ptr, i64 19, 1
-  %v8 = call %sl.enum.t25 @sl_m0_s0(i32 7)
-  %v10_enum_slot = alloca %sl.enum.t25, align 8
-  store %sl.enum.t25 zeroinitializer, ptr %v10_enum_slot, align 8
-  %v10_enum_tag = getelementptr inbounds %sl.enum.t25, ptr %v10_enum_slot, i32 0, i32 0
-  store i32 1, ptr %v10_enum_tag, align 4
-  %v10_enum_payload = getelementptr inbounds %sl.enum.t25, ptr %v10_enum_slot, i32 0, i32 1
-  store %sl.text %v11, ptr %v10_enum_payload, align 8
-  %v10 = load %sl.enum.t25, ptr %v10_enum_slot, align 8
-  call void @sl_runtime_print(ptr @sl_str_13, i64 19, i1 true)
+  %v38_ptr = insertvalue %sl.text poison, ptr @sl_str_38, 0
+  %v38 = insertvalue %sl.text %v38_ptr, i64 3, 1
+  %v46_ptr = insertvalue %sl.text poison, ptr @sl_str_46, 0
+  %v46 = insertvalue %sl.text %v46_ptr, i64 45, 1
+  %v33 = call %sl.enum.t25 @sl_m0_s0(i32 7)
+  %v37_enum_slot = alloca %sl.enum.t25, align 8
+  store %sl.enum.t25 zeroinitializer, ptr %v37_enum_slot, align 8
+  %v37_enum_tag = getelementptr inbounds %sl.enum.t25, ptr %v37_enum_slot, i32 0, i32 0
+  store i32 1, ptr %v37_enum_tag, align 4
+  %v37_enum_payload = getelementptr inbounds %sl.enum.t25, ptr %v37_enum_slot, i32 0, i32 1
+  store %sl.text %v38, ptr %v37_enum_payload, align 8
+  %v37 = load %sl.enum.t25, ptr %v37_enum_slot, align 8
+  %v36 = freeze %sl.enum.t25 %v33
+  %v40 = freeze %sl.enum.t25 %v37
+  %v42 = freeze %sl.enum.t25 %v37
+  %v35 = call i32 @sl_m0_s1(%sl.enum.t25 %v36)
+  %v39 = call i32 @sl_m0_s1(%sl.enum.t25 %v40)
+  %v41 = call %sl.text @sl_m0_s4(%sl.enum.t25 %v42)
+  %v44 = freeze %sl.text %v41
+  %v43_runtime_ptr = extractvalue %sl.text %v44, 0
+  %v43_runtime_len = extractvalue %sl.text %v44, 1
+  call void @sl_runtime_print(ptr %v43_runtime_ptr, i64 %v43_runtime_len, i1 true)
+  %v45_expression_literal0 = getelementptr i8, ptr @sl_str_46, i64 0
+  call void @sl_runtime_print(ptr %v45_expression_literal0, i64 20, i1 false)
+  call void @sl_runtime_print_i32(i32 %v35, i1 false)
+  %v45_expression_literal1 = getelementptr i8, ptr @sl_str_46, i64 32
+  call void @sl_runtime_print(ptr %v45_expression_literal1, i64 1, i1 false)
+  call void @sl_runtime_print_i32(i32 %v39, i1 false)
+  %v45_expression_suffix = getelementptr i8, ptr @sl_str_46, i64 45
+  call void @sl_runtime_print(ptr %v45_expression_suffix, i64 0, i1 true)
   call void @sl_runtime_flush_stdout()
   ret i32 0
 }

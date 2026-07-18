@@ -1006,7 +1006,7 @@ emitCore context: move EmitContext -> Unit uses Console {
                 context.ir[controlSearch!] => aggregateCandidate
                 # Explicit conversions around aggregate fields are represented
                 # by a value wrapper whose direct result is a call node.
-                (aggregateCandidate.parent == wrapperIndex and (aggregateCandidate.kind == 6 or aggregateCandidate.kind == 12 or aggregateCandidate.kind == 14 or aggregateCandidate.kind == 16 or aggregateCandidate.kind == 18 or aggregateCandidate.kind == 26)) -> if { controlSearch! => resolved! }
+                (aggregateCandidate.parent == wrapperIndex and (aggregateCandidate.kind == 6 or aggregateCandidate.kind == 12 or aggregateCandidate.kind == 14 or aggregateCandidate.kind == 16 or aggregateCandidate.kind == 18 or aggregateCandidate.kind == 26 or aggregateCandidate.kind == 27)) -> if { controlSearch! => resolved! }
                 controlSearch! + 1 => controlSearch!
             }
         }
@@ -3001,9 +3001,14 @@ emitCore context: move EmitContext -> Unit uses Console {
             }
             (regionNode.kind == 5 and not (regionNode.typeOrigin == 1 and regionNode.typeSymbol == 16) and ownerIndex! >= 0 and not (context.ir[ownerIndex!].kind == 0 and context.ir[ownerIndex!].operand1 >= 0 and regionNode.symbol == context.ir[context.ir[ownerIndex!].operand1].symbol)) -> if {
                 -1 => regionBindingIndex!
-                (regionNode.operand0 >= 0 and context.ir[regionNode.operand0].kind == 17) -> if { regionNode.operand0 => regionBindingIndex! }
+                (regionNode.operand0 >= 0 and (context.ir[regionNode.operand0].kind == 17 or context.ir[regionNode.operand0].kind == 29)) -> if { regionNode.operand0 => regionBindingIndex! }
                 regionBindingIndex! >= 0 -> if {
                     context.ir[regionBindingIndex!] => regionBinding
+                    regionBinding.kind == 29 -> if {
+                        "  %v$(regionNodeIndex!) = freeze " -> print
+                        regionNode -> writeIrType
+                        " %v$(regionBindingIndex!)" -> println
+                    } else {
                     regionBinding.flags == 1 -> if {
                         regionBindingIndex! -> mutableBindingRoot => regionBindingRoot
                         "  %v$(regionNodeIndex!) = load " -> print
@@ -3022,6 +3027,7 @@ emitCore context: move EmitContext -> Unit uses Console {
                             }
                         } else { "%v$(regionBinding.operand0)" -> print }
                         "" -> println
+                    }
                     }
                 }
             }
@@ -3061,6 +3067,7 @@ emitCore context: move EmitContext -> Unit uses Console {
             regionNode.kind == 26 -> if {
                 WhileValueRequest { whileIndex: regionNodeIndex!, ownerIndex: ownerIndex!, nodeIndex: regionNodeIndex! } -> emitEnumConstructor
             }
+            regionNode.kind == 27 -> if { regionNodeIndex! -> emitEnumMatch }
             regionNode.kind == 12 -> if {
                 regionNode.operand0 < 0 -> if {
                     "  %v$(regionNodeIndex!) = freeze " -> print
@@ -4127,6 +4134,82 @@ emitCore context: move EmitContext -> Unit uses Console {
             regionOrderIndex! + 1 => regionOrderIndex!
         }
     }
+    emitEnumMatch matchIndex: Int -> Unit uses Console {
+        context.ir[matchIndex] => match
+        context.ir[match.operand0] => subject
+        "  %v$(matchIndex)_tag = extractvalue " -> print
+        subject -> writeIrType
+        " " -> print
+        (subject.kind == 5 and subject.parent >= 0 and context.ir[subject.parent].kind == 1 and context.ir[subject.parent].parent >= 0 and context.ir[context.ir[subject.parent].parent].operand1 >= 0 and subject.symbol == context.ir[context.ir[context.ir[subject.parent].parent].operand1].symbol) -> if { "%arg" -> print } else { "%v$(match.operand0)" -> print }
+        ", 0" -> println
+        "  %v$(matchIndex)_subject_slot = alloca " -> print
+        subject -> writeIrType
+        ", align 8" -> println
+        "  store " -> print
+        subject -> writeIrType
+        " " -> print
+        (subject.kind == 5 and subject.parent >= 0 and context.ir[subject.parent].kind == 1 and context.ir[subject.parent].parent >= 0 and context.ir[context.ir[subject.parent].parent].operand1 >= 0 and subject.symbol == context.ir[context.ir[context.ir[subject.parent].parent].operand1].symbol) -> if { "%arg" -> print } else { "%v$(match.operand0)" -> print }
+        ", ptr %v$(matchIndex)_subject_slot, align 8" -> println
+        match.typeSymbol != 0 -> if {
+            "  %v$(matchIndex)_result = alloca " -> print
+            match -> writeIrType
+            ", align " -> print
+            match -> storageAlign -> writeDecimalLine
+        }
+        match.operand1 => armIndex!
+        0 => armOrdinal!
+        armIndex! >= 0 -> while {
+            context.ir[armIndex!] => arm
+            "  %v$(matchIndex)_is_arm$(armOrdinal!) = icmp eq i32 %v$(matchIndex)_tag, $(arm.opcode)" -> println
+            "  br i1 %v$(matchIndex)_is_arm$(armOrdinal!), label %match$(matchIndex)_arm$(armOrdinal!), label %match$(matchIndex)_next$(armOrdinal!)" -> println
+            "match$(matchIndex)_arm$(armOrdinal!):" -> println
+            -1 => armBindingIndex!
+            0 => armBindingSearch!
+            armBindingSearch! < (context.ir -> len) -> while {
+                (context.ir[armBindingSearch!].kind == 29 and context.ir[armBindingSearch!].parent == armIndex!) -> if { armBindingSearch! => armBindingIndex! }
+                armBindingSearch! + 1 => armBindingSearch!
+            }
+            armBindingIndex! >= 0 -> if {
+                context.ir[armBindingIndex!] => armBinding
+                "  %v$(matchIndex)_arm$(armOrdinal!)_payload = getelementptr inbounds " -> print
+                subject -> writeIrType
+                ", ptr %v$(matchIndex)_subject_slot, i32 0, i32 1" -> println
+                "  %v$(armBindingIndex!) = load " -> print
+                armBinding -> writeIrType
+                ", ptr %v$(matchIndex)_arm$(armOrdinal!)_payload, align " -> print
+                armBinding -> storageAlign -> writeDecimalLine
+            }
+            armIndex! -> emitRegion
+            match.typeSymbol != 0 -> if {
+                armIndex! -> regionResultValueIndex => armValueIndex
+                context.ir[armValueIndex] => armValue
+                "  store " -> print
+                match -> writeIrType
+                " " -> print
+                (armValue.kind == 3 or armValue.kind == 4) -> if {
+                    armValue -> sourceToken => armValueToken
+                    armValue.kind == 3 -> if { context.sources[armValue.sourceModule] -> slice(armValueToken.span.start, armValueToken.span.length) -> print } else {
+                        ((context.sources[armValue.sourceModule] -> byte(armValueToken.span.start)) == UInt8(116)) -> if { "1" -> print } else { "0" -> print }
+                    }
+                } else { "%v$(armValueIndex)" -> print }
+                ", ptr %v$(matchIndex)_result, align " -> print
+                match -> storageAlign -> writeDecimalLine
+            }
+            "  br label %match$(matchIndex)_merge" -> println
+            "match$(matchIndex)_next$(armOrdinal!):" -> println
+            arm.nextOperand => armIndex!
+            armOrdinal! + 1 => armOrdinal!
+        }
+        "  call void @llvm.trap()" -> println
+        "  unreachable" -> println
+        "match$(matchIndex)_merge:" -> println
+        match.typeSymbol != 0 -> if {
+            "  %v$(matchIndex) = load " -> print
+            match -> writeIrType
+            ", ptr %v$(matchIndex)_result, align " -> print
+            match -> storageAlign -> writeDecimalLine
+        }
+    }
     emitFunction requestedFunctionIndex: Int -> Int uses Console {
         requestedFunctionIndex => functionIndex!
         context.ir[functionIndex!] => function
@@ -4454,9 +4537,14 @@ emitCore context: move EmitContext -> Unit uses Console {
                 context.ir[expressionIndex!] => expression
                 (expression.kind == 5 and not (expression.typeOrigin == 1 and expression.typeSymbol == 16) and not (function.operand1 >= 0 and expression.symbol == context.ir[function.operand1].symbol)) -> if {
                     -1 => bindingValueIr!
-                    (expression.operand0 >= 0 and context.ir[expression.operand0].kind == 17) -> if { expression.operand0 => bindingValueIr! }
+                    (expression.operand0 >= 0 and (context.ir[expression.operand0].kind == 17 or context.ir[expression.operand0].kind == 29)) -> if { expression.operand0 => bindingValueIr! }
                     bindingValueIr! >= 0 -> if {
                         context.ir[bindingValueIr!] => bindingValue
+                        bindingValue.kind == 29 -> if {
+                            "  %v$(expressionIndex!) = freeze " -> print
+                            expression -> writeIrType
+                            " %v$(bindingValueIr!)" -> println
+                        } else {
                         bindingValue.flags == 1 -> if {
                             bindingValueIr! -> mutableBindingRoot => bindingRoot
                             "  %v$(expressionIndex!) = load " -> print
@@ -4475,6 +4563,7 @@ emitCore context: move EmitContext -> Unit uses Console {
                                 }
                             } else { "%v$(bindingValue.operand0)" -> print }
                             "" -> println
+                        }
                         }
                     }
                 }
@@ -4642,6 +4731,7 @@ emitCore context: move EmitContext -> Unit uses Console {
                 expression.kind == 26 -> if {
                     WhileValueRequest { whileIndex: expressionIndex!, ownerIndex: functionIndex!, nodeIndex: expressionIndex! } -> emitEnumConstructor
                 }
+                expression.kind == 27 -> if { expressionIndex! -> emitEnumMatch }
                 expression.kind == 2 -> if {
                     expression -> sourceToken => expressionToken
                     TextLiteralRequest { sourceModule: expression.sourceModule, token: expressionToken } -> textLiteralLength => expressionLength
@@ -6129,6 +6219,12 @@ emitCore context: move EmitContext -> Unit uses Console {
         context.composite[dictionaryCompositeSearch!].kind == 5 -> if { true => usesDictionary! }
         dictionaryCompositeSearch! + 1 => dictionaryCompositeSearch!
     }
+    false => usesEnumMatch!
+    0 => enumMatchSearch!
+    enumMatchSearch! < (context.ir -> len) -> while {
+        context.ir[enumMatchSearch!].kind == 27 -> if { true => usesEnumMatch! }
+        enumMatchSearch! + 1 => enumMatchSearch!
+    }
     usesDictionary! -> if {
         "%sl.dict = type { ptr, ptr, i64, i64 }" -> println
         intrinsicRuntimeModule! < 0 -> if { "declare void @llvm.trap()" -> println }
@@ -6137,6 +6233,7 @@ emitCore context: move EmitContext -> Unit uses Console {
             "declare void @free(ptr)" -> println
         }
     }
+    (usesEnumMatch! and not usesDictionary!) -> if { "declare void @llvm.trap()" -> println }
     false => usesText!
     0 => textTypeSearch!
     textTypeSearch! < (context.ir -> len) -> while {
@@ -6461,9 +6558,14 @@ emitCore context: move EmitContext -> Unit uses Console {
                     }
                     (entryExpression.kind == 5 and not (entryExpression.typeOrigin == 1 and entryExpression.typeSymbol == 16)) -> if {
                         -1 => entryBindingValueIr!
-                        (entryExpression.operand0 >= 0 and context.ir[entryExpression.operand0].kind == 17) -> if { entryExpression.operand0 => entryBindingValueIr! }
+                        (entryExpression.operand0 >= 0 and (context.ir[entryExpression.operand0].kind == 17 or context.ir[entryExpression.operand0].kind == 29)) -> if { entryExpression.operand0 => entryBindingValueIr! }
                         entryBindingValueIr! >= 0 -> if {
                             context.ir[entryBindingValueIr!] => entryBindingValue
+                            entryBindingValue.kind == 29 -> if {
+                                "  %v$(entryExpressionIndex!) = freeze " -> print
+                                entryExpression -> writeIrType
+                                " %v$(entryBindingValueIr!)" -> println
+                            } else {
                             entryBindingValue.flags == 1 -> if {
                                 entryBindingValueIr! -> mutableBindingRoot => entryBindingRoot
                                 "  %v$(entryExpressionIndex!) = load " -> print
@@ -6482,6 +6584,7 @@ emitCore context: move EmitContext -> Unit uses Console {
                                     }
                                 } else { "%v$(entryBindingValue.operand0)" -> print }
                                 "" -> println
+                            }
                             }
                         }
                     }
@@ -6617,6 +6720,7 @@ emitCore context: move EmitContext -> Unit uses Console {
                     entryExpression.kind == 26 -> if {
                         WhileValueRequest { whileIndex: entryExpressionIndex!, ownerIndex: functionIndex!, nodeIndex: entryExpressionIndex! } -> emitEnumConstructor
                     }
+                    entryExpression.kind == 27 -> if { entryExpressionIndex! -> emitEnumMatch }
                     entryExpression.kind == 15 -> if {
                         context.ir[entryExpression.operand0] => entryIndexedValue
                         context.ir[entryExpression.operand1] => entryIndexValue
