@@ -5860,3 +5860,32 @@ byte-identical at 7,247,585 bytes with SHA-256
 `llvm-as` accepts stage 3, whose emission took 35.19 seconds wall time. The
 stage-2 verifier now identifies the typed-IR worker by ABI shape instead of a
 fragile function symbol ordinal.
+
+## D183 - Give Self-Host `Option` and `Result` a Stable LLVM Value ABI
+
+Status: constructor ABI implemented and executable; matching and owned drop pending
+Date: 2026-07-19
+
+The self-host compiler now preserves qualified generic enum constructors such
+as `Result<Int, Text>.Ok(value)` through grammar, AST, semantic type IDs, and
+typed IR. `Option<T>` and `Result<T, E>` use the same value representation as
+the reference compiler: an `i32` tag followed by an eight-byte-aligned payload
+area sized for the largest variant. `Task<T>` remains a distinct two-pointer
+value and is not accidentally classified as an enum merely because all three
+types share the nominal-application semantic kind.
+
+Function and return nodes now retain their canonical recursive result type ID.
+The ordinary input parameter is selected before a block-role parameter, which
+prevents a function's `Result` return annotation from replacing an `Int` input
+in the emitted ABI. Constructor lowering supports function bodies, structured
+regions, and `main`; literal, local, parameter, text, and aggregate payloads
+are stored into the common tagged layout.
+
+Example 390 constructs both `Ok(Int)` and `Err(Text)`, calls a Result-returning
+function, assembles the generated LLVM with `llvm-as`, links it, and executes
+the native program. The focused recursive-type, enum-parser, ordered-output,
+and tryParallel-IR regression set passes 7/7, and regenerated grammar output is
+byte-identical at 2,124 words. Enum `when` lowering, tag-directed payload
+destruction, and self-host opcode `-209` runtime lowering remain open, so the
+parallel checklist remains 26/28 (92.9%) and the canonical roadmap remains
+48.5/60 gates (80.8%).

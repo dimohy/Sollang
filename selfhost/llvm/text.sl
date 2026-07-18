@@ -227,7 +227,13 @@ public layoutsFor request: TypeLayoutRequest -> TypeLayouts {
                 pointerSize => align!
                 0 => status!
             }
-            current.kind == 7 -> if { 2 => status! }
+            current.kind == 7 -> if {
+                (current.origin == 4 and current.symbol == 2) -> if {
+                    pointerSize * 2 => size!
+                    pointerSize => align!
+                    0 => status!
+                }
+            }
         }
         sizes! -> push(size!)
         aligns! -> push(align!)
@@ -245,6 +251,17 @@ public layoutsFor request: TypeLayoutRequest -> TypeLayouts {
                     (current.first >= 0 and statuses![current.first] == 0 and current.length >= 0) -> if {
                         sizes![current.first] * current.length => sizes![typeIndex!]
                         aligns![current.first] => aligns![typeIndex!]
+                        0 => statuses![typeIndex!]
+                        true => changed!
+                    }
+                }
+                (current.kind == 7 and current.origin == 4 and (current.symbol == 0 or current.symbol == 1)) -> if {
+                    (current.first >= 0 and statuses![current.first] == 0 and (current.second < 0 or statuses![current.second] == 0)) -> if {
+                        sizes![current.first] => payloadSize!
+                        (current.second >= 0 and sizes![current.second] > payloadSize!) -> if { sizes![current.second] => payloadSize! }
+                        (payloadSize! + 7) / 8 => payloadWords
+                        8 + payloadWords * 8 => sizes![typeIndex!]
+                        8 => aligns![typeIndex!]
                         0 => statuses![typeIndex!]
                         true => changed!
                     }
@@ -989,7 +1006,7 @@ emitCore context: move EmitContext -> Unit uses Console {
                 context.ir[controlSearch!] => aggregateCandidate
                 # Explicit conversions around aggregate fields are represented
                 # by a value wrapper whose direct result is a call node.
-                (aggregateCandidate.parent == wrapperIndex and (aggregateCandidate.kind == 6 or aggregateCandidate.kind == 12 or aggregateCandidate.kind == 14 or aggregateCandidate.kind == 16 or aggregateCandidate.kind == 18)) -> if { controlSearch! => resolved! }
+                (aggregateCandidate.parent == wrapperIndex and (aggregateCandidate.kind == 6 or aggregateCandidate.kind == 12 or aggregateCandidate.kind == 14 or aggregateCandidate.kind == 16 or aggregateCandidate.kind == 18 or aggregateCandidate.kind == 26)) -> if { controlSearch! => resolved! }
                 controlSearch! + 1 => controlSearch!
             }
         }
@@ -1342,6 +1359,10 @@ emitCore context: move EmitContext -> Unit uses Console {
                 current.kind == 3 -> if { "%sl.array.i32" -> print }
                 current.kind == 5 -> if { "%sl.dict" -> print }
                 current.kind == 6 -> if { "ptr" -> print }
+                current.kind == 7 -> if {
+                    (current.origin == 4 and (current.symbol == 0 or current.symbol == 1)) -> if { "%sl.enum.t$(typeTask)" -> print }
+                    (current.origin == 4 and current.symbol == 2) -> if { "%sl.task" -> print }
+                }
                 current.kind == 4 -> if {
                     "[$(current.length) x " -> print
                     typeTaskSize! == (typeTasks! -> len) -> if { typeTasks! -> push(-1) } else { -1 => typeTasks![typeTaskSize!] }
@@ -1503,6 +1524,72 @@ emitCore context: move EmitContext -> Unit uses Console {
         } else {
             node.typeSymbol -> legacyStorageAlign
         }
+    }
+    enumVariantTag node: typedIr.TypedIrNode -> Int {
+        node -> sourceToken => variantToken
+        -1 => tag!
+        variantToken.span.length == UIntSize(2) -> if {
+            context.sources[node.sourceModule] -> byte(variantToken.span.start) => first
+            context.sources[node.sourceModule] -> byte(variantToken.span.start + UIntSize(1)) => second
+            (first == UInt8(79) and second == UInt8(107)) -> if { 0 => tag! }
+        }
+        variantToken.span.length == UIntSize(3) -> if {
+            context.sources[node.sourceModule] -> byte(variantToken.span.start) => first
+            context.sources[node.sourceModule] -> byte(variantToken.span.start + UIntSize(1)) => second
+            context.sources[node.sourceModule] -> byte(variantToken.span.start + UIntSize(2)) => third
+            (first == UInt8(69) and second == UInt8(114) and third == UInt8(114)) -> if { 1 => tag! }
+        }
+        variantToken.span.length == UIntSize(4) -> if {
+            context.sources[node.sourceModule] -> byte(variantToken.span.start) => first
+            context.sources[node.sourceModule] -> byte(variantToken.span.start + UIntSize(1)) => second
+            context.sources[node.sourceModule] -> byte(variantToken.span.start + UIntSize(2)) => third
+            context.sources[node.sourceModule] -> byte(variantToken.span.start + UIntSize(3)) => fourth
+            (first == UInt8(78) and second == UInt8(111) and third == UInt8(110) and fourth == UInt8(101)) -> if { 0 => tag! }
+            (first == UInt8(83) and second == UInt8(111) and third == UInt8(109) and fourth == UInt8(101)) -> if { 1 => tag! }
+        }
+        tag!
+    }
+    emitEnumConstructor request: WhileValueRequest -> Unit uses Console {
+        context.ir[request.nodeIndex] => constructor
+        constructor -> enumVariantTag => variantTag
+        "  %v$(request.nodeIndex)_enum_slot = alloca " -> print
+        constructor -> writeIrType
+        ", align 8" -> println
+        "  store " -> print
+        constructor -> writeIrType
+        " zeroinitializer, ptr %v$(request.nodeIndex)_enum_slot, align 8" -> println
+        "  %v$(request.nodeIndex)_enum_tag = getelementptr inbounds " -> print
+        constructor -> writeIrType
+        ", ptr %v$(request.nodeIndex)_enum_slot, i32 0, i32 0" -> println
+        "  store i32 $variantTag, ptr %v$(request.nodeIndex)_enum_tag, align 4" -> println
+        constructor.operand0 >= 0 -> if {
+            constructor.operand0 -> aggregateValueIndex => payloadIndex
+            context.ir[payloadIndex] => payload
+            payload -> effectiveTypeId => payloadTypeId
+            (payloadTypeId < 0 or context.typeSizes[payloadTypeId] > 0) -> if {
+                "  %v$(request.nodeIndex)_enum_payload = getelementptr inbounds " -> print
+                constructor -> writeIrType
+                ", ptr %v$(request.nodeIndex)_enum_slot, i32 0, i32 1" -> println
+                "  store " -> print
+                payload -> writeIrType
+                " " -> print
+                (payload.kind == 3 or payload.kind == 4) -> if {
+                    payload -> sourceToken => payloadToken
+                    payload.kind == 3 -> if {
+                        context.sources[payload.sourceModule] -> slice(payloadToken.span.start, payloadToken.span.length) -> print
+                    } else {
+                        ((context.sources[payload.sourceModule] -> byte(payloadToken.span.start)) == UInt8(116)) -> if { "1" -> print } else { "0" -> print }
+                    }
+                } else {
+                    (payload.kind == 5 and request.ownerIndex >= 0 and context.ir[request.ownerIndex].operand1 >= 0 and payload.symbol == context.ir[context.ir[request.ownerIndex].operand1].symbol) -> if { "%arg" -> print } else { "%v$(payloadIndex)" -> print }
+                }
+                ", ptr %v$(request.nodeIndex)_enum_payload, align " -> print
+                payload -> storageAlign -> writeDecimalLine
+            }
+        }
+        "  %v$(request.nodeIndex) = load " -> print
+        constructor -> writeIrType
+        ", ptr %v$(request.nodeIndex)_enum_slot, align 8" -> println
     }
     arrayElementTypeId node: typedIr.TypedIrNode -> Int {
         -1 => elementTypeId!
@@ -2687,7 +2774,7 @@ emitCore context: move EmitContext -> Unit uses Console {
                                             (localPushValueBelongs! and not localScheduled![localPushValue! - regionLocalStart]) -> if { false => localReady! }
                                         }
                                     }
-                                    (localCandidate.kind == 12 or localCandidate.kind == 14 or localCandidate.kind == 16) -> if {
+                                    (localCandidate.kind == 12 or localCandidate.kind == 14 or localCandidate.kind == 16 or localCandidate.kind == 26) -> if {
                                         localCandidate.operand0 => localAggregateOperand!
                                         localAggregateOperand! >= 0 -> while {
                                             localAggregateOperand! -> aggregateValueIndex => localAggregateValue
@@ -2970,6 +3057,9 @@ emitCore context: move EmitContext -> Unit uses Console {
             }
             regionNode.kind == 25 -> if {
                 WhileValueRequest { whileIndex: regionNodeIndex!, ownerIndex: ownerIndex!, nodeIndex: regionNodeIndex! } -> emitMemberAssignment
+            }
+            regionNode.kind == 26 -> if {
+                WhileValueRequest { whileIndex: regionNodeIndex!, ownerIndex: ownerIndex!, nodeIndex: regionNodeIndex! } -> emitEnumConstructor
             }
             regionNode.kind == 12 -> if {
                 regionNode.operand0 < 0 -> if {
@@ -4237,7 +4327,7 @@ emitCore context: move EmitContext -> Unit uses Console {
                             scheduleNode.operand1 -> aggregateValueIndex => schedulePushValue
                             (schedulePushValue >= expressionStart and schedulePushValue < functionEnd! and not expressionScheduled![schedulePushValue - expressionStart]) -> if { false => scheduleReady! }
                         }
-                        (scheduleReady! and (scheduleNode.kind == 12 or scheduleNode.kind == 14 or scheduleNode.kind == 16)) -> if {
+                        (scheduleReady! and (scheduleNode.kind == 12 or scheduleNode.kind == 14 or scheduleNode.kind == 16 or scheduleNode.kind == 26)) -> if {
                             scheduleNode.operand0 => scheduleSibling!
                             scheduleSibling! >= 0 -> while {
                                 scheduleSibling! -> aggregateValueIndex => scheduleAggregateValue
@@ -4548,6 +4638,9 @@ emitCore context: move EmitContext -> Unit uses Console {
                 }
                 expression.kind == 25 -> if {
                     WhileValueRequest { whileIndex: expressionIndex!, ownerIndex: functionIndex!, nodeIndex: expressionIndex! } -> emitMemberAssignment
+                }
+                expression.kind == 26 -> if {
+                    WhileValueRequest { whileIndex: expressionIndex!, ownerIndex: functionIndex!, nodeIndex: expressionIndex! } -> emitEnumConstructor
                 }
                 expression.kind == 2 -> if {
                     expression -> sourceToken => expressionToken
@@ -5965,6 +6058,25 @@ emitCore context: move EmitContext -> Unit uses Console {
         sourceTextTypeSearch! + 1 => sourceTextTypeSearch!
     }
     usesSourceText! -> if { "%sl.source_text = type { ptr, i64, ptr, i64 }" -> println }
+    false => usesTaskType!
+    0 => taskTypeSearch!
+    taskTypeSearch! < (context.types -> len) -> while {
+        context.types[taskTypeSearch!] => taskTypeCandidate
+        (taskTypeCandidate.status == 0 and taskTypeCandidate.kind == 7 and taskTypeCandidate.origin == 4 and taskTypeCandidate.symbol == 2) -> if { true => usesTaskType! }
+        taskTypeSearch! + 1 => taskTypeSearch!
+    }
+    usesTaskType! -> if { "%sl.task = type { ptr, ptr }" -> println }
+    0 => enumTypeIndex!
+    enumTypeIndex! < (context.types -> len) -> while {
+        context.types[enumTypeIndex!] => enumType
+        (enumType.status == 0 and enumType.kind == 7 and enumType.origin == 4 and (enumType.symbol == 0 or enumType.symbol == 1)) -> if {
+            context.typeSizes[enumType.first] => enumPayloadSize!
+            (enumType.second >= 0 and context.typeSizes[enumType.second] > enumPayloadSize!) -> if { context.typeSizes[enumType.second] => enumPayloadSize! }
+            (enumPayloadSize! + 7) / 8 => enumPayloadWords
+            "%sl.enum.t$(enumTypeIndex!) = type { i32, [$enumPayloadWords x i64] }" -> println
+        }
+        enumTypeIndex! + 1 => enumTypeIndex!
+    }
     0 => structTypeIndex!
     structTypeIndex! < (context.types -> len) -> while {
         context.types[structTypeIndex!] => structType
@@ -6261,7 +6373,7 @@ emitCore context: move EmitContext -> Unit uses Console {
                                 entryScheduleNode.operand1 -> aggregateValueIndex => entrySchedulePushValue
                                 (entrySchedulePushValue > functionIndex! and entrySchedulePushValue < entryEnd! and not entryScheduled![entrySchedulePushValue - functionIndex! - 1]) -> if { false => entryScheduleReady! }
                             }
-                            (entryScheduleReady! and (entryScheduleNode.kind == 12 or entryScheduleNode.kind == 14 or entryScheduleNode.kind == 16)) -> if {
+                            (entryScheduleReady! and (entryScheduleNode.kind == 12 or entryScheduleNode.kind == 14 or entryScheduleNode.kind == 16 or entryScheduleNode.kind == 26)) -> if {
                                 entryScheduleNode.operand0 => entryScheduleSibling!
                                 entryScheduleSibling! >= 0 -> while {
                                     entryScheduleSibling! -> aggregateValueIndex => entryScheduleAggregateValue
@@ -6501,6 +6613,9 @@ emitCore context: move EmitContext -> Unit uses Console {
                     }
                     entryExpression.kind == 25 -> if {
                         WhileValueRequest { whileIndex: entryExpressionIndex!, ownerIndex: functionIndex!, nodeIndex: entryExpressionIndex! } -> emitMemberAssignment
+                    }
+                    entryExpression.kind == 26 -> if {
+                        WhileValueRequest { whileIndex: entryExpressionIndex!, ownerIndex: functionIndex!, nodeIndex: entryExpressionIndex! } -> emitEnumConstructor
                     }
                     entryExpression.kind == 15 -> if {
                         context.ir[entryExpression.operand0] => entryIndexedValue

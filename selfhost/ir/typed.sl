@@ -33,7 +33,7 @@ import sys.file as file
 # 23 explicit return (operand0 is the optional returned value), 24 index
 # assignment (operand0 is the value and operand1 is the index), 25 mutable
 # struct member assignment (operand0 is the value and operand1 is the owner
-# binding). AST kind 48
+# binding), 26 enum constructor (operand0 is the optional payload). AST kind 48
 # lowers to an ordinary call node; its child operations preserve the role body.
 public struct TypedIrNode {
     kind: Int
@@ -311,6 +311,32 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                 resultType.targetSymbol => functionResultSymbol!
                 function.typeNode => declaredResultAst!
                 function.secondaryTypeNode >= 0 -> if { function.secondaryTypeNode => declaredResultAst! }
+                -1 => functionResultTypeId!
+                0 => functionResultReferenceSearch!
+                functionResultReferenceSearch! < (recursiveTypes.references -> len) -> while {
+                    recursiveTypes.references[functionResultReferenceSearch!] => functionResultReference
+                    (functionResultReference.status == 0 and functionResultReference.sourceModule == sourceIndex! and functionResultReference.typeAst == declaredResultAst!) -> if {
+                        functionResultReference.typeId => functionResultTypeId!
+                    }
+                    functionResultReferenceSearch! + 1 => functionResultReferenceSearch!
+                }
+                -1 => functionResultTypeKind!
+                0 => functionResultTypeFlags!
+                functionResultTypeId! >= 0 -> if {
+                    recursiveSemanticTypes![functionResultTypeId!] => canonicalFunctionResult
+                    canonicalFunctionResult.origin => functionResultOrigin!
+                    canonicalFunctionResult.module => functionResultModule!
+                    canonicalFunctionResult.symbol => functionResultSymbol!
+                    canonicalFunctionResult.kind => functionResultTypeKind!
+                    recursiveTypeFlags![functionResultTypeId!] => functionResultTypeFlags!
+                    canonicalFunctionResult.kind != 1 -> if {
+                        10 + canonicalFunctionResult.kind => functionResultOrigin!
+                        canonicalFunctionResult.first >= 0 -> if {
+                            recursiveSemanticTypes![canonicalFunctionResult.first].module => functionResultModule!
+                            recursiveSemanticTypes![canonicalFunctionResult.first].symbol => functionResultSymbol!
+                        }
+                    }
+                }
                 0 => declaredResultNominalSearch!
                 declaredResultNominalSearch! < (prepared.nominal -> len) -> while {
                     prepared.nominal[declaredResultNominalSearch!] => declaredResultNominal
@@ -336,7 +362,7 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                 0 => parameterSearch!
                 parameterSearch! < sourceRange.symbolCount -> while {
                     prepared.package.symbols[sourceRange.symbolStart + parameterSearch!] => parameterCandidate
-                    (parameterCandidate.kind == 35 and parameterCandidate.parent == symbolIndex!) -> if { parameterSearch! => parameterSymbol! }
+                    (parameterSymbol! < 0 and parameterCandidate.kind == 35 and parameterCandidate.parent == symbolIndex!) -> if { parameterSearch! => parameterSymbol! }
                     parameterSearch! + 1 => parameterSearch!
                 }
                 parameterSymbol! >= 0 -> if {
@@ -458,9 +484,9 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                     typeOrigin: functionResultOrigin!
                     typeModule: functionResultModule!
                     typeSymbol: functionResultSymbol!
-                    typeId: -1
-                    typeKind: -1
-                    typeFlags: 0
+                    typeId: functionResultTypeId!
+                    typeKind: functionResultTypeKind!
+                    typeFlags: functionResultTypeFlags!
                     payloadToken: function.nameToken
                     opcode: -1
                     operand0: returnIr
@@ -478,9 +504,9 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                     typeOrigin: functionResultOrigin!
                     typeModule: functionResultModule!
                     typeSymbol: functionResultSymbol!
-                    typeId: -1
-                    typeKind: -1
-                    typeFlags: 0
+                    typeId: functionResultTypeId!
+                    typeKind: functionResultTypeKind!
+                    typeFlags: functionResultTypeFlags!
                     payloadToken: -1
                     opcode: -1
                     operand0: -1
@@ -494,7 +520,7 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                         kind: 10
                         parent: functionIr!
                         sourceModule: sourceIndex!
-                        astNode: function.astNode
+                        astNode: parameter.astNode
                         symbol: parameterSymbol!
                         targetModule: sourceIndex!
                         typeOrigin: parameterOrigin!
@@ -917,6 +943,7 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                             expression.kind == 41 -> if { 15 => expressionKind! }
                             expression.kind == 53 -> if { 24 => expressionKind! }
                             expression.kind == 54 -> if { 25 => expressionKind! }
+                            expression.kind == 55 -> if { 26 => expressionKind! }
                             0 => propertyCallSearch!
                             propertyCallSearch! < (prepared.calls -> len) -> while {
                                 prepared.calls[propertyCallSearch!] => propertyCall
@@ -1066,7 +1093,7 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                 expressionIrStart => operandIrIndex!
                 operandIrIndex! < expressionIrEnd -> while {
                     results![operandIrIndex!] => operatorIr!
-                    (operatorIr!.kind == 6 or operatorIr!.kind == 7 or operatorIr!.kind == 8 or (operatorIr!.kind == 9 and operatorIr!.opcode <= -201 and operatorIr!.opcode >= -206) or operatorIr!.kind == 13 or operatorIr!.kind == 15 or operatorIr!.kind == 17 or operatorIr!.kind == 22 or operatorIr!.kind == 23 or operatorIr!.kind == 24 or operatorIr!.kind == 25) -> if {
+                    (operatorIr!.kind == 6 or operatorIr!.kind == 7 or operatorIr!.kind == 8 or (operatorIr!.kind == 9 and operatorIr!.opcode <= -201 and operatorIr!.opcode >= -206) or operatorIr!.kind == 13 or operatorIr!.kind == 15 or operatorIr!.kind == 17 or operatorIr!.kind == 22 or operatorIr!.kind == 23 or operatorIr!.kind == 24 or operatorIr!.kind == 25 or operatorIr!.kind == 26) -> if {
                         -1 => firstOperand!
                         -1 => secondOperand!
                         UIntSize(0) => firstStart!
@@ -2079,6 +2106,7 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                                 entryExpression.kind == 41 -> if { 15 => entryExpressionKind! }
                                 entryExpression.kind == 53 -> if { 24 => entryExpressionKind! }
                                 entryExpression.kind == 54 -> if { 25 => entryExpressionKind! }
+                                entryExpression.kind == 55 -> if { 26 => entryExpressionKind! }
                                 0 => entryPropertyCallSearch!
                                 entryPropertyCallSearch! < (prepared.calls -> len) -> while {
                                     prepared.calls[entryPropertyCallSearch!] => entryPropertyCall
@@ -2223,7 +2251,7 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                     entryExpressionStart => entryOperandIr!
                     entryOperandIr! < entryExpressionEnd -> while {
                         results![entryOperandIr!] => entryOperator!
-                        (entryOperator!.kind == 6 or entryOperator!.kind == 7 or entryOperator!.kind == 8 or (entryOperator!.kind == 9 and entryOperator!.opcode <= -201 and entryOperator!.opcode >= -206) or entryOperator!.kind == 13 or entryOperator!.kind == 15 or entryOperator!.kind == 17 or entryOperator!.kind == 22 or entryOperator!.kind == 23 or entryOperator!.kind == 24 or entryOperator!.kind == 25) -> if {
+                        (entryOperator!.kind == 6 or entryOperator!.kind == 7 or entryOperator!.kind == 8 or (entryOperator!.kind == 9 and entryOperator!.opcode <= -201 and entryOperator!.opcode >= -206) or entryOperator!.kind == 13 or entryOperator!.kind == 15 or entryOperator!.kind == 17 or entryOperator!.kind == 22 or entryOperator!.kind == 23 or entryOperator!.kind == 24 or entryOperator!.kind == 25 or entryOperator!.kind == 26) -> if {
                             -1 => entryFirstOperand!
                             -1 => entrySecondOperand!
                             UIntSize(0) => entryFirstStart!

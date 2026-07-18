@@ -214,6 +214,20 @@ public resolveContext prepared: semanticContext.SemanticSnapshot -> ExpressionTy
             node.kind == 14 -> if { 2 => builtinTypeId! }
             (node.kind >= 44 and node.kind <= 47) -> if { 0 => builtinTypeId! }
             node.kind == 54 -> if { 0 => builtinTypeId! }
+            node.kind == 55 -> if {
+                0 => constructorTypeSearch!
+                constructorTypeSearch! < sourceRange.astCount -> while {
+                    prepared.package.nodes[sourceRange.astStart + constructorTypeSearch!] => constructorTypeNode
+                    (constructorTypeNode.kind == 12 and constructorTypeNode.parent == astIndex!) -> if {
+                        referenceIndexByTypeAst![sourceRange.astStart + constructorTypeSearch!] => constructorReference!
+                        constructorReference! >= 0 -> if {
+                            references![constructorReference!] => constructorTypeReference
+                            constructorTypeReference.status == 0 -> if { constructorTypeReference.typeId => builtinTypeId! }
+                        }
+                    }
+                    constructorTypeSearch! + 1 => constructorTypeSearch!
+                }
+            }
             # A typed empty dynamic-array expression, such as
             # `[file.SourceText; ~]`, is also its type syntax. The recursive
             # type pass has already resolved that AST through TypeReference;

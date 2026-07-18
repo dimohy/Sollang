@@ -43,6 +43,8 @@ struct LowerRequest {
 # 48 result-producing block-function call, 49 memory-map expression,
 # 50 effect declaration, 51 effect operation, 52 effect reference,
 # 53 index assignment, 54 mutable struct member assignment.
+# 55 generic enum constructor, 56 subject when target, 57 standalone when,
+# 58 when arm, 59 enum pattern.
 # Function flags: 1 move input, 2 mutable input, 4 public, 8 async.
 # Keyword operator codes use the same
 # -(keywordIndex + 1) representation as syntax diagnostics.
@@ -104,6 +106,11 @@ classifyRule rule: Int -> Int {
     rule == grammar.ruleIdEffectReference -> if { 52 => kind! }
     rule == grammar.ruleIdIndexAssignmentStatement -> if { 53 => kind! }
     rule == grammar.ruleIdFieldAssignmentStatement -> if { 54 => kind! }
+    rule == grammar.ruleIdEnumConstructorExpression -> if { 55 => kind! }
+    rule == grammar.ruleIdWhenFlowTarget -> if { 56 => kind! }
+    rule == grammar.ruleIdWhenExpression -> if { 57 => kind! }
+    (rule == grammar.ruleIdWhenArm or rule == grammar.ruleIdSubjectWhenArm) -> if { 58 => kind! }
+    rule == grammar.ruleIdEnumPattern -> if { 59 => kind! }
     kind! => selected
     selected
 }
@@ -913,6 +920,44 @@ lowerFrom request: LowerRequest -> [AstNode; ~] {
                     declaration!.flags + 4 => declaration!.flags
                 }
             }
+        }
+        declaration!.kind == 55 -> if {
+            -1 => constructorDot!
+            declaration!.firstToken => constructorToken!
+            declaration!.firstToken + declaration!.tokenCount => constructorEnd
+            0 => constructorAngleDepth!
+            constructorToken! < constructorEnd -> while {
+                tokens![constructorToken!].kind == grammar.tokenIdLess -> if { constructorAngleDepth! + 1 => constructorAngleDepth! }
+                tokens![constructorToken!].kind == grammar.tokenIdGreater -> if { constructorAngleDepth! - 1 => constructorAngleDepth! }
+                (constructorAngleDepth! == 0 and tokens![constructorToken!].kind == grammar.tokenIdDot) -> if { constructorToken! => constructorDot! }
+                constructorToken! + 1 => constructorToken!
+            }
+            constructorDot! >= 0 -> if {
+                constructorDot! + 1 => constructorName!
+                (constructorName! < constructorEnd and (tokens![constructorName!].kind == grammar.triviaIdWhitespace or tokens![constructorName!].kind == grammar.triviaIdComment)) -> while { constructorName! + 1 => constructorName! }
+                constructorName! < constructorEnd -> if { constructorName! => declaration!.payloadToken }
+            }
+        }
+        declaration!.kind == 59 -> if {
+            -1 => patternVariant!
+            -1 => patternBinding!
+            false => patternInsidePayload!
+            declaration!.firstToken => patternToken!
+            declaration!.firstToken + declaration!.tokenCount => patternEnd
+            patternToken! < patternEnd -> while {
+                tokens![patternToken!].kind == grammar.tokenIdLeftParen -> if { true => patternInsidePayload! }
+                tokens![patternToken!].kind == grammar.tokenIdRightParen -> if { false => patternInsidePayload! }
+                tokens![patternToken!].kind == grammar.tokenIdIdentifier -> if {
+                    patternInsidePayload! -> if {
+                        patternBinding! < 0 -> if { patternToken! => patternBinding! }
+                    } else {
+                        patternToken! => patternVariant!
+                    }
+                }
+                patternToken! + 1 => patternToken!
+            }
+            patternVariant! => declaration!.payloadToken
+            patternBinding! => declaration!.secondaryToken
         }
         declaration! => ast![declarationIndex!]
         declarationIndex! + 1 => declarationIndex!
