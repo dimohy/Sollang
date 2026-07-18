@@ -119,11 +119,11 @@ not lines of code.
 | Types, traits, and generics | 12 | 11 | 0 | 1 | 11.0 |
 | Ownership and storage | 10 | 7 | 2 | 1 | 8.0 |
 | Modules, visibility, and builds | 8 | 6 | 1 | 1 | 6.5 |
-| Compiler-construction primitives | 12 | 10 | 2 | 0 | 11.0 |
+| Compiler-construction primitives | 12 | 11 | 1 | 0 | 11.5 |
 | Standard library and tooling | 8 | 2 | 4 | 2 | 4.0 |
-| **Total** | **60** | **46** | **9** | **5** | **50.5 / 60** |
+| **Total** | **60** | **47** | **8** | **5** | **51.0 / 60** |
 
-Current count-based progress: **84.2% (50.5 of 60 equivalent gates)**.
+Current count-based progress: **85.0% (51 of 60 equivalent gates)**.
 
 The frontend parallel-compilation subproject is **28/28 checks (100%)**. Its
 source-local product boundary, typed callback-result role slice, nested-call
@@ -134,7 +134,7 @@ reject mutable or structurally non-sendable captures. The submitting parent now
 helps drain its task group before the structured join. Exact cancellation and
 partial-result destruction plus full Windows/Linux suite parity are proven.
 This completed feature-local subproject does not promote a roadmap gate.
-There are **9.5 equivalent gates remaining**. Because the remaining compiler
+There are **9 equivalent gates remaining**. Because the remaining compiler
 primitives are harder than early syntax gates, this is not an elapsed-time
 estimate.
 
@@ -288,9 +288,11 @@ milestone without changing the broader 60-gate language-capability score.
   workspaces.
 - Missing (1): module/interface cache.
 
-### Compiler-construction primitives — 11.0 / 12
+### Compiler-construction primitives — 11.5 / 12
 
-- Complete (10): Text values, validated UTF-8 iteration as fixed-width Unicode
+- Complete (11): Text values with allocation-free UTF-8 byte search, prefix,
+  suffix, containment, ordinal comparison, and ASCII case-insensitive equality;
+  validated UTF-8 iteration as fixed-width Unicode
   `CodePoint` scalar values, deterministic native file I/O wrappers needed by
   the existing demos, type-preserving array/dictionary iteration, and owned
   growable `UInt8` byte buffers with typed push/index/iteration/drop, plus typed
@@ -305,9 +307,9 @@ milestone without changing the broader 60-gate language-capability score.
   launch/wait/signal error on Windows and Linux. Reusable source spans now flow
   through Sollang lexer tokens, flat green CST nodes, invalid-byte diagnostics, and
   furthest-unexpected-token diagnostics.
-- Partial (2): generic arrays/dictionaries cover compiler-useful `Int`, `Text`,
-  and user-value payloads plus function contracts; Text now has checked UTF-8
-  byte length/index/slice primitives, but broader string processing remains.
+- Partial (1): generic arrays/dictionaries cover compiler-useful `Int`, `Text`,
+  and user-value payloads plus function contracts, but fully general generic
+  container ownership remains tied to the ownership/storage gate.
 
 ### Standard library and tooling — 4.0 / 8
 
@@ -1175,5 +1177,5 @@ Research basis:
    examples 51 and 56-71, including fixed-array value/type contracts).
 7. `Option`/`Result` and compiler-grade byte/text/source-span libraries
    (implemented for `Option`, `Result`, bytes, Unicode code points, byte arenas,
-   and reusable lexer/CST/parser source spans; multi-error continuation and
-   broader string processing remain).
+   reusable lexer/CST/parser source spans, and allocation-free Text search and
+   comparison; multi-error continuation remains).

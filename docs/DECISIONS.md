@@ -6583,3 +6583,38 @@ Research basis:
 
 - [rustc move paths](https://rustc-dev-guide.rust-lang.org/borrow-check/moves-and-initialization/move-paths.html)
 - [Rust assignment and destruction](https://doc.rust-lang.org/reference/destructors.html)
+
+## D202 - Allocation-Free Compiler Text Search
+
+Status: implemented and Stage2 verified
+Date: 2026-07-19
+
+`sys.text` now provides `startsWith`, `endsWith`, `indexOf`, `lastIndexOf`,
+`contains`, `compareOrdinal`, and `equalsAsciiIgnoreCase`. Search results use
+`Option<UIntSize>` and therefore make absence distinct from byte offset zero.
+All offsets are explicitly UTF-8 byte offsets, matching lexer spans, mapped
+source views, and the existing `Text.byte`/`Text.slice` substrate. Empty
+needles return `None`; empty prefixes and suffixes match.
+
+The operations borrow their Text inputs and allocate no temporary strings or
+arrays. Ordinal comparison is deterministic across targets, while the
+case-insensitive operation is deliberately ASCII-only so it does not pretend
+to implement Unicode case folding. Example 421 exercises the actual discovered
+standard-library module through the C# host. Example 422 assembles, links, and
+executes the same multi-argument loop shape through the self-host LLVM compiler.
+
+This completes the broader string-processing compiler primitive and provides
+the search substrate for the following portable Path/filesystem work. The
+formal roadmap becomes 47 complete, 8 partial, and 5 missing:
+**51/60 (85.0%)**.
+
+The Release build has zero warnings and errors and the complete Windows suite
+passes 559/559. Native self-host regeneration passes Stage2 6/6 at 8,919,060
+LLVM bytes with all three differential hashes preserved. This is checkpoint
+7/10 after the periodic Stage3 baseline, so Stage3 is intentionally not
+regenerated.
+
+Research basis:
+
+- [Rust cross-platform path and component model](https://doc.rust-lang.org/std/path/index.html)
+- [Swift System FilePath](https://developer.apple.com/documentation/system/filepath)
