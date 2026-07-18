@@ -5496,6 +5496,32 @@ stage 3 completed in 44.12 seconds and assembles with `llvm-as`.
 
 This does not declare all no-capture work safe. `SourceText` inputs returning
 owned analysis products remain serial until their worker failure is diagnosed.
-Likewise, `parallel` inside an `if` or `while` is owned by `emitRegion`, whose
-parallel lowering is not implemented yet; that is tracked as the next parity
-slice rather than silently falling through to an invalid ordinary call.
+Likewise, `parallel` inside an `if` or `while` was owned by `emitRegion`, whose
+parallel lowering was not implemented in this slice; D172 closes that parity
+gap.
+
+## D172 - Reuse Compute Generations Only After Every Worker Departs
+
+Status: implemented and fixed-point verified
+Date: 2026-07-18
+
+`emitRegion` now gives `parallel` inside nested `if` and `while` regions the
+same compute-pool and deterministic serial lowering as top-level entry and
+ordinary function bodies. Generic region-call emission excludes the role and
+its child callback call so the callback is invoked exactly once per element.
+
+The first 100-generation region test exposed a reusable-barrier race rather
+than an emitter error. The completion event is manual-reset. The last worker
+could signal it and the submitting thread could reset it before every waiting
+worker had returned from `WaitForSingleObject`; a stranded worker then consumed
+a permit from the next generation and eventually deadlocked the pool. Each
+non-last worker now increments a departure counter after its event wait, and
+the submitter waits for `workerCount - 1` departures before clearing the group
+and beginning another generation.
+
+The 100-generation nested-region execution passes in 0.14 seconds, and the
+emitter-affected LLVM suite passes 75/75. Complete stage 2 and stage 3 outputs
+are byte-identical at 7,069,022 bytes with SHA-256
+`B29A0DD2B778BEFF3DF96274C81314DDFE82199F7E5FCD8A462D1135CF4E32F1`.
+Stage 3 completed in 46.28 seconds and assembles with `llvm-as`; the complete
+six-step stage-2 differential verifier also passes.

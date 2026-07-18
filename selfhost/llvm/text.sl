@@ -3409,7 +3409,87 @@ emitCore context: move EmitContext -> Unit uses Console {
                     }
                 }
             }
-            (regionNode.kind == 6 and regionNode.opcode != -205) -> if {
+            (regionNode.kind == 6 and regionNode.opcode == -207 and regionNode.operand0 >= 0 and regionNode.operand1 >= 0) -> if {
+                context.ir[regionNode.operand0] => regionParallelSource
+                context.ir[regionNode.operand1] => regionParallelBodyCall
+                "  %v$(regionNodeIndex!)_input = extractvalue %sl.array.i32 %v$(regionNode.operand0), 0" -> println
+                "  %v$(regionNodeIndex!)_length = extractvalue %sl.array.i32 %v$(regionNode.operand0), 1" -> println
+                "  %v$(regionNodeIndex!)_bytes = mul i64 %v$(regionNodeIndex!)_length, " -> print
+                regionNode -> arrayElementSize -> writeDecimalLine
+                "  %v$(regionNodeIndex!)_data = call ptr @malloc(i64 %v$(regionNodeIndex!)_bytes)" -> println
+                regionNodeIndex! -> parallelUsesComputePool -> if {
+                    CallEnvironmentRequest { callerIndex: ownerIndex!, callIndex: regionNodeIndex!, targetModule: regionParallelBodyCall.targetModule, targetSymbol: regionParallelBodyCall.symbol, hasArgument: true } => regionParallelEnvironmentRequest
+                    regionParallelEnvironmentRequest -> targetFunctionIndex => regionParallelTargetFunction
+                    regionParallelTargetFunction -> functionCaptures => regionParallelCallCaptures!
+                    regionParallelCallCaptures! -> len => regionParallelCallCaptureCount
+                    regionParallelEnvironmentRequest -> emitCallEnvironmentValues
+                    "  %v$(regionNodeIndex!)_group = alloca %smalllang.compute_group, align 8" -> println
+                    "  %v$(regionNodeIndex!)_callback_slot = getelementptr %smalllang.compute_group, ptr %v$(regionNodeIndex!)_group, i32 0, i32 0" -> println
+                    "  store ptr @smalllang_parallel_callback_$(regionNodeIndex!), ptr %v$(regionNodeIndex!)_callback_slot, align 8" -> println
+                    "  %v$(regionNodeIndex!)_input_slot = getelementptr %smalllang.compute_group, ptr %v$(regionNodeIndex!)_group, i32 0, i32 1" -> println
+                    "  store ptr %v$(regionNodeIndex!)_input, ptr %v$(regionNodeIndex!)_input_slot, align 8" -> println
+                    "  %v$(regionNodeIndex!)_output_slot = getelementptr %smalllang.compute_group, ptr %v$(regionNodeIndex!)_group, i32 0, i32 2" -> println
+                    "  store ptr %v$(regionNodeIndex!)_data, ptr %v$(regionNodeIndex!)_output_slot, align 8" -> println
+                    "  %v$(regionNodeIndex!)_count_slot = getelementptr %smalllang.compute_group, ptr %v$(regionNodeIndex!)_group, i32 0, i32 3" -> println
+                    "  store i64 %v$(regionNodeIndex!)_length, ptr %v$(regionNodeIndex!)_count_slot, align 8" -> println
+                    regionParallelCallCaptureCount > 0 -> if {
+                        "  %v$(regionNodeIndex!)_capture_environment = alloca [$(regionParallelCallCaptureCount) x ptr], align 8" -> println
+                        0 => regionParallelCaptureStoreIndex!
+                        regionParallelCaptureStoreIndex! < regionParallelCallCaptureCount -> while {
+                            "  %v$(regionNodeIndex!)_capture_address_$(regionParallelCaptureStoreIndex!) = getelementptr [$(regionParallelCallCaptureCount) x ptr], ptr %v$(regionNodeIndex!)_capture_environment, i32 0, i32 $(regionParallelCaptureStoreIndex!)" -> println
+                            "  store ptr " -> print
+                            CaptureValueRequest { callerIndex: ownerIndex!, callIndex: regionNodeIndex!, bindingIndex: regionParallelCallCaptures![regionParallelCaptureStoreIndex!], captureIndex: regionParallelCaptureStoreIndex! } -> emitCapturePointer
+                            ", ptr %v$(regionNodeIndex!)_capture_address_$(regionParallelCaptureStoreIndex!), align 8" -> println
+                            regionParallelCaptureStoreIndex! + 1 => regionParallelCaptureStoreIndex!
+                        }
+                    }
+                    "  %v$(regionNodeIndex!)_capture_slot = getelementptr %smalllang.compute_group, ptr %v$(regionNodeIndex!)_group, i32 0, i32 4" -> println
+                    regionParallelCallCaptureCount > 0 -> if {
+                        "  store ptr %v$(regionNodeIndex!)_capture_environment, ptr %v$(regionNodeIndex!)_capture_slot, align 8" -> println
+                    } else {
+                        "  store ptr null, ptr %v$(regionNodeIndex!)_capture_slot, align 8" -> println
+                    }
+                    "  call void @smalllang_compute_execute(ptr %v$(regionNodeIndex!)_group)" -> println
+                } else {
+                    "  %v$(regionNodeIndex!)_index_slot = alloca i64, align 8" -> println
+                    "  store i64 0, ptr %v$(regionNodeIndex!)_index_slot, align 8" -> println
+                    "  br label %parallel$(regionNodeIndex!)_header" -> println
+                    "parallel$(regionNodeIndex!)_header:" -> println
+                    "  %v$(regionNodeIndex!)_index = load i64, ptr %v$(regionNodeIndex!)_index_slot, align 8" -> println
+                    "  %v$(regionNodeIndex!)_done = icmp eq i64 %v$(regionNodeIndex!)_index, %v$(regionNodeIndex!)_length" -> println
+                    "  br i1 %v$(regionNodeIndex!)_done, label %parallel$(regionNodeIndex!)_exit, label %parallel$(regionNodeIndex!)_body" -> println
+                    "parallel$(regionNodeIndex!)_body:" -> println
+                    "  %v$(regionNodeIndex!)_input_ptr = getelementptr " -> print
+                    regionParallelSource -> writeArrayElementType
+                    ", ptr %v$(regionNodeIndex!)_input, i64 %v$(regionNodeIndex!)_index" -> println
+                    "  %v$(regionNodeIndex!)_item = load " -> print
+                    regionParallelSource -> writeArrayElementType
+                    ", ptr %v$(regionNodeIndex!)_input_ptr, align " -> print
+                    regionParallelSource -> arrayElementAlign -> writeDecimalLine
+                    CallEnvironmentRequest { callerIndex: ownerIndex!, callIndex: regionNodeIndex!, targetModule: regionParallelBodyCall.targetModule, targetSymbol: regionParallelBodyCall.symbol, hasArgument: true } -> emitCallEnvironmentValues
+                    "  %v$(regionNodeIndex!)_mapped = call " -> print
+                    regionParallelBodyCall -> writeIrType
+                    " @sl_m$(regionParallelBodyCall.targetModule)_s$(regionParallelBodyCall.symbol)(" -> print
+                    CallEnvironmentRequest { callerIndex: ownerIndex!, callIndex: regionNodeIndex!, targetModule: regionParallelBodyCall.targetModule, targetSymbol: regionParallelBodyCall.symbol, hasArgument: true } -> emitCallEnvironment => regionParallelCallHasCaptures
+                    regionParallelSource -> writeArrayElementType
+                    " %v$(regionNodeIndex!)_item)" -> println
+                    "  %v$(regionNodeIndex!)_output_ptr = getelementptr " -> print
+                    regionNode -> writeArrayElementType
+                    ", ptr %v$(regionNodeIndex!)_data, i64 %v$(regionNodeIndex!)_index" -> println
+                    "  store " -> print
+                    regionNode -> writeArrayElementType
+                    " %v$(regionNodeIndex!)_mapped, ptr %v$(regionNodeIndex!)_output_ptr, align " -> print
+                    regionNode -> arrayElementAlign -> writeDecimalLine
+                    "  %v$(regionNodeIndex!)_next = add i64 %v$(regionNodeIndex!)_index, 1" -> println
+                    "  store i64 %v$(regionNodeIndex!)_next, ptr %v$(regionNodeIndex!)_index_slot, align 8" -> println
+                    "  br label %parallel$(regionNodeIndex!)_header" -> println
+                    "parallel$(regionNodeIndex!)_exit:" -> println
+                }
+                "  %v$(regionNodeIndex!)_0 = insertvalue %sl.array.i32 poison, ptr %v$(regionNodeIndex!)_data, 0" -> println
+                "  %v$(regionNodeIndex!)_1 = insertvalue %sl.array.i32 %v$(regionNodeIndex!)_0, i64 %v$(regionNodeIndex!)_length, 1" -> println
+                "  %v$(regionNodeIndex!) = insertvalue %sl.array.i32 %v$(regionNodeIndex!)_1, i64 %v$(regionNodeIndex!)_length, 2" -> println
+            }
+            (regionNode.kind == 6 and regionNode.opcode != -205 and regionNode.opcode != -207 and regionNode.opcode != -208 and not (regionNode.parent >= 0 and context.ir[regionNode.parent].kind == 6 and context.ir[regionNode.parent].opcode == -207 and context.ir[regionNode.parent].operand1 == regionNodeIndex!)) -> if {
                 (regionNode.symbol == -101 or regionNode.symbol == -102) -> if {
                     context.ir[regionNode.operand0] => regionArgument
                     regionArgument.kind == 2 -> if {
@@ -7090,6 +7170,7 @@ emitWindowsComputeRuntime: -> Unit uses Console {
     @smalllang_compute_group_current = internal global ptr null
     @smalllang_compute_next = internal global i64 0
     @smalllang_compute_active = internal global i32 0
+    @smalllang_compute_barrier_departed = internal global i32 0
     @smalllang_compute_running = internal global i32 0
     @smalllang_compute_peak = internal global i32 0
     @smalllang_compute_stopping = internal global i32 0
@@ -7131,6 +7212,7 @@ emitWindowsComputeRuntime: -> Unit uses Console {
     barrier:
       %barrier_event = load ptr, ptr @smalllang_compute_completion_event, align 8
       %barrier_waited = call i32 @WaitForSingleObject(ptr %barrier_event, i32 -1)
+      %departed_before = atomicrmw add ptr @smalllang_compute_barrier_departed, i32 1 acq_rel
       br label %wait
     signal:
       %event = load ptr, ptr @smalllang_compute_completion_event, align 8
@@ -7202,6 +7284,14 @@ emitWindowsComputeRuntime: -> Unit uses Console {
       %semaphore = load ptr, ptr @smalllang_compute_semaphore, align 8
       %released = call i32 @ReleaseSemaphore(ptr %semaphore, i32 %workers, ptr null)
       %waited = call i32 @WaitForSingleObject(ptr %event, i32 -1)
+      br label %await_departure
+    await_departure:
+      %departed = load atomic i32, ptr @smalllang_compute_barrier_departed acquire, align 4
+      %expected_departed = sub i32 %workers, 1
+      %all_departed = icmp eq i32 %departed, %expected_departed
+      br i1 %all_departed, label %departure_done, label %await_departure
+    departure_done:
+      store atomic i32 0, ptr @smalllang_compute_barrier_departed release, align 4
       store atomic ptr null, ptr @smalllang_compute_group_current release, align 8
       br label %done
     failed:

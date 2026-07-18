@@ -918,7 +918,7 @@ same buffered runtime, so stage 3 no longer writes LLVM one byte at a time.
 - [x] lower no-capture scalar-to-scalar callbacks through the compute pool;
 - [x] connect entry-body role results and lower top-level entry `parallel`;
 - [ ] make no-capture `SourceText` analysis worker-safe before parallelizing it;
-- [ ] lower `parallel` inside nested `if`/`while` regions;
+- [x] lower `parallel` inside nested `if`/`while` regions;
 - [ ] split or buffer independent `emitCore` function bodies for parallel output.
 
 The generated stage-2 compiler now lowers capture-safe `parallel` callbacks to
@@ -947,10 +947,11 @@ compute pool without a capture environment; a 100-generation execution test
 proves the null-environment ABI. Entry-body role bindings now receive the same
 explicit call-result edge repair as ordinary functions, and top-level entry
 `parallel` has both compute-pool and serial target lowering. The compiler
-fixed point remains exact at 7,011,834 bytes with SHA-256
-`66CFB3F0551D85CDFBDEE7851020F643792FB1AD5CF4FBC8DAE7C2045B19C250`;
-stage 3 completed in 44.12 s. `SourceText`/owned-analysis callbacks and
-`parallel` nested inside control regions remain separate unchecked ABI paths.
+fixed point remains exact after nested-region lowering at 7,069,022 bytes with
+SHA-256
+`B29A0DD2B778BEFF3DF96274C81314DDFE82199F7E5FCD8A462D1135CF4E32F1`;
+stage 3 completed in 46.28 s. `SourceText`/owned-analysis callbacks remain a
+separate unchecked ABI path.
 
 ## Immediate Implementation Order
 

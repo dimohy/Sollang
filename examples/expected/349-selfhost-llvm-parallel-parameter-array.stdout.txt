@@ -64,6 +64,7 @@ done:
 @smalllang_compute_group_current = internal global ptr null
 @smalllang_compute_next = internal global i64 0
 @smalllang_compute_active = internal global i32 0
+@smalllang_compute_barrier_departed = internal global i32 0
 @smalllang_compute_running = internal global i32 0
 @smalllang_compute_peak = internal global i32 0
 @smalllang_compute_stopping = internal global i32 0
@@ -105,6 +106,7 @@ complete:
 barrier:
   %barrier_event = load ptr, ptr @smalllang_compute_completion_event, align 8
   %barrier_waited = call i32 @WaitForSingleObject(ptr %barrier_event, i32 -1)
+  %departed_before = atomicrmw add ptr @smalllang_compute_barrier_departed, i32 1 acq_rel
   br label %wait
 signal:
   %event = load ptr, ptr @smalllang_compute_completion_event, align 8
@@ -176,6 +178,14 @@ publish:
   %semaphore = load ptr, ptr @smalllang_compute_semaphore, align 8
   %released = call i32 @ReleaseSemaphore(ptr %semaphore, i32 %workers, ptr null)
   %waited = call i32 @WaitForSingleObject(ptr %event, i32 -1)
+  br label %await_departure
+await_departure:
+  %departed = load atomic i32, ptr @smalllang_compute_barrier_departed acquire, align 4
+  %expected_departed = sub i32 %workers, 1
+  %all_departed = icmp eq i32 %departed, %expected_departed
+  br i1 %all_departed, label %departure_done, label %await_departure
+departure_done:
+  store atomic i32 0, ptr @smalllang_compute_barrier_departed release, align 4
   store atomic ptr null, ptr @smalllang_compute_group_current release, align 8
   br label %done
 failed:
