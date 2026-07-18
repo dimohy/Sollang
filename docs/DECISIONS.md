@@ -5827,7 +5827,7 @@ stays 48.5/60 (80.8%).
 
 ## D182 - Preserve Typed Failure Through `tryParallel`
 
-Status: reference runtime implemented; self-host runtime pending
+Status: reference runtime implemented; self-host scalar runtime executable
 Date: 2026-07-18
 
 `tryParallel<T, R, E>` is the fallible counterpart of `parallel`. Its callback
@@ -5851,10 +5851,10 @@ cover a non-`Result` callback and an ignored owned return. The self-host semanti
 and typed-IR passes recognize opcode `-209`, infer `Result<[R; ~], E>`, and apply
 the same capture-safety boundary; examples 380 and 389 prove that scope.
 
-The self-host LLVM emitter cannot yet construct or inspect executable generic
-enum values such as `Result<R, E>`. Self-host runtime lowering therefore remains
-open rather than emitting an unsound partial ABI. Because full self-host parity,
-Linux full-suite parity, and the final exactly-once proof are not yet complete,
+The self-host LLVM emitter now executes scalar `tryParallel` through the same
+13-field compute-group ABI in entry, ordinary-function, and nested-region
+positions. Nested owned callback payloads still need an executable exactly-once
+gate. Because that proof and Linux full-suite parity are not yet complete,
 parallel progress remains 26/28 (92.9%) and the canonical roadmap remains
 48.5/60 equivalent gates (80.8%).
 
@@ -5904,6 +5904,34 @@ runtime tag and destroys only the active `Option`/`Result` payload; dynamic
 arrays, dictionaries, boxes, `SourceText`, and owned nominal structs have
 direct payload paths. Example 391 assembles, links, and executes both an owned
 `Ok` and an inactive `Err`, and its LLVM contains one array-buffer `free` only
-on the `Ok` branch. Nested owned boxes/fixed arrays and self-host opcode `-209`
-still require the remaining recursive/runtime work, so progress does not move
-yet.
+on the `Ok` branch. Nested owned boxes/fixed arrays still require the remaining
+recursive cleanup proof, so progress does not move yet.
+
+## D184 - Execute Self-Host `tryParallel` Through the Native Pool
+
+Status: scalar entry/function/region paths executable; owned nested proof pending
+Date: 2026-07-19
+
+Self-host opcode `-209` now lowers to the native Windows/Linux compute-pool ABI.
+The compute group carries atomic `failure_limit` and per-index initialization
+bytes. Both workers and the submitting thread stop claiming indices at that
+limit, and the common output sink commits only the canonical prefix. Callbacks
+store complete `Result<R, E>` values before publishing initialization and use
+an atomic minimum to select the earliest failing source index.
+
+Collection moves successful payloads into a growable output array in input
+order or moves the selected error into the outer Result. The lowering is shared
+by top-level entry expressions, ordinary function bodies, and nested control
+regions. Examples 392-394 assemble, link, and execute all three positions;
+example 392 covers both successful array reconstruction and failure selection.
+
+This work also removed two independent self-host traps exposed by the new
+test. Symbol collection now sizes its AST-to-symbol map before following valid
+forward-parent edges, and fluent runtime calls consume the final transformed
+value (for example, a `when` result) instead of the original subject.
+
+The generated cleanup loop consults each initialization byte and has
+tag-directed owned-payload destruction hooks, but nested owned callback Results
+still need an executable leak/double-free proof. Therefore cancellation and
+partial-result destruction remain unchecked, parallel progress stays 26/28
+(92.9%), and the canonical roadmap stays 48.5/60 (80.8%).

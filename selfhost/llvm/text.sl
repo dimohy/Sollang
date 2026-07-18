@@ -1738,7 +1738,6 @@ emitCore context: move EmitContext -> Unit uses Console {
         ", ptr %v$(request.nodeIndex)_enum_slot, align 8" -> println
     }
     emitTryParallelCollect request: TryParallelCollectRequest -> Unit uses Console {
-        context.types[request.outerTypeId] => outerResultType
         context.types[request.callbackTypeId] => callbackResultType
         callbackResultType.first => okTypeId
         callbackResultType.second => errorTypeId
@@ -1765,6 +1764,56 @@ emitCore context: move EmitContext -> Unit uses Console {
         "  %v$(request.expressionIndex)_error_payload = load " -> print
         errorTypeId -> writeSemanticTypeId
         ", ptr %v$(request.expressionIndex)_selected_payload_ptr, align $(context.typeAligns[errorTypeId])" -> println
+        ((okTypeId -> semanticTypeOwns) or (errorTypeId -> semanticTypeOwns)) -> if {
+            request.expressionIndex * 1000 + 909 => partialDropRoot
+            "  %v$(request.expressionIndex)_cleanup_result_slot = alloca " -> print
+            request.callbackTypeId -> writeSemanticTypeId
+            ", align 8" -> println
+            "  br label %tryparallel$(request.expressionIndex)_cleanup_header" -> println
+            "tryparallel$(request.expressionIndex)_cleanup_header:" -> println
+            "  %v$(request.expressionIndex)_cleanup_index = phi i64 [ 0, %tryparallel$(request.expressionIndex)_error ], [ %v$(request.expressionIndex)_cleanup_next_index, %tryparallel$(request.expressionIndex)_cleanup_next ]" -> println
+            "  %v$(request.expressionIndex)_cleanup_in_range = icmp ult i64 %v$(request.expressionIndex)_cleanup_index, %v$(request.expressionIndex)_length" -> println
+            "  br i1 %v$(request.expressionIndex)_cleanup_in_range, label %tryparallel$(request.expressionIndex)_cleanup_check, label %tryparallel$(request.expressionIndex)_cleanup_done" -> println
+            "tryparallel$(request.expressionIndex)_cleanup_check:" -> println
+            "  %v$(request.expressionIndex)_cleanup_initialized_ptr = getelementptr i8, ptr %v$(request.expressionIndex)_initialized, i64 %v$(request.expressionIndex)_cleanup_index" -> println
+            "  %v$(request.expressionIndex)_cleanup_initialized = load atomic i8, ptr %v$(request.expressionIndex)_cleanup_initialized_ptr acquire, align 1" -> println
+            "  %v$(request.expressionIndex)_cleanup_has_value = icmp ne i8 %v$(request.expressionIndex)_cleanup_initialized, 0" -> println
+            "  %v$(request.expressionIndex)_cleanup_is_selected = icmp eq i64 %v$(request.expressionIndex)_cleanup_index, %v$(request.expressionIndex)_failure_limit" -> println
+            "  %v$(request.expressionIndex)_cleanup_not_selected = xor i1 %v$(request.expressionIndex)_cleanup_is_selected, true" -> println
+            "  %v$(request.expressionIndex)_cleanup_should_drop = and i1 %v$(request.expressionIndex)_cleanup_has_value, %v$(request.expressionIndex)_cleanup_not_selected" -> println
+            "  br i1 %v$(request.expressionIndex)_cleanup_should_drop, label %tryparallel$(request.expressionIndex)_cleanup_drop, label %tryparallel$(request.expressionIndex)_cleanup_next" -> println
+            "tryparallel$(request.expressionIndex)_cleanup_drop:" -> println
+            "  %v$(request.expressionIndex)_cleanup_offset = mul i64 %v$(request.expressionIndex)_cleanup_index, $callbackStride" -> println
+            "  %v$(request.expressionIndex)_cleanup_ptr = getelementptr i8, ptr %v$(request.expressionIndex)_callback_results, i64 %v$(request.expressionIndex)_cleanup_offset" -> println
+            "  %v$(request.expressionIndex)_cleanup_result = load " -> print
+            request.callbackTypeId -> writeSemanticTypeId
+            ", ptr %v$(request.expressionIndex)_cleanup_ptr, align $(context.typeAligns[request.callbackTypeId])" -> println
+            "  store " -> print
+            request.callbackTypeId -> writeSemanticTypeId
+            " %v$(request.expressionIndex)_cleanup_result, ptr %v$(request.expressionIndex)_cleanup_result_slot, align 8" -> println
+            "  %v$(request.expressionIndex)_cleanup_tag = extractvalue " -> print
+            request.callbackTypeId -> writeSemanticTypeId
+            " %v$(request.expressionIndex)_cleanup_result, 0" -> println
+            "  %enumdrop$(partialDropRoot)_payload_ptr = getelementptr inbounds " -> print
+            request.callbackTypeId -> writeSemanticTypeId
+            ", ptr %v$(request.expressionIndex)_cleanup_result_slot, i32 0, i32 1" -> println
+            "  %v$(request.expressionIndex)_cleanup_is_ok = icmp eq i32 %v$(request.expressionIndex)_cleanup_tag, 0" -> println
+            "  br i1 %v$(request.expressionIndex)_cleanup_is_ok, label %tryparallel$(request.expressionIndex)_cleanup_ok, label %tryparallel$(request.expressionIndex)_cleanup_error" -> println
+            "tryparallel$(request.expressionIndex)_cleanup_ok:" -> println
+            okTypeId -> semanticTypeOwns -> if {
+                EnumPayloadDropRequest { enumTypeId: request.callbackTypeId, payloadTypeId: okTypeId, nameRoot: partialDropRoot * 10 + 1, pointerRoot: partialDropRoot, bindingIndex: -1, regionIndex: -1 } -> emitEnumPayloadDrop
+            }
+            "  br label %tryparallel$(request.expressionIndex)_cleanup_next" -> println
+            "tryparallel$(request.expressionIndex)_cleanup_error:" -> println
+            errorTypeId -> semanticTypeOwns -> if {
+                EnumPayloadDropRequest { enumTypeId: request.callbackTypeId, payloadTypeId: errorTypeId, nameRoot: partialDropRoot * 10 + 2, pointerRoot: partialDropRoot, bindingIndex: -1, regionIndex: -1 } -> emitEnumPayloadDrop
+            }
+            "  br label %tryparallel$(request.expressionIndex)_cleanup_next" -> println
+            "tryparallel$(request.expressionIndex)_cleanup_next:" -> println
+            "  %v$(request.expressionIndex)_cleanup_next_index = add i64 %v$(request.expressionIndex)_cleanup_index, 1" -> println
+            "  br label %tryparallel$(request.expressionIndex)_cleanup_header" -> println
+            "tryparallel$(request.expressionIndex)_cleanup_done:" -> println
+        }
         "  call void @free(ptr %v$(request.expressionIndex)_callback_results)" -> println
         "  call void @free(ptr %v$(request.expressionIndex)_initialized)" -> println
         "  call void @free(ptr %v$(request.expressionIndex)_data)" -> println
@@ -1846,7 +1895,9 @@ emitCore context: move EmitContext -> Unit uses Console {
         "tryparallel$(request.expressionIndex)_merge:" -> println
         "  %v$(request.expressionIndex) = phi " -> print
         request.outerTypeId -> writeSemanticTypeId
-        " [ %v$(request.expressionIndex)_error_result, %tryparallel$(request.expressionIndex)_error ], [ %v$(request.expressionIndex)_success_result, %tryparallel$(request.expressionIndex)_copy_done ]" -> println
+        " [ %v$(request.expressionIndex)_error_result, %tryparallel$(request.expressionIndex)_" -> print
+        ((okTypeId -> semanticTypeOwns) or (errorTypeId -> semanticTypeOwns)) -> if { "cleanup_done" -> print } else { "error" -> print }
+        " ], [ %v$(request.expressionIndex)_success_result, %tryparallel$(request.expressionIndex)_copy_done ]" -> println
     }
     arrayElementTypeId node: typedIr.TypedIrNode -> Int {
         -1 => elementTypeId!
@@ -3043,6 +3094,10 @@ emitCore context: move EmitContext -> Unit uses Console {
                                             (localPushValueBelongs! and not localScheduled![localPushValue! - regionLocalStart]) -> if { false => localReady! }
                                         }
                                     }
+                                    (localCandidate.kind == 26 and localCandidate.operand0 >= 0) -> if {
+                                        localCandidate.operand0 -> aggregateValueIndex => localEnumPayloadValue
+                                        (localEnumPayloadValue >= regionLocalStart and localEnumPayloadValue < regionLocalEnd and not localScheduled![localEnumPayloadValue - regionLocalStart]) -> if { false => localReady! }
+                                    }
                                     (localCandidate.kind == 12 or localCandidate.kind == 14 or localCandidate.kind == 16) -> if {
                                         localCandidate.operand0 => localAggregateOperand!
                                         localAggregateOperand! >= 0 -> while {
@@ -3859,6 +3914,73 @@ emitCore context: move EmitContext -> Unit uses Console {
                             (ownerIndex! >= 0 and context.ir[ownerIndex!].kind == 0 and context.ir[ownerIndex!].operand1 >= 0 and regionRight.kind == 5 and regionRight.symbol == context.ir[context.ir[ownerIndex!].operand1].symbol) -> if { "%arg" -> println } else { "%v$(regionNode.operand1)" -> println }
                         }
                     }
+                }
+            }
+            (regionNode.kind == 6 and regionNode.opcode == -209 and regionNode.operand0 >= 0 and regionNode.operand1 >= 0) -> if {
+                context.ir[regionNode.operand0] => regionTryParallelSource
+                context.ir[regionNode.operand1] => regionTryParallelBodyCall
+                context.types[regionTryParallelBodyCall.typeId] => regionTryParallelCallbackType
+                "  %v$(regionNodeIndex!)_input = extractvalue %sl.array.i32 " -> print
+                (regionTryParallelSource.kind == 5 and ownerIndex! >= 0 and context.ir[ownerIndex!].kind == 0 and context.ir[ownerIndex!].operand1 >= 0 and regionTryParallelSource.symbol == context.ir[context.ir[ownerIndex!].operand1].symbol) -> if { "%arg" -> print } else { "%v$(regionNode.operand0)" -> print }
+                ", 0" -> println
+                "  %v$(regionNodeIndex!)_length = extractvalue %sl.array.i32 " -> print
+                (regionTryParallelSource.kind == 5 and ownerIndex! >= 0 and context.ir[ownerIndex!].kind == 0 and context.ir[ownerIndex!].operand1 >= 0 and regionTryParallelSource.symbol == context.ir[context.ir[ownerIndex!].operand1].symbol) -> if { "%arg" -> print } else { "%v$(regionNode.operand0)" -> print }
+                ", 1" -> println
+                "  %v$(regionNodeIndex!)_bytes = mul i64 %v$(regionNodeIndex!)_length, $(context.typeSizes[regionTryParallelCallbackType.first])" -> println
+                "  %v$(regionNodeIndex!)_data = call ptr @malloc(i64 %v$(regionNodeIndex!)_bytes)" -> println
+                "  %v$(regionNodeIndex!)_callback_bytes = mul i64 %v$(regionNodeIndex!)_length, $(context.typeSizes[regionTryParallelBodyCall.typeId])" -> println
+                "  %v$(regionNodeIndex!)_callback_results = call ptr @malloc(i64 %v$(regionNodeIndex!)_callback_bytes)" -> println
+                "  %v$(regionNodeIndex!)_initialized = call ptr @malloc(i64 %v$(regionNodeIndex!)_length)" -> println
+                "  call void @llvm.memset.p0.i64(ptr %v$(regionNodeIndex!)_initialized, i8 0, i64 %v$(regionNodeIndex!)_length, i1 false)" -> println
+                regionNodeIndex! -> parallelUsesComputePool -> if {
+                    CallEnvironmentRequest { callerIndex: ownerIndex!, callIndex: regionNodeIndex!, targetModule: regionTryParallelBodyCall.targetModule, targetSymbol: regionTryParallelBodyCall.symbol, hasArgument: true } => regionTryParallelEnvironmentRequest
+                    regionTryParallelEnvironmentRequest -> targetFunctionIndex => regionTryParallelTargetFunction
+                    regionTryParallelTargetFunction -> functionCaptures => regionTryParallelCaptures!
+                    regionTryParallelCaptures! -> len => regionTryParallelCaptureCount
+                    regionTryParallelEnvironmentRequest -> emitCallEnvironmentValues
+                    "  %v$(regionNodeIndex!)_group = alloca %smalllang.compute_group, align 8" -> println
+                    "  %v$(regionNodeIndex!)_callback_slot = getelementptr %smalllang.compute_group, ptr %v$(regionNodeIndex!)_group, i32 0, i32 0" -> println
+                    "  store ptr @smalllang_parallel_callback_$(regionNodeIndex!), ptr %v$(regionNodeIndex!)_callback_slot, align 8" -> println
+                    "  %v$(regionNodeIndex!)_input_slot = getelementptr %smalllang.compute_group, ptr %v$(regionNodeIndex!)_group, i32 0, i32 1" -> println
+                    "  store ptr %v$(regionNodeIndex!)_input, ptr %v$(regionNodeIndex!)_input_slot, align 8" -> println
+                    "  %v$(regionNodeIndex!)_output_slot = getelementptr %smalllang.compute_group, ptr %v$(regionNodeIndex!)_group, i32 0, i32 2" -> println
+                    "  store ptr %v$(regionNodeIndex!)_callback_results, ptr %v$(regionNodeIndex!)_output_slot, align 8" -> println
+                    "  %v$(regionNodeIndex!)_count_slot = getelementptr %smalllang.compute_group, ptr %v$(regionNodeIndex!)_group, i32 0, i32 3" -> println
+                    "  store i64 %v$(regionNodeIndex!)_length, ptr %v$(regionNodeIndex!)_count_slot, align 8" -> println
+                    regionTryParallelCaptureCount > 0 -> if {
+                        "  %v$(regionNodeIndex!)_capture_environment = alloca [$(regionTryParallelCaptureCount) x ptr], align 8" -> println
+                        0 => regionTryParallelCaptureIndex!
+                        regionTryParallelCaptureIndex! < regionTryParallelCaptureCount -> while {
+                            "  %v$(regionNodeIndex!)_capture_address_$(regionTryParallelCaptureIndex!) = getelementptr [$(regionTryParallelCaptureCount) x ptr], ptr %v$(regionNodeIndex!)_capture_environment, i32 0, i32 $(regionTryParallelCaptureIndex!)" -> println
+                            "  store ptr " -> print
+                            CaptureValueRequest { callerIndex: ownerIndex!, callIndex: regionNodeIndex!, bindingIndex: regionTryParallelCaptures![regionTryParallelCaptureIndex!], captureIndex: regionTryParallelCaptureIndex! } -> emitCapturePointer
+                            ", ptr %v$(regionNodeIndex!)_capture_address_$(regionTryParallelCaptureIndex!), align 8" -> println
+                            regionTryParallelCaptureIndex! + 1 => regionTryParallelCaptureIndex!
+                        }
+                    }
+                    "  %v$(regionNodeIndex!)_capture_slot = getelementptr %smalllang.compute_group, ptr %v$(regionNodeIndex!)_group, i32 0, i32 4" -> println
+                    regionTryParallelCaptureCount > 0 -> if {
+                        "  store ptr %v$(regionNodeIndex!)_capture_environment, ptr %v$(regionNodeIndex!)_capture_slot, align 8" -> println
+                    } else {
+                        "  store ptr null, ptr %v$(regionNodeIndex!)_capture_slot, align 8" -> println
+                    }
+                    "  %v$(regionNodeIndex!)_sink_bytes = mul i64 %v$(regionNodeIndex!)_length, 24" -> println
+                    "  %v$(regionNodeIndex!)_sinks = call ptr @malloc(i64 %v$(regionNodeIndex!)_sink_bytes)" -> println
+                    "  call void @llvm.memset.p0.i64(ptr %v$(regionNodeIndex!)_sinks, i8 0, i64 %v$(regionNodeIndex!)_sink_bytes, i1 false)" -> println
+                    "  %v$(regionNodeIndex!)_sinks_slot = getelementptr %smalllang.compute_group, ptr %v$(regionNodeIndex!)_group, i32 0, i32 5" -> println
+                    "  store ptr %v$(regionNodeIndex!)_sinks, ptr %v$(regionNodeIndex!)_sinks_slot, align 8" -> println
+                    6 => regionTryParallelRuntimeFieldIndex!
+                    regionTryParallelRuntimeFieldIndex! <= 10 -> while {
+                        "  %v$(regionNodeIndex!)_runtime_slot_$(regionTryParallelRuntimeFieldIndex!) = getelementptr %smalllang.compute_group, ptr %v$(regionNodeIndex!)_group, i32 0, i32 $(regionTryParallelRuntimeFieldIndex!)" -> println
+                        "  store ptr null, ptr %v$(regionNodeIndex!)_runtime_slot_$(regionTryParallelRuntimeFieldIndex!), align 8" -> println
+                        regionTryParallelRuntimeFieldIndex! + 1 => regionTryParallelRuntimeFieldIndex!
+                    }
+                    "  %v$(regionNodeIndex!)_failure_limit_slot = getelementptr %smalllang.compute_group, ptr %v$(regionNodeIndex!)_group, i32 0, i32 11" -> println
+                    "  store atomic i64 %v$(regionNodeIndex!)_length, ptr %v$(regionNodeIndex!)_failure_limit_slot release, align 8" -> println
+                    "  %v$(regionNodeIndex!)_initialized_slot = getelementptr %smalllang.compute_group, ptr %v$(regionNodeIndex!)_group, i32 0, i32 12" -> println
+                    "  store ptr %v$(regionNodeIndex!)_initialized, ptr %v$(regionNodeIndex!)_initialized_slot, align 8" -> println
+                    "  call void @smalllang_compute_execute(ptr %v$(regionNodeIndex!)_group)" -> println
+                    TryParallelCollectRequest { expressionIndex: regionNodeIndex!, outerTypeId: regionNode.typeId, callbackTypeId: regionTryParallelBodyCall.typeId } -> emitTryParallelCollect
                 }
             }
             (regionNode.kind == 6 and regionNode.opcode == -207 and regionNode.operand0 >= 0 and regionNode.operand1 >= 0) -> if {
@@ -4690,6 +4812,10 @@ emitCore context: move EmitContext -> Unit uses Console {
                             scheduleNode.operand1 -> aggregateValueIndex => schedulePushValue
                             (schedulePushValue >= expressionStart and schedulePushValue < functionEnd! and not expressionScheduled![schedulePushValue - expressionStart]) -> if { false => scheduleReady! }
                         }
+                        (scheduleReady! and scheduleNode.kind == 26 and scheduleNode.operand0 >= 0) -> if {
+                            scheduleNode.operand0 -> aggregateValueIndex => scheduleEnumPayloadValue
+                            (scheduleEnumPayloadValue >= expressionStart and scheduleEnumPayloadValue < functionEnd! and not expressionScheduled![scheduleEnumPayloadValue - expressionStart]) -> if { false => scheduleReady! }
+                        }
                         (scheduleReady! and (scheduleNode.kind == 12 or scheduleNode.kind == 14 or scheduleNode.kind == 16)) -> if {
                             scheduleNode.operand0 => scheduleSibling!
                             scheduleSibling! >= 0 -> while {
@@ -5475,6 +5601,73 @@ emitCore context: move EmitContext -> Unit uses Console {
                         }
                     }
                 }
+                (expression.kind == 6 and expression.opcode == -209 and expression.operand0 >= 0 and expression.operand1 >= 0) -> if {
+                    context.ir[expression.operand0] => tryParallelSource
+                    context.ir[expression.operand1] => tryParallelBodyCall
+                    context.types[tryParallelBodyCall.typeId] => tryParallelCallbackType
+                    "  %v$(expressionIndex!)_input = extractvalue %sl.array.i32 " -> print
+                    (tryParallelSource.kind == 5 and function.operand1 >= 0 and tryParallelSource.symbol == context.ir[function.operand1].symbol) -> if { "%arg" -> print } else { "%v$(expression.operand0)" -> print }
+                    ", 0" -> println
+                    "  %v$(expressionIndex!)_length = extractvalue %sl.array.i32 " -> print
+                    (tryParallelSource.kind == 5 and function.operand1 >= 0 and tryParallelSource.symbol == context.ir[function.operand1].symbol) -> if { "%arg" -> print } else { "%v$(expression.operand0)" -> print }
+                    ", 1" -> println
+                    "  %v$(expressionIndex!)_bytes = mul i64 %v$(expressionIndex!)_length, $(context.typeSizes[tryParallelCallbackType.first])" -> println
+                    "  %v$(expressionIndex!)_data = call ptr @malloc(i64 %v$(expressionIndex!)_bytes)" -> println
+                    "  %v$(expressionIndex!)_callback_bytes = mul i64 %v$(expressionIndex!)_length, $(context.typeSizes[tryParallelBodyCall.typeId])" -> println
+                    "  %v$(expressionIndex!)_callback_results = call ptr @malloc(i64 %v$(expressionIndex!)_callback_bytes)" -> println
+                    "  %v$(expressionIndex!)_initialized = call ptr @malloc(i64 %v$(expressionIndex!)_length)" -> println
+                    "  call void @llvm.memset.p0.i64(ptr %v$(expressionIndex!)_initialized, i8 0, i64 %v$(expressionIndex!)_length, i1 false)" -> println
+                    expressionIndex! -> parallelUsesComputePool -> if {
+                        CallEnvironmentRequest { callerIndex: functionIndex!, callIndex: expressionIndex!, targetModule: tryParallelBodyCall.targetModule, targetSymbol: tryParallelBodyCall.symbol, hasArgument: true } => tryParallelEnvironmentRequest
+                        tryParallelEnvironmentRequest -> targetFunctionIndex => tryParallelTargetFunction
+                        tryParallelTargetFunction -> functionCaptures => tryParallelCaptures!
+                        tryParallelCaptures! -> len => tryParallelCaptureCount
+                        tryParallelEnvironmentRequest -> emitCallEnvironmentValues
+                        "  %v$(expressionIndex!)_group = alloca %smalllang.compute_group, align 8" -> println
+                        "  %v$(expressionIndex!)_callback_slot = getelementptr %smalllang.compute_group, ptr %v$(expressionIndex!)_group, i32 0, i32 0" -> println
+                        "  store ptr @smalllang_parallel_callback_$(expressionIndex!), ptr %v$(expressionIndex!)_callback_slot, align 8" -> println
+                        "  %v$(expressionIndex!)_input_slot = getelementptr %smalllang.compute_group, ptr %v$(expressionIndex!)_group, i32 0, i32 1" -> println
+                        "  store ptr %v$(expressionIndex!)_input, ptr %v$(expressionIndex!)_input_slot, align 8" -> println
+                        "  %v$(expressionIndex!)_output_slot = getelementptr %smalllang.compute_group, ptr %v$(expressionIndex!)_group, i32 0, i32 2" -> println
+                        "  store ptr %v$(expressionIndex!)_callback_results, ptr %v$(expressionIndex!)_output_slot, align 8" -> println
+                        "  %v$(expressionIndex!)_count_slot = getelementptr %smalllang.compute_group, ptr %v$(expressionIndex!)_group, i32 0, i32 3" -> println
+                        "  store i64 %v$(expressionIndex!)_length, ptr %v$(expressionIndex!)_count_slot, align 8" -> println
+                        tryParallelCaptureCount > 0 -> if {
+                            "  %v$(expressionIndex!)_capture_environment = alloca [$(tryParallelCaptureCount) x ptr], align 8" -> println
+                            0 => tryParallelCaptureIndex!
+                            tryParallelCaptureIndex! < tryParallelCaptureCount -> while {
+                                "  %v$(expressionIndex!)_capture_address_$(tryParallelCaptureIndex!) = getelementptr [$(tryParallelCaptureCount) x ptr], ptr %v$(expressionIndex!)_capture_environment, i32 0, i32 $(tryParallelCaptureIndex!)" -> println
+                                "  store ptr " -> print
+                                CaptureValueRequest { callerIndex: functionIndex!, callIndex: expressionIndex!, bindingIndex: tryParallelCaptures![tryParallelCaptureIndex!], captureIndex: tryParallelCaptureIndex! } -> emitCapturePointer
+                                ", ptr %v$(expressionIndex!)_capture_address_$(tryParallelCaptureIndex!), align 8" -> println
+                                tryParallelCaptureIndex! + 1 => tryParallelCaptureIndex!
+                            }
+                        }
+                        "  %v$(expressionIndex!)_capture_slot = getelementptr %smalllang.compute_group, ptr %v$(expressionIndex!)_group, i32 0, i32 4" -> println
+                        tryParallelCaptureCount > 0 -> if {
+                            "  store ptr %v$(expressionIndex!)_capture_environment, ptr %v$(expressionIndex!)_capture_slot, align 8" -> println
+                        } else {
+                            "  store ptr null, ptr %v$(expressionIndex!)_capture_slot, align 8" -> println
+                        }
+                        "  %v$(expressionIndex!)_sink_bytes = mul i64 %v$(expressionIndex!)_length, 24" -> println
+                        "  %v$(expressionIndex!)_sinks = call ptr @malloc(i64 %v$(expressionIndex!)_sink_bytes)" -> println
+                        "  call void @llvm.memset.p0.i64(ptr %v$(expressionIndex!)_sinks, i8 0, i64 %v$(expressionIndex!)_sink_bytes, i1 false)" -> println
+                        "  %v$(expressionIndex!)_sinks_slot = getelementptr %smalllang.compute_group, ptr %v$(expressionIndex!)_group, i32 0, i32 5" -> println
+                        "  store ptr %v$(expressionIndex!)_sinks, ptr %v$(expressionIndex!)_sinks_slot, align 8" -> println
+                        6 => tryParallelRuntimeFieldIndex!
+                        tryParallelRuntimeFieldIndex! <= 10 -> while {
+                            "  %v$(expressionIndex!)_runtime_slot_$(tryParallelRuntimeFieldIndex!) = getelementptr %smalllang.compute_group, ptr %v$(expressionIndex!)_group, i32 0, i32 $(tryParallelRuntimeFieldIndex!)" -> println
+                            "  store ptr null, ptr %v$(expressionIndex!)_runtime_slot_$(tryParallelRuntimeFieldIndex!), align 8" -> println
+                            tryParallelRuntimeFieldIndex! + 1 => tryParallelRuntimeFieldIndex!
+                        }
+                        "  %v$(expressionIndex!)_failure_limit_slot = getelementptr %smalllang.compute_group, ptr %v$(expressionIndex!)_group, i32 0, i32 11" -> println
+                        "  store atomic i64 %v$(expressionIndex!)_length, ptr %v$(expressionIndex!)_failure_limit_slot release, align 8" -> println
+                        "  %v$(expressionIndex!)_initialized_slot = getelementptr %smalllang.compute_group, ptr %v$(expressionIndex!)_group, i32 0, i32 12" -> println
+                        "  store ptr %v$(expressionIndex!)_initialized, ptr %v$(expressionIndex!)_initialized_slot, align 8" -> println
+                        "  call void @smalllang_compute_execute(ptr %v$(expressionIndex!)_group)" -> println
+                        TryParallelCollectRequest { expressionIndex: expressionIndex!, outerTypeId: expression.typeId, callbackTypeId: tryParallelBodyCall.typeId } -> emitTryParallelCollect
+                    }
+                }
                 (expression.kind == 6 and expression.opcode == -207 and expression.operand0 >= 0 and expression.operand1 >= 0) -> if {
                     context.ir[expression.operand0] => parallelSource
                     context.ir[expression.operand1] => parallelBodyCall
@@ -6171,6 +6364,7 @@ emitCore context: move EmitContext -> Unit uses Console {
                     returnChildSearch! + 1 => returnChildSearch!
                 }
             }
+            returnValueIndex! -> aggregateValueIndex => returnValueIndex!
             returnValueIndex! => returnValueIndex
             context.ir[returnValueIndex] => returnOperand
             expressionStart => dropIndex!
@@ -6807,6 +7001,10 @@ emitCore context: move EmitContext -> Unit uses Console {
                             (entryScheduleReady! and entryScheduleNode.kind == 9 and entryScheduleNode.opcode == -204 and entryScheduleNode.operand1 >= 0) -> if {
                                 entryScheduleNode.operand1 -> aggregateValueIndex => entrySchedulePushValue
                                 (entrySchedulePushValue > functionIndex! and entrySchedulePushValue < entryEnd! and not entryScheduled![entrySchedulePushValue - functionIndex! - 1]) -> if { false => entryScheduleReady! }
+                            }
+                            (entryScheduleReady! and entryScheduleNode.kind == 26 and entryScheduleNode.operand0 >= 0) -> if {
+                                entryScheduleNode.operand0 -> aggregateValueIndex => entryScheduleEnumPayloadValue
+                                (entryScheduleEnumPayloadValue > functionIndex! and entryScheduleEnumPayloadValue < entryEnd! and not entryScheduled![entryScheduleEnumPayloadValue - functionIndex! - 1]) -> if { false => entryScheduleReady! }
                             }
                             (entryScheduleReady! and (entryScheduleNode.kind == 12 or entryScheduleNode.kind == 14 or entryScheduleNode.kind == 16)) -> if {
                                 entryScheduleNode.operand0 => entryScheduleSibling!

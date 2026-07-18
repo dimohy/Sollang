@@ -193,14 +193,15 @@ emitted by the native self-host compiler. Memory-output ownership is shared by
 one runtime abstraction: platforms provide only the final writer adapter while
 the common sink owns grow, append, canonical flush, and destruction.
 
-The reference runtime now implements the fallible `tryParallel<T, R, E>` role.
+The reference runtime and scalar self-host LLVM paths now implement the
+fallible `tryParallel<T, R, E>` role.
 It keeps the earliest failing source index, stops new claims at that boundary,
 joins already-started callbacks, flushes only the successful output-sink prefix,
 and moves or destroys every initialized `Result` payload exactly once. The
-self-host semantic and typed-IR layers recognize the same role and enforce its
-capture boundary. The C.6 checkbox remains open because executable self-host
-LLVM lowering still depends on generic enum/`Result` value lowering, and the
-full cross-platform ownership proof has not yet been completed.
+self-host emitter executes the same ABI from entry, ordinary-function, and
+nested-region positions (examples 392-394). The C.6 checkbox remains open
+because nested owned callback Result cleanup and the full cross-platform
+ownership proof have not yet been completed.
 
 - [POSIX `pthread_create`](https://pubs.opengroup.org/onlinepubs/000095399/functions/pthread_create.html)
 - [POSIX `pthread_join`](https://pubs.opengroup.org/onlinepubs/009695399/functions/pthread_join.html)

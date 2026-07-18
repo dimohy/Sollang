@@ -987,10 +987,12 @@ The self-host generic-enum execution boundary now preserves qualified
 `Option`/`Result` constructors into typed IR and emits the reference-compatible
 `{ i32 tag, [N x i64] payload }` LLVM ABI. Example 390 assembles, links, and
 executes construction plus contextual `when` matching for both `Ok(Int)` and
-`Err(Text)`, including typed payload bindings. Tag-directed owned-payload
-destruction and self-host `tryParallel` runtime
-lowering remain tracked work; this ABI checkpoint therefore does not advance
-the 48.5/60 canonical gate count or the 26/28 parallel checklist.
+`Err(Text)`, including typed payload bindings. Tag-directed outer Result
+destruction and scalar self-host `tryParallel` lowering now execute in entry,
+function, and nested-region positions through the native compute pool. Nested
+owned callback-payload cleanup and Linux full-suite parity remain tracked work;
+this checkpoint therefore does not advance the 48.5/60 canonical gate count or
+the 26/28 parallel checklist.
 
 ## Immediate Implementation Order
 
