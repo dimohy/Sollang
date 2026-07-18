@@ -1271,6 +1271,72 @@ emitCore context: move EmitContext -> Unit uses Console {
     sourceStart node: typedIr.TypedIrNode -> UIntSize {
         context.nodes[context.ranges[node.sourceModule].astStart + node.astNode].start
     }
+    moveRegionFor nodeIndex: Int -> Int {
+        context.ir[nodeIndex].parent => region!
+        (region! >= 0 and context.ir[region!].kind != 1 and context.ir[region!].kind != 11 and context.ir[region!].kind != 19 and context.ir[region!].kind != 20) -> while {
+            context.ir[region!].parent => region!
+        }
+        region!
+    }
+    memberMoveMatchesAssignment moveIndex: Int, assignmentIndex: Int -> Bool {
+        context.moves[moveIndex] => candidateMove
+        context.ir[assignmentIndex] => candidateAssignment
+        false => matches!
+        (candidateMove.memberIr >= 0 and candidateAssignment.kind == 25 and candidateAssignment.sourceModule == candidateMove.sourceModule and candidateAssignment.symbol == candidateMove.symbol) -> if {
+            context.ir[candidateMove.memberIr] => candidateMember
+            candidateMember -> sourceNode => candidateMemberAst
+            candidateAssignment -> sourceNode => candidateAssignmentAst
+            -1 => movedFieldToken!
+            0 => movedIdentifierCount!
+            candidateMemberAst.firstToken => movedTokenIndex!
+            movedTokenIndex! < candidateMemberAst.firstToken + candidateMemberAst.tokenCount -> while {
+                context.tokens[context.ranges[candidateMember.sourceModule].tokenStart + movedTokenIndex!].kind == grammar.tokenIdIdentifier -> if {
+                    movedTokenIndex! => movedFieldToken!
+                    movedIdentifierCount! + 1 => movedIdentifierCount!
+                }
+                movedTokenIndex! + 1 => movedTokenIndex!
+            }
+            (movedIdentifierCount! == 2 and movedFieldToken! >= 0 and candidateAssignmentAst.secondaryToken >= 0) -> if {
+                context.tokens[context.ranges[candidateMember.sourceModule].tokenStart + movedFieldToken!] => movedField
+                context.tokens[context.ranges[candidateAssignment.sourceModule].tokenStart + candidateAssignmentAst.secondaryToken] => assignedField
+                movedField.span.length == assignedField.span.length => matches!
+                UIntSize(0) => fieldByte!
+                (matches! and fieldByte! < movedField.span.length) -> while {
+                    (context.sources[candidateMember.sourceModule] -> byte(movedField.span.start + fieldByte!)) != (context.sources[candidateAssignment.sourceModule] -> byte(assignedField.span.start + fieldByte!)) -> if { false => matches! }
+                    fieldByte! + UIntSize(1) => fieldByte!
+                }
+            }
+        }
+        matches!
+    }
+    partialMoveActiveBefore moveIndex: Int, regionIndex: Int, beforeAst: Int -> Bool {
+        context.moves[moveIndex] => candidateMove
+        false => active!
+        beforeAst >= 0 => boundedEdge
+        candidateMove.memberIr >= 0 -> if {
+            candidateMove.regionIr == regionIndex => active!
+            context.ir[candidateMove.siteIr] => moveSite
+            UIntSize(0) => edgeStart!
+            beforeAst >= 0 -> if { context.nodes[context.ranges[moveSite.sourceModule].astStart + beforeAst].start => edgeStart! }
+            (active! and boundedEdge and (moveSite -> sourceStart) >= edgeStart!) -> if { false => active! }
+            0 => assignmentSearch!
+            assignmentSearch! < (context.ir -> len) -> while {
+                active! -> if {
+                    context.ir[assignmentSearch!] => reinitialization
+                    assignmentSearch! -> moveRegionFor => reinitializationRegion
+                    moveSite -> sourceStart => moveSiteStart
+                    reinitialization -> sourceStart => reinitializationStart
+                    true => reinitializationBeforeEdge!
+                    boundedEdge -> if { reinitializationStart < edgeStart! => reinitializationBeforeEdge! }
+                    (reinitialization.kind == 25 and reinitializationRegion == candidateMove.regionIr and moveSiteStart < reinitializationStart and reinitializationBeforeEdge!) -> if {
+                        moveIndex -> memberMoveMatchesAssignment(assignmentSearch!) -> if { false => active! }
+                    }
+                }
+                assignmentSearch! + 1 => assignmentSearch!
+            }
+        }
+        active!
+    }
     sourceInterpolations node: typedIr.TypedIrNode -> [interpolation.InterpolationNode; ~] {
         context.interpolationRanges[node.sourceModule] => interpolationRange
         [interpolation.InterpolationNode; ~] => sourceNodes!
@@ -1307,7 +1373,7 @@ emitCore context: move EmitContext -> Unit uses Console {
             0 => dropGlueMoveIndex!
             (dropGlueMoveIndex! < (context.moves -> len) and not dropTaskMoved!) -> while {
                 context.moves[dropGlueMoveIndex!] => dropGlueMove
-                (dropGlueMove.memberIr >= 0 and dropGlueMove.sourceModule == dropGlueBinding.sourceModule and dropGlueMove.symbol == dropGlueBinding.symbol and dropGlueMove.regionIr == dropTask.regionIndex) -> if {
+                (dropGlueMove.memberIr >= 0 and dropGlueMove.sourceModule == dropGlueBinding.sourceModule and dropGlueMove.symbol == dropGlueBinding.symbol and (dropGlueMoveIndex! -> partialMoveActiveBefore(dropTask.regionIndex, dropTask.beforeAst))) -> if {
                     context.ir[dropGlueMove.siteIr] => dropGlueSite
                     true => dropGlueMoveBeforeEdge!
                     dropTask.beforeAst >= 0 -> if {
@@ -2910,8 +2976,23 @@ emitCore context: move EmitContext -> Unit uses Console {
                     assignmentTargetFieldTypeId! -> writeSemanticTypeId
                     "" -> println
                 }
+                false => assignmentFieldWasMoved!
+                0 => assignmentMoveSearch!
+                assignmentMoveSearch! < (context.moves -> len) -> while {
+                    context.moves[assignmentMoveSearch!] => assignmentMove
+                    (assignmentMove.memberIr >= 0 and assignmentMove.sourceModule == assignment.sourceModule and assignmentMove.symbol == assignment.symbol and (assignmentMoveSearch! -> memberMoveMatchesAssignment(request.nodeIndex)) and (assignmentMoveSearch! -> partialMoveActiveBefore((request.nodeIndex -> moveRegionFor), assignment.astNode))) -> if {
+                        true => assignmentFieldWasMoved!
+                    }
+                    assignmentMoveSearch! + 1 => assignmentMoveSearch!
+                }
                 "  %member_assign$(request.nodeIndex)_current = load %sollang.struct.m$(assignmentOwnerSource!)_s$(assignmentBinding.typeSymbol), ptr %slot$(assignmentRoot), align " -> print
                 assignmentBinding -> storageAlign -> writeDecimalLine
+                (not assignmentFieldWasMoved! and assignmentTargetFieldTypeId! >= 0 and (assignmentTargetFieldTypeId! -> semanticTypeOwns)) -> if {
+                    "  %member_assign$(request.nodeIndex)_previous = extractvalue %sollang.struct.m$(assignmentOwnerSource!)_s$(assignmentBinding.typeSymbol) %member_assign$(request.nodeIndex)_current, $(assignmentFieldOrdinal!)" -> println
+                    "  call void @sollang_drop_t$(assignmentTargetFieldTypeId!)(" -> print
+                    assignmentTargetFieldTypeId! -> writeSemanticTypeId
+                    " %member_assign$(request.nodeIndex)_previous)" -> println
+                }
                 "  %member_assign$(request.nodeIndex)_updated = insertvalue %sollang.struct.m$(assignmentOwnerSource!)_s$(assignmentBinding.typeSymbol) %member_assign$(request.nodeIndex)_current, " -> print
                 assignmentTargetFieldTypeId! >= 0 -> if { assignmentTargetFieldTypeId! -> writeSemanticTypeId } else { assignmentValue -> writeIrType }
                 " " -> print
@@ -3425,7 +3506,7 @@ emitCore context: move EmitContext -> Unit uses Console {
                 0 => ownedMoveIndex!
                 (ownedMoveIndex! < (context.moves -> len) and not ownedDropMoved!) -> while {
                     context.moves[ownedMoveIndex!] => ownedMove
-                    (ownedMove.memberIr >= 0 and ownedMove.sourceModule == ownedDropCandidate.sourceModule and ownedMove.symbol == ownedDropCandidate.symbol) -> if { true => ownedDropHasPartialMoves! }
+                    (ownedMove.memberIr >= 0 and ownedMove.sourceModule == ownedDropCandidate.sourceModule and ownedMove.symbol == ownedDropCandidate.symbol and (ownedMoveIndex! -> partialMoveActiveBefore(request.regionIndex, request.beforeAst))) -> if { true => ownedDropHasPartialMoves! }
                     (ownedMove.memberIr < 0 and ownedMove.sourceModule == ownedDropCandidate.sourceModule and ownedMove.symbol == ownedDropCandidate.symbol and ownedMove.regionIr == request.regionIndex) -> if {
                         context.ir[ownedMove.siteIr] => ownedMoveCall
                         true => ownedMoveBeforeEdge!
@@ -7084,7 +7165,7 @@ emitCore context: move EmitContext -> Unit uses Console {
                     0 => dropMoveIndex!
                     (dropMoveIndex! < (context.moves -> len) and not dropCandidateMoved!) -> while {
                         context.moves[dropMoveIndex!] => dropMove
-                        (dropMove.memberIr >= 0 and dropMove.sourceModule == dropCandidate.sourceModule and dropMove.symbol == dropCandidate.symbol) -> if { true => dropCandidateHasPartialMoves! }
+                        (dropMove.memberIr >= 0 and dropMove.sourceModule == dropCandidate.sourceModule and dropMove.symbol == dropCandidate.symbol and (dropMoveIndex! -> partialMoveActiveBefore(function.operand0, -1))) -> if { true => dropCandidateHasPartialMoves! }
                         (dropMove.memberIr < 0 and dropMove.sourceModule == dropCandidate.sourceModule and dropMove.symbol == dropCandidate.symbol and dropMove.regionIr == function.operand0) -> if {
                             context.ir[dropMove.siteIr] => dropMoveCall
                             (dropMoveCall -> sourceStart) > (dropCandidate -> sourceStart) -> if { true => dropCandidateMoved! }
@@ -7209,7 +7290,7 @@ emitCore context: move EmitContext -> Unit uses Console {
                 0 => ownedParameterMoveIndex!
                 ownedParameterMoveIndex! < (context.moves -> len) -> while {
                     context.moves[ownedParameterMoveIndex!] => ownedParameterMove
-                    (ownedParameterMove.memberIr >= 0 and ownedParameterMove.sourceModule == ownedParameter.sourceModule and ownedParameterMove.symbol == ownedParameter.symbol) -> if { true => ownedParameterHasPartialMoves! }
+                    (ownedParameterMove.memberIr >= 0 and ownedParameterMove.sourceModule == ownedParameter.sourceModule and ownedParameterMove.symbol == ownedParameter.symbol and (ownedParameterMoveIndex! -> partialMoveActiveBefore(function.operand0, -1))) -> if { true => ownedParameterHasPartialMoves! }
                     (ownedParameterMove.memberIr < 0 and ownedParameterMove.sourceModule == ownedParameter.sourceModule and ownedParameterMove.symbol == ownedParameter.symbol and ownedParameterMove.regionIr == function.operand0) -> if { true => ownedParameterMoved! }
                     ownedParameterMoveIndex! + 1 => ownedParameterMoveIndex!
                 }

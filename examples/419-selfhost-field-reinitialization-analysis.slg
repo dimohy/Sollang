@@ -1,0 +1,24 @@
+import sollang.compiler.semantic.ownership_check as ownershipCheck
+
+main {
+    [
+        """
+        struct Holder {
+            values: [Int; ~]
+        }
+
+        repair: -> UIntSize {
+            Holder { values: [1, 2, ~] } => holder!
+            holder!.values => moved!
+            [3, 4, 5, ~] => replacement!
+            replacement! => holder!.values
+            holder!.values -> len
+        }
+
+        main { }
+        """,
+        ~
+    ] => sources!
+    sources! -> ownershipCheck.analyze => errors!
+    "reinitialization errors = $(errors! -> len)" -> println
+}

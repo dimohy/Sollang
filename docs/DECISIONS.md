@@ -6547,3 +6547,39 @@ Research basis:
 
 - [Swift Package Manager targets](https://docs.swift.org/swiftpm/documentation/packagedescription/target/)
 - [Rust module files](https://doc.rust-lang.org/reference/items/modules.html)
+
+## D201 - Static Move-Path Reinitialization and Safe Joins
+
+Status: implemented and Stage2 verified
+Date: 2026-07-19
+
+A mutable struct field assignment now distinguishes replacement from
+reinitialization. Replacing an initialized owned field drops its previous value
+before the store. Assigning the exact direct field after that path was moved
+does not read or drop the uninitialized slot; it restores the path's drop
+obligation. The owned replacement binding is itself consumed by the assignment,
+so exactly one owner remains.
+
+The self-host ownership pass permits later whole-owner and exact-field use only
+after the repair. Structured `if` and `while` regions use a deliberately static
+join rule: every partial move must be repaired before leaving that region.
+Otherwise diagnostic 20 rejects the join. This is stricter than a runtime drop
+flag scheme, but it keeps cleanup deterministic and proves that every joined
+path has the same initialized move-path set.
+
+Examples 417-420 cover native LLVM replacement/reinitialization cleanup,
+post-repair use, an unrepaired branch diagnostic, and the terminal branch case
+where an explicit return needs no join repair. This closes the
+structured early-exit roadmap gate and moves the formal roadmap to 46 complete,
+9 partial, and 5 missing: **50.5/60 (84.2%)**.
+
+The Release build has zero warnings and errors and the complete Windows suite
+passes 557/557. Native self-host regeneration passes Stage2 6/6 at 8,919,060
+LLVM bytes with all three
+differential hashes preserved. This is checkpoint 6/10 after the periodic
+Stage3 baseline, so Stage3 is intentionally not regenerated.
+
+Research basis:
+
+- [rustc move paths](https://rustc-dev-guide.rust-lang.org/borrow-check/moves-and-initialization/move-paths.html)
+- [Rust assignment and destruction](https://doc.rust-lang.org/reference/destructors.html)

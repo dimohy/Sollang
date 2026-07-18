@@ -115,15 +115,15 @@ not lines of code.
 
 | Area | Gates | Complete | Partial | Missing | Score |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| Core syntax and control flow | 10 | 9 | 1 | 0 | 9.5 |
+| Core syntax and control flow | 10 | 10 | 0 | 0 | 10.0 |
 | Types, traits, and generics | 12 | 11 | 0 | 1 | 11.0 |
 | Ownership and storage | 10 | 7 | 2 | 1 | 8.0 |
 | Modules, visibility, and builds | 8 | 6 | 1 | 1 | 6.5 |
 | Compiler-construction primitives | 12 | 10 | 2 | 0 | 11.0 |
 | Standard library and tooling | 8 | 2 | 4 | 2 | 4.0 |
-| **Total** | **60** | **45** | **10** | **5** | **50.0 / 60** |
+| **Total** | **60** | **46** | **9** | **5** | **50.5 / 60** |
 
-Current count-based progress: **83.3% (50 of 60 equivalent gates)**.
+Current count-based progress: **84.2% (50.5 of 60 equivalent gates)**.
 
 The frontend parallel-compilation subproject is **28/28 checks (100%)**. Its
 source-local product boundary, typed callback-result role slice, nested-call
@@ -134,7 +134,7 @@ reject mutable or structurally non-sendable captures. The submitting parent now
 helps drain its task group before the structured join. Exact cancellation and
 partial-result destruction plus full Windows/Linux suite parity are proven.
 This completed feature-local subproject does not promote a roadmap gate.
-There are **10 equivalent gates remaining**. Because the remaining compiler
+There are **9.5 equivalent gates remaining**. Because the remaining compiler
 primitives are harder than early syntax gates, this is not an elapsed-time
 estimate.
 
@@ -236,13 +236,14 @@ milestone without changing the broader 60-gate language-capability score.
 
 ## Gate Inventory
 
-### Core syntax and control flow — 9.5 / 10
+### Core syntax and control flow — 10 / 10
 
-- Complete (9): functions including fluent and direct multi-parameter calls,
+- Complete (10): functions including fluent and direct multi-parameter calls,
   local functions, expressions, bindings, arithmetic and Boolean logic,
-  `if`/`when`, ranges/loops, block-function calls.
-- Partial (1): structured early exit with `return`/`break`/`continue` across
-  ownership scopes.
+  `if`/`when`, ranges/loops, block-function calls, and structured early exit
+  with `return`/`break`/`continue` across ownership scopes. Moved direct fields
+  may be reinitialized; a branch or loop must repair every partial move before
+  it rejoins its parent region.
 
 ### Types, traits, and generics — 11.0 / 12
 
@@ -629,8 +630,10 @@ struct fields into owned arrays and dictionaries on normal, moved-parameter,
 and early-return edges. Static field-level partial moves now preserve sibling
 drop obligations and reject overlapping reuse. Local functions emitted as
 independent LLVM functions now accept explicit early returns and run the same
-reverse-order ownership cleanup as module functions. Field reinitialization and
-branch joins remain before the structured early-exit gate is complete.
+reverse-order ownership cleanup as module functions. Direct moved fields can
+now be reinitialized, and branch/loop regions may rejoin only after repairing
+their partial moves, completing the structured early-exit gate without runtime
+drop flags.
 
 Guard-flow loop control is also cumulative: `condition -> if continue` and
 `condition -> if break` are compact Bool-guarded transfers. Both the reference
@@ -644,8 +647,8 @@ type, transfers a returned owner, and drops every other active owner before
 the LLVM slice executes an early scalar return from an `if` region and frees a
 function-local dynamic array on both the early and fallthrough paths. Static
 partial-move masks are now emitted. Local-function returns share that cleanup
-path; moved-path reinitialization and joins keep the structured early-exit gate
-partial.
+path. Reinitialization clears the exact direct-field mask before later use and
+cleanup; branch and loop joins reject any unrepaired partial-move state.
 
 Typed IR now represents immutable local bindings explicitly and connects each
 name use by stable symbol id. LLVM materializes scalar literal bindings as SSA
@@ -667,8 +670,8 @@ returning consumer releases a `move` parameter exactly once. Branch-sensitive
 liveness now covers region-local Int arrays and dictionaries on normal and
 loop-exit edges. Whole-binding consuming calls now suppress only later cleanup
 within the same structured region. Nested static field moves now retain sibling
-drop obligations. Field reinitialization and nested owned aggregate member
-mutation remain.
+drop obligations. Direct-field reinitialization is complete; nested owned
+aggregate member mutation remains outside the current assignment surface.
 
 The reference frontend now supports context-inferred primary input and return
 types for local functions and for non-public top-level helpers consumed by one
@@ -794,7 +797,8 @@ nested member access, and recursive backing-store drop. Typed-IR move events now
 retain complete static member paths. LLVM skips only the exact moved leaf while
 recursively dropping sibling obligations, and a separate ownership diagnostic
 rejects later whole-owner or overlapping-path use while allowing diverging
-siblings. Field reinitialization and branch-sensitive moved-path joins remain.
+siblings. Direct-field assignment repairs the matching move path, while
+branch/loop joins reject unrepaired partial moves.
 Target-specific runtime declarations and ABI lowering beyond the
 currently supported shared IR subset also remain. Text `print`/`println` are
 the first completed runtime effect slice: flow calls survive semantic lowering

@@ -24,12 +24,67 @@ public struct OwnershipDiagnostic {
 # Code 17 identifies whole-owner or overlapping-field use after a partial move.
 # Code 18 identifies a mutable binding captured by a parallel callback.
 # Code 19 identifies a structurally non-sendable parallel callback capture.
+# Code 20 identifies a branch or loop that exits with a partially moved path.
 public analyze sources: [Text; ~] -> [OwnershipDiagnostic; ~] {
     sources -> semanticContext.prepare => prepared
     prepared -> analyzeContext
 }
 
 public analyzeContext prepared: semanticContext.SemanticSnapshot -> [OwnershipDiagnostic; ~] {
+    moveRegionFor nodeIndex: Int -> Int {
+        typed![nodeIndex].parent => region!
+        (region! >= 0 and typed![region!].kind != 1 and typed![region!].kind != 11 and typed![region!].kind != 19 and typed![region!].kind != 20) -> while {
+            typed![region!].parent => region!
+        }
+        region!
+    }
+    memberMoveMatchesAssignment moveIndex: Int, assignmentIndex: Int -> Bool {
+        moves![moveIndex] => candidateMove
+        typed![assignmentIndex] => candidateAssignment
+        false => matches!
+        (candidateMove.memberIr >= 0 and candidateAssignment.kind == 25 and candidateAssignment.sourceModule == candidateMove.sourceModule and candidateAssignment.symbol == candidateMove.symbol) -> if {
+            typed![candidateMove.memberIr] => candidateMember
+            prepared.package.ranges[candidateMember.sourceModule] => candidateRange
+            prepared.package.nodes[candidateRange.astStart + candidateMember.astNode] => candidateMemberAst
+            prepared.package.nodes[candidateRange.astStart + candidateAssignment.astNode] => candidateAssignmentAst
+            -1 => movedFieldToken!
+            0 => movedIdentifierCount!
+            candidateMemberAst.firstToken => movedTokenIndex!
+            movedTokenIndex! < candidateMemberAst.firstToken + candidateMemberAst.tokenCount -> while {
+                prepared.package.tokens[candidateRange.tokenStart + movedTokenIndex!].kind == grammar.tokenIdIdentifier -> if {
+                    movedTokenIndex! => movedFieldToken!
+                    movedIdentifierCount! + 1 => movedIdentifierCount!
+                }
+                movedTokenIndex! + 1 => movedTokenIndex!
+            }
+            (movedIdentifierCount! == 2 and movedFieldToken! >= 0 and candidateAssignmentAst.secondaryToken >= 0) -> if {
+                prepared.package.tokens[candidateRange.tokenStart + movedFieldToken!] => movedField
+                prepared.package.tokens[candidateRange.tokenStart + candidateAssignmentAst.secondaryToken] => assignedField
+                movedField.span.length == assignedField.span.length => matches!
+                UIntSize(0) => fieldByte!
+                (matches! and fieldByte! < movedField.span.length) -> while {
+                    (prepared.package.sources[candidateMember.sourceModule] -> byte(movedField.span.start + fieldByte!)) != (prepared.package.sources[candidateAssignment.sourceModule] -> byte(assignedField.span.start + fieldByte!)) -> if { false => matches! }
+                    fieldByte! + UIntSize(1) => fieldByte!
+                }
+            }
+        }
+        matches!
+    }
+    moveReinitializedBefore moveIndex: Int, beforeStart: UIntSize -> Bool {
+        moves![moveIndex] => candidateMove
+        prepared.package.ranges[candidateMove.sourceModule] => candidateRange
+        prepared.package.nodes[candidateRange.astStart + typed![candidateMove.siteIr].astNode].start => moveStart
+        false => repaired!
+        0 => assignmentSearch!
+        assignmentSearch! < (typed! -> len) -> while {
+            typed![assignmentSearch!] => reinitialization
+            (reinitialization.kind == 25 and (assignmentSearch! -> moveRegionFor) == candidateMove.regionIr and moveStart < prepared.package.nodes[candidateRange.astStart + reinitialization.astNode].start and prepared.package.nodes[candidateRange.astStart + reinitialization.astNode].start < beforeStart) -> if {
+                moveIndex -> memberMoveMatchesAssignment(assignmentSearch!) -> if { true => repaired! }
+            }
+            assignmentSearch! + 1 => assignmentSearch!
+        }
+        repaired!
+    }
     prepared -> typedIr.lowerContext => typed!
     typed! -> typedIr.movesFrom => moves!
     [OwnershipDiagnostic; ~] => diagnostics!
@@ -106,6 +161,7 @@ public analyzeContext prepared: semanticContext.SemanticSnapshot -> [OwnershipDi
                         }
                         sharedPath! => invalidMovedUse!
                     }
+                    (invalidMovedUse! and (partialMoveIndex! -> moveReinitializedBefore(prepared.package.nodes[sourceRange.astStart + movedUse.astNode].start))) -> if { false => invalidMovedUse! }
                     invalidMovedUse! -> if {
                         false => duplicateMoveDiagnostic!
                         0 => moveDiagnosticIndex!
@@ -132,6 +188,36 @@ public analyzeContext prepared: semanticContext.SemanticSnapshot -> [OwnershipDi
                     }
                 }
                 movedUseIndex! + 1 => movedUseIndex!
+            }
+        }
+        (partialMove.memberIr >= 0 and partialMove.regionIr >= 0 and (typed![partialMove.regionIr].kind == 19 or typed![partialMove.regionIr].kind == 20)) -> if {
+            prepared.package.ranges[partialMove.sourceModule] => branchRange
+            prepared.package.nodes[branchRange.astStart + typed![partialMove.regionIr].astNode] => branchAst
+            branchAst.start + branchAst.length => branchEnd
+            prepared.package.nodes[branchRange.astStart + typed![partialMove.siteIr].astNode].start => branchMoveStart
+            false => branchReturns!
+            0 => branchReturnSearch!
+            branchReturnSearch! < (typed! -> len) -> while {
+                typed![branchReturnSearch!] => branchReturn
+                (branchReturn.kind == 23 and branchReturn.sourceModule == partialMove.sourceModule and (branchReturnSearch! -> moveRegionFor) == partialMove.regionIr and prepared.package.nodes[branchRange.astStart + branchReturn.astNode].start > branchMoveStart) -> if {
+                    true => branchReturns!
+                }
+                branchReturnSearch! + 1 => branchReturnSearch!
+            }
+            (not branchReturns! and not (partialMoveIndex! -> moveReinitializedBefore(branchEnd))) -> if {
+                diagnostics! -> push(OwnershipDiagnostic {
+                    code: 20
+                    sourceModule: partialMove.sourceModule
+                    functionSymbol: -1
+                    expectedOrigin: -1
+                    expectedModule: -1
+                    expectedSymbol: -1
+                    actualOrigin: -1
+                    actualModule: -1
+                    actualSymbol: -1
+                    actualBuiltin: -1
+                    span: syntax.SourceSpan { fileId: partialMove.sourceModule, start: prepared.package.nodes[branchRange.astStart + typed![partialMove.siteIr].astNode].start, length: prepared.package.nodes[branchRange.astStart + typed![partialMove.siteIr].astNode].length }
+                })
             }
         }
         partialMoveIndex! + 1 => partialMoveIndex!

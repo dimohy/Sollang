@@ -540,7 +540,9 @@ member path of an owned extraction. LLVM releases that path's drop obligation,
 preserves and recursively drops sibling fields, and transfers the extracted
 field to its new owner. A separate ownership pass rejects later use of the whole
 owner or an overlapping ancestor/descendant path while allowing diverging
-siblings. Field reinitialization and branch-sensitive moved-path joins remain.
+siblings. Direct-field assignment now reinitializes an exactly moved path.
+Branch and loop regions must repair partial moves before their parent join, so
+the static cleanup mask never requires a path-dependent runtime drop flag.
 
 Nominal structs now have deterministic `%sollang.struct.m<module>_s<symbol>` LLVM
 types. Typed IR marks struct literals and links an arbitrary number of ordered
