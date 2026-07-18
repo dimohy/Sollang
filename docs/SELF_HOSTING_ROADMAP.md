@@ -995,6 +995,18 @@ owned callback-payload cleanup with Linux AddressSanitizer leak detection. The
 parallel checklist is now 27/28 (96.4%); Linux full-suite parity remains. This
 feature-local checkpoint does not advance the 48.5/60 canonical gate count.
 
+The following complete Windows regression found and fixed two stabilization
+issues before accepting updated LLVM fixtures. Self-host aggregate value lookup
+now distinguishes transparent opcode `-1` wrappers from real kind-9 slice
+operations, and two-operand calls choose the later resolved IR value. The
+Windows and Linux compute runtimes reserve the submitting parent's first work
+item before releasing workers, making the parent-help contract deterministic;
+the Windows executable reported `parent-helped=true` in 30/30 repeated runs.
+The read-only Windows suite passes 523/523, the Release build has zero warnings
+and errors, and the focused Linux verifier passes 6/6. Linux full-suite parity
+is still unproven, so the parallel checklist remains 27/28 (96.4%) and the
+canonical roadmap remains 48.5/60 (80.8%).
+
 ## Immediate Implementation Order
 
 1. Multi-file compilation (implemented by example 52).

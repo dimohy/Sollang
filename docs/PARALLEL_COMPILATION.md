@@ -182,6 +182,9 @@ LLVM comment. Example 381 limits the pool to one native worker and observes a
 peak of two active callbacks, proving that the submitting parent claims work
 instead of idling. The parent exhausts the same atomic index queue, waits for
 all native workers, and only then flushes ordered sinks and destroys the group.
+The submitter reserves source index zero before waking workers, so this
+observable parent-help property remains deterministic even for short queues;
+30 repeated Windows executions all reported `parent-helped=true`.
 This follows the helping-wait pattern documented by Java `ForkJoinPool` and
 oneTBB task groups.
 
@@ -231,3 +234,11 @@ reaches an exact 7,247,585-byte stage-2/stage-3 fixed point with SHA-256
 stage 3 assembles with `llvm-as` and took 35.19 seconds to emit. This evidence
 predates executable self-host owned-`Result` cleanup. That cleanup is now
 covered by example 396; a Linux full-suite run is still pending.
+
+The post-owned-cleanup Windows gate now passes all 523 examples in a read-only
+run with a zero-warning, zero-error Release build. That run also repaired a
+self-host aggregate-flow defect exposed by slice and nested-region output: only
+opcode `-1` kind-9 nodes are transparent wrappers, and two-operand calls select
+the later resolved IR value. The six-step Linux verifier remains green, but it
+is deliberately a focused platform gate rather than evidence for the complete
+523-case Linux suite. The final checklist item therefore stays open.

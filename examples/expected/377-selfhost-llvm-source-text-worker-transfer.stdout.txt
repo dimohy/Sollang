@@ -36,7 +36,7 @@ append:
   store i64 %required, ptr %length_slot, align 8
   ret void
 }
-define internal void @smalllang_memory_output_sink_array_flush(ptr %sinks, i64 %count, ptr %context, ptr %writer) {
+define internal void @smalllang_memory_output_sink_array_flush_prefix(ptr %sinks, i64 %count, i64 %prefix, ptr %context, ptr %writer) {
 entry:
   br label %flush_loop
 flush_loop:
@@ -50,9 +50,13 @@ flush_one:
   %data = load ptr, ptr %data_slot, align 8
   %length = load i64, ptr %length_slot, align 8
   %has_data = icmp ne ptr %data, null
-  br i1 %has_data, label %write, label %flush_one_done
+  %in_prefix = icmp ult i64 %index, %prefix
+  %should_write = and i1 %has_data, %in_prefix
+  br i1 %should_write, label %write, label %dispose_one
 write:
   call void %writer(ptr %context, ptr %data, i64 %length)
+  br label %dispose_one
+dispose_one:
   call void @free(ptr %data)
   br label %flush_one_done
 flush_one_done:
@@ -60,6 +64,11 @@ flush_one_done:
   br label %flush_loop
 finish:
   call void @free(ptr %sinks)
+  ret void
+}
+define internal void @smalllang_memory_output_sink_array_flush(ptr %sinks, i64 %count, ptr %context, ptr %writer) {
+entry:
+  call void @smalllang_memory_output_sink_array_flush_prefix(ptr %sinks, i64 %count, i64 %count, ptr %context, ptr %writer)
   ret void
 }
 define internal void @smalllang_memory_output_sink_array_dispose(ptr %sinks, i64 %count) {
@@ -163,7 +172,7 @@ write_newline:
 done:
   ret void
 }
-%smalllang.compute_group = type { ptr, ptr, ptr, i64, ptr, ptr }
+%smalllang.compute_group = type { ptr, ptr, ptr, i64, ptr, ptr, ptr, ptr, ptr, ptr, ptr, i64, ptr }
 @smalllang_compute_semaphore = internal global ptr null
 @smalllang_compute_completion_event = internal global ptr null
 @smalllang_compute_worker_count = internal global i32 0
@@ -200,7 +209,11 @@ take:
   br label %claim
 claim:
   %index = atomicrmw add ptr @smalllang_compute_next, i64 1 acq_rel
-  %has_work = icmp ult i64 %index, %count
+  %within_count = icmp ult i64 %index, %count
+  %failure_limit_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 11
+  %failure_limit = load atomic i64, ptr %failure_limit_slot acquire, align 8
+  %before_failure = icmp ult i64 %index, %failure_limit
+  %has_work = and i1 %within_count, %before_failure
   br i1 %has_work, label %work, label %complete
 work:
   %callback_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 0
@@ -329,14 +342,20 @@ publish:
   store atomic ptr %group, ptr @smalllang_compute_group_current release, align 8
   %event = load ptr, ptr @smalllang_compute_completion_event, align 8
   %reset = call i32 @ResetEvent(ptr %event)
+  %help_first_index = atomicrmw add ptr @smalllang_compute_next, i64 1 acq_rel
   %semaphore = load ptr, ptr @smalllang_compute_semaphore, align 8
   %released = call i32 @ReleaseSemaphore(ptr %semaphore, i32 %workers, ptr null)
-  br label %help_claim
+  br label %help_work
 help_claim:
-  %help_index = atomicrmw add ptr @smalllang_compute_next, i64 1 acq_rel
-  %help_has_work = icmp ult i64 %help_index, %count
+  %help_claimed_index = atomicrmw add ptr @smalllang_compute_next, i64 1 acq_rel
+  %help_within_count = icmp ult i64 %help_claimed_index, %count
+  %help_failure_limit_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 11
+  %help_failure_limit = load atomic i64, ptr %help_failure_limit_slot acquire, align 8
+  %help_before_failure = icmp ult i64 %help_claimed_index, %help_failure_limit
+  %help_has_work = and i1 %help_within_count, %help_before_failure
   br i1 %help_has_work, label %help_work, label %help_wait
 help_work:
+  %help_index = phi i64 [ %help_first_index, %publish ], [ %help_claimed_index, %help_claim ]
   %help_callback_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 0
   %help_callback = load ptr, ptr %help_callback_slot, align 8
   %help_sinks_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 5
@@ -363,7 +382,9 @@ departure_done:
   store atomic i32 0, ptr @smalllang_compute_barrier_departed release, align 4
   %sinks_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 5
   %sinks = load ptr, ptr %sinks_slot, align 8
-  call void @smalllang_memory_output_sink_array_flush(ptr %sinks, i64 %count, ptr %group, ptr @smalllang_memory_output_sink_write)
+  %flush_limit_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 11
+  %flush_limit = load atomic i64, ptr %flush_limit_slot acquire, align 8
+  call void @smalllang_memory_output_sink_array_flush_prefix(ptr %sinks, i64 %count, i64 %flush_limit, ptr %group, ptr @smalllang_memory_output_sink_write)
   store atomic ptr null, ptr @smalllang_compute_group_current release, align 8
   br label %done
 failed:
@@ -499,6 +520,20 @@ entry:
   call void @llvm.memset.p0.i64(ptr %v30_sinks, i8 0, i64 %v30_sink_bytes, i1 false)
   %v30_sinks_slot = getelementptr %smalllang.compute_group, ptr %v30_group, i32 0, i32 5
   store ptr %v30_sinks, ptr %v30_sinks_slot, align 8
+  %v30_runtime_slot_6 = getelementptr %smalllang.compute_group, ptr %v30_group, i32 0, i32 6
+  store ptr null, ptr %v30_runtime_slot_6, align 8
+  %v30_runtime_slot_7 = getelementptr %smalllang.compute_group, ptr %v30_group, i32 0, i32 7
+  store ptr null, ptr %v30_runtime_slot_7, align 8
+  %v30_runtime_slot_8 = getelementptr %smalllang.compute_group, ptr %v30_group, i32 0, i32 8
+  store ptr null, ptr %v30_runtime_slot_8, align 8
+  %v30_runtime_slot_9 = getelementptr %smalllang.compute_group, ptr %v30_group, i32 0, i32 9
+  store ptr null, ptr %v30_runtime_slot_9, align 8
+  %v30_runtime_slot_10 = getelementptr %smalllang.compute_group, ptr %v30_group, i32 0, i32 10
+  store ptr null, ptr %v30_runtime_slot_10, align 8
+  %v30_failure_limit_slot = getelementptr %smalllang.compute_group, ptr %v30_group, i32 0, i32 11
+  store atomic i64 %v30_length, ptr %v30_failure_limit_slot release, align 8
+  %v30_initialized_slot = getelementptr %smalllang.compute_group, ptr %v30_group, i32 0, i32 12
+  store ptr null, ptr %v30_initialized_slot, align 8
   call void @smalllang_compute_execute(ptr %v30_group)
   %v30_0 = insertvalue %sl.array.i32 poison, ptr %v30_data, 0
   %v30_1 = insertvalue %sl.array.i32 %v30_0, i64 %v30_length, 1

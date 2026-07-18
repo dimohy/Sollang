@@ -1038,7 +1038,7 @@ emitCore context: move EmitContext -> Unit uses Console {
     }
     aggregateValueIndex wrapperIndex: Int -> Int {
         wrapperIndex => resolved!
-        (wrapperIndex >= 0 and context.ir[wrapperIndex].kind == 9) -> if {
+        (wrapperIndex >= 0 and context.ir[wrapperIndex].kind == 9 and context.ir[wrapperIndex].opcode == -1) -> if {
             context.ir[wrapperIndex].parent => controlOwner!
             (controlOwner! >= 0 and context.ir[controlOwner!].kind != 0 and context.ir[controlOwner!].kind != 11) -> while { context.ir[controlOwner!].parent => controlOwner! }
             0 => controlSearch!
@@ -1060,9 +1060,13 @@ emitCore context: move EmitContext -> Unit uses Console {
     }
     callArgumentIndex callIndex: Int -> Int {
         context.ir[callIndex] => call
-        call.operand0 => argumentIndex!
-        call.operand1 >= 0 -> if { call.operand1 => argumentIndex! }
-        argumentIndex! -> aggregateValueIndex
+        call.operand0 -> aggregateValueIndex => firstArgumentIndex
+        firstArgumentIndex => argumentIndex!
+        call.operand1 >= 0 -> if {
+            call.operand1 -> aggregateValueIndex => secondArgumentIndex
+            secondArgumentIndex > argumentIndex! -> if { secondArgumentIndex => argumentIndex! }
+        }
+        argumentIndex!
     }
     regionResultValueIndex regionIndex: Int -> Int {
         context.ir[regionIndex].operand1 => resolved!
@@ -8333,18 +8337,20 @@ emitWindowsComputeRuntime: -> Unit uses Console {
       store atomic ptr %group, ptr @smalllang_compute_group_current release, align 8
       %event = load ptr, ptr @smalllang_compute_completion_event, align 8
       %reset = call i32 @ResetEvent(ptr %event)
+      %help_first_index = atomicrmw add ptr @smalllang_compute_next, i64 1 acq_rel
       %semaphore = load ptr, ptr @smalllang_compute_semaphore, align 8
       %released = call i32 @ReleaseSemaphore(ptr %semaphore, i32 %workers, ptr null)
-      br label %help_claim
+      br label %help_work
     help_claim:
-      %help_index = atomicrmw add ptr @smalllang_compute_next, i64 1 acq_rel
-      %help_within_count = icmp ult i64 %help_index, %count
+      %help_claimed_index = atomicrmw add ptr @smalllang_compute_next, i64 1 acq_rel
+      %help_within_count = icmp ult i64 %help_claimed_index, %count
       %help_failure_limit_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 11
       %help_failure_limit = load atomic i64, ptr %help_failure_limit_slot acquire, align 8
-      %help_before_failure = icmp ult i64 %help_index, %help_failure_limit
+      %help_before_failure = icmp ult i64 %help_claimed_index, %help_failure_limit
       %help_has_work = and i1 %help_within_count, %help_before_failure
       br i1 %help_has_work, label %help_work, label %help_wait
     help_work:
+      %help_index = phi i64 [ %help_first_index, %publish ], [ %help_claimed_index, %help_claim ]
       %help_callback_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 0
       %help_callback = load ptr, ptr %help_callback_slot, align 8
       %help_sinks_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 5
@@ -8610,18 +8616,20 @@ emitLinuxComputeRuntime: -> Unit uses Console {
       %workers64 = zext i32 %workers to i64
       %event_value = alloca i64, align 8
       store i64 %workers64, ptr %event_value, align 8
+      %help_first_index = atomicrmw add ptr @smalllang_compute_next, i64 1 acq_rel
       %work_fd = load i32, ptr @smalllang_compute_work_event_fd, align 4
       %released = call i64 @write(i32 %work_fd, ptr %event_value, i64 8)
-      br label %help_claim
+      br label %help_work
     help_claim:
-      %help_index = atomicrmw add ptr @smalllang_compute_next, i64 1 acq_rel
-      %help_within_count = icmp ult i64 %help_index, %count
+      %help_claimed_index = atomicrmw add ptr @smalllang_compute_next, i64 1 acq_rel
+      %help_within_count = icmp ult i64 %help_claimed_index, %count
       %help_failure_limit_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 11
       %help_failure_limit = load atomic i64, ptr %help_failure_limit_slot acquire, align 8
-      %help_before_failure = icmp ult i64 %help_index, %help_failure_limit
+      %help_before_failure = icmp ult i64 %help_claimed_index, %help_failure_limit
       %help_has_work = and i1 %help_within_count, %help_before_failure
       br i1 %help_has_work, label %help_work, label %help_wait
     help_work:
+      %help_index = phi i64 [ %help_first_index, %publish ], [ %help_claimed_index, %help_claim ]
       %help_callback_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 0
       %help_callback = load ptr, ptr %help_callback_slot, align 8
       %help_sinks_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 5

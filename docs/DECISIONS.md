@@ -5964,3 +5964,33 @@ Cancellation and partial-result destruction are therefore proven exactly once.
 Parallel progress advances to 27/28 (96.4%). The remaining check is full
 Windows/Linux suite parity, and the canonical roadmap remains 48.5/60 (80.8%)
 because this is a feature-local checklist checkpoint.
+
+## D186 - Stabilize the Complete Windows Parallel Regression Gate
+
+Status: Windows full suite proven; Linux full suite pending
+Date: 2026-07-19
+
+The first complete post-D185 Windows run exposed two implementation defects
+among otherwise stale generated-LLVM fixtures. The self-host emitter's
+`aggregateValueIndex` helper treated every kind-9 node as a one-operand wrapper.
+A real slice node therefore resolved through its final explicit `UIntSize`
+operand, producing an invalid aggregate value at a later call. Wrapper
+unwrapping is now restricted to opcode `-1`, and two-operand calls resolve both
+candidates before selecting the later canonical IR value. Examples 358 and 360
+now assemble and execute with the intended slice and nested-region results.
+
+Example 381 also showed that parent-assisted waiting was observable but not
+deterministic: native workers could claim the entire short queue before the
+submitting thread entered its first claim. Windows and Linux runtimes now
+reserve the first source index atomically before releasing worker tokens. The
+parent executes that reserved callback and then joins the shared atomic queue;
+30 repeated Windows executions all report `parent-helped=true`, while the Linux
+focused verifier still passes its parent-help case.
+
+After validating generated LLVM with `llvm-as`, the full fixture set was
+refreshed and a read-only rerun passed all 523 Windows examples. The Release
+solution build reports zero warnings and zero errors, and the focused Linux
+parallel verifier passes all six steps including AddressSanitizer. This proves
+the Windows half of the final parallel checklist item. It does not claim Linux
+full-suite parity, so progress remains 27/28 (96.4%) and the canonical roadmap
+remains 48.5/60 (80.8%).
