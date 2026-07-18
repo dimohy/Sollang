@@ -492,6 +492,70 @@ internal sealed partial class LlvmEmitter
                 }
                 result = new RuntimeFlowResult(null, null, _mainOk);
                 return true;
+            case "take":
+            {
+                if (current is not (RuntimeDynamicIntArray
+                    or RuntimeDynamicInlineArray
+                    or RuntimeIntDictionary
+                    or RuntimeInlineDictionary))
+                {
+                    return false;
+                }
+
+                if (target.Arguments.Count != 1)
+                {
+                    throw new SmallLangException("take expects exactly one index or key argument");
+                }
+
+                var takeName = RequireMutableContainerSource(source, "take");
+                RuntimeValue takenValue;
+                RuntimeValue remainingContainer;
+                switch (current)
+                {
+                    case RuntimeDynamicIntArray intArray:
+                    {
+                        var index = EmitIntAsSize(EmitIntExpression(target.Arguments[0]), "take_index");
+                        var taken = EmitDynamicArrayTake(intArray, index);
+                        takenValue = taken.Value;
+                        remainingContainer = taken.Array;
+                        break;
+                    }
+                    case RuntimeDynamicInlineArray inlineArray:
+                    {
+                        var index = EmitIntAsSize(EmitIntExpression(target.Arguments[0]), "take_index");
+                        var taken = EmitDynamicInlineArrayTake(inlineArray, index);
+                        takenValue = taken.Value;
+                        remainingContainer = taken.Array;
+                        break;
+                    }
+                    case RuntimeIntDictionary intDictionary:
+                    {
+                        var takeIntKey = EmitIntExpression(target.Arguments[0]);
+                        var taken = EmitDictionaryTake(intDictionary, takeIntKey.ValueName);
+                        takenValue = taken.Value;
+                        remainingContainer = taken.Dictionary;
+                        break;
+                    }
+                    case RuntimeInlineDictionary takeInlineDictionary:
+                    {
+                        var takeInlineKey = target.Arguments[0] is DictionaryLiteralExpression contextualTakeKey
+                            && _program.Types.IsStruct(takeInlineDictionary.KeyType)
+                                ? EmitContextualStructLiteral(contextualTakeKey, takeInlineDictionary.KeyType)
+                                : EmitExpression(target.Arguments[0]);
+                        var taken = EmitInlineDictionaryTake(takeInlineDictionary, takeInlineKey);
+                        takenValue = taken.Value;
+                        remainingContainer = taken.Dictionary;
+                        break;
+                    }
+                    default:
+                        throw new SmallLangException("take expects a dynamic array or dictionary owner");
+                }
+
+                StoreMutableContainer(takeName, remainingContainer);
+                _locals[takeName] = remainingContainer;
+                result = new RuntimeFlowResult(takenValue, null, _mainOk);
+                return true;
+            }
             case "append":
                 if (current is not RuntimeDynamicIntArray appendArray)
                 {

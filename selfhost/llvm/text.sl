@@ -2488,6 +2488,183 @@ emitCore context: move EmitContext -> Unit uses Console {
         "  %push$(pushIndex)_array2 = insertvalue %sl.array.i32 %push$(pushIndex)_array1, i64 %push$(pushIndex)_append_capacity, 2" -> println
         "  store %sl.array.i32 %push$(pushIndex)_array2, ptr %slot$(pushRoot), align 8" -> println
     }
+    emitTake request: WhileValueRequest -> Unit uses Console {
+        request.whileIndex => takeIndex
+        context.ir[takeIndex] => takeNode
+        context.ir[takeNode.operand0] => takeSource
+        context.ir[takeNode.operand1] => takeArgument
+        takeNode.operand0 -> mutableBindingRoot => takeRoot
+        takeSource -> isDictionaryType -> if {
+            -1 => takeKeyTypeId!
+            -1 => takeValueTypeId!
+            takeSource.typeId >= 0 -> if {
+                context.types[takeSource.typeId] => takeDictionaryType
+                takeDictionaryType.kind == 5 -> if {
+                    takeDictionaryType.first => takeKeyTypeId!
+                    takeDictionaryType.second => takeValueTypeId!
+                }
+            }
+            "  %take$(takeIndex)_keys = extractvalue %sl.dict %v$(takeNode.operand0), 0" -> println
+            "  %take$(takeIndex)_values = extractvalue %sl.dict %v$(takeNode.operand0), 1" -> println
+            "  %take$(takeIndex)_length = extractvalue %sl.dict %v$(takeNode.operand0), 2" -> println
+            "  %take$(takeIndex)_capacity = extractvalue %sl.dict %v$(takeNode.operand0), 3" -> println
+            "  br label %take$(takeIndex)_find_start" -> println
+            "take$(takeIndex)_find_start:" -> println
+            "  br label %take$(takeIndex)_find" -> println
+            "take$(takeIndex)_find:" -> println
+            "  %take$(takeIndex)_find_index = phi i64 [ 0, %take$(takeIndex)_find_start ], [ %take$(takeIndex)_find_next, %take$(takeIndex)_find_advance ]" -> println
+            "  %take$(takeIndex)_find_active = icmp ult i64 %take$(takeIndex)_find_index, %take$(takeIndex)_length" -> println
+            "  br i1 %take$(takeIndex)_find_active, label %take$(takeIndex)_find_check, label %take$(takeIndex)_missing" -> println
+            "take$(takeIndex)_find_check:" -> println
+            "  %take$(takeIndex)_key_ptr = getelementptr " -> print
+            takeKeyTypeId! >= 0 -> if { takeKeyTypeId! -> writeSemanticTypeId } else { takeSource.typeModule -> llvmType -> print }
+            ", ptr %take$(takeIndex)_keys, i64 %take$(takeIndex)_find_index" -> println
+            "  %take$(takeIndex)_key = load " -> print
+            takeKeyTypeId! >= 0 -> if { takeKeyTypeId! -> writeSemanticTypeId } else { takeSource.typeModule -> llvmType -> print }
+            ", ptr %take$(takeIndex)_key_ptr, align " -> print
+            takeKeyTypeId! >= 0 -> if { context.typeAligns[takeKeyTypeId!] -> writeDecimalLine } else { takeSource.typeModule -> legacyStorageAlign -> writeDecimalLine }
+            "  %take$(takeIndex)_found = icmp eq " -> print
+            takeKeyTypeId! >= 0 -> if { takeKeyTypeId! -> writeSemanticTypeId } else { takeSource.typeModule -> llvmType -> print }
+            " %take$(takeIndex)_key, " -> print
+            (takeArgument.kind == 3 or takeArgument.kind == 4) -> if {
+                takeArgument -> sourceToken => takeKeyToken
+                takeArgument.kind == 3 -> if { context.sources[takeArgument.sourceModule] -> slice(takeKeyToken.span.start, takeKeyToken.span.length) -> println } else {
+                    ((context.sources[takeArgument.sourceModule] -> byte(takeKeyToken.span.start)) == UInt8(116)) -> if { "1" -> println } else { "0" -> println }
+                }
+            } else {
+                (request.ownerIndex >= 0 and context.ir[request.ownerIndex].kind == 0 and context.ir[request.ownerIndex].operand1 >= 0 and takeArgument.kind == 5 and takeArgument.symbol == context.ir[context.ir[request.ownerIndex].operand1].symbol) -> if { "%arg" -> println } else { "%v$(takeNode.operand1)" -> println }
+            }
+            "  br i1 %take$(takeIndex)_found, label %take$(takeIndex)_hit, label %take$(takeIndex)_find_advance" -> println
+            "take$(takeIndex)_find_advance:" -> println
+            "  %take$(takeIndex)_find_next = add i64 %take$(takeIndex)_find_index, 1" -> println
+            "  br label %take$(takeIndex)_find" -> println
+            "take$(takeIndex)_missing:" -> println
+            "  call void @llvm.trap()" -> println
+            "  unreachable" -> println
+            "take$(takeIndex)_hit:" -> println
+            "  %take$(takeIndex)_value_ptr = getelementptr " -> print
+            takeValueTypeId! >= 0 -> if { takeValueTypeId! -> writeSemanticTypeId } else { takeSource.typeSymbol -> llvmType -> print }
+            ", ptr %take$(takeIndex)_values, i64 %take$(takeIndex)_find_index" -> println
+            "  %v$(takeIndex) = load " -> print
+            takeValueTypeId! >= 0 -> if { takeValueTypeId! -> writeSemanticTypeId } else { takeSource.typeSymbol -> llvmType -> print }
+            ", ptr %take$(takeIndex)_value_ptr, align " -> print
+            takeValueTypeId! >= 0 -> if { context.typeAligns[takeValueTypeId!] -> writeDecimalLine } else { takeSource.typeSymbol -> legacyStorageAlign -> writeDecimalLine }
+            (takeKeyTypeId! >= 0 and (takeKeyTypeId! -> semanticTypeOwns)) -> if {
+                "  call void @smalllang_drop_t$(takeKeyTypeId!)(" -> print
+                takeKeyTypeId! -> writeSemanticTypeId
+                " %take$(takeIndex)_key)" -> println
+            }
+            "  %take$(takeIndex)_new_length = sub i64 %take$(takeIndex)_length, 1" -> println
+            "  br label %take$(takeIndex)_shift" -> println
+            "take$(takeIndex)_shift:" -> println
+            "  %take$(takeIndex)_shift_index = phi i64 [ %take$(takeIndex)_find_index, %take$(takeIndex)_hit ], [ %take$(takeIndex)_shift_next, %take$(takeIndex)_shift_body ]" -> println
+            "  %take$(takeIndex)_shift_active = icmp ult i64 %take$(takeIndex)_shift_index, %take$(takeIndex)_new_length" -> println
+            "  br i1 %take$(takeIndex)_shift_active, label %take$(takeIndex)_shift_body, label %take$(takeIndex)_done" -> println
+            "take$(takeIndex)_shift_body:" -> println
+            "  %take$(takeIndex)_shift_next = add i64 %take$(takeIndex)_shift_index, 1" -> println
+            "  %take$(takeIndex)_source_key_ptr = getelementptr " -> print
+            takeKeyTypeId! >= 0 -> if { takeKeyTypeId! -> writeSemanticTypeId } else { takeSource.typeModule -> llvmType -> print }
+            ", ptr %take$(takeIndex)_keys, i64 %take$(takeIndex)_shift_next" -> println
+            "  %take$(takeIndex)_source_key = load " -> print
+            takeKeyTypeId! >= 0 -> if { takeKeyTypeId! -> writeSemanticTypeId } else { takeSource.typeModule -> llvmType -> print }
+            ", ptr %take$(takeIndex)_source_key_ptr, align " -> print
+            takeKeyTypeId! >= 0 -> if { context.typeAligns[takeKeyTypeId!] -> writeDecimalLine } else { takeSource.typeModule -> legacyStorageAlign -> writeDecimalLine }
+            "  %take$(takeIndex)_target_key_ptr = getelementptr " -> print
+            takeKeyTypeId! >= 0 -> if { takeKeyTypeId! -> writeSemanticTypeId } else { takeSource.typeModule -> llvmType -> print }
+            ", ptr %take$(takeIndex)_keys, i64 %take$(takeIndex)_shift_index" -> println
+            "  store " -> print
+            takeKeyTypeId! >= 0 -> if { takeKeyTypeId! -> writeSemanticTypeId } else { takeSource.typeModule -> llvmType -> print }
+            " %take$(takeIndex)_source_key, ptr %take$(takeIndex)_target_key_ptr, align " -> print
+            takeKeyTypeId! >= 0 -> if { context.typeAligns[takeKeyTypeId!] -> writeDecimalLine } else { takeSource.typeModule -> legacyStorageAlign -> writeDecimalLine }
+            "  %take$(takeIndex)_source_value_ptr = getelementptr " -> print
+            takeValueTypeId! >= 0 -> if { takeValueTypeId! -> writeSemanticTypeId } else { takeSource.typeSymbol -> llvmType -> print }
+            ", ptr %take$(takeIndex)_values, i64 %take$(takeIndex)_shift_next" -> println
+            "  %take$(takeIndex)_source_value = load " -> print
+            takeValueTypeId! >= 0 -> if { takeValueTypeId! -> writeSemanticTypeId } else { takeSource.typeSymbol -> llvmType -> print }
+            ", ptr %take$(takeIndex)_source_value_ptr, align " -> print
+            takeValueTypeId! >= 0 -> if { context.typeAligns[takeValueTypeId!] -> writeDecimalLine } else { takeSource.typeSymbol -> legacyStorageAlign -> writeDecimalLine }
+            "  %take$(takeIndex)_target_value_ptr = getelementptr " -> print
+            takeValueTypeId! >= 0 -> if { takeValueTypeId! -> writeSemanticTypeId } else { takeSource.typeSymbol -> llvmType -> print }
+            ", ptr %take$(takeIndex)_values, i64 %take$(takeIndex)_shift_index" -> println
+            "  store " -> print
+            takeValueTypeId! >= 0 -> if { takeValueTypeId! -> writeSemanticTypeId } else { takeSource.typeSymbol -> llvmType -> print }
+            " %take$(takeIndex)_source_value, ptr %take$(takeIndex)_target_value_ptr, align " -> print
+            takeValueTypeId! >= 0 -> if { context.typeAligns[takeValueTypeId!] -> writeDecimalLine } else { takeSource.typeSymbol -> legacyStorageAlign -> writeDecimalLine }
+            "  br label %take$(takeIndex)_shift" -> println
+            "take$(takeIndex)_done:" -> println
+            "  %take$(takeIndex)_dict0 = insertvalue %sl.dict poison, ptr %take$(takeIndex)_keys, 0" -> println
+            "  %take$(takeIndex)_dict1 = insertvalue %sl.dict %take$(takeIndex)_dict0, ptr %take$(takeIndex)_values, 1" -> println
+            "  %take$(takeIndex)_dict2 = insertvalue %sl.dict %take$(takeIndex)_dict1, i64 %take$(takeIndex)_new_length, 2" -> println
+            "  %take$(takeIndex)_dict3 = insertvalue %sl.dict %take$(takeIndex)_dict2, i64 %take$(takeIndex)_capacity, 3" -> println
+            "  store %sl.dict %take$(takeIndex)_dict3, ptr %slot$(takeRoot), align 8" -> println
+        } else {
+            "  %take$(takeIndex)_data = extractvalue %sl.array.i32 %v$(takeNode.operand0), 0" -> println
+            "  %take$(takeIndex)_length = extractvalue %sl.array.i32 %v$(takeNode.operand0), 1" -> println
+            "  %take$(takeIndex)_capacity = extractvalue %sl.array.i32 %v$(takeNode.operand0), 2" -> println
+            takeArgument.typeSymbol -> integerWidth => takeArgumentWidth
+            (takeArgument.kind != 3 and takeArgumentWidth > 0 and takeArgumentWidth < 64) -> if {
+                "  %take$(takeIndex)_index = " -> print
+                takeArgument -> integerNodeSigned -> if { "sext " -> print } else { "zext " -> print }
+                takeArgument -> writeIrType
+                " %v$(takeNode.operand1) to i64" -> println
+            }
+            "  %take$(takeIndex)_in_bounds = icmp ult i64 " -> print
+            takeArgument.kind == 3 -> if {
+                takeArgument -> sourceToken => takeIndexToken
+                context.sources[takeArgument.sourceModule] -> slice(takeIndexToken.span.start, takeIndexToken.span.length) -> print
+            } else {
+                (takeArgumentWidth > 0 and takeArgumentWidth < 64) -> if { "%take$(takeIndex)_index" -> print } else { "%v$(takeNode.operand1)" -> print }
+            }
+            ", %take$(takeIndex)_length" -> println
+            "  br i1 %take$(takeIndex)_in_bounds, label %take$(takeIndex)_ready, label %take$(takeIndex)_missing" -> println
+            "take$(takeIndex)_missing:" -> println
+            "  call void @llvm.trap()" -> println
+            "  unreachable" -> println
+            "take$(takeIndex)_ready:" -> println
+            "  %take$(takeIndex)_selected = add i64 0, " -> print
+            takeArgument.kind == 3 -> if {
+                takeArgument -> sourceToken => takeSelectedToken
+                context.sources[takeArgument.sourceModule] -> slice(takeSelectedToken.span.start, takeSelectedToken.span.length) -> println
+            } else {
+                (takeArgumentWidth > 0 and takeArgumentWidth < 64) -> if { "%take$(takeIndex)_index" -> println } else { "%v$(takeNode.operand1)" -> println }
+            }
+            "  %take$(takeIndex)_value_ptr = getelementptr " -> print
+            takeSource -> writeArrayElementType
+            ", ptr %take$(takeIndex)_data, i64 %take$(takeIndex)_selected" -> println
+            "  %v$(takeIndex) = load " -> print
+            takeSource -> writeArrayElementType
+            ", ptr %take$(takeIndex)_value_ptr, align " -> print
+            takeSource -> arrayElementAlign -> writeDecimalLine
+            "  %take$(takeIndex)_new_length = sub i64 %take$(takeIndex)_length, 1" -> println
+            "  br label %take$(takeIndex)_shift" -> println
+            "take$(takeIndex)_shift:" -> println
+            "  %take$(takeIndex)_shift_index = phi i64 [ %take$(takeIndex)_selected, %take$(takeIndex)_ready ], [ %take$(takeIndex)_shift_next, %take$(takeIndex)_shift_body ]" -> println
+            "  %take$(takeIndex)_shift_active = icmp ult i64 %take$(takeIndex)_shift_index, %take$(takeIndex)_new_length" -> println
+            "  br i1 %take$(takeIndex)_shift_active, label %take$(takeIndex)_shift_body, label %take$(takeIndex)_done" -> println
+            "take$(takeIndex)_shift_body:" -> println
+            "  %take$(takeIndex)_shift_next = add i64 %take$(takeIndex)_shift_index, 1" -> println
+            "  %take$(takeIndex)_source_ptr = getelementptr " -> print
+            takeSource -> writeArrayElementType
+            ", ptr %take$(takeIndex)_data, i64 %take$(takeIndex)_shift_next" -> println
+            "  %take$(takeIndex)_moved = load " -> print
+            takeSource -> writeArrayElementType
+            ", ptr %take$(takeIndex)_source_ptr, align " -> print
+            takeSource -> arrayElementAlign -> writeDecimalLine
+            "  %take$(takeIndex)_target_ptr = getelementptr " -> print
+            takeSource -> writeArrayElementType
+            ", ptr %take$(takeIndex)_data, i64 %take$(takeIndex)_shift_index" -> println
+            "  store " -> print
+            takeSource -> writeArrayElementType
+            " %take$(takeIndex)_moved, ptr %take$(takeIndex)_target_ptr, align " -> print
+            takeSource -> arrayElementAlign -> writeDecimalLine
+            "  br label %take$(takeIndex)_shift" -> println
+            "take$(takeIndex)_done:" -> println
+            "  %take$(takeIndex)_array0 = insertvalue %sl.array.i32 poison, ptr %take$(takeIndex)_data, 0" -> println
+            "  %take$(takeIndex)_array1 = insertvalue %sl.array.i32 %take$(takeIndex)_array0, i64 %take$(takeIndex)_new_length, 1" -> println
+            "  %take$(takeIndex)_array2 = insertvalue %sl.array.i32 %take$(takeIndex)_array1, i64 %take$(takeIndex)_capacity, 2" -> println
+            "  store %sl.array.i32 %take$(takeIndex)_array2, ptr %slot$(takeRoot), align 8" -> println
+        }
+    }
     writeWhileValue request: WhileValueRequest -> Unit uses Console {
         context.ir[request.nodeIndex] => value
         (value.kind == 3 or value.kind == 4) -> if {
@@ -3443,7 +3620,7 @@ emitCore context: move EmitContext -> Unit uses Console {
                                         }
                                         (localSliceLengthBelongs! and not localScheduled![localSliceLength! - regionLocalStart]) -> if { false => localReady! }
                                     }
-                                    (localCandidate.kind == 9 and localCandidate.opcode == -204 and localCandidate.operand1 >= 0) -> if {
+                                    (localCandidate.kind == 9 and (localCandidate.opcode == -204 or localCandidate.opcode == -213) and localCandidate.operand1 >= 0) -> if {
                                         localCandidate.operand1 -> aggregateValueIndex => localPushValue!
                                         (localPushValue! >= 0 and localPushValue! != localCandidate.operand1) -> if {
                                             context.ir[localPushValue!].parent => localPushValueAncestor!
@@ -4037,6 +4214,9 @@ emitCore context: move EmitContext -> Unit uses Console {
             }
             (regionNode.kind == 9 and regionNode.opcode == -204 and regionNode.operand0 >= 0 and regionNode.operand1 >= 0) -> if {
                 WhileValueRequest { whileIndex: regionNodeIndex!, ownerIndex: ownerIndex!, nodeIndex: 0 } -> emitArrayPush
+            }
+            (regionNode.kind == 9 and regionNode.opcode == -213 and regionNode.operand0 >= 0 and regionNode.operand1 >= 0) -> if {
+                WhileValueRequest { whileIndex: regionNodeIndex!, ownerIndex: ownerIndex!, nodeIndex: 0 } -> emitTake
             }
             ((regionNode.kind == 9 or regionNode.kind == 6) and regionNode.opcode == -205 and regionNode.operand0 >= 0) -> if {
                 context.ir[regionNode.operand0] => regionMapPath
@@ -5197,7 +5377,7 @@ emitCore context: move EmitContext -> Unit uses Console {
                         (scheduleReady! and scheduleNode.operand0 >= expressionStart and scheduleNode.operand0 < functionEnd! and (scheduleNode.kind != 5 or context.ir[scheduleNode.operand0].flags % 2 == 0) and not expressionScheduled![scheduleNode.operand0 - expressionStart]) -> if { false => scheduleReady! }
                         (scheduleReady! and scheduleNode.kind != 6 and scheduleNode.kind != 18 and scheduleNode.kind != 20 and scheduleNode.operand1 >= expressionStart and scheduleNode.operand1 < functionEnd! and not expressionScheduled![scheduleNode.operand1 - expressionStart]) -> if { false => scheduleReady! }
                         (scheduleReady! and (scheduleNode.kind == 9 or scheduleNode.kind == 6) and scheduleNode.opcode == -203 and scheduleNode.operand1 >= 0 and context.ir[scheduleNode.operand1].nextOperand >= expressionStart and context.ir[scheduleNode.operand1].nextOperand < functionEnd! and not expressionScheduled![context.ir[scheduleNode.operand1].nextOperand - expressionStart]) -> if { false => scheduleReady! }
-                        (scheduleReady! and scheduleNode.kind == 9 and scheduleNode.opcode == -204 and scheduleNode.operand1 >= 0) -> if {
+                        (scheduleReady! and scheduleNode.kind == 9 and (scheduleNode.opcode == -204 or scheduleNode.opcode == -213) and scheduleNode.operand1 >= 0) -> if {
                             scheduleNode.operand1 -> aggregateValueIndex => schedulePushValue
                             (schedulePushValue >= expressionStart and schedulePushValue < functionEnd! and not expressionScheduled![schedulePushValue - expressionStart]) -> if { false => scheduleReady! }
                         }
@@ -5283,30 +5463,30 @@ emitCore context: move EmitContext -> Unit uses Console {
                                             context.ir[mutableReadBarrierAncestor!].parent => mutableReadBarrierAncestor!
                                         }
                                     }
-                                    (not mutableReadInsideBarrier! and not expressionScheduled![mutableReadBarrierSearch! - expressionStart] and (mutableReadBarrier.kind == 18 or mutableReadBarrier.kind == 20 or mutableReadBarrier.kind == 24 or mutableReadBarrier.kind == 25 or (mutableReadBarrier.kind == 17 and mutableReadBarrier.flags == 1) or (mutableReadBarrier.kind == 9 and mutableReadBarrier.opcode == -204)) and (mutableReadBarrier -> sourceStart) < (scheduleNode -> sourceStart)) -> if {
+                                    (not mutableReadInsideBarrier! and not expressionScheduled![mutableReadBarrierSearch! - expressionStart] and (mutableReadBarrier.kind == 18 or mutableReadBarrier.kind == 20 or mutableReadBarrier.kind == 24 or mutableReadBarrier.kind == 25 or (mutableReadBarrier.kind == 17 and mutableReadBarrier.flags == 1) or (mutableReadBarrier.kind == 9 and (mutableReadBarrier.opcode == -204 or mutableReadBarrier.opcode == -213))) and (mutableReadBarrier -> sourceStart) < (scheduleNode -> sourceStart)) -> if {
                                         false => scheduleReady!
                                     }
                                     mutableReadBarrierSearch! + 1 => mutableReadBarrierSearch!
                                 }
                             }
                         }
-                        (scheduleReady! and (scheduleNode.kind == 6 or scheduleNode.kind == 18 or scheduleNode.kind == 20 or scheduleNode.kind == 24 or scheduleNode.kind == 25 or (scheduleNode.kind == 17 and scheduleNode.flags == 1) or (scheduleNode.kind == 9 and (scheduleNode.opcode == -204 or scheduleNode.opcode == -205)))) -> if {
+                        (scheduleReady! and (scheduleNode.kind == 6 or scheduleNode.kind == 18 or scheduleNode.kind == 20 or scheduleNode.kind == 24 or scheduleNode.kind == 25 or (scheduleNode.kind == 17 and scheduleNode.flags == 1) or (scheduleNode.kind == 9 and (scheduleNode.opcode == -204 or scheduleNode.opcode == -205 or scheduleNode.opcode == -213)))) -> if {
                             true => rootEffect!
                             scheduleNode.parent => effectAncestor!
                             (effectAncestor! >= expressionStart and rootEffect!) -> while {
-                                (context.ir[effectAncestor!].kind == 6 or context.ir[effectAncestor!].kind == 18 or context.ir[effectAncestor!].kind == 20 or context.ir[effectAncestor!].kind == 24 or context.ir[effectAncestor!].kind == 25 or (context.ir[effectAncestor!].kind == 17 and context.ir[effectAncestor!].flags == 1) or (context.ir[effectAncestor!].kind == 9 and (context.ir[effectAncestor!].opcode == -204 or context.ir[effectAncestor!].opcode == -205))) -> if { false => rootEffect! } else { context.ir[effectAncestor!].parent => effectAncestor! }
+                                (context.ir[effectAncestor!].kind == 6 or context.ir[effectAncestor!].kind == 18 or context.ir[effectAncestor!].kind == 20 or context.ir[effectAncestor!].kind == 24 or context.ir[effectAncestor!].kind == 25 or (context.ir[effectAncestor!].kind == 17 and context.ir[effectAncestor!].flags == 1) or (context.ir[effectAncestor!].kind == 9 and (context.ir[effectAncestor!].opcode == -204 or context.ir[effectAncestor!].opcode == -205 or context.ir[effectAncestor!].opcode == -213))) -> if { false => rootEffect! } else { context.ir[effectAncestor!].parent => effectAncestor! }
                             }
                             rootEffect! -> if {
                                 expressionStart => earlierEffectSearch!
                                 earlierEffectSearch! < functionEnd! -> while {
                                     context.ir[earlierEffectSearch!] => earlierEffect
-                                (not expressionScheduled![earlierEffectSearch! - expressionStart] and (earlierEffect.kind == 6 or earlierEffect.kind == 18 or earlierEffect.kind == 20 or earlierEffect.kind == 24 or earlierEffect.kind == 25 or (earlierEffect.kind == 17 and earlierEffect.flags == 1) or (earlierEffect.kind == 9 and (earlierEffect.opcode == -204 or earlierEffect.opcode == -205))) and (earlierEffect -> sourceStart) < (scheduleNode -> sourceStart)) -> if {
+                                (not expressionScheduled![earlierEffectSearch! - expressionStart] and (earlierEffect.kind == 6 or earlierEffect.kind == 18 or earlierEffect.kind == 20 or earlierEffect.kind == 24 or earlierEffect.kind == 25 or (earlierEffect.kind == 17 and earlierEffect.flags == 1) or (earlierEffect.kind == 9 and (earlierEffect.opcode == -204 or earlierEffect.opcode == -205 or earlierEffect.opcode == -213))) and (earlierEffect -> sourceStart) < (scheduleNode -> sourceStart)) -> if {
                                         earlierEffect.parent => earlierEffectAncestor!
                                         true => earlierRootEffect!
                                         false => earlierInsideRegion!
                                         (earlierEffectAncestor! >= expressionStart and earlierRootEffect! and not earlierInsideRegion!) -> while {
                                             (context.ir[earlierEffectAncestor!].kind == 19 or context.ir[earlierEffectAncestor!].kind == 20) -> if { true => earlierInsideRegion! } else {
-                                            (context.ir[earlierEffectAncestor!].kind == 6 or context.ir[earlierEffectAncestor!].kind == 18 or context.ir[earlierEffectAncestor!].kind == 20 or context.ir[earlierEffectAncestor!].kind == 24 or context.ir[earlierEffectAncestor!].kind == 25 or (context.ir[earlierEffectAncestor!].kind == 17 and context.ir[earlierEffectAncestor!].flags == 1) or (context.ir[earlierEffectAncestor!].kind == 9 and (context.ir[earlierEffectAncestor!].opcode == -204 or context.ir[earlierEffectAncestor!].opcode == -205))) -> if { false => earlierRootEffect! } else { context.ir[earlierEffectAncestor!].parent => earlierEffectAncestor! }
+                                            (context.ir[earlierEffectAncestor!].kind == 6 or context.ir[earlierEffectAncestor!].kind == 18 or context.ir[earlierEffectAncestor!].kind == 20 or context.ir[earlierEffectAncestor!].kind == 24 or context.ir[earlierEffectAncestor!].kind == 25 or (context.ir[earlierEffectAncestor!].kind == 17 and context.ir[earlierEffectAncestor!].flags == 1) or (context.ir[earlierEffectAncestor!].kind == 9 and (context.ir[earlierEffectAncestor!].opcode == -204 or context.ir[earlierEffectAncestor!].opcode == -205 or context.ir[earlierEffectAncestor!].opcode == -213))) -> if { false => earlierRootEffect! } else { context.ir[earlierEffectAncestor!].parent => earlierEffectAncestor! }
                                             }
                                         }
                                         (earlierRootEffect! and not earlierInsideRegion!) -> if { false => scheduleReady! }
@@ -5419,6 +5599,9 @@ emitCore context: move EmitContext -> Unit uses Console {
                 }
                 (expression.kind == 9 and expression.opcode == -204 and expression.operand0 >= 0 and expression.operand1 >= 0) -> if {
                     WhileValueRequest { whileIndex: expressionIndex!, ownerIndex: functionIndex!, nodeIndex: 0 } -> emitArrayPush
+                }
+                (expression.kind == 9 and expression.opcode == -213 and expression.operand0 >= 0 and expression.operand1 >= 0) -> if {
+                    WhileValueRequest { whileIndex: expressionIndex!, ownerIndex: functionIndex!, nodeIndex: 0 } -> emitTake
                 }
                 ((expression.kind == 9 or expression.kind == 6) and expression.opcode == -205 and expression.operand0 >= 0) -> if {
                     context.ir[expression.operand0] => mapPath
@@ -7494,7 +7677,7 @@ emitCore context: move EmitContext -> Unit uses Console {
                             (entryScheduleReady! and entryScheduleNode.operand0 > functionIndex! and entryScheduleNode.operand0 < entryEnd! and (entryScheduleNode.kind != 5 or context.ir[entryScheduleNode.operand0].flags % 2 == 0) and not entryScheduled![entryScheduleNode.operand0 - functionIndex! - 1]) -> if { false => entryScheduleReady! }
                             (entryScheduleReady! and entryScheduleNode.kind != 6 and entryScheduleNode.kind != 18 and entryScheduleNode.kind != 20 and entryScheduleNode.operand1 > functionIndex! and entryScheduleNode.operand1 < entryEnd! and not entryScheduled![entryScheduleNode.operand1 - functionIndex! - 1]) -> if { false => entryScheduleReady! }
                             (entryScheduleReady! and (entryScheduleNode.kind == 9 or entryScheduleNode.kind == 6) and entryScheduleNode.opcode == -203 and entryScheduleNode.operand1 >= 0 and context.ir[entryScheduleNode.operand1].nextOperand > functionIndex! and context.ir[entryScheduleNode.operand1].nextOperand < entryEnd! and not entryScheduled![context.ir[entryScheduleNode.operand1].nextOperand - functionIndex! - 1]) -> if { false => entryScheduleReady! }
-                            (entryScheduleReady! and entryScheduleNode.kind == 9 and entryScheduleNode.opcode == -204 and entryScheduleNode.operand1 >= 0) -> if {
+                            (entryScheduleReady! and entryScheduleNode.kind == 9 and (entryScheduleNode.opcode == -204 or entryScheduleNode.opcode == -213) and entryScheduleNode.operand1 >= 0) -> if {
                                 entryScheduleNode.operand1 -> aggregateValueIndex => entrySchedulePushValue
                                 (entrySchedulePushValue > functionIndex! and entrySchedulePushValue < entryEnd! and not entryScheduled![entrySchedulePushValue - functionIndex! - 1]) -> if { false => entryScheduleReady! }
                             }
@@ -7538,30 +7721,30 @@ emitCore context: move EmitContext -> Unit uses Console {
                                                 context.ir[entryMutableReadBarrierAncestor!].parent => entryMutableReadBarrierAncestor!
                                             }
                                         }
-                                        (not entryMutableReadInsideBarrier! and not entryScheduled![entryMutableReadBarrierSearch! - functionIndex! - 1] and (entryMutableReadBarrier.kind == 18 or entryMutableReadBarrier.kind == 20 or entryMutableReadBarrier.kind == 24 or entryMutableReadBarrier.kind == 25 or (entryMutableReadBarrier.kind == 17 and entryMutableReadBarrier.flags == 1) or (entryMutableReadBarrier.kind == 9 and entryMutableReadBarrier.opcode == -204)) and (entryMutableReadBarrier -> sourceStart) < (entryScheduleNode -> sourceStart)) -> if {
+                                        (not entryMutableReadInsideBarrier! and not entryScheduled![entryMutableReadBarrierSearch! - functionIndex! - 1] and (entryMutableReadBarrier.kind == 18 or entryMutableReadBarrier.kind == 20 or entryMutableReadBarrier.kind == 24 or entryMutableReadBarrier.kind == 25 or (entryMutableReadBarrier.kind == 17 and entryMutableReadBarrier.flags == 1) or (entryMutableReadBarrier.kind == 9 and (entryMutableReadBarrier.opcode == -204 or entryMutableReadBarrier.opcode == -213))) and (entryMutableReadBarrier -> sourceStart) < (entryScheduleNode -> sourceStart)) -> if {
                                             false => entryScheduleReady!
                                         }
                                         entryMutableReadBarrierSearch! + 1 => entryMutableReadBarrierSearch!
                                     }
                                 }
                             }
-                            (entryScheduleReady! and (entryScheduleNode.kind == 6 or entryScheduleNode.kind == 18 or entryScheduleNode.kind == 20 or entryScheduleNode.kind == 24 or entryScheduleNode.kind == 25 or (entryScheduleNode.kind == 17 and entryScheduleNode.flags == 1) or (entryScheduleNode.kind == 9 and (entryScheduleNode.opcode == -204 or entryScheduleNode.opcode == -205)))) -> if {
+                            (entryScheduleReady! and (entryScheduleNode.kind == 6 or entryScheduleNode.kind == 18 or entryScheduleNode.kind == 20 or entryScheduleNode.kind == 24 or entryScheduleNode.kind == 25 or (entryScheduleNode.kind == 17 and entryScheduleNode.flags == 1) or (entryScheduleNode.kind == 9 and (entryScheduleNode.opcode == -204 or entryScheduleNode.opcode == -205 or entryScheduleNode.opcode == -213)))) -> if {
                                 true => entryRootEffect!
                                 entryScheduleNode.parent => entryEffectAncestor!
                                 (entryEffectAncestor! > functionIndex! and entryRootEffect!) -> while {
-                                    (context.ir[entryEffectAncestor!].kind == 6 or context.ir[entryEffectAncestor!].kind == 18 or context.ir[entryEffectAncestor!].kind == 20 or context.ir[entryEffectAncestor!].kind == 24 or context.ir[entryEffectAncestor!].kind == 25 or (context.ir[entryEffectAncestor!].kind == 17 and context.ir[entryEffectAncestor!].flags == 1) or (context.ir[entryEffectAncestor!].kind == 9 and (context.ir[entryEffectAncestor!].opcode == -204 or context.ir[entryEffectAncestor!].opcode == -205))) -> if { false => entryRootEffect! } else { context.ir[entryEffectAncestor!].parent => entryEffectAncestor! }
+                                    (context.ir[entryEffectAncestor!].kind == 6 or context.ir[entryEffectAncestor!].kind == 18 or context.ir[entryEffectAncestor!].kind == 20 or context.ir[entryEffectAncestor!].kind == 24 or context.ir[entryEffectAncestor!].kind == 25 or (context.ir[entryEffectAncestor!].kind == 17 and context.ir[entryEffectAncestor!].flags == 1) or (context.ir[entryEffectAncestor!].kind == 9 and (context.ir[entryEffectAncestor!].opcode == -204 or context.ir[entryEffectAncestor!].opcode == -205 or context.ir[entryEffectAncestor!].opcode == -213))) -> if { false => entryRootEffect! } else { context.ir[entryEffectAncestor!].parent => entryEffectAncestor! }
                                 }
                                 entryRootEffect! -> if {
                                     functionIndex! + 1 => entryEarlierEffectSearch!
                                     entryEarlierEffectSearch! < entryEnd! -> while {
                                         context.ir[entryEarlierEffectSearch!] => entryEarlierEffect
-                                        (not entryScheduled![entryEarlierEffectSearch! - functionIndex! - 1] and (entryEarlierEffect.kind == 6 or entryEarlierEffect.kind == 18 or entryEarlierEffect.kind == 20 or entryEarlierEffect.kind == 24 or entryEarlierEffect.kind == 25 or (entryEarlierEffect.kind == 17 and entryEarlierEffect.flags == 1) or (entryEarlierEffect.kind == 9 and (entryEarlierEffect.opcode == -204 or entryEarlierEffect.opcode == -205))) and (entryEarlierEffect -> sourceStart) < (entryScheduleNode -> sourceStart)) -> if {
+                                        (not entryScheduled![entryEarlierEffectSearch! - functionIndex! - 1] and (entryEarlierEffect.kind == 6 or entryEarlierEffect.kind == 18 or entryEarlierEffect.kind == 20 or entryEarlierEffect.kind == 24 or entryEarlierEffect.kind == 25 or (entryEarlierEffect.kind == 17 and entryEarlierEffect.flags == 1) or (entryEarlierEffect.kind == 9 and (entryEarlierEffect.opcode == -204 or entryEarlierEffect.opcode == -205 or entryEarlierEffect.opcode == -213))) and (entryEarlierEffect -> sourceStart) < (entryScheduleNode -> sourceStart)) -> if {
                                             entryEarlierEffect.parent => entryEarlierEffectAncestor!
                                             true => entryEarlierRootEffect!
                                             false => entryEarlierInsideRegion!
                                             (entryEarlierEffectAncestor! > functionIndex! and entryEarlierRootEffect! and not entryEarlierInsideRegion!) -> while {
                                                 (context.ir[entryEarlierEffectAncestor!].kind == 19 or context.ir[entryEarlierEffectAncestor!].kind == 20) -> if { true => entryEarlierInsideRegion! } else {
-                                                    (context.ir[entryEarlierEffectAncestor!].kind == 6 or context.ir[entryEarlierEffectAncestor!].kind == 18 or context.ir[entryEarlierEffectAncestor!].kind == 20 or context.ir[entryEarlierEffectAncestor!].kind == 24 or context.ir[entryEarlierEffectAncestor!].kind == 25 or (context.ir[entryEarlierEffectAncestor!].kind == 17 and context.ir[entryEarlierEffectAncestor!].flags == 1) or (context.ir[entryEarlierEffectAncestor!].kind == 9 and (context.ir[entryEarlierEffectAncestor!].opcode == -204 or context.ir[entryEarlierEffectAncestor!].opcode == -205))) -> if { false => entryEarlierRootEffect! } else { context.ir[entryEarlierEffectAncestor!].parent => entryEarlierEffectAncestor! }
+                                                    (context.ir[entryEarlierEffectAncestor!].kind == 6 or context.ir[entryEarlierEffectAncestor!].kind == 18 or context.ir[entryEarlierEffectAncestor!].kind == 20 or context.ir[entryEarlierEffectAncestor!].kind == 24 or context.ir[entryEarlierEffectAncestor!].kind == 25 or (context.ir[entryEarlierEffectAncestor!].kind == 17 and context.ir[entryEarlierEffectAncestor!].flags == 1) or (context.ir[entryEarlierEffectAncestor!].kind == 9 and (context.ir[entryEarlierEffectAncestor!].opcode == -204 or context.ir[entryEarlierEffectAncestor!].opcode == -205 or context.ir[entryEarlierEffectAncestor!].opcode == -213))) -> if { false => entryEarlierRootEffect! } else { context.ir[entryEarlierEffectAncestor!].parent => entryEarlierEffectAncestor! }
                                                 }
                                             }
                                             (entryEarlierRootEffect! and not entryEarlierInsideRegion!) -> if { false => entryScheduleReady! }
@@ -7671,6 +7854,9 @@ emitCore context: move EmitContext -> Unit uses Console {
                     }
                     (entryExpression.kind == 9 and entryExpression.opcode == -204 and entryExpression.operand0 >= 0 and entryExpression.operand1 >= 0) -> if {
                         WhileValueRequest { whileIndex: entryExpressionIndex!, ownerIndex: functionIndex!, nodeIndex: 0 } -> emitArrayPush
+                    }
+                    (entryExpression.kind == 9 and entryExpression.opcode == -213 and entryExpression.operand0 >= 0 and entryExpression.operand1 >= 0) -> if {
+                        WhileValueRequest { whileIndex: entryExpressionIndex!, ownerIndex: functionIndex!, nodeIndex: 0 } -> emitTake
                     }
                     ((entryExpression.kind == 9 or entryExpression.kind == 6) and entryExpression.opcode == -205 and entryExpression.operand0 >= 0) -> if {
                         "  %v$(entryExpressionIndex!) = call %sl.source_text @sl_runtime_map_text(%sl.text %v$(entryExpression.operand0))" -> println

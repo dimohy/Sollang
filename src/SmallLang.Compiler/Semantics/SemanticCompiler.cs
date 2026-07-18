@@ -4899,6 +4899,57 @@ internal sealed class SemanticCompiler
                 }
                 result = new FlowResult(BoundType.Unit, FlowEffect.None);
                 return true;
+            case "take":
+                if (currentType != BoundType.DynamicIntArray
+                    && currentType != BoundType.IntDictionary
+                    && !_types.IsDynamicArray(currentType)
+                    && !_types.IsDictionary(currentType))
+                {
+                    return false;
+                }
+
+                EnsureMutableContainerSource(expression.Source, "take", mutableBindings);
+                if (target.Arguments.Count != 1)
+                {
+                    throw Error(target.Line, target.Column, "take expects exactly one index or key argument");
+                }
+
+                var takeArgument = target.Arguments[0];
+                var expectedTakeArgumentType = _types.IsDictionary(currentType)
+                    ? _types.GetDictionary(currentType).KeyType
+                    : BoundType.Int;
+                var takeArgumentType = takeArgument is DictionaryLiteralExpression contextualTakeKey
+                    && _types.IsStruct(expectedTakeArgumentType)
+                        ? InferContextualStructLiteral(
+                            contextualTakeKey,
+                            expectedTakeArgumentType,
+                            functions,
+                            bindings,
+                            allowReadIntCall)
+                        : InferExpression(
+                            takeArgument,
+                            functions,
+                            bindings,
+                            allowPrintCall: false,
+                            allowReadIntCall,
+                            allowFlowBindingTarget: false);
+                if (takeArgumentType != expectedTakeArgumentType)
+                {
+                    throw Error(
+                        takeArgument.Line,
+                        takeArgument.Column,
+                        $"take expects {FormatType(expectedTakeArgumentType)} as its index or key");
+                }
+
+                var takenType = currentType == BoundType.DynamicIntArray
+                    ? BoundType.Int
+                    : currentType == BoundType.IntDictionary
+                        ? BoundType.Int
+                        : _types.IsDynamicArray(currentType)
+                            ? _types.GetDynamicArray(currentType).ElementType
+                            : _types.GetDictionary(currentType).ValueType;
+                result = new FlowResult(takenType, FlowEffect.None);
+                return true;
             case "append":
                 if (currentType != BoundType.DynamicIntArray)
                 {

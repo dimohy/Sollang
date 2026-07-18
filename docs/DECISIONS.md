@@ -6197,3 +6197,62 @@ direct CLI build emits a 45,065-byte LLVM module whose executable prints the
 expected `Hello, dimohy. square = 49`. This is a compiler memory-efficiency
 checkpoint, not a new language gate, so the canonical roadmap remains
 48.5/60 (80.8%).
+
+## D193 - Make Owned Indexed Extraction Explicit and Destructive
+
+Status: implemented and cross-target verified
+Date: 2026-07-19
+
+Ordinary `owner![index]` remains a checked read and never silently transfers an
+owned element. Destructive extraction is explicit and fluent:
+
+```smalllang
+values! -> take(index) => value!
+dictionary! -> take(key) => value!
+```
+
+`take` requires a named mutable owner and exactly one correctly typed index or
+key. Missing array positions and dictionary keys trap consistently with checked
+indexing. Discarding an owned result is rejected by the existing value-flow
+rule, so every extracted value receives a new drop owner.
+
+Dynamic arrays load the selected value, raw-relocate later elements toward the
+gap, and decrement the stored length without destroying either the extracted
+value or relocated duplicates beyond the new logical end. Dictionaries remove
+the stored entry, destroy an owned stored key, transfer the value, and rebuild
+or compact the remaining lookup layout without recursively dropping moved
+entries. The C# reference emitter and self-host LLVM emitter use the same
+ownership contract for scalar and recursively owned components.
+
+Self-host typed IR assigns stable opcode `-213` and derives the result from the
+canonical array element or dictionary value type ID. Scheduling treats `take`
+as both a dependency-bearing mutation and an ordered effect in entry,
+function, and nested-region emission. The implementation also fixed an older
+entry ownership bug: consuming calls now record kind-11 entry points as their
+move region, preventing main cleanup from dropping a moved value twice.
+
+During verification, a multiline dictionary containing owned array values
+exposed that `DictionaryExpression` did not accept newline tokens after `{` or
+between entries. The grammar now gives dictionary literals the same newline
+layout freedom as arrays and struct literals, and the checked-in self-host
+grammar bytecode was regenerated deterministically.
+
+Examples 401-404 cover reference execution, canonical owned-result typed IR,
+self-host owned-array extraction, and self-host owned-dictionary extraction.
+Three negative cases preserve mutable-owner, key-type, and owned-result binding
+rules. `scripts/verify-owned-indexed-take.ps1` assembles and executes all three
+reference/self-host ownership cases under Linux AddressSanitizer and
+LeakSanitizer with leak and double-free detection enabled.
+
+The Release build has zero warnings and errors. The complete Windows and Linux
+suites pass 534/534. Windows Stage2 passes 6/6 at 8,336,587 LLVM bytes; Linux
+Stage2 passes 5/5 at 8,336,449 bytes. Existing single-file and imported-file
+differential hashes remain unchanged. The focused generic-container checklist
+advances to 7/8 (87.5%); only fixed-array generic function contracts remain, so
+the canonical roadmap stays 48.5/60 (80.8%).
+
+Research basis:
+
+- [Rust `Vec::remove`](https://doc.rust-lang.org/std/vec/struct.Vec.html#method.remove)
+- [Rust `HashMap::remove`](https://doc.rust-lang.org/std/collections/struct.HashMap.html#method.remove)
+- [Mojo `List.pop`](https://docs.modular.com/mojo/stdlib/collections/list/List/#pop)

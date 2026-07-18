@@ -1,0 +1,175 @@
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu"
+@sl_runtime_newline = private constant [1 x i8] c"\0A"
+declare i64 @write(i32, ptr, i64)
+define internal void @sl_runtime_flush_stdout() {
+entry:
+  ret void
+}
+define internal void @sl_runtime_print(ptr %data, i64 %len, i1 %newline) {
+entry:
+  %written = call i64 @write(i32 1, ptr %data, i64 %len)
+  br i1 %newline, label %write_newline, label %done
+write_newline:
+  %newline_written = call i64 @write(i32 1, ptr @sl_runtime_newline, i64 1)
+  br label %done
+done:
+  ret void
+}
+%sl.array.i32 = type { ptr, i64, i64 }
+declare ptr @malloc(i64)
+declare void @free(ptr)
+%sl.dict = type { ptr, ptr, i64, i64 }
+define internal void @smalllang_drop_t25(%sl.array.i32 %value) {
+entry:
+  %data = extractvalue %sl.array.i32 %value, 0
+  %length = extractvalue %sl.array.i32 %value, 1
+  call void @free(ptr %data)
+  ret void
+}
+define internal void @smalllang_drop_t26(%sl.dict %value) {
+entry:
+  %keys = extractvalue %sl.dict %value, 0
+  %values = extractvalue %sl.dict %value, 1
+  %length = extractvalue %sl.dict %value, 2
+  br label %loop
+loop:
+  %index = phi i64 [ 0, %entry ], [ %next, %continue ]
+  %in_range = icmp ult i64 %index, %length
+  br i1 %in_range, label %item, label %done
+item:
+  %value_slot = getelementptr %sl.array.i32, ptr %values, i64 %index
+  %item_value = load %sl.array.i32, ptr %value_slot, align 8
+  call void @smalllang_drop_t25(%sl.array.i32 %item_value)
+  br label %continue
+continue:
+  %next = add i64 %index, 1
+  br label %loop
+done:
+  call void @free(ptr %keys)
+  call void @free(ptr %values)
+  ret void
+}
+declare void @llvm.trap()
+%sl.text = type { ptr, i64 }
+@sl_str_39 = private unnamed_addr constant [21 x i8] c"owned dictionary take"
+define %sl.dict @sl_m0_s0() {
+entry:
+  %v4_data = call ptr @malloc(i64 4)
+  %v4_ptr0 = getelementptr i32, ptr %v4_data, i64 0
+  store i32 30, ptr %v4_ptr0, align 4
+  %v4_0 = insertvalue %sl.array.i32 poison, ptr %v4_data, 0
+  %v4_1 = insertvalue %sl.array.i32 %v4_0, i64 1, 1
+  %v4 = insertvalue %sl.array.i32 %v4_1, i64 1, 2
+  %v7_data = call ptr @malloc(i64 8)
+  %v7_ptr0 = getelementptr i32, ptr %v7_data, i64 0
+  store i32 40, ptr %v7_ptr0, align 4
+  %v7_ptr1 = getelementptr i32, ptr %v7_data, i64 1
+  store i32 41, ptr %v7_ptr1, align 4
+  %v7_0 = insertvalue %sl.array.i32 poison, ptr %v7_data, 0
+  %v7_1 = insertvalue %sl.array.i32 %v7_0, i64 2, 1
+  %v7 = insertvalue %sl.array.i32 %v7_1, i64 2, 2
+  %v2_keys = call ptr @malloc(i64 8)
+  %v2_values = call ptr @malloc(i64 48)
+  %v2_keys_ptr0 = getelementptr i32, ptr %v2_keys, i64 0
+  store i32 1, ptr %v2_keys_ptr0, align 4
+  %v2_values_ptr0 = getelementptr %sl.array.i32, ptr %v2_values, i64 0
+  store %sl.array.i32 %v4, ptr %v2_values_ptr0, align 8
+  %v2_keys_ptr1 = getelementptr i32, ptr %v2_keys, i64 1
+  store i32 2, ptr %v2_keys_ptr1, align 4
+  %v2_values_ptr1 = getelementptr %sl.array.i32, ptr %v2_values, i64 1
+  store %sl.array.i32 %v7, ptr %v2_values_ptr1, align 8
+  %v2_0 = insertvalue %sl.dict poison, ptr %v2_keys, 0
+  %v2_1 = insertvalue %sl.dict %v2_0, ptr %v2_values, 1
+  %v2_2 = insertvalue %sl.dict %v2_1, i64 2, 2
+  %v2 = insertvalue %sl.dict %v2_2, i64 2, 3
+  ret %sl.dict %v2
+}
+define i64 @sl_m0_s1(%sl.array.i32 %arg) {
+entry:
+  %v13 = extractvalue %sl.array.i32 %arg, 1
+  call void @smalllang_drop_t25(%sl.array.i32 %arg)
+  ret i64 %v13
+}
+define i32 @main() {
+entry:
+  %slot16 = alloca %sl.dict, align 8
+  %slot17 = alloca %sl.array.i32, align 8
+  %v20 = call %sl.dict @sl_m0_s0()
+  store %sl.dict %v20, ptr %slot16, align 8
+  %v22 = load %sl.dict, ptr %slot16, align 8
+  %take21_keys = extractvalue %sl.dict %v22, 0
+  %take21_values = extractvalue %sl.dict %v22, 1
+  %take21_length = extractvalue %sl.dict %v22, 2
+  %take21_capacity = extractvalue %sl.dict %v22, 3
+  br label %take21_find_start
+take21_find_start:
+  br label %take21_find
+take21_find:
+  %take21_find_index = phi i64 [ 0, %take21_find_start ], [ %take21_find_next, %take21_find_advance ]
+  %take21_find_active = icmp ult i64 %take21_find_index, %take21_length
+  br i1 %take21_find_active, label %take21_find_check, label %take21_missing
+take21_find_check:
+  %take21_key_ptr = getelementptr i32, ptr %take21_keys, i64 %take21_find_index
+  %take21_key = load i32, ptr %take21_key_ptr, align 4
+  %take21_found = icmp eq i32 %take21_key, 2
+  br i1 %take21_found, label %take21_hit, label %take21_find_advance
+take21_find_advance:
+  %take21_find_next = add i64 %take21_find_index, 1
+  br label %take21_find
+take21_missing:
+  call void @llvm.trap()
+  unreachable
+take21_hit:
+  %take21_value_ptr = getelementptr %sl.array.i32, ptr %take21_values, i64 %take21_find_index
+  %v21 = load %sl.array.i32, ptr %take21_value_ptr, align 8
+  %take21_new_length = sub i64 %take21_length, 1
+  br label %take21_shift
+take21_shift:
+  %take21_shift_index = phi i64 [ %take21_find_index, %take21_hit ], [ %take21_shift_next, %take21_shift_body ]
+  %take21_shift_active = icmp ult i64 %take21_shift_index, %take21_new_length
+  br i1 %take21_shift_active, label %take21_shift_body, label %take21_done
+take21_shift_body:
+  %take21_shift_next = add i64 %take21_shift_index, 1
+  %take21_source_key_ptr = getelementptr i32, ptr %take21_keys, i64 %take21_shift_next
+  %take21_source_key = load i32, ptr %take21_source_key_ptr, align 4
+  %take21_target_key_ptr = getelementptr i32, ptr %take21_keys, i64 %take21_shift_index
+  store i32 %take21_source_key, ptr %take21_target_key_ptr, align 4
+  %take21_source_value_ptr = getelementptr %sl.array.i32, ptr %take21_values, i64 %take21_shift_next
+  %take21_source_value = load %sl.array.i32, ptr %take21_source_value_ptr, align 8
+  %take21_target_value_ptr = getelementptr %sl.array.i32, ptr %take21_values, i64 %take21_shift_index
+  store %sl.array.i32 %take21_source_value, ptr %take21_target_value_ptr, align 8
+  br label %take21_shift
+take21_done:
+  %take21_dict0 = insertvalue %sl.dict poison, ptr %take21_keys, 0
+  %take21_dict1 = insertvalue %sl.dict %take21_dict0, ptr %take21_values, 1
+  %take21_dict2 = insertvalue %sl.dict %take21_dict1, i64 %take21_new_length, 2
+  %take21_dict3 = insertvalue %sl.dict %take21_dict2, i64 %take21_capacity, 3
+  store %sl.dict %take21_dict3, ptr %slot16, align 8
+  store %sl.array.i32 %v21, ptr %slot17, align 8
+  %v25 = load %sl.array.i32, ptr %slot17, align 8
+  %v27 = load %sl.dict, ptr %slot16, align 8
+  %v24 = call i64 @sl_m0_s1(%sl.array.i32 %v25)
+  %v26 = extractvalue %sl.dict %v27, 2
+  %while36_v31 = freeze i64 %v24
+  %while36_v30 = icmp eq i64 %while36_v31, 2
+  br i1 %while36_v30, label %while36_bool29_rhs, label %while36_exit
+while36_bool29_rhs:
+  %while36_v34 = freeze i64 %v26
+  %while36_v33 = icmp eq i64 %while36_v34, 1
+  br i1 %while36_v33, label %while36_body, label %while36_exit
+while36_body:
+  br label %if36_then
+while36_exit:
+  br label %if36_merge
+if36_then:
+  %v39_ptr = insertvalue %sl.text poison, ptr @sl_str_39, 0
+  %v39 = insertvalue %sl.text %v39_ptr, i64 21, 1
+  call void @sl_runtime_print(ptr @sl_str_39, i64 21, i1 true)
+  br label %if36_merge
+if36_merge:
+  %cleanup156_b16_current = load %sl.dict, ptr %slot16, align 8
+  call void @smalllang_drop_t26(%sl.dict %cleanup156_b16_current)
+  call void @sl_runtime_flush_stdout()
+  ret i32 0
+}

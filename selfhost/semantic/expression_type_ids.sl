@@ -1183,6 +1183,12 @@ public resolveContext prepared: semanticContext.SemanticSnapshot -> ExpressionTy
                         types![pathCandidate.typeId] => indexedCandidateType
                         ((indexedCandidateType.kind >= 2 and indexedCandidateType.kind <= 5) or (indexedCandidateType.kind == 1 and indexedCandidateType.origin == 1 and (indexedCandidateType.symbol == 16 or indexedCandidateType.symbol == 24))) -> if { true => usablePathBase! }
                     }
+                    # A mutating take flow derives its result from the owned
+                    # array element or dictionary value. The source expression
+                    # is the nearest typed child; the index/key argument is
+                    # nested below the flow target call and therefore cannot
+                    # replace that base.
+                    pathAncestorNode.kind == 10 -> if { true => usablePathBase! }
                     (usablePathBase! and pathDistance! < pathBaseDistance![pathAncestorGlobal]) -> if {
                         pathCandidateIndex! => pathBaseExpression![pathAncestorGlobal]
                         pathDistance! => pathBaseDistance![pathAncestorGlobal]
@@ -1284,6 +1290,42 @@ public resolveContext prepared: semanticContext.SemanticSnapshot -> ExpressionTy
                                     0 => existingIndexExpression!.status
                                     existingIndexExpression! => expressions![indexExpressionIndex!]
                                     true => pathChanged!
+                                }
+                            }
+                        }
+                    }
+                    pathNode.kind == 10 -> if {
+                        false => takeFlow!
+                        pathNode.firstToken => takeTokenIndex!
+                        takeTokenIndex! < pathNode.firstToken + pathNode.tokenCount -> while {
+                            prepared.package.tokens[pathRange.tokenStart + takeTokenIndex!] => takeToken
+                            takeToken.kind == grammar.tokenIdIdentifier -> if {
+                                takeToken.span.length == UIntSize(4) -> if {
+                                    ((pathSource -> byte(takeToken.span.start)) == UInt8(116) and (pathSource -> byte(takeToken.span.start + UIntSize(1))) == UInt8(97) and (pathSource -> byte(takeToken.span.start + UIntSize(2))) == UInt8(107) and (pathSource -> byte(takeToken.span.start + UIntSize(3))) == UInt8(101)) -> if { true => takeFlow! }
+                                }
+                            }
+                            takeTokenIndex! + 1 => takeTokenIndex!
+                        }
+                        takeFlow! -> if {
+                            types![baseExpression.typeId] => takeBaseType
+                            -1 => takeResultType!
+                            takeBaseType.kind == 3 -> if { takeBaseType.first => takeResultType! }
+                            takeBaseType.kind == 5 -> if { takeBaseType.second => takeResultType! }
+                            takeResultType! >= 0 -> if {
+                                expressionIndexByAst![pathGlobalAst] => takeExpressionIndex!
+                                takeExpressionIndex! < 0 -> if {
+                                    expressions! -> len => takeExpressionIndex!
+                                    expressions! -> push(ExpressionTypeId { sourceModule: pathSourceIndex!, astNode: pathAstIndex!, typeId: takeResultType!, status: 0 })
+                                    takeExpressionIndex! => expressionIndexByAst![pathGlobalAst]
+                                    true => pathChanged!
+                                } else {
+                                    expressions![takeExpressionIndex!] => existingTakeExpression!
+                                    (existingTakeExpression!.typeId != takeResultType! or existingTakeExpression!.status != 0) -> if {
+                                        takeResultType! => existingTakeExpression!.typeId
+                                        0 => existingTakeExpression!.status
+                                        existingTakeExpression! => expressions![takeExpressionIndex!]
+                                        true => pathChanged!
+                                    }
                                 }
                             }
                         }

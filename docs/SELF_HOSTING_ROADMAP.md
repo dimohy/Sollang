@@ -1057,10 +1057,10 @@ of a shallow container spelling.
 - [x] specialize contextual dictionary return literals;
 - [x] use canonical dictionary key/value types for lookup and LLVM loads;
 - [x] recursively destroy owned dynamic-array and dictionary elements;
-- [ ] implement move extraction of owned indexed elements;
+- [x] implement move extraction of owned indexed elements;
 - [ ] complete fixed-array generic function contracts.
 
-This focused migration is **6/8 checks (75%)**. Examples 397 and 398 assemble,
+This focused migration is **7/8 checks (87.5%)**. Examples 397 and 398 assemble,
 link, and execute on Windows and Linux. They prove that `{UInt16: Int64}` uses
 2-byte keys and 8-byte values and that `[UInt16; ~]` uses a 2-byte stride. Before
 this correction the producer stored default `Int32` components while the
@@ -1076,8 +1076,16 @@ moved field is never destroyed twice. `scripts/verify-recursive-container-drop.p
 assembles the generated Linux LLVM and executes it under AddressSanitizer with
 leak detection enabled.
 
-The formal roadmap remains **48.5/60 (80.8%)** until owned indexed extraction
-and fixed-array contracts close the canonical gate.
+Examples 401-404 add explicit mutating extraction with
+`owner! -> take(indexOrKey) => value!`. Ordinary indexing remains a borrow/read
+operation and still rejects copying an owned element. Array extraction closes
+the ordered gap, while dictionary extraction removes the stored key/value
+entry. The extracted value becomes a new owner and the shortened source owner
+retains exactly the remaining elements. The dedicated Linux verifier executes
+the reference and both self-host forms under AddressSanitizer and LeakSanitizer.
+
+The formal roadmap remains **48.5/60 (80.8%)** until fixed-array generic
+function contracts close the canonical gate.
 
 Research basis:
 

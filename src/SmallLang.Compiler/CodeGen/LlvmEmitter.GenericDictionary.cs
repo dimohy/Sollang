@@ -469,6 +469,45 @@ internal sealed partial class LlvmEmitter
         return dictionary with { PointerName = pointer, LengthName = length, CapacityName = capacity };
     }
 
+    private (RuntimeInlineDictionary Dictionary, RuntimeValue Value) EmitInlineDictionaryTake(
+        RuntimeInlineDictionary dictionary,
+        RuntimeValue key)
+    {
+        var definition = _program.Types.GetDictionary(dictionary.DictionaryType);
+        var found = EmitInlineDictionaryFindSlot(dictionary, key);
+        EmitTrapUnless(found.FoundName, "generic_dict_take_missing");
+        var storedKey = LoadInlineDictionaryField(
+            dictionary,
+            found.SlotName,
+            definition.KeyType,
+            0,
+            definition.KeyAlignment,
+            "generic_dict_take_key");
+        var value = LoadInlineDictionaryField(
+            dictionary,
+            found.SlotName,
+            definition.ValueType,
+            definition.ValueOffset,
+            definition.ValueAlignment,
+            "generic_dict_take_value");
+        if (_program.Types.ContainsOwnedStorage(definition.KeyType))
+        {
+            var materializedKey = MaterializeAggregateValue(storedKey);
+            EmitOwnedDropCall(definition.KeyType, materializedKey.ValueName);
+        }
+
+        var nextLength = NextTemp("generic_dict_take_length");
+        EmitBinary(nextLength, "sub", "i64", dictionary.LengthName, "1");
+        var target = dictionary with
+        {
+            PointerName = EmitInlineDictionaryAllocate(dictionary.CapacityName, definition),
+            LengthName = nextLength
+        };
+        EmitInlineDictionaryRehashExcept(dictionary, target, found.SlotName);
+        EmitCall(target: null, "void", "smalllang_free", $"ptr {dictionary.PointerName}");
+        return (target, value);
+    }
+
     private RuntimeInlineDictionary EmitInlineDictionaryGrow(RuntimeInlineDictionary dictionary)
     {
         var zero = NextTemp("generic_dict_zero_capacity");
@@ -517,6 +556,62 @@ internal sealed partial class LlvmEmitter
         EmitInlineDictionaryInsertUnique(target, key, value);
         EmitBranch(next); EmitFunctionLine();
         EmitLabel(next);
+        EmitBinary(nextI, "add", "i64", i, "1");
+        EmitBranch(loop); EmitFunctionLine();
+        EmitLabel(done);
+        _currentBlockLabel = done;
+    }
+
+    private void EmitInlineDictionaryRehashExcept(
+        RuntimeInlineDictionary source,
+        RuntimeInlineDictionary target,
+        string removedSlot)
+    {
+        var definition = _program.Types.GetDictionary(source.DictionaryType);
+        var entry = _currentBlockLabel;
+        var loop = NextLabel("generic_dict_take_rehash");
+        var body = NextLabel("generic_dict_take_rehash_body");
+        var inspect = NextLabel("generic_dict_take_rehash_inspect");
+        var move = NextLabel("generic_dict_take_rehash_move");
+        var next = NextLabel("generic_dict_take_rehash_next");
+        var done = NextLabel("generic_dict_take_rehash_done");
+        var nextI = NextTemp("generic_dict_take_rehash_next_i");
+        EmitBranch(loop); EmitFunctionLine();
+        EmitLabel(loop);
+        var i = NextTemp("generic_dict_take_rehash_i");
+        EmitPhi(i, "i64", ("0", entry), (nextI, next));
+        var active = NextTemp("generic_dict_take_rehash_active");
+        EmitCompare(active, "ult", "i64", i, source.CapacityName);
+        EmitConditionalBranch(active, body, done); EmitFunctionLine();
+        EmitLabel(body);
+        var removed = NextTemp("generic_dict_take_rehash_removed");
+        EmitCompare(removed, "eq", "i64", i, removedSlot);
+        EmitConditionalBranch(removed, next, inspect); EmitFunctionLine();
+        EmitLabel(inspect);
+        var control = LoadInlineDictionaryControl(source, i);
+        var occupied = NextTemp("generic_dict_take_rehash_occupied");
+        EmitCompare(occupied, "ne", "i8", control, "0");
+        EmitConditionalBranch(occupied, move, next); EmitFunctionLine();
+        EmitLabel(move);
+        _currentBlockLabel = move;
+        var key = LoadInlineDictionaryField(
+            source,
+            i,
+            definition.KeyType,
+            0,
+            definition.KeyAlignment,
+            "generic_dict_take_rehash_key");
+        var value = LoadInlineDictionaryField(
+            source,
+            i,
+            definition.ValueType,
+            definition.ValueOffset,
+            definition.ValueAlignment,
+            "generic_dict_take_rehash_value");
+        EmitInlineDictionaryInsertUnique(target, key, value);
+        EmitBranch(next); EmitFunctionLine();
+        EmitLabel(next);
+        _currentBlockLabel = next;
         EmitBinary(nextI, "add", "i64", i, "1");
         EmitBranch(loop); EmitFunctionLine();
         EmitLabel(done);

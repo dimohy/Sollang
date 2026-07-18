@@ -64,6 +64,39 @@ internal sealed partial class LlvmEmitter
         return EmitDynamicArrayPush(array, value);
     }
 
+    private (RuntimeDynamicIntArray Array, RuntimeInt Value) EmitDynamicArrayTake(
+        RuntimeDynamicIntArray array,
+        string index)
+    {
+        var value = EmitDynamicArrayLoad(array, index);
+        var nextLength = NextTemp("array_take_length");
+        EmitBinary(nextLength, "sub", "i64", array.LengthName, "1");
+        var entry = _currentBlockLabel;
+        var loop = NextLabel("array_take_shift");
+        var body = NextLabel("array_take_shift_body");
+        var done = NextLabel("array_take_shift_done");
+        var next = NextTemp("array_take_next");
+        EmitBranch(loop); EmitFunctionLine();
+        EmitLabel(loop);
+        var current = NextTemp("array_take_current");
+        EmitPhi(current, "i64", (index, entry), (next, body));
+        var active = NextTemp("array_take_active");
+        EmitCompare(active, "ult", "i64", current, nextLength);
+        EmitConditionalBranch(active, body, done); EmitFunctionLine();
+        EmitLabel(body);
+        var sourceIndex = NextTemp("array_take_source_index");
+        EmitBinary(sourceIndex, "add", "i64", current, "1");
+        var sourceSlot = NextTemp("array_take_source");
+        EmitAssign(sourceSlot, $"getelementptr i32, ptr {array.PointerName}, i64 {sourceIndex}");
+        var moved = LoadInt(sourceSlot, "array_take_moved");
+        StoreDynamicArrayElement(array.PointerName, current, moved.ValueName);
+        EmitBinary(next, "add", "i64", current, "1");
+        EmitBranch(loop); EmitFunctionLine();
+        EmitLabel(done);
+        _currentBlockLabel = done;
+        return (array with { LengthName = nextLength }, value);
+    }
+
     private RuntimeDynamicIntArray EmitDynamicArrayUpdatedMove(RuntimeDynamicIntArray array, string index, string value)
     {
         var inBounds = NextTemp("array_update_in_bounds");
@@ -138,6 +171,24 @@ internal sealed partial class LlvmEmitter
         return EmitDictionaryPut(dictionary, key, value);
     }
 
+    private (RuntimeIntDictionary Dictionary, RuntimeInt Value) EmitDictionaryTake(
+        RuntimeIntDictionary dictionary,
+        string key)
+    {
+        var found = EmitDictionaryFindSlot(dictionary, key);
+        EmitTrapUnless(found.FoundName, "dict_take_missing");
+        var value = LoadDictionaryValue(dictionary, found.SlotName);
+        var nextLength = NextTemp("dict_take_length");
+        EmitBinary(nextLength, "sub", "i64", dictionary.LengthName, "1");
+        var target = new RuntimeIntDictionary(
+            EmitDictionaryAllocate(dictionary.CapacityName),
+            nextLength,
+            dictionary.CapacityName);
+        EmitDictionaryRehashExcept(dictionary, target, found.SlotName);
+        EmitCall(target: null, "void", "smalllang_free", $"ptr {dictionary.PointerName}");
+        return (target, value);
+    }
+
     private RuntimeDynamicInlineArray EmitDynamicInlineArrayPush(
         RuntimeDynamicInlineArray array,
         RuntimeValue value)
@@ -199,6 +250,44 @@ internal sealed partial class LlvmEmitter
             LengthName = resultLength,
             CapacityName = resultCapacity
         };
+    }
+
+    private (RuntimeDynamicInlineArray Array, RuntimeValue Value) EmitDynamicInlineArrayTake(
+        RuntimeDynamicInlineArray array,
+        string index)
+    {
+        var value = EmitDynamicInlineArrayLoad(array, index);
+        var definition = _program.Types.GetDynamicArray(array.ArrayType);
+        var llvmType = LlvmType(definition.ElementType);
+        var nextLength = NextTemp("generic_array_take_length");
+        EmitBinary(nextLength, "sub", "i64", array.LengthName, "1");
+        var entry = _currentBlockLabel;
+        var loop = NextLabel("generic_array_take_shift");
+        var body = NextLabel("generic_array_take_shift_body");
+        var done = NextLabel("generic_array_take_shift_done");
+        var next = NextTemp("generic_array_take_next");
+        EmitBranch(loop); EmitFunctionLine();
+        EmitLabel(loop);
+        var current = NextTemp("generic_array_take_current");
+        EmitPhi(current, "i64", (index, entry), (next, body));
+        var active = NextTemp("generic_array_take_active");
+        EmitCompare(active, "ult", "i64", current, nextLength);
+        EmitConditionalBranch(active, body, done); EmitFunctionLine();
+        EmitLabel(body);
+        var sourceIndex = NextTemp("generic_array_take_source_index");
+        EmitBinary(sourceIndex, "add", "i64", current, "1");
+        var sourceSlot = NextTemp("generic_array_take_source");
+        EmitAssign(sourceSlot, $"getelementptr {llvmType}, ptr {array.PointerName}, i64 {sourceIndex}");
+        var moved = NextTemp("generic_array_take_moved");
+        EmitLoad(moved, llvmType, sourceSlot, definition.ElementAlignment);
+        var targetSlot = NextTemp("generic_array_take_target");
+        EmitAssign(targetSlot, $"getelementptr {llvmType}, ptr {array.PointerName}, i64 {current}");
+        EmitStore(llvmType, moved, targetSlot, definition.ElementAlignment);
+        EmitBinary(next, "add", "i64", current, "1");
+        EmitBranch(loop); EmitFunctionLine();
+        EmitLabel(done);
+        _currentBlockLabel = done;
+        return (array with { LengthName = nextLength }, value);
     }
 
     private void EmitDictionaryAssignExisting(RuntimeIntDictionary dictionary, string key, string value)
@@ -516,6 +605,49 @@ internal sealed partial class LlvmEmitter
         EmitFunctionLine();
         EmitLabel(doneLabel);
         _currentBlockLabel = doneLabel;
+    }
+
+    private void EmitDictionaryRehashExcept(
+        RuntimeIntDictionary source,
+        RuntimeIntDictionary target,
+        string removedSlot)
+    {
+        var entry = _currentBlockLabel;
+        var loop = NextLabel("dict_take_rehash");
+        var body = NextLabel("dict_take_rehash_body");
+        var inspect = NextLabel("dict_take_rehash_inspect");
+        var move = NextLabel("dict_take_rehash_move");
+        var next = NextLabel("dict_take_rehash_next");
+        var done = NextLabel("dict_take_rehash_done");
+        var nextI = NextTemp("dict_take_rehash_next_i");
+        EmitBranch(loop); EmitFunctionLine();
+        EmitLabel(loop);
+        var i = NextTemp("dict_take_rehash_i");
+        EmitPhi(i, "i64", ("0", entry), (nextI, next));
+        var active = NextTemp("dict_take_rehash_active");
+        EmitCompare(active, "ult", "i64", i, source.CapacityName);
+        EmitConditionalBranch(active, body, done); EmitFunctionLine();
+        EmitLabel(body);
+        var removed = NextTemp("dict_take_rehash_removed");
+        EmitCompare(removed, "eq", "i64", i, removedSlot);
+        EmitConditionalBranch(removed, next, inspect); EmitFunctionLine();
+        EmitLabel(inspect);
+        var control = LoadDictionaryControl(source, i);
+        var occupied = NextTemp("dict_take_rehash_occupied");
+        EmitCompare(occupied, "ne", "i8", control, "0");
+        EmitConditionalBranch(occupied, move, next); EmitFunctionLine();
+        EmitLabel(move);
+        _currentBlockLabel = move;
+        var key = LoadDictionaryKey(source, i);
+        var value = LoadDictionaryValue(source, i);
+        EmitDictionaryInsertUnique(target, key.ValueName, value.ValueName);
+        EmitBranch(next); EmitFunctionLine();
+        EmitLabel(next);
+        _currentBlockLabel = next;
+        EmitBinary(nextI, "add", "i64", i, "1");
+        EmitBranch(loop); EmitFunctionLine();
+        EmitLabel(done);
+        _currentBlockLabel = done;
     }
 
     private void EmitCopyInlineBuffer(
