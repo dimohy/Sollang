@@ -22,11 +22,15 @@ public collectPrepared nodes: [ast.AstNode; ~] -> [Symbol; ~] {
     [Symbol; ~] => symbols!
     [Int; ~] => astToSymbol!
     nodes -> len => astCount
+    0 => astMapIndex!
+    astMapIndex! < astCount -> while {
+        astToSymbol! -> push(-1)
+        astMapIndex! + 1 => astMapIndex!
+    }
     0 => astIndex!
 
     astIndex! < astCount -> while {
         nodes[astIndex!] => node
-        astToSymbol! -> push(-1)
         false => isSymbol!
         node.kind >= 3 -> if {
             node.kind <= 7 -> if { true => isSymbol! }

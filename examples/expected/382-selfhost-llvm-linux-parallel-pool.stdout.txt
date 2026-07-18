@@ -135,7 +135,7 @@ write_newline:
 done:
   ret void
 }
-%smalllang.compute_group = type { ptr, ptr, ptr, i64, ptr, ptr }
+%smalllang.compute_group = type { ptr, ptr, ptr, i64, ptr, ptr, ptr, ptr, ptr, ptr, ptr, i64, ptr }
 @smalllang_compute_work_event_fd = internal global i32 -1
 @smalllang_compute_completion_event_fd = internal global i32 -1
 @smalllang_compute_worker_count = internal global i32 0
@@ -173,7 +173,11 @@ take:
   br label %claim
 claim:
   %index = atomicrmw add ptr @smalllang_compute_next, i64 1 acq_rel
-  %has_work = icmp ult i64 %index, %count
+  %within_count = icmp ult i64 %index, %count
+  %failure_limit_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 11
+  %failure_limit = load atomic i64, ptr %failure_limit_slot acquire, align 8
+  %before_failure = icmp ult i64 %index, %failure_limit
+  %has_work = and i1 %within_count, %before_failure
   br i1 %has_work, label %work, label %complete
 work:
   %callback_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 0
@@ -327,7 +331,11 @@ publish:
   br label %help_claim
 help_claim:
   %help_index = atomicrmw add ptr @smalllang_compute_next, i64 1 acq_rel
-  %help_has_work = icmp ult i64 %help_index, %count
+  %help_within_count = icmp ult i64 %help_index, %count
+  %help_failure_limit_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 11
+  %help_failure_limit = load atomic i64, ptr %help_failure_limit_slot acquire, align 8
+  %help_before_failure = icmp ult i64 %help_index, %help_failure_limit
+  %help_has_work = and i1 %help_within_count, %help_before_failure
   br i1 %help_has_work, label %help_work, label %help_wait
 help_work:
   %help_callback_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 0
@@ -351,7 +359,9 @@ help_wait:
 flush_prepare:
   %sinks_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 5
   %sinks = load ptr, ptr %sinks_slot, align 8
-  call void @smalllang_memory_output_sink_array_flush(ptr %sinks, i64 %count, ptr %group, ptr @smalllang_memory_output_sink_write)
+  %flush_limit_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 11
+  %flush_limit = load atomic i64, ptr %flush_limit_slot acquire, align 8
+  call void @smalllang_memory_output_sink_array_flush_prefix(ptr %sinks, i64 %count, i64 %flush_limit, ptr %group, ptr @smalllang_memory_output_sink_write)
   store atomic ptr null, ptr @smalllang_compute_group_current release, align 8
   br label %done
 failed:
@@ -543,6 +553,20 @@ entry:
   call void @llvm.memset.p0.i64(ptr %v13_sinks, i8 0, i64 %v13_sink_bytes, i1 false)
   %v13_sinks_slot = getelementptr %smalllang.compute_group, ptr %v13_group, i32 0, i32 5
   store ptr %v13_sinks, ptr %v13_sinks_slot, align 8
+  %v13_runtime_slot_6 = getelementptr %smalllang.compute_group, ptr %v13_group, i32 0, i32 6
+  store ptr null, ptr %v13_runtime_slot_6, align 8
+  %v13_runtime_slot_7 = getelementptr %smalllang.compute_group, ptr %v13_group, i32 0, i32 7
+  store ptr null, ptr %v13_runtime_slot_7, align 8
+  %v13_runtime_slot_8 = getelementptr %smalllang.compute_group, ptr %v13_group, i32 0, i32 8
+  store ptr null, ptr %v13_runtime_slot_8, align 8
+  %v13_runtime_slot_9 = getelementptr %smalllang.compute_group, ptr %v13_group, i32 0, i32 9
+  store ptr null, ptr %v13_runtime_slot_9, align 8
+  %v13_runtime_slot_10 = getelementptr %smalllang.compute_group, ptr %v13_group, i32 0, i32 10
+  store ptr null, ptr %v13_runtime_slot_10, align 8
+  %v13_failure_limit_slot = getelementptr %smalllang.compute_group, ptr %v13_group, i32 0, i32 11
+  store atomic i64 %v13_length, ptr %v13_failure_limit_slot release, align 8
+  %v13_initialized_slot = getelementptr %smalllang.compute_group, ptr %v13_group, i32 0, i32 12
+  store ptr null, ptr %v13_initialized_slot, align 8
   call void @smalllang_compute_execute(ptr %v13_group)
   %v13_0 = insertvalue %sl.array.i32 poison, ptr %v13_data, 0
   %v13_1 = insertvalue %sl.array.i32 %v13_0, i64 %v13_length, 1

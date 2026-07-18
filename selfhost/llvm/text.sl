@@ -119,6 +119,12 @@ struct EnumPayloadDropRequest {
     regionIndex: Int
 }
 
+struct TryParallelCollectRequest {
+    expressionIndex: Int
+    outerTypeId: Int
+    callbackTypeId: Int
+}
+
 struct EmitContext {
     sources: [Text; ~]
     ranges: [analysis.SourceAnalysisRange; ~]
@@ -814,7 +820,7 @@ emitCore context: move EmitContext -> Unit uses Console {
                     } else {
                         currentType.kind == 1 -> if {
                             currentType.origin == 1 -> if {
-                                not ((currentType.symbol >= 2 and currentType.symbol <= 14) or (currentType.symbol >= 19 and currentType.symbol <= 23)) -> if {
+                                not (currentType.symbol == 1 or (currentType.symbol >= 2 and currentType.symbol <= 14) or (currentType.symbol >= 19 and currentType.symbol <= 23)) -> if {
                                     false => supported!
                                 }
                             } else {
@@ -835,7 +841,12 @@ emitCore context: move EmitContext -> Unit uses Console {
                             (currentType.kind == 3 or currentType.kind == 4) -> if {
                                 pending! -> push(currentType.first)
                             } else {
-                                false => supported!
+                                (currentType.kind == 7 and currentType.origin == 4 and (currentType.symbol == 0 or currentType.symbol == 1)) -> if {
+                                    pending! -> push(currentType.first)
+                                    currentType.second >= 0 -> if { pending! -> push(currentType.second) }
+                                } else {
+                                    false => supported!
+                                }
                             }
                         }
                     }
@@ -855,18 +866,28 @@ emitCore context: move EmitContext -> Unit uses Console {
     parallelUsesComputePool expressionIndex: Int -> Bool {
         false => supported!
         context.ir[expressionIndex] => parallelExpression
-        (context.supportsComputePool and parallelExpression.kind == 6 and parallelExpression.opcode == -207 and parallelExpression.operand1 >= 0) -> if {
+        (context.supportsComputePool and parallelExpression.kind == 6 and (parallelExpression.opcode == -207 or parallelExpression.opcode == -209) and parallelExpression.operand1 >= 0) -> if {
             context.ir[parallelExpression.operand1] => parallelCall
             CallEnvironmentRequest { callerIndex: -1, callIndex: expressionIndex, targetModule: parallelCall.targetModule, targetSymbol: parallelCall.symbol, hasArgument: true } -> targetFunctionIndex => parallelTarget
             parallelTarget >= 0 -> if {
                 parallelTarget -> functionCaptures => parallelTargetCaptures!
                 (parallelTargetCaptures! -> len) > 0 -> if { true => supported! } else {
                     parallelExpression.operand0 -> hasWorkerScalarArrayElement => scalarInput
-                    expressionIndex -> hasWorkerScalarArrayElement => scalarOutput
-                    (scalarInput and scalarOutput) -> if { true => supported! }
+                    false => scalarOutput!
+                    parallelExpression.opcode == -207 -> if {
+                        expressionIndex -> hasWorkerScalarArrayElement => scalarOutput!
+                    } else {
+                        parallelCall.typeId >= 0 -> if { parallelCall.typeId -> workerTransferType => scalarOutput! }
+                    }
+                    (scalarInput and scalarOutput!) -> if { true => supported! }
                     parallelExpression.operand0 -> hasWorkerSourceTextArrayElement => sourceTextInput
-                    expressionIndex -> hasWorkerTransferArrayElement => transferableOutput
-                    (sourceTextInput and transferableOutput) -> if { true => supported! }
+                    false => transferableOutput!
+                    parallelExpression.opcode == -207 -> if {
+                        expressionIndex -> hasWorkerTransferArrayElement => transferableOutput!
+                    } else {
+                        parallelCall.typeId >= 0 -> if { parallelCall.typeId -> workerTransferType => transferableOutput! }
+                    }
+                    (sourceTextInput and transferableOutput!) -> if { true => supported! }
                 }
                 0 => parallelTargetCaptureIndex!
                 parallelTargetCaptureIndex! < (parallelTargetCaptures! -> len) -> while {
@@ -1036,6 +1057,12 @@ emitCore context: move EmitContext -> Unit uses Console {
         }
         resolved! => result
         result
+    }
+    callArgumentIndex callIndex: Int -> Int {
+        context.ir[callIndex] => call
+        call.operand0 => argumentIndex!
+        call.operand1 >= 0 -> if { call.operand1 => argumentIndex! }
+        argumentIndex! -> aggregateValueIndex
     }
     regionResultValueIndex regionIndex: Int -> Int {
         context.ir[regionIndex].operand1 => resolved!
@@ -1709,6 +1736,117 @@ emitCore context: move EmitContext -> Unit uses Console {
         "  %v$(request.nodeIndex) = load " -> print
         constructor -> writeIrType
         ", ptr %v$(request.nodeIndex)_enum_slot, align 8" -> println
+    }
+    emitTryParallelCollect request: TryParallelCollectRequest -> Unit uses Console {
+        context.types[request.outerTypeId] => outerResultType
+        context.types[request.callbackTypeId] => callbackResultType
+        callbackResultType.first => okTypeId
+        callbackResultType.second => errorTypeId
+        context.typeSizes[request.callbackTypeId] => callbackStride
+        context.typeSizes[okTypeId] => okStride
+        "  %v$(request.expressionIndex)_failure_limit = load atomic i64, ptr %v$(request.expressionIndex)_failure_limit_slot acquire, align 8" -> println
+        "  %v$(request.expressionIndex)_has_failure = icmp ult i64 %v$(request.expressionIndex)_failure_limit, %v$(request.expressionIndex)_length" -> println
+        "  br i1 %v$(request.expressionIndex)_has_failure, label %tryparallel$(request.expressionIndex)_error, label %tryparallel$(request.expressionIndex)_success" -> println
+        "tryparallel$(request.expressionIndex)_error:" -> println
+        "  %v$(request.expressionIndex)_selected_offset = mul i64 %v$(request.expressionIndex)_failure_limit, $callbackStride" -> println
+        "  %v$(request.expressionIndex)_selected_ptr = getelementptr i8, ptr %v$(request.expressionIndex)_callback_results, i64 %v$(request.expressionIndex)_selected_offset" -> println
+        "  %v$(request.expressionIndex)_selected = load " -> print
+        request.callbackTypeId -> writeSemanticTypeId
+        ", ptr %v$(request.expressionIndex)_selected_ptr, align $(context.typeAligns[request.callbackTypeId])" -> println
+        "  %v$(request.expressionIndex)_selected_slot = alloca " -> print
+        request.callbackTypeId -> writeSemanticTypeId
+        ", align 8" -> println
+        "  store " -> print
+        request.callbackTypeId -> writeSemanticTypeId
+        " %v$(request.expressionIndex)_selected, ptr %v$(request.expressionIndex)_selected_slot, align 8" -> println
+        "  %v$(request.expressionIndex)_selected_payload_ptr = getelementptr inbounds " -> print
+        request.callbackTypeId -> writeSemanticTypeId
+        ", ptr %v$(request.expressionIndex)_selected_slot, i32 0, i32 1" -> println
+        "  %v$(request.expressionIndex)_error_payload = load " -> print
+        errorTypeId -> writeSemanticTypeId
+        ", ptr %v$(request.expressionIndex)_selected_payload_ptr, align $(context.typeAligns[errorTypeId])" -> println
+        "  call void @free(ptr %v$(request.expressionIndex)_callback_results)" -> println
+        "  call void @free(ptr %v$(request.expressionIndex)_initialized)" -> println
+        "  call void @free(ptr %v$(request.expressionIndex)_data)" -> println
+        "  %v$(request.expressionIndex)_error_slot = alloca " -> print
+        request.outerTypeId -> writeSemanticTypeId
+        ", align 8" -> println
+        "  store " -> print
+        request.outerTypeId -> writeSemanticTypeId
+        " zeroinitializer, ptr %v$(request.expressionIndex)_error_slot, align 8" -> println
+        "  %v$(request.expressionIndex)_error_tag = getelementptr inbounds " -> print
+        request.outerTypeId -> writeSemanticTypeId
+        ", ptr %v$(request.expressionIndex)_error_slot, i32 0, i32 0" -> println
+        "  store i32 1, ptr %v$(request.expressionIndex)_error_tag, align 4" -> println
+        "  %v$(request.expressionIndex)_outer_error_payload = getelementptr inbounds " -> print
+        request.outerTypeId -> writeSemanticTypeId
+        ", ptr %v$(request.expressionIndex)_error_slot, i32 0, i32 1" -> println
+        "  store " -> print
+        errorTypeId -> writeSemanticTypeId
+        " %v$(request.expressionIndex)_error_payload, ptr %v$(request.expressionIndex)_outer_error_payload, align $(context.typeAligns[errorTypeId])" -> println
+        "  %v$(request.expressionIndex)_error_result = load " -> print
+        request.outerTypeId -> writeSemanticTypeId
+        ", ptr %v$(request.expressionIndex)_error_slot, align 8" -> println
+        "  br label %tryparallel$(request.expressionIndex)_merge" -> println
+        "tryparallel$(request.expressionIndex)_success:" -> println
+        "  br label %tryparallel$(request.expressionIndex)_copy_header" -> println
+        "tryparallel$(request.expressionIndex)_copy_header:" -> println
+        "  %v$(request.expressionIndex)_copy_index = phi i64 [ 0, %tryparallel$(request.expressionIndex)_success ], [ %v$(request.expressionIndex)_copy_next, %tryparallel$(request.expressionIndex)_copy_body ]" -> println
+        "  %v$(request.expressionIndex)_copy_in_range = icmp ult i64 %v$(request.expressionIndex)_copy_index, %v$(request.expressionIndex)_length" -> println
+        "  br i1 %v$(request.expressionIndex)_copy_in_range, label %tryparallel$(request.expressionIndex)_copy_body, label %tryparallel$(request.expressionIndex)_copy_done" -> println
+        "tryparallel$(request.expressionIndex)_copy_body:" -> println
+        "  %v$(request.expressionIndex)_copy_result_offset = mul i64 %v$(request.expressionIndex)_copy_index, $callbackStride" -> println
+        "  %v$(request.expressionIndex)_copy_result_ptr = getelementptr i8, ptr %v$(request.expressionIndex)_callback_results, i64 %v$(request.expressionIndex)_copy_result_offset" -> println
+        "  %v$(request.expressionIndex)_copy_result = load " -> print
+        request.callbackTypeId -> writeSemanticTypeId
+        ", ptr %v$(request.expressionIndex)_copy_result_ptr, align $(context.typeAligns[request.callbackTypeId])" -> println
+        "  %v$(request.expressionIndex)_copy_result_slot = alloca " -> print
+        request.callbackTypeId -> writeSemanticTypeId
+        ", align 8" -> println
+        "  store " -> print
+        request.callbackTypeId -> writeSemanticTypeId
+        " %v$(request.expressionIndex)_copy_result, ptr %v$(request.expressionIndex)_copy_result_slot, align 8" -> println
+        "  %v$(request.expressionIndex)_copy_payload_ptr = getelementptr inbounds " -> print
+        request.callbackTypeId -> writeSemanticTypeId
+        ", ptr %v$(request.expressionIndex)_copy_result_slot, i32 0, i32 1" -> println
+        "  %v$(request.expressionIndex)_copy_payload = load " -> print
+        okTypeId -> writeSemanticTypeId
+        ", ptr %v$(request.expressionIndex)_copy_payload_ptr, align $(context.typeAligns[okTypeId])" -> println
+        "  %v$(request.expressionIndex)_copy_output_offset = mul i64 %v$(request.expressionIndex)_copy_index, $okStride" -> println
+        "  %v$(request.expressionIndex)_copy_output_ptr = getelementptr i8, ptr %v$(request.expressionIndex)_data, i64 %v$(request.expressionIndex)_copy_output_offset" -> println
+        "  store " -> print
+        okTypeId -> writeSemanticTypeId
+        " %v$(request.expressionIndex)_copy_payload, ptr %v$(request.expressionIndex)_copy_output_ptr, align $(context.typeAligns[okTypeId])" -> println
+        "  %v$(request.expressionIndex)_copy_next = add i64 %v$(request.expressionIndex)_copy_index, 1" -> println
+        "  br label %tryparallel$(request.expressionIndex)_copy_header" -> println
+        "tryparallel$(request.expressionIndex)_copy_done:" -> println
+        "  call void @free(ptr %v$(request.expressionIndex)_callback_results)" -> println
+        "  call void @free(ptr %v$(request.expressionIndex)_initialized)" -> println
+        "  %v$(request.expressionIndex)_array0 = insertvalue %sl.array.i32 poison, ptr %v$(request.expressionIndex)_data, 0" -> println
+        "  %v$(request.expressionIndex)_array1 = insertvalue %sl.array.i32 %v$(request.expressionIndex)_array0, i64 %v$(request.expressionIndex)_length, 1" -> println
+        "  %v$(request.expressionIndex)_array = insertvalue %sl.array.i32 %v$(request.expressionIndex)_array1, i64 %v$(request.expressionIndex)_length, 2" -> println
+        "  %v$(request.expressionIndex)_success_slot = alloca " -> print
+        request.outerTypeId -> writeSemanticTypeId
+        ", align 8" -> println
+        "  store " -> print
+        request.outerTypeId -> writeSemanticTypeId
+        " zeroinitializer, ptr %v$(request.expressionIndex)_success_slot, align 8" -> println
+        "  %v$(request.expressionIndex)_success_tag = getelementptr inbounds " -> print
+        request.outerTypeId -> writeSemanticTypeId
+        ", ptr %v$(request.expressionIndex)_success_slot, i32 0, i32 0" -> println
+        "  store i32 0, ptr %v$(request.expressionIndex)_success_tag, align 4" -> println
+        "  %v$(request.expressionIndex)_outer_success_payload = getelementptr inbounds " -> print
+        request.outerTypeId -> writeSemanticTypeId
+        ", ptr %v$(request.expressionIndex)_success_slot, i32 0, i32 1" -> println
+        "  store %sl.array.i32 %v$(request.expressionIndex)_array, ptr %v$(request.expressionIndex)_outer_success_payload, align 8" -> println
+        "  %v$(request.expressionIndex)_success_result = load " -> print
+        request.outerTypeId -> writeSemanticTypeId
+        ", ptr %v$(request.expressionIndex)_success_slot, align 8" -> println
+        "  br label %tryparallel$(request.expressionIndex)_merge" -> println
+        "tryparallel$(request.expressionIndex)_merge:" -> println
+        "  %v$(request.expressionIndex) = phi " -> print
+        request.outerTypeId -> writeSemanticTypeId
+        " [ %v$(request.expressionIndex)_error_result, %tryparallel$(request.expressionIndex)_error ], [ %v$(request.expressionIndex)_success_result, %tryparallel$(request.expressionIndex)_copy_done ]" -> println
     }
     arrayElementTypeId node: typedIr.TypedIrNode -> Int {
         -1 => elementTypeId!
@@ -3768,6 +3906,16 @@ emitCore context: move EmitContext -> Unit uses Console {
                     "  call void @llvm.memset.p0.i64(ptr %v$(regionNodeIndex!)_sinks, i8 0, i64 %v$(regionNodeIndex!)_sink_bytes, i1 false)" -> println
                     "  %v$(regionNodeIndex!)_sinks_slot = getelementptr %smalllang.compute_group, ptr %v$(regionNodeIndex!)_group, i32 0, i32 5" -> println
                     "  store ptr %v$(regionNodeIndex!)_sinks, ptr %v$(regionNodeIndex!)_sinks_slot, align 8" -> println
+                    6 => regionParallelRuntimeFieldIndex!
+                    regionParallelRuntimeFieldIndex! <= 10 -> while {
+                        "  %v$(regionNodeIndex!)_runtime_slot_$(regionParallelRuntimeFieldIndex!) = getelementptr %smalllang.compute_group, ptr %v$(regionNodeIndex!)_group, i32 0, i32 $(regionParallelRuntimeFieldIndex!)" -> println
+                        "  store ptr null, ptr %v$(regionNodeIndex!)_runtime_slot_$(regionParallelRuntimeFieldIndex!), align 8" -> println
+                        regionParallelRuntimeFieldIndex! + 1 => regionParallelRuntimeFieldIndex!
+                    }
+                    "  %v$(regionNodeIndex!)_failure_limit_slot = getelementptr %smalllang.compute_group, ptr %v$(regionNodeIndex!)_group, i32 0, i32 11" -> println
+                    "  store atomic i64 %v$(regionNodeIndex!)_length, ptr %v$(regionNodeIndex!)_failure_limit_slot release, align 8" -> println
+                    "  %v$(regionNodeIndex!)_initialized_slot = getelementptr %smalllang.compute_group, ptr %v$(regionNodeIndex!)_group, i32 0, i32 12" -> println
+                    "  store ptr null, ptr %v$(regionNodeIndex!)_initialized_slot, align 8" -> println
                     "  call void @smalllang_compute_execute(ptr %v$(regionNodeIndex!)_group)" -> println
                 } else {
                     "  %v$(regionNodeIndex!)_index_slot = alloca i64, align 8" -> println
@@ -3819,9 +3967,10 @@ emitCore context: move EmitContext -> Unit uses Console {
                 }
                 ")" -> println
             }
-            (regionNode.kind == 6 and regionNode.symbol != -115 and regionNode.opcode != -205 and regionNode.opcode != -207 and regionNode.opcode != -208 and not (regionNode.parent >= 0 and context.ir[regionNode.parent].kind == 6 and context.ir[regionNode.parent].opcode == -207 and context.ir[regionNode.parent].operand1 == regionNodeIndex!)) -> if {
+            (regionNode.kind == 6 and regionNode.symbol != -115 and regionNode.opcode != -205 and regionNode.opcode != -207 and regionNode.opcode != -208 and regionNode.opcode != -209 and not (regionNode.parent >= 0 and context.ir[regionNode.parent].kind == 6 and (context.ir[regionNode.parent].opcode == -207 or context.ir[regionNode.parent].opcode == -209) and context.ir[regionNode.parent].operand1 == regionNodeIndex!)) -> if {
                 (regionNode.symbol == -101 or regionNode.symbol == -102) -> if {
-                    context.ir[regionNode.operand0] => regionArgument
+                    regionNodeIndex! -> callArgumentIndex => regionArgumentIndex
+                    context.ir[regionArgumentIndex] => regionArgument
                     regionArgument.kind == 2 -> if {
                         regionArgument -> sourceToken => regionArgumentToken
                         Int(TextLiteralRequest { sourceModule: regionArgument.sourceModule, token: regionArgumentToken } -> textLiteralLength) => regionArgumentLength
@@ -4046,12 +4195,12 @@ emitCore context: move EmitContext -> Unit uses Console {
                         (regionNode.opcode == -203 or (regionArgument.typeOrigin == 1 and regionArgument.typeSymbol == 1)) -> if {
                             "  %v$(regionNodeIndex!)_runtime_ptr = extractvalue %sl.text " -> print
                             regionNode.opcode == -203 -> if { "%v$(regionNodeIndex!)" -> print } else {
-                                (ownerIndex! >= 0 and context.ir[ownerIndex!].kind == 0 and context.ir[ownerIndex!].operand1 >= 0 and regionArgument.kind == 5 and regionArgument.symbol == context.ir[context.ir[ownerIndex!].operand1].symbol) -> if { "%arg" -> print } else { "%v$(regionNode.operand0)" -> print }
+                                (ownerIndex! >= 0 and context.ir[ownerIndex!].kind == 0 and context.ir[ownerIndex!].operand1 >= 0 and regionArgument.kind == 5 and regionArgument.symbol == context.ir[context.ir[ownerIndex!].operand1].symbol) -> if { "%arg" -> print } else { "%v$(regionArgumentIndex)" -> print }
                             }
                             ", 0" -> println
                             "  %v$(regionNodeIndex!)_runtime_len = extractvalue %sl.text " -> print
                             regionNode.opcode == -203 -> if { "%v$(regionNodeIndex!)" -> print } else {
-                                (ownerIndex! >= 0 and context.ir[ownerIndex!].kind == 0 and context.ir[ownerIndex!].operand1 >= 0 and regionArgument.kind == 5 and regionArgument.symbol == context.ir[context.ir[ownerIndex!].operand1].symbol) -> if { "%arg" -> print } else { "%v$(regionNode.operand0)" -> print }
+                                (ownerIndex! >= 0 and context.ir[ownerIndex!].kind == 0 and context.ir[ownerIndex!].operand1 >= 0 and regionArgument.kind == 5 and regionArgument.symbol == context.ir[context.ir[ownerIndex!].operand1].symbol) -> if { "%arg" -> print } else { "%v$(regionArgumentIndex)" -> print }
                             }
                             ", 1" -> println
                             "  call void @sl_runtime_print(ptr %v$(regionNodeIndex!)_runtime_ptr, i64 %v$(regionNodeIndex!)_runtime_len, i1 " -> print
@@ -5375,6 +5524,16 @@ emitCore context: move EmitContext -> Unit uses Console {
                         "  call void @llvm.memset.p0.i64(ptr %v$(expressionIndex!)_sinks, i8 0, i64 %v$(expressionIndex!)_sink_bytes, i1 false)" -> println
                         "  %v$(expressionIndex!)_sinks_slot = getelementptr %smalllang.compute_group, ptr %v$(expressionIndex!)_group, i32 0, i32 5" -> println
                         "  store ptr %v$(expressionIndex!)_sinks, ptr %v$(expressionIndex!)_sinks_slot, align 8" -> println
+                        6 => parallelRuntimeFieldIndex!
+                        parallelRuntimeFieldIndex! <= 10 -> while {
+                            "  %v$(expressionIndex!)_runtime_slot_$(parallelRuntimeFieldIndex!) = getelementptr %smalllang.compute_group, ptr %v$(expressionIndex!)_group, i32 0, i32 $(parallelRuntimeFieldIndex!)" -> println
+                            "  store ptr null, ptr %v$(expressionIndex!)_runtime_slot_$(parallelRuntimeFieldIndex!), align 8" -> println
+                            parallelRuntimeFieldIndex! + 1 => parallelRuntimeFieldIndex!
+                        }
+                        "  %v$(expressionIndex!)_failure_limit_slot = getelementptr %smalllang.compute_group, ptr %v$(expressionIndex!)_group, i32 0, i32 11" -> println
+                        "  store atomic i64 %v$(expressionIndex!)_length, ptr %v$(expressionIndex!)_failure_limit_slot release, align 8" -> println
+                        "  %v$(expressionIndex!)_initialized_slot = getelementptr %smalllang.compute_group, ptr %v$(expressionIndex!)_group, i32 0, i32 12" -> println
+                        "  store ptr null, ptr %v$(expressionIndex!)_initialized_slot, align 8" -> println
                         "  call void @smalllang_compute_execute(ptr %v$(expressionIndex!)_group)" -> println
                     } else {
                     "  %v$(expressionIndex!)_index_slot = alloca i64, align 8" -> println
@@ -5426,9 +5585,10 @@ emitCore context: move EmitContext -> Unit uses Console {
                     }
                     ")" -> println
                 }
-                (expression.kind == 6 and expression.symbol != -115 and expression.opcode != -205 and expression.opcode != -207 and expression.opcode != -208 and not (expression.parent >= 0 and context.ir[expression.parent].kind == 6 and context.ir[expression.parent].opcode == -207 and context.ir[expression.parent].operand1 == expressionIndex!)) -> if {
+                (expression.kind == 6 and expression.symbol != -115 and expression.opcode != -205 and expression.opcode != -207 and expression.opcode != -208 and expression.opcode != -209 and not (expression.parent >= 0 and context.ir[expression.parent].kind == 6 and (context.ir[expression.parent].opcode == -207 or context.ir[expression.parent].opcode == -209) and context.ir[expression.parent].operand1 == expressionIndex!)) -> if {
                     (expression.symbol == -101 or expression.symbol == -102) -> if {
-                        context.ir[expression.operand0] => runtimeArgument
+                        expressionIndex! -> callArgumentIndex => runtimeArgumentIndex
+                        context.ir[runtimeArgumentIndex] => runtimeArgument
                         runtimeArgument.kind == 2 -> if {
                             runtimeArgument -> sourceToken => runtimeArgumentToken
                             Int(TextLiteralRequest { sourceModule: runtimeArgument.sourceModule, token: runtimeArgumentToken } -> textLiteralLength) => runtimeArgumentLength
@@ -5826,12 +5986,12 @@ emitCore context: move EmitContext -> Unit uses Console {
                         } else {
                             "  %v$(expressionIndex!)_runtime_ptr = extractvalue %sl.text " -> print
                             expression.opcode == -203 -> if { "%v$(expressionIndex!)" -> print } else {
-                                (runtimeArgument.kind == 5 and function.operand1 >= 0 and runtimeArgument.symbol == context.ir[function.operand1].symbol) -> if { "%arg" -> print } else { "%v$(expression.operand0)" -> print }
+                                (runtimeArgument.kind == 5 and function.operand1 >= 0 and runtimeArgument.symbol == context.ir[function.operand1].symbol) -> if { "%arg" -> print } else { "%v$(runtimeArgumentIndex)" -> print }
                             }
                             ", 0" -> println
                             "  %v$(expressionIndex!)_runtime_len = extractvalue %sl.text " -> print
                             expression.opcode == -203 -> if { "%v$(expressionIndex!)" -> print } else {
-                                (runtimeArgument.kind == 5 and function.operand1 >= 0 and runtimeArgument.symbol == context.ir[function.operand1].symbol) -> if { "%arg" -> print } else { "%v$(expression.operand0)" -> print }
+                                (runtimeArgument.kind == 5 and function.operand1 >= 0 and runtimeArgument.symbol == context.ir[function.operand1].symbol) -> if { "%arg" -> print } else { "%v$(runtimeArgumentIndex)" -> print }
                             }
                             ", 1" -> println
                             "  call void @sl_runtime_print(ptr %v$(expressionIndex!)_runtime_ptr, i64 %v$(expressionIndex!)_runtime_len, i1 " -> print
@@ -6517,13 +6677,36 @@ emitCore context: move EmitContext -> Unit uses Console {
             " %item)" -> println
             "  %output_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 2" -> println
             "  %output = load ptr, ptr %output_slot, align 8" -> println
-            "  %output_address = getelementptr " -> print
-            parallelExpression -> writeArrayElementType
-            ", ptr %output, i64 %index" -> println
-            "  store " -> print
-            parallelExpression -> writeArrayElementType
-            " %mapped, ptr %output_address, align " -> print
-            parallelExpression -> arrayElementAlign -> writeDecimalLine
+            parallelExpression.opcode == -209 -> if {
+                "  %output_offset = mul i64 %index, $(context.typeSizes[parallelBodyCall.typeId])" -> println
+                "  %output_address = getelementptr i8, ptr %output, i64 %output_offset" -> println
+                "  store " -> print
+                parallelBodyCall -> writeIrType
+                " %mapped, ptr %output_address, align " -> print
+                parallelBodyCall -> storageAlign -> writeDecimalLine
+                "  %initialized_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 12" -> println
+                "  %initialized = load ptr, ptr %initialized_slot, align 8" -> println
+                "  %initialized_address = getelementptr i8, ptr %initialized, i64 %index" -> println
+                "  store atomic i8 1, ptr %initialized_address release, align 1" -> println
+                "  %result_tag = extractvalue " -> print
+                parallelBodyCall -> writeIrType
+                " %mapped, 0" -> println
+                "  %is_error = icmp eq i32 %result_tag, 1" -> println
+                "  br i1 %is_error, label %publish_error, label %done" -> println
+                "publish_error:" -> println
+                "  %failure_limit_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 11" -> println
+                "  %failure_before = atomicrmw min ptr %failure_limit_slot, i64 %index acq_rel" -> println
+                "  br label %done" -> println
+                "done:" -> println
+            } else {
+                "  %output_address = getelementptr " -> print
+                parallelExpression -> writeArrayElementType
+                ", ptr %output, i64 %index" -> println
+                "  store " -> print
+                parallelExpression -> writeArrayElementType
+                " %mapped, ptr %output_address, align " -> print
+                parallelExpression -> arrayElementAlign -> writeDecimalLine
+            }
             "  ret void" -> println
             "}" -> println
         }
@@ -6962,6 +7145,69 @@ emitCore context: move EmitContext -> Unit uses Console {
                             }
                         }
                     }
+                    (entryExpression.kind == 6 and entryExpression.opcode == -209 and entryExpression.operand0 >= 0 and entryExpression.operand1 >= 0) -> if {
+                        context.ir[entryExpression.operand0] => entryTryParallelSource
+                        context.ir[entryExpression.operand1] => entryTryParallelBodyCall
+                        context.types[entryTryParallelBodyCall.typeId] => entryTryParallelCallbackType
+                        "  %v$(entryExpressionIndex!)_input = extractvalue %sl.array.i32 %v$(entryExpression.operand0), 0" -> println
+                        "  %v$(entryExpressionIndex!)_length = extractvalue %sl.array.i32 %v$(entryExpression.operand0), 1" -> println
+                        "  %v$(entryExpressionIndex!)_bytes = mul i64 %v$(entryExpressionIndex!)_length, $(context.typeSizes[entryTryParallelCallbackType.first])" -> println
+                        "  %v$(entryExpressionIndex!)_data = call ptr @malloc(i64 %v$(entryExpressionIndex!)_bytes)" -> println
+                        "  %v$(entryExpressionIndex!)_callback_bytes = mul i64 %v$(entryExpressionIndex!)_length, $(context.typeSizes[entryTryParallelBodyCall.typeId])" -> println
+                        "  %v$(entryExpressionIndex!)_callback_results = call ptr @malloc(i64 %v$(entryExpressionIndex!)_callback_bytes)" -> println
+                        "  %v$(entryExpressionIndex!)_initialized = call ptr @malloc(i64 %v$(entryExpressionIndex!)_length)" -> println
+                        "  call void @llvm.memset.p0.i64(ptr %v$(entryExpressionIndex!)_initialized, i8 0, i64 %v$(entryExpressionIndex!)_length, i1 false)" -> println
+                        entryExpressionIndex! -> parallelUsesComputePool -> if {
+                            CallEnvironmentRequest { callerIndex: functionIndex!, callIndex: entryExpressionIndex!, targetModule: entryTryParallelBodyCall.targetModule, targetSymbol: entryTryParallelBodyCall.symbol, hasArgument: true } => entryTryParallelEnvironmentRequest
+                            entryTryParallelEnvironmentRequest -> targetFunctionIndex => entryTryParallelTargetFunction
+                            entryTryParallelTargetFunction -> functionCaptures => entryTryParallelCaptures!
+                            entryTryParallelCaptures! -> len => entryTryParallelCaptureCount
+                            entryTryParallelEnvironmentRequest -> emitCallEnvironmentValues
+                            "  %v$(entryExpressionIndex!)_group = alloca %smalllang.compute_group, align 8" -> println
+                            "  %v$(entryExpressionIndex!)_callback_slot = getelementptr %smalllang.compute_group, ptr %v$(entryExpressionIndex!)_group, i32 0, i32 0" -> println
+                            "  store ptr @smalllang_parallel_callback_$(entryExpressionIndex!), ptr %v$(entryExpressionIndex!)_callback_slot, align 8" -> println
+                            "  %v$(entryExpressionIndex!)_input_slot = getelementptr %smalllang.compute_group, ptr %v$(entryExpressionIndex!)_group, i32 0, i32 1" -> println
+                            "  store ptr %v$(entryExpressionIndex!)_input, ptr %v$(entryExpressionIndex!)_input_slot, align 8" -> println
+                            "  %v$(entryExpressionIndex!)_output_slot = getelementptr %smalllang.compute_group, ptr %v$(entryExpressionIndex!)_group, i32 0, i32 2" -> println
+                            "  store ptr %v$(entryExpressionIndex!)_callback_results, ptr %v$(entryExpressionIndex!)_output_slot, align 8" -> println
+                            "  %v$(entryExpressionIndex!)_count_slot = getelementptr %smalllang.compute_group, ptr %v$(entryExpressionIndex!)_group, i32 0, i32 3" -> println
+                            "  store i64 %v$(entryExpressionIndex!)_length, ptr %v$(entryExpressionIndex!)_count_slot, align 8" -> println
+                            entryTryParallelCaptureCount > 0 -> if {
+                                "  %v$(entryExpressionIndex!)_capture_environment = alloca [$(entryTryParallelCaptureCount) x ptr], align 8" -> println
+                                0 => entryTryParallelCaptureIndex!
+                                entryTryParallelCaptureIndex! < entryTryParallelCaptureCount -> while {
+                                    "  %v$(entryExpressionIndex!)_capture_address_$(entryTryParallelCaptureIndex!) = getelementptr [$(entryTryParallelCaptureCount) x ptr], ptr %v$(entryExpressionIndex!)_capture_environment, i32 0, i32 $(entryTryParallelCaptureIndex!)" -> println
+                                    "  store ptr " -> print
+                                    CaptureValueRequest { callerIndex: functionIndex!, callIndex: entryExpressionIndex!, bindingIndex: entryTryParallelCaptures![entryTryParallelCaptureIndex!], captureIndex: entryTryParallelCaptureIndex! } -> emitCapturePointer
+                                    ", ptr %v$(entryExpressionIndex!)_capture_address_$(entryTryParallelCaptureIndex!), align 8" -> println
+                                    entryTryParallelCaptureIndex! + 1 => entryTryParallelCaptureIndex!
+                                }
+                            }
+                            "  %v$(entryExpressionIndex!)_capture_slot = getelementptr %smalllang.compute_group, ptr %v$(entryExpressionIndex!)_group, i32 0, i32 4" -> println
+                            entryTryParallelCaptureCount > 0 -> if {
+                                "  store ptr %v$(entryExpressionIndex!)_capture_environment, ptr %v$(entryExpressionIndex!)_capture_slot, align 8" -> println
+                            } else {
+                                "  store ptr null, ptr %v$(entryExpressionIndex!)_capture_slot, align 8" -> println
+                            }
+                            "  %v$(entryExpressionIndex!)_sink_bytes = mul i64 %v$(entryExpressionIndex!)_length, 24" -> println
+                            "  %v$(entryExpressionIndex!)_sinks = call ptr @malloc(i64 %v$(entryExpressionIndex!)_sink_bytes)" -> println
+                            "  call void @llvm.memset.p0.i64(ptr %v$(entryExpressionIndex!)_sinks, i8 0, i64 %v$(entryExpressionIndex!)_sink_bytes, i1 false)" -> println
+                            "  %v$(entryExpressionIndex!)_sinks_slot = getelementptr %smalllang.compute_group, ptr %v$(entryExpressionIndex!)_group, i32 0, i32 5" -> println
+                            "  store ptr %v$(entryExpressionIndex!)_sinks, ptr %v$(entryExpressionIndex!)_sinks_slot, align 8" -> println
+                            6 => entryTryParallelRuntimeFieldIndex!
+                            entryTryParallelRuntimeFieldIndex! <= 10 -> while {
+                                "  %v$(entryExpressionIndex!)_runtime_slot_$(entryTryParallelRuntimeFieldIndex!) = getelementptr %smalllang.compute_group, ptr %v$(entryExpressionIndex!)_group, i32 0, i32 $(entryTryParallelRuntimeFieldIndex!)" -> println
+                                "  store ptr null, ptr %v$(entryExpressionIndex!)_runtime_slot_$(entryTryParallelRuntimeFieldIndex!), align 8" -> println
+                                entryTryParallelRuntimeFieldIndex! + 1 => entryTryParallelRuntimeFieldIndex!
+                            }
+                            "  %v$(entryExpressionIndex!)_failure_limit_slot = getelementptr %smalllang.compute_group, ptr %v$(entryExpressionIndex!)_group, i32 0, i32 11" -> println
+                            "  store atomic i64 %v$(entryExpressionIndex!)_length, ptr %v$(entryExpressionIndex!)_failure_limit_slot release, align 8" -> println
+                            "  %v$(entryExpressionIndex!)_initialized_slot = getelementptr %smalllang.compute_group, ptr %v$(entryExpressionIndex!)_group, i32 0, i32 12" -> println
+                            "  store ptr %v$(entryExpressionIndex!)_initialized, ptr %v$(entryExpressionIndex!)_initialized_slot, align 8" -> println
+                            "  call void @smalllang_compute_execute(ptr %v$(entryExpressionIndex!)_group)" -> println
+                            TryParallelCollectRequest { expressionIndex: entryExpressionIndex!, outerTypeId: entryExpression.typeId, callbackTypeId: entryTryParallelBodyCall.typeId } -> emitTryParallelCollect
+                        }
+                    }
                     (entryExpression.kind == 6 and entryExpression.opcode == -207 and entryExpression.operand0 >= 0 and entryExpression.operand1 >= 0) -> if {
                         context.ir[entryExpression.operand0] => entryParallelSource
                         context.ir[entryExpression.operand1] => entryParallelBodyCall
@@ -7007,6 +7253,16 @@ emitCore context: move EmitContext -> Unit uses Console {
                             "  call void @llvm.memset.p0.i64(ptr %v$(entryExpressionIndex!)_sinks, i8 0, i64 %v$(entryExpressionIndex!)_sink_bytes, i1 false)" -> println
                             "  %v$(entryExpressionIndex!)_sinks_slot = getelementptr %smalllang.compute_group, ptr %v$(entryExpressionIndex!)_group, i32 0, i32 5" -> println
                             "  store ptr %v$(entryExpressionIndex!)_sinks, ptr %v$(entryExpressionIndex!)_sinks_slot, align 8" -> println
+                            6 => entryParallelRuntimeFieldIndex!
+                            entryParallelRuntimeFieldIndex! <= 10 -> while {
+                                "  %v$(entryExpressionIndex!)_runtime_slot_$(entryParallelRuntimeFieldIndex!) = getelementptr %smalllang.compute_group, ptr %v$(entryExpressionIndex!)_group, i32 0, i32 $(entryParallelRuntimeFieldIndex!)" -> println
+                                "  store ptr null, ptr %v$(entryExpressionIndex!)_runtime_slot_$(entryParallelRuntimeFieldIndex!), align 8" -> println
+                                entryParallelRuntimeFieldIndex! + 1 => entryParallelRuntimeFieldIndex!
+                            }
+                            "  %v$(entryExpressionIndex!)_failure_limit_slot = getelementptr %smalllang.compute_group, ptr %v$(entryExpressionIndex!)_group, i32 0, i32 11" -> println
+                            "  store atomic i64 %v$(entryExpressionIndex!)_length, ptr %v$(entryExpressionIndex!)_failure_limit_slot release, align 8" -> println
+                            "  %v$(entryExpressionIndex!)_initialized_slot = getelementptr %smalllang.compute_group, ptr %v$(entryExpressionIndex!)_group, i32 0, i32 12" -> println
+                            "  store ptr null, ptr %v$(entryExpressionIndex!)_initialized_slot, align 8" -> println
                             "  call void @smalllang_compute_execute(ptr %v$(entryExpressionIndex!)_group)" -> println
                         } else {
                             "  %v$(entryExpressionIndex!)_index_slot = alloca i64, align 8" -> println
@@ -7056,9 +7312,10 @@ emitCore context: move EmitContext -> Unit uses Console {
                         } else { "%v$(entryExpression.operand0)" -> print }
                         ")" -> println
                     }
-                    (entryExpression.kind == 6 and entryExpression.symbol != -115 and entryExpression.opcode != -205 and entryExpression.opcode != -207 and entryExpression.opcode != -208 and not (entryExpression.parent >= 0 and context.ir[entryExpression.parent].kind == 6 and context.ir[entryExpression.parent].opcode == -207 and context.ir[entryExpression.parent].operand1 == entryExpressionIndex!)) -> if {
+                    (entryExpression.kind == 6 and entryExpression.symbol != -115 and entryExpression.opcode != -205 and entryExpression.opcode != -207 and entryExpression.opcode != -208 and entryExpression.opcode != -209 and not (entryExpression.parent >= 0 and context.ir[entryExpression.parent].kind == 6 and (context.ir[entryExpression.parent].opcode == -207 or context.ir[entryExpression.parent].opcode == -209) and context.ir[entryExpression.parent].operand1 == entryExpressionIndex!)) -> if {
                         (entryExpression.symbol == -101 or entryExpression.symbol == -102) -> if {
-                            context.ir[entryExpression.operand0] => runtimeArgument
+                            entryExpressionIndex! -> callArgumentIndex => entryRuntimeArgumentIndex
+                            context.ir[entryRuntimeArgumentIndex] => runtimeArgument
                             runtimeArgument.kind == 2 -> if {
                                 runtimeArgument -> sourceToken => runtimeArgumentToken
                                 Int(TextLiteralRequest { sourceModule: runtimeArgument.sourceModule, token: runtimeArgumentToken } -> textLiteralLength) => runtimeArgumentLength
@@ -7350,8 +7607,8 @@ emitCore context: move EmitContext -> Unit uses Console {
                                     "  %v$(entryExpressionIndex!)_runtime_ptr = extractvalue %sl.text %v$(entryExpressionIndex!), 0" -> println
                                     "  %v$(entryExpressionIndex!)_runtime_len = extractvalue %sl.text %v$(entryExpressionIndex!), 1" -> println
                                 } else {
-                                    "  %v$(entryExpressionIndex!)_runtime_ptr = extractvalue %sl.text %v$(entryExpression.operand0), 0" -> println
-                                    "  %v$(entryExpressionIndex!)_runtime_len = extractvalue %sl.text %v$(entryExpression.operand0), 1" -> println
+                                    "  %v$(entryExpressionIndex!)_runtime_ptr = extractvalue %sl.text %v$(entryRuntimeArgumentIndex), 0" -> println
+                                    "  %v$(entryExpressionIndex!)_runtime_len = extractvalue %sl.text %v$(entryRuntimeArgumentIndex), 1" -> println
                                 }
                                 "  call void @sl_runtime_print(ptr %v$(entryExpressionIndex!)_runtime_ptr, i64 %v$(entryExpressionIndex!)_runtime_len, i1 " -> print
                             }
@@ -7515,7 +7772,7 @@ usesParallelRuntime context: EmitContext -> Bool {
     false => usesRuntime!
     0 => nodeIndex!
     nodeIndex! < (context.ir -> len) -> while {
-        (context.ir[nodeIndex!].opcode == -207 or context.ir[nodeIndex!].symbol == -115) -> if { true => usesRuntime! }
+        (context.ir[nodeIndex!].opcode == -207 or context.ir[nodeIndex!].opcode == -209 or context.ir[nodeIndex!].symbol == -115) -> if { true => usesRuntime! }
         nodeIndex! + 1 => nodeIndex!
     }
     usesRuntime!
@@ -7699,7 +7956,7 @@ emitBoolTextRuntime: -> Unit uses Console {
 
 emitWindowsComputeRuntime: -> Unit uses Console {
     """
-    %smalllang.compute_group = type { ptr, ptr, ptr, i64, ptr, ptr }
+    %smalllang.compute_group = type { ptr, ptr, ptr, i64, ptr, ptr, ptr, ptr, ptr, ptr, ptr, i64, ptr }
     @smalllang_compute_semaphore = internal global ptr null
     @smalllang_compute_completion_event = internal global ptr null
     @smalllang_compute_worker_count = internal global i32 0
@@ -7736,7 +7993,11 @@ emitWindowsComputeRuntime: -> Unit uses Console {
       br label %claim
     claim:
       %index = atomicrmw add ptr @smalllang_compute_next, i64 1 acq_rel
-      %has_work = icmp ult i64 %index, %count
+      %within_count = icmp ult i64 %index, %count
+      %failure_limit_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 11
+      %failure_limit = load atomic i64, ptr %failure_limit_slot acquire, align 8
+      %before_failure = icmp ult i64 %index, %failure_limit
+      %has_work = and i1 %within_count, %before_failure
       br i1 %has_work, label %work, label %complete
     work:
       %callback_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 0
@@ -7870,7 +8131,11 @@ emitWindowsComputeRuntime: -> Unit uses Console {
       br label %help_claim
     help_claim:
       %help_index = atomicrmw add ptr @smalllang_compute_next, i64 1 acq_rel
-      %help_has_work = icmp ult i64 %help_index, %count
+      %help_within_count = icmp ult i64 %help_index, %count
+      %help_failure_limit_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 11
+      %help_failure_limit = load atomic i64, ptr %help_failure_limit_slot acquire, align 8
+      %help_before_failure = icmp ult i64 %help_index, %help_failure_limit
+      %help_has_work = and i1 %help_within_count, %help_before_failure
       br i1 %help_has_work, label %help_work, label %help_wait
     help_work:
       %help_callback_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 0
@@ -7899,7 +8164,9 @@ emitWindowsComputeRuntime: -> Unit uses Console {
       store atomic i32 0, ptr @smalllang_compute_barrier_departed release, align 4
       %sinks_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 5
       %sinks = load ptr, ptr %sinks_slot, align 8
-      call void @smalllang_memory_output_sink_array_flush(ptr %sinks, i64 %count, ptr %group, ptr @smalllang_memory_output_sink_write)
+      %flush_limit_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 11
+      %flush_limit = load atomic i64, ptr %flush_limit_slot acquire, align 8
+      call void @smalllang_memory_output_sink_array_flush_prefix(ptr %sinks, i64 %count, i64 %flush_limit, ptr %group, ptr @smalllang_memory_output_sink_write)
       store atomic ptr null, ptr @smalllang_compute_group_current release, align 8
       br label %done
     failed:
@@ -7945,7 +8212,7 @@ emitWindowsComputeRuntime: -> Unit uses Console {
 
 emitLinuxComputeRuntime: -> Unit uses Console {
     """
-    %smalllang.compute_group = type { ptr, ptr, ptr, i64, ptr, ptr }
+    %smalllang.compute_group = type { ptr, ptr, ptr, i64, ptr, ptr, ptr, ptr, ptr, ptr, ptr, i64, ptr }
     @smalllang_compute_work_event_fd = internal global i32 -1
     @smalllang_compute_completion_event_fd = internal global i32 -1
     @smalllang_compute_worker_count = internal global i32 0
@@ -7983,7 +8250,11 @@ emitLinuxComputeRuntime: -> Unit uses Console {
       br label %claim
     claim:
       %index = atomicrmw add ptr @smalllang_compute_next, i64 1 acq_rel
-      %has_work = icmp ult i64 %index, %count
+      %within_count = icmp ult i64 %index, %count
+      %failure_limit_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 11
+      %failure_limit = load atomic i64, ptr %failure_limit_slot acquire, align 8
+      %before_failure = icmp ult i64 %index, %failure_limit
+      %has_work = and i1 %within_count, %before_failure
       br i1 %has_work, label %work, label %complete
     work:
       %callback_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 0
@@ -8137,7 +8408,11 @@ emitLinuxComputeRuntime: -> Unit uses Console {
       br label %help_claim
     help_claim:
       %help_index = atomicrmw add ptr @smalllang_compute_next, i64 1 acq_rel
-      %help_has_work = icmp ult i64 %help_index, %count
+      %help_within_count = icmp ult i64 %help_index, %count
+      %help_failure_limit_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 11
+      %help_failure_limit = load atomic i64, ptr %help_failure_limit_slot acquire, align 8
+      %help_before_failure = icmp ult i64 %help_index, %help_failure_limit
+      %help_has_work = and i1 %help_within_count, %help_before_failure
       br i1 %help_has_work, label %help_work, label %help_wait
     help_work:
       %help_callback_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 0
@@ -8161,7 +8436,9 @@ emitLinuxComputeRuntime: -> Unit uses Console {
     flush_prepare:
       %sinks_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 5
       %sinks = load ptr, ptr %sinks_slot, align 8
-      call void @smalllang_memory_output_sink_array_flush(ptr %sinks, i64 %count, ptr %group, ptr @smalllang_memory_output_sink_write)
+      %flush_limit_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 11
+      %flush_limit = load atomic i64, ptr %flush_limit_slot acquire, align 8
+      call void @smalllang_memory_output_sink_array_flush_prefix(ptr %sinks, i64 %count, i64 %flush_limit, ptr %group, ptr @smalllang_memory_output_sink_write)
       store atomic ptr null, ptr @smalllang_compute_group_current release, align 8
       br label %done
     failed:
