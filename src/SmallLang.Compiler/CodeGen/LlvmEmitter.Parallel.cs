@@ -50,7 +50,13 @@ internal sealed partial class LlvmEmitter
                 && specialization.Kind == BoundFunctionKind.RuntimeParallel
                 && TryResolveDirectParallelTarget(block, out var target))
             {
-                EmitDirectParallelCallback(block, specialization, target);
+                EmitDirectParallelCallback(block, specialization, target, isFallible: false);
+            }
+            else if (_program.ResolvedGenericCalls.TryGetValue(block, out specialization)
+                && specialization.Kind == BoundFunctionKind.RuntimeTryParallel
+                && TryResolveDirectParallelTarget(block, out target))
+            {
+                EmitDirectParallelCallback(block, specialization, target, isFallible: true);
             }
             CollectParallelCallbacks(block.Body);
         }
@@ -85,7 +91,8 @@ internal sealed partial class LlvmEmitter
     private void EmitDirectParallelCallback(
         BlockFunctionCallStatement block,
         BoundFunction specialization,
-        BoundFunction target)
+        BoundFunction target,
+        bool isFallible)
     {
         var inputType = specialization.BlockInputType
             ?? throw new SmallLangException("parallel input type was not specialized");
@@ -103,12 +110,16 @@ internal sealed partial class LlvmEmitter
         var inputAlignment = inputArrayType == BoundType.DynamicIntArray
             ? 4
             : _program.Types.GetDynamicArray(inputArrayType).ElementAlignment;
-        var outputSize = specialization.ReturnType == BoundType.DynamicIntArray
-            ? 4
-            : _program.Types.GetDynamicArray(specialization.ReturnType).ElementSize;
-        var outputAlignment = specialization.ReturnType == BoundType.DynamicIntArray
-            ? 4
-            : _program.Types.GetDynamicArray(specialization.ReturnType).ElementAlignment;
+        var outputSize = isFallible
+            ? _program.Types.InlineSizeOf(resultType)
+            : specialization.ReturnType == BoundType.DynamicIntArray
+                ? 4
+                : _program.Types.GetDynamicArray(specialization.ReturnType).ElementSize;
+        var outputAlignment = isFallible
+            ? RuntimeAlignment(resultType)
+            : specialization.ReturnType == BoundType.DynamicIntArray
+                ? 4
+                : _program.Types.GetDynamicArray(specialization.ReturnType).ElementAlignment;
         var callbackName = "smalllang_parallel_callback_"
             + _parallelCallbacks.Count.ToString(CultureInfo.InvariantCulture);
         var captures = CapturedBindingsForFunction(target);
@@ -166,6 +177,21 @@ internal sealed partial class LlvmEmitter
         EmitFunctionLine($"  %output_offset = mul i64 %index, {outputSize.ToString(CultureInfo.InvariantCulture)}");
         EmitFunctionLine("  %output_address = getelementptr i8, ptr %output, i64 %output_offset");
         EmitFunctionLine($"  store {LlvmType(resultType)} %mapped, ptr %output_address, align {outputAlignment.ToString(CultureInfo.InvariantCulture)}");
+        if (isFallible)
+        {
+            EmitFunctionLine("  %initialized_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 12");
+            EmitFunctionLine("  %initialized = load ptr, ptr %initialized_slot, align 8");
+            EmitFunctionLine("  %initialized_address = getelementptr i8, ptr %initialized, i64 %index");
+            EmitFunctionLine("  store atomic i8 1, ptr %initialized_address release, align 1");
+            EmitFunctionLine($"  %result_tag = extractvalue {LlvmEnumType(resultType)} %mapped, 0");
+            EmitFunctionLine("  %is_error = icmp eq i32 %result_tag, 1");
+            EmitFunctionLine("  br i1 %is_error, label %publish_error, label %done");
+            EmitFunctionLine("publish_error:");
+            EmitFunctionLine("  %failure_limit_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 11");
+            EmitFunctionLine("  %failure_before = atomicrmw min ptr %failure_limit_slot, i64 %index acq_rel");
+            EmitFunctionLine("  br label %done");
+            EmitFunctionLine("done:");
+        }
         EmitFunctionLine("  ret void");
         EmitFunctionLine("}");
         EmitFunctionLine();

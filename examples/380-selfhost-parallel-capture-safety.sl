@@ -24,6 +24,17 @@ main {
         }
         """,
         """
+        attempt value: Int -> Result<Int, Text> = intrinsic
+
+        main {
+            10 => offset!
+            [1, 2, 3, ~] => values!
+            values! -> tryParallel value {
+                value + offset! -> attempt
+            } => shifted!
+        }
+        """,
+        """
         main {
             10 => offset
             [1, 2, 3, ~] => values!

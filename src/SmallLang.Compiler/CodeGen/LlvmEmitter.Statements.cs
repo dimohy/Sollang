@@ -401,6 +401,12 @@ internal sealed partial class LlvmEmitter
                     return;
                 }
                 if ((resolvedGeneric || TryResolveFunction(statement.Target, out function))
+                    && function is { Kind: BoundFunctionKind.RuntimeTryParallel })
+                {
+                    EmitTryParallelBlockFunctionCall(statement, function);
+                    return;
+                }
+                if ((resolvedGeneric || TryResolveFunction(statement.Target, out function))
                     && function is { Kind: BoundFunctionKind.UserBlock })
                 {
                     EmitUserBlockFunctionCall(statement, function);
@@ -721,6 +727,12 @@ internal sealed partial class LlvmEmitter
                 EmitInstruction($"{runtimeSlot} = getelementptr %smalllang.compute_group, ptr {group}, i32 0, i32 {runtimeIndex + 6}");
                 EmitStore("ptr", runtimeValues[runtimeIndex], runtimeSlot, 8);
             }
+            var failureLimitSlot = NextTemp("parallel_failure_limit_slot");
+            EmitInstruction($"{failureLimitSlot} = getelementptr %smalllang.compute_group, ptr {group}, i32 0, i32 11");
+            EmitStore("i64", length, failureLimitSlot, 8);
+            var initializedSlot = NextTemp("parallel_initialized_slot");
+            EmitInstruction($"{initializedSlot} = getelementptr %smalllang.compute_group, ptr {group}, i32 0, i32 12");
+            EmitStore("ptr", "null", initializedSlot, 8);
             EmitCall(target: null, "void", "smalllang_compute_execute", $"ptr {group}");
             BindParallelResult(statement, resultArray);
             return;
@@ -808,6 +820,454 @@ internal sealed partial class LlvmEmitter
                     IsMutable: true), resultArray);
             }
         }
+    }
+
+    private void EmitTryParallelBlockFunctionCall(
+        BlockFunctionCallStatement statement,
+        BoundFunction function)
+    {
+        var source = EmitExpression(statement.Source);
+        var length = source switch
+        {
+            RuntimeDynamicIntArray array => array.LengthName,
+            RuntimeDynamicInlineArray array => array.LengthName,
+            _ => throw new SmallLangException("tryParallel expects a growable array")
+        };
+        if (statement.Body.Count == 0 || statement.Body[^1] is not ExpressionStatement callbackResult)
+        {
+            throw new SmallLangException("tryParallel callback requires a final Result expression");
+        }
+        if (function.BlockResultType is not { } callbackResultType
+            || !_program.Types.TryGetResultTypes(callbackResultType, out var callbackTypes)
+            || !_program.Types.TryGetResultTypes(function.ReturnType, out var outerTypes))
+        {
+            throw new SmallLangException("tryParallel Result types were not specialized");
+        }
+
+        RuntimeValue resultArray;
+        string outputPointer;
+        if (callbackTypes.Ok == BoundType.Int)
+        {
+            outputPointer = EmitHeapAllocateProduct(length, "4", "try_parallel_result_bytes");
+            resultArray = new RuntimeDynamicIntArray(outputPointer, length, length);
+        }
+        else
+        {
+            var outputDefinition = _program.Types.GetDynamicArray(outerTypes.Ok);
+            outputPointer = EmitHeapAllocateProduct(
+                length,
+                outputDefinition.ElementSize.ToString(CultureInfo.InvariantCulture),
+                "try_parallel_result_bytes");
+            resultArray = new RuntimeDynamicInlineArray(
+                outerTypes.Ok,
+                callbackTypes.Ok,
+                outputPointer,
+                length,
+                length);
+        }
+
+        if (_parallelCallbacks.TryGetValue(statement, out var callback))
+        {
+            var callbackStride = _program.Types.InlineSizeOf(callbackResultType);
+            var callbackBytes = NextTemp("try_parallel_callback_bytes");
+            EmitInstruction($"{callbackBytes} = mul i64 {length}, {callbackStride.ToString(CultureInfo.InvariantCulture)}");
+            var callbackResults = NextTemp("try_parallel_callback_results");
+            EmitCall(callbackResults, "ptr", "smalllang_alloc", $"i64 {callbackBytes}");
+            var initialized = NextTemp("try_parallel_initialized");
+            EmitCall(initialized, "ptr", "smalllang_alloc", $"i64 {length}");
+            EmitCall(target: null, "void", "llvm.memset.p0.i64", $"ptr {initialized}, i8 0, i64 {length}, i1 false");
+            var sinksBytes = NextTemp("try_parallel_sink_bytes");
+            EmitInstruction($"{sinksBytes} = mul i64 {length}, 24");
+            var sinks = NextTemp("try_parallel_sinks");
+            EmitCall(sinks, "ptr", "smalllang_alloc", $"i64 {sinksBytes}");
+            EmitCall(target: null, "void", "llvm.memset.p0.i64", $"ptr {sinks}, i8 0, i64 {sinksBytes}, i1 false");
+
+            var inputPointer = source switch
+            {
+                RuntimeDynamicIntArray array => array.PointerName,
+                RuntimeDynamicInlineArray array => array.PointerName,
+                _ => throw new SmallLangException("tryParallel expects a growable array")
+            };
+            var group = NextTemp("try_parallel_group");
+            EmitAlloca(group, "%smalllang.compute_group", 8);
+            EmitComputeGroupField(group, 0, "ptr", $"@{callback.Name}");
+            EmitComputeGroupField(group, 1, "ptr", inputPointer);
+            EmitComputeGroupField(group, 2, "ptr", callbackResults);
+            EmitComputeGroupField(group, 3, "i64", length);
+
+            var captureEnvironment = "null";
+            if (callback.Captures.Count > 0)
+            {
+                var captureType = ParallelCaptureType(callback.Captures);
+                captureEnvironment = NextTemp("try_parallel_capture_environment");
+                EmitAlloca(captureEnvironment, captureType, 8);
+                for (var captureIndex = 0; captureIndex < callback.Captures.Count; captureIndex++)
+                {
+                    var capture = callback.Captures[captureIndex];
+                    var captureValue = ResolveLocal(capture.Key);
+                    EnsureRuntimeType(captureValue, capture.Value, callback.Target.Name);
+                    var materialized = MaterializeAggregateValue(captureValue);
+                    var captureAddress = NextTemp("try_parallel_capture_address");
+                    EmitInstruction($"{captureAddress} = getelementptr {captureType}, ptr {captureEnvironment}, i32 0, i32 {captureIndex.ToString(CultureInfo.InvariantCulture)}");
+                    EmitStore(materialized.TypeName, materialized.ValueName, captureAddress, RuntimeAlignment(capture.Value));
+                }
+            }
+            EmitComputeGroupField(group, 4, "ptr", captureEnvironment);
+            EmitComputeGroupField(group, 5, "ptr", sinks);
+            var runtimeValues = new[] { "%stdin", "%stdout", "%written", "%read", "%ok_state" };
+            for (var runtimeIndex = 0; runtimeIndex < runtimeValues.Length; runtimeIndex++)
+            {
+                EmitComputeGroupField(group, runtimeIndex + 6, "ptr", runtimeValues[runtimeIndex]);
+            }
+            EmitComputeGroupField(group, 11, "i64", length);
+            EmitComputeGroupField(group, 12, "ptr", initialized);
+            EmitCall(target: null, "void", "smalllang_compute_execute", $"ptr {group}");
+            var collectedResult = EmitCollectTryParallelResults(
+                group,
+                function,
+                resultArray,
+                outputPointer,
+                callbackResults,
+                initialized,
+                length,
+                callbackResultType,
+                callbackTypes,
+                callbackStride);
+            BindParallelResult(statement, collectedResult);
+            return;
+        }
+
+        var bodyLabel = NextLabel("try_parallel_body");
+        var continueLabel = NextLabel("try_parallel_continue");
+        var successLabel = NextLabel("try_parallel_success");
+        var mergeLabel = NextLabel("try_parallel_merge");
+        var entryLabel = _currentBlockLabel;
+        var next = NextTemp("try_parallel_next");
+        var initialDone = NextTemp("try_parallel_done");
+        EmitCompare(initialDone, "eq", "i64", length, "0");
+        EmitConditionalBranch(initialDone, successLabel, bodyLabel);
+
+        EmitLabel(bodyLabel);
+        _currentBlockLabel = bodyLabel;
+        var index = NextTemp("try_parallel_i");
+        EmitPhi(index, "i64", ("0", entryLabel), (next, continueLabel));
+        RuntimeValue item = source switch
+        {
+            RuntimeDynamicIntArray array => EmitDynamicArrayLoad(array, index),
+            RuntimeDynamicInlineArray array => EmitDynamicInlineArrayLoad(array, index),
+            _ => throw new SmallLangException("tryParallel expects a growable array")
+        };
+
+        RuntimeEnum errorResult;
+        string errorResultLabel;
+        var outerLocals = CaptureLocals();
+        try
+        {
+            _locals[statement.ItemName] = item;
+            var callbackLocals = CaptureLocals();
+            EmitStatements(statement.Body.Take(statement.Body.Count - 1).ToArray());
+            var mapped = EmitExpression(callbackResult.Expression) as RuntimeEnum
+                ?? throw new SmallLangException("tryParallel callback must return Result<R, E>");
+            EnsureRuntimeType(mapped, callbackResultType, "tryParallel callback");
+            var tag = NextTemp("try_parallel_tag");
+            EmitAssign(tag, $"extractvalue {LlvmEnumType(mapped.Type)} {mapped.ValueName}, 0");
+            var isError = NextTemp("try_parallel_is_error");
+            EmitCompare(isError, "eq", "i32", tag, "1");
+            var errorLabel = NextLabel("try_parallel_error");
+            var okLabel = NextLabel("try_parallel_ok");
+            EmitConditionalBranch(isError, errorLabel, okLabel);
+
+            EmitLabel(okLabel);
+            _currentBlockLabel = okLabel;
+            var successful = ExtractEnumPayload(mapped, callbackTypes.Ok);
+            switch (resultArray)
+            {
+                case RuntimeDynamicIntArray integers:
+                    StoreDynamicArrayElement(integers.PointerName, index, ((RuntimeInt)successful).ValueName);
+                    break;
+                case RuntimeDynamicInlineArray inline:
+                    StoreDynamicInlineArrayElement(
+                        inline.PointerName,
+                        _program.Types.GetDynamicArray(inline.Type),
+                        index,
+                        successful);
+                    break;
+            }
+            DropOwnedLocalsCreatedSince(callbackLocals, transferredOwnerName: null);
+            EmitBranch(continueLabel);
+
+            EmitLabel(errorLabel);
+            _currentBlockLabel = errorLabel;
+            var error = ExtractEnumPayload(mapped, callbackTypes.Error);
+            DropOwnedLocalsCreatedSince(callbackLocals, transferredOwnerName: null);
+            EmitDropTryParallelPrefix(outputPointer, callbackTypes.Ok, index);
+            var outerDefinition = _program.Types.GetEnum(function.ReturnType);
+            var errorVariant = outerDefinition.Variants.First(variant => variant.Name == "Err");
+            errorResult = EmitEnumValue(function.ReturnType, errorVariant, error);
+            errorResultLabel = _currentBlockLabel;
+            EmitBranch(mergeLabel);
+        }
+        finally
+        {
+            RestoreLocals(outerLocals);
+        }
+
+        EmitLabel(continueLabel);
+        _currentBlockLabel = continueLabel;
+        EmitBinary(next, "add", "i64", index, "1");
+        var done = NextTemp("try_parallel_done");
+        EmitCompare(done, "eq", "i64", next, length);
+        EmitConditionalBranch(done, successLabel, bodyLabel);
+
+        EmitLabel(successLabel);
+        _currentBlockLabel = successLabel;
+        var resultDefinition = _program.Types.GetEnum(function.ReturnType);
+        var okVariant = resultDefinition.Variants.First(variant => variant.Name == "Ok");
+        var successResult = EmitEnumValue(function.ReturnType, okVariant, resultArray);
+        var successResultLabel = _currentBlockLabel;
+        EmitBranch(mergeLabel);
+
+        EmitLabel(mergeLabel);
+        _currentBlockLabel = mergeLabel;
+        var result = EmitEnumPhi(
+            "try_parallel_result",
+            function.ReturnType,
+            [(errorResult, errorResultLabel), (successResult, successResultLabel)]);
+        BindParallelResult(statement, result);
+    }
+
+    private void EmitComputeGroupField(string group, int index, string type, string value)
+    {
+        var slot = NextTemp("compute_group_slot");
+        EmitInstruction($"{slot} = getelementptr %smalllang.compute_group, ptr {group}, i32 0, i32 {index.ToString(CultureInfo.InvariantCulture)}");
+        EmitStore(type, value, slot, 8);
+    }
+
+    private RuntimeEnum EmitCollectTryParallelResults(
+        string group,
+        BoundFunction function,
+        RuntimeValue resultArray,
+        string outputPointer,
+        string callbackResults,
+        string initialized,
+        string length,
+        BoundType callbackResultType,
+        (BoundType Ok, BoundType Error) callbackTypes,
+        int callbackStride)
+    {
+        var groupFailureSlot = NextTemp("try_parallel_failure_slot");
+        EmitInstruction($"{groupFailureSlot} = getelementptr %smalllang.compute_group, ptr {group}, i32 0, i32 11");
+        var failureIndex = NextTemp("try_parallel_failure_index");
+        EmitInstruction($"{failureIndex} = load atomic i64, ptr {groupFailureSlot} acquire, align 8");
+        var hasFailure = NextTemp("try_parallel_has_failure");
+        EmitCompare(hasFailure, "ult", "i64", failureIndex, length);
+        var errorLabel = NextLabel("try_parallel_collect_error");
+        var successLabel = NextLabel("try_parallel_collect_success");
+        var mergeLabel = NextLabel("try_parallel_collect_merge");
+        EmitConditionalBranch(hasFailure, errorLabel, successLabel);
+
+        EmitLabel(errorLabel);
+        _currentBlockLabel = errorLabel;
+        var selected = EmitLoadTryParallelCallbackResult(
+            callbackResults, failureIndex, callbackResultType, callbackStride, "try_parallel_selected");
+        var errorPayload = ExtractEnumPayload(selected, callbackTypes.Error);
+        EmitDropInitializedTryParallelResults(
+            callbackResults,
+            initialized,
+            length,
+            failureIndex,
+            callbackResultType,
+            callbackTypes,
+            callbackStride);
+        EmitCall(target: null, "void", "smalllang_free", $"ptr {callbackResults}");
+        EmitCall(target: null, "void", "smalllang_free", $"ptr {initialized}");
+        EmitCall(target: null, "void", "smalllang_free", $"ptr {outputPointer}");
+        var resultDefinition = _program.Types.GetEnum(function.ReturnType);
+        var errorVariant = resultDefinition.Variants.First(variant => variant.Name == "Err");
+        var errorResult = EmitEnumValue(function.ReturnType, errorVariant, errorPayload);
+        var errorResultLabel = _currentBlockLabel;
+        EmitBranch(mergeLabel);
+
+        EmitLabel(successLabel);
+        _currentBlockLabel = successLabel;
+        var copyLoopLabel = NextLabel("try_parallel_copy_loop");
+        var copyBodyLabel = NextLabel("try_parallel_copy_body");
+        var copyDoneLabel = NextLabel("try_parallel_copy_done");
+        var copyEntryLabel = _currentBlockLabel;
+        var copyNext = NextTemp("try_parallel_copy_next");
+        EmitBranch(copyLoopLabel);
+        EmitLabel(copyLoopLabel);
+        _currentBlockLabel = copyLoopLabel;
+        var copyIndex = NextTemp("try_parallel_copy_i");
+        EmitPhi(copyIndex, "i64", ("0", copyEntryLabel), (copyNext, copyBodyLabel));
+        var copyInRange = NextTemp("try_parallel_copy_in_range");
+        EmitCompare(copyInRange, "ult", "i64", copyIndex, length);
+        EmitConditionalBranch(copyInRange, copyBodyLabel, copyDoneLabel);
+        EmitLabel(copyBodyLabel);
+        _currentBlockLabel = copyBodyLabel;
+        var callbackResult = EmitLoadTryParallelCallbackResult(
+            callbackResults, copyIndex, callbackResultType, callbackStride, "try_parallel_copy_result");
+        var successful = ExtractEnumPayload(callbackResult, callbackTypes.Ok);
+        switch (resultArray)
+        {
+            case RuntimeDynamicIntArray integers:
+                StoreDynamicArrayElement(integers.PointerName, copyIndex, ((RuntimeInt)successful).ValueName);
+                break;
+            case RuntimeDynamicInlineArray inline:
+                StoreDynamicInlineArrayElement(
+                    inline.PointerName,
+                    _program.Types.GetDynamicArray(inline.Type),
+                    copyIndex,
+                    successful);
+                break;
+        }
+        EmitBinary(copyNext, "add", "i64", copyIndex, "1");
+        EmitBranch(copyLoopLabel);
+        EmitLabel(copyDoneLabel);
+        _currentBlockLabel = copyDoneLabel;
+        EmitCall(target: null, "void", "smalllang_free", $"ptr {callbackResults}");
+        EmitCall(target: null, "void", "smalllang_free", $"ptr {initialized}");
+        var okVariant = resultDefinition.Variants.First(variant => variant.Name == "Ok");
+        var successResult = EmitEnumValue(function.ReturnType, okVariant, resultArray);
+        var successResultLabel = _currentBlockLabel;
+        EmitBranch(mergeLabel);
+
+        EmitLabel(mergeLabel);
+        _currentBlockLabel = mergeLabel;
+        return EmitEnumPhi(
+            "try_parallel_collected",
+            function.ReturnType,
+            [(errorResult, errorResultLabel), (successResult, successResultLabel)]);
+    }
+
+    private RuntimeEnum EmitLoadTryParallelCallbackResult(
+        string pointer,
+        string index,
+        BoundType resultType,
+        int stride,
+        string prefix)
+    {
+        var offset = NextTemp(prefix + "_offset");
+        EmitInstruction($"{offset} = mul i64 {index}, {stride.ToString(CultureInfo.InvariantCulture)}");
+        var address = NextTemp(prefix + "_address");
+        EmitInstruction($"{address} = getelementptr i8, ptr {pointer}, i64 {offset}");
+        var loaded = NextTemp(prefix + "_value");
+        EmitLoad(loaded, LlvmEnumType(resultType), address, RuntimeAlignment(resultType));
+        return new RuntimeEnum(resultType, loaded);
+    }
+
+    private void EmitDropInitializedTryParallelResults(
+        string callbackResults,
+        string initialized,
+        string length,
+        string selectedIndex,
+        BoundType callbackResultType,
+        (BoundType Ok, BoundType Error) callbackTypes,
+        int callbackStride)
+    {
+        if (!_program.Types.ContainsOwnedStorage(callbackTypes.Ok)
+            && !_program.Types.ContainsOwnedStorage(callbackTypes.Error))
+        {
+            return;
+        }
+
+        var entryLabel = _currentBlockLabel;
+        var loopLabel = NextLabel("try_parallel_cleanup_loop");
+        var inspectLabel = NextLabel("try_parallel_cleanup_inspect");
+        var okLabel = NextLabel("try_parallel_cleanup_ok");
+        var errorLabel = NextLabel("try_parallel_cleanup_error");
+        var nextLabel = NextLabel("try_parallel_cleanup_next");
+        var doneLabel = NextLabel("try_parallel_cleanup_done");
+        var next = NextTemp("try_parallel_cleanup_next_i");
+        EmitBranch(loopLabel);
+        EmitLabel(loopLabel);
+        _currentBlockLabel = loopLabel;
+        var index = NextTemp("try_parallel_cleanup_i");
+        EmitPhi(index, "i64", ("0", entryLabel), (next, nextLabel));
+        var inRange = NextTemp("try_parallel_cleanup_in_range");
+        EmitCompare(inRange, "ult", "i64", index, length);
+        var checkLabel = NextLabel("try_parallel_cleanup_check");
+        EmitConditionalBranch(inRange, checkLabel, doneLabel);
+        EmitLabel(checkLabel);
+        _currentBlockLabel = checkLabel;
+        var flagAddress = NextTemp("try_parallel_cleanup_flag_address");
+        EmitInstruction($"{flagAddress} = getelementptr i8, ptr {initialized}, i64 {index}");
+        var flag = NextTemp("try_parallel_cleanup_flag");
+        EmitInstruction($"{flag} = load atomic i8, ptr {flagAddress} acquire, align 1");
+        var wasInitialized = NextTemp("try_parallel_cleanup_initialized");
+        EmitCompare(wasInitialized, "ne", "i8", flag, "0");
+        var isSelected = NextTemp("try_parallel_cleanup_selected");
+        EmitCompare(isSelected, "eq", "i64", index, selectedIndex);
+        var notSelected = NextTemp("try_parallel_cleanup_not_selected");
+        EmitInstruction($"{notSelected} = xor i1 {isSelected}, true");
+        var shouldInspect = NextTemp("try_parallel_cleanup_should_inspect");
+        EmitInstruction($"{shouldInspect} = and i1 {wasInitialized}, {notSelected}");
+        EmitConditionalBranch(shouldInspect, inspectLabel, nextLabel);
+
+        EmitLabel(inspectLabel);
+        _currentBlockLabel = inspectLabel;
+        var value = EmitLoadTryParallelCallbackResult(
+            callbackResults, index, callbackResultType, callbackStride, "try_parallel_cleanup_result");
+        var tag = NextTemp("try_parallel_cleanup_tag");
+        EmitAssign(tag, $"extractvalue {LlvmEnumType(callbackResultType)} {value.ValueName}, 0");
+        var isError = NextTemp("try_parallel_cleanup_is_error");
+        EmitCompare(isError, "eq", "i32", tag, "1");
+        EmitConditionalBranch(isError, errorLabel, okLabel);
+
+        EmitLabel(okLabel);
+        _currentBlockLabel = okLabel;
+        if (_program.Types.ContainsOwnedStorage(callbackTypes.Ok))
+        {
+            DropOwnedRuntimeValue(ExtractEnumPayload(value, callbackTypes.Ok));
+        }
+        EmitBranch(nextLabel);
+
+        EmitLabel(errorLabel);
+        _currentBlockLabel = errorLabel;
+        if (_program.Types.ContainsOwnedStorage(callbackTypes.Error))
+        {
+            DropOwnedRuntimeValue(ExtractEnumPayload(value, callbackTypes.Error));
+        }
+        EmitBranch(nextLabel);
+
+        EmitLabel(nextLabel);
+        _currentBlockLabel = nextLabel;
+        EmitBinary(next, "add", "i64", index, "1");
+        EmitBranch(loopLabel);
+        EmitLabel(doneLabel);
+        _currentBlockLabel = doneLabel;
+    }
+
+    private void EmitDropTryParallelPrefix(string pointer, BoundType elementType, string length)
+    {
+        if (_program.Types.ContainsOwnedStorage(elementType))
+        {
+            var entryLabel = _currentBlockLabel;
+            var loopLabel = NextLabel("try_parallel_drop_loop");
+            var bodyLabel = NextLabel("try_parallel_drop_body");
+            var endLabel = NextLabel("try_parallel_drop_end");
+            var next = NextTemp("try_parallel_drop_next");
+            EmitBranch(loopLabel);
+            EmitLabel(loopLabel);
+            _currentBlockLabel = loopLabel;
+            var index = NextTemp("try_parallel_drop_i");
+            EmitPhi(index, "i64", ("0", entryLabel), (next, bodyLabel));
+            var inRange = NextTemp("try_parallel_drop_in_range");
+            EmitCompare(inRange, "ult", "i64", index, length);
+            EmitConditionalBranch(inRange, bodyLabel, endLabel);
+            EmitLabel(bodyLabel);
+            _currentBlockLabel = bodyLabel;
+            var address = NextTemp("try_parallel_drop_address");
+            EmitAssign(address, $"getelementptr {LlvmType(elementType)}, ptr {pointer}, i64 {index}");
+            var loaded = NextTemp("try_parallel_drop_value");
+            EmitLoad(loaded, LlvmType(elementType), address, RuntimeAlignment(elementType));
+            DropOwnedRuntimeValue(DematerializeAggregateValue(elementType, loaded));
+            EmitBinary(next, "add", "i64", index, "1");
+            EmitBranch(loopLabel);
+            EmitLabel(endLabel);
+            _currentBlockLabel = endLabel;
+        }
+        EmitCall(target: null, "void", "smalllang_free", $"ptr {pointer}");
     }
 
     private string EmitHeapAllocateProduct(string count, string stride, string name)

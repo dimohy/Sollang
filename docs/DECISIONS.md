@@ -5818,3 +5818,45 @@ zero warnings/errors and both focused examples pass with deterministic grammar
 generation. Cancellation, partial-result destruction, and runtime lowering
 remain open, so parallel progress stays 26/28 (92.9%) and the canonical roadmap
 stays 48.5/60 (80.8%).
+
+## D182 - Preserve Typed Failure Through `tryParallel`
+
+Status: reference runtime implemented; self-host runtime pending
+Date: 2026-07-18
+
+`tryParallel<T, R, E>` is the fallible counterpart of `parallel`. Its callback
+returns `Result<R, E>` and the role returns `Result<[R; ~], E>`; failure is not
+translated into an exception or a hidden runtime flag. The reference semantic
+compiler infers all three types from the source and callback, rejects callbacks
+that do not return `Result`, and requires callers to bind owned result arrays.
+
+The native compute group keeps an atomic earliest-failure source index. Workers
+stop claiming indices at or beyond that limit, while callbacks that already
+started are structurally joined. The lowest failing source index wins even when
+a later failure finishes first. After the join, successful payloads are moved
+into canonical input order or the selected error is moved out; every other
+initialized success/error payload is destroyed exactly once. Per-index memory
+output sinks flush only the successful prefix before the selected failure and
+dispose all remaining buffers.
+
+Examples 386-388 cover empty and successful arrays, deterministic competing
+errors with prefix-only output, and owned partial results. The two diagnostics
+cover a non-`Result` callback and an ignored owned return. The self-host semantic
+and typed-IR passes recognize opcode `-209`, infer `Result<[R; ~], E>`, and apply
+the same capture-safety boundary; examples 380 and 389 prove that scope.
+
+The self-host LLVM emitter cannot yet construct or inspect executable generic
+enum values such as `Result<R, E>`. Self-host runtime lowering therefore remains
+open rather than emitting an unsound partial ABI. Because full self-host parity,
+Linux full-suite parity, and the final exactly-once proof are not yet complete,
+parallel progress remains 26/28 (92.9%) and the canonical roadmap remains
+48.5/60 equivalent gates (80.8%).
+
+The Release build has zero warnings/errors and the complete Windows regression
+passes 516/516. All three reference runtime examples also pass on Linux x86-64.
+Stage-2 differential verification passes 6/6. Stage 2 and stage 3 are
+byte-identical at 7,247,585 bytes with SHA-256
+`C1D43534CFC873CC3BB18BA9DDE3CAF1F515FB8D9FEBA57ABDFE063F648F0723`;
+`llvm-as` accepts stage 3, whose emission took 35.19 seconds wall time. The
+stage-2 verifier now identifies the typed-IR worker by ABI shape instead of a
+fragile function symbol ordinal.

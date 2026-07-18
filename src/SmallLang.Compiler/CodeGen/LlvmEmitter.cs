@@ -78,6 +78,7 @@ internal sealed partial class LlvmEmitter
         _usesParallel = _platform.SupportsComputePool
             && program.ResolvedGenericCalls.Values.Any(function =>
                 function.Kind is BoundFunctionKind.RuntimeParallel
+                    or BoundFunctionKind.RuntimeTryParallel
                     or BoundFunctionKind.RuntimeLimitParallelWorkers);
         _usesAsync = program.Functions.Values.Any(function => function.IsAsync && !function.IsStandardLibrary)
             || _usesAsyncFile
@@ -403,7 +404,7 @@ internal sealed partial class LlvmEmitter
         {
             header += """
                 %smalllang.output_sink = type { ptr, i64, i64 }
-                %smalllang.compute_group = type { ptr, ptr, ptr, i64, ptr, ptr, ptr, ptr, ptr, ptr, ptr }
+                %smalllang.compute_group = type { ptr, ptr, ptr, i64, ptr, ptr, ptr, ptr, ptr, ptr, ptr, i64, ptr }
 
                 """;
         }

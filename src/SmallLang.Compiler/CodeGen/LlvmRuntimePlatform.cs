@@ -108,7 +108,7 @@ internal abstract class LlvmRuntimePlatform
               ret void
             }
 
-            define internal void @smalllang_memory_output_sink_array_flush(ptr %sinks, i64 %count, ptr %context, ptr %writer) #0 {
+            define internal void @smalllang_memory_output_sink_array_flush_prefix(ptr %sinks, i64 %count, i64 %prefix, ptr %context, ptr %writer) #0 {
             entry:
               br label %flush_loop
 
@@ -124,10 +124,15 @@ internal abstract class LlvmRuntimePlatform
               %data = load ptr, ptr %data_slot, align 8
               %length = load i64, ptr %length_slot, align 8
               %has_data = icmp ne ptr %data, null
-              br i1 %has_data, label %write, label %flush_one_done
+              %in_prefix = icmp ult i64 %index, %prefix
+              %should_write = and i1 %has_data, %in_prefix
+              br i1 %should_write, label %write, label %dispose_one
 
             write:
               call void %writer(ptr %context, ptr %data, i64 %length)
+              br label %dispose_one
+
+            dispose_one:
               call void @smalllang_free(ptr %data)
               br label %flush_one_done
 
@@ -137,6 +142,12 @@ internal abstract class LlvmRuntimePlatform
 
             finish:
               call void @smalllang_free(ptr %sinks)
+              ret void
+            }
+
+            define internal void @smalllang_memory_output_sink_array_flush(ptr %sinks, i64 %count, ptr %context, ptr %writer) #0 {
+            entry:
+              call void @smalllang_memory_output_sink_array_flush_prefix(ptr %sinks, i64 %count, i64 %count, ptr %context, ptr %writer)
               ret void
             }
 

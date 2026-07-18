@@ -876,7 +876,8 @@ public resolveContext prepared: semanticContext.SemanticSnapshot -> ExpressionTy
             (parallelAst.kind == 48 and parallelAst.payloadToken >= 0) -> if {
                 prepared.package.tokens[parallelRange.tokenStart + parallelAst.payloadToken] => parallelName
                 TextMatchRequest { source: parallelSource, start: parallelName.span.start, length: parallelName.span.length, expected: "parallel" } -> textMatches => intrinsicParallel
-                intrinsicParallel -> if {
+                TextMatchRequest { source: parallelSource, start: parallelName.span.start, length: parallelName.span.length, expected: "tryParallel" } -> textMatches => intrinsicTryParallel
+                (intrinsicParallel or intrinsicTryParallel) -> if {
                     -1 => parallelBlockExpression!
                     UIntSize(0) => parallelBlockEnd!
                     UIntSize(0) => parallelBlockLength!
@@ -900,22 +901,34 @@ public resolveContext prepared: semanticContext.SemanticSnapshot -> ExpressionTy
                         parallelExpressionSearch! + 1 => parallelExpressionSearch!
                     }
                     parallelBlockExpression! >= 0 -> if {
-                        expressions![parallelBlockExpression!].typeId => parallelElementType
+                        expressions![parallelBlockExpression!].typeId => parallelElementType!
+                        -1 => parallelErrorType!
+                        -1 => parallelResultConstructor!
+                        intrinsicTryParallel -> if {
+                            types![parallelElementType!] => parallelCallbackResult
+                            (parallelCallbackResult.kind == 7 and parallelCallbackResult.first >= 0 and parallelCallbackResult.second >= 0) -> if {
+                                parallelElementType! => parallelResultConstructor!
+                                parallelCallbackResult.first => parallelElementType!
+                                parallelCallbackResult.second => parallelErrorType!
+                            } else {
+                                -1 => parallelElementType!
+                            }
+                        }
                         -1 => parallelArrayType!
                         0 => parallelArraySearch!
-                        parallelArraySearch! < (types! -> len) -> while {
+                        (parallelElementType! >= 0 and parallelArraySearch! < (types! -> len)) -> while {
                             types![parallelArraySearch!] => parallelArrayCandidate
-                            (parallelArrayCandidate.kind == 3 and parallelArrayCandidate.first == parallelElementType and parallelArrayCandidate.status == 0) -> if { parallelArraySearch! => parallelArrayType! }
+                            (parallelArrayCandidate.kind == 3 and parallelArrayCandidate.first == parallelElementType! and parallelArrayCandidate.status == 0) -> if { parallelArraySearch! => parallelArrayType! }
                             parallelArraySearch! + 1 => parallelArraySearch!
                         }
-                        parallelArrayType! < 0 -> if {
+                        (parallelElementType! >= 0 and parallelArrayType! < 0) -> if {
                             types! -> len => parallelArrayType!
                             types! -> push(typeIds.SemanticType {
                                 kind: 3
                                 origin: -1
                                 module: -1
                                 symbol: -1
-                                first: parallelElementType
+                                first: parallelElementType!
                                 second: -1
                                 length: -1
                                 lengthHash: UInt64(0)
@@ -923,15 +936,42 @@ public resolveContext prepared: semanticContext.SemanticSnapshot -> ExpressionTy
                                 status: 0
                             })
                         }
+                        parallelArrayType! => parallelResultType!
+                        (intrinsicTryParallel and parallelArrayType! >= 0 and parallelResultConstructor! >= 0) -> if {
+                            types![parallelResultConstructor!] => parallelCallbackResult
+                            -1 => parallelWrappedResult!
+                            0 => parallelWrappedSearch!
+                            parallelWrappedSearch! < (types! -> len) -> while {
+                                types![parallelWrappedSearch!] => parallelWrappedCandidate
+                                (parallelWrappedCandidate.kind == 7 and parallelWrappedCandidate.origin == parallelCallbackResult.origin and parallelWrappedCandidate.module == parallelCallbackResult.module and parallelWrappedCandidate.symbol == parallelCallbackResult.symbol and parallelWrappedCandidate.first == parallelArrayType! and parallelWrappedCandidate.second == parallelErrorType! and parallelWrappedCandidate.status == 0) -> if { parallelWrappedSearch! => parallelWrappedResult! }
+                                parallelWrappedSearch! + 1 => parallelWrappedSearch!
+                            }
+                            parallelWrappedResult! < 0 -> if {
+                                types! -> len => parallelWrappedResult!
+                                types! -> push(typeIds.SemanticType {
+                                    kind: 7
+                                    origin: parallelCallbackResult.origin
+                                    module: parallelCallbackResult.module
+                                    symbol: parallelCallbackResult.symbol
+                                    first: parallelArrayType!
+                                    second: parallelErrorType!
+                                    length: -1
+                                    lengthHash: UInt64(0)
+                                    containsParameter: false
+                                    status: 0
+                                })
+                            }
+                            parallelWrappedResult! => parallelResultType!
+                        }
                         parallelRange.astStart + parallelAstIndex! => parallelGlobalAst
                         expressionIndexByAst![parallelGlobalAst] => parallelExistingExpression!
                         parallelExistingExpression! < 0 -> if {
                             expressions! -> len => parallelExpressionIndex
-                            expressions! -> push(ExpressionTypeId { sourceModule: parallelSourceIndex!, astNode: parallelAstIndex!, typeId: parallelArrayType!, status: 0 })
+                            expressions! -> push(ExpressionTypeId { sourceModule: parallelSourceIndex!, astNode: parallelAstIndex!, typeId: parallelResultType!, status: 0 })
                             parallelExpressionIndex => expressionIndexByAst![parallelGlobalAst]
                         } else {
                             expressions![parallelExistingExpression!] => parallelExisting!
-                            parallelArrayType! => parallelExisting!.typeId
+                            parallelResultType! => parallelExisting!.typeId
                             0 => parallelExisting!.status
                             parallelExisting! => expressions![parallelExistingExpression!]
                         }

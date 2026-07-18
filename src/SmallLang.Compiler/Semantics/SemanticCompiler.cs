@@ -306,7 +306,8 @@ internal sealed class SemanticCompiler
             }
         }
 
-        var inputTypeTemplate = function.Name == "sys.runtime.parallel"
+        var isParallelRole = function.Name is "sys.runtime.parallel" or "sys.runtime.tryParallel";
+        var inputTypeTemplate = isParallelRole
             && function.InputType is not null
             && function.InputType != function.GenericParameterName
             && (TypeSyntaxReferencesParameter(function.InputType, function.GenericParameterName)
@@ -329,7 +330,7 @@ internal sealed class SemanticCompiler
             inputType = BoundType.IntDictionaryView;
         }
 
-        var returnTypeTemplate = function.Name == "sys.runtime.parallel"
+        var returnTypeTemplate = isParallelRole
             && function.ReturnType != function.GenericParameterName
             && function.ReturnType != function.SecondaryGenericParameterName
             && function.ReturnType != function.TertiaryGenericParameterName
@@ -527,7 +528,7 @@ internal sealed class SemanticCompiler
         if (function.GenericParameterName is not null)
         {
             var allowsCompositeGenericInput = function.IsStandardLibrary
-                && function.Name == "sys.runtime.parallel";
+                && function.Name is "sys.runtime.parallel" or "sys.runtime.tryParallel";
             if (isLocal || function.TraitName is not null)
             {
                 throw Error(function.Line, function.Column, "generic local and impl functions are not implemented yet");
@@ -1392,6 +1393,7 @@ internal sealed class SemanticCompiler
                 BoundType.Int64,
                 BoundFunctionKind.RuntimeNowMillis),
             "sys.runtime.parallel" => RequireParallelIntrinsicSignature(function),
+            "sys.runtime.tryParallel" => RequireTryParallelIntrinsicSignature(function),
             "sys.runtime.limitParallelWorkers" => RequireIntrinsicSignature(
                 function,
                 inputType,
@@ -1516,6 +1518,25 @@ internal sealed class SemanticCompiler
         }
 
         return BoundFunctionKind.RuntimeParallel;
+    }
+
+    private BoundFunctionKind RequireTryParallelIntrinsicSignature(FunctionDeclaration function)
+    {
+        if (function.GenericParameterName is null
+            || function.SecondaryGenericParameterName is null
+            || function.TertiaryGenericParameterName is null
+            || function.InputType != $"[{function.GenericParameterName}; ~]"
+            || function.ReturnType != $"Result<[{function.SecondaryGenericParameterName}; ~], {function.TertiaryGenericParameterName}>"
+            || function.BlockInputType != function.GenericParameterName
+            || function.BlockResultType != $"Result<{function.SecondaryGenericParameterName}, {function.TertiaryGenericParameterName}>")
+        {
+            throw Error(
+                function.Line,
+                function.Column,
+                "intrinsic tryParallel<T, R, E> must be [T; ~] -> Result<[R; ~], E> block item: T -> Result<R, E>");
+        }
+
+        return BoundFunctionKind.RuntimeTryParallel;
     }
 
     private BoundFunctionKind RequireSleepIntrinsicSignature(
@@ -1709,6 +1730,7 @@ internal sealed class SemanticCompiler
         AddGlobalAlias(functions, "seconds", "sys.time.seconds");
         AddGlobalAlias(functions, "sleep", "sys.time.sleep");
         AddGlobalAlias(functions, "parallel", "sys.runtime.parallel");
+        AddGlobalAlias(functions, "tryParallel", "sys.runtime.tryParallel");
         AddGlobalAlias(functions, "limitParallelWorkers", "sys.runtime.limitParallelWorkers");
         AddGlobalAlias(functions, "parallelWorkers", "sys.runtime.parallelWorkers");
         AddGlobalAlias(functions, "parallelPeakWorkers", "sys.runtime.parallelPeakWorkers");
@@ -2209,7 +2231,9 @@ internal sealed class SemanticCompiler
                 return;
             default:
                 if (functions.TryGetValue(target, out var function)
-                    && function.Kind is BoundFunctionKind.UserBlock or BoundFunctionKind.RuntimeParallel)
+                    && function.Kind is BoundFunctionKind.UserBlock
+                        or BoundFunctionKind.RuntimeParallel
+                        or BoundFunctionKind.RuntimeTryParallel)
                 {
                     BindUserBlockFunctionCall(call, function, functions, bindings, mutableBindings, target);
                     return;
@@ -2365,20 +2389,20 @@ internal sealed class SemanticCompiler
             allowReadIntCall: true,
             allowFlowBindingTarget: false,
             mutableBindings: mutableBindings);
-        if (function.Kind == BoundFunctionKind.RuntimeParallel)
+        if (function.Kind is BoundFunctionKind.RuntimeParallel or BoundFunctionKind.RuntimeTryParallel)
         {
             ValidateParallelCapturedBindings(call, functions, bindings, mutableBindings);
         }
-        if (function.Kind == BoundFunctionKind.RuntimeParallel
+        if (function.Kind is BoundFunctionKind.RuntimeParallel or BoundFunctionKind.RuntimeTryParallel
             && function.SpecializedType is null)
         {
             if (!_types.IsDynamicArray(inputType) && inputType != BoundType.DynamicIntArray)
             {
-                throw Error(call.Source.Line, call.Source.Column, "parallel expects a growable array");
+                throw Error(call.Source.Line, call.Source.Column, $"{target} expects a growable array");
             }
             if (call.Body.Count == 0 || call.Body[^1] is not ExpressionStatement parallelResult)
             {
-                throw Error(call.Line, call.Column, "parallel callback must end with a result expression");
+                throw Error(call.Line, call.Column, $"{target} callback must end with a result expression");
             }
 
             var parallelItemType = inputType == BoundType.DynamicIntArray
@@ -2403,13 +2427,32 @@ internal sealed class SemanticCompiler
                 allowReadIntCall: true,
                 allowFlowBindingTarget: false,
                 mutableBindings: parallelMutableBindings);
+            BoundType parallelValueType;
+            BoundType? parallelErrorType = null;
+            if (function.Kind == BoundFunctionKind.RuntimeTryParallel)
+            {
+                if (!_types.TryGetResultTypes(parallelResultType, out var resultTypes))
+                {
+                    throw Error(
+                        parallelResult.Expression.Line,
+                        parallelResult.Expression.Column,
+                        $"{target} callback must return Result<R, E>");
+                }
+                parallelValueType = resultTypes.Ok;
+                parallelErrorType = resultTypes.Error;
+            }
+            else
+            {
+                parallelValueType = parallelResultType;
+            }
             function = ResolveGenericSpecialization(
                 function,
                 parallelItemType,
                 functions,
                 call,
                 specializedInputType: inputType,
-                explicitSecondaryType: parallelResultType);
+                explicitSecondaryType: parallelValueType,
+                explicitTertiaryType: parallelErrorType);
         }
         if (function.GenericParameterName is not null
             && function.SpecializedType is null
@@ -2479,7 +2522,9 @@ internal sealed class SemanticCompiler
 
         if (call.ResultName is null)
         {
-            if (function.ReturnType != BoundType.Unit && IsContainerType(function.ReturnType))
+            if (function.ReturnType != BoundType.Unit
+                && (IsContainerType(function.ReturnType)
+                    || _types.ContainsOwnedStorage(function.ReturnType)))
             {
                 throw Error(call.Line, call.Column,
                     $"owned result of block function '{target}' must be bound with '=> name'");

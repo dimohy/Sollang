@@ -222,7 +222,11 @@ internal sealed class LinuxLlvmRuntimePlatform : LlvmRuntimePlatform
 
             claim:
               %index = atomicrmw add ptr @smalllang_compute_next, i64 1 acq_rel
-              %has_work = icmp ult i64 %index, %count
+              %failure_limit_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 11
+              %failure_limit = load atomic i64, ptr %failure_limit_slot acquire, align 8
+              %within_count = icmp ult i64 %index, %count
+              %before_failure = icmp ult i64 %index, %failure_limit
+              %has_work = and i1 %within_count, %before_failure
               br i1 %has_work, label %work, label %complete
 
             work:
@@ -364,7 +368,11 @@ internal sealed class LinuxLlvmRuntimePlatform : LlvmRuntimePlatform
 
             help_claim:
               %help_index = atomicrmw add ptr @smalllang_compute_next, i64 1 acq_rel
-              %help_has_work = icmp ult i64 %help_index, %count
+              %help_failure_limit_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 11
+              %help_failure_limit = load atomic i64, ptr %help_failure_limit_slot acquire, align 8
+              %help_within_count = icmp ult i64 %help_index, %count
+              %help_before_failure = icmp ult i64 %help_index, %help_failure_limit
+              %help_has_work = and i1 %help_within_count, %help_before_failure
               br i1 %help_has_work, label %help_work, label %help_wait
 
             help_work:
@@ -385,7 +393,11 @@ internal sealed class LinuxLlvmRuntimePlatform : LlvmRuntimePlatform
             flush_prepare:
               %sinks_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 5
               %sinks = load ptr, ptr %sinks_slot, align 8
-              call void @smalllang_memory_output_sink_array_flush(ptr %sinks, i64 %count, ptr %group, ptr @smalllang_memory_output_sink_write)
+              %flush_failure_slot = getelementptr %smalllang.compute_group, ptr %group, i32 0, i32 11
+              %flush_failure = load atomic i64, ptr %flush_failure_slot acquire, align 8
+              %failure_before_end = icmp ult i64 %flush_failure, %count
+              %flush_prefix = select i1 %failure_before_end, i64 %flush_failure, i64 %count
+              call void @smalllang_memory_output_sink_array_flush_prefix(ptr %sinks, i64 %count, i64 %flush_prefix, ptr %group, ptr @smalllang_memory_output_sink_write)
               store atomic ptr null, ptr @smalllang_compute_group_current release, align 8
               br label %done
 

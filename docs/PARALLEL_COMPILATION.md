@@ -193,6 +193,15 @@ emitted by the native self-host compiler. Memory-output ownership is shared by
 one runtime abstraction: platforms provide only the final writer adapter while
 the common sink owns grow, append, canonical flush, and destruction.
 
+The reference runtime now implements the fallible `tryParallel<T, R, E>` role.
+It keeps the earliest failing source index, stops new claims at that boundary,
+joins already-started callbacks, flushes only the successful output-sink prefix,
+and moves or destroys every initialized `Result` payload exactly once. The
+self-host semantic and typed-IR layers recognize the same role and enforce its
+capture boundary. The C.6 checkbox remains open because executable self-host
+LLVM lowering still depends on generic enum/`Result` value lowering, and the
+full cross-platform ownership proof has not yet been completed.
+
 - [POSIX `pthread_create`](https://pubs.opengroup.org/onlinepubs/000095399/functions/pthread_create.html)
 - [POSIX `pthread_join`](https://pubs.opengroup.org/onlinepubs/009695399/functions/pthread_join.html)
 - [Linux `eventfd`](https://man7.org/linux/man-pages/man2/eventfd.2.html)
@@ -210,3 +219,11 @@ effective cores). The parent-help fixed-point run used 376.91 CPU-seconds over
 run used 407.42 CPU-seconds over 36.86 seconds wall time (11.05 effective cores)
 and peaked at 100.7 MiB. The earlier capture-safety run peaked at 77.5 MiB.
 Linux full-suite parity and exactly-once cancellation remain outstanding.
+
+The `tryParallel` reference-runtime checkpoint passes the complete 516-case
+Windows suite and its three runtime cases on Linux x86-64. The updated compiler
+reaches an exact 7,247,585-byte stage-2/stage-3 fixed point with SHA-256
+`C1D43534CFC873CC3BB18BA9DDE3CAF1F515FB8D9FEBA57ABDFE063F648F0723`;
+stage 3 assembles with `llvm-as` and took 35.19 seconds to emit. This evidence
+does not close the two remaining checks because executable self-host
+`Result`/generic-enum lowering and a Linux full-suite run are still pending.

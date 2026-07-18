@@ -20,7 +20,7 @@ $multiLibrarySource = Join-Path $repoRoot "tests\SmallLang.ExampleTests\Fixtures
 $multiMainSource = Join-Path $repoRoot "tests\SmallLang.ExampleTests\Fixtures\selfhost-stage2-main-smoke.sl"
 $groupedNotSource = Join-Path $repoRoot "tests\SmallLang.ExampleTests\Fixtures\selfhost-stage2-grouped-not-smoke.sl"
 $semanticContextSource = Join-Path $repoRoot "selfhost\semantic\context.sl"
-$expectedStage2Bytes = 7217656L
+$expectedStage2Bytes = 7247585L
 
 New-Item -ItemType Directory -Force -Path $artifactsDir | Out-Null
 
@@ -127,7 +127,7 @@ if (Test-Stage2IsCurrent) {
 }
 
 $stage2Llvm = [System.IO.File]::ReadAllText($stage2LlvmPath)
-if ($stage2Llvm -notmatch '(?s)define internal void @smalllang_parallel_callback_\d+\(ptr %group, i64 %index\) \{.*?call %sl\.struct\.m5_s19 @sl_m5_s129\(.*?\r?\n\}') {
+if ($stage2Llvm -notmatch '(?s)define internal void @smalllang_parallel_callback_\d+\(ptr %group, i64 %index\) \{.*?call %sl\.struct\.m5_s19 @sl_m5_s\d+\(.*?\r?\n\}') {
     throw "stage-2 LLVM does not contain the function-local typed IR worker callback"
 }
 

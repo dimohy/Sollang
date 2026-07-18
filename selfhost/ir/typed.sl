@@ -168,6 +168,9 @@ intrinsicOpcode request: IntrinsicNameRequest -> Int {
     request.token.span.length == UIntSize(10) -> if {
         ((request.source -> byte(request.token.span.start)) == UInt8(98) and (request.source -> byte(request.token.span.start + UIntSize(1))) == UInt8(111) and (request.source -> byte(request.token.span.start + UIntSize(2))) == UInt8(114) and (request.source -> byte(request.token.span.start + UIntSize(3))) == UInt8(114) and (request.source -> byte(request.token.span.start + UIntSize(4))) == UInt8(111) and (request.source -> byte(request.token.span.start + UIntSize(5))) == UInt8(119) and (request.source -> byte(request.token.span.start + UIntSize(6))) == UInt8(84) and (request.source -> byte(request.token.span.start + UIntSize(7))) == UInt8(101) and (request.source -> byte(request.token.span.start + UIntSize(8))) == UInt8(120) and (request.source -> byte(request.token.span.start + UIntSize(9))) == UInt8(116)) -> if { -206 => opcode! }
     }
+    request.token.span.length == UIntSize(11) -> if {
+        ((request.source -> byte(request.token.span.start)) == UInt8(116) and (request.source -> byte(request.token.span.start + UIntSize(1))) == UInt8(114) and (request.source -> byte(request.token.span.start + UIntSize(2))) == UInt8(121) and (request.source -> byte(request.token.span.start + UIntSize(3))) == UInt8(80) and (request.source -> byte(request.token.span.start + UIntSize(4))) == UInt8(97) and (request.source -> byte(request.token.span.start + UIntSize(5))) == UInt8(114) and (request.source -> byte(request.token.span.start + UIntSize(6))) == UInt8(97) and (request.source -> byte(request.token.span.start + UIntSize(7))) == UInt8(108) and (request.source -> byte(request.token.span.start + UIntSize(8))) == UInt8(108) and (request.source -> byte(request.token.span.start + UIntSize(9))) == UInt8(101) and (request.source -> byte(request.token.span.start + UIntSize(10))) == UInt8(108)) -> if { -209 => opcode! }
+    }
     opcode!
 }
 
@@ -974,7 +977,7 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                                     prepared.package.tokens[sourceRange.tokenStart + roleTokenIndex!] => roleToken
                                     roleToken.kind == grammar.tokenIdIdentifier -> if {
                                         IntrinsicNameRequest { source: source, token: roleToken } -> intrinsicOpcode => roleOpcode
-                                        (roleOpcode == -207 or roleOpcode == -208) -> if { roleOpcode => expressionOpcode! }
+                                        (roleOpcode == -207 or roleOpcode == -208 or roleOpcode == -209) -> if { roleOpcode => expressionOpcode! }
                                     }
                                     roleTokenIndex! + 1 => roleTokenIndex!
                                 }
@@ -1367,7 +1370,7 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                     (roleBinding!.kind == 17 and roleBinding!.operand0 < 0 and prepared.package.nodes[sourceRange.astStart + roleBinding!.astNode].kind == 48) -> if {
                         expressionIrStart => roleCallSearch!
                         roleCallSearch! < expressionIrEnd -> while {
-                            (results![roleCallSearch!].kind == 6 and results![roleCallSearch!].astNode == roleBinding!.astNode and results![roleCallSearch!].opcode == -207) -> if { roleCallSearch! => roleBinding!.operand0 }
+                            (results![roleCallSearch!].kind == 6 and results![roleCallSearch!].astNode == roleBinding!.astNode and (results![roleCallSearch!].opcode == -207 or results![roleCallSearch!].opcode == -209)) -> if { roleCallSearch! => roleBinding!.operand0 }
                             roleCallSearch! + 1 => roleCallSearch!
                         }
                         roleBinding! => results![roleBindingIndex!]
@@ -2135,7 +2138,7 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                                         prepared.package.tokens[sourceRange.tokenStart + entryRoleTokenIndex!] => entryRoleToken
                                         entryRoleToken.kind == grammar.tokenIdIdentifier -> if {
                                             IntrinsicNameRequest { source: source, token: entryRoleToken } -> intrinsicOpcode => entryRoleOpcode
-                                            (entryRoleOpcode == -207 or entryRoleOpcode == -208) -> if { entryRoleOpcode => entryExpressionOpcode! }
+                                            (entryRoleOpcode == -207 or entryRoleOpcode == -208 or entryRoleOpcode == -209) -> if { entryRoleOpcode => entryExpressionOpcode! }
                                         }
                                         entryRoleTokenIndex! + 1 => entryRoleTokenIndex!
                                     }
@@ -2509,7 +2512,7 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                         (entryRoleBinding!.kind == 17 and entryRoleBinding!.operand0 < 0 and prepared.package.nodes[sourceRange.astStart + entryRoleBinding!.astNode].kind == 48) -> if {
                             entryExpressionStart => entryRoleCallSearch!
                             entryRoleCallSearch! < entryExpressionEnd -> while {
-                                (results![entryRoleCallSearch!].kind == 6 and results![entryRoleCallSearch!].astNode == entryRoleBinding!.astNode and results![entryRoleCallSearch!].opcode == -207) -> if { entryRoleCallSearch! => entryRoleBinding!.operand0 }
+                                (results![entryRoleCallSearch!].kind == 6 and results![entryRoleCallSearch!].astNode == entryRoleBinding!.astNode and (results![entryRoleCallSearch!].opcode == -207 or results![entryRoleCallSearch!].opcode == -209)) -> if { entryRoleCallSearch! => entryRoleBinding!.operand0 }
                                 entryRoleCallSearch! + 1 => entryRoleCallSearch!
                             }
                             entryRoleBinding! => results![entryRoleBindingIndex!]

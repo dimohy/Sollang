@@ -144,15 +144,16 @@ public analyzeContext prepared: semanticContext.SemanticSnapshot -> [OwnershipDi
     0 => parallelIrIndex!
     parallelIrIndex! < (typed! -> len) -> while {
         typed![parallelIrIndex!] => parallelCall
-        (parallelCall.kind == 6 and parallelCall.opcode == -207 and parallelCall.sourceModule >= 0 and parallelCall.astNode >= 0) -> if {
+        (parallelCall.kind == 6 and (parallelCall.opcode == -207 or parallelCall.opcode == -209) and parallelCall.sourceModule >= 0 and parallelCall.astNode >= 0) -> if {
             prepared.package.ranges[parallelCall.sourceModule] => parallelRange
             prepared.package.nodes[parallelRange.astStart + parallelCall.astNode] => parallelAst
             parallelAst.payloadToken >= 0 -> if {
                 prepared.package.tokens[parallelRange.tokenStart + parallelAst.payloadToken] => parallelName
-                parallelName.span.length == UIntSize(8) => isParallel!
+                false => isParallel!
+                parallelCall.opcode == -209 -> if { true => isParallel! } else { parallelName.span.length == UIntSize(8) => isParallel! }
                 "parallel" => parallelText
                 UIntSize(0) => parallelNameByte!
-                (isParallel! and parallelNameByte! < parallelName.span.length) -> while {
+                (parallelCall.opcode == -207 and isParallel! and parallelNameByte! < parallelName.span.length) -> while {
                     (prepared.package.sources[parallelCall.sourceModule] -> byte(parallelName.span.start + parallelNameByte!)) != (parallelText -> byte(parallelNameByte!)) -> if { false => isParallel! }
                     parallelNameByte! + UIntSize(1) => parallelNameByte!
                 }
