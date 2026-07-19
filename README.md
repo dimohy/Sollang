@@ -66,7 +66,8 @@ value flow with `value -> target` syntax and expression-first bindings with
 - LLVM-backed Windows x64, Linux x64, and browser WebAssembly output
 - content-validated incremental builds whose exact-input warm path skips parsing,
   semantic analysis, LLVM emission, and linking, with byte-identical artifacts,
-  transitive interface invalidation, and atomic cache publication
+  transitive interface invalidation, stable cross-session semantic identities,
+  and atomic cache publication
 
 ## Example
 

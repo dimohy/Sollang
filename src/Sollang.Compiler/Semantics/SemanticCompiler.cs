@@ -44,6 +44,15 @@ internal sealed partial class SemanticCompiler
         var functions = BindFunctions();
         var mainBindings = BindMain(functions);
         var storagePlacement = StoragePlacementAnalyzer.Analyze(_program, functions);
+        var stableFunctionIdentities = SemanticStableIdentity.IndexFunctions(
+            _types,
+            functions.Values,
+            _resolvedGenericCalls.Values);
+        var stableCallSiteIdentities = SemanticStableIdentity.IndexCallSites(
+            functions.Values,
+            _program.Statements,
+            _resolvedGenericCalls,
+            stableFunctionIdentities);
         return new BoundProgram(
             _types,
             _traits,
@@ -54,7 +63,9 @@ internal sealed partial class SemanticCompiler
             _functionBindings,
             _functionCapturedBindings,
             storagePlacement.MainFrame,
-            storagePlacement.FunctionFrames);
+            storagePlacement.FunctionFrames,
+            stableFunctionIdentities,
+            stableCallSiteIdentities);
     }
 
     private IReadOnlyDictionary<string, BoundTraitDefinition> BindTraits(

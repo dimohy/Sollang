@@ -218,6 +218,7 @@ internal sealed class IncrementalCodegenCache
             System.IO.Path.Combine(cacheDirectory, baseName + ".cgu"),
             System.IO.Path.Combine(cacheDirectory, baseName + ".sources"),
             System.IO.Path.Combine(cacheDirectory, baseName + ".product"),
+            System.IO.Path.Combine(cacheDirectory, baseName + ".semantic"),
             compilerHash,
             HashFields([targetName]),
             HashFields([configurationName]));
@@ -510,9 +511,9 @@ internal sealed class IncrementalCodegenCache
             .GroupBy(static function => function.ModuleName ?? "", StringComparer.Ordinal);
         return functions.ToDictionary(
             static group => group.Key,
-            static group => HashFields(group
+            group => HashFields(group
                 .OrderBy(static function => function.Name, StringComparer.Ordinal)
-                .SelectMany(FunctionEmissionFields)),
+                .Select(function => program.StableFunctionIdentities[function])),
             StringComparer.Ordinal);
     }
 
@@ -528,31 +529,10 @@ internal sealed class IncrementalCodegenCache
         }
     }
 
-    private static IEnumerable<string> FunctionEmissionFields(BoundFunction function)
-    {
-        yield return "function";
-        yield return function.Name;
-        yield return ((int?)function.InputType)?.ToString(CultureInfo.InvariantCulture) ?? "-";
-        yield return ((int)function.InputOwnership).ToString(CultureInfo.InvariantCulture);
-        yield return ((int)function.ReturnType).ToString(CultureInfo.InvariantCulture);
-        yield return ((int?)function.BlockInputType)?.ToString(CultureInfo.InvariantCulture) ?? "-";
-        yield return ((int?)function.BlockResultType)?.ToString(CultureInfo.InvariantCulture) ?? "-";
-        yield return function.IsAsync ? "async" : "sync";
-        yield return ((int?)function.SpecializedType)?.ToString(CultureInfo.InvariantCulture) ?? "-";
-        yield return ((int?)function.SpecializedSecondaryType)?.ToString(CultureInfo.InvariantCulture) ?? "-";
-        yield return ((int?)function.SpecializedTertiaryType)?.ToString(CultureInfo.InvariantCulture) ?? "-";
-        yield return function.SpecializedValue?.ToString(CultureInfo.InvariantCulture) ?? "-";
-        foreach (var parameter in function.AdditionalParameters ?? [])
-        {
-            yield return parameter.Name;
-            yield return ((int)parameter.Type).ToString(CultureInfo.InvariantCulture);
-            yield return ((int)parameter.Ownership).ToString(CultureInfo.InvariantCulture);
-        }
-    }
-
     private static IEnumerable<string> PublicInterfaceFields(SollangProgram program)
     {
-        foreach (var structure in program.Structs.OrderBy(static value => value.Name, StringComparer.Ordinal))
+        foreach (var structure in program.Structs.Where(static value => value.IsPublic)
+                     .OrderBy(static value => value.Name, StringComparer.Ordinal))
         {
             yield return "struct";
             yield return structure.Name;
@@ -564,7 +544,8 @@ internal sealed class IncrementalCodegenCache
                 yield return field.TypeName;
             }
         }
-        foreach (var enumeration in program.Enums.OrderBy(static value => value.Name, StringComparer.Ordinal))
+        foreach (var enumeration in program.Enums.Where(static value => value.IsPublic)
+                     .OrderBy(static value => value.Name, StringComparer.Ordinal))
         {
             yield return "enum";
             yield return enumeration.Name;
@@ -772,6 +753,7 @@ internal sealed record IncrementalCacheLocation(
     string CodegenPath,
     string SourceSnapshotPath,
     string ProductPath,
+    string SemanticPath,
     ulong CompilerHash,
     ulong TargetHash,
     ulong ConfigurationHash);

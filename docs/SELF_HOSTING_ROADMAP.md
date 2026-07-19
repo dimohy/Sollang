@@ -1377,6 +1377,11 @@ Implementation order:
     - [x] Skip linking when the exact final product remains bound to the same
       validated source and codegen generations.
     - [ ] Rehydrate typed IR for unchanged modules after a partial source miss.
+      - [x] Replace session-local type IDs and AST object addresses with stable
+        structural function and resolved-call-site identities.
+      - [x] Persist, validate, and remap those identities through a canonical
+        checksummed semantic generation.
+      - [ ] Store module typed-IR bodies and load them before semantic analysis.
 - [ ] Prove cold, warm, body-only, public-interface, corruption, target-change,
   and clean-vs-cached byte-equivalence cases on Windows and Linux.
   - [x] Prove the complete matrix for ordinary LLVM codegen-unit reuse with
@@ -1522,6 +1527,37 @@ Stage2 passes 6/6 at 10,553,582 bytes, and Linux Stage2 passes 5/5 at
 (80%)** and the Stage3 cadence advances to **2/10**. Partial
 typed-IR rehydration for changed-source builds remains the final slice; the
 formal roadmap therefore remains **47 complete, 10 partial, 3 missing: 52.0/60
+(86.7%)**.
+
+D207C5A establishes the cross-session identity boundary required by partial
+typed-IR reuse. Semantic types are now named structurally rather than by the
+current process's `TypeId`; functions include their module, signature,
+ownership, generic specialization, associated types, effects, and enclosing
+local-function identity; resolved generic call sites use a deterministic
+owner-local ordinal instead of an AST object address. The production codegen
+interface hash now consumes the same stable function identity and correctly
+excludes private structs and enums from downstream invalidation.
+
+Normal builds publish a bounded, canonical, SHA-256-protected `.semantic`
+generation after a successful link. It is bound to compiler, target, and
+configuration identity, rejects invalid lengths, ordering, duplicates, UTF-8,
+or checksums, and atomically replaces the previous generation. On a changed
+source build the compiler maps the previous function and call-site identities
+onto the newly constructed semantic session. This is intentionally reported as
+`mapped`, not `reused`: semantic analysis still runs, and typed-IR bodies are
+not yet decoded before that phase.
+
+The focused invalidation matrix now has nine states for each target. It adds a
+private-declaration edit that retains the two unaffected consumer units, proves
+semantic-generation corruption rejection and repair, and preserves the existing
+public-interface transitive invalidation and clean/cached LLVM equality checks.
+Windows and Linux pass 9/9, both full suites pass 573/573, Windows Stage2 passes
+6/6 at 10,553,582 bytes, and Linux Stage2 passes 5/5 at 10,550,185 bytes.
+
+This completes the identity/artifact half of the final slice: D207C is
+**4.25/5 (85%)** and the Stage3 cadence advances to **3/10**. Actual module
+typed-IR payload serialization and pre-semantic rehydration remain pending, so
+the formal roadmap remains **47 complete, 10 partial, 3 missing: 52.0/60
 (86.7%)**.
 
 ## Immediate Implementation Order

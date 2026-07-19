@@ -12,7 +12,9 @@ internal sealed record BoundProgram(
     IReadOnlyDictionary<BoundFunction, IReadOnlyDictionary<string, BoundType>> FunctionBindings,
     IReadOnlyDictionary<BoundFunction, IReadOnlyDictionary<string, BoundType>> FunctionCapturedBindings,
     StackFramePlan MainStackFrame,
-    IReadOnlyDictionary<BoundFunction, StackFramePlan> FunctionStackFrames);
+    IReadOnlyDictionary<BoundFunction, StackFramePlan> FunctionStackFrames,
+    IReadOnlyDictionary<BoundFunction, string> StableFunctionIdentities,
+    IReadOnlyDictionary<object, string> StableCallSiteIdentities);
 
 internal sealed record BoundFunction(
     string Name,

@@ -7220,3 +7220,58 @@ This completes the fourth integration slice: D207C is **4/5 (80%)**, and the
 periodic Stage3 cadence is **2/10**. Module-granular typed-IR rehydration after a
 partial source miss remains the fifth slice, so the formal roadmap remains
 **47 complete, 10 partial, 3 missing: 52.0/60 (86.7%)**.
+
+## D207C5A - Stable Semantic Session Bridge
+
+Status: Windows/Linux full suites and Stage2 verified; D207C 4.25/5 complete
+Date: 2026-07-20
+
+Persistent typed IR cannot safely contain the reference compiler's numeric
+`TypeId` assignments or object-keyed resolved-call table because both identities
+are reconstructed in each process. Sollang now derives a structural type name
+for every builtin, nominal, option, result, task, array, dictionary, and box
+shape. A stable function identity combines that type structure with module and
+function name, kind, ownership, async state, generic templates and concrete
+specializations, value-generic arguments, additional parameters, associated
+types, effects, and the enclosing identity of a local function. Resolved call
+sites receive deterministic ordinals within that stable owner while traversing
+the source tree in semantic order.
+
+This follows rustc's requirement that incremental dependency identities and
+fingerprints remain stable across compiler sessions, while adopting Salsa's
+separation between durable input identity and tracked derived values. Salsa's
+backdating also reinforces an important later optimization: if a rebuilt
+function body produces the same typed result, dependents should remain green
+rather than being invalidated merely because work ran.
+
+The ordinary build writes the identities into a schema-1 `.semantic` generation.
+Records are unique and ordinally sorted, all lengths and counts are bounded,
+UTF-8 decoding is strict, compiler/target/configuration identities are checked,
+and a SHA-256 checksum covers the complete payload. Publication uses a
+same-directory write-through temporary file and atomic replacement after the
+link succeeds. A later changed-source build validates the old generation and
+maps old functions and call-site targets onto the new semantic objects.
+
+This checkpoint does not deserialize typed expressions and does not skip
+semantic analysis. Output deliberately says `mapped`, never `reused`. The next
+half must add module-scoped typed-IR body payloads, resolve stable references
+against the declaration universe, and load green modules before body analysis.
+
+The production emission fingerprint now uses the same stable function identity.
+The public-interface fingerprint also filters private structs and enums, fixing
+unnecessary transitive invalidation. The nine-state Windows/Linux cache matrix
+proves private-declaration `2/5` unit reuse, public-interface `0/5` invalidation,
+semantic corruption rejection/recovery, exact frontend/product hits, native
+execution, and LLVM byte equality. Both full suites pass 573/573; Windows
+Stage2 passes 6/6 at 10,553,582 LLVM bytes and Linux Stage2 passes 5/5 at
+10,550,185 bytes.
+
+This is D207C **4.25/5 (85%)** and periodic Stage3 checkpoint **3/10**. The
+formal roadmap remains **47 complete, 10 partial, 3 missing: 52.0/60 (86.7%)**.
+
+References:
+
+- [rustc incremental compilation](https://rustc-dev-guide.rust-lang.org/queries/incremental-compilation.html)
+- [rustc incremental compilation in detail](https://rustc-dev-guide.rust-lang.org/queries/incremental-compilation-in-detail.html)
+- [Salsa incremental algorithm](https://salsa-rs.github.io/salsa/reference/algorithm.html)
+- [Salsa tracked IR](https://salsa-rs.github.io/salsa/tutorial/ir.html)

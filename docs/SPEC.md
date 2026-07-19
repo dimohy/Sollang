@@ -2209,6 +2209,15 @@ Current backend:
   or changed final artifact relinks from the already validated LLVM units and
   atomically publishes a repaired product generation without rerunning the
   frontend.
+- semantic identity generation: a `.semantic` generation stores canonical
+  structural identities for bound functions and resolved generic call sites.
+  It never persists process-local `TypeId` values or AST object addresses, is
+  bound to compiler/target/configuration identity, uses strict UTF-8 and bounded
+  canonically ordered records, and protects the complete payload with SHA-256.
+  A changed-source build may map these identities into its newly analyzed
+  session; this mapping alone is not typed-IR reuse and does not permit semantic
+  analysis to be skipped. Publication is write-through and atomic after a
+  successful link.
 - common emitter: `LlvmEmitter` owns function calls, bindings,
   interpolation, local-function inlining, `each` lowering, integer decimal
   output, containers, and `readInt` parsing. It is split into partial files by

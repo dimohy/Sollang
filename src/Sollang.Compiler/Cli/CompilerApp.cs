@@ -71,6 +71,9 @@ internal static class CompilerApp
                 + $"{frontendCache.Output.Units.Count.ToString(CultureInfo.InvariantCulture)} units; "
                 + frontendCache.Location.CodegenPath);
             Console.WriteLine(
+                $"[semantic-cache] exact via frontend; skipped semantic loading; "
+                + frontendCache.Location.SemanticPath);
+            Console.WriteLine(
                 $"[product-cache] {productCache.Status}; "
                 + (productCache.IsExact ? "skipped linking; " : "linked and published; ")
                 + frontendCache.Location.ProductPath);
@@ -81,10 +84,12 @@ internal static class CompilerApp
         var loaded = LoadProgram(options.SourcePaths, options.Project);
         var pointerBitWidth = options.Target == CompilationTarget.Wasm32Browser ? 32 : 64;
         var boundProgram = new SemanticCompiler(loaded.Program, pointerBitWidth).Compile();
+        var semanticCache = IncrementalSemanticCache.Open(frontendCache.Location, boundProgram);
         var codegenCache = IncrementalCodegenCache.Open(loaded, boundProgram, options);
         var codegenOutput = LlvmIrGenerator.GenerateUnits(boundProgram, options.Target, codegenCache.Reuse);
         WriteAndLink(options, toolchain, codegenOutput);
         codegenCache.Publish(codegenOutput);
+        semanticCache.Publish();
         IncrementalFrontendCache.Publish(loaded, options, codegenCache.Location);
         IncrementalProductCache.Publish(codegenCache.Location, options.OutputPath);
         Console.WriteLine(
@@ -96,6 +101,13 @@ internal static class CompilerApp
             + $"{codegenOutput.ReusedCount.ToString(CultureInfo.InvariantCulture)}/"
             + $"{codegenOutput.Units.Count.ToString(CultureInfo.InvariantCulture)} units; "
             + codegenCache.Path);
+        Console.WriteLine(
+            $"[semantic-cache] {semanticCache.Status}; mapped "
+            + $"{semanticCache.MappedFunctions.ToString(CultureInfo.InvariantCulture)}/"
+            + $"{semanticCache.TotalFunctions.ToString(CultureInfo.InvariantCulture)} functions, "
+            + $"{semanticCache.MappedCalls.ToString(CultureInfo.InvariantCulture)}/"
+            + $"{semanticCache.TotalCalls.ToString(CultureInfo.InvariantCulture)} call sites; "
+            + semanticCache.Path);
         Console.WriteLine(
             $"[product-cache] rebuilt; linked and published; {codegenCache.Location.ProductPath}");
         PrintOutput(options.OutputPath);
