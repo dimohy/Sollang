@@ -52,7 +52,15 @@ internal static class CompilerApp
         var frontendCache = IncrementalFrontendCache.Open(options);
         if (frontendCache.Output is not null)
         {
-            WriteAndLink(options, toolchain, frontendCache.Output);
+            var productCache = IncrementalProductCache.Open(
+                frontendCache.Location,
+                options.OutputPath,
+                frontendCache.SourceGenerationKey!);
+            if (!productCache.IsExact)
+            {
+                WriteAndLink(options, toolchain, frontendCache.Output);
+                IncrementalProductCache.Publish(frontendCache.Location, options.OutputPath);
+            }
             Console.WriteLine(
                 $"[frontend-cache] {frontendCache.Status}; skipped parsing and semantic analysis for "
                 + $"{frontendCache.SourceCount.ToString(CultureInfo.InvariantCulture)} sources; "
@@ -62,6 +70,10 @@ internal static class CompilerApp
                 + $"{frontendCache.Output.ReusedCount.ToString(CultureInfo.InvariantCulture)}/"
                 + $"{frontendCache.Output.Units.Count.ToString(CultureInfo.InvariantCulture)} units; "
                 + frontendCache.Location.CodegenPath);
+            Console.WriteLine(
+                $"[product-cache] {productCache.Status}; "
+                + (productCache.IsExact ? "skipped linking; " : "linked and published; ")
+                + frontendCache.Location.ProductPath);
             PrintOutput(options.OutputPath);
             return;
         }
@@ -74,6 +86,7 @@ internal static class CompilerApp
         WriteAndLink(options, toolchain, codegenOutput);
         codegenCache.Publish(codegenOutput);
         IncrementalFrontendCache.Publish(loaded, options, codegenCache.Location);
+        IncrementalProductCache.Publish(codegenCache.Location, options.OutputPath);
         Console.WriteLine(
             $"[frontend-cache] {frontendCache.Status}; rebuilt and published "
             + $"{loaded.Sources.Count.ToString(CultureInfo.InvariantCulture)} sources; "
@@ -83,6 +96,8 @@ internal static class CompilerApp
             + $"{codegenOutput.ReusedCount.ToString(CultureInfo.InvariantCulture)}/"
             + $"{codegenOutput.Units.Count.ToString(CultureInfo.InvariantCulture)} units; "
             + codegenCache.Path);
+        Console.WriteLine(
+            $"[product-cache] rebuilt; linked and published; {codegenCache.Location.ProductPath}");
         PrintOutput(options.OutputPath);
     }
 

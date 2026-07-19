@@ -2202,6 +2202,13 @@ Current backend:
   still reuse independently valid LLVM units. Snapshot comparison is streamed;
   publication uses a same-directory write-through temporary file and atomic
   replacement after a successful link.
+- exact-product cache: a small checksummed `.product` generation binds the
+  validated source snapshot, LLVM-unit generation, and final target artifact by
+  SHA-256 together with compiler, target, and configuration identity. If all
+  three files still match, an exact warm build also skips the linker. A missing
+  or changed final artifact relinks from the already validated LLVM units and
+  atomically publishes a repaired product generation without rerunning the
+  frontend.
 - common emitter: `LlvmEmitter` owns function calls, bindings,
   interpolation, local-function inlining, `each` lowering, integer decimal
   output, containers, and `readInt` parsing. It is split into partial files by

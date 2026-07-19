@@ -217,6 +217,7 @@ internal sealed class IncrementalCodegenCache
         return new IncrementalCacheLocation(
             System.IO.Path.Combine(cacheDirectory, baseName + ".cgu"),
             System.IO.Path.Combine(cacheDirectory, baseName + ".sources"),
+            System.IO.Path.Combine(cacheDirectory, baseName + ".product"),
             compilerHash,
             HashFields([targetName]),
             HashFields([configurationName]));
@@ -770,6 +771,7 @@ internal sealed class IncrementalCodegenCache
 internal sealed record IncrementalCacheLocation(
     string CodegenPath,
     string SourceSnapshotPath,
+    string ProductPath,
     ulong CompilerHash,
     ulong TargetHash,
     ulong ConfigurationHash);

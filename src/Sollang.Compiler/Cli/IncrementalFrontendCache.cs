@@ -9,7 +9,8 @@ internal sealed record IncrementalFrontendCacheProbe(
     IncrementalCacheLocation Location,
     string Status,
     int SourceCount,
-    LlvmCodegenOutput? Output);
+    LlvmCodegenOutput? Output,
+    byte[]? SourceGenerationKey);
 
 internal static class IncrementalFrontendCache
 {
@@ -33,11 +34,11 @@ internal static class IncrementalFrontendCache
         var location = IncrementalCodegenCache.Locate(options);
         if (!File.Exists(location.SourceSnapshotPath))
         {
-            return new IncrementalFrontendCacheProbe(location, "cold", 0, null);
+            return new IncrementalFrontendCacheProbe(location, "cold", 0, null, null);
         }
         if (!File.Exists(location.CodegenPath))
         {
-            return new IncrementalFrontendCacheProbe(location, "miss: codegen generation is missing", 0, null);
+            return new IncrementalFrontendCacheProbe(location, "miss: codegen generation is missing", 0, null, null);
         }
 
         try
@@ -49,18 +50,23 @@ internal static class IncrementalFrontendCache
                 throw new InvalidDataException("codegen generation does not match the source snapshot");
             }
             var output = IncrementalCodegenCache.ReadExact(location);
-            return new IncrementalFrontendCacheProbe(location, "exact hit", validated.SourceCount, output);
+            return new IncrementalFrontendCacheProbe(
+                location,
+                "exact hit",
+                validated.SourceCount,
+                output,
+                validated.SourceGenerationKey);
         }
         catch (FrontendCacheMissException error)
         {
-            return new IncrementalFrontendCacheProbe(location, "miss: " + error.Message, 0, null);
+            return new IncrementalFrontendCacheProbe(location, "miss: " + error.Message, 0, null, null);
         }
         catch (Exception error) when (error is IOException
                                       or InvalidDataException
                                       or DecoderFallbackException
                                       or CryptographicException)
         {
-            return new IncrementalFrontendCacheProbe(location, "rejected: " + error.Message, 0, null);
+            return new IncrementalFrontendCacheProbe(location, "rejected: " + error.Message, 0, null, null);
         }
     }
 
@@ -258,7 +264,7 @@ internal static class IncrementalFrontendCache
         {
             throw new InvalidDataException("source snapshot checksum mismatch");
         }
-        return new ValidatedSnapshot(sourceCount, codegenDigest);
+        return new ValidatedSnapshot(sourceCount, codegenDigest, declaredDigest.ToArray());
     }
 
     private static IEnumerable<string> ManifestPaths(CliOptions options)
@@ -426,7 +432,10 @@ internal static class IncrementalFrontendCache
 
     private sealed record SnapshotRecord(byte Kind, string Path, int ContentLength);
 
-    private sealed record ValidatedSnapshot(int SourceCount, byte[] CodegenDigest);
+    private sealed record ValidatedSnapshot(
+        int SourceCount,
+        byte[] CodegenDigest,
+        byte[] SourceGenerationKey);
 
     private sealed class FrontendCacheMissException(string message) : Exception(message);
 }

@@ -64,9 +64,9 @@ value flow with `value -> target` syntax and expression-first bindings with
 - a Sollang standard library under `stdlib/sys`
 - source-generated lexer/parser code from compact grammar files
 - LLVM-backed Windows x64, Linux x64, and browser WebAssembly output
-- content-validated incremental builds whose exact-input warm path skips parsing
-  and semantic analysis, with byte-identical LLVM, transitive interface
-  invalidation, and atomic cache publication
+- content-validated incremental builds whose exact-input warm path skips parsing,
+  semantic analysis, LLVM emission, and linking, with byte-identical artifacts,
+  transitive interface invalidation, and atomic cache publication
 
 ## Example
 

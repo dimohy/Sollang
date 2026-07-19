@@ -1374,6 +1374,8 @@ Implementation order:
     analysis so frontend work can also be skipped.
     - [x] Skip the complete frontend when every exact source and build-context
       input matches a snapshot bound to the validated codegen generation.
+    - [x] Skip linking when the exact final product remains bound to the same
+      validated source and codegen generations.
     - [ ] Rehydrate typed IR for unchanged modules after a partial source miss.
 - [ ] Prove cold, warm, body-only, public-interface, corruption, target-change,
   and clean-vs-cached byte-equivalence cases on Windows and Linux.
@@ -1500,6 +1502,26 @@ This completes half of the fourth slice, so D207C is **3.5/5 (70%)**. It is
 checkpoint **1/10** after the latest Stage3 fixed point; Stage3 is intentionally
 deferred. Because partial source changes still rebuild the complete frontend,
 the formal roadmap remains **47 complete, 10 partial, 3 missing: 52.0/60
+(86.7%)**.
+
+D207C4B closes the exact-build artifact chain. A fixed-size checksummed
+`.product` generation records compiler/target/configuration identity and the
+SHA-256 digests of the validated `.sources`, `.cgu`, and final target artifact.
+When all three generations match, `sollang build` is a true no-op build: it
+streams identity checks and skips the frontend, LLVM emission, and linker. If
+only the executable is missing or changed, the compiler relinks from validated
+LLVM units and atomically repairs the product generation without repeating
+semantic analysis.
+
+The focused verifier now covers eight states on both Windows and Linux,
+including output corruption followed by frontend-free relinking and a repaired
+no-op build. Exact warm compilation of the 13-source focused project takes
+54.7 ms on the verification machine. Both full suites pass 573/573, Windows
+Stage2 passes 6/6 at 10,553,582 bytes, and Linux Stage2 passes 5/5 at
+10,550,185 bytes. This completes the fourth D207C slice, so D207C is **4/5
+(80%)** and the Stage3 cadence advances to **2/10**. Partial
+typed-IR rehydration for changed-source builds remains the final slice; the
+formal roadmap therefore remains **47 complete, 10 partial, 3 missing: 52.0/60
 (86.7%)**.
 
 ## Immediate Implementation Order

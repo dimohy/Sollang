@@ -92,13 +92,30 @@ function Invoke-Build {
     if (-not $frontendMatch.Success) {
         throw "frontend cache status was not reported for ${Target}:`n$text"
     }
+    $productMatch = [regex]::Match($text, '\[product-cache\] (?<status>.+?); (?:skipped|linked)')
+    if (-not $productMatch.Success) {
+        throw "product cache status was not reported for ${Target}:`n$text"
+    }
     [pscustomobject]@{
         Text = $text.Trim()
         Status = $match.Groups['status'].Value
         FrontendStatus = $frontendMatch.Groups['status'].Value
+        ProductStatus = $productMatch.Groups['status'].Value
         Reused = [int]$match.Groups['reused'].Value
         Total = [int]$match.Groups['total'].Value
         LlvmHash = (Get-FileHash -Algorithm SHA256 ([System.IO.Path]::ChangeExtension($outputPath, ".ll"))).Hash
+    }
+}
+
+function Assert-ProductStatus {
+    param(
+        [Parameter(Mandatory)] $Result,
+        [Parameter(Mandatory)] [string]$ExpectedPrefix,
+        [Parameter(Mandatory)] [string]$Description
+    )
+
+    if (-not $Result.ProductStatus.StartsWith($ExpectedPrefix, [System.StringComparison]::Ordinal)) {
+        throw "$Description expected product status '$ExpectedPrefix...', actual '$($Result.ProductStatus)':`n$($Result.Text)"
     }
 }
 
@@ -191,6 +208,23 @@ function Corrupt-FrontendCache {
     }
 }
 
+function Corrupt-Product {
+    param(
+        [Parameter(Mandatory)] [string]$Target
+    )
+
+    $stream = [System.IO.File]::Open($outputPath, 'Open', 'ReadWrite', 'None')
+    try {
+        $stream.Position = $stream.Length - 1
+        $value = $stream.ReadByte()
+        $stream.Position = $stream.Length - 1
+        $stream.WriteByte($value -bxor 0xff)
+        $stream.Flush($true)
+    } finally {
+        $stream.Dispose()
+    }
+}
+
 function Verify-Target {
     param(
         [Parameter(Mandatory)] [string]$Target,
@@ -200,48 +234,54 @@ function Verify-Target {
         [Parameter(Mandatory)] [int]$ChangedInterfaceRevision
     )
 
-    Write-Host "[$Target 1/7] Cold build."
+    Write-Host "[$Target 1/8] Cold build."
     Write-Provider $InitialFactor $InitialInterfaceRevision
     $cold = Invoke-Build $Target
     Assert-Reused $cold 0 "$Target cold build"
     Assert-FrontendStatus $cold "cold" "$Target cold build"
+    Assert-ProductStatus $cold "rebuilt" "$Target cold build"
     Assert-Product $Target ([string](21 * $InitialFactor))
 
-    Write-Host "[$Target 2/7] Exact warm build skips the frontend."
+    Write-Host "[$Target 2/8] Exact warm build skips the frontend and linker."
     $warm = Invoke-Build $Target
     Assert-Reused $warm 5 "$Target warm build"
     Assert-FrontendStatus $warm "exact hit" "$Target warm build"
+    Assert-ProductStatus $warm "exact hit" "$Target warm build"
     if ($warm.LlvmHash -ne $cold.LlvmHash) {
         throw "$Target clean and cached LLVM differed"
     }
 
-    Write-Host "[$Target 3/7] Body-only dependency edit preserves consumer units."
+    Write-Host "[$Target 3/8] Body-only dependency edit preserves consumer units."
     Write-Provider $BodyFactor $InitialInterfaceRevision
     $body = Invoke-Build $Target
     Assert-Reused $body 2 "$Target body-only build"
     Assert-FrontendStatus $body "miss: source changed:" "$Target body-only build"
+    Assert-ProductStatus $body "rebuilt" "$Target body-only build"
     Assert-Product $Target ([string](21 * $BodyFactor))
     $bodyWarm = Invoke-Build $Target
     Assert-Reused $bodyWarm 5 "$Target body-only warm build"
     Assert-FrontendStatus $bodyWarm "exact hit" "$Target body-only warm build"
+    Assert-ProductStatus $bodyWarm "exact hit" "$Target body-only warm build"
     if ($bodyWarm.LlvmHash -ne $body.LlvmHash) {
         throw "$Target body-only clean and cached LLVM differed"
     }
 
-    Write-Host "[$Target 4/7] Public-interface edit invalidates transitive consumers."
+    Write-Host "[$Target 4/8] Public-interface edit invalidates transitive consumers."
     Write-Provider $BodyFactor $ChangedInterfaceRevision
     $interface = Invoke-Build $Target
     Assert-Reused $interface 0 "$Target interface-change build"
     Assert-FrontendStatus $interface "miss: source changed:" "$Target interface-change build"
+    Assert-ProductStatus $interface "rebuilt" "$Target interface-change build"
     Assert-Product $Target ([string](21 * $BodyFactor))
 
-    Write-Host "[$Target 5/7] Frontend snapshot corruption falls back to validated codegen units."
+    Write-Host "[$Target 5/8] Frontend snapshot corruption falls back to validated codegen units."
     Corrupt-FrontendCache $Target
     $frontendCorrupt = Invoke-Build $Target
     Assert-Reused $frontendCorrupt 5 "$Target frontend-corruption build"
     Assert-FrontendStatus $frontendCorrupt "rejected:" "$Target frontend-corruption build"
+    Assert-ProductStatus $frontendCorrupt "rebuilt" "$Target frontend-corruption build"
 
-    Write-Host "[$Target 6/7] Codegen corruption is rejected and rebuilt."
+    Write-Host "[$Target 6/8] Codegen corruption is rejected and rebuilt."
     Corrupt-Cache $Target
     $corrupt = Invoke-Build $Target
     Assert-Reused $corrupt 0 "$Target corruption build"
@@ -249,15 +289,24 @@ function Verify-Target {
         throw "$Target corrupt cache was not explicitly rejected: $($corrupt.Status)"
     }
     Assert-FrontendStatus $corrupt "rejected:" "$Target codegen-corruption build"
+    Assert-ProductStatus $corrupt "rebuilt" "$Target codegen-corruption build"
 
-    Write-Host "[$Target 7/7] Rebuilt generation is exact-warm and byte-identical."
+    Write-Host "[$Target 7/8] Output corruption relinks without rebuilding the frontend."
+    Corrupt-Product $Target
+    $productCorrupt = Invoke-Build $Target
+    Assert-Reused $productCorrupt 5 "$Target product-corruption build"
+    Assert-FrontendStatus $productCorrupt "exact hit" "$Target product-corruption build"
+    Assert-ProductStatus $productCorrupt "miss: output changed" "$Target product-corruption build"
+
+    Write-Host "[$Target 8/8] Rebuilt generation is exact-warm and byte-identical."
     $repaired = Invoke-Build $Target
     Assert-Reused $repaired 5 "$Target repaired warm build"
     Assert-FrontendStatus $repaired "exact hit" "$Target repaired warm build"
+    Assert-ProductStatus $repaired "exact hit" "$Target repaired warm build"
     if ($repaired.LlvmHash -ne $corrupt.LlvmHash) {
         throw "$Target rebuilt and cached LLVM differed"
     }
-    Write-Host "[$Target 7/7] PASS LLVM $($repaired.LlvmHash)"
+    Write-Host "[$Target 8/8] PASS LLVM $($repaired.LlvmHash)"
 }
 
 Write-Host "[cache 1/3] Build the Release compiler once."

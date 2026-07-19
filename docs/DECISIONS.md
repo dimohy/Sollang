@@ -7193,3 +7193,30 @@ bytes; Linux Stage2 passes 5/5 at 10,550,185 LLVM bytes. This is checkpoint 1/10
 after the Stage3 reset, so Stage3 is deferred. D207C is **3.5/5 (70%)** while
 the formal roadmap remains **47 complete, 10 partial, 3 missing: 52.0/60
 (86.7%)** until changed modules can reuse pre-semantic typed IR.
+
+## D207C4B - Generation-Bound Final Product Reuse
+
+Status: Windows/Linux full suites and Stage2 verified; D207C 4/5 complete
+Date: 2026-07-20
+
+An exact source and codegen hit previously still paid the target linker cost.
+The build now atomically publishes a fixed-size `.product` generation after the
+source snapshot and LLVM-unit generation. Its checksummed payload binds compiler,
+target, and optimization identity to SHA-256 digests of `.sources`, `.cgu`, and
+the final executable or target artifact.
+
+An exact match skips linking as well as all frontend and LLVM work. A missing or
+changed output relinks from the already validated LLVM units and republishes only
+the product marker; source or codegen changes continue through their stricter
+fallback paths. The focused matrix now proves eight states on Windows and Linux,
+including output corruption, frontend-free relinking, and the repaired exact
+no-op path. The 13-source exact warm case measures 54.7 ms on the verification
+machine.
+
+The Windows and Linux full suites each pass 573/573. Windows Stage2 passes 6/6
+at 10,553,582 LLVM bytes and Linux Stage2 passes 5/5 at 10,550,185 LLVM bytes.
+
+This completes the fourth integration slice: D207C is **4/5 (80%)**, and the
+periodic Stage3 cadence is **2/10**. Module-granular typed-IR rehydration after a
+partial source miss remains the fifth slice, so the formal roadmap remains
+**47 complete, 10 partial, 3 missing: 52.0/60 (86.7%)**.
