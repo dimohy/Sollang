@@ -152,12 +152,14 @@ struct EmitContext {
     typeTraits: [Int; ~]
     pointerBitWidth: Int
     supportsComputePool: Bool
+    expectedPathStyle: Int
 }
 
 struct PrepareRequest {
     sources: [Text; ~]
     pointerBitWidth: Int
     supportsComputePool: Bool
+    expectedPathStyle: Int
 }
 
 public struct TypeLayoutRequest {
@@ -425,6 +427,7 @@ public writeType node: typedIr.TypedIrNode -> Unit uses Console {
 prepare request: move PrepareRequest -> EmitContext {
     request.pointerBitWidth => pointerBitWidth
     request.supportsComputePool => supportsComputePool
+    request.expectedPathStyle => expectedPathStyle
     request.sources -> semanticContext.prepare => prepared
     prepared -> typedIr.lowerContext => ir!
     prepared -> expressionTypeIds.resolveContext => recursiveTypes
@@ -594,9 +597,14 @@ prepare request: move PrepareRequest -> EmitContext {
         layoutStatusCopyIndex428! + 1 => layoutStatusCopyIndex428!
     }
     ir! -> typedIr.movesFrom => moves!
-    request.sources => sources
+    [Text; ~] => contextSources!
+    0 => contextSourceIndex!
+    contextSourceIndex! < (request.sources -> len) -> while {
+        contextSources! -> push(request.sources[contextSourceIndex!])
+        contextSourceIndex! + 1 => contextSourceIndex!
+    }
     EmitContext {
-        sources: sources
+        sources: contextSources!
         ranges: analysisRanges!
         nodes: analysisNodes!
         tokens: analysisTokens!
@@ -616,6 +624,7 @@ prepare request: move PrepareRequest -> EmitContext {
         typeTraits: typeTraits!
         pointerBitWidth: pointerBitWidth
         supportsComputePool: supportsComputePool
+        expectedPathStyle: expectedPathStyle
     } => context!
     context!
 }
@@ -4818,7 +4827,7 @@ emitCore context: move EmitContext -> Unit uses Console {
             (regionNode.kind == 6 and (regionNode.opcode == -210 or regionNode.opcode == -211)) -> if {
                 ProcessCallRequest { callIndex: regionNodeIndex!, ownerIndex: ownerIndex! } -> emitProcessCall
             }
-            (regionNode.kind == 6 and regionNode.symbol != -115 and regionNode.opcode != -205 and regionNode.opcode != -207 and regionNode.opcode != -208 and regionNode.opcode != -209 and regionNode.opcode != -210 and regionNode.opcode != -211 and regionNode.opcode != -212 and not (regionNode.parent >= 0 and context.ir[regionNode.parent].kind == 6 and (context.ir[regionNode.parent].opcode == -207 or context.ir[regionNode.parent].opcode == -209) and context.ir[regionNode.parent].operand1 == regionNodeIndex!)) -> if {
+            (regionNode.kind == 6 and regionNode.symbol != -115 and regionNode.opcode != -205 and regionNode.opcode != -206 and regionNode.opcode != -207 and regionNode.opcode != -208 and regionNode.opcode != -209 and regionNode.opcode != -210 and regionNode.opcode != -211 and regionNode.opcode != -212 and regionNode.opcode != -214 and not (regionNode.parent >= 0 and context.ir[regionNode.parent].kind == 6 and (context.ir[regionNode.parent].opcode == -207 or context.ir[regionNode.parent].opcode == -209) and context.ir[regionNode.parent].operand1 == regionNodeIndex!)) -> if {
                 (regionNode.symbol == -101 or regionNode.symbol == -102) -> if {
                     regionNodeIndex! -> callArgumentIndex => regionArgumentIndex
                     context.ir[regionArgumentIndex] => regionArgument
@@ -5792,6 +5801,49 @@ emitCore context: move EmitContext -> Unit uses Console {
                     (mapPath.kind == 5 and function.operand1 >= 0 and mapPath.symbol == context.ir[function.operand1].symbol) -> if { "%arg" -> print } else { "%v$(expression.operand0)" -> print }
                     ")" -> println
                 }
+                ((expression.kind == 9 or expression.kind == 6) and expression.opcode == -214 and expression.operand0 >= 0) -> if {
+                    context.ir[expression.operand0] => sourcePath
+                    context.expectedPathStyle => sourcePathExpectedStyle
+                    -1 => sourcePathBytesType!
+                    -1 => sourcePathStyleType!
+                    0 => sourcePathFieldIndex!
+                    sourcePathFieldIndex! < (context.fields -> len) -> while {
+                        context.fields[sourcePathFieldIndex!] => sourcePathField
+                        sourcePathField.ownerType == sourcePath.typeId -> if {
+                            sourcePathField.ordinal == 0 -> if { sourcePathField.fieldType => sourcePathBytesType! }
+                            sourcePathField.ordinal == 1 -> if { sourcePathField.fieldType => sourcePathStyleType! }
+                        }
+                        sourcePathFieldIndex! + 1 => sourcePathFieldIndex!
+                    }
+                    "  %v$(expressionIndex!)_path_bytes = extractvalue " -> print
+                    sourcePath -> writeIrType
+                    " " -> print
+                    (sourcePath.kind == 5 and function.operand1 >= 0 and sourcePath.symbol == context.ir[function.operand1].symbol) -> if { "%arg" -> print } else { "%v$(expression.operand0)" -> print }
+                    ", 0" -> println
+                    "  %v$(expressionIndex!)_path_data = extractvalue " -> print
+                    sourcePathBytesType! -> writeSemanticTypeId
+                    " %v$(expressionIndex!)_path_bytes, 0" -> println
+                    "  %v$(expressionIndex!)_path_length = extractvalue " -> print
+                    sourcePathBytesType! -> writeSemanticTypeId
+                    " %v$(expressionIndex!)_path_bytes, 1" -> println
+                    "  %v$(expressionIndex!)_path_style_value = extractvalue " -> print
+                    sourcePath -> writeIrType
+                    " " -> print
+                    (sourcePath.kind == 5 and function.operand1 >= 0 and sourcePath.symbol == context.ir[function.operand1].symbol) -> if { "%arg" -> print } else { "%v$(expression.operand0)" -> print }
+                    ", 1" -> println
+                    "  %v$(expressionIndex!)_path_style = extractvalue " -> print
+                    sourcePathStyleType! -> writeSemanticTypeId
+                    " %v$(expressionIndex!)_path_style_value, 0" -> println
+                    "  %v$(expressionIndex!)_path_style_valid = icmp eq i32 %v$(expressionIndex!)_path_style, $(sourcePathExpectedStyle)" -> println
+                    "  br i1 %v$(expressionIndex!)_path_style_valid, label %map_path$(expressionIndex!)_open, label %map_path$(expressionIndex!)_style_error" -> println
+                    "map_path$(expressionIndex!)_style_error:" -> println
+                    "  call void @llvm.trap()" -> println
+                    "  unreachable" -> println
+                    "map_path$(expressionIndex!)_open:" -> println
+                    "  %v$(expressionIndex!)_path_text0 = insertvalue %sollang.text poison, ptr %v$(expressionIndex!)_path_data, 0" -> println
+                    "  %v$(expressionIndex!)_path_text = insertvalue %sollang.text %v$(expressionIndex!)_path_text0, i64 %v$(expressionIndex!)_path_length, 1" -> println
+                    "  %v$(expressionIndex!) = call %sollang.source_text @sollang_runtime_map_text(%sollang.text %v$(expressionIndex!)_path_text)" -> println
+                }
                 ((expression.kind == 9 or expression.kind == 6) and expression.opcode == -206 and expression.operand0 >= 0) -> if {
                     context.ir[expression.operand0] => borrowText
                     "  %v$(expressionIndex!)_data = extractvalue %sollang.text " -> print
@@ -6558,7 +6610,7 @@ emitCore context: move EmitContext -> Unit uses Console {
                 (expression.kind == 6 and (expression.opcode == -210 or expression.opcode == -211)) -> if {
                     ProcessCallRequest { callIndex: expressionIndex!, ownerIndex: functionIndex! } -> emitProcessCall
                 }
-                (expression.kind == 6 and expression.symbol != -115 and expression.opcode != -205 and expression.opcode != -207 and expression.opcode != -208 and expression.opcode != -209 and expression.opcode != -210 and expression.opcode != -211 and expression.opcode != -212 and not (expression.parent >= 0 and context.ir[expression.parent].kind == 6 and (context.ir[expression.parent].opcode == -207 or context.ir[expression.parent].opcode == -209) and context.ir[expression.parent].operand1 == expressionIndex!)) -> if {
+                (expression.kind == 6 and expression.symbol != -115 and expression.opcode != -205 and expression.opcode != -206 and expression.opcode != -207 and expression.opcode != -208 and expression.opcode != -209 and expression.opcode != -210 and expression.opcode != -211 and expression.opcode != -212 and expression.opcode != -214 and not (expression.parent >= 0 and context.ir[expression.parent].kind == 6 and (context.ir[expression.parent].opcode == -207 or context.ir[expression.parent].opcode == -209) and context.ir[expression.parent].operand1 == expressionIndex!)) -> if {
                     (expression.symbol == -101 or expression.symbol == -102) -> if {
                         expressionIndex! -> callArgumentIndex => runtimeArgumentIndex
                         context.ir[runtimeArgumentIndex] => runtimeArgument
@@ -10170,7 +10222,7 @@ public emit sources: move [Text; ~] -> Unit uses Console {
     llvmTarget.windowsX64 => target
     target.dataLayoutLine -> println
     target.tripleLine -> println
-    PrepareRequest { sources: sources, pointerBitWidth: target.pointerBitWidth, supportsComputePool: true } => prepareRequest!
+    PrepareRequest { sources: sources, pointerBitWidth: target.pointerBitWidth, supportsComputePool: true, expectedPathStyle: 1 } => prepareRequest!
     prepareRequest! -> prepare => context!
     context! -> usesParallelRuntime => capturesParallelOutput
     context! -> usesTextRuntime => usesTextOutput
@@ -10204,7 +10256,7 @@ public emitLinux sources: move [Text; ~] -> Unit uses Console {
     llvmTarget.linuxX64 => target
     target.dataLayoutLine -> println
     target.tripleLine -> println
-    PrepareRequest { sources: sources, pointerBitWidth: target.pointerBitWidth, supportsComputePool: true } => prepareRequest!
+    PrepareRequest { sources: sources, pointerBitWidth: target.pointerBitWidth, supportsComputePool: true, expectedPathStyle: 0 } => prepareRequest!
     prepareRequest! -> prepare => context!
     context! -> usesParallelRuntime => capturesParallelOutput
     context! -> usesTextRuntime => usesTextOutput
@@ -10230,7 +10282,7 @@ public emitWasm sources: move [Text; ~] -> Unit uses Console {
     llvmTarget.wasm32Browser => target
     target.dataLayoutLine -> println
     target.tripleLine -> println
-    PrepareRequest { sources: sources, pointerBitWidth: target.pointerBitWidth, supportsComputePool: false } => prepareRequest!
+    PrepareRequest { sources: sources, pointerBitWidth: target.pointerBitWidth, supportsComputePool: false, expectedPathStyle: 0 } => prepareRequest!
     prepareRequest! -> prepare => context!
     context! -> usesTextRuntime -> if { emitWasmTextRuntime }
     context! -> usesIntInterpolation -> if { emitIntTextRuntime }

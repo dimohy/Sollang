@@ -6707,3 +6707,43 @@ Research basis:
 
 - [Rust `std::fs::read_dir`](https://doc.rust-lang.org/std/fs/fn.read_dir.html)
 - [Microsoft `FindFirstFile`](https://learn.microsoft.com/windows/win32/api/fileapi/nf-fileapi-findfirstfilea)
+
+## D205 - Target-Native Path Source Mapping
+
+Status: implemented and Stage3 fixed-point verified
+Date: 2026-07-19
+
+`sys.file.mapPath(Path)` is the ownership-safe boundary between the D204
+directory snapshot and affine compiler source mappings. It borrows the Path's
+owned UInt8 storage, validates that its explicit style matches the compilation
+target, and maps the file without allocating a second Text path. The Path and
+the returned `SourceText` remain independent owners: dropping the mapping
+unmaps the file, while dropping the Path releases only its byte buffer.
+
+`sys.path.nativeStyle` is selected from the output target rather than the host
+process. A Windows-hosted Linux build therefore receives `Style.Posix`. This
+keeps cross-compilation deterministic and prevents accidental host-path
+interpretation. The reference compiler supports both APIs. The self-host LLVM
+compiler lowers the Path mapping boundary with the same style check and native
+mapping runtime; its compiler driver will select the style when D206 combines
+directory discovery with source-root loading.
+
+The self-host typed IR now preserves `mapPath` as a SourceText-producing
+intrinsic, and the LLVM scheduler excludes it from ordinary user-function call
+emission. Example 426 executes the real stdlib API on Windows and Linux.
+Example 427 has the self-host compiler emit, assemble, link, and execute a
+Path-shaped mapped-source program. The filesystem gate remains partial because
+canonical filesystem queries, richer metadata, and source-root discovery still
+remain. The Release build has zero warnings and errors, the complete Windows
+suite passes 564/564, and the Linux path-mapping regression passes. Stage2
+passes 6/6 at 8,958,755 LLVM bytes with the three differential hashes preserved.
+The checkpoint-10 Stage3 gate reaches the same 8,958,755-byte fixed point with
+hash `A8FF3B396E03DD487017C3EC04521CE605501A61860B87849DF55714DE48CA39`.
+The cadence therefore resets to 0/10. The formal roadmap remains **51.5/60
+(85.8%)**.
+
+Research basis:
+
+- [Rust modules](https://doc.rust-lang.org/reference/items/modules.html)
+- [Zig modules](https://ziglang.org/documentation/master/)
+- [Swift Package Manager target paths](https://docs.swift.org/swiftpm/documentation/packagedescription/target/path/)

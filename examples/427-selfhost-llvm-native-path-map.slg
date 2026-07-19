@@ -1,0 +1,51 @@
+import sollang.compiler.llvm.text as llvm
+
+main {
+    [
+        """
+        namespace sys.path
+
+        public struct Path {
+            bytes: [UInt8; ~]
+            style: Style
+        }
+
+        public struct Style {
+            tag: Int32
+        }
+
+        public mapPath value: Path -> SourceText uses File = intrinsic
+
+        public fromText value: Text -> Path {
+            [UInt8; ~] => bytes!
+            UIntSize(0) => index!
+            index! < (value -> len) -> while {
+                bytes! -> push(value -> byte(index!))
+                index! + UIntSize(1) => index!
+            }
+            Style { tag: Int32(1) } => style
+            Path { bytes: bytes!, style: style } => result!
+            result!
+        }
+
+        public probe value: Path -> Text uses File {
+            value -> mapPath => source!
+            (source! -> len) == UIntSize(6) -> if {
+                "selfhost path map ok"
+            } else {
+                "unexpected"
+            }
+        }
+        """,
+        """
+        import sys.path as path
+
+        main {
+            "examples/fixtures/425-directory-order/Alpha.txt" -> path.fromText => sourcePath
+            sourcePath -> path.probe -> println
+        }
+        """,
+        ~
+    ] => sources!
+    sources! -> llvm.emit
+}

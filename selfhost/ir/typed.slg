@@ -164,6 +164,7 @@ intrinsicOpcode request: IntrinsicNameRequest -> Int {
     }
     request.token.span.length == UIntSize(7) -> if {
         ((request.source -> byte(request.token.span.start)) == UInt8(109) and (request.source -> byte(request.token.span.start + UIntSize(1))) == UInt8(97) and (request.source -> byte(request.token.span.start + UIntSize(2))) == UInt8(112) and (request.source -> byte(request.token.span.start + UIntSize(3))) == UInt8(84) and (request.source -> byte(request.token.span.start + UIntSize(4))) == UInt8(101) and (request.source -> byte(request.token.span.start + UIntSize(5))) == UInt8(120) and (request.source -> byte(request.token.span.start + UIntSize(6))) == UInt8(116)) -> if { -205 => opcode! }
+        ((request.source -> byte(request.token.span.start)) == UInt8(109) and (request.source -> byte(request.token.span.start + UIntSize(1))) == UInt8(97) and (request.source -> byte(request.token.span.start + UIntSize(2))) == UInt8(112) and (request.source -> byte(request.token.span.start + UIntSize(3))) == UInt8(80) and (request.source -> byte(request.token.span.start + UIntSize(4))) == UInt8(97) and (request.source -> byte(request.token.span.start + UIntSize(5))) == UInt8(116) and (request.source -> byte(request.token.span.start + UIntSize(6))) == UInt8(104)) -> if { -214 => opcode! }
     }
     request.token.span.length == UIntSize(8) -> if {
         ((request.source -> byte(request.token.span.start)) == UInt8(112) and (request.source -> byte(request.token.span.start + UIntSize(1))) == UInt8(97) and (request.source -> byte(request.token.span.start + UIntSize(2))) == UInt8(114) and (request.source -> byte(request.token.span.start + UIntSize(3))) == UInt8(97) and (request.source -> byte(request.token.span.start + UIntSize(4))) == UInt8(108) and (request.source -> byte(request.token.span.start + UIntSize(5))) == UInt8(108) and (request.source -> byte(request.token.span.start + UIntSize(6))) == UInt8(101) and (request.source -> byte(request.token.span.start + UIntSize(7))) == UInt8(108)) -> if { -207 => opcode! }
@@ -991,6 +992,7 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                     }
                     false => knownPushExpression!
                     false => knownMapTextExpression!
+                    false => knownMapPathExpression!
                     false => knownBorrowTextExpression!
                     expression.kind == 53 => knownIndexAssignment!
                     expression.kind == 54 => knownMemberAssignment!
@@ -998,6 +1000,7 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                         FlowIntrinsicRequest { source: source, tokens: prepared.package.tokens, tokenStart: sourceRange.tokenStart, node: expression } -> flowIntrinsicOpcode => flowOpcode
                         flowOpcode == -204 -> if { true => knownPushExpression! }
                         flowOpcode == -205 -> if { true => knownMapTextExpression! }
+                        flowOpcode == -214 -> if { true => knownMapPathExpression! }
                         flowOpcode == -206 -> if { true => knownBorrowTextExpression! }
                     }
                     knownPushExpression! -> if {
@@ -1005,7 +1008,7 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                         -1 => expressionTypeModule!
                         0 => expressionTypeSymbol!
                     }
-                    knownMapTextExpression! -> if {
+                    (knownMapTextExpression! or knownMapPathExpression!) -> if {
                         1 => expressionTypeOrigin!
                         -1 => expressionTypeModule!
                         24 => expressionTypeSymbol!
@@ -1073,7 +1076,7 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                                 flags: expression.flags
                             })
                         } else {
-                            (expressionTypeIndex! >= 0 or recursiveExpressionTypeId! >= 0 or knownParameterReference! or knownPatternReference! or expression.kind == 41 or expression.kind == 56 or (expression.kind == 15 and expression.parent >= 0 and prepared.package.nodes[sourceRange.astStart + expression.parent].kind == 41) or knownBooleanExpression! or knownCallExpression! or knownNumericExpression! or knownPushExpression! or knownMapTextExpression! or knownBorrowTextExpression! or knownIndexAssignment! or knownMemberAssignment!) -> if {
+                            (expressionTypeIndex! >= 0 or recursiveExpressionTypeId! >= 0 or knownParameterReference! or knownPatternReference! or expression.kind == 41 or expression.kind == 56 or (expression.kind == 15 and expression.parent >= 0 and prepared.package.nodes[sourceRange.astStart + expression.parent].kind == 41) or knownBooleanExpression! or knownCallExpression! or knownNumericExpression! or knownPushExpression! or knownMapTextExpression! or knownMapPathExpression! or knownBorrowTextExpression! or knownIndexAssignment! or knownMemberAssignment!) -> if {
                             9 => expressionKind!
                             expression.kind == 13 -> if { 2 => expressionKind! }
                             expression.kind == 14 -> if { 3 => expressionKind! }
@@ -1155,6 +1158,7 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                                 }
                                 knownPushExpression! -> if { -204 => expressionOpcode! }
                                 knownMapTextExpression! -> if { -205 => expressionOpcode! }
+                                knownMapPathExpression! -> if { -214 => expressionOpcode! }
                                 knownBorrowTextExpression! -> if { -206 => expressionOpcode! }
                             }
                             expression.kind == 48 -> if {
@@ -2266,6 +2270,7 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                         }
                         false => knownEntryPushExpression!
                         false => knownEntryMapTextExpression!
+                        false => knownEntryMapPathExpression!
                         false => knownEntryBorrowTextExpression!
                         entryExpression.kind == 53 => knownEntryIndexAssignment!
                         entryExpression.kind == 54 => knownEntryMemberAssignment!
@@ -2273,6 +2278,7 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                             FlowIntrinsicRequest { source: source, tokens: prepared.package.tokens, tokenStart: sourceRange.tokenStart, node: entryExpression } -> flowIntrinsicOpcode => entryFlowOpcode
                             entryFlowOpcode == -204 -> if { true => knownEntryPushExpression! }
                             entryFlowOpcode == -205 -> if { true => knownEntryMapTextExpression! }
+                            entryFlowOpcode == -214 -> if { true => knownEntryMapPathExpression! }
                             entryFlowOpcode == -206 -> if { true => knownEntryBorrowTextExpression! }
                         }
                         knownEntryPushExpression! -> if {
@@ -2280,7 +2286,7 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                             -1 => entryExpressionTypeModule!
                             0 => entryExpressionTypeSymbol!
                         }
-                        knownEntryMapTextExpression! -> if {
+                        (knownEntryMapTextExpression! or knownEntryMapPathExpression!) -> if {
                             1 => entryExpressionTypeOrigin!
                             -1 => entryExpressionTypeModule!
                             24 => entryExpressionTypeSymbol!
@@ -2348,7 +2354,7 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                                     flags: entryExpression.flags
                                 })
                             } else {
-                                (entryExpressionTypeIndex! >= 0 or recursiveEntryExpressionTypeId! >= 0 or knownEntryPatternReference! or entryExpression.kind == 41 or entryExpression.kind == 56 or (entryExpression.kind == 15 and entryExpression.parent >= 0 and prepared.package.nodes[sourceRange.astStart + entryExpression.parent].kind == 41) or knownEntryBooleanExpression! or knownEntryCallExpression! or knownEntryNumericExpression! or knownEntryPushExpression! or knownEntryMapTextExpression! or knownEntryBorrowTextExpression! or knownEntryIndexAssignment! or knownEntryMemberAssignment!) -> if {
+                                (entryExpressionTypeIndex! >= 0 or recursiveEntryExpressionTypeId! >= 0 or knownEntryPatternReference! or entryExpression.kind == 41 or entryExpression.kind == 56 or (entryExpression.kind == 15 and entryExpression.parent >= 0 and prepared.package.nodes[sourceRange.astStart + entryExpression.parent].kind == 41) or knownEntryBooleanExpression! or knownEntryCallExpression! or knownEntryNumericExpression! or knownEntryPushExpression! or knownEntryMapTextExpression! or knownEntryMapPathExpression! or knownEntryBorrowTextExpression! or knownEntryIndexAssignment! or knownEntryMemberAssignment!) -> if {
                                 9 => entryExpressionKind!
                                 entryExpression.kind == 13 -> if { 2 => entryExpressionKind! }
                                 entryExpression.kind == 14 -> if { 3 => entryExpressionKind! }
@@ -2429,6 +2435,7 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                                     }
                                     knownEntryPushExpression! -> if { -204 => entryExpressionOpcode! }
                                     knownEntryMapTextExpression! -> if { -205 => entryExpressionOpcode! }
+                                    knownEntryMapPathExpression! -> if { -214 => entryExpressionOpcode! }
                                     knownEntryBorrowTextExpression! -> if { -206 => entryExpressionOpcode! }
                                 }
                                 entryExpression.kind == 48 -> if {

@@ -116,6 +116,8 @@ internal enum BoundFunctionKind
     RuntimeRunProcessToFile,
     RuntimeBorrowSourceText,
     RuntimeMapSourceText,
+    RuntimeMapSourcePath,
+    RuntimePathStyle,
     RuntimeWriteScalar,
     RuntimeReadScalar,
     RuntimeReadScalarAsync,

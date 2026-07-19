@@ -80,6 +80,15 @@ internal sealed partial class LlvmEmitter
             return EmitRuntimeNowMillisIntrinsic(path);
         }
 
+        if (function.Kind == BoundFunctionKind.RuntimePathStyle)
+        {
+            if (expression.Arguments.Count != 0)
+            {
+                throw new SollangException($"{path} does not accept arguments");
+            }
+            return EmitRuntimePathStyle(function);
+        }
+
         if (function.Kind == BoundFunctionKind.RuntimeParallelWorkers)
         {
             if (expression.Arguments.Count != 0)
@@ -146,6 +155,15 @@ internal sealed partial class LlvmEmitter
             return function.Kind == BoundFunctionKind.RuntimeBorrowSourceText
                 ? EmitBorrowSourceText(sourceArgument)
                 : EmitMapSourceText(sourceArgument);
+        }
+
+        if (function.Kind == BoundFunctionKind.RuntimeMapSourcePath)
+        {
+            if (expression.Arguments.Count != 1)
+            {
+                throw new SollangException($"{path} expects exactly one Path value");
+            }
+            return EmitMapSourcePath(EmitExpression(expression.Arguments[0]));
         }
 
         if (function.Kind is BoundFunctionKind.RuntimeOpenFile
@@ -749,6 +767,15 @@ internal sealed partial class LlvmEmitter
             return EmitRuntimeNowMillisIntrinsic(function.Name);
         }
 
+        if (function.Kind == BoundFunctionKind.RuntimePathStyle)
+        {
+            if (argument is not null)
+            {
+                throw new SollangException($"{function.Name} does not accept an argument");
+            }
+            return EmitRuntimePathStyle(function);
+        }
+
         if (function.Kind == BoundFunctionKind.RuntimeParallelWorkers)
         {
             if (argument is not null)
@@ -832,6 +859,15 @@ internal sealed partial class LlvmEmitter
             return function.Kind == BoundFunctionKind.RuntimeBorrowSourceText
                 ? EmitBorrowSourceText(argument)
                 : EmitMapSourceText(argument);
+        }
+
+        if (function.Kind == BoundFunctionKind.RuntimeMapSourcePath)
+        {
+            if (argument is null)
+            {
+                throw new SollangException($"{function.Name} expects exactly one Path value");
+            }
+            return EmitMapSourcePath(argument);
         }
 
         if (function.Kind is BoundFunctionKind.RuntimeOpenFile

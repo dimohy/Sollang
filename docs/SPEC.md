@@ -1336,6 +1336,28 @@ Path bytes use a dedicated canonical `[UInt8; ~]` type identity. `Path`,
 `Style`, and their byte-buffer identity are reserved standard-library IDs, so
 adding the module cannot renumber unrelated user nominal or parametric types.
 
+`path.nativeStyle` is a target constant, not a host query. It yields
+`Style.Windows` for a `windows-x64` compilation and `Style.Posix` for Linux and
+wasm targets, even when the compiler itself runs on another operating system.
+`sys.file.mapPath(Path)` borrows the Path bytes and returns the same affine
+`SourceText` mapping as `mapText(Text)`, but first requires the carried style to
+match the compilation target:
+
+```sollang
+import sys.path as path
+import sys.file as file
+
+"src/main.slg" -> path.fromText(path.nativeStyle) => sourcePath!
+sourcePath! -> file.mapPath => source!
+source! -> len -> println
+```
+
+The Path owner remains valid and is dropped independently; the returned
+`SourceText` owns only its native mapping. A style mismatch traps at the
+intrinsic boundary instead of interpreting target syntax with host rules. This
+provides the ownership-safe bridge needed for deterministic directory discovery
+to feed compiler source loading without rebuilding every entry name as Text.
+
 ## Deterministic Directory Snapshots
 
 `sys.directory.read(Path)` returns an owned `ReadResult`. A successful snapshot

@@ -40,6 +40,51 @@ internal sealed partial class LlvmEmitter
         return new RuntimeSourceText(data, length, basePointer, mappedLength);
     }
 
+    private RuntimeSourceText EmitMapSourcePath(RuntimeValue value)
+    {
+        if (value is not RuntimeStruct path
+            || !_program.Types.IsStruct(path.Type)
+            || _program.Types.GetStruct(path.Type) is not { Name: "sys.path.Path" } definition)
+        {
+            throw new SollangException("mapPath expects sys.path.Path");
+        }
+
+        var bytesField = definition.Fields.First(field => field.Name == "bytes");
+        var styleField = definition.Fields.First(field => field.Name == "style");
+        var bytesAggregate = NextTemp("source_path_bytes");
+        EmitAssign(bytesAggregate,
+            $"extractvalue {LlvmStructType(path.Type)} {path.ValueName}, {bytesField.Index.ToString(CultureInfo.InvariantCulture)}");
+        if (DematerializeAggregateValue(bytesField.Type, bytesAggregate) is not RuntimeDynamicInlineArray bytes
+            || bytes.ElementType != BoundType.UInt8)
+        {
+            throw new SollangException("sys.path.Path.bytes must be [UInt8; ~]");
+        }
+
+        var styleAggregate = NextTemp("source_path_style");
+        EmitAssign(styleAggregate,
+            $"extractvalue {LlvmStructType(path.Type)} {path.ValueName}, {styleField.Index.ToString(CultureInfo.InvariantCulture)}");
+        var styleTag = NextTemp("source_path_style_tag");
+        EmitAssign(styleTag, $"extractvalue {LlvmEnumType(styleField.Type)} {styleAggregate}, 0");
+        var expectedStyle = _platform is WindowsLlvmRuntimePlatform ? 1 : 0;
+        var validStyle = NextTemp("source_path_style_valid");
+        EmitCompare(validStyle, "eq", "i32", styleTag, expectedStyle.ToString(CultureInfo.InvariantCulture));
+        EmitTrapUnless(validStyle, "source_path_style");
+
+        return EmitMapSourceText(new RuntimeText(bytes.PointerName, bytes.LengthName));
+    }
+
+    private RuntimeEnum EmitRuntimePathStyle(BoundFunction function)
+    {
+        if (!_program.Types.IsEnum(function.ReturnType)
+            || _program.Types.GetEnum(function.ReturnType) is not { Name: "sys.path.Style" } definition)
+        {
+            throw new SollangException("sys.path.nativeStyle must return sys.path.Style");
+        }
+        var variantName = _platform is WindowsLlvmRuntimePlatform ? "Windows" : "Posix";
+        var variant = definition.Variants.First(candidate => candidate.Name == variantName);
+        return EmitEnumValue(function.ReturnType, variant, payload: null);
+    }
+
     private RuntimeMappedBytes EmitMapExpression(MapExpression expression)
     {
         if (!_platform.SupportsMemoryMapping)

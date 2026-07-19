@@ -1504,6 +1504,12 @@ internal sealed partial class SemanticCompiler
             "sys.file.mapText" => RequireIntrinsicSignature(
                 function, inputType, returnType, BoundType.Text, BoundType.SourceText,
                 BoundFunctionKind.RuntimeMapSourceText),
+            "sys.file.mapPath" => RequireIntrinsicSignature(
+                function, inputType, returnType, TypeId.Path, BoundType.SourceText,
+                BoundFunctionKind.RuntimeMapSourcePath),
+            "sys.path.nativeStyle" => RequireIntrinsicSignature(
+                function, inputType, returnType, expectedInputType: null, TypeId.PathStyle,
+                BoundFunctionKind.RuntimePathStyle),
             "sys.directory.readRaw" => RequireReadDirectorySignature(
                 function,
                 inputType,
@@ -4463,6 +4469,10 @@ internal sealed partial class SemanticCompiler
                         }
                         currentType = function.ReturnType;
                         continue;
+                    case BoundFunctionKind.RuntimeMapSourcePath:
+                        EnsureRuntimeInput(currentType, function, expression.Line, expression.Column, path);
+                        currentType = function.ReturnType;
+                        continue;
                     case BoundFunctionKind.RuntimeOpenFileAsync:
                     case BoundFunctionKind.RuntimeOpenWriteFileAsync:
                         if (currentType != BoundType.Text)
@@ -5350,6 +5360,16 @@ internal sealed partial class SemanticCompiler
                         $"{path} expects Text but received {FormatType(textArgumentType)}");
                 }
                 return function.ReturnType;
+            case BoundFunctionKind.RuntimeMapSourcePath:
+                if (expression.Arguments.Count != 1)
+                {
+                    throw Error(expression.Line, expression.Column, $"{path} expects exactly one Path argument");
+                }
+                var sourcePathType = InferExpression(
+                    expression.Arguments[0], functions, bindings,
+                    allowPrintCall: false, allowReadIntCall, allowFlowBindingTarget: false);
+                EnsureRuntimeInput(sourcePathType, function, expression.Arguments[0].Line, expression.Arguments[0].Column, path);
+                return function.ReturnType;
             case BoundFunctionKind.RuntimeOpenFileAsync:
             case BoundFunctionKind.RuntimeOpenWriteFileAsync:
                 if (expression.Arguments.Count != 1)
@@ -5419,6 +5439,7 @@ internal sealed partial class SemanticCompiler
 
                 return BoundType.Unit;
             case BoundFunctionKind.RuntimeNowMillis:
+            case BoundFunctionKind.RuntimePathStyle:
             case BoundFunctionKind.RuntimeParallelWorkers:
             case BoundFunctionKind.RuntimeParallelPeakWorkers:
             case BoundFunctionKind.RuntimeArguments:
@@ -6537,7 +6558,8 @@ internal sealed partial class SemanticCompiler
                 or BoundFunctionKind.RuntimeWriteScalarAt
                 or BoundFunctionKind.RuntimeWriteScalarAtAsync
                 or BoundFunctionKind.RuntimeSyncFileAsync
-                or BoundFunctionKind.RuntimeMapSourceText => ["File"],
+                or BoundFunctionKind.RuntimeMapSourceText
+                or BoundFunctionKind.RuntimeMapSourcePath => ["File"],
             _ => []
         };
     }

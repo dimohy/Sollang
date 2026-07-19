@@ -1207,6 +1207,34 @@ checkpoint 9/10, so Stage3 is intentionally deferred. Canonical filesystem
 queries and richer metadata keep the filesystem gate partial; the formal
 roadmap remains **51.5/60 (85.8%)**.
 
+## Target-Native Path Source Mapping Checkpoint (D205)
+
+`sys.file.mapPath(Path)` now maps a compiler source directly from the owned,
+target-explicit Path produced by directory discovery. It borrows the Path bytes,
+checks the carried style against the output target, and returns an independent
+affine `SourceText`; no intermediate Text allocation or host-style path
+interpretation is required. `sys.path.nativeStyle` exposes the reference
+compiler's output-target style for source-root construction.
+
+The self-host typed IR recognizes `mapPath` as a SourceText-producing intrinsic,
+and its LLVM emitter performs the same style validation before reusing the
+native mapped-source runtime. Example 426 exercises the real standard library on
+Windows and Linux. Example 427 exercises self-host LLVM assembly, linking, and
+execution. This is the prerequisite boundary for D206 to combine sorted
+directory snapshots with deterministic source-root loading. Canonical queries
+and richer metadata keep the filesystem gate partial, so the formal roadmap
+remains **51.5/60 (85.8%)**.
+
+The Release build has zero warnings and errors and the complete Windows suite
+passes 564/564. Stage2 passes 6/6 at 8,958,755 LLVM bytes with differential
+hashes unchanged. Stage3 reaches the identical 8,958,755-byte compiler at hash
+`A8FF3B396E03DD487017C3EC04521CE605501A61860B87849DF55714DE48CA39`.
+This completes checkpoint 10/10 and resets the periodic Stage3 cadence to 0/10.
+To remove a bootstrap-only partial-move drift without shallow aliasing, compiler
+preparation copies its borrowed Text source table into the returned emit context,
+while module-call resolution borrows request sources through completion and
+drops the request as one owner.
+
 ## Immediate Implementation Order
 
 1. Multi-file compilation (implemented by example 52).
