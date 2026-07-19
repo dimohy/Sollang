@@ -15,6 +15,7 @@ internal sealed partial class LlvmEmitter
     private readonly bool _usesChildProcesses;
     private readonly bool _usesAsync;
     private readonly bool _usesAsyncFile;
+    private bool _usesDirectoryTraversal;
     private readonly bool _usesParallel;
     private sealed record ParallelCallbackInfo(
         string Name,
@@ -90,6 +91,7 @@ internal sealed partial class LlvmEmitter
         _platform.UsesAsyncFile = _usesAsyncFile;
         _platform.UsesProcessRuntime = UsesProcessRuntime;
         _platform.UsesComputePool = _usesParallel;
+        _platform.UsesDirectoryTraversal = _usesDirectoryTraversal;
     }
 
     private void RecordFunctionScopes(
@@ -389,6 +391,10 @@ internal sealed partial class LlvmEmitter
         {
             throw new SollangException("async functions are unavailable on the current target");
         }
+        if (_usesDirectoryTraversal && !_platform.SupportsDirectoryTraversal)
+        {
+            throw new SollangException("directory traversal is unavailable on the current target");
+        }
         var header = $$"""
             target triple = "{{_platform.TargetTriple}}"
 
@@ -408,6 +414,14 @@ internal sealed partial class LlvmEmitter
             %sollang.task = type { ptr, ptr }
             %sollang.task_control = type { ptr, ptr, ptr, ptr, i32, i32, ptr, ptr, i64, ptr, ptr, i32, i32, i64, i64, i32, ptr, i64, i64, i32, i32 }
             """;
+        if (_usesDirectoryTraversal)
+        {
+            header += """
+                %sollang.directory_result = type { ptr, i64, i64, i32 }
+                %sollang.directory_node = type { ptr, i64, i8, [7 x i8] }
+
+                """;
+        }
         if (_usesParallel)
         {
             header += """

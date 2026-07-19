@@ -485,10 +485,9 @@ internal sealed partial class LlvmEmitter
                 StoreMutableContainer(arrayName, pushedArray);
                 _locals[arrayName] = pushedArray;
                 if (current is RuntimeDynamicInlineArray ownedElementArray
-                    && _program.Types.ContainsOwnedStorage(ownedElementArray.ElementType)
-                    && target.Arguments[0] is NameExpression movedElement)
+                    && _program.Types.ContainsOwnedStorage(ownedElementArray.ElementType))
                 {
-                    RemoveLocal(movedElement.Name);
+                    RemoveOwnedLiteralSources(target.Arguments[0], ownedElementArray.ElementType);
                 }
                 result = new RuntimeFlowResult(null, null, _mainOk);
                 return true;

@@ -447,6 +447,110 @@ internal sealed partial class LlvmEmitter
         return EmitRuntimeOpenFileResult(function, handle, ok);
     }
 
+    private RuntimeEnum EmitRuntimeReadDirectory(BoundFunction function, RuntimeValue argument)
+    {
+        if (argument is not RuntimeStruct path
+            || !_program.Types.IsStruct(path.Type)
+            || _program.Types.GetStruct(path.Type) is not { Name: "sys.path.Path" } pathDefinition)
+        {
+            throw new SollangException($"{function.Name} expects sys.path.Path");
+        }
+
+        var bytesField = pathDefinition.Fields.First(field => field.Name == "bytes");
+        var styleField = pathDefinition.Fields.First(field => field.Name == "style");
+        var bytesAggregate = NextTemp("directory_path_bytes");
+        EmitAssign(
+            bytesAggregate,
+            $"extractvalue {LlvmStructType(path.Type)} {path.ValueName}, {bytesField.Index.ToString(CultureInfo.InvariantCulture)}");
+        if (DematerializeAggregateValue(bytesField.Type, bytesAggregate) is not RuntimeDynamicInlineArray bytes
+            || bytes.ElementType != BoundType.UInt8)
+        {
+            throw new SollangException("sys.path.Path.bytes must be [UInt8; ~]");
+        }
+
+        var styleAggregate = NextTemp("directory_path_style");
+        EmitAssign(
+            styleAggregate,
+            $"extractvalue {LlvmStructType(path.Type)} {path.ValueName}, {styleField.Index.ToString(CultureInfo.InvariantCulture)}");
+        var styleTag = NextTemp("directory_path_style_tag");
+        EmitAssign(styleTag, $"extractvalue {LlvmEnumType(styleField.Type)} {styleAggregate}, 0");
+
+        var platformResult = NextTemp("directory_platform_result");
+        EmitCall(
+            platformResult,
+            "%sollang.directory_result",
+            "sollang_platform_read_directory",
+            $"ptr {bytes.PointerName}, i64 {bytes.LengthName}, i32 {styleTag}");
+        var rawPointer = NextTemp("directory_raw_pointer");
+        EmitAssign(rawPointer, $"extractvalue %sollang.directory_result {platformResult}, 0");
+        var rawLength = NextTemp("directory_raw_length");
+        EmitAssign(rawLength, $"extractvalue %sollang.directory_result {platformResult}, 1");
+        var entryCount = NextTemp("directory_entry_count");
+        EmitAssign(entryCount, $"extractvalue %sollang.directory_result {platformResult}, 2");
+        var status = NextTemp("directory_status");
+        EmitAssign(status, $"extractvalue %sollang.directory_result {platformResult}, 3");
+        var succeeded = NextTemp("directory_succeeded");
+        EmitCompare(succeeded, "sgt", "i32", status, "0");
+
+        if (!_program.Types.TryGetResultTypes(function.ReturnType, out var resultTypes)
+            || !_program.Types.IsStruct(resultTypes.Ok)
+            || _program.Types.GetStruct(resultTypes.Ok) is not { Name: "sys.directory.Raw" } rawDefinition
+            || resultTypes.Error != BoundType.Text)
+        {
+            throw new SollangException($"{function.Name} has an invalid directory result type");
+        }
+        var rawBytesField = rawDefinition.Fields.First(field => field.Name == "bytes");
+        var rawCountField = rawDefinition.Fields.First(field => field.Name == "count");
+        var rawArray = new RuntimeDynamicInlineArray(
+            rawBytesField.Type,
+            BoundType.UInt8,
+            rawPointer,
+            rawLength,
+            rawLength);
+        var arrayAggregate = BuildDynamicArrayAggregate(
+            rawArray.PointerName,
+            rawArray.LengthName,
+            rawArray.CapacityName);
+
+        var definition = _program.Types.GetEnum(function.ReturnType);
+        var okVariant = definition.Variants.First(variant => variant.Name == "Ok");
+        var errVariant = definition.Variants.First(variant => variant.Name == "Err");
+        var successLabel = NextLabel("directory_success");
+        var errorLabel = NextLabel("directory_error");
+        var endLabel = NextLabel("directory_end");
+        EmitConditionalBranch(succeeded, successLabel, errorLabel);
+
+        EmitLabel(successLabel);
+        _currentBlockLabel = successLabel;
+        var rawWithBytes = NextTemp("directory_raw_with_bytes");
+        EmitAssign(
+            rawWithBytes,
+            $"insertvalue {LlvmStructType(resultTypes.Ok)} poison, %sollang.dynamic_int_array {arrayAggregate}, {rawBytesField.Index.ToString(CultureInfo.InvariantCulture)}");
+        var rawValue = NextTemp("directory_raw_value");
+        EmitAssign(
+            rawValue,
+            $"insertvalue {LlvmStructType(resultTypes.Ok)} {rawWithBytes}, {LlvmType(rawCountField.Type)} {entryCount}, {rawCountField.Index.ToString(CultureInfo.InvariantCulture)}");
+        var success = EmitEnumValue(
+            function.ReturnType,
+            okVariant,
+            new RuntimeStruct(resultTypes.Ok, rawValue));
+        EmitBranch(endLabel);
+        var successExit = _currentBlockLabel;
+
+        EmitLabel(errorLabel);
+        _currentBlockLabel = errorLabel;
+        var failure = EmitEnumValue(function.ReturnType, errVariant, EmitRuntimeErrorText("io"));
+        EmitBranch(endLabel);
+        var errorExit = _currentBlockLabel;
+
+        EmitLabel(endLabel);
+        _currentBlockLabel = endLabel;
+        return EmitEnumPhi(
+            "directory_result",
+            function.ReturnType,
+            [(success, successExit), (failure, errorExit)]);
+    }
+
     private RuntimeTask EmitRuntimeOpenFileAsync(BoundFunction function, RuntimeValue argument)
     {
         var path = argument as RuntimeText

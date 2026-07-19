@@ -6664,3 +6664,46 @@ Research basis:
 
 - [Rust Path and PathBuf](https://doc.rust-lang.org/std/path/index.html)
 - [Swift System FilePath](https://developer.apple.com/documentation/system/filepath)
+
+## D204 - Directory Reads Are Sorted Owned Snapshots
+
+Status: implemented and Stage2 verified
+Date: 2026-07-19
+
+`sys.directory.read(Path)` is a snapshot operation rather than a lazy iterator
+or an exposed native handle. Native Windows and Linux implementations enumerate
+once, exclude `.` and `..`, classify each entry as file, directory, symlink, or
+other, and insert it into raw UTF-8 byte lexical order before serialization.
+The operating-system handle and temporary nodes are released before control
+returns to Sollang. The stdlib decoder then allocates independent basename
+buffers, preserving the caller's explicit Posix/Windows `Path.Style`.
+
+This choice makes compiler module discovery reproducible. Native directory APIs
+do not guarantee enumeration order, so source ordering must be explicit rather
+than inherited from a filesystem. A compact `kind:u8 + length:u32-le + bytes`
+snapshot also avoids retaining `WIN32_FIND_DATA`, `dirent`, or a long-lived
+directory handle across the language boundary. Browser wasm rejects traversal
+until its host provides a filesystem capability.
+
+Directory `Raw`, `Entry`, `Kind`, dynamic-entry-array, and result identities are
+reserved. Their LLVM definitions, drop helpers, declarations, and platform
+runtime are emitted only when traversal is reachable, so adding the module does
+not change unrelated LLVM witnesses. Dedicated directory result enums avoid
+eager generic `Result` specializations from consuming user parametric IDs.
+
+The implementation exposed three ownership/code-generation defects. Moving an
+owned struct literal into a container now transfers nested owned field sources;
+an enum match drops or transfers its owned payload exactly once on each branch;
+and enum constructor emission now accepts the same multi-segment type paths as
+semantic analysis. Example 425 passes on Windows and Linux. Release builds with
+zero warnings, Windows passes 562/562, and Stage2 passes 6/6 at 8,919,060 bytes
+with hashes `8C4E94FCB4EBAC81D62C2AE4FB1CC97833045D829C20F84622870278C6EE5DE2`,
+`BAF325B5C8013346E5242C8011C2B26B11F4F5BDC40BFBFC2B1BF9338DB2860D`, and
+`F33D650B170E3E4383E41208E00634F1B9978C6EA4C922908D95E3AA1ABA2FD0`.
+This is Stage2 checkpoint 9/10; Stage3 is deferred. The filesystem gate remains
+partial and the formal score remains **51.5/60 (85.8%)**.
+
+Research basis:
+
+- [Rust `std::fs::read_dir`](https://doc.rust-lang.org/std/fs/fn.read_dir.html)
+- [Microsoft `FindFirstFile`](https://learn.microsoft.com/windows/win32/api/fileapi/nf-fileapi-findfirstfilea)

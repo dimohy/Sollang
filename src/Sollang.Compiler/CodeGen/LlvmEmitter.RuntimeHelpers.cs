@@ -12,6 +12,10 @@ internal sealed partial class LlvmEmitter
     {
         EmitPlatformFunctionBlock(_platform.EmitIoPrimitives);
         EmitPlatformFunctionBlock(_platform.EmitFilePrimitives);
+        if (_usesDirectoryTraversal)
+        {
+            EmitPlatformFunctionBlock(_platform.EmitDirectoryPrimitives);
+        }
         EmitPlatformFunctionBlock(_platform.EmitMappedFilePrimitives);
         EmitPlatformFunctionBlock(_platform.EmitTimePrimitives);
         if (UsesProcessRuntime)

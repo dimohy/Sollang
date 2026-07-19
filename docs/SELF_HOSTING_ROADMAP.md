@@ -328,8 +328,9 @@ milestone without changing the broader 60-gate language-capability score.
   resolution, recursive imports, and target output, but not versioned/remote
   resolution, a lock file, workspaces, tests, or a general build DAG.
   The owned portable Path layer has explicit Posix/Windows lexical normalization
-  and confined joins, while directory handles, metadata, and deterministic
-  traversal remain.
+  and confined joins. Windows/Linux directory reads now return sorted owned
+  snapshots with entry kind metadata; canonical queries and richer metadata
+  remain.
 - Missing (1): formatter and language server based on the real parser.
 
 ## Critical Path To Self-Hosting
@@ -1182,6 +1183,29 @@ Path-shaped module. Windows passes 561/561 and Stage2 passes 6/6 at 8,919,060
 bytes with unchanged differential hashes. This is checkpoint 8/10; directory
 handles, metadata, canonical queries, and deterministic traversal keep the
 filesystem gate partial. The formal roadmap is **51.5/60 (85.8%)**.
+
+## Deterministic Directory Snapshot Checkpoint (D204)
+
+`sys.directory.read(Path)` now returns an owned snapshot on Windows and Linux.
+The platform layer enumerates once, excludes `.` and `..`, inserts names in raw
+UTF-8 byte order, records file/directory/symlink/other kind, serializes a compact
+length-prefixed buffer, and closes the native handle before returning. The
+stdlib decoder copies each basename into an independently owned `Path`, so no
+borrowed `WIN32_FIND_DATA` or `dirent` storage escapes.
+
+Directory-only LLVM types, drop helpers, declarations, and runtime functions are
+emitted only when traversal is reachable. Stable reserved identities prevent
+the new stdlib types from renumbering existing snapshots. The work also fixes
+nested owned-field transfer into containers, branch-local enum payload transfer,
+and code generation for enum constructors with multi-segment namespace paths.
+
+Example 425 passes on both Windows and Linux and proves deterministic ordering
+and directory-kind classification. The Release build has zero warnings and
+errors, the complete Windows suite passes 562/562, and Stage2 passes 6/6 at
+8,919,060 LLVM bytes with all three differential hashes preserved. This is
+checkpoint 9/10, so Stage3 is intentionally deferred. Canonical filesystem
+queries and richer metadata keep the filesystem gate partial; the formal
+roadmap remains **51.5/60 (85.8%)**.
 
 ## Immediate Implementation Order
 

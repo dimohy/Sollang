@@ -22,7 +22,8 @@ internal sealed partial class LlvmEmitter
             || _program.Types.StaticArrays.Any(definition =>
                 _program.Types.ContainsOwnedStorage(definition.ElementType))
             || _program.Types.DynamicArrays.Any(definition =>
-                _program.Types.ContainsOwnedStorage(definition.ElementType));
+                ShouldEmitTypeDefinition(definition.Id)
+                && _program.Types.ContainsOwnedStorage(definition.ElementType));
         if (!needsHelpers)
         {
             return;
@@ -33,7 +34,9 @@ internal sealed partial class LlvmEmitter
             EmitBoxDropHelper(box);
         }
         EmitDynamicArrayDropHelper(BoundType.DynamicIntArray, BoundType.Int);
-        foreach (var array in _program.Types.DynamicArrays.OrderBy(static array => array.Id))
+        foreach (var array in _program.Types.DynamicArrays
+                     .Where(array => ShouldEmitTypeDefinition(array.Id))
+                     .OrderBy(static array => array.Id))
         {
             EmitDynamicArrayDropHelper(array.Id, array.ElementType);
         }
@@ -43,13 +46,15 @@ internal sealed partial class LlvmEmitter
             EmitDictionaryDropHelper(dictionary.Id);
         }
         foreach (var structure in _program.Types.Structs
-                     .Where(definition => _program.Types.ContainsOwnedStorage(definition.Id))
+                     .Where(definition => ShouldEmitTypeDefinition(definition.Id)
+                         && _program.Types.ContainsOwnedStorage(definition.Id))
                      .OrderBy(static definition => definition.Id))
         {
             EmitStructDropHelper(structure);
         }
         foreach (var enumeration in _program.Types.Enums
-                     .Where(definition => _program.Types.ContainsOwnedStorage(definition.Id))
+                     .Where(definition => ShouldEmitTypeDefinition(definition.Id)
+                         && _program.Types.ContainsOwnedStorage(definition.Id))
                      .OrderBy(static definition => definition.Id))
         {
             EmitEnumDropHelper(enumeration);

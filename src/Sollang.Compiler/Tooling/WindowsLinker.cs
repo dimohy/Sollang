@@ -128,6 +128,9 @@ internal sealed class WindowsLinker(LlvmToolchain toolchain)
             GetEnvironmentVariableW
             GetLastError
             SetLastError
+            FindFirstFileA
+            FindNextFileA
+            FindClose
             LocalFree
             GetProcessHeap
             HeapAlloc

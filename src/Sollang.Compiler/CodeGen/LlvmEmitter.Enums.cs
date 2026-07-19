@@ -10,16 +10,17 @@ internal sealed partial class LlvmEmitter
     private bool TryEmitEnumConstructor(CallExpression expression, out RuntimeValue value)
     {
         value = null!;
-        if (expression.Path.Count != 2
-            || !_program.Types.TryResolve(expression.Path[0], out var type)
+        if (expression.Path.Count < 2
+            || !_program.Types.TryResolve(string.Join('.', expression.Path.Take(expression.Path.Count - 1)), out var type)
             || !_program.Types.IsEnum(type))
         {
             return false;
         }
 
         var definition = _program.Types.GetEnum(type);
-        var variant = definition.Variants.FirstOrDefault(candidate => candidate.Name == expression.Path[1])
-            ?? throw new SollangException($"enum '{definition.Name}' has no variant '{expression.Path[1]}'");
+        var variantName = expression.Path[^1];
+        var variant = definition.Variants.FirstOrDefault(candidate => candidate.Name == variantName)
+            ?? throw new SollangException($"enum '{definition.Name}' has no variant '{variantName}'");
         var payloadType = variant.PayloadType
             ?? throw new SollangException($"payload-free variant '{definition.Name}.{variant.Name}' uses member syntax without parentheses");
         var payload = EmitExpression(expression.Arguments[0]);
@@ -86,6 +87,24 @@ internal sealed partial class LlvmEmitter
         var tag = NextTemp("enum_tag");
         EmitAssign(tag, $"extractvalue {LlvmEnumType(subject.Type)} {subject.ValueName}, 0");
 
+        var ownsStorage = _program.Types.ContainsOwnedStorage(subject.Type);
+        var anonymousSubject = IsAnonymousOwnedExpression(expression.Subject);
+        var armTransfers = expression.Arms.ToDictionary(
+            arm => arm,
+            arm => arm.Condition is EnumPatternExpression { BindingName: { } bindingName } pattern
+                && definition.Variants.First(candidate => candidate.Name == pattern.VariantName).PayloadType is { } payloadType
+                && _program.Types.ContainsOwnedStorage(payloadType)
+                && TransfersOwnerName(arm.Body, bindingName));
+        var transfersAnyPayload = armTransfers.Values.Any(static transfers => transfers);
+        var removedNamedSubject = false;
+        if (ownsStorage
+            && transfersAnyPayload
+            && expression.Subject is NameExpression subjectName)
+        {
+            RemoveLocal(subjectName.Name);
+            removedNamedSubject = true;
+        }
+
         var endLabel = NextLabel("enum_when_end");
         var valueResults = new List<(RuntimeValue Value, string Label)>();
         var nextConditionLabel = _currentBlockLabel;
@@ -113,6 +132,12 @@ internal sealed partial class LlvmEmitter
             {
                 valueResults.Add((armResult.Value, armResult.EndLabel));
             }
+            if (ownsStorage
+                && (anonymousSubject || removedNamedSubject)
+                && !armTransfers[arm])
+            {
+                DropOwnedRuntimeValue(subject);
+            }
             EmitBranch(endLabel);
 
             EmitLabel(nextLabel);
@@ -127,6 +152,10 @@ internal sealed partial class LlvmEmitter
             {
                 valueResults.Add((elseResult.Value, elseResult.EndLabel));
             }
+            if (ownsStorage && (anonymousSubject || removedNamedSubject))
+            {
+                DropOwnedRuntimeValue(subject);
+            }
             EmitBranch(endLabel);
         }
         else
@@ -140,12 +169,6 @@ internal sealed partial class LlvmEmitter
         var result = valueResults.Count == 0
             ? RuntimeUnit.Instance
             : EmitPhiValue("enum_when", valueResults);
-        if (IsAnonymousOwnedExpression(expression.Subject)
-            && _program.Types.ContainsOwnedStorage(subject.Type)
-            && !_program.Types.ContainsOwnedStorage(result.Type))
-        {
-            DropOwnedRuntimeValue(subject);
-        }
         return result;
     }
 

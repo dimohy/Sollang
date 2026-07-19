@@ -1335,9 +1335,35 @@ base path. `byteCount`, `equalsText`, and `isAbsolute` borrow the Path.
 Path bytes use a dedicated canonical `[UInt8; ~]` type identity. `Path`,
 `Style`, and their byte-buffer identity are reserved standard-library IDs, so
 adding the module cannot renumber unrelated user nominal or parametric types.
-Directory handles, metadata, canonical filesystem resolution, and deterministic
-directory traversal remain the next filesystem layer; lexical normalization
-does not claim to resolve symlinks.
+
+## Deterministic Directory Snapshots
+
+`sys.directory.read(Path)` returns an owned `ReadResult`. A successful snapshot
+contains independently owned `Entry` values with an owned basename `Path` and a
+`Kind` of `File`, `Directory`, `Symlink`, or `Other`:
+
+```sollang
+import sys.path as path
+import sys.directory as directory
+
+"src" -> path.fromText(path.Style.Posix) -> directory.read -> when {
+    Ok(entries) => entries -> each entry { entry.name -> path.byteCount }
+    Err(error) => error -> println
+}
+```
+
+The native runtime excludes `.` and `..`, orders names lexicographically by raw
+UTF-8 bytes, closes the operating-system directory handle before returning, and
+serializes the result once into an owned snapshot. The standard-library layer
+then gives each entry its own byte buffer, so neither entries nor paths borrow a
+native enumeration buffer. Ordering is therefore reproducible even though the
+operating system does not promise enumeration order. Windows and Linux support
+the operation; browser wasm rejects it until a host filesystem capability is
+provided. The supplied `Path.Style` must match the target path syntax.
+
+Canonical filesystem resolution and richer metadata remain future layers;
+lexical normalization and directory snapshots do not claim to resolve symlink
+targets.
 
 ## Generic Binary Scalar I/O
 

@@ -81,6 +81,12 @@ internal sealed class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
         functions.AppendLine("declare dllimport i32 @GetEnvironmentVariableW(ptr, ptr, i32)");
         functions.AppendLine("declare dllimport i32 @GetLastError()");
         functions.AppendLine("declare dllimport void @SetLastError(i32)");
+        if (UsesDirectoryTraversal)
+        {
+            functions.AppendLine("declare dllimport ptr @FindFirstFileA(ptr, ptr)");
+            functions.AppendLine("declare dllimport i32 @FindNextFileA(ptr, ptr)");
+            functions.AppendLine("declare dllimport i32 @FindClose(ptr)");
+        }
         if (UsesAsyncFile || UsesComputePool)
         {
             functions.AppendLine("declare dllimport ptr @CreateThread(ptr, i64, ptr, ptr, i32, ptr)");
@@ -1933,6 +1939,176 @@ internal sealed class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
             entry:
               %ignored = call i32 @UnmapViewOfFile(ptr %base)
               ret void
+            }
+
+            """);
+    }
+
+    public override void EmitDirectoryPrimitives(StringBuilder functions)
+    {
+        EmitDirectoryNodePrimitives(functions);
+        functions.AppendLine("""
+            define internal %sollang.directory_result @sollang_platform_read_directory(ptr %path, i64 %len, i32 %style) #0 {
+            entry:
+              %style_ok = icmp eq i32 %style, 1
+              br i1 %style_ok, label %prepare, label %fail
+
+            prepare:
+              %buffer_size = add i64 %len, 3
+              %pattern = call ptr @sollang_alloc(i64 %buffer_size)
+              %pattern_ok = icmp ne ptr %pattern, null
+              br i1 %pattern_ok, label %copy_path, label %fail
+
+            copy_path:
+              call void @llvm.memcpy.p0.p0.i64(ptr %pattern, ptr %path, i64 %len, i1 false)
+              %has_path = icmp ugt i64 %len, 0
+              br i1 %has_path, label %inspect_last, label %append_separator
+
+            inspect_last:
+              %last_index = sub i64 %len, 1
+              %last_ptr = getelementptr i8, ptr %pattern, i64 %last_index
+              %last = load i8, ptr %last_ptr, align 1
+              %last_slash = icmp eq i8 %last, 47
+              %last_backslash = icmp eq i8 %last, 92
+              %has_separator = or i1 %last_slash, %last_backslash
+              br i1 %has_separator, label %append_star, label %append_separator
+
+            append_separator:
+              %separator_ptr = getelementptr i8, ptr %pattern, i64 %len
+              store i8 92, ptr %separator_ptr, align 1
+              %separator_star_index = add i64 %len, 1
+              %separator_star_ptr = getelementptr i8, ptr %pattern, i64 %separator_star_index
+              store i8 42, ptr %separator_star_ptr, align 1
+              %separator_zero_index = add i64 %len, 2
+              %separator_zero_ptr = getelementptr i8, ptr %pattern, i64 %separator_zero_index
+              store i8 0, ptr %separator_zero_ptr, align 1
+              br label %open
+
+            append_star:
+              %star_ptr = getelementptr i8, ptr %pattern, i64 %len
+              store i8 42, ptr %star_ptr, align 1
+              %star_zero_index = add i64 %len, 1
+              %star_zero_ptr = getelementptr i8, ptr %pattern, i64 %star_zero_index
+              store i8 0, ptr %star_zero_ptr, align 1
+              br label %open
+
+            open:
+              %find_data = alloca [320 x i8], align 8
+              %handle = call ptr @FindFirstFileA(ptr %pattern, ptr %find_data)
+              call void @sollang_free(ptr %pattern)
+              %invalid = icmp eq ptr %handle, inttoptr (i64 -1 to ptr)
+              br i1 %invalid, label %fail, label %enumerate
+
+            enumerate:
+              %head = phi ptr [ null, %open ], [ %advanced_head, %advance ]
+              %count = phi i64 [ 0, %open ], [ %advanced_count, %advance ]
+              %total = phi i64 [ 0, %open ], [ %advanced_total, %advance ]
+              %name = getelementptr i8, ptr %find_data, i64 44
+              br label %name_length
+
+            name_length:
+              %name_index = phi i64 [ 0, %enumerate ], [ %name_next, %name_continue ]
+              %name_slot = getelementptr i8, ptr %name, i64 %name_index
+              %name_byte = load i8, ptr %name_slot, align 1
+              %name_end = icmp eq i8 %name_byte, 0
+              %name_limit = icmp eq i64 %name_index, 259
+              %name_done = or i1 %name_end, %name_limit
+              br i1 %name_done, label %inspect_name, label %name_continue
+
+            name_continue:
+              %name_next = add i64 %name_index, 1
+              br label %name_length
+
+            inspect_name:
+              %first = load i8, ptr %name, align 1
+              %second_ptr = getelementptr i8, ptr %name, i64 1
+              %second = load i8, ptr %second_ptr, align 1
+              %length_one = icmp eq i64 %name_index, 1
+              %length_two = icmp eq i64 %name_index, 2
+              %first_dot = icmp eq i8 %first, 46
+              %second_dot = icmp eq i8 %second, 46
+              %dot = and i1 %length_one, %first_dot
+              %two_dots = and i1 %first_dot, %second_dot
+              %dotdot = and i1 %length_two, %two_dots
+              %special = or i1 %dot, %dotdot
+              br i1 %special, label %skip, label %allocate_node
+
+            allocate_node:
+              %node_size = add i64 %name_index, 24
+              %node = call ptr @sollang_alloc(i64 %node_size)
+              %node_ok = icmp ne ptr %node, null
+              br i1 %node_ok, label %initialize_node, label %allocation_failed
+
+            initialize_node:
+              %node_next = getelementptr %sollang.directory_node, ptr %node, i32 0, i32 0
+              store ptr null, ptr %node_next, align 8
+              %node_length = getelementptr %sollang.directory_node, ptr %node, i32 0, i32 1
+              store i64 %name_index, ptr %node_length, align 8
+              %attributes = load i32, ptr %find_data, align 4
+              %reparse_bits = and i32 %attributes, 1024
+              %is_reparse = icmp ne i32 %reparse_bits, 0
+              %directory_bits = and i32 %attributes, 16
+              %is_directory = icmp ne i32 %directory_bits, 0
+              %ordinary_kind = select i1 %is_directory, i8 1, i8 0
+              %kind = select i1 %is_reparse, i8 2, i8 %ordinary_kind
+              %node_kind = getelementptr %sollang.directory_node, ptr %node, i32 0, i32 2
+              store i8 %kind, ptr %node_kind, align 1
+              %node_name = getelementptr i8, ptr %node, i64 24
+              call void @llvm.memcpy.p0.p0.i64(ptr %node_name, ptr %name, i64 %name_index, i1 false)
+              %inserted_head = call ptr @sollang_directory_insert_sorted(ptr %head, ptr %node)
+              %inserted_count = add i64 %count, 1
+              %record_size = add i64 %name_index, 5
+              %inserted_total = add i64 %total, %record_size
+              br label %advance
+
+            skip:
+              br label %advance
+
+            advance:
+              %advanced_head = phi ptr [ %head, %skip ], [ %inserted_head, %initialize_node ]
+              %advanced_count = phi i64 [ %count, %skip ], [ %inserted_count, %initialize_node ]
+              %advanced_total = phi i64 [ %total, %skip ], [ %inserted_total, %initialize_node ]
+              call void @SetLastError(i32 0)
+              %has_next_status = call i32 @FindNextFileA(ptr %handle, ptr %find_data)
+              %has_next = icmp ne i32 %has_next_status, 0
+              br i1 %has_next, label %enumerate, label %finish_enumeration
+
+            finish_enumeration:
+              %last_error = call i32 @GetLastError()
+              %normal_end = icmp eq i32 %last_error, 18
+              br i1 %normal_end, label %close_success, label %enumeration_failed
+
+            close_success:
+              %closed = call i32 @FindClose(ptr %handle)
+              %raw = call ptr @sollang_directory_serialize(ptr %advanced_head, i64 %advanced_total)
+              %has_payload = icmp ugt i64 %advanced_total, 0
+              %raw_missing = icmp eq ptr %raw, null
+              %serialization_failed = and i1 %has_payload, %raw_missing
+              br i1 %serialization_failed, label %fail, label %success
+
+            success:
+              %success0 = insertvalue %sollang.directory_result poison, ptr %raw, 0
+              %success1 = insertvalue %sollang.directory_result %success0, i64 %advanced_total, 1
+              %success2 = insertvalue %sollang.directory_result %success1, i64 %advanced_count, 2
+              %success3 = insertvalue %sollang.directory_result %success2, i32 1, 3
+              ret %sollang.directory_result %success3
+
+            allocation_failed:
+              call void @sollang_directory_free_nodes(ptr %head)
+              %allocation_closed = call i32 @FindClose(ptr %handle)
+              br label %fail
+
+            enumeration_failed:
+              call void @sollang_directory_free_nodes(ptr %advanced_head)
+              %failure_closed = call i32 @FindClose(ptr %handle)
+              br label %fail
+
+            fail:
+              %failure0 = insertvalue %sollang.directory_result poison, ptr null, 0
+              %failure1 = insertvalue %sollang.directory_result %failure0, i64 0, 1
+              %failure2 = insertvalue %sollang.directory_result %failure1, i64 0, 2
+              %failure3 = insertvalue %sollang.directory_result %failure2, i32 0, 3
+              ret %sollang.directory_result %failure3
             }
 
             """);

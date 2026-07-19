@@ -158,6 +158,15 @@ internal sealed partial class LlvmEmitter
             return EmitRuntimeOpenFile(function, EmitExpression(expression.Arguments[0]));
         }
 
+        if (function.Kind == BoundFunctionKind.RuntimeReadDirectory)
+        {
+            if (expression.Arguments.Count != 1)
+            {
+                throw new SollangException($"{path} expects exactly one Path argument");
+            }
+            return EmitRuntimeReadDirectory(function, EmitExpression(expression.Arguments[0]));
+        }
+
         if (function.Kind is BoundFunctionKind.RuntimeOpenFileAsync
             or BoundFunctionKind.RuntimeOpenWriteFileAsync)
         {
@@ -833,6 +842,15 @@ internal sealed partial class LlvmEmitter
                 throw new SollangException($"{function.Name} expects exactly one Text path");
             }
             return EmitRuntimeOpenFile(function, argument);
+        }
+
+        if (function.Kind == BoundFunctionKind.RuntimeReadDirectory)
+        {
+            if (argument is null)
+            {
+                throw new SollangException($"{function.Name} expects exactly one Path value");
+            }
+            return EmitRuntimeReadDirectory(function, argument);
         }
 
         if (function.Kind is BoundFunctionKind.RuntimeOpenFileAsync
@@ -1670,6 +1688,11 @@ internal sealed partial class LlvmEmitter
             if (target is not { IsStandardLibrary: true })
             {
                 return;
+            }
+
+            if (target.Kind == BoundFunctionKind.RuntimeReadDirectory)
+            {
+                _usesDirectoryTraversal = true;
             }
 
             if (RequiresStandaloneStandardLibraryEmission(target))

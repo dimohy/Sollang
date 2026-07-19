@@ -58,6 +58,13 @@ internal sealed class LinuxLlvmRuntimePlatform : LlvmRuntimePlatform
         functions.AppendLine("declare ptr @getenv(ptr)");
         functions.AppendLine("declare i32 @posix_spawnp(ptr, ptr, ptr, ptr, ptr, ptr)");
         functions.AppendLine("declare i32 @waitpid(i32, ptr, i32)");
+        if (UsesDirectoryTraversal)
+        {
+            functions.AppendLine("declare ptr @opendir(ptr)");
+            functions.AppendLine("declare ptr @readdir(ptr)");
+            functions.AppendLine("declare i32 @closedir(ptr)");
+            functions.AppendLine("declare ptr @__errno_location()");
+        }
         if (UsesAsyncFile || UsesComputePool)
         {
             functions.AppendLine("declare i32 @eventfd(i32, i32)");
@@ -1305,6 +1312,148 @@ internal sealed class LinuxLlvmRuntimePlatform : LlvmRuntimePlatform
             entry:
               %ignored = call i32 @munmap(ptr %base, i64 %mapped_len)
               ret void
+            }
+
+            """);
+    }
+
+    public override void EmitDirectoryPrimitives(StringBuilder functions)
+    {
+        EmitDirectoryNodePrimitives(functions);
+        functions.AppendLine("""
+            define internal %sollang.directory_result @sollang_platform_read_directory(ptr %path, i64 %len, i32 %style) #0 {
+            entry:
+              %style_ok = icmp eq i32 %style, 0
+              br i1 %style_ok, label %prepare, label %fail
+
+            prepare:
+              %buffer_size = add i64 %len, 1
+              %path_buffer = call ptr @sollang_alloc(i64 %buffer_size)
+              %path_ok = icmp ne ptr %path_buffer, null
+              br i1 %path_ok, label %copy_path, label %fail
+
+            copy_path:
+              call void @llvm.memcpy.p0.p0.i64(ptr %path_buffer, ptr %path, i64 %len, i1 false)
+              %zero_ptr = getelementptr i8, ptr %path_buffer, i64 %len
+              store i8 0, ptr %zero_ptr, align 1
+              %directory = call ptr @opendir(ptr %path_buffer)
+              call void @sollang_free(ptr %path_buffer)
+              %opened = icmp ne ptr %directory, null
+              br i1 %opened, label %enumerate, label %fail
+
+            enumerate:
+              %head = phi ptr [ null, %copy_path ], [ %advanced_head, %advance ]
+              %count = phi i64 [ 0, %copy_path ], [ %advanced_count, %advance ]
+              %total = phi i64 [ 0, %copy_path ], [ %advanced_total, %advance ]
+              %errno_ptr = call ptr @__errno_location()
+              store i32 0, ptr %errno_ptr, align 4
+              %entry_value = call ptr @readdir(ptr %directory)
+              %at_end = icmp eq ptr %entry_value, null
+              br i1 %at_end, label %finish_enumeration, label %scan_entry
+
+            scan_entry:
+              %name = getelementptr i8, ptr %entry_value, i64 19
+              br label %name_length
+
+            name_length:
+              %name_index = phi i64 [ 0, %scan_entry ], [ %name_next, %name_continue ]
+              %name_slot = getelementptr i8, ptr %name, i64 %name_index
+              %name_byte = load i8, ptr %name_slot, align 1
+              %name_done = icmp eq i8 %name_byte, 0
+              br i1 %name_done, label %inspect_name, label %name_continue
+
+            name_continue:
+              %name_next = add i64 %name_index, 1
+              br label %name_length
+
+            inspect_name:
+              %first = load i8, ptr %name, align 1
+              %second_ptr = getelementptr i8, ptr %name, i64 1
+              %second = load i8, ptr %second_ptr, align 1
+              %length_one = icmp eq i64 %name_index, 1
+              %length_two = icmp eq i64 %name_index, 2
+              %first_dot = icmp eq i8 %first, 46
+              %second_dot = icmp eq i8 %second, 46
+              %dot = and i1 %length_one, %first_dot
+              %two_dots = and i1 %first_dot, %second_dot
+              %dotdot = and i1 %length_two, %two_dots
+              %special = or i1 %dot, %dotdot
+              br i1 %special, label %skip, label %allocate_node
+
+            allocate_node:
+              %node_size = add i64 %name_index, 24
+              %node = call ptr @sollang_alloc(i64 %node_size)
+              %node_ok = icmp ne ptr %node, null
+              br i1 %node_ok, label %initialize_node, label %allocation_failed
+
+            initialize_node:
+              %node_next = getelementptr %sollang.directory_node, ptr %node, i32 0, i32 0
+              store ptr null, ptr %node_next, align 8
+              %node_length = getelementptr %sollang.directory_node, ptr %node, i32 0, i32 1
+              store i64 %name_index, ptr %node_length, align 8
+              %type_ptr = getelementptr i8, ptr %entry_value, i64 18
+              %entry_type = load i8, ptr %type_ptr, align 1
+              %is_symlink = icmp eq i8 %entry_type, 10
+              %is_directory = icmp eq i8 %entry_type, 4
+              %is_file = icmp eq i8 %entry_type, 8
+              %file_or_other = select i1 %is_file, i8 0, i8 3
+              %directory_or_other = select i1 %is_directory, i8 1, i8 %file_or_other
+              %kind = select i1 %is_symlink, i8 2, i8 %directory_or_other
+              %node_kind = getelementptr %sollang.directory_node, ptr %node, i32 0, i32 2
+              store i8 %kind, ptr %node_kind, align 1
+              %node_name = getelementptr i8, ptr %node, i64 24
+              call void @llvm.memcpy.p0.p0.i64(ptr %node_name, ptr %name, i64 %name_index, i1 false)
+              %inserted_head = call ptr @sollang_directory_insert_sorted(ptr %head, ptr %node)
+              %inserted_count = add i64 %count, 1
+              %record_size = add i64 %name_index, 5
+              %inserted_total = add i64 %total, %record_size
+              br label %advance
+
+            skip:
+              br label %advance
+
+            advance:
+              %advanced_head = phi ptr [ %head, %skip ], [ %inserted_head, %initialize_node ]
+              %advanced_count = phi i64 [ %count, %skip ], [ %inserted_count, %initialize_node ]
+              %advanced_total = phi i64 [ %total, %skip ], [ %inserted_total, %initialize_node ]
+              br label %enumerate
+
+            finish_enumeration:
+              %errno = load i32, ptr %errno_ptr, align 4
+              %normal_end = icmp eq i32 %errno, 0
+              br i1 %normal_end, label %close_success, label %enumeration_failed
+
+            close_success:
+              %closed = call i32 @closedir(ptr %directory)
+              %raw = call ptr @sollang_directory_serialize(ptr %head, i64 %total)
+              %has_payload = icmp ugt i64 %total, 0
+              %raw_missing = icmp eq ptr %raw, null
+              %serialization_failed = and i1 %has_payload, %raw_missing
+              br i1 %serialization_failed, label %fail, label %success
+
+            success:
+              %success0 = insertvalue %sollang.directory_result poison, ptr %raw, 0
+              %success1 = insertvalue %sollang.directory_result %success0, i64 %total, 1
+              %success2 = insertvalue %sollang.directory_result %success1, i64 %count, 2
+              %success3 = insertvalue %sollang.directory_result %success2, i32 1, 3
+              ret %sollang.directory_result %success3
+
+            allocation_failed:
+              call void @sollang_directory_free_nodes(ptr %head)
+              %allocation_closed = call i32 @closedir(ptr %directory)
+              br label %fail
+
+            enumeration_failed:
+              call void @sollang_directory_free_nodes(ptr %head)
+              %failure_closed = call i32 @closedir(ptr %directory)
+              br label %fail
+
+            fail:
+              %failure0 = insertvalue %sollang.directory_result poison, ptr null, 0
+              %failure1 = insertvalue %sollang.directory_result %failure0, i64 0, 1
+              %failure2 = insertvalue %sollang.directory_result %failure1, i64 0, 2
+              %failure3 = insertvalue %sollang.directory_result %failure2, i32 0, 3
+              ret %sollang.directory_result %failure3
             }
 
             """);

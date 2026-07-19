@@ -16,7 +16,9 @@ internal sealed partial class LlvmEmitter
         }
 
         var builder = new StringBuilder();
-        foreach (var definition in _program.Types.Structs.OrderBy(static definition => definition.Id))
+        foreach (var definition in _program.Types.Structs
+                     .Where(definition => ShouldEmitTypeDefinition(definition.Id))
+                     .OrderBy(static definition => definition.Id))
         {
             var fields = string.Join(", ", definition.Fields.Select(field => LlvmType(field.Type)));
             builder.Append(LlvmStructType(definition.Id))
@@ -25,7 +27,9 @@ internal sealed partial class LlvmEmitter
                 .AppendLine(" }");
         }
 
-        foreach (var definition in _program.Types.Enums.OrderBy(static definition => definition.Id))
+        foreach (var definition in _program.Types.Enums
+                     .Where(definition => ShouldEmitTypeDefinition(definition.Id))
+                     .OrderBy(static definition => definition.Id))
         {
             builder.Append(LlvmEnumType(definition.Id))
                 .Append(" = type { i32, [")
@@ -36,6 +40,15 @@ internal sealed partial class LlvmEmitter
         builder.AppendLine();
         return builder.ToString();
     }
+
+    private bool ShouldEmitTypeDefinition(TypeId type) =>
+        _usesDirectoryTraversal
+        || type is not (TypeId.DirectoryRaw
+            or TypeId.DirectoryEntryKind
+            or TypeId.DirectoryEntry
+            or TypeId.DynamicDirectoryEntryArray
+            or TypeId.DirectoryRawResult
+            or TypeId.DirectoryReadResult);
 
     private RuntimeStruct EmitStructLiteralExpression(StructLiteralExpression expression)
     {
@@ -82,6 +95,51 @@ internal sealed partial class LlvmEmitter
             aggregate = next;
         }
         return new RuntimeStruct(type, aggregate);
+    }
+
+    private void RemoveOwnedLiteralSources(Expression expression, BoundType expectedType)
+    {
+        if (!_program.Types.ContainsOwnedStorage(expectedType))
+        {
+            return;
+        }
+
+        if (expression is NameExpression name)
+        {
+            RemoveLocal(name.Name);
+            return;
+        }
+
+        if (!_program.Types.IsStruct(expectedType))
+        {
+            return;
+        }
+
+        var definition = _program.Types.GetStruct(expectedType);
+        IReadOnlyDictionary<string, Expression>? initializers = expression switch
+        {
+            StructLiteralExpression structure => structure.Fields.ToDictionary(
+                static field => field.Name,
+                static field => field.Value,
+                StringComparer.Ordinal),
+            DictionaryLiteralExpression contextual => contextual.Entries.ToDictionary(
+                entry => ((NameExpression)entry.Key).Name,
+                static entry => entry.Value,
+                StringComparer.Ordinal),
+            _ => null
+        };
+        if (initializers is null)
+        {
+            return;
+        }
+
+        foreach (var field in definition.Fields)
+        {
+            if (initializers.TryGetValue(field.Name, out var value))
+            {
+                RemoveOwnedLiteralSources(value, field.Type);
+            }
+        }
     }
 
     private RuntimeValue EmitFieldAccessExpression(FieldAccessExpression expression)

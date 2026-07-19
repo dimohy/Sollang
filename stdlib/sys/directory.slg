@@ -1,0 +1,81 @@
+namespace sys.directory
+
+import sys.path as path
+import sys.directory.kind as kinds
+
+# The runtime fills this private, length-prefixed byte snapshot in canonical
+# name order. The public layer decodes it into independently owned entries, so
+# no returned path borrows a native directory buffer or handle.
+struct Raw {
+    bytes: [UInt8; ~]
+    count: UIntSize
+}
+
+public struct Entry {
+    name: path.Path
+    kind: kinds.Kind
+}
+
+enum RawResult {
+    Ok(Raw)
+    Err(Text)
+}
+
+public enum ReadResult {
+    Ok([Entry; ~])
+    Err(Text)
+}
+
+readRaw directory: path.Path -> RawResult uses File = intrinsic
+
+rawByte raw: Raw, index: Int -> UInt8 => raw.bytes[index]
+
+entryKind code: UInt8 -> kinds.Kind {
+    code == UInt8(0) -> if {
+        kinds.Kind.File
+    } else {
+        code == UInt8(1) -> if {
+            kinds.Kind.Directory
+        } else {
+            code == UInt8(2) -> if {
+                kinds.Kind.Symlink
+            } else {
+                kinds.Kind.Other
+            }
+        }
+    }
+}
+
+# A directory read is an owned, deterministic snapshot. Entries are sorted by
+# raw UTF-8 name bytes, exclude `.` and `..`, and never retain an OS handle.
+public read directory: path.Path -> ReadResult {
+    directory.style => style
+    readRaw(directory)? => raw!
+    raw!.count => count
+    [Entry; ~] => entries!
+    UIntSize(0) => cursor!
+    UIntSize(0) => entryIndex!
+    entryIndex! < count -> while {
+        raw! -> rawByte(Int(cursor!)) -> entryKind => kind
+        cursor! + UIntSize(1) => cursor!
+        UIntSize(raw! -> rawByte(Int(cursor!))) => length0
+        UIntSize(raw! -> rawByte(Int(cursor! + UIntSize(1)))) * UIntSize(256) => length1
+        UIntSize(raw! -> rawByte(Int(cursor! + UIntSize(2)))) * UIntSize(65536) => length2
+        UIntSize(raw! -> rawByte(Int(cursor! + UIntSize(3)))) * UIntSize(16777216) => length3
+        length0 + length1 + length2 + length3 => nameLength
+        cursor! + UIntSize(4) => cursor!
+        [UInt8; ~] => nameBytes!
+        UIntSize(0) => nameIndex!
+        nameIndex! < nameLength -> while {
+            nameBytes! -> push(raw! -> rawByte(Int(cursor! + nameIndex!)))
+            nameIndex! + UIntSize(1) => nameIndex!
+        }
+        cursor! + nameLength => cursor!
+        entries! -> push(Entry {
+            name: path.Path { bytes: nameBytes!, style: style }
+            kind: kind
+        })
+        entryIndex! + UIntSize(1) => entryIndex!
+    }
+    sys.directory.ReadResult.Ok(entries!)
+}

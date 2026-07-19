@@ -123,6 +123,7 @@ internal enum BoundFunctionKind
     RuntimeOpenWriteFile,
     RuntimeOpenFileAsync,
     RuntimeOpenWriteFileAsync,
+    RuntimeReadDirectory,
     RuntimeWriteScalarAt,
     RuntimeWriteScalarAtAsync,
     RuntimeSyncFileAsync
@@ -166,6 +167,12 @@ internal enum TypeId
     Path,
     PathStyle,
     DynamicUInt8Array,
+    DirectoryRaw,
+    DirectoryEntryKind,
+    DirectoryEntry,
+    DynamicDirectoryEntryArray,
+    DirectoryRawResult,
+    DirectoryReadResult,
     GenericParameter = 512,
     SecondaryGenericParameter = 513,
     TertiaryGenericParameter = 514,
@@ -261,6 +268,14 @@ internal sealed class TypeDefinitionTable
         _enums = new Dictionary<TypeId, BoundEnumDefinition>(enums);
         _boxes = new Dictionary<TypeId, BoundBoxDefinition>(boxes);
         _pointerSize = pointerSize;
+        foreach (var definition in _enums.Values.Where(static definition =>
+                     definition.Name is "sys.directory.RawResult" or "sys.directory.ReadResult"))
+        {
+            var ok = definition.Variants.First(static variant => variant.Name == "Ok").PayloadType!.Value;
+            var error = definition.Variants.First(static variant => variant.Name == "Err").PayloadType!.Value;
+            _resultsByTypes.TryAdd((ok, error), definition.Id);
+            _resultTypes.TryAdd(definition.Id, (ok, error));
+        }
         _tasksByValue.Add(TypeId.Int, TypeId.TaskInt);
         _taskValues.Add(TypeId.TaskInt, TypeId.Int);
         _nextParametricTypeId = _names.Values

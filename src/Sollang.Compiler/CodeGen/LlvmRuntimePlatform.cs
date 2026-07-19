@@ -23,6 +23,8 @@ internal abstract class LlvmRuntimePlatform
 
     public abstract void EmitFilePrimitives(StringBuilder functions);
 
+    public abstract void EmitDirectoryPrimitives(StringBuilder functions);
+
     public abstract void EmitMappedFilePrimitives(StringBuilder functions);
 
     public abstract void EmitTimePrimitives(StringBuilder functions);
@@ -53,6 +55,8 @@ internal abstract class LlvmRuntimePlatform
 
     public virtual bool SupportsChildProcesses => true;
 
+    public virtual bool SupportsDirectoryTraversal => true;
+
     public virtual bool SupportsAsync => false;
 
     public virtual bool SupportsComputePool => false;
@@ -60,9 +64,197 @@ internal abstract class LlvmRuntimePlatform
     public bool UsesAsyncFile { get; set; }
     public bool UsesProcessRuntime { get; set; }
     public bool UsesComputePool { get; set; }
+    public bool UsesDirectoryTraversal { get; set; }
 
     public virtual void EmitComputePrimitives(StringBuilder functions)
     {
+    }
+
+    protected static void EmitDirectoryNodePrimitives(StringBuilder functions)
+    {
+        functions.AppendLine("""
+            define internal i32 @sollang_directory_compare_nodes(ptr %left, ptr %right) #0 {
+            entry:
+              %left_len_slot = getelementptr %sollang.directory_node, ptr %left, i32 0, i32 1
+              %left_len = load i64, ptr %left_len_slot, align 8
+              %right_len_slot = getelementptr %sollang.directory_node, ptr %right, i32 0, i32 1
+              %right_len = load i64, ptr %right_len_slot, align 8
+              %left_name = getelementptr i8, ptr %left, i64 24
+              %right_name = getelementptr i8, ptr %right, i64 24
+              %left_shorter = icmp ult i64 %left_len, %right_len
+              %minimum = select i1 %left_shorter, i64 %left_len, i64 %right_len
+              br label %compare
+
+            compare:
+              %index = phi i64 [ 0, %entry ], [ %next, %equal_byte ]
+              %within = icmp ult i64 %index, %minimum
+              br i1 %within, label %compare_byte, label %compare_length
+
+            compare_byte:
+              %left_ptr = getelementptr i8, ptr %left_name, i64 %index
+              %right_ptr = getelementptr i8, ptr %right_name, i64 %index
+              %left_byte = load i8, ptr %left_ptr, align 1
+              %right_byte = load i8, ptr %right_ptr, align 1
+              %same = icmp eq i8 %left_byte, %right_byte
+              br i1 %same, label %equal_byte, label %different_byte
+
+            equal_byte:
+              %next = add i64 %index, 1
+              br label %compare
+
+            different_byte:
+              %less = icmp ult i8 %left_byte, %right_byte
+              %byte_result = select i1 %less, i32 -1, i32 1
+              ret i32 %byte_result
+
+            compare_length:
+              %same_length = icmp eq i64 %left_len, %right_len
+              br i1 %same_length, label %equal, label %different_length
+
+            different_length:
+              %length_result = select i1 %left_shorter, i32 -1, i32 1
+              ret i32 %length_result
+
+            equal:
+              ret i32 0
+            }
+
+            define internal ptr @sollang_directory_insert_sorted(ptr %head, ptr %node) #0 {
+            entry:
+              %empty = icmp eq ptr %head, null
+              br i1 %empty, label %only, label %compare_head
+
+            only:
+              %only_next = getelementptr %sollang.directory_node, ptr %node, i32 0, i32 0
+              store ptr null, ptr %only_next, align 8
+              ret ptr %node
+
+            compare_head:
+              %head_order = call i32 @sollang_directory_compare_nodes(ptr %node, ptr %head)
+              %before_head = icmp slt i32 %head_order, 0
+              br i1 %before_head, label %prepend, label %scan_start
+
+            prepend:
+              %prepend_next = getelementptr %sollang.directory_node, ptr %node, i32 0, i32 0
+              store ptr %head, ptr %prepend_next, align 8
+              ret ptr %node
+
+            scan_start:
+              %head_next_slot = getelementptr %sollang.directory_node, ptr %head, i32 0, i32 0
+              %head_next = load ptr, ptr %head_next_slot, align 8
+              br label %scan
+
+            scan:
+              %previous = phi ptr [ %head, %scan_start ], [ %current, %advance ]
+              %current = phi ptr [ %head_next, %scan_start ], [ %next, %advance ]
+              %at_end = icmp eq ptr %current, null
+              br i1 %at_end, label %append, label %compare_current
+
+            compare_current:
+              %order = call i32 @sollang_directory_compare_nodes(ptr %node, ptr %current)
+              %before = icmp slt i32 %order, 0
+              br i1 %before, label %insert, label %advance
+
+            advance:
+              %current_next_slot = getelementptr %sollang.directory_node, ptr %current, i32 0, i32 0
+              %next = load ptr, ptr %current_next_slot, align 8
+              br label %scan
+
+            insert:
+              %node_next = getelementptr %sollang.directory_node, ptr %node, i32 0, i32 0
+              store ptr %current, ptr %node_next, align 8
+              %previous_next = getelementptr %sollang.directory_node, ptr %previous, i32 0, i32 0
+              store ptr %node, ptr %previous_next, align 8
+              ret ptr %head
+
+            append:
+              %append_node_next = getelementptr %sollang.directory_node, ptr %node, i32 0, i32 0
+              store ptr null, ptr %append_node_next, align 8
+              %append_previous_next = getelementptr %sollang.directory_node, ptr %previous, i32 0, i32 0
+              store ptr %node, ptr %append_previous_next, align 8
+              ret ptr %head
+            }
+
+            define internal void @sollang_directory_free_nodes(ptr %head) #0 {
+            entry:
+              br label %loop
+
+            loop:
+              %node = phi ptr [ %head, %entry ], [ %next, %body ]
+              %done = icmp eq ptr %node, null
+              br i1 %done, label %finish, label %body
+
+            body:
+              %next_slot = getelementptr %sollang.directory_node, ptr %node, i32 0, i32 0
+              %next = load ptr, ptr %next_slot, align 8
+              call void @sollang_free(ptr %node)
+              br label %loop
+
+            finish:
+              ret void
+            }
+
+            define internal ptr @sollang_directory_serialize(ptr %head, i64 %total) #0 {
+            entry:
+              %empty = icmp eq i64 %total, 0
+              br i1 %empty, label %empty_result, label %allocate
+
+            empty_result:
+              ret ptr null
+
+            allocate:
+              %output = call ptr @sollang_alloc(i64 %total)
+              %allocated = icmp ne ptr %output, null
+              br i1 %allocated, label %loop, label %allocation_failed
+
+            allocation_failed:
+              call void @sollang_directory_free_nodes(ptr %head)
+              ret ptr null
+
+            loop:
+              %node = phi ptr [ %head, %allocate ], [ %next_node, %body ]
+              %offset = phi i64 [ 0, %allocate ], [ %next_offset, %body ]
+              %done = icmp eq ptr %node, null
+              br i1 %done, label %finish, label %body
+
+            body:
+              %next_slot = getelementptr %sollang.directory_node, ptr %node, i32 0, i32 0
+              %next_node = load ptr, ptr %next_slot, align 8
+              %length_slot = getelementptr %sollang.directory_node, ptr %node, i32 0, i32 1
+              %length = load i64, ptr %length_slot, align 8
+              %kind_slot = getelementptr %sollang.directory_node, ptr %node, i32 0, i32 2
+              %kind = load i8, ptr %kind_slot, align 1
+              %record = getelementptr i8, ptr %output, i64 %offset
+              store i8 %kind, ptr %record, align 1
+              %length32 = trunc i64 %length to i32
+              %length0 = trunc i32 %length32 to i8
+              %length_shift1 = lshr i32 %length32, 8
+              %length1 = trunc i32 %length_shift1 to i8
+              %length_shift2 = lshr i32 %length32, 16
+              %length2 = trunc i32 %length_shift2 to i8
+              %length_shift3 = lshr i32 %length32, 24
+              %length3 = trunc i32 %length_shift3 to i8
+              %length_ptr0 = getelementptr i8, ptr %record, i64 1
+              %length_ptr1 = getelementptr i8, ptr %record, i64 2
+              %length_ptr2 = getelementptr i8, ptr %record, i64 3
+              %length_ptr3 = getelementptr i8, ptr %record, i64 4
+              store i8 %length0, ptr %length_ptr0, align 1
+              store i8 %length1, ptr %length_ptr1, align 1
+              store i8 %length2, ptr %length_ptr2, align 1
+              store i8 %length3, ptr %length_ptr3, align 1
+              %destination = getelementptr i8, ptr %record, i64 5
+              %source = getelementptr i8, ptr %node, i64 24
+              call void @llvm.memcpy.p0.p0.i64(ptr %destination, ptr %source, i64 %length, i1 false)
+              %record_size = add i64 %length, 5
+              %next_offset = add i64 %offset, %record_size
+              call void @sollang_free(ptr %node)
+              br label %loop
+
+            finish:
+              ret ptr %output
+            }
+
+            """);
     }
 
     public void EmitMemoryOutputSinkPrimitives(StringBuilder functions)

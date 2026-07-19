@@ -20,11 +20,17 @@ internal sealed class WasmBrowserLlvmRuntimePlatform : LlvmRuntimePlatform
 
     public override bool SupportsChildProcesses => false;
 
+    public override bool SupportsDirectoryTraversal => false;
+
     public override void EmitProcessPrimitives(StringBuilder functions)
     {
     }
 
     public override void EmitMappedFilePrimitives(StringBuilder functions)
+    {
+    }
+
+    public override void EmitDirectoryPrimitives(StringBuilder functions)
     {
     }
 

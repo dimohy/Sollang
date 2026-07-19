@@ -1504,6 +1504,10 @@ internal sealed partial class SemanticCompiler
             "sys.file.mapText" => RequireIntrinsicSignature(
                 function, inputType, returnType, BoundType.Text, BoundType.SourceText,
                 BoundFunctionKind.RuntimeMapSourceText),
+            "sys.directory.readRaw" => RequireReadDirectorySignature(
+                function,
+                inputType,
+                returnType),
             "sys.file.write" => RequireGenericScalarWriteSignature(
                 function,
                 inputType,
@@ -1635,6 +1639,26 @@ internal sealed partial class SemanticCompiler
                 $"intrinsic '{function.Name}' must have signature Text -> Option<Text>");
         }
         return BoundFunctionKind.RuntimeEnvironment;
+    }
+
+    private BoundFunctionKind RequireReadDirectorySignature(
+        FunctionDeclaration function,
+        BoundType? inputType,
+        BoundType returnType)
+    {
+        if (inputType is not { } pathType
+            || !_types.IsStruct(pathType)
+            || _types.GetStruct(pathType).Name != "sys.path.Path"
+            || !_types.TryGetResultTypes(returnType, out var resultTypes)
+            || !_types.IsStruct(resultTypes.Ok)
+            || _types.GetStruct(resultTypes.Ok).Name != "sys.directory.Raw"
+            || resultTypes.Error != BoundType.Text)
+        {
+            throw Error(function.Line, function.Column,
+                $"intrinsic '{function.Name}' must have signature Path -> Result<Raw, Text>");
+        }
+
+        return BoundFunctionKind.RuntimeReadDirectory;
     }
 
     private BoundFunctionKind RequireProcessRunIntrinsicSignature(
@@ -4451,6 +4475,7 @@ internal sealed partial class SemanticCompiler
                         continue;
                     case BoundFunctionKind.RuntimeRunProcess:
                     case BoundFunctionKind.RuntimeRunProcessToFile:
+                    case BoundFunctionKind.RuntimeReadDirectory:
                         EnsureRuntimeInput(currentType, function, expression.Line, expression.Column, path);
                         currentType = function.ReturnType;
                         continue;
@@ -5351,6 +5376,16 @@ internal sealed partial class SemanticCompiler
                     expression.Arguments[0], functions, bindings,
                     allowPrintCall: false, allowReadIntCall, allowFlowBindingTarget: false);
                 EnsureRuntimeInput(argvType, function, expression.Arguments[0].Line, expression.Arguments[0].Column, path);
+                return function.ReturnType;
+            case BoundFunctionKind.RuntimeReadDirectory:
+                if (expression.Arguments.Count != 1)
+                {
+                    throw Error(expression.Line, expression.Column, $"{path} expects exactly one Path argument");
+                }
+                var directoryPathType = InferExpression(
+                    expression.Arguments[0], functions, bindings,
+                    allowPrintCall: false, allowReadIntCall, allowFlowBindingTarget: false);
+                EnsureRuntimeInput(directoryPathType, function, expression.Arguments[0].Line, expression.Arguments[0].Column, path);
                 return function.ReturnType;
             case BoundFunctionKind.RuntimeSeedRandom:
             case BoundFunctionKind.RuntimeRandomBelow:
@@ -6615,7 +6650,11 @@ internal sealed partial class SemanticCompiler
                                 ? TypeId.RunToFileRequest
                                 : string.Equals(declaration.Name, "sys.path.Path", StringComparison.Ordinal)
                                     ? TypeId.Path
-                                    : (TypeId)nextTypeId++;
+                                    : string.Equals(declaration.Name, "sys.directory.Raw", StringComparison.Ordinal)
+                                        ? TypeId.DirectoryRaw
+                                        : string.Equals(declaration.Name, "sys.directory.Entry", StringComparison.Ordinal)
+                                            ? TypeId.DirectoryEntry
+                                            : (TypeId)nextTypeId++;
             if (!names.TryAdd(declaration.Name, id))
             {
                 throw Error(declaration.Line, declaration.Column, $"type '{declaration.Name}' already exists");
@@ -6634,7 +6673,13 @@ internal sealed partial class SemanticCompiler
 
             var id = string.Equals(declaration.Name, "sys.path.Style", StringComparison.Ordinal)
                 ? TypeId.PathStyle
-                : (TypeId)nextTypeId++;
+                : string.Equals(declaration.Name, "sys.directory.kind.Kind", StringComparison.Ordinal)
+                    ? TypeId.DirectoryEntryKind
+                    : string.Equals(declaration.Name, "sys.directory.RawResult", StringComparison.Ordinal)
+                        ? TypeId.DirectoryRawResult
+                        : string.Equals(declaration.Name, "sys.directory.ReadResult", StringComparison.Ordinal)
+                            ? TypeId.DirectoryReadResult
+                    : (TypeId)nextTypeId++;
             if (!names.TryAdd(declaration.Name, id))
             {
                 throw Error(declaration.Line, declaration.Column, $"type '{declaration.Name}' already exists");
@@ -6646,11 +6691,13 @@ internal sealed partial class SemanticCompiler
         var boxes = new Dictionary<TypeId, BoundBoxDefinition>();
         var predeclaredDynamicArrays = new Dictionary<TypeId, TypeId>
         {
-            [TypeId.DynamicUInt8Array] = TypeId.UInt8
+            [TypeId.DynamicUInt8Array] = TypeId.UInt8,
+            [TypeId.DynamicDirectoryEntryArray] = TypeId.DirectoryEntry
         };
         var predeclaredDynamicArraysByElement = new Dictionary<TypeId, TypeId>
         {
-            [TypeId.UInt8] = TypeId.DynamicUInt8Array
+            [TypeId.UInt8] = TypeId.DynamicUInt8Array,
+            [TypeId.DirectoryEntry] = TypeId.DynamicDirectoryEntryArray
         };
         var boxableTypes = names
             .Where(item => item.Value is TypeId.Int or TypeId.Bool or TypeId.Text
@@ -6658,7 +6705,9 @@ internal sealed partial class SemanticCompiler
                     && item.Value is not (TypeId.File or TypeId.FileWriter or TypeId.SourceText))
                     && item.Value is not TypeId.RunToFileRequest
                 || enumTypes.Values.Contains(item.Value))
-            .Where(item => item.Value is not (TypeId.Path or TypeId.PathStyle))
+            .Where(item => item.Value is not (TypeId.Path or TypeId.PathStyle
+                or TypeId.DirectoryRaw or TypeId.DirectoryEntryKind or TypeId.DirectoryEntry
+                or TypeId.DirectoryRawResult or TypeId.DirectoryReadResult))
             .OrderBy(item => (int)item.Value)
             .ToArray();
         foreach (var (name, elementType) in boxableTypes)
@@ -6742,7 +6791,8 @@ internal sealed partial class SemanticCompiler
                 TypeId? payloadType = null;
                 if (variant.PayloadType is not null)
                 {
-                    if (!names.TryGetValue(variant.PayloadType, out var resolvedPayloadType))
+                    if (!names.TryGetValue(variant.PayloadType, out var resolvedPayloadType)
+                        && !TryResolveDefinitionDynamicArray(variant.PayloadType, out resolvedPayloadType))
                     {
                         throw Error(variant.Line, variant.Column, $"unknown type '{variant.PayloadType}'");
                     }
