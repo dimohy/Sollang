@@ -1,17 +1,19 @@
 # Sollang Language Support
 
-VS Code language support for Sollang `.slg` files.
+VS Code language support for Sollang `.slg` files and language-shaped project
+manifests.
 
 ## Features
 
-- Registers `.slg` as `sollang`.
+- Registers `.slg`, `sollang.project`, and `sollang.workspace` as `sollang`.
 - Highlights comments, interpolated strings, indentation-normalized raw multiline
   strings, declarations (`struct`, nested `struct`, `enum`, `effect`, `trait`,
   `impl`), generics, async/effect clauses, `await`/`cancel` flow targets,
   receiver-only and parenthesized flow
   calls, bindings, owned values, compile-time ranges, arrays, dictionaries,
   memory mapping, fixed-width integer and floating-point types, Result
-  propagation, loop controls, namespaces, imports, and operators.
+  propagation, loop controls, namespaces, imports, workspace/project manifest
+  fields, and operators.
 - Adds Sollang-only default token colors for comments, strings, variables,
   parameters, keywords, types, namespaces, constants, numbers, operators, and
   punctuation while leaving function colors to the active VS Code theme.
@@ -26,7 +28,7 @@ From this folder:
 
 ```powershell
 npx --yes @vscode/vsce package --no-dependencies --allow-missing-repository
-code --install-extension .\sollang-language-support-0.5.0.vsix --force
+code --install-extension .\sollang-language-support-0.5.1.vsix --force
 ```
 
 For extension development, open this folder in VS Code and run the extension host

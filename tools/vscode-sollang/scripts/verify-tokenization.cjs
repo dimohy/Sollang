@@ -12,7 +12,12 @@ function collectFiles(directory) {
   return fs.readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
     const fullPath = path.join(directory, entry.name);
     if (entry.isDirectory()) return collectFiles(fullPath);
-    return entry.isFile() && entry.name.endsWith(".slg") ? [fullPath] : [];
+    return entry.isFile()
+      && (entry.name.endsWith(".slg")
+        || entry.name === "sollang.project"
+        || entry.name === "sollang.workspace")
+      ? [fullPath]
+      : [];
   });
 }
 
@@ -46,6 +51,9 @@ async function main() {
     ["Result<File, Text>.Ok(reader)", "File", "entity.name.type.nominal.sollang"],
     ["inner! == 2 -> if continue", "continue", "keyword.control.loop.sollang"],
     ["import sollang.compiler.lexer", "sollang.compiler.lexer", "entity.name.namespace.sollang"],
+    ["workspace { members: [\"packages/base\"] }", "workspace", "keyword.control.declaration.manifest.sollang"],
+    ["workspace { members: [\"packages/base\"] }", "members", "keyword.control.declaration.manifest.sollang"],
+    ["project { dependencies: {} }", "dependencies", "keyword.control.declaration.manifest.sollang"],
     ["self -> inspect", "self", "variable.language.special.sollang"]
   ];
   for (const [line, text, expectedScope] of assertions) {

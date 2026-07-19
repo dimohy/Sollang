@@ -506,8 +506,36 @@ such as `import syntax.tree as tree`. Each package can see only its own direct
 dependencies; a dependency's dependencies do not become ambient imports of the
 parent. The compiler resolves the complete local graph in sorted order and
 rejects dependency cycles and duplicate project names before parsing sources.
-Versioned registries, Git sources, lock files, and workspaces are not yet part
-of this bootstrap format.
+Versioned registries, Git sources, and lock files are not yet part of this
+bootstrap format.
+
+Put tightly coupled local projects in one `sollang.workspace`:
+
+```sollang
+workspace {
+    members: [
+        "packages/base"
+        "packages/math"
+        "apps/app"
+    ]
+}
+```
+
+The members array deliberately carries paths only; each member's
+`sollang.project` remains the single source of its package name, products, and
+dependencies. Paths must be relative and remain inside the workspace. Duplicate
+paths and names, empty workspaces, missing projects, and dependencies on an
+undeclared local project are errors.
+
+At the workspace root, select a package with
+`sollang build --package app`; use `--product` as well only when that project
+has multiple products. `--workspace <file-or-directory>` selects an explicit
+workspace. From a member directory, a source-free build finds the nearest
+project and enclosing workspace and selects that member automatically. Default
+outputs live under
+`build/<target>/<package>/<product>[.exe|.wasm]`, so different packages and
+targets cannot overwrite one another. The workspace manifest participates in
+the persistent frontend-cache identity.
 
 When only the root file is supplied, each non-`sys` import is mapped from its
 dotted module path to a `.slg` file relative to the root directory. For example,

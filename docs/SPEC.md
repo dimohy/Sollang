@@ -505,12 +505,26 @@ Notes:
   collisions. One source path cannot belong to different packages. A package
   may import only direct dependencies; transitive packages remain visible only
   to the package that declared them.
+- A `sollang.workspace` manifest contains one nonempty `members` array of
+  relative project directories or manifest paths. Member paths are confined to
+  the workspace directory. Project names remain authoritative in each
+  `sollang.project`; duplicate member paths or names are rejected. The selected
+  package's complete local dependency closure must consist only of declared
+  workspace members.
+- `--workspace` selects a workspace and `--package` selects one member. A
+  workspace with one member may omit `--package`; a multi-member workspace must
+  not choose implicitly. A source-free build inside a declared member discovers
+  the enclosing workspace and selects that member.
 - Local modules resolve relative to the selected product root. The dependency
   name is its first module-path segment; a one-segment import selects its root
   product and deeper paths resolve beneath that product's source directory.
 - A manifest build without `-o` writes to `build/<product>` with the target's
   `.exe` or `.wasm` suffix where applicable. Explicit CLI options override only
   build settings, not manifest identity or root ownership.
+- A workspace build without `-o` writes to
+  `build/<target>/<package>/<product>` under the workspace root, with the same
+  target suffix rules. The workspace manifest is part of incremental input
+  identity; deleting its disposable cache never changes source state.
 
 ## Bindings
 

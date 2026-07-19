@@ -5,27 +5,51 @@ namespace Sollang.Compiler.Cli;
 internal sealed record ProjectBuild(
     ProjectPackage RootPackage,
     ProjectProduct Product,
-    IReadOnlyList<ProjectPackage> Packages)
+    IReadOnlyList<ProjectPackage> Packages,
+    WorkspaceManifest? Workspace)
 {
-    public static ProjectBuild Load(string pathOrDirectory, string? productName)
+    public static ProjectBuild LoadProject(string pathOrDirectory, string? productName)
     {
         var rootManifest = ProjectManifest.Load(pathOrDirectory);
+        return Load(rootManifest, productName, workspace: null);
+    }
+
+    public static ProjectBuild LoadWorkspace(
+        string pathOrDirectory,
+        string? packageName,
+        string? productName)
+    {
+        var workspace = WorkspaceManifest.Load(pathOrDirectory);
+        var rootManifest = workspace.SelectMember(packageName);
+        return Load(rootManifest, productName, workspace);
+    }
+
+    private static ProjectBuild Load(
+        ProjectManifest rootManifest,
+        string? productName,
+        WorkspaceManifest? workspace)
+    {
         var manifestsByPath = new Dictionary<string, ProjectPackage>(StringComparer.OrdinalIgnoreCase);
         var manifestsByName = new Dictionary<string, string>(StringComparer.Ordinal);
         var states = new Dictionary<string, VisitState>(StringComparer.OrdinalIgnoreCase);
+        var workspaceMembers = workspace?.Members.ToDictionary(
+            static member => member.Path,
+            StringComparer.OrdinalIgnoreCase);
         var root = LoadPackage(
             rootManifest,
             rootManifest.SelectProduct(productName),
             manifestsByPath,
             manifestsByName,
             states,
+            workspaceMembers,
             []);
         return new ProjectBuild(
             root,
             root.Product,
             manifestsByPath.Values
                 .OrderBy(static package => package.Manifest.Name, StringComparer.Ordinal)
-                .ToArray());
+                .ToArray(),
+            workspace);
     }
 
     private static ProjectPackage LoadPackage(
@@ -34,6 +58,7 @@ internal sealed record ProjectBuild(
         IDictionary<string, ProjectPackage> packagesByPath,
         IDictionary<string, string> pathsByName,
         IDictionary<string, VisitState> states,
+        IReadOnlyDictionary<string, ProjectManifest>? workspaceMembers,
         IReadOnlyList<string> chain)
     {
         if (states.TryGetValue(manifest.Path, out var state))
@@ -60,6 +85,13 @@ internal sealed record ProjectBuild(
         foreach (var dependency in manifest.Dependencies.OrderBy(static pair => pair.Key, StringComparer.Ordinal))
         {
             var dependencyManifest = ProjectManifest.Load(dependency.Value);
+            if (workspaceMembers is not null
+                && !workspaceMembers.ContainsKey(dependencyManifest.Path))
+            {
+                throw new SollangException(
+                    $"workspace package '{manifest.Name}' depends on '{dependencyManifest.Name}' "
+                    + $"at '{dependencyManifest.Path}', but that project is not a workspace member");
+            }
             if (!string.Equals(dependency.Key, dependencyManifest.Name, StringComparison.Ordinal))
             {
                 throw new SollangException(
@@ -73,6 +105,7 @@ internal sealed record ProjectBuild(
                     packagesByPath,
                     pathsByName,
                     states,
+                    workspaceMembers,
                     nextChain));
         }
 

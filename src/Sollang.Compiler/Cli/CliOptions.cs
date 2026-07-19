@@ -22,6 +22,8 @@ internal sealed record CliOptions(
         string? output = null;
         string? llvmHome = null;
         string? projectPath = null;
+        string? workspacePath = null;
+        string? packageName = null;
         string? productName = null;
         var target = CompilationTarget.WindowsX64;
         var keepTemps = false;
@@ -41,6 +43,12 @@ internal sealed record CliOptions(
                     break;
                 case "--project":
                     projectPath = RequireValue(args, ref i, arg);
+                    break;
+                case "--workspace":
+                    workspacePath = RequireValue(args, ref i, arg);
+                    break;
+                case "--package":
+                    packageName = RequireValue(args, ref i, arg);
                     break;
                 case "--product":
                     productName = RequireValue(args, ref i, arg);
@@ -68,25 +76,58 @@ internal sealed record CliOptions(
             }
         }
 
-        if (sources.Count > 0 && projectPath is not null)
+        if (projectPath is not null && workspacePath is not null)
         {
-            throw new SollangException("--project cannot be combined with explicit source files");
+            throw new SollangException("--project cannot be combined with --workspace");
+        }
+        if (sources.Count > 0 && (projectPath is not null || workspacePath is not null))
+        {
+            throw new SollangException("--project/--workspace cannot be combined with explicit source files");
         }
         if (sources.Count > 0 && productName is not null)
         {
             throw new SollangException("--product requires a project build");
         }
+        if (sources.Count > 0 && packageName is not null)
+        {
+            throw new SollangException("--package requires a workspace build");
+        }
+        if (packageName is not null && projectPath is not null)
+        {
+            throw new SollangException("--package cannot be combined with --project");
+        }
 
         ProjectBuild? project = null;
         if (sources.Count == 0)
         {
-            projectPath ??= ProjectManifest.FindFrom(Directory.GetCurrentDirectory());
-            if (projectPath is null)
+            if (projectPath is null && workspacePath is null)
+            {
+                var currentDirectory = Directory.GetCurrentDirectory();
+                projectPath = ProjectManifest.FindFrom(currentDirectory);
+                workspacePath = WorkspaceManifest.FindFrom(currentDirectory);
+                if (projectPath is not null && workspacePath is not null)
+                {
+                    packageName ??= ProjectManifest.Load(projectPath).Name;
+                    projectPath = null;
+                }
+            }
+            if (workspacePath is not null)
+            {
+                project = ProjectBuild.LoadWorkspace(workspacePath, packageName, productName);
+            }
+            else if (projectPath is not null)
+            {
+                if (packageName is not null)
+                {
+                    throw new SollangException("--package requires a workspace build");
+                }
+                project = ProjectBuild.LoadProject(projectPath, productName);
+            }
+            else
             {
                 throw new SollangException(
-                    $"no source file or {ProjectManifest.FileName} was found; {Usage}");
+                    $"no source file, {ProjectManifest.FileName}, or {WorkspaceManifest.FileName} was found; {Usage}");
             }
-            project = ProjectBuild.Load(projectPath, productName);
             sources.Add(project.Product.RootSource);
         }
 
@@ -116,19 +157,37 @@ internal sealed record CliOptions(
         };
 
     private static string DefaultProjectOutput(ProjectBuild project, CompilationTarget target) =>
-        Path.Combine(
-            project.RootPackage.Manifest.Directory,
-            "build",
-            target switch
-            {
-                CompilationTarget.WindowsX64 => project.Product.Name + ".exe",
-                CompilationTarget.LinuxX64 => project.Product.Name,
-                CompilationTarget.Wasm32Browser => project.Product.Name + ".wasm",
-                _ => throw new SollangException($"unsupported target '{target}'")
-            });
+        project.Workspace is null
+            ? Path.Combine(
+                project.RootPackage.Manifest.Directory,
+                "build",
+                OutputFileName(project.Product.Name, target))
+            : Path.Combine(
+                project.Workspace.Directory,
+                "build",
+                TargetName(target),
+                project.RootPackage.Manifest.Name,
+                OutputFileName(project.Product.Name, target));
+
+    private static string OutputFileName(string productName, CompilationTarget target) => target switch
+    {
+        CompilationTarget.WindowsX64 => productName + ".exe",
+        CompilationTarget.LinuxX64 => productName,
+        CompilationTarget.Wasm32Browser => productName + ".wasm",
+        _ => throw new SollangException($"unsupported target '{target}'")
+    };
+
+    private static string TargetName(CompilationTarget target) => target switch
+    {
+        CompilationTarget.WindowsX64 => "windows-x64",
+        CompilationTarget.LinuxX64 => "linux-x64",
+        CompilationTarget.Wasm32Browser => "wasm32-browser",
+        _ => throw new SollangException($"unsupported target '{target}'")
+    };
 
     private const string Usage =
-        "usage: sollang build [<source.slg> ... | --project <sollang.project|directory>] [--product <name>] "
+        "usage: sollang build [<source.slg> ... | --project <sollang.project|directory> "
+        + "| --workspace <sollang.workspace|directory> --package <name>] [--product <name>] "
         + "[-o <output>] [--target windows-x64|linux-x64|wasm32-browser] "
         + "[--llvm <dir>] [-O0|-O1|-O2|-O3] [--keep-temps]";
 

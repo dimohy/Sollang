@@ -197,6 +197,7 @@ var affectedPaths = affectedFiles
 var allDiagnosticFiles = Directory.Exists(diagnosticDir)
     ? Directory.EnumerateFiles(diagnosticDir, "*.slg")
         .Concat(Directory.EnumerateFiles(diagnosticDir, "*.project"))
+        .Concat(Directory.EnumerateFiles(diagnosticDir, "*.workspace"))
         .Order(StringComparer.Ordinal)
         .ToArray()
     : [];
@@ -321,7 +322,9 @@ Parallel.ForEach(
     var stdinPath = Path.Combine(expectedDir, name + ".stdin.txt");
     var argumentsPath = Path.Combine(expectedDir, name + ".args.txt");
     var environmentPath = Path.Combine(expectedDir, name + ".env.txt");
-    var outputPath = Path.Combine(artifactsDir, name + TestExecutableSuffix(testTarget));
+    var outputPath = Path.Combine(
+        artifactsDir,
+        name + "." + TestTargetName(testTarget) + TestExecutableSuffix(testTarget));
     var commonLlvmContainsPath = Path.Combine(expectedDir, name + ".llvm.contains.txt");
     var commonLlvmNotContainsPath = Path.Combine(expectedDir, name + ".llvm.not-contains.txt");
     var targetLlvmContainsPath = Path.Combine(expectedDir, name + ".linux-x64.llvm.contains.txt");
@@ -390,7 +393,9 @@ Parallel.ForEach(
             .ToArray();
         var projectReference = projectArguments[0];
         compilerArguments.AddRange([
-            "--project",
+            string.Equals(Path.GetExtension(projectReference), ".workspace", StringComparison.OrdinalIgnoreCase)
+                ? "--workspace"
+                : "--project",
             Path.GetFullPath(projectReference, repoRoot)
         ]);
         compilerArguments.AddRange(projectArguments[1..]);
@@ -445,7 +450,7 @@ Parallel.ForEach(
 
     if (File.Exists(wasmLlvmContainsPath))
     {
-        var wasmOutputPath = Path.Combine(artifactsDir, name + ".wasm");
+        var wasmOutputPath = Path.Combine(artifactsDir, name + ".wasm32.wasm");
         var wasmArguments = new List<string>
         {
             compilerDll, "build", sourcePath,
@@ -696,6 +701,10 @@ Parallel.ForEach(diagnosticFiles, new ParallelOptions { MaxDegreeOfParallelism =
         if (string.Equals(Path.GetExtension(sourcePath), ".project", StringComparison.OrdinalIgnoreCase))
         {
             diagnosticArguments.AddRange(["--project", sourcePath]);
+        }
+        else if (string.Equals(Path.GetExtension(sourcePath), ".workspace", StringComparison.OrdinalIgnoreCase))
+        {
+            diagnosticArguments.AddRange(["--workspace", sourcePath]);
         }
         else
         {

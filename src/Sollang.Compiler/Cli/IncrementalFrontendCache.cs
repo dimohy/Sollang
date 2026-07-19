@@ -273,9 +273,14 @@ internal static class IncrementalFrontendCache
         {
             return [];
         }
-        return options.Project.Packages
+        var projectManifests = options.Project.Packages
             .Select(static package => Path.GetFullPath(package.Manifest.Path))
-            .Order(PathComparer);
+            .ToList();
+        if (options.Project.Workspace is not null)
+        {
+            projectManifests.Add(Path.GetFullPath(options.Project.Workspace.Path));
+        }
+        return projectManifests.Order(PathComparer);
     }
 
     private static void WriteRecord(

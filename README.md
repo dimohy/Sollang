@@ -235,6 +235,27 @@ Use `sollang build --product compiler`. A dependency path points to the exact
 directory containing another `sollang.project`; its name is also its first
 import segment, for example `import syntax.tree as tree`.
 
+Related local packages can share one explicit workspace without duplicating
+their names in a second map:
+
+```sollang
+workspace {
+    members: [
+        "packages/syntax"
+        "packages/compiler"
+        "apps/sollang"
+    ]
+}
+```
+
+Save this as `sollang.workspace`, then run
+`sollang build --package sollang`. Member paths are relative, confined, and
+resolved in deterministic package-name order. Every dependency of the selected
+package must be a declared workspace member. From inside a member directory,
+plain `sollang build` discovers both the member project and its workspace.
+Workspace outputs are separated as
+`build/<target>/<package>/<product>[.exe|.wasm]` under the workspace root.
+
 ## License
 
 Sollang is licensed under the [Apache License 2.0](LICENSE).

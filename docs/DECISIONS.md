@@ -7427,3 +7427,41 @@ References:
 - [rustc stable cross-session query fingerprints](https://rustc-dev-guide.rust-lang.org/queries/incremental-compilation-in-detail.html)
 - [Salsa tracked functions and backdating](https://salsa-rs.github.io/salsa/reference/algorithm.html)
 - [Swift incremental request architecture](https://www.swift.org/blog/swift-5.2-released/)
+
+## D208A - Confined Path-Only Local Workspaces
+
+Status: implemented; Windows/Linux full suites and Stage2 verified
+Date: 2026-07-20
+
+Sollang workspaces use a language-shaped `sollang.workspace` manifest with one
+explicit, non-empty `members` array. The manifest does not repeat package names
+or products: each member's `sollang.project` is the single authority for that
+metadata. This prevents a second name map from drifting away from the project
+graph while keeping the workspace concise.
+
+Member paths are normalized relative to the workspace root and may not escape
+it. Resolved paths and package names must be unique. Building a workspace with
+more than one member requires `--package`; building from inside a member uses
+ancestor discovery to select that member. Every dependency reachable from the
+selected project must be declared in the workspace. Outputs are isolated by
+target, package, and product, and the workspace manifest participates in the
+incremental input identity.
+
+The self-host boundary is `selfhost/workspace.slg`. It parses the same token
+shape and reports explicit status codes without depending on the C# manifest
+reader. Examples 437 and 438 plus six negative diagnostics cover the complete
+local contract. The test runner additionally separates native and wasm LLVM
+temporary stems; this removes a cache-sensitive false failure where a wasm
+`.ll` file could overwrite a native `.ll` file with the same base name.
+
+Validation: Release build has zero warnings and errors; Windows and Linux each
+pass 581/581; Windows Stage2 passes 6/6 at 10,590,477 bytes; Linux Stage2 passes
+5/5 at 10,587,080 bytes. This is Stage3 cadence checkpoint 7/10. Versioned
+resolution, registries, Git sources, and lock-file reproducibility remain
+separate D208 work.
+
+References:
+
+- [Cargo workspaces](https://doc.rust-lang.org/cargo/reference/workspaces.html)
+- [SwiftPM package dependencies](https://docs.swift.org/swiftpm/documentation/packagemanagerdocs/addingdependencies/)
+- [Zig build system](https://ziglang.org/learn/build-system/)

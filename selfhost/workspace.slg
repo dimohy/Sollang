@@ -1,0 +1,143 @@
+namespace sollang.compiler.workspace
+
+import sollang.compiler.lexer
+import sollang.compiler.syntax
+import syntax.generated.slg as grammar
+import sys.file as file
+
+public struct WorkspaceMember {
+    start: UIntSize
+    length: UIntSize
+}
+
+public struct WorkspaceManifest {
+    status: Int
+    members: [WorkspaceMember; ~]
+}
+
+textIs source: Text, token: syntax.SyntaxToken, expected: Text -> Bool {
+    token.span.length == (expected -> len) => matches!
+    UIntSize(0) => index!
+    (matches! and index! < token.span.length) -> while {
+        (source -> byte(token.span.start + index!)) != (expected -> byte(index!)) -> if {
+            false => matches!
+        }
+        index! + UIntSize(1) => index!
+    }
+    matches!
+}
+
+skipSeparators start: Int, tokens: [syntax.SyntaxToken; ~] -> Int {
+    start => index!
+    (tokens[index!].kind == grammar.tokenIdNewLine or tokens[index!].kind == grammar.tokenIdComma) -> while {
+        index! + 1 => index!
+    }
+    index!
+}
+
+sameMember source: Text, left: WorkspaceMember, right: WorkspaceMember -> Bool {
+    left.length == right.length => same!
+    UIntSize(0) => index!
+    (same! and index! < left.length) -> while {
+        (source -> byte(left.start + index!)) != (source -> byte(right.start + index!)) -> if {
+            false => same!
+        }
+        index! + UIntSize(1) => index!
+    }
+    same!
+}
+
+# Status: 0 valid, 1 workspace keyword, 2 opening brace, 3 members field,
+# 4 colon, 5 opening array, 6 string member, 7 duplicate member,
+# 8 missing separator, 9 closing brace, 10 trailing input, 11 empty members.
+public parse source: Text -> WorkspaceManifest {
+    source -> lexer.lex => rawTokens!
+    [syntax.SyntaxToken; ~] => tokens!
+    rawTokens! -> each token {
+        (token.kind != grammar.triviaIdWhitespace and token.kind != grammar.triviaIdComment) -> if {
+            tokens! -> push(token)
+        }
+    }
+
+    [WorkspaceMember; ~] => members!
+    0 => status!
+    0 => index!
+    index! -> skipSeparators(tokens!) => index!
+
+    (tokens![index!].kind == grammar.tokenIdIdentifier and (source -> textIs(tokens![index!], "workspace"))) -> if {
+        index! + 1 => index!
+    } else { 1 => status! }
+
+    status! == 0 -> if {
+        index! -> skipSeparators(tokens!) => index!
+        tokens![index!].kind == grammar.tokenIdLeftBrace -> if { index! + 1 => index! } else { 2 => status! }
+    }
+    status! == 0 -> if {
+        index! -> skipSeparators(tokens!) => index!
+        (tokens![index!].kind == grammar.tokenIdIdentifier and (source -> textIs(tokens![index!], "members"))) -> if {
+            index! + 1 => index!
+        } else { 3 => status! }
+    }
+    status! == 0 -> if {
+        index! -> skipSeparators(tokens!) => index!
+        tokens![index!].kind == grammar.tokenIdColon -> if { index! + 1 => index! } else { 4 => status! }
+    }
+    status! == 0 -> if {
+        index! -> skipSeparators(tokens!) => index!
+        tokens![index!].kind == grammar.tokenIdLeftBracket -> if { index! + 1 => index! } else { 5 => status! }
+    }
+
+    status! == 0 -> if {
+        index! -> skipSeparators(tokens!) => index!
+        (status! == 0 and tokens![index!].kind != grammar.tokenIdRightBracket) -> while {
+            tokens![index!].kind == grammar.tokenIdString -> if {
+                tokens![index!] => memberToken
+                memberToken.span.length >= UIntSize(2) -> if {
+                    WorkspaceMember {
+                        start: memberToken.span.start + UIntSize(1)
+                        length: memberToken.span.length - UIntSize(2)
+                    } => member
+                    false => duplicate!
+                    0 => memberIndex!
+                    (not duplicate! and memberIndex! < (members! -> len)) -> while {
+                        source -> sameMember(members![memberIndex!], member) -> if { true => duplicate! }
+                        memberIndex! + 1 => memberIndex!
+                    }
+                    duplicate! -> if { 7 => status! } else { members! -> push(member) }
+                } else { 6 => status! }
+                index! + 1 => index!
+            } else { 6 => status! }
+
+            status! == 0 -> if {
+                index! => separatorStart
+                index! -> skipSeparators(tokens!) => index!
+                (index! == separatorStart and tokens![index!].kind != grammar.tokenIdRightBracket) -> if {
+                    8 => status!
+                }
+            }
+        }
+    }
+
+    status! == 0 -> if {
+        tokens![index!].kind == grammar.tokenIdRightBracket -> if {
+            (members! -> len) == 0 -> if { 11 => status! } else { index! + 1 => index! }
+        } else { 6 => status! }
+    }
+    status! == 0 -> if {
+        index! -> skipSeparators(tokens!) => index!
+        tokens![index!].kind == grammar.tokenIdRightBrace -> if { index! + 1 => index! } else { 9 => status! }
+    }
+    status! == 0 -> if {
+        index! -> skipSeparators(tokens!) => index!
+        tokens![index!].kind != grammar.tokenIdEnd -> if { 10 => status! }
+    }
+
+    WorkspaceManifest { status: status!, members: members! } => result!
+    result!
+}
+
+public parseSource source: file.SourceText -> WorkspaceManifest {
+    source -> len => length
+    source -> slice(UIntSize(0), length) => view
+    view -> parse
+}

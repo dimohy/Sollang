@@ -46,6 +46,14 @@ The design deliberately combines a small set of compatible ideas:
   are internal by default, and public API is opt-in. See
   [access control](https://docs.swift.org/swift-book/documentation/the-swift-programming-language/accesscontrol/)
   and [packages](https://docs.swift.org/swiftpm/documentation/packagemanagerdocs/introducingpackages/).
+- Cargo workspaces use an explicit member set, ancestor discovery, shared output,
+  and one dependency-resolution boundary; SwiftPM keeps packages, products, and
+  local path dependencies distinct; Zig models builds as a deterministic DAG.
+  Sollang combines those boundaries in a confined path-only workspace manifest,
+  while deferring remote resolution until a lock-file contract exists. See
+  Cargo [workspaces](https://doc.rust-lang.org/cargo/reference/workspaces.html),
+  SwiftPM [adding dependencies](https://docs.swift.org/swiftpm/documentation/packagemanagerdocs/addingdependencies/),
+  and the Zig [build system](https://ziglang.org/learn/build-system/).
 - Swift structured task groups and sendability plus Mojo's indexed CPU
   `parallelize` shape the deterministic compiler worker design. Sollang uses bounded
   native workers, disjoint indexed result slots, structured join, and canonical
@@ -294,8 +302,10 @@ milestone without changing the broader 60-gate language-capability score.
 - Partial (1): the package graph has deterministic multiple-product selection,
   exact local path dependencies,
   direct-dependency visibility, transitive resolution, and cycle/name-collision
-  diagnostics, but not versions, registries, Git sources, a lock file, or
-  workspaces.
+  diagnostics. A confined `sollang.workspace` now provides explicit local member
+  discovery, package selection, workspace-closed dependency validation, shared
+  target/package output roots, cache identity, and ancestor discovery. Versions,
+  registries, Git sources, and a lock file remain.
 - Missing (0).
 
 ### Compiler-construction primitives — 11.5 / 12
@@ -335,8 +345,9 @@ milestone without changing the broader 60-gate language-capability score.
   open owns its path and transfers its newly opened handle on await. Explicit
   user-value serialization remains. The package/build surface has confined
   roots, automatic discovery, selected products, deterministic local dependency
-  resolution, recursive imports, and target output, but not versioned/remote
-  resolution, a lock file, workspaces, tests, or a general build DAG.
+  resolution, recursive imports, target output, and confined local workspaces,
+  but not versioned/remote resolution, a lock file, tests, or a general build
+  DAG.
   The owned portable Path layer has explicit Posix/Windows lexical normalization
   and confined joins. Windows/Linux directory reads now return sorted owned
   snapshots with entry kind metadata; canonical queries and richer metadata
@@ -345,9 +356,9 @@ milestone without changing the broader 60-gate language-capability score.
 
 ## Critical Path To Self-Hosting
 
-1. Finish distributable packages: local dependency products and direct
-   visibility work; version constraints, remote sources, a lock file, and
-   workspace-wide resolution remain.
+1. Finish distributable packages: local dependency products, direct visibility,
+   and workspace-wide local resolution work; version constraints, remote
+   sources, and a lock file remain.
 2. Finish the reusable type substrate: multi-parameter generics, associated
    types, generic `Array<T>`/`Dictionary<K, V>`, `Option`, and `Result`.
 3. Add compiler data primitives: bytes, source spans, Unicode iteration, arena
@@ -1659,6 +1670,45 @@ gate moves the formal roadmap to **48 complete, 9 partial, 3 missing: 52.5/60
 (87.5%)**. The reference backend still emits LLVM from the current AST plus
 rehydrated semantic maps; this result does not claim a separate serialized
 monolithic typed-AST representation.
+
+## Confined Local Workspaces (D208A)
+
+D208A adds deterministic, path-only local workspaces through
+`sollang.workspace`. A workspace explicitly lists member project directories;
+each member's `sollang.project` remains authoritative for its package name,
+products, and dependency edges. Member paths are relative to and confined by
+the workspace root, package names must be unique, and every selected package's
+dependency closure must consist entirely of declared members. The CLI supports
+`--workspace` and `--package`, ancestor discovery from a member directory, and
+stable output placement under `build/<target>/<package>/<product>`.
+
+The self-host compiler now includes `selfhost/workspace.slg`, which tokenizes
+and validates the same language-shaped manifest boundary. Examples 437 and 438
+cover reference builds and the self-host parser, while six diagnostics cover
+selection, escaping roots, undeclared dependencies, duplicate package names,
+unknown fields, and empty member sets. Native and wasm test products also use
+separate platform-qualified stems so cached native verification cannot consume
+a stale wasm LLVM temporary file.
+
+Both Windows and Linux full suites pass **581/581**. Windows Stage2 passes
+**6/6** at **10,590,477 LLVM bytes**, and Linux Stage2 passes **5/5** at
+**10,587,080 LLVM bytes**. The periodic Stage3 cadence advances to **7/10**, so
+Stage3 is not due at this checkpoint. D208 distributable package work is
+**1/5 (20%)**: local workspaces are complete; semantic versions, registries,
+Git sources, and a lock file remain. Therefore the formal roadmap stays
+**48 complete, 9 partial, 3 missing: 52.5/60 (87.5%)**, with **7.5 equivalent
+gates** remaining.
+
+The design combines Cargo's explicit workspace membership and shared build
+context, SwiftPM's package/product dependency separation, and Zig's explicit
+deterministic build graph. Glob discovery and remote dependency syntax remain
+deliberately outside D208A.
+
+References:
+
+- [Cargo workspaces](https://doc.rust-lang.org/cargo/reference/workspaces.html)
+- [SwiftPM package dependencies](https://docs.swift.org/swiftpm/documentation/packagemanagerdocs/addingdependencies/)
+- [Zig build system](https://ziglang.org/learn/build-system/)
 
 ## Immediate Implementation Order
 
