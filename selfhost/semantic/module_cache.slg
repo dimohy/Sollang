@@ -1,0 +1,275 @@
+namespace sollang.compiler.semantic.module_cache
+
+import sollang.compiler.semantic.analysis as analysis
+import sollang.compiler.semantic.module_interfaces as interfaces
+import sollang.compiler.semantic.modules as modules
+
+# CacheValidation.status: 0 valid, 1 truncated, 2 magic, 3 schema,
+# 4 target/compiler context, 5 declared length, 6 checksum, 7 structure.
+public struct CacheValidation {
+    status: Int
+    moduleCount: Int
+}
+
+public struct CacheReuse {
+    status: Int
+    hits: Int
+    misses: Int
+    bodyOnlyConsumerHits: Int
+}
+
+mix hash: UInt64, value: UInt64 -> UInt64 {
+    hash * UInt64(1099511628211) + value + UInt64(97)
+}
+
+checksum words: [UInt64; ~], start: Int -> UInt64 {
+    UInt64(1469598103934665603) => hash!
+    start => index!
+    index! < (words -> len) -> while {
+        hash! -> mix(words[index!]) => hash!
+        index! + 1 => index!
+    }
+    hash!
+}
+
+canRead index: Int, count: Int, length: Int -> Bool {
+    index >= 0 and count >= 0 and index <= length and count <= length - index
+}
+
+currentInterface fingerprints: [interfaces.ModuleFingerprint; ~], moduleHash: UInt64 -> UInt64 {
+    UInt64(0) => result!
+    0 => index!
+    index! < (fingerprints -> len) -> while {
+        fingerprints[index!].moduleHash == moduleHash -> if {
+            fingerprints[index!].interfaceHash => result!
+            fingerprints -> len => index!
+        } else {
+            index! + 1 => index!
+        }
+    }
+    result!
+}
+
+currentImplementation fingerprints: [interfaces.ModuleFingerprint; ~], moduleHash: UInt64 -> UInt64 {
+    UInt64(0) => result!
+    0 => index!
+    index! < (fingerprints -> len) -> while {
+        fingerprints[index!].moduleHash == moduleHash -> if {
+            fingerprints[index!].implementationHash => result!
+            fingerprints -> len => index!
+        } else {
+            index! + 1 => index!
+        }
+    }
+    result!
+}
+
+cacheRecordStart words: [UInt64; ~], moduleHash: UInt64 -> Int {
+    -1 => result!
+    7 => index!
+    Int(words[6]) => moduleCount
+    0 => moduleIndex!
+    moduleIndex! < moduleCount -> while {
+        index! => recordStart
+        words[index!] == moduleHash -> if {
+            recordStart => result!
+            moduleCount => moduleIndex!
+        } else {
+            Int(words[index! + 6]) => canonicalLength
+            index! + 7 + canonicalLength => dependencyCountIndex
+            Int(words[dependencyCountIndex]) => dependencyCount
+            dependencyCountIndex + 1 + dependencyCount * 2 => index!
+            moduleIndex! + 1 => moduleIndex!
+        }
+    }
+    result!
+}
+
+public encodeAnalyzed package: analysis.PackageAnalysis, targetHash: UInt64 -> [UInt64; ~] {
+    package -> interfaces.fingerprintAnalyzed => fingerprints!
+    package -> interfaces.interfacesAnalyzed => canonical!
+    package -> modules.importsAnalyzed => imports!
+    [UInt64; ~] => words!
+    words! -> push(UInt64(6002245291164258115))
+    words! -> push(UInt64(1))
+    words! -> push(UInt64(1397509978044337767))
+    words! -> push(targetHash)
+    words! -> push(UInt64(0))
+    words! -> push(UInt64(0))
+    words! -> push(UInt64(fingerprints! -> len))
+
+    0 => sourceIndex!
+    sourceIndex! < (fingerprints! -> len) -> while {
+        fingerprints![sourceIndex!] => fingerprint
+        words! -> push(fingerprint.moduleHash)
+        words! -> push(fingerprint.interfaceHash)
+        words! -> push(fingerprint.implementationHash)
+        words! -> push(fingerprint.importHash)
+        words! -> push(UInt64(fingerprint.publicSymbolCount))
+        words! -> push(UInt64(fingerprint.importCount))
+        canonical.wordLengths![sourceIndex!] => canonicalLength
+        canonical.wordStarts![sourceIndex!] => canonicalStart
+        words! -> push(UInt64(canonicalLength))
+        0 => canonicalIndex!
+        canonicalIndex! < canonicalLength -> while {
+            words! -> push(canonical.words![canonicalStart + canonicalIndex!])
+            canonicalIndex! + 1 => canonicalIndex!
+        }
+        words! -> push(UInt64(fingerprint.importCount))
+        0 => importIndex!
+        importIndex! < (imports! -> len) -> while {
+            imports![importIndex!] => edge
+            edge.sourceModule == sourceIndex! -> if {
+                words! -> push(edge.targetHash)
+                fingerprints! -> currentInterface(edge.targetHash) => dependencyInterface
+                words! -> push(dependencyInterface)
+            }
+            importIndex! + 1 => importIndex!
+        }
+        sourceIndex! + 1 => sourceIndex!
+    }
+    UInt64(words! -> len) => declaredWordCount
+    words! -> checksum(6) => declaredChecksum
+    declaredWordCount => words![4]
+    declaredChecksum => words![5]
+    words!
+}
+
+public encode sources: [Text; ~], targetHash: UInt64 -> [UInt64; ~] {
+    sources -> analysis.analyze => package
+    package -> encodeAnalyzed(targetHash) => words!
+    words!
+}
+
+public validate words: [UInt64; ~], targetHash: UInt64 -> CacheValidation {
+    Int(words -> len) => wordLength
+    words -> checksum(6) => actualChecksum
+    0 => status!
+    0 => moduleCount!
+    wordLength >= 7 -> if {
+        words[0] == UInt64(6002245291164258115) -> if {} else { 2 => status! }
+        (status! == 0 and words[1] != UInt64(1)) -> if { 3 => status! }
+        (status! == 0 and (words[2] != UInt64(1397509978044337767) or words[3] != targetHash)) -> if { 4 => status! }
+        (status! == 0 and words[4] != UInt64(wordLength)) -> if { 5 => status! }
+        (status! == 0 and actualChecksum != words[5]) -> if { 6 => status! }
+        status! == 0 -> if {
+            words[6] <= UInt64(1000000) -> if {
+                Int(words[6]) => moduleCount!
+                7 => index!
+                0 => moduleIndex!
+                (status! == 0 and moduleIndex! < moduleCount!) -> while {
+                    index! -> canRead(7, wordLength) -> if {
+                        words[index! + 6] <= UInt64(wordLength) -> if {
+                            Int(words[index! + 6]) => canonicalLength
+                            index! + 7 => canonicalStart
+                            canonicalStart -> canRead(canonicalLength + 1, wordLength) -> if {
+                                canonicalStart + canonicalLength => dependencyCountIndex
+                                words[dependencyCountIndex] <= UInt64(1000000) -> if {
+                                    Int(words[dependencyCountIndex]) => dependencyCount
+                                    dependencyCountIndex + 1 -> canRead(dependencyCount * 2, wordLength) -> if {
+                                        dependencyCountIndex + 1 + dependencyCount * 2 => index!
+                                    } else { 7 => status! }
+                                } else { 7 => status! }
+                            } else { 7 => status! }
+                        } else { 7 => status! }
+                    } else { 7 => status! }
+                    moduleIndex! + 1 => moduleIndex!
+                }
+                (status! == 0 and index! != wordLength) -> if { 7 => status! }
+            } else { 7 => status! }
+        }
+    } else {
+        1 => status!
+    }
+    CacheValidation { status: status!, moduleCount: moduleCount! }
+}
+
+public reuseAnalyzed package: analysis.PackageAnalysis, words: [UInt64; ~], targetHash: UInt64 -> CacheReuse {
+    words -> validate(targetHash) => validation
+    package -> interfaces.fingerprintAnalyzed => fingerprints!
+    package -> interfaces.interfacesAnalyzed => canonical!
+    package -> modules.importsAnalyzed => imports!
+    0 => hits!
+    0 => misses!
+    0 => bodyOnlyConsumerHits!
+    validation.status == 0 -> if {
+        0 => sourceIndex!
+        sourceIndex! < (fingerprints! -> len) -> while {
+            fingerprints![sourceIndex!] => current
+            words -> cacheRecordStart(current.moduleHash) => recordStart
+            recordStart >= 0 => hit!
+            hit! -> if {
+                (words[recordStart + 1] == current.interfaceHash and words[recordStart + 2] == current.implementationHash and words[recordStart + 3] == current.importHash and words[recordStart + 4] == UInt64(current.publicSymbolCount) and words[recordStart + 5] == UInt64(current.importCount)) => hit!
+            }
+            hit! -> if {
+                Int(words[recordStart + 6]) => cachedCanonicalLength
+                canonical.wordLengths![sourceIndex!] => currentCanonicalLength
+                cachedCanonicalLength == currentCanonicalLength => hit!
+                canonical.wordStarts![sourceIndex!] => currentCanonicalStart
+                0 => canonicalIndex!
+                (hit! and canonicalIndex! < cachedCanonicalLength) -> while {
+                    words[recordStart + 7 + canonicalIndex!] == canonical.words![currentCanonicalStart + canonicalIndex!] -> if {
+                    } else { false => hit! }
+                    canonicalIndex! + 1 => canonicalIndex!
+                }
+            }
+            false => bodyDependencyChanged!
+            hit! -> if {
+                Int(words[recordStart + 6]) => cachedCanonicalLength
+                recordStart + 7 + cachedCanonicalLength => dependencyCountIndex
+                Int(words[dependencyCountIndex]) => cachedDependencyCount
+                cachedDependencyCount == current.importCount => hit!
+                0 => dependencyIndex!
+                0 => currentImportOrdinal!
+                0 => importScan!
+                (hit! and dependencyIndex! < cachedDependencyCount) -> while {
+                    UInt64(0) => currentTarget!
+                    importScan! < (imports! -> len) -> while {
+                        imports![importScan!] => edge
+                        (edge.sourceModule == sourceIndex! and currentImportOrdinal! == dependencyIndex!) -> if {
+                            edge.targetHash => currentTarget!
+                            imports! -> len => importScan!
+                        } else {
+                            edge.sourceModule == sourceIndex! -> if { currentImportOrdinal! + 1 => currentImportOrdinal! }
+                            importScan! + 1 => importScan!
+                        }
+                    }
+                    dependencyCountIndex + 1 + dependencyIndex! * 2 => cachedDependencyIndex
+                    words[cachedDependencyIndex] => cachedTarget
+                    words[cachedDependencyIndex + 1] => cachedInterface
+                    fingerprints! -> currentInterface(currentTarget!) => currentDependencyInterface
+                    (cachedTarget == currentTarget! and cachedInterface == currentDependencyInterface) -> if {
+                        words -> cacheRecordStart(cachedTarget) => dependencyRecordStart
+                        dependencyRecordStart >= 0 -> if {
+                            words[dependencyRecordStart + 2] != (fingerprints! -> currentImplementation(currentTarget!)) -> if {
+                                true => bodyDependencyChanged!
+                            }
+                        }
+                    } else { false => hit! }
+                    dependencyIndex! + 1 => dependencyIndex!
+                    importScan! < (imports! -> len) -> if {} else { 0 => importScan! }
+                }
+            }
+            hit! -> if {
+                hits! + 1 => hits!
+                bodyDependencyChanged! -> if { bodyOnlyConsumerHits! + 1 => bodyOnlyConsumerHits! }
+            } else {
+                misses! + 1 => misses!
+            }
+            sourceIndex! + 1 => sourceIndex!
+        }
+    } else {
+        fingerprints! -> len => misses!
+    }
+    CacheReuse {
+        status: validation.status
+        hits: hits!
+        misses: misses!
+        bodyOnlyConsumerHits: bodyOnlyConsumerHits!
+    }
+}
+
+public reuse words: [UInt64; ~], sources: [Text; ~], targetHash: UInt64 -> CacheReuse {
+    sources -> analysis.analyze => package
+    package -> reuseAnalyzed(words, targetHash)
+}

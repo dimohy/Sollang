@@ -1,0 +1,83 @@
+import sollang.compiler.semantic.module_cache as cache
+import sollang.compiler.semantic.module_cache_io as cacheIo
+
+baselineSources: -> [Text; ~] => [
+    """
+    namespace sample.dependency
+    public answer value: Int -> Int => value + 1
+    """,
+    """
+    namespace sample.consumer
+    import sample.dependency as dependency
+    public use value: Int -> Int => value -> dependency.answer
+    """,
+    ~
+]
+
+bodyChangedSources: -> [Text; ~] => [
+    """
+    namespace sample.dependency
+    public answer value: Int -> Int => value + 99
+    """,
+    """
+    namespace sample.consumer
+    import sample.dependency as dependency
+    public use value: Int -> Int => value -> dependency.answer
+    """,
+    ~
+]
+
+signatureChangedSources: -> [Text; ~] => [
+    """
+    namespace sample.dependency
+    public answer value: Long -> Long => value + Long(1)
+    """,
+    """
+    namespace sample.consumer
+    import sample.dependency as dependency
+    public use value: Int -> Int => value -> dependency.answer
+    """,
+    ~
+]
+
+main {
+    UInt64(1) => target
+    baselineSources -> cache.encode(target) => baselineCache!
+    baselineCache! -> cache.reuse(baselineSources, target) => warm
+    baselineCache! -> cache.reuse(bodyChangedSources, target) => bodyChanged
+    baselineCache! -> cache.reuse(signatureChangedSources, target) => signatureChanged
+
+    baselineSources -> cache.encode(target) => corrupted!
+    corrupted![10] + UInt64(1) => corrupted![10]
+    corrupted! -> cache.validate(target) => corruption
+    [UInt64(1), ~] -> cache.validate(target) => truncated
+    baselineSources -> cache.encode(target) => badMagic!
+    UInt64(0) => badMagic![0]
+    badMagic! -> cache.validate(target) => magic
+    baselineSources -> cache.encode(target) => badSchema!
+    UInt64(2) => badSchema![1]
+    badSchema! -> cache.validate(target) => schema
+    baselineCache! -> cache.validate(UInt64(2)) => wrongTarget
+    baselineSources -> cache.encode(target) => badLength!
+    badLength![4] + UInt64(1) => badLength![4]
+    badLength! -> cache.validate(target) => length
+
+    baselineSources -> cache.encode(target) => persisted!
+    "artifacts/example-tests/433-module-cache.bin" => destination
+    "artifacts/example-tests/433-module-cache.tmp" => temporary
+    destination -> cacheIo.publish(temporary, persisted!) => published
+    destination -> cacheIo.load => loaded!
+    loaded!.status => loadStatus
+    loaded!.words -> cache.validate(target) => loadedValidation
+    loaded!.words -> cache.reuse(bodyChangedSources, target) => loadedReuse
+
+    "warm = $(warm.hits)/$(warm.misses)" -> println
+    "body-only = $(bodyChanged.hits)/$(bodyChanged.misses)/$(bodyChanged.bodyOnlyConsumerHits)" -> println
+    "signature = $(signatureChanged.hits)/$(signatureChanged.misses)" -> println
+    "guards = $(truncated.status),$(magic.status),$(schema.status),$(wrongTarget.status),$(length.status),$(corruption.status)" -> println
+    (published and loadStatus == 0 and loadedValidation.status == 0 and loadedReuse.hits == 1) -> if {
+        "persistent = valid"
+    } else {
+        "persistent = invalid"
+    } -> println
+}

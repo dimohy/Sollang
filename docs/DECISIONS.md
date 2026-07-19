@@ -6814,9 +6814,11 @@ Implementation checklist:
 - [x] Stage1/Stage2 fingerprint equality gate
 - [x] Versioned canonical interface serialization
 - [x] Atomic cache publication
-- [ ] Cache corruption rejection
-- [ ] Direct-dependency cache hit/miss integration
-- [ ] Body-only edit proves consumer reuse
+- [x] Cache corruption rejection
+- [x] Direct-dependency cache hit/miss integration
+- [x] Body-only edit proves consumer reuse
+- [ ] Self-host owned File lowering for persistent cache I/O
+- [ ] Stage2 persistent cache read/write integration
 
 D207A is an independently Stage2-verified foundation checkpoint, advancing the
 periodic Stage3 cadence to 2/10. It does not complete the module/interface-cache
@@ -6869,3 +6871,36 @@ Research basis:
 - [Rust incremental compilation fingerprints](https://rustc-dev-guide.rust-lang.org/queries/incremental-compilation-in-detail.html)
 - [Clang modules and cache invalidation](https://clang.llvm.org/docs/Modules.html)
 - [Clang strict module consistency](https://clang.llvm.org/docs/StandardCPlusPlusModules.html)
+
+## D207B2 - Validated Cache Codec and Dependency Reuse Planner
+
+Status: planner implemented and Stage2 verified; self-host persistence pending
+Date: 2026-07-19
+
+The schema-1 cache now has a bounded decoder and validator for magic, schema,
+compiler context, target, declared word count, checksum, record structure, and
+dependency lists. Reuse compares the full canonical public-interface stream in
+addition to lookup hashes, then checks each ordered direct dependency's module
+identity and interface hash. An implementation-only dependency edit misses the
+edited module while retaining the consumer; a public-signature edit invalidates
+both. Example 433 covers warm reuse, body-only consumer reuse, signature
+invalidation, each corruption guard, and staged atomic persistence through the
+reference backend on Windows and Linux.
+
+The pure codec, validator, and planner are part of the reusable self-host
+compiler. Its `interface-cache` verification mode analyzes real files, encodes
+their cache records, and immediately revalidates/reuses all three modules in
+both Stage1 and Stage2. Persistent I/O is deliberately isolated in
+`module_cache_io.slg`: the C# backend already lowers owned File open/read/write,
+sync, and atomic replace, while the self-host LLVM backend does not yet lower
+those owned File operations. Keeping the adapter separate prevents an
+unsupported effect backend from contaminating the pure planner and leaves that
+parity gap explicit rather than masking it with a fallback.
+
+The complete Windows suite passes 570/570. Windows Stage2 passes 6/6 at
+9,545,859 LLVM bytes, and Linux Stage2 passes 5/5 at 9,544,344 bytes with all
+existing differential hashes preserved. This is Stage2 checkpoint 4/10 after
+the D205 reset. Because Stage2 persistence still depends on the missing
+self-host owned File lowering, the module/interface-cache gate remains partial
+and the formal roadmap remains **47 complete, 9 partial, 4 missing: 51.5/60
+(85.8%)**.

@@ -32,7 +32,7 @@ $compilerRuntimeSources = @(
     (Join-Path $repoRoot "stdlib\sys\directory.slg")
     (Join-Path $repoRoot "stdlib\sys\directory\kind.slg")
 )
-$expectedStage2Bytes = 9401740L
+$expectedStage2Bytes = 9545859L
 
 New-Item -ItemType Directory -Force -Path $artifactsDir | Out-Null
 
@@ -261,7 +261,24 @@ $fingerprintLineCount = ([regex]::Matches($stage2Fingerprints, '(?m)^module fing
 if ($fingerprintLineCount -ne 3) {
     throw "stage-2 module fingerprint mode emitted $fingerprintLineCount records instead of 3"
 }
-Write-Host "[stage2 5/6] PASS execution, native build, and deterministic module fingerprints."
+$stage1CacheOutput = Join-Path $artifactsDir "stage2-check-module-cache-stage1.txt"
+$stage2CacheOutput = Join-Path $artifactsDir "stage2-check-module-cache-stage2.txt"
+$stage1CacheError = Join-Path $artifactsDir "stage2-check-module-cache-stage1.err"
+$stage2CacheError = Join-Path $artifactsDir "stage2-check-module-cache-stage2.err"
+$cacheArguments = @("interface-cache") + $fingerprintSources
+$stage1CacheProcess = Invoke-ProcessToFile $stage1Path $cacheArguments $stage1CacheOutput $stage1CacheError
+$stage2CacheProcess = Invoke-ProcessToFile $stage2Path $cacheArguments $stage2CacheOutput $stage2CacheError
+Assert-ProcessSucceeded $stage1CacheProcess $stage1CacheError "stage-1 module-cache planner"
+Assert-ProcessSucceeded $stage2CacheProcess $stage2CacheError "stage-2 module-cache planner"
+$stage1CacheText = ([System.IO.File]::ReadAllText($stage1CacheOutput)).Trim()
+$stage2CacheText = ([System.IO.File]::ReadAllText($stage2CacheOutput)).Trim()
+if ($stage1CacheText -ne "module cache = 0,3,0,0,1") {
+    throw "stage-1 module-cache planner result differed: $stage1CacheText"
+}
+if ($stage2CacheText -ne "module cache = 0,3,0,0,1") {
+    throw "stage-2 module-cache planner result differed: $stage2CacheText"
+}
+Write-Host "[stage2 5/6] PASS execution, native build, fingerprints, and module-cache planner parity."
 
 Write-Host "[stage2 6/6] Compare C# reference and native Sollang compiler runtime behavior."
 & dotnet run --project $runnerProject -c Release --no-build -- `

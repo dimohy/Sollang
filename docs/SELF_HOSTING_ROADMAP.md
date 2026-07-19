@@ -1284,6 +1284,27 @@ D205 reset. Persistent cache decoding, corruption rejection, dependency
 hit/miss integration, and body-only consumer reuse remain D207B2, leaving the
 formal roadmap at **47 complete, 9 partial, 4 missing: 51.5/60 (85.8%)**.
 
+## Validated Cache Planner (D207B2)
+
+The schema-1 cache validator now rejects truncated input, magic/schema/context
+and target mismatches, declared-length mismatches, checksum corruption, and
+malformed record bounds. Reuse requires full canonical interface equality and
+ordered direct-dependency interface equality. Example 433 proves warm hits,
+body-only dependency edits that preserve the consumer, public-signature edits
+that invalidate both modules, and atomic persistent publication on Windows and
+Linux through the reference backend.
+
+The pure cache codec and planner are Stage2-compatible and run in the reusable
+compiler's `interface-cache` mode. Persistent I/O is isolated in
+`module_cache_io.slg` because owned File open/read/write/sync/replace lowering
+is still absent from the self-host LLVM backend. That remaining parity item is
+tracked explicitly and keeps the module/interface-cache gate partial.
+
+Windows passes 570/570 examples and Stage2 6/6 at 9,545,859 LLVM bytes. Linux
+Stage2 passes 5/5 at 9,544,344 bytes. D207B2 is Stage2 checkpoint 4/10 after the
+D205 reset; Stage3 remains deferred. The formal roadmap remains **47 complete,
+9 partial, 4 missing: 51.5/60 (85.8%)**.
+
 ## Immediate Implementation Order
 
 1. Multi-file compilation (implemented by example 52).

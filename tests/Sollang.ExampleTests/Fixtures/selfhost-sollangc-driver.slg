@@ -2,6 +2,7 @@ import sollang.compiler.llvm.text as llvm
 import sollang.compiler.llvm.source_root as llvmRoot
 import sollang.compiler.semantic.context as semanticContext
 import sollang.compiler.semantic.module_interfaces as moduleInterfaces
+import sollang.compiler.semantic.module_cache as moduleCache
 import sys.path as path
 import sys.process as process
 
@@ -132,6 +133,14 @@ emitFingerprints pathStart: UIntSize -> Unit uses Console, File, Process {
     }
 }
 
+runInterfaceCache: -> Unit uses Console, File, Process {
+    UIntSize(2) -> collectPaths => paths!
+    paths! -> semanticContext.prepareFiles => snapshot!
+    snapshot!.package -> moduleCache.encodeAnalyzed(UInt64(1)) => current!
+    snapshot!.package -> moduleCache.reuseAnalyzed(current!, UInt64(1)) => reuse
+    "module cache = $(reuse.status),$(reuse.hits),$(reuse.misses),$(reuse.bodyOnlyConsumerHits),1" -> println
+}
+
 buildWindows pathStart: UIntSize -> Unit uses Console, File, Process {
     process.arguments => arguments
     pathStart -> collectBuildPaths => sourcePaths!
@@ -170,6 +179,9 @@ main {
         "; sollang error: --jobs expects a positive integer" -> println
     } else {
     workers > 0 -> if { "; sollang workers = $workers" -> println }
+    targetLength == UIntSize(15) -> if {
+        runInterfaceCache
+    } else {
     targetLength == UIntSize(11) -> if {
         pathStart -> emitFingerprints
     } else {
@@ -193,6 +205,7 @@ main {
         } else {
             pathStart -> emitWindowsFiles
         }
+    }
     }
     }
     }
