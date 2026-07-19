@@ -67,6 +67,7 @@ value flow with `value -> target` syntax and expression-first bindings with
 - content-validated incremental builds whose exact-input warm path skips parsing,
   semantic analysis, LLVM emission, and linking, with byte-identical artifacts,
   transitive interface invalidation, stable cross-session semantic identities,
+  dependency-safe function-body semantic reuse after partial source changes,
   and atomic cache publication
 
 ## Example

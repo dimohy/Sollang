@@ -7275,3 +7275,60 @@ References:
 - [rustc incremental compilation in detail](https://rustc-dev-guide.rust-lang.org/queries/incremental-compilation-in-detail.html)
 - [Salsa incremental algorithm](https://salsa-rs.github.io/salsa/reference/algorithm.html)
 - [Salsa tracked IR](https://salsa-rs.github.io/salsa/tutorial/ir.html)
+
+## D207C5B - Dependency-Safe Function Semantic Reuse
+
+Status: Windows/Linux full suites and Stage2 verified; D207C 4.5/5 complete
+Date: 2026-07-20
+
+D207C5A could map stable semantic identities after a complete analysis but did
+not avoid any body work. D207C5B splits the reference compiler's function phase
+into declaration construction and body validation. This is the request boundary
+used by Swift's compiler architecture: immutable declarations are established
+first, and later requests compute and cache body-derived information lazily.
+It also matches Salsa's tracked-function rule that the reuse key and every input
+read by the computation must be explicit.
+
+The previous `.semantic` generation is now opened after parsing but before the
+semantic compiler starts. Schema 2 adds:
+
+- one SHA-256 fingerprint over canonically ordered visible struct, enum, trait,
+  and function declarations;
+- an exact SHA-256 digest for every module's ordered paths and source bytes; and
+- canonical per-function binding and captured-binding maps whose type values use
+  stable structural identities rather than session-local `TypeId` values.
+
+After private-signature inference and declaration construction, the compiler
+recomputes the visible declaration fingerprint. If it differs, no function is
+reused. If it matches, an unchanged module may restore a cached function's type
+maps into the fresh `TypeDefinitionTable` and bypass `ValidateUserFunction`.
+Module source equality protects private declarations and bodies inside the same
+module; the visible declaration fingerprint protects every cross-module input.
+Consequently a provider body or private declaration change does not invalidate
+an unchanged consumer, while a public signature change invalidates all affected
+reuse conservatively.
+
+This checkpoint deliberately excludes functions with local functions or
+resolved generic/specialized call sites. Those require stable current-AST node
+reconnection, not merely function and type reconnection. Main-scope bindings are
+also recomputed. The compiler reports `reused N/M functions`, and the verifier
+requires positive reuse for body-only/private changes and exactly zero for a
+public-interface change. This is actual semantic work avoidance, but not yet the
+complete module typed-IR query system.
+
+The ten-state cache matrix passes on Windows and Linux, including semantic
+corruption rejection and atomic recovery. Both full suites pass 573/573.
+Windows Stage2 passes 6/6 with 10,553,582 LLVM bytes and unchanged differential
+hashes; Linux Stage2 passes 5/5 with 10,550,185 bytes and unchanged hashes.
+
+This advances D207C to **4.5/5 (90%)** and the periodic Stage3 cadence to
+**4/10**. The formal roadmap stays **47 complete, 10 partial, 3 missing:
+52.0/60 (86.7%)** until local functions, generic call sites, and main-scope
+semantic state can be rehydrated.
+
+References:
+
+- [rustc incremental compilation and try-mark-green](https://rustc-dev-guide.rust-lang.org/queries/incremental-compilation.html)
+- [rustc stable cross-session query fingerprints](https://rustc-dev-guide.rust-lang.org/queries/incremental-compilation-in-detail.html)
+- [Salsa tracked functions and backdating](https://salsa-rs.github.io/salsa/reference/algorithm.html)
+- [Swift incremental request architecture](https://www.swift.org/blog/swift-5.2-released/)

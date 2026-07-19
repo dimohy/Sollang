@@ -38,10 +38,20 @@ internal sealed partial class SemanticCompiler
         _traits = BindTraits(program.Traits);
     }
 
-    public BoundProgram Compile()
+    public BoundProgram Compile(SemanticReusePlan? reusePlan = null)
     {
         _program = InferPrivateFunctionSignatures(_program);
-        var functions = BindFunctions();
+        var functions = DeclareFunctions();
+        var declarationFingerprint = SemanticStableIdentity.DeclarationFingerprint(
+            _types,
+            _traits.Values,
+            functions.Values);
+        var activeReuse = reusePlan is not null
+            && reusePlan.DeclarationFingerprint.AsSpan().SequenceEqual(declarationFingerprint)
+                ? reusePlan
+                : null;
+        var (reusedSemanticFunctions, totalSemanticFunctions) =
+            ValidateFunctionBodies(functions, activeReuse);
         var mainBindings = BindMain(functions);
         var storagePlacement = StoragePlacementAnalyzer.Analyze(_program, functions);
         var stableFunctionIdentities = SemanticStableIdentity.IndexFunctions(
@@ -65,7 +75,10 @@ internal sealed partial class SemanticCompiler
             storagePlacement.MainFrame,
             storagePlacement.FunctionFrames,
             stableFunctionIdentities,
-            stableCallSiteIdentities);
+            stableCallSiteIdentities,
+            declarationFingerprint,
+            reusedSemanticFunctions,
+            totalSemanticFunctions);
     }
 
     private IReadOnlyDictionary<string, BoundTraitDefinition> BindTraits(
@@ -217,7 +230,7 @@ internal sealed partial class SemanticCompiler
         }
     }
 
-    private IReadOnlyDictionary<string, BoundFunction> BindFunctions()
+    private IReadOnlyDictionary<string, BoundFunction> DeclareFunctions()
     {
         var functions = new Dictionary<string, BoundFunction>(StringComparer.Ordinal);
         _boundFunctions = functions;
@@ -236,7 +249,16 @@ internal sealed partial class SemanticCompiler
         AddGlobalAliases(functions);
         ValidateMemberNameCollisions(functions);
 
+        return functions;
+    }
+
+    private (int Reused, int Total) ValidateFunctionBodies(
+        IReadOnlyDictionary<string, BoundFunction> functions,
+        SemanticReusePlan? reusePlan)
+    {
         var checkedFunctions = new HashSet<string>(StringComparer.Ordinal);
+        var reused = 0;
+        var total = 0;
         foreach (var function in functions.Values.ToArray())
         {
             if (function.Kind is not (BoundFunctionKind.User or BoundFunctionKind.UserBlock)
@@ -248,13 +270,35 @@ internal sealed partial class SemanticCompiler
                 continue;
             }
 
+            total++;
+            var identity = SemanticStableIdentity.Function(_types, function);
+            if (reusePlan is not null
+                && function.LocalFunctions.Count == 0
+                && reusePlan.Functions.TryGetValue(identity, out var reusable)
+                && StringComparer.Ordinal.Equals(reusable.ModuleName, function.ModuleName))
+            {
+                _functionBindings[function] = RestoreBindings(reusable.Bindings);
+                _functionCapturedBindings[function] = RestoreBindings(reusable.CapturedBindings);
+                reused++;
+                continue;
+            }
+
             ValidateUserFunction(
                 function,
                 functions,
                 new Dictionary<string, BoundType>(StringComparer.Ordinal));
         }
 
-        return functions;
+        return (reused, total);
+    }
+
+    private IReadOnlyDictionary<string, BoundType> RestoreBindings(
+        IReadOnlyDictionary<string, string> bindings)
+    {
+        return bindings.ToDictionary(
+            static pair => pair.Key,
+            pair => (BoundType)SemanticStableIdentity.ResolveType(_types, pair.Value),
+            StringComparer.Ordinal);
     }
 
     private void ValidateMemberNameCollisions(IReadOnlyDictionary<string, BoundFunction> functions)

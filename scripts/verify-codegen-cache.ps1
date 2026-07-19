@@ -108,13 +108,15 @@ function Invoke-Build {
     if (-not $semanticMatch.Success) {
         throw "semantic cache status was not reported for ${Target}:`n$text"
     }
-    $semanticCounts = [regex]::Match($text, '\[semantic-cache\].+?; mapped (?<functions>\d+)/(?<functionTotal>\d+) functions, (?<calls>\d+)/(?<callTotal>\d+) call sites;')
+    $semanticCounts = [regex]::Match($text, '\[semantic-cache\].+?; reused (?<reused>\d+)/(?<reuseTotal>\d+) functions; mapped (?<functions>\d+)/(?<functionTotal>\d+) functions, (?<calls>\d+)/(?<callTotal>\d+) call sites;')
     [pscustomobject]@{
         Text = $text.Trim()
         Status = $match.Groups['status'].Value
         FrontendStatus = $frontendMatch.Groups['status'].Value
         ProductStatus = $productMatch.Groups['status'].Value
         SemanticStatus = $semanticMatch.Groups['status'].Value
+        ReusedSemanticFunctions = $(if ($semanticCounts.Success) { [int]$semanticCounts.Groups['reused'].Value } else { -1 })
+        SemanticFunctionTotal = $(if ($semanticCounts.Success) { [int]$semanticCounts.Groups['reuseTotal'].Value } else { -1 })
         MappedFunctions = $(if ($semanticCounts.Success) { [int]$semanticCounts.Groups['functions'].Value } else { -1 })
         FunctionTotal = $(if ($semanticCounts.Success) { [int]$semanticCounts.Groups['functionTotal'].Value } else { -1 })
         MappedCalls = $(if ($semanticCounts.Success) { [int]$semanticCounts.Groups['calls'].Value } else { -1 })
@@ -282,7 +284,7 @@ function Verify-Target {
         [Parameter(Mandatory)] [int]$ChangedInterfaceRevision
     )
 
-    Write-Host "[$Target 1/9] Cold build."
+    Write-Host "[$Target 1/10] Cold build."
     Write-Provider $InitialFactor $InitialInterfaceRevision
     $cold = Invoke-Build $Target
     Assert-Reused $cold 0 "$Target cold build"
@@ -291,7 +293,7 @@ function Verify-Target {
     Assert-SemanticStatus $cold "cold" "$Target cold build"
     Assert-Product $Target ([string](21 * $InitialFactor))
 
-    Write-Host "[$Target 2/9] Exact warm build skips the frontend and linker."
+    Write-Host "[$Target 2/10] Exact warm build skips the frontend and linker."
     $warm = Invoke-Build $Target
     Assert-Reused $warm 5 "$Target warm build"
     Assert-FrontendStatus $warm "exact hit" "$Target warm build"
@@ -301,14 +303,16 @@ function Verify-Target {
         throw "$Target clean and cached LLVM differed"
     }
 
-    Write-Host "[$Target 3/9] Body-only dependency edit preserves consumer units."
-    Corrupt-SemanticCache $Target
+    Write-Host "[$Target 3/10] Body-only dependency edit reuses unchanged semantic bodies."
     Write-Provider $BodyFactor $InitialInterfaceRevision
     $body = Invoke-Build $Target
     Assert-Reused $body 2 "$Target body-only build"
     Assert-FrontendStatus $body "miss: source changed:" "$Target body-only build"
     Assert-ProductStatus $body "rebuilt" "$Target body-only build"
-    Assert-SemanticStatus $body "rejected:" "$Target body-only build"
+    Assert-SemanticStatus $body "loaded" "$Target body-only build"
+    if ($body.ReusedSemanticFunctions -le 0 -or $body.SemanticFunctionTotal -le 0) {
+        throw "$Target body-only build did not reuse unchanged semantic function bodies"
+    }
     Assert-Product $Target ([string](21 * $BodyFactor))
     $bodyWarm = Invoke-Build $Target
     Assert-Reused $bodyWarm 5 "$Target body-only warm build"
@@ -319,28 +323,43 @@ function Verify-Target {
         throw "$Target body-only clean and cached LLVM differed"
     }
 
-    Write-Host "[$Target 4/9] Private declaration edit preserves consumer units."
+    Write-Host "[$Target 4/10] Semantic corruption is rejected during a private declaration edit."
+    Corrupt-SemanticCache $Target
     Write-Provider $BodyFactor $InitialInterfaceRevision 1
     $private = Invoke-Build $Target
     Assert-Reused $private 2 "$Target private-declaration build"
     Assert-FrontendStatus $private "miss: source changed:" "$Target private-declaration build"
     Assert-ProductStatus $private "rebuilt" "$Target private-declaration build"
-    Assert-SemanticStatus $private "loaded" "$Target private-declaration build"
-    if ($private.MappedFunctions -le 0 -or $private.FunctionTotal -le 0) {
-        throw "$Target private-declaration build did not map stable semantic functions"
-    }
+    Assert-SemanticStatus $private "rejected:" "$Target private-declaration build"
     Assert-Product $Target ([string](21 * $BodyFactor))
 
-    Write-Host "[$Target 5/9] Public-interface edit invalidates transitive consumers."
-    Write-Provider $BodyFactor $ChangedInterfaceRevision 1
+    Write-Host "[$Target 5/10] Removing a private declaration reuses unchanged semantic bodies."
+    Write-Provider $BodyFactor $InitialInterfaceRevision
+    $privateRemoval = Invoke-Build $Target
+    Assert-Reused $privateRemoval 2 "$Target private-removal build"
+    Assert-FrontendStatus $privateRemoval "miss: source changed:" "$Target private-removal build"
+    Assert-ProductStatus $privateRemoval "rebuilt" "$Target private-removal build"
+    Assert-SemanticStatus $privateRemoval "loaded" "$Target private-removal build"
+    if ($privateRemoval.ReusedSemanticFunctions -le 0 -or $privateRemoval.SemanticFunctionTotal -le 0) {
+        throw "$Target private-removal build did not reuse semantic function bodies"
+    }
+    if ($privateRemoval.MappedFunctions -le 0 -or $privateRemoval.FunctionTotal -le 0) {
+        throw "$Target private-removal build did not map stable semantic functions"
+    }
+
+    Write-Host "[$Target 6/10] Public-interface edit invalidates transitive consumers."
+    Write-Provider $BodyFactor $ChangedInterfaceRevision
     $interface = Invoke-Build $Target
     Assert-Reused $interface 0 "$Target interface-change build"
     Assert-FrontendStatus $interface "miss: source changed:" "$Target interface-change build"
     Assert-ProductStatus $interface "rebuilt" "$Target interface-change build"
     Assert-SemanticStatus $interface "loaded" "$Target interface-change build"
+    if ($interface.ReusedSemanticFunctions -ne 0) {
+        throw "$Target public-interface build unexpectedly reused semantic function bodies"
+    }
     Assert-Product $Target ([string](21 * $BodyFactor))
 
-    Write-Host "[$Target 6/9] Frontend snapshot corruption falls back to validated codegen units."
+    Write-Host "[$Target 7/10] Frontend snapshot corruption falls back to validated codegen units."
     Corrupt-FrontendCache $Target
     $frontendCorrupt = Invoke-Build $Target
     Assert-Reused $frontendCorrupt 5 "$Target frontend-corruption build"
@@ -348,7 +367,7 @@ function Verify-Target {
     Assert-ProductStatus $frontendCorrupt "rebuilt" "$Target frontend-corruption build"
     Assert-SemanticStatus $frontendCorrupt "loaded" "$Target frontend-corruption build"
 
-    Write-Host "[$Target 7/9] Codegen corruption is rejected and rebuilt."
+    Write-Host "[$Target 8/10] Codegen corruption is rejected and rebuilt."
     Corrupt-Cache $Target
     $corrupt = Invoke-Build $Target
     Assert-Reused $corrupt 0 "$Target corruption build"
@@ -359,7 +378,7 @@ function Verify-Target {
     Assert-ProductStatus $corrupt "rebuilt" "$Target codegen-corruption build"
     Assert-SemanticStatus $corrupt "loaded" "$Target codegen-corruption build"
 
-    Write-Host "[$Target 8/9] Output corruption relinks without rebuilding the frontend."
+    Write-Host "[$Target 9/10] Output corruption relinks without rebuilding the frontend."
     Corrupt-Product $Target
     $productCorrupt = Invoke-Build $Target
     Assert-Reused $productCorrupt 5 "$Target product-corruption build"
@@ -367,7 +386,7 @@ function Verify-Target {
     Assert-ProductStatus $productCorrupt "miss: output changed" "$Target product-corruption build"
     Assert-SemanticStatus $productCorrupt "exact via frontend" "$Target product-corruption build"
 
-    Write-Host "[$Target 9/9] Rebuilt generation is exact-warm and byte-identical."
+    Write-Host "[$Target 10/10] Rebuilt generation is exact-warm and byte-identical."
     $repaired = Invoke-Build $Target
     Assert-Reused $repaired 5 "$Target repaired warm build"
     Assert-FrontendStatus $repaired "exact hit" "$Target repaired warm build"
@@ -376,7 +395,7 @@ function Verify-Target {
     if ($repaired.LlvmHash -ne $corrupt.LlvmHash) {
         throw "$Target rebuilt and cached LLVM differed"
     }
-    Write-Host "[$Target 9/9] PASS LLVM $($repaired.LlvmHash)"
+    Write-Host "[$Target 10/10] PASS LLVM $($repaired.LlvmHash)"
 }
 
 Write-Host "[cache 1/3] Build the Release compiler once."

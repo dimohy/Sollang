@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Security.Cryptography;
 using System.Text;
 using Sollang.Compiler.Syntax;
 
@@ -6,6 +7,70 @@ namespace Sollang.Compiler.Semantics;
 
 internal static class SemanticStableIdentity
 {
+    public static byte[] DeclarationFingerprint(
+        TypeDefinitionTable types,
+        IEnumerable<BoundTraitDefinition> traits,
+        IEnumerable<BoundFunction> functions)
+    {
+        var fields = new List<string>();
+        foreach (var structure in types.Structs.Where(static value => value.IsPublic)
+                     .OrderBy(static value => value.Name, StringComparer.Ordinal))
+        {
+            fields.Add("struct");
+            fields.Add(structure.ModuleName);
+            fields.Add(structure.Name);
+            fields.Add(structure.DeclaringTypeName ?? "");
+            fields.Add(structure.IsPublic ? "public" : "private");
+            foreach (var field in structure.Fields)
+            {
+                fields.Add(field.Name);
+                fields.Add(Type(types, field.Type));
+            }
+        }
+        foreach (var enumeration in types.Enums.Where(static value => value.IsPublic)
+                     .OrderBy(static value => value.Name, StringComparer.Ordinal))
+        {
+            fields.Add("enum");
+            fields.Add(enumeration.ModuleName);
+            fields.Add(enumeration.Name);
+            fields.Add(enumeration.IsPublic ? "public" : "private");
+            foreach (var variant in enumeration.Variants)
+            {
+                fields.Add(variant.Name);
+                fields.Add(variant.PayloadType is { } payload ? Type(types, payload) : "-");
+            }
+        }
+        foreach (var trait in traits.Where(static value => value.IsPublic)
+                     .OrderBy(static value => value.Name, StringComparer.Ordinal))
+        {
+            fields.Add("trait");
+            fields.Add(trait.ModuleName);
+            fields.Add(trait.Name);
+            fields.Add(trait.IsPublic ? "public" : "private");
+            foreach (var associated in trait.AssociatedTypes)
+                fields.Add(associated.Name);
+            foreach (var method in trait.Methods)
+            {
+                fields.Add(method.Name);
+                fields.Add(((int)method.SelfOwnership).ToString(CultureInfo.InvariantCulture));
+                fields.Add(method.ReturnType is { } result ? Type(types, result) : "-");
+                fields.Add(method.ReturnAssociatedTypeName ?? "");
+            }
+        }
+        var seen = new HashSet<BoundFunction>(ReferenceEqualityComparer.Instance);
+        foreach (var function in functions.Where(seen.Add).Where(static value => value.IsPublic)
+                     .OrderBy(static value => value.ModuleName, StringComparer.Ordinal)
+                     .ThenBy(static value => value.Name, StringComparer.Ordinal))
+        {
+            fields.Add(Function(types, function));
+        }
+
+        var builder = new StringBuilder();
+        foreach (var field in fields)
+            Append(builder, field);
+        return SHA256.HashData(Encoding.UTF8.GetBytes(builder.ToString()));
+    }
+
     public static IReadOnlyDictionary<object, string> IndexCallSites(
         IEnumerable<BoundFunction> roots,
         IReadOnlyList<Statement> mainStatements,
@@ -165,6 +230,14 @@ internal static class SemanticStableIdentity
         }
         throw new InvalidOperationException(
             $"type id '{(int)type}' has no stable structural identity");
+    }
+
+    public static TypeId ResolveType(TypeDefinitionTable types, string identity)
+    {
+        var parser = new StableTypeParser(types, identity);
+        var result = parser.Parse();
+        parser.RequireEnd();
+        return result;
     }
 
     private static void AddFunction(
@@ -449,5 +522,100 @@ internal static class SemanticStableIdentity
         builder.Append(value.Length.ToString(CultureInfo.InvariantCulture));
         builder.Append(':');
         builder.Append(value);
+    }
+
+    private sealed class StableTypeParser(TypeDefinitionTable types, string text)
+    {
+        private int _position;
+
+        public TypeId Parse()
+        {
+            if (Take("Option<"))
+                return Close(types.GetOrAddOption(Parse(), "Option"));
+            if (Take("Task<"))
+                return Close(types.GetOrAddTask(Parse()));
+            if (Take("StaticArray<"))
+                return Close(types.GetOrAddStaticArray(Parse()));
+            if (Take("Array<"))
+                return Close(types.GetOrAddDynamicArray(Parse()));
+            if (Take("Box<"))
+            {
+                var element = Parse();
+                Expect('>');
+                if (types.Boxes.FirstOrDefault(box => box.ElementType == element) is { } box)
+                    return box.Id;
+                throw Invalid("unknown box type");
+            }
+            if (Take("Result<"))
+            {
+                var ok = Parse();
+                Expect(',');
+                var error = Parse();
+                Expect('>');
+                return types.GetOrAddResult(ok, error, "Result");
+            }
+            if (Take("Dictionary<"))
+            {
+                var key = Parse();
+                Expect(',');
+                var value = Parse();
+                Expect('>');
+                return types.GetOrAddDictionary(key, value);
+            }
+            if (Take("builtin:"))
+            {
+                var name = Rest();
+                if (Enum.TryParse<TypeId>(name, out var builtin)
+                    && (int)builtin < (int)TypeId.FirstUserDefined)
+                    return builtin;
+                throw Invalid("unknown builtin type");
+            }
+            if (Take("struct:") || Take("enum:"))
+            {
+                var name = Rest();
+                if (types.TryResolve(name, out var nominal))
+                    return nominal;
+                throw Invalid("unknown nominal type");
+            }
+            throw Invalid("unknown stable type identity");
+        }
+
+        public void RequireEnd()
+        {
+            if (_position != text.Length)
+                throw Invalid("trailing stable type data");
+        }
+
+        private TypeId Close(TypeId type)
+        {
+            Expect('>');
+            return type;
+        }
+
+        private bool Take(string value)
+        {
+            if (!text.AsSpan(_position).StartsWith(value, StringComparison.Ordinal))
+                return false;
+            _position += value.Length;
+            return true;
+        }
+
+        private string Rest()
+        {
+            var start = _position;
+            while (_position < text.Length && text[_position] is not ('>' or ','))
+                _position++;
+            return text[start.._position];
+        }
+
+        private void Expect(char value)
+        {
+            if (_position >= text.Length || text[_position] != value)
+                throw Invalid($"expected '{value}'");
+            _position++;
+        }
+
+        private InvalidDataException Invalid(string message) =>
+            new($"{message} at stable type offset {_position}");
     }
 }

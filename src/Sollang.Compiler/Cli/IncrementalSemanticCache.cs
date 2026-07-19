@@ -5,34 +5,53 @@ using Sollang.Compiler.Semantics;
 
 namespace Sollang.Compiler.Cli;
 
+internal sealed record IncrementalSemanticCacheProbe(
+    string Status,
+    SemanticReusePlan? ReusePlan,
+    IReadOnlyList<string> Functions,
+    IReadOnlyList<KeyValuePair<string, string>> Calls);
+
 internal sealed class IncrementalSemanticCache
 {
     private const ulong Magic = 6002245291165495635;
-    private const ulong Schema = 1;
+    private const ulong Schema = 2;
     private const int DigestLength = 32;
-    private const int HeaderWords = 7;
+    private const int HeaderWords = 9;
     private const int MaximumRecords = 1_000_000;
     private const int MaximumIdentityBytes = 1024 * 1024;
     private const long MaximumArtifactBytes = 1024L * 1024 * 1024;
 
     private readonly IncrementalCacheLocation _location;
+    private readonly byte[] _declarationFingerprint;
     private readonly string[] _functions;
     private readonly KeyValuePair<string, string>[] _calls;
+    private readonly KeyValuePair<string, byte[]>[] _modules;
+    private readonly SemanticFunctionReuse[] _reusableFunctions;
 
     private IncrementalSemanticCache(
         IncrementalCacheLocation location,
+        byte[] declarationFingerprint,
         string[] functions,
         KeyValuePair<string, string>[] calls,
+        KeyValuePair<string, byte[]>[] modules,
+        SemanticFunctionReuse[] reusableFunctions,
         string status,
         int mappedFunctions,
-        int mappedCalls)
+        int mappedCalls,
+        int reusedFunctions,
+        int totalReusableFunctions)
     {
         _location = location;
+        _declarationFingerprint = declarationFingerprint;
         _functions = functions;
         _calls = calls;
+        _modules = modules;
+        _reusableFunctions = reusableFunctions;
         Status = status;
         MappedFunctions = mappedFunctions;
         MappedCalls = mappedCalls;
+        ReusedFunctions = reusedFunctions;
+        TotalReusableFunctions = totalReusableFunctions;
     }
 
     public string Status { get; }
@@ -40,11 +59,60 @@ internal sealed class IncrementalSemanticCache
     public int TotalFunctions => _functions.Length;
     public int MappedCalls { get; }
     public int TotalCalls => _calls.Length;
+    public int ReusedFunctions { get; }
+    public int TotalReusableFunctions { get; }
     public string Path => _location.SemanticPath;
 
-    public static IncrementalSemanticCache Open(
+    public static IncrementalSemanticCacheProbe Probe(
         IncrementalCacheLocation location,
-        BoundProgram program)
+        LoadedCompilation compilation)
+    {
+        if (!File.Exists(location.SemanticPath))
+            return EmptyProbe("cold");
+
+        try
+        {
+            var old = Read(location);
+            var currentModules = BuildModuleHashes(compilation).ToDictionary(
+                static pair => pair.Key,
+                static pair => pair.Value,
+                StringComparer.Ordinal);
+            var oldModules = old.Modules.ToDictionary(
+                static pair => pair.Key,
+                static pair => pair.Value,
+                StringComparer.Ordinal);
+            var exactModules = currentModules
+                .Where(pair => oldModules.TryGetValue(pair.Key, out var oldHash)
+                    && CryptographicOperations.FixedTimeEquals(pair.Value, oldHash))
+                .Select(static pair => pair.Key)
+                .ToHashSet(StringComparer.Ordinal);
+            var reusable = old.ReusableFunctions
+                .Where(function => exactModules.Contains(function.ModuleName))
+                .ToDictionary(static function => function.Identity, StringComparer.Ordinal);
+            return new IncrementalSemanticCacheProbe(
+                "loaded",
+                new SemanticReusePlan(old.DeclarationFingerprint, reusable),
+                old.Functions,
+                old.Calls);
+        }
+        catch (SemanticCacheMissException error)
+        {
+            return EmptyProbe("miss: " + error.Message);
+        }
+        catch (Exception error) when (error is IOException
+                                      or InvalidDataException
+                                      or DecoderFallbackException
+                                      or CryptographicException)
+        {
+            return EmptyProbe("rejected: " + error.Message);
+        }
+    }
+
+    public static IncrementalSemanticCache Create(
+        IncrementalCacheLocation location,
+        LoadedCompilation compilation,
+        BoundProgram program,
+        IncrementalSemanticCacheProbe probe)
     {
         var functions = program.StableFunctionIdentities.Values
             .Distinct(StringComparer.Ordinal)
@@ -56,45 +124,31 @@ internal sealed class IncrementalSemanticCache
                 program.StableFunctionIdentities[program.ResolvedGenericCalls[pair.Key]]))
             .OrderBy(static pair => pair.Key, StringComparer.Ordinal)
             .ToArray();
-        EnsureUniqueCalls(calls);
+        EnsureUniquePairs(calls, "semantic call-site identity collision");
+        var modules = BuildModuleHashes(compilation);
+        var reusableFunctions = BuildReusableFunctions(program);
 
-        if (!File.Exists(location.SemanticPath))
-        {
-            return new IncrementalSemanticCache(location, functions, calls, "cold", 0, 0);
-        }
-        try
-        {
-            var old = Read(location);
-            var oldFunctions = old.Functions.ToHashSet(StringComparer.Ordinal);
-            var oldCalls = old.Calls.ToDictionary(
-                static pair => pair.Key,
-                static pair => pair.Value,
-                StringComparer.Ordinal);
-            var mappedFunctions = functions.Count(oldFunctions.Contains);
-            var mappedCalls = calls.Count(pair =>
-                oldCalls.TryGetValue(pair.Key, out var target)
-                && StringComparer.Ordinal.Equals(target, pair.Value));
-            return new IncrementalSemanticCache(
-                location,
-                functions,
-                calls,
-                "loaded",
-                mappedFunctions,
-                mappedCalls);
-        }
-        catch (SemanticCacheMissException error)
-        {
-            return new IncrementalSemanticCache(
-                location, functions, calls, "miss: " + error.Message, 0, 0);
-        }
-        catch (Exception error) when (error is IOException
-                                      or InvalidDataException
-                                      or DecoderFallbackException
-                                      or CryptographicException)
-        {
-            return new IncrementalSemanticCache(
-                location, functions, calls, "rejected: " + error.Message, 0, 0);
-        }
+        var oldFunctions = probe.Functions.ToHashSet(StringComparer.Ordinal);
+        var oldCalls = probe.Calls.ToDictionary(
+            static pair => pair.Key,
+            static pair => pair.Value,
+            StringComparer.Ordinal);
+        var mappedFunctions = functions.Count(oldFunctions.Contains);
+        var mappedCalls = calls.Count(pair =>
+            oldCalls.TryGetValue(pair.Key, out var target)
+            && StringComparer.Ordinal.Equals(target, pair.Value));
+        return new IncrementalSemanticCache(
+            location,
+            program.StableDeclarationFingerprint,
+            functions,
+            calls,
+            modules,
+            reusableFunctions,
+            probe.Status,
+            mappedFunctions,
+            mappedCalls,
+            program.ReusedSemanticFunctions,
+            program.TotalSemanticFunctions);
     }
 
     public void Publish()
@@ -121,14 +175,27 @@ internal sealed class IncrementalSemanticCache
                 WriteUInt64(stream, checksum, _location.ConfigurationHash);
                 WriteUInt64(stream, checksum, checked((ulong)_functions.Length));
                 WriteUInt64(stream, checksum, checked((ulong)_calls.Length));
+                WriteUInt64(stream, checksum, checked((ulong)_modules.Length));
+                WriteUInt64(stream, checksum, checked((ulong)_reusableFunctions.Length));
+                WriteDigest(stream, checksum, _declarationFingerprint);
                 foreach (var function in _functions)
-                {
                     WriteString(stream, checksum, function);
-                }
                 foreach (var call in _calls)
                 {
                     WriteString(stream, checksum, call.Key);
                     WriteString(stream, checksum, call.Value);
+                }
+                foreach (var module in _modules)
+                {
+                    WriteString(stream, checksum, module.Key);
+                    WriteDigest(stream, checksum, module.Value);
+                }
+                foreach (var function in _reusableFunctions)
+                {
+                    WriteString(stream, checksum, function.Identity);
+                    WriteString(stream, checksum, function.ModuleName);
+                    WriteBindings(stream, checksum, function.Bindings);
+                    WriteBindings(stream, checksum, function.CapturedBindings);
                 }
                 stream.Write(checksum.GetHashAndReset());
                 stream.Flush(flushToDisk: true);
@@ -138,20 +205,77 @@ internal sealed class IncrementalSemanticCache
         finally
         {
             if (File.Exists(temporaryPath))
-            {
                 File.Delete(temporaryPath);
-            }
         }
+    }
+
+    private static IncrementalSemanticCacheProbe EmptyProbe(string status) =>
+        new(status, null, [], []);
+
+    private static SemanticFunctionReuse[] BuildReusableFunctions(BoundProgram program)
+    {
+        var callOwners = program.StableCallSiteIdentities.Values.ToArray();
+        var seen = new HashSet<BoundFunction>(ReferenceEqualityComparer.Instance);
+        return program.Functions.Values
+            .Where(seen.Add)
+            .Where(static function => function.Kind is BoundFunctionKind.User or BoundFunctionKind.UserBlock)
+            .Where(static function => function.LocalFunctions.Count == 0)
+            .Where(program.FunctionBindings.ContainsKey)
+            .Select(function => new
+            {
+                Function = function,
+                Identity = program.StableFunctionIdentities[function]
+            })
+            .Where(item => !callOwners.Any(call => call.StartsWith(
+                item.Identity + "/call:", StringComparison.Ordinal)))
+            .Select(item => new SemanticFunctionReuse(
+                item.Identity,
+                item.Function.ModuleName,
+                StableBindings(program.Types, program.FunctionBindings[item.Function]),
+                program.FunctionCapturedBindings.TryGetValue(item.Function, out var captured)
+                    ? StableBindings(program.Types, captured)
+                    : new Dictionary<string, string>(StringComparer.Ordinal)))
+            .OrderBy(static function => function.Identity, StringComparer.Ordinal)
+            .ToArray();
+    }
+
+    private static IReadOnlyDictionary<string, string> StableBindings(
+        TypeDefinitionTable types,
+        IReadOnlyDictionary<string, BoundType> bindings) =>
+        bindings.OrderBy(static pair => pair.Key, StringComparer.Ordinal).ToDictionary(
+            static pair => pair.Key,
+            pair => SemanticStableIdentity.Type(types, pair.Value),
+            StringComparer.Ordinal);
+
+    private static KeyValuePair<string, byte[]>[] BuildModuleHashes(LoadedCompilation compilation)
+    {
+        return compilation.Sources
+            .GroupBy(static source => source.ModuleName, StringComparer.Ordinal)
+            .Select(group => new KeyValuePair<string, byte[]>(group.Key, HashModule(group)))
+            .OrderBy(static pair => pair.Key, StringComparer.Ordinal)
+            .ToArray();
+    }
+
+    private static byte[] HashModule(IEnumerable<CompilationSource> sources)
+    {
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        foreach (var source in sources.OrderBy(static source => source.Path, StringComparer.Ordinal))
+        {
+            AppendHashUInt64(hash, checked((ulong)Encoding.UTF8.GetByteCount(source.Path)));
+            hash.AppendData(Encoding.UTF8.GetBytes(source.Path));
+            AppendHashUInt64(hash, checked((ulong)source.SourceBytes.Length));
+            hash.AppendData(source.SourceBytes);
+        }
+        return hash.GetHashAndReset();
     }
 
     private static DecodedSemanticCache Read(IncrementalCacheLocation location)
     {
         var length = new FileInfo(location.SemanticPath).Length;
-        if (length < HeaderWords * sizeof(ulong) + DigestLength
+        if (length < HeaderWords * sizeof(ulong) + DigestLength * 2
             || length > MaximumArtifactBytes)
-        {
             throw new InvalidDataException("semantic generation length is invalid");
-        }
+
         using var stream = new FileStream(
             location.SemanticPath,
             FileMode.Open,
@@ -161,73 +285,129 @@ internal sealed class IncrementalSemanticCache
             FileOptions.SequentialScan);
         using var checksum = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
         if (ReadUInt64(stream, checksum) != Magic || ReadUInt64(stream, checksum) != Schema)
-        {
             throw new InvalidDataException("semantic generation magic or schema mismatch");
-        }
         if (ReadUInt64(stream, checksum) != location.CompilerHash
             || ReadUInt64(stream, checksum) != location.TargetHash
             || ReadUInt64(stream, checksum) != location.ConfigurationHash)
-        {
             throw new SemanticCacheMissException("compiler, target, or configuration changed");
-        }
+
         var functionCount = CheckedCount(ReadUInt64(stream, checksum));
         var callCount = CheckedCount(ReadUInt64(stream, checksum));
-        var functions = new string[functionCount];
+        var moduleCount = CheckedCount(ReadUInt64(stream, checksum));
+        var reusableCount = CheckedCount(ReadUInt64(stream, checksum));
+        var declarationFingerprint = ReadDigest(stream, checksum);
+        var functions = ReadCanonicalStrings(stream, checksum, functionCount, "function identities");
+        var calls = ReadCanonicalPairs(stream, checksum, callCount, "call-site identities");
+        var modules = new KeyValuePair<string, byte[]>[moduleCount];
         string? previous = null;
-        for (var index = 0; index < functionCount; index++)
+        for (var index = 0; index < moduleCount; index++)
         {
-            var identity = ReadString(stream, checksum);
-            if (previous is not null && StringComparer.Ordinal.Compare(previous, identity) >= 0)
-            {
-                throw new InvalidDataException("semantic function identities are not canonical");
-            }
-            functions[index] = identity;
-            previous = identity;
+            var name = ReadString(stream, checksum);
+            RequireIncreasing(previous, name, "module identities");
+            modules[index] = new KeyValuePair<string, byte[]>(name, ReadDigest(stream, checksum));
+            previous = name;
         }
-        var calls = new KeyValuePair<string, string>[callCount];
+        var reusable = new SemanticFunctionReuse[reusableCount];
         previous = null;
-        for (var index = 0; index < callCount; index++)
+        for (var index = 0; index < reusableCount; index++)
         {
             var identity = ReadString(stream, checksum);
-            var target = ReadString(stream, checksum);
-            if (previous is not null && StringComparer.Ordinal.Compare(previous, identity) >= 0)
-            {
-                throw new InvalidDataException("semantic call-site identities are not canonical");
-            }
-            calls[index] = new KeyValuePair<string, string>(identity, target);
+            RequireIncreasing(previous, identity, "reusable function identities");
+            var module = ReadString(stream, checksum);
+            var bindings = ReadBindings(stream, checksum);
+            var captured = ReadBindings(stream, checksum);
+            reusable[index] = new SemanticFunctionReuse(identity, module, bindings, captured);
             previous = identity;
         }
         if (stream.Position != length - DigestLength)
-        {
             throw new InvalidDataException("semantic generation declared lengths do not reach the checksum");
-        }
         Span<byte> declared = stackalloc byte[DigestLength];
         stream.ReadExactly(declared);
         if (!CryptographicOperations.FixedTimeEquals(checksum.GetHashAndReset(), declared))
-        {
             throw new InvalidDataException("semantic generation checksum mismatch");
-        }
-        return new DecodedSemanticCache(functions, calls);
+        return new DecodedSemanticCache(
+            declarationFingerprint, functions, calls, modules, reusable);
     }
 
-    private static void EnsureUniqueCalls(IReadOnlyList<KeyValuePair<string, string>> calls)
+    private static string[] ReadCanonicalStrings(
+        Stream stream,
+        IncrementalHash checksum,
+        int count,
+        string description)
     {
-        for (var index = 1; index < calls.Count; index++)
+        var result = new string[count];
+        string? previous = null;
+        for (var index = 0; index < count; index++)
         {
-            if (StringComparer.Ordinal.Equals(calls[index - 1].Key, calls[index].Key))
-            {
-                throw new InvalidOperationException(
-                    $"stable semantic call-site identity collision: {calls[index].Key}");
-            }
+            var value = ReadString(stream, checksum);
+            RequireIncreasing(previous, value, description);
+            result[index] = value;
+            previous = value;
         }
+        return result;
+    }
+
+    private static KeyValuePair<string, string>[] ReadCanonicalPairs(
+        Stream stream,
+        IncrementalHash checksum,
+        int count,
+        string description)
+    {
+        var result = new KeyValuePair<string, string>[count];
+        string? previous = null;
+        for (var index = 0; index < count; index++)
+        {
+            var key = ReadString(stream, checksum);
+            RequireIncreasing(previous, key, description);
+            result[index] = new KeyValuePair<string, string>(key, ReadString(stream, checksum));
+            previous = key;
+        }
+        return result;
+    }
+
+    private static IReadOnlyDictionary<string, string> ReadBindings(
+        Stream stream,
+        IncrementalHash checksum)
+    {
+        var pairs = ReadCanonicalPairs(
+            stream, checksum, CheckedCount(ReadUInt64(stream, checksum)), "binding names");
+        return pairs.ToDictionary(static pair => pair.Key, static pair => pair.Value, StringComparer.Ordinal);
+    }
+
+    private static void WriteBindings(
+        Stream stream,
+        IncrementalHash checksum,
+        IReadOnlyDictionary<string, string> bindings)
+    {
+        WriteUInt64(stream, checksum, checked((ulong)bindings.Count));
+        foreach (var binding in bindings.OrderBy(static pair => pair.Key, StringComparer.Ordinal))
+        {
+            WriteString(stream, checksum, binding.Key);
+            WriteString(stream, checksum, binding.Value);
+        }
+    }
+
+    private static void EnsureUniquePairs(
+        IReadOnlyList<KeyValuePair<string, string>> pairs,
+        string message)
+    {
+        for (var index = 1; index < pairs.Count; index++)
+        {
+            if (StringComparer.Ordinal.Equals(pairs[index - 1].Key, pairs[index].Key))
+                throw new InvalidOperationException($"{message}: {pairs[index].Key}");
+        }
+    }
+
+    private static void RequireIncreasing(string? previous, string value, string description)
+    {
+        if (previous is not null && StringComparer.Ordinal.Compare(previous, value) >= 0)
+            throw new InvalidDataException($"semantic {description} are not canonical");
     }
 
     private static int CheckedCount(ulong value)
     {
         if (value > MaximumRecords)
-        {
             throw new InvalidDataException("semantic generation record count is invalid");
-        }
         return (int)value;
     }
 
@@ -235,9 +415,7 @@ internal sealed class IncrementalSemanticCache
     {
         var bytes = Encoding.UTF8.GetBytes(value);
         if (bytes.Length > MaximumIdentityBytes)
-        {
             throw new InvalidDataException("semantic identity is too large");
-        }
         WriteUInt64(stream, checksum, checked((ulong)bytes.Length));
         stream.Write(bytes);
         checksum.AppendData(bytes);
@@ -247,13 +425,27 @@ internal sealed class IncrementalSemanticCache
     {
         var length = ReadUInt64(stream, checksum);
         if (length > MaximumIdentityBytes)
-        {
             throw new InvalidDataException("semantic identity length is invalid");
-        }
         var bytes = new byte[(int)length];
         stream.ReadExactly(bytes);
         checksum.AppendData(bytes);
         return new UTF8Encoding(false, true).GetString(bytes);
+    }
+
+    private static void WriteDigest(Stream stream, IncrementalHash checksum, byte[] digest)
+    {
+        if (digest.Length != DigestLength)
+            throw new InvalidDataException("semantic digest length is invalid");
+        stream.Write(digest);
+        checksum.AppendData(digest);
+    }
+
+    private static byte[] ReadDigest(Stream stream, IncrementalHash checksum)
+    {
+        var digest = new byte[DigestLength];
+        stream.ReadExactly(digest);
+        checksum.AppendData(digest);
+        return digest;
     }
 
     private static void WriteUInt64(Stream stream, IncrementalHash checksum, ulong value)
@@ -272,9 +464,19 @@ internal sealed class IncrementalSemanticCache
         return BinaryPrimitives.ReadUInt64LittleEndian(bytes);
     }
 
+    private static void AppendHashUInt64(IncrementalHash hash, ulong value)
+    {
+        Span<byte> bytes = stackalloc byte[sizeof(ulong)];
+        BinaryPrimitives.WriteUInt64LittleEndian(bytes, value);
+        hash.AppendData(bytes);
+    }
+
     private sealed record DecodedSemanticCache(
+        byte[] DeclarationFingerprint,
         IReadOnlyList<string> Functions,
-        IReadOnlyList<KeyValuePair<string, string>> Calls);
+        IReadOnlyList<KeyValuePair<string, string>> Calls,
+        IReadOnlyList<KeyValuePair<string, byte[]>> Modules,
+        IReadOnlyList<SemanticFunctionReuse> ReusableFunctions);
 
     private sealed class SemanticCacheMissException(string message) : Exception(message);
 }

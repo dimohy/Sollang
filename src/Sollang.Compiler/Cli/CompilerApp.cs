@@ -83,8 +83,14 @@ internal static class CompilerApp
 
         var loaded = LoadProgram(options.SourcePaths, options.Project);
         var pointerBitWidth = options.Target == CompilationTarget.Wasm32Browser ? 32 : 64;
-        var boundProgram = new SemanticCompiler(loaded.Program, pointerBitWidth).Compile();
-        var semanticCache = IncrementalSemanticCache.Open(frontendCache.Location, boundProgram);
+        var semanticProbe = IncrementalSemanticCache.Probe(frontendCache.Location, loaded);
+        var boundProgram = new SemanticCompiler(loaded.Program, pointerBitWidth)
+            .Compile(semanticProbe.ReusePlan);
+        var semanticCache = IncrementalSemanticCache.Create(
+            frontendCache.Location,
+            loaded,
+            boundProgram,
+            semanticProbe);
         var codegenCache = IncrementalCodegenCache.Open(loaded, boundProgram, options);
         var codegenOutput = LlvmIrGenerator.GenerateUnits(boundProgram, options.Target, codegenCache.Reuse);
         WriteAndLink(options, toolchain, codegenOutput);
@@ -102,7 +108,9 @@ internal static class CompilerApp
             + $"{codegenOutput.Units.Count.ToString(CultureInfo.InvariantCulture)} units; "
             + codegenCache.Path);
         Console.WriteLine(
-            $"[semantic-cache] {semanticCache.Status}; mapped "
+            $"[semantic-cache] {semanticCache.Status}; reused "
+            + $"{semanticCache.ReusedFunctions.ToString(CultureInfo.InvariantCulture)}/"
+            + $"{semanticCache.TotalReusableFunctions.ToString(CultureInfo.InvariantCulture)} functions; mapped "
             + $"{semanticCache.MappedFunctions.ToString(CultureInfo.InvariantCulture)}/"
             + $"{semanticCache.TotalFunctions.ToString(CultureInfo.InvariantCulture)} functions, "
             + $"{semanticCache.MappedCalls.ToString(CultureInfo.InvariantCulture)}/"

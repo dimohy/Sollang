@@ -1382,6 +1382,10 @@ Implementation order:
       - [x] Persist, validate, and remap those identities through a canonical
         checksummed semantic generation.
       - [ ] Store module typed-IR bodies and load them before semantic analysis.
+        - [x] Restore cached binding and captured-binding types before validating
+          unchanged functions without local or generic-call state.
+        - [ ] Restore local-function, generic-call-site, and main-scope semantic
+          state so every green module body can bypass validation.
 - [ ] Prove cold, warm, body-only, public-interface, corruption, target-change,
   and clean-vs-cached byte-equivalence cases on Windows and Linux.
   - [x] Prove the complete matrix for ordinary LLVM codegen-unit reuse with
@@ -1559,6 +1563,41 @@ This completes the identity/artifact half of the final slice: D207C is
 typed-IR payload serialization and pre-semantic rehydration remain pending, so
 the formal roadmap remains **47 complete, 10 partial, 3 missing: 52.0/60
 (86.7%)**.
+
+D207C5B turns that identity bridge into the first real partial-source semantic
+reuse path. `SemanticCompiler` now separates declaration construction from
+function-body validation. Before validation it compares a stable SHA-256
+fingerprint of every visible struct, enum, trait, and function declaration with
+the previous generation. The cache independently hashes each module's exact
+ordered source set. Only a function whose module bytes are unchanged and whose
+visible declaration universe is green may restore its binding and captured-
+binding type maps and skip `ValidateUserFunction`.
+
+The `.semantic` schema is now version 2. Besides canonical functions and
+resolved-call mappings it stores the declaration fingerprint, module source
+digests, and per-function semantic binding payloads. Every type in those maps is
+structural and is re-interned into the fresh session's type table. The reader
+retains strict count, length, order, uniqueness, UTF-8, compiler/target/config,
+and whole-file SHA-256 validation. Publication remains write-through and atomic
+after a successful link.
+
+Functions with local functions or resolved generic/specialized call sites still
+run normal validation because their AST-object relationships are not yet
+rehydrated. Main-scope bindings also remain fresh. This makes the reuse count
+honest and keeps the final slice open instead of treating a safe subset as the
+finished architecture.
+
+The focused Windows/Linux matrix now has ten states. A body-only dependency edit
+must reuse at least one unchanged semantic function; corruption must reject the
+semantic generation; a private declaration edit/removal preserves reuse; and a
+public-interface edit must reuse zero semantic functions. Existing codegen,
+frontend, product, execution, and byte-equality checks remain. Both targets pass
+10/10, both full suites pass 573/573, Windows Stage2 passes 6/6 at 10,553,582
+bytes, and Linux Stage2 passes 5/5 at 10,550,185 bytes.
+
+D207C is now **4.5/5 (90%)** and the Stage3 cadence advances to **4/10**. The
+formal roadmap remains **47 complete, 10 partial, 3 missing: 52.0/60 (86.7%)**
+until local/generic/main semantic state is fully reusable.
 
 ## Immediate Implementation Order
 

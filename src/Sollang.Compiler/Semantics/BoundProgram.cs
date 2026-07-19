@@ -14,7 +14,10 @@ internal sealed record BoundProgram(
     StackFramePlan MainStackFrame,
     IReadOnlyDictionary<BoundFunction, StackFramePlan> FunctionStackFrames,
     IReadOnlyDictionary<BoundFunction, string> StableFunctionIdentities,
-    IReadOnlyDictionary<object, string> StableCallSiteIdentities);
+    IReadOnlyDictionary<object, string> StableCallSiteIdentities,
+    byte[] StableDeclarationFingerprint,
+    int ReusedSemanticFunctions,
+    int TotalSemanticFunctions);
 
 internal sealed record BoundFunction(
     string Name,
