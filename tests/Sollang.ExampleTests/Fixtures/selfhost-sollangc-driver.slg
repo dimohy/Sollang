@@ -7,6 +7,7 @@ import sollang.compiler.semantic.module_interfaces as moduleInterfaces
 import sollang.compiler.semantic.module_cache as moduleCache
 import sollang.compiler.semantic.module_cache_io as moduleCacheIo
 import sollang.compiler.semantic.modules as modules
+import sollang.compiler.semantic.type_ids as typeIds
 import sys.path as path
 import sys.process as process
 
@@ -153,11 +154,17 @@ runModuleArtifacts: -> Unit uses Console, File, Process {
     UIntSize(2) -> collectPaths => paths!
     paths! -> semanticContext.prepareFiles => snapshot!
     snapshot! -> typedIr.lowerContext => ir!
+    [typeIds.SemanticType; ~] => types!
+    snapshot!.semantic.types -> each currentType { types! -> push(currentType) }
     [modules.ModuleIdentity; ~] => identities!
     snapshot!.modules -> each identity { identities! -> push(identity) }
-    ir! -> moduleArtifacts.encode(identities!) => words!
+    ir! -> moduleArtifacts.encode(identities!, types!) => words!
     words! -> moduleArtifacts.validate => validation
-    validation.nodeCount > 0 -> if { 1 } else { 0 } => hasNodes
+    words! -> moduleArtifacts.decode(identities!) => decoded!
+    [typedIr.TypedIrNode; ~] => decodedIr!
+    decoded!.ir -> each node { decodedIr! -> push(node) }
+    decodedIr! -> len => decodedNodeCount
+    (validation.nodeCount > 0 and decoded!.status == 0 and decodedNodeCount == validation.nodeCount) -> if { 1 } else { 0 } => hasNodes
     "module artifacts = $(validation.status),$(validation.moduleCount),$hasNodes" -> println
 }
 

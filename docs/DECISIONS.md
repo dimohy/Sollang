@@ -7003,3 +7003,45 @@ This does not yet make the artifact reusable. D207C2B must serialize canonical
 structural types and decode the stable references into a fresh compilation
 session. D207C is **1.5/5 (30%)**, the Stage3 cadence is 7/10, and the formal
 roadmap remains **47 complete, 9 partial, 4 missing: 51.5/60 (85.8%)**.
+
+## D207C2B - Canonical Structural Types and Artifact Rehydration
+
+Status: Windows and Linux Stage2 verified; D207C 2/5 complete
+Date: 2026-07-19
+
+Schema 2 now embeds a canonical structural type table before the module IR.
+Each record contains stable module and child-type hashes, explicit presence
+words for optional references, scalar metadata, and a structural checksum.
+Equivalent records are interned, unequal records with the same identity are
+rejected, and records are emitted in an explicit unsigned hash order. The
+unsigned comparator is expressed in language-level arithmetic so Stage1 and
+Stage2 cannot disagree at the signed `i64` boundary.
+
+Decoding no longer restores process-local indexes. It resolves module hashes
+against the new session, rebuilds child types in dependency-ready order, maps
+stable type hashes to fresh canonical IDs, and then reconstructs IR references
+from module hash plus one-based local ordinal. Dynamic indexed words are bound
+before signed conversion so the self-host LLVM backend does not hoist a value
+outside its defining control-flow region.
+
+Example 435 proves canonical input-order independence, corruption rejection,
+and encode-decode-encode byte equality through the C# compiler. The native
+Stage2 driver validates the same type table and rehydrates all 13 IR nodes in
+both Windows and Linux products. Windows passes 572/572 examples and the full
+six-phase Stage2 differential check (10,406,201 LLVM bytes). Linux passes the
+five-phase Stage2 check (10,402,804 LLVM bytes).
+
+This follows rustc's stable dependency identities and Clang's stable-ID
+remapping principle: persisted identity is separate from the fresh in-memory
+arena index. Strict schema, target, and configuration matching remains a
+precondition for reuse.
+
+Research basis:
+
+- [rustc incremental compilation](https://rustc-dev-guide.rust-lang.org/queries/incremental-compilation.html)
+- [Clang modules](https://clang.llvm.org/docs/Modules.html)
+- [Clang PCH stable ID remapping](https://clang.llvm.org/docs/PCHInternals.html)
+
+D207C is now **2/5 (40%)**, and the periodic Stage3 cadence advances to 8/10.
+The formal roadmap remains **47 complete, 9 partial, 4 missing: 51.5/60
+(85.8%)** until ordinary builds load and merge reusable codegen units.

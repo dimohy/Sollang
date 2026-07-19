@@ -1,0 +1,407 @@
+namespace sollang.compiler.ir.module_artifact_types
+
+import sollang.compiler.semantic.modules as modules
+import sollang.compiler.semantic.type_ids as typeIds
+
+# A canonical type record contains its structural hash followed by thirteen
+# stable fields. Module references carry an explicit presence word because a
+# real module path hash is allowed to be zero.
+public struct EncodedTypeTable {
+    words: [UInt64; ~]
+    hashes: [UInt64; ~]
+    count: Int
+    status: Int
+}
+
+public struct DecodedTypeTable {
+    types: [typeIds.SemanticType; ~]
+    hashes: [UInt64; ~]
+    status: Int
+}
+
+struct CanonicalTypeRecord {
+    kind: UInt64
+    origin: UInt64
+    modulePresent: UInt64
+    moduleHash: UInt64
+    symbol: UInt64
+    firstPresent: UInt64
+    firstHash: UInt64
+    secondPresent: UInt64
+    secondHash: UInt64
+    length: UInt64
+    lengthHash: UInt64
+    containsParameter: UInt64
+    status: UInt64
+}
+
+mix hash: UInt64, value: UInt64 -> UInt64 {
+    (hash + UInt64(11400714819323198485)) * (hash + UInt64(13787848793156543929)) + (value + UInt64(10723151780598845931)) * (value + UInt64(7146057691288625177)) + UInt64(1099511628211)
+}
+
+lessHash left: UInt64, right: UInt64 -> Bool {
+    UInt64(9223372036854775808) => midpoint
+    left / midpoint => leftHigh
+    right / midpoint => rightHigh
+    leftHigh < rightHigh -> if {
+        true
+    } else {
+        leftHigh > rightHigh -> if {
+            false
+        } else {
+            left % midpoint < right % midpoint
+        }
+    }
+}
+
+signedWord value: Int -> UInt64 {
+    value >= 0 -> if {
+        UInt64(value) * UInt64(2)
+    } else {
+        UInt64(-(value + 1)) * UInt64(2) + UInt64(1)
+    }
+}
+
+signedValue word: UInt64 -> Int {
+    word % UInt64(2) == UInt64(0) -> if {
+        Int(word / UInt64(2))
+    } else {
+        -(Int(word / UInt64(2)) + 1)
+    }
+}
+
+moduleHash identities: [modules.ModuleIdentity; ~], sourceModule: Int -> UInt64 {
+    UInt64(0) => result!
+    0 => identityIndex!
+    identityIndex! < (identities -> len) -> while {
+        identities[identityIndex!].sourceIndex == sourceModule -> if {
+            identities[identityIndex!].pathHash => result!
+            identities -> len => identityIndex!
+        } else { identityIndex! + 1 => identityIndex! }
+    }
+    result!
+}
+
+moduleIndex identities: [modules.ModuleIdentity; ~], hash: UInt64 -> Int {
+    -1 => result!
+    0 => identityIndex!
+    (identityIndex! < (identities -> len) and result! < 0) -> while {
+        identities[identityIndex!].pathHash == hash -> if {
+            identities[identityIndex!].sourceIndex => result!
+        }
+        identityIndex! + 1 => identityIndex!
+    }
+    result!
+}
+
+canonicalRecord current: typeIds.SemanticType, hashes: [UInt64; ~], identities: [modules.ModuleIdentity; ~] -> CanonicalTypeRecord {
+    current.kind -> signedWord => kind
+    current.origin -> signedWord => origin
+    UInt64(0) => modulePresent!
+    UInt64(0) => stableModuleHash!
+    current.module >= 0 -> if {
+        UInt64(1) => modulePresent!
+        identities -> moduleHash(current.module) => stableModuleHash!
+    }
+    current.symbol -> signedWord => symbol
+    UInt64(0) => firstPresent!
+    UInt64(0) => stableFirstHash!
+    current.first >= 0 -> if {
+        UInt64(1) => firstPresent!
+        hashes[current.first] => stableFirstHash!
+    }
+    UInt64(0) => secondPresent!
+    UInt64(0) => stableSecondHash!
+    current.second >= 0 -> if {
+        UInt64(1) => secondPresent!
+        hashes[current.second] => stableSecondHash!
+    }
+    current.length -> signedWord => length
+    UInt64(0) => containsParameter!
+    current.containsParameter -> if { UInt64(1) => containsParameter! }
+    current.status -> signedWord => status
+    CanonicalTypeRecord {
+        kind: kind
+        origin: origin
+        modulePresent: modulePresent!
+        moduleHash: stableModuleHash!
+        symbol: symbol
+        firstPresent: firstPresent!
+        firstHash: stableFirstHash!
+        secondPresent: secondPresent!
+        secondHash: stableSecondHash!
+        length: length
+        lengthHash: current.lengthHash
+        containsParameter: containsParameter!
+        status: status
+    }
+}
+
+recordHash record: CanonicalTypeRecord -> UInt64 {
+    UInt64(16320118547808316911) -> mix(record.kind) => hash1
+    hash1 -> mix(record.origin) => hash2
+    hash2 -> mix(record.modulePresent) => hash3
+    hash3 -> mix(record.moduleHash) => hash4
+    hash4 -> mix(record.symbol) => hash5
+    hash5 -> mix(record.firstPresent) => hash6
+    hash6 -> mix(record.firstHash) => hash7
+    hash7 -> mix(record.secondPresent) => hash8
+    hash8 -> mix(record.secondHash) => hash9
+    hash9 -> mix(record.length) => hash10
+    hash10 -> mix(record.lengthHash) => hash11
+    hash11 -> mix(record.containsParameter) => hash12
+    hash12 -> mix(record.status)
+}
+
+recordHashAt words: [UInt64; ~], offset: Int -> UInt64 {
+    words[offset + 1] => kind
+    words[offset + 2] => origin
+    words[offset + 3] => modulePresent
+    words[offset + 4] => moduleHash
+    words[offset + 5] => symbol
+    words[offset + 6] => firstPresent
+    words[offset + 7] => firstHash
+    words[offset + 8] => secondPresent
+    words[offset + 9] => secondHash
+    words[offset + 10] => length
+    words[offset + 11] => lengthHash
+    words[offset + 12] => containsParameter
+    words[offset + 13] => status
+    CanonicalTypeRecord { kind: kind, origin: origin, modulePresent: modulePresent, moduleHash: moduleHash, symbol: symbol, firstPresent: firstPresent, firstHash: firstHash, secondPresent: secondPresent, secondHash: secondHash, length: length, lengthHash: lengthHash, containsParameter: containsParameter, status: status } => record
+    record -> recordHash
+}
+
+sameRecord left: CanonicalTypeRecord, right: CanonicalTypeRecord -> Bool {
+    (left.kind == right.kind and left.origin == right.origin and left.modulePresent == right.modulePresent and left.moduleHash == right.moduleHash and left.symbol == right.symbol and left.firstPresent == right.firstPresent and left.firstHash == right.firstHash and left.secondPresent == right.secondPresent and left.secondHash == right.secondHash and left.length == right.length and left.lengthHash == right.lengthHash and left.containsParameter == right.containsParameter and left.status == right.status)
+}
+
+public encode types: [typeIds.SemanticType; ~], identities: [modules.ModuleIdentity; ~] -> EncodedTypeTable {
+    [UInt64; ~] => hashes!
+    [UInt64; ~] => words!
+    0 => status!
+    0 => typeIndex!
+    typeIndex! < (types -> len) -> while {
+        types[typeIndex!] => current
+        ((current.first >= typeIndex!) or (current.second >= typeIndex!)) -> if { 1 => status! }
+        (current.first < -1 or current.second < -1) -> if { 1 => status! }
+        current -> canonicalRecord(hashes!, identities) => record
+        record -> recordHash => currentHash!
+        hashes! -> push(currentHash!)
+        typeIndex! + 1 => typeIndex!
+    }
+
+    [Bool; ~] => emitted!
+    0 => emittedIndex!
+    emittedIndex! < (types -> len) -> while {
+        emitted! -> push(false)
+        emittedIndex! + 1 => emittedIndex!
+    }
+    UInt64(0) => previousHash!
+    -1 => previousSelected!
+    0 => processedCount!
+    0 => uniqueCount!
+    processedCount! < (types -> len) -> while {
+        -1 => selected!
+        UInt64(18446744073709551615) => selectedHash!
+        0 => candidate!
+        candidate! < (types -> len) -> while {
+            hashes![candidate!] => candidateHash
+            candidateHash -> lessHash(selectedHash!) => candidateLess
+            (not emitted![candidate!] and (selected! < 0 or candidateLess)) -> if {
+                candidate! => selected!
+                hashes![candidate!] => selectedHash!
+            }
+            candidate! + 1 => candidate!
+        }
+        true => emitted![selected!]
+        false => duplicate!
+        (uniqueCount! > 0 and selectedHash! == previousHash!) -> if {
+            types[selected!] -> canonicalRecord(hashes!, identities) => selectedRecord
+            types[previousSelected!] -> canonicalRecord(hashes!, identities) => previousRecord
+            selectedRecord -> sameRecord(previousRecord) -> if {
+                true => duplicate!
+            } else { 2 => status! }
+        }
+        not duplicate! -> if {
+        selectedHash! => previousHash!
+        selected! => previousSelected!
+        types[selected!] => current
+        current -> canonicalRecord(hashes!, identities) => record
+        words! -> push(selectedHash!)
+        words! -> push(record.kind)
+        words! -> push(record.origin)
+        words! -> push(record.modulePresent)
+        words! -> push(record.moduleHash)
+        words! -> push(record.symbol)
+        words! -> push(record.firstPresent)
+        words! -> push(record.firstHash)
+        words! -> push(record.secondPresent)
+        words! -> push(record.secondHash)
+        words! -> push(record.length)
+        words! -> push(record.lengthHash)
+        words! -> push(record.containsParameter)
+        words! -> push(record.status)
+        uniqueCount! + 1 => uniqueCount!
+        }
+        processedCount! + 1 => processedCount!
+    }
+    EncodedTypeTable { words: words!, hashes: hashes!, count: uniqueCount!, status: status! } => result!
+    result!
+}
+
+hashIndex words: [UInt64; ~], start: Int, count: Int, hash: UInt64 -> Int {
+    -1 => result!
+    0 => recordIndex!
+    (recordIndex! < count and result! < 0) -> while {
+        words[start + recordIndex! * 14] == hash -> if { recordIndex! => result! }
+        recordIndex! + 1 => recordIndex!
+    }
+    result!
+}
+
+decodedHashIndex hashes: [UInt64; ~], hash: UInt64 -> Int {
+    -1 => result!
+    0 => index!
+    (index! < (hashes -> len) and result! < 0) -> while {
+        hashes[index!] == hash -> if { index! => result! }
+        index! + 1 => index!
+    }
+    result!
+}
+
+public indexOfHash hashes: [UInt64; ~], hash: UInt64 -> Int {
+    hashes -> decodedHashIndex(hash)
+}
+
+public validate words: [UInt64; ~], start: Int, count: Int -> Int {
+    0 => status!
+    (start < 0 or count < 0 or start + count * 14 > (words -> len)) -> if { 1 => status! }
+    UInt64(0) => previousHash!
+    0 => recordIndex!
+    (status! == 0 and recordIndex! < count) -> while {
+        start + recordIndex! * 14 => offset
+        words[offset] => storedHash
+        previousHash! -> lessHash(storedHash) => orderValid
+        (recordIndex! > 0 and not orderValid) -> if { 2 => status! }
+        (words[offset + 3] > UInt64(1) or words[offset + 6] > UInt64(1) or words[offset + 8] > UInt64(1) or words[offset + 12] > UInt64(1)) -> if { 3 => status! }
+        (words[offset + 3] == UInt64(0) and words[offset + 4] != UInt64(0)) -> if { 3 => status! }
+        (words[offset + 6] == UInt64(0) and words[offset + 7] != UInt64(0)) -> if { 3 => status! }
+        (words[offset + 8] == UInt64(0) and words[offset + 9] != UInt64(0)) -> if { 3 => status! }
+        words[offset + 7] => firstReferenceHash
+        words[offset + 9] => secondReferenceHash
+        (words[offset + 6] == UInt64(1) and (words -> hashIndex(start, count, firstReferenceHash)) < 0) -> if { 4 => status! }
+        (words[offset + 8] == UInt64(1) and (words -> hashIndex(start, count, secondReferenceHash)) < 0) -> if { 4 => status! }
+        words -> recordHashAt(offset) => actualHash
+        (status! == 0 and actualHash != storedHash) -> if { 5 => status! }
+        storedHash => previousHash!
+        recordIndex! + 1 => recordIndex!
+    }
+    status!
+}
+
+
+public decode words: [UInt64; ~], identities: [modules.ModuleIdentity; ~] -> DecodedTypeTable {
+    9 => start
+    0 => count!
+    0 => status!
+    (words -> len) >= 6 -> if {
+        words[5] <= UInt64(9223372036854775807) -> if { Int(words[5]) => count! } else { 1 => status! }
+    } else { 1 => status! }
+    [typeIds.SemanticType; ~] => types!
+    [UInt64; ~] => hashes!
+    status! == 0 -> if { count! < 0 -> if { 1 => status! } }
+    status! == 0 -> if { start > (words -> len) -> if { 1 => status! } }
+    0 => availableWords!
+    status! == 0 -> if { (words -> len) - start => availableWords! }
+    0 => maximumCount!
+    status! == 0 -> if { availableWords! / 14 => maximumCount! }
+    status! == 0 -> if { count! > maximumCount! -> if { 1 => status! } }
+    UInt64(0) => previousHash!
+    0 => validationIndex!
+    (status! == 0 and validationIndex! < count!) -> while {
+        start + validationIndex! * 14 => validationOffset
+        words[validationOffset] => storedHash
+        (validationIndex! > 0 and storedHash <= previousHash!) -> if { 2 => status! }
+        (words[validationOffset + 3] > UInt64(1) or words[validationOffset + 6] > UInt64(1) or words[validationOffset + 8] > UInt64(1) or words[validationOffset + 12] > UInt64(1)) -> if { 3 => status! }
+        (words[validationOffset + 3] == UInt64(0) and words[validationOffset + 4] != UInt64(0)) -> if { 3 => status! }
+        (words[validationOffset + 6] == UInt64(0) and words[validationOffset + 7] != UInt64(0)) -> if { 3 => status! }
+        (words[validationOffset + 8] == UInt64(0) and words[validationOffset + 9] != UInt64(0)) -> if { 3 => status! }
+        words[validationOffset + 7] => firstValidationHash
+        words[validationOffset + 9] => secondValidationHash
+        (words[validationOffset + 6] == UInt64(1) and (words -> hashIndex(start, count!, firstValidationHash)) < 0) -> if { 4 => status! }
+        (words[validationOffset + 8] == UInt64(1) and (words -> hashIndex(start, count!, secondValidationHash)) < 0) -> if { 4 => status! }
+        words -> recordHashAt(validationOffset) => actualHash
+        (status! == 0 and actualHash != storedHash) -> if { 5 => status! }
+        storedHash => previousHash!
+        validationIndex! + 1 => validationIndex!
+    }
+    [Bool; ~] => decoded!
+    0 => seed!
+    seed! < count! -> while {
+        decoded! -> push(false)
+        seed! + 1 => seed!
+    }
+    0 => decodedCount!
+    true => changed!
+    (status! == 0 and decodedCount! < count! and changed!) -> while {
+        false => changed!
+        0 => recordIndex!
+        recordIndex! < count! -> while {
+            not decoded![recordIndex!] -> if {
+                start + recordIndex! * 14 => offset
+                words[offset + 7] => firstReferenceHash
+                words[offset + 9] => secondReferenceHash
+                (words[offset + 6] == UInt64(0) or (hashes! -> decodedHashIndex(firstReferenceHash)) >= 0) => firstReady
+                (words[offset + 8] == UInt64(0) or (hashes! -> decodedHashIndex(secondReferenceHash)) >= 0) => secondReady
+                (firstReady and secondReady) -> if {
+                    -1 => module!
+                    words[offset + 3] == UInt64(1) -> if {
+                        words[offset + 4] => moduleHash
+                        identities -> moduleIndex(moduleHash) => module!
+                        module! < 0 -> if { 6 => status! }
+                    }
+                    -1 => first!
+                    words[offset + 6] == UInt64(1) -> if {
+                        words[offset + 7] => firstHash
+                        hashes! -> decodedHashIndex(firstHash) => first!
+                    }
+                    -1 => second!
+                    words[offset + 8] == UInt64(1) -> if {
+                        words[offset + 9] => secondHash
+                        hashes! -> decodedHashIndex(secondHash) => second!
+                    }
+                    words[offset + 1] => kindWord
+                    words[offset + 2] => originWord
+                    words[offset + 5] => symbolWord
+                    words[offset + 10] => lengthWord
+                    words[offset + 13] => statusWord
+                    kindWord -> signedValue => kind
+                    originWord -> signedValue => origin
+                    symbolWord -> signedValue => symbol
+                    lengthWord -> signedValue => length
+                    statusWord -> signedValue => recordStatus
+                    types! -> push(typeIds.SemanticType {
+                        kind: kind
+                        origin: origin
+                        module: module!
+                        symbol: symbol
+                        first: first!
+                        second: second!
+                        length: length
+                        lengthHash: words[offset + 11]
+                        containsParameter: words[offset + 12] == UInt64(1)
+                        status: recordStatus
+                    })
+                    hashes! -> push(words[offset])
+                    true => decoded![recordIndex!]
+                    decodedCount! + 1 => decodedCount!
+                    true => changed!
+                }
+            }
+            recordIndex! + 1 => recordIndex!
+        }
+    }
+    (status! == 0 and decodedCount! != count!) -> if { 7 => status! }
+    DecodedTypeTable { types: types!, hashes: hashes!, status: status! } => result!
+    result!
+}

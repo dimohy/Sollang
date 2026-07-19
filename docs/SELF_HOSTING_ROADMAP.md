@@ -1332,7 +1332,7 @@ parity, but does not yet make an ordinary build skip frontend or codegen work;
 the module/interface-cache gate therefore remains partial at **47 complete,
 9 partial, 4 missing: 51.5/60 (85.8%)**.
 
-## Incremental Build Integration (D207C, next)
+## Incremental Build Integration (D207C, in progress)
 
 The next slice moves the cache from a verification mode into the ordinary build
 pipeline. The design uses two immutable generations, following rustc's old/new
@@ -1352,11 +1352,11 @@ Implementation order:
 
 - [x] Add stable raw-source identities so unchanged files can be recognized
   before full semantic analysis.
-- [ ] Serialize module-level reusable semantic/typed-IR artifacts without
+- [x] Serialize module-level reusable semantic/typed-IR artifacts without
   session-local indexes.
   - [x] Encode a canonical module envelope ordered by stable path hash, with IR
     references rewritten as module hash plus module-local ordinal.
-  - [ ] Add the canonical structural type table and decode/rehydration path.
+  - [x] Add the canonical structural type table and decode/rehydration path.
 - [ ] Split deterministic LLVM output into cacheable module/codegen units and a
   canonical ordered merge.
 - [ ] Integrate old-generation load and new-generation atomic publication into
@@ -1389,9 +1389,10 @@ payload with length and checksum validation. Example 435 proves validation,
 source-input-order independence, and corruption rejection. Stage1 and Stage2
 also execute the same three-module artifact path and agree on its result.
 
-The second checklist item stays partial until canonical structural types can be
-decoded into a complete lowering context. D207C is therefore **1.5/5 (30%)**,
-this is checkpoint 7/10, and the formal roadmap remains **51.5/60 (85.8%)**.
+The structural-type half is complete: schema 2 carries canonical type records,
+stable structural hashes, explicit optional references, and a decoder that
+rebuilds fresh type and IR arenas. D207C is therefore **2/5 (40%)**, this is
+checkpoint 8/10, and the formal roadmap remains **51.5/60 (85.8%)**.
 
 ## Immediate Implementation Order
 

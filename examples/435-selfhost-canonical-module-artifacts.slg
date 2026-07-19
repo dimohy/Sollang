@@ -2,6 +2,7 @@ import sollang.compiler.ir.module_artifacts as artifacts
 import sollang.compiler.ir.typed as typed
 import sollang.compiler.semantic.context as context
 import sollang.compiler.semantic.modules as modules
+import sollang.compiler.semantic.type_ids as typeIds
 
 sameWords left: [UInt64; ~], right: [UInt64; ~] -> Bool {
     (left -> len) == (right -> len) => same!
@@ -20,8 +21,10 @@ main {
     [zeta, alpha, ~] => firstSources!
     firstSources! -> context.prepare => firstSnapshot!
     firstSnapshot! -> typed.lowerContext => firstIr!
+    [typeIds.SemanticType; ~] => firstTypes!
+    firstSnapshot!.semantic.types -> each currentType { firstTypes! -> push(currentType) }
     firstSources! -> modules.identities => firstModules!
-    firstIr! -> artifacts.encode(firstModules!) => first!
+    firstIr! -> artifacts.encode(firstModules!, firstTypes!) => first!
     first! -> artifacts.validate => validation
     validation.status == 0 and validation.moduleCount == 2 and validation.nodeCount > 0 -> if {
         "canonical artifact valid"
@@ -30,13 +33,25 @@ main {
     [alpha, zeta, ~] => secondSources!
     secondSources! -> context.prepare => secondSnapshot!
     secondSnapshot! -> typed.lowerContext => secondIr!
+    [typeIds.SemanticType; ~] => secondTypes!
+    secondSnapshot!.semantic.types -> each currentType { secondTypes! -> push(currentType) }
     secondSources! -> modules.identities => secondModules!
-    secondIr! -> artifacts.encode(secondModules!) => second!
+    secondIr! -> artifacts.encode(secondModules!, secondTypes!) => second!
     first! -> sameWords(second!) -> if {
         "source order independent"
     } else { "source order leaked" } -> println
 
-    first![7] + UInt64(1) => first![7]
+    first! -> artifacts.decode(firstModules!) => decoded!
+    [typed.TypedIrNode; ~] => decodedIr!
+    decoded!.ir -> each node { decodedIr! -> push(node) }
+    [typeIds.SemanticType; ~] => decodedTypes!
+    decoded!.typeTable.types -> each currentType { decodedTypes! -> push(currentType) }
+    decodedIr! -> artifacts.encode(firstModules!, decodedTypes!) => roundTrip!
+    (decoded!.status == 0 and (decoded!.ir -> len) == (firstIr! -> len) and (first! -> sameWords(roundTrip!))) -> if {
+        "rehydration stable"
+    } else { "rehydration failed" } -> println
+
+    first![9] + UInt64(1) => first![9]
     first! -> artifacts.validate => corrupted
     corrupted.status == 6 -> if {
         "corruption rejected"
