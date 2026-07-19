@@ -8,4 +8,6 @@ internal sealed record SemanticFunctionReuse(
 
 internal sealed record SemanticReusePlan(
     byte[] DeclarationFingerprint,
-    IReadOnlyDictionary<string, SemanticFunctionReuse> Functions);
+    IReadOnlyDictionary<string, SemanticFunctionReuse> Functions,
+    string? MainModuleName,
+    IReadOnlyDictionary<string, string>? MainBindings);

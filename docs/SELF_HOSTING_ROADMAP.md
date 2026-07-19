@@ -1384,8 +1384,10 @@ Implementation order:
       - [ ] Store module typed-IR bodies and load them before semantic analysis.
         - [x] Restore cached binding and captured-binding types before validating
           unchanged functions without local or generic-call state.
-        - [ ] Restore local-function, generic-call-site, and main-scope semantic
-          state so every green module body can bypass validation.
+        - [x] Restore complete local-function trees atomically and reuse a green
+          main scope when neither contains specialization state.
+        - [ ] Restore generic/specialized call-site state so every green module
+          body can bypass validation.
 - [ ] Prove cold, warm, body-only, public-interface, corruption, target-change,
   and clean-vs-cached byte-equivalence cases on Windows and Linux.
   - [x] Prove the complete matrix for ordinary LLVM codegen-unit reuse with
@@ -1598,6 +1600,31 @@ bytes, and Linux Stage2 passes 5/5 at 10,550,185 bytes.
 D207C is now **4.5/5 (90%)** and the Stage3 cadence advances to **4/10**. The
 formal roadmap remains **47 complete, 10 partial, 3 missing: 52.0/60 (86.7%)**
 until local/generic/main semantic state is fully reusable.
+
+D207C5C expands schema 3 to local-function trees and main-scope bindings.
+Local records use their enclosing function's stable identity, and a top-level
+function is reusable only when its complete recursively nested tree is present.
+The compiler first collects the whole tree without mutating the fresh session,
+then restores every binding and captured-binding map together. A missing child
+therefore falls back to normal validation for the entire parent.
+
+The semantic generation may also carry the executable module identity and its
+stable main binding map. Main is reusable only when that exact source module and
+the visible declaration universe are green and the previous main had no
+resolved generic/specialized call-site state. Storage placement still runs over
+the current AST, independently preserving stack and lifetime planning.
+
+The focused project now embeds a local function in its unchanged consumer. A
+body-only provider edit restores that parent/local tree and main; the measured
+Linux build reuses **43/45 semantic functions plus main** and **2/5 LLVM
+units**. Public-interface edits rebuild both functions and main. The two
+ten-state matrices, both 573/573 full suites, Windows Stage2 6/6 at 10,553,582
+bytes, and Linux Stage2 5/5 at 10,550,185 bytes all pass.
+
+D207C is now **4.75/5 (95%)** and the Stage3 cadence advances to **5/10**.
+Generic/specialized call-site reconstruction remains the last D207C boundary,
+so the formal roadmap stays **47 complete, 10 partial, 3 missing: 52.0/60
+(86.7%)**.
 
 ## Immediate Implementation Order
 

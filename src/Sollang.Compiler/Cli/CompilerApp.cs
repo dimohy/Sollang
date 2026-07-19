@@ -110,7 +110,8 @@ internal static class CompilerApp
         Console.WriteLine(
             $"[semantic-cache] {semanticCache.Status}; reused "
             + $"{semanticCache.ReusedFunctions.ToString(CultureInfo.InvariantCulture)}/"
-            + $"{semanticCache.TotalReusableFunctions.ToString(CultureInfo.InvariantCulture)} functions; mapped "
+            + $"{semanticCache.TotalReusableFunctions.ToString(CultureInfo.InvariantCulture)} functions; main "
+            + (semanticCache.ReusedMainSemantics ? "reused; mapped " : "rebuilt; mapped ")
             + $"{semanticCache.MappedFunctions.ToString(CultureInfo.InvariantCulture)}/"
             + $"{semanticCache.TotalFunctions.ToString(CultureInfo.InvariantCulture)} functions, "
             + $"{semanticCache.MappedCalls.ToString(CultureInfo.InvariantCulture)}/"

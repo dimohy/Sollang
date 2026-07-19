@@ -14,9 +14,9 @@ internal sealed record IncrementalSemanticCacheProbe(
 internal sealed class IncrementalSemanticCache
 {
     private const ulong Magic = 6002245291165495635;
-    private const ulong Schema = 2;
+    private const ulong Schema = 3;
     private const int DigestLength = 32;
-    private const int HeaderWords = 9;
+    private const int HeaderWords = 10;
     private const int MaximumRecords = 1_000_000;
     private const int MaximumIdentityBytes = 1024 * 1024;
     private const long MaximumArtifactBytes = 1024L * 1024 * 1024;
@@ -27,6 +27,8 @@ internal sealed class IncrementalSemanticCache
     private readonly KeyValuePair<string, string>[] _calls;
     private readonly KeyValuePair<string, byte[]>[] _modules;
     private readonly SemanticFunctionReuse[] _reusableFunctions;
+    private readonly string? _mainModuleName;
+    private readonly IReadOnlyDictionary<string, string>? _mainBindings;
 
     private IncrementalSemanticCache(
         IncrementalCacheLocation location,
@@ -35,11 +37,14 @@ internal sealed class IncrementalSemanticCache
         KeyValuePair<string, string>[] calls,
         KeyValuePair<string, byte[]>[] modules,
         SemanticFunctionReuse[] reusableFunctions,
+        string? mainModuleName,
+        IReadOnlyDictionary<string, string>? mainBindings,
         string status,
         int mappedFunctions,
         int mappedCalls,
         int reusedFunctions,
-        int totalReusableFunctions)
+        int totalReusableFunctions,
+        bool reusedMainSemantics)
     {
         _location = location;
         _declarationFingerprint = declarationFingerprint;
@@ -47,11 +52,14 @@ internal sealed class IncrementalSemanticCache
         _calls = calls;
         _modules = modules;
         _reusableFunctions = reusableFunctions;
+        _mainModuleName = mainModuleName;
+        _mainBindings = mainBindings;
         Status = status;
         MappedFunctions = mappedFunctions;
         MappedCalls = mappedCalls;
         ReusedFunctions = reusedFunctions;
         TotalReusableFunctions = totalReusableFunctions;
+        ReusedMainSemantics = reusedMainSemantics;
     }
 
     public string Status { get; }
@@ -61,6 +69,7 @@ internal sealed class IncrementalSemanticCache
     public int TotalCalls => _calls.Length;
     public int ReusedFunctions { get; }
     public int TotalReusableFunctions { get; }
+    public bool ReusedMainSemantics { get; }
     public string Path => _location.SemanticPath;
 
     public static IncrementalSemanticCacheProbe Probe(
@@ -89,9 +98,17 @@ internal sealed class IncrementalSemanticCache
             var reusable = old.ReusableFunctions
                 .Where(function => exactModules.Contains(function.ModuleName))
                 .ToDictionary(static function => function.Identity, StringComparer.Ordinal);
+            var mainBindings = old.MainModuleName is not null
+                && exactModules.Contains(old.MainModuleName)
+                    ? old.MainBindings
+                    : null;
             return new IncrementalSemanticCacheProbe(
                 "loaded",
-                new SemanticReusePlan(old.DeclarationFingerprint, reusable),
+                new SemanticReusePlan(
+                    old.DeclarationFingerprint,
+                    reusable,
+                    mainBindings is null ? null : old.MainModuleName,
+                    mainBindings),
                 old.Functions,
                 old.Calls);
         }
@@ -127,6 +144,7 @@ internal sealed class IncrementalSemanticCache
         EnsureUniquePairs(calls, "semantic call-site identity collision");
         var modules = BuildModuleHashes(compilation);
         var reusableFunctions = BuildReusableFunctions(program);
+        var (mainModuleName, mainBindings) = BuildReusableMain(compilation, program);
 
         var oldFunctions = probe.Functions.ToHashSet(StringComparer.Ordinal);
         var oldCalls = probe.Calls.ToDictionary(
@@ -144,11 +162,14 @@ internal sealed class IncrementalSemanticCache
             calls,
             modules,
             reusableFunctions,
+            mainModuleName,
+            mainBindings,
             probe.Status,
             mappedFunctions,
             mappedCalls,
             program.ReusedSemanticFunctions,
-            program.TotalSemanticFunctions);
+            program.TotalSemanticFunctions,
+            program.ReusedMainSemantics);
     }
 
     public void Publish()
@@ -177,7 +198,13 @@ internal sealed class IncrementalSemanticCache
                 WriteUInt64(stream, checksum, checked((ulong)_calls.Length));
                 WriteUInt64(stream, checksum, checked((ulong)_modules.Length));
                 WriteUInt64(stream, checksum, checked((ulong)_reusableFunctions.Length));
+                WriteUInt64(stream, checksum, _mainBindings is null ? 0UL : 1UL);
                 WriteDigest(stream, checksum, _declarationFingerprint);
+                if (_mainBindings is not null)
+                {
+                    WriteString(stream, checksum, _mainModuleName!);
+                    WriteBindings(stream, checksum, _mainBindings);
+                }
                 foreach (var function in _functions)
                     WriteString(stream, checksum, function);
                 foreach (var call in _calls)
@@ -216,10 +243,8 @@ internal sealed class IncrementalSemanticCache
     {
         var callOwners = program.StableCallSiteIdentities.Values.ToArray();
         var seen = new HashSet<BoundFunction>(ReferenceEqualityComparer.Instance);
-        return program.Functions.Values
-            .Where(seen.Add)
+        return EnumerateFunctions(program.Functions.Values, seen)
             .Where(static function => function.Kind is BoundFunctionKind.User or BoundFunctionKind.UserBlock)
-            .Where(static function => function.LocalFunctions.Count == 0)
             .Where(program.FunctionBindings.ContainsKey)
             .Select(function => new
             {
@@ -237,6 +262,34 @@ internal sealed class IncrementalSemanticCache
                     : new Dictionary<string, string>(StringComparer.Ordinal)))
             .OrderBy(static function => function.Identity, StringComparer.Ordinal)
             .ToArray();
+    }
+
+    private static IEnumerable<BoundFunction> EnumerateFunctions(
+        IEnumerable<BoundFunction> functions,
+        ISet<BoundFunction> seen)
+    {
+        foreach (var function in functions)
+        {
+            if (!seen.Add(function))
+                continue;
+            yield return function;
+            foreach (var local in EnumerateFunctions(function.LocalFunctions.Values, seen))
+                yield return local;
+        }
+    }
+
+    private static (string? ModuleName, IReadOnlyDictionary<string, string>? Bindings) BuildReusableMain(
+        LoadedCompilation compilation,
+        BoundProgram program)
+    {
+        if (program.StableCallSiteIdentities.Values.Any(static identity =>
+                identity.StartsWith("main/call:", StringComparison.Ordinal)))
+            return (null, null);
+        var executable = compilation.Sources.SingleOrDefault(static source =>
+            source.Program.Statements.Count > 0);
+        return executable is null
+            ? (null, null)
+            : (executable.ModuleName, StableBindings(program.Types, program.MainBindings));
     }
 
     private static IReadOnlyDictionary<string, string> StableBindings(
@@ -295,7 +348,15 @@ internal sealed class IncrementalSemanticCache
         var callCount = CheckedCount(ReadUInt64(stream, checksum));
         var moduleCount = CheckedCount(ReadUInt64(stream, checksum));
         var reusableCount = CheckedCount(ReadUInt64(stream, checksum));
+        var hasMain = ReadUInt64(stream, checksum) switch
+        {
+            0 => false,
+            1 => true,
+            _ => throw new InvalidDataException("semantic main presence is invalid")
+        };
         var declarationFingerprint = ReadDigest(stream, checksum);
+        var mainModuleName = hasMain ? ReadString(stream, checksum) : null;
+        var mainBindings = hasMain ? ReadBindings(stream, checksum) : null;
         var functions = ReadCanonicalStrings(stream, checksum, functionCount, "function identities");
         var calls = ReadCanonicalPairs(stream, checksum, callCount, "call-site identities");
         var modules = new KeyValuePair<string, byte[]>[moduleCount];
@@ -326,7 +387,13 @@ internal sealed class IncrementalSemanticCache
         if (!CryptographicOperations.FixedTimeEquals(checksum.GetHashAndReset(), declared))
             throw new InvalidDataException("semantic generation checksum mismatch");
         return new DecodedSemanticCache(
-            declarationFingerprint, functions, calls, modules, reusable);
+            declarationFingerprint,
+            functions,
+            calls,
+            modules,
+            reusable,
+            mainModuleName,
+            mainBindings);
     }
 
     private static string[] ReadCanonicalStrings(
@@ -476,7 +543,9 @@ internal sealed class IncrementalSemanticCache
         IReadOnlyList<string> Functions,
         IReadOnlyList<KeyValuePair<string, string>> Calls,
         IReadOnlyList<KeyValuePair<string, byte[]>> Modules,
-        IReadOnlyList<SemanticFunctionReuse> ReusableFunctions);
+        IReadOnlyList<SemanticFunctionReuse> ReusableFunctions,
+        string? MainModuleName,
+        IReadOnlyDictionary<string, string>? MainBindings);
 
     private sealed class SemanticCacheMissException(string message) : Exception(message);
 }

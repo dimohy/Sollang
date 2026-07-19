@@ -52,7 +52,10 @@ internal sealed partial class SemanticCompiler
                 : null;
         var (reusedSemanticFunctions, totalSemanticFunctions) =
             ValidateFunctionBodies(functions, activeReuse);
-        var mainBindings = BindMain(functions);
+        var reusedMainSemantics = activeReuse?.MainBindings is not null;
+        var mainBindings = reusedMainSemantics
+            ? RestoreBindings(activeReuse!.MainBindings!)
+            : BindMain(functions);
         var storagePlacement = StoragePlacementAnalyzer.Analyze(_program, functions);
         var stableFunctionIdentities = SemanticStableIdentity.IndexFunctions(
             _types,
@@ -78,7 +81,8 @@ internal sealed partial class SemanticCompiler
             stableCallSiteIdentities,
             declarationFingerprint,
             reusedSemanticFunctions,
-            totalSemanticFunctions);
+            totalSemanticFunctions,
+            reusedMainSemantics);
     }
 
     private IReadOnlyDictionary<string, BoundTraitDefinition> BindTraits(
@@ -271,14 +275,9 @@ internal sealed partial class SemanticCompiler
             }
 
             total++;
-            var identity = SemanticStableIdentity.Function(_types, function);
             if (reusePlan is not null
-                && function.LocalFunctions.Count == 0
-                && reusePlan.Functions.TryGetValue(identity, out var reusable)
-                && StringComparer.Ordinal.Equals(reusable.ModuleName, function.ModuleName))
+                && TryRestoreFunctionTree(function, reusePlan))
             {
-                _functionBindings[function] = RestoreBindings(reusable.Bindings);
-                _functionCapturedBindings[function] = RestoreBindings(reusable.CapturedBindings);
                 reused++;
                 continue;
             }
@@ -290,6 +289,39 @@ internal sealed partial class SemanticCompiler
         }
 
         return (reused, total);
+    }
+
+    private bool TryRestoreFunctionTree(BoundFunction root, SemanticReusePlan reusePlan)
+    {
+        var tree = new List<(BoundFunction Function, SemanticFunctionReuse Reuse)>();
+        if (!CollectReusableFunctionTree(root, parentIdentity: null, reusePlan, tree))
+            return false;
+        foreach (var (function, reusable) in tree)
+        {
+            _functionBindings[function] = RestoreBindings(reusable.Bindings);
+            _functionCapturedBindings[function] = RestoreBindings(reusable.CapturedBindings);
+        }
+        return true;
+    }
+
+    private bool CollectReusableFunctionTree(
+        BoundFunction function,
+        string? parentIdentity,
+        SemanticReusePlan reusePlan,
+        ICollection<(BoundFunction Function, SemanticFunctionReuse Reuse)> tree)
+    {
+        var identity = SemanticStableIdentity.Function(_types, function, parentIdentity);
+        if (!reusePlan.Functions.TryGetValue(identity, out var reusable)
+            || !StringComparer.Ordinal.Equals(reusable.ModuleName, function.ModuleName))
+            return false;
+        tree.Add((function, reusable));
+        foreach (var local in function.LocalFunctions.Values
+                     .OrderBy(static value => value.Name, StringComparer.Ordinal))
+        {
+            if (!CollectReusableFunctionTree(local, identity, reusePlan, tree))
+                return false;
+        }
+        return true;
     }
 
     private IReadOnlyDictionary<string, BoundType> RestoreBindings(

@@ -45,7 +45,11 @@ namespace cache.consumer
 import cache.provider as provider
 
 public compute value: Int -> Int {
-    value -> provider.scale
+    identity item: Int -> Int {
+        item
+    }
+
+    value -> provider.scale -> identity
 }
 '@ | Set-Content -LiteralPath $consumerSource -Encoding utf8NoBOM
 
@@ -108,7 +112,7 @@ function Invoke-Build {
     if (-not $semanticMatch.Success) {
         throw "semantic cache status was not reported for ${Target}:`n$text"
     }
-    $semanticCounts = [regex]::Match($text, '\[semantic-cache\].+?; reused (?<reused>\d+)/(?<reuseTotal>\d+) functions; mapped (?<functions>\d+)/(?<functionTotal>\d+) functions, (?<calls>\d+)/(?<callTotal>\d+) call sites;')
+    $semanticCounts = [regex]::Match($text, '\[semantic-cache\].+?; reused (?<reused>\d+)/(?<reuseTotal>\d+) functions; main (?<main>reused|rebuilt); mapped (?<functions>\d+)/(?<functionTotal>\d+) functions, (?<calls>\d+)/(?<callTotal>\d+) call sites;')
     [pscustomobject]@{
         Text = $text.Trim()
         Status = $match.Groups['status'].Value
@@ -117,6 +121,7 @@ function Invoke-Build {
         SemanticStatus = $semanticMatch.Groups['status'].Value
         ReusedSemanticFunctions = $(if ($semanticCounts.Success) { [int]$semanticCounts.Groups['reused'].Value } else { -1 })
         SemanticFunctionTotal = $(if ($semanticCounts.Success) { [int]$semanticCounts.Groups['reuseTotal'].Value } else { -1 })
+        ReusedMainSemantics = $semanticCounts.Success -and $semanticCounts.Groups['main'].Value -eq 'reused'
         MappedFunctions = $(if ($semanticCounts.Success) { [int]$semanticCounts.Groups['functions'].Value } else { -1 })
         FunctionTotal = $(if ($semanticCounts.Success) { [int]$semanticCounts.Groups['functionTotal'].Value } else { -1 })
         MappedCalls = $(if ($semanticCounts.Success) { [int]$semanticCounts.Groups['calls'].Value } else { -1 })
@@ -313,6 +318,9 @@ function Verify-Target {
     if ($body.ReusedSemanticFunctions -le 0 -or $body.SemanticFunctionTotal -le 0) {
         throw "$Target body-only build did not reuse unchanged semantic function bodies"
     }
+    if (-not $body.ReusedMainSemantics) {
+        throw "$Target body-only build did not reuse unchanged main semantics"
+    }
     Assert-Product $Target ([string](21 * $BodyFactor))
     $bodyWarm = Invoke-Build $Target
     Assert-Reused $bodyWarm 5 "$Target body-only warm build"
@@ -343,6 +351,9 @@ function Verify-Target {
     if ($privateRemoval.ReusedSemanticFunctions -le 0 -or $privateRemoval.SemanticFunctionTotal -le 0) {
         throw "$Target private-removal build did not reuse semantic function bodies"
     }
+    if (-not $privateRemoval.ReusedMainSemantics) {
+        throw "$Target private-removal build did not reuse main semantics"
+    }
     if ($privateRemoval.MappedFunctions -le 0 -or $privateRemoval.FunctionTotal -le 0) {
         throw "$Target private-removal build did not map stable semantic functions"
     }
@@ -356,6 +367,9 @@ function Verify-Target {
     Assert-SemanticStatus $interface "loaded" "$Target interface-change build"
     if ($interface.ReusedSemanticFunctions -ne 0) {
         throw "$Target public-interface build unexpectedly reused semantic function bodies"
+    }
+    if ($interface.ReusedMainSemantics) {
+        throw "$Target public-interface build unexpectedly reused main semantics"
     }
     Assert-Product $Target ([string](21 * $BodyFactor))
 

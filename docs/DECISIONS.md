@@ -7332,3 +7332,49 @@ References:
 - [rustc stable cross-session query fingerprints](https://rustc-dev-guide.rust-lang.org/queries/incremental-compilation-in-detail.html)
 - [Salsa tracked functions and backdating](https://salsa-rs.github.io/salsa/reference/algorithm.html)
 - [Swift incremental request architecture](https://www.swift.org/blog/swift-5.2-released/)
+
+## D207C5C - Atomic Local Trees and Main-Scope Reuse
+
+Status: Windows/Linux full suites and Stage2 verified; D207C 4.75/5 complete
+Date: 2026-07-20
+
+D207C5B excluded every function containing local declarations and always bound
+main from scratch. Schema 3 removes both coarse exclusions without weakening
+the dependency proof. Stable local-function identity already includes the
+complete enclosing identity, so the artifact now serializes local binding and
+captured-binding maps alongside top-level records. Before skipping a parent,
+the compiler recursively verifies that every local descendant has a matching
+record from the same exact module. It applies no state until the complete tree
+is proven, then restores all maps together and skips the parent's recursive
+`ValidateUserFunction` operation.
+
+The schema also has an explicit optional main record: executable module identity
+plus canonical binding types. Probe exposes it only when the current executable
+module digest matches. The compiler additionally requires the same visible
+declaration fingerprint used for functions. Main records with resolved generic
+or specialized calls are not published yet, so restoring main cannot omit a
+required specialization object or object-keyed call mapping.
+
+This follows rustc's cache-promotion principle: a green parent carries the
+green nested results that were not independently demanded in the current
+session. It also follows Salsa's tracked-output ownership rule by making the
+parent query responsible for its local results instead of allowing unrelated
+partial restoration.
+
+The focused consumer now contains a local identity function. A provider
+body-only edit proves restoration of that parent/local tree and main. The Linux
+measurement reports `reused 43/45 functions; main reused` plus `2/5` LLVM
+units. A public-interface edit reports zero function reuse and a rebuilt main.
+Corruption, private changes, exact hits, native execution, and LLVM byte
+equality remain covered by the ten-state Windows/Linux matrix.
+
+Both full suites pass 573/573. Windows Stage2 passes 6/6 at 10,553,582 bytes;
+Linux Stage2 passes 5/5 at 10,550,185 bytes. D207C reaches **4.75/5 (95%)**,
+the periodic Stage3 cadence is **5/10**, and the formal roadmap remains
+**47 complete, 10 partial, 3 missing: 52.0/60 (86.7%)**. Stable syntax-node and
+specialization reconstruction is the remaining final slice.
+
+References:
+
+- [rustc incremental cache promotion](https://rustc-dev-guide.rust-lang.org/queries/incremental-compilation-in-detail.html)
+- [Salsa tracked functions as reuse units](https://salsa-rs.github.io/salsa/tutorial/parser.html)

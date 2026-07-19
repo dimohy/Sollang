@@ -2209,7 +2209,7 @@ Current backend:
   or changed final artifact relinks from the already validated LLVM units and
   atomically publishes a repaired product generation without rerunning the
   frontend.
-- semantic identity generation: a schema-2 `.semantic` generation stores
+- semantic identity generation: a schema-3 `.semantic` generation stores
   canonical structural identities for bound functions and resolved generic call
   sites, the visible declaration-universe fingerprint, exact per-module source
   digests, and reusable function binding/captured-binding type maps.
@@ -2219,10 +2219,12 @@ Current backend:
   After declarations are rebuilt, a changed-source build may skip body
   validation only when the function's module digest and the complete visible
   declaration fingerprint are unchanged. Persisted structural types are
-  re-interned into the fresh type table. Functions containing local functions or
-  resolved generic call-site state and the main scope are not yet reusable and
-  must be analyzed normally. Publication is write-through and atomic after a
-  successful link.
+  re-interned into the fresh type table. A parent and all recursively nested
+  local functions are restored as one atomic tree. Main bindings may also be
+  restored when the executable module is exact and main has no resolved
+  specialization state. Functions or main scopes containing resolved generic
+  call-site state are not yet reusable and must be analyzed normally.
+  Publication is write-through and atomic after a successful link.
 - common emitter: `LlvmEmitter` owns function calls, bindings,
   interpolation, local-function inlining, `each` lowering, integer decimal
   output, containers, and `readInt` parsing. It is split into partial files by

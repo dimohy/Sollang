@@ -17,7 +17,8 @@ internal sealed record BoundProgram(
     IReadOnlyDictionary<object, string> StableCallSiteIdentities,
     byte[] StableDeclarationFingerprint,
     int ReusedSemanticFunctions,
-    int TotalSemanticFunctions);
+    int TotalSemanticFunctions,
+    bool ReusedMainSemantics);
 
 internal sealed record BoundFunction(
     string Name,
