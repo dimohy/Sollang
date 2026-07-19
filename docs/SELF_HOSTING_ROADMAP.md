@@ -120,10 +120,10 @@ not lines of code.
 | Ownership and storage | 10 | 7 | 2 | 1 | 8.0 |
 | Modules, visibility, and builds | 8 | 6 | 1 | 1 | 6.5 |
 | Compiler-construction primitives | 12 | 11 | 1 | 0 | 11.5 |
-| Standard library and tooling | 8 | 2 | 4 | 2 | 4.0 |
-| **Total** | **60** | **47** | **8** | **5** | **51.0 / 60** |
+| Standard library and tooling | 8 | 2 | 5 | 1 | 4.5 |
+| **Total** | **60** | **47** | **9** | **4** | **51.5 / 60** |
 
-Current count-based progress: **85.0% (51 of 60 equivalent gates)**.
+Current count-based progress: **85.8% (51.5 of 60 equivalent gates)**.
 
 The frontend parallel-compilation subproject is **28/28 checks (100%)**. Its
 source-local product boundary, typed callback-result role slice, nested-call
@@ -134,7 +134,7 @@ reject mutable or structurally non-sendable captures. The submitting parent now
 helps drain its task group before the structured join. Exact cancellation and
 partial-result destruction plus full Windows/Linux suite parity are proven.
 This completed feature-local subproject does not promote a roadmap gate.
-There are **9 equivalent gates remaining**. Because the remaining compiler
+There are **8.5 equivalent gates remaining**. Because the remaining compiler
 primitives are harder than early syntax gates, this is not an elapsed-time
 estimate.
 
@@ -311,10 +311,10 @@ milestone without changing the broader 60-gate language-capability score.
   and user-value payloads plus function contracts, but fully general generic
   container ownership remains tied to the ownership/storage gate.
 
-### Standard library and tooling — 4.0 / 8
+### Standard library and tooling — 4.5 / 8
 
 - Complete (2): basic `sys.io` and three LLVM-backed target link paths.
-- Partial (4): file/random/time APIs are narrow compiler intrinsics; VS Code
+- Partial (5): file/random/time APIs are narrow compiler intrinsics; VS Code
   support is grammar-only; tests are example-driven without an Sollang unit-test
   framework. File I/O now monomorphizes canonical scalar `write<T>` and
   zero-input `read<T>` calls with explicit EOF/error results. Affine `File`
@@ -327,8 +327,10 @@ milestone without changing the broader 60-gate language-capability score.
   roots, automatic discovery, selected products, deterministic local dependency
   resolution, recursive imports, and target output, but not versioned/remote
   resolution, a lock file, workspaces, tests, or a general build DAG.
-- Missing (2): portable path/filesystem library; formatter and language server
-  based on the real parser.
+  The owned portable Path layer has explicit Posix/Windows lexical normalization
+  and confined joins, while directory handles, metadata, and deterministic
+  traversal remain.
+- Missing (1): formatter and language server based on the real parser.
 
 ## Critical Path To Self-Hosting
 
@@ -1162,6 +1164,24 @@ Research basis:
 - [Rust drop check](https://doc.rust-lang.org/nightly/nomicon/dropck.html)
 - [Swift generics implementation model](https://download.swift.org/docs/assets/generics.pdf)
 - [Mojo generic traits and containers](https://mojolang.org/docs/manual/traits/)
+
+## Owned Portable Path Checkpoint (D203)
+
+`sys.path.Path` now owns canonical UInt8 storage and carries explicit Posix or
+Windows lexical rules. Confined normalization handles repeated separators,
+`.`/`..`, drive roots, and UNC roots without consulting the host filesystem;
+joining an absolute child is an error. The reference backend emits only
+reachable standard-library functions that require independent ownership or
+control-flow frames, so imported `move` functions preserve field transfers and
+early returns without polluting unrelated programs. Reserved Path, Style, and
+UInt8-buffer type IDs keep existing user and parametric LLVM identities stable.
+
+Example 423 executes the real standard-library module. Example 424 proves the
+self-host LLVM compiler can emit, assemble, link, and run an imported owned
+Path-shaped module. Windows passes 561/561 and Stage2 passes 6/6 at 8,919,060
+bytes with unchanged differential hashes. This is checkpoint 8/10; directory
+handles, metadata, canonical queries, and deterministic traversal keep the
+filesystem gate partial. The formal roadmap is **51.5/60 (85.8%)**.
 
 ## Immediate Implementation Order
 

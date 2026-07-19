@@ -1,0 +1,206 @@
+namespace sys.path
+
+# Path owns its UTF-8 storage. It is not a Text alias and therefore cannot
+# outlive borrowed source storage accidentally.
+public struct Path {
+    bytes: [UInt8; ~]
+    style: Style
+}
+
+# Path style is explicit so a cross-compiler can manipulate target paths
+# without silently applying the host machine's separator rules.
+public enum Style {
+    Posix
+    Windows
+}
+
+pathError message: Text -> Result<Path, Text> {
+    Result<Path, Text>.Err(message) => result!
+    result!
+}
+
+public fromText value: Text, style: Style -> Path {
+    [UInt8; ~] => bytes!
+    UIntSize(0) => index!
+    index! < (value -> len) -> while {
+        bytes! -> push(value -> byte(index!))
+        index! + UIntSize(1) => index!
+    }
+    Path { bytes: bytes!, style: style } => result!
+    result!
+}
+
+public byteCount path: Path -> UIntSize {
+    UIntSize(path.bytes -> len)
+}
+
+public equalsText path: Path, value: Text -> Bool {
+    UIntSize(path.bytes -> len) => pathLength
+    value -> len => valueLength
+    pathLength == valueLength => matches!
+    UIntSize(0) => index!
+    (matches! and index! < pathLength) -> while {
+        path.bytes[Int(index!)] != (value -> byte(index!)) -> if { false => matches! }
+        index! + UIntSize(1) => index!
+    }
+    matches!
+}
+
+public isAbsolute path: Path -> Bool {
+    path.style -> when {
+        Posix {
+            UIntSize(path.bytes -> len) > UIntSize(0) and path.bytes[0] == UInt8(47)
+        }
+        Windows {
+            UIntSize(path.bytes -> len) => length
+            false => absolute!
+            (length >= UIntSize(2) and (path.bytes[0] == UInt8(47) or path.bytes[0] == UInt8(92)) and (path.bytes[1] == UInt8(47) or path.bytes[1] == UInt8(92))) -> if { true => absolute! }
+            (length >= UIntSize(3) and path.bytes[1] == UInt8(58) and (path.bytes[2] == UInt8(47) or path.bytes[2] == UInt8(92))) -> if { true => absolute! }
+            absolute!
+        }
+    }
+}
+
+# Join rejects an absolute child rather than silently discarding the base.
+public join base: move Path, child: Text -> Result<Path, Text> {
+    base.style => style
+    style -> when {
+        Posix {
+            (child -> len) > UIntSize(0) and (child -> byte(UIntSize(0))) == UInt8(47)
+        }
+        Windows {
+            child -> len => childLength
+            false => absolute!
+            (childLength >= UIntSize(2) and ((child -> byte(UIntSize(0))) == UInt8(47) or (child -> byte(UIntSize(0))) == UInt8(92)) and ((child -> byte(UIntSize(1))) == UInt8(47) or (child -> byte(UIntSize(1))) == UInt8(92))) -> if { true => absolute! }
+            (childLength >= UIntSize(3) and (child -> byte(UIntSize(1))) == UInt8(58) and ((child -> byte(UIntSize(2))) == UInt8(47) or (child -> byte(UIntSize(2))) == UInt8(92))) -> if { true => absolute! }
+            absolute!
+        }
+    } => childAbsolute
+    childAbsolute -> if {
+        pathError("absolute child path") -> return
+    }
+    base.bytes => bytes!
+    UIntSize(bytes! -> len) => baseLength
+    false => endsWithSeparator!
+    baseLength > UIntSize(0) -> if {
+        bytes![Int(baseLength - UIntSize(1))] => lastByte
+        style -> when {
+            Posix => lastByte == UInt8(47)
+            Windows => lastByte == UInt8(47) or lastByte == UInt8(92)
+        } => endsWithSeparator!
+    }
+    (baseLength > UIntSize(0) and (child -> len) > UIntSize(0) and not endsWithSeparator!) -> if {
+        style -> when {
+            Posix => UInt8(47)
+            Windows => UInt8(92)
+        } => separator
+        bytes! -> push(separator)
+    }
+    UIntSize(0) => childIndex!
+    childIndex! < (child -> len) -> while {
+        bytes! -> push(child -> byte(childIndex!))
+        childIndex! + UIntSize(1) => childIndex!
+    }
+    Path { bytes: bytes!, style: style } => joined!
+    Result<Path, Text>.Ok(joined!)
+}
+
+# Lexical normalization never touches the filesystem. Parent components that
+# would cross the starting root are rejected, which is the safe default for
+# package roots and module discovery.
+public normalizeConfined path: move Path -> Result<Path, Text> {
+    path.style => style
+    path.bytes => source!
+    [UInt8; ~] => output!
+    [UIntSize; ~] => componentStarts!
+    style -> when {
+        Posix => false
+        Windows => true
+    } => windows
+    UIntSize(source! -> len) => sourceLength
+    UIntSize(0) => index!
+    false => absolute!
+    false => unc!
+    UIntSize(0) => protectedComponents!
+
+    windows -> if {
+        (sourceLength >= UIntSize(2) and source![1] == UInt8(58)) -> if {
+            output! -> push(source![0])
+            output! -> push(UInt8(58))
+            UIntSize(2) => index!
+            (index! < sourceLength and (source![Int(index!)] == UInt8(47) or source![Int(index!)] == UInt8(92))) -> if {
+                output! -> push(UInt8(92))
+                true => absolute!
+                (index! < sourceLength and (source![Int(index!)] == UInt8(47) or source![Int(index!)] == UInt8(92))) -> while { index! + UIntSize(1) => index! }
+            }
+        } else {
+            (sourceLength >= UIntSize(2) and (source![0] == UInt8(47) or source![0] == UInt8(92)) and (source![1] == UInt8(47) or source![1] == UInt8(92))) -> if {
+                output! -> push(UInt8(92))
+                output! -> push(UInt8(92))
+                true => absolute!
+                true => unc!
+                UIntSize(2) => protectedComponents!
+                UIntSize(2) => index!
+                (index! < sourceLength and (source![Int(index!)] == UInt8(47) or source![Int(index!)] == UInt8(92))) -> while { index! + UIntSize(1) => index! }
+            }
+        }
+    } else {
+        (sourceLength > UIntSize(0) and source![0] == UInt8(47)) -> if {
+            output! -> push(UInt8(47))
+            true => absolute!
+            UIntSize(1) => index!
+            (index! < sourceLength and source![Int(index!)] == UInt8(47)) -> while { index! + UIntSize(1) => index! }
+        }
+    }
+
+    false => escaped!
+    false => wroteComponent!
+    (index! < sourceLength and not escaped!) -> while {
+        index! => componentStart
+        (index! < sourceLength and (windows -> if { source![Int(index!)] != UInt8(47) and source![Int(index!)] != UInt8(92) } else { source![Int(index!)] != UInt8(47) })) -> while {
+            index! + UIntSize(1) => index!
+        }
+        index! => componentEnd
+        componentEnd - componentStart => componentLength
+        (index! < sourceLength and (windows -> if { source![Int(index!)] == UInt8(47) or source![Int(index!)] == UInt8(92) } else { source![Int(index!)] == UInt8(47) })) -> while {
+            index! + UIntSize(1) => index!
+        }
+
+        componentLength == UIntSize(1) and source![Int(componentStart)] == UInt8(46) => currentDirectory
+        componentLength == UIntSize(2) and source![Int(componentStart)] == UInt8(46) and source![Int(componentStart + UIntSize(1))] == UInt8(46) => parentDirectory
+        (componentLength > UIntSize(0) and not currentDirectory and not parentDirectory) -> if {
+            UIntSize(output! -> len) => truncateStart
+            wroteComponent! -> if {
+                windows -> if { output! -> push(UInt8(92)) } else { output! -> push(UInt8(47)) }
+            }
+            componentStarts! -> push(truncateStart)
+            componentStart => componentByteIndex!
+            componentByteIndex! < componentEnd -> while {
+                output! -> push(source![Int(componentByteIndex!)])
+                componentByteIndex! + UIntSize(1) => componentByteIndex!
+            }
+            true => wroteComponent!
+        }
+        parentDirectory -> if {
+            UIntSize(componentStarts! -> len) > protectedComponents! -> if {
+                componentStarts! -> take(Int(UIntSize(componentStarts! -> len) - UIntSize(1))) => truncateTo
+                UIntSize(output! -> len) > truncateTo -> while {
+                    output! -> take(Int(UIntSize(output! -> len) - UIntSize(1))) => removedByte
+                }
+                UIntSize(componentStarts! -> len) > UIntSize(0) => wroteComponent!
+            } else {
+                true => escaped!
+            }
+        }
+    }
+
+    escaped! -> if {
+        pathError("path escapes root") -> return
+    }
+    (unc! and UIntSize(componentStarts! -> len) < UIntSize(2)) -> if {
+        pathError("incomplete UNC path") -> return
+    }
+    UIntSize(output! -> len) == UIntSize(0) -> if { output! -> push(UInt8(46)) }
+    Path { bytes: output!, style: style } => normalized!
+    Result<Path, Text>.Ok(normalized!)
+}

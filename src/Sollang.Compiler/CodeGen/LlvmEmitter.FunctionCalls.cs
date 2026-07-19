@@ -601,7 +601,9 @@ internal sealed partial class LlvmEmitter
         }
 
         var outerLocals = CaptureLocals();
+        var previousFunction = _currentFunction;
         var previousFunctions = _currentFunctions;
+        _currentFunction = function;
         _currentFunctions = CreateFunctionScope(_currentFunctions, function.LocalFunctions);
         _inlineFunctionStack.Add(function);
         try
@@ -689,6 +691,7 @@ internal sealed partial class LlvmEmitter
         finally
         {
             _inlineFunctionStack.RemoveAt(_inlineFunctionStack.Count - 1);
+            _currentFunction = previousFunction;
             _currentFunctions = previousFunctions;
             RestoreLocals(outerLocals);
         }
@@ -895,7 +898,8 @@ internal sealed partial class LlvmEmitter
             throw new SollangException($"function '{function.Name}' does not produce a runtime value");
         }
 
-        if (function.IsStandardLibrary || function.Kind == BoundFunctionKind.UserBlock)
+        if (function.Kind == BoundFunctionKind.UserBlock
+            || (function.IsStandardLibrary && !_standaloneStandardLibraryFunctions.Contains(function)))
         {
             return EmitInlineFunctionCall(function, argument, additionalArguments);
         }
@@ -1555,6 +1559,267 @@ internal sealed partial class LlvmEmitter
 
         kind = default;
         return false;
+    }
+
+    private void CollectStandaloneStandardLibraryFunctions()
+    {
+        var visited = new HashSet<BoundFunction>(ReferenceEqualityComparer.Instance);
+        ScanStatementsForStandaloneStandardLibraryFunctions(
+            _program.MainStatements,
+            _program.Functions,
+            caller: null,
+            visited);
+
+        foreach (var function in _program.Functions.Values
+                     .Where(function => !function.IsStandardLibrary))
+        {
+            ScanFunctionForStandaloneStandardLibraryFunctions(function, visited);
+        }
+    }
+
+    private void ScanFunctionForStandaloneStandardLibraryFunctions(
+        BoundFunction function,
+        HashSet<BoundFunction> visited)
+    {
+        if (!visited.Add(function))
+        {
+            return;
+        }
+
+        var scope = FunctionScope(function);
+        ScanStatementsForStandaloneStandardLibraryFunctions(function.BlockBody, scope, function, visited);
+        if (function.Body is not null)
+        {
+            ScanExpressionForStandaloneStandardLibraryFunctions(function.Body, scope, function, visited);
+        }
+    }
+
+    private void ScanStatementsForStandaloneStandardLibraryFunctions(
+        IEnumerable<Statement> statements,
+        IReadOnlyDictionary<string, BoundFunction> scope,
+        BoundFunction? caller,
+        HashSet<BoundFunction> visited)
+    {
+        foreach (var statement in statements)
+        {
+            switch (statement)
+            {
+                case BindingStatement binding:
+                    ScanExpressionForStandaloneStandardLibraryFunctions(binding.Value, scope, caller, visited);
+                    break;
+                case IndexAssignmentStatement assignment:
+                    ScanExpressionForStandaloneStandardLibraryFunctions(assignment.Index, scope, caller, visited);
+                    ScanExpressionForStandaloneStandardLibraryFunctions(assignment.Value, scope, caller, visited);
+                    break;
+                case FieldAssignmentStatement assignment:
+                    ScanExpressionForStandaloneStandardLibraryFunctions(assignment.Value, scope, caller, visited);
+                    break;
+                case BlockFunctionCallStatement block:
+                    ScanExpressionForStandaloneStandardLibraryFunctions(block.Source, scope, caller, visited);
+                    ScanStatementsForStandaloneStandardLibraryFunctions(block.Body, scope, caller, visited);
+                    break;
+                case ExpressionStatement expression:
+                    ScanExpressionForStandaloneStandardLibraryFunctions(expression.Expression, scope, caller, visited);
+                    break;
+                case GuardLoopControlStatement guard:
+                    ScanExpressionForStandaloneStandardLibraryFunctions(guard.Condition, scope, caller, visited);
+                    break;
+                case ReturnStatement { Value: { } value }:
+                    ScanExpressionForStandaloneStandardLibraryFunctions(value, scope, caller, visited);
+                    break;
+            }
+        }
+    }
+
+    private void ScanBlockForStandaloneStandardLibraryFunctions(
+        BlockBody? block,
+        IReadOnlyDictionary<string, BoundFunction> scope,
+        BoundFunction? caller,
+        HashSet<BoundFunction> visited)
+    {
+        if (block is null)
+        {
+            return;
+        }
+
+        ScanStatementsForStandaloneStandardLibraryFunctions(block.Statements, scope, caller, visited);
+        if (block.Value is not null)
+        {
+            ScanExpressionForStandaloneStandardLibraryFunctions(block.Value, scope, caller, visited);
+        }
+    }
+
+    private void ScanExpressionForStandaloneStandardLibraryFunctions(
+        Expression expression,
+        IReadOnlyDictionary<string, BoundFunction> scope,
+        BoundFunction? caller,
+        HashSet<BoundFunction> visited)
+    {
+        void RecordTarget(object callSite, IReadOnlyList<string> path)
+        {
+            BoundFunction? target = null;
+            if (_program.ResolvedGenericCalls.TryGetValue(callSite, out var generic))
+            {
+                target = generic;
+            }
+            else if (TryResolveFunctionForScan(path, scope, caller, out var resolved))
+            {
+                target = resolved;
+            }
+
+            if (target is not { IsStandardLibrary: true })
+            {
+                return;
+            }
+
+            if (RequiresStandaloneStandardLibraryEmission(target))
+            {
+                _standaloneStandardLibraryFunctions.Add(target);
+            }
+            ScanFunctionForStandaloneStandardLibraryFunctions(target, visited);
+        }
+
+        switch (expression)
+        {
+            case CallExpression call:
+                RecordTarget(call, call.Path);
+                foreach (var argument in call.Arguments)
+                {
+                    ScanExpressionForStandaloneStandardLibraryFunctions(argument, scope, caller, visited);
+                }
+                return;
+            case FlowExpression flow:
+                ScanExpressionForStandaloneStandardLibraryFunctions(flow.Source, scope, caller, visited);
+                foreach (var target in flow.Targets)
+                {
+                    RecordTarget(target, target.Path);
+                    foreach (var argument in target.Arguments)
+                    {
+                        ScanExpressionForStandaloneStandardLibraryFunctions(argument, scope, caller, visited);
+                    }
+                }
+                return;
+            case FieldAccessExpression field:
+                if (TryBuildQualifiedPath(field, out var fieldPath))
+                {
+                    RecordTarget(field, fieldPath);
+                }
+                ScanExpressionForStandaloneStandardLibraryFunctions(field.Source, scope, caller, visited);
+                return;
+            case IfExpression conditional:
+                ScanExpressionForStandaloneStandardLibraryFunctions(conditional.Condition, scope, caller, visited);
+                ScanBlockForStandaloneStandardLibraryFunctions(conditional.Then, scope, caller, visited);
+                ScanBlockForStandaloneStandardLibraryFunctions(conditional.Else, scope, caller, visited);
+                return;
+            case WhenExpression whenExpression:
+                if (whenExpression.Subject is not null)
+                {
+                    ScanExpressionForStandaloneStandardLibraryFunctions(whenExpression.Subject, scope, caller, visited);
+                }
+                foreach (var arm in whenExpression.Arms)
+                {
+                    ScanExpressionForStandaloneStandardLibraryFunctions(arm.Condition, scope, caller, visited);
+                    ScanBlockForStandaloneStandardLibraryFunctions(arm.Body, scope, caller, visited);
+                }
+                ScanBlockForStandaloneStandardLibraryFunctions(whenExpression.Else, scope, caller, visited);
+                return;
+            case EnumMatchExpression match:
+                ScanExpressionForStandaloneStandardLibraryFunctions(match.Subject, scope, caller, visited);
+                foreach (var arm in match.Arms)
+                {
+                    ScanExpressionForStandaloneStandardLibraryFunctions(arm.Condition, scope, caller, visited);
+                    ScanBlockForStandaloneStandardLibraryFunctions(arm.Body, scope, caller, visited);
+                }
+                ScanBlockForStandaloneStandardLibraryFunctions(match.Else, scope, caller, visited);
+                return;
+            case FoldExpression fold:
+                ScanExpressionForStandaloneStandardLibraryFunctions(fold.Source, scope, caller, visited);
+                ScanExpressionForStandaloneStandardLibraryFunctions(fold.Initial, scope, caller, visited);
+                ScanBlockForStandaloneStandardLibraryFunctions(fold.Body, scope, caller, visited);
+                return;
+            case CompileTimeEachExpression each:
+                ScanExpressionForStandaloneStandardLibraryFunctions(each.Source, scope, caller, visited);
+                ScanExpressionForStandaloneStandardLibraryFunctions(each.Selector, scope, caller, visited);
+                if (each.DictionaryValueSelector is not null)
+                {
+                    ScanExpressionForStandaloneStandardLibraryFunctions(each.DictionaryValueSelector, scope, caller, visited);
+                }
+                return;
+        }
+
+        foreach (var child in ExpressionChildren(expression))
+        {
+            ScanExpressionForStandaloneStandardLibraryFunctions(child, scope, caller, visited);
+        }
+    }
+
+    private static bool TryResolveFunctionForScan(
+        IReadOnlyList<string> path,
+        IReadOnlyDictionary<string, BoundFunction> scope,
+        BoundFunction? caller,
+        out BoundFunction function)
+    {
+        var name = string.Join('.', path);
+        if (scope.TryGetValue(name, out function!))
+        {
+            return true;
+        }
+
+        return !name.Contains('.', StringComparison.Ordinal)
+            && caller is { ModuleName.Length: > 0 }
+            && scope.TryGetValue(caller.ModuleName + "." + name, out function!);
+    }
+
+    private static bool TryBuildQualifiedPath(FieldAccessExpression field, out IReadOnlyList<string> path)
+    {
+        var segments = new Stack<string>();
+        Expression current = field;
+        while (current is FieldAccessExpression access)
+        {
+            segments.Push(access.FieldName);
+            current = access.Source;
+        }
+        if (current is not NameExpression root)
+        {
+            path = [];
+            return false;
+        }
+
+        segments.Push(root.Name);
+        path = segments.ToArray();
+        return true;
+    }
+
+    private static IEnumerable<Expression> ExpressionChildren(Expression expression) => expression switch
+    {
+        StringExpression text => text.Segments.OfType<InterpolationSegment>().Select(segment => segment.Expression),
+        AddExpression binary => [binary.Left, binary.Right],
+        SubtractExpression binary => [binary.Left, binary.Right],
+        MultiplyExpression binary => [binary.Left, binary.Right],
+        DivideExpression binary => [binary.Left, binary.Right],
+        ModuloExpression binary => [binary.Left, binary.Right],
+        CompareExpression binary => [binary.Left, binary.Right],
+        AndExpression binary => [binary.Left, binary.Right],
+        OrExpression binary => [binary.Left, binary.Right],
+        NegateExpression unary => [unary.Value],
+        NotExpression unary => [unary.Value],
+        RangeExpression range => [range.Start, range.End],
+        ArrayLiteralExpression array => array.Elements,
+        ArrayRepeatExpression repeat => [repeat.Value],
+        DictionaryLiteralExpression dictionary => dictionary.Entries.SelectMany(entry => new[] { entry.Key, entry.Value }),
+        IndexExpression index => [index.Source, index.Index],
+        StructLiteralExpression structure => structure.Fields.Select(field => field.Value),
+        TryExpression attempt => [attempt.Value],
+        BoxExpression box => [box.Value],
+        MapExpression map => new[] { map.Path, map.Offset, map.Length, map.FileSize }.OfType<Expression>(),
+        SubjectCompareExpression subject => [subject.Right],
+        SubjectRangeExpression subject => [subject.Start, subject.End],
+        _ => []
+    };
+
+    private static bool RequiresStandaloneStandardLibraryEmission(BoundFunction function)
+    {
+        return FunctionControlFlowFacts.RequiresStandaloneStandardLibraryEmission(function);
     }
 
 }

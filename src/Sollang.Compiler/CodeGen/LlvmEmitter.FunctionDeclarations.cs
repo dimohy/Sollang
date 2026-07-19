@@ -27,7 +27,7 @@ internal sealed partial class LlvmEmitter
         foreach (var function in EnumerateEmittableFunctions(_program.Functions.Values))
         {
             if (function.Kind != BoundFunctionKind.User
-                || function.IsStandardLibrary
+                || (function.IsStandardLibrary && !_standaloneStandardLibraryFunctions.Contains(function))
                 || (function.GenericParameterName is not null
                     && function.SpecializedType is null
                     && function.SpecializedValue is null)

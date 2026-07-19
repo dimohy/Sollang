@@ -6618,3 +6618,49 @@ Research basis:
 
 - [Rust cross-platform path and component model](https://doc.rust-lang.org/std/path/index.html)
 - [Swift System FilePath](https://developer.apple.com/documentation/system/filepath)
+
+## D203 - Owned Target-Explicit Portable Paths
+
+Status: implemented and Stage2 verified
+Date: 2026-07-19
+
+`sys.path.Path` owns a canonical growable UInt8 buffer and carries an explicit
+`Style.Posix` or `Style.Windows`. The style is data, not ambient host state, so
+a Windows-hosted compiler can normalize a Posix target path and vice versa.
+`normalizeConfined` is lexical: it collapses repeated separators and `.`
+components, resolves `..`, preserves Posix, drive, and UNC roots, and rejects
+parent traversal beyond the starting root. `join` rejects absolute children
+instead of silently replacing the base. No operation performs filesystem I/O or
+claims to resolve symlinks.
+
+The reference LLVM backend exposed a latent module-boundary ownership defect.
+Standard-library user functions had always been inlined, so an imported `move`
+function containing a field move or early return inherited the caller's
+function context. That could drop both the moved input field and the returned
+Path payload. Standard-library functions that contain an early return or a
+stack-promotable container are now emitted as ordinary LLVM functions, but only
+when reachable from the program's call graph. Pure scalar wrappers remain
+inline. Storage-placement analysis uses the same classification, preventing
+unused library functions from reserving caller frame slots.
+
+`Path`, `Style`, and `[UInt8; ~]` receive reserved standard-library type IDs.
+Adding the discovered module therefore does not renumber unrelated user types,
+alter legacy LLVM witnesses, or make unused heap containers appear on wasm.
+Example 423 executes Posix, drive, UNC, escape rejection, relative join, and
+absolute-child rejection through the reference compiler. Example 424 has the
+self-host compiler emit, assemble, link, and execute a two-module program that
+creates, transfers, returns, and consumes an owned Path-shaped value.
+
+The Release build has zero warnings and errors and the complete Windows suite
+passes 561/561. Native self-host regeneration passes Stage2 6/6 at 8,919,060
+LLVM bytes with all three differential hashes preserved. This is checkpoint
+8/10 after the periodic Stage3 baseline, so Stage3 is intentionally not
+regenerated. The portable path/filesystem gate advances from missing to partial:
+directory handles, metadata, canonical filesystem queries, and deterministic
+directory traversal remain. The formal roadmap becomes 47 complete, 9 partial,
+and 4 missing: **51.5/60 (85.8%)**.
+
+Research basis:
+
+- [Rust Path and PathBuf](https://doc.rust-lang.org/std/path/index.html)
+- [Swift System FilePath](https://developer.apple.com/documentation/system/filepath)

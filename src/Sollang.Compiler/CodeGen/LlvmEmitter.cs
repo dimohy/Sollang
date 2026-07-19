@@ -36,6 +36,8 @@ internal sealed partial class LlvmEmitter
     private readonly Dictionary<string, string> _readonlyCaptureBorrowPointers = new(StringComparer.Ordinal);
     private readonly Dictionary<BoundFunction, IReadOnlyDictionary<string, BoundFunction>> _functionScopes =
         new(ReferenceEqualityComparer.Instance);
+    private readonly HashSet<BoundFunction> _standaloneStandardLibraryFunctions =
+        new(ReferenceEqualityComparer.Instance);
     private readonly List<BoundFunction> _inlineFunctionStack = [];
     private StackFramePlan _currentStackFramePlan = StackFramePlan.Empty;
     private RuntimeBlockInvocation? _currentBlockInvocation;
@@ -58,6 +60,7 @@ internal sealed partial class LlvmEmitter
         _platform = platform;
         _currentFunctions = program.Functions;
         RecordFunctionScopes(program.Functions.Values, program.Functions);
+        CollectStandaloneStandardLibraryFunctions();
         _usesProcessArguments = program.MainStatements.Any(UsesProcessArguments);
         _usesProcessEnvironment = program.MainStatements.Any(UsesProcessEnvironment)
             || program.Functions.Values.Where(function => !function.IsStandardLibrary).Any(function =>

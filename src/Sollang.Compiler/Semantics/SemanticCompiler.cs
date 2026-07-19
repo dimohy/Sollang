@@ -6585,7 +6585,8 @@ internal sealed partial class SemanticCompiler
             ["Bool"] = BoundType.Bool,
             ["[Int]"] = BoundType.IntSlice,
             ["[Int; ~]"] = BoundType.DynamicIntArray,
-            ["{Int: Int}"] = BoundType.IntDictionary
+            ["{Int: Int}"] = BoundType.IntDictionary,
+            ["[UInt8; ~]"] = TypeId.DynamicUInt8Array
         };
         var structTypes = new Dictionary<StructDeclaration, TypeId>(ReferenceEqualityComparer.Instance);
         var enumTypes = new Dictionary<EnumDeclaration, TypeId>(ReferenceEqualityComparer.Instance);
@@ -6605,14 +6606,16 @@ internal sealed partial class SemanticCompiler
                 StringComparison.Ordinal)
                 ? TypeId.Duration
                 : string.Equals(declaration.Name, "sys.file.File", StringComparison.Ordinal)
-                ? TypeId.File
-                : string.Equals(declaration.Name, "sys.file.FileWriter", StringComparison.Ordinal)
-                    ? TypeId.FileWriter
-                    : string.Equals(declaration.Name, "sys.file.SourceText", StringComparison.Ordinal)
-                        ? TypeId.SourceText
-                        : string.Equals(declaration.Name, "sys.process.RunToFileRequest", StringComparison.Ordinal)
-                            ? TypeId.RunToFileRequest
-                : (TypeId)nextTypeId++;
+                    ? TypeId.File
+                    : string.Equals(declaration.Name, "sys.file.FileWriter", StringComparison.Ordinal)
+                        ? TypeId.FileWriter
+                        : string.Equals(declaration.Name, "sys.file.SourceText", StringComparison.Ordinal)
+                            ? TypeId.SourceText
+                            : string.Equals(declaration.Name, "sys.process.RunToFileRequest", StringComparison.Ordinal)
+                                ? TypeId.RunToFileRequest
+                                : string.Equals(declaration.Name, "sys.path.Path", StringComparison.Ordinal)
+                                    ? TypeId.Path
+                                    : (TypeId)nextTypeId++;
             if (!names.TryAdd(declaration.Name, id))
             {
                 throw Error(declaration.Line, declaration.Column, $"type '{declaration.Name}' already exists");
@@ -6629,7 +6632,9 @@ internal sealed partial class SemanticCompiler
                 throw Error(declaration.Line, declaration.Column, $"type name '{declaration.Name}' is reserved");
             }
 
-            var id = (TypeId)nextTypeId++;
+            var id = string.Equals(declaration.Name, "sys.path.Style", StringComparison.Ordinal)
+                ? TypeId.PathStyle
+                : (TypeId)nextTypeId++;
             if (!names.TryAdd(declaration.Name, id))
             {
                 throw Error(declaration.Line, declaration.Column, $"type '{declaration.Name}' already exists");
@@ -6639,14 +6644,21 @@ internal sealed partial class SemanticCompiler
         }
 
         var boxes = new Dictionary<TypeId, BoundBoxDefinition>();
-        var predeclaredDynamicArrays = new Dictionary<TypeId, TypeId>();
-        var predeclaredDynamicArraysByElement = new Dictionary<TypeId, TypeId>();
+        var predeclaredDynamicArrays = new Dictionary<TypeId, TypeId>
+        {
+            [TypeId.DynamicUInt8Array] = TypeId.UInt8
+        };
+        var predeclaredDynamicArraysByElement = new Dictionary<TypeId, TypeId>
+        {
+            [TypeId.UInt8] = TypeId.DynamicUInt8Array
+        };
         var boxableTypes = names
             .Where(item => item.Value is TypeId.Int or TypeId.Bool or TypeId.Text
                 || (structTypes.Values.Contains(item.Value)
                     && item.Value is not (TypeId.File or TypeId.FileWriter or TypeId.SourceText))
                     && item.Value is not TypeId.RunToFileRequest
                 || enumTypes.Values.Contains(item.Value))
+            .Where(item => item.Value is not (TypeId.Path or TypeId.PathStyle))
             .OrderBy(item => (int)item.Value)
             .ToArray();
         foreach (var (name, elementType) in boxableTypes)

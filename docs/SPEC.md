@@ -1306,6 +1306,39 @@ releases every temporary allocation. Browser wasm rejects the capability until
 a host process interface is supplied. Example 87 verifies self-launch, spaces,
 Hangul, exit status, and a missing executable on Windows and Linux.
 
+## Owned Portable Paths
+
+`sys.path.Path` owns its UTF-8 byte storage rather than borrowing a `Text`.
+The representation carries an explicit `Style.Posix` or `Style.Windows`, so a
+cross-compiler applies the target's lexical path rules instead of silently
+using the host operating system:
+
+```sollang
+import sys.path as path
+
+"src//compiler/./../main.slg" -> path.fromText(path.Style.Posix) => source!
+source! -> path.normalizeConfined => normalized!
+normalized! -> when {
+    Ok(value) => value -> path.equalsText("src/main.slg")
+    Err(error) => false
+}
+```
+
+`normalizeConfined(move Path)` is purely lexical and performs no filesystem
+access. It removes repeated separators and `.` components, resolves `..`, and
+returns `Err("path escapes root")` rather than allowing a parent component to
+cross the starting root. Windows drive roots and UNC server/share roots are
+preserved; an incomplete UNC prefix is rejected. `join(move Path, Text)` accepts
+only a relative child and rejects an absolute child instead of discarding the
+base path. `byteCount`, `equalsText`, and `isAbsolute` borrow the Path.
+
+Path bytes use a dedicated canonical `[UInt8; ~]` type identity. `Path`,
+`Style`, and their byte-buffer identity are reserved standard-library IDs, so
+adding the module cannot renumber unrelated user nominal or parametric types.
+Directory handles, metadata, canonical filesystem resolution, and deterministic
+directory traversal remain the next filesystem layer; lexical normalization
+does not claim to resolve symlinks.
+
 ## Generic Binary Scalar I/O
 
 `sys.file` provides a generic writer alongside the legacy sorted-Int64 demo

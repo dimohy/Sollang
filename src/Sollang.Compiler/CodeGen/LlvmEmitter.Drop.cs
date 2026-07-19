@@ -10,13 +10,15 @@ internal sealed partial class LlvmEmitter
     {
         var needsHelpers = _program.MainBindings.Values.Any(IsCustomOwnedType)
             || _program.MainStatements.Any(UsesBox)
-            || _program.Functions.Values.Where(function => !function.IsStandardLibrary).Any(function =>
+            || _program.Functions.Values.Where(function =>
+                !function.IsStandardLibrary || _standaloneStandardLibraryFunctions.Contains(function)).Any(function =>
                 IsCustomOwnedType(function.ReturnType)
                 || (function.InputType is { } input && IsCustomOwnedType(input))
                 || (function.Body is not null && UsesBox(function.Body))
                 || function.BlockBody.Any(UsesBox))
             || _program.FunctionBindings.Any(item =>
-                !item.Key.IsStandardLibrary && item.Value.Values.Any(IsCustomOwnedType))
+                (!item.Key.IsStandardLibrary || _standaloneStandardLibraryFunctions.Contains(item.Key))
+                && item.Value.Values.Any(IsCustomOwnedType))
             || _program.Types.StaticArrays.Any(definition =>
                 _program.Types.ContainsOwnedStorage(definition.ElementType))
             || _program.Types.DynamicArrays.Any(definition =>

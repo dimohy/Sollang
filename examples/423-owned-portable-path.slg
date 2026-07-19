@@ -1,0 +1,43 @@
+import sys.path
+
+normalizedEquals result: move Result<path.Path, Text>, expected: Text -> Bool => result -> when {
+    Ok(value) => value -> path.equalsText(expected)
+    Err(error) => false
+}
+
+isError result: move Result<path.Path, Text> -> Bool => result -> when {
+    Ok(value) => false
+    Err(error) => true
+}
+
+main {
+    "src//compiler/./../main.slg" -> path.fromText(path.Style.Posix) => posixPath!
+    posixPath! -> path.normalizeConfined => posixResult!
+    posixResult! -> normalizedEquals("src/main.slg") => posix
+
+    "../secret.slg" -> path.fromText(path.Style.Posix) => escapePath!
+    escapePath! -> path.normalizeConfined => escapeResult!
+    escapeResult! -> isError => escaped
+
+    "C:\src\\compiler\..\main.slg" -> path.fromText(path.Style.Windows) => windowsPath!
+    windowsPath! -> path.normalizeConfined => windowsResult!
+    windowsResult! -> normalizedEquals("C:\src\main.slg") => windowsOk
+
+    "\\\\server\share\compiler\..\main.slg" -> path.fromText(path.Style.Windows) => uncPath!
+    uncPath! -> path.normalizeConfined => uncResult!
+    uncResult! -> normalizedEquals("\\\\server\share\main.slg") => unc
+
+    "src" -> path.fromText(path.Style.Posix) => base!
+    base! -> path.join("compiler/main.slg") => joinedResult!
+    joinedResult! -> normalizedEquals("src/compiler/main.slg") => joined
+
+    "src" -> path.fromText(path.Style.Posix) => absoluteBase!
+    absoluteBase! -> path.join("/outside.slg") => absoluteResult!
+    absoluteResult! -> isError => absoluteRejected
+
+    posix and escaped and windowsOk and unc and joined and absoluteRejected -> if {
+        "portable path ok"
+    } else {
+        "portable path failed"
+    } -> println
+}

@@ -53,7 +53,9 @@ internal static class StoragePlacementAnalyzer
         IReadOnlyDictionary<string, BoundFunction> functions)
     {
         var standardInlineFunctions = DistinctFunctions(functions.Values
-            .Where(static function => function.Kind == BoundFunctionKind.User && function.IsStandardLibrary));
+            .Where(static function => function.Kind == BoundFunctionKind.User
+                && function.IsStandardLibrary
+                && !FunctionControlFlowFacts.RequiresStandaloneStandardLibraryEmission(function)));
         var mainFrame = MergeFramePlans(
             AnalyzeFrame(program.Statements, result: null, functions),
             AnalyzeInlineFunctions(standardInlineFunctions, functions));
