@@ -29,38 +29,48 @@ See [The Sollang Philosophy](docs/PHILOSOPHY.md).
 Sollang was created with **GPT-5.6 Sol Medium**. Its creator is satisfied with
 the result and records that collaboration as part of the project's history.
 
-It currently accepts a compact `.slg` language slice, lowers it to LLVM IR, and
-links minimal Windows x64 or Linux x64 executables. The language favors explicit
-value flow with `value -> target` syntax and expression-first bindings with
+Sollang compiles `.slg` source to LLVM IR and links native Windows x64 and Linux
+x64 programs or browser WebAssembly. The reference compiler is written in C#;
+the growing compiler written in Sollang already emits LLVM itself and passes
+native Windows and Linux Stage 2 differential verification. The language favors
+explicit value flow with `value -> target` and expression-first bindings with
 `value => name`.
 
 ## Quick Look
 
 - `.slg` source files
-- value-flow calls and bindings, such as `"text" -> print` and
+- value-flow calls and bindings, such as `"text" -> println` and
   `7 -> square => num`
+- zero-input calls without ceremony: `nowMillis`, never `nowMillis()`
 - `main { ... }` or omitted `main` with top-level executable statements
-- block-function calls such as `1..9 -> each i { ... }`
-- flow-oriented `if` and `when` conditionals
-- fixed and growable `Int` arrays, such as `[1, 2, 3]`, `[1, 2, ~]`,
-  `[Int; ~]`, and `[Int; 1024~]`
-- compile-time `Int` value generics and size-checked `[Int; N]` parameters
-- `{Int: Int}` dictionaries, such as `{ 1: 100, 2: 200 }`, `{Int: Int}`,
-  and `{Int: Int; 1024~}`
-- readonly `[Int]` function parameters for non-owning array views
-- readonly `{Int: Int}` function parameters for non-owning dictionary views
-- `mut [Int; ~]` and `mut {Int: Int}` function parameters for non-owning
-  mutable container borrows
-- explicit `move` growable array and dictionary parameters, including returning
-  the consumed input owner to the caller
+- block-function calls such as `1..9 -> each i { ... }` and compact guards such
+  as `condition -> if continue`
+- expression-oriented `if` and `when`, with contextual enum patterns such as
+  `Ok(value)` and `Err(error)`
+- nested structs, traits with associated types, `<T, R, E>` type generics, and
+  compile-time value generics such as `<N: Int>`
+- fixed and growable generic arrays (`[T; N]`, `[T; ~]`) and Swiss-table
+  dictionaries (`{K: V}`), including contextual struct keys and elements
+- compile-time collection expansion such as `[1..10]`,
+  `[1..10 -> each { it + 1 }]`, and `{1..3 -> each { it: it * 10 }}`
+- readonly views, mutable borrows, explicit ownership transfer, `box`, and
+  move-path checking for arrays, dictionaries, structs, and async frames
+- `Int8`/`Int16`/`Int32`/`Int64`, unsigned widths, `Float32`/`Float64`, and
+  stable `Int`/`Float` aliases plus target-sized `Size` and `UIntSize`
 - automatic stack promotion for small, non-escaping, readonly dynamic-array
-  and dictionary literals
+  and dictionary literals, with heap promotion when ownership or size requires it
 - lifetime-based function-entry stack slots reused across nested branches and
   loop iterations
-- small fixed arrays and mutable container metadata placed in entry slots, with
-  oversized fixed arrays automatically moved to owned heap storage
 - mutable owner names with `!` and checked indexed assignment
-- move-consuming container transforms, such as `values -> append(3) => values`
+- both `data![index] = value` and `value => data![index]` assignment flow
+- structured `async`/`await`, cancellation, deterministic parallel transforms,
+  and explicit `uses Console, File, Clock, ...` effect capabilities
+- language-level memory-mapped byte regions for data larger than ordinary heap
+  collections
+- strict UTF-8 `Text`, Unicode `CodePoint`, raw multiline strings, `Option`,
+  `Result`, and `?` propagation
+- import discovery with the final path segment as the default alias, local
+  packages, products, and explicit workspaces
 - a Sollang standard library under `stdlib/sys`
 - source-generated lexer/parser code from compact grammar files
 - LLVM-backed Windows x64, Linux x64, and browser WebAssembly output
@@ -82,7 +92,7 @@ square: Int -> Int {
 }
 
 main {
-    getName() => name
+    getName => name
     7 -> square => num
     "Hello, $name. square = $num" -> print
 }
@@ -97,10 +107,14 @@ Hello, dimohy. square = 49
 Top-level executable statements can omit the `main` wrapper:
 
 ```sollang
-getName() => name
+getName => name
 7 -> square => num
 "Hello, $name. square = $num" -> sys.io.print
 ```
+
+Zero-input functions are values selected by name. Parentheses are reserved for
+calls that actually supply input, so `getName()` is a compile-time error rather
+than an alternative spelling of `getName`.
 
 A range can flow into a block function:
 
@@ -123,6 +137,50 @@ score -> when {
     80..89 => "B"
     else => "Needs practice"
 } => grade
+```
+
+Compile-time ranges and transforms become ordinary collection literals before
+runtime code generation:
+
+```sollang
+[1..10] => numbers
+[1..10 -> each { it + 1 }] => incremented
+{1..3 -> each { it: it * 10 }} => lookup
+```
+
+Structured async keeps the same left-to-right flow:
+
+```sollang
+square value: Int -> async Int => value * value
+answer: -> async Int => 42
+
+main {
+    6 -> square -> await => squared
+    answer -> await => value
+    "$(squared), $(value)" -> println
+}
+```
+
+The expected enum type supplies short `Ok` and `Err` patterns:
+
+```sollang
+valueOrZero result: Result<Int, Text> -> Int {
+    result -> when {
+        Ok(value) => value
+        Err(error) => 0
+    }
+}
+```
+
+Comments use `#`. Triple-quoted strings preserve readable embedded source, and
+their common indentation is removed:
+
+```sollang
+"""
+namespace sample
+
+public answer: -> Int => 42
+""" => source
 ```
 
 ## Install A Release
@@ -198,7 +256,9 @@ dotnet run --project src/Sollang.Compiler -- build `
 ```
 
 Supplying only the root file is sufficient when imported modules follow the
-dotted-path layout: `import sample.math` discovers `sample/math.slg`.
+dotted-path layout: `import sample.math` discovers `sample/math.slg` and binds
+the alias `math`. Write `import sample.math as arithmetic` only when a different
+alias is useful.
 Module functions, structs, enums, and traits are internal by default; prefix
 declarations with `public` to make them usable from an importing module.
 
@@ -233,7 +293,8 @@ project {
 
 Use `sollang build --product compiler`. A dependency path points to the exact
 directory containing another `sollang.project`; its name is also its first
-import segment, for example `import syntax.tree as tree`.
+import segment, for example `import syntax.tree` binds `tree`. Dependency
+paths are local and resolved from the declaring manifest.
 
 Related local packages can share one explicit workspace without duplicating
 their names in a second map:
@@ -255,6 +316,23 @@ package must be a declared workspace member. From inside a member directory,
 plain `sollang build` discovers both the member project and its workspace.
 Workspace outputs are separated as
 `build/<target>/<package>/<product>[.exe|.wasm]` under the workspace root.
+
+## Self-Hosting Progress
+
+The measured roadmap is currently **52.5/60 gates (87.5%)**:
+
+- **48 complete**
+- **9 partial**
+- **3 missing**
+- **7.5 equivalent gates remaining**
+
+The Sollang-written compiler is split into lexer, parser/CST/AST, semantic,
+typed-IR, ownership, module-cache, and LLVM modules. It builds a native Stage 2
+compiler and passes Windows and Linux differential gates. Local workspaces are
+implemented; versioned/locked local package graphs are the active next layer,
+while registries and content-pinned Git dependencies remain unfinished. Exact
+counts and the evidence behind every gate live in the
+[self-hosting roadmap](docs/SELF_HOSTING_ROADMAP.md).
 
 ## License
 
