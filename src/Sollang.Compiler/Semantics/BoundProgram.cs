@@ -128,7 +128,9 @@ internal enum BoundFunctionKind
     RuntimeReadDirectory,
     RuntimeWriteScalarAt,
     RuntimeWriteScalarAtAsync,
-    RuntimeSyncFileAsync
+    RuntimeSyncFileAsync,
+    RuntimeSyncFile,
+    RuntimeAtomicReplaceFile
 }
 
 internal enum TypeId
@@ -166,6 +168,7 @@ internal enum TypeId
     FileWriter,
     SourceText,
     RunToFileRequest,
+    AtomicReplaceRequest,
     Path,
     PathStyle,
     DynamicUInt8Array,

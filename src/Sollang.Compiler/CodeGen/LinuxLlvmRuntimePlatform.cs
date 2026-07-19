@@ -48,6 +48,7 @@ internal sealed class LinuxLlvmRuntimePlatform : LlvmRuntimePlatform
         functions.AppendLine("declare i32 @dup(i32)");
         functions.AppendLine("declare i32 @dup2(i32, i32)");
         functions.AppendLine("declare i32 @fsync(i32)");
+        functions.AppendLine("declare i32 @rename(ptr, ptr)");
         functions.AppendLine("declare i64 @lseek(i32, i64, i32)");
         functions.AppendLine("declare i32 @ftruncate(i32, i64)");
         functions.AppendLine("declare ptr @mmap(ptr, i64, i32, i32, i32, i64)");
@@ -910,6 +911,31 @@ internal sealed class LinuxLlvmRuntimePlatform : LlvmRuntimePlatform
     public override void EmitFilePrimitives(StringBuilder functions)
     {
         functions.AppendLine("""
+            define internal i32 @sollang_platform_atomic_replace_file(ptr %temporary, i64 %temporary_len, ptr %destination, i64 %destination_len) #0 {
+            entry:
+              %temporary_buf = alloca [4096 x i8], align 1
+              %temporary_ptr = getelementptr inbounds [4096 x i8], ptr %temporary_buf, i64 0, i64 0
+              %temporary_ok = call i32 @sollang_copy_text_to_c_path(ptr %temporary, i64 %temporary_len, ptr %temporary_ptr)
+              %temporary_valid = icmp ne i32 %temporary_ok, 0
+              br i1 %temporary_valid, label %copy_destination, label %fail
+
+            copy_destination:
+              %destination_buf = alloca [4096 x i8], align 1
+              %destination_ptr = getelementptr inbounds [4096 x i8], ptr %destination_buf, i64 0, i64 0
+              %destination_ok = call i32 @sollang_copy_text_to_c_path(ptr %destination, i64 %destination_len, ptr %destination_ptr)
+              %destination_valid = icmp ne i32 %destination_ok, 0
+              br i1 %destination_valid, label %replace, label %fail
+
+            replace:
+              %status = call i32 @rename(ptr %temporary_ptr, ptr %destination_ptr)
+              %ok = icmp eq i32 %status, 0
+              %ok32 = zext i1 %ok to i32
+              ret i32 %ok32
+
+            fail:
+              ret i32 0
+            }
+
             define internal %sollang.file_handle_result @sollang_platform_open_owned_read_file(ptr %path, i64 %len) #0 {
             entry:
               %buf = alloca [260 x i8], align 1

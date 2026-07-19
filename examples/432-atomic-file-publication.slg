@@ -1,0 +1,52 @@
+import sys.file as file
+
+writeSucceeded result: Result<Unit, Text> -> Bool => result -> when {
+    Ok(_) { true }
+    Err(_) { false }
+}
+
+writeClosed path: Text, value: UInt64 -> Bool uses File {
+    file.openWrite(path) -> when {
+        Ok(writer) {
+            writer -> writeAt(value, 0) -> writeSucceeded => wrote
+            writer -> file.sync => synced
+            wrote and synced
+        }
+        Err(_) { false }
+    }
+}
+
+readValue path: Text -> UInt64 uses File {
+    file.openRead(path) => opened
+    opened -> when {
+        Ok(reader) {
+            reader -> readAt<UInt64>(0) -> when {
+                Ok(value) {
+                    value -> when {
+                        Some(item) { item }
+                        None { UInt64(0) }
+                    }
+                }
+                Err(_) { UInt64(0) }
+            }
+        }
+        Err(_) { UInt64(0) }
+    }
+}
+
+main {
+    "artifacts/example-tests/432-atomic-cache.bin" => destination
+    "artifacts/example-tests/432-atomic-cache.tmp" => temporary
+    destination -> writeClosed(UInt64(1)) => baseline
+    temporary -> writeClosed(UInt64(99)) => staged
+    file.AtomicReplaceRequest {
+        temporary: temporary
+        destination: destination
+    } -> file.atomicReplace => published
+    destination -> readValue => value
+    (baseline and staged and published and value == UInt64(99)) -> if {
+        "atomic publication = 99"
+    } else {
+        "atomic publication failed"
+    } -> println
+}

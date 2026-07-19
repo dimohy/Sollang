@@ -1556,6 +1556,8 @@ internal sealed partial class SemanticCompiler
                 "sys.file.FileWriter",
                 BoundFunctionKind.RuntimeOpenWriteFileAsync,
                 isAsync: true),
+            "sys.file.sync" => RequireOwnedFileSyncSignature(function, inputType, returnType),
+            "sys.file.atomicReplace" => RequireAtomicReplaceSignature(function, inputType, returnType),
             "sys.file.openWriter" => RequireIntrinsicSignature(
                 function, inputType, returnType, BoundType.Text, BoundType.Unit,
                 BoundFunctionKind.RuntimeOpenIntWriter),
@@ -1665,6 +1667,42 @@ internal sealed partial class SemanticCompiler
         }
 
         return BoundFunctionKind.RuntimeReadDirectory;
+    }
+
+    private BoundFunctionKind RequireOwnedFileSyncSignature(
+        FunctionDeclaration function,
+        BoundType? inputType,
+        BoundType returnType)
+    {
+        if (inputType is not { } writerType
+            || !_types.IsStruct(writerType)
+            || _types.GetStruct(writerType).Name != "sys.file.FileWriter"
+            || returnType != BoundType.Bool
+            || function.InputOwnership != FunctionInputOwnership.Default)
+        {
+            throw Error(function.Line, function.Column,
+                $"intrinsic '{function.Name}' must have signature FileWriter -> Bool");
+        }
+        return BoundFunctionKind.RuntimeSyncFile;
+    }
+
+    private BoundFunctionKind RequireAtomicReplaceSignature(
+        FunctionDeclaration function,
+        BoundType? inputType,
+        BoundType returnType)
+    {
+        if (inputType is not { } requestType
+            || !_types.IsStruct(requestType)
+            || _types.GetStruct(requestType) is not { Name: "sys.file.AtomicReplaceRequest" } request
+            || request.Fields.Count != 2
+            || request.GetField("temporary").Type != BoundType.Text
+            || request.GetField("destination").Type != BoundType.Text
+            || returnType != BoundType.Bool)
+        {
+            throw Error(function.Line, function.Column,
+                $"intrinsic '{function.Name}' must have signature AtomicReplaceRequest -> Bool");
+        }
+        return BoundFunctionKind.RuntimeAtomicReplaceFile;
     }
 
     private BoundFunctionKind RequireProcessRunIntrinsicSignature(
@@ -4496,6 +4534,8 @@ internal sealed partial class SemanticCompiler
                     case BoundFunctionKind.RuntimeRunProcess:
                     case BoundFunctionKind.RuntimeRunProcessToFile:
                     case BoundFunctionKind.RuntimeReadDirectory:
+                    case BoundFunctionKind.RuntimeSyncFile:
+                    case BoundFunctionKind.RuntimeAtomicReplaceFile:
                         EnsureRuntimeInput(currentType, function, expression.Line, expression.Column, path);
                         currentType = function.ReturnType;
                         continue;
@@ -5398,6 +5438,8 @@ internal sealed partial class SemanticCompiler
                 return AsyncCallType(function);
             case BoundFunctionKind.RuntimeRunProcess:
             case BoundFunctionKind.RuntimeRunProcessToFile:
+            case BoundFunctionKind.RuntimeSyncFile:
+            case BoundFunctionKind.RuntimeAtomicReplaceFile:
                 if (expression.Arguments.Count != 1)
                 {
                     throw Error(expression.Line, expression.Column, $"{path} expects exactly one request");
@@ -6568,6 +6610,8 @@ internal sealed partial class SemanticCompiler
                 or BoundFunctionKind.RuntimeWriteScalarAt
                 or BoundFunctionKind.RuntimeWriteScalarAtAsync
                 or BoundFunctionKind.RuntimeSyncFileAsync
+                or BoundFunctionKind.RuntimeSyncFile
+                or BoundFunctionKind.RuntimeAtomicReplaceFile
                 or BoundFunctionKind.RuntimeMapSourceText
                 or BoundFunctionKind.RuntimeMapSourcePath => ["File"],
             _ => []
@@ -6680,6 +6724,8 @@ internal sealed partial class SemanticCompiler
                             ? TypeId.SourceText
                             : string.Equals(declaration.Name, "sys.process.RunToFileRequest", StringComparison.Ordinal)
                                 ? TypeId.RunToFileRequest
+                            : string.Equals(declaration.Name, "sys.file.AtomicReplaceRequest", StringComparison.Ordinal)
+                                ? TypeId.AtomicReplaceRequest
                                 : string.Equals(declaration.Name, "sys.path.Path", StringComparison.Ordinal)
                                     ? TypeId.Path
                                     : string.Equals(declaration.Name, "sys.directory.Raw", StringComparison.Ordinal)
@@ -6735,7 +6781,7 @@ internal sealed partial class SemanticCompiler
             .Where(item => item.Value is TypeId.Int or TypeId.Bool or TypeId.Text
                 || (structTypes.Values.Contains(item.Value)
                     && item.Value is not (TypeId.File or TypeId.FileWriter or TypeId.SourceText))
-                    && item.Value is not TypeId.RunToFileRequest
+                    && item.Value is not (TypeId.RunToFileRequest or TypeId.AtomicReplaceRequest)
                 || enumTypes.Values.Contains(item.Value))
             .Where(item => item.Value is not (TypeId.Path or TypeId.PathStyle
                 or TypeId.DirectoryRaw or TypeId.DirectoryEntryKind or TypeId.DirectoryEntry

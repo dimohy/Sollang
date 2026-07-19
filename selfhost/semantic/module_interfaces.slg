@@ -18,8 +18,30 @@ public struct ModuleFingerprint {
     importCount: Int
 }
 
+# Canonical interface words are retained alongside their lookup hash. Every
+# source byte is one lossless word; persistent storage writes words in explicit
+# little-endian order. A cache reader compares the complete sequence after
+# locating an entry by
+# interfaceHash, so a hash collision can never silently accept a different API.
+public struct ModuleInterfaces {
+    interfaceHashes: [UInt64; ~]
+    wordStarts: [Int; ~]
+    wordLengths: [Int; ~]
+    words: [UInt64; ~]
+}
+
 mix hash: UInt64, value: UInt64 -> UInt64 {
     hash * UInt64(1099511628211) + value + UInt64(97)
+}
+
+hashWords words: [UInt64; ~] -> UInt64 {
+    UInt64(7809847782465536322) => hash!
+    0 => index!
+    index! < (words -> len) -> while {
+        hash! -> mix(words[index!]) => hash!
+        index! + 1 => index!
+    }
+    hash!
 }
 
 hashToken package: analysis.PackageAnalysis, sourceIndex: Int, tokenIndex: Int, seed: UInt64 -> UInt64 {
@@ -63,9 +85,157 @@ hashSymbol package: analysis.PackageAnalysis, sourceIndex: Int, symbolIndex: Int
     hash!
 }
 
+# Schema 1 is a deterministic UInt64 word stream (serialized little-endian):
+# magic, schema, module path hash, public symbol count, then each exported
+# signature as kind, flags, token count-delimited records, and a symbol marker.
+# Source-local AST/symbol indices are deliberately absent.
+public interfacesAnalyzed package: analysis.PackageAnalysis -> ModuleInterfaces {
+    package -> modules.identitiesAnalyzed => identities!
+    [UInt64; ~] => interfaceHashes!
+    [Int; ~] => wordStarts!
+    [Int; ~] => wordLengths!
+    [UInt64; ~] => allWords!
+    0 => sourceIndex!
+    sourceIndex! < (package.ranges -> len) -> while {
+        package.ranges[sourceIndex!] => sourceRange
+        [UInt64; ~] => words!
+        words! -> push(UInt64(4991188231678313299))
+        words! -> push(UInt64(1))
+        words! -> push(identities![sourceIndex!].pathHash)
+
+        0 => publicSymbolCount!
+        0 => symbolIndex!
+        symbolIndex! < sourceRange.symbolCount -> while {
+            package.symbols[sourceRange.symbolStart + symbolIndex!] => symbol
+            symbolIndex! => rootSymbolIndex!
+            symbol.parent => parentSymbol!
+            parentSymbol! >= 0 -> while {
+                parentSymbol! => rootSymbolIndex!
+                package.symbols[sourceRange.symbolStart + parentSymbol!].parent => parentSymbol!
+            }
+            package.symbols[sourceRange.symbolStart + rootSymbolIndex!] => rootSymbol
+            rootSymbol.flags / 4 % 2 == 1 => exportedRoot
+            false => signatureSymbol!
+            (exportedRoot and symbolIndex! == rootSymbolIndex!) -> if { true => signatureSymbol! }
+            (exportedRoot and (rootSymbol.kind == 3 or rootSymbol.kind == 4 or rootSymbol.kind == 5)) -> if {
+                (symbol.kind == 26 or symbol.kind == 27 or symbol.kind == 28 or symbol.kind == 29 or symbol.kind == 32 or symbol.kind == 33 or symbol.kind == 34) -> if { true => signatureSymbol! }
+            }
+            (exportedRoot and rootSymbol.kind == 7) -> if {
+                (symbol.kind == 32 or symbol.kind == 33 or symbol.kind == 34 or symbol.kind == 35) -> if { true => signatureSymbol! }
+            }
+            signatureSymbol! -> if { publicSymbolCount! + 1 => publicSymbolCount! }
+            symbolIndex! + 1 => symbolIndex!
+        }
+        words! -> push(UInt64(publicSymbolCount!))
+
+        0 => publicOrdinal!
+        0 => canonicalSymbolIndex!
+        canonicalSymbolIndex! < sourceRange.symbolCount -> while {
+            package.symbols[sourceRange.symbolStart + canonicalSymbolIndex!] => symbol
+            canonicalSymbolIndex! => rootSymbolIndex!
+            symbol.parent => parentSymbol!
+            parentSymbol! >= 0 -> while {
+                parentSymbol! => rootSymbolIndex!
+                package.symbols[sourceRange.symbolStart + parentSymbol!].parent => parentSymbol!
+            }
+            package.symbols[sourceRange.symbolStart + rootSymbolIndex!] => rootSymbol
+            rootSymbol.flags / 4 % 2 == 1 => exportedRoot
+            false => signatureSymbol!
+            (exportedRoot and canonicalSymbolIndex! == rootSymbolIndex!) -> if { true => signatureSymbol! }
+            (exportedRoot and (rootSymbol.kind == 3 or rootSymbol.kind == 4 or rootSymbol.kind == 5)) -> if {
+                (symbol.kind == 26 or symbol.kind == 27 or symbol.kind == 28 or symbol.kind == 29 or symbol.kind == 32 or symbol.kind == 33 or symbol.kind == 34) -> if { true => signatureSymbol! }
+            }
+            (exportedRoot and rootSymbol.kind == 7) -> if {
+                (symbol.kind == 32 or symbol.kind == 33 or symbol.kind == 34 or symbol.kind == 35) -> if { true => signatureSymbol! }
+            }
+            signatureSymbol! -> if {
+                words! -> push(UInt64(publicOrdinal! + 1))
+                words! -> push(UInt64(symbol.kind + 1))
+                words! -> push(UInt64(symbol.flags + 1))
+                package.nodes[sourceRange.astStart + symbol.astNode] => declaration
+                declaration.firstToken => tokenIndex!
+                declaration.firstToken + declaration.tokenCount => tokenEnd!
+                tokenIndex! < tokenEnd! -> while {
+                    package.tokens[sourceRange.tokenStart + tokenIndex!] => token
+                    (token.kind == grammar.tokenIdLeftBrace or token.kind == grammar.tokenIdFatArrow) -> if {
+                        tokenIndex! => tokenEnd!
+                    } else {
+                        (token.kind == grammar.triviaIdWhitespace or token.kind == grammar.triviaIdComment) -> if {
+                        } else {
+                            words! -> push(UInt64(token.kind + 1))
+                            words! -> push(UInt64(token.span.length))
+                            UIntSize(0) => tokenByteIndex!
+                            tokenByteIndex! < token.span.length -> while {
+                                package.sources[sourceIndex!] -> byte(token.span.start + tokenByteIndex!) => tokenByte
+                                words! -> push(UInt64(tokenByte))
+                                tokenByteIndex! + UIntSize(1) => tokenByteIndex!
+                            }
+                        }
+                        tokenIndex! + 1 => tokenIndex!
+                    }
+                }
+                words! -> push(UInt64(18446744073709551615))
+                publicOrdinal! + 1 => publicOrdinal!
+            }
+            canonicalSymbolIndex! + 1 => canonicalSymbolIndex!
+        }
+
+        words! -> hashWords => interfaceHash
+        interfaceHashes! -> push(interfaceHash)
+        allWords! -> len => wordStart
+        words! -> len => wordLength
+        wordStarts! -> push(wordStart)
+        wordLengths! -> push(wordLength)
+        0 => copyIndex!
+        copyIndex! < (words! -> len) -> while {
+            allWords! -> push(words![copyIndex!])
+            copyIndex! + 1 => copyIndex!
+        }
+        sourceIndex! + 1 => sourceIndex!
+    }
+    ModuleInterfaces {
+        interfaceHashes: interfaceHashes!
+        wordStarts: wordStarts!
+        wordLengths: wordLengths!
+        words: allWords!
+    } => result!
+    result!
+}
+
+public interfaces sources: [Text; ~] -> ModuleInterfaces {
+    sources -> analysis.analyze => package
+    package -> interfacesAnalyzed => result!
+    result!
+}
+
+# Hashes are lookup accelerators only. Reuse is valid only when the complete
+# canonical interface stream is equal as well.
+public sameInterface left: ModuleInterfaces, leftIndex: Int, right: ModuleInterfaces, rightIndex: Int -> Bool {
+    left.interfaceHashes[leftIndex] == right.interfaceHashes[rightIndex] => matches!
+    left.wordLengths[leftIndex] == right.wordLengths[rightIndex] -> if {
+    } else {
+        false => matches!
+    }
+    matches! -> if {
+        left.wordStarts[leftIndex] => leftStart
+        right.wordStarts[rightIndex] => rightStart
+        left.wordLengths[leftIndex] => length
+        0 => index!
+        (matches! and index! < length) -> while {
+            left.words[leftStart + index!] == right.words[rightStart + index!] -> if {
+            } else {
+                false => matches!
+            }
+            index! + 1 => index!
+        }
+    }
+    matches!
+}
+
 public fingerprintAnalyzed package: analysis.PackageAnalysis -> [ModuleFingerprint; ~] {
     package -> modules.identitiesAnalyzed => identities!
     package -> modules.importsAnalyzed => imports!
+    package -> interfacesAnalyzed => interfaces!
     [ModuleFingerprint; ~] => results!
     0 => sourceIndex!
     sourceIndex! < (package.ranges -> len) -> while {
@@ -85,7 +255,6 @@ public fingerprintAnalyzed package: analysis.PackageAnalysis -> [ModuleFingerpri
             tokenIndex! + 1 => tokenIndex!
         }
 
-        UInt64(7809847782465536322) => interfaceHash!
         0 => publicSymbolCount!
         0 => symbolIndex!
         symbolIndex! < sourceRange.symbolCount -> while {
@@ -107,8 +276,6 @@ public fingerprintAnalyzed package: analysis.PackageAnalysis -> [ModuleFingerpri
                 (symbol.kind == 32 or symbol.kind == 33 or symbol.kind == 34 or symbol.kind == 35) -> if { true => signatureSymbol! }
             }
             signatureSymbol! -> if {
-                interfaceHash! -> mix(UInt64(symbolIndex! + 1)) => interfaceHash!
-                package -> hashSymbol(sourceIndex!, symbolIndex!, interfaceHash!) => interfaceHash!
                 publicSymbolCount! + 1 => publicSymbolCount!
             }
             symbolIndex! + 1 => symbolIndex!
@@ -126,10 +293,11 @@ public fingerprintAnalyzed package: analysis.PackageAnalysis -> [ModuleFingerpri
             importIndex! + 1 => importIndex!
         }
 
+        interfaces.interfaceHashes![sourceIndex!] => interfaceHash
         ModuleFingerprint {
             sourceIndex: sourceIndex!
             moduleHash: identities![sourceIndex!].pathHash
-            interfaceHash: interfaceHash!
+            interfaceHash: interfaceHash
             implementationHash: implementationHash!
             importHash: importHash!
             publicSymbolCount: publicSymbolCount!

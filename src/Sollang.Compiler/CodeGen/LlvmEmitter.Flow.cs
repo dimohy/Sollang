@@ -171,6 +171,16 @@ internal sealed partial class LlvmEmitter
                             ? EmitRuntimeRunProcessToFileIntrinsic(function, request)
                             : throw new SollangException($"{path} expects a RunToFileRequest");
                         continue;
+                    case BoundFunctionKind.RuntimeSyncFile:
+                        current = current is RuntimeStruct syncWriter
+                            ? EmitRuntimeSyncFile(syncWriter)
+                            : throw new SollangException($"{path} expects a FileWriter");
+                        continue;
+                    case BoundFunctionKind.RuntimeAtomicReplaceFile:
+                        current = current is RuntimeStruct replaceRequest
+                            ? EmitRuntimeAtomicReplaceFile(function, replaceRequest)
+                            : throw new SollangException($"{path} expects an AtomicReplaceRequest");
+                        continue;
                     case BoundFunctionKind.RuntimeBorrowSourceText:
                         current = EmitBorrowSourceText(current);
                         continue;

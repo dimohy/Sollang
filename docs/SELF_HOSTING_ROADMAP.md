@@ -1269,6 +1269,21 @@ and dependency-driven hit/miss reuse remain D207B. D207A is Stage2 checkpoint
 Windows passes 568/568 examples and Stage2 6/6 at 9,401,740 LLVM bytes. Linux
 Stage2 passes 5/5 at 9,400,225 bytes. D207B is the next implementation slice.
 
+## Canonical Interfaces and Atomic Publication (D207B1)
+
+Schema-1 canonical interface words now preserve every exported-signature token
+and source byte while excluding trivia, bodies, private declaration positions,
+and session-local indices. Cache lookup still uses a UInt64 fingerprint, but
+reuse requires complete canonical-stream equality. `FileWriter.sync` plus
+`AtomicReplaceRequest -> atomicReplace` supplies the staged-write publication
+boundary on Windows and Linux; example 432 executes the full replacement path.
+
+Windows passes 569/569 examples and Stage2 6/6 at 9,464,194 LLVM bytes. Linux
+Stage2 passes 5/5 at 9,462,679 bytes. D207B1 is Stage2 checkpoint 3/10 after the
+D205 reset. Persistent cache decoding, corruption rejection, dependency
+hit/miss integration, and body-only consumer reuse remain D207B2, leaving the
+formal roadmap at **47 complete, 9 partial, 4 missing: 51.5/60 (85.8%)**.
+
 ## Immediate Implementation Order
 
 1. Multi-file compilation (implemented by example 52).

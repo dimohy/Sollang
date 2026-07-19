@@ -426,6 +426,40 @@ internal sealed partial class LlvmEmitter
             function);
     }
 
+    private RuntimeBool EmitRuntimeSyncFile(RuntimeStruct writer)
+    {
+        var handle = ExtractOwnedFileHandle(writer, "sys.file.FileWriter");
+        var raw = NextTemp("file_sync_result");
+        EmitCall(raw, "i32", "sollang_platform_sync_owned_file", $"i64 {handle}");
+        var succeeded = NextTemp("file_sync_succeeded");
+        EmitCompare(succeeded, "ne", "i32", raw, "0");
+        return new RuntimeBool(succeeded);
+    }
+
+    private RuntimeBool EmitRuntimeAtomicReplaceFile(BoundFunction function, RuntimeStruct request)
+    {
+        var definition = _program.Types.GetStruct(request.Type);
+        var temporaryField = definition.GetField("temporary");
+        var destinationField = definition.GetField("destination");
+        var temporaryAggregate = NextTemp("atomic_replace_temporary");
+        EmitAssign(temporaryAggregate,
+            $"extractvalue {LlvmStructType(request.Type)} {request.ValueName}, {temporaryField.Index}");
+        var temporary = DematerializeAggregateValue(temporaryField.Type, temporaryAggregate) as RuntimeText
+            ?? throw new SollangException($"{function.Name} expects a Text temporary path");
+        var destinationAggregate = NextTemp("atomic_replace_destination");
+        EmitAssign(destinationAggregate,
+            $"extractvalue {LlvmStructType(request.Type)} {request.ValueName}, {destinationField.Index}");
+        var destination = DematerializeAggregateValue(destinationField.Type, destinationAggregate) as RuntimeText
+            ?? throw new SollangException($"{function.Name} expects a Text destination path");
+        var raw = NextTemp("atomic_replace_result");
+        EmitCall(raw, "i32", "sollang_platform_atomic_replace_file",
+            $"ptr {temporary.PointerName}, i64 {temporary.LengthName}, " +
+            $"ptr {destination.PointerName}, i64 {destination.LengthName}");
+        var succeeded = NextTemp("atomic_replace_succeeded");
+        EmitCompare(succeeded, "ne", "i32", raw, "0");
+        return new RuntimeBool(succeeded);
+    }
+
     private RuntimeEnum EmitRuntimeOpenFile(BoundFunction function, RuntimeValue argument)
     {
         var path = argument as RuntimeText

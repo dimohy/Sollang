@@ -1522,6 +1522,14 @@ original handle immediately and does not await Tasks because every pending
 operation owns its own duplicate. A future IOCP/io_uring completion backend
 remains before the general file-I/O gate is complete.
 
+Compiler and cache code may use the synchronous `writer -> file.sync` barrier.
+After the affine writer's scope closes, `file.AtomicReplaceRequest` passed to
+`file.atomicReplace` publishes the staged path over the destination atomically.
+Windows uses `MoveFileExA` with replace-existing and write-through flags; Linux
+uses `rename` after `fsync`. Wasm reports `false` because it has no host
+filesystem. The destination is therefore either the previous complete file or
+the new complete file, never a partially written cache entry.
+
 Double-quoted UTF-8 literals decode `\n`, `\r`, `\t`, and `\\` in text
 segments and support optional identifier and expression interpolation. Unknown
 backslash sequences remain literal for backward compatibility:

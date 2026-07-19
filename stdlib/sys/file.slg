@@ -16,6 +16,11 @@ public struct FileWriter {
     token: UInt64
 }
 
+public struct AtomicReplaceRequest {
+    temporary: Text
+    destination: Text
+}
+
 # SourceText is an affine compiler input. A borrowed literal has no mapping;
 # a mapped file owns its mapping until the SourceText owner is dropped.
 public struct SourceText {
@@ -37,6 +42,12 @@ openReadAsync path: Text -> async Result<File, Text> uses File = intrinsic
 openWrite path: Text -> Result<FileWriter, Text> uses File = intrinsic
 
 openWriteAsync path: Text -> async Result<FileWriter, Text> uses File = intrinsic
+
+# Synchronous compiler/cache durability primitives. The affine writer closes
+# deterministically at scope exit before atomicReplace publishes its temp file.
+public sync writer: FileWriter -> Bool uses File = intrinsic
+
+public atomicReplace request: AtomicReplaceRequest -> Bool uses File = intrinsic
 
 openIntWriter path: Text -> Unit uses File {
     path -> rt.openIntWriter

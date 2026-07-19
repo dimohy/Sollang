@@ -185,6 +185,22 @@ internal sealed partial class LlvmEmitter
             return EmitRuntimeReadDirectory(function, EmitExpression(expression.Arguments[0]));
         }
 
+        if (function.Kind is BoundFunctionKind.RuntimeSyncFile
+            or BoundFunctionKind.RuntimeAtomicReplaceFile)
+        {
+            if (expression.Arguments.Count != 1)
+            {
+                throw new SollangException($"{path} expects exactly one argument");
+            }
+            var fileArgument = EmitExpression(expression.Arguments[0]) as RuntimeStruct
+                ?? throw new SollangException($"{path} expects a file runtime struct");
+            return function.Kind switch
+            {
+                BoundFunctionKind.RuntimeSyncFile => EmitRuntimeSyncFile(fileArgument),
+                _ => EmitRuntimeAtomicReplaceFile(function, fileArgument)
+            };
+        }
+
         if (function.Kind is BoundFunctionKind.RuntimeOpenFileAsync
             or BoundFunctionKind.RuntimeOpenWriteFileAsync)
         {
@@ -887,6 +903,20 @@ internal sealed partial class LlvmEmitter
                 throw new SollangException($"{function.Name} expects exactly one Path value");
             }
             return EmitRuntimeReadDirectory(function, argument);
+        }
+
+        if (function.Kind is BoundFunctionKind.RuntimeSyncFile
+            or BoundFunctionKind.RuntimeAtomicReplaceFile)
+        {
+            if (argument is not RuntimeStruct fileArgument)
+            {
+                throw new SollangException($"{function.Name} expects a file runtime struct");
+            }
+            return function.Kind switch
+            {
+                BoundFunctionKind.RuntimeSyncFile => EmitRuntimeSyncFile(fileArgument),
+                _ => EmitRuntimeAtomicReplaceFile(function, fileArgument)
+            };
         }
 
         if (function.Kind is BoundFunctionKind.RuntimeOpenFileAsync

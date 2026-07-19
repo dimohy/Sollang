@@ -6812,8 +6812,9 @@ Implementation checklist:
 - [x] Trivia stability, body isolation, private isolation, and ABI invalidation tests
 - [x] Native Stage1 `fingerprint` mode
 - [x] Stage1/Stage2 fingerprint equality gate
-- [ ] Versioned canonical interface serialization
-- [ ] Atomic cache publication and corruption rejection
+- [x] Versioned canonical interface serialization
+- [x] Atomic cache publication
+- [ ] Cache corruption rejection
 - [ ] Direct-dependency cache hit/miss integration
 - [ ] Body-only edit proves consumer reuse
 
@@ -6831,3 +6832,40 @@ Research basis:
 - [Rust incremental compilation fingerprints](https://rustc-dev-guide.rust-lang.org/queries/incremental-compilation-in-detail.html)
 - [Clang modules and cache invalidation](https://clang.llvm.org/docs/Modules.html)
 - [Clang standard module consistency](https://clang.llvm.org/docs/StandardCPlusPlusModules.html)
+
+## D207B1 - Canonical Interfaces and Atomic Publication
+
+Status: implemented and Stage2 verified; persistent cache reuse pending
+Date: 2026-07-19
+
+The interface hash is now derived from a schema-1 canonical UInt64 word stream.
+The stream contains its magic, schema, module identity, exported-symbol count,
+public ordinal, symbol kind and flags, token kind and length, and every original
+signature byte. Whitespace, comments, bodies, source-local AST indices, and
+private-symbol positions are absent. A lookup hash is only an accelerator:
+`sameInterface` compares the full flattened canonical stream before reuse. This
+also fixes the D207A edge case where inserting a private declaration before a
+public declaration could change a source-local symbol index and spuriously
+invalidate consumers.
+
+`sys.file.FileWriter` now exposes a synchronous durability barrier, and
+`AtomicReplaceRequest -> atomicReplace` publishes a closed staged file with
+Windows `MoveFileExA(REPLACE_EXISTING | WRITE_THROUGH)` or Linux `rename`.
+Example 432 writes, syncs, closes by affine scope exit, atomically replaces an
+existing file, and reads back the new value on both Windows and Linux. Example
+431 now proves full canonical equality across private insertion and full
+canonical inequality after a public signature change.
+
+The complete Windows suite passes 569/569. Windows Stage2 passes 6/6 at
+9,464,194 LLVM bytes; Linux Stage2 passes 5/5 at 9,462,679 bytes. Stage1 and
+Stage2 canonical fingerprint output and all target differential hashes remain
+equal. This advances the periodic Stage3 cadence to 3/10. Corruption rejection,
+persistent read/write integration, direct-dependency hit/miss planning, and the
+body-only consumer-reuse proof remain D207B2, so the formal roadmap remains
+**47 complete, 9 partial, 4 missing: 51.5/60 (85.8%)**.
+
+Research basis:
+
+- [Rust incremental compilation fingerprints](https://rustc-dev-guide.rust-lang.org/queries/incremental-compilation-in-detail.html)
+- [Clang modules and cache invalidation](https://clang.llvm.org/docs/Modules.html)
+- [Clang strict module consistency](https://clang.llvm.org/docs/StandardCPlusPlusModules.html)
