@@ -54,7 +54,7 @@ internal sealed partial class LlvmEmitter
             return;
         }
 
-        _functions.Write(instruction);
+        _activeFunctions.Write(instruction);
     }
 
     private void EmitLoad(string target, string typeName, string pointer, int align)

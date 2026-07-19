@@ -25,8 +25,8 @@ internal sealed partial class LlvmEmitter
     private readonly Dictionary<BlockFunctionCallStatement, ParallelCallbackInfo> _parallelCallbacks =
         new(ReferenceEqualityComparer.Instance);
     private bool UsesProcessRuntime => _usesProcessArguments || _usesProcessEnvironment || _usesChildProcesses;
-    private readonly MemoryOutputSink _globals = new();
-    private readonly MemoryOutputSink _functions = new();
+    private MemoryOutputSink _activeGlobals = new();
+    private MemoryOutputSink _activeFunctions = new();
     private readonly Dictionary<string, RuntimeValue> _locals = new(StringComparer.Ordinal);
     private readonly HashSet<string> _mutableLocals = new(StringComparer.Ordinal);
     private readonly HashSet<string> _borrowedMutableLocals = new(StringComparer.Ordinal);
@@ -47,6 +47,7 @@ internal sealed partial class LlvmEmitter
     private int _stringId;
     private int _tempId;
     private int _labelId;
+    private string _activeUnitToken = "prefix";
     private string _mainOk = "true";
     private string _currentBlockLabel = "entry";
     private bool _currentBlockTerminated;
@@ -376,12 +377,15 @@ internal sealed partial class LlvmEmitter
 
     public string Emit()
     {
-        var output = new MemoryOutputSink();
-        Emit(output);
-        return output.ToString();
+        return EmitUnits(reuse: null).ToString();
     }
 
     public void Emit(ITextOutputSink output)
+    {
+        EmitUnits(reuse: null).CopyTo(output);
+    }
+
+    public LlvmCodegenOutput EmitUnits(LlvmCodegenReuse? reuse)
     {
         if (_usesChildProcesses && !_platform.SupportsChildProcesses)
         {
@@ -394,6 +398,25 @@ internal sealed partial class LlvmEmitter
         if (_usesDirectoryTraversal && !_platform.SupportsDirectoryTraversal)
         {
             throw new SollangException("directory traversal is unavailable on the current target");
+        }
+        var moduleGroups = GetEmittableUserFunctions()
+            .GroupBy(static function => function.ModuleName ?? "", StringComparer.Ordinal)
+            .OrderBy(static group => LlvmCodegenUnit.StableIdentity(group.Key))
+            .Select(static group => new ModuleFunctionGroup(group.Key, group.ToArray()))
+            .ToArray();
+        for (var index = 1; index < moduleGroups.Length; index++)
+        {
+            if (LlvmCodegenUnit.StableIdentity(moduleGroups[index - 1].Identity)
+                    == LlvmCodegenUnit.StableIdentity(moduleGroups[index].Identity))
+            {
+                throw new SollangException(
+                    $"codegen module identity collision between '{moduleGroups[index - 1].Identity}' "
+                    + $"and '{moduleGroups[index].Identity}'");
+            }
+        }
+        if (reuse is not null && TryCreateFullyReusedOutput(reuse, moduleGroups, out var fullyReused))
+        {
+            return fullyReused;
         }
         var header = $$"""
             target triple = "{{_platform.TargetTriple}}"
@@ -432,6 +455,8 @@ internal sealed partial class LlvmEmitter
         }
         header += EmitStructTypeDefinitions();
 
+        var units = new List<LlvmCodegenUnit>();
+        BeginUnit("prefix");
         EmitPlatformGlobalBlock(_platform.EmitGlobals);
         if (_platform is WindowsLlvmRuntimePlatform)
         {
@@ -483,13 +508,138 @@ internal sealed partial class LlvmEmitter
 
         EmitOwnedDropHelpers();
         EmitParallelCallbacks();
-        EmitUserFunctions();
+        var prefixKey = reuse?.PrefixKey ?? default;
+        units.Add(reuse is not null
+                  && reuse.TryGet(LlvmCodegenUnitKind.SharedPrefix, "", prefixKey, out var reusedPrefix)
+            ? new LlvmCodegenUnit(LlvmCodegenUnitKind.SharedPrefix, "", prefixKey, reusedPrefix, Reused: true)
+            : new LlvmCodegenUnit(
+                LlvmCodegenUnitKind.SharedPrefix,
+                "",
+                prefixKey,
+                header + FinishUnit(),
+                Reused: false));
+
+        foreach (var group in moduleGroups)
+        {
+            var identity = group.Identity;
+            var cacheKey = reuse is not null && reuse.ModuleKeys.TryGetValue(identity, out var plannedKey)
+                ? plannedKey
+                : default;
+            if (reuse is not null
+                && reuse.TryGet(LlvmCodegenUnitKind.Module, identity, cacheKey, out var reusedModule))
+            {
+                units.Add(new LlvmCodegenUnit(
+                    LlvmCodegenUnitKind.Module,
+                    identity,
+                    cacheKey,
+                    reusedModule,
+                    Reused: true));
+                continue;
+            }
+
+            BeginUnit("module." + LlvmCodegenUnit.StableIdentity(identity).ToString("x16", CultureInfo.InvariantCulture));
+            EmitUserFunctions(group.Functions);
+            units.Add(new LlvmCodegenUnit(
+                LlvmCodegenUnitKind.Module,
+                identity,
+                cacheKey,
+                FinishUnit(),
+                Reused: false));
+        }
+
+        BeginUnit("suffix");
         EmitRuntimeHelpers();
         EmitMain();
         EmitFunctionLine("attributes #0 = { nounwind }");
-
-        output.Write(header);
-        _globals.CopyTo(output);
-        _functions.CopyTo(output);
+        var suffixKey = reuse?.SuffixKey ?? default;
+        units.Add(reuse is not null
+                  && reuse.TryGet(LlvmCodegenUnitKind.SharedSuffix, "", suffixKey, out var reusedSuffix)
+            ? new LlvmCodegenUnit(LlvmCodegenUnitKind.SharedSuffix, "", suffixKey, reusedSuffix, Reused: true)
+            : new LlvmCodegenUnit(
+                LlvmCodegenUnitKind.SharedSuffix,
+                "",
+                suffixKey,
+                FinishUnit(),
+                Reused: false));
+        return new LlvmCodegenOutput(units);
     }
+
+    private static bool TryCreateFullyReusedOutput(
+        LlvmCodegenReuse reuse,
+        IReadOnlyList<ModuleFunctionGroup> moduleGroups,
+        out LlvmCodegenOutput output)
+    {
+        var units = new List<LlvmCodegenUnit>(moduleGroups.Count + 2);
+        if (!reuse.TryGet(
+                LlvmCodegenUnitKind.SharedPrefix,
+                "",
+                reuse.PrefixKey,
+                out var prefix))
+        {
+            output = null!;
+            return false;
+        }
+        units.Add(new LlvmCodegenUnit(
+            LlvmCodegenUnitKind.SharedPrefix,
+            "",
+            reuse.PrefixKey,
+            prefix,
+            Reused: true));
+        foreach (var group in moduleGroups)
+        {
+            if (!reuse.ModuleKeys.TryGetValue(group.Identity, out var cacheKey)
+                || !reuse.TryGet(
+                    LlvmCodegenUnitKind.Module,
+                    group.Identity,
+                    cacheKey,
+                    out var fragment))
+            {
+                output = null!;
+                return false;
+            }
+            units.Add(new LlvmCodegenUnit(
+                LlvmCodegenUnitKind.Module,
+                group.Identity,
+                cacheKey,
+                fragment,
+                Reused: true));
+        }
+        if (!reuse.TryGet(
+                LlvmCodegenUnitKind.SharedSuffix,
+                "",
+                reuse.SuffixKey,
+                out var suffix))
+        {
+            output = null!;
+            return false;
+        }
+        units.Add(new LlvmCodegenUnit(
+            LlvmCodegenUnitKind.SharedSuffix,
+            "",
+            reuse.SuffixKey,
+            suffix,
+            Reused: true));
+        output = new LlvmCodegenOutput(units);
+        return true;
+    }
+
+    private void BeginUnit(string token)
+    {
+        _activeGlobals = new MemoryOutputSink();
+        _activeFunctions = new MemoryOutputSink();
+        _activeUnitToken = token;
+        _stringId = 0;
+        _tempId = 0;
+        _labelId = 0;
+    }
+
+    private string FinishUnit()
+    {
+        var output = new MemoryOutputSink();
+        _activeGlobals.CopyTo(output);
+        _activeFunctions.CopyTo(output);
+        return output.ToString();
+    }
+
+    private sealed record ModuleFunctionGroup(string Identity, IReadOnlyList<BoundFunction> Functions);
 }

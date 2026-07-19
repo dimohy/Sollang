@@ -19,20 +19,16 @@ $singleSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhos
 $multiLibrarySource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-library-smoke.slg"
 $multiMainSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-main-smoke.slg"
 $groupedNotSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-grouped-not-smoke.slg"
+$runtimeManifestPath = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-compiler-runtime.sources.txt"
 $fingerprintSources = @(
     (Join-Path $repoRoot "examples\fixtures\429-selfhost-root\Alpha.slg")
     (Join-Path $repoRoot "examples\fixtures\429-selfhost-root\Zeta.slg")
     (Join-Path $repoRoot "examples\fixtures\429-selfhost-root\nested\Beta.slg")
 )
 $semanticContextSource = Join-Path $repoRoot "selfhost\semantic\context.slg"
-$processSource = Join-Path $repoRoot "stdlib\sys\process.slg"
-$compilerRuntimeSources = @(
-    $processSource
-    (Join-Path $repoRoot "selfhost\runtime\path.slg")
-    (Join-Path $repoRoot "selfhost\runtime\file.slg")
-    (Join-Path $repoRoot "stdlib\sys\directory.slg")
-    (Join-Path $repoRoot "stdlib\sys\directory\kind.slg")
-)
+$compilerRuntimeSources = Get-Content $runtimeManifestPath |
+    Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+    ForEach-Object { Join-Path $repoRoot $_.Trim() }
 $expectedStage2Bytes = 9545859L
 
 New-Item -ItemType Directory -Force -Path $artifactsDir | Out-Null
@@ -92,7 +88,7 @@ function Test-Stage2IsCurrent {
     }
 
     $stage2Time = (Get-Item $stage2Path).LastWriteTimeUtc
-    $inputs = @($stage1Path, $manifestPath) + $compilerRuntimeSources
+    $inputs = @($stage1Path, $manifestPath, $runtimeManifestPath) + $compilerRuntimeSources
     $inputs += Get-Content $manifestPath |
         Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
         ForEach-Object { Join-Path $repoRoot $_.Trim() }

@@ -7097,3 +7097,63 @@ D207C is now **2.5/5 (50%)**, and the periodic Stage3 cadence advances to
 **9/10**. The formal roadmap remains **47 complete, 9 partial, 4 missing:
 51.5/60 (85.8%)** because the ordinary emitter and build pipeline do not yet
 consume cached codegen units.
+
+## D207C3B - Production LLVM Units and Ordinary-Build Reuse
+
+Status: Windows/Linux full suites, Stage2, and Stage3 fixed point verified
+Date: 2026-07-20
+
+The production C# emitter no longer owns one monolithic globals/functions pair.
+It emits a shared prefix, canonical stable-hash-ordered module units, and a
+shared suffix. Global strings include a stable unit token, while SSA temporary
+and label numbering restarts for each function. A module fragment is therefore
+independent of prior modules and can be selected without replaying their
+emission. When every key is warm, the emitter returns the old fragments before
+generating any LLVM; on a partial hit it emits only the invalid modules and
+merges both generations in canonical order.
+
+`sollang build` retains source bytes and syntax per discovered source module.
+Its codegen key covers compiler MVID/schema, target, optimization configuration,
+exact module implementation bytes, canonical public declaration shape,
+transitive imported interfaces, the ambient standard-library interface, and
+the concrete bound-function specialization inventory. This is deliberately
+stricter than timestamps and remains correct when generic calls change the set
+of emitted functions.
+
+The disposable `.sollang-cache` generation uses the exact D207C3A schema-1
+`UInt64` envelope: the same magic, record order, little-endian fragment packing,
+and checksum functions. It carries
+exact UTF-8 identities, one prefix and suffix, unique canonically ordered
+module records, and the same per-fragment and envelope checksums defined by the
+self-host D207C3A schema. Loading rejects
+invalid magic, schema, kind, cardinality, ordering, lengths, UTF-8, duplicates,
+and checksums. A rejected cache is named in the build output and rebuilt rather
+than silently trusted. The new generation is written through a same-directory
+temporary file and atomically replaces the old generation only after the LLVM
+link succeeds.
+
+`scripts/verify-codegen-cache.ps1` executes the same generation matrix for
+Windows x64 and Linux x64. Each target proves cold `0/5`, warm `5/5`, exact LLVM
+byte equality, native output, body-only provider edits retaining the consumer
+and root as `2/5`, public-interface edits invalidating the transitive consumers
+as `0/5`, corruption rejection and repair. The Linux cold generation after the
+Windows run also proves target isolation. The Windows and Linux full suites
+each pass 573/573.
+
+The checkpoint-10 Stage3 run initially exposed drift between duplicated source
+lists: Stage2 included `selfhost/runtime/file.slg`, while Stage3 did not. The
+missing `sys.file` module left `openWrite` and `openRead` unresolved, so their
+following enum matches had no subject IR. Both Stage2 verifiers and the Stage3
+verifier now read `selfhost-compiler-runtime.sources.txt`; the manifest itself
+also participates in freshness checks. This makes the compiler source set one
+shared contract instead of three manually synchronized arrays.
+
+This completes the third D207C slice (**3/5, 60%**). Windows Stage2 passes 6/6
+at 10,553,582 LLVM bytes, Linux Stage2 passes 5/5 at 10,550,185 bytes, and
+Stage3 reaches the byte-identical 10,553,582-byte fixed point with normalized
+SHA-256 `21A504DB039BE52029D594580D3EA4B9002AB17C5C45B7C36EDD52BD7BF349E6`.
+The checkpoint cadence therefore resets from **10/10** to **0/10**. The
+module/interface cache is now a partial rather than missing gate:
+**47 complete, 10 partial, 3 missing: 52.0/60 (86.7%)**. Ordinary-build reuse of
+the already-defined raw-source and typed-IR artifacts remains required before
+the gate can be complete.

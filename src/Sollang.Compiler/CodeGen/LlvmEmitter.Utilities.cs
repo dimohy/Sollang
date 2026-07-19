@@ -10,17 +10,17 @@ internal sealed partial class LlvmEmitter
 {
     private void EmitGlobalLine(string line = "")
     {
-        _globals.WriteLine(line);
+        _activeGlobals.WriteLine(line);
     }
 
     private void EmitGlobalBlock(string block)
     {
-        _globals.Write(EnsureTrailingNewLine(block));
+        _activeGlobals.Write(EnsureTrailingNewLine(block));
     }
 
     private void EmitFunctionLine(string line = "")
     {
-        _functions.WriteLine(line);
+        _activeFunctions.WriteLine(line);
         if (line.EndsWith(':'))
         {
             _currentBlockTerminated = false;
@@ -29,7 +29,7 @@ internal sealed partial class LlvmEmitter
 
     private void EmitFunctionBlock(string block)
     {
-        _functions.Write(EnsureTrailingNewLine(block));
+        _activeFunctions.Write(EnsureTrailingNewLine(block));
     }
 
     private void EmitPlatformGlobalBlock(Action<StringBuilder> emit)
@@ -197,7 +197,7 @@ internal sealed partial class LlvmEmitter
                 $"[{slot.Size.ToString(CultureInfo.InvariantCulture)} x i8]",
                 slot.Alignment);
         }
-        _currentHoistedAllocas = _functions.CreateInsertionPoint();
+        _currentHoistedAllocas = _activeFunctions.CreateInsertionPoint();
     }
 
     private string EmitStackLifetimeStart(object unit)
@@ -863,7 +863,7 @@ internal sealed partial class LlvmEmitter
     private GlobalString AddGlobalString(string text)
     {
         var bytes = Encoding.UTF8.GetBytes(text);
-        var name = "@.slg.str." + _stringId.ToString(CultureInfo.InvariantCulture);
+        var name = "@.slg.str." + _activeUnitToken + "." + _stringId.ToString(CultureInfo.InvariantCulture);
         _stringId++;
         EmitGlobalLine($"""{name} = private unnamed_addr constant [{bytes.Length.ToString(CultureInfo.InvariantCulture)} x i8] c"{EscapeLlvmBytes(bytes)}", align 1""");
         return new GlobalString(name, bytes.Length);

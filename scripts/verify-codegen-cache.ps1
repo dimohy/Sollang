@@ -1,0 +1,228 @@
+[CmdletBinding()]
+param(
+    [string]$Distribution = "Ubuntu"
+)
+
+$ErrorActionPreference = "Stop"
+$repoRoot = Split-Path -Parent $PSScriptRoot
+$artifactsRoot = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "artifacts"))
+$caseRoot = [System.IO.Path]::GetFullPath((Join-Path $artifactsRoot "codegen-cache-verification"))
+$artifactsPrefix = $artifactsRoot.TrimEnd(
+    [System.IO.Path]::DirectorySeparatorChar,
+    [System.IO.Path]::AltDirectorySeparatorChar) + [System.IO.Path]::DirectorySeparatorChar
+if (-not $caseRoot.StartsWith($artifactsPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+    throw "verification root escaped the artifacts directory: $caseRoot"
+}
+if (Test-Path -LiteralPath $caseRoot) {
+    Remove-Item -LiteralPath $caseRoot -Recurse -Force
+}
+New-Item -ItemType Directory -Force -Path (Join-Path $caseRoot "cache") | Out-Null
+New-Item -ItemType Directory -Force -Path (Join-Path $caseRoot "build") | Out-Null
+
+$compiler = Join-Path $repoRoot "src\Sollang.Compiler\bin\Release\net11.0\Sollang.Compiler.dll"
+$llvm = Join-Path $repoRoot ".tools\llvm-22.1.8"
+$mainSource = Join-Path $caseRoot "main.slg"
+$providerSource = Join-Path $caseRoot "cache\provider.slg"
+$consumerSource = Join-Path $caseRoot "cache\consumer.slg"
+$outputPath = Join-Path $caseRoot "build\app.exe"
+
+@'
+import cache.consumer as consumer
+
+rootValue value: Int -> Int {
+    value
+}
+
+main {
+    21 -> consumer.compute -> rootValue => result
+    "$result" -> println
+}
+'@ | Set-Content -LiteralPath $mainSource -Encoding utf8NoBOM
+
+@'
+namespace cache.consumer
+
+import cache.provider as provider
+
+public compute value: Int -> Int {
+    value -> provider.scale
+}
+'@ | Set-Content -LiteralPath $consumerSource -Encoding utf8NoBOM
+
+function Write-Provider {
+    param(
+        [Parameter(Mandatory)] [int]$Factor,
+        [Parameter(Mandatory)] [int]$InterfaceRevision
+    )
+
+    $extra = switch ($InterfaceRevision) {
+        0 { "" }
+        1 { "`npublic identity value: Int -> Int {`n    value`n}`n" }
+        2 { "`npublic decrement value: Int -> Int {`n    value - 1`n}`n" }
+        default { throw "unsupported interface revision $InterfaceRevision" }
+    }
+    @"
+namespace cache.provider
+
+public scale value: Int -> Int {
+    value * $Factor
+}
+$extra
+"@ | Set-Content -LiteralPath $providerSource -Encoding utf8NoBOM
+}
+
+function Invoke-Build {
+    param(
+        [Parameter(Mandatory)] [string]$Target
+    )
+
+    $text = & dotnet $compiler build $mainSource `
+        -o $outputPath `
+        --target $Target `
+        --llvm $llvm `
+        --keep-temps 2>&1 | Out-String
+    if ($LASTEXITCODE -ne 0) {
+        throw "build failed for ${Target}:`n$text"
+    }
+    $match = [regex]::Match($text, '\[codegen-cache\] (?<status>.+?); reused (?<reused>\d+)/(?<total>\d+) units;')
+    if (-not $match.Success) {
+        throw "codegen cache status was not reported for ${Target}:`n$text"
+    }
+    [pscustomobject]@{
+        Text = $text.Trim()
+        Status = $match.Groups['status'].Value
+        Reused = [int]$match.Groups['reused'].Value
+        Total = [int]$match.Groups['total'].Value
+        LlvmHash = (Get-FileHash -Algorithm SHA256 ([System.IO.Path]::ChangeExtension($outputPath, ".ll"))).Hash
+    }
+}
+
+function Invoke-Product {
+    param(
+        [Parameter(Mandatory)] [string]$Target
+    )
+
+    if ($Target -eq "windows-x64") {
+        $value = & $outputPath
+    } else {
+        $wslPath = "/mnt/p/" + $outputPath.Substring(3).Replace('\', '/')
+        $value = wsl.exe -d $Distribution -- $wslPath
+    }
+    if ($LASTEXITCODE -ne 0) {
+        throw "generated product failed for $Target"
+    }
+    $value.Trim()
+}
+
+function Assert-Reused {
+    param(
+        [Parameter(Mandatory)] $Result,
+        [Parameter(Mandatory)] [int]$Expected,
+        [Parameter(Mandatory)] [string]$Description
+    )
+
+    if ($Result.Total -ne 5 -or $Result.Reused -ne $Expected) {
+        throw "$Description expected $Expected/5 reused units, actual $($Result.Reused)/$($Result.Total):`n$($Result.Text)"
+    }
+}
+
+function Assert-Product {
+    param(
+        [Parameter(Mandatory)] [string]$Target,
+        [Parameter(Mandatory)] [string]$Expected
+    )
+
+    $actual = Invoke-Product $Target
+    if ($actual -ne $Expected) {
+        throw "$Target product expected '$Expected', actual '$actual'"
+    }
+}
+
+function Corrupt-Cache {
+    param(
+        [Parameter(Mandatory)] [string]$Target
+    )
+
+    $cachePath = Join-Path $caseRoot "build\.sollang-cache\app.$Target.o0.cgu"
+    $stream = [System.IO.File]::Open($cachePath, 'Open', 'ReadWrite', 'None')
+    try {
+        $stream.Position = $stream.Length - 1
+        $value = $stream.ReadByte()
+        $stream.Position = $stream.Length - 1
+        $stream.WriteByte($value -bxor 0xff)
+        $stream.Flush($true)
+    } finally {
+        $stream.Dispose()
+    }
+}
+
+function Verify-Target {
+    param(
+        [Parameter(Mandatory)] [string]$Target,
+        [Parameter(Mandatory)] [int]$InitialFactor,
+        [Parameter(Mandatory)] [int]$BodyFactor,
+        [Parameter(Mandatory)] [int]$InitialInterfaceRevision,
+        [Parameter(Mandatory)] [int]$ChangedInterfaceRevision
+    )
+
+    Write-Host "[$Target 1/6] Cold build."
+    Write-Provider $InitialFactor $InitialInterfaceRevision
+    $cold = Invoke-Build $Target
+    Assert-Reused $cold 0 "$Target cold build"
+    Assert-Product $Target ([string](21 * $InitialFactor))
+
+    Write-Host "[$Target 2/6] Warm build and byte-identical merge."
+    $warm = Invoke-Build $Target
+    Assert-Reused $warm 5 "$Target warm build"
+    if ($warm.LlvmHash -ne $cold.LlvmHash) {
+        throw "$Target clean and cached LLVM differed"
+    }
+
+    Write-Host "[$Target 3/6] Body-only dependency edit preserves consumer units."
+    Write-Provider $BodyFactor $InitialInterfaceRevision
+    $body = Invoke-Build $Target
+    Assert-Reused $body 2 "$Target body-only build"
+    Assert-Product $Target ([string](21 * $BodyFactor))
+    $bodyWarm = Invoke-Build $Target
+    Assert-Reused $bodyWarm 5 "$Target body-only warm build"
+    if ($bodyWarm.LlvmHash -ne $body.LlvmHash) {
+        throw "$Target body-only clean and cached LLVM differed"
+    }
+
+    Write-Host "[$Target 4/6] Public-interface edit invalidates transitive consumers."
+    Write-Provider $BodyFactor $ChangedInterfaceRevision
+    $interface = Invoke-Build $Target
+    Assert-Reused $interface 0 "$Target interface-change build"
+    Assert-Product $Target ([string](21 * $BodyFactor))
+
+    Write-Host "[$Target 5/6] Corruption is rejected and rebuilt."
+    Corrupt-Cache $Target
+    $corrupt = Invoke-Build $Target
+    Assert-Reused $corrupt 0 "$Target corruption build"
+    if (-not $corrupt.Status.StartsWith("rejected:", [System.StringComparison]::Ordinal)) {
+        throw "$Target corrupt cache was not explicitly rejected: $($corrupt.Status)"
+    }
+
+    Write-Host "[$Target 6/6] Rebuilt generation is warm and byte-identical."
+    $repaired = Invoke-Build $Target
+    Assert-Reused $repaired 5 "$Target repaired warm build"
+    if ($repaired.LlvmHash -ne $corrupt.LlvmHash) {
+        throw "$Target rebuilt and cached LLVM differed"
+    }
+    Write-Host "[$Target 6/6] PASS LLVM $($repaired.LlvmHash)"
+}
+
+Write-Host "[cache 1/3] Build the Release compiler once."
+& dotnet build (Join-Path $repoRoot "Sollang.slnx") -c Release --no-restore --nologo
+if ($LASTEXITCODE -ne 0) {
+    throw "Release build failed"
+}
+Write-Host "[cache 1/3] PASS Release compiler."
+
+Write-Host "[cache 2/3] Verify Windows codegen generations."
+Verify-Target "windows-x64" 2 3 0 1
+Write-Host "[cache 2/3] PASS Windows codegen generations."
+
+Write-Host "[cache 3/3] Verify target isolation and Linux codegen generations."
+Verify-Target "linux-x64" 3 4 1 2
+Write-Host "[cache 3/3] PASS Linux target isolation and codegen generations."

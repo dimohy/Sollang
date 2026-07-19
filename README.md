@@ -64,6 +64,8 @@ value flow with `value -> target` syntax and expression-first bindings with
 - a Sollang standard library under `stdlib/sys`
 - source-generated lexer/parser code from compact grammar files
 - LLVM-backed Windows x64, Linux x64, and browser WebAssembly output
+- content-validated incremental LLVM units with byte-identical clean and cached
+  output, transitive interface invalidation, and atomic cache publication
 
 ## Example
 
@@ -147,6 +149,9 @@ Run `sollang --version` to verify the installed compiler version.
 
 On first use, the script downloads LLVM 22.1.8 into `.tools`. LLVM binaries,
 build outputs, and generated executables are intentionally ignored by Git.
+Ordinary builds keep a disposable `.sollang-cache` beside the selected output;
+the compiler reports cold, reused, or rejected units on every build. Deleting
+that directory always produces a clean rebuild and never removes source state.
 
 Build the browser WebAssembly sample and serve the repository root with any
 static file server:

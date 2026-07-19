@@ -7,13 +7,10 @@ $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $artifactsDir = Join-Path $repoRoot "artifacts\example-tests"
 $manifestPath = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-sollangc-driver.sources.txt"
-$processSource = Join-Path $repoRoot "stdlib\sys\process.slg"
-$compilerRuntimeSources = @(
-    $processSource
-    (Join-Path $repoRoot "selfhost\runtime\path.slg")
-    (Join-Path $repoRoot "stdlib\sys\directory.slg")
-    (Join-Path $repoRoot "stdlib\sys\directory\kind.slg")
-)
+$runtimeManifestPath = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-compiler-runtime.sources.txt"
+$compilerRuntimeSources = Get-Content $runtimeManifestPath |
+    Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+    ForEach-Object { Join-Path $repoRoot $_.Trim() }
 $stage2LlvmPath = Join-Path $artifactsDir "selfhost-stage2.ll"
 $stage2Path = Join-Path $artifactsDir "selfhost-stage2.exe"
 $stage3LlvmPath = Join-Path $artifactsDir "selfhost-stage3.ll"
@@ -46,7 +43,7 @@ $sourcePaths = Get-Content $manifestPath |
     ForEach-Object { (Resolve-Path (Join-Path $repoRoot $_.Trim())).Path }
 $sourcePaths += $compilerRuntimeSources | ForEach-Object { (Resolve-Path $_).Path }
 $stage2Time = (Get-Item $stage2Path).LastWriteTimeUtc
-$staleInput = @($manifestPath) + $sourcePaths |
+$staleInput = @($manifestPath, $runtimeManifestPath) + $sourcePaths |
     Where-Object { (Get-Item $_).LastWriteTimeUtc -gt $stage2Time } |
     Select-Object -First 1
 if ($staleInput) {

@@ -46,10 +46,11 @@ internal static class CompilerApp
 
     private static void Build(CliOptions options)
     {
-        var program = LoadProgram(options.SourcePaths, options.Project);
+        var loaded = LoadProgram(options.SourcePaths, options.Project);
         var pointerBitWidth = options.Target == CompilationTarget.Wasm32Browser ? 32 : 64;
-        var boundProgram = new SemanticCompiler(program, pointerBitWidth).Compile();
+        var boundProgram = new SemanticCompiler(loaded.Program, pointerBitWidth).Compile();
         var toolchain = LlvmToolchain.From(options.LlvmHome);
+        var codegenCache = IncrementalCodegenCache.Open(loaded, boundProgram, options);
 
         Directory.CreateDirectory(Path.GetDirectoryName(options.OutputPath)
             ?? Directory.GetCurrentDirectory());
@@ -69,14 +70,21 @@ internal static class CompilerApp
         try
         {
             var llPath = Path.Combine(workDir, Path.GetFileNameWithoutExtension(options.OutputPath) + ".ll");
+            var codegenOutput = LlvmIrGenerator.GenerateUnits(boundProgram, options.Target, codegenCache.Reuse);
             using (var writer = new StreamWriter(
                 llPath,
                 append: false,
                 new UTF8Encoding(encoderShouldEmitUTF8Identifier: false)))
             {
-                LlvmIrGenerator.WriteProgram(boundProgram, options.Target, writer);
+                codegenOutput.CopyTo(new TextWriterOutputSink(writer));
             }
             LinkLlvmIr(options, toolchain, llPath, workDir);
+            codegenCache.Publish(codegenOutput);
+            Console.WriteLine(
+                $"[codegen-cache] {codegenCache.LoadStatus}; reused "
+                + $"{codegenOutput.ReusedCount.ToString(CultureInfo.InvariantCulture)}/"
+                + $"{codegenOutput.Units.Count.ToString(CultureInfo.InvariantCulture)} units; "
+                + codegenCache.Path);
 
             if (options.KeepTemps)
             {
@@ -114,7 +122,7 @@ internal static class CompilerApp
         }
     }
 
-    private static SollangProgram LoadProgram(
+    private static LoadedCompilation LoadProgram(
         IReadOnlyList<string> sourcePaths,
         ProjectBuild? project)
     {
@@ -126,30 +134,31 @@ internal static class CompilerApp
             throw new SollangException("multiple source files contain executable top-level statements; exactly one root file may define the program entry point");
         }
 
-        return new SollangProgram(
+        var program = new SollangProgram(
             [],
             [],
-            standardLibrary.SelectMany(static program => program.Structs)
+            standardLibrary.SelectMany(static source => source.Program.Structs)
                 .Concat(sourcePrograms.SelectMany(static source => source.Program.Structs))
                 .ToArray(),
-            standardLibrary.SelectMany(static program => program.Enums)
+            standardLibrary.SelectMany(static source => source.Program.Enums)
                 .Concat(sourcePrograms.SelectMany(static source => source.Program.Enums))
                 .ToArray(),
-            standardLibrary.SelectMany(static program => program.Traits)
+            standardLibrary.SelectMany(static source => source.Program.Traits)
                 .Concat(sourcePrograms.SelectMany(static source => source.Program.Traits))
                 .ToArray(),
-            standardLibrary.SelectMany(static program => program.Functions)
+            standardLibrary.SelectMany(static source => source.Program.Functions)
                 .Concat(sourcePrograms.SelectMany(static source => source.Program.Functions))
                 .ToArray(),
             sourcePrograms.SelectMany(static source => source.Program.Statements).ToArray());
+        return new LoadedCompilation(program, standardLibrary.Concat(sourcePrograms).ToArray());
     }
 
-    private static IReadOnlyList<LoadedSource> LoadUserPrograms(
+    private static IReadOnlyList<CompilationSource> LoadUserPrograms(
         IReadOnlyList<string> sourcePaths,
         ProjectBuild? project)
     {
-        var loadedByPath = new Dictionary<string, LoadedSource>(StringComparer.OrdinalIgnoreCase);
-        var modules = new Dictionary<string, LoadedSource>(StringComparer.Ordinal);
+        var loadedByPath = new Dictionary<string, CompilationSource>(StringComparer.OrdinalIgnoreCase);
+        var modules = new Dictionary<string, CompilationSource>(StringComparer.Ordinal);
         foreach (var sourcePath in sourcePaths)
         {
             AddSource(
@@ -181,13 +190,13 @@ internal static class CompilerApp
         return loadedByPath.Values.OrderBy(static source => source.Path, StringComparer.OrdinalIgnoreCase).ToArray();
     }
 
-    private static LoadedSource AddSource(
+    private static CompilationSource AddSource(
         string path,
         string? expectedModule,
         ProjectPackage? package,
         bool isDependencyRoot,
-        IDictionary<string, LoadedSource> loadedByPath,
-        IDictionary<string, LoadedSource> modules)
+        IDictionary<string, CompilationSource> loadedByPath,
+        IDictionary<string, CompilationSource> modules)
     {
         if (loadedByPath.TryGetValue(path, out var existing))
         {
@@ -204,7 +213,8 @@ internal static class CompilerApp
             throw new SollangException($"imported module file not found: {path}");
         }
 
-        var program = ParseSourceFile(path, isStandardLibrary: false);
+        var parsed = ParseSourceFile(path, isStandardLibrary: false);
+        var program = parsed.Program;
         var moduleName = string.Join('.', program.NamespacePath);
         if (expectedModule is not null && moduleName != expectedModule)
         {
@@ -224,7 +234,7 @@ internal static class CompilerApp
                 $"module '{moduleName}' is declared by both '{duplicate.Path}' and '{path}'");
         }
 
-        var loaded = new LoadedSource(path, program, package);
+        var loaded = new CompilationSource(path, program, package, IsStandardLibrary: false, parsed.SourceBytes);
         loadedByPath.Add(path, loaded);
         if (moduleName.Length > 0)
         {
@@ -234,11 +244,11 @@ internal static class CompilerApp
     }
 
     private static void VisitImports(
-        LoadedSource source,
+        CompilationSource source,
         string moduleRoot,
         IReadOnlyDictionary<string, ProjectPackage> packagesByName,
-        IDictionary<string, LoadedSource> loadedByPath,
-        IDictionary<string, LoadedSource> modules,
+        IDictionary<string, CompilationSource> loadedByPath,
+        IDictionary<string, CompilationSource> modules,
         IDictionary<string, ModuleVisitState> states,
         IReadOnlyList<string> chain)
     {
@@ -283,7 +293,7 @@ internal static class CompilerApp
                     $"project '{source.Package.Manifest.Name}' imports undeclared dependency '{import.Path[0]}'");
             }
 
-            LoadedSource? imported = null;
+            CompilationSource? imported = null;
             if (modules.TryGetValue(moduleName, out var existing)
                 && SamePackage(existing.Package, importedPackage))
             {
@@ -330,7 +340,7 @@ internal static class CompilerApp
 
     private static string PackageName(ProjectPackage? package) => package?.Manifest.Name ?? "<explicit-sources>";
 
-    private static IReadOnlyList<SollangProgram> LoadStandardLibrary(string sourcePath)
+    private static IReadOnlyList<CompilationSource> LoadStandardLibrary(string sourcePath)
     {
         var root = FindRepositoryRoot(sourcePath);
         var standardLibraryRoot = Path.Combine(root, "stdlib");
@@ -346,7 +356,7 @@ internal static class CompilerApp
                 $"standard library contains no Sollang source modules: {standardLibraryRoot}");
         }
 
-        var programs = new List<SollangProgram>(paths.Length);
+        var sources = new List<CompilationSource>(paths.Length);
         var modules = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var path in paths)
         {
@@ -355,7 +365,8 @@ internal static class CompilerApp
                 '.',
                 Path.ChangeExtension(relativePath, extension: null)!
                     .Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
-            var program = ParseSourceFile(path, isStandardLibrary: true);
+            var parsed = ParseSourceFile(path, isStandardLibrary: true);
+            var program = parsed.Program;
             var actualModule = ModuleName(program);
             if (!string.Equals(actualModule, expectedModule, StringComparison.Ordinal))
             {
@@ -376,10 +387,15 @@ internal static class CompilerApp
             }
 
             modules.Add(actualModule, path);
-            programs.Add(program);
+            sources.Add(new CompilationSource(
+                path,
+                program,
+                Package: null,
+                IsStandardLibrary: true,
+                parsed.SourceBytes));
         }
 
-        return programs;
+        return sources;
     }
 
     private static string FindRepositoryRoot(string sourcePath)
@@ -407,17 +423,20 @@ internal static class CompilerApp
         yield return AppContext.BaseDirectory;
     }
 
-    private static SollangProgram ParseSourceFile(string path, bool isStandardLibrary)
+    private static ParsedSource ParseSourceFile(string path, bool isStandardLibrary)
     {
-        var sourceText = File.ReadAllText(path, Encoding.UTF8);
+        var sourceBytes = File.ReadAllBytes(path);
+        using var stream = new MemoryStream(sourceBytes, writable: false);
+        using var reader = new StreamReader(
+            stream,
+            new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true),
+            detectEncodingFromByteOrderMarks: true);
+        var sourceText = reader.ReadToEnd();
         var tokens = new Lexer(sourceText).Lex();
-        return new Parser(tokens, isStandardLibrary).Parse();
+        return new ParsedSource(new Parser(tokens, isStandardLibrary).Parse(), sourceBytes);
     }
 
-    private sealed record LoadedSource(
-        string Path,
-        SollangProgram Program,
-        ProjectPackage? Package);
+    private sealed record ParsedSource(SollangProgram Program, byte[] SourceBytes);
 
     private enum ModuleVisitState
     {

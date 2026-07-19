@@ -20,8 +20,9 @@ internal sealed partial class LlvmEmitter
         return true;
     }
 
-    private void EmitUserFunctions()
+    private IReadOnlyList<BoundFunction> GetEmittableUserFunctions()
     {
+        var result = new List<BoundFunction>();
         var emitted = new HashSet<string>(StringComparer.Ordinal);
         var emittedFunctions = new HashSet<BoundFunction>(ReferenceEqualityComparer.Instance);
         foreach (var function in EnumerateEmittableFunctions(_program.Functions.Values))
@@ -37,7 +38,18 @@ internal sealed partial class LlvmEmitter
                 continue;
             }
 
+            result.Add(function);
+        }
+        return result;
+    }
+
+    private void EmitUserFunctions(IEnumerable<BoundFunction> functions)
+    {
+        foreach (var function in functions)
+        {
             _currentFunction = function;
+            _tempId = 0;
+            _labelId = 0;
             if (function.IsAsync)
             {
                 EmitAsyncFunction(function);

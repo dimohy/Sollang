@@ -1,7 +1,7 @@
 # Sollang Self-Hosting Roadmap
 
 Status: active
-Updated: 2026-07-19
+Updated: 2026-07-20
 
 The end state is an Sollang compiler written in Sollang that reads a multi-file Sollang
 program, performs lexical, syntactic, type, ownership, and module analysis,
@@ -125,12 +125,12 @@ not lines of code.
 | Core syntax and control flow | 10 | 10 | 0 | 0 | 10.0 |
 | Types, traits, and generics | 12 | 11 | 0 | 1 | 11.0 |
 | Ownership and storage | 10 | 7 | 2 | 1 | 8.0 |
-| Modules, visibility, and builds | 8 | 6 | 1 | 1 | 6.5 |
+| Modules, visibility, and builds | 8 | 6 | 2 | 0 | 7.0 |
 | Compiler-construction primitives | 12 | 11 | 1 | 0 | 11.5 |
 | Standard library and tooling | 8 | 2 | 5 | 1 | 4.5 |
-| **Total** | **60** | **47** | **9** | **4** | **51.5 / 60** |
+| **Total** | **60** | **47** | **10** | **3** | **52.0 / 60** |
 
-Current count-based progress: **85.8% (51.5 of 60 equivalent gates)**.
+Current count-based progress: **86.7% (52.0 of 60 equivalent gates)**.
 
 The frontend parallel-compilation subproject is **28/28 checks (100%)**. Its
 source-local product boundary, typed callback-result role slice, nested-call
@@ -141,7 +141,7 @@ reject mutable or structurally non-sendable captures. The submitting parent now
 helps drain its task group before the structured join. Exact cancellation and
 partial-result destruction plus full Windows/Linux suite parity are proven.
 This completed feature-local subproject does not promote a roadmap gate.
-There are **8.5 equivalent gates remaining**. Because the remaining compiler
+There are **8.0 equivalent gates remaining**. Because the remaining compiler
 primitives are harder than early syntax gates, this is not an elapsed-time
 estimate.
 
@@ -288,12 +288,15 @@ milestone without changing the broader 60-gate language-capability score.
   `sollang build` discovers it from ancestor directories; the standard library
   recursively discovers every `.slg` module below its confined root in stable
   relative-path order and verifies path-to-namespace identity.
-- Partial (1): the package graph has deterministic multiple-product selection,
+- Partial (2): the package graph has deterministic multiple-product selection,
   exact local path dependencies,
   direct-dependency visibility, transitive resolution, and cycle/name-collision
   diagnostics, but not versions, registries, Git sources, a lock file, or
-  workspaces.
-- Missing (1): module/interface cache.
+  workspaces. The ordinary C# bootstrap build now reuses validated LLVM
+  prefix/module/suffix units from a persistent old generation and atomically
+  publishes a complete new generation after linking; raw-source and typed-IR
+  artifacts are not yet consumed before semantic analysis.
+- Missing (0).
 
 ### Compiler-construction primitives — 11.5 / 12
 
@@ -1357,16 +1360,23 @@ Implementation order:
   - [x] Encode a canonical module envelope ordered by stable path hash, with IR
     references rewritten as module hash plus module-local ordinal.
   - [x] Add the canonical structural type table and decode/rehydration path.
-- [ ] Split deterministic LLVM output into cacheable module/codegen units and a
+- [x] Split deterministic LLVM output into cacheable module/codegen units and a
   canonical ordered merge.
   - [x] Define, validate, decode, and canonically merge the persistent
     codegen-unit artifact independently of source input order.
-  - [ ] Route the real LLVM emitter into shared-prefix, per-module, and
+  - [x] Route the real LLVM emitter into shared-prefix, per-module, and
     shared-suffix sinks and consume reused fragments in an ordinary build.
 - [ ] Integrate old-generation load and new-generation atomic publication into
   normal `sollang build`.
+  - [x] Load, validate, reuse, and atomically publish the C# bootstrap
+    compiler's LLVM codegen units after a successful link.
+  - [ ] Load the stable raw-source and typed-IR generations before semantic
+    analysis so frontend work can also be skipped.
 - [ ] Prove cold, warm, body-only, public-interface, corruption, target-change,
   and clean-vs-cached byte-equivalence cases on Windows and Linux.
+  - [x] Prove the complete matrix for ordinary LLVM codegen-unit reuse with
+    `scripts/verify-codegen-cache.ps1`.
+  - [ ] Prove the same invalidation matrix for pre-semantic typed-IR reuse.
 
 This deliberately starts with module/codegen-unit granularity. Rust's query
 graph shows the eventual finer-grained direction, while Clang demonstrates that
@@ -1418,6 +1428,47 @@ current emitter still writes a monolithic stream. D207C is now **2.5/5 (50%)**,
 the periodic Stage3 cadence advances to **9/10**, and the formal roadmap remains
 **47 complete, 9 partial, 4 missing: 51.5/60 (85.8%)** until real emitter
 fragments are loaded and merged by `sollang build`.
+
+D207C3B routes the production C# LLVM emitter through one shared prefix, a
+stable-hash-ordered unit for every module that emits user functions, and one
+shared suffix. String globals carry a unit-stable identity and SSA temporaries
+restart at each function, so a fragment no longer depends on which earlier
+module happened to emit first. A completely warm generation returns the cached
+fragments before running the emitter; a partial generation emits only invalid
+modules and canonically merges them with validated old fragments.
+
+Normal `sollang build` now retains exact source bytes per discovered module,
+computes canonical public-declaration and transitive-import fingerprints, adds
+the concrete specialization inventory, compiler MVID, target, and optimization
+configuration to its keys, and stores the resulting fragments in a disposable
+schema-1 packed-`UInt64` generation beside the output—the same magic, record
+layout, little-endian byte packing, and checksum contract as D207C3A. The reader bounds every length, requires
+one prefix and suffix plus strictly ordered unique modules, validates UTF-8,
+the schema-1 per-fragment and whole-envelope checksums, and reports corruption
+before rebuilding. Publication uses a same-directory write-through temporary
+file and atomic replacement only after linking succeeds.
+
+The focused verifier proves Windows and Linux cold `0/5`, warm `5/5`, body-only
+dependency edits with the unaffected consumer and root reused as `2/5`, public
+interface edits with transitive invalidation `0/5`, target isolation, explicit
+corruption rejection, recovery, native execution, and clean-vs-cached LLVM byte
+identity. The Windows and Linux full suites each pass 573/573. This completes
+the production codegen-unit slice: D207C is **3/5 (60%)**. Windows Stage2 passes
+6/6 at 10,553,582 LLVM bytes and Linux Stage2 passes 5/5 at 10,550,185 bytes.
+
+The checkpoint-10 Stage3 run also made the complete compiler input set an
+explicit invariant. Stage2 formerly included `selfhost/runtime/file.slg` while
+Stage3's duplicated list omitted it, leaving `sys.file.openWrite/openRead`
+unresolved and their following enum matches without subject IR. Windows Stage2,
+Linux Stage2, and Stage3 now consume the same
+`selfhost-compiler-runtime.sources.txt` manifest and include that manifest in
+freshness checks. Stage3 reaches the identical 10,553,582-byte compiler with
+normalized SHA-256
+`21A504DB039BE52029D594580D3EA4B9002AB17C5C45B7C36EDD52BD7BF349E6`, so the
+periodic cadence resets from **10/10** to **0/10**. The module/interface-cache gate
+advances from missing to partial, so the formal roadmap is now **47 complete,
+10 partial, 3 missing: 52.0/60 (86.7%)**. Frontend raw-source/typed-IR reuse in
+ordinary builds remains the next integration boundary.
 
 ## Immediate Implementation Order
 

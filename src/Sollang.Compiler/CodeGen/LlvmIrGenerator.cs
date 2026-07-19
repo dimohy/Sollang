@@ -14,4 +14,12 @@ internal static class LlvmIrGenerator
         var output = new TextWriterOutputSink(writer);
         new LlvmEmitter(program, LlvmRuntimePlatform.Create(target)).Emit(output);
     }
+
+    public static LlvmCodegenOutput GenerateUnits(
+        BoundProgram program,
+        CompilationTarget target,
+        LlvmCodegenReuse reuse)
+    {
+        return new LlvmEmitter(program, LlvmRuntimePlatform.Create(target)).EmitUnits(reuse);
+    }
 }

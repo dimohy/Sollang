@@ -2182,6 +2182,16 @@ Current backend:
   subject-value `when`, branch/phi conditional lowering, named inline LLVM
   aggregates for user structs, statically dispatched methods, inlined local
   functions, and runtime integer decimal output
+- incremental LLVM units: the production emitter writes one target/configuration
+  prefix, stable-hash-ordered per-module function units, and one program suffix.
+  Unit-local string symbols and function-local SSA numbering make module text
+  independent of earlier emission order. `sollang build` may reuse a module only
+  when its exact implementation, transitive public interfaces, concrete
+  specialization inventory, compiler identity, target, and configuration match.
+  The persistent binary generation has bounded lengths, canonical unit order,
+  full module identities, the schema-1 per-fragment and envelope checksums, and is
+  atomically replaced only after a successful link. A corrupt or incompatible
+  generation is reported and rebuilt; cached and clean LLVM bytes must match.
 - common emitter: `LlvmEmitter` owns function calls, bindings,
   interpolation, local-function inlining, `each` lowering, integer decimal
   output, containers, and `readInt` parsing. It is split into partial files by
