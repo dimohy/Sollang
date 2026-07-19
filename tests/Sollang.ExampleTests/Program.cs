@@ -314,7 +314,9 @@ Parallel.ForEach(
     ReportStarted(name);
     try
     {
-    var sourcePath = Path.Combine(repoRoot, "examples", name + ".slg");
+    var defaultSourcePath = Path.Combine(repoRoot, "examples", name + ".slg");
+    var targetSourcePath = Path.Combine(repoRoot, "examples", name + "." + TestTargetName(testTarget) + ".slg");
+    var sourcePath = File.Exists(targetSourcePath) ? targetSourcePath : defaultSourcePath;
     var projectPath = Path.Combine(expectedDir, name + ".project.txt");
     var stdinPath = Path.Combine(expectedDir, name + ".stdin.txt");
     var argumentsPath = Path.Combine(expectedDir, name + ".args.txt");
