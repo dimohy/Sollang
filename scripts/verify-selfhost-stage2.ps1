@@ -21,7 +21,13 @@ $multiMainSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\self
 $groupedNotSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-grouped-not-smoke.slg"
 $semanticContextSource = Join-Path $repoRoot "selfhost\semantic\context.slg"
 $processSource = Join-Path $repoRoot "stdlib\sys\process.slg"
-$expectedStage2Bytes = 8881548L
+$compilerRuntimeSources = @(
+    $processSource
+    (Join-Path $repoRoot "selfhost\runtime\path.slg")
+    (Join-Path $repoRoot "stdlib\sys\directory.slg")
+    (Join-Path $repoRoot "stdlib\sys\directory\kind.slg")
+)
+$expectedStage2Bytes = 9361816L
 
 New-Item -ItemType Directory -Force -Path $artifactsDir | Out-Null
 
@@ -47,6 +53,7 @@ function Invoke-ProcessToFile {
         -RedirectStandardError $ErrorPath `
         -PassThru `
         -WindowStyle Hidden
+    $null = $process.Handle
     return $process
 }
 
@@ -58,6 +65,7 @@ function Assert-ProcessSucceeded {
     )
 
     $Process.WaitForExit()
+    $Process.Refresh()
     if ($Process.ExitCode -ne 0) {
         $details = if (Test-Path $ErrorPath) { Get-Content $ErrorPath -Raw } else { "" }
         throw "$Description failed with exit code $($Process.ExitCode).`n$details"
@@ -78,7 +86,7 @@ function Test-Stage2IsCurrent {
     }
 
     $stage2Time = (Get-Item $stage2Path).LastWriteTimeUtc
-    $inputs = @($stage1Path, $manifestPath, $processSource)
+    $inputs = @($stage1Path, $manifestPath) + $compilerRuntimeSources
     $inputs += Get-Content $manifestPath |
         Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
         ForEach-Object { Join-Path $repoRoot $_.Trim() }
@@ -105,7 +113,7 @@ if (Test-Stage2IsCurrent) {
     $sourcePaths = Get-Content $manifestPath |
         Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
         ForEach-Object { (Resolve-Path (Join-Path $repoRoot $_.Trim())).Path }
-    $sourcePaths += (Resolve-Path $processSource).Path
+    $sourcePaths += $compilerRuntimeSources | ForEach-Object { (Resolve-Path $_).Path }
     $stage2ErrorPath = Join-Path $artifactsDir "selfhost-stage2.err.log"
     $stage2Process = Invoke-ProcessToFile `
         -FilePath $stage1Path `
@@ -129,7 +137,7 @@ if (Test-Stage2IsCurrent) {
 }
 
 $stage2Llvm = [System.IO.File]::ReadAllText($stage2LlvmPath)
-if ($stage2Llvm -notmatch '(?s)define internal void @sollang_parallel_callback_\d+\(ptr %group, i64 %index\) \{.*?call %sollang\.struct\.m5_s19 @sollang_m5_s\d+\(.*?\r?\n\}') {
+if ($stage2Llvm -notmatch '(?s)define internal void @sollang_parallel_callback_\d+\(ptr %group, i64 %index\) \{.*?call %sollang\.struct\.m(?<typedIrModule>\d+)_s19 @sollang_m\k<typedIrModule>_s\d+\(.*?\r?\n\}') {
     throw "stage-2 LLVM does not contain the function-local typed IR worker callback"
 }
 

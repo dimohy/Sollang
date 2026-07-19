@@ -694,7 +694,7 @@ internal static class ParserEmitter
         builder.AppendLine("            isAsync = true;");
         builder.AppendLine("        }");
         builder.AppendLine("        string returnType;");
-        builder.AppendLine("        if (Check(TokenKind.FatArrow) || Check(TokenKind.Arrow) || Check(TokenKind.Equal))");
+        builder.AppendLine("        if (Check(TokenKind.FatArrow) || Check(TokenKind.Arrow) || Check(TokenKind.Equal) || CheckIdentifier(\"uses\"))");
         builder.AppendLine("        {");
         builder.AppendLine("            returnType = InferredFunctionType.Name;");
         builder.AppendLine("        }");

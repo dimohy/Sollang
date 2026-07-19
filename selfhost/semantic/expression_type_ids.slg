@@ -478,6 +478,35 @@ public resolveContext prepared: semanticContext.SemanticSnapshot -> ExpressionTy
                                 qualifiedValueReturn.status == 0 -> if { qualifiedValueReturn.typeId => builtinTypeId! }
                             }
                         }
+                        (qualifiedValueTargetSymbol.kind == 27 and qualifiedValueTargetSymbol.parent >= 0) -> if {
+                            -1 => qualifiedEnumTypeId!
+                            0 => qualifiedEnumTypeSearch!
+                            (qualifiedEnumTypeSearch! < (types! -> len) and qualifiedEnumTypeId! < 0) -> while {
+                                types![qualifiedEnumTypeSearch!] => qualifiedEnumType
+                                (qualifiedEnumType.kind == 1 and (qualifiedEnumType.origin == 0 or qualifiedEnumType.origin == 2) and qualifiedEnumType.module == qualifiedValueTargetSource and qualifiedEnumType.symbol == qualifiedValueTargetSymbol.parent) -> if {
+                                    qualifiedEnumTypeSearch! => qualifiedEnumTypeId!
+                                }
+                                qualifiedEnumTypeSearch! + 1 => qualifiedEnumTypeSearch!
+                            }
+                            qualifiedEnumTypeId! < 0 -> if {
+                                types! -> len => qualifiedEnumTypeId!
+                                2 => qualifiedEnumOrigin!
+                                qualifiedValueTargetSource == sourceIndex! -> if { 0 => qualifiedEnumOrigin! }
+                                types! -> push(typeIds.SemanticType {
+                                    kind: 1
+                                    origin: qualifiedEnumOrigin!
+                                    module: qualifiedValueTargetSource
+                                    symbol: qualifiedValueTargetSymbol.parent
+                                    first: -1
+                                    second: -1
+                                    length: -1
+                                    lengthHash: UInt64(0)
+                                    containsParameter: false
+                                    status: 0
+                                })
+                            }
+                            qualifiedEnumTypeId! => builtinTypeId!
+                        }
                     }
                 }
             }

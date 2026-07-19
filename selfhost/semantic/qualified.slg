@@ -39,18 +39,73 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> [QualifiedResolution
             package.nodes[sourceRange.astStart + pathAstIndex!] => pathAst
             (pathAst.kind == 16 or pathAst.kind == 36) -> if {
                 -1 => firstIdentifier!
+                -1 => secondIdentifier!
+                -1 => previousIdentifier!
                 -1 => lastIdentifier!
+                0 => identifierCount!
                 pathAst.firstToken => pathToken!
-                pathAst.firstToken + pathAst.tokenCount => pathEnd
-                pathToken! < pathEnd -> while {
+                pathAst.firstToken + pathAst.tokenCount => pathEnd!
+                pathToken! < pathEnd! -> while {
+                    package.tokens[sourceRange.tokenStart + pathToken!].kind == grammar.tokenIdLeftParen -> if { pathToken! => pathEnd! }
                     package.tokens[sourceRange.tokenStart + pathToken!].kind == grammar.tokenIdIdentifier -> if {
                         firstIdentifier! < 0 -> if { pathToken! => firstIdentifier! }
+                        identifierCount! == 1 -> if { pathToken! => secondIdentifier! }
+                        lastIdentifier! >= 0 -> if { lastIdentifier! => previousIdentifier! }
                         pathToken! => lastIdentifier!
+                        identifierCount! + 1 => identifierCount!
                     }
                     pathToken! + 1 => pathToken!
                 }
                 (firstIdentifier! >= 0 and lastIdentifier! != firstIdentifier!) -> if {
+                    false => localVariantResolved!
+                    -1 => currentModule!
+                    0 => currentModuleSearch!
+                    currentModuleSearch! < (identities! -> len) -> while {
+                        identities![currentModuleSearch!].sourceIndex == sourceIndex! -> if { currentModuleSearch! => currentModule! }
+                        currentModuleSearch! + 1 => currentModuleSearch!
+                    }
+                    (currentModule! >= 0 and previousIdentifier! >= 0) -> if {
+                        0 => localEnumSearch!
+                        localEnumSearch! < sourceRange.symbolCount -> while {
+                            package.symbols[sourceRange.symbolStart + localEnumSearch!] => localEnum
+                            (localEnum.kind == 4 and localEnum.parent < 0) -> if {
+                                package.tokens[sourceRange.tokenStart + localEnum.nameToken] => localEnumName
+                                package.tokens[sourceRange.tokenStart + previousIdentifier!] => localEnumReference
+                                localEnumName.span.length == localEnumReference.span.length => localEnumEqual!
+                                UIntSize(0) => localEnumByte!
+                                (localEnumEqual! and localEnumByte! < localEnumName.span.length) -> while {
+                                    (source -> byte(localEnumName.span.start + localEnumByte!)) != (source -> byte(localEnumReference.span.start + localEnumByte!)) -> if { false => localEnumEqual! }
+                                    localEnumByte! + UIntSize(1) => localEnumByte!
+                                }
+                                localEnumEqual! -> if {
+                                    0 => localVariantSearch!
+                                    localVariantSearch! < sourceRange.symbolCount -> while {
+                                        package.symbols[sourceRange.symbolStart + localVariantSearch!] => localVariant
+                                        (localVariant.kind == 27 and localVariant.parent == localEnumSearch!) -> if {
+                                            package.tokens[sourceRange.tokenStart + localVariant.nameToken] => localVariantName
+                                            package.tokens[sourceRange.tokenStart + lastIdentifier!] => localVariantReference
+                                            localVariantName.span.length == localVariantReference.span.length => localVariantEqual!
+                                            UIntSize(0) => localVariantByte!
+                                            (localVariantEqual! and localVariantByte! < localVariantName.span.length) -> while {
+                                                (source -> byte(localVariantName.span.start + localVariantByte!)) != (source -> byte(localVariantReference.span.start + localVariantByte!)) -> if { false => localVariantEqual! }
+                                                localVariantByte! + UIntSize(1) => localVariantByte!
+                                            }
+                                            localVariantEqual! -> if {
+                                                QualifiedResolution { sourceModule: sourceIndex!, pathAst: pathAstIndex!, targetModule: currentModule!, targetSymbol: localVariantSearch!, status: 0 } => localResult
+                                                results! -> push(localResult)
+                                                true => localVariantResolved!
+                                                sourceRange.symbolCount => localVariantSearch!
+                                            }
+                                        }
+                                        localVariantSearch! + 1 => localVariantSearch!
+                                    }
+                                }
+                            }
+                            localEnumSearch! + 1 => localEnumSearch!
+                        }
+                    }
                     0 => edgeIndex!
+                    localVariantResolved! -> if { importCount => edgeIndex! }
                     edgeIndex! < importCount -> while {
                         imports![edgeIndex!] => edge
                         resolvedImports![edgeIndex!] => resolvedImport
@@ -78,7 +133,9 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> [QualifiedResolution
                                     package.symbols[targetRange.symbolStart + symbolIndex!] => candidate
                                     candidate.parent < 0 -> if {
                                         package.tokens[targetRange.tokenStart + candidate.nameToken] => candidateName
-                                        package.tokens[sourceRange.tokenStart + lastIdentifier!] => memberName
+                                        lastIdentifier! => topLevelIdentifier!
+                                        identifierCount! >= 3 -> if { secondIdentifier! => topLevelIdentifier! }
+                                        package.tokens[sourceRange.tokenStart + topLevelIdentifier!] => memberName
                                         candidateName.span.length == memberName.span.length => memberEqual!
                                         UIntSize(0) => memberByte!
                                         (memberEqual! and memberByte! < candidateName.span.length) -> while {
@@ -88,8 +145,34 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> [QualifiedResolution
                                             memberByte! + UIntSize(1) => memberByte!
                                         }
                                         memberEqual! -> if {
-                                            symbolIndex! => targetSymbol!
-                                            candidate.flags >= 4 -> if { true => targetPublic! }
+                                            identifierCount! >= 3 -> if {
+                                                candidate.kind == 4 -> if {
+                                                    0 => nestedSymbolIndex!
+                                                    nestedSymbolIndex! < targetRange.symbolCount -> while {
+                                                        package.symbols[targetRange.symbolStart + nestedSymbolIndex!] => nestedCandidate
+                                                        nestedCandidate.parent == symbolIndex! -> if {
+                                                            package.tokens[targetRange.tokenStart + nestedCandidate.nameToken] => nestedName
+                                                            package.tokens[sourceRange.tokenStart + lastIdentifier!] => nestedMemberName
+                                                            nestedName.span.length == nestedMemberName.span.length => nestedEqual!
+                                                            UIntSize(0) => nestedByte!
+                                                            (nestedEqual! and nestedByte! < nestedName.span.length) -> while {
+                                                                targetSource -> byte(nestedName.span.start + nestedByte!) => nestedLeftByte
+                                                                source -> byte(nestedMemberName.span.start + nestedByte!) => nestedRightByte
+                                                                nestedLeftByte != nestedRightByte -> if { false => nestedEqual! }
+                                                                nestedByte! + UIntSize(1) => nestedByte!
+                                                            }
+                                                            nestedEqual! -> if {
+                                                                nestedSymbolIndex! => targetSymbol!
+                                                                candidate.flags >= 4 -> if { true => targetPublic! }
+                                                            }
+                                                        }
+                                                        nestedSymbolIndex! + 1 => nestedSymbolIndex!
+                                                    }
+                                                }
+                                            } else {
+                                                symbolIndex! => targetSymbol!
+                                                candidate.flags >= 4 -> if { true => targetPublic! }
+                                            }
                                         }
                                     }
                                     symbolIndex! + 1 => symbolIndex!

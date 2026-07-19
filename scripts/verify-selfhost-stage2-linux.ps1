@@ -18,10 +18,16 @@ $llvmDir = Join-Path $repoRoot ".tools\llvm-22.1.8"
 $llvmAsPath = Join-Path $llvmDir "bin\llvm-as.exe"
 $clangPath = Join-Path $llvmDir "bin\clang.exe"
 $processSource = Join-Path $repoRoot "stdlib\sys\process.slg"
+$compilerRuntimeSources = @(
+    $processSource
+    (Join-Path $repoRoot "selfhost\runtime\path.slg")
+    (Join-Path $repoRoot "stdlib\sys\directory.slg")
+    (Join-Path $repoRoot "stdlib\sys\directory\kind.slg")
+)
 $singleSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-single-smoke.slg"
 $multiLibrarySource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-library-smoke.slg"
 $multiMainSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-main-smoke.slg"
-$expectedStage2Bytes = 8781688L
+$expectedStage2Bytes = 9360301L
 
 New-Item -ItemType Directory -Force -Path $artifactsDir | Out-Null
 
@@ -43,13 +49,15 @@ function Invoke-ProcessToFile {
     )
 
     Remove-Item -LiteralPath $OutputPath, $ErrorPath -ErrorAction SilentlyContinue
-    return Start-Process `
+    $process = Start-Process `
         -FilePath $FilePath `
         -ArgumentList $ArgumentList `
         -RedirectStandardOutput $OutputPath `
         -RedirectStandardError $ErrorPath `
         -PassThru `
         -WindowStyle Hidden
+    $null = $process.Handle
+    return $process
 }
 
 function Assert-ProcessSucceeded {
@@ -60,6 +68,7 @@ function Assert-ProcessSucceeded {
     )
 
     $Process.WaitForExit()
+    $Process.Refresh()
     if ($Process.ExitCode -ne 0) {
         $details = if (Test-Path $ErrorPath) { Get-Content $ErrorPath -Raw } else { "" }
         throw "$Description failed with exit code $($Process.ExitCode).`n$details"
@@ -80,7 +89,7 @@ function Test-Stage2IsCurrent {
     }
 
     $stage2Time = (Get-Item $stage2Path).LastWriteTimeUtc
-    $inputs = @($stage1Path, $manifestPath, $processSource)
+    $inputs = @($stage1Path, $manifestPath) + $compilerRuntimeSources
     $inputs += Get-Content $manifestPath |
         Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
         ForEach-Object { Join-Path $repoRoot $_.Trim() }
@@ -125,7 +134,7 @@ if (Test-Stage2IsCurrent) {
     $sourcePaths = Get-Content $manifestPath |
         Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
         ForEach-Object { (Resolve-Path (Join-Path $repoRoot $_.Trim())).Path }
-    $sourcePaths += (Resolve-Path $processSource).Path
+    $sourcePaths += $compilerRuntimeSources | ForEach-Object { (Resolve-Path $_).Path }
     $stage2ErrorPath = Join-Path $artifactsDir "selfhost-stage2-linux.err.log"
     $stage2Process = Invoke-ProcessToFile `
         -FilePath $stage1Path `

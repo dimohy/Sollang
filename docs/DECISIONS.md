@@ -6747,3 +6747,38 @@ Research basis:
 - [Rust modules](https://doc.rust-lang.org/reference/items/modules.html)
 - [Zig modules](https://ziglang.org/documentation/master/)
 - [Swift Package Manager target paths](https://docs.swift.org/swiftpm/documentation/packagedescription/target/path/)
+
+## D206 - Deterministic Source-Root Discovery
+
+Status: implemented and Windows/Linux Stage2 verified
+Date: 2026-07-19
+
+`sollang.compiler.source_root.discover(Path)` performs breadth-first traversal
+over the sorted, owned D204 directory snapshots. It returns only regular
+`.slg` files, carries target-explicit `Path` values throughout traversal, and
+therefore produces the same relative source order independently of host
+directory enumeration order. An empty root returns an explicit error rather
+than silently compiling an empty product.
+
+The self-host LLVM boundary maps every discovered Path directly with the D205
+`file.mapPath` intrinsic. Its small local `mapSource` helper intentionally
+omits the predictable return type while retaining `uses File`, proving that
+private/local signature inference survives source-root compilation without
+weakening public ABI rules. Fully qualified payload-enum constructors are now
+resolved before call arguments, so argument identifiers cannot be mistaken for
+namespace members. The Linux directory failure path also frees the current SSA
+list head, matching the reference runtime and LLVM dominance rules.
+
+Completion checklist:
+
+- [x] Deterministic breadth-first discovery and empty-root failure
+- [x] Owned target-explicit paths with direct mapped-source loading
+- [x] Windows examples 428-430 and valid self-host LLVM assembly
+- [x] Complete Windows Stage2 6/6 at 9,361,816 LLVM bytes
+- [x] Complete Linux Stage2 5/5 at 9,360,301 LLVM bytes
+- [x] Stage1/Stage2 differential hashes preserved on both targets
+- [x] Complete Windows example suite passes 567/567
+
+This is checkpoint 1/10 after the D205 periodic Stage3 reset, so Stage3 is
+intentionally deferred. Canonical filesystem queries and richer metadata keep
+the filesystem gate partial; the formal roadmap remains **51.5/60 (85.8%)**.

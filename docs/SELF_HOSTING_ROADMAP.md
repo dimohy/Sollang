@@ -1235,6 +1235,22 @@ preparation copies its borrowed Text source table into the returned emit context
 while module-call resolution borrows request sources through completion and
 drops the request as one owner.
 
+## Deterministic Source-Root Discovery Checkpoint (D206)
+
+The self-host compiler now discovers a source root breadth-first through sorted,
+owned directory snapshots, filters regular `.slg` files, and maps each resulting
+target-explicit Path without an intermediate Text copy. Examples 428 and 430
+cover deterministic and empty roots; example 429 drives the discovered sources
+through self-host LLVM emission. The local effectful `mapSource` helper omits its
+inferred return type, exercising the private-signature inference boundary in the
+real compiler pipeline.
+
+Windows Stage2 passes 6/6 at 9,361,816 LLVM bytes and Linux Stage2 passes 5/5 at
+9,360,301 bytes, with all target differential hashes preserved. The complete
+Windows suite passes 567/567. This is checkpoint 1/10 after the D205 Stage3
+reset, so Stage3 remains deferred. Canonical filesystem queries and richer
+metadata keep the formal filesystem gate partial at **51.5/60 (85.8%)**.
+
 ## Immediate Implementation Order
 
 1. Multi-file compilation (implemented by example 52).

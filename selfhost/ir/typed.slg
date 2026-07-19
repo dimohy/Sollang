@@ -259,6 +259,39 @@ legacyTypes recursive: expressionTypeIds.ExpressionTypeIdSet -> [expressionTypes
 }
 
 public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; ~] {
+    nominalVariantTag sourceIndex: Int, variantToken: syntax.SyntaxToken -> Int {
+        prepared.package.ranges[sourceIndex] => variantRange
+        prepared.package.sources[sourceIndex] -> len => variantSourceLength
+        prepared.package.sources[sourceIndex] -> slice(UIntSize(0), variantSourceLength) => variantSource
+        -1 => tag!
+        0 => candidateIndex!
+        candidateIndex! < variantRange.astCount -> while {
+            prepared.package.nodes[variantRange.astStart + candidateIndex!] => candidate
+            (candidate.kind == 27 and candidate.parent >= 0 and prepared.package.nodes[variantRange.astStart + candidate.parent].kind == 4 and candidate.payloadToken >= 0) -> if {
+                prepared.package.tokens[variantRange.tokenStart + candidate.payloadToken] => candidateToken
+                candidateToken.span.length == variantToken.span.length -> if {
+                    true => sameName!
+                    UIntSize(0) => byteIndex!
+                    (sameName! and byteIndex! < variantToken.span.length) -> while {
+                        (variantSource -> byte(candidateToken.span.start + byteIndex!)) != (variantSource -> byte(variantToken.span.start + byteIndex!)) -> if { false => sameName! }
+                        byteIndex! + UIntSize(1) => byteIndex!
+                    }
+                    sameName! -> if {
+                        0 => ordinal!
+                        0 => ordinalSearch!
+                        ordinalSearch! < variantRange.astCount -> while {
+                            prepared.package.nodes[variantRange.astStart + ordinalSearch!] => sibling
+                            (sibling.kind == 27 and sibling.parent == candidate.parent and sibling.start < candidate.start) -> if { ordinal! + 1 => ordinal! }
+                            ordinalSearch! + 1 => ordinalSearch!
+                        }
+                        ordinal! => tag!
+                    }
+                }
+            }
+            candidateIndex! + 1 => candidateIndex!
+        }
+        tag!
+    }
     lowerFunction request: FunctionLowerRequest -> SourceTypedIr {
         [TypedIrNode; ~] => results!
         request.sourceIndex => sourceIndex!
@@ -1040,8 +1073,10 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                                 patternSearch! < sourceRange.astCount -> while {
                                     prepared.package.nodes[sourceRange.astStart + patternSearch!] => patternCandidate
                                     (patternCandidate.kind == 59 and patternCandidate.parent == expressionAstIndex!) -> if {
-                                        prepared.package.tokens[sourceRange.tokenStart + patternCandidate.payloadToken] => patternVariant
-                                        (source -> byte(patternVariant.span.start)) == UInt8(69) -> if { 1 => controlOpcode! } else { 0 => controlOpcode! }
+                                    prepared.package.tokens[sourceRange.tokenStart + patternCandidate.payloadToken] => patternVariant
+                                    (source -> byte(patternVariant.span.start)) == UInt8(69) -> if { 1 => controlOpcode! } else { 0 => controlOpcode! }
+                                    sourceIndex! -> nominalVariantTag(patternVariant) => nominalTag
+                                    nominalTag >= 0 -> if { nominalTag => controlOpcode! }
                                     }
                                     patternSearch! + 1 => patternSearch!
                                 }
@@ -1139,6 +1174,11 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                                         prepared.package.symbols[valueTargetRange.symbolStart + valuePath.targetSymbol] => valueTarget
                                         (valueTarget.kind == 7 and valueTarget.secondaryTypeNode < 0) -> if {
                                             6 => expressionKind!
+                                            valuePath.targetSymbol => expressionSymbol!
+                                            valueTargetSource => expressionTargetModule!
+                                        }
+                                        valueTarget.kind == 27 -> if {
+                                            26 => expressionKind!
                                             valuePath.targetSymbol => expressionSymbol!
                                             valueTargetSource => expressionTargetModule!
                                         }
@@ -1425,7 +1465,7 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                         matchSearch! < expressionIrEnd -> while {
                             results![matchSearch!] => matchCandidate
                             prepared.package.nodes[sourceRange.astStart + matchCandidate.astNode] => matchCandidateAst
-                            (matchCandidateAst.parent == matchFlowAst and matchCandidateAst.start < prepared.package.nodes[sourceRange.astStart + control!.astNode].start and matchCandidate.typeKind == 7) -> if {
+                            (matchCandidateAst.parent == matchFlowAst and matchCandidateAst.start < prepared.package.nodes[sourceRange.astStart + control!.astNode].start and (matchCandidate.typeKind == 7 or (matchCandidate.typeKind == 1 and (matchCandidate.typeOrigin == 0 or matchCandidate.typeOrigin == 2)))) -> if {
                                 (matchSubject! < 0 or matchCandidateAst.start > matchSubjectStart!) -> if {
                                     matchSearch! => matchSubject!
                                     matchCandidateAst.start => matchSubjectStart!
@@ -2318,8 +2358,10 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                                     entryPatternSearch! < sourceRange.astCount -> while {
                                         prepared.package.nodes[sourceRange.astStart + entryPatternSearch!] => entryPatternCandidate
                                         (entryPatternCandidate.kind == 59 and entryPatternCandidate.parent == entryExpressionAst!) -> if {
-                                            prepared.package.tokens[sourceRange.tokenStart + entryPatternCandidate.payloadToken] => entryPatternVariant
-                                            (source -> byte(entryPatternVariant.span.start)) == UInt8(69) -> if { 1 => entryControlOpcode! } else { 0 => entryControlOpcode! }
+                                    prepared.package.tokens[sourceRange.tokenStart + entryPatternCandidate.payloadToken] => entryPatternVariant
+                                    (source -> byte(entryPatternVariant.span.start)) == UInt8(69) -> if { 1 => entryControlOpcode! } else { 0 => entryControlOpcode! }
+                                    sourceIndex! -> nominalVariantTag(entryPatternVariant) => entryNominalTag
+                                    entryNominalTag >= 0 -> if { entryNominalTag => entryControlOpcode! }
                                         }
                                         entryPatternSearch! + 1 => entryPatternSearch!
                                     }
@@ -2416,6 +2458,11 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                                             prepared.package.symbols[entryValueTargetRange.symbolStart + entryValuePath.targetSymbol] => entryValueTarget
                                             (entryValueTarget.kind == 7 and entryValueTarget.secondaryTypeNode < 0) -> if {
                                                 6 => entryExpressionKind!
+                                                entryValuePath.targetSymbol => entryExpressionSymbol!
+                                                entryValueTargetSource => entryExpressionTargetModule!
+                                            }
+                                            entryValueTarget.kind == 27 -> if {
+                                                26 => entryExpressionKind!
                                                 entryValuePath.targetSymbol => entryExpressionSymbol!
                                                 entryValueTargetSource => entryExpressionTargetModule!
                                             }
@@ -2695,7 +2742,7 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                             entryMatchSearch! < entryExpressionEnd -> while {
                                 results![entryMatchSearch!] => entryMatchCandidate
                                 prepared.package.nodes[sourceRange.astStart + entryMatchCandidate.astNode] => entryMatchCandidateAst
-                                (entryMatchCandidateAst.parent == entryMatchFlowAst and entryMatchCandidateAst.start < prepared.package.nodes[sourceRange.astStart + entryControl!.astNode].start and entryMatchCandidate.typeKind == 7) -> if {
+                                (entryMatchCandidateAst.parent == entryMatchFlowAst and entryMatchCandidateAst.start < prepared.package.nodes[sourceRange.astStart + entryControl!.astNode].start and (entryMatchCandidate.typeKind == 7 or (entryMatchCandidate.typeKind == 1 and (entryMatchCandidate.typeOrigin == 0 or entryMatchCandidate.typeOrigin == 2)))) -> if {
                                     (entryMatchSubject! < 0 or entryMatchCandidateAst.start > entryMatchSubjectStart!) -> if {
                                         entryMatchSearch! => entryMatchSubject!
                                         entryMatchCandidateAst.start => entryMatchSubjectStart!
@@ -3698,6 +3745,42 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                 processCall! => results![processCallIndex!]
             }
             processCallIndex! + 1 => processCallIndex!
+        }
+    }
+    # Directory traversal is a target runtime intrinsic. Resolve it from the
+    # canonical module and function symbol so unrelated functions named
+    # `readRaw` keep ordinary call semantics.
+    -1 => directoryModuleSource!
+    0 => directoryModuleSearch!
+    directoryModuleSearch! < (prepared.modules -> len) -> while {
+        prepared.modules[directoryModuleSearch!] => directoryModuleIdentity
+        directoryModuleIdentity.pathHash == UInt64(3466438528969553761) -> if { directoryModuleIdentity.sourceIndex => directoryModuleSource! }
+        directoryModuleSearch! + 1 => directoryModuleSearch!
+    }
+    -1 => directoryReadRawSymbol!
+    directoryModuleSource! >= 0 -> if {
+        prepared.package.ranges[directoryModuleSource!] => directorySourceRange
+        prepared.package.sources[directoryModuleSource!] -> len => directorySourceLength
+        prepared.package.sources[directoryModuleSource!] -> slice(UIntSize(0), directorySourceLength) => directorySource
+        0 => directorySymbolSearch!
+        directorySymbolSearch! < directorySourceRange.symbolCount -> while {
+            prepared.package.symbols[directorySourceRange.symbolStart + directorySymbolSearch!] => directorySymbol
+            (directorySymbol.kind == 7 and directorySymbol.parent < 0) -> if {
+                prepared.package.tokens[directorySourceRange.tokenStart + directorySymbol.nameToken] => directoryNameToken
+                directoryNameToken.span.length == UIntSize(7) -> if {
+                    ((directorySource -> byte(directoryNameToken.span.start)) == UInt8(114) and (directorySource -> byte(directoryNameToken.span.start + UIntSize(1))) == UInt8(101) and (directorySource -> byte(directoryNameToken.span.start + UIntSize(2))) == UInt8(97) and (directorySource -> byte(directoryNameToken.span.start + UIntSize(3))) == UInt8(100) and (directorySource -> byte(directoryNameToken.span.start + UIntSize(4))) == UInt8(82) and (directorySource -> byte(directoryNameToken.span.start + UIntSize(5))) == UInt8(97) and (directorySource -> byte(directoryNameToken.span.start + UIntSize(6))) == UInt8(119)) -> if { directorySymbolSearch! => directoryReadRawSymbol! }
+                }
+            }
+            directorySymbolSearch! + 1 => directorySymbolSearch!
+        }
+        0 => directoryCallIndex!
+        directoryCallIndex! < (results! -> len) -> while {
+            results![directoryCallIndex!] => directoryCall!
+            (directoryCall!.kind == 6 and directoryCall!.targetModule == directoryModuleSource! and directoryCall!.symbol == directoryReadRawSymbol!) -> if {
+                -215 => directoryCall!.opcode
+                directoryCall! => results![directoryCallIndex!]
+            }
+            directoryCallIndex! + 1 => directoryCallIndex!
         }
     }
     # Collection literals returned directly from a function are contextually

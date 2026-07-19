@@ -1,0 +1,19 @@
+import sollang.compiler.source_root as sourceRoot
+import sys.path as path
+
+isNestedBeta source: path.Path -> Bool {
+    (source -> path.endsWithText("nested/Beta.slg")) or (source -> path.endsWithText("nested\\Beta.slg"))
+}
+
+validate sources: [path.Path; ~] -> Bool {
+    (sources -> len) == 3 and (sources[0] -> path.endsWithText("Alpha.slg")) and (sources[1] -> path.endsWithText("Zeta.slg")) and (sources[2] -> isNestedBeta)
+}
+
+main {
+    "examples/fixtures/428-source-root" -> path.fromText(path.nativeStyle) => root!
+    root! -> sourceRoot.discover -> when {
+        Ok(sources) => sources -> validate
+        Err(error) => false
+    } => valid
+    valid -> if { "source root order ok" } else { "source root order failed" } -> println
+}

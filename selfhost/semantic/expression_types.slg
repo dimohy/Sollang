@@ -134,6 +134,16 @@ public inferContext prepared: semanticContext.SemanticSnapshot -> [ExpressionTyp
                     prepared.modules[qualifiedPath.targetModule].sourceIndex => qualifiedTargetSource
                     prepared.package.ranges[qualifiedTargetSource] => qualifiedTargetRange
                     prepared.package.symbols[qualifiedTargetRange.symbolStart + qualifiedPath.targetSymbol] => qualifiedTargetSymbol
+                    (qualifiedTargetSymbol.kind == 27 and qualifiedTargetSymbol.parent >= 0) -> if {
+                        prepared.package.symbols[qualifiedTargetRange.symbolStart + qualifiedTargetSymbol.parent] => qualifiedEnumSymbol
+                        qualifiedEnumSymbol.kind == 4 -> if {
+                            qualifiedTargetSource == sourceIndex! -> if {
+                                inferred! -> push(ExpressionType { sourceModule: sourceIndex!, astNode: astIndex!, origin: 0, targetModule: sourceIndex!, targetSymbol: qualifiedTargetSymbol.parent, keyOrigin: -1, keyModule: -1, valueOrigin: -1, valueModule: -1 })
+                            } else {
+                                inferred! -> push(ExpressionType { sourceModule: sourceIndex!, astNode: astIndex!, origin: 2, targetModule: qualifiedPath.targetModule, targetSymbol: qualifiedTargetSymbol.parent, keyOrigin: -1, keyModule: -1, valueOrigin: -1, valueModule: -1 })
+                            }
+                        }
+                    }
                     (qualifiedTargetSymbol.kind == 7 and qualifiedTargetSymbol.secondaryTypeNode < 0) -> if {
                         qualifiedTargetSymbol.typeNode => qualifiedReturnTypeAst
                         false => qualifiedReturnInferred!

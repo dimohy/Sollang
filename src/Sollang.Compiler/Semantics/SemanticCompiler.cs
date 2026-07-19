@@ -2887,13 +2887,15 @@ internal sealed partial class SemanticCompiler
                 functions,
                 bindings,
                 allowReadIntCall,
-                allowedOwnedOuterResultName),
+                allowedOwnedOuterResultName,
+                mutableBindings),
             EnumMatchExpression enumMatch => InferEnumMatchExpression(
                 enumMatch,
                 functions,
                 bindings,
                 allowReadIntCall,
-                allowedOwnedOuterResultName),
+                allowedOwnedOuterResultName,
+                mutableBindings),
             EnumPatternExpression => throw Error(
                 expression.Line,
                 expression.Column,
@@ -3880,7 +3882,8 @@ internal sealed partial class SemanticCompiler
         IReadOnlyDictionary<string, BoundFunction> functions,
         IReadOnlyDictionary<string, BoundType> bindings,
         bool allowReadIntCall,
-        string? allowedOwnedOuterResultName = null)
+        string? allowedOwnedOuterResultName = null,
+        IReadOnlySet<string>? mutableBindings = null)
     {
         var hasSubjectConditions = expression.Arms.Any(arm => IsSubjectWhenCondition(arm.Condition));
         if (expression.Subject is not null)
@@ -3891,7 +3894,8 @@ internal sealed partial class SemanticCompiler
                 bindings,
                 allowPrintCall: false,
                 allowReadIntCall,
-                allowFlowBindingTarget: false);
+                allowFlowBindingTarget: false,
+                mutableBindings: mutableBindings);
             if (subjectType != BoundType.Int)
             {
                 throw Error(expression.Subject.Line, expression.Subject.Column, "value-flow when subject must be an integer");
@@ -3931,10 +3935,11 @@ internal sealed partial class SemanticCompiler
 
             var armType = InferBlockBody(
                 arm.Body,
-                functions,
-                bindings,
-                allowReadIntCall,
-                allowedOwnedOuterResultName);
+                    functions,
+                    bindings,
+                    allowReadIntCall,
+                    allowedOwnedOuterResultName,
+                    mutableBindings);
             resultType ??= armType;
             if (armType != resultType)
             {
@@ -3950,7 +3955,8 @@ internal sealed partial class SemanticCompiler
             functions,
             bindings,
             allowReadIntCall,
-            allowedOwnedOuterResultName);
+            allowedOwnedOuterResultName,
+            mutableBindings);
         resultType ??= elseType;
         if (elseType != resultType)
         {
@@ -3973,7 +3979,8 @@ internal sealed partial class SemanticCompiler
         IReadOnlyDictionary<string, BoundFunction> functions,
         IReadOnlyDictionary<string, BoundType> bindings,
         bool allowReadIntCall,
-        string? allowedOwnedOuterResultName)
+        string? allowedOwnedOuterResultName,
+        IReadOnlySet<string>? mutableBindings = null)
     {
         var subjectType = InferExpression(
             expression.Subject,
@@ -3981,7 +3988,8 @@ internal sealed partial class SemanticCompiler
             bindings,
             allowPrintCall: false,
             allowReadIntCall,
-            allowFlowBindingTarget: false);
+            allowFlowBindingTarget: false,
+            mutableBindings: mutableBindings);
         if (!_types.IsEnum(subjectType))
         {
             throw Error(expression.Subject.Line, expression.Subject.Column, "enum pattern matching expects an enum subject");
@@ -4046,7 +4054,8 @@ internal sealed partial class SemanticCompiler
                 functions,
                 armBindings,
                 allowReadIntCall,
-                allowedOwnedOuterResultName);
+                allowedOwnedOuterResultName,
+                mutableBindings);
             resultType ??= armType;
             if (armType != resultType)
             {
@@ -4080,7 +4089,8 @@ internal sealed partial class SemanticCompiler
                 functions,
                 bindings,
                 allowReadIntCall,
-                allowedOwnedOuterResultName);
+                allowedOwnedOuterResultName,
+                mutableBindings);
             resultType ??= elseType;
             if (elseType != resultType)
             {
@@ -7783,7 +7793,8 @@ internal sealed partial class SemanticCompiler
             or CallExpression
             or FlowExpression
             or IfExpression
-            or WhenExpression)
+            or WhenExpression
+            or EnumMatchExpression)
         {
             return;
         }

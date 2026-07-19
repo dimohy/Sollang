@@ -73,6 +73,7 @@ ownership behavior is part of the feature.
 - [x] Command-line argument and environment access
 - [x] Shell-free argv-based child-process execution with typed status/errors
 - [x] Deterministic lexer-descriptor/parser-bytecode generation into `.slg`
+- [x] Deterministic source-root discovery with sorted owned `.slg` paths
 - [ ] Sollang lexer/parser VM over generated grammar tables
 
 ## Design Direction

@@ -17,6 +17,30 @@ public enum Style {
 # The compiled target decides this value; it never reflects the build host.
 public nativeStyle: -> Style = intrinsic
 
+sameStyle left: Style, right: Style -> Bool {
+    left -> when {
+        Posix {
+            right -> when {
+                Posix { true }
+                Windows { false }
+            }
+        }
+        Windows {
+            right -> when {
+                Posix { false }
+                Windows { true }
+            }
+        }
+    }
+}
+
+isSeparator value: UInt8, style: Style -> Bool {
+    style -> when {
+        Posix { value == UInt8(47) }
+        Windows { value == UInt8(47) or value == UInt8(92) }
+    }
+}
+
 pathError message: Text -> Result<Path, Text> {
     Result<Path, Text>.Err(message) => result!
     result!
@@ -44,6 +68,19 @@ public equalsText path: Path, value: Text -> Bool {
     UIntSize(0) => index!
     (matches! and index! < pathLength) -> while {
         path.bytes[Int(index!)] != (value -> byte(index!)) -> if { false => matches! }
+        index! + UIntSize(1) => index!
+    }
+    matches!
+}
+
+public endsWithText path: Path, value: Text -> Bool {
+    UIntSize(path.bytes -> len) => pathLength
+    value -> len => valueLength
+    valueLength <= pathLength => matches!
+    pathLength - valueLength => start
+    UIntSize(0) => index!
+    (matches! and index! < valueLength) -> while {
+        path.bytes[Int(start + index!)] != (value -> byte(index!)) -> if { false => matches! }
         index! + UIntSize(1) => index!
     }
     matches!
@@ -105,6 +142,50 @@ public join base: move Path, child: Text -> Result<Path, Text> {
         childIndex! + UIntSize(1) => childIndex!
     }
     Path { bytes: bytes!, style: style } => joined!
+    Result<Path, Text>.Ok(joined!)
+}
+
+# Joins two owned path values without borrowing either result from the inputs.
+# The returned Path owns a fresh byte buffer, so directory Entry values can be
+# dropped immediately after source-root discovery advances.
+public joinDiscovered base: Path, child: Path -> Path {
+    [UInt8; ~] => bytes!
+    UIntSize(0) => baseIndex!
+    baseIndex! < UIntSize(base.bytes -> len) -> while {
+        bytes! -> push(base.bytes[Int(baseIndex!)])
+        baseIndex! + UIntSize(1) => baseIndex!
+    }
+    UIntSize(bytes! -> len) => baseLength
+    false => endsWithSeparator!
+    baseLength > UIntSize(0) -> if {
+        bytes![Int(baseLength - UIntSize(1))] => last
+        isSeparator(last, base.style) => endsWithSeparator!
+    }
+    (baseLength > UIntSize(0) and UIntSize(child.bytes -> len) > UIntSize(0) and not endsWithSeparator!) -> if {
+        base.style -> when {
+            Posix => UInt8(47)
+            Windows => UInt8(92)
+        } => separator
+        bytes! -> push(separator)
+    }
+    UIntSize(0) => childIndex!
+    childIndex! < UIntSize(child.bytes -> len) -> while {
+        bytes! -> push(child.bytes[Int(childIndex!)])
+        childIndex! + UIntSize(1) => childIndex!
+    }
+    Path { bytes: bytes!, style: base.style } => joined!
+    joined!
+}
+
+public joinPath base: Path, child: Path -> Result<Path, Text> {
+    not sameStyle(base.style, child.style) -> if {
+        Result<Path, Text>.Err("path styles differ") -> return
+    }
+    child -> isAbsolute -> if {
+        Result<Path, Text>.Err("cannot join an absolute child") -> return
+    }
+
+    base -> joinDiscovered(child) => joined!
     Result<Path, Text>.Ok(joined!)
 }
 

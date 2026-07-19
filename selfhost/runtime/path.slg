@@ -1,0 +1,77 @@
+namespace sys.path
+
+# Bootstrap ABI projection for source discovery. The complete portable path
+# algorithms remain in `sys/path.slg`; the self-host compiler only needs this
+# deterministic, ownership-safe subset while it builds its next stage.
+public struct Path {
+    bytes: [UInt8; ~]
+    style: Style
+}
+
+public enum Style {
+    Posix
+    Windows
+}
+
+public nativeStyle: -> Style = intrinsic
+
+public fromText value: Text, style: Style -> Path {
+    [UInt8; ~] => bytes!
+    UIntSize(0) => index!
+    index! < (value -> len) -> while {
+        bytes! -> push(value -> byte(index!))
+        index! + UIntSize(1) => index!
+    }
+    Path { bytes: bytes!, style: style } => result!
+    result!
+}
+
+public endsWithText path: Path, value: Text -> Bool {
+    UIntSize(path.bytes -> len) => pathLength
+    value -> len => valueLength
+    valueLength <= pathLength => matches!
+    pathLength - valueLength => start
+    UIntSize(0) => index!
+    (matches! and index! < valueLength) -> while {
+        path.bytes[Int(start + index!)] != (value -> byte(index!)) -> if { false => matches! }
+        index! + UIntSize(1) => index!
+    }
+    matches!
+}
+
+public joinDiscovered base: Path, child: Path -> Path {
+    [UInt8; ~] => bytes!
+    UIntSize(0) => baseIndex!
+    baseIndex! < UIntSize(base.bytes -> len) -> while {
+        bytes! -> push(base.bytes[Int(baseIndex!)])
+        baseIndex! + UIntSize(1) => baseIndex!
+    }
+    UIntSize(bytes! -> len) => baseLength
+    false => separated!
+    baseLength > UIntSize(0) -> if {
+        bytes![Int(baseLength - UIntSize(1))] => last
+        base.style -> when {
+            Posix => last == UInt8(47)
+            Windows => last == UInt8(47) or last == UInt8(92)
+        } => separated!
+    }
+    (baseLength > UIntSize(0) and UIntSize(child.bytes -> len) > UIntSize(0) and not separated!) -> if {
+        base.style -> when {
+            Posix => UInt8(47)
+            Windows => UInt8(92)
+        } => separator
+        bytes! -> push(separator)
+    }
+    UIntSize(0) => childIndex!
+    childIndex! < UIntSize(child.bytes -> len) -> while {
+        bytes! -> push(child.bytes[Int(childIndex!)])
+        childIndex! + UIntSize(1) => childIndex!
+    }
+    Path { bytes: bytes!, style: base.style } => joined!
+    joined!
+}
+
+public joinPath base: Path, child: Path -> Result<Path, Text> {
+    base -> joinDiscovered(child) => joined!
+    Result<Path, Text>.Ok(joined!)
+}

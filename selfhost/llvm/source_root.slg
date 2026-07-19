@@ -1,0 +1,90 @@
+namespace sollang.compiler.llvm.source_root
+
+import sollang.compiler.llvm.text as llvm
+import sollang.compiler.source_root as sourceRoot
+import sys.file as file
+import sys.path as path
+
+emitDiscovered paths: move [path.Path; ~] -> Unit uses Console, File {
+    mapSource sourcePath: path.Path -> uses File {
+        sourcePath -> file.mapPath
+    }
+    [file.SourceText; ~] => owners!
+    paths -> each sourcePath {
+        sourcePath -> mapSource => owner!
+        owners! -> push(owner!)
+    }
+    [Text; ~] => sources!
+    0 => sourceIndex!
+    sourceIndex! < (owners! -> len) -> while {
+        owners![sourceIndex!] -> len => sourceLength
+        owners![sourceIndex!] -> slice(UIntSize(0), sourceLength) => source
+        sources! -> push(source)
+        sourceIndex! + 1 => sourceIndex!
+    }
+    sources! -> llvm.emit
+    owners! -> len => ownerCount
+}
+
+emitDiscoveredLinux paths: move [path.Path; ~] -> Unit uses Console, File {
+    mapSource sourcePath: path.Path -> uses File {
+        sourcePath -> file.mapPath
+    }
+    [file.SourceText; ~] => owners!
+    paths -> each sourcePath {
+        sourcePath -> mapSource => owner!
+        owners! -> push(owner!)
+    }
+    [Text; ~] => sources!
+    0 => sourceIndex!
+    sourceIndex! < (owners! -> len) -> while {
+        owners![sourceIndex!] -> len => sourceLength
+        owners![sourceIndex!] -> slice(UIntSize(0), sourceLength) => source
+        sources! -> push(source)
+        sourceIndex! + 1 => sourceIndex!
+    }
+    sources! -> llvm.emitLinux
+    owners! -> len => ownerCount
+}
+
+emitDiscoveredWasm paths: move [path.Path; ~] -> Unit uses Console, File {
+    mapSource sourcePath: path.Path -> uses File {
+        sourcePath -> file.mapPath
+    }
+    [file.SourceText; ~] => owners!
+    paths -> each sourcePath {
+        sourcePath -> mapSource => owner!
+        owners! -> push(owner!)
+    }
+    [Text; ~] => sources!
+    0 => sourceIndex!
+    sourceIndex! < (owners! -> len) -> while {
+        owners![sourceIndex!] -> len => sourceLength
+        owners![sourceIndex!] -> slice(UIntSize(0), sourceLength) => source
+        sources! -> push(source)
+        sourceIndex! + 1 => sourceIndex!
+    }
+    sources! -> llvm.emitWasm
+    owners! -> len => ownerCount
+}
+
+public emitRoot root: move path.Path -> Unit uses Console, File {
+    root -> sourceRoot.discover -> when {
+        Ok(paths) { paths -> emitDiscovered }
+        Err(error) { "; sollang source root error: $error" -> println }
+    }
+}
+
+public emitLinuxRoot root: move path.Path -> Unit uses Console, File {
+    root -> sourceRoot.discover -> when {
+        Ok(paths) { paths -> emitDiscoveredLinux }
+        Err(error) { "; sollang source root error: $error" -> println }
+    }
+}
+
+public emitWasmRoot root: move path.Path -> Unit uses Console, File {
+    root -> sourceRoot.discover -> when {
+        Ok(paths) { paths -> emitDiscoveredWasm }
+        Err(error) { "; sollang source root error: $error" -> println }
+    }
+}

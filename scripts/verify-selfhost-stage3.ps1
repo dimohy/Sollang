@@ -8,6 +8,12 @@ $repoRoot = Split-Path -Parent $PSScriptRoot
 $artifactsDir = Join-Path $repoRoot "artifacts\example-tests"
 $manifestPath = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-sollangc-driver.sources.txt"
 $processSource = Join-Path $repoRoot "stdlib\sys\process.slg"
+$compilerRuntimeSources = @(
+    $processSource
+    (Join-Path $repoRoot "selfhost\runtime\path.slg")
+    (Join-Path $repoRoot "stdlib\sys\directory.slg")
+    (Join-Path $repoRoot "stdlib\sys\directory\kind.slg")
+)
 $stage2LlvmPath = Join-Path $artifactsDir "selfhost-stage2.ll"
 $stage2Path = Join-Path $artifactsDir "selfhost-stage2.exe"
 $stage3LlvmPath = Join-Path $artifactsDir "selfhost-stage3.ll"
@@ -38,9 +44,9 @@ if (-not (Test-Path $stage2Path) -or -not (Test-Path $stage2LlvmPath)) {
 $sourcePaths = Get-Content $manifestPath |
     Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
     ForEach-Object { (Resolve-Path (Join-Path $repoRoot $_.Trim())).Path }
-$sourcePaths += (Resolve-Path $processSource).Path
+$sourcePaths += $compilerRuntimeSources | ForEach-Object { (Resolve-Path $_).Path }
 $stage2Time = (Get-Item $stage2Path).LastWriteTimeUtc
-$staleInput = @($manifestPath, $processSource) + $sourcePaths |
+$staleInput = @($manifestPath) + $sourcePaths |
     Where-Object { (Get-Item $_).LastWriteTimeUtc -gt $stage2Time } |
     Select-Object -First 1
 if ($staleInput) {
@@ -58,6 +64,7 @@ $process = Start-Process `
     -PassThru `
     -WindowStyle Hidden
 $process.WaitForExit()
+$process.Refresh()
 if ($process.ExitCode -ne 0) {
     $details = if (Test-Path $stage3ErrorPath) { Get-Content $stage3ErrorPath -Raw } else { "" }
     throw "stage-3 LLVM emission failed with exit code $($process.ExitCode).`n$details"

@@ -58,7 +58,7 @@ internal sealed partial class LlvmEmitter
             throw new SollangException("value-flow expression statements must end in a unit-producing call or bind their result with '=>'");
         }
 
-        if (expression is IfExpression or WhenExpression)
+        if (expression is IfExpression or WhenExpression or EnumMatchExpression)
         {
             var value = EmitExpression(expression);
             if (value.Type != BoundType.Unit)

@@ -332,6 +332,7 @@ Parallel.ForEach(
         : commonLlvmNotContainsPath;
     var wasmLlvmContainsPath = Path.Combine(expectedDir, name + ".wasm32.llvm.contains.txt");
     var sourcesPath = Path.Combine(expectedDir, name + ".sources.txt");
+    var selfHostRootPath = Path.Combine(expectedDir, name + ".root.txt");
     var stdoutLlvmValidationPath = Path.Combine(expectedDir, name + ".stdout.llvm.validate.txt");
     var stdoutLlvmExecutionPath = Path.Combine(expectedDir, name + ".stdout.llvm.execute.txt");
     var verifyLlvm = File.Exists(llvmContainsPath) || File.Exists(llvmNotContainsPath);
@@ -353,13 +354,23 @@ Parallel.ForEach(
         selfHostMode = SelfHostTargetMode(outerSource, testTarget);
         var driverArguments = new List<string>
         {
-            selfHostMode
+            File.Exists(selfHostRootPath) ? selfHostMode + "-root" : selfHostMode
         };
-        selfHostSourcePaths = MaterializeSelfHostSources(
-            name,
-            ExtractRawMultilineStrings(outerSource),
-            artifactsDir);
-        driverArguments.AddRange(selfHostSourcePaths);
+        if (File.Exists(selfHostRootPath))
+        {
+            var sourceRoot = File.ReadLines(selfHostRootPath)
+                .First(static line => !string.IsNullOrWhiteSpace(line))
+                .Trim();
+            driverArguments.Add(Path.GetFullPath(sourceRoot, repoRoot));
+        }
+        else
+        {
+            selfHostSourcePaths = MaterializeSelfHostSources(
+                name,
+                ExtractRawMultilineStrings(outerSource),
+                artifactsDir);
+            driverArguments.AddRange(selfHostSourcePaths);
+        }
         run = Run(selfHostDriverPath, driverArguments, input: null, repoRoot);
     }
     else
@@ -484,7 +495,7 @@ Parallel.ForEach(
     var actual = Normalize(run.Stdout);
     var compareRawStdout = testTarget == TestTarget.WindowsX64
         || !reusableSelfHostTest
-        || string.Equals(selfHostMode, "wasm", StringComparison.Ordinal);
+        || selfHostMode.StartsWith("wasm", StringComparison.Ordinal);
     var expected = compareRawStdout
         ? Normalize(File.ReadAllText(expectedFile, Encoding.UTF8))
         : actual;
@@ -535,7 +546,7 @@ Parallel.ForEach(
     if (File.Exists(stdoutLlvmValidationPath)
         || (testTarget == TestTarget.LinuxX64
             && reusableSelfHostTest
-            && !string.Equals(selfHostMode, "wasm", StringComparison.Ordinal)))
+            && !selfHostMode.StartsWith("wasm", StringComparison.Ordinal)))
     {
         var stdoutLlvmPath = Path.Combine(artifactsDir, name + ".stdout.ll");
         var stdoutBitcodePath = Path.Combine(artifactsDir, name + ".stdout.bc");
@@ -778,6 +789,26 @@ static bool MatchesAffectedExpected(
     }
 
     var sourcesPath = Path.Combine(expectedDir, name + ".sources.txt");
+    var rootPath = Path.Combine(expectedDir, name + ".root.txt");
+    if (File.Exists(rootPath))
+    {
+        if (affectedPaths.Contains(Path.GetFullPath(rootPath)))
+        {
+            return true;
+        }
+
+        var rootReference = File.ReadLines(rootPath)
+            .First(static line => !string.IsNullOrWhiteSpace(line))
+            .Trim();
+        var sourceRoot = Path.GetFullPath(rootReference, repoRoot)
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+            + Path.DirectorySeparatorChar;
+        if (affectedPaths.Any(path => path.StartsWith(sourceRoot, StringComparison.OrdinalIgnoreCase)))
+        {
+            return true;
+        }
+    }
+
     return MatchesAffectedSources(sourcesPath, repoRoot, affectedPaths);
 }
 

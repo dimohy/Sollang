@@ -131,6 +131,11 @@ struct ProcessCallRequest {
     ownerIndex: Int
 }
 
+struct DirectoryCallRequest {
+    callIndex: Int
+    ownerIndex: Int
+}
+
 struct EmitContext {
     sources: [Text; ~]
     ranges: [analysis.SourceAnalysisRange; ~]
@@ -595,6 +600,76 @@ prepare request: move PrepareRequest -> EmitContext {
         layouts.statuses[layoutStatusCopyIndex428!] => layoutStatus
         typeLayoutStatuses! -> push(layoutStatus)
         layoutStatusCopyIndex428! + 1 => layoutStatusCopyIndex428!
+    }
+    # Nominal enums share the same tagged payload ABI as Result/Option. The
+    # recursive type arena represents their declaration identity as a nominal
+    # type, so recover variant payload type uses from the flat AST before the
+    # emitter freezes layout and ownership tables.
+    0 => nominalEnumLayoutIndex!
+    nominalEnumLayoutIndex! < (semanticTypes! -> len) -> while {
+        semanticTypes![nominalEnumLayoutIndex!] => nominalEnumType
+        -1 => nominalEnumAst!
+        (nominalEnumType.kind == 1 and (nominalEnumType.origin == 0 or nominalEnumType.origin == 2) and nominalEnumType.module >= 0 and nominalEnumType.module < (analysisRanges! -> len)) -> if {
+            analysisRanges![nominalEnumType.module] => nominalEnumRange
+            (nominalEnumType.symbol >= 0 and nominalEnumType.symbol < nominalEnumRange.symbolCount) -> if {
+                analysisSymbols![nominalEnumRange.symbolStart + nominalEnumType.symbol] => nominalEnumSymbol
+                nominalEnumSymbol.astNode >= 0 -> if {
+                    analysisNodes![nominalEnumRange.astStart + nominalEnumSymbol.astNode].kind == 4 -> if { nominalEnumSymbol.astNode => nominalEnumAst! }
+                }
+            }
+        }
+        nominalEnumAst! >= 0 -> if {
+            0 => nominalEnumPayloadSize!
+            false => nominalEnumOwns!
+            false => nominalEnumReachesHeap!
+            0 => nominalEnumNominalPayloadIndex!
+            nominalEnumNominalPayloadIndex! < (nominal! -> len) -> while {
+                nominal![nominalEnumNominalPayloadIndex!] => nominalPayload
+                (nominalPayload.status == 0 and nominalPayload.sourceModule == nominalEnumType.module and nominalPayload.typeAst >= 0 and nominalPayload.canonical >= 0) -> if {
+                    nominalPayload.typeAst => nominalPayloadAncestor!
+                    false => nominalPayloadBelongs!
+                    (nominalPayloadAncestor! >= 0 and nominalPayloadAncestor! < analysisRanges![nominalEnumType.module].astCount and not nominalPayloadBelongs!) -> while {
+                        analysisRanges![nominalEnumType.module] => nominalPayloadRange
+                        analysisNodes![nominalPayloadRange.astStart + nominalPayloadAncestor!] => nominalPayloadNode
+                        (nominalPayloadNode.kind == 27 and nominalPayloadNode.parent == nominalEnumAst!) -> if { true => nominalPayloadBelongs! } else { nominalPayloadNode.parent => nominalPayloadAncestor! }
+                    }
+                    (nominalPayloadBelongs! and nominalPayload.canonical < (layouts.sizes -> len) and nominalPayload.canonical < (typeTraits! -> len)) -> if {
+                        layouts.sizes[nominalPayload.canonical] > nominalEnumPayloadSize! -> if { layouts.sizes[nominalPayload.canonical] => nominalEnumPayloadSize! }
+                        typeTraits![nominalPayload.canonical] % 2 == 1 -> if { true => nominalEnumOwns! }
+                        (typeTraits![nominalPayload.canonical] / 2) % 2 == 1 -> if { true => nominalEnumReachesHeap! }
+                    }
+                }
+                nominalEnumNominalPayloadIndex! + 1 => nominalEnumNominalPayloadIndex!
+            }
+            0 => nominalEnumCompositePayloadIndex!
+            nominalEnumCompositePayloadIndex! < (composite! -> len) -> while {
+                composite![nominalEnumCompositePayloadIndex!] => compositePayload
+                (compositePayload.status == 0 and compositePayload.sourceModule == nominalEnumType.module and compositePayload.typeAst >= 0 and compositePayload.canonical >= 0) -> if {
+                    compositePayload.typeAst => compositePayloadAncestor!
+                    false => compositePayloadBelongs!
+                    (compositePayloadAncestor! >= 0 and compositePayloadAncestor! < analysisRanges![nominalEnumType.module].astCount and not compositePayloadBelongs!) -> while {
+                        analysisRanges![nominalEnumType.module] => compositePayloadRange
+                        analysisNodes![compositePayloadRange.astStart + compositePayloadAncestor!] => compositePayloadNode
+                        (compositePayloadNode.kind == 27 and compositePayloadNode.parent == nominalEnumAst!) -> if { true => compositePayloadBelongs! } else { compositePayloadNode.parent => compositePayloadAncestor! }
+                    }
+                    (compositePayloadBelongs! and compositePayload.canonical < (layouts.sizes -> len) and compositePayload.canonical < (typeTraits! -> len)) -> if {
+                        layouts.sizes[compositePayload.canonical] > nominalEnumPayloadSize! -> if { layouts.sizes[compositePayload.canonical] => nominalEnumPayloadSize! }
+                        typeTraits![compositePayload.canonical] % 2 == 1 -> if { true => nominalEnumOwns! }
+                        (typeTraits![compositePayload.canonical] / 2) % 2 == 1 -> if { true => nominalEnumReachesHeap! }
+                    }
+                }
+                nominalEnumCompositePayloadIndex! + 1 => nominalEnumCompositePayloadIndex!
+            }
+            (nominalEnumPayloadSize! + 7) / 8 => nominalEnumPayloadWords
+            8 + nominalEnumPayloadWords * 8 => typeSizes![nominalEnumLayoutIndex!]
+            8 => typeAligns![nominalEnumLayoutIndex!]
+            0 => typeLayoutStatuses![nominalEnumLayoutIndex!]
+            0 => nominalEnumTraits!
+            nominalEnumOwns! -> if { nominalEnumTraits! + 1 => nominalEnumTraits! }
+            nominalEnumReachesHeap! -> if { nominalEnumTraits! + 2 => nominalEnumTraits! }
+            nominalEnumTraits! => typeTraits![nominalEnumLayoutIndex!]
+        }
+        nominalEnumLayoutIndex! + 1 => nominalEnumLayoutIndex!
     }
     ir! -> typedIr.movesFrom => moves!
     [Text; ~] => contextSources!
@@ -1084,7 +1159,7 @@ emitCore context: move EmitContext -> Unit uses Console {
                 context.ir[controlSearch!] => aggregateCandidate
                 # Explicit conversions around aggregate fields are represented
                 # by a value wrapper whose direct result is a call node.
-                (aggregateCandidate.parent == wrapperIndex and (aggregateCandidate.kind == 6 or aggregateCandidate.kind == 12 or aggregateCandidate.kind == 14 or aggregateCandidate.kind == 16 or aggregateCandidate.kind == 18 or aggregateCandidate.kind == 26 or aggregateCandidate.kind == 27)) -> if { controlSearch! => resolved! }
+                (aggregateCandidate.parent == wrapperIndex and (aggregateCandidate.kind == 2 or aggregateCandidate.kind == 3 or aggregateCandidate.kind == 4 or aggregateCandidate.kind == 6 or aggregateCandidate.kind == 12 or aggregateCandidate.kind == 14 or aggregateCandidate.kind == 16 or aggregateCandidate.kind == 18 or aggregateCandidate.kind == 26 or aggregateCandidate.kind == 27)) -> if { controlSearch! => resolved! }
                 controlSearch! + 1 => controlSearch!
             }
         }
@@ -1115,6 +1190,13 @@ emitCore context: move EmitContext -> Unit uses Console {
                 aggregateResolved => resolved!
                 true => resolving!
             }
+        }
+        resolved!
+    }
+    matchRegionResultValueIndex regionIndex: Int -> Int {
+        regionIndex -> regionResultValueIndex => resolved!
+        (resolved! >= 0 and context.ir[resolved!].kind == 19 and context.ir[resolved!].operand1 >= 0) -> if {
+            context.ir[resolved!].operand1 -> aggregateValueIndex => resolved!
         }
         resolved!
     }
@@ -1733,7 +1815,7 @@ emitCore context: move EmitContext -> Unit uses Console {
                     "  call void @sollang_runtime_unmap_text(%sollang.source_text %value)" -> println
                     "  ret void" -> println
                 }
-                (dropType.kind == 1 and (dropType.origin == 0 or dropType.origin == 2)) -> if {
+                (dropType.kind == 1 and (dropType.origin == 0 or dropType.origin == 2) and not (dropTypeIndex! -> isNominalEnumType)) -> if {
                     0 => dropFieldIndex!
                     dropFieldIndex! < (context.fields -> len) -> while {
                         context.fields[dropFieldIndex!] => dropField
@@ -1784,6 +1866,45 @@ emitCore context: move EmitContext -> Unit uses Console {
                             context.typeAligns[dropType.second] -> writeDecimalLine
                             "  call void @sollang_drop_t$(dropType.second)(" -> print
                             dropType.second -> writeSemanticTypeId
+                            " %second)" -> println
+                        }
+                    }
+                    "  br label %done" -> println
+                    "done:" -> println
+                    "  ret void" -> println
+                }
+                (dropTypeIndex! -> isNominalEnumType) -> if {
+                    dropTypeIndex! -> enumPayloadTypes => nominalDropPayloads!
+                    "  %slot = alloca %sollang.enum.t$(dropTypeIndex!), align 8" -> println
+                    "  store %sollang.enum.t$(dropTypeIndex!) %value, ptr %slot, align 8" -> println
+                    "  %tag = extractvalue %sollang.enum.t$(dropTypeIndex!) %value, 0" -> println
+                    "  %payload = getelementptr inbounds %sollang.enum.t$(dropTypeIndex!), ptr %slot, i32 0, i32 1" -> println
+                    "  %is0 = icmp eq i32 %tag, 0" -> println
+                    "  br i1 %is0, label %tag0, label %tag1" -> println
+                    "tag0:" -> println
+                    (nominalDropPayloads! -> len) > 0 -> if {
+                        nominalDropPayloads![0] => nominalDropFirst
+                        (nominalDropFirst >= 0 and context.typeTraits[nominalDropFirst] % 2 == 1) -> if {
+                            "  %first = load " -> print
+                            nominalDropFirst -> writeSemanticTypeId
+                            ", ptr %payload, align " -> print
+                            context.typeAligns[nominalDropFirst] -> writeDecimalLine
+                            "  call void @sollang_drop_t$(nominalDropFirst)(" -> print
+                            nominalDropFirst -> writeSemanticTypeId
+                            " %first)" -> println
+                        }
+                    }
+                    "  br label %done" -> println
+                    "tag1:" -> println
+                    (nominalDropPayloads! -> len) > 1 -> if {
+                        nominalDropPayloads![1] => nominalDropSecond
+                        (nominalDropSecond >= 0 and context.typeTraits[nominalDropSecond] % 2 == 1) -> if {
+                            "  %second = load " -> print
+                            nominalDropSecond -> writeSemanticTypeId
+                            ", ptr %payload, align " -> print
+                            context.typeAligns[nominalDropSecond] -> writeDecimalLine
+                            "  call void @sollang_drop_t$(nominalDropSecond)(" -> print
+                            nominalDropSecond -> writeSemanticTypeId
                             " %second)" -> println
                         }
                     }
@@ -1855,6 +1976,116 @@ emitCore context: move EmitContext -> Unit uses Console {
         request.valueKind == 2 -> if { "%enumdrop$(request.nameRoot)_value" -> print }
         ")" -> println
     }
+    nominalDeclarationAst typeId: Int -> Int {
+        -1 => declarationAst!
+        (typeId >= 0 and typeId < (context.types -> len)) -> if {
+            context.types[typeId] => nominalType
+            (nominalType.kind == 1 and (nominalType.origin == 0 or nominalType.origin == 2) and nominalType.module >= 0 and nominalType.module < (context.ranges -> len)) -> if {
+                context.ranges[nominalType.module] => nominalRange
+                (nominalType.symbol >= 0 and nominalType.symbol < nominalRange.symbolCount) -> if {
+                    context.symbols[nominalRange.symbolStart + nominalType.symbol] => nominalSymbol
+                    nominalSymbol.astNode >= 0 -> if { nominalSymbol.astNode => declarationAst! }
+                }
+            }
+        }
+        declarationAst!
+    }
+    isNominalEnumType typeId: Int -> Bool {
+        typeId -> nominalDeclarationAst => declarationAst
+        false => result!
+        declarationAst >= 0 -> if {
+            context.types[typeId] => nominalType
+            context.ranges[nominalType.module] => nominalRange
+            context.nodes[nominalRange.astStart + declarationAst].kind == 4 -> if { true => result! }
+        }
+        result!
+    }
+    enumPayloadTypes typeId: Int -> [Int; ~] {
+        [Int; ~] => payloads!
+        typeId -> isNominalEnumType -> if {
+            context.types[typeId] => enumType
+            enumType.module => enumModule
+            typeId -> nominalDeclarationAst => enumAst
+            0 => nominalPayloadIndex!
+            nominalPayloadIndex! < (context.nominal -> len) -> while {
+                context.nominal[nominalPayloadIndex!] => nominalPayload
+                (nominalPayload.status == 0 and nominalPayload.sourceModule == enumModule and nominalPayload.typeAst >= 0) -> if {
+                    nominalPayload.typeAst => payloadAncestor!
+                    false => payloadBelongs!
+                    (payloadAncestor! >= 0 and payloadAncestor! < context.ranges[enumModule].astCount and not payloadBelongs!) -> while {
+                        context.ranges[enumModule] => payloadRange
+                        context.nodes[payloadRange.astStart + payloadAncestor!] => payloadNode
+                        (payloadNode.kind == 27 and payloadNode.parent == enumAst) -> if { true => payloadBelongs! } else { payloadNode.parent => payloadAncestor! }
+                    }
+                    payloadBelongs! -> if {
+                        -1 => resolvedPayloadType!
+                        0 => resolvedPayloadSearch!
+                        resolvedPayloadSearch! < (context.types -> len) -> while {
+                            context.types[resolvedPayloadSearch!] => payloadTypeCandidate
+                            (payloadTypeCandidate.status == 0 and payloadTypeCandidate.kind == 1 and payloadTypeCandidate.origin == nominalPayload.origin and payloadTypeCandidate.module == nominalPayload.targetModule and payloadTypeCandidate.symbol == nominalPayload.targetSymbol) -> if { resolvedPayloadSearch! => resolvedPayloadType! }
+                            resolvedPayloadSearch! + 1 => resolvedPayloadSearch!
+                        }
+                        resolvedPayloadType! >= 0 -> if {
+                            false => alreadyPayload!
+                            0 => existingPayloadIndex!
+                            existingPayloadIndex! < (payloads! -> len) -> while {
+                                payloads![existingPayloadIndex!] == resolvedPayloadType! -> if { true => alreadyPayload! }
+                                existingPayloadIndex! + 1 => existingPayloadIndex!
+                            }
+                            not alreadyPayload! -> if { payloads! -> push(resolvedPayloadType!) }
+                        }
+                    }
+                }
+                nominalPayloadIndex! + 1 => nominalPayloadIndex!
+            }
+            0 => compositePayloadIndex!
+            compositePayloadIndex! < (context.composite -> len) -> while {
+                context.composite[compositePayloadIndex!] => compositePayload
+                (compositePayload.status == 0 and compositePayload.sourceModule == enumModule and compositePayload.typeAst >= 0) -> if {
+                    compositePayload.typeAst => payloadAncestor!
+                    false => payloadBelongs!
+                    (payloadAncestor! >= 0 and payloadAncestor! < context.ranges[enumModule].astCount and not payloadBelongs!) -> while {
+                        context.ranges[enumModule] => payloadRange
+                        context.nodes[payloadRange.astStart + payloadAncestor!] => payloadNode
+                        (payloadNode.kind == 27 and payloadNode.parent == enumAst) -> if { true => payloadBelongs! } else { payloadNode.parent => payloadAncestor! }
+                    }
+                    payloadBelongs! -> if {
+                        -1 => compositeElementType!
+                        0 => compositeElementSearch!
+                        compositeElementSearch! < (context.types -> len) -> while {
+                            context.types[compositeElementSearch!] => compositeElementCandidate
+                            (compositeElementCandidate.status == 0 and compositeElementCandidate.kind == 1 and compositeElementCandidate.origin == compositePayload.elementOrigin and compositeElementCandidate.module == compositePayload.elementModule and compositeElementCandidate.symbol == compositePayload.elementSymbol) -> if { compositeElementSearch! => compositeElementType! }
+                            compositeElementSearch! + 1 => compositeElementSearch!
+                        }
+                        -1 => resolvedPayloadType!
+                        0 => resolvedPayloadSearch!
+                        resolvedPayloadSearch! < (context.types -> len) -> while {
+                            context.types[resolvedPayloadSearch!] => payloadTypeCandidate
+                            (payloadTypeCandidate.status == 0 and payloadTypeCandidate.kind == compositePayload.kind and payloadTypeCandidate.first == compositeElementType!) -> if { resolvedPayloadSearch! => resolvedPayloadType! }
+                            resolvedPayloadSearch! + 1 => resolvedPayloadSearch!
+                        }
+                        resolvedPayloadType! >= 0 -> if {
+                            false => alreadyPayload!
+                            0 => existingPayloadIndex!
+                            existingPayloadIndex! < (payloads! -> len) -> while {
+                                payloads![existingPayloadIndex!] == resolvedPayloadType! -> if { true => alreadyPayload! }
+                                existingPayloadIndex! + 1 => existingPayloadIndex!
+                            }
+                            not alreadyPayload! -> if { payloads! -> push(resolvedPayloadType!) }
+                        }
+                    }
+                }
+                compositePayloadIndex! + 1 => compositePayloadIndex!
+            }
+        } else {
+            context.types[typeId] => enumType
+            (enumType.kind == 7 and enumType.origin == 4 and (enumType.symbol == 0 or enumType.symbol == 1)) -> if {
+                enumType.first >= 0 -> if { payloads! -> push(enumType.first) }
+                enumType.second >= 0 -> if { payloads! -> push(enumType.second) }
+            }
+        }
+        payloads!
+    }
     writeSemanticTypeId typeId: Int -> Unit uses Console {
         [typeId, ~] => typeTasks!
         typeTasks! -> len => typeTaskSize!
@@ -1880,7 +2111,7 @@ emitCore context: move EmitContext -> Unit uses Console {
                 }
                 current.kind == 1 -> if {
                     (current.origin == 0 or current.origin == 2) -> if {
-                        "%sollang.struct.m$(current.module)_s$(current.symbol)" -> print
+                        typeTask -> isNominalEnumType -> if { "%sollang.enum.t$(typeTask)" -> print } else { "%sollang.struct.m$(current.module)_s$(current.symbol)" -> print }
                     } else {
                         current.symbol == 0 -> if { "void" -> print }
                         current.symbol == 1 -> if { "%sollang.text" -> print }
@@ -2028,7 +2259,9 @@ emitCore context: move EmitContext -> Unit uses Console {
     storageAlign node: typedIr.TypedIrNode -> Int {
         node -> effectiveTypeId => typeId
         typeId >= 0 -> if {
-            context.typeLayoutStatuses[typeId] == 0 -> if { context.typeAligns[typeId] } else { 1 }
+            typeId -> isNominalEnumType -> if { 8 } else {
+                context.typeLayoutStatuses[typeId] == 0 -> if { context.typeAligns[typeId] } else { 1 }
+            }
         } else {
             node.typeSymbol -> legacyStorageAlign
         }
@@ -2054,6 +2287,22 @@ emitCore context: move EmitContext -> Unit uses Console {
             context.sources[node.sourceModule] -> byte(variantToken.span.start + UIntSize(3)) => fourth
             (first == UInt8(78) and second == UInt8(111) and third == UInt8(110) and fourth == UInt8(101)) -> if { 0 => tag! }
             (first == UInt8(83) and second == UInt8(111) and third == UInt8(109) and fourth == UInt8(101)) -> if { 1 => tag! }
+        }
+        (tag! < 0 and node.targetModule >= 0 and node.targetModule < (context.ranges -> len)) -> if {
+            context.ranges[node.targetModule] => variantRange
+            (node.symbol >= 0 and node.symbol < variantRange.symbolCount) -> if {
+                context.symbols[variantRange.symbolStart + node.symbol] => variantSymbol
+                (variantSymbol.kind == 27 and variantSymbol.parent >= 0) -> if {
+                    0 => variantOrdinal!
+                    0 => variantSymbolIndex!
+                    variantSymbolIndex! < node.symbol -> while {
+                        context.symbols[variantRange.symbolStart + variantSymbolIndex!] => siblingVariant
+                        (siblingVariant.kind == 27 and siblingVariant.parent == variantSymbol.parent) -> if { variantOrdinal! + 1 => variantOrdinal! }
+                        variantSymbolIndex! + 1 => variantSymbolIndex!
+                    }
+                    variantOrdinal! => tag!
+                }
+            }
         }
         tag!
     }
@@ -2198,6 +2447,111 @@ emitCore context: move EmitContext -> Unit uses Console {
         "  %v$(request.callIndex) = load " -> print
         call -> writeIrType
         ", ptr %v$(request.callIndex)_process_result_slot, align 8" -> println
+    }
+    emitDirectoryCall request: DirectoryCallRequest -> Unit uses Console {
+        context.ir[request.callIndex] => call
+        request.callIndex -> callArgumentIndex => argumentIndex!
+        argumentIndex! -> aggregateValueIndex => argumentIndex!
+        context.ir[argumentIndex!] => directoryPath
+        -1 => pathBytesType!
+        -1 => pathStyleType!
+        0 => pathFieldIndex!
+        pathFieldIndex! < (context.fields -> len) -> while {
+            context.fields[pathFieldIndex!] => pathField
+            (pathField.status == 0 and pathField.ownerType == directoryPath.typeId and pathField.ordinal == 0) -> if { pathField.fieldType => pathBytesType! }
+            (pathField.status == 0 and pathField.ownerType == directoryPath.typeId and pathField.ordinal == 1) -> if { pathField.fieldType => pathStyleType! }
+            pathFieldIndex! + 1 => pathFieldIndex!
+        }
+        "  %v$(request.callIndex)_directory_path_bytes = extractvalue " -> print
+        directoryPath -> writeIrType
+        " " -> print
+        (directoryPath.kind == 5 and request.ownerIndex >= 0 and context.ir[request.ownerIndex].operand1 >= 0 and directoryPath.symbol == context.ir[context.ir[request.ownerIndex].operand1].symbol) -> if { "%arg" -> print } else { "%v$(argumentIndex!)" -> print }
+        ", 0" -> println
+        "  %v$(request.callIndex)_directory_path_data = extractvalue " -> print
+        pathBytesType! -> writeSemanticTypeId
+        " %v$(request.callIndex)_directory_path_bytes, 0" -> println
+        "  %v$(request.callIndex)_directory_path_length = extractvalue " -> print
+        pathBytesType! -> writeSemanticTypeId
+        " %v$(request.callIndex)_directory_path_bytes, 1" -> println
+        "  %v$(request.callIndex)_directory_path_style_value = extractvalue " -> print
+        directoryPath -> writeIrType
+        " " -> print
+        (directoryPath.kind == 5 and request.ownerIndex >= 0 and context.ir[request.ownerIndex].operand1 >= 0 and directoryPath.symbol == context.ir[context.ir[request.ownerIndex].operand1].symbol) -> if { "%arg" -> print } else { "%v$(argumentIndex!)" -> print }
+        ", 1" -> println
+        "  %v$(request.callIndex)_directory_path_style = extractvalue " -> print
+        pathStyleType! -> writeSemanticTypeId
+        " %v$(request.callIndex)_directory_path_style_value, 0" -> println
+        "  %v$(request.callIndex)_directory_raw = call %sollang.directory_result @sollang_platform_read_directory(ptr %v$(request.callIndex)_directory_path_data, i64 %v$(request.callIndex)_directory_path_length, i32 %v$(request.callIndex)_directory_path_style)" -> println
+        "  %v$(request.callIndex)_directory_data = extractvalue %sollang.directory_result %v$(request.callIndex)_directory_raw, 0" -> println
+        "  %v$(request.callIndex)_directory_length = extractvalue %sollang.directory_result %v$(request.callIndex)_directory_raw, 1" -> println
+        "  %v$(request.callIndex)_directory_count = extractvalue %sollang.directory_result %v$(request.callIndex)_directory_raw, 2" -> println
+        "  %v$(request.callIndex)_directory_status = extractvalue %sollang.directory_result %v$(request.callIndex)_directory_raw, 3" -> println
+        "  %v$(request.callIndex)_directory_ok = icmp sgt i32 %v$(request.callIndex)_directory_status, 0" -> println
+        context.types[call.typeId] => resultType
+        resultType.first => rawTypeId!
+        call.typeId -> isNominalEnumType -> if {
+            call.typeId -> enumPayloadTypes => directoryResultPayloads!
+            (directoryResultPayloads! -> len) > 0 -> if { directoryResultPayloads![0] => rawTypeId! }
+        }
+        -1 => rawBytesType!
+        0 => rawFieldIndex!
+        rawFieldIndex! < (context.fields -> len) -> while {
+            context.fields[rawFieldIndex!] => rawField
+            (rawField.status == 0 and rawField.ownerType == rawTypeId! and rawField.ordinal == 0) -> if { rawField.fieldType => rawBytesType! }
+            rawFieldIndex! + 1 => rawFieldIndex!
+        }
+        "  %v$(request.callIndex)_directory_result_slot = alloca " -> print
+        call -> writeIrType
+        ", align 8" -> println
+        "  store " -> print
+        call -> writeIrType
+        " zeroinitializer, ptr %v$(request.callIndex)_directory_result_slot, align 8" -> println
+        "  br i1 %v$(request.callIndex)_directory_ok, label %directory$(request.callIndex)_ok, label %directory$(request.callIndex)_error" -> println
+        "directory$(request.callIndex)_ok:" -> println
+        "  %v$(request.callIndex)_directory_bytes0 = insertvalue " -> print
+        rawBytesType! -> writeSemanticTypeId
+        " poison, ptr %v$(request.callIndex)_directory_data, 0" -> println
+        "  %v$(request.callIndex)_directory_bytes1 = insertvalue " -> print
+        rawBytesType! -> writeSemanticTypeId
+        " %v$(request.callIndex)_directory_bytes0, i64 %v$(request.callIndex)_directory_length, 1" -> println
+        "  %v$(request.callIndex)_directory_bytes = insertvalue " -> print
+        rawBytesType! -> writeSemanticTypeId
+        " %v$(request.callIndex)_directory_bytes1, i64 %v$(request.callIndex)_directory_length, 2" -> println
+        "  %v$(request.callIndex)_directory_raw0 = insertvalue " -> print
+        rawTypeId! -> writeSemanticTypeId
+        " poison, " -> print
+        rawBytesType! -> writeSemanticTypeId
+        " %v$(request.callIndex)_directory_bytes, 0" -> println
+        "  %v$(request.callIndex)_directory_raw_value = insertvalue " -> print
+        rawTypeId! -> writeSemanticTypeId
+        " %v$(request.callIndex)_directory_raw0, i64 %v$(request.callIndex)_directory_count, 1" -> println
+        "  %v$(request.callIndex)_directory_ok_tag = getelementptr inbounds " -> print
+        call -> writeIrType
+        ", ptr %v$(request.callIndex)_directory_result_slot, i32 0, i32 0" -> println
+        "  store i32 0, ptr %v$(request.callIndex)_directory_ok_tag, align 4" -> println
+        "  %v$(request.callIndex)_directory_ok_payload = getelementptr inbounds " -> print
+        call -> writeIrType
+        ", ptr %v$(request.callIndex)_directory_result_slot, i32 0, i32 1" -> println
+        "  store " -> print
+        rawTypeId! -> writeSemanticTypeId
+        " %v$(request.callIndex)_directory_raw_value, ptr %v$(request.callIndex)_directory_ok_payload, align 8" -> println
+        "  br label %directory$(request.callIndex)_merge" -> println
+        "directory$(request.callIndex)_error:" -> println
+        "  %v$(request.callIndex)_directory_error_tag = getelementptr inbounds " -> print
+        call -> writeIrType
+        ", ptr %v$(request.callIndex)_directory_result_slot, i32 0, i32 0" -> println
+        "  store i32 1, ptr %v$(request.callIndex)_directory_error_tag, align 4" -> println
+        "  %v$(request.callIndex)_directory_error_text0 = insertvalue %sollang.text poison, ptr @sollang_directory_error_io, 0" -> println
+        "  %v$(request.callIndex)_directory_error_text = insertvalue %sollang.text %v$(request.callIndex)_directory_error_text0, i64 2, 1" -> println
+        "  %v$(request.callIndex)_directory_error_payload = getelementptr inbounds " -> print
+        call -> writeIrType
+        ", ptr %v$(request.callIndex)_directory_result_slot, i32 0, i32 1" -> println
+        "  store %sollang.text %v$(request.callIndex)_directory_error_text, ptr %v$(request.callIndex)_directory_error_payload, align 8" -> println
+        "  br label %directory$(request.callIndex)_merge" -> println
+        "directory$(request.callIndex)_merge:" -> println
+        "  %v$(request.callIndex) = load " -> print
+        call -> writeIrType
+        ", ptr %v$(request.callIndex)_directory_result_slot, align 8" -> println
     }
     emitTryParallelCollect request: TryParallelCollectRequest -> Unit uses Console {
         context.types[request.callbackTypeId] => callbackResultType
@@ -2805,8 +3159,14 @@ emitCore context: move EmitContext -> Unit uses Console {
                 ((context.sources[value.sourceModule] -> byte(valueToken.span.start)) == UInt8(116)) -> if { "1" -> print } else { "0" -> print }
             }
         } else {
-            (request.ownerIndex >= 0 and context.ir[request.ownerIndex].kind == 0 and context.ir[request.ownerIndex].operand1 >= 0 and value.kind == 5 and value.symbol == context.ir[context.ir[request.ownerIndex].operand1].symbol) -> if {
-                "%arg" -> print
+            -1 => whileParameterOrdinal!
+            (request.ownerIndex >= 0 and context.ir[request.ownerIndex].kind == 0 and context.ir[request.ownerIndex].operand1 >= 0 and value.kind == 5) -> if {
+                value.symbol == context.ir[context.ir[request.ownerIndex].operand1].symbol -> if { 0 => whileParameterOrdinal! } else {
+                    request.ownerIndex -> additionalParameterOrdinal(value.symbol) => whileParameterOrdinal!
+                }
+            }
+            whileParameterOrdinal! >= 0 -> if {
+                whileParameterOrdinal! == 0 -> if { "%arg" -> print } else { "%arg$(whileParameterOrdinal!)" -> print }
             } else {
                 false => capturedWhileValue!
                 (request.ownerIndex >= 0 and context.ir[request.ownerIndex].kind == 0 and value.kind == 5 and value.operand0 < 0) -> if {
@@ -3765,6 +4125,17 @@ emitCore context: move EmitContext -> Unit uses Console {
                                         }
                                         (localSecondBelongs! and not localScheduled![localCandidate.operand1 - regionLocalStart]) -> if { false => localReady! }
                                     }
+                                    (localCandidate.kind == 6 and localCandidate.opcode != -207 and localCandidate.opcode != -208 and localCandidate.opcode != -209 and localCandidate.operand1 >= 0) -> if {
+                                        localCandidate.operand1 -> aggregateValueIndex => localAdditionalArgument
+                                        (localAdditionalArgument >= regionLocalStart and localAdditionalArgument < regionLocalEnd) -> if {
+                                            context.ir[localAdditionalArgument].parent => localAdditionalAncestor!
+                                            false => localAdditionalBelongs!
+                                            (localAdditionalAncestor! >= 0 and not localAdditionalBelongs!) -> while {
+                                                localAdditionalAncestor! == regionTaskNode -> if { true => localAdditionalBelongs! } else { context.ir[localAdditionalAncestor!].parent => localAdditionalAncestor! }
+                                            }
+                                            (localAdditionalBelongs! and not localScheduled![localAdditionalArgument - regionLocalStart]) -> if { false => localReady! }
+                                        }
+                                    }
                                     (localCandidate.kind == 9 and localCandidate.operand0 >= 0) -> if {
                                         localCandidate.operand0 => localCallArgument!
                                         (localCallArgument! >= regionLocalStart and localCallArgument! < regionLocalEnd and context.ir[localCallArgument!].parent == localCandidateIndex!) -> while {
@@ -4393,6 +4764,45 @@ emitCore context: move EmitContext -> Unit uses Console {
                 (regionMapPath.kind == 5 and ownerIndex! >= 0 and context.ir[ownerIndex!].operand1 >= 0 and regionMapPath.symbol == context.ir[context.ir[ownerIndex!].operand1].symbol) -> if { "%arg" -> print } else { "%v$(regionNode.operand0)" -> print }
                 ")" -> println
             }
+            ((regionNode.kind == 9 or regionNode.kind == 6) and regionNode.opcode == -214 and regionNode.operand0 >= 0) -> if {
+                context.ir[regionNode.operand0] => regionSourcePath
+                context.expectedPathStyle => regionSourcePathExpectedStyle
+                -1 => regionSourcePathBytesType!
+                -1 => regionSourcePathStyleType!
+                0 => regionSourcePathFieldIndex!
+                regionSourcePathFieldIndex! < (context.fields -> len) -> while {
+                    context.fields[regionSourcePathFieldIndex!] => regionSourcePathField
+                    regionSourcePathField.ownerType == regionSourcePath.typeId -> if {
+                        regionSourcePathField.ordinal == 0 -> if { regionSourcePathField.fieldType => regionSourcePathBytesType! }
+                        regionSourcePathField.ordinal == 1 -> if { regionSourcePathField.fieldType => regionSourcePathStyleType! }
+                    }
+                    regionSourcePathFieldIndex! + 1 => regionSourcePathFieldIndex!
+                }
+                "  %v$(regionNodeIndex!)_path_bytes = extractvalue " -> print
+                regionSourcePath -> writeIrType
+                " %v$(regionNode.operand0), 0" -> println
+                "  %v$(regionNodeIndex!)_path_data = extractvalue " -> print
+                regionSourcePathBytesType! -> writeSemanticTypeId
+                " %v$(regionNodeIndex!)_path_bytes, 0" -> println
+                "  %v$(regionNodeIndex!)_path_length = extractvalue " -> print
+                regionSourcePathBytesType! -> writeSemanticTypeId
+                " %v$(regionNodeIndex!)_path_bytes, 1" -> println
+                "  %v$(regionNodeIndex!)_path_style_value = extractvalue " -> print
+                regionSourcePath -> writeIrType
+                " %v$(regionNode.operand0), 1" -> println
+                "  %v$(regionNodeIndex!)_path_style = extractvalue " -> print
+                regionSourcePathStyleType! -> writeSemanticTypeId
+                " %v$(regionNodeIndex!)_path_style_value, 0" -> println
+                "  %v$(regionNodeIndex!)_path_style_valid = icmp eq i32 %v$(regionNodeIndex!)_path_style, $(regionSourcePathExpectedStyle)" -> println
+                "  br i1 %v$(regionNodeIndex!)_path_style_valid, label %map_path$(regionNodeIndex!)_open, label %map_path$(regionNodeIndex!)_style_error" -> println
+                "map_path$(regionNodeIndex!)_style_error:" -> println
+                "  call void @llvm.trap()" -> println
+                "  unreachable" -> println
+                "map_path$(regionNodeIndex!)_open:" -> println
+                "  %v$(regionNodeIndex!)_path_text0 = insertvalue %sollang.text poison, ptr %v$(regionNodeIndex!)_path_data, 0" -> println
+                "  %v$(regionNodeIndex!)_path_text = insertvalue %sollang.text %v$(regionNodeIndex!)_path_text0, i64 %v$(regionNodeIndex!)_path_length, 1" -> println
+                "  %v$(regionNodeIndex!) = call %sollang.source_text @sollang_runtime_map_text(%sollang.text %v$(regionNodeIndex!)_path_text)" -> println
+            }
             ((regionNode.kind == 9 or regionNode.kind == 6) and regionNode.opcode == -206 and regionNode.operand0 >= 0) -> if {
                 context.ir[regionNode.operand0] => regionBorrowText
                 "  %v$(regionNodeIndex!)_data = extractvalue %sollang.text " -> print
@@ -4405,6 +4815,9 @@ emitCore context: move EmitContext -> Unit uses Console {
                 "  %v$(regionNodeIndex!)_value1 = insertvalue %sollang.source_text %v$(regionNodeIndex!)_value0, i64 %v$(regionNodeIndex!)_length, 1" -> println
                 "  %v$(regionNodeIndex!)_value2 = insertvalue %sollang.source_text %v$(regionNodeIndex!)_value1, ptr null, 2" -> println
                 "  %v$(regionNodeIndex!) = insertvalue %sollang.source_text %v$(regionNodeIndex!)_value2, i64 0, 3" -> println
+            }
+            (regionNode.kind == 6 and regionNode.opcode == -215) -> if {
+                DirectoryCallRequest { callIndex: regionNodeIndex!, ownerIndex: ownerIndex! } -> emitDirectoryCall
             }
             (regionNode.kind == 14 and (regionNode.typeOrigin == 13 or regionNode.typeOrigin == 14 or regionNode.typeKind == 3)) -> if {
                 0 => regionArrayLength!
@@ -4827,7 +5240,7 @@ emitCore context: move EmitContext -> Unit uses Console {
             (regionNode.kind == 6 and (regionNode.opcode == -210 or regionNode.opcode == -211)) -> if {
                 ProcessCallRequest { callIndex: regionNodeIndex!, ownerIndex: ownerIndex! } -> emitProcessCall
             }
-            (regionNode.kind == 6 and regionNode.symbol != -115 and regionNode.opcode != -205 and regionNode.opcode != -206 and regionNode.opcode != -207 and regionNode.opcode != -208 and regionNode.opcode != -209 and regionNode.opcode != -210 and regionNode.opcode != -211 and regionNode.opcode != -212 and regionNode.opcode != -214 and not (regionNode.parent >= 0 and context.ir[regionNode.parent].kind == 6 and (context.ir[regionNode.parent].opcode == -207 or context.ir[regionNode.parent].opcode == -209) and context.ir[regionNode.parent].operand1 == regionNodeIndex!)) -> if {
+            (regionNode.kind == 6 and regionNode.symbol != -115 and regionNode.opcode != -205 and regionNode.opcode != -206 and regionNode.opcode != -207 and regionNode.opcode != -208 and regionNode.opcode != -209 and regionNode.opcode != -210 and regionNode.opcode != -211 and regionNode.opcode != -212 and regionNode.opcode != -214 and regionNode.opcode != -215 and not (regionNode.parent >= 0 and context.ir[regionNode.parent].kind == 6 and (context.ir[regionNode.parent].opcode == -207 or context.ir[regionNode.parent].opcode == -209) and context.ir[regionNode.parent].operand1 == regionNodeIndex!)) -> if {
                 (regionNode.symbol == -101 or regionNode.symbol == -102) -> if {
                     regionNodeIndex! -> callArgumentIndex => regionArgumentIndex
                     context.ir[regionArgumentIndex] => regionArgument
@@ -5147,7 +5560,7 @@ emitCore context: move EmitContext -> Unit uses Console {
                     nestedConditionChild! >= 0 -> if { nestedConditionChild! => nestedConditionIndex! } else { false => nestedConditionUnwrap! }
                 }
                 context.ir[nestedConditionIndex!] => nestedCondition
-                (regionNode.typeSymbol != 0 and regionNode.nextOperand >= 0) -> if {
+                (not (regionNode.typeOrigin == 1 and regionNode.typeSymbol == 0) and regionNode.nextOperand >= 0) -> if {
                     "  %if$(regionNodeIndex!)_result = alloca " -> print
                     regionNode -> writeIrType
                     ", align " -> print
@@ -5177,7 +5590,7 @@ emitCore context: move EmitContext -> Unit uses Console {
             regionEventKind == 3 -> if {
                 ifActive![regionNodeIndex! - regionLocalStart] -> if {
                     not regionTerminated! -> if {
-                        (regionNode.typeSymbol != 0 and regionNode.nextOperand >= 0) -> if {
+                        (not (regionNode.typeOrigin == 1 and regionNode.typeSymbol == 0) and regionNode.nextOperand >= 0) -> if {
                             regionNode.operand1 -> regionResultValueIndex => nestedThenStoreIndex
                             context.ir[nestedThenStoreIndex] => nestedThenStoreValue
                             "  store " -> print
@@ -5207,7 +5620,7 @@ emitCore context: move EmitContext -> Unit uses Console {
                 regionNode.nextOperand < 0 -> if { true => ifThenReachesMerge![regionNodeIndex! - regionLocalStart] }
                 not regionTerminated! -> if {
                     regionNode.nextOperand >= 0 -> if {
-                        regionNode.typeSymbol != 0 -> if {
+                        not (regionNode.typeOrigin == 1 and regionNode.typeSymbol == 0) -> if {
                             regionNode.nextOperand -> regionResultValueIndex => nestedElseStoreIndex
                             context.ir[nestedElseStoreIndex] => nestedElseStoreValue
                             "  store " -> print
@@ -5234,7 +5647,7 @@ emitCore context: move EmitContext -> Unit uses Console {
                 ifThenReachesMerge![regionNodeIndex! - regionLocalStart] -> if {
                     "if$(regionNodeIndex!)_merge:" -> println
                     false => regionTerminated!
-                    (regionNode.typeSymbol != 0 and regionNode.nextOperand >= 0) -> if {
+                    (not (regionNode.typeOrigin == 1 and regionNode.typeSymbol == 0) and regionNode.nextOperand >= 0) -> if {
                         "  %v$(regionNodeIndex!) = load " -> print
                         regionNode -> writeIrType
                         ", ptr %if$(regionNodeIndex!)_result, align " -> print
@@ -5287,7 +5700,7 @@ emitCore context: move EmitContext -> Unit uses Console {
         " " -> print
         (subject.kind == 5 and subject.parent >= 0 and context.ir[subject.parent].kind == 1 and context.ir[subject.parent].parent >= 0 and context.ir[context.ir[subject.parent].parent].operand1 >= 0 and subject.symbol == context.ir[context.ir[context.ir[subject.parent].parent].operand1].symbol) -> if { "%arg" -> print } else { "%v$(match.operand0)" -> print }
         ", ptr %v$(matchIndex)_subject_slot, align 8" -> println
-        match.typeSymbol != 0 -> if {
+        not (match.typeOrigin == 1 and match.typeSymbol == 0) -> if {
             "  %v$(matchIndex)_result = alloca " -> print
             match -> writeIrType
             ", align " -> print
@@ -5317,8 +5730,8 @@ emitCore context: move EmitContext -> Unit uses Console {
                 armBinding -> storageAlign -> writeDecimalLine
             }
             armIndex! -> emitRegion
-            match.typeSymbol != 0 -> if {
-                armIndex! -> regionResultValueIndex => armValueIndex
+            not (match.typeOrigin == 1 and match.typeSymbol == 0) -> if {
+                armIndex! -> matchRegionResultValueIndex => armValueIndex
                 context.ir[armValueIndex] => armValue
                 "  store " -> print
                 match -> writeIrType
@@ -5340,7 +5753,7 @@ emitCore context: move EmitContext -> Unit uses Console {
         "  call void @llvm.trap()" -> println
         "  unreachable" -> println
         "match$(matchIndex)_merge:" -> println
-        match.typeSymbol != 0 -> if {
+        not (match.typeOrigin == 1 and match.typeSymbol == 0) -> if {
             "  %v$(matchIndex) = load " -> print
             match -> writeIrType
             ", ptr %v$(matchIndex)_result, align " -> print
@@ -5553,6 +5966,10 @@ emitCore context: move EmitContext -> Unit uses Console {
                         }
                         (scheduleReady! and scheduleNode.operand0 >= expressionStart and scheduleNode.operand0 < functionEnd! and (scheduleNode.kind != 5 or context.ir[scheduleNode.operand0].flags % 2 == 0) and not expressionScheduled![scheduleNode.operand0 - expressionStart]) -> if { false => scheduleReady! }
                         (scheduleReady! and scheduleNode.kind != 6 and scheduleNode.kind != 18 and scheduleNode.kind != 20 and scheduleNode.operand1 >= expressionStart and scheduleNode.operand1 < functionEnd! and not expressionScheduled![scheduleNode.operand1 - expressionStart]) -> if { false => scheduleReady! }
+                        (scheduleReady! and scheduleNode.kind == 6 and scheduleNode.opcode != -207 and scheduleNode.opcode != -208 and scheduleNode.opcode != -209 and scheduleNode.operand1 >= expressionStart and scheduleNode.operand1 < functionEnd!) -> if {
+                            scheduleNode.operand1 -> aggregateValueIndex => scheduleAdditionalArgument
+                            (scheduleAdditionalArgument >= expressionStart and scheduleAdditionalArgument < functionEnd! and not expressionScheduled![scheduleAdditionalArgument - expressionStart]) -> if { false => scheduleReady! }
+                        }
                         (scheduleReady! and scheduleNode.kind == 9 and scheduleNode.operand0 >= expressionStart) -> if {
                             scheduleNode.operand0 => scheduleCallArgument!
                             (scheduleCallArgument! >= expressionStart and scheduleCallArgument! < functionEnd! and context.ir[scheduleCallArgument!].parent == scheduleCandidate!) -> while {
@@ -6610,7 +7027,10 @@ emitCore context: move EmitContext -> Unit uses Console {
                 (expression.kind == 6 and (expression.opcode == -210 or expression.opcode == -211)) -> if {
                     ProcessCallRequest { callIndex: expressionIndex!, ownerIndex: functionIndex! } -> emitProcessCall
                 }
-                (expression.kind == 6 and expression.symbol != -115 and expression.opcode != -205 and expression.opcode != -206 and expression.opcode != -207 and expression.opcode != -208 and expression.opcode != -209 and expression.opcode != -210 and expression.opcode != -211 and expression.opcode != -212 and expression.opcode != -214 and not (expression.parent >= 0 and context.ir[expression.parent].kind == 6 and (context.ir[expression.parent].opcode == -207 or context.ir[expression.parent].opcode == -209) and context.ir[expression.parent].operand1 == expressionIndex!)) -> if {
+                (expression.kind == 6 and expression.opcode == -215) -> if {
+                    DirectoryCallRequest { callIndex: expressionIndex!, ownerIndex: functionIndex! } -> emitDirectoryCall
+                }
+                (expression.kind == 6 and expression.symbol != -115 and expression.opcode != -205 and expression.opcode != -206 and expression.opcode != -207 and expression.opcode != -208 and expression.opcode != -209 and expression.opcode != -210 and expression.opcode != -211 and expression.opcode != -212 and expression.opcode != -214 and expression.opcode != -215 and not (expression.parent >= 0 and context.ir[expression.parent].kind == 6 and (context.ir[expression.parent].opcode == -207 or context.ir[expression.parent].opcode == -209) and context.ir[expression.parent].operand1 == expressionIndex!)) -> if {
                     (expression.symbol == -101 or expression.symbol == -102) -> if {
                         expressionIndex! -> callArgumentIndex => runtimeArgumentIndex
                         context.ir[runtimeArgumentIndex] => runtimeArgument
@@ -7068,7 +7488,7 @@ emitCore context: move EmitContext -> Unit uses Console {
                 }
                 expression.kind == 18 -> if {
                     context.ir[expression.operand0] => ifCondition
-                    (expression.typeSymbol != 0 and expression.nextOperand >= 0) -> if {
+                    (not (expression.typeOrigin == 1 and expression.typeSymbol == 0) and expression.nextOperand >= 0) -> if {
                         "  %if$(expressionIndex!)_result = alloca " -> print
                         expression -> writeIrType
                         ", align " -> print
@@ -7095,7 +7515,7 @@ emitCore context: move EmitContext -> Unit uses Console {
                     expression.operand1 -> regionReturns => thenReturns!
                     expression.operand1 -> emitRegion
                     not thenReturns! -> if {
-                        (expression.typeSymbol != 0 and expression.nextOperand >= 0) -> if {
+                        (not (expression.typeOrigin == 1 and expression.typeSymbol == 0) and expression.nextOperand >= 0) -> if {
                             expression.operand1 -> regionResultValueIndex => thenStoreIndex
                             context.ir[thenStoreIndex] => thenStoreValue
                             "  store " -> print
@@ -7120,7 +7540,7 @@ emitCore context: move EmitContext -> Unit uses Console {
                         expression.nextOperand -> regionReturns => elseReturns!
                         expression.nextOperand -> emitRegion
                         not elseReturns! -> if {
-                            expression.typeSymbol != 0 -> if {
+                            not (expression.typeOrigin == 1 and expression.typeSymbol == 0) -> if {
                                 expression.nextOperand -> regionResultValueIndex => elseStoreIndex
                                 context.ir[elseStoreIndex] => elseStoreValue
                                 "  store " -> print
@@ -7141,7 +7561,7 @@ emitCore context: move EmitContext -> Unit uses Console {
                         }
                     }
                     not (thenReturns! and elseReturns!) -> if { "if$(expressionIndex!)_merge:" -> println }
-                    (expression.typeSymbol != 0 and expression.nextOperand >= 0 and not (thenReturns! and elseReturns!)) -> if {
+                    (not (expression.typeOrigin == 1 and expression.typeSymbol == 0) and expression.nextOperand >= 0 and not (thenReturns! and elseReturns!)) -> if {
                         "  %v$(expressionIndex!) = load " -> print
                         expression -> writeIrType
                         ", ptr %if$(expressionIndex!)_result, align " -> print
@@ -7564,6 +7984,14 @@ emitCore context: move EmitContext -> Unit uses Console {
         sourceTextTypeSearch! + 1 => sourceTextTypeSearch!
     }
     usesSourceText! -> if { "%sollang.source_text = type { ptr, i64, ptr, i64 }" -> println }
+    context -> usesDirectoryRuntime => usesDirectoryTraversal
+    usesDirectoryTraversal -> if {
+        "%sollang.directory_result = type { ptr, i64, i64, i32 }" -> println
+        "%sollang.directory_node = type { ptr, i64, i8, [7 x i8] }" -> println
+        """
+        @sollang_directory_error_io = private constant [2 x i8] c"io"
+        """ -> println
+    }
     false => usesTaskType!
     0 => taskTypeSearch!
     taskTypeSearch! < (context.types -> len) -> while {
@@ -7575,9 +8003,15 @@ emitCore context: move EmitContext -> Unit uses Console {
     0 => enumTypeIndex!
     enumTypeIndex! < (context.types -> len) -> while {
         context.types[enumTypeIndex!] => enumType
-        (enumType.status == 0 and enumType.kind == 7 and enumType.origin == 4 and (enumType.symbol == 0 or enumType.symbol == 1)) -> if {
-            context.typeSizes[enumType.first] => enumPayloadSize!
-            (enumType.second >= 0 and context.typeSizes[enumType.second] > enumPayloadSize!) -> if { context.typeSizes[enumType.second] => enumPayloadSize! }
+        (enumType.status == 0 and ((enumType.kind == 7 and enumType.origin == 4 and (enumType.symbol == 0 or enumType.symbol == 1)) or (enumTypeIndex! -> isNominalEnumType))) -> if {
+            0 => enumPayloadSize!
+            enumTypeIndex! -> enumPayloadTypes => enumPayloads!
+            0 => enumPayloadIndex!
+            enumPayloadIndex! < (enumPayloads! -> len) -> while {
+                enumPayloads![enumPayloadIndex!] => enumPayloadType
+                (enumPayloadType >= 0 and context.typeSizes[enumPayloadType] > enumPayloadSize!) -> if { context.typeSizes[enumPayloadType] => enumPayloadSize! }
+                enumPayloadIndex! + 1 => enumPayloadIndex!
+            }
             (enumPayloadSize! + 7) / 8 => enumPayloadWords
             "%sollang.enum.t$(enumTypeIndex!) = type { i32, [$enumPayloadWords x i64] }" -> println
         }
@@ -7586,7 +8020,7 @@ emitCore context: move EmitContext -> Unit uses Console {
     0 => structTypeIndex!
     structTypeIndex! < (context.types -> len) -> while {
         context.types[structTypeIndex!] => structType
-        (structType.status == 0 and structType.kind == 1 and (structType.origin == 0 or structType.origin == 2)) -> if {
+        (structType.status == 0 and structType.kind == 1 and (structType.origin == 0 or structType.origin == 2) and not (structTypeIndex! -> isNominalEnumType)) -> if {
             "%sollang.struct.m$(structType.module)_s$(structType.symbol) = type { " -> print
             true => firstField!
             0 => canonicalFieldIndex!
@@ -7619,7 +8053,7 @@ emitCore context: move EmitContext -> Unit uses Console {
     usesDynamicArray! -> if {
         "%sollang.array.i32 = type { ptr, i64, i64 }" -> println
     }
-    (usesDynamicArray! or usesSourceText! or usesComputePool or intrinsicRuntimeModule! >= 0 or usesOwnedDropRuntime!) -> if {
+    (usesDynamicArray! or usesSourceText! or usesComputePool or intrinsicRuntimeModule! >= 0 or usesOwnedDropRuntime! or usesDirectoryTraversal) -> if {
         "declare ptr @malloc(i64)" -> println
         usesArrayPush! -> if { "declare ptr @realloc(ptr, i64)" -> println }
         "declare void @free(ptr)" -> println
@@ -7906,6 +8340,10 @@ emitCore context: move EmitContext -> Unit uses Console {
                             (entryInsideControlRegion! or entryScheduleNode.kind == 19) -> if { false => entryScheduleReady! }
                             (entryScheduleReady! and entryScheduleNode.operand0 > functionIndex! and entryScheduleNode.operand0 < entryEnd! and (entryScheduleNode.kind != 5 or context.ir[entryScheduleNode.operand0].flags % 2 == 0) and not entryScheduled![entryScheduleNode.operand0 - functionIndex! - 1]) -> if { false => entryScheduleReady! }
                             (entryScheduleReady! and entryScheduleNode.kind != 6 and entryScheduleNode.kind != 18 and entryScheduleNode.kind != 20 and entryScheduleNode.operand1 > functionIndex! and entryScheduleNode.operand1 < entryEnd! and not entryScheduled![entryScheduleNode.operand1 - functionIndex! - 1]) -> if { false => entryScheduleReady! }
+                            (entryScheduleReady! and entryScheduleNode.kind == 6 and entryScheduleNode.opcode != -207 and entryScheduleNode.opcode != -208 and entryScheduleNode.opcode != -209 and entryScheduleNode.operand1 > functionIndex! and entryScheduleNode.operand1 < entryEnd!) -> if {
+                                entryScheduleNode.operand1 -> aggregateValueIndex => entryScheduleAdditionalArgument
+                                (entryScheduleAdditionalArgument > functionIndex! and entryScheduleAdditionalArgument < entryEnd! and not entryScheduled![entryScheduleAdditionalArgument - functionIndex! - 1]) -> if { false => entryScheduleReady! }
+                            }
                             (entryScheduleReady! and entryScheduleNode.kind == 9 and entryScheduleNode.operand0 > functionIndex!) -> if {
                                 entryScheduleNode.operand0 => entryScheduleCallArgument!
                                 (entryScheduleCallArgument! > functionIndex! and entryScheduleCallArgument! < entryEnd! and context.ir[entryScheduleCallArgument!].parent == entryScheduleCandidate!) -> while {
@@ -8105,6 +8543,9 @@ emitCore context: move EmitContext -> Unit uses Console {
                         "  %v$(entryExpressionIndex!)_value1 = insertvalue %sollang.source_text %v$(entryExpressionIndex!)_value0, i64 %v$(entryExpressionIndex!)_length, 1" -> println
                         "  %v$(entryExpressionIndex!)_value2 = insertvalue %sollang.source_text %v$(entryExpressionIndex!)_value1, ptr null, 2" -> println
                         "  %v$(entryExpressionIndex!) = insertvalue %sollang.source_text %v$(entryExpressionIndex!)_value2, i64 0, 3" -> println
+                    }
+                    (entryExpression.kind == 6 and entryExpression.opcode == -215) -> if {
+                        DirectoryCallRequest { callIndex: entryExpressionIndex!, ownerIndex: functionIndex! } -> emitDirectoryCall
                     }
                     (entryExpression.kind == 14 and (entryExpression.typeOrigin == 13 or entryExpression.typeOrigin == 14 or entryExpression.typeKind == 3)) -> if {
                         0 => entryArrayLength!
@@ -8440,7 +8881,7 @@ emitCore context: move EmitContext -> Unit uses Console {
                     (entryExpression.kind == 6 and (entryExpression.opcode == -210 or entryExpression.opcode == -211)) -> if {
                         ProcessCallRequest { callIndex: entryExpressionIndex!, ownerIndex: functionIndex! } -> emitProcessCall
                     }
-                    (entryExpression.kind == 6 and entryExpression.symbol != -115 and entryExpression.opcode != -205 and entryExpression.opcode != -207 and entryExpression.opcode != -208 and entryExpression.opcode != -209 and entryExpression.opcode != -210 and entryExpression.opcode != -211 and entryExpression.opcode != -212 and not (entryExpression.parent >= 0 and context.ir[entryExpression.parent].kind == 6 and (context.ir[entryExpression.parent].opcode == -207 or context.ir[entryExpression.parent].opcode == -209) and context.ir[entryExpression.parent].operand1 == entryExpressionIndex!)) -> if {
+                    (entryExpression.kind == 6 and entryExpression.symbol != -115 and entryExpression.opcode != -205 and entryExpression.opcode != -207 and entryExpression.opcode != -208 and entryExpression.opcode != -209 and entryExpression.opcode != -210 and entryExpression.opcode != -211 and entryExpression.opcode != -212 and entryExpression.opcode != -215 and not (entryExpression.parent >= 0 and context.ir[entryExpression.parent].kind == 6 and (context.ir[entryExpression.parent].opcode == -207 or context.ir[entryExpression.parent].opcode == -209) and context.ir[entryExpression.parent].operand1 == entryExpressionIndex!)) -> if {
                         (entryExpression.symbol == -101 or entryExpression.symbol == -102) -> if {
                             entryExpressionIndex! -> callArgumentIndex => entryRuntimeArgumentIndex
                             context.ir[entryRuntimeArgumentIndex] => runtimeArgument
@@ -8783,7 +9224,7 @@ emitCore context: move EmitContext -> Unit uses Console {
                     }
                     entryExpression.kind == 18 -> if {
                         context.ir[entryExpression.operand0] => entryIfCondition
-                        (entryExpression.typeSymbol != 0 and entryExpression.nextOperand >= 0) -> if {
+                        (not (entryExpression.typeOrigin == 1 and entryExpression.typeSymbol == 0) and entryExpression.nextOperand >= 0) -> if {
                             "  %if$(entryExpressionIndex!)_result = alloca " -> print
                             entryExpression -> writeIrType
                             ", align " -> print
@@ -8806,7 +9247,7 @@ emitCore context: move EmitContext -> Unit uses Console {
                         }
                         "if$(entryExpressionIndex!)_then:" -> println
                         entryExpression.operand1 -> emitRegion
-                        (entryExpression.typeSymbol != 0 and entryExpression.nextOperand >= 0) -> if {
+                        (not (entryExpression.typeOrigin == 1 and entryExpression.typeSymbol == 0) and entryExpression.nextOperand >= 0) -> if {
                             entryExpression.operand1 -> regionResultValueIndex => entryThenStoreIndex
                             context.ir[entryThenStoreIndex] => entryThenStoreValue
                             "  store " -> print
@@ -8825,7 +9266,7 @@ emitCore context: move EmitContext -> Unit uses Console {
                         entryExpression.nextOperand >= 0 -> if {
                             "if$(entryExpressionIndex!)_else:" -> println
                             entryExpression.nextOperand -> emitRegion
-                            entryExpression.typeSymbol != 0 -> if {
+                            not (entryExpression.typeOrigin == 1 and entryExpression.typeSymbol == 0) -> if {
                                 entryExpression.nextOperand -> regionResultValueIndex => entryElseStoreIndex
                                 context.ir[entryElseStoreIndex] => entryElseStoreValue
                                 "  store " -> print
@@ -8843,7 +9284,7 @@ emitCore context: move EmitContext -> Unit uses Console {
                             "  br label %if$(entryExpressionIndex!)_merge" -> println
                         }
                         "if$(entryExpressionIndex!)_merge:" -> println
-                        (entryExpression.typeSymbol != 0 and entryExpression.nextOperand >= 0) -> if {
+                        (not (entryExpression.typeOrigin == 1 and entryExpression.typeSymbol == 0) and entryExpression.nextOperand >= 0) -> if {
                             "  %v$(entryExpressionIndex!) = load " -> print
                             entryExpression -> writeIrType
                             ", ptr %if$(entryExpressionIndex!)_result, align " -> print
@@ -8912,6 +9353,16 @@ usesSourceTextRuntime context: EmitContext -> Bool {
     0 => nodeIndex!
     nodeIndex! < (context.ir -> len) -> while {
         context.ir[nodeIndex!] -> isSourceTextType -> if { true => usesRuntime! }
+        nodeIndex! + 1 => nodeIndex!
+    }
+    usesRuntime!
+}
+
+usesDirectoryRuntime context: EmitContext -> Bool {
+    false => usesRuntime!
+    0 => nodeIndex!
+    nodeIndex! < (context.ir -> len) -> while {
+        context.ir[nodeIndex!].opcode == -215 -> if { true => usesRuntime! }
         nodeIndex! + 1 => nodeIndex!
     }
     usesRuntime!
@@ -10227,6 +10678,7 @@ public emit sources: move [Text; ~] -> Unit uses Console {
     context! -> usesParallelRuntime => capturesParallelOutput
     context! -> usesTextRuntime => usesTextOutput
     context! -> usesProcessRuntime => needsProcessRuntime
+    context! -> usesDirectoryRuntime => needsDirectoryRuntime
     capturesParallelOutput -> if { emitMemoryOutputSinkRuntime }
     (usesTextOutput or capturesParallelOutput) -> if { capturesParallelOutput -> emitWindowsTextRuntime }
     capturesParallelOutput -> if { emitWindowsComputeRuntime }
@@ -10243,6 +10695,7 @@ public emit sources: move [Text; ~] -> Unit uses Console {
     needsProcessRuntime -> if { emitProcessTypeRuntime }
     context! -> emitCore
     needsProcessRuntime -> if { emitWindowsProcessRuntime }
+    needsDirectoryRuntime -> if { llvmRuntime.emitWindowsDirectory }
     runtimeModule! >= 0 -> if {
         runtimeModule! -> llvmRuntime.emitWindows
     }
@@ -10262,6 +10715,7 @@ public emitLinux sources: move [Text; ~] -> Unit uses Console {
     context! -> usesTextRuntime => usesTextOutput
     context! -> usesProcessRuntime => needsProcessRuntime
     context! -> usesSourceTextRuntime => needsSourceTextRuntime
+    context! -> usesDirectoryRuntime => needsDirectoryRuntime
     capturesParallelOutput -> if { emitMemoryOutputSinkRuntime }
     (usesTextOutput or capturesParallelOutput) -> if { capturesParallelOutput -> emitLinuxTextRuntime }
     capturesParallelOutput -> if { emitLinuxComputeRuntime }
@@ -10270,6 +10724,7 @@ public emitLinux sources: move [Text; ~] -> Unit uses Console {
     needsProcessRuntime -> if { emitProcessTypeRuntime }
     context! -> emitCore
     needsProcessRuntime -> if { capturesParallelOutput -> emitLinuxProcessRuntime }
+    needsDirectoryRuntime -> if { llvmRuntime.emitLinuxDirectory }
     needsSourceTextRuntime -> if {
         not needsProcessRuntime -> if { "declare i32 @open(ptr, i32, i32)" -> println }
         (not capturesParallelOutput and not needsProcessRuntime) -> if { "declare i32 @close(i32)" -> println }

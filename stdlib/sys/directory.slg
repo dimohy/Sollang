@@ -6,7 +6,7 @@ import sys.directory.kind as kinds
 # The runtime fills this private, length-prefixed byte snapshot in canonical
 # name order. The public layer decodes it into independently owned entries, so
 # no returned path borrows a native directory buffer or handle.
-struct Raw {
+public struct Raw {
     bytes: [UInt8; ~]
     count: UIntSize
 }
@@ -16,7 +16,7 @@ public struct Entry {
     kind: kinds.Kind
 }
 
-enum RawResult {
+public enum RawResult {
     Ok(Raw)
     Err(Text)
 }
@@ -26,9 +26,30 @@ public enum ReadResult {
     Err(Text)
 }
 
-readRaw directory: path.Path -> RawResult uses File = intrinsic
+public readRaw directory: path.Path -> RawResult uses File = intrinsic
 
-rawByte raw: Raw, index: Int -> UInt8 => raw.bytes[index]
+public rawByte raw: Raw, index: Int -> UInt8 => raw.bytes[index]
+
+# Bootstrap consumers that cannot yet retain an owned enum payload may flatten
+# the result immediately. A zero-count, one-byte snapshot is impossible for a
+# native directory encoding and therefore preserves the read-failure state.
+public readRawSnapshot directory: path.Path -> Raw {
+    readRaw(directory) -> when {
+        Ok(raw) {
+            raw -> return
+        }
+        Err(error) {
+            Raw { bytes: [UInt8(255), ~], count: UIntSize(0) } => failed!
+            failed! -> return
+        }
+    }
+    Raw { bytes: [UInt8(255), ~], count: UIntSize(0) } => unreachable!
+    unreachable!
+}
+
+readError message: Text -> ReadResult {
+    sys.directory.ReadResult.Err(message)
+}
 
 entryKind code: UInt8 -> kinds.Kind {
     code == UInt8(0) -> if {
@@ -50,7 +71,11 @@ entryKind code: UInt8 -> kinds.Kind {
 # raw UTF-8 name bytes, exclude `.` and `..`, and never retain an OS handle.
 public read directory: path.Path -> ReadResult {
     directory.style => style
-    readRaw(directory)? => raw!
+    readRawSnapshot(directory) => raw!
+    (raw!.count == UIntSize(0) and (raw!.bytes -> len) == 1) -> if {
+        "io" -> readError => failure!
+        failure! -> return
+    }
     raw!.count => count
     [Entry; ~] => entries!
     UIntSize(0) => cursor!

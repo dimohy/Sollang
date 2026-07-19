@@ -1,4 +1,6 @@
 import sollang.compiler.llvm.text as llvm
+import sollang.compiler.llvm.source_root as llvmRoot
+import sys.path as path
 import sys.process as process
 
 processCode result: Result<Int, Text> -> Int => result -> when {
@@ -96,6 +98,26 @@ emitWindowsFiles pathStart: UIntSize -> Unit uses Console, File, Process {
     paths! -> llvm.emitFiles
 }
 
+emitLinuxRoot pathStart: UIntSize -> Unit uses Console, File, Process {
+    process.arguments => arguments
+    # Root discovery and source mapping run in this native Windows driver even
+    # when the emitted program targets Linux.
+    arguments[pathStart] -> path.fromText(path.Style.Windows) => root!
+    root! -> llvmRoot.emitLinuxRoot
+}
+
+emitWasmRoot pathStart: UIntSize -> Unit uses Console, File, Process {
+    process.arguments => arguments
+    arguments[pathStart] -> path.fromText(path.Style.Windows) => root!
+    root! -> llvmRoot.emitWasmRoot
+}
+
+emitWindowsRoot pathStart: UIntSize -> Unit uses Console, File, Process {
+    process.arguments => arguments
+    arguments[pathStart] -> path.fromText(path.Style.Windows) => root!
+    root! -> llvmRoot.emitRoot
+}
+
 buildWindows pathStart: UIntSize -> Unit uses Console, File, Process {
     process.arguments => arguments
     pathStart -> collectBuildPaths => sourcePaths!
@@ -137,6 +159,15 @@ main {
     targetLength == UIntSize(13) -> if {
         pathStart -> buildWindows
     } else {
+    targetLength == UIntSize(12) -> if {
+        pathStart -> emitWindowsRoot
+    } else {
+    targetLength == UIntSize(10) -> if {
+        pathStart -> emitLinuxRoot
+    } else {
+    targetLength == UIntSize(9) -> if {
+        pathStart -> emitWasmRoot
+    } else {
     targetLength == UIntSize(5) -> if {
         pathStart -> emitLinuxFiles
     } else {
@@ -145,6 +176,9 @@ main {
         } else {
             pathStart -> emitWindowsFiles
         }
+    }
+    }
+    }
     }
     }
     }

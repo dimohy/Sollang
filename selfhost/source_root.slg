@@ -1,0 +1,62 @@
+namespace sollang.compiler.source_root
+
+import sys.directory as directory
+import sys.path as path
+
+sourceError message: Text -> Result<[path.Path; ~], Text> {
+    Result<[path.Path; ~], Text>.Err(message)
+}
+
+# A source root is a confined source set. Each directory snapshot is already
+# raw-UTF-8 sorted; the work queue composes those snapshots in deterministic
+# breadth-first order. Symlinks and non-source files are never traversed.
+public discover root: move path.Path -> Result<[path.Path; ~], Text> uses File {
+    [path.Path; ~] => directories!
+    directories! -> push(root)
+    [path.Path; ~] => sources!
+    UIntSize(directories! -> len) > UIntSize(0) -> while {
+        directories! -> take(0) => current!
+        directory.readRawSnapshot(current!) => raw!
+        (raw!.count == UIntSize(0) and (raw!.bytes -> len) == 1) -> if {
+            "source root could not be read" -> sourceError => failure
+            failure -> return
+        }
+        UIntSize(0) => cursor!
+        UIntSize(0) => entryIndex!
+        entryIndex! < raw!.count -> while {
+            raw! -> directory.rawByte(Int(cursor!)) => kind
+            cursor! + UIntSize(1) => cursor!
+            UIntSize(raw! -> directory.rawByte(Int(cursor!))) => length0
+            UIntSize(raw! -> directory.rawByte(Int(cursor! + UIntSize(1)))) * UIntSize(256) => length1
+            UIntSize(raw! -> directory.rawByte(Int(cursor! + UIntSize(2)))) * UIntSize(65536) => length2
+            UIntSize(raw! -> directory.rawByte(Int(cursor! + UIntSize(3)))) * UIntSize(16777216) => length3
+            length0 + length1 + length2 + length3 => nameLength
+            cursor! + UIntSize(4) => cursor!
+            [UInt8; ~] => nameBytes!
+            UIntSize(0) => nameIndex!
+            nameIndex! < nameLength -> while {
+                nameBytes! -> push(raw! -> directory.rawByte(Int(cursor! + nameIndex!)))
+                nameIndex! + UIntSize(1) => nameIndex!
+            }
+            cursor! + nameLength => cursor!
+            path.Path { bytes: nameBytes!, style: current!.style } => name!
+            kind == UInt8(0) -> if {
+                name! -> path.endsWithText(".slg") -> if {
+                    current! -> path.joinDiscovered(name!) => joined!
+                    sources! -> push(joined!)
+                }
+            } else {
+                kind == UInt8(1) -> if {
+                    current! -> path.joinDiscovered(name!) => joined!
+                    directories! -> push(joined!)
+                }
+            }
+            entryIndex! + UIntSize(1) => entryIndex!
+        }
+    }
+    (sources! -> len) == 0 -> if {
+        "source root contains no .slg files" -> sourceError => failure
+        failure -> return
+    }
+    Result<[path.Path; ~], Text>.Ok(sources!)
+}
