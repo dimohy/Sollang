@@ -258,7 +258,7 @@ $stage2Fingerprints = [System.IO.File]::ReadAllText($stage2FingerprintOutput).Re
 if ($stage1Fingerprints -ne $stage2Fingerprints) {
     throw "stage-1 and stage-2 module fingerprints differ"
 }
-$fingerprintLineCount = ([regex]::Matches($stage2Fingerprints, '(?m)^module fingerprint = \d+,\d+,\d+,\d+,\d+,\d+$')).Count
+$fingerprintLineCount = ([regex]::Matches($stage2Fingerprints, '(?m)^module fingerprint = \d+,\d+,\d+,\d+,\d+,\d+,\d+$')).Count
 if ($fingerprintLineCount -ne 3) {
     throw "stage-2 module fingerprint mode emitted $fingerprintLineCount records instead of 3"
 }

@@ -6156,7 +6156,7 @@ emitCore context: move EmitContext -> Unit uses Console {
                     WhileValueRequest { whileIndex: armValueIndex, ownerIndex: matchIndex, nodeIndex: armValueIndex } -> emitEnumConstructor
                 }
                 (armBindingIndex! < 0 and (armValueIndex == armIndex! or (armValue.kind == 19 and armValue.operand0 < 0))) => directArmPayload
-                (armBindingIndex! >= 0 and armValue.kind == 5 and (armValue.operand0 == armBindingIndex! or armValue.symbol == context.ir[armBindingIndex!].symbol)) => armValueUsesBinding
+                (armBindingIndex! >= 0 and armValue.kind == 5 and armValue.parent != armIndex! and (armValue.operand0 == armBindingIndex! or armValue.symbol == context.ir[armBindingIndex!].symbol)) => armValueUsesBlockBinding
                 (armBindingIndex! >= 0 and armValue.kind == 19 and armValue.operand0 < 0 and (match.typeKind == 7 or (match.typeId >= 0 and context.types[match.typeId].kind == 7))) => emptyPayloadlessArm
                 directArmPayload -> if {
                     "  %v$(matchIndex)_arm$(armOrdinal!)_direct_payload = getelementptr inbounds " -> print
@@ -6172,7 +6172,7 @@ emitCore context: move EmitContext -> Unit uses Console {
                 " " -> print
                 directArmPayload -> if { "%v$(matchIndex)_arm$(armOrdinal!)_direct_value" -> print } else {
                 emptyPayloadlessArm -> if { "zeroinitializer" -> print } else {
-                armValueUsesBinding -> if { "%v$(armBindingIndex!)" -> print } else {
+                armValueUsesBlockBinding -> if { "%v$(armBindingIndex!)" -> print } else {
                 (armValue.kind == 3 or armValue.kind == 4) -> if {
                     armValue -> sourceToken => armValueToken
                     armValue.kind == 3 -> if { context.sources[armValue.sourceModule] -> slice(armValueToken.span.start, armValueToken.span.length) -> print } else {
@@ -11212,10 +11212,10 @@ public emitLinux sources: move [Text; ~] -> Unit uses Console {
     context! -> emitCore
     needsProcessRuntime -> if { capturesParallelOutput -> emitLinuxProcessRuntime }
     needsDirectoryRuntime -> if { llvmRuntime.emitLinuxDirectory }
-    needsOwnedFileRuntime -> if { llvmRuntime.emitLinuxOwnedFile }
+    needsOwnedFileRuntime -> if { not needsProcessRuntime -> llvmRuntime.emitLinuxOwnedFile }
     needsSourceTextRuntime -> if {
-        not needsProcessRuntime -> if { "declare i32 @open(ptr, i32, i32)" -> println }
-        (not capturesParallelOutput and not needsProcessRuntime) -> if { "declare i32 @close(i32)" -> println }
+        (not needsProcessRuntime and not needsOwnedFileRuntime) -> if { "declare i32 @open(ptr, i32, i32)" -> println }
+        (not capturesParallelOutput and not needsProcessRuntime and not needsOwnedFileRuntime) -> if { "declare i32 @close(i32)" -> println }
         llvmRuntime.emitLinuxSourceTextDeclarations
         llvmRuntime.emitLinuxSourceText
     }

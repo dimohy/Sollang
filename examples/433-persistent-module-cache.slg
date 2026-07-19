@@ -1,5 +1,6 @@
 import sollang.compiler.semantic.module_cache as cache
 import sollang.compiler.semantic.module_cache_io as cacheIo
+import sollang.compiler.semantic.module_interfaces as interfaces
 
 baselineSources: -> [Text; ~] => [
     """
@@ -46,6 +47,12 @@ main {
     baselineCache! -> cache.reuse(baselineSources, target) => warm
     baselineCache! -> cache.reuse(bodyChangedSources, target) => bodyChanged
     baselineCache! -> cache.reuse(signatureChangedSources, target) => signatureChanged
+    baselineSources -> interfaces.fingerprint => baselineFingerprints!
+    bodyChangedSources -> interfaces.fingerprint => changedFingerprints!
+    baselineCache! -> cache.preflight(target, baselineFingerprints![0].moduleHash, baselineFingerprints![0].sourceHash) => preflightWarm
+    baselineCache! -> cache.preflight(target, changedFingerprints![0].moduleHash, changedFingerprints![0].sourceHash) => preflightChanged
+    preflightWarm -> if { 1 } else { 0 } => preflightWarmValue
+    preflightChanged -> if { 1 } else { 0 } => preflightChangedValue
 
     baselineSources -> cache.encode(target) => corrupted!
     corrupted![10] + UInt64(1) => corrupted![10]
@@ -55,7 +62,7 @@ main {
     UInt64(0) => badMagic![0]
     badMagic! -> cache.validate(target) => magic
     baselineSources -> cache.encode(target) => badSchema!
-    UInt64(2) => badSchema![1]
+    UInt64(3) => badSchema![1]
     badSchema! -> cache.validate(target) => schema
     baselineCache! -> cache.validate(UInt64(2)) => wrongTarget
     baselineSources -> cache.encode(target) => badLength!
@@ -65,7 +72,7 @@ main {
     baselineSources -> cache.encode(target) => persisted!
     "artifacts/example-tests/433-module-cache.bin" => destination
     "artifacts/example-tests/433-module-cache.tmp" => temporary
-    destination -> cacheIo.publish(temporary, persisted!) => published
+    persisted! -> cacheIo.publish(destination, temporary) => published
     destination -> cacheIo.load => loaded!
     loaded! -> cache.validate(target) => loadedValidation
     loaded! -> cache.reuse(bodyChangedSources, target) => loadedReuse
@@ -73,6 +80,7 @@ main {
     "warm = $(warm.hits)/$(warm.misses)" -> println
     "body-only = $(bodyChanged.hits)/$(bodyChanged.misses)/$(bodyChanged.bodyOnlyConsumerHits)" -> println
     "signature = $(signatureChanged.hits)/$(signatureChanged.misses)" -> println
+    "preflight = $preflightWarmValue/$preflightChangedValue" -> println
     "guards = $(truncated.status),$(magic.status),$(schema.status),$(wrongTarget.status),$(length.status),$(corruption.status)" -> println
     (published and loadedValidation.status == 0 and loadedReuse.hits == 1) -> if {
         "persistent = valid"

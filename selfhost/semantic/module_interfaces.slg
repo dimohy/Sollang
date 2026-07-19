@@ -3,6 +3,7 @@ namespace sollang.compiler.semantic.module_interfaces
 import sollang.compiler.semantic.analysis as analysis
 import sollang.compiler.semantic.modules as modules
 import syntax.generated.slg as grammar
+import sys.file as file
 
 # Stable module cache identity is split deliberately: implementationHash sees
 # every non-trivia token, while interfaceHash sees only exported declarations
@@ -11,6 +12,7 @@ import syntax.generated.slg as grammar
 public struct ModuleFingerprint {
     sourceIndex: Int
     moduleHash: UInt64
+    sourceHash: UInt64
     interfaceHash: UInt64
     implementationHash: UInt64
     importHash: UInt64
@@ -32,6 +34,39 @@ public struct ModuleInterfaces {
 
 mix hash: UInt64, value: UInt64 -> UInt64 {
     hash * UInt64(1099511628211) + value + UInt64(97)
+}
+
+# Raw source identity is deliberately available before lexing or semantic
+# analysis. It is a fast unchanged-file gate, never the sole proof that a
+# cached semantic or codegen artifact is compatible.
+public sourceIdentity source: Text -> UInt64 {
+    UInt64(1469598103934665603) => hash!
+    source -> len => sourceLength
+    UInt64(sourceLength) => sourceLengthWord
+    hash! -> mix(sourceLengthWord) => hash!
+    UIntSize(0) => index!
+    index! < sourceLength -> while {
+        source -> byte(index!) => sourceByte
+        UInt64(sourceByte) => sourceByteWord
+        hash! -> mix(sourceByteWord) => hash!
+        index! + UIntSize(1) => index!
+    }
+    hash!
+}
+
+mappedSourceIdentity source: file.SourceText -> UInt64 {
+    UInt64(1469598103934665603) => hash!
+    source -> len => sourceLength
+    UInt64(sourceLength) => sourceLengthWord
+    hash! -> mix(sourceLengthWord) => hash!
+    UIntSize(0) => index!
+    index! < sourceLength -> while {
+        source -> byte(index!) => sourceByte
+        UInt64(sourceByte) => sourceByteWord
+        hash! -> mix(sourceByteWord) => hash!
+        index! + UIntSize(1) => index!
+    }
+    hash!
 }
 
 hashWords words: [UInt64; ~] -> UInt64 {
@@ -297,6 +332,7 @@ public fingerprintAnalyzed package: analysis.PackageAnalysis -> [ModuleFingerpri
         ModuleFingerprint {
             sourceIndex: sourceIndex!
             moduleHash: identities![sourceIndex!].pathHash
+            sourceHash: package.sources[sourceIndex!] -> mappedSourceIdentity
             interfaceHash: interfaceHash
             implementationHash: implementationHash!
             importHash: importHash!

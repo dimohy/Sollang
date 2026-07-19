@@ -6817,8 +6817,8 @@ Implementation checklist:
 - [x] Cache corruption rejection
 - [x] Direct-dependency cache hit/miss integration
 - [x] Body-only edit proves consumer reuse
-- [ ] Self-host owned File lowering for persistent cache I/O
-- [ ] Stage2 persistent cache read/write integration
+- [x] Self-host owned File lowering for persistent cache I/O
+- [x] Stage2 persistent cache read/write integration
 
 D207A is an independently Stage2-verified foundation checkpoint, advancing the
 periodic Stage3 cadence to 2/10. It does not complete the module/interface-cache
@@ -6904,3 +6904,74 @@ the D205 reset. Because Stage2 persistence still depends on the missing
 self-host owned File lowering, the module/interface-cache gate remains partial
 and the formal roadmap remains **47 complete, 9 partial, 4 missing: 51.5/60
 (85.8%)**.
+
+## D207B3 - Self-Host Persistent Cache I/O and D207C Boundary
+
+Status: Windows Stage2 verified; ordinary-build reuse remains D207C
+Date: 2026-07-19
+
+The self-host backend now emits the complete affine cache-file path:
+`openRead`, `openWrite`, positioned `readAt<UInt64>` and `writeAt<UInt64>`,
+`sync`, scope-close, and `atomicReplace`. Stage1 and Stage2 persist and reload
+independent cache files, then produce the same validated planner result
+`0,3,0,0,1`. The implementation also closes matched owned file payloads at the
+`when` merge whenever the result does not transfer that same owner.
+
+During this work, a direct no-argument call used as a payloadless enum arm result
+was present in typed IR but absent from emitted LLVM. The match emitter now
+materializes that call before storing the arm result. Example 434 isolates the
+case and its expected LLVM assembles with `llvm-as`.
+
+This checkpoint does not claim the module-cache gate complete. The current
+`interface-cache` mode still performs complete analysis before planning reuse,
+and ordinary `sollang build` does not load cached semantic or LLVM artifacts.
+D207C will use an immutable old manifest plus an atomically published new
+generation. Reuse requires strict compiler/target/configuration identity, full
+canonical dependency interfaces, validated artifact bytes, and clean-vs-cached
+output equality. Cache data is always disposable; deletion must restore a cold
+but equivalent build.
+
+Research basis:
+
+- [rustc incremental compilation in detail](https://rustc-dev-guide.rust-lang.org/queries/incremental-compilation-in-detail.html)
+- [Clang module cache compilation model](https://clang.llvm.org/docs/Modules.html#compilation-model)
+- [Clang module option consistency](https://clang.llvm.org/docs/StandardCPlusPlusModules.html#options-consistency)
+- [Zig 0.16 incremental compilation](https://ziglang.org/download/0.16.0/release-notes.html#Incremental-Compilation)
+- [Zig disposable local build cache](https://ziglang.org/learn/build-system/)
+
+D207B3 advances the periodic Stage3 cadence to 5/10. The formal score remains
+**47 complete, 9 partial, 4 missing: 51.5/60 (85.8%)** until ordinary builds
+actually skip validated module/codegen work.
+
+## D207C1 - Raw-Source Identity and Schema-2 Preflight
+
+Status: Windows and Linux Stage2 verified; D207C 1/5 complete
+Date: 2026-07-19
+
+Persistent cache schema 2 adds `sourceHash` to every module record. The hash is
+computed from the exact source length and bytes, providing a cheap pre-analysis
+identity for files discovered by deterministic module paths. `preflight`
+accepts only a fully validated cache whose target, module identity, and raw
+source identity all match.
+
+Raw-source identity is intentionally separate from semantic reuse identity.
+Whitespace or comments must miss the preflight fast path, while the normalized
+implementation hash and full canonical public interface can still prove that
+dependent modules remain reusable. This preserves correctness without making
+the cache sensitive to session-local indexes or pretending that trivia changes
+alter module semantics.
+
+Example 431 proves that trivia changes raw identity but not semantic identity.
+Example 433 proves schema-2 persistence and warm/miss preflight behavior.
+Example 434 independently locks down the payloadless-match call-emission bug
+found while making the cache path self-hosted. Block-arm payload bindings keep
+their loaded payload when their synthetic region result is not emitted. Linux
+runtime composition also assigns shared `open`/`close` declarations to one
+runtime owner when process, source-text, and owned-file support coexist.
+Windows Stage2 passes all six phases and Linux Stage2 all five, including
+matching single-file and multi-file LLVM plus native execution.
+
+D207C is now **1/5 (20%)**, and this advances the periodic Stage3 cadence to
+6/10. The formal roadmap remains **47 complete, 9 partial, 4 missing: 51.5/60
+(85.8%)** because normal builds still do not load reusable semantic or LLVM
+artifacts.

@@ -75,8 +75,8 @@ cacheRecordStart words: [UInt64; ~], moduleHash: UInt64 -> Int {
             recordStart => result!
             moduleCount => moduleIndex!
         } else {
-            Int(words[index! + 6]) => canonicalLength
-            index! + 7 + canonicalLength => dependencyCountIndex
+            Int(words[index! + 7]) => canonicalLength
+            index! + 8 + canonicalLength => dependencyCountIndex
             Int(words[dependencyCountIndex]) => dependencyCount
             dependencyCountIndex + 1 + dependencyCount * 2 => index!
             moduleIndex! + 1 => moduleIndex!
@@ -91,7 +91,7 @@ public encodeAnalyzed package: analysis.PackageAnalysis, targetHash: UInt64 -> [
     package -> modules.importsAnalyzed => imports!
     [UInt64; ~] => words!
     words! -> push(UInt64(6002245291164258115))
-    words! -> push(UInt64(1))
+    words! -> push(UInt64(2))
     words! -> push(UInt64(1397509978044337767))
     words! -> push(targetHash)
     words! -> push(UInt64(0))
@@ -102,6 +102,7 @@ public encodeAnalyzed package: analysis.PackageAnalysis, targetHash: UInt64 -> [
     sourceIndex! < (fingerprints! -> len) -> while {
         fingerprints![sourceIndex!] => fingerprint
         words! -> push(fingerprint.moduleHash)
+        words! -> push(fingerprint.sourceHash)
         words! -> push(fingerprint.interfaceHash)
         words! -> push(fingerprint.implementationHash)
         words! -> push(fingerprint.importHash)
@@ -148,7 +149,7 @@ public validate words: [UInt64; ~], targetHash: UInt64 -> CacheValidation {
     0 => moduleCount!
     wordLength >= 7 -> if {
         words[0] == UInt64(6002245291164258115) -> if {} else { 2 => status! }
-        (status! == 0 and words[1] != UInt64(1)) -> if { 3 => status! }
+        (status! == 0 and words[1] != UInt64(2)) -> if { 3 => status! }
         (status! == 0 and (words[2] != UInt64(1397509978044337767) or words[3] != targetHash)) -> if { 4 => status! }
         (status! == 0 and words[4] != UInt64(wordLength)) -> if { 5 => status! }
         (status! == 0 and actualChecksum != words[5]) -> if { 6 => status! }
@@ -158,10 +159,10 @@ public validate words: [UInt64; ~], targetHash: UInt64 -> CacheValidation {
                 7 => index!
                 0 => moduleIndex!
                 (status! == 0 and moduleIndex! < moduleCount!) -> while {
-                    index! -> canRead(7, wordLength) -> if {
-                        words[index! + 6] <= UInt64(wordLength) -> if {
-                            Int(words[index! + 6]) => canonicalLength
-                            index! + 7 => canonicalStart
+                    index! -> canRead(8, wordLength) -> if {
+                        words[index! + 7] <= UInt64(wordLength) -> if {
+                            Int(words[index! + 7]) => canonicalLength
+                            index! + 8 => canonicalStart
                             canonicalStart -> canRead(canonicalLength + 1, wordLength) -> if {
                                 canonicalStart + canonicalLength => dependencyCountIndex
                                 words[dependencyCountIndex] <= UInt64(1000000) -> if {
@@ -199,24 +200,24 @@ public reuseAnalyzed package: analysis.PackageAnalysis, words: [UInt64; ~], targ
             words -> cacheRecordStart(current.moduleHash) => recordStart
             recordStart >= 0 => hit!
             hit! -> if {
-                (words[recordStart + 1] == current.interfaceHash and words[recordStart + 2] == current.implementationHash and words[recordStart + 3] == current.importHash and words[recordStart + 4] == UInt64(current.publicSymbolCount) and words[recordStart + 5] == UInt64(current.importCount)) => hit!
+                (words[recordStart + 2] == current.interfaceHash and words[recordStart + 3] == current.implementationHash and words[recordStart + 4] == current.importHash and words[recordStart + 5] == UInt64(current.publicSymbolCount) and words[recordStart + 6] == UInt64(current.importCount)) => hit!
             }
             hit! -> if {
-                Int(words[recordStart + 6]) => cachedCanonicalLength
+                Int(words[recordStart + 7]) => cachedCanonicalLength
                 canonical.wordLengths![sourceIndex!] => currentCanonicalLength
                 cachedCanonicalLength == currentCanonicalLength => hit!
                 canonical.wordStarts![sourceIndex!] => currentCanonicalStart
                 0 => canonicalIndex!
                 (hit! and canonicalIndex! < cachedCanonicalLength) -> while {
-                    words[recordStart + 7 + canonicalIndex!] == canonical.words![currentCanonicalStart + canonicalIndex!] -> if {
+                    words[recordStart + 8 + canonicalIndex!] == canonical.words![currentCanonicalStart + canonicalIndex!] -> if {
                     } else { false => hit! }
                     canonicalIndex! + 1 => canonicalIndex!
                 }
             }
             false => bodyDependencyChanged!
             hit! -> if {
-                Int(words[recordStart + 6]) => cachedCanonicalLength
-                recordStart + 7 + cachedCanonicalLength => dependencyCountIndex
+                Int(words[recordStart + 7]) => cachedCanonicalLength
+                recordStart + 8 + cachedCanonicalLength => dependencyCountIndex
                 Int(words[dependencyCountIndex]) => cachedDependencyCount
                 cachedDependencyCount == current.importCount => hit!
                 0 => dependencyIndex!
@@ -241,7 +242,7 @@ public reuseAnalyzed package: analysis.PackageAnalysis, words: [UInt64; ~], targ
                     (cachedTarget == currentTarget! and cachedInterface == currentDependencyInterface) -> if {
                         words -> cacheRecordStart(cachedTarget) => dependencyRecordStart
                         dependencyRecordStart >= 0 -> if {
-                            words[dependencyRecordStart + 2] != (fingerprints! -> currentImplementation(currentTarget!)) -> if {
+                            words[dependencyRecordStart + 3] != (fingerprints! -> currentImplementation(currentTarget!)) -> if {
                                 true => bodyDependencyChanged!
                             }
                         }
@@ -267,6 +268,15 @@ public reuseAnalyzed package: analysis.PackageAnalysis, words: [UInt64; ~], targ
         misses: misses!
         bodyOnlyConsumerHits: bodyOnlyConsumerHits!
     }
+}
+
+# A cheap pre-analysis gate. The caller obtains moduleHash from deterministic
+# path-to-module discovery; semantic reuse still performs the stronger full
+# canonical interface and dependency checks in reuseAnalyzed.
+public preflight words: [UInt64; ~], targetHash: UInt64, moduleHash: UInt64, sourceHash: UInt64 -> Bool {
+    words -> validate(targetHash) => validation
+    words -> cacheRecordStart(moduleHash) => recordStart
+    validation.status == 0 and recordStart >= 0 and words[recordStart + 1] == sourceHash
 }
 
 public reuse words: [UInt64; ~], sources: [Text; ~], targetHash: UInt64 -> CacheReuse {

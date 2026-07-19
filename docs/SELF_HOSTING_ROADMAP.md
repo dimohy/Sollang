@@ -100,6 +100,13 @@ The design deliberately combines a small set of compatible ideas:
   fingerprints rather than timestamps alone. See rustc
   [dependency-node fingerprints](https://doc.rust-lang.org/stable/nightly-rustc/rustc_query_system/dep_graph/dep_node/index.html)
   and Clang [module caches](https://clang.llvm.org/docs/Modules.html#compilation-model).
+- Zig 0.16 keeps incremental compilation explicit while its dependency graph,
+  frontend, code generation, and linker support mature; its local cache is
+  disposable and never a source of correctness. Sollang adopts that recovery
+  property, but requires cached and clean builds to remain byte-identical before
+  incremental mode can become the default. See Zig's
+  [0.16 incremental compilation notes](https://ziglang.org/download/0.16.0/release-notes.html#Incremental-Compilation)
+  and [build-system cache model](https://ziglang.org/learn/build-system/).
 
 Sollang keeps its own expression-first `=>` binding and fluent `->` application
 syntax. It does not adopt class inheritance, implicit null, implicit garbage
@@ -1304,6 +1311,72 @@ Windows passes 570/570 examples and Stage2 6/6 at 9,545,859 LLVM bytes. Linux
 Stage2 passes 5/5 at 9,544,344 bytes. D207B2 is Stage2 checkpoint 4/10 after the
 D205 reset; Stage3 remains deferred. The formal roadmap remains **47 complete,
 9 partial, 4 missing: 51.5/60 (85.8%)**.
+
+## Self-Host Persistent Cache I/O (D207B3)
+
+The self-host LLVM backend now lowers affine `File`/`FileWriter` open,
+positioned scalar read/write, durability sync, deterministic close, and atomic
+replacement on Windows. `module_cache_io.slg` therefore executes the same
+schema-1 load, bounded read, staged write, close-before-publish, and validation
+path in the C#-built Stage1 compiler and the Sollang-built Stage2 compiler.
+
+Windows Stage2 passes 6/6. The three established differential hashes remain
+unchanged, native execution and build pass, and the persistent planner reports
+the same `0,3,0,0,1` result in Stage1 and Stage2. Example 434 independently
+locks down the LLVM regression exposed by this work: a payloadless `when` arm
+whose value is a no-argument function call must emit that call before storing
+the arm result.
+
+D207B3 is checkpoint 5/10 after the D205 Stage3 reset. It closes self-host I/O
+parity, but does not yet make an ordinary build skip frontend or codegen work;
+the module/interface-cache gate therefore remains partial at **47 complete,
+9 partial, 4 missing: 51.5/60 (85.8%)**.
+
+## Incremental Build Integration (D207C, next)
+
+The next slice moves the cache from a verification mode into the ordinary build
+pipeline. The design uses two immutable generations, following rustc's old/new
+dependency-graph model: load the previous manifest, construct the current plan,
+reuse only green module artifacts, and atomically publish a complete new
+generation after a successful link. A cache hit requires all of the following:
+
+1. compiler schema, target, ABI, and build configuration match;
+2. the module's full source identity or normalized implementation identity
+   matches the cached record;
+3. every ordered direct dependency has the same full canonical interface;
+4. the cached typed-IR/LLVM fragment passes its length, checksum, and identity
+   checks; and
+5. clean and cached builds produce identical normalized LLVM and runtime output.
+
+Implementation order:
+
+- [x] Add stable raw-source identities so unchanged files can be recognized
+  before full semantic analysis.
+- [ ] Serialize module-level reusable semantic/typed-IR artifacts without
+  session-local indexes.
+- [ ] Split deterministic LLVM output into cacheable module/codegen units and a
+  canonical ordered merge.
+- [ ] Integrate old-generation load and new-generation atomic publication into
+  normal `sollang build`.
+- [ ] Prove cold, warm, body-only, public-interface, corruption, target-change,
+  and clean-vs-cached byte-equivalence cases on Windows and Linux.
+
+This deliberately starts with module/codegen-unit granularity. Rust's query
+graph shows the eventual finer-grained direction, while Clang demonstrates that
+semantic module imports need strict configuration consistency. Zig's current
+incremental LLVM path also confirms that frontend reuse and LLVM object emission
+have distinct cost boundaries; Sollang will measure and cache them separately.
+
+D207C1 completes the first of five integration slices (**1/5, 20%**). Cache
+schema 2 records a stable hash of the exact source bytes and exposes a cheap
+`preflight` check before semantic analysis. Semantic reuse deliberately remains
+based on normalized implementation and canonical public-interface identities,
+so harmless trivia can fail the raw-source fast path without invalidating
+downstream modules. Windows and Linux Stage2 verify cache encoding, atomic
+persistence, reload, preflight, and Stage1/Stage2 planner parity. This is
+checkpoint 6/10;
+the formal roadmap remains **51.5/60 (85.8%)** until ordinary builds consume
+reusable artifacts.
 
 ## Immediate Implementation Order
 
