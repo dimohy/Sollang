@@ -1,9 +1,12 @@
 import sollang.compiler.llvm.text as llvm
 import sollang.compiler.llvm.source_root as llvmRoot
+import sollang.compiler.ir.module_artifacts as moduleArtifacts
+import sollang.compiler.ir.typed as typedIr
 import sollang.compiler.semantic.context as semanticContext
 import sollang.compiler.semantic.module_interfaces as moduleInterfaces
 import sollang.compiler.semantic.module_cache as moduleCache
 import sollang.compiler.semantic.module_cache_io as moduleCacheIo
+import sollang.compiler.semantic.modules as modules
 import sys.path as path
 import sys.process as process
 
@@ -146,6 +149,18 @@ runInterfaceCache: -> Unit uses Console, File, Process {
     "module cache = $(reuse.status),$(reuse.hits),$(reuse.misses),$(reuse.bodyOnlyConsumerHits),$persistent" -> println
 }
 
+runModuleArtifacts: -> Unit uses Console, File, Process {
+    UIntSize(2) -> collectPaths => paths!
+    paths! -> semanticContext.prepareFiles => snapshot!
+    snapshot! -> typedIr.lowerContext => ir!
+    [modules.ModuleIdentity; ~] => identities!
+    snapshot!.modules -> each identity { identities! -> push(identity) }
+    ir! -> moduleArtifacts.encode(identities!) => words!
+    words! -> moduleArtifacts.validate => validation
+    validation.nodeCount > 0 -> if { 1 } else { 0 } => hasNodes
+    "module artifacts = $(validation.status),$(validation.moduleCount),$hasNodes" -> println
+}
+
 buildWindows pathStart: UIntSize -> Unit uses Console, File, Process {
     process.arguments => arguments
     pathStart -> collectBuildPaths => sourcePaths!
@@ -184,6 +199,9 @@ main {
         "; sollang error: --jobs expects a positive integer" -> println
     } else {
     workers > 0 -> if { "; sollang workers = $workers" -> println }
+    targetLength == UIntSize(16) -> if {
+        runModuleArtifacts
+    } else {
     targetLength == UIntSize(15) -> if {
         runInterfaceCache
     } else {
@@ -210,6 +228,7 @@ main {
         } else {
             pathStart -> emitWindowsFiles
         }
+    }
     }
     }
     }

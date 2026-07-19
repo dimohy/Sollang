@@ -1,0 +1,44 @@
+import sollang.compiler.ir.module_artifacts as artifacts
+import sollang.compiler.ir.typed as typed
+import sollang.compiler.semantic.context as context
+import sollang.compiler.semantic.modules as modules
+
+sameWords left: [UInt64; ~], right: [UInt64; ~] -> Bool {
+    (left -> len) == (right -> len) => same!
+    0 => index!
+    (same! and index! < (left -> len)) -> while {
+        left[index!] == right[index!] -> if {} else { false => same! }
+        index! + 1 => index!
+    }
+    same!
+}
+
+main {
+    "namespace zeta\npublic twice value: Int -> Int => value * 2\n" => zeta
+    "namespace alpha\npublic next value: Int -> Int => value + 1\n" => alpha
+
+    [zeta, alpha, ~] => firstSources!
+    firstSources! -> context.prepare => firstSnapshot!
+    firstSnapshot! -> typed.lowerContext => firstIr!
+    firstSources! -> modules.identities => firstModules!
+    firstIr! -> artifacts.encode(firstModules!) => first!
+    first! -> artifacts.validate => validation
+    validation.status == 0 and validation.moduleCount == 2 and validation.nodeCount > 0 -> if {
+        "canonical artifact valid"
+    } else { "unexpected validation" } -> println
+
+    [alpha, zeta, ~] => secondSources!
+    secondSources! -> context.prepare => secondSnapshot!
+    secondSnapshot! -> typed.lowerContext => secondIr!
+    secondSources! -> modules.identities => secondModules!
+    secondIr! -> artifacts.encode(secondModules!) => second!
+    first! -> sameWords(second!) -> if {
+        "source order independent"
+    } else { "source order leaked" } -> println
+
+    first![7] + UInt64(1) => first![7]
+    first! -> artifacts.validate => corrupted
+    corrupted.status == 6 -> if {
+        "corruption rejected"
+    } else { "corruption accepted" } -> println
+}

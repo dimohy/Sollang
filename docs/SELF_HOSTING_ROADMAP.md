@@ -1354,6 +1354,9 @@ Implementation order:
   before full semantic analysis.
 - [ ] Serialize module-level reusable semantic/typed-IR artifacts without
   session-local indexes.
+  - [x] Encode a canonical module envelope ordered by stable path hash, with IR
+    references rewritten as module hash plus module-local ordinal.
+  - [ ] Add the canonical structural type table and decode/rehydration path.
 - [ ] Split deterministic LLVM output into cacheable module/codegen units and a
   canonical ordered merge.
 - [ ] Integrate old-generation load and new-generation atomic publication into
@@ -1377,6 +1380,18 @@ persistence, reload, preflight, and Stage1/Stage2 planner parity. This is
 checkpoint 6/10;
 the formal roadmap remains **51.5/60 (85.8%)** until ordinary builds consume
 reusable artifacts.
+
+D207C2A completes the stable typed-IR envelope half of the second slice. The
+artifact format excludes session-local `typeId`, zig-zag encodes signed IR
+metadata, rewrites module references to path hashes, rewrites IR references to
+module-local ordinals, sorts module records canonically, and protects the full
+payload with length and checksum validation. Example 435 proves validation,
+source-input-order independence, and corruption rejection. Stage1 and Stage2
+also execute the same three-module artifact path and agree on its result.
+
+The second checklist item stays partial until canonical structural types can be
+decoded into a complete lowering context. D207C is therefore **1.5/5 (30%)**,
+this is checkpoint 7/10, and the formal roadmap remains **51.5/60 (85.8%)**.
 
 ## Immediate Implementation Order
 

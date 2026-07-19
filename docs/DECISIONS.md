@@ -6975,3 +6975,31 @@ D207C is now **1/5 (20%)**, and this advances the periodic Stage3 cadence to
 6/10. The formal roadmap remains **47 complete, 9 partial, 4 missing: 51.5/60
 (85.8%)** because normal builds still do not load reusable semantic or LLVM
 artifacts.
+
+## D207C2A - Canonical Typed-IR Artifact Envelope
+
+Status: Windows and Linux Stage2 verified; D207C 1.5/5 complete
+Date: 2026-07-19
+
+The first half of typed-IR artifact serialization is a canonical word envelope,
+not a dump of process-local arrays. Modules are emitted in ascending stable path
+hash order. Every IR reference is represented by a module hash and a one-based
+module-local ordinal. Module references use path hashes, signed IR metadata uses
+zig-zag encoding, and session-local `typeId` is deliberately excluded.
+
+The envelope carries compiler schema, module/node counts, declared word length,
+per-module payload lengths, and a checksum. A zero module hash remains legal;
+the `(hash, ordinal)` pair distinguishes it from an absent `(0, 0)` reference.
+Example 435 proves that reversing source input order produces identical words
+and that payload corruption is rejected. The Stage2 verifier executes the same
+three-module artifact operation through both Stage1 and Stage2 and requires the
+shared result `module artifacts = 0,3,1`.
+
+Linux Stage2 also assembles, links, and executes the complete compiler with the
+serializer included; Windows additionally executes and compares the artifact
+mode directly between Stage1 and Stage2.
+
+This does not yet make the artifact reusable. D207C2B must serialize canonical
+structural types and decode the stable references into a fresh compilation
+session. D207C is **1.5/5 (30%)**, the Stage3 cadence is 7/10, and the formal
+roadmap remains **47 complete, 9 partial, 4 missing: 51.5/60 (85.8%)**.

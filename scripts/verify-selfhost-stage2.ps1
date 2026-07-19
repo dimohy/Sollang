@@ -284,7 +284,24 @@ if ($stage1CacheText -ne "module cache = 0,3,0,0,1") {
 if ($stage2CacheText -ne "module cache = 0,3,0,0,1") {
     throw "stage-2 module-cache planner result differed: $stage2CacheText"
 }
-Write-Host "[stage2 5/6] PASS execution, native build, fingerprints, and module-cache planner parity."
+$stage1ArtifactOutput = Join-Path $artifactsDir "stage2-check-module-artifacts-stage1.txt"
+$stage2ArtifactOutput = Join-Path $artifactsDir "stage2-check-module-artifacts-stage2.txt"
+$stage1ArtifactError = Join-Path $artifactsDir "stage2-check-module-artifacts-stage1.err"
+$stage2ArtifactError = Join-Path $artifactsDir "stage2-check-module-artifacts-stage2.err"
+$artifactArguments = @("module-artifacts") + $fingerprintSources
+$stage1ArtifactProcess = Invoke-ProcessToFile $stage1Path $artifactArguments $stage1ArtifactOutput $stage1ArtifactError
+$stage2ArtifactProcess = Invoke-ProcessToFile $stage2Path $artifactArguments $stage2ArtifactOutput $stage2ArtifactError
+Assert-ProcessSucceeded $stage1ArtifactProcess $stage1ArtifactError "stage-1 canonical module artifacts"
+Assert-ProcessSucceeded $stage2ArtifactProcess $stage2ArtifactError "stage-2 canonical module artifacts"
+$stage1ArtifactText = ([System.IO.File]::ReadAllText($stage1ArtifactOutput)).Trim()
+$stage2ArtifactText = ([System.IO.File]::ReadAllText($stage2ArtifactOutput)).Trim()
+if ($stage1ArtifactText -ne "module artifacts = 0,3,1") {
+    throw "stage-1 canonical module artifacts differed: $stage1ArtifactText"
+}
+if ($stage2ArtifactText -ne $stage1ArtifactText) {
+    throw "stage-2 canonical module artifacts differed: $stage2ArtifactText"
+}
+Write-Host "[stage2 5/6] PASS execution, native build, fingerprints, module cache, and canonical artifact parity."
 
 Write-Host "[stage2 6/6] Compare C# reference and native Sollang compiler runtime behavior."
 & dotnet run --project $runnerProject -c Release --no-build -- `
