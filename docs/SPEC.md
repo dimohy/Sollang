@@ -2192,6 +2192,16 @@ Current backend:
   full module identities, the schema-1 per-fragment and envelope checksums, and is
   atomically replaced only after a successful link. A corrupt or incompatible
   generation is reported and rebuilt; cached and clean LLVM bytes must match.
+- exact-input frontend cache: after a successful link, `sollang build` records
+  the exact root, manifest, standard-library, and discovered user-source bytes in
+  a checksummed snapshot bound to the SHA-256 digest of the matching LLVM-unit
+  generation. If compiler, target, configuration, source sets, bytes, snapshot
+  checksum, codegen digest, and codegen envelope all match, a warm build skips
+  lexing, parsing, semantic analysis, and LLVM emission and links the validated
+  units directly. Any source change falls back to the normal frontend and may
+  still reuse independently valid LLVM units. Snapshot comparison is streamed;
+  publication uses a same-directory write-through temporary file and atomic
+  replacement after a successful link.
 - common emitter: `LlvmEmitter` owns function calls, bindings,
   interpolation, local-function inlining, `each` lowering, integer decimal
   output, containers, and `readInt` parsing. It is split into partial files by

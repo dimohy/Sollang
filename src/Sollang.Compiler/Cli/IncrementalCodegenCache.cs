@@ -19,26 +19,17 @@ internal sealed class IncrementalCodegenCache
     private const int MaximumIdentityBytes = 1024 * 1024;
     private const long MaximumFragmentBytes = 1024L * 1024 * 1024;
 
-    private readonly string _path;
-    private readonly ulong _compilerHash;
-    private readonly ulong _targetHash;
-    private readonly ulong _configurationHash;
+    private readonly IncrementalCacheLocation _location;
 
     private IncrementalCodegenCache(
-        string path,
-        ulong compilerHash,
-        ulong targetHash,
-        ulong configurationHash,
+        IncrementalCacheLocation location,
         LlvmCodegenKey prefixKey,
         LlvmCodegenKey suffixKey,
         IReadOnlyDictionary<string, LlvmCodegenKey> moduleKeys,
         IReadOnlyDictionary<(LlvmCodegenUnitKind Kind, string Identity, LlvmCodegenKey CacheKey), string> fragments,
         string loadStatus)
     {
-        _path = path;
-        _compilerHash = compilerHash;
-        _targetHash = targetHash;
-        _configurationHash = configurationHash;
+        _location = location;
         LoadStatus = loadStatus;
         Reuse = new LlvmCodegenReuse(prefixKey, suffixKey, moduleKeys, fragments);
     }
@@ -47,21 +38,16 @@ internal sealed class IncrementalCodegenCache
 
     public string LoadStatus { get; }
 
-    public string Path => _path;
+    public string Path => _location.CodegenPath;
+
+    public IncrementalCacheLocation Location => _location;
 
     public static IncrementalCodegenCache Open(
         LoadedCompilation compilation,
         BoundProgram boundProgram,
         CliOptions options)
     {
-        var compilerHash = HashFields([
-            "sollang-codegen-unit-schema-1",
-            typeof(CompilerApp).Assembly.ManifestModule.ModuleVersionId.ToString("N")
-        ]);
-        var targetName = TargetName(options.Target);
-        var configurationName = options.OptimizationLevel ?? "-O0";
-        var targetHash = HashFields([targetName]);
-        var configurationHash = HashFields([configurationName]);
+        var location = Locate(options);
         var modules = compilation.Sources
             .GroupBy(static source => source.ModuleName, StringComparer.Ordinal)
             .Select(static group => CreateModuleIdentity(group.Key, group.ToArray()))
@@ -140,18 +126,9 @@ internal sealed class IncrementalCodegenCache
             HashFields(["suffix-interface", Hex(wholeInterfaceHash)]),
             HashFields(["suffix-implementation", Hex(wholeImplementationHash)]));
 
-        var outputDirectory = System.IO.Path.GetDirectoryName(options.OutputPath)
-            ?? Directory.GetCurrentDirectory();
-        var cacheDirectory = System.IO.Path.Combine(outputDirectory, ".sollang-cache");
-        var outputName = System.IO.Path.GetFileNameWithoutExtension(options.OutputPath);
-        var configuration = configurationName.TrimStart('-').ToLowerInvariant();
-        var path = System.IO.Path.Combine(
-            cacheDirectory,
-            $"{SanitizeFileName(outputName)}.{targetName}.{configuration}.cgu");
-
         IReadOnlyDictionary<(LlvmCodegenUnitKind Kind, string Identity, LlvmCodegenKey CacheKey), string> fragments;
         string loadStatus;
-        if (!File.Exists(path))
+        if (!File.Exists(location.CodegenPath))
         {
             fragments = new Dictionary<(LlvmCodegenUnitKind, string, LlvmCodegenKey), string>();
             loadStatus = "cold";
@@ -160,7 +137,11 @@ internal sealed class IncrementalCodegenCache
         {
             try
             {
-                fragments = Read(path, compilerHash, targetHash, configurationHash);
+                fragments = Read(
+                    location.CodegenPath,
+                    location.CompilerHash,
+                    location.TargetHash,
+                    location.ConfigurationHash).Fragments;
                 loadStatus = "loaded";
             }
             catch (Exception error) when (error is IOException or InvalidDataException or DecoderFallbackException)
@@ -171,10 +152,7 @@ internal sealed class IncrementalCodegenCache
         }
 
         return new IncrementalCodegenCache(
-            path,
-            compilerHash,
-            targetHash,
-            configurationHash,
+            location,
             prefixKey,
             suffixKey,
             moduleKeys,
@@ -184,11 +162,15 @@ internal sealed class IncrementalCodegenCache
 
     public void Publish(LlvmCodegenOutput output)
     {
-        var words = Encode(output, _compilerHash, _targetHash, _configurationHash);
-        var directory = System.IO.Path.GetDirectoryName(_path)
+        var words = Encode(
+            output,
+            _location.CompilerHash,
+            _location.TargetHash,
+            _location.ConfigurationHash);
+        var directory = System.IO.Path.GetDirectoryName(_location.CodegenPath)
             ?? throw new InvalidOperationException("codegen cache path has no directory");
         Directory.CreateDirectory(directory);
-        var temporaryPath = _path + "." + Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture) + ".tmp";
+        var temporaryPath = _location.CodegenPath + "." + Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture) + ".tmp";
         try
         {
             using (var stream = new FileStream(
@@ -207,7 +189,7 @@ internal sealed class IncrementalCodegenCache
                 }
                 stream.Flush(flushToDisk: true);
             }
-            File.Move(temporaryPath, _path, overwrite: true);
+            File.Move(temporaryPath, _location.CodegenPath, overwrite: true);
         }
         finally
         {
@@ -216,6 +198,38 @@ internal sealed class IncrementalCodegenCache
                 File.Delete(temporaryPath);
             }
         }
+    }
+
+    public static IncrementalCacheLocation Locate(CliOptions options)
+    {
+        var compilerHash = HashFields([
+            "sollang-codegen-unit-schema-1",
+            typeof(CompilerApp).Assembly.ManifestModule.ModuleVersionId.ToString("N")
+        ]);
+        var targetName = TargetName(options.Target);
+        var configurationName = options.OptimizationLevel ?? "-O0";
+        var outputDirectory = System.IO.Path.GetDirectoryName(options.OutputPath)
+            ?? Directory.GetCurrentDirectory();
+        var cacheDirectory = System.IO.Path.Combine(outputDirectory, ".sollang-cache");
+        var outputName = System.IO.Path.GetFileNameWithoutExtension(options.OutputPath);
+        var configuration = configurationName.TrimStart('-').ToLowerInvariant();
+        var baseName = $"{SanitizeFileName(outputName)}.{targetName}.{configuration}";
+        return new IncrementalCacheLocation(
+            System.IO.Path.Combine(cacheDirectory, baseName + ".cgu"),
+            System.IO.Path.Combine(cacheDirectory, baseName + ".sources"),
+            compilerHash,
+            HashFields([targetName]),
+            HashFields([configurationName]));
+    }
+
+    public static LlvmCodegenOutput ReadExact(IncrementalCacheLocation location)
+    {
+        var decoded = Read(
+            location.CodegenPath,
+            location.CompilerHash,
+            location.TargetHash,
+            location.ConfigurationHash);
+        return new LlvmCodegenOutput(decoded.Units);
     }
 
     private static IReadOnlyList<ulong> Encode(
@@ -287,7 +301,7 @@ internal sealed class IncrementalCodegenCache
         return words;
     }
 
-    private static IReadOnlyDictionary<(LlvmCodegenUnitKind Kind, string Identity, LlvmCodegenKey CacheKey), string> Read(
+    private static DecodedCodegenCache Read(
         string path,
         ulong compilerHash,
         ulong targetHash,
@@ -342,6 +356,7 @@ internal sealed class IncrementalCodegenCache
 
         var unitCount = (int)words[5];
         var result = new Dictionary<(LlvmCodegenUnitKind Kind, string Identity, LlvmCodegenKey CacheKey), string>();
+        var units = new List<LlvmCodegenUnit>(unitCount);
         var wordIndex = HeaderWords;
         var prefixCount = 0;
         var suffixCount = 0;
@@ -430,6 +445,7 @@ internal sealed class IncrementalCodegenCache
             {
                 throw new InvalidDataException("artifact contains a duplicate unit");
             }
+            units.Add(new LlvmCodegenUnit(kind, identity, cacheKey, fragment, Reused: true));
             previousKind = (int)kind;
             wordIndex = checked(fragmentStart + fragmentWordLength);
         }
@@ -437,7 +453,7 @@ internal sealed class IncrementalCodegenCache
         {
             throw new InvalidDataException("artifact envelope shape is invalid");
         }
-        return result;
+        return new DecodedCodegenCache(result, units);
     }
 
     private static ModuleIdentity CreateModuleIdentity(
@@ -745,4 +761,15 @@ internal sealed class IncrementalCodegenCache
         ulong InterfaceHash,
         IReadOnlyList<string> Imports,
         bool IsStandardLibrary);
+
+    private sealed record DecodedCodegenCache(
+        IReadOnlyDictionary<(LlvmCodegenUnitKind Kind, string Identity, LlvmCodegenKey CacheKey), string> Fragments,
+        IReadOnlyList<LlvmCodegenUnit> Units);
 }
+
+internal sealed record IncrementalCacheLocation(
+    string CodegenPath,
+    string SourceSnapshotPath,
+    ulong CompilerHash,
+    ulong TargetHash,
+    ulong ConfigurationHash);

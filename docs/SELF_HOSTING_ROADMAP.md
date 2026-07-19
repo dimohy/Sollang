@@ -1372,10 +1372,15 @@ Implementation order:
     compiler's LLVM codegen units after a successful link.
   - [ ] Load the stable raw-source and typed-IR generations before semantic
     analysis so frontend work can also be skipped.
+    - [x] Skip the complete frontend when every exact source and build-context
+      input matches a snapshot bound to the validated codegen generation.
+    - [ ] Rehydrate typed IR for unchanged modules after a partial source miss.
 - [ ] Prove cold, warm, body-only, public-interface, corruption, target-change,
   and clean-vs-cached byte-equivalence cases on Windows and Linux.
   - [x] Prove the complete matrix for ordinary LLVM codegen-unit reuse with
     `scripts/verify-codegen-cache.ps1`.
+  - [x] Prove exact-input frontend skipping and source-snapshot/codegen
+    corruption fallback on Windows and Linux.
   - [ ] Prove the same invalidation matrix for pre-semantic typed-IR reuse.
 
 This deliberately starts with module/codegen-unit granularity. Rust's query
@@ -1469,6 +1474,33 @@ periodic cadence resets from **10/10** to **0/10**. The module/interface-cache g
 advances from missing to partial, so the formal roadmap is now **47 complete,
 10 partial, 3 missing: 52.0/60 (86.7%)**. Frontend raw-source/typed-IR reuse in
 ordinary builds remains the next integration boundary.
+
+D207C4A adds the first pre-semantic production fast path. After a successful
+link, the bootstrap compiler writes a bounded, checksummed `.sources`
+generation containing the exact ordered roots, project manifests, standard
+library, and discovered user-source bytes. The snapshot also stores the SHA-256
+digest of its matching `.cgu` generation, so an interrupted publication cannot
+pair source identity from one generation with LLVM units from another. Reads
+stream source comparison instead of materializing a second compiler-sized copy,
+validate source sets and build context, and accept cached LLVM only after both
+envelopes and their generation binding pass.
+
+On an exact hit, normal `sollang build` bypasses source loading, lexing, parsing,
+semantic analysis, specialization discovery, and LLVM emission, then directly
+merges and links the validated units. A changed source misses this whole-build
+fast path and returns to the existing frontend plus partial codegen-unit reuse;
+this checkpoint does not yet claim module-granular typed-IR rehydration.
+`verify-codegen-cache.ps1` now proves seven Windows and seven Linux states:
+cold, exact warm, body-only, public-interface, corrupt frontend snapshot,
+corrupt/mismatched codegen generation, and repaired exact warm, including native
+output and LLVM byte identity. Both full suites pass 573/573, Windows Stage2
+passes 6/6 at 10,553,582 bytes, and Linux Stage2 passes 5/5 at 10,550,185 bytes.
+
+This completes half of the fourth slice, so D207C is **3.5/5 (70%)**. It is
+checkpoint **1/10** after the latest Stage3 fixed point; Stage3 is intentionally
+deferred. Because partial source changes still rebuild the complete frontend,
+the formal roadmap remains **47 complete, 10 partial, 3 missing: 52.0/60
+(86.7%)**.
 
 ## Immediate Implementation Order
 

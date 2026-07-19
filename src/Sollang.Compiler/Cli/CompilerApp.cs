@@ -46,15 +46,51 @@ internal static class CompilerApp
 
     private static void Build(CliOptions options)
     {
+        var toolchain = LlvmToolchain.From(options.LlvmHome);
+        Directory.CreateDirectory(Path.GetDirectoryName(options.OutputPath)
+            ?? Directory.GetCurrentDirectory());
+        var frontendCache = IncrementalFrontendCache.Open(options);
+        if (frontendCache.Output is not null)
+        {
+            WriteAndLink(options, toolchain, frontendCache.Output);
+            Console.WriteLine(
+                $"[frontend-cache] {frontendCache.Status}; skipped parsing and semantic analysis for "
+                + $"{frontendCache.SourceCount.ToString(CultureInfo.InvariantCulture)} sources; "
+                + frontendCache.Location.SourceSnapshotPath);
+            Console.WriteLine(
+                $"[codegen-cache] exact; reused "
+                + $"{frontendCache.Output.ReusedCount.ToString(CultureInfo.InvariantCulture)}/"
+                + $"{frontendCache.Output.Units.Count.ToString(CultureInfo.InvariantCulture)} units; "
+                + frontendCache.Location.CodegenPath);
+            PrintOutput(options.OutputPath);
+            return;
+        }
+
         var loaded = LoadProgram(options.SourcePaths, options.Project);
         var pointerBitWidth = options.Target == CompilationTarget.Wasm32Browser ? 32 : 64;
         var boundProgram = new SemanticCompiler(loaded.Program, pointerBitWidth).Compile();
-        var toolchain = LlvmToolchain.From(options.LlvmHome);
         var codegenCache = IncrementalCodegenCache.Open(loaded, boundProgram, options);
+        var codegenOutput = LlvmIrGenerator.GenerateUnits(boundProgram, options.Target, codegenCache.Reuse);
+        WriteAndLink(options, toolchain, codegenOutput);
+        codegenCache.Publish(codegenOutput);
+        IncrementalFrontendCache.Publish(loaded, options, codegenCache.Location);
+        Console.WriteLine(
+            $"[frontend-cache] {frontendCache.Status}; rebuilt and published "
+            + $"{loaded.Sources.Count.ToString(CultureInfo.InvariantCulture)} sources; "
+            + codegenCache.Location.SourceSnapshotPath);
+        Console.WriteLine(
+            $"[codegen-cache] {codegenCache.LoadStatus}; reused "
+            + $"{codegenOutput.ReusedCount.ToString(CultureInfo.InvariantCulture)}/"
+            + $"{codegenOutput.Units.Count.ToString(CultureInfo.InvariantCulture)} units; "
+            + codegenCache.Path);
+        PrintOutput(options.OutputPath);
+    }
 
-        Directory.CreateDirectory(Path.GetDirectoryName(options.OutputPath)
-            ?? Directory.GetCurrentDirectory());
-
+    private static void WriteAndLink(
+        CliOptions options,
+        LlvmToolchain toolchain,
+        LlvmCodegenOutput codegenOutput)
+    {
         var workDir = Path.Combine(
             Path.GetDirectoryName(Path.GetFullPath(options.OutputPath))
                 ?? Directory.GetCurrentDirectory(),
@@ -70,7 +106,6 @@ internal static class CompilerApp
         try
         {
             var llPath = Path.Combine(workDir, Path.GetFileNameWithoutExtension(options.OutputPath) + ".ll");
-            var codegenOutput = LlvmIrGenerator.GenerateUnits(boundProgram, options.Target, codegenCache.Reuse);
             using (var writer = new StreamWriter(
                 llPath,
                 append: false,
@@ -79,12 +114,6 @@ internal static class CompilerApp
                 codegenOutput.CopyTo(new TextWriterOutputSink(writer));
             }
             LinkLlvmIr(options, toolchain, llPath, workDir);
-            codegenCache.Publish(codegenOutput);
-            Console.WriteLine(
-                $"[codegen-cache] {codegenCache.LoadStatus}; reused "
-                + $"{codegenOutput.ReusedCount.ToString(CultureInfo.InvariantCulture)}/"
-                + $"{codegenOutput.Units.Count.ToString(CultureInfo.InvariantCulture)} units; "
-                + codegenCache.Path);
 
             if (options.KeepTemps)
             {
@@ -99,8 +128,11 @@ internal static class CompilerApp
                 Directory.Delete(workDir, recursive: true);
             }
         }
+    }
 
-        var exeInfo = new FileInfo(options.OutputPath);
+    private static void PrintOutput(string outputPath)
+    {
+        var exeInfo = new FileInfo(outputPath);
         Console.WriteLine($"Wrote {exeInfo.FullName} ({exeInfo.Length.ToString("N0", CultureInfo.InvariantCulture)} bytes)");
     }
 
@@ -342,21 +374,15 @@ internal static class CompilerApp
 
     private static IReadOnlyList<CompilationSource> LoadStandardLibrary(string sourcePath)
     {
-        var root = FindRepositoryRoot(sourcePath);
-        var standardLibraryRoot = Path.Combine(root, "stdlib");
-        var paths = Directory
-            .EnumerateFiles(standardLibraryRoot, "*.slg", SearchOption.AllDirectories)
-            .OrderBy(
-                path => Path.GetRelativePath(standardLibraryRoot, path),
-                StringComparer.Ordinal)
-            .ToArray();
-        if (paths.Length == 0)
+        var standardLibraryRoot = Path.Combine(FindRepositoryRoot(sourcePath), "stdlib");
+        var paths = DiscoverStandardLibraryPaths(sourcePath);
+        if (paths.Count == 0)
         {
             throw new SollangException(
                 $"standard library contains no Sollang source modules: {standardLibraryRoot}");
         }
 
-        var sources = new List<CompilationSource>(paths.Length);
+        var sources = new List<CompilationSource>(paths.Count);
         var modules = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var path in paths)
         {
@@ -396,6 +422,18 @@ internal static class CompilerApp
         }
 
         return sources;
+    }
+
+    internal static IReadOnlyList<string> DiscoverStandardLibraryPaths(string sourcePath)
+    {
+        var standardLibraryRoot = Path.Combine(FindRepositoryRoot(sourcePath), "stdlib");
+        return Directory
+            .EnumerateFiles(standardLibraryRoot, "*.slg", SearchOption.AllDirectories)
+            .OrderBy(
+                path => Path.GetRelativePath(standardLibraryRoot, path),
+                StringComparer.Ordinal)
+            .Select(Path.GetFullPath)
+            .ToArray();
     }
 
     private static string FindRepositoryRoot(string sourcePath)

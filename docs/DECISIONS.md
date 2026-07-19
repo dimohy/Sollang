@@ -7157,3 +7157,39 @@ module/interface cache is now a partial rather than missing gate:
 **47 complete, 10 partial, 3 missing: 52.0/60 (86.7%)**. Ordinary-build reuse of
 the already-defined raw-source and typed-IR artifacts remains required before
 the gate can be complete.
+
+## D207C4A - Exact-Input Pre-Semantic Fast Path
+
+Status: Windows/Linux full suites and Stage2 verified; D207C 3.5/5 complete
+Date: 2026-07-20
+
+Normal `sollang build` now probes an exact-input source snapshot before loading
+or parsing the program. The snapshot records compiler, target, and optimization
+identity; ordered root and project-manifest records; every standard-library and
+discovered user-source path; and the exact bytes of manifests and sources.
+Lengths and record counts are bounded, paths are unique and canonically ordered,
+UTF-8 is strict, source comparison is streamed in 64 KiB blocks, and the full
+envelope has a SHA-256 checksum.
+
+The snapshot contains the SHA-256 digest of the corresponding `.cgu` file. An
+exact hit therefore requires both artifacts to be individually valid and to
+belong to the same published generation. This closes the crash window in which
+atomic replacement of two separate files could otherwise leave a new codegen
+generation beside an old source snapshot. Publication remains write-through,
+same-directory, and atomic, and happens only after a successful link.
+
+An exact hit skips source discovery, lexing, parsing, semantic analysis,
+specialization discovery, and LLVM emission; the compiler decodes, merges, and
+links the validated codegen units directly. A miss or rejected snapshot runs the
+complete frontend and retains D207C3B's module-level LLVM reuse. This is a
+whole-compilation exact fast path, not yet partial typed-IR rehydration.
+
+The focused matrix now covers seven states on both Windows and Linux: cold,
+exact warm, body-only change, public-interface change, source-snapshot
+corruption, codegen corruption/generation mismatch, and repaired exact warm.
+It proves native output and clean/cached LLVM byte identity. Windows and Linux
+full suites each pass 573/573; Windows Stage2 passes 6/6 at 10,553,582 LLVM
+bytes; Linux Stage2 passes 5/5 at 10,550,185 LLVM bytes. This is checkpoint 1/10
+after the Stage3 reset, so Stage3 is deferred. D207C is **3.5/5 (70%)** while
+the formal roadmap remains **47 complete, 10 partial, 3 missing: 52.0/60
+(86.7%)** until changed modules can reuse pre-semantic typed IR.
