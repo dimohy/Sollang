@@ -19,6 +19,11 @@ $singleSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhos
 $multiLibrarySource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-library-smoke.slg"
 $multiMainSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-main-smoke.slg"
 $groupedNotSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-grouped-not-smoke.slg"
+$fingerprintSources = @(
+    (Join-Path $repoRoot "examples\fixtures\429-selfhost-root\Alpha.slg")
+    (Join-Path $repoRoot "examples\fixtures\429-selfhost-root\Zeta.slg")
+    (Join-Path $repoRoot "examples\fixtures\429-selfhost-root\nested\Beta.slg")
+)
 $semanticContextSource = Join-Path $repoRoot "selfhost\semantic\context.slg"
 $processSource = Join-Path $repoRoot "stdlib\sys\process.slg"
 $compilerRuntimeSources = @(
@@ -27,7 +32,7 @@ $compilerRuntimeSources = @(
     (Join-Path $repoRoot "stdlib\sys\directory.slg")
     (Join-Path $repoRoot "stdlib\sys\directory\kind.slg")
 )
-$expectedStage2Bytes = 9361816L
+$expectedStage2Bytes = 9401740L
 
 New-Item -ItemType Directory -Force -Path $artifactsDir | Out-Null
 
@@ -237,7 +242,26 @@ $nativeBuildActual = (& $nativeBuildExecutable | Out-String).TrimEnd("`r", "`n")
 if ($LASTEXITCODE -ne 0 -or $nativeBuildActual -ne "stage2-single-ok") {
     throw "stage-2 native build execution failed: expected 'stage2-single-ok', actual '$nativeBuildActual'"
 }
-Write-Host "[stage2 5/6] PASS direct smoke execution and self-host runToFile/run native build."
+
+$stage1FingerprintOutput = Join-Path $artifactsDir "stage2-check-fingerprint-stage1.txt"
+$stage2FingerprintOutput = Join-Path $artifactsDir "stage2-check-fingerprint-stage2.txt"
+$stage1FingerprintError = Join-Path $artifactsDir "stage2-check-fingerprint-stage1.err"
+$stage2FingerprintError = Join-Path $artifactsDir "stage2-check-fingerprint-stage2.err"
+$fingerprintArguments = @("fingerprint") + $fingerprintSources
+$stage1FingerprintProcess = Invoke-ProcessToFile $stage1Path $fingerprintArguments $stage1FingerprintOutput $stage1FingerprintError
+$stage2FingerprintProcess = Invoke-ProcessToFile $stage2Path $fingerprintArguments $stage2FingerprintOutput $stage2FingerprintError
+Assert-ProcessSucceeded $stage1FingerprintProcess $stage1FingerprintError "stage-1 module fingerprint emission"
+Assert-ProcessSucceeded $stage2FingerprintProcess $stage2FingerprintError "stage-2 module fingerprint emission"
+$stage1Fingerprints = [System.IO.File]::ReadAllText($stage1FingerprintOutput).Replace("`r`n", "`n")
+$stage2Fingerprints = [System.IO.File]::ReadAllText($stage2FingerprintOutput).Replace("`r`n", "`n")
+if ($stage1Fingerprints -ne $stage2Fingerprints) {
+    throw "stage-1 and stage-2 module fingerprints differ"
+}
+$fingerprintLineCount = ([regex]::Matches($stage2Fingerprints, '(?m)^module fingerprint = \d+,\d+,\d+,\d+,\d+,\d+$')).Count
+if ($fingerprintLineCount -ne 3) {
+    throw "stage-2 module fingerprint mode emitted $fingerprintLineCount records instead of 3"
+}
+Write-Host "[stage2 5/6] PASS execution, native build, and deterministic module fingerprints."
 
 Write-Host "[stage2 6/6] Compare C# reference and native Sollang compiler runtime behavior."
 & dotnet run --project $runnerProject -c Release --no-build -- `

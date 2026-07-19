@@ -1251,6 +1251,24 @@ Windows suite passes 567/567. This is checkpoint 1/10 after the D205 Stage3
 reset, so Stage3 remains deferred. Canonical filesystem queries and richer
 metadata keep the formal filesystem gate partial at **51.5/60 (85.8%)**.
 
+## Stable Module Fingerprint Foundation (D207A)
+
+The self-host semantic layer now derives separate stable identities for a
+module's exported interface, normalized implementation, and ordered direct
+imports. Example 431 proves trivia stability, body/private isolation, and
+public-signature/import invalidation. The reusable native compiler exposes a
+`fingerprint` mode, and the Stage2 gate compares three real modules byte-for-byte
+between the C#-built Stage1 compiler and the Sollang-built Stage2 compiler.
+
+This foundation deliberately does not claim the missing module-cache gate yet.
+Versioned canonical serialization, atomic publication, corruption validation,
+and dependency-driven hit/miss reuse remain D207B. D207A is Stage2 checkpoint
+2/10 after the D205 reset. The formal count remains **47 complete, 9 partial,
+4 missing: 51.5/60 (85.8%)**.
+
+Windows passes 568/568 examples and Stage2 6/6 at 9,401,740 LLVM bytes. Linux
+Stage2 passes 5/5 at 9,400,225 bytes. D207B is the next implementation slice.
+
 ## Immediate Implementation Order
 
 1. Multi-file compilation (implemented by example 52).

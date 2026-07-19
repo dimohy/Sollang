@@ -1,5 +1,7 @@
 import sollang.compiler.llvm.text as llvm
 import sollang.compiler.llvm.source_root as llvmRoot
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.module_interfaces as moduleInterfaces
 import sys.path as path
 import sys.process as process
 
@@ -118,6 +120,18 @@ emitWindowsRoot pathStart: UIntSize -> Unit uses Console, File, Process {
     root! -> llvmRoot.emitRoot
 }
 
+emitFingerprints pathStart: UIntSize -> Unit uses Console, File, Process {
+    pathStart -> collectPaths => paths!
+    paths! -> semanticContext.prepareFiles => snapshot!
+    snapshot!.package -> moduleInterfaces.fingerprintAnalyzed => fingerprints!
+    0 => fingerprintIndex!
+    fingerprintIndex! < (fingerprints! -> len) -> while {
+        fingerprints![fingerprintIndex!] => fingerprint
+        "module fingerprint = $(fingerprint.moduleHash),$(fingerprint.interfaceHash),$(fingerprint.implementationHash),$(fingerprint.importHash),$(fingerprint.publicSymbolCount),$(fingerprint.importCount)" -> println
+        fingerprintIndex! + 1 => fingerprintIndex!
+    }
+}
+
 buildWindows pathStart: UIntSize -> Unit uses Console, File, Process {
     process.arguments => arguments
     pathStart -> collectBuildPaths => sourcePaths!
@@ -156,6 +170,9 @@ main {
         "; sollang error: --jobs expects a positive integer" -> println
     } else {
     workers > 0 -> if { "; sollang workers = $workers" -> println }
+    targetLength == UIntSize(11) -> if {
+        pathStart -> emitFingerprints
+    } else {
     targetLength == UIntSize(13) -> if {
         pathStart -> buildWindows
     } else {
@@ -176,6 +193,7 @@ main {
         } else {
             pathStart -> emitWindowsFiles
         }
+    }
     }
     }
     }

@@ -1,0 +1,147 @@
+namespace sollang.compiler.semantic.module_interfaces
+
+import sollang.compiler.semantic.analysis as analysis
+import sollang.compiler.semantic.modules as modules
+import syntax.generated.slg as grammar
+
+# Stable module cache identity is split deliberately: implementationHash sees
+# every non-trivia token, while interfaceHash sees only exported declarations
+# and their signature-bearing members. Consumers therefore survive body-only
+# edits, but never reuse an interface after a public ABI change.
+public struct ModuleFingerprint {
+    sourceIndex: Int
+    moduleHash: UInt64
+    interfaceHash: UInt64
+    implementationHash: UInt64
+    importHash: UInt64
+    publicSymbolCount: Int
+    importCount: Int
+}
+
+mix hash: UInt64, value: UInt64 -> UInt64 {
+    hash * UInt64(1099511628211) + value + UInt64(97)
+}
+
+hashToken package: analysis.PackageAnalysis, sourceIndex: Int, tokenIndex: Int, seed: UInt64 -> UInt64 {
+    package.ranges[sourceIndex] => sourceRange
+    package.tokens[sourceRange.tokenStart + tokenIndex] => token
+    seed => hash!
+    token.kind == grammar.triviaIdWhitespace -> if {
+    } else {
+        token.kind == grammar.triviaIdComment -> if {
+        } else {
+            hash! -> mix(UInt64(token.kind + 1)) => hash!
+            UIntSize(0) => byteIndex!
+            byteIndex! < token.span.length -> while {
+                package.sources[sourceIndex] -> byte(token.span.start + byteIndex!) => value
+                hash! -> mix(UInt64(value)) => hash!
+                byteIndex! + UIntSize(1) => byteIndex!
+            }
+            hash! -> mix(UInt64(0)) => hash!
+        }
+    }
+    hash!
+}
+
+hashSymbol package: analysis.PackageAnalysis, sourceIndex: Int, symbolIndex: Int, seed: UInt64 -> UInt64 {
+    package.ranges[sourceIndex] => sourceRange
+    package.symbols[sourceRange.symbolStart + symbolIndex] => symbol
+    package.nodes[sourceRange.astStart + symbol.astNode] => declaration
+    seed -> mix(UInt64(symbol.kind + 1)) => hash!
+    hash! -> mix(UInt64(symbol.flags + 1)) => hash!
+    declaration.firstToken => tokenIndex!
+    declaration.firstToken + declaration.tokenCount => tokenEnd!
+    tokenIndex! < tokenEnd! -> while {
+        package.tokens[sourceRange.tokenStart + tokenIndex!] => token
+        (token.kind == grammar.tokenIdLeftBrace or token.kind == grammar.tokenIdFatArrow) -> if {
+            tokenIndex! => tokenEnd!
+        } else {
+            package -> hashToken(sourceIndex, tokenIndex!, hash!) => hash!
+            tokenIndex! + 1 => tokenIndex!
+        }
+    }
+    hash!
+}
+
+public fingerprintAnalyzed package: analysis.PackageAnalysis -> [ModuleFingerprint; ~] {
+    package -> modules.identitiesAnalyzed => identities!
+    package -> modules.importsAnalyzed => imports!
+    [ModuleFingerprint; ~] => results!
+    0 => sourceIndex!
+    sourceIndex! < (package.ranges -> len) -> while {
+        package.ranges[sourceIndex!] => sourceRange
+        UInt64(1469598103934665603) => implementationHash!
+        -1 => lastImplementationKind!
+        0 => tokenIndex!
+        tokenIndex! < sourceRange.tokenCount -> while {
+            package.tokens[sourceRange.tokenStart + tokenIndex!] => implementationToken
+            false => skipImplementationToken!
+            (implementationToken.kind == grammar.triviaIdWhitespace or implementationToken.kind == grammar.triviaIdComment) -> if { true => skipImplementationToken! }
+            (implementationToken.kind == grammar.tokenIdNewLine and lastImplementationKind! == grammar.tokenIdNewLine) -> if { true => skipImplementationToken! }
+            not skipImplementationToken! -> if {
+                package -> hashToken(sourceIndex!, tokenIndex!, implementationHash!) => implementationHash!
+                implementationToken.kind => lastImplementationKind!
+            }
+            tokenIndex! + 1 => tokenIndex!
+        }
+
+        UInt64(7809847782465536322) => interfaceHash!
+        0 => publicSymbolCount!
+        0 => symbolIndex!
+        symbolIndex! < sourceRange.symbolCount -> while {
+            package.symbols[sourceRange.symbolStart + symbolIndex!] => symbol
+            symbolIndex! => rootSymbolIndex!
+            symbol.parent => parentSymbol!
+            parentSymbol! >= 0 -> while {
+                parentSymbol! => rootSymbolIndex!
+                package.symbols[sourceRange.symbolStart + parentSymbol!].parent => parentSymbol!
+            }
+            package.symbols[sourceRange.symbolStart + rootSymbolIndex!] => rootSymbol
+            rootSymbol.flags / 4 % 2 == 1 => exportedRoot
+            false => signatureSymbol!
+            (exportedRoot and symbolIndex! == rootSymbolIndex!) -> if { true => signatureSymbol! }
+            (exportedRoot and (rootSymbol.kind == 3 or rootSymbol.kind == 4 or rootSymbol.kind == 5)) -> if {
+                (symbol.kind == 26 or symbol.kind == 27 or symbol.kind == 28 or symbol.kind == 29 or symbol.kind == 32 or symbol.kind == 33 or symbol.kind == 34) -> if { true => signatureSymbol! }
+            }
+            (exportedRoot and rootSymbol.kind == 7) -> if {
+                (symbol.kind == 32 or symbol.kind == 33 or symbol.kind == 34 or symbol.kind == 35) -> if { true => signatureSymbol! }
+            }
+            signatureSymbol! -> if {
+                interfaceHash! -> mix(UInt64(symbolIndex! + 1)) => interfaceHash!
+                package -> hashSymbol(sourceIndex!, symbolIndex!, interfaceHash!) => interfaceHash!
+                publicSymbolCount! + 1 => publicSymbolCount!
+            }
+            symbolIndex! + 1 => symbolIndex!
+        }
+
+        UInt64(12379813812177893520) => importHash!
+        0 => importCount!
+        0 => importIndex!
+        importIndex! < (imports! -> len) -> while {
+            imports![importIndex!] => edge
+            edge.sourceModule == sourceIndex! -> if {
+                importHash! -> mix(edge.targetHash) => importHash!
+                importCount! + 1 => importCount!
+            }
+            importIndex! + 1 => importIndex!
+        }
+
+        ModuleFingerprint {
+            sourceIndex: sourceIndex!
+            moduleHash: identities![sourceIndex!].pathHash
+            interfaceHash: interfaceHash!
+            implementationHash: implementationHash!
+            importHash: importHash!
+            publicSymbolCount: publicSymbolCount!
+            importCount: importCount!
+        } => fingerprint
+        results! -> push(fingerprint)
+        sourceIndex! + 1 => sourceIndex!
+    }
+    results!
+}
+
+public fingerprint sources: [Text; ~] -> [ModuleFingerprint; ~] {
+    sources -> analysis.analyze => package
+    package -> fingerprintAnalyzed
+}

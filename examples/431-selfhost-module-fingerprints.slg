@@ -1,0 +1,49 @@
+import sollang.compiler.semantic.module_interfaces as interfaces
+
+fingerprintOf source: Text -> interfaces.ModuleFingerprint {
+    [source, ~] -> interfaces.fingerprint => values!
+    values![0]
+}
+
+main {
+    """
+    namespace sample.api
+    public answer value: Int -> Int => value + 1
+    """ -> fingerprintOf => baseline
+    """
+    namespace sample.api
+
+    # Formatting and comments are not semantic cache inputs.
+    public answer value: Int -> Int => value + 1
+    """ -> fingerprintOf => triviaChanged
+    """
+    namespace sample.api
+    public answer value: Int -> Int => value + 2
+    """ -> fingerprintOf => bodyChanged
+    """
+    namespace sample.api
+    public answer value: Long -> Long => value + Long(1)
+    """ -> fingerprintOf => signatureChanged
+    """
+    namespace sample.api
+    privateValue value: Int -> Int => value + 1
+    """ -> fingerprintOf => privateBaseline
+    """
+    namespace sample.api
+    privateValue value: Int -> Int => value + 99
+    """ -> fingerprintOf => privateChanged
+    """
+    namespace sample.use
+    import dependency.one
+    """ -> fingerprintOf => importOne
+    """
+    namespace sample.use
+    import dependency.two
+    """ -> fingerprintOf => importTwo
+
+    baseline.interfaceHash == triviaChanged.interfaceHash and baseline.implementationHash == triviaChanged.implementationHash -> if { "trivia stable" } else { "trivia unstable" } -> println
+    baseline.interfaceHash == bodyChanged.interfaceHash and baseline.implementationHash != bodyChanged.implementationHash -> if { "body isolated" } else { "body leaked" } -> println
+    baseline.interfaceHash != signatureChanged.interfaceHash -> if { "signature invalidates" } else { "signature reused" } -> println
+    privateBaseline.interfaceHash == privateChanged.interfaceHash and privateBaseline.implementationHash != privateChanged.implementationHash -> if { "private isolated" } else { "private leaked" } -> println
+    importOne.importHash != importTwo.importHash -> if { "imports invalidate" } else { "imports reused" } -> println
+}

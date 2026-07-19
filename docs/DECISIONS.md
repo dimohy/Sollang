@@ -6782,3 +6782,52 @@ Completion checklist:
 This is checkpoint 1/10 after the D205 periodic Stage3 reset, so Stage3 is
 intentionally deferred. Canonical filesystem queries and richer metadata keep
 the filesystem gate partial; the formal roadmap remains **51.5/60 (85.8%)**.
+
+## D207A - Stable Module Interface Fingerprints
+
+Status: fingerprint foundation implemented; persistent reuse pending
+Date: 2026-07-19
+
+Sollang module caching uses three separate content identities rather than file
+timestamps. `interfaceHash` contains only exported declarations and their
+signature-bearing members, `implementationHash` contains the normalized module
+token stream, and `importHash` contains the ordered direct imports. Whitespace,
+comments, and repeated blank lines do not affect these identities. A private or
+body-only edit changes the implementation identity without invalidating
+consumers; a public signature or direct import edit changes the corresponding
+consumer invalidation input.
+
+The design follows Rust's stable cross-session dependency fingerprints and
+Clang's strict module-context consistency, while avoiding Clang PCM's
+compiler-version-sensitive binary AST as Sollang's first cache format. A cache
+entry will additionally carry its schema/compiler/target identity and the full
+canonical interface bytes, so the 64-bit lookup hash is never trusted as the
+sole correctness check. Direct dependency interface hashes, not transitive
+source timestamps, form the invalidation frontier.
+
+Implementation checklist:
+
+- [x] Stable public-interface fingerprint
+- [x] Separate normalized implementation and direct-import fingerprints
+- [x] Trivia stability, body isolation, private isolation, and ABI invalidation tests
+- [x] Native Stage1 `fingerprint` mode
+- [x] Stage1/Stage2 fingerprint equality gate
+- [ ] Versioned canonical interface serialization
+- [ ] Atomic cache publication and corruption rejection
+- [ ] Direct-dependency cache hit/miss integration
+- [ ] Body-only edit proves consumer reuse
+
+D207A is an independently Stage2-verified foundation checkpoint, advancing the
+periodic Stage3 cadence to 2/10. It does not complete the module/interface-cache
+gate, so the formal roadmap remains **47 complete, 9 partial, 4 missing:
+51.5/60 (85.8%)**.
+
+The complete Windows suite passes 568/568. Windows Stage2 passes 6/6 at
+9,401,740 LLVM bytes, and Linux Stage2 passes 5/5 at 9,400,225 bytes with the
+existing target differential hashes preserved.
+
+Research basis:
+
+- [Rust incremental compilation fingerprints](https://rustc-dev-guide.rust-lang.org/queries/incremental-compilation-in-detail.html)
+- [Clang modules and cache invalidation](https://clang.llvm.org/docs/Modules.html)
+- [Clang standard module consistency](https://clang.llvm.org/docs/StandardCPlusPlusModules.html)
