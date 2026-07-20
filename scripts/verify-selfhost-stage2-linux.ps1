@@ -24,7 +24,9 @@ $compilerRuntimeSources = Get-Content $runtimeManifestPath |
 $singleSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-single-smoke.slg"
 $multiLibrarySource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-library-smoke.slg"
 $multiMainSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-main-smoke.slg"
-$expectedStage2Bytes = 11281803L
+$borrowConflictSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-borrow-conflict.slg"
+$borrowSourceRuntime = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-borrow-source.slg"
+$expectedStage2Bytes = 11578079L
 
 New-Item -ItemType Directory -Force -Path $artifactsDir | Out-Null
 
@@ -115,18 +117,18 @@ function Build-And-ExecuteLinuxLlvm {
     }
 }
 
-Write-Host "[linux-stage2 1/5] Bootstrap or reuse the native stage-1 compiler."
+Write-Host "[linux-stage2 1/6] Bootstrap or reuse the native stage-1 compiler."
 & dotnet run --project $runnerProject -c Release -- `
     --exact 365-selfhost-llvm-stage2-single-smoke `
     --exact 366-selfhost-llvm-stage2-multi-file-smoke `
     --jobs 2
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 if (-not (Test-Path $stage1Path)) { throw "stage-1 compiler was not produced: $stage1Path" }
-Write-Host "[linux-stage2 1/5] PASS native stage 1."
+Write-Host "[linux-stage2 1/6] PASS native stage 1."
 
-Write-Host "[linux-stage2 2/5] Build or reuse the complete Linux stage-2 compiler."
+Write-Host "[linux-stage2 2/6] Build or reuse the complete Linux stage-2 compiler."
 if (Test-Stage2IsCurrent) {
-    Write-Host "[linux-stage2 2/5] REUSE current Linux stage 2."
+    Write-Host "[linux-stage2 2/6] REUSE current Linux stage 2."
 } else {
     $sourcePaths = Get-Content $manifestPath |
         Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
@@ -142,7 +144,7 @@ if (Test-Stage2IsCurrent) {
         Start-Sleep -Seconds 2
         $bytes = if (Test-Path $stage2LlvmPath) { (Get-Item $stage2LlvmPath).Length } else { 0L }
         $percent = [Math]::Min(99.9, 100.0 * $bytes / $expectedStage2Bytes)
-        Write-Host ("[linux-stage2 2/5] LLVM {0:N0} bytes ({1:N1}% heuristic)" -f $bytes, $percent)
+        Write-Host ("[linux-stage2 2/6] LLVM {0:N0} bytes ({1:N1}% heuristic)" -f $bytes, $percent)
         $stage2Process.Refresh()
     }
     Assert-ProcessSucceeded $stage2Process $stage2ErrorPath "Linux stage-2 LLVM emission"
@@ -153,9 +155,9 @@ if (Test-Stage2IsCurrent) {
     & wsl.exe -d $Distribution -- gcc (Convert-ToWslPath $stage2ObjectPath) -pthread -o (Convert-ToWslPath $stage2Path)
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }
-Write-Host "[linux-stage2 2/5] PASS $((Get-Item $stage2LlvmPath).Length) LLVM bytes."
+Write-Host "[linux-stage2 2/6] PASS $((Get-Item $stage2LlvmPath).Length) LLVM bytes."
 
-Write-Host "[linux-stage2 3/5] Compare stage-1 and stage-2 single-file LLVM."
+Write-Host "[linux-stage2 3/6] Compare stage-1 and stage-2 single-file LLVM."
 $singleStage1Llvm = Join-Path $artifactsDir "linux-stage2-check-single-stage1.ll"
 $singleStage2Llvm = Join-Path $artifactsDir "linux-stage2-check-single-stage2.ll"
 $singleStage1Error = Join-Path $artifactsDir "linux-stage2-check-single-stage1.err"
@@ -167,9 +169,9 @@ Assert-ProcessSucceeded $singleStage2 $singleStage2Error "Linux stage-2 single-f
 $singleStage1Hash = Get-NormalizedHash $singleStage1Llvm
 $singleStage2Hash = Get-NormalizedHash $singleStage2Llvm
 if ($singleStage1Hash -ne $singleStage2Hash) { throw "Linux single-file LLVM differs: stage1=$singleStage1Hash stage2=$singleStage2Hash" }
-Write-Host "[linux-stage2 3/5] PASS $singleStage2Hash"
+Write-Host "[linux-stage2 3/6] PASS $singleStage2Hash"
 
-Write-Host "[linux-stage2 4/5] Compare stage-1 and stage-2 imported multi-file LLVM."
+Write-Host "[linux-stage2 4/6] Compare stage-1 and stage-2 imported multi-file LLVM."
 $multiStage1Llvm = Join-Path $artifactsDir "linux-stage2-check-multi-stage1.ll"
 $multiStage2Llvm = Join-Path $artifactsDir "linux-stage2-check-multi-stage2.ll"
 $multiStage1Error = Join-Path $artifactsDir "linux-stage2-check-multi-stage1.err"
@@ -193,9 +195,36 @@ $codegenStage1Text = ([System.IO.File]::ReadAllText($codegenStage1Output)).Trim(
 $codegenStage2Text = ([System.IO.File]::ReadAllText($codegenStage2Output)).Trim()
 if ($codegenStage1Text -ne "codegen units = 0,2,6") { throw "Linux stage-1 canonical codegen units differed: $codegenStage1Text" }
 if ($codegenStage2Text -ne $codegenStage1Text) { throw "Linux stage-2 canonical codegen units differed: $codegenStage2Text" }
-Write-Host "[linux-stage2 4/5] PASS $multiStage2Hash"
+Write-Host "[linux-stage2 4/6] PASS $multiStage2Hash"
 
-Write-Host "[linux-stage2 5/5] Assemble, link, and execute both Linux stage-2 products."
+Write-Host "[linux-stage2 5/6] Assemble, link, and execute both Linux stage-2 products."
 Build-And-ExecuteLinuxLlvm $singleStage2Llvm "linux-stage2-check-single" "stage2-single-ok"
 Build-And-ExecuteLinuxLlvm $multiStage2Llvm "linux-stage2-check-multi" "stage2-multi-ok"
-Write-Host "[linux-stage2 5/5] PASS complete Linux stage-2 verification."
+Write-Host "[linux-stage2 5/6] PASS Linux stage-2 products execute."
+
+Write-Host "[linux-stage2 6/6] Reject a moved origin while its borrowed Text view remains live."
+$stage1DiagnosticOutput = Join-Path $artifactsDir "linux-stage2-check-borrow-conflict-stage1.txt"
+$stage1DiagnosticError = Join-Path $artifactsDir "linux-stage2-check-borrow-conflict-stage1.err"
+$stage1Diagnostic = Invoke-ProcessToFile $stage1Path @("linux", $borrowConflictSource, $borrowSourceRuntime) $stage1DiagnosticOutput $stage1DiagnosticError
+$stage2DiagnosticOutput = Join-Path $artifactsDir "linux-stage2-check-borrow-conflict-stage2.txt"
+$stage2DiagnosticError = Join-Path $artifactsDir "linux-stage2-check-borrow-conflict-stage2.err"
+$stage2Diagnostic = Invoke-ProcessToFile "wsl.exe" @(
+    "-d", $Distribution, "--", (Convert-ToWslPath $stage2Path), "linux",
+    (Convert-ToWslPath $borrowConflictSource), (Convert-ToWslPath $borrowSourceRuntime)
+) $stage2DiagnosticOutput $stage2DiagnosticError
+foreach ($candidate in @(
+    @($stage1Diagnostic, $stage1DiagnosticOutput, "stage1"),
+    @($stage2Diagnostic, $stage2DiagnosticOutput, "stage2")
+)) {
+    $candidate[0].WaitForExit()
+    $candidate[0].Refresh()
+    if ($candidate[0].ExitCode -eq 0) { throw "$($candidate[2]) accepted a moved origin with a live borrowed Text view" }
+    $diagnosticText = [System.IO.File]::ReadAllText($candidate[1])
+    if ($diagnosticText -notmatch 'error\[E21\].*origin moved while a borrowed Text view is still live') {
+        throw "$($candidate[2]) did not emit ownership diagnostic E21: '$diagnosticText'"
+    }
+    if ($diagnosticText -match '^target (datalayout|triple)') {
+        throw "$($candidate[2]) began LLVM emission before rejecting ownership diagnostic E21"
+    }
+}
+Write-Host "[linux-stage2 6/6] PASS ownership diagnostic E21 blocks LLVM emission in stage-1 and stage-2."

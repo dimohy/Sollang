@@ -39,6 +39,10 @@ internal sealed class LinuxLlvmRuntimePlatform : LlvmRuntimePlatform
 
     public override void EmitExternalDeclarations(StringBuilder functions)
     {
+        if (UsesProcessExit)
+        {
+            functions.AppendLine("declare void @exit(i32)");
+        }
         functions.AppendLine("declare i64 @write(i32, ptr, i64)");
         functions.AppendLine("declare i64 @read(i32, ptr, i64)");
         functions.AppendLine("declare i64 @pread(i32, ptr, i64, i64)");

@@ -1925,6 +1925,13 @@ internal sealed partial class SemanticCompiler
                 function,
                 inputType,
                 returnType),
+            "sys.process.exit" => RequireIntrinsicSignature(
+                function,
+                inputType,
+                returnType,
+                BoundType.Int,
+                BoundType.Unit,
+                BoundFunctionKind.RuntimeExitProcess),
             "sys.file.borrowText" => RequireIntrinsicSignature(
                 function, inputType, returnType, BoundType.Text, BoundType.SourceText,
                 BoundFunctionKind.RuntimeBorrowSourceText),
@@ -5096,6 +5103,13 @@ internal sealed partial class SemanticCompiler
                         EnsureRuntimeInput(currentType, function, expression.Line, expression.Column, path);
                         currentType = function.ReturnType;
                         continue;
+                    case BoundFunctionKind.RuntimeExitProcess:
+                        EnsureRuntimeInput(currentType, function, expression.Line, expression.Column, path);
+                        if (!isLast)
+                        {
+                            throw Error(expression.Line, expression.Column, $"{path} must be the final value-flow target");
+                        }
+                        return new FlowResult(BoundType.Unit, FlowEffect.None);
                     case BoundFunctionKind.RuntimeSleep:
                         EnsureRuntimeInput(currentType, function, expression.Line, expression.Column, path);
                         currentType = AsyncCallType(function);
@@ -6016,6 +6030,16 @@ internal sealed partial class SemanticCompiler
                     allowPrintCall: false, allowReadIntCall, allowFlowBindingTarget: false);
                 EnsureRuntimeInput(directoryPathType, function, expression.Arguments[0].Line, expression.Arguments[0].Column, path);
                 return function.ReturnType;
+            case BoundFunctionKind.RuntimeExitProcess:
+                if (expression.Arguments.Count != 1)
+                {
+                    throw Error(expression.Line, expression.Column, $"{path} expects exactly one Int exit code");
+                }
+                var exitCodeType = InferExpression(
+                    expression.Arguments[0], functions, bindings,
+                    allowPrintCall: false, allowReadIntCall, allowFlowBindingTarget: false);
+                EnsureRuntimeInput(exitCodeType, function, expression.Arguments[0].Line, expression.Arguments[0].Column, path);
+                return BoundType.Unit;
             case BoundFunctionKind.RuntimeSeedRandom:
             case BoundFunctionKind.RuntimeRandomBelow:
             case BoundFunctionKind.RuntimeOpenIntWriter:

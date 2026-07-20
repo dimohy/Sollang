@@ -17,6 +17,10 @@ processCode result: Result<Int, Text> -> Int => result -> when {
     Err(error) => -1
 }
 
+exitFailure: -> Unit uses Process {
+    process.exit(1)
+}
+
 isJobsOption value: Text -> Bool {
     (value -> len) == UIntSize(6) => matches!
     matches! -> if {
@@ -94,17 +98,20 @@ collectBuildPaths start: UIntSize -> [Text; ~] uses Process {
 
 emitLinuxFiles pathStart: UIntSize -> Unit uses Console, File, Process {
     pathStart -> collectPaths => paths!
-    paths! -> llvm.emitLinuxFiles
+    paths! -> llvm.emitLinuxCheckedFiles => diagnosticCount
+    diagnosticCount > 0 -> if { exitFailure }
 }
 
 emitWasmFiles pathStart: UIntSize -> Unit uses Console, File, Process {
     pathStart -> collectPaths => paths!
-    paths! -> llvm.emitWasmFiles
+    paths! -> llvm.emitWasmCheckedFiles => diagnosticCount
+    diagnosticCount > 0 -> if { exitFailure }
 }
 
 emitWindowsFiles pathStart: UIntSize -> Unit uses Console, File, Process {
     pathStart -> collectPaths => paths!
-    paths! -> llvm.emitFiles
+    paths! -> llvm.emitCheckedFiles => diagnosticCount
+    diagnosticCount > 0 -> if { exitFailure }
 }
 
 emitLinuxRoot pathStart: UIntSize -> Unit uses Console, File, Process {
@@ -112,19 +119,19 @@ emitLinuxRoot pathStart: UIntSize -> Unit uses Console, File, Process {
     # Root discovery and source mapping run in this native Windows driver even
     # when the emitted program targets Linux.
     arguments[pathStart] -> path.fromText(path.Style.Windows) => root!
-    root! -> llvmRoot.emitLinuxRoot
+    root! -> llvmRoot.emitLinuxCheckedRoot
 }
 
 emitWasmRoot pathStart: UIntSize -> Unit uses Console, File, Process {
     process.arguments => arguments
     arguments[pathStart] -> path.fromText(path.Style.Windows) => root!
-    root! -> llvmRoot.emitWasmRoot
+    root! -> llvmRoot.emitWasmCheckedRoot
 }
 
 emitWindowsRoot pathStart: UIntSize -> Unit uses Console, File, Process {
     process.arguments => arguments
     arguments[pathStart] -> path.fromText(path.Style.Windows) => root!
-    root! -> llvmRoot.emitRoot
+    root! -> llvmRoot.emitCheckedRoot
 }
 
 emitFingerprints pathStart: UIntSize -> Unit uses Console, File, Process {

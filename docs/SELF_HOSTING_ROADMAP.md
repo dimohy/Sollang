@@ -2138,6 +2138,43 @@ Research basis:
 - [Mojo lifetimes, origins, and references](https://mojolang.org/docs/manual/values/lifetimes/)
 - [Swift memory safety](https://docs.swift.org/swift-book/documentation/the-swift-programming-language/memorysafety/)
 
+## Production Ownership-Diagnostic Gate (D213C)
+
+D213C connects borrowed-Text diagnostic E21 to the native compiler's checked
+file-list and source-root entry points. Ownership validation runs before target
+headers or LLVM are printed. A live borrowed view followed by an owner move now
+produces E21 and a nonzero process exit in both Stage1 and Stage2; valid programs
+retain the existing LLVM-only output contract. E17-E20 remain nonfatal until
+their path-sensitive false positives are resolved.
+
+The driver uses the new `sys.process.exit(Int)` intrinsic, lowered consistently
+by the reference and self-host backends. Windows flushes buffered output and
+calls `ExitProcess`; Linux calls `exit`. The cross-target gate verifies the
+failure code, message, and absence of an LLVM target header.
+
+Validation is a zero-warning Release build, Windows/Linux full suites at
+**631/631**, Windows Stage2 **7/7** at **11,581,500 LLVM bytes** with a
+**1,625,088-byte executable**, and Linux Stage2 **6/6** at **11,578,079 LLVM
+bytes**. The fresh checks took 101.8 seconds and 253.9 seconds respectively.
+Typed IR is currently lowered separately for ownership and emission because
+the self-host backend cannot yet safely return an owned IR array from an
+analysis aggregate or capture a borrowed IR parameter in a local helper. That
+duplicate lowering and the pre-output 0-byte progress interval are tracked as
+performance follow-ups.
+
+The Stage3 cadence is **1/10** after D213B's reset, so Stage3 is not due. Formal
+progress remains **49 complete, 8 partial, 3 missing: 53/60 (88.3%)** because
+the wider ownership/storage gate still includes CFG-sensitive lifetimes,
+multiple/union origins, aggregate borrowed returns, projection conflicts, and
+production enforcement of E17-E20.
+
+Research basis:
+
+- [Rust compiler diagnostics](https://rustc-dev-guide.rust-lang.org/diagnostics.html)
+- [Rust `ErrorGuaranteed`](https://rustc-dev-guide.rust-lang.org/diagnostics/error-guaranteed.html)
+- [Clang command stages](https://clang.llvm.org/docs/CommandGuide/clang.html)
+- [Clang diagnostics internals](https://clang.llvm.org/docs/InternalsManual.html)
+
 ## Straight-Line Last-Use Borrow Regions (D213B)
 
 D213B shortens a returned Text view's inferred SourceText borrow from lexical

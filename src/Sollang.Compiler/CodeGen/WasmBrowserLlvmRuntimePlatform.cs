@@ -36,6 +36,10 @@ internal sealed class WasmBrowserLlvmRuntimePlatform : LlvmRuntimePlatform
 
     public override void EmitExternalDeclarations(StringBuilder functions)
     {
+        if (UsesProcessExit)
+        {
+            functions.AppendLine("declare void @exit(i32)");
+        }
         functions.AppendLine("declare i32 @sollang_browser_write(ptr, i32)");
         functions.AppendLine("declare i64 @sollang_browser_now_millis()");
     }

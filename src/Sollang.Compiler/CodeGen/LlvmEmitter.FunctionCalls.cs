@@ -80,6 +80,16 @@ internal sealed partial class LlvmEmitter
             return EmitRuntimeNowMillisIntrinsic(path);
         }
 
+        if (function.Kind == BoundFunctionKind.RuntimeExitProcess)
+        {
+            if (expression.Arguments.Count != 1)
+            {
+                throw new SollangException($"{path} expects exactly one Int exit code");
+            }
+
+            return EmitRuntimeExitProcessIntrinsic(EmitExpression(expression.Arguments[0]), path);
+        }
+
         if (function.Kind == BoundFunctionKind.RuntimePathStyle)
         {
             if (expression.Arguments.Count != 0)
@@ -863,6 +873,15 @@ internal sealed partial class LlvmEmitter
                 throw new SollangException($"{function.Name} expects a RunToFileRequest");
             }
             return EmitRuntimeRunProcessToFileIntrinsic(function, request);
+        }
+
+        if (function.Kind == BoundFunctionKind.RuntimeExitProcess)
+        {
+            if (argument is null)
+            {
+                throw new SollangException($"{function.Name} expects exactly one Int exit code");
+            }
+            return EmitRuntimeExitProcessIntrinsic(argument, function.Name);
         }
 
         if (function.Kind is BoundFunctionKind.RuntimeBorrowSourceText

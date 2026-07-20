@@ -4,6 +4,7 @@ import sollang.compiler.llvm.text as llvm
 import sollang.compiler.source_root as sourceRoot
 import sys.file as file
 import sys.path as path
+import sys.process as process
 
 emitDiscovered paths: move [path.Path; ~] -> Unit uses Console, File {
     mapSource sourcePath: path.Path -> uses File {
@@ -87,4 +88,106 @@ public emitWasmRoot root: move path.Path -> Unit uses Console, File {
         Ok(paths) { paths -> emitDiscoveredWasm }
         Err(error) { "; sollang source root error: $error" -> println }
     }
+}
+
+emitDiscoveredChecked paths: move [path.Path; ~] -> Int uses Console, File {
+    mapSource sourcePath: path.Path -> uses File {
+        sourcePath -> file.mapPath
+    }
+    [file.SourceText; ~] => owners!
+    paths -> each sourcePath {
+        sourcePath -> mapSource => owner!
+        owners! -> push(owner!)
+    }
+    [Text; ~] => sources!
+    0 => sourceIndex!
+    sourceIndex! < (owners! -> len) -> while {
+        owners![sourceIndex!] -> len => sourceLength
+        owners![sourceIndex!] -> slice(UIntSize(0), sourceLength) => source
+        sources! -> push(source)
+        sourceIndex! + 1 => sourceIndex!
+    }
+    sources! -> llvm.emitChecked => diagnosticCount
+    owners! -> len => ownerCount
+    diagnosticCount
+}
+
+emitDiscoveredLinuxChecked paths: move [path.Path; ~] -> Int uses Console, File {
+    mapSource sourcePath: path.Path -> uses File { sourcePath -> file.mapPath }
+    [file.SourceText; ~] => owners!
+    paths -> each sourcePath {
+        sourcePath -> mapSource => owner!
+        owners! -> push(owner!)
+    }
+    [Text; ~] => sources!
+    0 => sourceIndex!
+    sourceIndex! < (owners! -> len) -> while {
+        owners![sourceIndex!] -> len => sourceLength
+        owners![sourceIndex!] -> slice(UIntSize(0), sourceLength) => source
+        sources! -> push(source)
+        sourceIndex! + 1 => sourceIndex!
+    }
+    sources! -> llvm.emitLinuxChecked => diagnosticCount
+    owners! -> len => ownerCount
+    diagnosticCount
+}
+
+emitDiscoveredWasmChecked paths: move [path.Path; ~] -> Int uses Console, File {
+    mapSource sourcePath: path.Path -> uses File { sourcePath -> file.mapPath }
+    [file.SourceText; ~] => owners!
+    paths -> each sourcePath {
+        sourcePath -> mapSource => owner!
+        owners! -> push(owner!)
+    }
+    [Text; ~] => sources!
+    0 => sourceIndex!
+    sourceIndex! < (owners! -> len) -> while {
+        owners![sourceIndex!] -> len => sourceLength
+        owners![sourceIndex!] -> slice(UIntSize(0), sourceLength) => source
+        sources! -> push(source)
+        sourceIndex! + 1 => sourceIndex!
+    }
+    sources! -> llvm.emitWasmChecked => diagnosticCount
+    owners! -> len => ownerCount
+    diagnosticCount
+}
+
+sourceRootExitFailure: -> Unit uses Process {
+    process.exit(1)
+}
+
+public emitCheckedRoot root: move path.Path -> Unit uses Console, File, Process {
+    0 => diagnosticCount!
+    root -> sourceRoot.discover -> when {
+        Ok(paths) { paths -> emitDiscoveredChecked => diagnosticCount! }
+        Err(error) {
+            "; sollang source root error: $error" -> println
+            1 => diagnosticCount!
+        }
+    }
+    diagnosticCount! > 0 -> if { sourceRootExitFailure }
+}
+
+public emitLinuxCheckedRoot root: move path.Path -> Unit uses Console, File, Process {
+    0 => diagnosticCount!
+    root -> sourceRoot.discover -> when {
+        Ok(paths) { paths -> emitDiscoveredLinuxChecked => diagnosticCount! }
+        Err(error) {
+            "; sollang source root error: $error" -> println
+            1 => diagnosticCount!
+        }
+    }
+    diagnosticCount! > 0 -> if { sourceRootExitFailure }
+}
+
+public emitWasmCheckedRoot root: move path.Path -> Unit uses Console, File, Process {
+    0 => diagnosticCount!
+    root -> sourceRoot.discover -> when {
+        Ok(paths) { paths -> emitDiscoveredWasmChecked => diagnosticCount! }
+        Err(error) {
+            "; sollang source root error: $error" -> println
+            1 => diagnosticCount!
+        }
+    }
+    diagnosticCount! > 0 -> if { sourceRootExitFailure }
 }

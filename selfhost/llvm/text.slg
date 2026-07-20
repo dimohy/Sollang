@@ -11,6 +11,7 @@ import sollang.compiler.semantic.context as semanticContext
 import sollang.compiler.semantic.expression_type_ids as expressionTypeIds
 import sollang.compiler.semantic.modules as modules
 import sollang.compiler.semantic.nominal_types as nominalTypes
+import sollang.compiler.semantic.ownership_check as ownershipCheck
 import sollang.compiler.semantic.symbols as symbols
 import sollang.compiler.semantic.type_ids as typeIds
 import sollang.compiler.syntax as syntax
@@ -163,6 +164,7 @@ struct EmitContext {
     pointerBitWidth: Int
     supportsComputePool: Bool
     expectedPathStyle: Int
+    ownershipDiagnostics: [ownershipCheck.OwnershipDiagnostic; ~]
 }
 
 struct PrepareRequest {
@@ -439,6 +441,7 @@ prepare request: move PrepareRequest -> EmitContext {
     request.supportsComputePool => supportsComputePool
     request.expectedPathStyle => expectedPathStyle
     request.sources -> semanticContext.prepare => prepared
+    prepared -> ownershipCheck.analyzeContext => ownershipDiagnostics!
     prepared -> typedIr.lowerContext => ir!
     prepared -> expressionTypeIds.resolveContext => recursiveTypes
     [typeIds.SemanticType; ~] => semanticTypes!
@@ -705,6 +708,7 @@ prepare request: move PrepareRequest -> EmitContext {
         pointerBitWidth: pointerBitWidth
         supportsComputePool: supportsComputePool
         expectedPathStyle: expectedPathStyle
+        ownershipDiagnostics: ownershipDiagnostics!
     } => context!
     context!
 }
@@ -717,7 +721,7 @@ writeDecimalLine value: Int -> Unit uses Console {
     "$(value)" -> println
 }
 
-emitCore context: move EmitContext -> Unit uses Console {
+emitCore context: EmitContext -> Unit uses Console {
     snapshotIntArray values: [Int; ~] -> [Int; ~] {
         [Int; ~] => snapshot!
         values -> each value {
@@ -2594,6 +2598,17 @@ emitCore context: move EmitContext -> Unit uses Console {
         "  %v$(request.callIndex) = load " -> print
         call -> writeIrType
         ", ptr %v$(request.callIndex)_process_result_slot, align 8" -> println
+    }
+    emitExitCall callIndex: Int -> Unit uses Console {
+        callIndex -> callArgumentIndex => argumentIndex
+        context.ir[argumentIndex] => argument
+        context -> usesTextRuntime -> if { "  call void @sollang_runtime_flush_stdout()" -> println }
+        context.expectedPathStyle == 1 -> if { "  call void @ExitProcess(i32 " -> print } else { "  call void @exit(i32 " -> print }
+        argument.kind == 3 -> if {
+            argument -> sourceToken => argumentToken
+            context.sources[argument.sourceModule] -> slice(argumentToken.span.start, argumentToken.span.length) -> print
+        } else { "%v$(argumentIndex)" -> print }
+        ")" -> println
     }
     emitFileCall request: FileCallRequest -> Unit uses Console {
         context.ir[request.callIndex] => call
@@ -5913,10 +5928,11 @@ emitCore context: move EmitContext -> Unit uses Console {
             (regionNode.kind == 6 and (regionNode.opcode == -210 or regionNode.opcode == -211)) -> if {
                 ProcessCallRequest { callIndex: regionNodeIndex!, ownerIndex: ownerIndex! } -> emitProcessCall
             }
+            (regionNode.kind == 6 and regionNode.opcode == -222) -> if { regionNodeIndex! -> emitExitCall }
             ((regionNode.kind == 6 or regionNode.kind == 9) and regionNode.opcode <= -216 and regionNode.opcode >= -221) -> if {
                 FileCallRequest { callIndex: regionNodeIndex!, ownerIndex: ownerIndex! } -> emitFileCall
             }
-            (regionNode.kind == 6 and regionNode.symbol != -115 and regionNode.opcode != -205 and regionNode.opcode != -206 and regionNode.opcode != -207 and regionNode.opcode != -208 and regionNode.opcode != -209 and regionNode.opcode != -210 and regionNode.opcode != -211 and regionNode.opcode != -212 and regionNode.opcode != -214 and regionNode.opcode != -215 and (regionNode.opcode > -216 or regionNode.opcode < -221) and not (regionNode.parent >= 0 and context.ir[regionNode.parent].kind == 6 and (context.ir[regionNode.parent].opcode == -207 or context.ir[regionNode.parent].opcode == -209) and context.ir[regionNode.parent].operand1 == regionNodeIndex!)) -> if {
+            (regionNode.kind == 6 and regionNode.symbol != -115 and regionNode.opcode != -205 and regionNode.opcode != -206 and regionNode.opcode != -207 and regionNode.opcode != -208 and regionNode.opcode != -209 and regionNode.opcode != -210 and regionNode.opcode != -211 and regionNode.opcode != -212 and regionNode.opcode != -214 and regionNode.opcode != -215 and regionNode.opcode != -222 and (regionNode.opcode > -216 or regionNode.opcode < -221) and not (regionNode.parent >= 0 and context.ir[regionNode.parent].kind == 6 and (context.ir[regionNode.parent].opcode == -207 or context.ir[regionNode.parent].opcode == -209) and context.ir[regionNode.parent].operand1 == regionNodeIndex!)) -> if {
                 (regionNode.symbol == -101 or regionNode.symbol == -102) -> if {
                     regionNodeIndex! -> callArgumentIndex => regionArgumentIndex
                     context.ir[regionArgumentIndex] => regionArgument
@@ -7794,13 +7810,14 @@ emitCore context: move EmitContext -> Unit uses Console {
                 (expression.kind == 6 and (expression.opcode == -210 or expression.opcode == -211)) -> if {
                     ProcessCallRequest { callIndex: expressionIndex!, ownerIndex: functionIndex! } -> emitProcessCall
                 }
+                (expression.kind == 6 and expression.opcode == -222) -> if { expressionIndex! -> emitExitCall }
                 (expression.kind == 6 and expression.opcode == -215) -> if {
                     DirectoryCallRequest { callIndex: expressionIndex!, ownerIndex: functionIndex! } -> emitDirectoryCall
                 }
                 ((expression.kind == 6 or expression.kind == 9) and expression.opcode <= -216 and expression.opcode >= -221) -> if {
                     FileCallRequest { callIndex: expressionIndex!, ownerIndex: functionIndex! } -> emitFileCall
                 }
-                (expression.kind == 6 and expression.symbol != -115 and expression.opcode != -205 and expression.opcode != -206 and expression.opcode != -207 and expression.opcode != -208 and expression.opcode != -209 and expression.opcode != -210 and expression.opcode != -211 and expression.opcode != -212 and expression.opcode != -214 and expression.opcode != -215 and (expression.opcode > -216 or expression.opcode < -221) and not (expression.parent >= 0 and context.ir[expression.parent].kind == 6 and (context.ir[expression.parent].opcode == -207 or context.ir[expression.parent].opcode == -209) and context.ir[expression.parent].operand1 == expressionIndex!)) -> if {
+                (expression.kind == 6 and expression.symbol != -115 and expression.opcode != -205 and expression.opcode != -206 and expression.opcode != -207 and expression.opcode != -208 and expression.opcode != -209 and expression.opcode != -210 and expression.opcode != -211 and expression.opcode != -212 and expression.opcode != -214 and expression.opcode != -215 and expression.opcode != -222 and (expression.opcode > -216 or expression.opcode < -221) and not (expression.parent >= 0 and context.ir[expression.parent].kind == 6 and (context.ir[expression.parent].opcode == -207 or context.ir[expression.parent].opcode == -209) and context.ir[expression.parent].operand1 == expressionIndex!)) -> if {
                     (expression.symbol == -101 or expression.symbol == -102) -> if {
                         expressionIndex! -> callArgumentIndex => runtimeArgumentIndex
                         context.ir[runtimeArgumentIndex] => runtimeArgument
@@ -8917,6 +8934,10 @@ emitCore context: move EmitContext -> Unit uses Console {
     }
     dropTypeActive! -> emitSemanticDropHelpers
     (usesDictionary! or usesEnumMatch! or usesSourceText!) -> if { "declare void @llvm.trap()" -> println }
+    context -> usesProcessExit => needsProcessExit
+    needsProcessExit -> if {
+        context.expectedPathStyle == 1 -> if { "declare dllimport void @ExitProcess(i32)" -> println } else { "declare void @exit(i32)" -> println }
+    }
     (usesText! and not requiresEarlyTextType!) -> if { "%sollang.text = type { ptr, i64 }" -> println }
     usesText! -> if {
         0 => textGlobalIndex!
@@ -8972,7 +8993,7 @@ emitCore context: move EmitContext -> Unit uses Console {
     0 => externalCallIndex!
     externalCallIndex! < (context.ir -> len) -> while {
         context.ir[externalCallIndex!] => externalCall
-        (externalCall.kind == 6 and externalCall.opcode != -205 and externalCall.opcode != -210 and externalCall.opcode != -211 and externalCall.opcode != -212 and externalCall.targetModule >= 0 and externalCall.symbol >= 0) -> if {
+        (externalCall.kind == 6 and externalCall.opcode != -205 and externalCall.opcode != -210 and externalCall.opcode != -211 and externalCall.opcode != -212 and externalCall.opcode != -222 and externalCall.targetModule >= 0 and externalCall.symbol >= 0) -> if {
             false => externalDefined!
             externalCall.targetModule < (context.ranges -> len) -> if {
                 context.ranges[externalCall.targetModule].symbolStart + externalCall.symbol => externalGlobalSymbol
@@ -10039,10 +10060,11 @@ emitCore context: move EmitContext -> Unit uses Console {
                     (entryExpression.kind == 6 and (entryExpression.opcode == -210 or entryExpression.opcode == -211)) -> if {
                         ProcessCallRequest { callIndex: entryExpressionIndex!, ownerIndex: functionIndex! } -> emitProcessCall
                     }
+                    (entryExpression.kind == 6 and entryExpression.opcode == -222) -> if { entryExpressionIndex! -> emitExitCall }
                     ((entryExpression.kind == 6 or entryExpression.kind == 9) and entryExpression.opcode <= -216 and entryExpression.opcode >= -221) -> if {
                         FileCallRequest { callIndex: entryExpressionIndex!, ownerIndex: functionIndex! } -> emitFileCall
                     }
-                    (entryExpression.kind == 6 and entryExpression.symbol != -115 and entryExpression.opcode != -205 and entryExpression.opcode != -207 and entryExpression.opcode != -208 and entryExpression.opcode != -209 and entryExpression.opcode != -210 and entryExpression.opcode != -211 and entryExpression.opcode != -212 and entryExpression.opcode != -215 and (entryExpression.opcode > -216 or entryExpression.opcode < -221) and not (entryExpression.parent >= 0 and context.ir[entryExpression.parent].kind == 6 and (context.ir[entryExpression.parent].opcode == -207 or context.ir[entryExpression.parent].opcode == -209) and context.ir[entryExpression.parent].operand1 == entryExpressionIndex!)) -> if {
+                    (entryExpression.kind == 6 and entryExpression.symbol != -115 and entryExpression.opcode != -205 and entryExpression.opcode != -207 and entryExpression.opcode != -208 and entryExpression.opcode != -209 and entryExpression.opcode != -210 and entryExpression.opcode != -211 and entryExpression.opcode != -212 and entryExpression.opcode != -215 and entryExpression.opcode != -222 and (entryExpression.opcode > -216 or entryExpression.opcode < -221) and not (entryExpression.parent >= 0 and context.ir[entryExpression.parent].kind == 6 and (context.ir[entryExpression.parent].opcode == -207 or context.ir[entryExpression.parent].opcode == -209) and context.ir[entryExpression.parent].operand1 == entryExpressionIndex!)) -> if {
                         (entryExpression.symbol == -101 or entryExpression.symbol == -102) -> if {
                             entryExpressionIndex! -> callArgumentIndex => entryRuntimeArgumentIndex
                             context.ir[entryRuntimeArgumentIndex] => runtimeArgument
@@ -10507,6 +10529,16 @@ usesProcessRuntime context: EmitContext -> Bool {
         nodeIndex! + 1 => nodeIndex!
     }
     usesRuntime!
+}
+
+usesProcessExit context: EmitContext -> Bool {
+    false => usesExit!
+    0 => nodeIndex!
+    nodeIndex! < (context.ir -> len) -> while {
+        context.ir[nodeIndex!].opcode == -222 -> if { true => usesExit! }
+        nodeIndex! + 1 => nodeIndex!
+    }
+    usesExit!
 }
 
 usesSourceTextRuntime context: EmitContext -> Bool {
@@ -11847,32 +11879,51 @@ emitWasmTextRuntime: -> Unit uses Console {
     """" -> println
 }
 
-public emit sources: move [Text; ~] -> Unit uses Console {
-    llvmTarget.windowsX64 => target
-    target.dataLayoutLine -> println
-    target.tripleLine -> println
-    PrepareRequest { sources: sources, pointerBitWidth: target.pointerBitWidth, supportsComputePool: true, expectedPathStyle: 1 } => prepareRequest!
-    prepareRequest! -> prepare => context!
-    context! -> usesParallelRuntime => capturesParallelOutput
-    context! -> usesTextRuntime => usesTextOutput
-    context! -> usesProcessRuntime => needsProcessRuntime
-    context! -> usesDirectoryRuntime => needsDirectoryRuntime
-    context! -> usesOwnedFileRuntime => needsOwnedFileRuntime
+emitOwnershipDiagnostics context: EmitContext -> Unit uses Console {
+    0 => diagnosticIndex!
+    diagnosticIndex! < (context.ownershipDiagnostics -> len) -> while {
+        context.ownershipDiagnostics[diagnosticIndex!] => diagnostic
+        diagnostic.code == 21 -> if {
+            diagnostic.span => diagnosticSpan
+            diagnosticSpan.start => diagnosticStart
+            diagnosticSpan.length => diagnosticLength
+            "; sollang error[E21]: origin moved while a borrowed Text view is still live (source $(diagnostic.sourceModule), byte $diagnosticStart, length $diagnosticLength)" -> println
+        }
+        diagnosticIndex! + 1 => diagnosticIndex!
+    }
+}
+
+blockingOwnershipDiagnosticCount context: EmitContext -> Int {
+    0 => count!
+    0 => diagnosticIndex!
+    diagnosticIndex! < (context.ownershipDiagnostics -> len) -> while {
+        context.ownershipDiagnostics[diagnosticIndex!].code == 21 -> if { count! + 1 => count! }
+        diagnosticIndex! + 1 => diagnosticIndex!
+    }
+    count!
+}
+
+emitWindowsContext context: EmitContext -> Unit uses Console {
+    context -> usesParallelRuntime => capturesParallelOutput
+    context -> usesTextRuntime => usesTextOutput
+    context -> usesProcessRuntime => needsProcessRuntime
+    context -> usesDirectoryRuntime => needsDirectoryRuntime
+    context -> usesOwnedFileRuntime => needsOwnedFileRuntime
     capturesParallelOutput -> if { emitMemoryOutputSinkRuntime }
     (usesTextOutput or capturesParallelOutput) -> if { capturesParallelOutput -> emitWindowsTextRuntime }
     capturesParallelOutput -> if { emitWindowsComputeRuntime }
-    context! -> usesIntInterpolation -> if { emitIntTextRuntime }
-    context! -> usesBoolInterpolation -> if { emitBoolTextRuntime }
-    context! -> usesSourceTextRuntime => needsSourceTextRuntime
+    context -> usesIntInterpolation -> if { emitIntTextRuntime }
+    context -> usesBoolInterpolation -> if { emitBoolTextRuntime }
+    context -> usesSourceTextRuntime => needsSourceTextRuntime
     -1 => runtimeModule!
     0 => runtimeModuleSearch!
-    runtimeModuleSearch! < (context!.modules -> len) -> while {
-        (context!.modules)[runtimeModuleSearch!] => moduleIdentity
+    runtimeModuleSearch! < (context.modules -> len) -> while {
+        context.modules[runtimeModuleSearch!] => moduleIdentity
         moduleIdentity.pathHash == UInt64(12254170256457402476) -> if { moduleIdentity.sourceIndex => runtimeModule! }
         runtimeModuleSearch! + 1 => runtimeModuleSearch!
     }
     needsProcessRuntime -> if { emitProcessTypeRuntime }
-    context! -> emitCore
+    context -> emitCore
     needsProcessRuntime -> if { emitWindowsProcessRuntime }
     needsDirectoryRuntime -> if { llvmRuntime.emitWindowsDirectory }
     needsOwnedFileRuntime -> if { llvmRuntime.emitWindowsOwnedFile }
@@ -11885,25 +11936,20 @@ public emit sources: move [Text; ~] -> Unit uses Console {
     }
 }
 
-public emitLinux sources: move [Text; ~] -> Unit uses Console {
-    llvmTarget.linuxX64 => target
-    target.dataLayoutLine -> println
-    target.tripleLine -> println
-    PrepareRequest { sources: sources, pointerBitWidth: target.pointerBitWidth, supportsComputePool: true, expectedPathStyle: 0 } => prepareRequest!
-    prepareRequest! -> prepare => context!
-    context! -> usesParallelRuntime => capturesParallelOutput
-    context! -> usesTextRuntime => usesTextOutput
-    context! -> usesProcessRuntime => needsProcessRuntime
-    context! -> usesSourceTextRuntime => needsSourceTextRuntime
-    context! -> usesDirectoryRuntime => needsDirectoryRuntime
-    context! -> usesOwnedFileRuntime => needsOwnedFileRuntime
+emitLinuxContext context: EmitContext -> Unit uses Console {
+    context -> usesParallelRuntime => capturesParallelOutput
+    context -> usesTextRuntime => usesTextOutput
+    context -> usesProcessRuntime => needsProcessRuntime
+    context -> usesSourceTextRuntime => needsSourceTextRuntime
+    context -> usesDirectoryRuntime => needsDirectoryRuntime
+    context -> usesOwnedFileRuntime => needsOwnedFileRuntime
     capturesParallelOutput -> if { emitMemoryOutputSinkRuntime }
     (usesTextOutput or capturesParallelOutput) -> if { capturesParallelOutput -> emitLinuxTextRuntime }
     capturesParallelOutput -> if { emitLinuxComputeRuntime }
-    context! -> usesIntInterpolation -> if { emitIntTextRuntime }
-    context! -> usesBoolInterpolation -> if { emitBoolTextRuntime }
+    context -> usesIntInterpolation -> if { emitIntTextRuntime }
+    context -> usesBoolInterpolation -> if { emitBoolTextRuntime }
     needsProcessRuntime -> if { emitProcessTypeRuntime }
-    context! -> emitCore
+    context -> emitCore
     needsProcessRuntime -> if { capturesParallelOutput -> emitLinuxProcessRuntime }
     needsDirectoryRuntime -> if { llvmRuntime.emitLinuxDirectory }
     needsOwnedFileRuntime -> if { not needsProcessRuntime -> llvmRuntime.emitLinuxOwnedFile }
@@ -11915,16 +11961,77 @@ public emitLinux sources: move [Text; ~] -> Unit uses Console {
     }
 }
 
+emitWasmContext context: EmitContext -> Unit uses Console {
+    context -> usesTextRuntime -> if { emitWasmTextRuntime }
+    context -> usesIntInterpolation -> if { emitIntTextRuntime }
+    context -> usesBoolInterpolation -> if { emitBoolTextRuntime }
+    context -> emitCore
+}
+
+public emit sources: move [Text; ~] -> Unit uses Console {
+    llvmTarget.windowsX64 => target
+    target.dataLayoutLine -> println
+    target.tripleLine -> println
+    PrepareRequest { sources: sources, pointerBitWidth: target.pointerBitWidth, supportsComputePool: true, expectedPathStyle: 1 } => prepareRequest!
+    prepareRequest! -> prepare => context!
+    context! -> emitWindowsContext
+}
+
+public emitLinux sources: move [Text; ~] -> Unit uses Console {
+    llvmTarget.linuxX64 => target
+    target.dataLayoutLine -> println
+    target.tripleLine -> println
+    PrepareRequest { sources: sources, pointerBitWidth: target.pointerBitWidth, supportsComputePool: true, expectedPathStyle: 0 } => prepareRequest!
+    prepareRequest! -> prepare => context!
+    context! -> emitLinuxContext
+}
+
 public emitWasm sources: move [Text; ~] -> Unit uses Console {
     llvmTarget.wasm32Browser => target
     target.dataLayoutLine -> println
     target.tripleLine -> println
     PrepareRequest { sources: sources, pointerBitWidth: target.pointerBitWidth, supportsComputePool: false, expectedPathStyle: 0 } => prepareRequest!
     prepareRequest! -> prepare => context!
-    context! -> usesTextRuntime -> if { emitWasmTextRuntime }
-    context! -> usesIntInterpolation -> if { emitIntTextRuntime }
-    context! -> usesBoolInterpolation -> if { emitBoolTextRuntime }
-    context! -> emitCore
+    context! -> emitWasmContext
+}
+
+public emitChecked sources: move [Text; ~] -> Int uses Console {
+    llvmTarget.windowsX64 => target
+    PrepareRequest { sources: sources, pointerBitWidth: target.pointerBitWidth, supportsComputePool: true, expectedPathStyle: 1 } => prepareRequest!
+    prepareRequest! -> prepare => context!
+    context! -> blockingOwnershipDiagnosticCount => diagnosticCount
+    diagnosticCount == 0 -> if {
+        target.dataLayoutLine -> println
+        target.tripleLine -> println
+        context! -> emitWindowsContext
+    } else { context! -> emitOwnershipDiagnostics }
+    diagnosticCount
+}
+
+public emitLinuxChecked sources: move [Text; ~] -> Int uses Console {
+    llvmTarget.linuxX64 => target
+    PrepareRequest { sources: sources, pointerBitWidth: target.pointerBitWidth, supportsComputePool: true, expectedPathStyle: 0 } => prepareRequest!
+    prepareRequest! -> prepare => context!
+    context! -> blockingOwnershipDiagnosticCount => diagnosticCount
+    diagnosticCount == 0 -> if {
+        target.dataLayoutLine -> println
+        target.tripleLine -> println
+        context! -> emitLinuxContext
+    } else { context! -> emitOwnershipDiagnostics }
+    diagnosticCount
+}
+
+public emitWasmChecked sources: move [Text; ~] -> Int uses Console {
+    llvmTarget.wasm32Browser => target
+    PrepareRequest { sources: sources, pointerBitWidth: target.pointerBitWidth, supportsComputePool: false, expectedPathStyle: 0 } => prepareRequest!
+    prepareRequest! -> prepare => context!
+    context! -> blockingOwnershipDiagnosticCount => diagnosticCount
+    diagnosticCount == 0 -> if {
+        target.dataLayoutLine -> println
+        target.tripleLine -> println
+        context! -> emitWasmContext
+    } else { context! -> emitOwnershipDiagnostics }
+    diagnosticCount
 }
 
 public emitFiles paths: [Text; ~] -> Unit uses Console, File {
@@ -11988,4 +12095,67 @@ public emitWasmFiles paths: [Text; ~] -> Unit uses Console, File {
     }
     sources! -> emitWasm
     owners! -> len => ownerCount
+}
+
+public emitCheckedFiles paths: [Text; ~] -> Int uses Console, File {
+    [file.SourceText; ~] => owners!
+    0 => pathIndex!
+    pathIndex! < (paths -> len) -> while {
+        paths[pathIndex!] -> file.mapText => owner!
+        owners! -> push(owner!)
+        pathIndex! + 1 => pathIndex!
+    }
+    [Text; ~] => sources!
+    0 => sourceIndex!
+    sourceIndex! < (owners! -> len) -> while {
+        owners![sourceIndex!] -> len => sourceLength
+        owners![sourceIndex!] -> slice(UIntSize(0), sourceLength) => source
+        sources! -> push(source)
+        sourceIndex! + 1 => sourceIndex!
+    }
+    sources! -> emitChecked => diagnosticCount
+    owners! -> len => ownerCount
+    diagnosticCount
+}
+
+public emitLinuxCheckedFiles paths: [Text; ~] -> Int uses Console, File {
+    [file.SourceText; ~] => owners!
+    0 => pathIndex!
+    pathIndex! < (paths -> len) -> while {
+        paths[pathIndex!] -> file.mapText => owner!
+        owners! -> push(owner!)
+        pathIndex! + 1 => pathIndex!
+    }
+    [Text; ~] => sources!
+    0 => sourceIndex!
+    sourceIndex! < (owners! -> len) -> while {
+        owners![sourceIndex!] -> len => sourceLength
+        owners![sourceIndex!] -> slice(UIntSize(0), sourceLength) => source
+        sources! -> push(source)
+        sourceIndex! + 1 => sourceIndex!
+    }
+    sources! -> emitLinuxChecked => diagnosticCount
+    owners! -> len => ownerCount
+    diagnosticCount
+}
+
+public emitWasmCheckedFiles paths: [Text; ~] -> Int uses Console, File {
+    [file.SourceText; ~] => owners!
+    0 => pathIndex!
+    pathIndex! < (paths -> len) -> while {
+        paths[pathIndex!] -> file.mapText => owner!
+        owners! -> push(owner!)
+        pathIndex! + 1 => pathIndex!
+    }
+    [Text; ~] => sources!
+    0 => sourceIndex!
+    sourceIndex! < (owners! -> len) -> while {
+        owners![sourceIndex!] -> len => sourceLength
+        owners![sourceIndex!] -> slice(UIntSize(0), sourceLength) => source
+        sources! -> push(source)
+        sourceIndex! + 1 => sourceIndex!
+    }
+    sources! -> emitWasmChecked => diagnosticCount
+    owners! -> len => ownerCount
+    diagnosticCount
 }

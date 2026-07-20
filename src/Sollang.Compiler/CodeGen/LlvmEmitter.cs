@@ -13,6 +13,7 @@ internal sealed partial class LlvmEmitter
     private readonly bool _usesProcessArguments;
     private readonly bool _usesProcessEnvironment;
     private readonly bool _usesChildProcesses;
+    private readonly bool _usesProcessExit;
     private readonly bool _usesAsync;
     private readonly bool _usesAsyncFile;
     private bool _usesDirectoryTraversal;
@@ -72,6 +73,10 @@ internal sealed partial class LlvmEmitter
             || program.Functions.Values.Where(function => !function.IsStandardLibrary).Any(function =>
                 (function.Body is not null && UsesChildProcess(function.Body))
                 || function.BlockBody.Any(UsesChildProcess));
+        _usesProcessExit = program.MainStatements.Any(UsesProcessExit)
+            || program.Functions.Values.Where(function => !function.IsStandardLibrary).Any(function =>
+                (function.Body is not null && UsesProcessExit(function.Body))
+                || function.BlockBody.Any(UsesProcessExit));
         _usesAsyncFile = program.ResolvedGenericCalls.Values.Any(function =>
             function.Kind is BoundFunctionKind.RuntimeReadScalarAsync
                 or BoundFunctionKind.RuntimeWriteScalarAtAsync
@@ -91,6 +96,7 @@ internal sealed partial class LlvmEmitter
                 || function.BlockBody.Any(UsesRuntimeSleep));
         _platform.UsesAsyncFile = _usesAsyncFile;
         _platform.UsesProcessRuntime = UsesProcessRuntime;
+        _platform.UsesProcessExit = _usesProcessExit;
         _platform.UsesComputePool = _usesParallel;
         _platform.UsesDirectoryTraversal = _usesDirectoryTraversal;
     }
@@ -169,6 +175,69 @@ internal sealed partial class LlvmEmitter
 
     private bool UsesChildProcess(BlockBody body) => body.Statements.Any(UsesChildProcess)
         || (body.Value is not null && UsesChildProcess(body.Value));
+
+    private bool UsesProcessExit(Statement statement) => statement switch
+    {
+        BindingStatement value => UsesProcessExit(value.Value),
+        ExpressionStatement value => UsesProcessExit(value.Expression),
+        IndexAssignmentStatement value => UsesProcessExit(value.Index) || UsesProcessExit(value.Value),
+        FieldAssignmentStatement value => UsesProcessExit(value.Value),
+        BlockFunctionCallStatement value => UsesProcessExit(value.Source) || value.Body.Any(UsesProcessExit),
+        GuardLoopControlStatement value => UsesProcessExit(value.Condition),
+        ReturnStatement { Value: { } value } => UsesProcessExit(value),
+        _ => false
+    };
+
+    private bool UsesProcessExit(Expression expression)
+    {
+        if (expression is CallExpression call
+            && string.Join('.', call.Path) == "sys.process.exit") return true;
+        if (expression is FlowExpression flow
+            && flow.Targets.Any(target => string.Join('.', target.Path) == "sys.process.exit")) return true;
+        return expression switch
+        {
+            StringExpression value => value.Segments.OfType<InterpolationSegment>().Any(x => UsesProcessExit(x.Expression)),
+            AddExpression value => UsesProcessExit(value.Left) || UsesProcessExit(value.Right),
+            SubtractExpression value => UsesProcessExit(value.Left) || UsesProcessExit(value.Right),
+            MultiplyExpression value => UsesProcessExit(value.Left) || UsesProcessExit(value.Right),
+            DivideExpression value => UsesProcessExit(value.Left) || UsesProcessExit(value.Right),
+            ModuloExpression value => UsesProcessExit(value.Left) || UsesProcessExit(value.Right),
+            CompareExpression value => UsesProcessExit(value.Left) || UsesProcessExit(value.Right),
+            AndExpression value => UsesProcessExit(value.Left) || UsesProcessExit(value.Right),
+            OrExpression value => UsesProcessExit(value.Left) || UsesProcessExit(value.Right),
+            NegateExpression value => UsesProcessExit(value.Value),
+            NotExpression value => UsesProcessExit(value.Value),
+            FlowExpression value => UsesProcessExit(value.Source)
+                || value.Targets.SelectMany(target => target.Arguments).Any(UsesProcessExit),
+            CallExpression value => value.Arguments.Any(UsesProcessExit),
+            RangeExpression value => UsesProcessExit(value.Start) || UsesProcessExit(value.End),
+            ArrayLiteralExpression value => value.Elements.Any(UsesProcessExit),
+            ArrayRepeatExpression value => UsesProcessExit(value.Value),
+            DictionaryLiteralExpression value => value.Entries.Any(x => UsesProcessExit(x.Key) || UsesProcessExit(x.Value)),
+            IndexExpression value => UsesProcessExit(value.Source) || UsesProcessExit(value.Index),
+            StructLiteralExpression value => value.Fields.Any(x => UsesProcessExit(x.Value)),
+            BoxExpression value => UsesProcessExit(value.Value),
+            TryExpression value => UsesProcessExit(value.Value),
+            FieldAccessExpression value => UsesProcessExit(value.Source),
+            MapExpression value => UsesProcessExit(value.Path)
+                || (value.Offset is not null && UsesProcessExit(value.Offset))
+                || (value.Length is not null && UsesProcessExit(value.Length))
+                || (value.FileSize is not null && UsesProcessExit(value.FileSize)),
+            IfExpression value => UsesProcessExit(value.Condition) || UsesProcessExit(value.Then)
+                || (value.Else is not null && UsesProcessExit(value.Else)),
+            WhenExpression value => (value.Subject is not null && UsesProcessExit(value.Subject))
+                || value.Arms.Any(x => UsesProcessExit(x.Condition) || UsesProcessExit(x.Body))
+                || UsesProcessExit(value.Else),
+            EnumMatchExpression value => UsesProcessExit(value.Subject)
+                || value.Arms.Any(x => UsesProcessExit(x.Body))
+                || (value.Else is not null && UsesProcessExit(value.Else)),
+            FoldExpression value => UsesProcessExit(value.Source) || UsesProcessExit(value.Initial) || UsesProcessExit(value.Body),
+            _ => false
+        };
+    }
+
+    private bool UsesProcessExit(BlockBody body) => body.Statements.Any(UsesProcessExit)
+        || (body.Value is not null && UsesProcessExit(body.Value));
 
     private bool UsesRuntimeSleep(Statement statement) => statement switch
     {

@@ -44,18 +44,18 @@ public analyze sources: [Text; ~] -> [OwnershipDiagnostic; ~] {
 
 public analyzeContext prepared: semanticContext.SemanticSnapshot -> [OwnershipDiagnostic; ~] {
     moveRegionFor nodeIndex: Int -> Int {
-        typed![nodeIndex].parent => region!
-        (region! >= 0 and typed![region!].kind != 1 and typed![region!].kind != 11 and typed![region!].kind != 19 and typed![region!].kind != 20) -> while {
-            typed![region!].parent => region!
+        typed[nodeIndex].parent => region!
+        (region! >= 0 and typed[region!].kind != 1 and typed[region!].kind != 11 and typed[region!].kind != 19 and typed[region!].kind != 20) -> while {
+            typed[region!].parent => region!
         }
         region!
     }
     memberMoveMatchesAssignment moveIndex: Int, assignmentIndex: Int -> Bool {
         moves![moveIndex] => candidateMove
-        typed![assignmentIndex] => candidateAssignment
+        typed[assignmentIndex] => candidateAssignment
         false => matches!
         (candidateMove.memberIr >= 0 and candidateAssignment.kind == 25 and candidateAssignment.sourceModule == candidateMove.sourceModule and candidateAssignment.symbol == candidateMove.symbol) -> if {
-            typed![candidateMove.memberIr] => candidateMember
+            typed[candidateMove.memberIr] => candidateMember
             prepared.package.ranges[candidateMember.sourceModule] => candidateRange
             prepared.package.nodes[candidateRange.astStart + candidateMember.astNode] => candidateMemberAst
             prepared.package.nodes[candidateRange.astStart + candidateAssignment.astNode] => candidateAssignmentAst
@@ -85,11 +85,11 @@ public analyzeContext prepared: semanticContext.SemanticSnapshot -> [OwnershipDi
     moveReinitializedBefore moveIndex: Int, beforeStart: UIntSize -> Bool {
         moves![moveIndex] => candidateMove
         prepared.package.ranges[candidateMove.sourceModule] => candidateRange
-        prepared.package.nodes[candidateRange.astStart + typed![candidateMove.siteIr].astNode].start => moveStart
+        prepared.package.nodes[candidateRange.astStart + typed[candidateMove.siteIr].astNode].start => moveStart
         false => repaired!
         0 => assignmentSearch!
-        assignmentSearch! < (typed! -> len) -> while {
-            typed![assignmentSearch!] => reinitialization
+        assignmentSearch! < (typed -> len) -> while {
+            typed[assignmentSearch!] => reinitialization
             (reinitialization.kind == 25 and (assignmentSearch! -> moveRegionFor) == candidateMove.regionIr and moveStart < prepared.package.nodes[candidateRange.astStart + reinitialization.astNode].start and prepared.package.nodes[candidateRange.astStart + reinitialization.astNode].start < beforeStart) -> if {
                 moveIndex -> memberMoveMatchesAssignment(assignmentSearch!) -> if { true => repaired! }
             }
@@ -97,8 +97,8 @@ public analyzeContext prepared: semanticContext.SemanticSnapshot -> [OwnershipDi
         }
         repaired!
     }
-    prepared -> typedIr.lowerContext => typed!
-    typed! -> typedIr.movesFrom => moves!
+    prepared -> typedIr.lowerContext => typed
+    typed -> typedIr.movesFrom => moves!
     [OwnershipDiagnostic; ~] => diagnostics!
 
     # A Text returned from a default SourceText input inherits that input's
@@ -107,27 +107,27 @@ public analyzeContext prepared: semanticContext.SemanticSnapshot -> [OwnershipDi
     # single-input lifetime elision rule.
     [BorrowedTextReturn; ~] => borrowedReturns!
     0 => borrowedFunctionIndex!
-    borrowedFunctionIndex! < (typed! -> len) -> while {
-        typed![borrowedFunctionIndex!] => borrowedFunction
+    borrowedFunctionIndex! < (typed -> len) -> while {
+        typed[borrowedFunctionIndex!] => borrowedFunction
         (borrowedFunction.kind == 0 and borrowedFunction.typeOrigin == 1 and borrowedFunction.typeSymbol == 1 and borrowedFunction.operand1 >= 0) -> if {
-            typed![borrowedFunction.operand1] => borrowedParameter
+            typed[borrowedFunction.operand1] => borrowedParameter
             (borrowedParameter.kind == 10 and borrowedParameter.typeOrigin == 1 and borrowedParameter.typeSymbol == 24 and borrowedParameter.flags == 0) -> if {
                 false => returnsSlice!
                 0 => borrowedReturnSearch!
-                borrowedReturnSearch! < (typed! -> len) -> while {
-                    typed![borrowedReturnSearch!] => borrowedReturn
+                borrowedReturnSearch! < (typed -> len) -> while {
+                    typed[borrowedReturnSearch!] => borrowedReturn
                     (borrowedReturn.kind == 1 and borrowedReturn.parent == borrowedFunctionIndex!) -> if {
                         0 => borrowedSliceSearch!
-                        borrowedSliceSearch! < (typed! -> len) -> while {
-                            typed![borrowedSliceSearch!] => borrowedSlice
+                        borrowedSliceSearch! < (typed -> len) -> while {
+                            typed[borrowedSliceSearch!] => borrowedSlice
                             borrowedSlice.opcode == -203 -> if {
                                 borrowedSliceSearch! => borrowedAncestor!
                                 (borrowedAncestor! >= 0 and borrowedAncestor! != borrowedReturnSearch!) -> while {
-                                    typed![borrowedAncestor!].parent => borrowedAncestor!
+                                    typed[borrowedAncestor!].parent => borrowedAncestor!
                                 }
                                 borrowedAncestor! == borrowedReturnSearch! -> if {
                                     borrowedSlice.operand0 >= 0 -> if {
-                                        typed![borrowedSlice.operand0] => borrowedSliceSource
+                                        typed[borrowedSlice.operand0] => borrowedSliceSource
                                         (borrowedSliceSource.kind == 5 and borrowedSliceSource.symbol == borrowedParameter.symbol) -> if {
                                             true => returnsSlice!
                                         }
@@ -152,10 +152,10 @@ public analyzeContext prepared: semanticContext.SemanticSnapshot -> [OwnershipDi
 
     [BorrowedTextBinding; ~] => borrowedBindings!
     0 => borrowedBindingSearch!
-    borrowedBindingSearch! < (typed! -> len) -> while {
-        typed![borrowedBindingSearch!] => borrowedBinding
+    borrowedBindingSearch! < (typed -> len) -> while {
+        typed[borrowedBindingSearch!] => borrowedBinding
         (borrowedBinding.kind == 17 and borrowedBinding.operand0 >= 0) -> if {
-            typed![borrowedBinding.operand0] => borrowedCall
+            typed[borrowedBinding.operand0] => borrowedCall
             borrowedCall.kind == 6 -> if {
                 false => borrowedCallReturnsView!
                 0 => borrowedReturnIndex!
@@ -167,7 +167,7 @@ public analyzeContext prepared: semanticContext.SemanticSnapshot -> [OwnershipDi
                     borrowedReturnIndex! + 1 => borrowedReturnIndex!
                 }
                 (borrowedCallReturnsView! and borrowedCall.operand0 >= 0) -> if {
-                    typed![borrowedCall.operand0] => borrowedCallSource
+                    typed[borrowedCall.operand0] => borrowedCallSource
                     (borrowedCallSource.kind == 5 and borrowedCallSource.operand0 >= 0) -> if {
                         borrowedBindings! -> push(BorrowedTextBinding {
                             bindingIr: borrowedBindingSearch!
@@ -183,10 +183,10 @@ public analyzeContext prepared: semanticContext.SemanticSnapshot -> [OwnershipDi
     0 => borrowedMoveIndex!
     borrowedMoveIndex! < (moves! -> len) -> while {
         moves![borrowedMoveIndex!] => borrowedMove
-        (borrowedMove.siteIr >= 0 and borrowedMove.siteIr < (typed! -> len)) -> if {
-            typed![borrowedMove.siteIr] => borrowedMoveCall
+        (borrowedMove.siteIr >= 0 and borrowedMove.siteIr < (typed -> len)) -> if {
+            typed[borrowedMove.siteIr] => borrowedMoveCall
             borrowedMoveCall.operand0 >= 0 -> if {
-                typed![borrowedMoveCall.operand0] => borrowedMoveSource
+                typed[borrowedMoveCall.operand0] => borrowedMoveSource
                 (borrowedMoveSource.kind == 5 and borrowedMoveSource.operand0 >= 0) -> if {
                     borrowedMoveSource.operand0 => movedOwnerBinding
                     0 => activeBorrowIndex!
@@ -194,12 +194,12 @@ public analyzeContext prepared: semanticContext.SemanticSnapshot -> [OwnershipDi
                         borrowedBindings![activeBorrowIndex!] => activeBorrow
                         (activeBorrow.ownerBindingIr == movedOwnerBinding and activeBorrow.bindingIr < borrowedMove.siteIr) -> if {
                             prepared.package.ranges[borrowedMove.sourceModule] => borrowedMoveRange
-                            typed![borrowedMove.siteIr] => borrowedMoveSite
+                            typed[borrowedMove.siteIr] => borrowedMoveSite
                             prepared.package.nodes[borrowedMoveRange.astStart + borrowedMoveSite.astNode].start => borrowedMoveStart
                             false => borrowedViewUsedAfterMove!
                             0 => borrowedUseSearch!
-                            borrowedUseSearch! < (typed! -> len) -> while {
-                                typed![borrowedUseSearch!] => borrowedUse
+                            borrowedUseSearch! < (typed -> len) -> while {
+                                typed[borrowedUseSearch!] => borrowedUse
                                 (borrowedUse.kind == 5 and borrowedUse.sourceModule == borrowedMove.sourceModule and borrowedUse.operand0 == activeBorrow.bindingIr and borrowedUse.astNode >= 0 and prepared.package.nodes[borrowedMoveRange.astStart + borrowedUse.astNode].start > borrowedMoveStart) -> if {
                                     true => borrowedViewUsedAfterMove!
                                 }
@@ -233,10 +233,10 @@ public analyzeContext prepared: semanticContext.SemanticSnapshot -> [OwnershipDi
     partialMoveIndex! < (moves! -> len) -> while {
         moves![partialMoveIndex!] => partialMove
         partialMove.memberIr >= 0 -> if {
-            typed![partialMove.siteIr] => partialMoveSite
+            typed[partialMove.siteIr] => partialMoveSite
             prepared.package.ranges[partialMove.sourceModule] => sourceRange
             prepared.package.nodes[sourceRange.astStart + partialMoveSite.astNode].start => partialMoveStart
-            typed![partialMove.memberIr] => movedMember
+            typed[partialMove.memberIr] => movedMember
             prepared.package.nodes[sourceRange.astStart + movedMember.astNode] => movedMemberAst
             0 => movedIdentifierCount!
             movedMemberAst.firstToken => movedTokenIndex!
@@ -245,17 +245,17 @@ public analyzeContext prepared: semanticContext.SemanticSnapshot -> [OwnershipDi
                 movedTokenIndex! + 1 => movedTokenIndex!
             }
             0 => movedUseIndex!
-            movedUseIndex! < (typed! -> len) -> while {
-                typed![movedUseIndex!] => movedUse
+            movedUseIndex! < (typed -> len) -> while {
+                typed[movedUseIndex!] => movedUse
                 (movedUse.kind == 5 and movedUse.sourceModule == partialMove.sourceModule and movedUse.symbol == partialMove.symbol and prepared.package.nodes[sourceRange.astStart + movedUse.astNode].start > partialMoveStart) -> if {
                     movedUse.parent => movedUseAncestor!
                     -1 => movedUseMember!
                     (movedUseAncestor! >= 0 and movedUseMember! < 0) -> while {
-                        typed![movedUseAncestor!].kind == 13 -> if { movedUseAncestor! => movedUseMember! } else { typed![movedUseAncestor!].parent => movedUseAncestor! }
+                        typed[movedUseAncestor!].kind == 13 -> if { movedUseAncestor! => movedUseMember! } else { typed[movedUseAncestor!].parent => movedUseAncestor! }
                     }
                     movedUseMember! < 0 => invalidMovedUse!
                     movedUseMember! >= 0 -> if {
-                        typed![movedUseMember!] => useMember
+                        typed[movedUseMember!] => useMember
                         prepared.package.nodes[sourceRange.astStart + useMember.astNode] => useMemberAst
                         0 => useIdentifierCount!
                         useMemberAst.firstToken => useTokenIndex!
@@ -331,15 +331,15 @@ public analyzeContext prepared: semanticContext.SemanticSnapshot -> [OwnershipDi
                 movedUseIndex! + 1 => movedUseIndex!
             }
         }
-        (partialMove.memberIr >= 0 and partialMove.regionIr >= 0 and (typed![partialMove.regionIr].kind == 19 or typed![partialMove.regionIr].kind == 20)) -> if {
+        (partialMove.memberIr >= 0 and partialMove.regionIr >= 0 and (typed[partialMove.regionIr].kind == 19 or typed[partialMove.regionIr].kind == 20)) -> if {
             prepared.package.ranges[partialMove.sourceModule] => branchRange
-            prepared.package.nodes[branchRange.astStart + typed![partialMove.regionIr].astNode] => branchAst
+            prepared.package.nodes[branchRange.astStart + typed[partialMove.regionIr].astNode] => branchAst
             branchAst.start + branchAst.length => branchEnd
-            prepared.package.nodes[branchRange.astStart + typed![partialMove.siteIr].astNode].start => branchMoveStart
+            prepared.package.nodes[branchRange.astStart + typed[partialMove.siteIr].astNode].start => branchMoveStart
             false => branchReturns!
             0 => branchReturnSearch!
-            branchReturnSearch! < (typed! -> len) -> while {
-                typed![branchReturnSearch!] => branchReturn
+            branchReturnSearch! < (typed -> len) -> while {
+                typed[branchReturnSearch!] => branchReturn
                 (branchReturn.kind == 23 and branchReturn.sourceModule == partialMove.sourceModule and (branchReturnSearch! -> moveRegionFor) == partialMove.regionIr and prepared.package.nodes[branchRange.astStart + branchReturn.astNode].start > branchMoveStart) -> if {
                     true => branchReturns!
                 }
@@ -357,7 +357,7 @@ public analyzeContext prepared: semanticContext.SemanticSnapshot -> [OwnershipDi
                     actualModule: -1
                     actualSymbol: -1
                     actualBuiltin: -1
-                    span: syntax.SourceSpan { fileId: partialMove.sourceModule, start: prepared.package.nodes[branchRange.astStart + typed![partialMove.siteIr].astNode].start, length: prepared.package.nodes[branchRange.astStart + typed![partialMove.siteIr].astNode].length }
+                    span: syntax.SourceSpan { fileId: partialMove.sourceModule, start: prepared.package.nodes[branchRange.astStart + typed[partialMove.siteIr].astNode].start, length: prepared.package.nodes[branchRange.astStart + typed[partialMove.siteIr].astNode].length }
                 })
             }
         }
@@ -369,8 +369,8 @@ public analyzeContext prepared: semanticContext.SemanticSnapshot -> [OwnershipDi
     # therefore be borrowed read-only; mutable bindings and runtime-affine
     # views cannot cross this boundary.
     0 => parallelIrIndex!
-    parallelIrIndex! < (typed! -> len) -> while {
-        typed![parallelIrIndex!] => parallelCall
+    parallelIrIndex! < (typed -> len) -> while {
+        typed[parallelIrIndex!] => parallelCall
         (parallelCall.kind == 6 and (parallelCall.opcode == -207 or parallelCall.opcode == -209) and parallelCall.sourceModule >= 0 and parallelCall.astNode >= 0) -> if {
             prepared.package.ranges[parallelCall.sourceModule] => parallelRange
             prepared.package.nodes[parallelRange.astStart + parallelCall.astNode] => parallelAst
@@ -386,8 +386,8 @@ public analyzeContext prepared: semanticContext.SemanticSnapshot -> [OwnershipDi
                 }
                 isParallel! -> if {
                     0 => captureUseIndex!
-                    captureUseIndex! < (typed! -> len) -> while {
-                        typed![captureUseIndex!] => captureUse
+                    captureUseIndex! < (typed -> len) -> while {
+                        typed[captureUseIndex!] => captureUse
                         (captureUse.kind == 5 and captureUse.sourceModule == parallelCall.sourceModule and captureUse.astNode >= 0) -> if {
                             prepared.package.nodes[parallelRange.astStart + captureUse.astNode] => captureUseAst
                             captureUseAst.parent => captureAncestor!
@@ -400,14 +400,14 @@ public analyzeContext prepared: semanticContext.SemanticSnapshot -> [OwnershipDi
                             # is a concurrently executed callback.
                             (insideParallel! and captureUseAst.start >= parallelName.span.start + parallelName.span.length) -> if {
                                 -1 => captureBindingIndex!
-                                (captureUse.operand0 >= 0 and captureUse.operand0 < (typed! -> len)) -> if {
-                                    typed![captureUse.operand0] => directCaptureBinding
+                                (captureUse.operand0 >= 0 and captureUse.operand0 < (typed -> len)) -> if {
+                                    typed[captureUse.operand0] => directCaptureBinding
                                     (directCaptureBinding.kind == 10 or directCaptureBinding.kind == 17) -> if { captureUse.operand0 => captureBindingIndex! }
                                 }
                                 captureBindingIndex! < 0 -> if {
                                     0 => captureBindingSearch!
-                                    captureBindingSearch! < (typed! -> len) -> while {
-                                        typed![captureBindingSearch!] => captureBindingCandidate
+                                    captureBindingSearch! < (typed -> len) -> while {
+                                        typed[captureBindingSearch!] => captureBindingCandidate
                                         ((captureBindingCandidate.kind == 10 or captureBindingCandidate.kind == 17) and captureBindingCandidate.sourceModule == captureUse.sourceModule and captureBindingCandidate.symbol == captureUse.symbol) -> if {
                                             captureBindingSearch! => captureBindingIndex!
                                         }
@@ -415,7 +415,7 @@ public analyzeContext prepared: semanticContext.SemanticSnapshot -> [OwnershipDi
                                     }
                                 }
                                 captureBindingIndex! >= 0 -> if {
-                                    typed![captureBindingIndex!] => captureBinding
+                                    typed[captureBindingIndex!] => captureBinding
                                     false => bindingInsideParallel!
                                     captureBinding.astNode >= 0 -> if {
                                         prepared.package.nodes[parallelRange.astStart + captureBinding.astNode].parent => bindingAncestor!

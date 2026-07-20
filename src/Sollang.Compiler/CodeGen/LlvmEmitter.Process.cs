@@ -6,6 +6,19 @@ namespace Sollang.Compiler.CodeGen;
 
 internal sealed partial class LlvmEmitter
 {
+    private RuntimeUnit EmitRuntimeExitProcessIntrinsic(RuntimeValue value, string path)
+    {
+        EnsureRuntimeType(value, BoundType.Int, path);
+        var code = (RuntimeInt)value;
+        if (_platform is WindowsLlvmRuntimePlatform)
+        {
+            EmitCall(NextTemp("exit_flush"), "i32", "sollang_flush_stdout", "ptr %stdout, ptr %written");
+        }
+        var function = _platform is WindowsLlvmRuntimePlatform ? "ExitProcess" : "exit";
+        EmitCall(target: null, "void", function, $"i32 {code.ValueName}");
+        return RuntimeUnit.Instance;
+    }
+
     private RuntimeArguments EmitRuntimeArgumentsIntrinsic()
     {
         if (!_platform.SupportsProcessArguments)

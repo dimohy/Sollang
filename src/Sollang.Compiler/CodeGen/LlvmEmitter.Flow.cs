@@ -171,6 +171,16 @@ internal sealed partial class LlvmEmitter
                             ? EmitRuntimeRunProcessToFileIntrinsic(function, request)
                             : throw new SollangException($"{path} expects a RunToFileRequest");
                         continue;
+                    case BoundFunctionKind.RuntimeExitProcess:
+                        if (!isLast)
+                        {
+                            throw new SollangException($"{path} must be the final value-flow target");
+                        }
+                        EmitRuntimeExitProcessIntrinsic(current, path);
+                        return new RuntimeFlowResult(
+                            Value: null,
+                            Binding: null,
+                            Ok: _mainOk);
                     case BoundFunctionKind.RuntimeSyncFile:
                         current = current is RuntimeStruct syncWriter
                             ? EmitRuntimeSyncFile(syncWriter)

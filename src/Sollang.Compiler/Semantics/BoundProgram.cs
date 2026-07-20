@@ -120,6 +120,7 @@ internal enum BoundFunctionKind
     RuntimeParallelPeakWorkers,
     RuntimeRunProcess,
     RuntimeRunProcessToFile,
+    RuntimeExitProcess,
     RuntimeBorrowSourceText,
     RuntimeMapSourceText,
     RuntimeMapSourcePath,

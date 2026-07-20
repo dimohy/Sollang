@@ -102,6 +102,7 @@ internal sealed class WindowsLinker(LlvmToolchain toolchain)
             LIBRARY kernel32.dll
             EXPORTS
             GetStdHandle
+            ExitProcess
             GetConsoleMode
             CreateProcessW
             GetExitCodeProcess

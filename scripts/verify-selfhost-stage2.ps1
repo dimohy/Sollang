@@ -19,6 +19,8 @@ $singleSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhos
 $multiLibrarySource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-library-smoke.slg"
 $multiMainSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-main-smoke.slg"
 $groupedNotSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-grouped-not-smoke.slg"
+$borrowConflictSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-borrow-conflict.slg"
+$borrowSourceRuntime = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-borrow-source.slg"
 $runtimeManifestPath = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-compiler-runtime.sources.txt"
 $fingerprintSources = @(
     (Join-Path $repoRoot "examples\fixtures\429-selfhost-root\Alpha.slg")
@@ -29,7 +31,7 @@ $semanticContextSource = Join-Path $repoRoot "selfhost\semantic\context.slg"
 $compilerRuntimeSources = Get-Content $runtimeManifestPath |
     Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
     ForEach-Object { Join-Path $repoRoot $_.Trim() }
-$expectedStage2Bytes = 11285200L
+$expectedStage2Bytes = 11581500L
 
 New-Item -ItemType Directory -Force -Path $artifactsDir | Out-Null
 
@@ -95,7 +97,7 @@ function Test-Stage2IsCurrent {
     return -not ($inputs | Where-Object { (Get-Item $_).LastWriteTimeUtc -gt $stage2Time })
 }
 
-Write-Host "[stage2 1/6] Bootstrap or reuse the native stage-1 compiler."
+Write-Host "[stage2 1/7] Bootstrap or reuse the native stage-1 compiler."
 & dotnet run --project $runnerProject -c Release -- `
     --exact 365-selfhost-llvm-stage2-single-smoke `
     --exact 366-selfhost-llvm-stage2-multi-file-smoke `
@@ -108,9 +110,9 @@ if (-not (Test-Path $stage1Path)) {
     throw "stage-1 compiler was not produced: $stage1Path"
 }
 
-Write-Host "[stage2 2/6] Build or reuse the complete stage-2 compiler."
+Write-Host "[stage2 2/7] Build or reuse the complete stage-2 compiler."
 if (Test-Stage2IsCurrent) {
-    Write-Host "[stage2 2/6] REUSE current stage-2 compiler."
+    Write-Host "[stage2 2/7] REUSE current stage-2 compiler."
 } else {
     $sourcePaths = Get-Content $manifestPath |
         Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
@@ -127,7 +129,7 @@ if (Test-Stage2IsCurrent) {
         Start-Sleep -Seconds 2
         $bytes = if (Test-Path $stage2LlvmPath) { (Get-Item $stage2LlvmPath).Length } else { 0L }
         $percent = [Math]::Min(99.9, 100.0 * $bytes / $expectedStage2Bytes)
-        Write-Host ("[stage2 2/6] LLVM {0:N0} bytes ({1:N1}% heuristic)" -f $bytes, $percent)
+        Write-Host ("[stage2 2/7] LLVM {0:N0} bytes ({1:N1}% heuristic)" -f $bytes, $percent)
         $stage2Process.Refresh()
     }
     Assert-ProcessSucceeded $stage2Process $stage2ErrorPath "stage-2 LLVM emission"
@@ -143,7 +145,7 @@ if ($stage2Llvm -notmatch '(?s)define internal void @sollang_parallel_callback_\
     throw "stage-2 LLVM does not contain the function-local typed IR worker callback"
 }
 
-Write-Host "[stage2 3/6] Compare stage-1 and stage-2 LLVM with an explicit worker limit."
+Write-Host "[stage2 3/7] Compare stage-1 and stage-2 LLVM with an explicit worker limit."
 $singleStage1Llvm = Join-Path $artifactsDir "stage2-check-single-stage1.ll"
 $singleStage2Llvm = Join-Path $artifactsDir "stage2-check-single-stage2.ll"
 $singleStage1Error = Join-Path $artifactsDir "stage2-check-single-stage1.err"
@@ -161,7 +163,7 @@ if ($singleStage1Hash -ne $singleStage2Hash) {
 if (-not ([System.IO.File]::ReadAllText($singleStage2Llvm).StartsWith("; sollang workers = 2"))) {
     throw "stage-2 compiler did not report the effective --jobs worker count"
 }
-Write-Host "[stage2 3/6] PASS $singleStage2Hash"
+Write-Host "[stage2 3/7] PASS $singleStage2Hash"
 
 $groupedStage1Llvm = Join-Path $artifactsDir "stage2-check-grouped-not-stage1.ll"
 $groupedStage2Llvm = Join-Path $artifactsDir "stage2-check-grouped-not-stage2.ll"
@@ -179,9 +181,9 @@ if ($groupedStage1Hash -ne $groupedStage2Hash) {
 if (-not ([System.IO.File]::ReadAllText($groupedStage2Llvm).Contains("xor i1"))) {
     throw "grouped-not stage-2 LLVM does not contain unary Boolean lowering"
 }
-Write-Host "[stage2 3/6] PASS grouped-not $groupedStage2Hash"
+Write-Host "[stage2 3/7] PASS grouped-not $groupedStage2Hash"
 
-Write-Host "[stage2 4/6] Compare stage-1 and stage-2 LLVM for imported source files."
+Write-Host "[stage2 4/7] Compare stage-1 and stage-2 LLVM for imported source files."
 $multiStage1Llvm = Join-Path $artifactsDir "stage2-check-multi-stage1.ll"
 $multiStage2Llvm = Join-Path $artifactsDir "stage2-check-multi-stage2.ll"
 $multiStage1Error = Join-Path $artifactsDir "stage2-check-multi-stage1.err"
@@ -196,9 +198,9 @@ $multiStage2Hash = Get-NormalizedHash $multiStage2Llvm
 if ($multiStage1Hash -ne $multiStage2Hash) {
     throw "multi-file normalized LLVM differs: stage1=$multiStage1Hash stage2=$multiStage2Hash"
 }
-Write-Host "[stage2 4/6] PASS $multiStage2Hash"
+Write-Host "[stage2 4/7] PASS $multiStage2Hash"
 
-Write-Host "[stage2 5/6] Assemble, link, execute, and exercise the native build path."
+Write-Host "[stage2 5/7] Assemble, link, execute, and exercise the native build path."
 foreach ($case in @(
     @($singleStage2Llvm, "stage2-check-single.exe", "stage2-single-ok"),
     @($multiStage2Llvm, "stage2-check-multi.exe", "stage2-multi-ok"),
@@ -313,9 +315,36 @@ if ($stage1CodegenText -ne "codegen units = 0,2,6") {
 if ($stage2CodegenText -ne $stage1CodegenText) {
     throw "stage-2 canonical codegen units differed: $stage2CodegenText"
 }
-Write-Host "[stage2 5/6] PASS execution, native build, fingerprints, module cache, typed-IR artifacts, and codegen-unit parity."
+Write-Host "[stage2 5/7] PASS execution, native build, fingerprints, module cache, typed-IR artifacts, and codegen-unit parity."
 
-Write-Host "[stage2 6/6] Compare C# reference and native Sollang compiler runtime behavior."
+Write-Host "[stage2 6/7] Reject a moved origin while its borrowed Text view remains live."
+foreach ($compiler in @(
+    @($stage1Path, "stage1"),
+    @($stage2Path, "stage2")
+)) {
+    $diagnosticOutput = Join-Path $artifactsDir "stage2-check-borrow-conflict-$($compiler[1]).txt"
+    $diagnosticError = Join-Path $artifactsDir "stage2-check-borrow-conflict-$($compiler[1]).err"
+    $diagnosticProcess = Invoke-ProcessToFile `
+        -FilePath $compiler[0] `
+        -ArgumentList @("windows", $borrowConflictSource, $borrowSourceRuntime) `
+        -OutputPath $diagnosticOutput `
+        -ErrorPath $diagnosticError
+    $diagnosticProcess.WaitForExit()
+    $diagnosticProcess.Refresh()
+    if ($diagnosticProcess.ExitCode -eq 0) {
+        throw "$($compiler[1]) accepted a moved origin with a live borrowed Text view"
+    }
+    $diagnosticText = [System.IO.File]::ReadAllText($diagnosticOutput)
+    if ($diagnosticText -notmatch 'error\[E21\].*origin moved while a borrowed Text view is still live') {
+        throw "$($compiler[1]) did not emit ownership diagnostic E21: '$diagnosticText'"
+    }
+    if ($diagnosticText -match '^target (datalayout|triple)') {
+        throw "$($compiler[1]) began LLVM emission before rejecting ownership diagnostic E21"
+    }
+}
+Write-Host "[stage2 6/7] PASS ownership diagnostic E21 blocks LLVM emission in stage-1 and stage-2."
+
+Write-Host "[stage2 7/7] Compare C# reference and native Sollang compiler runtime behavior."
 & dotnet run --project $runnerProject -c Release --no-build -- `
     --skip-bootstrap `
     --compare-compilers `
@@ -326,4 +355,4 @@ if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }
 
-Write-Host "[stage2 6/6] PASS complete stage-2 differential verification."
+Write-Host "[stage2 7/7] PASS complete stage-2 differential verification."

@@ -42,6 +42,10 @@ internal sealed class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
 
     public override void EmitExternalDeclarations(StringBuilder functions)
     {
+        if (UsesProcessExit)
+        {
+            functions.AppendLine("declare dllimport void @ExitProcess(i32)");
+        }
         functions.AppendLine("declare dllimport ptr @GetStdHandle(i32)");
         functions.AppendLine("declare dllimport i32 @GetConsoleMode(ptr, ptr)");
         functions.AppendLine("declare dllimport i32 @WriteFile(ptr, ptr, i32, ptr, ptr)");

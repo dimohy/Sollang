@@ -8018,6 +8018,59 @@ References:
 - [Mojo lifetimes, origins, and references](https://mojolang.org/docs/manual/values/lifetimes/)
 - [Swift memory safety and overlapping access](https://docs.swift.org/swift-book/documentation/the-swift-programming-language/memorysafety/)
 
+## D213C - Failure-First Ownership Diagnostics in the Production Driver
+
+Status: implemented and cross-target Stage2 verified
+Date: 2026-07-20
+
+The native Stage2 compiler now validates the inferred borrowed-Text lifetime
+contract before it prints a target data layout, target triple, or LLVM body.
+Diagnostic E21 is a fatal compiler result: both explicit file lists and
+discovered source roots print the source/byte/length diagnostic and terminate
+with a nonzero process exit code. Successful compilation still emits pure LLVM
+text. The checked API deliberately blocks only E21 for now; E17-E20 remain
+available to focused ownership tests but are not production-fatal until their
+remaining false positives are removed.
+
+`sys.process.exit(Int)` is the runtime boundary used by the Sollang-written
+driver. Windows lowers it to `ExitProcess` and Linux/Wasm-native hosting lowers
+it to `exit`; buffered compiler output is flushed before termination. The C#
+reference compiler and self-host emitter resolve the same intrinsic identity.
+The failure gate runs the unsafe two-file fixture through both Stage1 and
+Stage2, requires a nonzero result and E21, and rejects any output that already
+contains a target header.
+
+The first attempt to share one lowered IR exposed two existing self-host
+backend limits: a borrowed array captured by a local function can select the
+wrong outer `%arg`, and an owned array cannot yet be extracted from a returned
+aggregate into a new binding. Until those are repaired, checked preparation
+lowers typed IR once for ownership analysis and once for emission. This is
+correct but measurable: fresh Windows Stage2 verification took 101.8 seconds,
+and fresh Linux Stage2 verification took 253.9 seconds. Removing the duplicate
+lowering and replacing the pre-output 0-byte heuristic are explicit follow-up
+performance work rather than hidden as successful optimization.
+
+Validation is a zero-warning Release build, Windows/Linux full suites at
+631/631, Windows Stage2 7/7 at 11,581,500 LLVM bytes with a 1,625,088-byte
+executable, and Linux Stage2 6/6 at 11,578,079 LLVM bytes. This is checkpoint
+1/10 after the D213B Stage3 reset, so Stage3 is intentionally deferred. Formal
+progress remains 49 complete, 8 partial, and 3 missing: 53/60 (88.3%), because
+CFG-sensitive regions, origin unions, aggregate borrowed returns, projection
+conflicts, and the remaining production ownership diagnostics are still open.
+
+Rust's diagnostic architecture treats an emitted fatal error as proof that
+compilation cannot continue. Clang likewise performs parsing and semantic
+analysis before LLVM generation and regression-tests location-specific
+diagnostics. Sollang adopts that failure boundary while keeping its concise
+pipeline syntax and deterministic source spans.
+
+References:
+
+- [Rust compiler diagnostics](https://rustc-dev-guide.rust-lang.org/diagnostics.html)
+- [Rust `ErrorGuaranteed`](https://rustc-dev-guide.rust-lang.org/diagnostics/error-guaranteed.html)
+- [Clang command stages](https://clang.llvm.org/docs/CommandGuide/clang.html)
+- [Clang diagnostics internals](https://clang.llvm.org/docs/InternalsManual.html)
+
 ## D213B - Straight-Line Last-Use Borrow Regions
 
 Status: implemented, cross-target Stage2 verified, and Stage3 fixed point verified
