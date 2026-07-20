@@ -25,8 +25,9 @@ $singleSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhos
 $multiLibrarySource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-library-smoke.slg"
 $multiMainSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-main-smoke.slg"
 $borrowConflictSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-borrow-conflict.slg"
+$borrowUnionConflictSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-borrow-union-conflict.slg"
 $borrowSourceRuntime = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-borrow-source.slg"
-$expectedStage2Bytes = 11603514L
+$expectedStage2Bytes = 11608839L
 
 New-Item -ItemType Directory -Force -Path $artifactsDir | Out-Null
 
@@ -216,28 +217,33 @@ Build-And-ExecuteLinuxLlvm $multiStage2Llvm "linux-stage2-check-multi" "stage2-m
 Write-Host "[linux-stage2 5/6] PASS Linux stage-2 products execute."
 
 Write-Host "[linux-stage2 6/6] Reject a moved origin while its borrowed Text view remains live."
-$stage1DiagnosticOutput = Join-Path $artifactsDir "linux-stage2-check-borrow-conflict-stage1.txt"
-$stage1DiagnosticError = Join-Path $artifactsDir "linux-stage2-check-borrow-conflict-stage1.err"
-$stage1Diagnostic = Invoke-ProcessToFile $stage1Path @("linux", $borrowConflictSource, $borrowSourceRuntime) $stage1DiagnosticOutput $stage1DiagnosticError
-$stage2DiagnosticOutput = Join-Path $artifactsDir "linux-stage2-check-borrow-conflict-stage2.txt"
-$stage2DiagnosticError = Join-Path $artifactsDir "linux-stage2-check-borrow-conflict-stage2.err"
-$stage2Diagnostic = Invoke-ProcessToFile "wsl.exe" @(
-    "-d", $Distribution, "--", (Convert-ToWslPath $stage2Path), "linux",
-    (Convert-ToWslPath $borrowConflictSource), (Convert-ToWslPath $borrowSourceRuntime)
-) $stage2DiagnosticOutput $stage2DiagnosticError
-foreach ($candidate in @(
-    @($stage1Diagnostic, $stage1DiagnosticOutput, "stage1"),
-    @($stage2Diagnostic, $stage2DiagnosticOutput, "stage2")
+foreach ($conflict in @(
+    @($borrowConflictSource, "single"),
+    @($borrowUnionConflictSource, "union")
 )) {
-    $candidate[0].WaitForExit()
-    $candidate[0].Refresh()
-    if ($candidate[0].ExitCode -eq 0) { throw "$($candidate[2]) accepted a moved origin with a live borrowed Text view" }
-    $diagnosticText = [System.IO.File]::ReadAllText($candidate[1])
-    if ($diagnosticText -notmatch 'error\[E21\].*origin moved while a borrowed Text view is still live') {
-        throw "$($candidate[2]) did not emit ownership diagnostic E21: '$diagnosticText'"
-    }
-    if ($diagnosticText -match '^target (datalayout|triple)') {
-        throw "$($candidate[2]) began LLVM emission before rejecting ownership diagnostic E21"
+    $stage1DiagnosticOutput = Join-Path $artifactsDir "linux-stage2-check-borrow-$($conflict[1])-stage1.txt"
+    $stage1DiagnosticError = Join-Path $artifactsDir "linux-stage2-check-borrow-$($conflict[1])-stage1.err"
+    $stage1Diagnostic = Invoke-ProcessToFile $stage1Path @("linux", $conflict[0], $borrowSourceRuntime) $stage1DiagnosticOutput $stage1DiagnosticError
+    $stage2DiagnosticOutput = Join-Path $artifactsDir "linux-stage2-check-borrow-$($conflict[1])-stage2.txt"
+    $stage2DiagnosticError = Join-Path $artifactsDir "linux-stage2-check-borrow-$($conflict[1])-stage2.err"
+    $stage2Diagnostic = Invoke-ProcessToFile "wsl.exe" @(
+        "-d", $Distribution, "--", (Convert-ToWslPath $stage2Path), "linux",
+        (Convert-ToWslPath $conflict[0]), (Convert-ToWslPath $borrowSourceRuntime)
+    ) $stage2DiagnosticOutput $stage2DiagnosticError
+    foreach ($candidate in @(
+        @($stage1Diagnostic, $stage1DiagnosticOutput, "stage1"),
+        @($stage2Diagnostic, $stage2DiagnosticOutput, "stage2")
+    )) {
+        $candidate[0].WaitForExit()
+        $candidate[0].Refresh()
+        if ($candidate[0].ExitCode -eq 0) { throw "$($candidate[2]) accepted a $($conflict[1])-origin move with a live borrowed Text view" }
+        $diagnosticText = [System.IO.File]::ReadAllText($candidate[1])
+        if ($diagnosticText -notmatch 'error\[E21\].*origin moved while a borrowed Text view is still live') {
+            throw "$($candidate[2]) did not emit ownership diagnostic E21 for $($conflict[1]) origin: '$diagnosticText'"
+        }
+        if ($diagnosticText -match '^target (datalayout|triple)') {
+            throw "$($candidate[2]) began LLVM emission before rejecting $($conflict[1])-origin diagnostic E21"
+        }
     }
 }
-Write-Host "[linux-stage2 6/6] PASS ownership diagnostic E21 blocks LLVM emission in stage-1 and stage-2."
+Write-Host "[linux-stage2 6/6] PASS single and union-origin E21 block LLVM emission in stage-1 and stage-2."

@@ -16,9 +16,9 @@ internal sealed partial class SemanticCompiler
         new(ReferenceEqualityComparer.Instance);
     private readonly Dictionary<BoundFunction, IReadOnlyDictionary<string, BoundType>> _functionCapturedBindings =
         new(ReferenceEqualityComparer.Instance);
-    private readonly Dictionary<BoundFunction, string> _borrowedTextReturnOrigins =
+    private readonly Dictionary<BoundFunction, IReadOnlySet<string>> _borrowedTextReturnOrigins =
         new(ReferenceEqualityComparer.Instance);
-    private readonly Dictionary<string, string> _activeBorrowedTextOrigins =
+    private readonly Dictionary<string, IReadOnlySet<string>> _activeBorrowedTextOrigins =
         new(StringComparer.Ordinal);
     private IReadOnlySet<string> _borrowedTextContinuationNames =
         new HashSet<string>(StringComparer.Ordinal);
@@ -1451,7 +1451,7 @@ internal sealed partial class SemanticCompiler
         IReadOnlyDictionary<string, BoundFunction> parentFunctions,
         IReadOnlyDictionary<string, BoundType> capturedBindings)
     {
-        var parentBorrowedTextOrigins = new Dictionary<string, string>(
+        var parentBorrowedTextOrigins = new Dictionary<string, IReadOnlySet<string>>(
             _activeBorrowedTextOrigins,
             StringComparer.Ordinal);
         _activeBorrowedTextOrigins.Clear();
@@ -1521,7 +1521,7 @@ internal sealed partial class SemanticCompiler
             allowContainerBindings: true,
             borrowRegionResult: function.Body,
             shortenBorrowRegions: true);
-        var functionBorrowedTextOrigins = new Dictionary<string, string>(
+        var functionBorrowedTextOrigins = new Dictionary<string, IReadOnlySet<string>>(
             _activeBorrowedTextOrigins,
             StringComparer.Ordinal);
         foreach (var localFunction in function.LocalFunctions.Values)
@@ -1584,8 +1584,7 @@ internal sealed partial class SemanticCompiler
                 $"function '{function.Name}' returns {FormatType(bodyType)} but declares {FormatType(function.ReturnType)}");
         }
 
-        if (function.InputType is { } sourceInput
-            && TypeContains(sourceInput, BoundType.SourceText)
+        if (BorrowedSourceTextParameterNames(function).Any()
             && TypeContains(function.ReturnType, BoundType.Text)
             && (ContainsSliceFlow(function.BlockBody)
                 || (function.Body is not null && ContainsSliceFlow(function.Body))))
@@ -1596,7 +1595,7 @@ internal sealed partial class SemanticCompiler
                 throw Error(
                     function.Line,
                     function.Column,
-                    $"function '{function.Name}' cannot return Text storage after slicing borrowed SourceText; return one direct Text view from a single SourceText input or copy into an owned text type");
+                    $"function '{function.Name}' cannot return Text storage after slicing borrowed SourceText; return a direct Text view with inferred input origins or copy into an owned text type");
             }
         }
 
@@ -2477,13 +2476,9 @@ internal sealed partial class SemanticCompiler
                     {
                         mutableBindings.Add(binding.Name);
                     }
-                    if (TryGetBorrowedTextCallOrigin(binding.Value, functions, bindings, out var borrowedOrigin))
+                    if (TryGetBorrowedTextCallOrigins(binding.Value, functions, bindings, out var borrowedOrigins))
                     {
-                        if (_activeBorrowedTextOrigins.TryGetValue(borrowedOrigin, out var transitiveOrigin))
-                        {
-                            borrowedOrigin = transitiveOrigin;
-                        }
-                        _activeBorrowedTextOrigins[binding.Name] = borrowedOrigin;
+                        _activeBorrowedTextOrigins[binding.Name] = borrowedOrigins;
                     }
 
                     break;
@@ -2626,17 +2621,13 @@ internal sealed partial class SemanticCompiler
                         }
 
                         bindings.Add(bindingEffect.Name, bindingEffect.Type);
-                        if (TryGetBorrowedTextCallOrigin(
+                        if (TryGetBorrowedTextCallOrigins(
                                 expressionStatement.Expression,
                                 functions,
                                 bindings,
-                                out var flowBorrowedOrigin))
+                                out var flowBorrowedOrigins))
                         {
-                            if (_activeBorrowedTextOrigins.TryGetValue(flowBorrowedOrigin, out var transitiveOrigin))
-                            {
-                                flowBorrowedOrigin = transitiveOrigin;
-                            }
-                            _activeBorrowedTextOrigins[bindingEffect.Name] = flowBorrowedOrigin;
+                            _activeBorrowedTextOrigins[bindingEffect.Name] = flowBorrowedOrigins;
                         }
                     }
 

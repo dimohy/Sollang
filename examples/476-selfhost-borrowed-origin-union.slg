@@ -1,0 +1,78 @@
+import sollang.compiler.semantic.ownership_check as ownershipCheck
+
+conflictCount sources: [Text; ~] -> Int {
+    sources -> ownershipCheck.analyze => errors!
+    0 => conflicts!
+    0 => index!
+    index! < (errors! -> len) -> while {
+        errors![index!].code == 21 -> if {
+            conflicts! + 1 => conflicts!
+        }
+        index! + 1 => index!
+    }
+    conflicts!
+}
+
+main {
+    """
+    namespace sys.file
+
+    public struct SourceText {
+        token: UInt64
+    }
+
+    borrowText text: Text -> SourceText = intrinsic
+    """ => fileSource
+
+    """
+    import sys.file as file
+
+    pick useLeft: Bool, left: file.SourceText, right: file.SourceText -> Text {
+        useLeft -> if {
+            left -> slice(UIntSize(0), UIntSize(3))
+        } else {
+            right -> slice(UIntSize(0), UIntSize(3))
+        }
+    }
+
+    consume source: move file.SourceText -> Unit {
+        source -> len -> println
+    }
+
+    main {
+        "lexer" -> file.borrowText => left!
+        "parser" -> file.borrowText => right!
+        true -> pick(left!, right!) => selected
+        left! -> consume
+        selected -> println
+    }
+    """ => leftConflictSource
+
+    """
+    import sys.file as file
+
+    pick useLeft: Bool, left: file.SourceText, right: file.SourceText -> Text {
+        useLeft -> if {
+            left -> slice(UIntSize(0), UIntSize(3))
+        } else {
+            right -> slice(UIntSize(0), UIntSize(3))
+        }
+    }
+
+    consume source: move file.SourceText -> Unit {
+        source -> len -> println
+    }
+
+    main {
+        "lexer" -> file.borrowText => left!
+        "parser" -> file.borrowText => right!
+        false -> pick(left!, right!) => selected
+        right! -> consume
+        selected -> println
+    }
+    """ => rightConflictSource
+
+    [leftConflictSource, fileSource, ~] -> conflictCount => leftConflicts
+    [rightConflictSource, fileSource, ~] -> conflictCount => rightConflicts
+    "union origin conflicts=$leftConflicts,$rightConflicts" -> println
+}

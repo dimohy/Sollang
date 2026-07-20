@@ -8018,6 +8018,57 @@ References:
 - [Mojo lifetimes, origins, and references](https://mojolang.org/docs/manual/values/lifetimes/)
 - [Swift memory safety and overlapping access](https://docs.swift.org/swift-book/documentation/the-swift-programming-language/memorysafety/)
 
+## D213F - Inferred Union Origins Across Multiple Borrowed Inputs
+
+Status: implemented and cross-target Stage2 verified
+Date: 2026-07-20
+
+Sollang infers a set of possible origins when a returned `Text` view can select
+between multiple default-borrowed `SourceText` parameters. The programmer does
+not name lifetimes or origins. `if` and `when` result paths contribute their
+origin sets, function contracts are discovered to a fixed point, and direct or
+fluent call sites substitute concrete caller owners by parameter ordinal. A
+live union view blocks moving or mutating every possible owner until CFG
+last-use analysis ends that view.
+
+The reference semantic compiler replaces scalar `function -> input` and `view
+-> owner` maps with immutable origin sets. The self-host ownership analyzer
+records one return-contract row per contributing parameter and follows the
+typed-IR call argument chain to create distinct binding-to-owner edges. These
+sets are erased after semantic analysis, so there is no runtime tag, allocation,
+or ABI change.
+
+Examples 475 and 476 cover reference execution and self-host left/right conflict
+classification. The new diagnostic proves the reference compiler freezes the
+non-selected possible owner too. Windows and Linux Stage2 now run a union-origin
+failure fixture through both Stage1 and Stage2 and require fatal E21 before LLVM
+emission.
+
+Release builds remain at zero warnings and errors; focused ownership checks pass
+14/14 and Windows/Linux full suites pass 638/638. Windows Stage2 passes 7/7 in
+68.5 seconds with 11,612,260 LLVM bytes, 3,435,204 bitcode bytes, and a
+1,628,672-byte executable. Linux Stage2 passes 6/6 in 149.3 seconds with
+11,608,839 LLVM bytes, 3,433,412 bitcode bytes, and a 3,265,096-byte executable.
+This advances the periodic Stage3 cadence to 4/10, so Stage3 is deferred.
+
+Formal progress remains 49 complete, 8 partial, and 3 missing: 53/60 (88.3%).
+The broader ownership gate still contains reference reassignment, borrowed
+values inside aggregate returns, disjoint projected-borrow conflicts, and
+production precision for E17-E20.
+
+Mojo directly models a reference that may originate from `a` or `b` as the
+union `origin_of(a, b)` and extends both owners' lifetimes. Polonius likewise
+models origins as sets containing loans, propagates them through subset
+relations, and combines that relation with CFG-point liveness. Sollang adopts
+the set semantics while inferring the contract from its expression-first body.
+
+References:
+
+- [Mojo lifetimes, origins, and union origins](https://mojolang.org/docs/manual/values/lifetimes/)
+- [Polonius origin and subset relations](https://rust-lang.github.io/polonius/rules/relations.html)
+- [Polonius loan propagation and liveness](https://rust-lang.github.io/polonius/rules/loans.html)
+- [Rust lifetime elision](https://doc.rust-lang.org/reference/lifetime-elision.html)
+
 ## D213E - CFG-Reachable Borrow Liveness Across Branches and Loops
 
 Status: implemented and cross-target Stage2 verified

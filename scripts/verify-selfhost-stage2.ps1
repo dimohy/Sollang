@@ -20,6 +20,7 @@ $multiLibrarySource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\s
 $multiMainSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-main-smoke.slg"
 $groupedNotSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-grouped-not-smoke.slg"
 $borrowConflictSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-borrow-conflict.slg"
+$borrowUnionConflictSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-borrow-union-conflict.slg"
 $borrowSourceRuntime = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-borrow-source.slg"
 $runtimeManifestPath = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-compiler-runtime.sources.txt"
 $fingerprintSources = @(
@@ -31,7 +32,7 @@ $semanticContextSource = Join-Path $repoRoot "selfhost\semantic\context.slg"
 $compilerRuntimeSources = Get-Content $runtimeManifestPath |
     Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
     ForEach-Object { Join-Path $repoRoot $_.Trim() }
-$expectedStage2Bytes = 11606935L
+$expectedStage2Bytes = 11612260L
 
 New-Item -ItemType Directory -Force -Path $artifactsDir | Out-Null
 
@@ -331,31 +332,36 @@ if ($stage2CodegenText -ne $stage1CodegenText) {
 Write-Host "[stage2 5/7] PASS execution, native build, fingerprints, module cache, typed-IR artifacts, and codegen-unit parity."
 
 Write-Host "[stage2 6/7] Reject a moved origin while its borrowed Text view remains live."
-foreach ($compiler in @(
-    @($stage1Path, "stage1"),
-    @($stage2Path, "stage2")
+foreach ($conflict in @(
+    @($borrowConflictSource, "single"),
+    @($borrowUnionConflictSource, "union")
 )) {
-    $diagnosticOutput = Join-Path $artifactsDir "stage2-check-borrow-conflict-$($compiler[1]).txt"
-    $diagnosticError = Join-Path $artifactsDir "stage2-check-borrow-conflict-$($compiler[1]).err"
-    $diagnosticProcess = Invoke-ProcessToFile `
-        -FilePath $compiler[0] `
-        -ArgumentList @("windows", $borrowConflictSource, $borrowSourceRuntime) `
-        -OutputPath $diagnosticOutput `
-        -ErrorPath $diagnosticError
-    $diagnosticProcess.WaitForExit()
-    $diagnosticProcess.Refresh()
-    if ($diagnosticProcess.ExitCode -eq 0) {
-        throw "$($compiler[1]) accepted a moved origin with a live borrowed Text view"
-    }
-    $diagnosticText = [System.IO.File]::ReadAllText($diagnosticOutput)
-    if ($diagnosticText -notmatch 'error\[E21\].*origin moved while a borrowed Text view is still live') {
-        throw "$($compiler[1]) did not emit ownership diagnostic E21: '$diagnosticText'"
-    }
-    if ($diagnosticText -match '^target (datalayout|triple)') {
-        throw "$($compiler[1]) began LLVM emission before rejecting ownership diagnostic E21"
+    foreach ($compiler in @(
+        @($stage1Path, "stage1"),
+        @($stage2Path, "stage2")
+    )) {
+        $diagnosticOutput = Join-Path $artifactsDir "stage2-check-borrow-$($conflict[1])-$($compiler[1]).txt"
+        $diagnosticError = Join-Path $artifactsDir "stage2-check-borrow-$($conflict[1])-$($compiler[1]).err"
+        $diagnosticProcess = Invoke-ProcessToFile `
+            -FilePath $compiler[0] `
+            -ArgumentList @("windows", $conflict[0], $borrowSourceRuntime) `
+            -OutputPath $diagnosticOutput `
+            -ErrorPath $diagnosticError
+        $diagnosticProcess.WaitForExit()
+        $diagnosticProcess.Refresh()
+        if ($diagnosticProcess.ExitCode -eq 0) {
+            throw "$($compiler[1]) accepted a $($conflict[1])-origin move with a live borrowed Text view"
+        }
+        $diagnosticText = [System.IO.File]::ReadAllText($diagnosticOutput)
+        if ($diagnosticText -notmatch 'error\[E21\].*origin moved while a borrowed Text view is still live') {
+            throw "$($compiler[1]) did not emit ownership diagnostic E21 for $($conflict[1]) origin: '$diagnosticText'"
+        }
+        if ($diagnosticText -match '^target (datalayout|triple)') {
+            throw "$($compiler[1]) began LLVM emission before rejecting $($conflict[1])-origin diagnostic E21"
+        }
     }
 }
-Write-Host "[stage2 6/7] PASS ownership diagnostic E21 blocks LLVM emission in stage-1 and stage-2."
+Write-Host "[stage2 6/7] PASS single and union-origin E21 block LLVM emission in stage-1 and stage-2."
 
 Write-Host "[stage2 7/7] Compare C# reference and native Sollang compiler runtime behavior."
 & dotnet run --project $runnerProject -c Release --no-build -- `

@@ -2290,6 +2290,59 @@ Research basis:
 - [Polonius CFG input relations](https://rust-lang.github.io/polonius/rules/relations.html)
 - [2026 Polonius alpha project goal](https://rust-lang.github.io/rust-project-goals/2026/polonius.html)
 
+## Inferred Union Origins for Returned Text Views (D213F)
+
+D213F generalizes the returned `Text` lifetime contract from one borrowed
+`SourceText` parameter to the union of every input origin that can reach the
+return value. A function such as `pick useLeft: Bool, left: SourceText, right:
+SourceText -> Text` needs no lifetime punctuation: the semantic compiler walks
+the `if`/`when` result paths, records `{left, right}`, and substitutes the
+caller's concrete owners at each call. Transitive calls use the same fixed-point
+contract discovery. A live result therefore freezes both possible owners even
+when the runtime condition selects only one; after the result's CFG last use,
+both owners may move independently.
+
+The reference compiler now stores immutable origin sets for both function
+contracts and active borrowed bindings. Direct and fluent calls map parameter
+ordinals to caller expressions and flatten transitive sets. The self-host
+ownership analyzer records one `BorrowedTextReturn` row per contributing
+parameter, follows the linked typed-IR argument chain by ordinal, and creates
+one owner edge per distinct concrete owner. This is compile-time metadata only;
+the emitted `Text` ABI remains pointer plus length with no runtime origin tag.
+
+Example 475 executes a two-input conditional view and proves both owners can
+move after its final use. Example 476 asks the Sollang-written analyzer to move
+the left and right owners separately and obtains `1,1` E21 conflicts. The
+`borrowed-text-origin-union-move` diagnostic checks the reference compiler, and
+the Stage2 union fixture proves Stage1 and Stage2 reject the same unsafe program
+before emitting an LLVM target header.
+
+Validation is a zero-warning, zero-error Release build and focused ownership
+regression at **14/14**. Windows and Linux full suites pass **638/638**. Fresh
+Windows Stage2 passes **7/7 in 68.5 seconds** at **11,612,260 LLVM bytes**,
+**3,435,204 bitcode bytes**, and a **1,628,672-byte executable**. Fresh Linux
+Stage2 passes **6/6 in 149.3 seconds** at **11,608,839 LLVM bytes**,
+**3,433,412 bitcode bytes**, and a **3,265,096-byte executable**. The periodic
+Stage3 cadence advances to **4/10**, so Stage3 is intentionally deferred.
+
+Formal progress remains **49 complete, 8 partial, 3 missing: 53/60 (88.3%)**.
+Union origins close one major sub-gate, but reference reassignment, aggregate
+borrowed returns, disjoint projected conflicts, and production enforcement of
+E17-E20 remain inside the partial ownership/storage gate.
+
+The design follows Mojo's explicit union-origin rule: a reference that may come
+from either input extends both lifetimes. Polonius supplies the compatible set
+model—origins contain loans that flow through subset relations and remain
+subject to point-specific CFG liveness. Sollang infers the same conservative
+union from the body so ordinary code keeps its punctuation-free surface.
+
+Research basis:
+
+- [Mojo lifetimes, origins, and union origins](https://mojolang.org/docs/manual/values/lifetimes/)
+- [Polonius origin and subset relations](https://rust-lang.github.io/polonius/rules/relations.html)
+- [Polonius loan propagation and liveness](https://rust-lang.github.io/polonius/rules/loans.html)
+- [Rust lifetime elision](https://doc.rust-lang.org/reference/lifetime-elision.html)
+
 ## Immediate Implementation Order
 
 1. Multi-file compilation (implemented by example 52).

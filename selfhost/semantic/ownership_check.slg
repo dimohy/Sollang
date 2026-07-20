@@ -24,6 +24,7 @@ public struct OwnershipDiagnostic {
 struct BorrowedTextReturn {
     sourceModule: Int
     functionSymbol: Int
+    parameterOrdinal: Int
 }
 
 struct BorrowedTextBinding {
@@ -171,50 +172,61 @@ public analyzeLoweredContext prepared: semanticContext.SemanticSnapshot, typed: 
     typed -> typedIr.movesFrom => moves!
     [OwnershipDiagnostic; ~] => diagnostics!
 
-    # A Text returned from a default SourceText input inherits that input's
-    # symbolic origin. The contract is inferred only when the returned subtree
-    # contains the SourceText slice operation, matching the reference compiler's
-    # single-input lifetime elision rule.
+    # A Text returned from one or more default SourceText inputs inherits the
+    # union of those symbolic origins. One contract row is recorded per source
+    # parameter whose slice can reach a return, so callers keep every possible
+    # owner alive without runtime metadata or explicit lifetime syntax.
     [BorrowedTextReturn; ~] => borrowedReturns!
     0 => borrowedFunctionIndex!
     borrowedFunctionIndex! < (typed -> len) -> while {
         typed[borrowedFunctionIndex!] => borrowedFunction
         (borrowedFunction.kind == 0 and borrowedFunction.typeOrigin == 1 and borrowedFunction.typeSymbol == 1 and borrowedFunction.operand1 >= 0) -> if {
-            typed[borrowedFunction.operand1] => borrowedParameter
-            (borrowedParameter.kind == 10 and borrowedParameter.typeOrigin == 1 and borrowedParameter.typeSymbol == 24 and borrowedParameter.flags == 0) -> if {
+            borrowedFunction.operand1 => borrowedParameterIr!
+            0 => borrowedParameterOrdinal!
+            borrowedParameterIr! >= 0 -> while {
+                typed[borrowedParameterIr!] => borrowedParameter
                 false => returnsSlice!
-                0 => borrowedReturnSearch!
-                borrowedReturnSearch! < (typed -> len) -> while {
-                    typed[borrowedReturnSearch!] => borrowedReturn
-                    (borrowedReturn.kind == 1 and borrowedReturn.parent == borrowedFunctionIndex!) -> if {
-                        0 => borrowedSliceSearch!
-                        borrowedSliceSearch! < (typed -> len) -> while {
-                            typed[borrowedSliceSearch!] => borrowedSlice
-                            borrowedSlice.opcode == -203 -> if {
-                                borrowedSliceSearch! => borrowedAncestor!
-                                (borrowedAncestor! >= 0 and borrowedAncestor! != borrowedReturnSearch!) -> while {
-                                    typed[borrowedAncestor!].parent => borrowedAncestor!
-                                }
-                                borrowedAncestor! == borrowedReturnSearch! -> if {
-                                    borrowedSlice.operand0 >= 0 -> if {
-                                        typed[borrowedSlice.operand0] => borrowedSliceSource
-                                        (borrowedSliceSource.kind == 5 and borrowedSliceSource.symbol == borrowedParameter.symbol) -> if {
-                                            true => returnsSlice!
+                (borrowedParameter.kind == 10 and borrowedParameter.typeOrigin == 1 and borrowedParameter.typeSymbol == 24 and borrowedParameter.flags == 0) -> if {
+                    0 => borrowedReturnSearch!
+                    borrowedReturnSearch! < (typed -> len) -> while {
+                        typed[borrowedReturnSearch!] => borrowedReturn
+                        (borrowedReturn.kind == 1 and borrowedReturn.parent == borrowedFunctionIndex!) -> if {
+                            0 => borrowedSliceSearch!
+                            borrowedSliceSearch! < (typed -> len) -> while {
+                                typed[borrowedSliceSearch!] => borrowedSlice
+                                borrowedSlice.opcode == -203 -> if {
+                                    borrowedSliceSearch! => borrowedAncestor!
+                                    (borrowedAncestor! >= 0 and borrowedAncestor! != borrowedReturnSearch!) -> while {
+                                        typed[borrowedAncestor!].parent => borrowedAncestor!
+                                    }
+                                    borrowedAncestor! == borrowedReturnSearch! -> if {
+                                        borrowedSlice.operand0 >= 0 -> if {
+                                            typed[borrowedSlice.operand0] => borrowedSliceSource
+                                            (borrowedSliceSource.kind == 5 and borrowedSliceSource.symbol == borrowedParameter.symbol) -> if {
+                                                true => returnsSlice!
+                                            }
                                         }
                                     }
                                 }
+                                borrowedSliceSearch! + 1 => borrowedSliceSearch!
                             }
-                            borrowedSliceSearch! + 1 => borrowedSliceSearch!
                         }
+                        borrowedReturnSearch! + 1 => borrowedReturnSearch!
                     }
-                    borrowedReturnSearch! + 1 => borrowedReturnSearch!
+                    returnsSlice! -> if {
+                        borrowedReturns! -> push(BorrowedTextReturn {
+                            sourceModule: borrowedFunction.sourceModule
+                            functionSymbol: borrowedFunction.symbol
+                            parameterOrdinal: borrowedParameterOrdinal!
+                        })
+                    }
                 }
-                returnsSlice! -> if {
-                    borrowedReturns! -> push(BorrowedTextReturn {
-                        sourceModule: borrowedFunction.sourceModule
-                        functionSymbol: borrowedFunction.symbol
-                    })
+                borrowedParameterIr! == borrowedFunction.operand1 -> if {
+                    borrowedFunction.nextOperand => borrowedParameterIr!
+                } else {
+                    borrowedParameter.nextOperand => borrowedParameterIr!
                 }
+                borrowedParameterOrdinal! + 1 => borrowedParameterOrdinal!
             }
         }
         borrowedFunctionIndex! + 1 => borrowedFunctionIndex!
@@ -227,23 +239,38 @@ public analyzeLoweredContext prepared: semanticContext.SemanticSnapshot, typed: 
         (borrowedBinding.kind == 17 and borrowedBinding.operand0 >= 0) -> if {
             typed[borrowedBinding.operand0] => borrowedCall
             borrowedCall.kind == 6 -> if {
-                false => borrowedCallReturnsView!
                 0 => borrowedReturnIndex!
                 borrowedReturnIndex! < (borrowedReturns! -> len) -> while {
                     borrowedReturns![borrowedReturnIndex!] => borrowedReturnContract
                     (borrowedCall.targetModule == borrowedReturnContract.sourceModule and borrowedCall.symbol == borrowedReturnContract.functionSymbol) -> if {
-                        true => borrowedCallReturnsView!
+                        borrowedCall.operand0 => borrowedCallArgumentIr!
+                        0 => borrowedCallArgumentOrdinal!
+                        (borrowedCallArgumentIr! >= 0 and borrowedCallArgumentOrdinal! < borrowedReturnContract.parameterOrdinal) -> while {
+                            typed[borrowedCallArgumentIr!].nextOperand => borrowedCallArgumentIr!
+                            borrowedCallArgumentOrdinal! + 1 => borrowedCallArgumentOrdinal!
+                        }
+                        borrowedCallArgumentIr! >= 0 -> if {
+                            typed[borrowedCallArgumentIr!] => borrowedCallSource
+                            (borrowedCallSource.kind == 5 and borrowedCallSource.operand0 >= 0) -> if {
+                                false => duplicateBorrowedOwner!
+                                0 => borrowedOwnerSearch!
+                                borrowedOwnerSearch! < (borrowedBindings! -> len) -> while {
+                                    borrowedBindings![borrowedOwnerSearch!] => existingBorrowedOwner
+                                    (existingBorrowedOwner.bindingIr == borrowedBindingSearch! and existingBorrowedOwner.ownerBindingIr == borrowedCallSource.operand0) -> if {
+                                        true => duplicateBorrowedOwner!
+                                    }
+                                    borrowedOwnerSearch! + 1 => borrowedOwnerSearch!
+                                }
+                                not duplicateBorrowedOwner! -> if {
+                                    borrowedBindings! -> push(BorrowedTextBinding {
+                                        bindingIr: borrowedBindingSearch!
+                                        ownerBindingIr: borrowedCallSource.operand0
+                                    })
+                                }
+                            }
+                        }
                     }
                     borrowedReturnIndex! + 1 => borrowedReturnIndex!
-                }
-                (borrowedCallReturnsView! and borrowedCall.operand0 >= 0) -> if {
-                    typed[borrowedCall.operand0] => borrowedCallSource
-                    (borrowedCallSource.kind == 5 and borrowedCallSource.operand0 >= 0) -> if {
-                        borrowedBindings! -> push(BorrowedTextBinding {
-                            bindingIr: borrowedBindingSearch!
-                            ownerBindingIr: borrowedCallSource.operand0
-                        })
-                    }
                 }
             }
         }
