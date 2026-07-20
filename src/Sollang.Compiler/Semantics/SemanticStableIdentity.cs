@@ -208,6 +208,10 @@ internal static class SemanticStableIdentity
         {
             return "Box<" + Type(types, types.GetBox(type).ElementType) + ">";
         }
+        if (types.IsReference(type))
+        {
+            return "Ref<" + Type(types, types.GetReference(type).ElementType) + ">";
+        }
         if (types.IsStruct(type))
         {
             return "struct:" + types.GetStruct(type).Name;
@@ -533,6 +537,8 @@ internal static class SemanticStableIdentity
                     return box.Id;
                 throw Invalid("unknown box type");
             }
+            if (Take("Ref<"))
+                return Close(types.GetOrAddReference(Parse()));
             if (Take("Result<"))
             {
                 var ok = Parse();

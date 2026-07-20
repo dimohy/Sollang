@@ -2642,6 +2642,29 @@ Research basis:
 
 ## Immediate Implementation Order
 
+### General readonly references (`ref T`) - D214
+
+The first reference-compiler slice now parses and types `ref T`, passes it as a
+real LLVM pointer, returns a projected struct-field address, and transparently
+loads the referenced value at ordinary read sites. Example 505 is the executable
+proof. The first slice permits only immutable, non-owning owners; mutable and
+owned-storage references remain rejected until CFG liveness can lock the owner.
+This does not yet close the ownership/storage gate.
+
+- [x] C# parser and parametric semantic type
+- [x] pointer ABI and struct-field return place
+- [x] executable owner -> function -> returned reference -> read path
+- [ ] complete C# origin/liveness conflict analysis
+- [ ] stored references and aggregate/index projections
+- [ ] self-host parser, semantic type, typed IR, ownership, and LLVM parity
+- [x] cross-target regression and Stage2 verification of the C# vertical slice
+
+Formal progress stays at **49 complete, 8 partial, 3 missing: 53/60 (88.3%)**
+until the unchecked boxes above close the general reference gate.
+Windows/Linux full suites pass **677/677**. Windows Stage2 passes **7/7** at
+**11,862,180 LLVM bytes**, and Linux Stage2 passes **6/6** at **11,858,759 LLVM
+bytes**. Stage3 cadence remains **2/10**.
+
 1. Multi-file compilation (implemented by example 52).
 2. Import-driven file discovery with cycle and duplicate-module diagnostics
    (implemented after example 52).

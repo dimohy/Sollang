@@ -851,6 +851,12 @@ internal static class ParserEmitter
         builder.AppendLine();
         builder.AppendLine("    private string ParseTypeAnnotation()");
         builder.AppendLine("    {");
+        builder.AppendLine("        if (CheckIdentifier(\"ref\"))");
+        builder.AppendLine("        {");
+        builder.AppendLine("            ExpectIdentifier(\"ref\");");
+        builder.AppendLine("            return \"ref \" + ParseTypeAnnotation();");
+        builder.AppendLine("        }");
+        builder.AppendLine();
         builder.AppendLine("        if (CheckIdentifier(\"box\"))");
         builder.AppendLine("        {");
         builder.AppendLine("            ExpectIdentifier(\"box\");");

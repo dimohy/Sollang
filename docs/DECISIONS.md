@@ -8260,6 +8260,66 @@ References:
 - [Mojo lifetimes and origins](https://docs.modular.com/mojo/manual/values/lifetimes/)
 - [Swift memory safety](https://docs.swift.org/swift-book/documentation/the-swift-programming-language/memorysafety/)
 
+## D214 - Explicit Readonly `ref T` with Inferred Origins
+
+Status: first C# reference-compiler vertical slice implemented; lifetime and
+self-host completion tracked below
+Date: 2026-07-20
+
+Sollang uses `ref T` for a long-lived readonly reference. The `ref` marker is
+kept because returning or storing an alias is materially different from copying
+or moving `T`; ordinary callers do not write lifetime parameters. A function
+such as `first pair: ref Pair -> ref Int` borrows an addressable `Pair`, returns
+the address of `pair.first`, and lets the caller read the result as an `Int`
+through transparent readonly dereference.
+
+The first vertical slice is deliberately real rather than syntactic sugar.
+`ref T` has its own parametric semantic type, pointer-sized layout, stable type
+identity, LLVM `ptr` parameter and result ABI, reference runtime value, field
+place GEP, and load-on-read behavior. A returned place must be rooted in a
+reference input; literals, temporaries, and locals owned only by the callee are
+not valid return origins. Until the CFG owner-lock is implemented, this slice
+accepts only immutable owners whose `T` contains no owned storage; mutable and
+heap-owning owners are rejected instead of receiving an unsound partial rule.
+Example 505 executes this ABI end to end.
+
+Single-input origins will be inferred from the referenced parameter. Multiple
+possible input origins will form a conservative union. Mutation, move, drop,
+and replacement of an owner must remain blocked until every reachable
+reference has passed its CFG last use. References stored in user structs need
+the same origin metadata without a runtime lifetime object. Async and parallel
+escape are rejected until Send/Sync and suspension lifetime proofs exist.
+
+Completion checklist:
+
+- [x] `ref T` grammar, parser, semantic type, formatting, visibility, and stable identity
+- [x] pointer-sized C# reference-compiler layout and LLVM parameter/result ABI
+- [x] named owner borrowing, returned struct-field place, and transparent readonly load
+- [x] conservative rejection of mutable and owned-storage owners in the first slice
+- [ ] indexed and nested aggregate places
+- [ ] explicit early-return, branch, loop, and union-origin contracts
+- [ ] owner mutation/move/drop conflicts through CFG last use
+- [ ] references stored in user values
+- [ ] generic substitution and trait interactions verified by examples
+- [ ] Sollang self-host semantic, typed-IR, ownership, and LLVM parity
+- [x] Windows/Linux regression suites and the required Stage2 checkpoint
+
+The design combines Mojo's explicit `ref` surface and inferred origins with
+Rust's return-lifetime relationships and Swift's exclusive-access rule. The
+formal roadmap remains 53/60 (88.3%) until the general returned/stored-reference
+gate, including self-host parity, is complete.
+
+Checkpoint validation is a zero-warning Release build, Windows/Linux full
+suites at 677/677, Windows Stage2 at 7/7 with 11,862,180 LLVM bytes, and Linux
+Stage2 at 6/6 with 11,858,759 LLVM bytes. Stage3 cadence remains 2/10 because
+this checkpoint does not claim self-host `ref T` implementation parity.
+
+References:
+
+- [Mojo lifetimes, origins, and references](https://docs.modular.com/mojo/manual/values/lifetimes/)
+- [Rust lifetime elision](https://doc.rust-lang.org/stable/reference/lifetime-elision.html)
+- [Swift memory safety](https://docs.swift.org/swift-book/documentation/the-swift-programming-language/memorysafety/)
+
 ## D213I - Aggregate Values Carry Inferred Borrow-Origin Unions
 
 Status: implemented and cross-target Stage2 verified

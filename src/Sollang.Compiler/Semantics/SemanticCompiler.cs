@@ -1576,7 +1576,7 @@ internal sealed partial class SemanticCompiler
                 yieldInputType: null,
                 mutableBindings: mutableBindings,
                 allowedOwnedOuterResultName: returnedMoveInputName);
-        if (bodyType != function.ReturnType)
+        if (!IsFunctionReturnCompatible(function.Body, bodyType, function.ReturnType, bodyBindings))
         {
             throw Error(
                 function.Line,
@@ -2580,7 +2580,11 @@ internal sealed partial class SemanticCompiler
                             yieldInputType: yieldInputType,
                             mutableBindings: mutableBindings,
                             allowedOwnedOuterResultName: MoveInputNameForExpression(returnStatement.Value));
-                    if (returnType != _currentFunctionReturnType.Value)
+                    if (!IsFunctionReturnCompatible(
+                            returnStatement.Value,
+                            returnType,
+                            _currentFunctionReturnType.Value,
+                            bindings))
                     {
                         throw Error(
                             returnStatement.Line,
@@ -3809,6 +3813,10 @@ internal sealed partial class SemanticCompiler
             allowReadIntCall,
             allowFlowBindingTarget: false,
             allowOwnedElementBorrow: allowOwnedElementBorrow);
+        if (_types.IsReference(sourceType))
+        {
+            sourceType = _types.GetReference(sourceType).ElementType;
+        }
         if (sourceType is not (BoundType.IntSlice
             or BoundType.StaticIntArray
             or BoundType.StaticTextArray
@@ -4106,6 +4114,10 @@ internal sealed partial class SemanticCompiler
             allowReadIntCall,
             allowFlowBindingTarget: false,
             allowOwnedElementBorrow: allowOwnedElementBorrow);
+        if (_types.IsReference(sourceType))
+        {
+            sourceType = _types.GetReference(sourceType).ElementType;
+        }
         if (_types.IsBox(sourceType))
         {
             sourceType = _types.GetBox(sourceType).ElementType;
@@ -5235,15 +5247,20 @@ internal sealed partial class SemanticCompiler
                             mutableBindings,
                             path);
 
-                if (currentType != function.InputType)
-                {
+                        if (currentType != function.InputType)
+                        {
                             if (!CanPassFunctionArgument(currentType, function.InputType.Value))
                             {
                                 throw Error(
-                                expression.Line,
-                                expression.Column,
-                                $"function '{path}' expects {FormatType(function.InputType.Value)} but received {FormatType(currentType)}");
+                                    expression.Line,
+                                    expression.Column,
+                                    $"function '{path}' expects {FormatType(function.InputType.Value)} but received {FormatType(currentType)}");
                             }
+                        }
+
+                        if (_types.IsReference(function.InputType.Value))
+                        {
+                            EnsureReferenceArgumentPlace(expression.Source, bindings, mutableBindings, path);
                         }
 
                         if (FunctionMovesOwnedHeapInput(function))
@@ -6480,6 +6497,15 @@ internal sealed partial class SemanticCompiler
             var value = SubstituteGenericType(taskValue, primaryType, secondaryType, tertiaryType);
             return _types.GetOrAddTask(value);
         }
+        if (_types.IsReference(type))
+        {
+            var element = SubstituteGenericType(
+                _types.GetReference(type).ElementType,
+                primaryType,
+                secondaryType,
+                tertiaryType);
+            return _types.GetOrAddReference(element);
+        }
         return type;
     }
 
@@ -7005,6 +7031,10 @@ internal sealed partial class SemanticCompiler
                 expression.Column,
                 $"function '{path}' expects {FormatType(function.InputType.Value)} but received {FormatType(argumentType)}");
         }
+        if (_types.IsReference(function.InputType.Value))
+        {
+            EnsureReferenceArgumentPlace(expression.Arguments[0], bindings, mutableBindings, path);
+        }
 
         if (FunctionMovesOwnedHeapInput(function))
         {
@@ -7067,6 +7097,10 @@ internal sealed partial class SemanticCompiler
                 throw Error(argument.Line, argument.Column,
                     $"function '{path}' parameter '{parameter.Name}' expects {FormatType(parameter.Type)} "
                     + $"but received {FormatType(actualType)}");
+            }
+            if (_types.IsReference(parameter.Type))
+            {
+                EnsureReferenceArgumentPlace(argument, bindings, mutableBindings, path);
             }
             if (parameter.Ownership == BoundFunctionInputOwnership.Move)
             {
@@ -7162,7 +7196,9 @@ internal sealed partial class SemanticCompiler
     {
         if (bindings.TryGetValue(expression.Name, out var type))
         {
-            return type;
+            return _types.IsReference(type)
+                ? _types.GetReference(type).ElementType
+                : type;
         }
 
         if (TryGetFunction(expression.Name, functions, out var function))
@@ -7782,6 +7818,24 @@ internal sealed partial class SemanticCompiler
 
     private BoundType ParseType(string typeName, int line, int column)
     {
+        if (typeName.StartsWith("ref ", StringComparison.Ordinal))
+        {
+            var elementType = ParseType(typeName[4..].Trim(), line, column);
+            if (elementType == BoundType.Unit || _types.IsReference(elementType))
+            {
+                throw Error(line, column, "ref requires a non-reference value type");
+            }
+            if (_types.ContainsOwnedStorage(elementType))
+            {
+                throw Error(
+                    line,
+                    column,
+                    "ref to an owned-storage type requires the pending origin/liveness checker");
+            }
+            var reference = _types.GetOrAddReference(elementType);
+            _types.AddAlias(typeName, reference);
+            return reference;
+        }
         if (typeName.StartsWith("Option<", StringComparison.Ordinal) && typeName.EndsWith('>'))
         {
             var valueName = typeName[7..^1].Trim();
@@ -8059,6 +8113,10 @@ internal sealed partial class SemanticCompiler
 
     private string FormatType(BoundType type)
     {
+        if (_types.IsReference(type))
+        {
+            return "ref " + FormatType(_types.GetReference(type).ElementType);
+        }
         if (_types.TryGetOptionValue(type, out var optionValue))
         {
             return $"Option<{FormatType(optionValue)}>";
@@ -8197,8 +8255,66 @@ internal sealed partial class SemanticCompiler
     private bool CanPassFunctionArgument(BoundType actualType, BoundType expectedType)
     {
         return actualType == expectedType
+            || (_types.IsReference(expectedType)
+                && actualType == _types.GetReference(expectedType).ElementType)
             || (expectedType == BoundType.IntSlice && IsReadonlyIntViewCompatible(actualType))
             || (expectedType == BoundType.IntDictionaryView && actualType == BoundType.IntDictionary);
+    }
+
+    private bool IsFunctionReturnCompatible(
+        Expression? expression,
+        BoundType actualType,
+        BoundType declaredType,
+        IReadOnlyDictionary<string, BoundType> bindings)
+    {
+        if (actualType == declaredType)
+        {
+            return true;
+        }
+        if (expression is null || !_types.IsReference(declaredType))
+        {
+            return false;
+        }
+        var elementType = _types.GetReference(declaredType).ElementType;
+        if (actualType != elementType)
+        {
+            return false;
+        }
+        var root = ReferencePlaceRoot(expression);
+        return root is not null
+            && bindings.TryGetValue(root, out var rootType)
+            && _types.IsReference(rootType);
+    }
+
+    private static string? ReferencePlaceRoot(Expression expression) => expression switch
+    {
+        NameExpression name => name.Name,
+        FieldAccessExpression field => ReferencePlaceRoot(field.Source),
+        IndexExpression index => ReferencePlaceRoot(index.Source),
+        _ => null
+    };
+
+    private void EnsureReferenceArgumentPlace(
+        Expression expression,
+        IReadOnlyDictionary<string, BoundType> bindings,
+        IReadOnlySet<string>? mutableBindings,
+        string path)
+    {
+        var root = ReferencePlaceRoot(expression);
+        if (root is null || !bindings.ContainsKey(root))
+        {
+            throw Error(
+                expression.Line,
+                expression.Column,
+                $"function '{path}' requires an addressable owner or reference; literals and temporary values cannot be borrowed");
+        }
+        if (mutableBindings?.Contains(root) == true)
+        {
+            throw Error(
+                expression.Line,
+                expression.Column,
+                $"function '{path}' cannot borrow mutable owner '{root}' until reference liveness is proven");
+        }
     }
 
     private static bool IsIntegerLiteralExpression(Expression expression) => expression switch
@@ -9229,6 +9345,10 @@ internal sealed partial class SemanticCompiler
         {
             result = TypeContains(_types.GetBox(type).ElementType, expected, visiting);
         }
+        else if (_types.IsReference(type))
+        {
+            result = TypeContains(_types.GetReference(type).ElementType, expected, visiting);
+        }
         else if (_types.IsStruct(type))
         {
             result = _types.GetStruct(type).Fields.Any(field =>
@@ -9511,6 +9631,11 @@ internal sealed partial class SemanticCompiler
         else if (_types.IsBox(type))
         {
             EnsureTypeVisible(_types.GetBox(type).ElementType, line, column);
+            return;
+        }
+        else if (_types.IsReference(type))
+        {
+            EnsureTypeVisible(_types.GetReference(type).ElementType, line, column);
             return;
         }
 

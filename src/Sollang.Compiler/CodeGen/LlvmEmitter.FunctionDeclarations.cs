@@ -60,6 +60,11 @@ internal sealed partial class LlvmEmitter
                 EmitNumericFunction(function);
                 continue;
             }
+            if (_program.Types.IsReference(function.ReturnType))
+            {
+                EmitReferenceFunction(function);
+                continue;
+            }
             switch (function.ReturnType)
             {
                 case BoundType.Unit:
@@ -154,6 +159,38 @@ internal sealed partial class LlvmEmitter
             DropOwnedLocalsCreatedSince(functionLocals, transferredOwnerName);
             var aggregate = MaterializeAggregateValue(value);
             EmitRet(aggregate.TypeName, aggregate.ValueName);
+            EmitFunctionLine("}");
+            EmitFunctionLine();
+        }
+        finally
+        {
+            _currentFunctions = previousFunctions;
+        }
+    }
+
+    private void EmitReferenceFunction(BoundFunction function)
+    {
+        if (function.Body is null)
+        {
+            throw new SollangException($"function '{function.Name}' has no body");
+        }
+
+        var previousFunctions = _currentFunctions;
+        _currentFunctions = FunctionScope(function);
+        ClearLocalState();
+        SelectStackFrame(function);
+        try
+        {
+            EmitFunctionLine($"define internal ptr {SymbolForFunction(function)}({ParameterListForFunction(function)}) #0 {{");
+            EmitFunctionLine("entry:");
+            EmitStackFrameAllocations();
+            _currentBlockLabel = "entry";
+            BindFunctionCaptures(function);
+            BindAllFunctionParameters(function);
+            EmitStatements(function.BlockBody);
+            if (FinishTerminatedFunction()) return;
+            var reference = EmitReferencePlace(function.Body, function.ReturnType);
+            EmitRet("ptr", reference.PointerName);
             EmitFunctionLine("}");
             EmitFunctionLine();
         }
@@ -564,6 +601,10 @@ internal sealed partial class LlvmEmitter
                     ? $"ptr {name}"
                     : $"%sollang.mutable_container {name}");
             }
+            else if (_program.Types.IsReference(parameter.Type))
+            {
+                parts.Add($"ptr {name}");
+            }
             else
             {
                 parts.Add($"{LlvmType(parameter.Type)} {name}");
@@ -574,6 +615,10 @@ internal sealed partial class LlvmEmitter
 
     private string PrimaryParameterListForFunction(BoundFunction function)
     {
+        if (function.InputType is { } referenceType && _program.Types.IsReference(referenceType))
+        {
+            return "ptr %it";
+        }
         if (function.InputOwnership == BoundFunctionInputOwnership.MutableBorrow)
         {
             if (function.InputType is { } mutableType && _program.Types.IsStruct(mutableType))
@@ -670,6 +715,14 @@ internal sealed partial class LlvmEmitter
 
     private void BindFunctionParameter(BoundFunction function)
     {
+        if (function.InputType is { } referenceType && _program.Types.IsReference(referenceType))
+        {
+            var elementType = _program.Types.GetReference(referenceType).ElementType;
+            _locals.Add(
+                function.InputName ?? "it",
+                new RuntimeReference(referenceType, elementType, "%it"));
+            return;
+        }
         if (function.InputOwnership == BoundFunctionInputOwnership.MutableBorrow)
         {
             BindMutableBorrowFunctionParameter(function);
@@ -864,6 +917,14 @@ internal sealed partial class LlvmEmitter
             if (parameter.Ownership == BoundFunctionInputOwnership.MutableBorrow)
             {
                 BindMutableBorrowFunctionParameter(parameter.Name, parameter.Type, argumentName);
+                continue;
+            }
+            if (_program.Types.IsReference(parameter.Type))
+            {
+                var elementType = _program.Types.GetReference(parameter.Type).ElementType;
+                _locals.Add(
+                    parameter.Name,
+                    new RuntimeReference(parameter.Type, elementType, argumentName));
                 continue;
             }
             _locals.Add(parameter.Name, DematerializeAggregateValue(parameter.Type, argumentName));

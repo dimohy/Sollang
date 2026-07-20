@@ -220,7 +220,8 @@ internal sealed partial class LlvmEmitter
     {
         if (_locals.ContainsKey(expression.Name))
         {
-            return ResolveLocal(expression.Name);
+            var value = ResolveLocal(expression.Name);
+            return value is RuntimeReference reference ? LoadReference(reference) : value;
         }
         if (TryResolveFunction([expression.Name], out var function)
             && function.InputType is null)

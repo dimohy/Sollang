@@ -311,6 +311,13 @@ internal sealed partial class LlvmEmitter
                     path,
                     function.InputName ?? "it");
             }
+            else if (_program.Types.IsReference(function.InputType.Value))
+            {
+                argument = CreateReadonlyReferenceArgument(
+                    expression.Arguments[0],
+                    function.InputType.Value,
+                    path);
+            }
             else
             {
                 argument = EmitFunctionArgumentExpression(
@@ -327,6 +334,8 @@ internal sealed partial class LlvmEmitter
                 var argumentExpression = expression.Arguments[additionalArgumentOffset + index];
                 var value = parameter.Ownership == BoundFunctionInputOwnership.MutableBorrow
                     ? CreateMutableBorrowArgument(argumentExpression, parameter.Type, path, parameter.Name)
+                    : _program.Types.IsReference(parameter.Type)
+                        ? CreateReadonlyReferenceArgument(argumentExpression, parameter.Type, path)
                     : EmitFunctionArgumentExpression(argumentExpression, parameter.Type);
                 EnsureFunctionArgumentRuntimeType(value, parameter.Type, path);
                 return value;
@@ -405,7 +414,9 @@ internal sealed partial class LlvmEmitter
                 function.InputType.Value,
                 function.Name,
                 function.InputName ?? "it")
-            : argument;
+            : _program.Types.IsReference(function.InputType.Value)
+                ? CreateReadonlyReferenceArgument(source, function.InputType.Value, function.Name)
+                : argument;
         EnsureFunctionArgumentRuntimeType(functionArgument, function.InputType.Value, function.Name);
         var additionalArguments = (function.AdditionalParameters ?? [])
             .Select((parameter, index) =>
@@ -413,7 +424,9 @@ internal sealed partial class LlvmEmitter
                 var value = parameter.Ownership == BoundFunctionInputOwnership.MutableBorrow
                     ? CreateMutableBorrowArgument(
                         additionalExpressions[index], parameter.Type, function.Name, parameter.Name)
-                    : EmitFunctionArgumentExpression(additionalExpressions[index], parameter.Type);
+                    : _program.Types.IsReference(parameter.Type)
+                        ? CreateReadonlyReferenceArgument(additionalExpressions[index], parameter.Type, function.Name)
+                        : EmitFunctionArgumentExpression(additionalExpressions[index], parameter.Type);
                 EnsureFunctionArgumentRuntimeType(value, parameter.Type, function.Name);
                 return value;
             })
@@ -1028,6 +1041,7 @@ internal sealed partial class LlvmEmitter
             BoundType.IntDictionary => EmitIntDictionaryFunctionCall(function, argument, additionalArguments),
             BoundType.Arena => EmitArenaFunctionCall(function, argument, additionalArguments),
             _ when _program.Types.IsDictionary(function.ReturnType) => EmitInlineDictionaryFunctionCall(function, argument, additionalArguments),
+            _ when _program.Types.IsReference(function.ReturnType) => EmitReferenceFunctionCall(function, argument, additionalArguments),
             _ when _program.Types.IsStruct(function.ReturnType)
                 || _program.Types.IsEnum(function.ReturnType)
                 || _program.Types.IsBox(function.ReturnType)
@@ -1043,6 +1057,18 @@ internal sealed partial class LlvmEmitter
         var llvmType = LlvmType(function.ReturnType);
         EmitCall(value, llvmType, SymbolForFunction(function)[1..], arguments);
         return DematerializeAggregateValue(function.ReturnType, value);
+    }
+
+    private RuntimeReference EmitReferenceFunctionCall(
+        BoundFunction function,
+        RuntimeValue? argument,
+        IReadOnlyList<RuntimeValue>? additionalArguments)
+    {
+        var pointer = NextTemp("ref_call");
+        var arguments = FunctionCallArgumentList(function, argument, additionalArguments);
+        EmitCall(pointer, "ptr", SymbolForFunction(function)[1..], arguments);
+        var elementType = _program.Types.GetReference(function.ReturnType).ElementType;
+        return new RuntimeReference(function.ReturnType, elementType, pointer);
     }
 
     private RuntimeUnit EmitUnitFunctionCall(BoundFunction function, RuntimeValue? argument, IReadOnlyList<RuntimeValue>? additionalArguments)
@@ -1242,6 +1268,16 @@ internal sealed partial class LlvmEmitter
                 });
                 continue;
             }
+            if (_program.Types.IsReference(parameter.Type))
+            {
+                if (value is not RuntimeReference reference || reference.Type != parameter.Type)
+                {
+                    throw new SollangException(
+                        $"function '{function.Name}' parameter '{parameter.Name}' requires {parameter.Type}");
+                }
+                parts.Add($"ptr {reference.PointerName}");
+                continue;
+            }
             var materialized = MaterializeAggregateValue(value);
             parts.Add($"{materialized.TypeName} {materialized.ValueName}");
         }
@@ -1290,6 +1326,16 @@ internal sealed partial class LlvmEmitter
                     + $"but received [{StaticArrayElementType(actualType)}; {length}]");
             }
             return BuildIntSliceArgument(pointer, length);
+        }
+
+        if (_program.Types.IsReference(function.InputType.Value))
+        {
+            if (argument is not RuntimeReference reference || reference.Type != function.InputType.Value)
+            {
+                throw new SollangException(
+                    $"function '{function.Name}' expects {function.InputType.Value} but received {argument.Type}");
+            }
+            return $"ptr {reference.PointerName}";
         }
 
         if (argument is RuntimeDynamicInlineArray inlineArray
@@ -1379,6 +1425,51 @@ internal sealed partial class LlvmEmitter
             slot.PointerAddress,
             slot.LengthAddress,
             slot.CapacityAddress);
+    }
+
+    private RuntimeReference CreateReadonlyReferenceArgument(
+        Expression expression,
+        BoundType referenceType,
+        string path)
+    {
+        var elementType = _program.Types.GetReference(referenceType).ElementType;
+        if (expression is not NameExpression name || !_locals.TryGetValue(name.Name, out var stored))
+        {
+            throw new SollangException(
+                $"function '{path}' requires a named addressable owner or reference");
+        }
+        if (stored is RuntimeReference reference)
+        {
+            if (reference.ElementType != elementType)
+            {
+                throw new SollangException(
+                    $"function '{path}' expects a reference to {elementType} but received {reference.ElementType}");
+            }
+            return new RuntimeReference(referenceType, elementType, reference.PointerName);
+        }
+        if (stored.Type != elementType)
+        {
+            throw new SollangException(
+                $"function '{path}' expects a reference to {elementType} but received {stored.Type}");
+        }
+        if (_mutableStructSlots.TryGetValue(name.Name, out var mutablePointer))
+        {
+            return new RuntimeReference(referenceType, elementType, mutablePointer);
+        }
+        if (_readonlyCaptureBorrowPointers.TryGetValue(name.Name, out var capturePointer))
+        {
+            return new RuntimeReference(referenceType, elementType, capturePointer);
+        }
+
+        var materialized = MaterializeAggregateValue(stored);
+        var pointer = NextTemp("ref_arg");
+        EmitAlloca(pointer, materialized.TypeName, RuntimeAlignment(elementType));
+        EmitStore(
+            materialized.TypeName,
+            materialized.ValueName,
+            pointer,
+            RuntimeAlignment(elementType));
+        return new RuntimeReference(referenceType, elementType, pointer);
     }
 
     private void BindInlineMutableBorrowFunctionParameter(BoundFunction function, RuntimeValue argument)
@@ -1598,8 +1689,14 @@ internal sealed partial class LlvmEmitter
         }
     }
 
-    private static void EnsureFunctionArgumentRuntimeType(RuntimeValue value, BoundType expected, string path)
+    private void EnsureFunctionArgumentRuntimeType(RuntimeValue value, BoundType expected, string path)
     {
+        if (_program.Types.IsReference(expected)
+            && value is RuntimeReference reference
+            && reference.Type == expected)
+        {
+            return;
+        }
         if (expected == BoundType.IntSlice
             && value.Type is BoundType.IntSlice or BoundType.StaticIntArray or BoundType.DynamicIntArray)
         {

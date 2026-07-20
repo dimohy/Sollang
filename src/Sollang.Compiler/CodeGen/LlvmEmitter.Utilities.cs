@@ -980,6 +980,9 @@ internal sealed partial class LlvmEmitter
     private sealed record RuntimeBox(BoundType BoxType, BoundType ElementType, string PointerName)
         : RuntimeValue(BoxType);
 
+    private sealed record RuntimeReference(BoundType ReferenceType, BoundType ElementType, string PointerName)
+        : RuntimeValue(ReferenceType);
+
     private sealed record RuntimeIntSlice(string PointerName, string LengthName) : RuntimeValue(BoundType.IntSlice);
 
     private sealed record RuntimeStaticIntArray(

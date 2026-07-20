@@ -189,6 +189,10 @@ internal sealed partial class LlvmEmitter
         }
 
         var source = EmitExpression(expression.Source);
+        if (source is RuntimeReference reference)
+        {
+            source = LoadReference(reference);
+        }
         if (source is RuntimeBox box)
         {
             var loaded = NextTemp("box_value");
@@ -220,6 +224,61 @@ internal sealed partial class LlvmEmitter
         return DematerializeAggregateValue(field.Type, extracted);
     }
 
+    private RuntimeValue LoadReference(RuntimeReference reference)
+    {
+        var loaded = NextTemp("ref_value");
+        EmitLoad(
+            loaded,
+            LlvmType(reference.ElementType),
+            reference.PointerName,
+            RuntimeAlignment(reference.ElementType));
+        return DematerializeAggregateValue(reference.ElementType, loaded);
+    }
+
+    private RuntimeReference EmitReferencePlace(Expression expression, BoundType expectedReferenceType)
+    {
+        var expectedElementType = _program.Types.GetReference(expectedReferenceType).ElementType;
+        var place = EmitReferencePlace(expression);
+        if (place.ElementType != expectedElementType)
+        {
+            throw new SollangException(
+                $"reference place has type {place.ElementType} but {expectedElementType} was expected");
+        }
+        return new RuntimeReference(expectedReferenceType, expectedElementType, place.PointerName);
+    }
+
+    private RuntimeReference EmitReferencePlace(Expression expression)
+    {
+        if (expression is NameExpression name
+            && _locals.TryGetValue(name.Name, out var local)
+            && local is RuntimeReference reference)
+        {
+            return reference;
+        }
+
+        if (expression is FieldAccessExpression field)
+        {
+            var source = EmitReferencePlace(field.Source);
+            if (!_program.Types.IsStruct(source.ElementType))
+            {
+                throw new SollangException("reference field access expects a struct place");
+            }
+            var definition = _program.Types.GetStruct(source.ElementType);
+            var member = definition.Fields.FirstOrDefault(candidate => candidate.Name == field.FieldName)
+                ?? throw new SollangException(
+                    $"struct '{definition.Name}' has no field '{field.FieldName}'");
+            var pointer = NextTemp("ref_field");
+            EmitAssign(
+                pointer,
+                $"getelementptr inbounds {LlvmStructType(source.ElementType)}, ptr {source.PointerName}, i32 0, i32 {member.Index.ToString(CultureInfo.InvariantCulture)}");
+            var memberReferenceType = _program.Types.GetOrAddReference(member.Type);
+            return new RuntimeReference(memberReferenceType, member.Type, pointer);
+        }
+
+        throw new SollangException(
+            "reference returns currently require a named reference input or one of its fields");
+    }
+
     private (string TypeName, string ValueName) MaterializeAggregateValue(RuntimeValue value)
     {
         return value switch
@@ -234,6 +293,7 @@ internal sealed partial class LlvmEmitter
             RuntimeStruct structure => (LlvmStructType(structure.Type), structure.ValueName),
             RuntimeEnum enumeration => (LlvmEnumType(enumeration.Type), enumeration.ValueName),
             RuntimeBox box => ("ptr", box.PointerName),
+            RuntimeReference reference => ("ptr", reference.PointerName),
             RuntimeDynamicIntArray array => (
                 "%sollang.dynamic_int_array",
                 BuildDynamicArrayAggregate(array.PointerName, array.LengthName, array.CapacityName)),
@@ -291,6 +351,10 @@ internal sealed partial class LlvmEmitter
         {
             var box = _program.Types.GetBox(type);
             return new RuntimeBox(type, box.ElementType, valueName);
+        }
+        if (_program.Types.IsReference(type))
+        {
+            return new RuntimeReference(type, _program.Types.GetReference(type).ElementType, valueName);
         }
         if (type == BoundType.DynamicIntArray)
         {
@@ -468,6 +532,10 @@ internal sealed partial class LlvmEmitter
             return LlvmEnumType(type);
         }
         if (_program.Types.IsBox(type))
+        {
+            return "ptr";
+        }
+        if (_program.Types.IsReference(type))
         {
             return "ptr";
         }

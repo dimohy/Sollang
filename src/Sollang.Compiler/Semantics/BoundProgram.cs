@@ -224,6 +224,8 @@ internal sealed record BoundEnumDefinition(
 
 internal sealed record BoundBoxDefinition(TypeId Id, TypeId ElementType, int Size, int Alignment);
 
+internal sealed record BoundReferenceDefinition(TypeId Id, TypeId ElementType);
+
 internal sealed record BoundStaticArrayDefinition(
     TypeId Id,
     TypeId ElementType,
@@ -253,6 +255,8 @@ internal sealed class TypeDefinitionTable
     private readonly Dictionary<TypeId, BoundStructDefinition> _structs;
     private readonly Dictionary<TypeId, BoundEnumDefinition> _enums;
     private readonly Dictionary<TypeId, BoundBoxDefinition> _boxes;
+    private readonly Dictionary<TypeId, BoundReferenceDefinition> _references = [];
+    private readonly Dictionary<TypeId, TypeId> _referencesByElement = [];
     private readonly Dictionary<TypeId, BoundStaticArrayDefinition> _staticArrays = [];
     private readonly Dictionary<TypeId, TypeId> _staticArraysByElement = [];
     private readonly Dictionary<TypeId, BoundDynamicArrayDefinition> _dynamicArrays = [];
@@ -303,6 +307,8 @@ internal sealed class TypeDefinitionTable
 
     public IReadOnlyCollection<BoundBoxDefinition> Boxes => _boxes.Values.ToArray();
 
+    public IReadOnlyCollection<BoundReferenceDefinition> References => _references.Values.ToArray();
+
     public IReadOnlyCollection<BoundStaticArrayDefinition> StaticArrays => _staticArrays.Values.ToArray();
 
     public IReadOnlyCollection<BoundDynamicArrayDefinition> DynamicArrays => _dynamicArrays.Values.ToArray();
@@ -318,6 +324,21 @@ internal sealed class TypeDefinitionTable
     public bool IsEnum(TypeId type) => _enums.ContainsKey(type);
 
     public bool IsBox(TypeId type) => _boxes.ContainsKey(type);
+
+    public bool IsReference(TypeId type) => _references.ContainsKey(type);
+
+    public TypeId GetOrAddReference(TypeId elementType)
+    {
+        if (_referencesByElement.TryGetValue(elementType, out var existing))
+        {
+            return existing;
+        }
+
+        var id = (TypeId)_nextParametricTypeId++;
+        _references.Add(id, new BoundReferenceDefinition(id, elementType));
+        _referencesByElement.Add(elementType, id);
+        return id;
+    }
 
     public bool IsStaticArray(TypeId type) => _staticArrays.ContainsKey(type);
 
@@ -527,6 +548,13 @@ internal sealed class TypeDefinitionTable
             : throw new KeyNotFoundException($"type id '{(int)type}' is not a box");
     }
 
+    public BoundReferenceDefinition GetReference(TypeId type)
+    {
+        return _references.TryGetValue(type, out var definition)
+            ? definition
+            : throw new KeyNotFoundException($"type id '{(int)type}' is not a reference");
+    }
+
     public BoundStaticArrayDefinition GetStaticArray(TypeId type)
     {
         return _staticArrays.TryGetValue(type, out var definition)
@@ -551,9 +579,9 @@ internal sealed class TypeDefinitionTable
         {
             return 24;
         }
-        if (_boxes.ContainsKey(type))
+        if (_boxes.ContainsKey(type) || _references.ContainsKey(type))
         {
-            return 8;
+            return _pointerSize;
         }
         if (type == TypeId.SourceText)
         {
