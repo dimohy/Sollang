@@ -1,0 +1,117 @@
+import sollang.compiler.semantic.ownership_check as ownershipCheck
+
+# Verifies self-host E23 owner invalidation and projection precision.
+main {
+    [
+        """
+        same value: ref Int -> ref Int {
+            value
+        }
+
+        read value: ref Int -> Int {
+            value
+        }
+
+        consume values: move [Int; ~] -> Int {
+            values -> len
+        }
+
+        main {
+            [10, 20, ~] => values!
+            values![0] -> same => borrowed
+
+            # Moving the whole owner conflicts with a live element reference.
+            values! -> consume => count
+            borrowed -> read -> println
+        }
+        """,
+        ~
+    ] => moveSources!
+    moveSources! -> ownershipCheck.analyze => moveDiagnostics!
+    0 => moved!
+    moveDiagnostics! -> each diagnostic {
+        diagnostic.code == 23 -> if {
+            moved! + 1 => moved!
+        }
+    }
+
+    [
+        """
+        struct Pair {
+            first: Int
+            second: Int
+        }
+
+        same value: ref Int -> ref Int {
+            value
+        }
+
+        read value: ref Int -> Int {
+            value
+        }
+
+        main {
+            Pair { first: 10, second: 20 } => pair!
+            pair!.first -> same => borrowed
+
+            # Rebinding the whole owner conflicts with a live field reference.
+            Pair { first: 30, second: 40 } => pair!
+            borrowed -> read -> println
+        }
+        """,
+        ~
+    ] => rebindSources!
+    rebindSources! -> ownershipCheck.analyze => rebindDiagnostics!
+    0 => rebound!
+    rebindDiagnostics! -> each diagnostic {
+        diagnostic.code == 23 -> if {
+            rebound! + 1 => rebound!
+        }
+    }
+
+    [
+        """
+        struct Bundle {
+            left: Int
+            right: [Int; ~]
+        }
+
+        same value: ref Int -> ref Int {
+            value
+        }
+
+        read value: ref Int -> Int {
+            value
+        }
+
+        consume values: move [Int; ~] -> Int {
+            values -> len
+        }
+
+        inspect bundle: move Bundle -> Int {
+            bundle.left -> same => borrowed
+
+            # Moving a disjoint field preserves the sibling field loan.
+            bundle.right => moved!
+            borrowed -> read => observed
+            moved! -> consume => count
+            observed + count
+        }
+
+        main {
+            Bundle { left: 70, right: [80, 90, ~] } => bundle!
+            bundle! -> inspect -> println
+        }
+        """,
+        ~
+    ] => disjointSources!
+    disjointSources! -> ownershipCheck.analyze => disjointDiagnostics!
+    0 => disjoint!
+    disjointDiagnostics! -> each diagnostic {
+        diagnostic.code == 23 -> if {
+            disjoint! + 1 => disjoint!
+        }
+    }
+
+    "move=$(moved!),rebind=$(rebound!),disjoint=$(disjoint!)" -> println
+}

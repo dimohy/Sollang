@@ -1,0 +1,51 @@
+# Verifies that owner rebind and move are allowed after the ref's last use.
+struct Pair {
+    first: Int
+    second: Int
+}
+
+struct Bundle {
+    left: Int
+    right: [Int; ~]
+}
+
+same value: ref Int -> ref Int {
+    value
+}
+
+read value: ref Int -> Int {
+    value
+}
+
+consume values: move [Int; ~] -> Int {
+    values -> len
+}
+
+inspect bundle: move Bundle -> Int {
+    bundle.left -> same => borrowed
+
+    # Moving a disjoint owned field preserves the sibling field loan.
+    bundle.right => moved!
+    borrowed -> read => observed
+    moved! -> consume => count
+    observed + count
+}
+
+main {
+    Pair { first: 10, second: 20 } => pair!
+    pair!.first -> same => fieldRef
+    fieldRef -> read => observed
+
+    # The field loan ended above, so replacing the whole owner is safe.
+    Pair { first: 30, second: 40 } => pair!
+
+    [50, 60, ~] => values!
+    values![0] -> same => elementRef
+    elementRef -> read => element
+
+    # The element loan ended above, so consuming the owner is safe.
+    values! -> consume => count
+    Bundle { left: 70, right: [80, 90, ~] } => bundle!
+    bundle! -> inspect => partial
+    "observed=$observed,rebound=$(pair!.first),element=$element,count=$count,partial=$partial" -> println
+}

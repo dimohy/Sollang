@@ -30,6 +30,7 @@ $parallelMutableCaptureSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\
 $parallelNonSendableCaptureSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-parallel-nonsendable-capture.slg"
 $referenceTemporarySource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-reference-temporary.slg"
 $referenceLivenessSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-reference-liveness.slg"
+$referenceOwnerMoveSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-reference-owner-move.slg"
 $borrowSourceRuntime = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-borrow-source.slg"
 $runtimeManifestPath = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-compiler-runtime.sources.txt"
 $fingerprintSources = @(
@@ -491,18 +492,23 @@ foreach ($compiler in @(
     @($stage1Path, "stage1"),
     @($stage2Path, "stage2")
 )) {
-    $diagnosticOutput = Join-Path $artifactsDir "stage2-check-reference-liveness-$($compiler[1]).txt"
-    $diagnosticError = Join-Path $artifactsDir "stage2-check-reference-liveness-$($compiler[1]).err"
-    $diagnosticProcess = Invoke-ProcessToFile $compiler[0] @("windows", $referenceLivenessSource) $diagnosticOutput $diagnosticError
-    $diagnosticProcess.WaitForExit()
-    $diagnosticProcess.Refresh()
-    if ($diagnosticProcess.ExitCode -eq 0) { throw "$($compiler[1]) accepted owner mutation with a live readonly reference" }
-    $diagnosticText = [System.IO.File]::ReadAllText($diagnosticOutput)
-    if ($diagnosticText -notmatch 'error\[E23\].*owner mutation conflicts with a live readonly reference') {
-        throw "$($compiler[1]) did not emit ownership diagnostic E23: '$diagnosticText'"
-    }
-    if ($diagnosticText -match '^target (datalayout|triple)') {
-        throw "$($compiler[1]) began LLVM emission before rejecting readonly-reference liveness diagnostic E23"
+    foreach ($referenceConflict in @(
+        @($referenceLivenessSource, "mutation"),
+        @($referenceOwnerMoveSource, "move")
+    )) {
+        $diagnosticOutput = Join-Path $artifactsDir "stage2-check-reference-$($referenceConflict[1])-$($compiler[1]).txt"
+        $diagnosticError = Join-Path $artifactsDir "stage2-check-reference-$($referenceConflict[1])-$($compiler[1]).err"
+        $diagnosticProcess = Invoke-ProcessToFile $compiler[0] @("windows", $referenceConflict[0]) $diagnosticOutput $diagnosticError
+        $diagnosticProcess.WaitForExit()
+        $diagnosticProcess.Refresh()
+        if ($diagnosticProcess.ExitCode -eq 0) { throw "$($compiler[1]) accepted owner $($referenceConflict[1]) with a live readonly reference" }
+        $diagnosticText = [System.IO.File]::ReadAllText($diagnosticOutput)
+        if ($diagnosticText -notmatch 'error\[E23\].*owner mutation conflicts with a live readonly reference') {
+            throw "$($compiler[1]) did not emit ownership diagnostic E23 for owner $($referenceConflict[1]): '$diagnosticText'"
+        }
+        if ($diagnosticText -match '^target (datalayout|triple)') {
+            throw "$($compiler[1]) began LLVM emission before rejecting readonly-reference owner $($referenceConflict[1]) diagnostic E23"
+        }
     }
 }
 Write-Host "[stage2 6/7] PASS E17-E23 ownership violations block LLVM emission in stage-1 and stage-2."

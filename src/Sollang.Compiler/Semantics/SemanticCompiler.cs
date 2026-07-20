@@ -2389,11 +2389,12 @@ internal sealed partial class SemanticCompiler
                         && !IsContainerType(reboundType);
                     var movedSourceName = GetMoveConsumingContainerSourceName(binding.Value);
                     var movedFieldOwnerName = GetMoveConsumingOwnedFieldOwnerName(binding.Value, bindings);
+                    var movedFieldOwnerPlace = GetMoveConsumingOwnedFieldPlace(binding.Value, bindings);
                     var consumedSourceNames = GetOwnedParameterConsumedSourceNames(binding.Value, functions, bindings);
                     var aggregateLiteralSourceNames = GetOwnedAggregateLiteralSourceNames(binding.Value, bindings);
                     RejectBorrowedTextOriginInvalidation(
                         movedSourceName,
-                        movedFieldOwnerName,
+                        movedFieldOwnerPlace,
                         consumedSourceNames,
                         aggregateLiteralSourceNames,
                         binding.Name,
@@ -8623,6 +8624,16 @@ internal sealed partial class SemanticCompiler
             .FirstOrDefault(candidate => candidate.Name == field.FieldName);
         return fieldDefinition is not null && _types.ContainsOwnedStorage(fieldDefinition.Type)
             ? owner.Name
+            : null;
+    }
+
+    private string? GetMoveConsumingOwnedFieldPlace(
+        Expression expression,
+        IReadOnlyDictionary<string, BoundType> bindings)
+    {
+        var ownerName = GetMoveConsumingOwnedFieldOwnerName(expression, bindings);
+        return ownerName is not null && expression is FieldAccessExpression field
+            ? $"{CanonicalBorrowOriginName(ownerName)}.{field.FieldName}"
             : null;
     }
 

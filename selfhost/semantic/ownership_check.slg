@@ -719,9 +719,42 @@ public analyzeLoweredContext prepared: semanticContext.SemanticSnapshot, typed: 
                             (referenceOwnerBinding >= 0 and referenceMutation.kind == 24 and (prepared -> indexAssignmentTargetsBinding(typed, referenceMutationIndex!, referenceOwnerBinding)) and (prepared -> indexedReferenceOverlapsAssignment(typed, referenceArgumentIr!, referenceMutation.operand1))) -> if {
                                 true => mutatesReferenceOwner!
                             }
+                            # Rebinding the owner replaces its storage identity.
+                            (referenceOwnerBinding >= 0 and referenceMutation.kind == 17 and referenceMutationIndex! != referenceOwnerBinding) -> if {
+                                typed[referenceOwnerBinding] => referenceOwnerDefinition
+                                (referenceOwnerDefinition.sourceModule == referenceMutation.sourceModule and referenceOwnerDefinition.payloadToken >= 0 and referenceMutation.payloadToken >= 0) -> if {
+                                    prepared.package.ranges[referenceOwnerDefinition.sourceModule] => referenceRebindRange
+                                    prepared.package.tokens[referenceRebindRange.tokenStart + referenceOwnerDefinition.payloadToken] => referenceOwnerName
+                                    prepared.package.tokens[referenceRebindRange.tokenStart + referenceMutation.payloadToken] => referenceRebindName
+                                    referenceOwnerName.span.length == referenceRebindName.span.length => sameReferenceOwnerName!
+                                    UIntSize(0) => referenceOwnerNameByte!
+                                    (sameReferenceOwnerName! and referenceOwnerNameByte! < referenceOwnerName.span.length) -> while {
+                                        (prepared.package.sources[referenceOwnerDefinition.sourceModule] -> byte(referenceOwnerName.span.start + referenceOwnerNameByte!)) != (prepared.package.sources[referenceMutation.sourceModule] -> byte(referenceRebindName.span.start + referenceOwnerNameByte!)) -> if {
+                                            false => sameReferenceOwnerName!
+                                        }
+                                        referenceOwnerNameByte! + UIntSize(1) => referenceOwnerNameByte!
+                                    }
+                                    sameReferenceOwnerName! -> if { true => mutatesReferenceOwner! }
+                                }
+                            }
+                            # A consuming call or aggregate transfer invalidates
+                            # the moved place. Whole-owner moves overlap every
+                            # projection; partial moves retain place precision.
+                            0 => referenceMoveIndex!
+                            (referenceOwnerBinding >= 0 and not mutatesReferenceOwner! and referenceMoveIndex! < (moves! -> len)) -> while {
+                                moves![referenceMoveIndex!] => referenceMove
+                                referenceMove.siteIr == referenceMutationIndex! -> if {
+                                    (referenceMove.sourceModule == typed[referenceOwnerBinding].sourceModule and referenceMove.symbol == typed[referenceOwnerBinding].symbol) -> if {
+                                        referenceArgumentIr! -> placesOverlap(referenceMove.memberIr) -> if {
+                                            true => mutatesReferenceOwner!
+                                        }
+                                    }
+                                }
+                                referenceMoveIndex! + 1 => referenceMoveIndex!
+                            }
                             (mutatesReferenceOwner! and referenceBindingIndex! < referenceMutationIndex!) -> if {
                             false => referenceBorrowUsedAfterMutation!
-                            referenceMutation.kind == 24 -> if {
+                            (referenceMutation.kind == 6 or referenceMutation.kind == 12 or referenceMutation.kind == 14 or referenceMutation.kind == 16 or referenceMutation.kind == 17 or referenceMutation.kind == 24) -> if {
                                 prepared -> referenceBindingUsedAfterIndexSite(typed, referenceBindingIndex!, referenceMutationIndex!) => referenceBorrowUsedAfterMutation!
                             } else {
                                 referenceBindingIndex! -> borrowedBindingUsedAfterSite(referenceMutationIndex!) => referenceBorrowUsedAfterMutation!

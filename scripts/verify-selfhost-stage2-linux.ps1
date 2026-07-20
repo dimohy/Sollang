@@ -35,6 +35,7 @@ $parallelMutableCaptureSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\
 $parallelNonSendableCaptureSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-parallel-nonsendable-capture.slg"
 $referenceTemporarySource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-reference-temporary.slg"
 $referenceLivenessSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-reference-liveness.slg"
+$referenceOwnerMoveSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-reference-owner-move.slg"
 $borrowSourceRuntime = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-borrow-source.slg"
 $expectedStage2Bytes = 11987197L
 
@@ -377,27 +378,32 @@ foreach ($candidate in @(
         throw "$($candidate[2]) began LLVM emission before rejecting readonly-reference diagnostic E22"
     }
 }
-$stage1ReferenceLivenessOutput = Join-Path $artifactsDir "linux-stage2-check-reference-liveness-stage1.txt"
-$stage1ReferenceLivenessError = Join-Path $artifactsDir "linux-stage2-check-reference-liveness-stage1.err"
-$stage1ReferenceLiveness = Invoke-ProcessToFile $stage1Path @("linux", $referenceLivenessSource) $stage1ReferenceLivenessOutput $stage1ReferenceLivenessError
-$stage2ReferenceLivenessOutput = Join-Path $artifactsDir "linux-stage2-check-reference-liveness-stage2.txt"
-$stage2ReferenceLivenessError = Join-Path $artifactsDir "linux-stage2-check-reference-liveness-stage2.err"
-$stage2ReferenceLiveness = Invoke-ProcessToFile "wsl.exe" @(
-    "-d", $Distribution, "--", (Convert-ToWslPath $stage2Path), "linux", (Convert-ToWslPath $referenceLivenessSource)
-) $stage2ReferenceLivenessOutput $stage2ReferenceLivenessError
-foreach ($candidate in @(
-    @($stage1ReferenceLiveness, $stage1ReferenceLivenessOutput, "stage1"),
-    @($stage2ReferenceLiveness, $stage2ReferenceLivenessOutput, "stage2")
+foreach ($referenceConflict in @(
+    @($referenceLivenessSource, "mutation"),
+    @($referenceOwnerMoveSource, "move")
 )) {
-    $candidate[0].WaitForExit()
-    $candidate[0].Refresh()
-    if ($candidate[0].ExitCode -eq 0) { throw "$($candidate[2]) accepted owner mutation with a live readonly reference" }
-    $diagnosticText = [System.IO.File]::ReadAllText($candidate[1])
-    if ($diagnosticText -notmatch 'error\[E23\].*owner mutation conflicts with a live readonly reference') {
-        throw "$($candidate[2]) did not emit ownership diagnostic E23: '$diagnosticText'"
-    }
-    if ($diagnosticText -match '^target (datalayout|triple)') {
-        throw "$($candidate[2]) began LLVM emission before rejecting readonly-reference liveness diagnostic E23"
+    $stage1ReferenceOutput = Join-Path $artifactsDir "linux-stage2-check-reference-$($referenceConflict[1])-stage1.txt"
+    $stage1ReferenceError = Join-Path $artifactsDir "linux-stage2-check-reference-$($referenceConflict[1])-stage1.err"
+    $stage1Reference = Invoke-ProcessToFile $stage1Path @("linux", $referenceConflict[0]) $stage1ReferenceOutput $stage1ReferenceError
+    $stage2ReferenceOutput = Join-Path $artifactsDir "linux-stage2-check-reference-$($referenceConflict[1])-stage2.txt"
+    $stage2ReferenceError = Join-Path $artifactsDir "linux-stage2-check-reference-$($referenceConflict[1])-stage2.err"
+    $stage2Reference = Invoke-ProcessToFile "wsl.exe" @(
+        "-d", $Distribution, "--", (Convert-ToWslPath $stage2Path), "linux", (Convert-ToWslPath $referenceConflict[0])
+    ) $stage2ReferenceOutput $stage2ReferenceError
+    foreach ($candidate in @(
+        @($stage1Reference, $stage1ReferenceOutput, "stage1"),
+        @($stage2Reference, $stage2ReferenceOutput, "stage2")
+    )) {
+        $candidate[0].WaitForExit()
+        $candidate[0].Refresh()
+        if ($candidate[0].ExitCode -eq 0) { throw "$($candidate[2]) accepted owner $($referenceConflict[1]) with a live readonly reference" }
+        $diagnosticText = [System.IO.File]::ReadAllText($candidate[1])
+        if ($diagnosticText -notmatch 'error\[E23\].*owner mutation conflicts with a live readonly reference') {
+            throw "$($candidate[2]) did not emit ownership diagnostic E23 for owner $($referenceConflict[1]): '$diagnosticText'"
+        }
+        if ($diagnosticText -match '^target (datalayout|triple)') {
+            throw "$($candidate[2]) began LLVM emission before rejecting readonly-reference owner $($referenceConflict[1]) diagnostic E23"
+        }
     }
 }
 Write-Host "[linux-stage2 6/6] PASS E17-E23 ownership violations block LLVM emission in stage-1 and stage-2."

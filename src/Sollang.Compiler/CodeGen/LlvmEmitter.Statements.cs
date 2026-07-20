@@ -99,6 +99,16 @@ internal sealed partial class LlvmEmitter
                         RuntimeAlignment(value.Type));
                     break;
                 }
+                if (binding.IsMutable
+                    && _mutableStructSlots.TryGetValue(binding.Name, out reboundPointer))
+                {
+                    var previous = _locals[binding.Name];
+                    EnsureRuntimeType(value, previous.Type, binding.Name);
+                    var reboundValue = MaterializeAggregateValue(value);
+                    EmitStore(reboundValue.TypeName, reboundValue.ValueName, reboundPointer,
+                        RuntimeAlignment(value.Type));
+                    break;
+                }
                 if (RequiresHeapAllocation(value) && !_platform.SupportsHeapAllocation)
                 {
                     throw new SollangException("dynamic arrays and dictionaries require heap allocation; wasm32-browser does not support them yet");

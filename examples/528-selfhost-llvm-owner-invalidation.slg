@@ -1,0 +1,48 @@
+import sollang.compiler.llvm.text as llvm
+
+# Verifies self-host LLVM execution after readonly-reference loans end.
+main {
+    [
+        """
+        struct Pair {
+            first: Int
+            second: Int
+        }
+
+        same value: ref Int -> ref Int {
+            value
+        }
+
+        read value: ref Int -> Int {
+            value
+        }
+
+        consume values: move [Int; ~] -> UIntSize {
+            values -> len
+        }
+
+        main {
+            Pair { first: 10, second: 20 } => pair!
+            pair!.first -> same => fieldRef
+            fieldRef -> read => observed
+
+            # The field loan ended, so replacing the whole owner is safe.
+            Pair { first: 30, second: 40 } => pair!
+
+            [50, 60, ~] => values!
+            values![0] -> same => elementRef
+            elementRef -> read => element
+
+            # The element loan ended, so consuming the owner is safe.
+            values! -> consume => count
+            pair!.first => rebound
+            "observed=$observed" -> println
+            "rebound=$rebound" -> println
+            "element=$element" -> println
+            "count=$count" -> println
+        }
+        """,
+        ~
+    ] => sources!
+    sources! -> llvm.emitLinuxChecked => diagnosticCount
+}

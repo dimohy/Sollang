@@ -8960,3 +8960,47 @@ References:
 - [Rust borrow splitting](https://doc.rust-lang.org/nomicon/borrow-splitting.html)
 - [Mojo lifetimes, origins, and references](https://docs.modular.com/mojo/manual/values/lifetimes)
 - [Polonius loan rules](https://rust-lang.github.io/polonius/rules/loans.html)
+
+## D221 - Readonly-Reference Owner Invalidation
+
+Status: implemented owner move/rebind vertical with cross-target Stage2 verification
+Date: 2026-07-21
+
+Sollang defines a readonly-reference conflict in terms of overlapping places and
+storage identity, not only assignment syntax. Passing an owner to a `move`
+parameter, transferring an owned value into another aggregate, or rebinding a
+mutable owner invalidates the old place. A whole-owner invalidation overlaps all
+of its projections. A partial move keeps its field/index path, so moving
+`bundle.right` does not invalidate a reference to `bundle.left`.
+
+There is no source-level `drop()` statement in this checkpoint. Destruction is
+an implicit compiler action and remains valid after the reference's final use.
+The source-level equivalent of an early drop is an explicit consuming transfer;
+it is rejected with E23 when the reference is still live. Rebinding is governed
+by the same rule because it replaces the addressable storage identity even for a
+scalar-only struct.
+
+The C# semantic pass now sends the precise owned-field place into invalidation
+checking and retains root removal only for the moved-owner state. Its LLVM
+backend stores a mutable struct replacement into the original slot. The
+self-host pass consumes canonical `MoveEvent` places, recognizes whole-owner
+mutable rebindings by source binding name, and applies the same last-use test.
+Examples 526-528 prove safe post-last-use replacement/consumption, disjoint
+partial movement, self-host E23 classification, and native LLVM execution. The
+`ref-owner-move` and `ref-owner-rebind` diagnostics plus the Stage2 owner-move
+fixture prove that both compiler generations stop before LLVM emission.
+
+Windows and Linux full suites pass 707/707. Windows Stage2 passes 7/7 at
+12,170,216 LLVM bytes; Linux Stage2 passes 6/6 at 12,166,795 LLVM bytes. Formal
+progress remains 53/60 (88.3%), and Stage3 cadence is 9/10.
+
+The rule follows Rust's prohibition on moving or assigning an owner while it is
+borrowed, Mojo's inferred origin model, and Polonius loan invalidation. Sollang
+retains its existing syntax and exposes none of those systems' lifetime notation.
+
+References:
+
+- [Rust E0505: move while borrowed](https://doc.rust-lang.org/error_codes/E0505.html)
+- [Rust E0506: assignment while borrowed](https://doc.rust-lang.org/error_codes/E0506.html)
+- [Mojo lifetimes, origins, and references](https://docs.modular.com/mojo/manual/values/lifetimes)
+- [Polonius loan rules](https://rust-lang.github.io/polonius/rules/loans.html)

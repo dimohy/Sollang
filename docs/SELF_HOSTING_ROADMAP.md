@@ -2658,6 +2658,7 @@ This does not yet close the ownership/storage gate.
 - [x] C# mutable-owner root origins with last-use mutation conflicts
 - [x] C# inferred return-parameter origins and branch-selected origin unions
 - [x] C# nested stored-field reference places and disjoint-field mutation precision
+- [x] C# owner move/rebind invalidation with projected-place precision
 - [ ] stored references and indexed projections
 - [x] self-host recursive type arena, typed-IR field projection, pointer ABI,
   projected address return, and transparent return load
@@ -2667,6 +2668,7 @@ This does not yet close the ownership/storage gate.
 - [x] self-host mutable-owner slots and first production E23 liveness conflict
 - [x] self-host return-parameter origin unions and additional `ref` parameter ABI
 - [x] self-host nested stored-field reference ABI and E23 overlap precision
+- [x] self-host owner move/rebind invalidation with Stage2 E23 parity
 - [x] cross-target regression and Stage2 verification of the C# vertical slice
 
 Formal progress stays at **49 complete, 8 partial, 3 missing: 53/60 (88.3%)**
@@ -2803,6 +2805,31 @@ complete, 8 partial, 3 missing: 53/60 (88.3%)** because owner move/rebind/drop
 conflicts, branch-local and loop-sensitive loan liveness, and references stored
 in user aggregates remain open. Stage3 cadence advances to **8/10**, so Stage3 is
 not due.
+
+D221 treats every storage-identity-destroying operation as an owner invalidation.
+A consuming call or aggregate transfer moves the whole owner or one projected
+owned field; rebinding a mutable owner replaces its previous storage identity.
+E23 rejects either operation only while an overlapping readonly reference has a
+later use. Whole-owner invalidation overlaps every projection, while a move of
+one owned field remains disjoint from a loan of its sibling field. Sollang does
+not add a public `drop()` form: implicit destruction is still inserted by the
+compiler after the final loan, and an explicit consuming transfer is the
+source-level invalidation event.
+
+The C# compiler now preserves the exact projected place for owned-field moves
+instead of collapsing every transfer to the root, and mutable struct rebinding
+stores into the existing LLVM slot. The self-host ownership pass mirrors whole
+and partial move events plus source-name-based mutable rebinding, and the
+self-host LLVM backend executes both safe post-last-use paths. Examples 526-528,
+two reference diagnostics, and a dedicated Stage2 move fixture cover C#,
+self-host analysis, LLVM validation/execution, and Stage1/Stage2 E23 parity.
+
+Release builds have zero warnings and errors. Windows and Linux full suites pass
+**707/707**. Windows Stage2 passes **7/7** at **12,170,216 LLVM bytes**, and Linux
+Stage2 passes **6/6** at **12,166,795 LLVM bytes**. Formal progress remains **49
+complete, 8 partial, 3 missing: 53/60 (88.3%)** because branch-local and
+loop-sensitive loan liveness plus references stored in user aggregates remain
+open. Stage3 cadence advances to **9/10**, so Stage3 is not due.
 
 1. Multi-file compilation (implemented by example 52).
 2. Import-driven file discovery with cycle and duplicate-module diagnostics
