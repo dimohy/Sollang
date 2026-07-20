@@ -1,0 +1,111 @@
+import sollang.compiler.semantic.ownership_check as ownershipCheck
+
+conflictCount sources: [Text; ~] -> Int {
+    sources -> ownershipCheck.analyze => errors!
+    0 => conflicts!
+    0 => index!
+    index! < (errors! -> len) -> while {
+        errors![index!].code == 21 -> if {
+            conflicts! + 1 => conflicts!
+        }
+        index! + 1 => index!
+    }
+    conflicts!
+}
+
+main {
+    """
+    namespace sys.file
+
+    public struct SourceText {
+        token: UInt64
+    }
+
+    borrowText text: Text -> SourceText = intrinsic
+    """ => fileSource
+
+    [
+        """
+        import sys.file as file
+
+        prefix source: file.SourceText -> Text {
+            source -> slice(UIntSize(0), UIntSize(3))
+        }
+
+        consume source: move file.SourceText -> Unit {
+            source -> len -> println
+        }
+
+        main {
+            "lexer" -> file.borrowText => source!
+            source! -> prefix => view
+            when {
+                true {
+                    source! -> consume
+                }
+                else {
+                    view -> println
+                }
+            }
+        }
+        """,
+        fileSource,
+        ~
+    ] -> conflictCount => exclusiveConflicts
+
+    [
+        """
+        import sys.file as file
+
+        prefix source: file.SourceText -> Text {
+            source -> slice(UIntSize(0), UIntSize(3))
+        }
+
+        consume source: move file.SourceText -> Unit {
+            source -> len -> println
+        }
+
+        main {
+            "parser" -> file.borrowText => source!
+            source! -> prefix => view
+            true -> if {
+                source! -> consume
+            } else {
+                "kept" -> println
+            }
+            view -> println
+        }
+        """,
+        fileSource,
+        ~
+    ] -> conflictCount => joinConflicts
+
+    [
+        """
+        import sys.file as file
+
+        prefix source: file.SourceText -> Text {
+            source -> slice(UIntSize(0), UIntSize(3))
+        }
+
+        consume source: move file.SourceText -> Unit {
+            source -> len -> println
+        }
+
+        main {
+            "semantic" -> file.borrowText => source!
+            source! -> prefix => view
+            true => active!
+            active! -> while {
+                view -> println
+                source! -> consume
+                false => active!
+            }
+        }
+        """,
+        fileSource,
+        ~
+    ] -> conflictCount => backEdgeConflicts
+
+    "cfg borrow conflicts=$exclusiveConflicts,$joinConflicts,$backEdgeConflicts" -> println
+}

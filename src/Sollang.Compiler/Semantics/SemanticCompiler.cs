@@ -20,6 +20,8 @@ internal sealed partial class SemanticCompiler
         new(ReferenceEqualityComparer.Instance);
     private readonly Dictionary<string, string> _activeBorrowedTextOrigins =
         new(StringComparer.Ordinal);
+    private IReadOnlySet<string> _borrowedTextContinuationNames =
+        new HashSet<string>(StringComparer.Ordinal);
     private Dictionary<string, BoundFunction>? _boundFunctions;
     private string _currentModuleName = "";
     private string? _currentTypeScopeName;
@@ -2346,7 +2348,8 @@ internal sealed partial class SemanticCompiler
         BoundType? yieldInputType = null,
         bool allowContainerBindings = true,
         Expression? borrowRegionResult = null,
-        bool shortenBorrowRegions = false)
+        bool shortenBorrowRegions = false,
+        IReadOnlySet<string>? borrowRegionContinuation = null)
     {
         mutableBindings ??= new HashSet<string>(StringComparer.Ordinal);
         for (var statementIndex = 0; statementIndex < statements.Count; statementIndex++)
@@ -2356,9 +2359,16 @@ internal sealed partial class SemanticCompiler
                 ExpireBorrowedTextOriginsBeforeStatement(
                     statements,
                     statementIndex,
-                    borrowRegionResult);
+                    borrowRegionResult,
+                    borrowRegionContinuation);
             }
 
+            var parentBorrowedTextContinuation = _borrowedTextContinuationNames;
+            _borrowedTextContinuationNames = BorrowedTextContinuationAfterStatement(
+                statements,
+                statementIndex,
+                borrowRegionResult,
+                borrowRegionContinuation);
             var statement = statements[statementIndex];
             switch (statement)
             {
@@ -2447,7 +2457,7 @@ internal sealed partial class SemanticCompiler
                         mutableBindings.Remove(movedFieldOwnerName);
                     }
 
-                    ValidateOwnedParameterConsumptionExpression(binding.Value, functions);
+                    ValidateOwnedParameterConsumptionExpression(binding.Value, functions, bindings);
                     foreach (var consumedName in consumedSourceNames)
                     {
                         bindings.Remove(consumedName);
@@ -2521,7 +2531,7 @@ internal sealed partial class SemanticCompiler
                             guardLoopControl.Condition.Column,
                             $"loop-control guard requires Bool but received {FormatType(guardType)}");
                     }
-                    ValidateOwnedParameterConsumptionExpression(guardLoopControl.Condition, functions);
+                    ValidateOwnedParameterConsumptionExpression(guardLoopControl.Condition, functions, bindings);
                     break;
                 case ReturnStatement returnStatement:
                     if (_currentFunctionReturnType is null)
@@ -2568,7 +2578,7 @@ internal sealed partial class SemanticCompiler
 
                     if (returnStatement.Value is not null)
                     {
-                        ValidateOwnedParameterConsumptionExpression(returnStatement.Value, functions);
+                        ValidateOwnedParameterConsumptionExpression(returnStatement.Value, functions, bindings);
                         if (IsContainerType(returnType))
                         {
                             EnsureOwnedContainerCanLeaveBlock(
@@ -2579,6 +2589,7 @@ internal sealed partial class SemanticCompiler
                                 MoveInputNameForExpression(returnStatement.Value));
                         }
                     }
+                    _borrowedTextContinuationNames = parentBorrowedTextContinuation;
                     return;
                 case ExpressionStatement expressionStatement:
                     var movedExpressionSourceName = GetMoveConsumingContainerSourceName(
@@ -2629,7 +2640,7 @@ internal sealed partial class SemanticCompiler
                         }
                     }
 
-                    ValidateOwnedParameterConsumptionExpression(expressionStatement.Expression, functions);
+                    ValidateOwnedParameterConsumptionExpression(expressionStatement.Expression, functions, bindings);
                     foreach (var consumedName in consumedExpressionSourceNames)
                     {
                         bindings.Remove(consumedName);
@@ -2650,6 +2661,7 @@ internal sealed partial class SemanticCompiler
                 default:
                     throw new SollangException($"unsupported statement {statement.GetType().Name}");
             }
+            _borrowedTextContinuationNames = parentBorrowedTextContinuation;
         }
     }
 
@@ -3301,18 +3313,33 @@ internal sealed partial class SemanticCompiler
         bool allowContainerBindings = true)
     {
         _loopDepth++;
+        var loopEntryBorrowedTextOrigins = CaptureBorrowedTextOriginState();
         try
         {
+            var loopContinuation = new HashSet<string>(
+                _borrowedTextContinuationNames,
+                StringComparer.Ordinal);
+            foreach (var binding in _activeBorrowedTextOrigins.Keys)
+            {
+                if (statements.Any(statement =>
+                        StoragePlacementAnalyzer.ReferencesName(statement, binding)))
+                {
+                    loopContinuation.Add(binding);
+                }
+            }
             BindStatements(
                 statements,
                 functions,
                 bindings,
                 mutableBindings,
                 yieldInputType,
-                allowContainerBindings);
+                allowContainerBindings,
+                shortenBorrowRegions: true,
+                borrowRegionContinuation: loopContinuation);
         }
         finally
         {
+            RestoreBorrowedTextOriginState(loopEntryBorrowedTextOrigins);
             _loopDepth--;
         }
     }
@@ -4444,6 +4471,7 @@ internal sealed partial class SemanticCompiler
             throw Error(expression.Condition.Line, expression.Condition.Column, "if expects Bool input");
         }
 
+        var branchEntryBorrowedTextOrigins = CaptureBorrowedTextOriginState();
         var thenType = InferBlockBody(
             expression.Then,
             functions,
@@ -4451,6 +4479,7 @@ internal sealed partial class SemanticCompiler
             allowReadIntCall,
             allowedOwnedOuterResultName,
             mutableBindings);
+        RestoreBorrowedTextOriginState(branchEntryBorrowedTextOrigins);
         if (expression.Else is null)
         {
             if (thenType != BoundType.Unit)
@@ -4458,6 +4487,11 @@ internal sealed partial class SemanticCompiler
                 throw Error(expression.Line, expression.Column, "if used as a value requires an else block");
             }
 
+            ExpireBorrowedTextOriginsBeforeStatement(
+                [],
+                0,
+                null,
+                _borrowedTextContinuationNames);
             return BoundType.Unit;
         }
 
@@ -4468,6 +4502,7 @@ internal sealed partial class SemanticCompiler
             allowReadIntCall,
             allowedOwnedOuterResultName,
             mutableBindings);
+        RestoreBorrowedTextOriginState(branchEntryBorrowedTextOrigins);
         if (thenType != elseType)
         {
             throw Error(
@@ -4476,6 +4511,11 @@ internal sealed partial class SemanticCompiler
                 $"if branches must return the same type, got {FormatType(thenType)} and {FormatType(elseType)}");
         }
 
+        ExpireBorrowedTextOriginsBeforeStatement(
+            [],
+            0,
+            null,
+            _borrowedTextContinuationNames);
         return thenType;
     }
 
@@ -4515,8 +4555,10 @@ internal sealed partial class SemanticCompiler
         }
 
         BoundType? resultType = null;
+        var branchEntryBorrowedTextOrigins = CaptureBorrowedTextOriginState();
         foreach (var arm in expression.Arms)
         {
+            RestoreBorrowedTextOriginState(branchEntryBorrowedTextOrigins);
             var condition = expression.Subject is null && !hasSubjectConditions
                 ? InferExpression(
                     arm.Condition,
@@ -4552,6 +4594,7 @@ internal sealed partial class SemanticCompiler
             }
         }
 
+        RestoreBorrowedTextOriginState(branchEntryBorrowedTextOrigins);
         var elseType = InferBlockBody(
             expression.Else,
             functions,
@@ -4559,6 +4602,7 @@ internal sealed partial class SemanticCompiler
             allowReadIntCall,
             allowedOwnedOuterResultName,
             mutableBindings);
+        RestoreBorrowedTextOriginState(branchEntryBorrowedTextOrigins);
         resultType ??= elseType;
         if (elseType != resultType)
         {
@@ -4568,6 +4612,11 @@ internal sealed partial class SemanticCompiler
                 $"when else must return {FormatType(resultType.Value)} but returns {FormatType(elseType)}");
         }
 
+        ExpireBorrowedTextOriginsBeforeStatement(
+            [],
+            0,
+            null,
+            _borrowedTextContinuationNames);
         return resultType.Value;
     }
 
@@ -4863,11 +4912,25 @@ internal sealed partial class SemanticCompiler
         var bodyMutableBindings = mutableBindings is null
             ? new HashSet<string>(StringComparer.Ordinal)
             : new HashSet<string>(mutableBindings, StringComparer.Ordinal);
-        BindStatements(body.Statements, functions, bodyBindings, bodyMutableBindings, allowContainerBindings: true);
+        BindStatements(
+            body.Statements,
+            functions,
+            bodyBindings,
+            bodyMutableBindings,
+            allowContainerBindings: true,
+            borrowRegionResult: body.Value,
+            shortenBorrowRegions: true,
+            borrowRegionContinuation: _borrowedTextContinuationNames);
         if (body.Value is null)
         {
             return BoundType.Unit;
         }
+
+        ExpireBorrowedTextOriginsBeforeStatement(
+            [],
+            0,
+            body.Value,
+            _borrowedTextContinuationNames);
 
         var resultType = InferExpression(
             body.Value,
@@ -8757,6 +8820,21 @@ internal sealed partial class SemanticCompiler
             return consumed;
         }
 
+        if (expression is IfExpression or WhenExpression)
+        {
+            var consumed = new List<string>();
+            foreach (var pair in bindings)
+            {
+                if (_types.ContainsOwnedStorage(pair.Value)
+                    && GetMoveInputDisposition(expression, pair.Key, functions, isResult: false)
+                    == MoveInputDisposition.Transferred)
+                {
+                    consumed.Add(pair.Key);
+                }
+            }
+            return consumed;
+        }
+
         return [];
     }
 
@@ -8838,11 +8916,13 @@ internal sealed partial class SemanticCompiler
             return MoveInputDisposition.Transferred;
         }
 
-        if (expression is IfExpression conditional && conditional.Else is not null)
+        if (expression is IfExpression conditional)
         {
             return CombineAlternativeMoveInputDispositions(
                 GetMoveInputDisposition(conditional.Then, inputName, functions),
-                GetMoveInputDisposition(conditional.Else, inputName, functions));
+                conditional.Else is null
+                    ? MoveInputDisposition.Retained
+                    : GetMoveInputDisposition(conditional.Else, inputName, functions));
         }
 
         if (expression is WhenExpression whenExpression)
@@ -8914,8 +8994,37 @@ internal sealed partial class SemanticCompiler
 
     private void ValidateOwnedParameterConsumptionExpression(
         Expression expression,
-        IReadOnlyDictionary<string, BoundFunction> functions)
+        IReadOnlyDictionary<string, BoundFunction> functions,
+        IReadOnlyDictionary<string, BoundType> bindings)
     {
+        if (expression is IfExpression conditional)
+        {
+            ValidateOwnedParameterConsumptionExpression(conditional.Condition, functions, bindings);
+            ValidateAlternativeOwnedParameterConsumption(expression, functions, bindings);
+            ValidateOwnedParameterConsumptionBlock(conditional.Then, functions, bindings);
+            if (conditional.Else is not null)
+            {
+                ValidateOwnedParameterConsumptionBlock(conditional.Else, functions, bindings);
+            }
+            return;
+        }
+
+        if (expression is WhenExpression selection)
+        {
+            if (selection.Subject is not null)
+            {
+                ValidateOwnedParameterConsumptionExpression(selection.Subject, functions, bindings);
+            }
+            foreach (var arm in selection.Arms)
+            {
+                ValidateOwnedParameterConsumptionExpression(arm.Condition, functions, bindings);
+                ValidateOwnedParameterConsumptionBlock(arm.Body, functions, bindings);
+            }
+            ValidateOwnedParameterConsumptionBlock(selection.Else, functions, bindings);
+            ValidateAlternativeOwnedParameterConsumption(expression, functions, bindings);
+            return;
+        }
+
         if (expression is CallExpression call && IsOwnedParameterCall(call, functions))
         {
             return;
@@ -8944,6 +9053,54 @@ internal sealed partial class SemanticCompiler
                 expression.Line,
                 expression.Column,
                 "owned container parameter calls must be direct calls or direct value-flow from a named owner");
+        }
+    }
+
+    private void ValidateAlternativeOwnedParameterConsumption(
+        Expression expression,
+        IReadOnlyDictionary<string, BoundFunction> functions,
+        IReadOnlyDictionary<string, BoundType> bindings)
+    {
+        foreach (var pair in bindings)
+        {
+            if (_types.ContainsOwnedStorage(pair.Value)
+                && GetMoveInputDisposition(expression, pair.Key, functions, isResult: false)
+                == MoveInputDisposition.Mixed)
+            {
+                throw Error(
+                    expression.Line,
+                    expression.Column,
+                    $"owned binding '{pair.Key}' must be consumed on every control-flow branch or on none of them");
+            }
+        }
+    }
+
+    private void ValidateOwnedParameterConsumptionBlock(
+        BlockBody body,
+        IReadOnlyDictionary<string, BoundFunction> functions,
+        IReadOnlyDictionary<string, BoundType> bindings)
+    {
+        foreach (var statement in body.Statements)
+        {
+            var nested = statement switch
+            {
+                BindingStatement binding => binding.Value,
+                ReturnStatement { Value: { } value } => value,
+                IndexAssignmentStatement assignment => assignment.Value,
+                FieldAssignmentStatement assignment => assignment.Value,
+                ExpressionStatement expressionStatement => expressionStatement.Expression,
+                GuardLoopControlStatement guard => guard.Condition,
+                BlockFunctionCallStatement block => block.Source,
+                _ => null
+            };
+            if (nested is not null)
+            {
+                ValidateOwnedParameterConsumptionExpression(nested, functions, bindings);
+            }
+        }
+        if (body.Value is not null)
+        {
+            ValidateOwnedParameterConsumptionExpression(body.Value, functions, bindings);
         }
     }
 

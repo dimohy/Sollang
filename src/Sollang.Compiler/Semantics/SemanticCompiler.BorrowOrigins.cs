@@ -217,11 +217,12 @@ internal sealed partial class SemanticCompiler
     private void ExpireBorrowedTextOriginsBeforeStatement(
         IReadOnlyList<Statement> statements,
         int statementIndex,
-        Expression? result)
+        Expression? result,
+        IReadOnlySet<string>? continuationNames)
     {
         foreach (var binding in _activeBorrowedTextOrigins.Keys.ToArray())
         {
-            var isLive = false;
+            var isLive = continuationNames?.Contains(binding) == true;
             for (var index = statementIndex; index < statements.Count; index++)
             {
                 if (StoragePlacementAnalyzer.ReferencesName(statements[index], binding))
@@ -242,6 +243,46 @@ internal sealed partial class SemanticCompiler
             {
                 _activeBorrowedTextOrigins.Remove(binding);
             }
+        }
+    }
+
+    private HashSet<string> BorrowedTextContinuationAfterStatement(
+        IReadOnlyList<Statement> statements,
+        int statementIndex,
+        Expression? result,
+        IReadOnlySet<string>? continuationNames)
+    {
+        var live = continuationNames is null
+            ? new HashSet<string>(StringComparer.Ordinal)
+            : new HashSet<string>(continuationNames, StringComparer.Ordinal);
+        foreach (var binding in _activeBorrowedTextOrigins.Keys)
+        {
+            for (var index = statementIndex + 1; index < statements.Count; index++)
+            {
+                if (StoragePlacementAnalyzer.ReferencesName(statements[index], binding))
+                {
+                    live.Add(binding);
+                    break;
+                }
+            }
+
+            if (result is not null && StoragePlacementAnalyzer.ReferencesName(result, binding))
+            {
+                live.Add(binding);
+            }
+        }
+        return live;
+    }
+
+    private Dictionary<string, string> CaptureBorrowedTextOriginState() =>
+        new(_activeBorrowedTextOrigins, StringComparer.Ordinal);
+
+    private void RestoreBorrowedTextOriginState(IReadOnlyDictionary<string, string> state)
+    {
+        _activeBorrowedTextOrigins.Clear();
+        foreach (var pair in state)
+        {
+            _activeBorrowedTextOrigins.Add(pair.Key, pair.Value);
         }
     }
 

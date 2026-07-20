@@ -2254,6 +2254,42 @@ Research basis:
 - [LLVM pass instrumentation](https://llvm.org/doxygen/PassInstrumentation_8h.html)
 - [MLIR pass instrumentation](https://mlir.llvm.org/docs/PassManagement/#pass-instrumentation)
 
+## CFG-Reachable Borrow Liveness (D213E)
+
+D213E replaces source-order-only E21 analysis with structured control-flow
+reachability for the current inferred SourceText-to-Text origin. The reference
+compiler carries outer continuation uses into branch blocks, analyzes `if` and
+`when` alternatives independently, and admits branch-local last-use shortening
+only when every outgoing path consumes the owner consistently. Mixed
+consumption is a compile-time join error.
+
+The self-host analyzer recognizes typed-IR branch regions, linked `when`
+alternatives, and loop containment. Sibling alternatives are mutually
+exclusive, a post-join use is reachable, and a use earlier in a loop body is
+reachable from a later move through the back-edge. Examples 472-474 and the new
+mixed-consumption diagnostic cover reference execution, self-host `0,1,1`
+classification, `if`, `when`, and loop behavior.
+
+Validation is a zero-warning Release build, focused checks **8/8**,
+Windows/Linux full suites at **635/635**, Windows Stage2 **7/7 in 70.5 seconds**
+at **11,606,935 LLVM bytes** with a **1,628,160-byte executable**, and Linux
+Stage2 **6/6 in 141.2 seconds** at **11,603,514 LLVM bytes** with a
+**3,265,096-byte executable**. The periodic Stage3 cadence advances to
+**3/10**, so Stage3 is not due.
+
+Formal progress remains **49 complete, 8 partial, 3 missing: 53/60 (88.3%)**.
+The remaining ownership gate still includes multiple/union origins, reference
+reassignment, aggregate borrowed returns, disjoint projected conflicts, and
+production enforcement of E17-E20.
+
+Research basis:
+
+- [Rust RFC 2094: non-lexical lifetimes](https://rust-lang.github.io/rfcs/2094-nll.html)
+- [Rust MIR dataflow](https://rustc-dev-guide.rust-lang.org/mir/dataflow.html)
+- [Polonius loan analysis](https://rust-lang.github.io/polonius/rules/loans.html)
+- [Polonius CFG input relations](https://rust-lang.github.io/polonius/rules/relations.html)
+- [2026 Polonius alpha project goal](https://rust-lang.github.io/rust-project-goals/2026/polonius.html)
+
 ## Immediate Implementation Order
 
 1. Multi-file compilation (implemented by example 52).

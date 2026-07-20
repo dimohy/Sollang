@@ -57,6 +57,70 @@ public analyzeLoweredContext prepared: semanticContext.SemanticSnapshot, typed: 
         }
         region!
     }
+    nodeBelongsTo nodeIndex: Int, ancestorIndex: Int -> Bool {
+        nodeIndex => ancestor!
+        false => belongs!
+        (ancestor! >= 0 and not belongs!) -> while {
+            ancestor! == ancestorIndex -> if {
+                true => belongs!
+            } else {
+                typed[ancestor!].parent => ancestor!
+            }
+        }
+        belongs!
+    }
+    enclosingLoopFor nodeIndex: Int -> Int {
+        nodeIndex => ancestor!
+        -1 => loop!
+        (ancestor! >= 0 and loop! < 0) -> while {
+            typed[ancestor!].kind == 20 -> if {
+                ancestor! => loop!
+            } else {
+                typed[ancestor!].parent => ancestor!
+            }
+        }
+        loop!
+    }
+    mutuallyExclusiveBranches leftIndex: Int, rightIndex: Int -> Bool {
+        leftIndex => leftAncestor!
+        false => exclusive!
+        (leftAncestor! >= 0 and not exclusive!) -> while {
+            typed[leftAncestor!].parent => branchControl!
+            (typed[leftAncestor!].kind == 19 and typed[leftAncestor!].operand1 >= 0 and typed[leftAncestor!].nextOperand >= 0) -> if {
+                leftIndex -> nodeBelongsTo(typed[leftAncestor!].operand1) => leftInArm
+                leftIndex -> nodeBelongsTo(typed[leftAncestor!].nextOperand) => leftInAlternative
+                rightIndex -> nodeBelongsTo(typed[leftAncestor!].operand1) => rightInArm
+                rightIndex -> nodeBelongsTo(typed[leftAncestor!].nextOperand) => rightInAlternative
+                ((leftInArm and rightInAlternative) or (leftInAlternative and rightInArm)) -> if {
+                    true => exclusive!
+                }
+            }
+            (typed[leftAncestor!].kind == 19 and branchControl! >= 0 and (typed[branchControl!].kind == 18 or typed[branchControl!].kind == 27)) -> if {
+                rightIndex => rightAncestor!
+                (rightAncestor! >= 0 and typed[rightAncestor!].parent != branchControl!) -> while {
+                    typed[rightAncestor!].parent => rightAncestor!
+                }
+                (rightAncestor! >= 0 and typed[rightAncestor!].kind == 19 and typed[rightAncestor!].parent == branchControl! and rightAncestor! != leftAncestor!) -> if {
+                    true => exclusive!
+                }
+            }
+            typed[leftAncestor!].parent => leftAncestor!
+        }
+        exclusive!
+    }
+    useReachableAfterMove moveIndex: Int, useIndex: Int -> Bool {
+        moveIndex -> enclosingLoopFor => moveLoop
+        (moveLoop >= 0 and (useIndex -> nodeBelongsTo(moveLoop))) -> if {
+            true
+        } else {
+            moveIndex -> mutuallyExclusiveBranches(useIndex) -> if {
+                false
+            } else {
+                prepared.package.ranges[typed[moveIndex].sourceModule] => reachabilityRange
+                prepared.package.nodes[reachabilityRange.astStart + typed[useIndex].astNode].start > prepared.package.nodes[reachabilityRange.astStart + typed[moveIndex].astNode].start
+            }
+        }
+    }
     memberMoveMatchesAssignment moveIndex: Int, assignmentIndex: Int -> Bool {
         moves![moveIndex] => candidateMove
         typed[assignmentIndex] => candidateAssignment
@@ -206,8 +270,10 @@ public analyzeLoweredContext prepared: semanticContext.SemanticSnapshot, typed: 
                             0 => borrowedUseSearch!
                             borrowedUseSearch! < (typed -> len) -> while {
                                 typed[borrowedUseSearch!] => borrowedUse
-                                (borrowedUse.kind == 5 and borrowedUse.sourceModule == borrowedMove.sourceModule and borrowedUse.operand0 == activeBorrow.bindingIr and borrowedUse.astNode >= 0 and prepared.package.nodes[borrowedMoveRange.astStart + borrowedUse.astNode].start > borrowedMoveStart) -> if {
-                                    true => borrowedViewUsedAfterMove!
+                                (borrowedUse.kind == 5 and borrowedUse.sourceModule == borrowedMove.sourceModule and borrowedUse.operand0 == activeBorrow.bindingIr and borrowedUse.astNode >= 0) -> if {
+                                    borrowedMove.siteIr -> useReachableAfterMove(borrowedUseSearch!) -> if {
+                                        true => borrowedViewUsedAfterMove!
+                                    }
                                 }
                                 borrowedUseSearch! + 1 => borrowedUseSearch!
                             }

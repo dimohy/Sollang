@@ -8018,6 +8018,65 @@ References:
 - [Mojo lifetimes, origins, and references](https://mojolang.org/docs/manual/values/lifetimes/)
 - [Swift memory safety and overlapping access](https://docs.swift.org/swift-book/documentation/the-swift-programming-language/memorysafety/)
 
+## D213E - CFG-Reachable Borrow Liveness Across Branches and Loops
+
+Status: implemented and cross-target Stage2 verified
+Date: 2026-07-20
+
+Borrowed Text regions now follow structured control-flow reachability rather
+than global source order. The reference semantic compiler carries the set of
+borrow bindings used by the continuation into nested `if` and `when` blocks,
+analyzes every alternative from the same entry state, and expires a view before
+a block result when neither that result nor the outer continuation reads it.
+An owned SourceText may therefore be consumed after the selected arm's final
+view use when every arm consumes it. Consumption on only some outgoing paths is
+rejected because the join would otherwise contain a conditionally initialized
+owner.
+
+Loop bodies use a conservative back-edge rule. If a view is read anywhere in a
+repeating body, its origin remains borrowed at every invalidation in that body,
+including a move textually after the read: the next iteration can reach the
+earlier read. A dead view that is not used in the loop or continuation may still
+expire before the loop-local invalidation.
+
+The self-host ownership analyzer applies the same reachability rule directly to
+flat typed IR. It recognizes sibling regions of structured `if` and enum
+control, the linked arm/alternative representation used by `when`, enclosing
+kind-20 loop regions, and ordinary forward reachability. Mutually exclusive
+arms do not create E21; a use after the join and a use reachable through a loop
+back-edge do. Example 473 proves the three outcomes independently as `0,1,1`.
+Examples 472 and 474 execute all-branch SourceText consumption after branch-
+local last uses, while `borrowed-text-branch-mixed-consumption` proves the join
+diagnostic.
+
+Validation passes a zero-warning Release build, focused checks 8/8, and the
+Windows and Linux full suites at 635/635. Windows Stage2 passes 7/7 in 70.5
+seconds at 11,606,935 LLVM bytes, 3,433,820 bitcode bytes, and a 1,628,160-byte
+executable. Linux Stage2 passes 6/6 in 141.2 seconds at 11,603,514 LLVM bytes,
+3,432,024 bitcode bytes, and a 3,265,096-byte executable. The Stage3 cadence is
+3/10, so Stage3 is intentionally deferred.
+
+Formal progress remains 49 complete, 8 partial, and 3 missing: 53/60 (88.3%).
+D213E closes structured branch alternatives and conservative loop back-edges
+for the current single-origin Text view, but multiple/union origins, reference
+reassignment, aggregate borrowed returns, disjoint projected conflicts, and
+production enforcement of E17-E20 remain.
+
+Rust NLL defines non-lexical lifetimes over the CFG rather than lexical scopes.
+Polonius makes the operational rule explicit: a loan is illegal to invalidate
+only when it is live at that CFG point, and its location-sensitive model follows
+CFG reachability. Sollang adopts that principle with a compact structured-CFG
+solver suited to its current typed IR, leaving general origin propagation for a
+later gate.
+
+References:
+
+- [Rust RFC 2094: non-lexical lifetimes](https://rust-lang.github.io/rfcs/2094-nll.html)
+- [Rust MIR dataflow](https://rustc-dev-guide.rust-lang.org/mir/dataflow.html)
+- [Polonius loan analysis](https://rust-lang.github.io/polonius/rules/loans.html)
+- [Polonius CFG input relations](https://rust-lang.github.io/polonius/rules/relations.html)
+- [2026 Polonius alpha project goal](https://rust-lang.github.io/rust-project-goals/2026/polonius.html)
+
 ## D213D - Shared Canonical Typed IR and Observable Stage2 Phases
 
 Status: implemented and cross-target Stage2 verified

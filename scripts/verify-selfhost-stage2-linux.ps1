@@ -26,7 +26,7 @@ $multiLibrarySource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\s
 $multiMainSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-main-smoke.slg"
 $borrowConflictSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-borrow-conflict.slg"
 $borrowSourceRuntime = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-borrow-source.slg"
-$expectedStage2Bytes = 11582091L
+$expectedStage2Bytes = 11603514L
 
 New-Item -ItemType Directory -Force -Path $artifactsDir | Out-Null
 
