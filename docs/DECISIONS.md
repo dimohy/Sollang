@@ -7884,3 +7884,43 @@ References:
 - [Rust place expressions](https://doc.rust-lang.org/stable/reference/expressions.html#place-expressions-and-value-expressions)
 - [Rust borrow splitting](https://doc.rust-lang.org/nomicon/borrow-splitting.html)
 - [Mojo lifetimes, origins, and references](https://docs.modular.com/mojo/manual/values/lifetimes/)
+
+## D211C - Mixed Postfix Chain Parity
+
+Status: implemented and cross-target Stage2 verified
+Date: 2026-07-20
+
+Sollang treats field and index access as suffixes of one left-associated postfix
+expression. The reference parser therefore consumes `.field`, `[index]`, and
+`![index]` in arbitrary order rather than in separate grouped passes. The
+self-host frontend keeps pure member paths compact for qualified-name
+compatibility, but normalizes any mixed chain containing an index into explicit
+prefix AST nodes. Thus `symbols![1].payload![0]` has the same shape and meaning
+as `((symbols![1]).payload)![0]` without requiring punctuation that obscures the
+place path.
+
+Examples 460 and 461 establish reference/self-host parity for two- and
+three-projection chains. The focused six-example D211 verifier passes on Linux,
+and all six emitted products are covered by ASan/UBSan leak, double-free,
+use-after-free, and undefined-behavior checks.
+
+Stage2 found and constrained a separate scheduling edge in the bootstrapped
+compiler: a computed final array index used as a call input could be emitted
+after the consuming operation. The normalizer records the last prefix node as
+it is created, eliminating that nested recovery expression. Windows/Linux full
+suites pass 622/622. Windows Stage2 passes 6/6 at 11,313,892 LLVM text bytes and
+a 1,570,304-byte executable; Linux Stage2 passes 5/5 at 11,310,495 LLVM text
+bytes and a 3,116,392-byte executable. Stage3 cadence advances to 7/10. Formal
+progress remains 49 complete, 8 partial, and 3 missing: 53/60 (88.3%).
+
+The design follows Kotlin's repeated postfix-suffix grammar and Rust's shared
+high-precedence, left-to-right field/index expression model while preserving
+Sollang's mutable-place `!` and propagation `?` spellings.
+
+References:
+
+- [Kotlin expressions specification](https://kotlinlang.org/spec/expressions.html)
+- [Kotlin grammar](https://kotlinlang.org/grammar/)
+- [Rust expression precedence and order](https://doc.rust-lang.org/stable/reference/expressions.html)
+- [Rust field expressions](https://doc.rust-lang.org/reference/expressions/field-expr.html)
+- [Rust array and slice indexing](https://doc.rust-lang.org/reference/expressions/array-expr.html)

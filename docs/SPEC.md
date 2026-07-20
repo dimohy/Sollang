@@ -405,7 +405,8 @@ argument_list := expression ("," expression)*
 path         := identifier ("." identifier)*
 type_name    := identifier
 type_annotation := type_name | "[" type_name ";" "~" "]" | "{" type_name ":" type_name "}"
-primary      := atom ("[" expression "]")*
+primary      := atom postfix_suffix*
+postfix_suffix := ("!"? "[" expression "]") | ("." identifier) | "?"
 atom         := when_expression | call | array_literal | dictionary_literal | "(" expression ")" | bool_literal | string_literal | number_literal | identifier
 array_literal := "[" type_name ";" ("~" | number_literal "~") "]" | "[" expression ("," expression)* ("," "~")? "]" | "[" expression ";" number_literal "]"
 dictionary_literal := "{" type_name ":" type_name (";" number_literal "~")? "}" | "{" dictionary_entry ("," dictionary_entry)* ","? "}"
@@ -426,6 +427,10 @@ Notes:
 - Semicolons are not statement separators. The current surface uses `;` only in
   repeated fixed-array literals such as `[0; 8]`.
 - Braces are the only block delimiters.
+- Field, index, mutable-index-view, and propagation suffixes form one repeated
+  postfix chain and associate from left to right. Dot and index suffixes may be
+  freely interleaved, so `symbols![1].payload![0]` means
+  `((symbols![1]).payload)![0]` without requiring grouping parentheses.
 - If `main { ... }` is omitted, remaining top-level statements after function
   declarations are treated as the executable main body.
 - A function whose body is a single expression should use `=> expression`
@@ -1061,7 +1066,7 @@ Container rules in the current slice:
   trap in the current runtime slice.
 - An indexed element that recursively owns storage is a place, not a copied
   value. Field and nested-index projections preserve that place identity, so
-  `symbols![key].payload -> inspect` and `(symbols![key].payload)[0] -> inspect`
+  `symbols![key].payload -> inspect` and `symbols![key].payload![0] -> inspect`
   may be passed directly to a default readonly function input. That borrow
   lasts only for the call expression. Binding, returning, storing, or mutating
   through the indexed result or one of its projections is rejected. Use

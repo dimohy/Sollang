@@ -2025,6 +2025,50 @@ direct-call lifetime while now retaining the complete projected place path.
 - [Rust borrow splitting](https://doc.rust-lang.org/nomicon/borrow-splitting.html)
 - [Mojo lifetimes, origins, and references](https://docs.modular.com/mojo/manual/values/lifetimes/)
 
+## Mixed Postfix Chain Parity (D211C)
+
+D211C makes field and index suffixes one left-associated chain in both compiler
+implementations. The parser now accepts arbitrary dot/index ordering such as
+`symbols![1].payload![0]` and `branches![1].items![0].value`; no grouping
+parentheses are required between suffix kinds. Pure qualified/member paths keep
+their compact existing AST representation, while chains containing an index
+are normalized by the self-host frontend into explicit left-associated prefix
+nodes. This preserves existing symbol-path behavior and gives typed IR the same
+tree shape as the reference compiler.
+
+Examples 460 and 461 cover index-to-field-to-index and
+index-to-field-to-index-to-field evaluation in the reference and self-host LLVM
+paths. The call-borrow verifier now runs all six D211 products and instruments
+the three reference modules plus three self-host modules with ASan/UBSan.
+
+The first Stage2 attempt also exposed a pre-existing self-host scheduling edge:
+using `array[(array -> len) - 1]` directly as another call's argument could emit
+the index conversion after its use. The AST normalizer now retains its last
+synthetic node while constructing the chain instead of recovering it through
+that nested expression. This keeps Stage1 and Stage2 LLVM valid and identical
+without introducing a hidden copy.
+
+Validation is a zero-warning Release build, Windows/Linux full suites at
+**622/622**, Windows Stage2 **6/6** at **11,313,892 LLVM text bytes** with a
+**1,570,304-byte native executable**, and Linux Stage2 **5/5** at **11,310,495
+LLVM text bytes** with a **3,116,392-byte native executable**. The periodic
+Stage3 cadence advances to **7/10**. Formal progress remains **49 complete, 8
+partial, 3 missing: 53/60 (88.3%)** because this closes parser/self-host parity
+inside an existing gate; escaping references and simultaneous path-sensitive
+borrow conflicts remain open.
+
+Research basis: Kotlin models a postfix expression as one primary followed by
+repeated postfix suffixes. Rust likewise gives field and index expressions the
+same high precedence and evaluates nested expressions left to right. Sollang
+adopts that uniform chain while retaining its own `![index]` mutable-place
+spelling and postfix `?` propagation.
+
+- [Kotlin expressions specification](https://kotlinlang.org/spec/expressions.html)
+- [Kotlin grammar](https://kotlinlang.org/grammar/)
+- [Rust expression precedence and order](https://doc.rust-lang.org/stable/reference/expressions.html)
+- [Rust field expressions](https://doc.rust-lang.org/reference/expressions/field-expr.html)
+- [Rust array and slice indexing](https://doc.rust-lang.org/reference/expressions/array-expr.html)
+
 ## Immediate Implementation Order
 
 1. Multi-file compilation (implemented by example 52).

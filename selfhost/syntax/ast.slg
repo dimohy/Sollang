@@ -125,9 +125,12 @@ lowerFrom request: LowerRequest -> [AstNode; ~] {
     source -> lexer.lex => tokens!
     [AstNode; ~] => ast!
     [Int; ~] => cstToAst!
-    [Int; ~] => indexedMemberParents!
-    [Int; ~] => indexedMemberNodes!
-    [UIntSize; ~] => indexedMemberBracketStarts!
+    [Int; ~] => postfixFixupParents!
+    [Int; ~] => postfixFixupNodes!
+    [UIntSize; ~] => postfixFixupStarts!
+    [UIntSize; ~] => postfixFixupEnds!
+    [Int; ~] => postfixOuterParents!
+    [Int; ~] => postfixOuterNodes!
     0 => cstIndex!
     0 - 1 => missingNode
 
@@ -140,9 +143,10 @@ lowerFrom request: LowerRequest -> [AstNode; ~] {
         }
         -1 => operatorKind!
         -1 => operatorPayloadToken!
-        -1 => memberDotToken!
-        -1 => indexBracketToken!
-        -1 => trailingMemberDotToken!
+        [Int; ~] => postfixKinds!
+        [Int; ~] => postfixOperatorTokens!
+        [Int; ~] => postfixBoundaryTokens!
+        false => postfixHasIndex!
         node.firstToken => operatorTokenIndex!
         node.firstToken + node.tokenCount => operatorTokenEnd
         0 => operatorGroupDepth!
@@ -169,20 +173,26 @@ lowerFrom request: LowerRequest -> [AstNode; ~] {
                 candidateOperator => operatorKind!
                 operatorTokenIndex! => operatorPayloadToken!
             }
-            (operatorGroupDepth! == 0 and astKind! == 36 and candidateOperator == grammar.tokenIdDot) -> if {
-                candidateOperator => operatorKind!
-                operatorTokenIndex! => operatorPayloadToken!
-                operatorTokenIndex! => memberDotToken!
-            }
-            (operatorGroupDepth! == 0 and astKind! == 36 and candidateOperator == grammar.tokenIdLeftBracket and operatorTokenIndex! > node.firstToken) -> if {
-                41 => astKind!
-                candidateOperator => operatorKind!
-                operatorTokenIndex! => operatorPayloadToken!
-                operatorTokenIndex! => indexBracketToken!
-            }
-            (operatorGroupDepth! == 0 and astKind! == 41 and candidateOperator == grammar.tokenIdDot and trailingMemberDotToken! < 0) -> if {
-                operatorTokenIndex! => trailingMemberDotToken!
+            (operatorGroupDepth! == 0 and node.ruleId == grammar.ruleIdPostfixExpression and candidateOperator == grammar.tokenIdDot) -> if {
+                postfixKinds! -> push(36)
+                postfixOperatorTokens! -> push(operatorTokenIndex!)
+                postfixBoundaryTokens! -> push(operatorTokenIndex!)
                 36 => astKind!
+                candidateOperator => operatorKind!
+                operatorTokenIndex! => operatorPayloadToken!
+            }
+            (operatorGroupDepth! == 0 and node.ruleId == grammar.ruleIdPostfixExpression and candidateOperator == grammar.tokenIdLeftBracket and operatorTokenIndex! > node.firstToken) -> if {
+                operatorTokenIndex! => postfixBoundaryToken!
+                operatorTokenIndex! - 1 => postfixPreviousToken!
+                (postfixPreviousToken! >= node.firstToken and (tokens![postfixPreviousToken!].kind == grammar.triviaIdWhitespace or tokens![postfixPreviousToken!].kind == grammar.triviaIdComment)) -> while {
+                    postfixPreviousToken! - 1 => postfixPreviousToken!
+                }
+                (postfixPreviousToken! >= node.firstToken and tokens![postfixPreviousToken!].kind == grammar.tokenIdBang) -> if { postfixPreviousToken! => postfixBoundaryToken! }
+                postfixKinds! -> push(41)
+                postfixOperatorTokens! -> push(operatorTokenIndex!)
+                postfixBoundaryTokens! -> push(postfixBoundaryToken!)
+                true => postfixHasIndex!
+                41 => astKind!
                 candidateOperator => operatorKind!
                 operatorTokenIndex! => operatorPayloadToken!
             }
@@ -314,85 +324,76 @@ lowerFrom request: LowerRequest -> [AstNode; ~] {
             ast! -> len => astIndex
             ast! -> push(astNode)
             astIndex => cstToAst![cstIndex!]
-            (astKind! == 41 and memberDotToken! >= 0) -> if {
-                ast! -> len => indexedMemberNode
-                ast! -> push(AstNode {
-                    kind: 36
-                    parent: astIndex
-                    cstRuleId: node.ruleId
-                    operatorKind: grammar.tokenIdDot
-                    payloadToken: memberDotToken!
-                    secondaryToken: -1
-                    tertiaryToken: -1
-                    flags: 0
-                    firstToken: astFirstToken!
-                    tokenCount: operatorPayloadToken! - astFirstToken!
-                    start: astStart!
-                    length: tokens![operatorPayloadToken!].span.start - astStart!
-                })
-                indexedMemberParents! -> push(astIndex)
-                indexedMemberNodes! -> push(indexedMemberNode)
-                indexedMemberBracketStarts! -> push(tokens![operatorPayloadToken!].span.start)
-            }
-            (astKind! == 36 and trailingMemberDotToken! >= 0 and indexBracketToken! >= 0) -> if {
-                ast! -> len => trailingIndexNode
-                ast! -> push(AstNode {
-                    kind: 41
-                    parent: astIndex
-                    cstRuleId: node.ruleId
-                    operatorKind: grammar.tokenIdLeftBracket
-                    payloadToken: indexBracketToken!
-                    secondaryToken: -1
-                    tertiaryToken: -1
-                    flags: 0
-                    firstToken: astFirstToken!
-                    tokenCount: trailingMemberDotToken! - astFirstToken!
-                    start: astStart!
-                    length: tokens![trailingMemberDotToken!].span.start - astStart!
-                })
-                indexedMemberParents! -> push(astIndex)
-                indexedMemberNodes! -> push(trailingIndexNode)
-                indexedMemberBracketStarts! -> push(tokens![trailingMemberDotToken!].span.start)
-                memberDotToken! >= 0 -> if {
-                    ast! -> len => trailingIndexedMemberNode
+            ((postfixKinds! -> len) > 1 and postfixHasIndex!) -> if {
+                [Int; ~] => postfixPrefixNodes!
+                missingNode => postfixLastPrefixNode!
+                0 => postfixPrefixIndex!
+                postfixPrefixIndex! < (postfixKinds! -> len) - 1 -> while {
+                    postfixBoundaryTokens![postfixPrefixIndex! + 1] => postfixPrefixEndToken!
+                    (postfixPrefixEndToken! > astFirstToken! and (tokens![postfixPrefixEndToken! - 1].kind == grammar.triviaIdWhitespace or tokens![postfixPrefixEndToken! - 1].kind == grammar.triviaIdComment)) -> while {
+                        postfixPrefixEndToken! - 1 => postfixPrefixEndToken!
+                    }
+                    tokens![postfixPrefixEndToken! - 1] => postfixPrefixLastToken
+                    ast! -> len => postfixPrefixNode
                     ast! -> push(AstNode {
-                        kind: 36
-                        parent: trailingIndexNode
+                        kind: postfixKinds![postfixPrefixIndex!]
+                        parent: -1
                         cstRuleId: node.ruleId
-                        operatorKind: grammar.tokenIdDot
-                        payloadToken: memberDotToken!
+                        operatorKind: postfixKinds![postfixPrefixIndex!] == 36 -> if { grammar.tokenIdDot } else { grammar.tokenIdLeftBracket }
+                        payloadToken: postfixOperatorTokens![postfixPrefixIndex!]
                         secondaryToken: -1
                         tertiaryToken: -1
                         flags: 0
                         firstToken: astFirstToken!
-                        tokenCount: indexBracketToken! - astFirstToken!
+                        tokenCount: postfixPrefixEndToken! - astFirstToken!
                         start: astStart!
-                        length: tokens![indexBracketToken!].span.start - astStart!
+                        length: postfixPrefixLastToken.span.start + postfixPrefixLastToken.span.length - astStart!
                     })
-                    indexedMemberParents! -> push(trailingIndexNode)
-                    indexedMemberNodes! -> push(trailingIndexedMemberNode)
-                    indexedMemberBracketStarts! -> push(tokens![indexBracketToken!].span.start)
+                    postfixPrefixNodes! -> push(postfixPrefixNode)
+                    postfixPrefixNode => postfixLastPrefixNode!
+                    postfixFixupParents! -> push(astIndex)
+                    postfixFixupNodes! -> push(postfixPrefixNode)
+                    postfixPrefixIndex! == 0 -> if { postfixFixupStarts! -> push(astStart!) } else { postfixFixupStarts! -> push(tokens![postfixBoundaryTokens![postfixPrefixIndex!]].span.start) }
+                    postfixFixupEnds! -> push(tokens![postfixBoundaryTokens![postfixPrefixIndex! + 1]].span.start)
+                    postfixPrefixIndex! + 1 => postfixPrefixIndex!
                 }
+                0 => postfixParentIndex!
+                postfixParentIndex! < (postfixPrefixNodes! -> len) -> while {
+                    ast![postfixPrefixNodes![postfixParentIndex!]] => postfixPrefixAst!
+                    postfixParentIndex! + 1 < (postfixPrefixNodes! -> len) -> if { postfixPrefixNodes![postfixParentIndex! + 1] => postfixPrefixAst!.parent }
+                    postfixPrefixAst! => ast![postfixPrefixNodes![postfixParentIndex!]]
+                    postfixParentIndex! + 1 => postfixParentIndex!
+                }
+                postfixOuterParents! -> push(astIndex)
+                postfixOuterNodes! -> push(postfixLastPrefixNode!)
             }
         }
         cstIndex! + 1 => cstIndex!
     }
 
-    0 => indexedMemberFixup!
-    indexedMemberFixup! < (indexedMemberParents! -> len) -> while {
-        indexedMemberParents![indexedMemberFixup!] => indexedMemberParent
-        indexedMemberNodes![indexedMemberFixup!] => indexedMemberNode
-        indexedMemberBracketStarts![indexedMemberFixup!] => indexedMemberBracketStart
-        0 => indexedMemberChild!
-        indexedMemberChild! < (ast! -> len) -> while {
-            ast![indexedMemberChild!] => indexedMemberChildNode!
-            (indexedMemberChild! != indexedMemberNode and indexedMemberChildNode!.parent == indexedMemberParent and indexedMemberChildNode!.start < indexedMemberBracketStart) -> if {
-                indexedMemberNode => indexedMemberChildNode!.parent
-                indexedMemberChildNode! => ast![indexedMemberChild!]
+    0 => postfixFixup!
+    postfixFixup! < (postfixFixupParents! -> len) -> while {
+        postfixFixupParents![postfixFixup!] => postfixFixupParent
+        postfixFixupNodes![postfixFixup!] => postfixFixupNode
+        postfixFixupStarts![postfixFixup!] => postfixFixupStart
+        postfixFixupEnds![postfixFixup!] => postfixFixupEnd
+        0 => postfixFixupChild!
+        postfixFixupChild! < (ast! -> len) -> while {
+            ast![postfixFixupChild!] => postfixFixupChildNode!
+            (postfixFixupChildNode!.parent == postfixFixupParent and postfixFixupChildNode!.start >= postfixFixupStart and postfixFixupChildNode!.start < postfixFixupEnd) -> if {
+                postfixFixupNode => postfixFixupChildNode!.parent
+                postfixFixupChildNode! => ast![postfixFixupChild!]
             }
-            indexedMemberChild! + 1 => indexedMemberChild!
+            postfixFixupChild! + 1 => postfixFixupChild!
         }
-        indexedMemberFixup! + 1 => indexedMemberFixup!
+        postfixFixup! + 1 => postfixFixup!
+    }
+    0 => postfixOuterFixup!
+    postfixOuterFixup! < (postfixOuterParents! -> len) -> while {
+        ast![postfixOuterNodes![postfixOuterFixup!]] => postfixOuterNode!
+        postfixOuterParents![postfixOuterFixup!] => postfixOuterNode!.parent
+        postfixOuterNode! => ast![postfixOuterNodes![postfixOuterFixup!]]
+        postfixOuterFixup! + 1 => postfixOuterFixup!
     }
 
     # The grammar keeps repeated infix operands flat. Normalize them into an

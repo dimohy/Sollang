@@ -889,6 +889,10 @@ approved syntax.
   `examples/459-selfhost-llvm-owned-index-projected-call-borrow.slg`:
   call-scoped readonly borrowing through field and nested-index projections,
   with the container retaining sole ownership
+- `examples/460-mixed-postfix-chain.slg` and
+  `examples/461-selfhost-llvm-mixed-postfix-chain.slg`: left-associated mixed
+  index/field chains such as `symbols![1].payload![0]` in the reference and
+  self-host LLVM paths
 - `examples/88-grammar-table-module.slg`: compiles the generated grammar-table
   module as a separate source file and reads its public metadata
 - `examples/browser`: static HTML/JS runner for the WebAssembly sample

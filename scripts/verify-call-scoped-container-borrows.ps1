@@ -13,11 +13,13 @@ $llvmDir = Join-Path $repoRoot ".tools\llvm-22.1.8"
 $clangPath = Join-Path $llvmDir "bin\clang.exe"
 $referenceNames = @(
     "456-owned-dictionary-value-call-borrow",
-    "458-owned-index-projected-call-borrow"
+    "458-owned-index-projected-call-borrow",
+    "460-mixed-postfix-chain"
 )
 $selfHostNames = @(
     "457-selfhost-llvm-owned-dictionary-value-call-borrow",
-    "459-selfhost-llvm-owned-index-projected-call-borrow"
+    "459-selfhost-llvm-owned-index-projected-call-borrow",
+    "461-selfhost-llvm-mixed-postfix-chain"
 )
 
 function Convert-ToWslPath {
@@ -45,11 +47,13 @@ Write-Host "[call-borrow 1/4] Verify reference and self-host behavior on Linux."
 & dotnet run --project $runnerProject -c Release --no-build -- `
     --exact $referenceNames[0] `
     --exact $referenceNames[1] `
+    --exact $referenceNames[2] `
     --exact $selfHostNames[0] `
     --exact $selfHostNames[1] `
+    --exact $selfHostNames[2] `
     --target linux-x64 `
     --skip-bootstrap `
-    --jobs 4
+    --jobs 6
 if ($LASTEXITCODE -ne 0) {
     throw "Call-scoped container borrow examples failed"
 }
