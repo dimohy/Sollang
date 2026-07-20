@@ -131,7 +131,11 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> [QualifiedResolution
                                 0 => symbolIndex!
                                 symbolIndex! < targetRange.symbolCount -> while {
                                     package.symbols[targetRange.symbolStart + symbolIndex!] => candidate
-                                    candidate.parent < 0 -> if {
+                                    # An impl header repeats its target type's name, but it is
+                                    # not an exported namespace member. Without this filter a
+                                    # later `impl SourceSpan` shadows the public `SourceSpan`
+                                    # declaration during qualified type resolution.
+                                    (candidate.parent < 0 and candidate.kind != 6) -> if {
                                         package.tokens[targetRange.tokenStart + candidate.nameToken] => candidateName
                                         lastIdentifier! => topLevelIdentifier!
                                         identifierCount! >= 3 -> if { secondIdentifier! => topLevelIdentifier! }

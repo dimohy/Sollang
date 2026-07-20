@@ -1,0 +1,52 @@
+import sollang.compiler.llvm.text as llvm
+
+main {
+    [
+        """
+        struct OwnedKey {
+            id: Int
+            payload: [Int; ~]
+        }
+
+        trait Hash {
+            hash: self -> Int
+        }
+
+        trait Eq {
+            eq: self -> Int
+        }
+
+        impl Hash for OwnedKey {
+            hash: self -> Int {
+                self.id
+            }
+        }
+
+        impl Eq for OwnedKey {
+            eq: self -> Int {
+                self.id
+            }
+        }
+
+        main {
+            {OwnedKey { id: 1, payload: [10, ~] }: 100} => values!
+            OwnedKey { id: 1, payload: [20, ~] } => lookup!
+            true -> if {
+                values![lookup!]
+            } else {
+                0
+            } => before
+            lookup!.id => lookupId
+
+            OwnedKey { id: 1, payload: [30, ~] } => equalKey!
+            200 => values![equalKey!]
+            equalKey!.id => equalId
+            values![lookup!] => after
+            values! -> take(lookup!) => taken
+            "owned key=$before,$after,$taken,ids=$lookupId,$equalId" -> println
+        }
+        """,
+        ~
+    ] => sources!
+    sources! -> llvm.emitLinux
+}

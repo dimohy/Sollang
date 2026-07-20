@@ -1873,6 +1873,39 @@ inside static ownership lowering.
 - [Rust `HashMap::Entry`](https://doc.rust-lang.org/stable/std/collections/hash_map/enum.Entry.html)
 - [Swift `Dictionary.updateValue`](https://developer.apple.com/documentation/swift/dictionary/updatevalue(_:forkey:))
 
+## Borrowed Equality For Owned Dictionary Keys (D210A)
+
+D210A admits local nominal dictionary keys that own recursive storage once the
+type provides valid `Hash` and `Eq` impls. Literal/insertion paths move the
+stored key exactly once; lookup, indexed replacement, and `take` invoke
+readonly `Eq.eq` without consuming stored or query keys. `take` destroys the
+removed stored key and preserves the independent query owner.
+
+The reference compiler now tracks transfers recursively through aggregate
+literals. The self-host compiler derives exact synthetic-`self` types from impl
+targets, lowers impl methods, and emits canonical key layout plus Eq calls in
+ordinary functions, main, and nested regions. Newline-tolerant impl parsing and
+qualified-name filtering prevent a parsed impl declaration from shadowing its
+target type. Examples 451-453 and two diagnostics cover these paths;
+`scripts/verify-owned-dictionary-keys.ps1` passes ASan/UBSan leak, double-free,
+use-after-free, and UB checks.
+
+Validation is zero-warning Release build, Windows/Linux full suites at
+**612/612**, Windows Stage2 **6/6** at **11,249,244 bytes**, and Linux Stage2
+**5/5** at **11,245,847 bytes**. This is Stage3 cadence **3/10**. Formal
+progress remains **49 complete, 8 partial, 3 missing: 53/60 (88.3%)**, with
+**7 equivalent gates remaining**: imported composite-key inference and wider
+path-sensitive container borrows are still open.
+
+Research basis: Rust separates owned map storage from borrowed lookup through
+`Borrow`, while Swift requires custom dictionary keys to satisfy `Hashable`
+and equality coherently. Sollang monomorphizes those witnesses without runtime
+type erasure.
+
+- [Rust `Borrow`](https://doc.rust-lang.org/std/borrow/trait.Borrow.html)
+- [Swift `Hashable`](https://developer.apple.com/documentation/swift/hashable)
+- [Swift `Dictionary`](https://developer.apple.com/documentation/swift/dictionary)
+
 ## Immediate Implementation Order
 
 1. Multi-file compilation (implemented by example 52).

@@ -2307,13 +2307,13 @@ internal sealed partial class SemanticCompiler
                     var movedSourceName = GetMoveConsumingContainerSourceName(binding.Value);
                     var movedFieldOwnerName = GetMoveConsumingOwnedFieldOwnerName(binding.Value, bindings);
                     var consumedSourceNames = GetOwnedParameterConsumedSourceNames(binding.Value, functions, bindings);
-                    var structFieldSourceNames = GetOwnedStructFieldSourceNames(binding.Value, bindings);
+                    var aggregateLiteralSourceNames = GetOwnedAggregateLiteralSourceNames(binding.Value, bindings);
                     if (bindings.ContainsKey(binding.Name)
                         && !isMutableRebind
                         && !string.Equals(binding.Name, movedSourceName, StringComparison.Ordinal)
                         && !string.Equals(binding.Name, movedFieldOwnerName, StringComparison.Ordinal)
                         && !consumedSourceNames.Contains(binding.Name, StringComparer.Ordinal)
-                        && !structFieldSourceNames.Contains(binding.Name, StringComparer.Ordinal))
+                        && !aggregateLiteralSourceNames.Contains(binding.Name, StringComparer.Ordinal))
                     {
                         throw Error(binding.Line, binding.Column, $"binding '{binding.Name}' already exists in this scope");
                     }
@@ -2379,7 +2379,7 @@ internal sealed partial class SemanticCompiler
                         bindings.Remove(consumedName);
                         mutableBindings.Remove(consumedName);
                     }
-                    foreach (var transferredName in structFieldSourceNames)
+                    foreach (var transferredName in aggregateLiteralSourceNames)
                     {
                         bindings.Remove(transferredName);
                         mutableBindings.Remove(transferredName);
@@ -2606,7 +2606,7 @@ internal sealed partial class SemanticCompiler
         {
             transferred.Add(consumedName);
         }
-        foreach (var fieldSourceName in GetOwnedStructFieldSourceNames(
+        foreach (var fieldSourceName in GetOwnedAggregateLiteralSourceNames(
                      assignment.Value, bindings))
         {
             transferred.Add(fieldSourceName);
@@ -2718,7 +2718,7 @@ internal sealed partial class SemanticCompiler
             {
                 transferred.Add(consumedName);
             }
-            foreach (var fieldSourceName in GetOwnedStructFieldSourceNames(
+            foreach (var fieldSourceName in GetOwnedAggregateLiteralSourceNames(
                          assignment.Value, bindings))
             {
                 transferred.Add(fieldSourceName);
@@ -7950,11 +7950,6 @@ internal sealed partial class SemanticCompiler
         {
             return false;
         }
-        if (_types.ContainsOwnedStorage(type))
-        {
-            return false;
-        }
-
         return HasDictionaryKeyTrait(type, "Hash", "hash")
             && HasDictionaryKeyTrait(type, "Eq", "eq");
     }
@@ -8196,40 +8191,49 @@ internal sealed partial class SemanticCompiler
         return name.Name;
     }
 
-    private IReadOnlyList<string> GetOwnedStructFieldSourceNames(
+    private IReadOnlyList<string> GetOwnedAggregateLiteralSourceNames(
         Expression expression,
         IReadOnlyDictionary<string, BoundType> bindings)
     {
-        if (expression is not StructLiteralExpression literal
-            || !_types.TryResolve(literal.TypeName, out var type)
-            || !_types.IsStruct(type))
+        var transferred = new List<string>();
+        switch (expression)
         {
-            return [];
+            case StructLiteralExpression structure
+                when _types.TryResolve(structure.TypeName, out var structureType)
+                     && _types.IsStruct(structureType):
+                CollectOwnedLiteralSourceNames(structure, structureType, bindings, transferred);
+                break;
+            case ArrayLiteralExpression { ElementType: { } elementTypeName } array
+                when _types.TryResolve(elementTypeName, out var elementType):
+                foreach (var element in array.Elements)
+                {
+                    CollectOwnedLiteralSourceNames(element, elementType, bindings, transferred);
+                }
+                break;
+            case DictionaryLiteralExpression
+                {
+                    KeyType: { } keyTypeName,
+                    ValueType: { } valueTypeName
+                } dictionary
+                when _types.TryResolve(keyTypeName, out var keyType)
+                     && _types.TryResolve(valueTypeName, out var valueType):
+                foreach (var entry in dictionary.Entries)
+                {
+                    CollectOwnedLiteralSourceNames(entry.Key, keyType, bindings, transferred);
+                    CollectOwnedLiteralSourceNames(entry.Value, valueType, bindings, transferred);
+                }
+                break;
         }
 
-        var definition = _types.GetStruct(type);
-        var transferred = new List<string>();
-        var unique = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var initializer in literal.Fields)
+        var duplicate = transferred
+            .GroupBy(static name => name, StringComparer.Ordinal)
+            .FirstOrDefault(static group => group.Count() > 1);
+        if (duplicate is not null)
         {
-            var field = definition.Fields.FirstOrDefault(candidate => candidate.Name == initializer.Name);
-            if (field is null
-                || !_types.ContainsOwnedStorage(field.Type)
-                || initializer.Value is not NameExpression name
-                || !bindings.TryGetValue(name.Name, out var sourceType)
-                || sourceType != field.Type)
-            {
-                continue;
-            }
-
-            if (!unique.Add(name.Name))
-            {
-                throw Error(
-                    initializer.Line,
-                    initializer.Column,
-                    $"owned binding '{name.Name}' cannot initialize more than one struct field");
-            }
-            transferred.Add(name.Name);
+            throw Error(
+                expression.Line,
+                expression.Column,
+                $"owned binding '{duplicate.Key}' cannot initialize more than one aggregate position");
         }
         return transferred;
     }
@@ -8506,6 +8510,27 @@ internal sealed partial class SemanticCompiler
             if (bindings.TryGetValue(name.Name, out var sourceType) && sourceType == expectedType)
             {
                 consumed.Add(name.Name);
+            }
+            return;
+        }
+        if (_types.IsDynamicArray(expectedType)
+            && expression is ArrayLiteralExpression array)
+        {
+            var elementType = _types.GetDynamicArray(expectedType).ElementType;
+            foreach (var element in array.Elements)
+            {
+                CollectOwnedLiteralSourceNames(element, elementType, bindings, consumed);
+            }
+            return;
+        }
+        if (_types.IsDictionary(expectedType)
+            && expression is DictionaryLiteralExpression dictionary)
+        {
+            var definition = _types.GetDictionary(expectedType);
+            foreach (var entry in dictionary.Entries)
+            {
+                CollectOwnedLiteralSourceNames(entry.Key, definition.KeyType, bindings, consumed);
+                CollectOwnedLiteralSourceNames(entry.Value, definition.ValueType, bindings, consumed);
             }
             return;
         }

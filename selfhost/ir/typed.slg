@@ -310,7 +310,7 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
         }
         request.symbolIndex => symbolIndex!
         prepared.package.symbols[sourceRange.symbolStart + symbolIndex!] => function
-        function.kind == 7 -> if {
+        (function.kind == 7 or function.kind == 31) -> if {
             -1 => resultTypeIndex!
             -1 => resultRootAst!
             1000000 => resultDistance!
@@ -400,6 +400,7 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                 }
                 -1 => parameterSymbol!
                 -1 => parameterTypeIndex!
+                -1 => parameterReferenceAst!
                 0 => parameterSearch!
                 parameterSearch! < sourceRange.symbolCount -> while {
                     prepared.package.symbols[sourceRange.symbolStart + parameterSearch!] => parameterCandidate
@@ -411,6 +412,7 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                     parameterNameSearch! < (resolvedNames! -> len) -> while {
                         resolvedNames![parameterNameSearch!] => parameterName
                         parameterName.symbol == parameterSymbol! -> if {
+                            parameterName.astNode => parameterReferenceAst!
                             0 => parameterInferredSearch!
                             parameterInferredSearch! < (inferred! -> len) -> while {
                                 inferred![parameterInferredSearch!] => parameterInferred
@@ -425,7 +427,23 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                 -1 => parameterModule!
                 -1 => parameterTypeSymbol!
                 -1 => parameterTypeId!
-                parameterTypeIndex! >= 0 -> if {
+                parameterReferenceAst! >= 0 -> if {
+                    0 => parameterExactSearch!
+                    parameterExactSearch! < (recursiveTypes.expressions -> len) -> while {
+                        recursiveTypes.expressions[parameterExactSearch!] => parameterExact
+                        (parameterExact.status == 0 and parameterExact.sourceModule == sourceIndex! and parameterExact.astNode == parameterReferenceAst!) -> if {
+                            parameterExact.typeId => parameterTypeId!
+                        }
+                        parameterExactSearch! + 1 => parameterExactSearch!
+                    }
+                    parameterTypeId! >= 0 -> if {
+                        recursiveSemanticTypes![parameterTypeId!] => exactParameterType
+                        exactParameterType.origin => parameterOrigin!
+                        exactParameterType.module => parameterModule!
+                        exactParameterType.symbol => parameterTypeSymbol!
+                    }
+                }
+                (parameterTypeIndex! >= 0 and parameterTypeId! < 0) -> if {
                     inferred![parameterTypeIndex!] => inferredParameterType
                     inferredParameterType.origin => parameterOrigin!
                     inferredParameterType.targetModule => parameterModule!
@@ -1917,7 +1935,7 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
         0 => symbolIndex!
         symbolIndex! < sourceRange.symbolCount -> while {
             prepared.package.symbols[sourceRange.symbolStart + symbolIndex!] => symbol
-            symbol.kind == 7 -> if {
+            (symbol.kind == 7 or symbol.kind == 31) -> if {
                 functionRequests! -> push(FunctionLowerRequest {
                     sourceIndex: sourceIndex!
                     symbolIndex: symbolIndex!

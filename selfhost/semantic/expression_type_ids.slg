@@ -657,6 +657,91 @@ public resolveContext prepared: semanticContext.SemanticSnapshot -> ExpressionTy
                     }
                 }
             }
+            # A method's synthetic `self` symbol has no written type node. For
+            # trait and inherent impls, derive it from the last Path child of
+            # the impl header (the target after `for` when a trait is present).
+            # This keeps readonly self a normal borrowed nominal parameter in
+            # typed IR instead of inventing a dictionary-only ABI.
+            (valueSymbol.typeNode < 0 and valueSymbol.kind == 35 and valueSymbol.parent >= 0) -> if {
+                prepared.package.symbols[sourceRange.symbolStart + valueSymbol.parent] => selfOwner
+                (selfOwner.kind == 31 and selfOwner.parent >= 0) -> if {
+                    prepared.package.symbols[sourceRange.symbolStart + selfOwner.parent] => selfImpl
+                    selfImpl.kind == 6 -> if {
+                        -1 => selfTargetPath!
+                        UIntSize(0) => selfTargetStart!
+                        0 => selfPathSearch!
+                        selfPathSearch! < sourceRange.astCount -> while {
+                            prepared.package.nodes[sourceRange.astStart + selfPathSearch!] => selfPathCandidate
+                            (selfPathCandidate.kind == 16 and selfPathCandidate.parent == selfImpl.astNode and (selfTargetPath! < 0 or selfPathCandidate.start > selfTargetStart!)) -> if {
+                                selfPathSearch! => selfTargetPath!
+                                selfPathCandidate.start => selfTargetStart!
+                            }
+                            selfPathSearch! + 1 => selfPathSearch!
+                        }
+                        selfTargetPath! >= 0 -> if {
+                            prepared.package.nodes[sourceRange.astStart + selfTargetPath!] => selfTargetNode
+                            -1 => selfTargetToken!
+                            selfTargetNode.firstToken => selfTargetTokenSearch!
+                            selfTargetTokenSearch! < selfTargetNode.firstToken + selfTargetNode.tokenCount -> while {
+                                prepared.package.tokens[sourceRange.tokenStart + selfTargetTokenSearch!].kind == grammar.tokenIdIdentifier -> if { selfTargetTokenSearch! => selfTargetToken! }
+                                selfTargetTokenSearch! + 1 => selfTargetTokenSearch!
+                            }
+                            -1 => selfTargetSymbol!
+                            selfTargetToken! >= 0 -> if {
+                                prepared.package.tokens[sourceRange.tokenStart + selfTargetToken!] => selfTargetName
+                                0 => selfTargetSymbolSearch!
+                                selfTargetSymbolSearch! < sourceRange.symbolCount -> while {
+                                    prepared.package.symbols[sourceRange.symbolStart + selfTargetSymbolSearch!] => selfTargetCandidate
+                                    ((selfTargetCandidate.kind == 3 or selfTargetCandidate.kind == 4) and selfTargetCandidate.parent < 0) -> if {
+                                        prepared.package.tokens[sourceRange.tokenStart + selfTargetCandidate.nameToken] => selfCandidateName
+                                        selfCandidateName.span.length == selfTargetName.span.length => selfTargetEqual!
+                                        UIntSize(0) => selfTargetByte!
+                                        (selfTargetEqual! and selfTargetByte! < selfTargetName.span.length) -> while {
+                                            (source -> byte(selfCandidateName.span.start + selfTargetByte!)) != (source -> byte(selfTargetName.span.start + selfTargetByte!)) -> if { false => selfTargetEqual! }
+                                            selfTargetByte! + UIntSize(1) => selfTargetByte!
+                                        }
+                                        selfTargetEqual! -> if { selfTargetSymbolSearch! => selfTargetSymbol! }
+                                    }
+                                    selfTargetSymbolSearch! + 1 => selfTargetSymbolSearch!
+                                }
+                            }
+                            selfTargetSymbol! >= 0 -> if {
+                                -1 => selfTypeId!
+                                0 => selfTypeSearch!
+                                selfTypeSearch! < (types! -> len) -> while {
+                                    types![selfTypeSearch!] => selfTypeCandidate
+                                    (selfTypeCandidate.kind == 1 and selfTypeCandidate.module == sourceIndex! and selfTypeCandidate.symbol == selfTargetSymbol!) -> if { selfTypeSearch! => selfTypeId! }
+                                    selfTypeSearch! + 1 => selfTypeSearch!
+                                }
+                                selfTypeId! < 0 -> if {
+                                    types! -> len => selfTypeId!
+                                    types! -> push(typeIds.SemanticType {
+                                        kind: 1
+                                        origin: 0
+                                        module: sourceIndex!
+                                        symbol: selfTargetSymbol!
+                                        first: -1
+                                        second: -1
+                                        length: -1
+                                        lengthHash: UInt64(0)
+                                        containsParameter: false
+                                        status: 0
+                                    })
+                                }
+                                expressionIndexByAst![sourceRange.astStart + resolvedName.astNode] => selfExpressionIndex!
+                                ExpressionTypeId { sourceModule: sourceIndex!, astNode: resolvedName.astNode, typeId: selfTypeId!, status: 0 } => selfExactType
+                                selfExpressionIndex! >= 0 -> if {
+                                    selfExactType => expressions![selfExpressionIndex!]
+                                } else {
+                                    expressions! -> len => selfExpressionIndex!
+                                    expressions! -> push(selfExactType)
+                                    selfExpressionIndex! => expressionIndexByAst![sourceRange.astStart + resolvedName.astNode]
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             resolvedNameIndex! + 1 => resolvedNameIndex!
         }
         sourceIndex! + 1 => sourceIndex!

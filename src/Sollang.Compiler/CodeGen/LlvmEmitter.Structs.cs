@@ -110,6 +110,29 @@ internal sealed partial class LlvmEmitter
             return;
         }
 
+        if (_program.Types.IsDynamicArray(expectedType)
+            && expression is ArrayLiteralExpression array)
+        {
+            var elementType = _program.Types.GetDynamicArray(expectedType).ElementType;
+            foreach (var element in array.Elements)
+            {
+                RemoveOwnedLiteralSources(element, elementType);
+            }
+            return;
+        }
+
+        if (_program.Types.IsDictionary(expectedType)
+            && expression is DictionaryLiteralExpression dictionary)
+        {
+            var dictionaryDefinition = _program.Types.GetDictionary(expectedType);
+            foreach (var entry in dictionary.Entries)
+            {
+                RemoveOwnedLiteralSources(entry.Key, dictionaryDefinition.KeyType);
+                RemoveOwnedLiteralSources(entry.Value, dictionaryDefinition.ValueType);
+            }
+            return;
+        }
+
         if (!_program.Types.IsStruct(expectedType))
         {
             return;

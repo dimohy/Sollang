@@ -7686,3 +7686,53 @@ References:
 - [Rust `HashMap::insert`](https://doc.rust-lang.org/std/collections/hash_map/struct.HashMap.html#method.insert)
 - [Rust `HashMap::Entry`](https://doc.rust-lang.org/stable/std/collections/hash_map/enum.Entry.html)
 - [Swift `Dictionary.updateValue`](https://developer.apple.com/documentation/swift/dictionary/updatevalue(_:forkey:))
+
+## D210A - Borrow Owned Dictionary Keys Through Hash And Eq
+
+Status: implemented and cross-target verified for local nominal keys
+Date: 2026-07-20
+
+A dictionary key may now own recursively managed storage. Admission still
+requires the concrete key type to implement both `Hash` and `Eq`; ownership no
+longer rejects the type before those semantic witnesses are considered. A
+dictionary literal or vacant `put` transfers the key exactly once. Lookup,
+indexed replacement, and `take` pass stored and query keys to readonly `self`
+methods without consuming either key. Removing an entry destroys only the
+stored key, while the independent query owner remains valid.
+
+The reference semantic pass recursively discovers transfers inside struct,
+array, and dictionary literals, rejects duplicate aggregate ownership, and the
+LLVM backend removes those source owners from cleanup state. The self-host
+type-ID pass derives a method's synthetic `self` from its impl target, typed IR
+lowers impl methods as ordinary functions, and LLVM lookup/replacement/take
+uses the canonical key type and the resolved `Eq.eq` witness in function,
+main-entry, and nested-region emission.
+
+This work exposed two independent parser/module fidelity defects. Impl bodies
+now permit newlines between methods and the closing brace. Qualified lookup no
+longer lets a top-level `impl SourceSpan` shadow the public `SourceSpan` type
+whose name it repeats. Example 453 permanently covers an imported struct with
+an inherent impl. Explicit imported dictionary-key composite types remain a
+separate module-type inference gate and are not claimed here.
+
+Examples 451 and 452 cover reference and self-host owned keys, including
+literal transfer, readonly lookup, indexed update, `take`, post-borrow member
+access, nested-region lookup, and recursive key destruction. Two diagnostics
+prove use-after-move rejection. `scripts/verify-owned-dictionary-keys.ps1`
+runs both Linux LLVM products under ASan/UBSan with leak detection and passes.
+Release builds have zero warnings and errors; Windows/Linux full suites pass
+612/612. Windows Stage2 passes 6/6 at 11,249,244 LLVM text bytes and Linux
+Stage2 passes 5/5 at 11,245,847 bytes. Formal progress remains 53/60 (88.3%)
+because imported composite-key inference and wider path-sensitive container
+borrows remain. Stage3 cadence advances to 3/10.
+
+The design follows Rust's rule that a map owns its stored key while lookup may
+borrow a compatible key, and Swift's rule that custom dictionary keys satisfy
+hashing and equality together. Sollang keeps these witnesses statically
+specialized and adds no runtime type tag or per-key witness pointer.
+
+References:
+
+- [Rust `Borrow`](https://doc.rust-lang.org/std/borrow/trait.Borrow.html)
+- [Swift `Hashable`](https://developer.apple.com/documentation/swift/hashable)
+- [Swift `Dictionary`](https://developer.apple.com/documentation/swift/dictionary)

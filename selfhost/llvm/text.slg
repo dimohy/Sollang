@@ -882,6 +882,93 @@ emitCore context: move EmitContext -> Unit uses Console {
         }
         targetFunctionIr!
     }
+    sourceTokenIs sourceIndex: Int, tokenIndex: Int, expected: Text -> Bool {
+        false => equal!
+        (sourceIndex >= 0 and sourceIndex < (context.ranges -> len) and tokenIndex >= 0) -> if {
+            context.ranges[sourceIndex] => tokenRange
+            context.tokens[tokenRange.tokenStart + tokenIndex] => actual
+            actual.span.length == (expected -> len) => equal!
+            UIntSize(0) => tokenByte!
+            (equal! and tokenByte! < actual.span.length) -> while {
+                (context.sources[sourceIndex] -> byte(actual.span.start + tokenByte!)) != (expected -> byte(tokenByte!)) -> if { false => equal! }
+                tokenByte! + UIntSize(1) => tokenByte!
+            }
+        }
+        equal!
+    }
+    sourceTokensEqual leftSource: Int, leftToken: Int, rightSource: Int, rightToken: Int -> Bool {
+        false => equal!
+        (leftSource >= 0 and leftSource < (context.ranges -> len) and rightSource >= 0 and rightSource < (context.ranges -> len) and leftToken >= 0 and rightToken >= 0) -> if {
+            context.ranges[leftSource] => leftRange
+            context.ranges[rightSource] => rightRange
+            context.tokens[leftRange.tokenStart + leftToken] => left
+            context.tokens[rightRange.tokenStart + rightToken] => right
+            left.span.length == right.span.length => equal!
+            UIntSize(0) => tokenByte!
+            (equal! and tokenByte! < left.span.length) -> while {
+                (context.sources[leftSource] -> byte(left.span.start + tokenByte!)) != (context.sources[rightSource] -> byte(right.span.start + tokenByte!)) -> if { false => equal! }
+                tokenByte! + UIntSize(1) => tokenByte!
+            }
+        }
+        equal!
+    }
+    # Resolve a trait method for a nominal key without transferring `self`.
+    # Impl methods are ordinary typed-IR functions, so dictionary equality can
+    # call the same readonly-borrow ABI as an explicit method invocation.
+    traitMethodSymbol typeId: Int, traitName: Text, methodName: Text -> Int {
+        -1 => resolvedMethod!
+        (typeId >= 0 and typeId < (context.types -> len)) -> if {
+            context.types[typeId] => receiverType
+            (receiverType.kind == 1 and receiverType.module >= 0 and receiverType.module < (context.ranges -> len)) -> if {
+                receiverType.module => receiverSource
+                context.ranges[receiverSource] => receiverRange
+                (receiverType.symbol >= 0 and receiverType.symbol < receiverRange.symbolCount) -> if {
+                    context.symbols[receiverRange.symbolStart + receiverType.symbol] => receiverSymbol
+                    0 => implSearch!
+                    implSearch! < receiverRange.symbolCount -> while {
+                        context.symbols[receiverRange.symbolStart + implSearch!] => implCandidate
+                        (resolvedMethod! < 0 and implCandidate.kind == 6 and implCandidate.parent < 0 and (receiverSource -> sourceTokenIs(implCandidate.nameToken, traitName))) -> if {
+                            -1 => targetPath!
+                            UIntSize(0) => targetPathStart!
+                            0 => targetPathSearch!
+                            targetPathSearch! < receiverRange.astCount -> while {
+                                context.nodes[receiverRange.astStart + targetPathSearch!] => targetPathCandidate
+                                (targetPathCandidate.kind == 16 and targetPathCandidate.parent == implCandidate.astNode and (targetPath! < 0 or targetPathCandidate.start > targetPathStart!)) -> if {
+                                    targetPathSearch! => targetPath!
+                                    targetPathCandidate.start => targetPathStart!
+                                }
+                                targetPathSearch! + 1 => targetPathSearch!
+                            }
+                            -1 => targetNameToken!
+                            targetPath! >= 0 -> if {
+                                context.nodes[receiverRange.astStart + targetPath!] => targetPathNode
+                                targetPathNode.firstToken => targetTokenSearch!
+                                targetTokenSearch! < targetPathNode.firstToken + targetPathNode.tokenCount -> while {
+                                    context.tokens[receiverRange.tokenStart + targetTokenSearch!].kind == grammar.tokenIdIdentifier -> if { targetTokenSearch! => targetNameToken! }
+                                    targetTokenSearch! + 1 => targetTokenSearch!
+                                }
+                            }
+                            (targetNameToken! >= 0 and (receiverSource -> sourceTokensEqual(targetNameToken!, receiverSource, receiverSymbol.nameToken))) -> if {
+                                0 => methodSearch!
+                                methodSearch! < receiverRange.symbolCount -> while {
+                                    context.symbols[receiverRange.symbolStart + methodSearch!] => methodCandidate
+                                    (methodCandidate.kind == 31 and methodCandidate.parent == implSearch! and (receiverSource -> sourceTokenIs(methodCandidate.nameToken, methodName))) -> if {
+                                        receiverRange.symbolStart + methodSearch! => methodGlobalSymbol
+                                        (methodGlobalSymbol >= 0 and methodGlobalSymbol < (frozenCaptureFunctionsBySymbol -> len) and frozenCaptureFunctionsBySymbol[methodGlobalSymbol] >= 0) -> if {
+                                            methodSearch! => resolvedMethod!
+                                        }
+                                    }
+                                    methodSearch! + 1 => methodSearch!
+                                }
+                            }
+                        }
+                        implSearch! + 1 => implSearch!
+                    }
+                }
+            }
+        }
+        resolvedMethod!
+    }
     hasWorkerScalarArrayElement nodeIndex: Int -> Bool {
         false => supported!
         context.ir[nodeIndex] => arrayNode
@@ -3394,16 +3481,31 @@ emitCore context: move EmitContext -> Unit uses Console {
             takeKeyTypeId! >= 0 -> if { takeKeyTypeId! -> writeSemanticTypeId } else { takeSource.typeModule -> llvmType -> print }
             ", ptr %take$(takeIndex)_key_ptr, align " -> print
             takeKeyTypeId! >= 0 -> if { context.typeAligns[takeKeyTypeId!] -> writeDecimalLine } else { takeSource.typeModule -> legacyStorageAlign -> writeDecimalLine }
-            "  %take$(takeIndex)_found = icmp eq " -> print
-            takeKeyTypeId! >= 0 -> if { takeKeyTypeId! -> writeSemanticTypeId } else { takeSource.typeModule -> llvmType -> print }
-            " %take$(takeIndex)_key, " -> print
-            (takeArgument.kind == 3 or takeArgument.kind == 4) -> if {
-                takeArgument -> sourceToken => takeKeyToken
-                takeArgument.kind == 3 -> if { context.sources[takeArgument.sourceModule] -> slice(takeKeyToken.span.start, takeKeyToken.span.length) -> println } else {
-                    ((context.sources[takeArgument.sourceModule] -> byte(takeKeyToken.span.start)) == UInt8(116)) -> if { "1" -> println } else { "0" -> println }
-                }
+            -1 => takeEqMethod!
+            takeKeyTypeId! >= 0 -> if { takeKeyTypeId! -> traitMethodSymbol("Eq", "eq") => takeEqMethod! }
+            takeEqMethod! >= 0 -> if {
+                context.types[takeKeyTypeId!] => takeNominalKeyType
+                "  %take$(takeIndex)_stored_eq = call i32 @sollang_m$(takeNominalKeyType.module)_s$(takeEqMethod!)(" -> print
+                takeKeyTypeId! -> writeSemanticTypeId
+                " %take$(takeIndex)_key)" -> println
+                "  %take$(takeIndex)_query_eq = call i32 @sollang_m$(takeNominalKeyType.module)_s$(takeEqMethod!)(" -> print
+                takeKeyTypeId! -> writeSemanticTypeId
+                " " -> print
+                (request.ownerIndex >= 0 and context.ir[request.ownerIndex].kind == 0 and context.ir[request.ownerIndex].operand1 >= 0 and takeArgument.kind == 5 and takeArgument.symbol == context.ir[context.ir[request.ownerIndex].operand1].symbol) -> if { "%arg" -> print } else { "%v$(takeNode.operand1)" -> print }
+                ")" -> println
+                "  %take$(takeIndex)_found = icmp eq i32 %take$(takeIndex)_stored_eq, %take$(takeIndex)_query_eq" -> println
             } else {
-                (request.ownerIndex >= 0 and context.ir[request.ownerIndex].kind == 0 and context.ir[request.ownerIndex].operand1 >= 0 and takeArgument.kind == 5 and takeArgument.symbol == context.ir[context.ir[request.ownerIndex].operand1].symbol) -> if { "%arg" -> println } else { "%v$(takeNode.operand1)" -> println }
+                "  %take$(takeIndex)_found = icmp eq " -> print
+                takeKeyTypeId! >= 0 -> if { takeKeyTypeId! -> writeSemanticTypeId } else { takeSource.typeModule -> llvmType -> print }
+                " %take$(takeIndex)_key, " -> print
+                (takeArgument.kind == 3 or takeArgument.kind == 4) -> if {
+                    takeArgument -> sourceToken => takeKeyToken
+                    takeArgument.kind == 3 -> if { context.sources[takeArgument.sourceModule] -> slice(takeKeyToken.span.start, takeKeyToken.span.length) -> println } else {
+                        ((context.sources[takeArgument.sourceModule] -> byte(takeKeyToken.span.start)) == UInt8(116)) -> if { "1" -> println } else { "0" -> println }
+                    }
+                } else {
+                    (request.ownerIndex >= 0 and context.ir[request.ownerIndex].kind == 0 and context.ir[request.ownerIndex].operand1 >= 0 and takeArgument.kind == 5 and takeArgument.symbol == context.ir[context.ir[request.ownerIndex].operand1].symbol) -> if { "%arg" -> println } else { "%v$(takeNode.operand1)" -> println }
+                }
             }
             "  br i1 %take$(takeIndex)_found, label %take$(takeIndex)_hit, label %take$(takeIndex)_find_advance" -> println
             "take$(takeIndex)_find_advance:" -> println
@@ -3620,18 +3722,33 @@ emitCore context: move EmitContext -> Unit uses Console {
                     assignmentKeyTypeId! >= 0 -> if { assignmentKeyTypeId! -> writeSemanticTypeId } else { assignmentBinding.typeModule -> llvmType -> print }
                     ", ptr %assign$(request.nodeIndex)_key_ptr, align " -> print
                     assignmentKeyTypeId! >= 0 -> if { context.typeAligns[assignmentKeyTypeId!] -> writeDecimalLine } else { assignmentBinding.typeModule -> legacyStorageAlign -> writeDecimalLine }
-                    "  %assign$(request.nodeIndex)_found = icmp eq " -> print
-                    assignmentKeyTypeId! >= 0 -> if { assignmentKeyTypeId! -> writeSemanticTypeId } else { assignmentBinding.typeModule -> llvmType -> print }
-                    " %assign$(request.nodeIndex)_key, " -> print
-                    (assignmentIndex.kind == 3 or assignmentIndex.kind == 4) -> if {
-                        assignmentIndex -> sourceToken => assignmentDictionaryKeyToken
-                        assignmentIndex.kind == 3 -> if {
-                            context.sources[assignmentIndex.sourceModule] -> slice(assignmentDictionaryKeyToken.span.start, assignmentDictionaryKeyToken.span.length) -> println
-                        } else {
-                            ((context.sources[assignmentIndex.sourceModule] -> byte(assignmentDictionaryKeyToken.span.start)) == UInt8(116)) -> if { "1" -> println } else { "0" -> println }
-                        }
+                    -1 => assignmentEqMethod!
+                    assignmentKeyTypeId! >= 0 -> if { assignmentKeyTypeId! -> traitMethodSymbol("Eq", "eq") => assignmentEqMethod! }
+                    assignmentEqMethod! >= 0 -> if {
+                        context.types[assignmentKeyTypeId!] => assignmentNominalKeyType
+                        "  %assign$(request.nodeIndex)_stored_eq = call i32 @sollang_m$(assignmentNominalKeyType.module)_s$(assignmentEqMethod!)(" -> print
+                        assignmentKeyTypeId! -> writeSemanticTypeId
+                        " %assign$(request.nodeIndex)_key)" -> println
+                        "  %assign$(request.nodeIndex)_query_eq = call i32 @sollang_m$(assignmentNominalKeyType.module)_s$(assignmentEqMethod!)(" -> print
+                        assignmentKeyTypeId! -> writeSemanticTypeId
+                        " " -> print
+                        (request.ownerIndex >= 0 and context.ir[request.ownerIndex].kind == 0 and context.ir[request.ownerIndex].operand1 >= 0 and assignmentIndex.kind == 5 and assignmentIndex.symbol == context.ir[context.ir[request.ownerIndex].operand1].symbol) -> if { "%arg" -> print } else { "%v$(assignment.operand1)" -> print }
+                        ")" -> println
+                        "  %assign$(request.nodeIndex)_found = icmp eq i32 %assign$(request.nodeIndex)_stored_eq, %assign$(request.nodeIndex)_query_eq" -> println
                     } else {
-                        (request.ownerIndex >= 0 and context.ir[request.ownerIndex].kind == 0 and context.ir[request.ownerIndex].operand1 >= 0 and assignmentIndex.kind == 5 and assignmentIndex.symbol == context.ir[context.ir[request.ownerIndex].operand1].symbol) -> if { "%arg" -> println } else { "%v$(assignment.operand1)" -> println }
+                        "  %assign$(request.nodeIndex)_found = icmp eq " -> print
+                        assignmentKeyTypeId! >= 0 -> if { assignmentKeyTypeId! -> writeSemanticTypeId } else { assignmentBinding.typeModule -> llvmType -> print }
+                        " %assign$(request.nodeIndex)_key, " -> print
+                        (assignmentIndex.kind == 3 or assignmentIndex.kind == 4) -> if {
+                            assignmentIndex -> sourceToken => assignmentDictionaryKeyToken
+                            assignmentIndex.kind == 3 -> if {
+                                context.sources[assignmentIndex.sourceModule] -> slice(assignmentDictionaryKeyToken.span.start, assignmentDictionaryKeyToken.span.length) -> println
+                            } else {
+                                ((context.sources[assignmentIndex.sourceModule] -> byte(assignmentDictionaryKeyToken.span.start)) == UInt8(116)) -> if { "1" -> println } else { "0" -> println }
+                            }
+                        } else {
+                            (request.ownerIndex >= 0 and context.ir[request.ownerIndex].kind == 0 and context.ir[request.ownerIndex].operand1 >= 0 and assignmentIndex.kind == 5 and assignmentIndex.symbol == context.ir[context.ir[request.ownerIndex].operand1].symbol) -> if { "%arg" -> println } else { "%v$(assignment.operand1)" -> println }
+                        }
                     }
                     "  br i1 %assign$(request.nodeIndex)_found, label %assign$(request.nodeIndex)_hit, label %assign$(request.nodeIndex)_find_advance" -> println
                     "assign$(request.nodeIndex)_find_advance:" -> println
@@ -5398,6 +5515,84 @@ emitCore context: move EmitContext -> Unit uses Console {
                     }
                     ")" -> println
                 } else {
+                    regionIndexedValue.typeOrigin == 15 -> if {
+                        -1 => regionIndexedDictionaryKeyTypeId!
+                        -1 => regionIndexedDictionaryValueTypeId!
+                        regionIndexedValue.typeId >= 0 -> if {
+                            context.types[regionIndexedValue.typeId] => regionIndexedDictionaryType
+                            regionIndexedDictionaryType.kind == 5 -> if {
+                                regionIndexedDictionaryType.first => regionIndexedDictionaryKeyTypeId!
+                                regionIndexedDictionaryType.second => regionIndexedDictionaryValueTypeId!
+                            }
+                        }
+                        "  %v$(regionNodeIndex!)_keys = extractvalue %sollang.dict " -> print
+                        (regionIndexedValue.kind == 5 and ownerIndex! >= 0 and context.ir[ownerIndex!].kind == 0 and context.ir[ownerIndex!].operand1 >= 0 and regionIndexedValue.symbol == context.ir[context.ir[ownerIndex!].operand1].symbol) -> if { "%arg" -> print } else { "%v$(regionNode.operand0)" -> print }
+                        ", 0" -> println
+                        "  %v$(regionNodeIndex!)_values = extractvalue %sollang.dict " -> print
+                        (regionIndexedValue.kind == 5 and ownerIndex! >= 0 and context.ir[ownerIndex!].kind == 0 and context.ir[ownerIndex!].operand1 >= 0 and regionIndexedValue.symbol == context.ir[context.ir[ownerIndex!].operand1].symbol) -> if { "%arg" -> print } else { "%v$(regionNode.operand0)" -> print }
+                        ", 1" -> println
+                        "  %v$(regionNodeIndex!)_length = extractvalue %sollang.dict " -> print
+                        (regionIndexedValue.kind == 5 and ownerIndex! >= 0 and context.ir[ownerIndex!].kind == 0 and context.ir[ownerIndex!].operand1 >= 0 and regionIndexedValue.symbol == context.ir[context.ir[ownerIndex!].operand1].symbol) -> if { "%arg" -> print } else { "%v$(regionNode.operand0)" -> print }
+                        ", 2" -> println
+                        "  br label %dict$(regionNodeIndex!)_start" -> println
+                        "dict$(regionNodeIndex!)_start:" -> println
+                        "  br label %dict$(regionNodeIndex!)_loop" -> println
+                        "dict$(regionNodeIndex!)_loop:" -> println
+                        "  %v$(regionNodeIndex!)_slot = phi i64 [ 0, %dict$(regionNodeIndex!)_start ], [ %v$(regionNodeIndex!)_next, %dict$(regionNodeIndex!)_advance ]" -> println
+                        "  %v$(regionNodeIndex!)_in_range = icmp ult i64 %v$(regionNodeIndex!)_slot, %v$(regionNodeIndex!)_length" -> println
+                        "  br i1 %v$(regionNodeIndex!)_in_range, label %dict$(regionNodeIndex!)_check, label %dict$(regionNodeIndex!)_missing" -> println
+                        "dict$(regionNodeIndex!)_check:" -> println
+                        "  %v$(regionNodeIndex!)_key_ptr = getelementptr " -> print
+                        regionIndexedDictionaryKeyTypeId! >= 0 -> if { regionIndexedDictionaryKeyTypeId! -> writeSemanticTypeId } else { regionIndexedValue.typeModule -> llvmType -> print }
+                        ", ptr %v$(regionNodeIndex!)_keys, i64 %v$(regionNodeIndex!)_slot" -> println
+                        "  %v$(regionNodeIndex!)_key = load " -> print
+                        regionIndexedDictionaryKeyTypeId! >= 0 -> if { regionIndexedDictionaryKeyTypeId! -> writeSemanticTypeId } else { regionIndexedValue.typeModule -> llvmType -> print }
+                        ", ptr %v$(regionNodeIndex!)_key_ptr, align " -> print
+                        regionIndexedDictionaryKeyTypeId! >= 0 -> if { context.typeAligns[regionIndexedDictionaryKeyTypeId!] -> writeDecimalLine } else { regionIndexedValue.typeModule -> legacyStorageAlign -> writeDecimalLine }
+                        -1 => regionIndexedDictionaryEqMethod!
+                        regionIndexedDictionaryKeyTypeId! >= 0 -> if { regionIndexedDictionaryKeyTypeId! -> traitMethodSymbol("Eq", "eq") => regionIndexedDictionaryEqMethod! }
+                        regionIndexedDictionaryEqMethod! >= 0 -> if {
+                            context.types[regionIndexedDictionaryKeyTypeId!] => regionIndexedNominalKeyType
+                            "  %v$(regionNodeIndex!)_stored_eq = call i32 @sollang_m$(regionIndexedNominalKeyType.module)_s$(regionIndexedDictionaryEqMethod!)(" -> print
+                            regionIndexedDictionaryKeyTypeId! -> writeSemanticTypeId
+                            " %v$(regionNodeIndex!)_key)" -> println
+                            "  %v$(regionNodeIndex!)_query_eq = call i32 @sollang_m$(regionIndexedNominalKeyType.module)_s$(regionIndexedDictionaryEqMethod!)(" -> print
+                            regionIndexedDictionaryKeyTypeId! -> writeSemanticTypeId
+                            " " -> print
+                            (regionIndexValue.kind == 5 and ownerIndex! >= 0 and context.ir[ownerIndex!].kind == 0 and context.ir[ownerIndex!].operand1 >= 0 and regionIndexValue.symbol == context.ir[context.ir[ownerIndex!].operand1].symbol) -> if { "%arg" -> print } else { "%v$(regionNode.operand1)" -> print }
+                            ")" -> println
+                            "  %v$(regionNodeIndex!)_found = icmp eq i32 %v$(regionNodeIndex!)_stored_eq, %v$(regionNodeIndex!)_query_eq" -> println
+                        } else {
+                            "  %v$(regionNodeIndex!)_found = icmp eq " -> print
+                            regionIndexedDictionaryKeyTypeId! >= 0 -> if { regionIndexedDictionaryKeyTypeId! -> writeSemanticTypeId } else { regionIndexedValue.typeModule -> llvmType -> print }
+                            " %v$(regionNodeIndex!)_key, " -> print
+                            (regionIndexValue.kind == 3 or regionIndexValue.kind == 4) -> if {
+                                regionIndexValue -> sourceToken => regionDictionaryIndexToken
+                                regionIndexValue.kind == 3 -> if {
+                                    context.sources[regionIndexValue.sourceModule] -> slice(regionDictionaryIndexToken.span.start, regionDictionaryIndexToken.span.length) -> println
+                                } else {
+                                    ((context.sources[regionIndexValue.sourceModule] -> byte(regionDictionaryIndexToken.span.start)) == UInt8(116)) -> if { "1" -> println } else { "0" -> println }
+                                }
+                            } else {
+                                (regionIndexValue.kind == 5 and ownerIndex! >= 0 and context.ir[ownerIndex!].kind == 0 and context.ir[ownerIndex!].operand1 >= 0 and regionIndexValue.symbol == context.ir[context.ir[ownerIndex!].operand1].symbol) -> if { "%arg" -> println } else { "%v$(regionNode.operand1)" -> println }
+                            }
+                        }
+                        "  br i1 %v$(regionNodeIndex!)_found, label %dict$(regionNodeIndex!)_hit, label %dict$(regionNodeIndex!)_advance" -> println
+                        "dict$(regionNodeIndex!)_advance:" -> println
+                        "  %v$(regionNodeIndex!)_next = add i64 %v$(regionNodeIndex!)_slot, 1" -> println
+                        "  br label %dict$(regionNodeIndex!)_loop" -> println
+                        "dict$(regionNodeIndex!)_missing:" -> println
+                        "  call void @llvm.trap()" -> println
+                        "  unreachable" -> println
+                        "dict$(regionNodeIndex!)_hit:" -> println
+                        "  %v$(regionNodeIndex!)_value_ptr = getelementptr " -> print
+                        regionIndexedDictionaryValueTypeId! >= 0 -> if { regionIndexedDictionaryValueTypeId! -> writeSemanticTypeId } else { regionIndexedValue.typeSymbol -> llvmType -> print }
+                        ", ptr %v$(regionNodeIndex!)_values, i64 %v$(regionNodeIndex!)_slot" -> println
+                        "  %v$(regionNodeIndex!) = load " -> print
+                        regionIndexedDictionaryValueTypeId! >= 0 -> if { regionIndexedDictionaryValueTypeId! -> writeSemanticTypeId } else { regionIndexedValue.typeSymbol -> llvmType -> print }
+                        ", ptr %v$(regionNodeIndex!)_value_ptr, align " -> print
+                        regionIndexedDictionaryValueTypeId! >= 0 -> if { context.typeAligns[regionIndexedDictionaryValueTypeId!] -> writeDecimalLine } else { regionIndexedValue.typeSymbol -> legacyStorageAlign -> writeDecimalLine }
+                    } else {
                     "  %v$(regionNodeIndex!)_data = extractvalue %sollang.array.i32 " -> print
                     (regionIndexedValue.kind == 5 and ownerIndex! >= 0 and context.ir[ownerIndex!].kind == 0 and context.ir[ownerIndex!].operand1 >= 0 and regionIndexedValue.symbol == context.ir[context.ir[ownerIndex!].operand1].symbol) -> if { "%arg" -> print } else { "%v$(regionNode.operand0)" -> print }
                     ", 0" -> println
@@ -5462,6 +5657,7 @@ emitCore context: move EmitContext -> Unit uses Console {
                     regionNode -> writeIrType
                     ", ptr %v$(regionNodeIndex!)_ptr, align " -> print
                     regionNode -> storageAlign -> writeDecimalLine
+                    }
                 }
             }
             (regionNode.kind == 7 or regionNode.kind == 8) -> if {
@@ -7225,6 +7421,15 @@ emitCore context: move EmitContext -> Unit uses Console {
                         ")" -> println
                     } else {
                     indexedArray.typeOrigin == 15 -> if {
+                        -1 => indexedDictionaryKeyTypeId!
+                        -1 => indexedDictionaryValueTypeId!
+                        indexedArray.typeId >= 0 -> if {
+                            context.types[indexedArray.typeId] => indexedDictionaryType
+                            indexedDictionaryType.kind == 5 -> if {
+                                indexedDictionaryType.first => indexedDictionaryKeyTypeId!
+                                indexedDictionaryType.second => indexedDictionaryValueTypeId!
+                            }
+                        }
                         "  %v$(expressionIndex!)_keys = extractvalue %sollang.dict " -> print
                         (indexedArray.kind == 5 and function.operand1 >= 0 and indexedArray.symbol == context.ir[function.operand1].symbol) -> if { "%arg" -> print } else { "%v$(expression.operand0)" -> print }
                         ", 0" -> println
@@ -7243,24 +7448,39 @@ emitCore context: move EmitContext -> Unit uses Console {
                         "  br i1 %v$(expressionIndex!)_in_range, label %dict$(expressionIndex!)_check, label %dict$(expressionIndex!)_missing" -> println
                         "dict$(expressionIndex!)_check:" -> println
                         "  %v$(expressionIndex!)_key_ptr = getelementptr " -> print
-                        indexedArray.typeModule -> llvmType -> print
+                        indexedDictionaryKeyTypeId! >= 0 -> if { indexedDictionaryKeyTypeId! -> writeSemanticTypeId } else { indexedArray.typeModule -> llvmType -> print }
                         ", ptr %v$(expressionIndex!)_keys, i64 %v$(expressionIndex!)_slot" -> println
                         "  %v$(expressionIndex!)_key = load " -> print
-                        indexedArray.typeModule -> llvmType -> print
+                        indexedDictionaryKeyTypeId! >= 0 -> if { indexedDictionaryKeyTypeId! -> writeSemanticTypeId } else { indexedArray.typeModule -> llvmType -> print }
                         ", ptr %v$(expressionIndex!)_key_ptr, align " -> print
-                        indexedArray.typeModule -> legacyStorageAlign -> writeDecimalLine
-                        "  %v$(expressionIndex!)_found = icmp eq " -> print
-                        indexedArray.typeModule -> llvmType -> print
-                        " %v$(expressionIndex!)_key, " -> print
-                        (arrayIndex.kind == 3 or arrayIndex.kind == 4) -> if {
-                            arrayIndex -> sourceToken => dictionaryIndexToken
-                            arrayIndex.kind == 3 -> if {
-                                context.sources[arrayIndex.sourceModule] -> slice(dictionaryIndexToken.span.start, dictionaryIndexToken.span.length) -> println
-                            } else {
-                                ((context.sources[arrayIndex.sourceModule] -> byte(dictionaryIndexToken.span.start)) == UInt8(116)) -> if { "1" -> println } else { "0" -> println }
-                            }
+                        indexedDictionaryKeyTypeId! >= 0 -> if { context.typeAligns[indexedDictionaryKeyTypeId!] -> writeDecimalLine } else { indexedArray.typeModule -> legacyStorageAlign -> writeDecimalLine }
+                        -1 => indexedDictionaryEqMethod!
+                        indexedDictionaryKeyTypeId! >= 0 -> if { indexedDictionaryKeyTypeId! -> traitMethodSymbol("Eq", "eq") => indexedDictionaryEqMethod! }
+                        indexedDictionaryEqMethod! >= 0 -> if {
+                            context.types[indexedDictionaryKeyTypeId!] => indexedNominalKeyType
+                            "  %v$(expressionIndex!)_stored_eq = call i32 @sollang_m$(indexedNominalKeyType.module)_s$(indexedDictionaryEqMethod!)(" -> print
+                            indexedDictionaryKeyTypeId! -> writeSemanticTypeId
+                            " %v$(expressionIndex!)_key)" -> println
+                            "  %v$(expressionIndex!)_query_eq = call i32 @sollang_m$(indexedNominalKeyType.module)_s$(indexedDictionaryEqMethod!)(" -> print
+                            indexedDictionaryKeyTypeId! -> writeSemanticTypeId
+                            " " -> print
+                            (arrayIndex.kind == 5 and function.operand1 >= 0 and arrayIndex.symbol == context.ir[function.operand1].symbol) -> if { "%arg" -> print } else { "%v$(expression.operand1)" -> print }
+                            ")" -> println
+                            "  %v$(expressionIndex!)_found = icmp eq i32 %v$(expressionIndex!)_stored_eq, %v$(expressionIndex!)_query_eq" -> println
                         } else {
-                            (arrayIndex.kind == 5 and function.operand1 >= 0 and arrayIndex.symbol == context.ir[function.operand1].symbol) -> if { "%arg" -> println } else { "%v$(expression.operand1)" -> println }
+                            "  %v$(expressionIndex!)_found = icmp eq " -> print
+                            indexedDictionaryKeyTypeId! >= 0 -> if { indexedDictionaryKeyTypeId! -> writeSemanticTypeId } else { indexedArray.typeModule -> llvmType -> print }
+                            " %v$(expressionIndex!)_key, " -> print
+                            (arrayIndex.kind == 3 or arrayIndex.kind == 4) -> if {
+                                arrayIndex -> sourceToken => dictionaryIndexToken
+                                arrayIndex.kind == 3 -> if {
+                                    context.sources[arrayIndex.sourceModule] -> slice(dictionaryIndexToken.span.start, dictionaryIndexToken.span.length) -> println
+                                } else {
+                                    ((context.sources[arrayIndex.sourceModule] -> byte(dictionaryIndexToken.span.start)) == UInt8(116)) -> if { "1" -> println } else { "0" -> println }
+                                }
+                            } else {
+                                (arrayIndex.kind == 5 and function.operand1 >= 0 and arrayIndex.symbol == context.ir[function.operand1].symbol) -> if { "%arg" -> println } else { "%v$(expression.operand1)" -> println }
+                            }
                         }
                         "  br i1 %v$(expressionIndex!)_found, label %dict$(expressionIndex!)_hit, label %dict$(expressionIndex!)_advance" -> println
                         "dict$(expressionIndex!)_advance:" -> println
@@ -7271,12 +7491,12 @@ emitCore context: move EmitContext -> Unit uses Console {
                         "  unreachable" -> println
                         "dict$(expressionIndex!)_hit:" -> println
                         "  %v$(expressionIndex!)_value_ptr = getelementptr " -> print
-                        indexedArray.typeSymbol -> llvmType -> print
+                        indexedDictionaryValueTypeId! >= 0 -> if { indexedDictionaryValueTypeId! -> writeSemanticTypeId } else { indexedArray.typeSymbol -> llvmType -> print }
                         ", ptr %v$(expressionIndex!)_values, i64 %v$(expressionIndex!)_slot" -> println
                         "  %v$(expressionIndex!) = load " -> print
-                        indexedArray.typeSymbol -> llvmType -> print
+                        indexedDictionaryValueTypeId! >= 0 -> if { indexedDictionaryValueTypeId! -> writeSemanticTypeId } else { indexedArray.typeSymbol -> llvmType -> print }
                         ", ptr %v$(expressionIndex!)_value_ptr, align " -> print
-                        indexedArray.typeSymbol -> legacyStorageAlign -> writeDecimalLine
+                        indexedDictionaryValueTypeId! >= 0 -> if { context.typeAligns[indexedDictionaryValueTypeId!] -> writeDecimalLine } else { indexedArray.typeSymbol -> legacyStorageAlign -> writeDecimalLine }
                     } else {
                     "  %v$(expressionIndex!)_data = extractvalue %sollang.array.i32 " -> print
                     (indexedArray.kind == 5 and function.operand1 >= 0 and indexedArray.symbol == context.ir[function.operand1].symbol) -> if { "%arg" -> print } else { "%v$(expression.operand0)" -> print }
@@ -9087,6 +9307,111 @@ emitCore context: move EmitContext -> Unit uses Console {
                             entryFieldPosition! + 1 => entryFieldPosition!
                         }
                     }
+                    entryExpression.kind == 13 -> if {
+                        (entryExpression.typeOrigin == 1 and entryExpression.typeSymbol == 16) -> if {
+                        } else {
+                        context.ir[entryExpression.operand0] => entryMemberBase
+                        entryMemberBase.typeOrigin => entryMemberCurrentOrigin!
+                        entryMemberBase.typeModule => entryMemberCurrentModule!
+                        entryMemberBase.typeSymbol => entryMemberCurrentSymbol!
+                        entryExpression -> sourceNode => entryMemberAst
+                        entryMemberBase -> sourceNode => entryMemberBaseAst
+                        entryMemberBaseAst.start + entryMemberBaseAst.length => entryMemberBaseEnd
+                        1 => entryMemberIdentifierCount!
+                        entryMemberAst.firstToken => entryMemberTokenIndex!
+                        true => entryBeforeMemberBaseEnd!
+                        (entryBeforeMemberBaseEnd! and entryMemberTokenIndex! < entryMemberAst.firstToken + entryMemberAst.tokenCount) -> while {
+                            context.tokens[context.ranges[entryExpression.sourceModule].tokenStart + entryMemberTokenIndex!].span.start < entryMemberBaseEnd -> if {
+                                entryMemberTokenIndex! + 1 => entryMemberTokenIndex!
+                            } else { false => entryBeforeMemberBaseEnd! }
+                        }
+                        entryMemberTokenIndex! => entryMemberPathTokenStart
+                        entryMemberTokenIndex! < entryMemberAst.firstToken + entryMemberAst.tokenCount -> while {
+                            context.tokens[context.ranges[entryExpression.sourceModule].tokenStart + entryMemberTokenIndex!].kind == grammar.tokenIdIdentifier -> if { entryMemberIdentifierCount! + 1 => entryMemberIdentifierCount! }
+                            entryMemberTokenIndex! + 1 => entryMemberTokenIndex!
+                        }
+                        1 => entryMemberIdentifierOrdinal!
+                        0 => entryMemberProjectionOrdinal!
+                        entryMemberPathTokenStart => entryMemberTokenIndex!
+                        entryMemberTokenIndex! < entryMemberAst.firstToken + entryMemberAst.tokenCount -> while {
+                            context.tokens[context.ranges[entryExpression.sourceModule].tokenStart + entryMemberTokenIndex!].kind == grammar.tokenIdIdentifier -> if {
+                                entryMemberIdentifierOrdinal! > 0 -> if {
+                                    entryMemberCurrentModule! => entryMemberOwnerSourceModule!
+                                    entryMemberCurrentOrigin! == 2 -> if { context.modules[entryMemberCurrentModule!].sourceIndex => entryMemberOwnerSourceModule! }
+                                    context.ranges[entryMemberOwnerSourceModule!] => entryMemberOwnerRange
+                                    -1 => entryMemberFieldOrdinal!
+                                    0 => entryMemberCandidateFieldOrdinal!
+                                    0 => entryMemberFieldSearch!
+                                    entryMemberFieldSearch! < entryMemberOwnerRange.symbolCount -> while {
+                                        context.symbols[entryMemberOwnerRange.symbolStart + entryMemberFieldSearch!] => entryMemberField
+                                        (entryMemberField.kind == 26 and entryMemberField.parent == entryMemberCurrentSymbol!) -> if {
+                                            context.tokens[context.ranges[entryExpression.sourceModule].tokenStart + entryMemberTokenIndex!] => entryMemberName
+                                            context.tokens[entryMemberOwnerRange.tokenStart + entryMemberField.nameToken] => entryMemberFieldName
+                                            entryMemberName.span.length == entryMemberFieldName.span.length => entryMemberEqual!
+                                            UIntSize(0) => entryMemberFieldNameByte!
+                                            (entryMemberEqual! and entryMemberFieldNameByte! < entryMemberName.span.length) -> while {
+                                                context.sources[entryExpression.sourceModule] -> byte(entryMemberName.span.start + entryMemberFieldNameByte!) => entryMemberByte
+                                                context.sources[entryMemberOwnerSourceModule!] -> byte(entryMemberFieldName.span.start + entryMemberFieldNameByte!) => entryMemberFieldByte
+                                                entryMemberByte != entryMemberFieldByte -> if { false => entryMemberEqual! }
+                                                entryMemberFieldNameByte! + UIntSize(1) => entryMemberFieldNameByte!
+                                            }
+                                            entryMemberEqual! -> if {
+                                                entryMemberCandidateFieldOrdinal! => entryMemberFieldOrdinal!
+                                                -1 => entryMemberFieldTypeIndex!
+                                                0 => entryMemberFieldTypeSearch!
+                                                entryMemberFieldTypeSearch! < (context.nominal -> len) -> while {
+                                                    (context.nominal[entryMemberFieldTypeSearch!].sourceModule == entryMemberOwnerSourceModule! and context.nominal[entryMemberFieldTypeSearch!].typeAst == entryMemberField.typeNode) -> if { entryMemberFieldTypeSearch! => entryMemberFieldTypeIndex! }
+                                                    entryMemberFieldTypeSearch! + 1 => entryMemberFieldTypeSearch!
+                                                }
+                                                -1 => entryMemberNextOrigin!
+                                                -1 => entryMemberNextModule!
+                                                -1 => entryMemberNextSymbol!
+                                                entryMemberFieldTypeIndex! >= 0 -> if {
+                                                    context.nominal[entryMemberFieldTypeIndex!] => entryMemberFieldType
+                                                    entryMemberFieldType.origin => entryMemberNextOrigin!
+                                                    entryMemberFieldType.targetModule => entryMemberNextModule!
+                                                    entryMemberFieldType.targetSymbol => entryMemberNextSymbol!
+                                                } else {
+                                                    0 => entryMemberCompositeSearch!
+                                                    entryMemberCompositeSearch! < (context.composite -> len) -> while {
+                                                        context.composite[entryMemberCompositeSearch!] => entryMemberCompositeType
+                                                        (entryMemberCompositeType.sourceModule == entryMemberOwnerSourceModule! and entryMemberCompositeType.typeAst == entryMemberField.typeNode) -> if {
+                                                            10 + entryMemberCompositeType.kind => entryMemberNextOrigin!
+                                                            entryMemberCompositeType.kind == 5 -> if {
+                                                                entryMemberCompositeType.keySymbol => entryMemberNextModule!
+                                                                entryMemberCompositeType.valueSymbol => entryMemberNextSymbol!
+                                                            } else {
+                                                                entryMemberCompositeType.elementModule => entryMemberNextModule!
+                                                                entryMemberCompositeType.elementSymbol => entryMemberNextSymbol!
+                                                            }
+                                                        }
+                                                        entryMemberCompositeSearch! + 1 => entryMemberCompositeSearch!
+                                                    }
+                                                }
+                                                "  " -> print
+                                                entryMemberIdentifierOrdinal! == entryMemberIdentifierCount! - 1 -> if { "%v$(entryExpressionIndex!)" -> print } else { "%v$(entryExpressionIndex!)_m$(entryMemberProjectionOrdinal!)" -> print }
+                                                " = extractvalue %sollang.struct.m$(entryMemberOwnerSourceModule!)_s$(entryMemberCurrentSymbol!) " -> print
+                                                entryMemberProjectionOrdinal! == 0 -> if { "%v$(entryExpression.operand0)" -> print } else {
+                                                    "%v$(entryExpressionIndex!)_m" -> print
+                                                    entryMemberProjectionOrdinal! - 1 -> writeDecimal
+                                                }
+                                                ", $(entryMemberFieldOrdinal!)" -> println
+                                                entryMemberNextOrigin! => entryMemberCurrentOrigin!
+                                                entryMemberNextModule! => entryMemberCurrentModule!
+                                                entryMemberNextSymbol! => entryMemberCurrentSymbol!
+                                                entryMemberProjectionOrdinal! + 1 => entryMemberProjectionOrdinal!
+                                            }
+                                            entryMemberCandidateFieldOrdinal! + 1 => entryMemberCandidateFieldOrdinal!
+                                        }
+                                        entryMemberFieldSearch! + 1 => entryMemberFieldSearch!
+                                    }
+                                }
+                                entryMemberIdentifierOrdinal! + 1 => entryMemberIdentifierOrdinal!
+                            }
+                            entryMemberTokenIndex! + 1 => entryMemberTokenIndex!
+                        }
+                        }
+                    }
                     (entryExpression.kind == 5 and not (entryExpression.typeOrigin == 1 and entryExpression.typeSymbol == 16)) -> if {
                         -1 => entryBindingValueIr!
                         (entryExpression.operand0 >= 0 and (context.ir[entryExpression.operand0].kind == 17 or context.ir[entryExpression.operand0].kind == 29)) -> if { entryExpression.operand0 => entryBindingValueIr! }
@@ -9221,6 +9546,63 @@ emitCore context: move EmitContext -> Unit uses Console {
                         "  %v$(entryExpressionIndex!)_1 = insertvalue %sollang.array.i32 %v$(entryExpressionIndex!)_0, i64 $(entryArrayLength!), 1" -> println
                         "  %v$(entryExpressionIndex!) = insertvalue %sollang.array.i32 %v$(entryExpressionIndex!)_1, i64 $(entryArrayLength!), 2" -> println
                     }
+                    (entryExpression.kind == 16 and entryExpression.typeOrigin == 15) -> if {
+                        0 => entryDictionaryItemCount!
+                        entryExpression.operand0 => entryDictionaryCountIndex!
+                        entryDictionaryCountIndex! >= 0 -> while {
+                            entryDictionaryItemCount! + 1 => entryDictionaryItemCount!
+                            context.ir[entryDictionaryCountIndex!].nextOperand => entryDictionaryCountIndex!
+                        }
+                        entryDictionaryItemCount! / 2 => entryDictionaryLength
+                        -1 => entryDictionaryKeyTypeId!
+                        -1 => entryDictionaryValueTypeId!
+                        entryExpression.typeId >= 0 -> if {
+                            context.types[entryExpression.typeId] => canonicalEntryDictionaryType
+                            canonicalEntryDictionaryType.kind == 5 -> if {
+                                canonicalEntryDictionaryType.first => entryDictionaryKeyTypeId!
+                                canonicalEntryDictionaryType.second => entryDictionaryValueTypeId!
+                            }
+                        }
+                        entryDictionaryLength * (entryExpression.typeModule -> storageSize) => entryDictionaryKeyByteLength!
+                        entryDictionaryLength * (entryExpression.typeSymbol -> storageSize) => entryDictionaryValueByteLength!
+                        entryDictionaryKeyTypeId! >= 0 -> if { entryDictionaryLength * context.typeSizes[entryDictionaryKeyTypeId!] => entryDictionaryKeyByteLength! }
+                        entryDictionaryValueTypeId! >= 0 -> if { entryDictionaryLength * context.typeSizes[entryDictionaryValueTypeId!] => entryDictionaryValueByteLength! }
+                        entryDictionaryKeyByteLength! => entryDictionaryKeyByteLength
+                        entryDictionaryValueByteLength! => entryDictionaryValueByteLength
+                        "  %v$(entryExpressionIndex!)_keys = call ptr @malloc(i64 $entryDictionaryKeyByteLength)" -> println
+                        "  %v$(entryExpressionIndex!)_values = call ptr @malloc(i64 $entryDictionaryValueByteLength)" -> println
+                        entryExpression.operand0 => entryDictionaryItemIndex!
+                        0 => entryDictionaryItemPosition!
+                        entryDictionaryItemIndex! >= 0 -> while {
+                            context.ir[entryDictionaryItemIndex!] => entryDictionaryItem
+                            entryDictionaryItemPosition! / 2 => entryDictionaryEntryPosition
+                            entryDictionaryItemPosition! % 2 == 0 -> if { "keys" } else { "values" } => entryDictionarySide
+                            entryDictionaryItemPosition! % 2 == 0 -> if { entryExpression.typeModule } else { entryExpression.typeSymbol } => entryDictionaryItemSymbol
+                            entryDictionaryItemPosition! % 2 == 0 -> if { entryDictionaryKeyTypeId! } else { entryDictionaryValueTypeId! } => entryDictionaryItemTypeId
+                            "  %v$(entryExpressionIndex!)_$(entryDictionarySide)_ptr$(entryDictionaryEntryPosition) = getelementptr " -> print
+                            entryDictionaryItemTypeId >= 0 -> if { entryDictionaryItemTypeId -> writeSemanticTypeId } else { entryDictionaryItemSymbol -> llvmType -> print }
+                            ", ptr %v$(entryExpressionIndex!)_$(entryDictionarySide), i64 $(entryDictionaryEntryPosition)" -> println
+                            "  store " -> print
+                            entryDictionaryItemTypeId >= 0 -> if { entryDictionaryItemTypeId -> writeSemanticTypeId } else { entryDictionaryItemSymbol -> llvmType -> print }
+                            " " -> print
+                            (entryDictionaryItem.kind == 3 or entryDictionaryItem.kind == 4) -> if {
+                                entryDictionaryItem -> sourceToken => entryDictionaryItemToken
+                                entryDictionaryItem.kind == 3 -> if {
+                                    context.sources[entryDictionaryItem.sourceModule] -> slice(entryDictionaryItemToken.span.start, entryDictionaryItemToken.span.length) -> print
+                                } else {
+                                    ((context.sources[entryDictionaryItem.sourceModule] -> byte(entryDictionaryItemToken.span.start)) == UInt8(116)) -> if { "1" -> print } else { "0" -> print }
+                                }
+                            } else { "%v$(entryDictionaryItemIndex!)" -> print }
+                            ", ptr %v$(entryExpressionIndex!)_$(entryDictionarySide)_ptr$(entryDictionaryEntryPosition), align " -> print
+                            entryDictionaryItemTypeId >= 0 -> if { context.typeAligns[entryDictionaryItemTypeId] -> writeDecimalLine } else { entryDictionaryItemSymbol -> legacyStorageAlign -> writeDecimalLine }
+                            entryDictionaryItem.nextOperand => entryDictionaryItemIndex!
+                            entryDictionaryItemPosition! + 1 => entryDictionaryItemPosition!
+                        }
+                        "  %v$(entryExpressionIndex!)_0 = insertvalue %sollang.dict poison, ptr %v$(entryExpressionIndex!)_keys, 0" -> println
+                        "  %v$(entryExpressionIndex!)_1 = insertvalue %sollang.dict %v$(entryExpressionIndex!)_0, ptr %v$(entryExpressionIndex!)_values, 1" -> println
+                        "  %v$(entryExpressionIndex!)_2 = insertvalue %sollang.dict %v$(entryExpressionIndex!)_1, i64 $(entryDictionaryLength), 2" -> println
+                        "  %v$(entryExpressionIndex!) = insertvalue %sollang.dict %v$(entryExpressionIndex!)_2, i64 $(entryDictionaryLength), 3" -> println
+                    }
                     (entryExpression.kind == 17 and entryExpression.flags == 1) -> if {
                         entryExpressionIndex! -> mutableBindingRoot => entryMutableRoot
                         context.ir[entryMutableRoot] => entryMutableBinding
@@ -9277,6 +9659,75 @@ emitCore context: move EmitContext -> Unit uses Console {
                                 (entryArgumentIndexWidth > 0 and entryArgumentIndexWidth < 64) -> if { "%v$(entryExpressionIndex!)_argument_index" -> print } else { "%v$(entryExpression.operand1)" -> print }
                             }
                             ")" -> println
+                        } else {
+                            entryIndexedValue.typeOrigin == 15 -> if {
+                                -1 => entryIndexedDictionaryKeyTypeId!
+                                -1 => entryIndexedDictionaryValueTypeId!
+                                entryIndexedValue.typeId >= 0 -> if {
+                                    context.types[entryIndexedValue.typeId] => entryIndexedDictionaryType
+                                    entryIndexedDictionaryType.kind == 5 -> if {
+                                        entryIndexedDictionaryType.first => entryIndexedDictionaryKeyTypeId!
+                                        entryIndexedDictionaryType.second => entryIndexedDictionaryValueTypeId!
+                                    }
+                                }
+                                "  %v$(entryExpressionIndex!)_keys = extractvalue %sollang.dict %v$(entryExpression.operand0), 0" -> println
+                                "  %v$(entryExpressionIndex!)_values = extractvalue %sollang.dict %v$(entryExpression.operand0), 1" -> println
+                                "  %v$(entryExpressionIndex!)_length = extractvalue %sollang.dict %v$(entryExpression.operand0), 2" -> println
+                                "  br label %dict$(entryExpressionIndex!)_start" -> println
+                                "dict$(entryExpressionIndex!)_start:" -> println
+                                "  br label %dict$(entryExpressionIndex!)_loop" -> println
+                                "dict$(entryExpressionIndex!)_loop:" -> println
+                                "  %v$(entryExpressionIndex!)_slot = phi i64 [ 0, %dict$(entryExpressionIndex!)_start ], [ %v$(entryExpressionIndex!)_next, %dict$(entryExpressionIndex!)_advance ]" -> println
+                                "  %v$(entryExpressionIndex!)_in_range = icmp ult i64 %v$(entryExpressionIndex!)_slot, %v$(entryExpressionIndex!)_length" -> println
+                                "  br i1 %v$(entryExpressionIndex!)_in_range, label %dict$(entryExpressionIndex!)_check, label %dict$(entryExpressionIndex!)_missing" -> println
+                                "dict$(entryExpressionIndex!)_check:" -> println
+                                "  %v$(entryExpressionIndex!)_key_ptr = getelementptr " -> print
+                                entryIndexedDictionaryKeyTypeId! >= 0 -> if { entryIndexedDictionaryKeyTypeId! -> writeSemanticTypeId } else { entryIndexedValue.typeModule -> llvmType -> print }
+                                ", ptr %v$(entryExpressionIndex!)_keys, i64 %v$(entryExpressionIndex!)_slot" -> println
+                                "  %v$(entryExpressionIndex!)_key = load " -> print
+                                entryIndexedDictionaryKeyTypeId! >= 0 -> if { entryIndexedDictionaryKeyTypeId! -> writeSemanticTypeId } else { entryIndexedValue.typeModule -> llvmType -> print }
+                                ", ptr %v$(entryExpressionIndex!)_key_ptr, align " -> print
+                                entryIndexedDictionaryKeyTypeId! >= 0 -> if { context.typeAligns[entryIndexedDictionaryKeyTypeId!] -> writeDecimalLine } else { entryIndexedValue.typeModule -> legacyStorageAlign -> writeDecimalLine }
+                                -1 => entryIndexedDictionaryEqMethod!
+                                entryIndexedDictionaryKeyTypeId! >= 0 -> if { entryIndexedDictionaryKeyTypeId! -> traitMethodSymbol("Eq", "eq") => entryIndexedDictionaryEqMethod! }
+                                entryIndexedDictionaryEqMethod! >= 0 -> if {
+                                    context.types[entryIndexedDictionaryKeyTypeId!] => entryIndexedNominalKeyType
+                                    "  %v$(entryExpressionIndex!)_stored_eq = call i32 @sollang_m$(entryIndexedNominalKeyType.module)_s$(entryIndexedDictionaryEqMethod!)(" -> print
+                                    entryIndexedDictionaryKeyTypeId! -> writeSemanticTypeId
+                                    " %v$(entryExpressionIndex!)_key)" -> println
+                                    "  %v$(entryExpressionIndex!)_query_eq = call i32 @sollang_m$(entryIndexedNominalKeyType.module)_s$(entryIndexedDictionaryEqMethod!)(" -> print
+                                    entryIndexedDictionaryKeyTypeId! -> writeSemanticTypeId
+                                    " %v$(entryExpression.operand1))" -> println
+                                    "  %v$(entryExpressionIndex!)_found = icmp eq i32 %v$(entryExpressionIndex!)_stored_eq, %v$(entryExpressionIndex!)_query_eq" -> println
+                                } else {
+                                    "  %v$(entryExpressionIndex!)_found = icmp eq " -> print
+                                    entryIndexedDictionaryKeyTypeId! >= 0 -> if { entryIndexedDictionaryKeyTypeId! -> writeSemanticTypeId } else { entryIndexedValue.typeModule -> llvmType -> print }
+                                    " %v$(entryExpressionIndex!)_key, " -> print
+                                    (entryIndexValue.kind == 3 or entryIndexValue.kind == 4) -> if {
+                                        entryIndexValue -> sourceToken => entryDictionaryIndexToken
+                                        entryIndexValue.kind == 3 -> if {
+                                            context.sources[entryIndexValue.sourceModule] -> slice(entryDictionaryIndexToken.span.start, entryDictionaryIndexToken.span.length) -> println
+                                        } else {
+                                            ((context.sources[entryIndexValue.sourceModule] -> byte(entryDictionaryIndexToken.span.start)) == UInt8(116)) -> if { "1" -> println } else { "0" -> println }
+                                        }
+                                    } else { "%v$(entryExpression.operand1)" -> println }
+                                }
+                                "  br i1 %v$(entryExpressionIndex!)_found, label %dict$(entryExpressionIndex!)_hit, label %dict$(entryExpressionIndex!)_advance" -> println
+                                "dict$(entryExpressionIndex!)_advance:" -> println
+                                "  %v$(entryExpressionIndex!)_next = add i64 %v$(entryExpressionIndex!)_slot, 1" -> println
+                                "  br label %dict$(entryExpressionIndex!)_loop" -> println
+                                "dict$(entryExpressionIndex!)_missing:" -> println
+                                "  call void @llvm.trap()" -> println
+                                "  unreachable" -> println
+                                "dict$(entryExpressionIndex!)_hit:" -> println
+                                "  %v$(entryExpressionIndex!)_value_ptr = getelementptr " -> print
+                                entryIndexedDictionaryValueTypeId! >= 0 -> if { entryIndexedDictionaryValueTypeId! -> writeSemanticTypeId } else { entryIndexedValue.typeSymbol -> llvmType -> print }
+                                ", ptr %v$(entryExpressionIndex!)_values, i64 %v$(entryExpressionIndex!)_slot" -> println
+                                "  %v$(entryExpressionIndex!) = load " -> print
+                                entryIndexedDictionaryValueTypeId! >= 0 -> if { entryIndexedDictionaryValueTypeId! -> writeSemanticTypeId } else { entryIndexedValue.typeSymbol -> llvmType -> print }
+                                ", ptr %v$(entryExpressionIndex!)_value_ptr, align " -> print
+                                entryIndexedDictionaryValueTypeId! >= 0 -> if { context.typeAligns[entryIndexedDictionaryValueTypeId!] -> writeDecimalLine } else { entryIndexedValue.typeSymbol -> legacyStorageAlign -> writeDecimalLine }
+                            }
                         }
                     }
                     (entryExpression.kind == 7 or entryExpression.kind == 8) -> if {
