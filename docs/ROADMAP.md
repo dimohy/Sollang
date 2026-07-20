@@ -56,7 +56,8 @@ ownership behavior is part of the feature.
 - [x] Readonly, `mut`, and `move` function ABI for parametric dynamic arrays
 - [x] Type-preserving `each` for fixed and dynamic parametric arrays
 - [x] Type-preserving `eachKey` and `eachValue` for parametric dictionaries
-- [x] Static `Hash`/`Eq` trait dispatch for copyable nominal dictionary keys
+- [x] Static `Hash`/`Eq` trait dispatch for local/imported nominal dictionary
+  keys, including recursively owned keys
 - [x] Contextual struct-key literals in dictionary indexing
 - [x] Compile-time `Int` value generics, `[Int; N]` parameters, and specialization
 - [x] Monomorphization with deterministic ownership/drop behavior for inline values

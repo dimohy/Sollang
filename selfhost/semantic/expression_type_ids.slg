@@ -401,6 +401,59 @@ public resolveContext prepared: semanticContext.SemanticSnapshot -> ExpressionTy
                     (byte0 == UInt8(102) and byte1 == UInt8(97) and byte2 == UInt8(108) and byte3 == UInt8(115) and byte4 == UInt8(101)) -> if { 23 => builtinTypeId! }
                 }
             }
+            # A typed dictionary literal carries two TypeAnnotation children
+            # before its runtime entries. Resolve those annotations directly
+            # instead of letting the generic nearest-expression pass mistake
+            # the qualified key path for the dictionary value itself.
+            node.kind == 38 -> if {
+                -1 => typedDictionaryKeyType!
+                -1 => typedDictionaryValueType!
+                0 => typedDictionaryChildSearch!
+                typedDictionaryChildSearch! < sourceRange.astCount -> while {
+                    prepared.package.nodes[sourceRange.astStart + typedDictionaryChildSearch!] => typedDictionaryChild
+                    (typedDictionaryChild.kind == 12 and typedDictionaryChild.parent == astIndex!) -> if {
+                        referenceIndexByTypeAst![sourceRange.astStart + typedDictionaryChildSearch!] => typedDictionaryReferenceIndex!
+                        typedDictionaryReferenceIndex! >= 0 -> if {
+                            references![typedDictionaryReferenceIndex!] => typedDictionaryReference
+                            typedDictionaryReference.status == 0 -> if {
+                                typedDictionaryKeyType! < 0 -> if {
+                                    typedDictionaryReference.typeId => typedDictionaryKeyType!
+                                } else {
+                                    typedDictionaryValueType! < 0 -> if { typedDictionaryReference.typeId => typedDictionaryValueType! }
+                                }
+                            }
+                        }
+                    }
+                    typedDictionaryChildSearch! + 1 => typedDictionaryChildSearch!
+                }
+                (typedDictionaryKeyType! >= 0 and typedDictionaryValueType! >= 0) -> if {
+                    -1 => typedDictionaryType!
+                    0 => typedDictionaryTypeSearch!
+                    typedDictionaryTypeSearch! < (types! -> len) -> while {
+                        types![typedDictionaryTypeSearch!] => typedDictionaryCandidate
+                        (typedDictionaryCandidate.kind == 5 and typedDictionaryCandidate.first == typedDictionaryKeyType! and typedDictionaryCandidate.second == typedDictionaryValueType! and typedDictionaryCandidate.status == 0) -> if {
+                            typedDictionaryTypeSearch! => typedDictionaryType!
+                        }
+                        typedDictionaryTypeSearch! + 1 => typedDictionaryTypeSearch!
+                    }
+                    typedDictionaryType! < 0 -> if {
+                        types! -> len => typedDictionaryType!
+                        types! -> push(typeIds.SemanticType {
+                            kind: 5
+                            origin: -1
+                            module: -1
+                            symbol: -1
+                            first: typedDictionaryKeyType!
+                            second: typedDictionaryValueType!
+                            length: -1
+                            lengthHash: UInt64(0)
+                            containsParameter: types![typedDictionaryKeyType!].containsParameter or types![typedDictionaryValueType!].containsParameter
+                            status: 0
+                        })
+                    }
+                    typedDictionaryType! => builtinTypeId!
+                }
+            }
             node.kind == 10 -> if {
                 node.firstToken => flowTokenIndex!
                 flowTokenIndex! < node.firstToken + node.tokenCount -> while {

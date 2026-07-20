@@ -7956,11 +7956,17 @@ internal sealed partial class SemanticCompiler
 
     private bool HasDictionaryKeyTrait(BoundType type, string traitName, string methodName)
     {
+        var definitionModule = _types.IsStruct(type)
+            ? _types.GetStruct(type).ModuleName
+            : _types.GetEnum(type).ModuleName;
         var typeName = _types.IsStruct(type)
             ? _types.GetStruct(type).Name
             : _types.GetEnum(type).Name;
+        var moduleTraitName = definitionModule.Length == 0
+            ? traitName
+            : definitionModule + "." + traitName;
         return _program.Functions.Any(function =>
-            function.TraitName == traitName
+            (function.TraitName == traitName || function.TraitName == moduleTraitName)
             && function.InputType == typeName
             && function.Name.EndsWith('.' + methodName, StringComparison.Ordinal)
             && function.ReturnType == "Int"

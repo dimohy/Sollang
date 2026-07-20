@@ -1,0 +1,58 @@
+import sollang.compiler.llvm.text as llvm
+
+main {
+    [
+        """
+        import sample.keys as keys
+
+        count values: {keys.OwnedKey: Int} -> Int {
+            values -> len => length
+            Int(length)
+        }
+
+        main {
+            {keys.OwnedKey: Int;
+                keys.OwnedKey { id: 7, payload: [10, ~] }: 600
+            } => values!
+            values! -> count => countBeforeTake
+            keys.OwnedKey { id: 7, payload: [20, ~] } => lookup!
+            values![lookup!] => before
+            keys.OwnedKey { id: 7, payload: [30, ~] } => replacement!
+            700 => values![replacement!]
+            values![lookup!] => after
+            values! -> take(lookup!) => taken
+            "imported owned key=$before,$after,$taken,count=$countBeforeTake" -> println
+        }
+        """,
+        """
+        namespace sample.keys
+
+        public struct OwnedKey {
+            id: Int
+            payload: [Int; ~]
+        }
+
+        trait Hash {
+            hash: self -> Int
+        }
+
+        trait Eq {
+            eq: self -> Int
+        }
+
+        impl Hash for OwnedKey {
+            hash: self -> Int {
+                self.id
+            }
+        }
+
+        impl Eq for OwnedKey {
+            eq: self -> Int {
+                self.id
+            }
+        }
+        """,
+        ~
+    ] => sources!
+    sources! -> llvm.emitLinux
+}

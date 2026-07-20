@@ -31,13 +31,18 @@ public struct CompositeType {
 # Component origins match nominal_types: 0 local, 1 builtin, 3 generic.
 public resolve sources: [Text; ~] -> [CompositeType; ~] {
     sources -> analysis.analyze => package
-    package -> resolveAnalyzed
+    package -> typeIds.resolveAnalyzed => semanticTypeSet
+    package -> resolveAnalyzed(semanticTypeSet)
 }
 
-public resolveAnalyzed package: analysis.PackageAnalysis -> [CompositeType; ~] {
+public resolveAnalyzed package: analysis.PackageAnalysis, semanticTypeSet: typeIds.SemanticTypeSet -> [CompositeType; ~] {
     ["Unit", "Text", "Int", "Int8", "Int16", "Int32", "Int64", "Long", "UInt8", "UInt16", "UInt32", "UInt64", "Size", "UIntSize", "CodePoint", "Arena", "Arguments", "MappedBytes", "MutableMappedBytes", "Float", "Float32", "Float64", "Double", "Bool", "SourceText", ~] => builtinNames!
     [CompositeType; ~] => results!
     package -> typeResolve.resolveAnalyzed => importedTypes!
+    # Use the canonical recursive type arena as the authoritative component
+    # identity source. Token ordinals remain below only as a compatibility
+    # projection for older unresolved forms; qualified names such as
+    # `{keys.OwnedKey: Int; ...}` cannot be decoded from identifier position.
     package -> modules.identitiesAnalyzed => identities!
     0 => sourceIndex!
     sourceIndex! < (package.sources -> len) -> while {
@@ -160,6 +165,41 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> [CompositeType; ~] {
                             0 => status!
                         }
                         importedTypeIndex! + 1 => importedTypeIndex!
+                    }
+                }
+                -1 => canonicalCompositeTypeId!
+                0 => canonicalReferenceSearch!
+                canonicalReferenceSearch! < (semanticTypeSet.references -> len) -> while {
+                    semanticTypeSet.references[canonicalReferenceSearch!] => canonicalReference
+                    (canonicalReference.status == 0 and canonicalReference.sourceModule == sourceIndex! and canonicalReference.typeAst == typeUse.astNode) -> if {
+                        semanticTypeSet.types[canonicalReference.typeId].kind == typeUse.kind -> if {
+                            canonicalReference.typeId => canonicalCompositeTypeId!
+                        }
+                    }
+                    canonicalReferenceSearch! + 1 => canonicalReferenceSearch!
+                }
+                canonicalCompositeTypeId! >= 0 -> if {
+                    semanticTypeSet.types[canonicalCompositeTypeId!] => canonicalComposite
+                    0 => canonicalChildIndex!
+                    canonicalChildIndex! < 2 -> while {
+                        canonicalComposite.first => canonicalChildTypeId!
+                        canonicalChildIndex! == 1 -> if { canonicalComposite.second => canonicalChildTypeId! }
+                        canonicalChildTypeId! >= 0 -> if {
+                            semanticTypeSet.types[canonicalChildTypeId!] => canonicalChild
+                            canonicalChild.kind == 1 -> if {
+                                canonicalChildIndex! => canonicalComponentSlot!
+                                typeUse.kind == 5 -> if { canonicalComponentSlot! + 1 => canonicalComponentSlot! }
+                                canonicalChild.origin => componentOrigins![canonicalComponentSlot!]
+                                canonicalChild.module => componentModules![canonicalComponentSlot!]
+                                canonicalChild.symbol => componentSymbols![canonicalComponentSlot!]
+                            }
+                        }
+                        canonicalChildIndex! + 1 => canonicalChildIndex!
+                    }
+                    typeUse.kind == 5 -> if {
+                        (componentOrigins![1] >= 0 and componentOrigins![2] >= 0) -> if { 0 => status! } else { 2 => status! }
+                    } else {
+                        componentOrigins![0] >= 0 -> if { 0 => status! } else { 2 => status! }
                     }
                 }
                 results! -> push(CompositeType {

@@ -255,8 +255,14 @@ internal sealed partial class LlvmEmitter
 
     private BoundFunction FindDictionaryKeyTraitMethod(BoundType type, string traitName, string methodName)
     {
+        var definitionModule = _program.Types.IsStruct(type)
+            ? _program.Types.GetStruct(type).ModuleName
+            : _program.Types.GetEnum(type).ModuleName;
+        var moduleTraitName = definitionModule.Length == 0
+            ? traitName
+            : definitionModule + "." + traitName;
         return _program.Functions.Values.FirstOrDefault(function =>
-            function.TraitName == traitName
+            (function.TraitName == traitName || function.TraitName == moduleTraitName)
             && function.InputType == type
             && function.Name.EndsWith('.' + methodName, StringComparison.Ordinal))
             ?? throw new SollangException(

@@ -1049,6 +1049,9 @@ Container rules in the current slice:
   the required built-in hash/equality operations. Values may be scalar, `Text`,
   or inline user values; owned values receive recursive entry destruction.
   `{Key: Value; N~}` creates an empty typed dictionary with a capacity hint.
+  `{Key: Value; keyExpression: valueExpression, ...}` gives nonempty entries
+  an explicit type context. Key and value annotations accept imported qualified
+  paths and the same recursive type syntax as function signatures.
   The legacy `{Int: Int}` layout also supports readonly stack promotion; other
   specializations currently use heap payload storage.
 - Typed empty arrays and dictionaries without capacity hints begin with a null
@@ -1064,8 +1067,9 @@ Container rules in the current slice:
 - `dictionary -> eachKey key { ... }` and `dictionary -> eachValue value {
   ... }` scan occupied Swiss-table slots and bind the concrete K or V type.
   Iteration order is unspecified. Owned items are readonly per-slot borrows.
-- `Int` and `Text` have built-in dictionary hash/equality. A copyable nominal
-  key must implement `Hash.hash: self -> Int` and `Eq.eq: self -> Int`.
+- `Int` and `Text` have built-in dictionary hash/equality. A local or imported
+  nominal key, including one that recursively owns storage, must implement
+  `Hash.hash: self -> Int` and `Eq.eq: self -> Int`.
   `Eq.eq` returns the canonical equality-class integer, and equal keys must
   return the same hash. Dispatch is statically specialized with no vtable.
 - When dictionary K is a struct, `dictionary[{ field: value, ... }]` is a

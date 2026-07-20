@@ -11,8 +11,14 @@ $compilerProject = Join-Path $repoRoot "src\Sollang.Compiler\Sollang.Compiler.cs
 $runnerProject = Join-Path $repoRoot "tests\Sollang.ExampleTests\Sollang.ExampleTests.csproj"
 $llvmDir = Join-Path $repoRoot ".tools\llvm-22.1.8"
 $clangPath = Join-Path $llvmDir "bin\clang.exe"
-$referenceName = "451-owned-dictionary-keys"
-$selfHostName = "452-selfhost-llvm-owned-dictionary-keys"
+$referenceNames = @(
+    "451-owned-dictionary-keys",
+    "455-imported-owned-dictionary-key"
+)
+$selfHostNames = @(
+    "452-selfhost-llvm-owned-dictionary-keys",
+    "454-selfhost-llvm-imported-owned-dictionary-key"
+)
 
 function Convert-ToWslPath {
     param([string]$Path)
@@ -37,8 +43,7 @@ New-Item -ItemType Directory -Force -Path $artifactsDir | Out-Null
 
 Write-Host "[owned-keys 1/4] Verify reference and self-host behavior on Linux."
 & dotnet run --project $runnerProject -c Release --no-build -- `
-    --exact $referenceName `
-    --exact $selfHostName `
+    ($referenceNames + $selfHostNames | ForEach-Object { "--exact"; $_ }) `
     --target linux-x64 `
     --skip-bootstrap `
     --jobs 2
@@ -48,32 +53,35 @@ if ($LASTEXITCODE -ne 0) {
 Write-Host "[owned-keys 1/4] PASS Linux reference and self-host execution"
 
 Write-Host "[owned-keys 2/4] Emit reference LLVM and collect self-host LLVM."
-$referenceOutput = Join-Path $artifactsDir "$referenceName-asan"
-& dotnet run --project $compilerProject -c Release --no-build -- build `
-    (Join-Path $repoRoot "examples\$referenceName.slg") `
-    -o $referenceOutput `
-    --target linux-x64 `
-    --llvm $llvmDir `
-    -O0 `
-    --keep-temps
-if ($LASTEXITCODE -ne 0) {
-    throw "Reference owned dictionary key LLVM emission failed"
-}
-$modules = @(
-    [pscustomobject]@{
+$modules = @()
+foreach ($referenceName in $referenceNames) {
+    $referenceOutput = Join-Path $artifactsDir "$referenceName-asan"
+    & dotnet run --project $compilerProject -c Release --no-build -- build `
+        (Join-Path $repoRoot "examples\$referenceName.slg") `
+        -o $referenceOutput `
+        --target linux-x64 `
+        --llvm $llvmDir `
+        -O0 `
+        --keep-temps
+    if ($LASTEXITCODE -ne 0) {
+        throw "Reference owned dictionary key LLVM emission failed: $referenceName"
+    }
+    $modules += [pscustomobject]@{
         Name = $referenceName
         Llvm = [System.IO.Path]::ChangeExtension($referenceOutput, ".ll")
         Expected = Join-Path $repoRoot "examples\expected\$referenceName.stdout.txt"
-    },
-    [pscustomobject]@{
+    }
+}
+foreach ($selfHostName in $selfHostNames) {
+    $modules += [pscustomobject]@{
         Name = $selfHostName
         Llvm = Join-Path $linuxArtifactsDir "$selfHostName.stdout.ll"
         Expected = Join-Path $repoRoot "examples\expected\$selfHostName.stdout.llvm.linux.execute.txt"
     }
-)
+}
 Write-Host "[owned-keys 2/4] PASS LLVM modules collected"
 
-Write-Host "[owned-keys 3/4] Instrument both LLVM modules with ASan and UBSan."
+Write-Host "[owned-keys 3/4] Instrument all LLVM modules with ASan and UBSan."
 foreach ($module in $modules) {
     $objectPath = Join-Path $artifactsDir "$($module.Name).asan.o"
     & $clangPath "--target=x86_64-unknown-linux-gnu" -c $module.Llvm -O1 -g `

@@ -1906,6 +1906,39 @@ type erasure.
 - [Swift `Hashable`](https://developer.apple.com/documentation/swift/hashable)
 - [Swift `Dictionary`](https://developer.apple.com/documentation/swift/dictionary)
 
+## Canonical Imported Dictionary Key Types (D210B)
+
+D210B closes the imported composite-key inference boundary left by D210A.
+Typed nonempty dictionaries and function contracts accept qualified recursive
+annotations such as `{keys.OwnedKey: Int}`. Both the C# and generated parsers
+preserve the explicit type context; self-host expression inference constructs
+the dictionary ID from canonical `TypeAnnotation` references instead of token
+ordinals, and legacy composite projections reuse the prepared type arena.
+
+Reference and self-host LLVM resolve `Hash`/`Eq` implementations in the key's
+defining module, retain the imported nominal layout, borrow lookup keys, and
+recursively destroy only transferred stored keys. Examples 454 and 455 plus
+the expanded ASan/UBSan gate cover typed literals, typed function input,
+lookup, replacement, `take`, and drop across the module boundary.
+
+Validation is a zero-warning Release build, Windows/Linux full suites at
+**614/614**, Windows Stage2 **6/6** at **11,278,354 bytes**, and Linux Stage2
+**5/5** at **11,274,957 bytes**. The periodic Stage3 cadence is **4/10**.
+Formal progress remains **49 complete, 8 partial, 3 missing: 53/60 (88.3%)**;
+this was a tracked sub-gate inside existing module/type/container capability,
+not a separate one of the 60 top-level gates.
+
+Research basis: Rust gives imported items canonical identities independent of
+their source aliases and permits paths in type syntax; Swift composes custom
+dictionary key types across module APIs and requires `Hashable` conformance.
+Sollang uses the same identity boundary with dot-qualified paths and static
+witness specialization.
+
+- [Rust paths](https://doc.rust-lang.org/reference/paths.html)
+- [Rust implementation coherence](https://doc.rust-lang.org/stable/reference/items/implementations.html)
+- [Swift dictionary types](https://docs.swift.org/swift-book/documentation/the-swift-programming-language/types/)
+- [Swift access control](https://docs.swift.org/swift-book/documentation/the-swift-programming-language/accesscontrol/)
+
 ## Immediate Implementation Order
 
 1. Multi-file compilation (implemented by example 52).

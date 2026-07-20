@@ -7736,3 +7736,51 @@ References:
 - [Rust `Borrow`](https://doc.rust-lang.org/std/borrow/trait.Borrow.html)
 - [Swift `Hashable`](https://developer.apple.com/documentation/swift/hashable)
 - [Swift `Dictionary`](https://developer.apple.com/documentation/swift/dictionary)
+
+## D210B - Canonical Imported Dictionary Key Types Across Modules
+
+Status: implemented and cross-target Stage2 verified
+Date: 2026-07-20
+
+Imported nominal dictionary keys now retain declaration identity through both
+typed literals and function signatures. The explicit forms
+`{keys.OwnedKey: Int; key: value}` and `{keys.OwnedKey: Int}` parse the key and
+value as recursive type annotations rather than assuming one-token type names.
+The generated grammar accepts typed nonempty entries after the semicolon, and
+the C# parser uses speculative recursive type parsing to preserve its ordinary
+dictionary-entry ambiguity boundary.
+
+The self-host expression type-ID pass constructs the literal's dictionary ID
+directly from its two `TypeAnnotation` children. Composite projection consumes
+the already prepared canonical type arena, so a module alias spelling maps to
+the imported declaration's module/symbol identity without repeating semantic
+analysis. Reference admission and LLVM dispatch recognize the defining
+module's `Hash` and `Eq` witnesses while still allowing the root traits used by
+existing programs. No runtime type tag, witness table, or erased key ABI is
+introduced.
+
+Examples 454 and 455 cover self-host and reference compilation of an imported
+owned key in a typed literal and `{keys.OwnedKey: Int}` function contract. They
+exercise readonly lookup, occupied replacement, `take`, static `Eq.eq` calls,
+and recursive destruction. The owned-key sanitizer gate now instruments all
+four local/imported reference/self-host LLVM products with ASan/UBSan and leak
+detection. Release builds report zero warnings and errors; Windows and Linux
+full suites pass 614/614. Windows Stage2 passes 6/6 at 11,278,354 LLVM text
+bytes and Linux Stage2 passes 5/5 at 11,274,957 bytes. Formal progress remains
+49 complete, 8 partial, and 3 missing: 53/60 (88.3%), because this closes a
+documented sub-gate rather than one of the 60 top-level capability gates.
+Stage3 cadence advances to 4/10.
+
+The design follows Rust's distinction between source aliases and canonical
+item paths, while keeping qualified paths valid in type positions. Swift's
+dictionary type likewise composes arbitrary types and requires every key to
+conform to `Hashable`; Swift module access control makes imported public types
+part of the consumer's usable API. Sollang keeps its own dot-qualified import
+syntax and statically specializes the resolved witnesses.
+
+References:
+
+- [Rust paths and canonical paths](https://doc.rust-lang.org/reference/paths.html)
+- [Rust trait implementation coherence](https://doc.rust-lang.org/stable/reference/items/implementations.html)
+- [Swift dictionary types](https://docs.swift.org/swift-book/documentation/the-swift-programming-language/types/)
+- [Swift module access control](https://docs.swift.org/swift-book/documentation/the-swift-programming-language/accesscontrol/)

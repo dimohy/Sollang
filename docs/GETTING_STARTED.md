@@ -877,6 +877,10 @@ approved syntax.
 - `examples/71-user-defined-dictionary-keys.slg`: copyable nominal keys with
   statically dispatched `Hash.hash` and canonical `Eq.eq` implementations,
   plus contextual lookup syntax such as `map[{ scope: 1, id: 10 }]`
+- `examples/454-selfhost-llvm-imported-owned-dictionary-key.slg` and
+  `examples/455-imported-owned-dictionary-key.slg`: module-qualified owned key
+  types in typed dictionary literals and function signatures, with static
+  cross-module `Hash`/`Eq`, replacement, extraction, and recursive drop
 - `examples/88-grammar-table-module.slg`: compiles the generated grammar-table
   module as a separate source file and reads its public metadata
 - `examples/browser`: static HTML/JS runner for the WebAssembly sample
