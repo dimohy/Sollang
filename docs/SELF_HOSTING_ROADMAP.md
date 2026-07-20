@@ -2851,6 +2851,24 @@ resetting the periodic cadence to **0/10**. References stored in user aggregates
 remain open, so formal progress stays **49 complete, 8 partial, 3 missing:
 53/60 (88.3%)**.
 
+D223 completes the struct vertical for readonly references stored in user
+values. A `ref T` struct field remains a pointer at runtime, while C# and
+self-host semantic analysis propagate its inferred origin through direct
+struct literals and function returns. E22 rejects a returned struct containing
+a callee-local reference, and E23 protects the owner until the final reachable
+reference-field use. Scalar sibling use does not extend the loan. The self-host
+LLVM emitter loads the stored pointer correctly and now lowers entry-function
+member expressions inside interpolation.
+
+Examples 532-534 plus two diagnostics and the Stage2 stored-struct/aggregate-
+escape fixtures cover execution, local escape, direct-literal discovery,
+field-sensitive liveness, and stage-1/stage-2 parity. Release builds have zero
+warnings and errors. Windows and Linux full suites pass **716/716**. Windows
+Stage2 passes **7/7** at **12,292,062 LLVM bytes**, and Linux Stage2 passes
+**6/6** at **12,288,641 LLVM bytes**. Formal progress remains **49 complete, 8
+partial, 3 missing: 53/60 (88.3%)** because enum payloads and container element
+storage remain open. Stage3 cadence advances to **1/10**, so Stage3 is not due.
+
 1. Multi-file compilation (implemented by example 52).
 2. Import-driven file discovery with cycle and duplicate-module diagnostics
    (implemented after example 52).

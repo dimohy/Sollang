@@ -1,0 +1,39 @@
+import sollang.compiler.llvm.text as llvm
+
+# Verifies self-host LLVM execution for a readonly reference stored in a struct.
+main {
+    [
+        """
+        struct Pair {
+            first: Int
+            second: Int
+        }
+
+        struct PairView {
+            value: ref Int
+            tag: Int
+        }
+
+        same value: ref Int -> ref Int {
+            value
+        }
+
+        read value: ref Int -> Int {
+            value
+        }
+
+        view pair: ref Pair -> PairView {
+            PairView { value: pair.first -> same, tag: 7 }
+        }
+
+        main {
+            Pair { first: 40, second: 2 } => pair!
+            pair! -> view => stored
+            stored.value -> read => observed
+            "observed=$observed,tag=$(stored.tag)" -> println
+        }
+        """,
+        ~
+    ] => sources!
+    sources! -> llvm.emitLinuxChecked => diagnosticCount
+}

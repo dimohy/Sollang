@@ -9050,3 +9050,60 @@ References:
 - [Polonius implementation](https://github.com/rust-lang/polonius)
 - [Mojo lifetimes and origins](https://docs.modular.com/mojo/manual/values/lifetimes)
 - [Mojo value lifecycle](https://docs.modular.com/mojo/manual/lifecycle/life)
+
+## D223 - Inferred Origins for References Stored in User Structs
+
+Status: implemented struct vertical with cross-target Stage2 verification
+Date: 2026-07-21
+
+Sollang permits `ref T` fields in user structs without adding lifetime syntax.
+The runtime representation is the ordinary pointer field. At compile time, the
+containing struct carries the symbolic origin union of its reference-bearing
+fields. A reference-bearing return is valid only when that union can be inferred
+from reference-bearing inputs; hiding a reference to callee-owned storage in a
+returned struct is E22. Mutating, moving, or rebinding an overlapping owner while
+a stored reference has a reachable later use is E23.
+
+The analysis is field-sensitive. `stored.value` keeps the corresponding origin
+live, while later use of scalar sibling `stored.tag` does not. Origins are found
+both through helper calls returning a struct and through reference-returning
+calls nested directly in a struct literal. C# type definition construction now
+admits reference fields, recursively discovers reference-bearing return/input
+types, and emits the stored pointer without an accidental pointer-to-pointer.
+The self-host ownership pass mirrors aggregate origin inference, local escape
+rejection, nested-call discovery, and field-sensitive last use. Its LLVM entry
+path also now lowers member expressions embedded in string interpolation.
+
+Implementation checklist:
+
+- [x] Parse and resolve `ref T` user-struct fields in the reference compiler.
+- [x] Infer origins through reference-bearing parameters and struct returns.
+- [x] Reject callee-local aggregate escapes with E22.
+- [x] Preserve E23 across helper-returned and direct-literal struct storage.
+- [x] End a stored reference at its final reference-field use, not a scalar
+  sibling use.
+- [x] Emit and execute the struct's pointer field in C# and self-host LLVM.
+- [x] Verify stage-1/stage-2 parity on Windows and Linux.
+- [ ] Extend the same rule to enum payloads and array/dictionary element
+  storage before closing the general user-aggregate gate.
+
+Examples 532-534 cover reference-compiler execution, checked self-host
+classification, direct-literal tracking, local escape rejection, and native
+self-host LLVM execution. Release builds have zero warnings and errors. Windows
+and Linux full suites pass 716/716. Windows Stage2 passes 7/7 at 12,292,062 LLVM
+bytes, and Linux Stage2 passes 6/6 at 12,288,641 LLVM bytes. The periodic Stage3
+cadence advances to 1/10, so Stage3 is not due. Formal progress remains 53/60
+(88.3%) until enum and container storage complete the broader aggregate gate.
+
+This combines Mojo's inferred-origin model with Swift's non-escapable aggregate
+and lifetime-dependency design. Rust's lifetime-bearing structs provide the
+safety invariant, but Sollang deliberately keeps those parameters inferred.
+
+References:
+
+- [Mojo lifetimes and origins](https://docs.modular.com/mojo/manual/values/lifetimes)
+- [Mojo ownership](https://docs.modular.com/mojo/manual/values/ownership)
+- [Swift non-escapable types](https://github.com/swiftlang/swift-evolution/blob/main/proposals/0446-non-escapable.md)
+- [Swift safe C++ interop](https://www.swift.org/documentation/cxx-interop/safe-interop/)
+- [Swift 6.2 Span](https://www.swift.org/blog/swift-6.2-released/)
+- [Rust lifetime syntax for structs](https://doc.rust-lang.org/book/ch10-03-lifetime-syntax.html)

@@ -1,0 +1,35 @@
+# Verifies that a user struct can store and forward an inferred readonly reference.
+struct Pair {
+    first: Int
+    second: Int
+}
+
+struct PairView {
+    value: ref Int
+    tag: Int
+}
+
+same value: ref Int -> ref Int {
+    value
+}
+
+read value: ref Int -> Int {
+    value
+}
+
+view pair: ref Pair -> PairView {
+    PairView {
+        value: pair.first -> same
+        tag: 7
+    }
+}
+
+main {
+    Pair { first: 40, second: 2 } => pair!
+    pair! -> view => stored
+    stored.value -> read => observed
+
+    # The owner may be rebound after the stored reference's final use.
+    Pair { first: 50, second: 3 } => pair!
+    "observed=$observed,next=$(pair!.first),tag=$(stored.tag)" -> println
+}

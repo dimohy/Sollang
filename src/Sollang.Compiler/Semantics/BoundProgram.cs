@@ -255,8 +255,8 @@ internal sealed class TypeDefinitionTable
     private readonly Dictionary<TypeId, BoundStructDefinition> _structs;
     private readonly Dictionary<TypeId, BoundEnumDefinition> _enums;
     private readonly Dictionary<TypeId, BoundBoxDefinition> _boxes;
-    private readonly Dictionary<TypeId, BoundReferenceDefinition> _references = [];
-    private readonly Dictionary<TypeId, TypeId> _referencesByElement = [];
+    private readonly Dictionary<TypeId, BoundReferenceDefinition> _references;
+    private readonly Dictionary<TypeId, TypeId> _referencesByElement;
     private readonly Dictionary<TypeId, BoundStaticArrayDefinition> _staticArrays = [];
     private readonly Dictionary<TypeId, TypeId> _staticArraysByElement = [];
     private readonly Dictionary<TypeId, BoundDynamicArrayDefinition> _dynamicArrays = [];
@@ -277,12 +277,17 @@ internal sealed class TypeDefinitionTable
         IReadOnlyDictionary<TypeId, BoundStructDefinition> structs,
         IReadOnlyDictionary<TypeId, BoundEnumDefinition> enums,
         IReadOnlyDictionary<TypeId, BoundBoxDefinition> boxes,
+        IReadOnlyDictionary<TypeId, BoundReferenceDefinition> references,
         int pointerSize)
     {
         _names = new Dictionary<string, TypeId>(names, StringComparer.Ordinal);
         _structs = new Dictionary<TypeId, BoundStructDefinition>(structs);
         _enums = new Dictionary<TypeId, BoundEnumDefinition>(enums);
         _boxes = new Dictionary<TypeId, BoundBoxDefinition>(boxes);
+        _references = new Dictionary<TypeId, BoundReferenceDefinition>(references);
+        _referencesByElement = references.Values.ToDictionary(
+            static reference => reference.ElementType,
+            static reference => reference.Id);
         _pointerSize = pointerSize;
         foreach (var definition in _enums.Values.Where(static definition =>
                      definition.Name is "sys.directory.RawResult" or "sys.directory.ReadResult"))
@@ -296,6 +301,7 @@ internal sealed class TypeDefinitionTable
         _taskValues.Add(TypeId.TaskInt, TypeId.Int);
         _nextParametricTypeId = _names.Values
             .Concat(_boxes.Keys)
+            .Concat(_references.Keys)
             .Select(static type => (int)type)
             .DefaultIfEmpty((int)TypeId.FirstUserDefined)
             .Max() + 1;

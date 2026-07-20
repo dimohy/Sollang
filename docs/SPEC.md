@@ -1113,6 +1113,17 @@ Container rules in the current slice:
   numeric array indices are disjoint at their first difference. A runtime
   index, or projections whose disjointness cannot otherwise be proven, remain
   conservatively overlapping.
+- A user struct field may have type `ref T`. The reference remains a plain
+  pointer in the runtime layout, while the compiler attaches its inferred
+  origin to the containing value. A function may return such a struct only
+  when every possible stored reference originates from a reference-bearing
+  input; returning a reference to callee-owned storage is E22. Moving,
+  rebinding, or mutating an overlapping owner while a stored reference has a
+  reachable later use is E23. Liveness is field-sensitive: using a scalar
+  sibling after the stored reference's final use does not keep the reference
+  live. No lifetime or origin parameters appear in source syntax. Reference
+  fields in enum payloads and array/dictionary element storage remain outside
+  this implemented struct vertical.
 - `push`, `put`, and indexed assignment require a named mutable owner binding
   created with `=> name!`.
 - `array -> each item { ... }` binds `item` to the concrete element type for

@@ -32,6 +32,8 @@ $referenceTemporarySource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixt
 $referenceLivenessSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-reference-liveness.slg"
 $referenceOwnerMoveSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-reference-owner-move.slg"
 $referenceLoopContinueSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-reference-loop-continue.slg"
+$referenceStoredStructSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-reference-stored-struct.slg"
+$referenceAggregateEscapeSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-reference-aggregate-escape.slg"
 $borrowSourceRuntime = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-borrow-source.slg"
 $runtimeManifestPath = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-compiler-runtime.sources.txt"
 $fingerprintSources = @(
@@ -496,7 +498,8 @@ foreach ($compiler in @(
     foreach ($referenceConflict in @(
         @($referenceLivenessSource, "mutation"),
         @($referenceOwnerMoveSource, "move"),
-        @($referenceLoopContinueSource, "loop-continue")
+        @($referenceLoopContinueSource, "loop-continue"),
+        @($referenceStoredStructSource, "stored-struct")
     )) {
         $diagnosticOutput = Join-Path $artifactsDir "stage2-check-reference-$($referenceConflict[1])-$($compiler[1]).txt"
         $diagnosticError = Join-Path $artifactsDir "stage2-check-reference-$($referenceConflict[1])-$($compiler[1]).err"
@@ -511,6 +514,20 @@ foreach ($compiler in @(
         if ($diagnosticText -match '^target (datalayout|triple)') {
             throw "$($compiler[1]) began LLVM emission before rejecting readonly-reference owner $($referenceConflict[1]) diagnostic E23"
         }
+    }
+
+    $aggregateEscapeOutput = Join-Path $artifactsDir "stage2-check-reference-aggregate-escape-$($compiler[1]).txt"
+    $aggregateEscapeError = Join-Path $artifactsDir "stage2-check-reference-aggregate-escape-$($compiler[1]).err"
+    $aggregateEscapeProcess = Invoke-ProcessToFile $compiler[0] @("windows", $referenceAggregateEscapeSource) $aggregateEscapeOutput $aggregateEscapeError
+    $aggregateEscapeProcess.WaitForExit()
+    $aggregateEscapeProcess.Refresh()
+    $aggregateEscapeText = (Get-Content $aggregateEscapeOutput -Raw) + (Get-Content $aggregateEscapeError -Raw)
+    if ($aggregateEscapeProcess.ExitCode -eq 0) { throw "$($compiler[1]) accepted a returned aggregate containing a callee-owned readonly reference" }
+    if ($aggregateEscapeText -notmatch 'error\[E22\]') {
+        throw "$($compiler[1]) did not emit ownership diagnostic E22 for a returned reference-bearing aggregate: '$aggregateEscapeText'"
+    }
+    if ($aggregateEscapeText -match 'target triple') {
+        throw "$($compiler[1]) began LLVM emission before rejecting reference-bearing aggregate escape diagnostic E22"
     }
 }
 Write-Host "[stage2 6/7] PASS E17-E23 ownership violations block LLVM emission in stage-1 and stage-2."

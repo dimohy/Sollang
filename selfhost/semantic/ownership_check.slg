@@ -39,6 +39,70 @@ struct ReadonlyReferenceReturn {
     parameterOrdinal: Int
 }
 
+semanticTypeContainsReadonlyReference prepared: semanticContext.SemanticSnapshot, typeId: Int -> Bool {
+    [Int; ~] => pending!
+    [Int; ~] => visited!
+    false => contains!
+    typeId >= 0 -> if { pending! -> push(typeId) }
+    0 => pendingIndex!
+    (not contains! and pendingIndex! < (pending! -> len)) -> while {
+        pending![pendingIndex!] => currentTypeId
+        false => seen!
+        0 => seenIndex!
+        seenIndex! < (visited! -> len) -> while {
+            visited![seenIndex!] == currentTypeId -> if { true => seen! }
+            seenIndex! + 1 => seenIndex!
+        }
+        (not seen! and currentTypeId >= 0 and currentTypeId < (prepared.semantic.types -> len)) -> if {
+            visited! -> push(currentTypeId)
+            prepared.semantic.types[currentTypeId] => currentType
+            currentType.kind == 8 -> if {
+                true => contains!
+            } else {
+                currentType.kind == 1 -> if {
+                    0 => fieldIndex!
+                    fieldIndex! < (prepared.semantic.fields -> len) -> while {
+                        prepared.semantic.fields[fieldIndex!] => field
+                        (field.status == 0 and field.ownerType == currentTypeId) -> if {
+                            pending! -> push(field.fieldType)
+                        }
+                        fieldIndex! + 1 => fieldIndex!
+                    }
+                } else {
+                    (currentType.kind == 3 or currentType.kind == 4 or currentType.kind == 6) -> if {
+                        pending! -> push(currentType.first)
+                    } else {
+                        currentType.kind == 5 -> if {
+                            pending! -> push(currentType.first)
+                            pending! -> push(currentType.second)
+                        }
+                    }
+                }
+            }
+        }
+        pendingIndex! + 1 => pendingIndex!
+    }
+    contains!
+}
+
+readonlyCarrierUseTouchesReference prepared: semanticContext.SemanticSnapshot, typed: [typedIr.TypedIrNode; ~], useIndex: Int, carrierTypeId: Int -> Bool {
+    true => touches!
+    (carrierTypeId >= 0 and useIndex >= 0 and useIndex < (typed -> len)) -> if {
+        useIndex => projectedUse!
+        typed[projectedUse!].parent => projectedParent!
+        false => projected!
+        (projectedParent! >= 0 and projectedParent! < (typed -> len) and typed[projectedParent!].kind == 13 and typed[projectedParent!].operand0 == projectedUse!) -> while {
+            true => projected!
+            projectedParent! => projectedUse!
+            typed[projectedUse!].parent => projectedParent!
+        }
+        projected! -> if {
+            prepared -> semanticTypeContainsReadonlyReference(typed[projectedUse!].typeId) => touches!
+        }
+    }
+    touches!
+}
+
 # Code 17 identifies whole-owner or overlapping-field use after a partial move.
 # Code 18 identifies a mutable binding captured by a parallel callback.
 # Code 19 identifies a structurally non-sendable parallel callback capture.
@@ -457,7 +521,7 @@ public analyzeLoweredContext prepared: semanticContext.SemanticSnapshot, typed: 
         }
         hasTake!
     }
-    borrowedBindingUsedAfterSite borrowedPrepared: semanticContext.SemanticSnapshot, borrowedTyped: [typedIr.TypedIrNode; ~], bindingIr: Int, siteIr: Int -> Bool {
+    borrowedBindingUsedAfterSite borrowedPrepared: semanticContext.SemanticSnapshot, borrowedTyped: [typedIr.TypedIrNode; ~], bindingIr: Int, siteIr: Int, carrierTypeId: Int -> Bool {
         false => used!
         borrowedPrepared.package.ranges[borrowedTyped[siteIr].sourceModule] => useRange
         borrowedPrepared.package.nodes[useRange.astStart + borrowedTyped[siteIr].astNode].start => siteStart
@@ -475,7 +539,7 @@ public analyzeLoweredContext prepared: semanticContext.SemanticSnapshot, typed: 
         0 => useIndex!
         (searchReachableUses and not used! and useIndex! < (borrowedTyped -> len)) -> while {
             borrowedTyped[useIndex!] => use
-            (siteStart >= UIntSize(0) and use.kind == 5 and use.sourceModule == borrowedTyped[siteIr].sourceModule and use.astNode >= 0 and use.operand0 == bindingIr) -> if {
+            (siteStart >= UIntSize(0) and use.kind == 5 and use.sourceModule == borrowedTyped[siteIr].sourceModule and use.astNode >= 0 and use.operand0 == bindingIr and (carrierTypeId < 0 or (borrowedPrepared -> readonlyCarrierUseTouchesReference(borrowedTyped, useIndex!, carrierTypeId)))) -> if {
                 borrowedPrepared.package.nodes[useRange.astStart + use.astNode].start => useStart
                 useStart > siteStart -> if {
                     borrowedPrepared -> referenceForwardUseReachable(borrowedTyped, siteIr, useIndex!) -> if { true => used! }
@@ -817,7 +881,7 @@ public analyzeLoweredContext prepared: semanticContext.SemanticSnapshot, typed: 
             originParameterIr! >= 0 -> while {
                 typed[originParameterIr!] => originParameter
                 false => parameterReturnsReference!
-                (originParameter.typeId >= 0 and originParameter.typeId < (prepared.semantic.types -> len) and prepared.semantic.types[originParameter.typeId].kind == 8) -> if {
+                (originParameter.typeId >= 0 and originParameter.typeId < (prepared.semantic.types -> len) and (prepared -> semanticTypeContainsReadonlyReference(originParameter.typeId))) -> if {
                     0 => originReturnSearch!
                     originReturnSearch! < (typed -> len) -> while {
                         typed[originReturnSearch!] => originReturn
@@ -859,6 +923,49 @@ public analyzeLoweredContext prepared: semanticContext.SemanticSnapshot, typed: 
         referenceFunctionIndex! + 1 => referenceFunctionIndex!
     }
 
+    # A reference-bearing return must inherit at least one stable input origin.
+    # This rejects hiding a local reference inside a returned aggregate.
+    0 => escapingReferenceFunctionIndex!
+    escapingReferenceFunctionIndex! < (typed -> len) -> while {
+        typed[escapingReferenceFunctionIndex!] => escapingReferenceFunction
+        escapingReferenceFunction.typeId => escapingReferenceReturnTypeId!
+        (escapingReferenceFunction.kind == 0 and escapingReferenceFunction.operand0 >= 0 and escapingReferenceFunction.operand0 < (typed -> len)) -> if {
+            typed[escapingReferenceFunction.operand0] => escapingReferenceReturn
+            (escapingReferenceReturn.operand0 >= 0 and escapingReferenceReturn.operand0 < (typed -> len) and typed[escapingReferenceReturn.operand0].typeId >= 0) -> if {
+                typed[escapingReferenceReturn.operand0].typeId => escapingReferenceReturnTypeId!
+            }
+        }
+        (escapingReferenceFunction.kind == 0 and escapingReferenceReturnTypeId! >= 0 and (prepared -> semanticTypeContainsReadonlyReference(escapingReferenceReturnTypeId!))) -> if {
+            false => hasInferredReferenceOrigin!
+            0 => inferredReferenceOriginIndex!
+            inferredReferenceOriginIndex! < (readonlyReferenceReturns! -> len) -> while {
+                readonlyReferenceReturns![inferredReferenceOriginIndex!] => inferredReferenceOrigin
+                (inferredReferenceOrigin.sourceModule == escapingReferenceFunction.sourceModule and inferredReferenceOrigin.functionSymbol == escapingReferenceFunction.symbol) -> if {
+                    true => hasInferredReferenceOrigin!
+                }
+                inferredReferenceOriginIndex! + 1 => inferredReferenceOriginIndex!
+            }
+            not hasInferredReferenceOrigin! -> if {
+                prepared.package.ranges[escapingReferenceFunction.sourceModule] => escapingReferenceFunctionRange
+                prepared.package.nodes[escapingReferenceFunctionRange.astStart + escapingReferenceFunction.astNode] => escapingReferenceFunctionAst
+                diagnostics! -> push(OwnershipDiagnostic {
+                    code: 22
+                    sourceModule: escapingReferenceFunction.sourceModule
+                    functionSymbol: escapingReferenceFunction.symbol
+                    expectedOrigin: -1
+                    expectedModule: escapingReferenceFunction.sourceModule
+                    expectedSymbol: -1
+                    actualOrigin: escapingReferenceFunction.typeOrigin
+                    actualModule: escapingReferenceFunction.typeModule
+                    actualSymbol: escapingReferenceFunction.typeSymbol
+                    actualBuiltin: -1
+                    span: syntax.SourceSpan { fileId: escapingReferenceFunction.sourceModule, start: escapingReferenceFunctionAst.start, length: escapingReferenceFunctionAst.length }
+                })
+            }
+        }
+        escapingReferenceFunctionIndex! + 1 => escapingReferenceFunctionIndex!
+    }
+
     # A mutable owner may be borrowed, but its storage cannot change while a
     # returned readonly reference still has a reachable use. All possible
     # branch-selected origins remain locked until that last use.
@@ -866,15 +973,26 @@ public analyzeLoweredContext prepared: semanticContext.SemanticSnapshot, typed: 
     referenceBindingIndex! < (typed -> len) -> while {
         typed[referenceBindingIndex!] => referenceBinding
         false => referenceBindingIsReadonlyReference!
+        -1 => referenceBindingCarrierType!
         (referenceBinding.kind == 17 and referenceBinding.operand0 >= 0) -> if {
             typed[referenceBinding.operand0] => referenceBindingValue
-            (referenceBindingValue.kind == 6 and referenceBindingValue.typeId >= 0 and referenceBindingValue.typeId < (prepared.semantic.types -> len)) -> if {
-                prepared.semantic.types[referenceBindingValue.typeId].kind == 8 -> if { true => referenceBindingIsReadonlyReference! }
+            (referenceBindingValue.typeId >= 0 and referenceBindingValue.typeId < (prepared.semantic.types -> len)) -> if {
+                referenceBindingValue.typeId => referenceBindingCarrierType!
+                prepared -> semanticTypeContainsReadonlyReference(referenceBindingValue.typeId) -> if { true => referenceBindingIsReadonlyReference! }
             }
         }
         referenceBindingIsReadonlyReference! -> if {
-            typed[referenceBinding.operand0] => referenceCall
-            (referenceCall.kind == 6 and referenceCall.operand0 >= 0) -> if {
+            0 => referenceCarrierCallIndex!
+            referenceCarrierCallIndex! < (typed -> len) -> while {
+                typed[referenceCarrierCallIndex!] => referenceCall
+                false => referenceCallBelongsToCarrier!
+                referenceCarrierCallIndex! == referenceBinding.operand0 -> if { true => referenceCallBelongsToCarrier! }
+                referenceCarrierCallIndex! => referenceCallAncestor!
+                (not referenceCallBelongsToCarrier! and referenceCallAncestor! >= 0 and referenceCallAncestor! < (typed -> len)) -> while {
+                    typed[referenceCallAncestor!].parent => referenceCallAncestor!
+                    referenceCallAncestor! == referenceBinding.operand0 -> if { true => referenceCallBelongsToCarrier! }
+                }
+                (referenceCallBelongsToCarrier! and referenceCall.kind == 6 and referenceCall.operand0 >= 0) -> if {
                 0 => referenceMutationIndex!
                 referenceMutationIndex! < (typed -> len) -> while {
                     typed[referenceMutationIndex!] => referenceMutation
@@ -935,7 +1053,7 @@ public analyzeLoweredContext prepared: semanticContext.SemanticSnapshot, typed: 
                             (referenceMutation.kind == 6 or referenceMutation.kind == 24) -> if {
                                 prepared -> referenceBindingUsedAfterIndexSite(typed, referenceBindingIndex!, referenceMutationIndex!) => referenceBorrowUsedAfterMutation!
                             } else {
-                                prepared -> borrowedBindingUsedAfterSite(typed, referenceBindingIndex!, referenceMutationIndex!) => referenceBorrowUsedAfterMutation!
+                                prepared -> borrowedBindingUsedAfterSite(typed, referenceBindingIndex!, referenceMutationIndex!, referenceBindingCarrierType!) => referenceBorrowUsedAfterMutation!
                             }
                             referenceBorrowUsedAfterMutation! -> if {
                             prepared.package.ranges[referenceMutation.sourceModule] => referenceMutationRange
@@ -961,6 +1079,8 @@ public analyzeLoweredContext prepared: semanticContext.SemanticSnapshot, typed: 
                     }
                     referenceMutationIndex! + 1 => referenceMutationIndex!
                 }
+                }
+                referenceCarrierCallIndex! + 1 => referenceCarrierCallIndex!
             }
         }
         referenceBindingIndex! + 1 => referenceBindingIndex!
@@ -1317,7 +1437,7 @@ public analyzeLoweredContext prepared: semanticContext.SemanticSnapshot, typed: 
                 0 => borrowedTakeOriginSearch!
                 borrowedTakeOriginSearch! < (borrowedBindings! -> len) -> while {
                     borrowedBindings![borrowedTakeOriginSearch!] => borrowedTakeOrigin
-                    (borrowedTakeOrigin.ownerBindingIr == borrowedTakeOwnerBinding and (borrowedTakeOrigin.ownerPlaceIr -> placeOverlapsIndexedProjection(borrowedTakeElementIndex!)) and borrowedTakeOrigin.bindingIr < borrowedTakeIndex! and (prepared -> borrowedBindingUsedAfterSite(typed, borrowedTakeOrigin.bindingIr, borrowedTakeIndex!))) -> if {
+                    (borrowedTakeOrigin.ownerBindingIr == borrowedTakeOwnerBinding and (borrowedTakeOrigin.ownerPlaceIr -> placeOverlapsIndexedProjection(borrowedTakeElementIndex!)) and borrowedTakeOrigin.bindingIr < borrowedTakeIndex! and (prepared -> borrowedBindingUsedAfterSite(typed, borrowedTakeOrigin.bindingIr, borrowedTakeIndex!, -1))) -> if {
                         prepared.package.ranges[borrowedTake.sourceModule] => borrowedTakeRange
                         prepared.package.nodes[borrowedTakeRange.astStart + borrowedTake.astNode] => borrowedTakeAst
                         diagnostics! -> push(OwnershipDiagnostic {

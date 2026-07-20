@@ -1592,6 +1592,15 @@ internal sealed partial class SemanticCompiler
                 $"function '{function.Name}' returns {FormatType(bodyType)} but declares {FormatType(function.ReturnType)}");
         }
 
+        if (TypeContainsReadonlyReference(function.ReturnType)
+            && !_readonlyReferenceReturnOrigins.ContainsKey(function))
+        {
+            throw Error(
+                function.Line,
+                function.Column,
+                $"function '{function.Name}' cannot return a value containing a readonly reference whose origin is not inferred from a reference-bearing input");
+        }
+
         if (BorrowedTextOriginParameterNames(function).Any()
             && TypeContains(function.ReturnType, BoundType.Text)
             && (ContainsSliceFlow(function.BlockBody)
@@ -2503,14 +2512,19 @@ internal sealed partial class SemanticCompiler
                     {
                         _activeBorrowedTextOrigins[binding.Name] = borrowedOrigins;
                     }
-                    else if (TryGetReadonlyReferenceCallOrigins(
-                                 binding.Value,
-                                 functions,
-                                 bindings,
-                                 out var readonlyReferenceOrigins))
+                    else
                     {
-                        _activeBorrowedTextOrigins[binding.Name] = readonlyReferenceOrigins;
-                        _activeReadonlyReferenceBindings.Add(binding.Name);
+                        var readonlyReferenceCarriers = GetReadonlyReferenceCarrierOrigins(
+                            binding.Value,
+                            valueType,
+                            functions,
+                            bindings);
+                        foreach (var carrier in readonlyReferenceCarriers)
+                        {
+                            var carrierName = binding.Name + carrier.Key;
+                            _activeBorrowedTextOrigins[carrierName] = carrier.Value;
+                            _activeReadonlyReferenceBindings.Add(carrierName);
+                        }
                     }
 
                     break;
@@ -7632,6 +7646,44 @@ internal sealed partial class SemanticCompiler
             boxes.Add(id, new BoundBoxDefinition(id, elementType, Size: 0, Alignment: 1));
         }
 
+        var references = new Dictionary<TypeId, BoundReferenceDefinition>();
+        var referencesByElement = new Dictionary<TypeId, TypeId>();
+
+        TypeId ResolveDefinitionType(string typeName, int line, int column)
+        {
+            if (names.TryGetValue(typeName, out var known))
+            {
+                return known;
+            }
+            if (TryResolveDefinitionDynamicArray(typeName, out var dynamicArray))
+            {
+                return dynamicArray;
+            }
+            if (typeName.StartsWith("ref ", StringComparison.Ordinal))
+            {
+                var elementName = typeName[4..].Trim();
+                if (!names.TryGetValue(elementName, out var elementType)
+                    || elementType == BoundType.Unit
+                    || references.ContainsKey(elementType))
+                {
+                    throw Error(line, column, "ref requires a known non-reference value type");
+                }
+                if (referencesByElement.TryGetValue(elementType, out var existing))
+                {
+                    names.TryAdd(typeName, existing);
+                    return existing;
+                }
+
+                var reference = (TypeId)nextTypeId++;
+                references.Add(reference, new BoundReferenceDefinition(reference, elementType));
+                referencesByElement.Add(elementType, reference);
+                names.Add(typeName, reference);
+                return reference;
+            }
+
+            throw Error(line, column, $"unknown type '{typeName}'");
+        }
+
         var structs = new Dictionary<TypeId, BoundStructDefinition>();
         foreach (var declaration in structDeclarations)
         {
@@ -7647,11 +7699,10 @@ internal sealed partial class SemanticCompiler
                     throw Error(field.Line, field.Column, $"field '{field.Name}' already exists in struct '{declaration.Name}'");
                 }
 
-                if (!names.TryGetValue(field.TypeName, out var fieldType)
-                    && !TryResolveDefinitionDynamicArray(field.TypeName, out fieldType))
-                {
-                    throw Error(field.Line, field.Column, $"unknown type '{field.TypeName}'");
-                }
+                var fieldType = ResolveDefinitionType(
+                    field.TypeName,
+                    field.Line,
+                    field.Column);
 
                 if (fieldType is TypeId.Unit
                     or TypeId.IntSlice
@@ -7704,11 +7755,10 @@ internal sealed partial class SemanticCompiler
                 TypeId? payloadType = null;
                 if (variant.PayloadType is not null)
                 {
-                    if (!names.TryGetValue(variant.PayloadType, out var resolvedPayloadType)
-                        && !TryResolveDefinitionDynamicArray(variant.PayloadType, out resolvedPayloadType))
-                    {
-                        throw Error(variant.Line, variant.Column, $"unknown type '{variant.PayloadType}'");
-                    }
+                    var resolvedPayloadType = ResolveDefinitionType(
+                        variant.PayloadType,
+                        variant.Line,
+                        variant.Column);
 
                     if (resolvedPayloadType is TypeId.Unit
                         or TypeId.IntSlice
@@ -7751,7 +7801,7 @@ internal sealed partial class SemanticCompiler
         {
             var payloadBytes = definition.Variants
                 .Where(static variant => variant.PayloadType is not null)
-                .Select(variant => InlineSize(variant.PayloadType!.Value, structs, enums, boxes, predeclaredDynamicArrays))
+                .Select(variant => InlineSize(variant.PayloadType!.Value, structs, enums, boxes, references, predeclaredDynamicArrays))
                 .DefaultIfEmpty(0)
                 .Max();
             enums[id] = definition with { PayloadWords = (payloadBytes + 7) / 8 };
@@ -7759,7 +7809,7 @@ internal sealed partial class SemanticCompiler
 
         foreach (var (id, definition) in boxes.ToArray())
         {
-            var size = InlineSize(definition.ElementType, structs, enums, boxes, predeclaredDynamicArrays);
+            var size = InlineSize(definition.ElementType, structs, enums, boxes, references, predeclaredDynamicArrays);
             boxes[id] = definition with
             {
                 Size = size,
@@ -7767,7 +7817,13 @@ internal sealed partial class SemanticCompiler
             };
         }
 
-        var result = new TypeDefinitionTable(names, structs, enums, boxes, _pointerBitWidth / 8);
+        var result = new TypeDefinitionTable(
+            names,
+            structs,
+            enums,
+            boxes,
+            references,
+            _pointerBitWidth / 8);
         foreach (var (id, elementType) in predeclaredDynamicArrays)
         {
             result.RegisterDynamicArray(id, elementType);
@@ -7876,9 +7932,10 @@ internal sealed partial class SemanticCompiler
         IReadOnlyDictionary<TypeId, BoundStructDefinition> structs,
         IReadOnlyDictionary<TypeId, BoundEnumDefinition> enums,
         IReadOnlyDictionary<TypeId, BoundBoxDefinition> boxes,
+        IReadOnlyDictionary<TypeId, BoundReferenceDefinition> references,
         IReadOnlyDictionary<TypeId, TypeId> dynamicArrays)
     {
-        if (boxes.ContainsKey(type))
+        if (boxes.ContainsKey(type) || references.ContainsKey(type))
         {
             return 8;
         }
@@ -7897,7 +7954,7 @@ internal sealed partial class SemanticCompiler
             var maxAlignment = 1;
             foreach (var field in structure.Fields)
             {
-                var size = InlineSize(field.Type, structs, enums, boxes, dynamicArrays);
+                var size = InlineSize(field.Type, structs, enums, boxes, references, dynamicArrays);
                 var alignment = Math.Min(Math.Max(size, 1), 8);
                 offset = AlignUp(offset, alignment);
                 offset += size;
@@ -7911,7 +7968,7 @@ internal sealed partial class SemanticCompiler
         {
             var payloadBytes = enumeration.Variants
                 .Where(static variant => variant.PayloadType is not null)
-                .Select(variant => InlineSize(variant.PayloadType!.Value, structs, enums, boxes, dynamicArrays))
+                .Select(variant => InlineSize(variant.PayloadType!.Value, structs, enums, boxes, references, dynamicArrays))
                 .DefaultIfEmpty(0)
                 .Max();
             return 8 + AlignUp(payloadBytes, 8);

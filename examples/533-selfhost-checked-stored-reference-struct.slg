@@ -1,0 +1,155 @@
+import sollang.compiler.semantic.ownership_check as ownershipCheck
+
+# Verifies self-host E23 for readonly references stored in user structs.
+main {
+    [
+        """
+        struct Pair {
+            first: Int
+            second: Int
+        }
+
+        struct PairView {
+            value: ref Int
+            tag: Int
+        }
+
+        same value: ref Int -> ref Int {
+            value
+        }
+
+        read value: ref Int -> Int {
+            value
+        }
+
+        view pair: ref Pair -> PairView {
+            PairView { value: pair.first -> same, tag: 7 }
+        }
+
+        main {
+            Pair { first: 40, second: 2 } => pair!
+            pair! -> view => stored
+            stored.value -> read => observed
+
+            # A scalar sibling does not keep the stored reference live.
+            Pair { first: 50, second: 3 } => pair!
+            stored.tag -> println
+        }
+        """,
+        ~
+    ] => safeSources!
+    safeSources! -> ownershipCheck.analyze => safeDiagnostics!
+    0 => safe!
+    safeDiagnostics! -> each diagnostic {
+        diagnostic.code == 23 -> if { safe! + 1 => safe! }
+    }
+
+    [
+        """
+        struct Pair {
+            first: Int
+            second: Int
+        }
+
+        struct PairView {
+            value: ref Int
+        }
+
+        same value: ref Int -> ref Int {
+            value
+        }
+
+        read value: ref Int -> Int {
+            value
+        }
+
+        view pair: ref Pair -> PairView {
+            PairView { value: pair.first -> same }
+        }
+
+        main {
+            Pair { first: 10, second: 20 } => pair!
+            pair! -> view => stored
+
+            # Rebinding conflicts with the later stored-reference use.
+            Pair { first: 30, second: 40 } => pair!
+            stored.value -> read => observed
+        }
+        """,
+        ~
+    ] => conflictSources!
+    conflictSources! -> ownershipCheck.analyze => conflictDiagnostics!
+    0 => conflicts!
+    conflictDiagnostics! -> each diagnostic {
+        diagnostic.code == 23 -> if { conflicts! + 1 => conflicts! }
+    }
+
+    [
+        """
+        struct Pair {
+            first: Int
+            second: Int
+        }
+
+        struct PairView {
+            value: ref Int
+        }
+
+        same value: ref Int -> ref Int {
+            value
+        }
+
+        read value: ref Int -> Int {
+            value
+        }
+
+        main {
+            Pair { first: 10, second: 20 } => pair!
+            PairView { value: pair!.first -> same } => stored
+
+            # A reference nested directly in a struct literal remains tracked.
+            Pair { first: 30, second: 40 } => pair!
+            stored.value -> read => observed
+        }
+        """,
+        ~
+    ] => literalSources!
+    literalSources! -> ownershipCheck.analyze => literalDiagnostics!
+    0 => literalConflicts!
+    literalDiagnostics! -> each diagnostic {
+        diagnostic.code == 23 -> if { literalConflicts! + 1 => literalConflicts! }
+    }
+
+    [
+        """
+        struct Pair {
+            first: Int
+        }
+
+        struct PairView {
+            value: ref Int
+        }
+
+        same value: ref Int -> ref Int {
+            value
+        }
+
+        escape: -> PairView {
+            Pair { first: 10 } => local!
+            PairView { value: local!.first -> same }
+        }
+
+        main {
+            escape => escaped
+        }
+        """,
+        ~
+    ] => escapeSources!
+    escapeSources! -> ownershipCheck.analyze => escapeDiagnostics!
+    0 => escapes!
+    escapeDiagnostics! -> each diagnostic {
+        diagnostic.code == 22 -> if { escapes! + 1 => escapes! }
+    }
+
+    "safe=$(safe!),conflict=$(conflicts!),literal=$(literalConflicts!),escape=$(escapes!)" -> println
+}

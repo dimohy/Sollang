@@ -34,7 +34,7 @@ internal sealed partial class SemanticCompiler
             foreach (var function in candidates)
             {
                 if (_readonlyReferenceReturnOrigins.ContainsKey(function)
-                    || !_types.IsReference(function.ReturnType)
+                    || !TypeContainsReadonlyReference(function.ReturnType)
                     || !ReadonlyReferenceOriginParameterNames(function).Any())
                 {
                     continue;
@@ -51,13 +51,13 @@ internal sealed partial class SemanticCompiler
 
     private IEnumerable<string> ReadonlyReferenceOriginParameterNames(BoundFunction function)
     {
-        if (function.InputType is { } inputType && _types.IsReference(inputType))
+        if (function.InputType is { } inputType && TypeContainsReadonlyReference(inputType))
         {
             yield return function.InputName ?? "it";
         }
         foreach (var parameter in function.AdditionalParameters ?? [])
         {
-            if (_types.IsReference(parameter.Type))
+            if (TypeContainsReadonlyReference(parameter.Type))
             {
                 yield return parameter.Name;
             }
@@ -178,6 +178,30 @@ internal sealed partial class SemanticCompiler
         {
             return TryInferReadonlyReferenceOrigins(index.Source, functions, locals, out origins);
         }
+        if (expression is StructLiteralExpression structure)
+        {
+            return TryUnionInferredReadonlyReferenceOrigins(
+                structure.Fields.Select(static field => field.Value),
+                functions,
+                locals,
+                out origins);
+        }
+        if (expression is ArrayLiteralExpression array)
+        {
+            return TryUnionInferredReadonlyReferenceOrigins(
+                array.Elements,
+                functions,
+                locals,
+                out origins);
+        }
+        if (expression is DictionaryLiteralExpression dictionary)
+        {
+            return TryUnionInferredReadonlyReferenceOrigins(
+                dictionary.Entries.SelectMany(static entry => new[] { entry.Key, entry.Value }),
+                functions,
+                locals,
+                out origins);
+        }
         if (expression is CallExpression call
             && TryGetFunction(call.Path, functions, out var called)
             && _readonlyReferenceReturnOrigins.TryGetValue(called, out var returnOrigins))
@@ -263,6 +287,24 @@ internal sealed partial class SemanticCompiler
                 return false;
             }
             union.UnionWith(argumentOrigins);
+        }
+        origins = union;
+        return union.Count > 0;
+    }
+
+    private bool TryUnionInferredReadonlyReferenceOrigins(
+        IEnumerable<Expression> expressions,
+        IReadOnlyDictionary<string, BoundFunction> functions,
+        IReadOnlyDictionary<string, IReadOnlySet<string>> locals,
+        out IReadOnlySet<string> origins)
+    {
+        var union = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var expression in expressions)
+        {
+            if (TryInferReadonlyReferenceOrigins(expression, functions, locals, out var nested))
+            {
+                union.UnionWith(nested);
+            }
         }
         origins = union;
         return union.Count > 0;
@@ -773,16 +815,41 @@ internal sealed partial class SemanticCompiler
         IReadOnlyDictionary<string, BoundType> bindings,
         out IReadOnlySet<string> origins)
     {
-        if (expression is NameExpression name
-            && _activeReadonlyReferenceBindings.Contains(name.Name)
-            && _activeBorrowedTextOrigins.TryGetValue(name.Name, out origins!))
+        if (TryGetActiveReadonlyReferenceCarrierOrigins(expression, out origins))
         {
             return true;
         }
 
+        if (expression is StructLiteralExpression structure)
+        {
+            return TryUnionReadonlyReferenceCallOrigins(
+                structure.Fields.Select(static field => field.Value),
+                functions,
+                bindings,
+                out origins);
+        }
+
+        if (expression is ArrayLiteralExpression array)
+        {
+            return TryUnionReadonlyReferenceCallOrigins(
+                array.Elements,
+                functions,
+                bindings,
+                out origins);
+        }
+
+        if (expression is DictionaryLiteralExpression dictionary)
+        {
+            return TryUnionReadonlyReferenceCallOrigins(
+                dictionary.Entries.SelectMany(static entry => new[] { entry.Key, entry.Value }),
+                functions,
+                bindings,
+                out origins);
+        }
+
         if (expression is CallExpression call
             && TryGetFunction(call.Path, functions, out var called)
-            && _types.IsReference(called.ReturnType))
+            && TypeContainsReadonlyReference(called.ReturnType))
         {
             return TryMapReadonlyReferenceCallOrigins(
                 called,
@@ -797,7 +864,7 @@ internal sealed partial class SemanticCompiler
         {
             var target = flow.Targets[^1];
             if (TryGetFunction(target.Path, functions, out var flowed)
-                && _types.IsReference(flowed.ReturnType))
+                && TypeContainsReadonlyReference(flowed.ReturnType))
             {
                 var arguments = new Expression[] { flow.Source }
                     .Concat(target.Arguments)
@@ -813,6 +880,244 @@ internal sealed partial class SemanticCompiler
 
         origins = EmptyBorrowOrigins();
         return false;
+    }
+
+    private bool TryGetActiveReadonlyReferenceCarrierOrigins(
+        Expression expression,
+        out IReadOnlySet<string> origins)
+    {
+        if (!TryGetBorrowPlace(expression, out var place))
+        {
+            origins = EmptyBorrowOrigins();
+            return false;
+        }
+
+        var union = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var carrier in _activeReadonlyReferenceBindings)
+        {
+            if ((StringComparer.Ordinal.Equals(carrier, place)
+                    || carrier.StartsWith(place + ".", StringComparison.Ordinal)
+                    || carrier.StartsWith(place + "[", StringComparison.Ordinal))
+                && _activeBorrowedTextOrigins.TryGetValue(carrier, out var carrierOrigins))
+            {
+                union.UnionWith(carrierOrigins);
+            }
+        }
+        origins = union;
+        return union.Count > 0;
+    }
+
+    private IReadOnlyDictionary<string, IReadOnlySet<string>> GetReadonlyReferenceCarrierOrigins(
+        Expression expression,
+        BoundType type,
+        IReadOnlyDictionary<string, BoundFunction> functions,
+        IReadOnlyDictionary<string, BoundType> bindings)
+    {
+        var result = new Dictionary<string, IReadOnlySet<string>>(StringComparer.Ordinal);
+        Collect(expression, type, "");
+        return result;
+
+        void Collect(Expression value, BoundType valueType, string path)
+        {
+            if (_types.IsReference(valueType))
+            {
+                if (TryGetReadonlyReferenceCallOrigins(value, functions, bindings, out var origins))
+                {
+                    result[path] = origins;
+                }
+                return;
+            }
+
+            if (_types.IsStruct(valueType)
+                && value is StructLiteralExpression structure)
+            {
+                var initializers = structure.Fields.ToDictionary(
+                    static field => field.Name,
+                    StringComparer.Ordinal);
+                foreach (var field in _types.GetStruct(valueType).Fields)
+                {
+                    if (TypeContainsReadonlyReference(field.Type)
+                        && initializers.TryGetValue(field.Name, out var initializer))
+                    {
+                        Collect(initializer.Value, field.Type, path + "." + field.Name);
+                    }
+                }
+                return;
+            }
+
+            if (value is NameExpression name)
+            {
+                var prefix = CanonicalBorrowOriginName(name.Name);
+                foreach (var carrier in _activeReadonlyReferenceBindings)
+                {
+                    if (!carrier.StartsWith(prefix + ".", StringComparison.Ordinal)
+                        && !carrier.StartsWith(prefix + "[", StringComparison.Ordinal))
+                    {
+                        continue;
+                    }
+                    if (_activeBorrowedTextOrigins.TryGetValue(carrier, out var origins))
+                    {
+                        result[path + carrier[prefix.Length..]] = origins;
+                    }
+                }
+                if (result.Count > 0)
+                {
+                    return;
+                }
+            }
+
+            if (!TryGetReadonlyReferenceCallOrigins(value, functions, bindings, out var aggregateOrigins))
+            {
+                return;
+            }
+            foreach (var leaf in ReadonlyReferenceLeafPaths(valueType))
+            {
+                result[path + leaf] = aggregateOrigins;
+            }
+        }
+    }
+
+    private IEnumerable<string> ReadonlyReferenceLeafPaths(BoundType type)
+    {
+        if (_types.IsReference(type))
+        {
+            yield return "";
+            yield break;
+        }
+        if (_types.IsStruct(type))
+        {
+            foreach (var field in _types.GetStruct(type).Fields)
+            {
+                foreach (var nested in ReadonlyReferenceLeafPaths(field.Type))
+                {
+                    yield return "." + field.Name + nested;
+                }
+            }
+            yield break;
+        }
+        if (_types.IsEnum(type))
+        {
+            foreach (var variant in _types.GetEnum(type).Variants)
+            {
+                if (variant.PayloadType is not { } payload)
+                {
+                    continue;
+                }
+                foreach (var nested in ReadonlyReferenceLeafPaths(payload))
+                {
+                    yield return "[" + variant.Name + "]" + nested;
+                }
+            }
+            yield break;
+        }
+        if (_types.IsStaticArray(type))
+        {
+            foreach (var nested in ReadonlyReferenceLeafPaths(_types.GetStaticArray(type).ElementType))
+            {
+                yield return "[*]" + nested;
+            }
+            yield break;
+        }
+        if (_types.IsDynamicArray(type))
+        {
+            foreach (var nested in ReadonlyReferenceLeafPaths(_types.GetDynamicArray(type).ElementType))
+            {
+                yield return "[*]" + nested;
+            }
+        }
+    }
+
+    private static bool TryGetBorrowPlace(Expression expression, out string place)
+    {
+        switch (expression)
+        {
+            case NameExpression name:
+                place = CanonicalBorrowOriginName(name.Name);
+                return true;
+            case FieldAccessExpression field when TryGetBorrowPlace(field.Source, out var source):
+                place = source + "." + field.FieldName;
+                return true;
+            case IndexExpression index when TryGetBorrowPlace(index.Source, out var source):
+                place = source + BorrowOriginIndexProjection(index.Index);
+                return true;
+            default:
+                place = "";
+                return false;
+        }
+    }
+
+    private bool TryUnionReadonlyReferenceCallOrigins(
+        IEnumerable<Expression> expressions,
+        IReadOnlyDictionary<string, BoundFunction> functions,
+        IReadOnlyDictionary<string, BoundType> bindings,
+        out IReadOnlySet<string> origins)
+    {
+        var union = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var expression in expressions)
+        {
+            if (TryGetReadonlyReferenceCallOrigins(expression, functions, bindings, out var nested))
+            {
+                union.UnionWith(nested);
+            }
+        }
+        origins = union;
+        return union.Count > 0;
+    }
+
+    private bool TypeContainsReadonlyReference(BoundType type) =>
+        TypeContainsReadonlyReference(type, new HashSet<BoundType>());
+
+    private bool TypeContainsReadonlyReference(BoundType type, HashSet<BoundType> visiting)
+    {
+        if (_types.IsReference(type))
+        {
+            return true;
+        }
+        if (!visiting.Add(type))
+        {
+            return false;
+        }
+        try
+        {
+            if (_types.IsStruct(type))
+            {
+                return _types.GetStruct(type).Fields.Any(field =>
+                    TypeContainsReadonlyReference(field.Type, visiting));
+            }
+            if (_types.IsEnum(type))
+            {
+                return _types.GetEnum(type).Variants.Any(variant =>
+                    variant.PayloadType is { } payload
+                    && TypeContainsReadonlyReference(payload, visiting));
+            }
+            if (_types.IsStaticArray(type))
+            {
+                return TypeContainsReadonlyReference(
+                    _types.GetStaticArray(type).ElementType,
+                    visiting);
+            }
+            if (_types.IsDynamicArray(type))
+            {
+                return TypeContainsReadonlyReference(
+                    _types.GetDynamicArray(type).ElementType,
+                    visiting);
+            }
+            if (_types.IsDictionary(type))
+            {
+                var dictionary = _types.GetDictionary(type);
+                return TypeContainsReadonlyReference(dictionary.KeyType, visiting)
+                    || TypeContainsReadonlyReference(dictionary.ValueType, visiting);
+            }
+            if (_types.IsBox(type))
+            {
+                return TypeContainsReadonlyReference(_types.GetBox(type).ElementType, visiting);
+            }
+            return false;
+        }
+        finally
+        {
+            visiting.Remove(type);
+        }
     }
 
     private bool TryMapReadonlyReferenceCallOrigins(
@@ -1032,7 +1337,7 @@ internal sealed partial class SemanticCompiler
             var isLive = continuationNames?.Contains(binding) == true;
             for (var index = statementIndex; index < statements.Count; index++)
             {
-                if (StoragePlacementAnalyzer.ReferencesName(statements[index], binding))
+                if (ReferencesTrackedBorrow(statements[index], binding))
                 {
                     isLive = true;
                     break;
@@ -1041,7 +1346,7 @@ internal sealed partial class SemanticCompiler
 
             if (!isLive
                 && result is not null
-                && StoragePlacementAnalyzer.ReferencesName(result, binding))
+                && ReferencesTrackedBorrow(result, binding))
             {
                 isLive = true;
             }
@@ -1067,19 +1372,141 @@ internal sealed partial class SemanticCompiler
         {
             for (var index = statementIndex + 1; index < statements.Count; index++)
             {
-                if (StoragePlacementAnalyzer.ReferencesName(statements[index], binding))
+                if (ReferencesTrackedBorrow(statements[index], binding))
                 {
                     live.Add(binding);
                     break;
                 }
             }
 
-            if (result is not null && StoragePlacementAnalyzer.ReferencesName(result, binding))
+            if (result is not null && ReferencesTrackedBorrow(result, binding))
             {
                 live.Add(binding);
             }
         }
         return live;
+    }
+
+    private bool ReferencesTrackedBorrow(Statement statement, string binding) =>
+        _activeReadonlyReferenceBindings.Contains(binding)
+            ? ReferencesBorrowCarrier(statement, binding)
+            : StoragePlacementAnalyzer.ReferencesName(statement, binding);
+
+    private bool ReferencesTrackedBorrow(Expression expression, string binding) =>
+        _activeReadonlyReferenceBindings.Contains(binding)
+            ? ReferencesBorrowCarrier(expression, binding)
+            : StoragePlacementAnalyzer.ReferencesName(expression, binding);
+
+    private static bool ReferencesBorrowCarrier(Statement statement, string carrier) => statement switch
+    {
+        BindingStatement binding => ReferencesBorrowCarrier(binding.Value, carrier),
+        IndexAssignmentStatement assignment =>
+            BorrowPlacesConflict(BorrowOriginIndexedPlace(assignment.Name, assignment.Index), carrier)
+            || ReferencesBorrowCarrier(assignment.Index, carrier)
+            || ReferencesBorrowCarrier(assignment.Value, carrier),
+        FieldAssignmentStatement assignment =>
+            BorrowPlacesConflict(
+                CanonicalBorrowOriginName(assignment.Name) + "." + assignment.FieldName,
+                carrier)
+            || ReferencesBorrowCarrier(assignment.Value, carrier),
+        BlockFunctionCallStatement block => ReferencesBorrowCarrier(block.Source, carrier)
+            || ReferencesBorrowCarrier(block.Body, carrier),
+        ExpressionStatement expression => ReferencesBorrowCarrier(expression.Expression, carrier),
+        ReturnStatement { Value: { } value } => ReferencesBorrowCarrier(value, carrier),
+        GuardLoopControlStatement guard => ReferencesBorrowCarrier(guard.Condition, carrier),
+        _ => false
+    };
+
+    private static bool ReferencesBorrowCarrier(BlockBody body, string carrier) =>
+        body.Statements.Any(statement => ReferencesBorrowCarrier(statement, carrier))
+        || (body.Value is not null && ReferencesBorrowCarrier(body.Value, carrier));
+
+    private static bool ReferencesBorrowCarrier(
+        IReadOnlyList<Statement> statements,
+        string carrier) => statements.Any(statement =>
+            ReferencesBorrowCarrier(statement, carrier));
+
+    private static bool ReferencesBorrowCarrier(Expression expression, string carrier)
+    {
+        if (expression is FieldAccessExpression field)
+        {
+            return (TryGetBorrowPlace(field, out var place) && BorrowPlacesConflict(place, carrier));
+        }
+        if (expression is IndexExpression index)
+        {
+            return (TryGetBorrowPlace(index, out var place) && BorrowPlacesConflict(place, carrier))
+                || ReferencesBorrowCarrier(index.Index, carrier);
+        }
+        if (expression is NameExpression name)
+        {
+            return BorrowPlacesConflict(CanonicalBorrowOriginName(name.Name), carrier);
+        }
+
+        return expression switch
+        {
+            StringExpression text => text.Segments.OfType<InterpolationSegment>()
+                .Any(segment => ReferencesBorrowCarrier(segment.Expression, carrier)),
+            AddExpression add => ReferencesBorrowCarrier(add.Left, carrier)
+                || ReferencesBorrowCarrier(add.Right, carrier),
+            SubtractExpression subtract => ReferencesBorrowCarrier(subtract.Left, carrier)
+                || ReferencesBorrowCarrier(subtract.Right, carrier),
+            MultiplyExpression multiply => ReferencesBorrowCarrier(multiply.Left, carrier)
+                || ReferencesBorrowCarrier(multiply.Right, carrier),
+            DivideExpression divide => ReferencesBorrowCarrier(divide.Left, carrier)
+                || ReferencesBorrowCarrier(divide.Right, carrier),
+            ModuloExpression modulo => ReferencesBorrowCarrier(modulo.Left, carrier)
+                || ReferencesBorrowCarrier(modulo.Right, carrier),
+            NegateExpression negate => ReferencesBorrowCarrier(negate.Value, carrier),
+            CompareExpression compare => ReferencesBorrowCarrier(compare.Left, carrier)
+                || ReferencesBorrowCarrier(compare.Right, carrier),
+            AndExpression and => ReferencesBorrowCarrier(and.Left, carrier)
+                || ReferencesBorrowCarrier(and.Right, carrier),
+            OrExpression or => ReferencesBorrowCarrier(or.Left, carrier)
+                || ReferencesBorrowCarrier(or.Right, carrier),
+            NotExpression not => ReferencesBorrowCarrier(not.Value, carrier),
+            RangeExpression range => ReferencesBorrowCarrier(range.Start, carrier)
+                || ReferencesBorrowCarrier(range.End, carrier),
+            FoldExpression fold => ReferencesBorrowCarrier(fold.Source, carrier)
+                || ReferencesBorrowCarrier(fold.Initial, carrier)
+                || ReferencesBorrowCarrier(fold.Body, carrier),
+            IfExpression conditional => ReferencesBorrowCarrier(conditional.Condition, carrier)
+                || ReferencesBorrowCarrier(conditional.Then, carrier)
+                || (conditional.Else is not null
+                    && ReferencesBorrowCarrier(conditional.Else, carrier)),
+            WhenExpression selection =>
+                (selection.Subject is not null
+                    && ReferencesBorrowCarrier(selection.Subject, carrier))
+                || selection.Arms.Any(arm =>
+                    ReferencesBorrowCarrier(arm.Condition, carrier)
+                    || ReferencesBorrowCarrier(arm.Body, carrier))
+                || ReferencesBorrowCarrier(selection.Else, carrier),
+            EnumMatchExpression match => ReferencesBorrowCarrier(match.Subject, carrier)
+                || match.Arms.Any(arm => ReferencesBorrowCarrier(arm.Body, carrier))
+                || (match.Else is not null && ReferencesBorrowCarrier(match.Else, carrier)),
+            SubjectCompareExpression subject => ReferencesBorrowCarrier(subject.Right, carrier),
+            SubjectRangeExpression subject => ReferencesBorrowCarrier(subject.Start, carrier)
+                || ReferencesBorrowCarrier(subject.End, carrier),
+            FlowExpression flow => ReferencesBorrowCarrier(flow.Source, carrier)
+                || flow.Targets.Any(target => target.Arguments.Any(argument =>
+                    ReferencesBorrowCarrier(argument, carrier))),
+            CallExpression call => call.Arguments.Any(argument =>
+                ReferencesBorrowCarrier(argument, carrier)),
+            ArrayLiteralExpression array => array.Elements.Any(element =>
+                ReferencesBorrowCarrier(element, carrier)),
+            ArrayRepeatExpression repeat => ReferencesBorrowCarrier(repeat.Value, carrier),
+            StructLiteralExpression structure => structure.Fields.Any(field =>
+                ReferencesBorrowCarrier(field.Value, carrier)),
+            BoxExpression box => ReferencesBorrowCarrier(box.Value, carrier),
+            DictionaryLiteralExpression dictionary => dictionary.Entries.Any(entry =>
+                ReferencesBorrowCarrier(entry.Key, carrier)
+                || ReferencesBorrowCarrier(entry.Value, carrier)),
+            TryExpression attempt => ReferencesBorrowCarrier(attempt.Value, carrier),
+            MapExpression map => ReferencesBorrowCarrier(map.Path, carrier)
+                || (map.Offset is not null && ReferencesBorrowCarrier(map.Offset, carrier))
+                || (map.Length is not null && ReferencesBorrowCarrier(map.Length, carrier))
+                || (map.FileSize is not null && ReferencesBorrowCarrier(map.FileSize, carrier)),
+            _ => false
+        };
     }
 
     private BorrowOriginState CaptureBorrowedTextOriginState() => new(

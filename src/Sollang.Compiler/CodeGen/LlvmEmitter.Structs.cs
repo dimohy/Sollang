@@ -290,6 +290,15 @@ internal sealed partial class LlvmEmitter
             EmitAssign(
                 pointer,
                 $"getelementptr inbounds {LlvmStructType(source.ElementType)}, ptr {source.PointerName}, i32 0, i32 {member.Index.ToString(CultureInfo.InvariantCulture)}");
+            if (_program.Types.IsReference(member.Type))
+            {
+                var storedPointer = NextTemp("stored_ref");
+                EmitLoad(storedPointer, "ptr", pointer, RuntimeAlignment(member.Type));
+                return new RuntimeReference(
+                    member.Type,
+                    _program.Types.GetReference(member.Type).ElementType,
+                    storedPointer);
+            }
             var memberReferenceType = _program.Types.GetOrAddReference(member.Type);
             return new RuntimeReference(memberReferenceType, member.Type, pointer);
         }
