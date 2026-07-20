@@ -898,6 +898,11 @@ approved syntax.
   `examples/464-selfhost-typed-ir-nested-index-dependencies.slg`: recursive
   evaluation of a computed index before its consuming call, including the
   self-host typed-IR dependency and LLVM dominance contracts
+- `examples/465-borrowed-text-return-origin.slg`,
+  `examples/466-selfhost-llvm-borrowed-text-return-origin.slg`, and
+  `examples/468-selfhost-borrowed-return-origin-analysis.slg`: a sliced Text
+  return inherits its single SourceText input origin, executes through both
+  compiler paths, and rejects moving the owner while the stored view is live
 - `examples/88-grammar-table-module.slg`: compiles the generated grammar-table
   module as a separate source file and reads its public metadata
 - `examples/browser`: static HTML/JS runner for the WebAssembly sample

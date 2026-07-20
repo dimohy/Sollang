@@ -21,10 +21,21 @@ public struct OwnershipDiagnostic {
     span: syntax.SourceSpan
 }
 
+struct BorrowedTextReturn {
+    sourceModule: Int
+    functionSymbol: Int
+}
+
+struct BorrowedTextBinding {
+    bindingIr: Int
+    ownerBindingIr: Int
+}
+
 # Code 17 identifies whole-owner or overlapping-field use after a partial move.
 # Code 18 identifies a mutable binding captured by a parallel callback.
 # Code 19 identifies a structurally non-sendable parallel callback capture.
 # Code 20 identifies a branch or loop that exits with a partially moved path.
+# Code 21 identifies an origin moved while a returned borrowed Text is live.
 public analyze sources: [Text; ~] -> [OwnershipDiagnostic; ~] {
     sources -> semanticContext.prepare => prepared
     prepared -> analyzeContext
@@ -88,6 +99,123 @@ public analyzeContext prepared: semanticContext.SemanticSnapshot -> [OwnershipDi
     prepared -> typedIr.lowerContext => typed!
     typed! -> typedIr.movesFrom => moves!
     [OwnershipDiagnostic; ~] => diagnostics!
+
+    # A Text returned from a default SourceText input inherits that input's
+    # symbolic origin. The contract is inferred only when the returned subtree
+    # contains the SourceText slice operation, matching the reference compiler's
+    # single-input lifetime elision rule.
+    [BorrowedTextReturn; ~] => borrowedReturns!
+    0 => borrowedFunctionIndex!
+    borrowedFunctionIndex! < (typed! -> len) -> while {
+        typed![borrowedFunctionIndex!] => borrowedFunction
+        (borrowedFunction.kind == 0 and borrowedFunction.typeOrigin == 1 and borrowedFunction.typeSymbol == 1 and borrowedFunction.operand1 >= 0) -> if {
+            typed![borrowedFunction.operand1] => borrowedParameter
+            (borrowedParameter.kind == 10 and borrowedParameter.typeOrigin == 1 and borrowedParameter.typeSymbol == 24 and borrowedParameter.flags == 0) -> if {
+                false => returnsSlice!
+                0 => borrowedReturnSearch!
+                borrowedReturnSearch! < (typed! -> len) -> while {
+                    typed![borrowedReturnSearch!] => borrowedReturn
+                    (borrowedReturn.kind == 1 and borrowedReturn.parent == borrowedFunctionIndex!) -> if {
+                        0 => borrowedSliceSearch!
+                        borrowedSliceSearch! < (typed! -> len) -> while {
+                            typed![borrowedSliceSearch!] => borrowedSlice
+                            borrowedSlice.opcode == -203 -> if {
+                                borrowedSliceSearch! => borrowedAncestor!
+                                (borrowedAncestor! >= 0 and borrowedAncestor! != borrowedReturnSearch!) -> while {
+                                    typed![borrowedAncestor!].parent => borrowedAncestor!
+                                }
+                                borrowedAncestor! == borrowedReturnSearch! -> if {
+                                    borrowedSlice.operand0 >= 0 -> if {
+                                        typed![borrowedSlice.operand0] => borrowedSliceSource
+                                        (borrowedSliceSource.kind == 5 and borrowedSliceSource.symbol == borrowedParameter.symbol) -> if {
+                                            true => returnsSlice!
+                                        }
+                                    }
+                                }
+                            }
+                            borrowedSliceSearch! + 1 => borrowedSliceSearch!
+                        }
+                    }
+                    borrowedReturnSearch! + 1 => borrowedReturnSearch!
+                }
+                returnsSlice! -> if {
+                    borrowedReturns! -> push(BorrowedTextReturn {
+                        sourceModule: borrowedFunction.sourceModule
+                        functionSymbol: borrowedFunction.symbol
+                    })
+                }
+            }
+        }
+        borrowedFunctionIndex! + 1 => borrowedFunctionIndex!
+    }
+
+    [BorrowedTextBinding; ~] => borrowedBindings!
+    0 => borrowedBindingSearch!
+    borrowedBindingSearch! < (typed! -> len) -> while {
+        typed![borrowedBindingSearch!] => borrowedBinding
+        (borrowedBinding.kind == 17 and borrowedBinding.operand0 >= 0) -> if {
+            typed![borrowedBinding.operand0] => borrowedCall
+            borrowedCall.kind == 6 -> if {
+                false => borrowedCallReturnsView!
+                0 => borrowedReturnIndex!
+                borrowedReturnIndex! < (borrowedReturns! -> len) -> while {
+                    borrowedReturns![borrowedReturnIndex!] => borrowedReturnContract
+                    (borrowedCall.targetModule == borrowedReturnContract.sourceModule and borrowedCall.symbol == borrowedReturnContract.functionSymbol) -> if {
+                        true => borrowedCallReturnsView!
+                    }
+                    borrowedReturnIndex! + 1 => borrowedReturnIndex!
+                }
+                (borrowedCallReturnsView! and borrowedCall.operand0 >= 0) -> if {
+                    typed![borrowedCall.operand0] => borrowedCallSource
+                    (borrowedCallSource.kind == 5 and borrowedCallSource.operand0 >= 0) -> if {
+                        borrowedBindings! -> push(BorrowedTextBinding {
+                            bindingIr: borrowedBindingSearch!
+                            ownerBindingIr: borrowedCallSource.operand0
+                        })
+                    }
+                }
+            }
+        }
+        borrowedBindingSearch! + 1 => borrowedBindingSearch!
+    }
+
+    0 => borrowedMoveIndex!
+    borrowedMoveIndex! < (moves! -> len) -> while {
+        moves![borrowedMoveIndex!] => borrowedMove
+        (borrowedMove.siteIr >= 0 and borrowedMove.siteIr < (typed! -> len)) -> if {
+            typed![borrowedMove.siteIr] => borrowedMoveCall
+            borrowedMoveCall.operand0 >= 0 -> if {
+                typed![borrowedMoveCall.operand0] => borrowedMoveSource
+                (borrowedMoveSource.kind == 5 and borrowedMoveSource.operand0 >= 0) -> if {
+                    borrowedMoveSource.operand0 => movedOwnerBinding
+                    0 => activeBorrowIndex!
+                    activeBorrowIndex! < (borrowedBindings! -> len) -> while {
+                        borrowedBindings![activeBorrowIndex!] => activeBorrow
+                        (activeBorrow.ownerBindingIr == movedOwnerBinding and activeBorrow.bindingIr < borrowedMove.siteIr) -> if {
+                            prepared.package.ranges[borrowedMove.sourceModule] => borrowedMoveRange
+                            typed![borrowedMove.siteIr] => borrowedMoveSite
+                            diagnostics! -> push(OwnershipDiagnostic {
+                                code: 21
+                                sourceModule: borrowedMove.sourceModule
+                                functionSymbol: -1
+                                expectedOrigin: -1
+                                expectedModule: -1
+                                expectedSymbol: movedOwnerBinding
+                                actualOrigin: -1
+                                actualModule: -1
+                                actualSymbol: activeBorrow.bindingIr
+                                actualBuiltin: -1
+                                span: syntax.SourceSpan { fileId: borrowedMove.sourceModule, start: prepared.package.nodes[borrowedMoveRange.astStart + borrowedMoveSite.astNode].start, length: prepared.package.nodes[borrowedMoveRange.astStart + borrowedMoveSite.astNode].length }
+                            })
+                        }
+                        activeBorrowIndex! + 1 => activeBorrowIndex!
+                    }
+                }
+            }
+        }
+        borrowedMoveIndex! + 1 => borrowedMoveIndex!
+    }
+
     0 => partialMoveIndex!
     partialMoveIndex! < (moves! -> len) -> while {
         moves![partialMoveIndex!] => partialMove

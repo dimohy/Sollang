@@ -1076,6 +1076,15 @@ Container rules in the current slice:
   lasts only for the call expression. Binding, returning, storing, or mutating
   through the indexed result or one of its projections is rejected. Use
   `owner! -> take(indexOrKey) => value!` to transfer ownership out explicitly.
+- A function with exactly one default-borrowed `sys.file.SourceText` input may
+  return a `Text` produced by `slice` from that input. The return origin is
+  inferred from the input; no lifetime parameter is written in the common
+  case. A caller may bind the returned view while the named SourceText owner
+  remains in the same or an enclosing lexical scope. Moving, replacing, or
+  mutating that origin while the view is live is a compile-time error. The
+  first implementation conservatively keeps the origin frozen through the end
+  of the scope. Returning borrowed Text inside an aggregate, ambiguous
+  multi-input origins, origin unions, and last-use shortening remain rejected.
 - `push`, `put`, and indexed assignment require a named mutable owner binding
   created with `=> name!`.
 - `array -> each item { ... }` binds `item` to the concrete element type for

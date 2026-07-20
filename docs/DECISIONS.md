@@ -7961,3 +7961,59 @@ References:
 - [LLVM language reference: well-formed SSA](https://llvm.org/docs/LangRef.html#well-formedness)
 - [Rust operand evaluation order](https://doc.rust-lang.org/stable/reference/expressions.html#evaluation-order-of-operands)
 - [Kotlin function-call evaluation](https://kotlinlang.org/spec/expressions.html#function-calls-and-property-access)
+
+## D213A - Inferred Borrowed Text Return Origins
+
+Status: implemented and cross-target Stage2 verified
+Date: 2026-07-20
+
+Sollang now permits the first stored and returned borrowed view without adding
+lifetime punctuation to the common signature. A function with one default
+`SourceText` input and a direct `Text` result derived through `slice` assigns
+the input's symbolic origin to the result. A caller can bind that returned
+view, and the runtime value remains the existing pointer-plus-length Text with
+no allocation, reference count, or hidden owner.
+
+The reference semantic compiler discovers these contracts as a fixed point, so
+one borrowed-return helper may delegate to another. Each bound result records
+the caller's named owner. Moving, transferring into an aggregate, replacing,
+or mutating that owner while the view remains active is rejected. This first
+slice uses a deliberately conservative lexical region: the owner stays frozen
+until the enclosing scope ends rather than ending the borrow at last use.
+Aggregate returns containing borrowed Text remain rejected.
+
+The self-host ownership analyzer derives the same contract from flat typed IR:
+a Text-returning function's return subtree must contain the SourceText `slice`
+intrinsic rooted at its default parameter. A binding of that call records the
+concrete owner-binding IR index, and diagnostic 21 rejects a later move event
+against it. The self-host LLVM backend already carries the two-word view
+unchanged and executes the positive program. Wiring every ownership diagnostic
+into the standalone Stage2 driver remains part of the broader self-host
+diagnostic gate; example 468 executes this analyzer directly so the rule is not
+merely documented.
+
+Examples 465, 466, and 468 cover reference execution, self-host LLVM
+assembly/execution, and self-host origin-conflict analysis. The reference
+diagnostic `borrowed-text-origin-move` fixes the owner-freeze boundary. Release
+builds have zero warnings and errors; Windows and Linux full suites pass
+628/628. Windows Stage2 passes 6/6 at 11,325,985 LLVM text bytes with a
+1,570,816-byte executable, and Linux Stage2 passes 5/5 at 11,322,588 LLVM text
+bytes with a 3,120,488-byte executable. Stage3 cadence advances to 9/10.
+Formal progress remains 49 complete, 8 partial, and 3 missing: 53/60 (88.3%),
+because origin unions, multiple borrowed inputs, path-sensitive simultaneous
+borrows, last-use regions, and production-driver diagnostic integration remain
+inside the incomplete ownership/storage gate.
+
+The design combines Rust's ergonomic lifetime elision rule with Mojo's
+symbolic origin model. Rust assigns an elided output lifetime to the single
+input lifetime and rejects an ambiguous multi-input result. Mojo explicitly
+tracks which variable owns referenced storage and allows return references to
+carry an inferred or declared origin. Swift's location, duration, and access
+kind model informs the later conflict phase; D213A implements only the
+single-origin readonly case.
+
+References:
+
+- [Rust lifetime elision](https://doc.rust-lang.org/reference/lifetime-elision.html)
+- [Mojo lifetimes, origins, and references](https://mojolang.org/docs/manual/values/lifetimes/)
+- [Swift memory safety and overlapping access](https://docs.swift.org/swift-book/documentation/the-swift-programming-language/memorysafety/)

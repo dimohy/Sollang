@@ -16,6 +16,10 @@ internal sealed partial class SemanticCompiler
         new(ReferenceEqualityComparer.Instance);
     private readonly Dictionary<BoundFunction, IReadOnlyDictionary<string, BoundType>> _functionCapturedBindings =
         new(ReferenceEqualityComparer.Instance);
+    private readonly Dictionary<BoundFunction, string> _borrowedTextReturnOrigins =
+        new(ReferenceEqualityComparer.Instance);
+    private readonly Dictionary<string, string> _activeBorrowedTextOrigins =
+        new(StringComparer.Ordinal);
     private Dictionary<string, BoundFunction>? _boundFunctions;
     private string _currentModuleName = "";
     private string? _currentTypeScopeName;
@@ -42,6 +46,7 @@ internal sealed partial class SemanticCompiler
     {
         _program = InferPrivateFunctionSignatures(_program);
         var functions = DeclareFunctions();
+        DiscoverBorrowedTextReturnOrigins(functions);
         var declarationFingerprint = SemanticStableIdentity.DeclarationFingerprint(
             _types,
             _traits.Values,
@@ -1444,6 +1449,10 @@ internal sealed partial class SemanticCompiler
         IReadOnlyDictionary<string, BoundFunction> parentFunctions,
         IReadOnlyDictionary<string, BoundType> capturedBindings)
     {
+        var parentBorrowedTextOrigins = new Dictionary<string, string>(
+            _activeBorrowedTextOrigins,
+            StringComparer.Ordinal);
+        _activeBorrowedTextOrigins.Clear();
         var selectedCapturedBindings = SelectCapturedBindings(function, capturedBindings, out var calledFunctions);
         _functionCapturedBindings[function] = new Dictionary<string, BoundType>(
             selectedCapturedBindings,
@@ -1453,6 +1462,11 @@ internal sealed partial class SemanticCompiler
         if (function.Kind == BoundFunctionKind.UserBlock)
         {
             ValidateUserBlockFunction(function, parentFunctions, selectedCapturedBindings);
+            _activeBorrowedTextOrigins.Clear();
+            foreach (var pair in parentBorrowedTextOrigins)
+            {
+                _activeBorrowedTextOrigins[pair.Key] = pair.Value;
+            }
             return;
         }
 
@@ -1498,9 +1512,17 @@ internal sealed partial class SemanticCompiler
         var returnedMoveInputName = ReturnedMoveInputName(function);
 
         BindStatements(function.BlockBody, scopedFunctions, bodyBindings, mutableBindings, allowContainerBindings: true);
+        var functionBorrowedTextOrigins = new Dictionary<string, string>(
+            _activeBorrowedTextOrigins,
+            StringComparer.Ordinal);
         foreach (var localFunction in function.LocalFunctions.Values)
         {
             ValidateUserFunction(localFunction, scopedFunctions, bodyBindings);
+        }
+        _activeBorrowedTextOrigins.Clear();
+        foreach (var pair in functionBorrowedTextOrigins)
+        {
+            _activeBorrowedTextOrigins[pair.Key] = pair.Value;
         }
         var effectiveCapturedBindings = new Dictionary<string, BoundType>(selectedCapturedBindings, StringComparer.Ordinal);
         foreach (var calledFunctionName in calledFunctions)
@@ -1559,10 +1581,14 @@ internal sealed partial class SemanticCompiler
             && (ContainsSliceFlow(function.BlockBody)
                 || (function.Body is not null && ContainsSliceFlow(function.Body))))
         {
-            throw Error(
-                function.Line,
-                function.Column,
-                $"function '{function.Name}' cannot return Text storage after slicing borrowed SourceText; copy into an owned text type or keep the view inside the SourceText borrow");
+            if (function.ReturnType != BoundType.Text
+                || !_borrowedTextReturnOrigins.ContainsKey(function))
+            {
+                throw Error(
+                    function.Line,
+                    function.Column,
+                    $"function '{function.Name}' cannot return Text storage after slicing borrowed SourceText; return one direct Text view from a single SourceText input or copy into an owned text type");
+            }
         }
 
         if (function.Body is not null && IsContainerType(bodyType))
@@ -1585,6 +1611,12 @@ internal sealed partial class SemanticCompiler
         _functionBindings[function] = new Dictionary<string, BoundType>(
             bodyBindings,
             StringComparer.Ordinal);
+
+        _activeBorrowedTextOrigins.Clear();
+        foreach (var pair in parentBorrowedTextOrigins)
+        {
+            _activeBorrowedTextOrigins[pair.Key] = pair.Value;
+        }
 
     }
 
@@ -2278,6 +2310,7 @@ internal sealed partial class SemanticCompiler
         _currentFunctionAllowsEarlyReturn = false;
         _currentFunctionIsAsync = true;
         _currentFunctionEffects = null;
+        _activeBorrowedTextOrigins.Clear();
         var bindings = new Dictionary<string, BoundType>(StringComparer.Ordinal);
         var mutableBindings = new HashSet<string>(StringComparer.Ordinal);
         BindStatements(_program.Statements, functions, bindings, mutableBindings);
@@ -2308,6 +2341,15 @@ internal sealed partial class SemanticCompiler
                     var movedFieldOwnerName = GetMoveConsumingOwnedFieldOwnerName(binding.Value, bindings);
                     var consumedSourceNames = GetOwnedParameterConsumedSourceNames(binding.Value, functions, bindings);
                     var aggregateLiteralSourceNames = GetOwnedAggregateLiteralSourceNames(binding.Value, bindings);
+                    RejectBorrowedTextOriginInvalidation(
+                        movedSourceName,
+                        movedFieldOwnerName,
+                        consumedSourceNames,
+                        aggregateLiteralSourceNames,
+                        binding.Name,
+                        isMutableRebind,
+                        binding.Line,
+                        binding.Column);
                     if (bindings.ContainsKey(binding.Name)
                         && !isMutableRebind
                         && !string.Equals(binding.Name, movedSourceName, StringComparison.Ordinal)
@@ -2393,12 +2435,22 @@ internal sealed partial class SemanticCompiler
                     {
                         mutableBindings.Add(binding.Name);
                     }
+                    if (TryGetBorrowedTextCallOrigin(binding.Value, functions, bindings, out var borrowedOrigin))
+                    {
+                        if (_activeBorrowedTextOrigins.TryGetValue(borrowedOrigin, out var transitiveOrigin))
+                        {
+                            borrowedOrigin = transitiveOrigin;
+                        }
+                        _activeBorrowedTextOrigins[binding.Name] = borrowedOrigin;
+                    }
 
                     break;
                 case IndexAssignmentStatement assignment:
+                    RejectBorrowedTextOriginMutation(assignment.Name, assignment.Line, assignment.Column);
                     BindIndexAssignment(assignment, functions, bindings, mutableBindings, yieldInputType);
                     break;
                 case FieldAssignmentStatement assignment:
+                    RejectBorrowedTextOriginMutation(assignment.Name, assignment.Line, assignment.Column);
                     BindFieldAssignment(assignment, functions, bindings, mutableBindings, yieldInputType);
                     break;
                 case BlockFunctionCallStatement blockFunctionCall:
@@ -2503,6 +2555,19 @@ internal sealed partial class SemanticCompiler
                     var mutatedContainerSourceNames = GetOwnedContainerMutationConsumedSourceNames(
                         expressionStatement.Expression,
                         bindings);
+                    var consumedExpressionSourceNames = GetOwnedParameterConsumedSourceNames(
+                        expressionStatement.Expression,
+                        functions,
+                        bindings);
+                    RejectBorrowedTextOriginInvalidation(
+                        movedExpressionSourceName,
+                        null,
+                        consumedExpressionSourceNames,
+                        mutatedContainerSourceNames,
+                        null,
+                        false,
+                        expressionStatement.Expression.Line,
+                        expressionStatement.Expression.Column);
                     if (effect is FlowBindingEffect bindingEffect)
                     {
                         ValidateBindingName(
@@ -2518,13 +2583,22 @@ internal sealed partial class SemanticCompiler
                         }
 
                         bindings.Add(bindingEffect.Name, bindingEffect.Type);
+                        if (TryGetBorrowedTextCallOrigin(
+                                expressionStatement.Expression,
+                                functions,
+                                bindings,
+                                out var flowBorrowedOrigin))
+                        {
+                            if (_activeBorrowedTextOrigins.TryGetValue(flowBorrowedOrigin, out var transitiveOrigin))
+                            {
+                                flowBorrowedOrigin = transitiveOrigin;
+                            }
+                            _activeBorrowedTextOrigins[bindingEffect.Name] = flowBorrowedOrigin;
+                        }
                     }
 
                     ValidateOwnedParameterConsumptionExpression(expressionStatement.Expression, functions);
-                    foreach (var consumedName in GetOwnedParameterConsumedSourceNames(
-                        expressionStatement.Expression,
-                        functions,
-                        bindings))
+                    foreach (var consumedName in consumedExpressionSourceNames)
                     {
                         bindings.Remove(consumedName);
                         mutableBindings.Remove(consumedName);

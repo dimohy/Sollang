@@ -2107,6 +2107,37 @@ in concrete typed-IR dependency edges before emitting LLVM.
 - [Rust operand evaluation order](https://doc.rust-lang.org/stable/reference/expressions.html#evaluation-order-of-operands)
 - [Kotlin function-call evaluation](https://kotlinlang.org/spec/expressions.html#function-calls-and-property-access)
 
+## Inferred Borrowed Text Return Origins (D213A)
+
+D213A introduces the first safe reference that survives a call. A direct Text
+slice returned from one default SourceText input inherits that input's symbolic
+origin without adding lifetime syntax. The reference compiler records the
+caller owner on the result binding and conservatively freezes that owner until
+scope exit. A later move, aggregate transfer, replacement, or mutation is a
+compile-time error; returning a borrowed Text inside an aggregate remains an
+escape error.
+
+The self-host ownership analyzer reconstructs the same relationship from flat
+typed IR and emits diagnostic 21 when a move event targets the recorded owner.
+The self-host LLVM backend executes the returned two-word view with no copy or
+runtime ownership machinery. Examples 465, 466, and 468 prove reference
+execution, self-host LLVM assembly/execution, and self-host conflict analysis.
+
+Validation is a zero-warning Release build, Windows/Linux full suites at
+**628/628**, Windows Stage2 **6/6** at **11,325,985 LLVM text bytes** with a
+**1,570,816-byte native executable**, and Linux Stage2 **5/5** at **11,322,588
+LLVM text bytes** with a **3,120,488-byte native executable**. The Stage3 cadence
+advances to **9/10**. Formal progress remains **49 complete, 8 partial, 3
+missing: 53/60 (88.3%)**. Multiple input origins, origin unions, last-use
+shortening, projected simultaneous borrow conflicts, and standalone Stage2
+driver enforcement remain open.
+
+Research basis:
+
+- [Rust lifetime elision](https://doc.rust-lang.org/reference/lifetime-elision.html)
+- [Mojo lifetimes, origins, and references](https://mojolang.org/docs/manual/values/lifetimes/)
+- [Swift memory safety](https://docs.swift.org/swift-book/documentation/the-swift-programming-language/memorysafety/)
+
 ## Immediate Implementation Order
 
 1. Multi-file compilation (implemented by example 52).
