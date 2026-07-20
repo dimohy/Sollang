@@ -903,6 +903,11 @@ approved syntax.
   `examples/468-selfhost-borrowed-return-origin-analysis.slg`: a sliced Text
   return inherits its single SourceText input origin, executes through both
   compiler paths, and rejects moving the owner while the stored view is live
+- `examples/469-borrowed-text-last-use-region.slg`,
+  `examples/470-selfhost-borrowed-text-last-use-analysis.slg`, and
+  `examples/471-selfhost-llvm-borrowed-text-last-use.slg`: the inferred borrow
+  ends after the view's final straight-line use, permitting a later owner move
+  in the reference compiler, self-host analyzer, and self-host LLVM path
 - `examples/88-grammar-table-module.slg`: compiles the generated grammar-table
   module as a separate source file and reads its public metadata
 - `examples/browser`: static HTML/JS runner for the WebAssembly sample

@@ -8017,3 +8017,58 @@ References:
 - [Rust lifetime elision](https://doc.rust-lang.org/reference/lifetime-elision.html)
 - [Mojo lifetimes, origins, and references](https://mojolang.org/docs/manual/values/lifetimes/)
 - [Swift memory safety and overlapping access](https://docs.swift.org/swift-book/documentation/the-swift-programming-language/memorysafety/)
+
+## D213B - Straight-Line Last-Use Borrow Regions
+
+Status: implemented, cross-target Stage2 verified, and Stage3 fixed point verified
+Date: 2026-07-20
+
+An inferred borrowed Text result no longer freezes its SourceText origin until
+lexical scope exit when the caller has finished using the view. Before each
+statement in a function or main's straight-line statement sequence, the
+reference semantic compiler checks the remaining statements and final result
+expression. Borrow bindings with no remaining use are removed from the active
+origin set. A later owner move, replacement, or mutation is therefore legal;
+the same operation remains an error when any later statement can read the view.
+
+The self-host ownership analyzer applies the equivalent rule to flat typed IR.
+For each move event against a borrowed origin it searches for a later name-read
+whose definition is the borrowed binding. Diagnostic 21 is emitted only when
+that later use exists. The analysis is intentionally source-order conservative:
+full control-flow-graph liveness for branch joins, loops, reassignment, and
+path-specific regions remains open.
+
+The self-host LLVM execution example exposed and fixed an adjacent compiler
+defect rather than weakening the test. A function-local `println` previously
+treated non-Int32 numeric results such as SourceText `len` (`UIntSize`) as
+Text. Function emission now selects Bool or signed/unsigned 8/16/32/64-bit
+integer formatting, widens narrow values when required, and the runtime-feature
+scan includes the matching formatter helpers.
+
+Examples 469-471 cover reference execution, direct self-host ownership
+analysis, LLVM assembly, and Linux execution. The existing
+`borrowed-text-origin-move` diagnostic and example 468 prove that a move before
+the final view use is still rejected. Release builds have zero warnings and
+errors; Windows and Linux full suites pass 631/631. Windows Stage2 passes 6/6
+at 11,348,275 LLVM text bytes with a 1,573,376-byte executable, and Linux
+Stage2 passes 5/5 at 11,344,878 LLVM text bytes with a 3,128,680-byte
+executable. Stage3 regenerates 11,348,275 identical LLVM bytes and passes the
+fixed-point hash
+`390F7C0482933D3C2918421B9CE1994762712C4FA459F240407A1C5A302D0976`.
+This completes cadence 10/10 and resets it to 0/10.
+
+Formal progress remains 49 complete, 8 partial, and 3 missing: 53/60 (88.3%).
+D213B narrows the ownership/storage gate but does not yet close CFG-sensitive
+regions, multiple or union origins, aggregate borrowed returns, disjoint
+projection conflicts, or production-driver ownership-diagnostic integration.
+
+The design follows Rust NLL's minimal region containing every possible future
+use, Mojo's compiler-inferred symbolic origins, and Swift's rule that accesses
+conflict only when their locations and durations overlap. Sollang deliberately
+keeps lifetime punctuation out of the single-origin common case.
+
+References:
+
+- [Rust RFC 2094: non-lexical lifetimes](https://rust-lang.github.io/rfcs/2094-nll.html)
+- [Mojo lifetimes, origins, and references](https://mojolang.org/docs/manual/values/lifetimes/)
+- [Swift memory safety and overlapping access](https://docs.swift.org/swift-book/documentation/the-swift-programming-language/memorysafety/)

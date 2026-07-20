@@ -1,0 +1,214 @@
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-unknown-linux-gnu"
+@sollang_runtime_newline = private constant [1 x i8] c"\0A"
+declare i64 @write(i32, ptr, i64)
+define internal void @sollang_runtime_flush_stdout() {
+entry:
+  ret void
+}
+define internal void @sollang_runtime_print(ptr %data, i64 %len, i1 %newline) {
+entry:
+  %written = call i64 @write(i32 1, ptr %data, i64 %len)
+  br i1 %newline, label %write_newline, label %done
+write_newline:
+  %newline_written = call i64 @write(i32 1, ptr @sollang_runtime_newline, i64 1)
+  br label %done
+done:
+  ret void
+}
+define internal void @sollang_runtime_print_i32(i32 %value, i1 %newline) {
+entry:
+  %buffer = alloca [12 x i8], align 1
+  %end = getelementptr [12 x i8], ptr %buffer, i64 0, i64 12
+  %wide = sext i32 %value to i64
+  %negative = icmp slt i64 %wide, 0
+  %negated = sub i64 0, %wide
+  %magnitude = select i1 %negative, i64 %negated, i64 %wide
+  br label %digits
+digits:
+  %current = phi i64 [ %magnitude, %entry ], [ %quotient, %digits ]
+  %cursor = phi ptr [ %end, %entry ], [ %digit_slot, %digits ]
+  %digit = urem i64 %current, 10
+  %quotient = udiv i64 %current, 10
+  %digit_slot = getelementptr i8, ptr %cursor, i64 -1
+  %digit8 = trunc i64 %digit to i8
+  %ascii = add i8 %digit8, 48
+  store i8 %ascii, ptr %digit_slot, align 1
+  %more = icmp ne i64 %quotient, 0
+  br i1 %more, label %digits, label %digits_done
+digits_done:
+  br i1 %negative, label %write_sign, label %emit
+write_sign:
+  %sign_slot = getelementptr i8, ptr %digit_slot, i64 -1
+  store i8 45, ptr %sign_slot, align 1
+  br label %emit
+emit:
+  %start = phi ptr [ %digit_slot, %digits_done ], [ %sign_slot, %write_sign ]
+  %end_address = ptrtoint ptr %end to i64
+  %start_address = ptrtoint ptr %start to i64
+  %length = sub i64 %end_address, %start_address
+  call void @sollang_runtime_print(ptr %start, i64 %length, i1 %newline)
+  ret void
+}
+define internal void @sollang_runtime_print_i64(i64 %value, i1 %signed, i1 %newline) {
+entry:
+  %buffer = alloca [21 x i8], align 1
+  %end = getelementptr [21 x i8], ptr %buffer, i64 0, i64 21
+  %negative_value = icmp slt i64 %value, 0
+  %negative = and i1 %signed, %negative_value
+  %negated = sub i64 0, %value
+  %magnitude = select i1 %negative, i64 %negated, i64 %value
+  br label %digits
+digits:
+  %current = phi i64 [ %magnitude, %entry ], [ %quotient, %digits ]
+  %cursor = phi ptr [ %end, %entry ], [ %digit_slot, %digits ]
+  %digit = urem i64 %current, 10
+  %quotient = udiv i64 %current, 10
+  %digit_slot = getelementptr i8, ptr %cursor, i64 -1
+  %digit8 = trunc i64 %digit to i8
+  %ascii = add i8 %digit8, 48
+  store i8 %ascii, ptr %digit_slot, align 1
+  %more = icmp ne i64 %quotient, 0
+  br i1 %more, label %digits, label %digits_done
+digits_done:
+  br i1 %negative, label %write_sign, label %emit
+write_sign:
+  %sign_slot = getelementptr i8, ptr %digit_slot, i64 -1
+  store i8 45, ptr %sign_slot, align 1
+  br label %emit
+emit:
+  %start = phi ptr [ %digit_slot, %digits_done ], [ %sign_slot, %write_sign ]
+  %end_address = ptrtoint ptr %end to i64
+  %start_address = ptrtoint ptr %start to i64
+  %length = sub i64 %end_address, %start_address
+  call void @sollang_runtime_print(ptr %start, i64 %length, i1 %newline)
+  ret void
+}
+%sollang.source_text = type { ptr, i64, ptr, i64 }
+declare ptr @malloc(i64)
+declare void @free(ptr)
+define internal void @sollang_drop_t25(%sollang.source_text %value) {
+entry:
+  call void @sollang_runtime_unmap_text(%sollang.source_text %value)
+  ret void
+}
+declare void @llvm.trap()
+%sollang.text = type { ptr, i64 }
+@sollang_str_19 = private unnamed_addr constant [5 x i8] c"lexer"
+@sollang_str_27 = private unnamed_addr constant [25 x i8] c"moved after last view use"
+define %sollang.text @sollang_m0_s0(%sollang.source_text %arg) {
+entry:
+  %v5 = add i64 0, 0
+  %v7 = add i64 3, 0
+  %v3_base = extractvalue %sollang.source_text %arg, 0
+  %v3_start = getelementptr i8, ptr %v3_base, i64 %v5
+  %v3_ptr = insertvalue %sollang.text poison, ptr %v3_start, 0
+  %v3 = insertvalue %sollang.text %v3_ptr, i64 %v7, 1
+  ret %sollang.text %v3
+}
+define void @sollang_m0_s1(%sollang.source_text %arg) {
+entry:
+  %v14 = extractvalue %sollang.source_text %arg, 1
+  call void @sollang_runtime_print_i64(i64 %v14, i1 false, i1 true)
+  call void @sollang_drop_t25(%sollang.source_text %arg)
+  ret void
+}
+define i32 @main() {
+entry:
+  %slot16 = alloca %sollang.source_text, align 8
+  %v19_ptr = insertvalue %sollang.text poison, ptr @sollang_str_19, 0
+  %v19 = insertvalue %sollang.text %v19_ptr, i64 5, 1
+  %v27_ptr = insertvalue %sollang.text poison, ptr @sollang_str_27, 0
+  %v27 = insertvalue %sollang.text %v27_ptr, i64 25, 1
+  %v18_data = extractvalue %sollang.text %v19, 0
+  %v18_length = extractvalue %sollang.text %v19, 1
+  %v18_value0 = insertvalue %sollang.source_text poison, ptr %v18_data, 0
+  %v18_value1 = insertvalue %sollang.source_text %v18_value0, i64 %v18_length, 1
+  %v18_value2 = insertvalue %sollang.source_text %v18_value1, ptr null, 2
+  %v18 = insertvalue %sollang.source_text %v18_value2, i64 0, 3
+  store %sollang.source_text %v18, ptr %slot16, align 8
+  %v21 = load %sollang.source_text, ptr %slot16, align 8
+  %v25 = load %sollang.source_text, ptr %slot16, align 8
+  %v20 = call %sollang.text @sollang_m0_s0(%sollang.source_text %v21)
+  %v23 = freeze %sollang.text %v20
+  %v22_runtime_ptr = extractvalue %sollang.text %v23, 0
+  %v22_runtime_len = extractvalue %sollang.text %v23, 1
+  call void @sollang_runtime_print(ptr %v22_runtime_ptr, i64 %v22_runtime_len, i1 true)
+  call void @sollang_m0_s1(%sollang.source_text %v25)
+  call void @sollang_runtime_print(ptr @sollang_str_27, i64 25, i1 true)
+  call void @sollang_runtime_flush_stdout()
+  ret i32 0
+}
+declare i32 @open(ptr, i32, i32)
+declare i32 @close(i32)
+declare i64 @lseek(i32, i64, i32)
+declare ptr @mmap(ptr, i64, i32, i32, i32, i64)
+declare i32 @munmap(ptr, i64)
+define %sollang.source_text @sollang_runtime_map_text(%sollang.text %path) {
+entry:
+  %path_data = extractvalue %sollang.text %path, 0
+  %path_length = extractvalue %sollang.text %path, 1
+  %buffer_length = add i64 %path_length, 1
+  %buffer = call ptr @malloc(i64 %buffer_length)
+  %allocated = icmp ne ptr %buffer, null
+  br i1 %allocated, label %copy, label %failure
+copy:
+  %index = phi i64 [ 0, %entry ], [ %next, %copy_body ]
+  %copy_done = icmp eq i64 %index, %path_length
+  br i1 %copy_done, label %terminate, label %copy_body
+copy_body:
+  %source = getelementptr i8, ptr %path_data, i64 %index
+  %byte = load i8, ptr %source, align 1
+  %destination = getelementptr i8, ptr %buffer, i64 %index
+  store i8 %byte, ptr %destination, align 1
+  %next = add i64 %index, 1
+  br label %copy
+terminate:
+  %terminator = getelementptr i8, ptr %buffer, i64 %path_length
+  store i8 0, ptr %terminator, align 1
+  %file = call i32 @open(ptr %buffer, i32 0, i32 0)
+  call void @free(ptr %buffer)
+  %opened = icmp sge i32 %file, 0
+  br i1 %opened, label %size, label %failure
+size:
+  %length = call i64 @lseek(i32 %file, i64 0, i32 2)
+  %size_ok = icmp sge i64 %length, 0
+  br i1 %size_ok, label %size_known, label %close_failure
+size_known:
+  %empty = icmp eq i64 %length, 0
+  br i1 %empty, label %empty_success, label %mapping
+empty_success:
+  %empty_closed = call i32 @close(i32 %file)
+  ret %sollang.source_text zeroinitializer
+mapping:
+  %base = call ptr @mmap(ptr null, i64 %length, i32 1, i32 1, i32 %file, i64 0)
+  %base_value = ptrtoint ptr %base to i64
+  %base_ok = icmp ne i64 %base_value, -1
+  br i1 %base_ok, label %success, label %close_failure
+success:
+  %file_closed = call i32 @close(i32 %file)
+  %result0 = insertvalue %sollang.source_text poison, ptr %base, 0
+  %result1 = insertvalue %sollang.source_text %result0, i64 %length, 1
+  %result2 = insertvalue %sollang.source_text %result1, ptr %base, 2
+  %result3 = insertvalue %sollang.source_text %result2, i64 %length, 3
+  ret %sollang.source_text %result3
+close_failure:
+  %failed_file_closed = call i32 @close(i32 %file)
+  br label %failure
+failure:
+  call void @llvm.trap()
+  unreachable
+}
+
+define void @sollang_runtime_unmap_text(%sollang.source_text %source) {
+entry:
+  %base = extractvalue %sollang.source_text %source, 2
+  %length = extractvalue %sollang.source_text %source, 3
+  %owned = icmp ne ptr %base, null
+  br i1 %owned, label %unmap, label %done
+unmap:
+  %ignored = call i32 @munmap(ptr %base, i64 %length)
+  br label %done
+done:
+  ret void
+}

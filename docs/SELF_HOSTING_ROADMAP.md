@@ -2138,6 +2138,46 @@ Research basis:
 - [Mojo lifetimes, origins, and references](https://mojolang.org/docs/manual/values/lifetimes/)
 - [Swift memory safety](https://docs.swift.org/swift-book/documentation/the-swift-programming-language/memorysafety/)
 
+## Straight-Line Last-Use Borrow Regions (D213B)
+
+D213B shortens a returned Text view's inferred SourceText borrow from lexical
+scope end to its last use in a straight-line function or main statement
+sequence. The reference compiler examines remaining statements plus the final
+result expression before each statement. The self-host ownership analyzer
+checks whether a typed-IR read of the borrowed binding remains after a move.
+Consequently, an owner can be moved after the last view use, while moving it
+before a later view read still produces diagnostic 21.
+
+This is the first local non-lexical region, not the final CFG solver. Branch and
+loop liveness, joins, reference reassignment, multiple or union origins,
+aggregate borrowed returns, and disjoint projection conflicts remain open.
+The implementation follows Rust NLL's minimum-live-region principle, Mojo's
+symbolic origin inference, and Swift's duration-overlap conflict model without
+adding lifetime syntax to Sollang's common case.
+
+Example 471 also closes a self-host LLVM defect found during honest execution
+testing: function-local `println` now formats Bool and signed/unsigned
+8/16/32/64-bit values, including SourceText `len` as UIntSize, instead of
+assuming every non-Int32 value is Text. Runtime helper discovery covers these
+direct numeric calls.
+
+Validation is a zero-warning Release build, Windows/Linux focused checks at
+**5/5**, Windows/Linux full suites at **631/631**, Windows Stage2 **6/6** at
+**11,348,275 LLVM text bytes** with a **1,573,376-byte native executable**, and
+Linux Stage2 **5/5** at **11,344,878 LLVM text bytes** with a **3,128,680-byte
+native executable**. Stage3 emits the same **11,348,275 bytes** and passes fixed
+point hash
+`390F7C0482933D3C2918421B9CE1994762712C4FA459F240407A1C5A302D0976`.
+Cadence checkpoint **10/10** is complete and resets to **0/10**. Formal progress
+remains **49 complete, 8 partial, 3 missing: 53/60 (88.3%)** because this is a
+sub-gate inside the remaining ownership/storage work.
+
+Research basis:
+
+- [Rust RFC 2094: non-lexical lifetimes](https://rust-lang.github.io/rfcs/2094-nll.html)
+- [Mojo lifetimes, origins, and references](https://mojolang.org/docs/manual/values/lifetimes/)
+- [Swift memory safety](https://docs.swift.org/swift-book/documentation/the-swift-programming-language/memorysafety/)
+
 ## Immediate Implementation Order
 
 1. Multi-file compilation (implemented by example 52).

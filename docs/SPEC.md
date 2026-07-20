@@ -1081,10 +1081,13 @@ Container rules in the current slice:
   inferred from the input; no lifetime parameter is written in the common
   case. A caller may bind the returned view while the named SourceText owner
   remains in the same or an enclosing lexical scope. Moving, replacing, or
-  mutating that origin while the view is live is a compile-time error. The
-  first implementation conservatively keeps the origin frozen through the end
-  of the scope. Returning borrowed Text inside an aggregate, ambiguous
-  multi-input origins, origin unions, and last-use shortening remain rejected.
+  mutating that origin while the view is live is a compile-time error. For a
+  straight-line function or main statement sequence, the compiler ends the
+  borrow immediately after the view's final use, so the owner may be moved or
+  mutated later in that sequence. A use after that operation keeps the borrow
+  live and is rejected. Returning borrowed Text inside an aggregate, ambiguous
+  multi-input origins, origin unions, and path-sensitive branch/loop regions
+  remain rejected.
 - `push`, `put`, and indexed assignment require a named mutable owner binding
   created with `=> name!`.
 - `array -> each item { ... }` binds `item` to the concrete element type for

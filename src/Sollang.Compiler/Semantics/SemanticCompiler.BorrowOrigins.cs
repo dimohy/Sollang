@@ -214,6 +214,37 @@ internal sealed partial class SemanticCompiler
         }
     }
 
+    private void ExpireBorrowedTextOriginsBeforeStatement(
+        IReadOnlyList<Statement> statements,
+        int statementIndex,
+        Expression? result)
+    {
+        foreach (var binding in _activeBorrowedTextOrigins.Keys.ToArray())
+        {
+            var isLive = false;
+            for (var index = statementIndex; index < statements.Count; index++)
+            {
+                if (StoragePlacementAnalyzer.ReferencesName(statements[index], binding))
+                {
+                    isLive = true;
+                    break;
+                }
+            }
+
+            if (!isLive
+                && result is not null
+                && StoragePlacementAnalyzer.ReferencesName(result, binding))
+            {
+                isLive = true;
+            }
+
+            if (!isLive)
+            {
+                _activeBorrowedTextOrigins.Remove(binding);
+            }
+        }
+    }
+
     private void RejectBorrowedTextOriginMutation(string name, int line, int column)
     {
         name = CanonicalBorrowOriginName(name);

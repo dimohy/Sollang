@@ -1511,7 +1511,14 @@ internal sealed partial class SemanticCompiler
 
         var returnedMoveInputName = ReturnedMoveInputName(function);
 
-        BindStatements(function.BlockBody, scopedFunctions, bodyBindings, mutableBindings, allowContainerBindings: true);
+        BindStatements(
+            function.BlockBody,
+            scopedFunctions,
+            bodyBindings,
+            mutableBindings,
+            allowContainerBindings: true,
+            borrowRegionResult: function.Body,
+            shortenBorrowRegions: true);
         var functionBorrowedTextOrigins = new Dictionary<string, string>(
             _activeBorrowedTextOrigins,
             StringComparer.Ordinal);
@@ -1704,7 +1711,9 @@ internal sealed partial class SemanticCompiler
             bodyBindings,
             mutableBindings,
             yieldInputType: function.BlockInputType.Value,
-            allowContainerBindings: true);
+            allowContainerBindings: true,
+            borrowRegionResult: function.Body,
+            shortenBorrowRegions: true);
 
         var bodyType = function.Body is null
             ? BoundType.Unit
@@ -2313,7 +2322,12 @@ internal sealed partial class SemanticCompiler
         _activeBorrowedTextOrigins.Clear();
         var bindings = new Dictionary<string, BoundType>(StringComparer.Ordinal);
         var mutableBindings = new HashSet<string>(StringComparer.Ordinal);
-        BindStatements(_program.Statements, functions, bindings, mutableBindings);
+        BindStatements(
+            _program.Statements,
+            functions,
+            bindings,
+            mutableBindings,
+            shortenBorrowRegions: true);
         return bindings;
     }
 
@@ -2323,11 +2337,22 @@ internal sealed partial class SemanticCompiler
         Dictionary<string, BoundType> bindings,
         HashSet<string>? mutableBindings = null,
         BoundType? yieldInputType = null,
-        bool allowContainerBindings = true)
+        bool allowContainerBindings = true,
+        Expression? borrowRegionResult = null,
+        bool shortenBorrowRegions = false)
     {
         mutableBindings ??= new HashSet<string>(StringComparer.Ordinal);
-        foreach (var statement in statements)
+        for (var statementIndex = 0; statementIndex < statements.Count; statementIndex++)
         {
+            if (shortenBorrowRegions)
+            {
+                ExpireBorrowedTextOriginsBeforeStatement(
+                    statements,
+                    statementIndex,
+                    borrowRegionResult);
+            }
+
+            var statement = statements[statementIndex];
             switch (statement)
             {
                 case BindingStatement binding:

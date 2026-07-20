@@ -36,6 +36,7 @@ struct BorrowedTextBinding {
 # Code 19 identifies a structurally non-sendable parallel callback capture.
 # Code 20 identifies a branch or loop that exits with a partially moved path.
 # Code 21 identifies an origin moved while a returned borrowed Text is live.
+# The view region ends at its last typed-IR use rather than at lexical scope end.
 public analyze sources: [Text; ~] -> [OwnershipDiagnostic; ~] {
     sources -> semanticContext.prepare => prepared
     prepared -> analyzeContext
@@ -194,19 +195,31 @@ public analyzeContext prepared: semanticContext.SemanticSnapshot -> [OwnershipDi
                         (activeBorrow.ownerBindingIr == movedOwnerBinding and activeBorrow.bindingIr < borrowedMove.siteIr) -> if {
                             prepared.package.ranges[borrowedMove.sourceModule] => borrowedMoveRange
                             typed![borrowedMove.siteIr] => borrowedMoveSite
-                            diagnostics! -> push(OwnershipDiagnostic {
-                                code: 21
-                                sourceModule: borrowedMove.sourceModule
-                                functionSymbol: -1
-                                expectedOrigin: -1
-                                expectedModule: -1
-                                expectedSymbol: movedOwnerBinding
-                                actualOrigin: -1
-                                actualModule: -1
-                                actualSymbol: activeBorrow.bindingIr
-                                actualBuiltin: -1
-                                span: syntax.SourceSpan { fileId: borrowedMove.sourceModule, start: prepared.package.nodes[borrowedMoveRange.astStart + borrowedMoveSite.astNode].start, length: prepared.package.nodes[borrowedMoveRange.astStart + borrowedMoveSite.astNode].length }
-                            })
+                            prepared.package.nodes[borrowedMoveRange.astStart + borrowedMoveSite.astNode].start => borrowedMoveStart
+                            false => borrowedViewUsedAfterMove!
+                            0 => borrowedUseSearch!
+                            borrowedUseSearch! < (typed! -> len) -> while {
+                                typed![borrowedUseSearch!] => borrowedUse
+                                (borrowedUse.kind == 5 and borrowedUse.sourceModule == borrowedMove.sourceModule and borrowedUse.operand0 == activeBorrow.bindingIr and borrowedUse.astNode >= 0 and prepared.package.nodes[borrowedMoveRange.astStart + borrowedUse.astNode].start > borrowedMoveStart) -> if {
+                                    true => borrowedViewUsedAfterMove!
+                                }
+                                borrowedUseSearch! + 1 => borrowedUseSearch!
+                            }
+                            borrowedViewUsedAfterMove! -> if {
+                                diagnostics! -> push(OwnershipDiagnostic {
+                                    code: 21
+                                    sourceModule: borrowedMove.sourceModule
+                                    functionSymbol: -1
+                                    expectedOrigin: -1
+                                    expectedModule: -1
+                                    expectedSymbol: movedOwnerBinding
+                                    actualOrigin: -1
+                                    actualModule: -1
+                                    actualSymbol: activeBorrow.bindingIr
+                                    actualBuiltin: -1
+                                    span: syntax.SourceSpan { fileId: borrowedMove.sourceModule, start: borrowedMoveStart, length: prepared.package.nodes[borrowedMoveRange.astStart + borrowedMoveSite.astNode].length }
+                                })
+                            }
                         }
                         activeBorrowIndex! + 1 => activeBorrowIndex!
                     }

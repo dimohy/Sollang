@@ -8199,17 +8199,50 @@ emitCore context: move EmitContext -> Unit uses Console {
                             }
                             }
                         } else {
-                            "  %v$(expressionIndex!)_runtime_ptr = extractvalue %sollang.text " -> print
-                            expression.opcode == -203 -> if { "%v$(expressionIndex!)" -> print } else {
-                                (runtimeArgument.kind == 5 and function.operand1 >= 0 and runtimeArgument.symbol == context.ir[function.operand1].symbol) -> if { "%arg" -> print } else { "%v$(runtimeArgumentIndex)" -> print }
+                            (runtimeArgument.typeOrigin == 1 and runtimeArgument.typeSymbol == 1) -> if {
+                                "  %v$(expressionIndex!)_runtime_ptr = extractvalue %sollang.text " -> print
+                                expression.opcode == -203 -> if { "%v$(expressionIndex!)" -> print } else {
+                                    (runtimeArgument.kind == 5 and function.operand1 >= 0 and runtimeArgument.symbol == context.ir[function.operand1].symbol) -> if { "%arg" -> print } else { "%v$(runtimeArgumentIndex)" -> print }
+                                }
+                                ", 0" -> println
+                                "  %v$(expressionIndex!)_runtime_len = extractvalue %sollang.text " -> print
+                                expression.opcode == -203 -> if { "%v$(expressionIndex!)" -> print } else {
+                                    (runtimeArgument.kind == 5 and function.operand1 >= 0 and runtimeArgument.symbol == context.ir[function.operand1].symbol) -> if { "%arg" -> print } else { "%v$(runtimeArgumentIndex)" -> print }
+                                }
+                                ", 1" -> println
+                                "  call void @sollang_runtime_print(ptr %v$(expressionIndex!)_runtime_ptr, i64 %v$(expressionIndex!)_runtime_len, i1 " -> print
+                            } else {
+                                runtimeArgument.typeSymbol == 23 -> if {
+                                    "  call void @sollang_runtime_print_i1(i1 " -> print
+                                } else {
+                                    runtimeArgument.typeSymbol -> integerWidth => runtimeArgumentWidth
+                                    (runtimeArgumentWidth > 0 and runtimeArgumentWidth < 32 and runtimeArgument.kind != 3) -> if {
+                                        "  %v$(expressionIndex!)_runtime_integer = " -> print
+                                        runtimeArgument -> integerNodeSigned -> if { "sext" -> print } else { "zext" -> print }
+                                        " i$(runtimeArgumentWidth) %v$(runtimeArgumentIndex) to i32" -> println
+                                    }
+                                    runtimeArgumentWidth == 64 -> if {
+                                        "  call void @sollang_runtime_print_i64(i64 " -> print
+                                    } else {
+                                        "  call void @sollang_runtime_print_i32(i32 " -> print
+                                    }
+                                }
+                                runtimeArgument.kind == 3 -> if {
+                                    runtimeArgument -> sourceToken => runtimeIntegerArgumentToken
+                                    context.sources[runtimeArgument.sourceModule] -> slice(runtimeIntegerArgumentToken.span.start, runtimeIntegerArgumentToken.span.length) -> print
+                                } else {
+                                    (runtimeArgument.typeSymbol != 23 and (runtimeArgument.typeSymbol -> integerWidth) > 0 and (runtimeArgument.typeSymbol -> integerWidth) < 32) -> if {
+                                        "%v$(expressionIndex!)_runtime_integer" -> print
+                                    } else {
+                                        (runtimeArgument.kind == 5 and function.operand1 >= 0 and runtimeArgument.symbol == context.ir[function.operand1].symbol) -> if { "%arg" -> print } else { "%v$(runtimeArgumentIndex)" -> print }
+                                    }
+                                }
+                                (runtimeArgument.typeSymbol != 23 and (runtimeArgument.typeSymbol -> integerWidth) == 64) -> if {
+                                    ", i1 " -> print
+                                    runtimeArgument -> integerNodeSigned -> if { "true" -> print } else { "false" -> print }
+                                }
+                                ", i1 " -> print
                             }
-                            ", 0" -> println
-                            "  %v$(expressionIndex!)_runtime_len = extractvalue %sollang.text " -> print
-                            expression.opcode == -203 -> if { "%v$(expressionIndex!)" -> print } else {
-                                (runtimeArgument.kind == 5 and function.operand1 >= 0 and runtimeArgument.symbol == context.ir[function.operand1].symbol) -> if { "%arg" -> print } else { "%v$(runtimeArgumentIndex)" -> print }
-                            }
-                            ", 1" -> println
-                            "  call void @sollang_runtime_print(ptr %v$(expressionIndex!)_runtime_ptr, i64 %v$(expressionIndex!)_runtime_len, i1 " -> print
                         }
                         expression.symbol == -102 -> if { "true)" -> println } else { "false)" -> println }
                     } else {
@@ -10512,6 +10545,9 @@ usesIntInterpolation context: EmitContext -> Bool {
     0 => nodeIndex!
     nodeIndex! < (context.ir -> len) -> while {
         context.ir[nodeIndex!] => node
+        (node.kind == 6 and (node.symbol == -101 or node.symbol == -102) and node.operand0 >= 0 and context.ir[node.operand0].typeOrigin == 1 and context.ir[node.operand0].typeSymbol >= 2 and context.ir[node.operand0].typeSymbol <= 14) -> if {
+            true => usesInterpolation!
+        }
         (node.kind == 6 and (node.symbol == -101 or node.symbol == -102) and node.operand0 >= 0 and context.ir[node.operand0].kind == 2) -> if {
             context.ir[node.operand0] => argument
             context.tokens[context.ranges[argument.sourceModule].tokenStart + argument.payloadToken] => token
@@ -10556,6 +10592,9 @@ usesBoolInterpolation context: EmitContext -> Bool {
     0 => nodeIndex!
     nodeIndex! < (context.ir -> len) -> while {
         context.ir[nodeIndex!] => node
+        (node.kind == 6 and (node.symbol == -101 or node.symbol == -102) and node.operand0 >= 0 and context.ir[node.operand0].typeOrigin == 1 and context.ir[node.operand0].typeSymbol == 23) -> if {
+            true => usesInterpolation!
+        }
         (node.kind == 6 and (node.symbol == -101 or node.symbol == -102) and node.operand0 >= 0 and context.ir[node.operand0].kind == 2) -> if {
             context.ir[node.operand0] => argument
             context.interpolationRanges[argument.sourceModule] => interpolationRange
