@@ -11912,11 +11912,25 @@ emitOwnershipDiagnostics context: EmitContext -> Unit uses Console {
     0 => diagnosticIndex!
     diagnosticIndex! < (context.ownershipDiagnostics -> len) -> while {
         context.ownershipDiagnostics[diagnosticIndex!] => diagnostic
-        diagnostic.code == 21 -> if {
+        diagnostic.code == 17 -> if {
             diagnostic.span => diagnosticSpan
             diagnosticSpan.start => diagnosticStart
             diagnosticSpan.length => diagnosticLength
-            "; sollang error[E21]: origin moved while a borrowed Text view is still live (source $(diagnostic.sourceModule), byte $diagnosticStart, length $diagnosticLength)" -> println
+            diagnostic.expectedSymbol >= 0 -> if {
+                context.ir[diagnostic.expectedSymbol] => moveSite
+                context.ranges[moveSite.sourceModule] => moveRange
+                context.nodes[moveRange.astStart + moveSite.astNode].start => moveStart
+                "; sollang error[E17]: use of a partially moved value (source $(diagnostic.sourceModule), move byte $moveStart, use byte $diagnosticStart, length $diagnosticLength)" -> println
+            } else {
+                "; sollang error[E17]: use of a partially moved value (source $(diagnostic.sourceModule), use byte $diagnosticStart, length $diagnosticLength)" -> println
+            }
+        } else {
+            diagnostic.code == 21 -> if {
+                diagnostic.span => diagnosticSpan
+                diagnosticSpan.start => diagnosticStart
+                diagnosticSpan.length => diagnosticLength
+                "; sollang error[E21]: origin moved while a borrowed Text view is still live (source $(diagnostic.sourceModule), byte $diagnosticStart, length $diagnosticLength)" -> println
+            }
         }
         diagnosticIndex! + 1 => diagnosticIndex!
     }
@@ -11926,7 +11940,9 @@ blockingOwnershipDiagnosticCount context: EmitContext -> Int {
     0 => count!
     0 => diagnosticIndex!
     diagnosticIndex! < (context.ownershipDiagnostics -> len) -> while {
-        context.ownershipDiagnostics[diagnosticIndex!].code == 21 -> if { count! + 1 => count! }
+        context.ownershipDiagnostics[diagnosticIndex!].code => diagnosticCode
+        diagnosticCode == 17 -> if { count! + 1 => count! }
+        diagnosticCode == 21 -> if { count! + 1 => count! }
         diagnosticIndex! + 1 => diagnosticIndex!
     }
     count!

@@ -1,0 +1,27 @@
+import sollang.compiler.llvm.text as llvm
+
+# Verifies that the checked self-host compiler reports E17 and stops before
+# emitting an LLVM target header for a reachable whole-owner use after a move.
+
+main {
+    [
+        """
+        struct Pair {
+            left: [Int; ~]
+            right: [Int; ~]
+        }
+
+        invalid: -> Int {
+            Pair { left: [1, ~], right: [2, ~] } => pair!
+            pair!.left => moved!
+            pair! => whole!
+            0
+        }
+
+        main { }
+        """,
+        ~
+    ] => sources!
+    sources! -> llvm.emitLinuxChecked => diagnosticCount
+    "blocked=$diagnosticCount" -> println
+}

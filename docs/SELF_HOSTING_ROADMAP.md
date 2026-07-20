@@ -2494,6 +2494,43 @@ Research basis:
 - [Mojo lifetimes and origins](https://docs.modular.com/mojo/manual/values/lifetimes/)
 - [Swift memory safety](https://docs.swift.org/swift-book/documentation/the-swift-programming-language/memorysafety/)
 
+## Production E17 for Reachable Partial Moves (D213K)
+
+D213K promotes explicit partial-move diagnostic E17 into the checked self-host
+compiler. Canonical move paths reject whole-owner, equal-path, and descendant
+uses after a heap-reaching field extraction while permitting sibling fields.
+Reinitialization repairs the path, and a direct return after the move makes a
+later outer use unreachable from the moving branch.
+
+Scalar-only nominal fields copy without deinitializing their parent. Projections
+nested inside readonly request literals remain move-table entries for drop
+suppression but are not treated as explicit E17 extraction sites. These two
+distinctions remove false positives from the compiler's `SourceSpan`, path, and
+semantic request structs without weakening dynamic-array field ownership.
+
+Examples 495 and 496 cover analysis precision and checked compiler behavior;
+the Stage2 fixture proves E17 and all existing E21 cases stop both Stage1 and
+Stage2 before LLVM emission. A fixed-point probe also forced return-path logic
+to remain local to E17, preserving the previously verified E21 reachability
+implementation in the Stage2-generated compiler.
+
+Windows/Linux full suites pass **664/664**. Windows Stage2 passes **7/7** at
+**11,793,906 LLVM bytes**, **3,483,864 bitcode bytes**, and a **1,647,104-byte
+executable**. Linux Stage2 passes **6/6** at **11,790,485 LLVM bytes**,
+**3,482,072 bitcode bytes**, and a **3,323,008-byte executable**.
+
+The Stage3 cadence advances to **9/10**. Formal progress remains **49 complete,
+8 partial, 3 missing: 53/60 (88.3%)** because E18-E20 are not yet production
+blocking.
+
+Research basis:
+
+- [rustc move paths](https://rustc-dev-guide.rust-lang.org/borrow-check/moves-and-initialization/move-paths.html)
+- [Rust moved place expressions](https://doc.rust-lang.org/stable/reference/expressions.html#move-and-copy-semantics)
+- [Rust partial moves](https://doc.rust-lang.org/nightly/rust-by-example/scope/move/partial_move.html)
+- [Rust destructors and partial initialization](https://doc.rust-lang.org/reference/destructors.html)
+- [Swift borrowing and consuming parameters](https://docs.swift.org/swift-book/documentation/the-swift-programming-language/declarations/)
+
 ## Immediate Implementation Order
 
 1. Multi-file compilation (implemented by example 52).

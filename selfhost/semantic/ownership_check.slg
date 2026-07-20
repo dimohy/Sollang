@@ -152,8 +152,9 @@ public analyzeLoweredContext prepared: semanticContext.SemanticSnapshot, typed: 
                 # A field and an index cannot prove separate storage.
             } else {
                 leftProjection.kind == 13 -> if {
-                    leftProjection.sourceModule -> tokenTextEquals(leftProjection.payloadToken, rightProjection.sourceModule, rightProjection.payloadToken) => sameField
-                    not sameField -> if { false => overlap! }
+                    (leftProjection.symbol >= 0 and rightProjection.symbol >= 0 and (leftProjection.targetModule != rightProjection.targetModule or leftProjection.symbol != rightProjection.symbol)) -> if {
+                        false => overlap!
+                    }
                 } else {
                     leftProjection.kind == 15 -> if {
                         (leftProjection.operand1 >= 0 and rightProjection.operand1 >= 0 and typed[leftProjection.operand1].kind == 3 and typed[rightProjection.operand1].kind == 3) -> if {
@@ -757,76 +758,44 @@ public analyzeLoweredContext prepared: semanticContext.SemanticSnapshot, typed: 
     0 => partialMoveIndex!
     partialMoveIndex! < (moves! -> len) -> while {
         moves![partialMoveIndex!] => partialMove
-        partialMove.memberIr >= 0 -> if {
+        # A member nested inside an aggregate literal may be a shallow,
+        # call-scoped request projection. `movesFrom` still retains that event
+        # for drop suppression, but E17 becomes production-blocking only for
+        # explicit extraction/call/assignment move sites whose ownership
+        # context is already canonical.
+        (partialMove.memberIr >= 0 and typed[partialMove.siteIr].kind != 13) -> if {
             typed[partialMove.siteIr] => partialMoveSite
             prepared.package.ranges[partialMove.sourceModule] => sourceRange
             prepared.package.nodes[sourceRange.astStart + partialMoveSite.astNode].start => partialMoveStart
-            typed[partialMove.memberIr] => movedMember
-            prepared.package.nodes[sourceRange.astStart + movedMember.astNode] => movedMemberAst
-            0 => movedIdentifierCount!
-            movedMemberAst.firstToken => movedTokenIndex!
-            movedTokenIndex! < movedMemberAst.firstToken + movedMemberAst.tokenCount -> while {
-                prepared.package.tokens[sourceRange.tokenStart + movedTokenIndex!].kind == grammar.tokenIdIdentifier -> if { movedIdentifierCount! + 1 => movedIdentifierCount! }
-                movedTokenIndex! + 1 => movedTokenIndex!
-            }
             0 => movedUseIndex!
             movedUseIndex! < (typed -> len) -> while {
                 typed[movedUseIndex!] => movedUse
-                (movedUse.kind == 5 and movedUse.sourceModule == partialMove.sourceModule and movedUse.symbol == partialMove.symbol and prepared.package.nodes[sourceRange.astStart + movedUse.astNode].start > partialMoveStart) -> if {
+                (movedUse.kind == 5 and movedUse.sourceModule == partialMove.sourceModule and movedUse.symbol == partialMove.symbol and prepared.package.nodes[sourceRange.astStart + movedUse.astNode].start > partialMoveStart and not (movedUseIndex! -> nodeBelongsTo(partialMove.siteIr))) -> if {
                     movedUse.parent => movedUseAncestor!
                     -1 => movedUseMember!
                     (movedUseAncestor! >= 0 and movedUseMember! < 0) -> while {
-                        typed[movedUseAncestor!].kind == 13 -> if { movedUseAncestor! => movedUseMember! } else { typed[movedUseAncestor!].parent => movedUseAncestor! }
+                        (typed[movedUseAncestor!].kind == 13 or typed[movedUseAncestor!].kind == 15) -> if { movedUseAncestor! => movedUseMember! } else { typed[movedUseAncestor!].parent => movedUseAncestor! }
                     }
                     movedUseMember! < 0 => invalidMovedUse!
                     movedUseMember! >= 0 -> if {
-                        typed[movedUseMember!] => useMember
-                        prepared.package.nodes[sourceRange.astStart + useMember.astNode] => useMemberAst
-                        0 => useIdentifierCount!
-                        useMemberAst.firstToken => useTokenIndex!
-                        useTokenIndex! < useMemberAst.firstToken + useMemberAst.tokenCount -> while {
-                            prepared.package.tokens[sourceRange.tokenStart + useTokenIndex!].kind == grammar.tokenIdIdentifier -> if { useIdentifierCount! + 1 => useIdentifierCount! }
-                            useTokenIndex! + 1 => useTokenIndex!
-                        }
-                        movedIdentifierCount! < useIdentifierCount! -> if { movedIdentifierCount! } else { useIdentifierCount! } => sharedIdentifierCount
-                        true => sharedPath!
-                        0 => sharedIdentifierOrdinal!
-                        sharedIdentifierOrdinal! < sharedIdentifierCount -> while {
-                            -1 => movedIdentifierToken!
-                            -1 => useIdentifierToken!
-                            0 => movedIdentifierOrdinal!
-                            movedMemberAst.firstToken => movedTokenIndex!
-                            (movedTokenIndex! < movedMemberAst.firstToken + movedMemberAst.tokenCount and movedIdentifierToken! < 0) -> while {
-                                prepared.package.tokens[sourceRange.tokenStart + movedTokenIndex!].kind == grammar.tokenIdIdentifier -> if {
-                                    movedIdentifierOrdinal! == sharedIdentifierOrdinal! -> if { movedTokenIndex! => movedIdentifierToken! }
-                                    movedIdentifierOrdinal! + 1 => movedIdentifierOrdinal!
-                                }
-                                movedTokenIndex! + 1 => movedTokenIndex!
-                            }
-                            0 => useIdentifierOrdinal!
-                            useMemberAst.firstToken => useTokenIndex!
-                            (useTokenIndex! < useMemberAst.firstToken + useMemberAst.tokenCount and useIdentifierToken! < 0) -> while {
-                                prepared.package.tokens[sourceRange.tokenStart + useTokenIndex!].kind == grammar.tokenIdIdentifier -> if {
-                                    useIdentifierOrdinal! == sharedIdentifierOrdinal! -> if { useTokenIndex! => useIdentifierToken! }
-                                    useIdentifierOrdinal! + 1 => useIdentifierOrdinal!
-                                }
-                                useTokenIndex! + 1 => useTokenIndex!
-                            }
-                            prepared.package.tokens[sourceRange.tokenStart + movedIdentifierToken!] => movedIdentifier
-                            prepared.package.tokens[sourceRange.tokenStart + useIdentifierToken!] => useIdentifier
-                            movedIdentifier.span.length == useIdentifier.span.length => sameIdentifier!
-                            UIntSize(0) => identifierByte!
-                            (sameIdentifier! and identifierByte! < movedIdentifier.span.length) -> while {
-                                prepared.package.sources[partialMove.sourceModule] -> byte(movedIdentifier.span.start + identifierByte!) => movedByte
-                                prepared.package.sources[partialMove.sourceModule] -> byte(useIdentifier.span.start + identifierByte!) => useByte
-                                movedByte != useByte -> if { false => sameIdentifier! }
-                                identifierByte! + UIntSize(1) => identifierByte!
-                            }
-                            not sameIdentifier! -> if { false => sharedPath! }
-                            sharedIdentifierOrdinal! + 1 => sharedIdentifierOrdinal!
-                        }
-                        sharedPath! => invalidMovedUse!
+                        partialMove.memberIr -> placesOverlap(movedUseMember!) => invalidMovedUse!
                     }
+                    invalidMovedUse! -> if {
+                        false => partialMovePathTerminates!
+                        partialMove.siteIr -> moveRegionFor => partialMoveRegion
+                        prepared.package.nodes[sourceRange.astStart + movedUse.astNode].start => partialMoveUseStart
+                        0 => partialMoveReturnSearch!
+                        (not partialMovePathTerminates! and partialMoveReturnSearch! < (typed -> len)) -> while {
+                            typed[partialMoveReturnSearch!] => partialMoveReturn
+                            (partialMoveReturn.kind == 23 and partialMoveReturn.sourceModule == partialMove.sourceModule and partialMoveReturn.astNode >= 0 and (partialMoveReturnSearch! -> moveRegionFor) == partialMoveRegion) -> if {
+                                prepared.package.nodes[sourceRange.astStart + partialMoveReturn.astNode].start => partialMoveReturnStart
+                                (partialMoveStart < partialMoveReturnStart and partialMoveReturnStart < partialMoveUseStart) -> if { true => partialMovePathTerminates! }
+                            }
+                            partialMoveReturnSearch! + 1 => partialMoveReturnSearch!
+                        }
+                        partialMovePathTerminates! -> if { false => invalidMovedUse! }
+                    }
+                    (invalidMovedUse! and not (partialMove.siteIr -> useReachableAfterMove(movedUseIndex!))) -> if { false => invalidMovedUse! }
                     (invalidMovedUse! and (partialMoveIndex! -> moveReinitializedBefore(prepared.package.nodes[sourceRange.astStart + movedUse.astNode].start))) -> if { false => invalidMovedUse! }
                     invalidMovedUse! -> if {
                         false => duplicateMoveDiagnostic!
@@ -843,10 +812,10 @@ public analyzeLoweredContext prepared: semanticContext.SemanticSnapshot, typed: 
                                 functionSymbol: -1
                                 expectedOrigin: -1
                                 expectedModule: -1
-                                expectedSymbol: -1
+                                expectedSymbol: partialMove.siteIr
                                 actualOrigin: -1
                                 actualModule: -1
-                                actualSymbol: -1
+                                actualSymbol: movedUseIndex!
                                 actualBuiltin: -1
                                 span: syntax.SourceSpan { fileId: partialMove.sourceModule, start: prepared.package.nodes[sourceRange.astStart + movedUse.astNode].start, length: prepared.package.nodes[sourceRange.astStart + movedUse.astNode].length }
                             })

@@ -24,6 +24,7 @@ $borrowUnionConflictSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fix
 $borrowAliasConflictSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-borrow-alias-conflict.slg"
 $borrowAggregateConflictSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-borrow-aggregate-conflict.slg"
 $borrowProjectionConflictSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-borrow-projection-conflict.slg"
+$partialMoveConflictSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-partial-move-conflict.slg"
 $borrowSourceRuntime = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-borrow-source.slg"
 $runtimeManifestPath = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-compiler-runtime.sources.txt"
 $fingerprintSources = @(
@@ -334,7 +335,7 @@ if ($stage2CodegenText -ne $stage1CodegenText) {
 }
 Write-Host "[stage2 5/7] PASS execution, native build, fingerprints, module cache, typed-IR artifacts, and codegen-unit parity."
 
-Write-Host "[stage2 6/7] Reject a moved origin while its borrowed Text view remains live."
+Write-Host "[stage2 6/7] Enforce production ownership diagnostics E17 and E21."
 foreach ($conflict in @(
     @($borrowConflictSource, "single"),
     @($borrowUnionConflictSource, "union"),
@@ -367,7 +368,31 @@ foreach ($conflict in @(
         }
     }
 }
-Write-Host "[stage2 6/7] PASS single, union, transferred, aggregate, and projected-origin E21 block LLVM emission in stage-1 and stage-2."
+foreach ($compiler in @(
+    @($stage1Path, "stage1"),
+    @($stage2Path, "stage2")
+)) {
+    $diagnosticOutput = Join-Path $artifactsDir "stage2-check-partial-move-$($compiler[1]).txt"
+    $diagnosticError = Join-Path $artifactsDir "stage2-check-partial-move-$($compiler[1]).err"
+    $diagnosticProcess = Invoke-ProcessToFile `
+        -FilePath $compiler[0] `
+        -ArgumentList @("windows", $partialMoveConflictSource) `
+        -OutputPath $diagnosticOutput `
+        -ErrorPath $diagnosticError
+    $diagnosticProcess.WaitForExit()
+    $diagnosticProcess.Refresh()
+    if ($diagnosticProcess.ExitCode -eq 0) {
+        throw "$($compiler[1]) accepted a reachable whole-owner use after a partial move"
+    }
+    $diagnosticText = [System.IO.File]::ReadAllText($diagnosticOutput)
+    if ($diagnosticText -notmatch 'error\[E17\].*use of a partially moved value') {
+        throw "$($compiler[1]) did not emit ownership diagnostic E17: '$diagnosticText'"
+    }
+    if ($diagnosticText -match '^target (datalayout|triple)') {
+        throw "$($compiler[1]) began LLVM emission before rejecting partial-move diagnostic E17"
+    }
+}
+Write-Host "[stage2 6/7] PASS E17 partial moves and all E21 origin conflicts block LLVM emission in stage-1 and stage-2."
 
 Write-Host "[stage2 7/7] Compare C# reference and native Sollang compiler runtime behavior."
 & dotnet run --project $runnerProject -c Release --no-build -- `

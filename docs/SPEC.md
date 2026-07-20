@@ -1076,6 +1076,16 @@ Container rules in the current slice:
   lasts only for the call expression. Binding, returning, storing, or mutating
   through the indexed result or one of its projections is rejected. Use
   `owner! -> take(indexOrKey) => value!` to transfer ownership out explicitly.
+- Extracting a stored field whose type reaches heap-backed storage partially
+  deinitializes that exact move path. Sibling fields remain usable, while the
+  whole owner, the same path, and descendants of that path are unavailable
+  until the field is reinitialized. A scalar-only nominal field is a copyable
+  value and does not partially move its parent. If the moving control-flow path
+  returns before a later use, that use is reachable only from a non-moving path
+  and remains valid. The checked self-host compiler reports reachable explicit
+  extraction/call/assignment violations as E17 before printing an LLVM target
+  header. Implicit owned projections nested inside readonly request literals
+  retain drop-tracking metadata but are not classified as explicit E17 moves.
 - A function may return `Text` produced by `slice` from one or more
   default-borrowed `sys.file.SourceText` inputs. The compiler infers the union
   of every possible input origin; no lifetime parameter is written in the

@@ -29,6 +29,7 @@ $borrowUnionConflictSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fix
 $borrowAliasConflictSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-borrow-alias-conflict.slg"
 $borrowAggregateConflictSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-borrow-aggregate-conflict.slg"
 $borrowProjectionConflictSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-borrow-projection-conflict.slg"
+$partialMoveConflictSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-partial-move-conflict.slg"
 $borrowSourceRuntime = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-borrow-source.slg"
 $expectedStage2Bytes = 11724053L
 
@@ -219,7 +220,7 @@ Build-And-ExecuteLinuxLlvm $singleStage2Llvm "linux-stage2-check-single" "stage2
 Build-And-ExecuteLinuxLlvm $multiStage2Llvm "linux-stage2-check-multi" "stage2-multi-ok"
 Write-Host "[linux-stage2 5/6] PASS Linux stage-2 products execute."
 
-Write-Host "[linux-stage2 6/6] Reject a moved origin while its borrowed Text view remains live."
+Write-Host "[linux-stage2 6/6] Enforce production ownership diagnostics E17 and E21."
 foreach ($conflict in @(
     @($borrowConflictSource, "single"),
     @($borrowUnionConflictSource, "union"),
@@ -252,4 +253,28 @@ foreach ($conflict in @(
         }
     }
 }
-Write-Host "[linux-stage2 6/6] PASS single, union, transferred, aggregate, and projected-origin E21 block LLVM emission in stage-1 and stage-2."
+$stage1PartialMoveOutput = Join-Path $artifactsDir "linux-stage2-check-partial-move-stage1.txt"
+$stage1PartialMoveError = Join-Path $artifactsDir "linux-stage2-check-partial-move-stage1.err"
+$stage1PartialMove = Invoke-ProcessToFile $stage1Path @("linux", $partialMoveConflictSource) $stage1PartialMoveOutput $stage1PartialMoveError
+$stage2PartialMoveOutput = Join-Path $artifactsDir "linux-stage2-check-partial-move-stage2.txt"
+$stage2PartialMoveError = Join-Path $artifactsDir "linux-stage2-check-partial-move-stage2.err"
+$stage2PartialMove = Invoke-ProcessToFile "wsl.exe" @(
+    "-d", $Distribution, "--", (Convert-ToWslPath $stage2Path), "linux",
+    (Convert-ToWslPath $partialMoveConflictSource)
+) $stage2PartialMoveOutput $stage2PartialMoveError
+foreach ($candidate in @(
+    @($stage1PartialMove, $stage1PartialMoveOutput, "stage1"),
+    @($stage2PartialMove, $stage2PartialMoveOutput, "stage2")
+)) {
+    $candidate[0].WaitForExit()
+    $candidate[0].Refresh()
+    if ($candidate[0].ExitCode -eq 0) { throw "$($candidate[2]) accepted a reachable whole-owner use after a partial move" }
+    $diagnosticText = [System.IO.File]::ReadAllText($candidate[1])
+    if ($diagnosticText -notmatch 'error\[E17\].*use of a partially moved value') {
+        throw "$($candidate[2]) did not emit ownership diagnostic E17: '$diagnosticText'"
+    }
+    if ($diagnosticText -match '^target (datalayout|triple)') {
+        throw "$($candidate[2]) began LLVM emission before rejecting partial-move diagnostic E17"
+    }
+}
+Write-Host "[linux-stage2 6/6] PASS E17 partial moves and all E21 origin conflicts block LLVM emission in stage-1 and stage-2."

@@ -8018,6 +8018,58 @@ References:
 - [Mojo lifetimes, origins, and references](https://mojolang.org/docs/manual/values/lifetimes/)
 - [Swift memory safety and overlapping access](https://docs.swift.org/swift-book/documentation/the-swift-programming-language/memorysafety/)
 
+## D213K - Reachable Partial Moves Become Production E17
+
+Status: implemented and cross-target Stage2 verified
+Date: 2026-07-20
+
+The checked self-host compiler now treats diagnostic E17 as fatal before LLVM
+emission. An explicit extraction, consuming call, or assignment that moves a
+heap-reaching field deinitializes its canonical place. A later whole-owner,
+equal-path, or descendant use is rejected; a disjoint sibling remains legal.
+Reinitialization restores the path, and a direct return after the move ends
+that control-flow path, so a use reached only through the non-moving branch is
+not a false positive.
+
+D213K reuses D213J's resolved field identity rather than comparing incidental
+AST punctuation tokens. It also distinguishes scalar-only nominal fields,
+which are copyable values, from fields whose unique drop responsibility reaches
+heap storage. Owned projections nested in readonly request literals remain in
+the move table for drop suppression but are not promoted to explicit E17 move
+sites. This distinction was required for the self-host compiler's own request
+structs and `SourceSpan` values to pass the production gate without weakening
+real dynamic-array field moves.
+
+The first Stage2 attempt exposed a fixed-point-only regression: factoring the
+return test into a new local helper made the Stage2-generated analyzer suppress
+both E17 and E21. The final form preserves the already-proven shared
+reachability helper for E21 and performs return-path termination locally in the
+E17 scan. Stage1 and Stage2 now reject both diagnostics identically.
+
+Examples 495 and 496 cover invalid whole-owner reuse, legal sibling access,
+returning-branch reachability, and checked output/exit behavior. Their English
+`#` comments state each invariant. A dedicated Stage2 fixture proves that E17
+terminates both production compiler generations before any target header.
+
+Release builds have zero warnings and errors; Windows/Linux full suites pass
+**664/664**. Windows Stage2 passes **7/7** with **11,793,906 LLVM bytes**,
+**3,483,864 bitcode bytes**, and a **1,647,104-byte executable**. Linux Stage2
+passes **6/6** with **11,790,485 LLVM bytes**, **3,482,072 bitcode bytes**, and
+a **3,323,008-byte executable**.
+
+The periodic Stage3 cadence advances to **9/10**; no Stage3 run is due at this
+checkpoint. Formal progress remains **49 complete, 8 partial, 3 missing:
+53/60 (88.3%)** because E18-E20 production precision still leaves the broader
+ownership/storage gate partial.
+
+References:
+
+- [rustc move paths](https://rustc-dev-guide.rust-lang.org/borrow-check/moves-and-initialization/move-paths.html)
+- [Rust moved place expressions](https://doc.rust-lang.org/stable/reference/expressions.html#move-and-copy-semantics)
+- [Rust partial moves](https://doc.rust-lang.org/nightly/rust-by-example/scope/move/partial_move.html)
+- [Rust destructors and partial initialization](https://doc.rust-lang.org/reference/destructors.html)
+- [Swift borrowing and consuming parameters](https://docs.swift.org/swift-book/documentation/the-swift-programming-language/declarations/)
+
 ## D213J - Borrow Conflicts Use Canonical Projected Places
 
 Status: implemented and cross-target Stage2 verified

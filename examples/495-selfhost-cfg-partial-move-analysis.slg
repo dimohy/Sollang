@@ -1,0 +1,93 @@
+import sollang.compiler.semantic.ownership_check as ownershipCheck
+
+# Verifies that E17 follows canonical move paths and reachable control flow:
+# whole-owner reuse conflicts, sibling fields remain usable, and a returning
+# branch cannot invalidate a use reached only through the non-moving path.
+
+countE17 source: Text -> Int {
+    [source, ~] => unit!
+    unit! -> ownershipCheck.analyze => errors!
+    0 => count!
+    errors! -> each error {
+        error.code == 17 -> if { count! + 1 => count! }
+    }
+    count!
+}
+
+main {
+    # Whole-owner reuse after directly extracting a heap-reaching field is E17.
+    """
+    struct Pair {
+        left: [Int; ~]
+        right: [Int; ~]
+    }
+
+    invalid: -> Int {
+        Pair { left: [1, ~], right: [2, ~] } => pair!
+        pair!.left => moved!
+        pair! => whole!
+        0
+    }
+
+    main { }
+    """ -> countE17 => invalid
+
+    # A different stored field remains initialized and usable.
+    """
+    struct Pair {
+        left: [Int; ~]
+        right: [Int; ~]
+    }
+
+    sibling: -> UIntSize {
+        Pair { left: [1, ~], right: [2, ~] } => pair!
+        pair!.left => moved!
+        pair!.right -> len
+    }
+
+    main { }
+    """ -> countE17 => sibling
+
+    # Passing a field to a consuming input is also an explicit partial move.
+    """
+    struct Pair {
+        left: [Int; ~]
+        right: [Int; ~]
+    }
+
+    consume values: move [Int; ~] -> UIntSize {
+        values -> len
+    }
+
+    invalidCall: -> Int {
+        Pair { left: [1, ~], right: [2, ~] } => pair!
+        pair!.left -> consume => movedLength
+        pair! => whole!
+        0
+    }
+
+    main { }
+    """ -> countE17 => call
+
+    # A branch that returns after moving cannot reach the later whole-owner use.
+    """
+    struct Pair {
+        left: [Int; ~]
+        right: [Int; ~]
+    }
+
+    terminal flag: Bool -> Int {
+        Pair { left: [1, ~], right: [2, ~] } => pair!
+        flag -> if {
+            pair!.left => moved!
+            1 -> return
+        }
+        pair! => whole!
+        0
+    }
+
+    main { }
+    """ -> countE17 => terminal
+
+    "invalid=$invalid, sibling=$sibling, call=$call, terminal=$terminal" -> println
+}
