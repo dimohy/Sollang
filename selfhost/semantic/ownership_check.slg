@@ -879,6 +879,7 @@ public analyzeLoweredContext prepared: semanticContext.SemanticSnapshot, typed: 
                     parallelNameByte! + UIntSize(1) => parallelNameByte!
                 }
                 isParallel! -> if {
+                    [Int; ~] => reportedMutableCaptures!
                     0 => captureUseIndex!
                     captureUseIndex! < (typed -> len) -> while {
                         typed[captureUseIndex!] => captureUse
@@ -919,19 +920,28 @@ public analyzeLoweredContext prepared: semanticContext.SemanticSnapshot, typed: 
                                     }
                                     not bindingInsideParallel! -> if {
                                         captureBinding.flags == 1 -> if {
-                                            diagnostics! -> push(OwnershipDiagnostic {
-                                                code: 18
-                                                sourceModule: captureUse.sourceModule
-                                                functionSymbol: -1
-                                                expectedOrigin: -1
-                                                expectedModule: -1
-                                                expectedSymbol: -1
-                                                actualOrigin: captureBinding.typeOrigin
-                                                actualModule: captureBinding.typeModule
-                                                actualSymbol: captureBinding.typeSymbol
-                                                actualBuiltin: captureBinding.typeSymbol
-                                                span: syntax.SourceSpan { fileId: captureUse.sourceModule, start: captureUseAst.start, length: captureUseAst.length }
-                                            })
+                                            false => mutableCaptureReported!
+                                            0 => reportedMutableIndex!
+                                            reportedMutableIndex! < (reportedMutableCaptures! -> len) -> while {
+                                                reportedMutableCaptures![reportedMutableIndex!] == captureBindingIndex! -> if { true => mutableCaptureReported! }
+                                                reportedMutableIndex! + 1 => reportedMutableIndex!
+                                            }
+                                            not mutableCaptureReported! -> if {
+                                                reportedMutableCaptures! -> push(captureBindingIndex!)
+                                                diagnostics! -> push(OwnershipDiagnostic {
+                                                    code: 18
+                                                    sourceModule: captureUse.sourceModule
+                                                    functionSymbol: -1
+                                                    expectedOrigin: -1
+                                                    expectedModule: -1
+                                                    expectedSymbol: -1
+                                                    actualOrigin: captureBinding.typeOrigin
+                                                    actualModule: captureBinding.typeModule
+                                                    actualSymbol: captureBinding.typeSymbol
+                                                    actualBuiltin: captureBinding.typeSymbol
+                                                    span: syntax.SourceSpan { fileId: captureUse.sourceModule, start: captureUseAst.start, length: captureUseAst.length }
+                                                })
+                                            }
                                         } else {
                                             [Int; ~] => pendingTypes!
                                             [Int; ~] => visitedTypes!
@@ -1006,6 +1016,113 @@ public analyzeLoweredContext prepared: semanticContext.SemanticSnapshot, typed: 
                             }
                         }
                         captureUseIndex! + 1 => captureUseIndex!
+                    }
+
+                    # Calls inside a parallel callback may delegate to local
+                    # helpers. Follow that call graph so a helper cannot hide
+                    # a mutable outer binding from the concurrency boundary.
+                    [Int; ~] => pendingCaptureFunctions!
+                    [Int; ~] => visitedCaptureFunctions!
+                    0 => parallelCallSearch!
+                    parallelCallSearch! < (typed -> len) -> while {
+                        typed[parallelCallSearch!] => nestedParallelCall
+                        (parallelCallSearch! != parallelIrIndex! and nestedParallelCall.kind == 6 and nestedParallelCall.sourceModule == parallelCall.sourceModule and nestedParallelCall.astNode >= 0 and nestedParallelCall.targetModule >= 0 and nestedParallelCall.symbol >= 0) -> if {
+                            prepared.package.nodes[parallelRange.astStart + nestedParallelCall.astNode] => nestedParallelCallAst
+                            nestedParallelCallAst.parent => nestedParallelAncestor!
+                            false => nestedCallInsideParallel!
+                            (nestedParallelAncestor! >= 0 and not nestedCallInsideParallel!) -> while {
+                                nestedParallelAncestor! == parallelCall.astNode -> if { true => nestedCallInsideParallel! } else { prepared.package.nodes[parallelRange.astStart + nestedParallelAncestor!].parent => nestedParallelAncestor! }
+                            }
+                            (nestedCallInsideParallel! and nestedParallelCallAst.start >= parallelName.span.start + parallelName.span.length) -> if {
+                                -1 => nestedTargetFunction!
+                                0 => nestedTargetSearch!
+                                nestedTargetSearch! < (typed -> len) -> while {
+                                    typed[nestedTargetSearch!] => nestedTargetCandidate
+                                    (nestedTargetCandidate.kind == 0 and nestedTargetCandidate.sourceModule == nestedParallelCall.targetModule and nestedTargetCandidate.symbol == nestedParallelCall.symbol) -> if { nestedTargetSearch! => nestedTargetFunction! }
+                                    nestedTargetSearch! + 1 => nestedTargetSearch!
+                                }
+                                nestedTargetFunction! >= 0 -> if { pendingCaptureFunctions! -> push(nestedTargetFunction!) }
+                            }
+                        }
+                        parallelCallSearch! + 1 => parallelCallSearch!
+                    }
+
+                    0 => pendingCaptureFunctionIndex!
+                    pendingCaptureFunctionIndex! < (pendingCaptureFunctions! -> len) -> while {
+                        pendingCaptureFunctions![pendingCaptureFunctionIndex!] => captureFunctionIr
+                        false => captureFunctionVisited!
+                        0 => visitedCaptureFunctionIndex!
+                        visitedCaptureFunctionIndex! < (visitedCaptureFunctions! -> len) -> while {
+                            visitedCaptureFunctions![visitedCaptureFunctionIndex!] == captureFunctionIr -> if { true => captureFunctionVisited! }
+                            visitedCaptureFunctionIndex! + 1 => visitedCaptureFunctionIndex!
+                        }
+                        not captureFunctionVisited! -> if {
+                            visitedCaptureFunctions! -> push(captureFunctionIr)
+                            0 => functionCaptureSearch!
+                            functionCaptureSearch! < (typed -> len) -> while {
+                                typed[functionCaptureSearch!] => functionCaptureNode
+                                (functionCaptureSearch! -> nodeBelongsTo(captureFunctionIr)) -> if {
+                                    functionCaptureNode.kind == 5 -> if {
+                                        -1 => functionCaptureBindingIndex!
+                                        (functionCaptureNode.operand0 >= 0 and functionCaptureNode.operand0 < (typed -> len)) -> if {
+                                            typed[functionCaptureNode.operand0] => functionCaptureBindingCandidate
+                                            (functionCaptureBindingCandidate.kind == 10 or functionCaptureBindingCandidate.kind == 17) -> if { functionCaptureNode.operand0 => functionCaptureBindingIndex! }
+                                        }
+                                        functionCaptureBindingIndex! < 0 -> if {
+                                            0 => functionCaptureBindingSearch!
+                                            functionCaptureBindingSearch! < (typed -> len) -> while {
+                                                typed[functionCaptureBindingSearch!] => functionCaptureBindingCandidate
+                                                ((functionCaptureBindingCandidate.kind == 10 or functionCaptureBindingCandidate.kind == 17) and functionCaptureBindingCandidate.sourceModule == functionCaptureNode.sourceModule and functionCaptureBindingCandidate.symbol == functionCaptureNode.symbol) -> if {
+                                                    functionCaptureBindingSearch! => functionCaptureBindingIndex!
+                                                }
+                                                functionCaptureBindingSearch! + 1 => functionCaptureBindingSearch!
+                                            }
+                                        }
+                                        (functionCaptureBindingIndex! >= 0 and not (functionCaptureBindingIndex! -> nodeBelongsTo(captureFunctionIr))) -> if {
+                                            typed[functionCaptureBindingIndex!] => functionCaptureBinding
+                                            functionCaptureBinding.flags == 1 -> if {
+                                                false => functionMutableReported!
+                                                0 => functionReportedIndex!
+                                                functionReportedIndex! < (reportedMutableCaptures! -> len) -> while {
+                                                    reportedMutableCaptures![functionReportedIndex!] == functionCaptureBindingIndex! -> if { true => functionMutableReported! }
+                                                    functionReportedIndex! + 1 => functionReportedIndex!
+                                                }
+                                                not functionMutableReported! -> if {
+                                                    reportedMutableCaptures! -> push(functionCaptureBindingIndex!)
+                                                    prepared.package.ranges[functionCaptureNode.sourceModule] => functionCaptureRange
+                                                    prepared.package.nodes[functionCaptureRange.astStart + functionCaptureNode.astNode] => functionCaptureAst
+                                                    diagnostics! -> push(OwnershipDiagnostic {
+                                                        code: 18
+                                                        sourceModule: functionCaptureNode.sourceModule
+                                                        functionSymbol: typed[captureFunctionIr].symbol
+                                                        expectedOrigin: -1
+                                                        expectedModule: -1
+                                                        expectedSymbol: -1
+                                                        actualOrigin: functionCaptureBinding.typeOrigin
+                                                        actualModule: functionCaptureBinding.typeModule
+                                                        actualSymbol: functionCaptureBinding.typeSymbol
+                                                        actualBuiltin: functionCaptureBinding.typeSymbol
+                                                        span: syntax.SourceSpan { fileId: functionCaptureNode.sourceModule, start: functionCaptureAst.start, length: functionCaptureAst.length }
+                                                    })
+                                                }
+                                            }
+                                        }
+                                    }
+                                    (functionCaptureNode.kind == 6 and functionCaptureNode.targetModule >= 0 and functionCaptureNode.symbol >= 0) -> if {
+                                        -1 => transitiveTargetFunction!
+                                        0 => transitiveTargetSearch!
+                                        transitiveTargetSearch! < (typed -> len) -> while {
+                                            typed[transitiveTargetSearch!] => transitiveTargetCandidate
+                                            (transitiveTargetCandidate.kind == 0 and transitiveTargetCandidate.sourceModule == functionCaptureNode.targetModule and transitiveTargetCandidate.symbol == functionCaptureNode.symbol) -> if { transitiveTargetSearch! => transitiveTargetFunction! }
+                                            transitiveTargetSearch! + 1 => transitiveTargetSearch!
+                                        }
+                                        transitiveTargetFunction! >= 0 -> if { pendingCaptureFunctions! -> push(transitiveTargetFunction!) }
+                                    }
+                                }
+                                functionCaptureSearch! + 1 => functionCaptureSearch!
+                            }
+                        }
+                        pendingCaptureFunctionIndex! + 1 => pendingCaptureFunctionIndex!
                     }
                 }
             }

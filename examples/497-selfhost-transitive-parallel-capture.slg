@@ -1,0 +1,70 @@
+import sollang.compiler.semantic.ownership_check as ownershipCheck
+
+# Verifies that E18 follows local-function calls from a parallel callback:
+# direct and transitively hidden mutable captures are rejected, while an
+# immutable value captured through the same helper shape remains valid.
+
+countE18 source: Text -> Int {
+    [source, ~] => unit!
+    unit! -> ownershipCheck.analyze => errors!
+    0 => count!
+    errors! -> each error {
+        error.code == 18 -> if { count! + 1 => count! }
+    }
+    count!
+}
+
+main {
+    # A mutable binding read directly in the parallel body is E18.
+    """
+    main {
+        10 => offset!
+        [1, 2, 3, ~] => values!
+        values! -> parallel value {
+            value + offset!
+        } => shifted!
+    }
+    """ -> countE18 => direct
+
+    # A local helper must not hide its mutable outer capture from E18.
+    """
+    shift seed: Int -> [Int; ~] {
+        addOffset value: Int -> Int {
+            value + offset!
+        }
+
+        10 => offset!
+        [1, 2, 3, ~] => values!
+        values! -> parallel value {
+            value -> addOffset
+        } => shifted!
+        shifted!
+    }
+
+    main {
+        0 -> shift => shifted!
+    }
+    """ -> countE18 => transitive
+
+    # An immutable value remains a safe read-only transitive capture.
+    """
+    shift seed: Int -> [Int; ~] {
+        addOffset value: Int -> Int {
+            value + offset
+        }
+
+        10 => offset
+        [1, 2, 3, ~] => values!
+        values! -> parallel value {
+            value -> addOffset
+        } => shifted!
+        shifted!
+    }
+
+    main {
+        0 -> shift => shifted!
+    }
+    """ -> countE18 => immutable
+
+    "direct=$direct, transitive=$transitive, immutable=$immutable" -> println
+}

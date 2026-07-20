@@ -137,11 +137,14 @@ is the named ownership barrier consumed read-only by semantic, typed-IR,
 ownership, effect, and LLVM passes; example 379 proves the frozen package,
 module, import, and resolved-import views.
 The reference compiler rejects direct and transitive mutable captures and
-structurally non-sendable values. The self-host ownership pass reports the same
-direct callback boundary as diagnostic codes 18 and 19; example 380 proves
-mutable, non-sendable, and immutable cases. Before its own parallel LLVM-body
-emission, the self-host emitter snapshots construction-time mutable indexes so
-worker callbacks capture only immutable arrays.
+structurally non-sendable values. The self-host ownership pass now follows the
+local-function call graph and reports direct or transitively hidden mutable
+captures as production diagnostic E18; code 19 continues to classify direct
+structurally non-sendable captures. Examples 380 and 497 prove mutable,
+non-sendable, immutable, and transitive cases, while example 498 proves that
+the checked compiler stops before LLVM emission. Before parallel typed-IR and
+LLVM work begins, construction-time tables move into immutable owners without
+copying, so worker callbacks never capture mutable builders.
 
 ### E. Verification (5/6)
 

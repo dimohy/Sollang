@@ -2494,6 +2494,44 @@ Research basis:
 - [Mojo lifetimes and origins](https://docs.modular.com/mojo/manual/values/lifetimes/)
 - [Swift memory safety](https://docs.swift.org/swift-book/documentation/the-swift-programming-language/memorysafety/)
 
+## Production E18 for Transitive Mutable Parallel Captures (D213L)
+
+D213L promotes mutable parallel-capture diagnostic E18 into the checked
+self-host compiler. The ownership pass now walks every local function called
+from a `parallel` or `tryParallel` body and continues transitively through its
+local call graph. A mutable outer binding therefore cannot be hidden behind an
+outlined helper. A visited-function set bounds recursive call graphs, and a
+reported-binding set prevents duplicate diagnostics when the same capture is
+read more than once. Immutable structurally sendable captures remain valid.
+
+The first Stage2 attempt correctly found six mutable tables captured by the
+self-host typed-IR parallelizer. Instead of copying those compiler-sized
+tables, typed-IR lowering now transfers their owners through typed `move`
+freeze helpers and lets workers borrow immutable names. This is a zero-copy
+ownership transition and closes the fixed-point safety issue without increasing
+the live table payload.
+
+Examples 497 and 498 cover direct, transitive, immutable, and checked-driver
+behavior. Their English `#` comments explain each verification scenario. A
+dedicated Stage2 fixture proves that Stage1 and Stage2 both emit E18 and exit
+before a target header. Windows/Linux full suites pass **666/666**. Windows
+Stage2 passes **7/7** at **11,840,360 LLVM bytes**, **3,496,608 bitcode bytes**,
+and a **1,650,176-byte executable**. Linux Stage2 passes **6/6** at **11,836,939
+LLVM bytes**, **3,494,820 bitcode bytes**, and a **3,331,320-byte executable**.
+
+The required periodic Stage3 passes at **11,840,360 LLVM bytes** and is
+byte-for-byte equal to Stage2 with SHA-256
+`E0B91E9140B90D04F3417926C80C3B2BE38CF5B35EC975D119757B8C75C2BBF9`.
+The cadence resets to **0/10**. Formal progress remains **49 complete, 8
+partial, 3 missing: 53/60 (88.3%)** because E19-E20 production precision still
+keeps the broader ownership/storage gate partial.
+
+Research basis:
+
+- [Swift sendable closure captures](https://docs.swift.org/compiler/documentation/diagnostics/sendable-closure-captures/)
+- [Swift sending closure data-race diagnostics](https://docs.swift.org/compiler/documentation/diagnostics/sending-closure-risks-data-race/)
+- [Rust closure capture precision and `Send`/`Sync`](https://doc.rust-lang.org/reference/types/closure.html)
+
 ## Production E17 for Reachable Partial Moves (D213K)
 
 D213K promotes explicit partial-move diagnostic E17 into the checked self-host

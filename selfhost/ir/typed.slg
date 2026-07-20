@@ -263,6 +263,15 @@ legacyTypes recursive: expressionTypeIds.ExpressionTypeIdSet -> [expressionTypes
 }
 
 public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; ~] {
+    freezeSemanticTypes values: move [typeIds.SemanticType; ~] -> [typeIds.SemanticType; ~] {
+        values
+    }
+    freezeExpressionTypes values: move [expressionTypeIds.ExpressionTypeId; ~] -> [expressionTypeIds.ExpressionTypeId; ~] {
+        values
+    }
+    freezeInts values: move [Int; ~] -> [Int; ~] {
+        values
+    }
     nominalVariantTag sourceIndex: Int, variantToken: syntax.SyntaxToken -> Int {
         prepared.package.ranges[sourceIndex] => variantRange
         prepared.package.sources[sourceIndex] -> len => variantSourceLength
@@ -316,8 +325,8 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
             1000000 => resultDistance!
             UIntSize(0) => resultTopLevelStart!
             0 => typeSearch!
-            typeSearch! < (inferred! -> len) -> while {
-                inferred![typeSearch!] => candidateType
+            typeSearch! < (inferred -> len) -> while {
+                inferred[typeSearch!] => candidateType
                 candidateType.sourceModule == sourceIndex! -> if {
                     prepared.package.nodes[sourceRange.astStart + candidateType.astNode].parent => ancestor!
                     candidateType.astNode => functionChildAst!
@@ -346,7 +355,7 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                 typeSearch! + 1 => typeSearch!
             }
             resultTypeIndex! >= 0 -> if {
-                inferred![resultTypeIndex!] => resultType
+                inferred[resultTypeIndex!] => resultType
                 resultType.origin => functionResultOrigin!
                 resultType.targetModule => functionResultModule!
                 resultType.targetSymbol => functionResultSymbol!
@@ -364,17 +373,17 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                 -1 => functionResultTypeKind!
                 0 => functionResultTypeFlags!
                 functionResultTypeId! >= 0 -> if {
-                    recursiveSemanticTypes![functionResultTypeId!] => canonicalFunctionResult
+                    frozenRecursiveSemanticTypes[functionResultTypeId!] => canonicalFunctionResult
                     canonicalFunctionResult.origin => functionResultOrigin!
                     canonicalFunctionResult.module => functionResultModule!
                     canonicalFunctionResult.symbol => functionResultSymbol!
                     canonicalFunctionResult.kind => functionResultTypeKind!
-                    recursiveTypeFlags![functionResultTypeId!] => functionResultTypeFlags!
+                    recursiveTypeFlags[functionResultTypeId!] => functionResultTypeFlags!
                     canonicalFunctionResult.kind != 1 -> if {
                         10 + canonicalFunctionResult.kind => functionResultOrigin!
                         canonicalFunctionResult.first >= 0 -> if {
-                            recursiveSemanticTypes![canonicalFunctionResult.first].module => functionResultModule!
-                            recursiveSemanticTypes![canonicalFunctionResult.first].symbol => functionResultSymbol!
+                            frozenRecursiveSemanticTypes[canonicalFunctionResult.first].module => functionResultModule!
+                            frozenRecursiveSemanticTypes[canonicalFunctionResult.first].symbol => functionResultSymbol!
                         }
                     }
                 }
@@ -414,8 +423,8 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                         parameterName.symbol == parameterSymbol! -> if {
                             parameterName.astNode => parameterReferenceAst!
                             0 => parameterInferredSearch!
-                            parameterInferredSearch! < (inferred! -> len) -> while {
-                                inferred![parameterInferredSearch!] => parameterInferred
+                            parameterInferredSearch! < (inferred -> len) -> while {
+                                inferred[parameterInferredSearch!] => parameterInferred
                                 (parameterInferred.sourceModule == sourceIndex! and parameterInferred.astNode == parameterName.astNode) -> if { parameterInferredSearch! => parameterTypeIndex! }
                                 parameterInferredSearch! + 1 => parameterInferredSearch!
                             }
@@ -437,14 +446,14 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                         parameterExactSearch! + 1 => parameterExactSearch!
                     }
                     parameterTypeId! >= 0 -> if {
-                        recursiveSemanticTypes![parameterTypeId!] => exactParameterType
+                        frozenRecursiveSemanticTypes[parameterTypeId!] => exactParameterType
                         exactParameterType.origin => parameterOrigin!
                         exactParameterType.module => parameterModule!
                         exactParameterType.symbol => parameterTypeSymbol!
                     }
                 }
                 (parameterTypeIndex! >= 0 and parameterTypeId! < 0) -> if {
-                    inferred![parameterTypeIndex!] => inferredParameterType
+                    inferred[parameterTypeIndex!] => inferredParameterType
                     inferredParameterType.origin => parameterOrigin!
                     inferredParameterType.targetModule => parameterModule!
                     inferredParameterType.targetSymbol => parameterTypeSymbol!
@@ -504,8 +513,8 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                             }
                             canonicalParameterIsSourceText! -> if {
                                 0 => canonicalParameterSourceTextSearch!
-                                canonicalParameterSourceTextSearch! < (recursiveSemanticTypes! -> len) -> while {
-                                    recursiveSemanticTypes![canonicalParameterSourceTextSearch!] => canonicalParameterSourceText
+                                canonicalParameterSourceTextSearch! < (frozenRecursiveSemanticTypes -> len) -> while {
+                                    frozenRecursiveSemanticTypes[canonicalParameterSourceTextSearch!] => canonicalParameterSourceText
                                     (canonicalParameterSourceText.kind == 1 and canonicalParameterSourceText.origin == 1 and canonicalParameterSourceText.symbol == 24) -> if {
                                         canonicalParameterSourceTextSearch! => parameterTypeId!
                                     }
@@ -515,14 +524,14 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                         }
                     }
                     parameterTypeId! >= 0 -> if {
-                        recursiveSemanticTypes![parameterTypeId!] => canonicalParameterType
+                        frozenRecursiveSemanticTypes[parameterTypeId!] => canonicalParameterType
                         canonicalParameterType.origin => parameterOrigin!
                         canonicalParameterType.module => parameterModule!
                         canonicalParameterType.symbol => parameterTypeSymbol!
                         canonicalParameterType.kind != 1 -> if {
                             10 + canonicalParameterType.kind => parameterOrigin!
                             canonicalParameterType.first >= 0 -> if {
-                                recursiveSemanticTypes![canonicalParameterType.first] => canonicalParameterElement
+                                frozenRecursiveSemanticTypes[canonicalParameterType.first] => canonicalParameterElement
                                 canonicalParameterElement.module => parameterModule!
                                 canonicalParameterElement.symbol => parameterTypeSymbol!
                             }
@@ -617,16 +626,16 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                         -1 => additionalParameterTypeKind!
                         0 => additionalParameterTypeFlags!
                         additionalParameterTypeId! >= 0 -> if {
-                            recursiveSemanticTypes![additionalParameterTypeId!] => additionalParameterType
+                            frozenRecursiveSemanticTypes[additionalParameterTypeId!] => additionalParameterType
                             additionalParameterType.origin => additionalParameterOrigin!
                             additionalParameterType.module => additionalParameterModule!
                             additionalParameterType.symbol => additionalParameterTypeSymbol!
                             additionalParameterType.kind => additionalParameterTypeKind!
-                            recursiveTypeFlags![additionalParameterTypeId!] => additionalParameterTypeFlags!
+                            recursiveTypeFlags[additionalParameterTypeId!] => additionalParameterTypeFlags!
                             additionalParameterType.kind != 1 -> if {
                                 10 + additionalParameterType.kind => additionalParameterOrigin!
                                 additionalParameterType.first >= 0 -> if {
-                                    recursiveSemanticTypes![additionalParameterType.first] => additionalParameterElement
+                                    frozenRecursiveSemanticTypes[additionalParameterType.first] => additionalParameterElement
                                     additionalParameterElement.module => additionalParameterModule!
                                     additionalParameterElement.symbol => additionalParameterTypeSymbol!
                                 }
@@ -716,8 +725,8 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                             -1 => bindingTypeIndex!
                             1000000 => bindingTypeDistance!
                             0 => bindingTypeSearch!
-                            bindingTypeSearch! < (inferred! -> len) -> while {
-                                inferred![bindingTypeSearch!] => bindingTypeCandidate
+                            bindingTypeSearch! < (inferred -> len) -> while {
+                                inferred[bindingTypeSearch!] => bindingTypeCandidate
                                 bindingTypeCandidate.sourceModule == sourceIndex! -> if {
                                     prepared.package.nodes[sourceRange.astStart + bindingTypeCandidate.astNode].parent => bindingTypeAncestor!
                                     1 => bindingDistance!
@@ -739,8 +748,8 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                             -1 => bindingCanonicalTypeId!
                             1000000 => bindingCanonicalDistance!
                             0 => bindingCanonicalSearch!
-                            bindingCanonicalSearch! < (recursiveExpressions! -> len) -> while {
-                                recursiveExpressions![bindingCanonicalSearch!] => bindingCanonicalCandidate
+                            bindingCanonicalSearch! < (frozenRecursiveExpressions -> len) -> while {
+                                frozenRecursiveExpressions[bindingCanonicalSearch!] => bindingCanonicalCandidate
                                 (bindingCanonicalCandidate.status == 0 and bindingCanonicalCandidate.sourceModule == sourceIndex!) -> if {
                                     0 => bindingCanonicalCandidateDistance!
                                     bindingCanonicalCandidate.astNode == bindingAstIndex! => bindingCanonicalBelongs!
@@ -785,28 +794,28 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                                 -1 => bindingTypeKind!
                                 0 => bindingTypeFlags!
                                 bindingTypeIndex! >= 0 -> if {
-                                    inferred![bindingTypeIndex!] => bindingType
+                                    inferred[bindingTypeIndex!] => bindingType
                                     bindingType.origin => bindingOrigin!
                                     bindingType.targetModule => bindingModule!
                                     bindingType.targetSymbol => bindingSymbolType!
                                 }
                                 bindingCanonicalTypeId! >= 0 -> if {
-                                    recursiveSemanticTypes![bindingCanonicalTypeId!] => bindingCanonicalType
+                                    frozenRecursiveSemanticTypes[bindingCanonicalTypeId!] => bindingCanonicalType
                                     bindingCanonicalType.origin => bindingOrigin!
                                     bindingCanonicalType.module => bindingModule!
                                     bindingCanonicalType.symbol => bindingSymbolType!
                                     bindingCanonicalType.kind => bindingTypeKind!
-                                    recursiveTypeFlags![bindingCanonicalTypeId!] => bindingTypeFlags!
+                                    recursiveTypeFlags[bindingCanonicalTypeId!] => bindingTypeFlags!
                                     (bindingCanonicalType.kind >= 2 and bindingCanonicalType.kind <= 6) -> if { 10 + bindingCanonicalType.kind => bindingOrigin! }
                                     (bindingCanonicalType.kind == 2 or bindingCanonicalType.kind == 3 or bindingCanonicalType.kind == 4 or bindingCanonicalType.kind == 6) -> if {
                                         bindingCanonicalType.first >= 0 -> if {
-                                            recursiveSemanticTypes![bindingCanonicalType.first].module => bindingModule!
-                                            recursiveSemanticTypes![bindingCanonicalType.first].symbol => bindingSymbolType!
+                                            frozenRecursiveSemanticTypes[bindingCanonicalType.first].module => bindingModule!
+                                            frozenRecursiveSemanticTypes[bindingCanonicalType.first].symbol => bindingSymbolType!
                                         }
                                     }
                                     bindingCanonicalType.kind == 5 -> if {
-                                        bindingCanonicalType.first >= 0 -> if { recursiveSemanticTypes![bindingCanonicalType.first].symbol => bindingModule! }
-                                        bindingCanonicalType.second >= 0 -> if { recursiveSemanticTypes![bindingCanonicalType.second].symbol => bindingSymbolType! }
+                                        bindingCanonicalType.first >= 0 -> if { frozenRecursiveSemanticTypes[bindingCanonicalType.first].symbol => bindingModule! }
+                                        bindingCanonicalType.second >= 0 -> if { frozenRecursiveSemanticTypes[bindingCanonicalType.second].symbol => bindingSymbolType! }
                                     }
                                 }
                                 (bindingOrigin! == 13 and bindingSymbol! >= 0) -> if {
@@ -861,19 +870,19 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                             (prepared.package.nodes[sourceRange.astStart + expressionAncestor!].kind == 7 or prepared.package.nodes[sourceRange.astStart + expressionAncestor!].kind == 29 or prepared.package.nodes[sourceRange.astStart + expressionAncestor!].kind == 31) -> if { true => expressionBlockedByNestedFunction! } else { prepared.package.nodes[sourceRange.astStart + expressionAncestor!].parent => expressionAncestor! }
                         }
                     }
-                    inferredIndexByAst![sourceRange.astStart + expressionAstIndex!] => expressionTypeIndex!
-                    recursiveTypeByAst![sourceRange.astStart + expressionAstIndex!] => recursiveExpressionTypeId!
+                    frozenInferredIndexByAst[sourceRange.astStart + expressionAstIndex!] => expressionTypeIndex!
+                    frozenRecursiveTypeByAst[sourceRange.astStart + expressionAstIndex!] => recursiveExpressionTypeId!
                     1 => expressionTypeOrigin!
                     -1 => expressionTypeModule!
                     0 => expressionTypeSymbol!
                     expressionTypeIndex! >= 0 -> if {
-                        inferred![expressionTypeIndex!] => legacyExpressionType
+                        inferred[expressionTypeIndex!] => legacyExpressionType
                         legacyExpressionType.origin => expressionTypeOrigin!
                         legacyExpressionType.targetModule => expressionTypeModule!
                         legacyExpressionType.targetSymbol => expressionTypeSymbol!
                     }
                     recursiveExpressionTypeId! >= 0 -> if {
-                        recursiveSemanticTypes![recursiveExpressionTypeId!] => recursiveExpressionType
+                        frozenRecursiveSemanticTypes[recursiveExpressionTypeId!] => recursiveExpressionType
                         recursiveExpressionType.origin => expressionTypeOrigin!
                         recursiveExpressionType.module => expressionTypeModule!
                         recursiveExpressionType.symbol => expressionTypeSymbol!
@@ -882,13 +891,13 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                         }
                         (recursiveExpressionType.kind == 2 or recursiveExpressionType.kind == 3 or recursiveExpressionType.kind == 4 or recursiveExpressionType.kind == 6) -> if {
                             recursiveExpressionType.first >= 0 -> if {
-                                recursiveSemanticTypes![recursiveExpressionType.first].module => expressionTypeModule!
-                                recursiveSemanticTypes![recursiveExpressionType.first].symbol => expressionTypeSymbol!
+                                frozenRecursiveSemanticTypes[recursiveExpressionType.first].module => expressionTypeModule!
+                                frozenRecursiveSemanticTypes[recursiveExpressionType.first].symbol => expressionTypeSymbol!
                             }
                         }
                         recursiveExpressionType.kind == 5 -> if {
-                            recursiveExpressionType.first >= 0 -> if { recursiveSemanticTypes![recursiveExpressionType.first].symbol => expressionTypeModule! }
-                            recursiveExpressionType.second >= 0 -> if { recursiveSemanticTypes![recursiveExpressionType.second].symbol => expressionTypeSymbol! }
+                            recursiveExpressionType.first >= 0 -> if { frozenRecursiveSemanticTypes[recursiveExpressionType.first].symbol => expressionTypeModule! }
+                            recursiveExpressionType.second >= 0 -> if { frozenRecursiveSemanticTypes[recursiveExpressionType.second].symbol => expressionTypeSymbol! }
                         }
                     }
                     false => knownPatternReference!
@@ -914,8 +923,8 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                         0 => patternSubjectSearch!
                         patternSubjectSearch! < sourceRange.astCount -> while {
                             prepared.package.nodes[sourceRange.astStart + patternSubjectSearch!] => patternSubjectAst
-                            recursiveTypeByAst![sourceRange.astStart + patternSubjectSearch!] => patternSubjectCandidateType
-                            (patternSubjectAst.parent == patternFlowAst and patternSubjectAst.start < prepared.package.nodes[sourceRange.astStart + patternMatchAst].start and patternSubjectCandidateType >= 0 and recursiveSemanticTypes![patternSubjectCandidateType].kind == 7) -> if {
+                            frozenRecursiveTypeByAst[sourceRange.astStart + patternSubjectSearch!] => patternSubjectCandidateType
+                            (patternSubjectAst.parent == patternFlowAst and patternSubjectAst.start < prepared.package.nodes[sourceRange.astStart + patternMatchAst].start and patternSubjectCandidateType >= 0 and frozenRecursiveSemanticTypes[patternSubjectCandidateType].kind == 7) -> if {
                                 (patternSubjectTypeId! < 0 or patternSubjectAst.start > patternSubjectStart!) -> if {
                                     patternSubjectCandidateType => patternSubjectTypeId!
                                     patternSubjectAst.start => patternSubjectStart!
@@ -924,12 +933,12 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                             patternSubjectSearch! + 1 => patternSubjectSearch!
                         }
                         patternSubjectTypeId! >= 0 -> if {
-                            recursiveSemanticTypes![patternSubjectTypeId!] => patternSubjectType
+                            frozenRecursiveSemanticTypes[patternSubjectTypeId!] => patternSubjectType
                             prepared.package.tokens[sourceRange.tokenStart + patternTypeNode.payloadToken] => patternVariantToken
                             patternSubjectType.first => recursiveExpressionTypeId!
                             (source -> byte(patternVariantToken.span.start)) == UInt8(69) -> if { patternSubjectType.second => recursiveExpressionTypeId! }
                             recursiveExpressionTypeId! >= 0 -> if {
-                                recursiveSemanticTypes![recursiveExpressionTypeId!] => patternPayloadType
+                                frozenRecursiveSemanticTypes[recursiveExpressionTypeId!] => patternPayloadType
                                 patternPayloadType.origin => expressionTypeOrigin!
                                 patternPayloadType.module => expressionTypeModule!
                                 patternPayloadType.symbol => expressionTypeSymbol!
@@ -951,7 +960,7 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                         sameParameterName! -> if {
                             true => knownParameterReference!
                             parameterTypeId! => recursiveExpressionTypeId!
-                            recursiveSemanticTypes![parameterTypeId!] => knownParameterType
+                            frozenRecursiveSemanticTypes[parameterTypeId!] => knownParameterType
                             knownParameterType.origin => expressionTypeOrigin!
                             knownParameterType.module => expressionTypeModule!
                             knownParameterType.symbol => expressionTypeSymbol!
@@ -998,8 +1007,8 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                     (expression.kind == 20 or expression.kind == 21) -> if {
                         1000000 => knownNumericDistance!
                         0 => knownNumericSearch!
-                        knownNumericSearch! < (inferred! -> len) -> while {
-                            inferred![knownNumericSearch!] => knownNumericCandidate
+                        knownNumericSearch! < (inferred -> len) -> while {
+                            inferred[knownNumericSearch!] => knownNumericCandidate
                             knownNumericCandidate.sourceModule == sourceIndex! -> if {
                                 prepared.package.nodes[sourceRange.astStart + knownNumericCandidate.astNode].parent => knownNumericAncestor!
                                 1 => knownNumericCandidateDistance!
@@ -1026,10 +1035,10 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                         (unaryChildSearch! < sourceRange.astCount and not knownNumericExpression!) -> while {
                             prepared.package.nodes[sourceRange.astStart + unaryChildSearch!] => unaryChild
                             unaryChild.parent == expressionAstIndex! -> if {
-                                recursiveTypeByAst![sourceRange.astStart + unaryChildSearch!] => unaryChildTypeId
+                                frozenRecursiveTypeByAst[sourceRange.astStart + unaryChildSearch!] => unaryChildTypeId
                                 unaryChildTypeId >= 0 -> if {
                                     unaryChildTypeId => recursiveExpressionTypeId!
-                                    recursiveSemanticTypes![unaryChildTypeId] => unaryChildType
+                                    frozenRecursiveSemanticTypes[unaryChildTypeId] => unaryChildType
                                     unaryChildType.origin => expressionTypeOrigin!
                                     unaryChildType.module => expressionTypeModule!
                                     unaryChildType.symbol => expressionTypeSymbol!
@@ -1108,7 +1117,7 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                             -1 => controlTypeModule!
                             0 => controlTypeSymbol!
                             expressionTypeIndex! >= 0 -> if {
-                                inferred![expressionTypeIndex!] => inferredControlType
+                                inferred[expressionTypeIndex!] => inferredControlType
                                 inferredControlType.origin => controlTypeOrigin!
                                 inferredControlType.targetModule => controlTypeModule!
                                 inferredControlType.targetSymbol => controlTypeSymbol!
@@ -1278,8 +1287,8 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                             -1 => expressionTypeKind!
                             0 => expressionTypeFlags!
                             recursiveExpressionTypeId! >= 0 -> if {
-                                recursiveSemanticTypes![recursiveExpressionTypeId!].kind => expressionTypeKind!
-                                recursiveTypeFlags![recursiveExpressionTypeId!] => expressionTypeFlags!
+                                frozenRecursiveSemanticTypes[recursiveExpressionTypeId!].kind => expressionTypeKind!
+                                recursiveTypeFlags[recursiveExpressionTypeId!] => expressionTypeFlags!
                             }
                             results! -> push(TypedIrNode {
                                 kind: expressionKind!
@@ -1380,28 +1389,28 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                     (canonicalIndexResult!.kind == 15 and canonicalIndexResult!.typeId < 0 and canonicalIndexResult!.operand0 >= expressionIrStart) -> if {
                         results![canonicalIndexResult!.operand0] => canonicalIndexedValue
                         canonicalIndexedValue.typeId >= 0 -> if {
-                            recursiveSemanticTypes![canonicalIndexedValue.typeId] => canonicalContainerType
+                            frozenRecursiveSemanticTypes[canonicalIndexedValue.typeId] => canonicalContainerType
                             -1 => canonicalElementTypeId!
                             (canonicalContainerType.kind == 2 or canonicalContainerType.kind == 3 or canonicalContainerType.kind == 4) -> if { canonicalContainerType.first => canonicalElementTypeId! }
                             canonicalContainerType.kind == 5 -> if { canonicalContainerType.second => canonicalElementTypeId! }
                             canonicalElementTypeId! >= 0 -> if {
-                                recursiveSemanticTypes![canonicalElementTypeId!] => canonicalElementType
+                                frozenRecursiveSemanticTypes[canonicalElementTypeId!] => canonicalElementType
                                 canonicalElementTypeId! => canonicalIndexResult!.typeId
                                 canonicalElementType.kind => canonicalIndexResult!.typeKind
-                                recursiveTypeFlags![canonicalElementTypeId!] => canonicalIndexResult!.typeFlags
+                                recursiveTypeFlags[canonicalElementTypeId!] => canonicalIndexResult!.typeFlags
                                 canonicalElementType.origin => canonicalIndexResult!.typeOrigin
                                 canonicalElementType.module => canonicalIndexResult!.typeModule
                                 canonicalElementType.symbol => canonicalIndexResult!.typeSymbol
                                 (canonicalElementType.kind >= 2 and canonicalElementType.kind <= 6) -> if { 10 + canonicalElementType.kind => canonicalIndexResult!.typeOrigin }
                                 (canonicalElementType.kind == 2 or canonicalElementType.kind == 3 or canonicalElementType.kind == 4 or canonicalElementType.kind == 6) -> if {
                                     canonicalElementType.first >= 0 -> if {
-                                        recursiveSemanticTypes![canonicalElementType.first].module => canonicalIndexResult!.typeModule
-                                        recursiveSemanticTypes![canonicalElementType.first].symbol => canonicalIndexResult!.typeSymbol
+                                        frozenRecursiveSemanticTypes[canonicalElementType.first].module => canonicalIndexResult!.typeModule
+                                        frozenRecursiveSemanticTypes[canonicalElementType.first].symbol => canonicalIndexResult!.typeSymbol
                                     }
                                 }
                                 canonicalElementType.kind == 5 -> if {
-                                    canonicalElementType.first >= 0 -> if { recursiveSemanticTypes![canonicalElementType.first].symbol => canonicalIndexResult!.typeModule }
-                                    canonicalElementType.second >= 0 -> if { recursiveSemanticTypes![canonicalElementType.second].symbol => canonicalIndexResult!.typeSymbol }
+                                    canonicalElementType.first >= 0 -> if { frozenRecursiveSemanticTypes[canonicalElementType.first].symbol => canonicalIndexResult!.typeModule }
+                                    canonicalElementType.second >= 0 -> if { frozenRecursiveSemanticTypes[canonicalElementType.second].symbol => canonicalIndexResult!.typeSymbol }
                                 }
                                 canonicalIndexResult! => results![canonicalIndexResultIr!]
                             }
@@ -1498,7 +1507,7 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                                     matchCandidateDistance! + 1 => matchCandidateDistance!
                                 }
                             }
-                            (matchCandidateBelongs! and matchCandidateAst.start < prepared.package.nodes[sourceRange.astStart + control!.astNode].start and (matchCandidate.typeKind == 7 or (matchCandidate.typeId >= 0 and recursiveSemanticTypes![matchCandidate.typeId].kind == 7) or (matchCandidate.typeKind == 1 and (matchCandidate.typeOrigin == 0 or matchCandidate.typeOrigin == 2)))) -> if {
+                            (matchCandidateBelongs! and matchCandidateAst.start < prepared.package.nodes[sourceRange.astStart + control!.astNode].start and (matchCandidate.typeKind == 7 or (matchCandidate.typeId >= 0 and frozenRecursiveSemanticTypes[matchCandidate.typeId].kind == 7) or (matchCandidate.typeKind == 1 and (matchCandidate.typeOrigin == 0 or matchCandidate.typeOrigin == 2)))) -> if {
                                 (matchSubject! < 0 or matchCandidateDistance! < matchSubjectDistance! or (matchCandidateDistance! == matchSubjectDistance! and matchCandidateAst.start > matchSubjectStart!)) -> if {
                                     matchSearch! => matchSubject!
                                     matchCandidateAst.start => matchSubjectStart!
@@ -1529,7 +1538,7 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                                     candidateConditionDistance! + 1 => candidateConditionDistance!
                                 }
                             }
-                            (conditionBelongsToFlow! and ((conditionCandidate.typeOrigin == 1 and conditionCandidate.typeSymbol == 23) or (conditionCandidate.typeId >= 0 and recursiveSemanticTypes![conditionCandidate.typeId].origin == 1 and recursiveSemanticTypes![conditionCandidate.typeId].symbol == 23)) and prepared.package.nodes[sourceRange.astStart + conditionCandidate.astNode].start < prepared.package.nodes[sourceRange.astStart + control!.astNode].start) -> if {
+                            (conditionBelongsToFlow! and ((conditionCandidate.typeOrigin == 1 and conditionCandidate.typeSymbol == 23) or (conditionCandidate.typeId >= 0 and frozenRecursiveSemanticTypes[conditionCandidate.typeId].origin == 1 and frozenRecursiveSemanticTypes[conditionCandidate.typeId].symbol == 23)) and prepared.package.nodes[sourceRange.astStart + conditionCandidate.astNode].start < prepared.package.nodes[sourceRange.astStart + control!.astNode].start) -> if {
                                 prepared.package.nodes[sourceRange.astStart + conditionCandidate.astNode].start => candidateStart
                                 (conditionIr! < 0 or candidateConditionDistance! < conditionDistance! or (candidateConditionDistance! == conditionDistance! and candidateStart > conditionStart!)) -> if {
                                     conditionSearch! => conditionIr!
@@ -1539,7 +1548,7 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                             }
                         conditionSearch! + 1 => conditionSearch!
                     }
-                    (conditionIr! < 0 and control!.parent >= expressionIrStart and results![control!.parent].kind != 19 and ((results![control!.parent].typeOrigin == 1 and results![control!.parent].typeSymbol == 23) or (results![control!.parent].typeId >= 0 and recursiveSemanticTypes![results![control!.parent].typeId].origin == 1 and recursiveSemanticTypes![results![control!.parent].typeId].symbol == 23))) -> if {
+                    (conditionIr! < 0 and control!.parent >= expressionIrStart and results![control!.parent].kind != 19 and ((results![control!.parent].typeOrigin == 1 and results![control!.parent].typeSymbol == 23) or (results![control!.parent].typeId >= 0 and frozenRecursiveSemanticTypes[results![control!.parent].typeId].origin == 1 and frozenRecursiveSemanticTypes[results![control!.parent].typeId].symbol == 23))) -> if {
                         control!.parent => enclosingConditionIr!
                         results![enclosingConditionIr!].parent => control!.parent
                         enclosingConditionIr! => conditionIr!
@@ -1786,12 +1795,12 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                         canonicalBindingValue.typeFlags => canonicalBinding!.typeFlags
                         canonicalBinding!.typeId < 0 -> if {
                             0 => canonicalInitializerTypeSearch!
-                            canonicalInitializerTypeSearch! < (recursiveSemanticTypes! -> len) -> while {
-                                recursiveSemanticTypes![canonicalInitializerTypeSearch!] => canonicalInitializerType
+                            canonicalInitializerTypeSearch! < (frozenRecursiveSemanticTypes -> len) -> while {
+                                frozenRecursiveSemanticTypes[canonicalInitializerTypeSearch!] => canonicalInitializerType
                                 (canonicalInitializerType.status == 0 and canonicalInitializerType.origin == canonicalBinding!.typeOrigin and canonicalInitializerType.module == canonicalBinding!.typeModule and canonicalInitializerType.symbol == canonicalBinding!.typeSymbol) -> if {
                                     canonicalInitializerTypeSearch! => canonicalBinding!.typeId
                                     canonicalInitializerType.kind => canonicalBinding!.typeKind
-                                    recursiveTypeFlags![canonicalInitializerTypeSearch!] => canonicalBinding!.typeFlags
+                                    recursiveTypeFlags[canonicalInitializerTypeSearch!] => canonicalBinding!.typeFlags
                                 }
                                 canonicalInitializerTypeSearch! + 1 => canonicalInitializerTypeSearch!
                             }
@@ -1966,8 +1975,8 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                 -1 => entryResultTypeIndex!
                 1000000 => entryResultDistance!
                 0 => entryTypeSearch!
-                entryTypeSearch! < (inferred! -> len) -> while {
-                    inferred![entryTypeSearch!] => entryCandidateType
+                entryTypeSearch! < (inferred -> len) -> while {
+                    inferred[entryTypeSearch!] => entryCandidateType
                     entryCandidateType.sourceModule == sourceIndex! -> if {
                         prepared.package.nodes[sourceRange.astStart + entryCandidateType.astNode].parent => entryAncestor!
                         1 => entryDistance!
@@ -1981,7 +1990,7 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                                 }
                             }
                         }
-                        (belongsToEntry! and (entryDistance! < entryResultDistance! or (entryDistance! == entryResultDistance! and (entryResultTypeIndex! < 0 or prepared.package.nodes[sourceRange.astStart + entryCandidateType.astNode].start > prepared.package.nodes[sourceRange.astStart + inferred![entryResultTypeIndex!].astNode].start)))) -> if {
+                        (belongsToEntry! and (entryDistance! < entryResultDistance! or (entryDistance! == entryResultDistance! and (entryResultTypeIndex! < 0 or prepared.package.nodes[sourceRange.astStart + entryCandidateType.astNode].start > prepared.package.nodes[sourceRange.astStart + inferred[entryResultTypeIndex!].astNode].start)))) -> if {
                             entryTypeSearch! => entryResultTypeIndex!
                             entryDistance! => entryResultDistance!
                         }
@@ -2033,8 +2042,8 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                                 -1 => entryBindingTypeIndex!
                                 1000000 => entryBindingTypeDistance!
                                 0 => entryBindingTypeSearch!
-                                entryBindingTypeSearch! < (inferred! -> len) -> while {
-                                    inferred![entryBindingTypeSearch!] => entryBindingTypeCandidate
+                                entryBindingTypeSearch! < (inferred -> len) -> while {
+                                    inferred[entryBindingTypeSearch!] => entryBindingTypeCandidate
                                     entryBindingTypeCandidate.sourceModule == sourceIndex! -> if {
                                         prepared.package.nodes[sourceRange.astStart + entryBindingTypeCandidate.astNode].parent => entryBindingTypeAncestor!
                                         1 => entryBindingDistance!
@@ -2056,8 +2065,8 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                                 -1 => entryBindingCanonicalTypeId!
                                 1000000 => entryBindingCanonicalDistance!
                                 0 => entryBindingCanonicalSearch!
-                                entryBindingCanonicalSearch! < (recursiveExpressions! -> len) -> while {
-                                    recursiveExpressions![entryBindingCanonicalSearch!] => entryBindingCanonicalCandidate
+                                entryBindingCanonicalSearch! < (frozenRecursiveExpressions -> len) -> while {
+                                    frozenRecursiveExpressions[entryBindingCanonicalSearch!] => entryBindingCanonicalCandidate
                                     (entryBindingCanonicalCandidate.status == 0 and entryBindingCanonicalCandidate.sourceModule == sourceIndex!) -> if {
                                         0 => entryBindingCanonicalCandidateDistance!
                                         entryBindingCanonicalCandidate.astNode == entryBindingAstIndex! => entryBindingCanonicalBelongs!
@@ -2102,28 +2111,28 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                                     -1 => entryBindingTypeKind!
                                     0 => entryBindingTypeFlags!
                                     entryBindingTypeIndex! >= 0 -> if {
-                                        inferred![entryBindingTypeIndex!] => entryBindingType
+                                        inferred[entryBindingTypeIndex!] => entryBindingType
                                         entryBindingType.origin => entryBindingOrigin!
                                         entryBindingType.targetModule => entryBindingModule!
                                         entryBindingType.targetSymbol => entryBindingSymbolType!
                                     }
                                     entryBindingCanonicalTypeId! >= 0 -> if {
-                                        recursiveSemanticTypes![entryBindingCanonicalTypeId!] => entryBindingCanonicalType
+                                        frozenRecursiveSemanticTypes[entryBindingCanonicalTypeId!] => entryBindingCanonicalType
                                         entryBindingCanonicalType.origin => entryBindingOrigin!
                                         entryBindingCanonicalType.module => entryBindingModule!
                                         entryBindingCanonicalType.symbol => entryBindingSymbolType!
                                         entryBindingCanonicalType.kind => entryBindingTypeKind!
-                                        recursiveTypeFlags![entryBindingCanonicalTypeId!] => entryBindingTypeFlags!
+                                        recursiveTypeFlags[entryBindingCanonicalTypeId!] => entryBindingTypeFlags!
                                         (entryBindingCanonicalType.kind >= 2 and entryBindingCanonicalType.kind <= 6) -> if { 10 + entryBindingCanonicalType.kind => entryBindingOrigin! }
                                         (entryBindingCanonicalType.kind == 2 or entryBindingCanonicalType.kind == 3 or entryBindingCanonicalType.kind == 4 or entryBindingCanonicalType.kind == 6) -> if {
                                             entryBindingCanonicalType.first >= 0 -> if {
-                                                recursiveSemanticTypes![entryBindingCanonicalType.first].module => entryBindingModule!
-                                                recursiveSemanticTypes![entryBindingCanonicalType.first].symbol => entryBindingSymbolType!
+                                                frozenRecursiveSemanticTypes[entryBindingCanonicalType.first].module => entryBindingModule!
+                                                frozenRecursiveSemanticTypes[entryBindingCanonicalType.first].symbol => entryBindingSymbolType!
                                             }
                                         }
                                         entryBindingCanonicalType.kind == 5 -> if {
-                                            entryBindingCanonicalType.first >= 0 -> if { recursiveSemanticTypes![entryBindingCanonicalType.first].symbol => entryBindingModule! }
-                                            entryBindingCanonicalType.second >= 0 -> if { recursiveSemanticTypes![entryBindingCanonicalType.second].symbol => entryBindingSymbolType! }
+                                            entryBindingCanonicalType.first >= 0 -> if { frozenRecursiveSemanticTypes[entryBindingCanonicalType.first].symbol => entryBindingModule! }
+                                            entryBindingCanonicalType.second >= 0 -> if { frozenRecursiveSemanticTypes[entryBindingCanonicalType.second].symbol => entryBindingSymbolType! }
                                         }
                                     }
                                     (entryBindingOrigin! == 13 and entryBindingSymbol! >= 0) -> if {
@@ -2178,19 +2187,19 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                                 (prepared.package.nodes[sourceRange.astStart + entryExpressionAncestor!].kind == 7 or prepared.package.nodes[sourceRange.astStart + entryExpressionAncestor!].kind == 29 or prepared.package.nodes[sourceRange.astStart + entryExpressionAncestor!].kind == 31) -> if { true => entryExpressionBlockedByNestedFunction! } else { prepared.package.nodes[sourceRange.astStart + entryExpressionAncestor!].parent => entryExpressionAncestor! }
                             }
                         }
-                        inferredIndexByAst![sourceRange.astStart + entryExpressionAst!] => entryExpressionTypeIndex!
-                        recursiveTypeByAst![sourceRange.astStart + entryExpressionAst!] => recursiveEntryExpressionTypeId!
+                        frozenInferredIndexByAst[sourceRange.astStart + entryExpressionAst!] => entryExpressionTypeIndex!
+                        frozenRecursiveTypeByAst[sourceRange.astStart + entryExpressionAst!] => recursiveEntryExpressionTypeId!
                         1 => entryExpressionTypeOrigin!
                         -1 => entryExpressionTypeModule!
                         0 => entryExpressionTypeSymbol!
                         entryExpressionTypeIndex! >= 0 -> if {
-                            inferred![entryExpressionTypeIndex!] => legacyEntryExpressionType
+                            inferred[entryExpressionTypeIndex!] => legacyEntryExpressionType
                             legacyEntryExpressionType.origin => entryExpressionTypeOrigin!
                             legacyEntryExpressionType.targetModule => entryExpressionTypeModule!
                             legacyEntryExpressionType.targetSymbol => entryExpressionTypeSymbol!
                         }
                         recursiveEntryExpressionTypeId! >= 0 -> if {
-                            recursiveSemanticTypes![recursiveEntryExpressionTypeId!] => recursiveEntryExpressionType
+                            frozenRecursiveSemanticTypes[recursiveEntryExpressionTypeId!] => recursiveEntryExpressionType
                             recursiveEntryExpressionType.origin => entryExpressionTypeOrigin!
                             recursiveEntryExpressionType.module => entryExpressionTypeModule!
                             recursiveEntryExpressionType.symbol => entryExpressionTypeSymbol!
@@ -2199,13 +2208,13 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                             }
                             (recursiveEntryExpressionType.kind == 2 or recursiveEntryExpressionType.kind == 3 or recursiveEntryExpressionType.kind == 4 or recursiveEntryExpressionType.kind == 6) -> if {
                                 recursiveEntryExpressionType.first >= 0 -> if {
-                                    recursiveSemanticTypes![recursiveEntryExpressionType.first].module => entryExpressionTypeModule!
-                                    recursiveSemanticTypes![recursiveEntryExpressionType.first].symbol => entryExpressionTypeSymbol!
+                                    frozenRecursiveSemanticTypes[recursiveEntryExpressionType.first].module => entryExpressionTypeModule!
+                                    frozenRecursiveSemanticTypes[recursiveEntryExpressionType.first].symbol => entryExpressionTypeSymbol!
                                 }
                             }
                             recursiveEntryExpressionType.kind == 5 -> if {
-                                recursiveEntryExpressionType.first >= 0 -> if { recursiveSemanticTypes![recursiveEntryExpressionType.first].symbol => entryExpressionTypeModule! }
-                                recursiveEntryExpressionType.second >= 0 -> if { recursiveSemanticTypes![recursiveEntryExpressionType.second].symbol => entryExpressionTypeSymbol! }
+                                recursiveEntryExpressionType.first >= 0 -> if { frozenRecursiveSemanticTypes[recursiveEntryExpressionType.first].symbol => entryExpressionTypeModule! }
+                                recursiveEntryExpressionType.second >= 0 -> if { frozenRecursiveSemanticTypes[recursiveEntryExpressionType.second].symbol => entryExpressionTypeSymbol! }
                             }
                         }
                         false => knownEntryPatternReference!
@@ -2231,8 +2240,8 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                             0 => entryPatternSubjectSearch!
                             entryPatternSubjectSearch! < sourceRange.astCount -> while {
                                 prepared.package.nodes[sourceRange.astStart + entryPatternSubjectSearch!] => entryPatternSubjectAst
-                                recursiveTypeByAst![sourceRange.astStart + entryPatternSubjectSearch!] => entryPatternSubjectCandidateType
-                                (entryPatternSubjectAst.parent == entryPatternFlowAst and entryPatternSubjectAst.start < prepared.package.nodes[sourceRange.astStart + entryPatternMatchAst].start and entryPatternSubjectCandidateType >= 0 and recursiveSemanticTypes![entryPatternSubjectCandidateType].kind == 7) -> if {
+                                frozenRecursiveTypeByAst[sourceRange.astStart + entryPatternSubjectSearch!] => entryPatternSubjectCandidateType
+                                (entryPatternSubjectAst.parent == entryPatternFlowAst and entryPatternSubjectAst.start < prepared.package.nodes[sourceRange.astStart + entryPatternMatchAst].start and entryPatternSubjectCandidateType >= 0 and frozenRecursiveSemanticTypes[entryPatternSubjectCandidateType].kind == 7) -> if {
                                     (entryPatternSubjectTypeId! < 0 or entryPatternSubjectAst.start > entryPatternSubjectStart!) -> if {
                                         entryPatternSubjectCandidateType => entryPatternSubjectTypeId!
                                         entryPatternSubjectAst.start => entryPatternSubjectStart!
@@ -2241,12 +2250,12 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                                 entryPatternSubjectSearch! + 1 => entryPatternSubjectSearch!
                             }
                             entryPatternSubjectTypeId! >= 0 -> if {
-                                recursiveSemanticTypes![entryPatternSubjectTypeId!] => entryPatternSubjectType
+                                frozenRecursiveSemanticTypes[entryPatternSubjectTypeId!] => entryPatternSubjectType
                                 prepared.package.tokens[sourceRange.tokenStart + entryPatternTypeNode.payloadToken] => entryPatternVariantToken
                                 entryPatternSubjectType.first => recursiveEntryExpressionTypeId!
                                 (source -> byte(entryPatternVariantToken.span.start)) == UInt8(69) -> if { entryPatternSubjectType.second => recursiveEntryExpressionTypeId! }
                                 recursiveEntryExpressionTypeId! >= 0 -> if {
-                                    recursiveSemanticTypes![recursiveEntryExpressionTypeId!] => entryPatternPayloadType
+                                    frozenRecursiveSemanticTypes[recursiveEntryExpressionTypeId!] => entryPatternPayloadType
                                     entryPatternPayloadType.origin => entryExpressionTypeOrigin!
                                     entryPatternPayloadType.module => entryExpressionTypeModule!
                                     entryPatternPayloadType.symbol => entryExpressionTypeSymbol!
@@ -2295,8 +2304,8 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                         (entryExpression.kind == 20 or entryExpression.kind == 21) -> if {
                             1000000 => knownEntryNumericDistance!
                             0 => knownEntryNumericSearch!
-                            knownEntryNumericSearch! < (inferred! -> len) -> while {
-                                inferred![knownEntryNumericSearch!] => knownEntryNumericCandidate
+                            knownEntryNumericSearch! < (inferred -> len) -> while {
+                                inferred[knownEntryNumericSearch!] => knownEntryNumericCandidate
                                 knownEntryNumericCandidate.sourceModule == sourceIndex! -> if {
                                     prepared.package.nodes[sourceRange.astStart + knownEntryNumericCandidate.astNode].parent => knownEntryNumericAncestor!
                                     1 => knownEntryNumericCandidateDistance!
@@ -2323,10 +2332,10 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                             (entryUnaryChildSearch! < sourceRange.astCount and not knownEntryNumericExpression!) -> while {
                                 prepared.package.nodes[sourceRange.astStart + entryUnaryChildSearch!] => entryUnaryChild
                                 entryUnaryChild.parent == entryExpressionAst! -> if {
-                                    recursiveTypeByAst![sourceRange.astStart + entryUnaryChildSearch!] => entryUnaryChildTypeId
+                                    frozenRecursiveTypeByAst[sourceRange.astStart + entryUnaryChildSearch!] => entryUnaryChildTypeId
                                     entryUnaryChildTypeId >= 0 -> if {
                                         entryUnaryChildTypeId => recursiveEntryExpressionTypeId!
-                                        recursiveSemanticTypes![entryUnaryChildTypeId] => entryUnaryChildType
+                                        frozenRecursiveSemanticTypes[entryUnaryChildTypeId] => entryUnaryChildType
                                         entryUnaryChildType.origin => entryExpressionTypeOrigin!
                                         entryUnaryChildType.module => entryExpressionTypeModule!
                                         entryUnaryChildType.symbol => entryExpressionTypeSymbol!
@@ -2405,7 +2414,7 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                                 -1 => entryControlTypeModule!
                                 0 => entryControlTypeSymbol!
                                 entryExpressionTypeIndex! >= 0 -> if {
-                                    inferred![entryExpressionTypeIndex!] => inferredEntryControlType
+                                    inferred[entryExpressionTypeIndex!] => inferredEntryControlType
                                     inferredEntryControlType.origin => entryControlTypeOrigin!
                                     inferredEntryControlType.targetModule => entryControlTypeModule!
                                     inferredEntryControlType.targetSymbol => entryControlTypeSymbol!
@@ -2574,8 +2583,8 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                                 -1 => entryExpressionTypeKind!
                                 0 => entryExpressionTypeFlags!
                                 recursiveEntryExpressionTypeId! >= 0 -> if {
-                                    recursiveSemanticTypes![recursiveEntryExpressionTypeId!].kind => entryExpressionTypeKind!
-                                    recursiveTypeFlags![recursiveEntryExpressionTypeId!] => entryExpressionTypeFlags!
+                                    frozenRecursiveSemanticTypes[recursiveEntryExpressionTypeId!].kind => entryExpressionTypeKind!
+                                    recursiveTypeFlags[recursiveEntryExpressionTypeId!] => entryExpressionTypeFlags!
                                 }
                                 results! -> push(TypedIrNode {
                                     kind: entryExpressionKind!
@@ -2670,28 +2679,28 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                         (entryCanonicalIndexResult!.kind == 15 and entryCanonicalIndexResult!.typeId < 0 and entryCanonicalIndexResult!.operand0 >= entryExpressionStart) -> if {
                             results![entryCanonicalIndexResult!.operand0] => entryCanonicalIndexedValue
                             entryCanonicalIndexedValue.typeId >= 0 -> if {
-                                recursiveSemanticTypes![entryCanonicalIndexedValue.typeId] => entryCanonicalContainerType
+                                frozenRecursiveSemanticTypes[entryCanonicalIndexedValue.typeId] => entryCanonicalContainerType
                                 -1 => entryCanonicalElementTypeId!
                                 (entryCanonicalContainerType.kind == 2 or entryCanonicalContainerType.kind == 3 or entryCanonicalContainerType.kind == 4) -> if { entryCanonicalContainerType.first => entryCanonicalElementTypeId! }
                                 entryCanonicalContainerType.kind == 5 -> if { entryCanonicalContainerType.second => entryCanonicalElementTypeId! }
                                 entryCanonicalElementTypeId! >= 0 -> if {
-                                    recursiveSemanticTypes![entryCanonicalElementTypeId!] => entryCanonicalElementType
+                                    frozenRecursiveSemanticTypes[entryCanonicalElementTypeId!] => entryCanonicalElementType
                                     entryCanonicalElementTypeId! => entryCanonicalIndexResult!.typeId
                                     entryCanonicalElementType.kind => entryCanonicalIndexResult!.typeKind
-                                    recursiveTypeFlags![entryCanonicalElementTypeId!] => entryCanonicalIndexResult!.typeFlags
+                                    recursiveTypeFlags[entryCanonicalElementTypeId!] => entryCanonicalIndexResult!.typeFlags
                                     entryCanonicalElementType.origin => entryCanonicalIndexResult!.typeOrigin
                                     entryCanonicalElementType.module => entryCanonicalIndexResult!.typeModule
                                     entryCanonicalElementType.symbol => entryCanonicalIndexResult!.typeSymbol
                                     (entryCanonicalElementType.kind >= 2 and entryCanonicalElementType.kind <= 6) -> if { 10 + entryCanonicalElementType.kind => entryCanonicalIndexResult!.typeOrigin }
                                     (entryCanonicalElementType.kind == 2 or entryCanonicalElementType.kind == 3 or entryCanonicalElementType.kind == 4 or entryCanonicalElementType.kind == 6) -> if {
                                         entryCanonicalElementType.first >= 0 -> if {
-                                            recursiveSemanticTypes![entryCanonicalElementType.first].module => entryCanonicalIndexResult!.typeModule
-                                            recursiveSemanticTypes![entryCanonicalElementType.first].symbol => entryCanonicalIndexResult!.typeSymbol
+                                            frozenRecursiveSemanticTypes[entryCanonicalElementType.first].module => entryCanonicalIndexResult!.typeModule
+                                            frozenRecursiveSemanticTypes[entryCanonicalElementType.first].symbol => entryCanonicalIndexResult!.typeSymbol
                                         }
                                     }
                                     entryCanonicalElementType.kind == 5 -> if {
-                                        entryCanonicalElementType.first >= 0 -> if { recursiveSemanticTypes![entryCanonicalElementType.first].symbol => entryCanonicalIndexResult!.typeModule }
-                                        entryCanonicalElementType.second >= 0 -> if { recursiveSemanticTypes![entryCanonicalElementType.second].symbol => entryCanonicalIndexResult!.typeSymbol }
+                                        entryCanonicalElementType.first >= 0 -> if { frozenRecursiveSemanticTypes[entryCanonicalElementType.first].symbol => entryCanonicalIndexResult!.typeModule }
+                                        entryCanonicalElementType.second >= 0 -> if { frozenRecursiveSemanticTypes[entryCanonicalElementType.second].symbol => entryCanonicalIndexResult!.typeSymbol }
                                     }
                                     entryCanonicalIndexResult! => results![entryCanonicalIndexResultIr!]
                                 }
@@ -2787,7 +2796,7 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                                         entryMatchCandidateDistance! + 1 => entryMatchCandidateDistance!
                                     }
                                 }
-                                (entryMatchCandidateBelongs! and entryMatchCandidateAst.start < prepared.package.nodes[sourceRange.astStart + entryControl!.astNode].start and (entryMatchCandidate.typeKind == 7 or (entryMatchCandidate.typeId >= 0 and recursiveSemanticTypes![entryMatchCandidate.typeId].kind == 7) or (entryMatchCandidate.typeKind == 1 and (entryMatchCandidate.typeOrigin == 0 or entryMatchCandidate.typeOrigin == 2)))) -> if {
+                                (entryMatchCandidateBelongs! and entryMatchCandidateAst.start < prepared.package.nodes[sourceRange.astStart + entryControl!.astNode].start and (entryMatchCandidate.typeKind == 7 or (entryMatchCandidate.typeId >= 0 and frozenRecursiveSemanticTypes[entryMatchCandidate.typeId].kind == 7) or (entryMatchCandidate.typeKind == 1 and (entryMatchCandidate.typeOrigin == 0 or entryMatchCandidate.typeOrigin == 2)))) -> if {
                                     (entryMatchSubject! < 0 or entryMatchCandidateDistance! < entryMatchSubjectDistance! or (entryMatchCandidateDistance! == entryMatchSubjectDistance! and entryMatchCandidateAst.start > entryMatchSubjectStart!)) -> if {
                                         entryMatchSearch! => entryMatchSubject!
                                         entryMatchCandidateAst.start => entryMatchSubjectStart!
@@ -2818,7 +2827,7 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                                         entryCandidateConditionDistance! + 1 => entryCandidateConditionDistance!
                                     }
                                 }
-                                (entryConditionBelongsToFlow! and ((entryConditionCandidate.typeOrigin == 1 and entryConditionCandidate.typeSymbol == 23) or (entryConditionCandidate.typeId >= 0 and recursiveSemanticTypes![entryConditionCandidate.typeId].origin == 1 and recursiveSemanticTypes![entryConditionCandidate.typeId].symbol == 23)) and prepared.package.nodes[sourceRange.astStart + entryConditionCandidate.astNode].start < prepared.package.nodes[sourceRange.astStart + entryControl!.astNode].start) -> if {
+                                (entryConditionBelongsToFlow! and ((entryConditionCandidate.typeOrigin == 1 and entryConditionCandidate.typeSymbol == 23) or (entryConditionCandidate.typeId >= 0 and frozenRecursiveSemanticTypes[entryConditionCandidate.typeId].origin == 1 and frozenRecursiveSemanticTypes[entryConditionCandidate.typeId].symbol == 23)) and prepared.package.nodes[sourceRange.astStart + entryConditionCandidate.astNode].start < prepared.package.nodes[sourceRange.astStart + entryControl!.astNode].start) -> if {
                                     prepared.package.nodes[sourceRange.astStart + entryConditionCandidate.astNode].start => entryCandidateStart
                                     (entryConditionIr! < 0 or entryCandidateConditionDistance! < entryConditionDistance! or (entryCandidateConditionDistance! == entryConditionDistance! and entryCandidateStart > entryConditionStart!)) -> if {
                                         entryConditionSearch! => entryConditionIr!
@@ -2828,7 +2837,7 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                                 }
                                 entryConditionSearch! + 1 => entryConditionSearch!
                             }
-                            (entryConditionIr! < 0 and entryControl!.parent >= entryExpressionStart and results![entryControl!.parent].kind != 19 and ((results![entryControl!.parent].typeOrigin == 1 and results![entryControl!.parent].typeSymbol == 23) or (results![entryControl!.parent].typeId >= 0 and recursiveSemanticTypes![results![entryControl!.parent].typeId].origin == 1 and recursiveSemanticTypes![results![entryControl!.parent].typeId].symbol == 23))) -> if {
+                            (entryConditionIr! < 0 and entryControl!.parent >= entryExpressionStart and results![entryControl!.parent].kind != 19 and ((results![entryControl!.parent].typeOrigin == 1 and results![entryControl!.parent].typeSymbol == 23) or (results![entryControl!.parent].typeId >= 0 and frozenRecursiveSemanticTypes[results![entryControl!.parent].typeId].origin == 1 and frozenRecursiveSemanticTypes[results![entryControl!.parent].typeId].symbol == 23))) -> if {
                                 entryControl!.parent => entryEnclosingConditionIr!
                                 results![entryEnclosingConditionIr!].parent => entryControl!.parent
                                 entryEnclosingConditionIr! => entryConditionIr!
@@ -3076,7 +3085,7 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                         entryAggregateIrIndex! + 1 => entryAggregateIrIndex!
                     }
                     results![entryIr!] => entryNode!
-                    entryAstToIr![inferred![entryResultTypeIndex!].astNode] => entryResultIr!
+                    entryAstToIr![inferred[entryResultTypeIndex!].astNode] => entryResultIr!
                     entryResultIr! < 0 -> if {
                         1000000 => entryResultOperandDistance!
                         entryExpressionStart => entryResultOperandSearch!
@@ -3085,7 +3094,7 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                             1 => entryResultCandidateDistance!
                             false => entryResultCandidateBelongs!
                             (entryResultOperandAncestor! >= 0 and not entryResultCandidateBelongs!) -> while {
-                                entryResultOperandAncestor! == inferred![entryResultTypeIndex!].astNode -> if { true => entryResultCandidateBelongs! } else {
+                                entryResultOperandAncestor! == inferred[entryResultTypeIndex!].astNode -> if { true => entryResultCandidateBelongs! } else {
                                     prepared.package.nodes[sourceRange.astStart + entryResultOperandAncestor!].parent => entryResultOperandAncestor!
                                     entryResultCandidateDistance! + 1 => entryResultCandidateDistance!
                                 }
@@ -3137,7 +3146,7 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
         classificationFieldCopyIndex154! + 1 => classificationFieldCopyIndex154!
     }
     typeIds.TypeClassificationRequest { types: classificationTypes!, fields: classificationFields! } => classificationRequest!
-    classificationRequest! -> typeIds.classify => recursiveTypeFlags!
+    classificationRequest! -> typeIds.classify => recursiveTypeFlags
     [typeIds.TypeReference; ~] => recursiveReferences!
     0 => recursiveReferenceCopyIndex!
     recursiveReferenceCopyIndex! < (recursiveTypes.references -> len) -> while {
@@ -3169,7 +3178,7 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
         }
         recursiveTypeMapIndex! + 1 => recursiveTypeMapIndex!
     }
-    recursiveTypes -> legacyTypes => inferred!
+    recursiveTypes -> legacyTypes => inferred
     [Int; ~] => inferredIndexByAst!
     0 => inferredIndexSeed!
     inferredIndexSeed! < (prepared.package.nodes -> len) -> while {
@@ -3177,8 +3186,8 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
         inferredIndexSeed! + 1 => inferredIndexSeed!
     }
     0 => inferredMapIndex!
-    inferredMapIndex! < (inferred! -> len) -> while {
-        inferred![inferredMapIndex!] => mappedLegacy
+    inferredMapIndex! < (inferred -> len) -> while {
+        inferred[inferredMapIndex!] => mappedLegacy
         (mappedLegacy.sourceModule >= 0 and mappedLegacy.sourceModule < (prepared.package.ranges -> len)) -> if {
             prepared.package.ranges[mappedLegacy.sourceModule] => mappedLegacyRange
             (mappedLegacy.astNode >= 0 and mappedLegacy.astNode < mappedLegacyRange.astCount) -> if {
@@ -3187,6 +3196,13 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
         }
         inferredMapIndex! + 1 => inferredMapIndex!
     }
+    # Transfer construction-time tables into immutable owners before the
+    # per-function parallel region. This is a zero-copy ownership transition;
+    # workers borrow the frozen values without sharing mutable bindings.
+    recursiveSemanticTypes! -> freezeSemanticTypes => frozenRecursiveSemanticTypes
+    recursiveExpressions! -> freezeExpressionTypes => frozenRecursiveExpressions
+    recursiveTypeByAst! -> freezeInts => frozenRecursiveTypeByAst
+    inferredIndexByAst! -> freezeInts => frozenInferredIndexByAst
     [Int; ~] => sourceIndices!
     0 => sourceIndex!
     sourceIndex! < (prepared.package.sources -> len) -> while {
@@ -3324,8 +3340,8 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                                         recursiveReferences![memberTypeReferenceIndex!] => memberTypeReference
                                         (memberTypeReference.status == 0 and memberTypeReference.sourceModule == memberOwnerSource! and memberTypeReference.typeAst == memberField.typeNode) -> if {
                                             memberTypeReference.typeId => member!.typeId
-                                            recursiveSemanticTypes![memberTypeReference.typeId].kind => member!.typeKind
-                                            recursiveTypeFlags![memberTypeReference.typeId] => member!.typeFlags
+                                            frozenRecursiveSemanticTypes[memberTypeReference.typeId].kind => member!.typeKind
+                                            recursiveTypeFlags[memberTypeReference.typeId] => member!.typeFlags
                                         }
                                         memberTypeReferenceIndex! + 1 => memberTypeReferenceIndex!
                                     }
@@ -3361,16 +3377,16 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
     recursiveIrIndex! < (results! -> len) -> while {
         results![recursiveIrIndex!] => recursiveIr!
         0 => recursiveExpressionIndex!
-        recursiveExpressionIndex! < (recursiveExpressions! -> len) -> while {
-            recursiveExpressions![recursiveExpressionIndex!] => recursiveExpression
+        recursiveExpressionIndex! < (frozenRecursiveExpressions -> len) -> while {
+            frozenRecursiveExpressions[recursiveExpressionIndex!] => recursiveExpression
             (recursiveExpression.status == 0 and recursiveExpression.sourceModule == recursiveIr!.sourceModule and recursiveExpression.astNode == recursiveIr!.astNode and recursiveIr!.kind != 0 and recursiveIr!.kind != 1 and recursiveIr!.kind != 10 and recursiveIr!.kind != 11) -> if {
                 recursiveExpression.typeId => recursiveIr!.typeId
-                recursiveSemanticTypes![recursiveExpression.typeId] => recursiveExpressionType
+                frozenRecursiveSemanticTypes[recursiveExpression.typeId] => recursiveExpressionType
                 recursiveExpressionType.kind => recursiveIr!.typeKind
                 recursiveExpressionType.origin => recursiveIr!.typeOrigin
                 recursiveExpressionType.module => recursiveIr!.typeModule
                 recursiveExpressionType.symbol => recursiveIr!.typeSymbol
-                recursiveTypeFlags![recursiveExpression.typeId] => recursiveIr!.typeFlags
+                recursiveTypeFlags[recursiveExpression.typeId] => recursiveIr!.typeFlags
             }
             recursiveExpressionIndex! + 1 => recursiveExpressionIndex!
         }
@@ -3421,8 +3437,8 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
     }
     -1 => intrinsicSourceTextTypeId!
     0 => intrinsicSourceTextTypeSearch!
-    intrinsicSourceTextTypeSearch! < (recursiveSemanticTypes! -> len) -> while {
-        recursiveSemanticTypes![intrinsicSourceTextTypeSearch!] => intrinsicSourceTextTypeCandidate
+    intrinsicSourceTextTypeSearch! < (frozenRecursiveSemanticTypes -> len) -> while {
+        frozenRecursiveSemanticTypes[intrinsicSourceTextTypeSearch!] => intrinsicSourceTextTypeCandidate
         (intrinsicSourceTextTypeCandidate.kind == 1 and intrinsicSourceTextTypeCandidate.origin == 1 and intrinsicSourceTextTypeCandidate.symbol == 24) -> if {
             intrinsicSourceTextTypeSearch! => intrinsicSourceTextTypeId!
         }
@@ -3430,8 +3446,8 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
     }
     -1 => intrinsicSourceTextArrayTypeId!
     0 => intrinsicSourceTextArraySearch!
-    intrinsicSourceTextArraySearch! < (recursiveSemanticTypes! -> len) -> while {
-        recursiveSemanticTypes![intrinsicSourceTextArraySearch!] => intrinsicSourceTextArrayCandidate
+    intrinsicSourceTextArraySearch! < (frozenRecursiveSemanticTypes -> len) -> while {
+        frozenRecursiveSemanticTypes[intrinsicSourceTextArraySearch!] => intrinsicSourceTextArrayCandidate
         (intrinsicSourceTextArrayCandidate.kind == 3 and intrinsicSourceTextArrayCandidate.first == intrinsicSourceTextTypeId!) -> if {
             intrinsicSourceTextArraySearch! => intrinsicSourceTextArrayTypeId!
         }
@@ -3719,7 +3735,7 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
         (globalIndexNode!.kind == 15 and globalIndexNode!.operand0 >= 0) -> if {
             results![globalIndexNode!.operand0] => globalIndexContainer
             globalIndexContainer.typeId >= 0 -> if {
-                recursiveSemanticTypes![globalIndexContainer.typeId] => globalContainerType
+                frozenRecursiveSemanticTypes[globalIndexContainer.typeId] => globalContainerType
                 -1 => globalElementTypeId!
                 (globalContainerType.kind == 2 or globalContainerType.kind == 3 or globalContainerType.kind == 4) -> if { globalContainerType.first => globalElementTypeId! }
                 globalContainerType.kind == 5 -> if { globalContainerType.second => globalElementTypeId! }
@@ -3772,14 +3788,14 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
         (canonicalScalar!.typeKind == 1 and canonicalScalar!.typeOrigin == 1 and canonicalScalar!.typeSymbol >= 0 and canonicalScalar!.typeSymbol <= 23) -> if {
             true => canonicalScalarIdMismatch!
             canonicalScalar!.typeId >= 0 -> if {
-                recursiveSemanticTypes![canonicalScalar!.typeId] => canonicalScalarIdType
+                frozenRecursiveSemanticTypes[canonicalScalar!.typeId] => canonicalScalarIdType
                 (canonicalScalarIdType.kind == 1 and canonicalScalarIdType.origin == 1 and canonicalScalarIdType.symbol == canonicalScalar!.typeSymbol) -> if { false => canonicalScalarIdMismatch! }
             }
             canonicalScalarIdMismatch! -> if {
                 -1 => canonicalScalarTypeId!
                 0 => canonicalScalarTypeSearch!
-                canonicalScalarTypeSearch! < (recursiveSemanticTypes! -> len) -> while {
-                    recursiveSemanticTypes![canonicalScalarTypeSearch!] => canonicalScalarTypeCandidate
+                canonicalScalarTypeSearch! < (frozenRecursiveSemanticTypes -> len) -> while {
+                    frozenRecursiveSemanticTypes[canonicalScalarTypeSearch!] => canonicalScalarTypeCandidate
                     (canonicalScalarTypeCandidate.kind == 1 and canonicalScalarTypeCandidate.origin == 1 and canonicalScalarTypeCandidate.symbol == canonicalScalar!.typeSymbol) -> if {
                         canonicalScalarTypeSearch! => canonicalScalarTypeId!
                     }
@@ -3929,8 +3945,8 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
         -1 => fileOwnedType!
         -1 => fileWriterType!
         0 => fileNominalTypeSearch!
-        fileNominalTypeSearch! < (recursiveSemanticTypes! -> len) -> while {
-            recursiveSemanticTypes![fileNominalTypeSearch!] => fileNominalType
+        fileNominalTypeSearch! < (frozenRecursiveSemanticTypes -> len) -> while {
+            frozenRecursiveSemanticTypes[fileNominalTypeSearch!] => fileNominalType
             (fileNominalType.kind == 1 and (fileNominalType.origin == 0 or fileNominalType.origin == 2) and fileNominalType.module == fileModuleSource!) -> if {
                 fileNominalType.symbol == fileOwnedSymbol! -> if { fileNominalTypeSearch! => fileOwnedType! }
                 fileNominalType.symbol == fileWriterSymbol! -> if { fileNominalTypeSearch! => fileWriterType! }
@@ -3940,8 +3956,8 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
         -1 => fileOpenReadResultType!
         -1 => fileOpenWriteResultType!
         0 => fileResultTypeSearch!
-        fileResultTypeSearch! < (recursiveSemanticTypes! -> len) -> while {
-            recursiveSemanticTypes![fileResultTypeSearch!] => fileResultType
+        fileResultTypeSearch! < (frozenRecursiveSemanticTypes -> len) -> while {
+            frozenRecursiveSemanticTypes[fileResultTypeSearch!] => fileResultType
             (fileResultType.kind == 7 and fileResultType.origin == 4 and fileResultType.symbol == 1 and fileResultType.second == 1) -> if {
                 fileResultType.first == fileOwnedType! -> if { fileResultTypeSearch! => fileOpenReadResultType! }
                 fileResultType.first == fileWriterType! -> if { fileResultTypeSearch! => fileOpenWriteResultType! }
@@ -3967,23 +3983,23 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                         recursiveReferences![fileCallReferenceSearch!] => fileCallReference
                         (fileCallReference.sourceModule == fileModuleSource! and fileCallReference.typeAst == fileCallResultAst! and fileCallReference.status == 0) -> if {
                             fileCallReference.typeId => fileCall!.typeId
-                            recursiveSemanticTypes![fileCallReference.typeId] => fileCallType
+                            frozenRecursiveSemanticTypes[fileCallReference.typeId] => fileCallType
                             fileCallType.kind => fileCall!.typeKind
                             fileCallType.origin => fileCall!.typeOrigin
                             fileCallType.module => fileCall!.typeModule
                             fileCallType.symbol => fileCall!.typeSymbol
-                            recursiveTypeFlags![fileCallReference.typeId] => fileCall!.typeFlags
+                            recursiveTypeFlags[fileCallReference.typeId] => fileCall!.typeFlags
                         }
                         fileCallReferenceSearch! + 1 => fileCallReferenceSearch!
                     }
                 }
                 fileCall!.typeId >= 0 -> if {
-                    recursiveSemanticTypes![fileCall!.typeId] => canonicalFileCallType
+                    frozenRecursiveSemanticTypes[fileCall!.typeId] => canonicalFileCallType
                     canonicalFileCallType.kind => fileCall!.typeKind
                     canonicalFileCallType.origin => fileCall!.typeOrigin
                     canonicalFileCallType.module => fileCall!.typeModule
                     canonicalFileCallType.symbol => fileCall!.typeSymbol
-                    recursiveTypeFlags![fileCall!.typeId] => fileCall!.typeFlags
+                    recursiveTypeFlags[fileCall!.typeId] => fileCall!.typeFlags
                 }
                 fileCall! => results![fileCallIndex!]
             }
@@ -4048,15 +4064,15 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                 results![contextualDynamicArray!.operand0] => contextualDynamicArrayElement
                 contextualDynamicArrayElement.typeId >= 0 -> if {
                     0 => contextualDynamicArrayTypeSearch!
-                    contextualDynamicArrayTypeSearch! < (recursiveSemanticTypes! -> len) -> while {
-                        recursiveSemanticTypes![contextualDynamicArrayTypeSearch!] => contextualDynamicArrayType
+                    contextualDynamicArrayTypeSearch! < (frozenRecursiveSemanticTypes -> len) -> while {
+                        frozenRecursiveSemanticTypes[contextualDynamicArrayTypeSearch!] => contextualDynamicArrayType
                         (contextualDynamicArrayType.kind == 3 and contextualDynamicArrayType.first == contextualDynamicArrayElement.typeId) -> if {
                             contextualDynamicArrayTypeSearch! => contextualDynamicArray!.typeId
                             contextualDynamicArrayType.kind => contextualDynamicArray!.typeKind
                             contextualDynamicArrayType.origin => contextualDynamicArray!.typeOrigin
                             contextualDynamicArrayType.module => contextualDynamicArray!.typeModule
                             contextualDynamicArrayType.symbol => contextualDynamicArray!.typeSymbol
-                            recursiveTypeFlags![contextualDynamicArrayTypeSearch!] => contextualDynamicArray!.typeFlags
+                            recursiveTypeFlags[contextualDynamicArrayTypeSearch!] => contextualDynamicArray!.typeFlags
                         }
                         contextualDynamicArrayTypeSearch! + 1 => contextualDynamicArrayTypeSearch!
                     }
@@ -4101,20 +4117,20 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
     canonicalTypeProjectionIndex! < (results! -> len) -> while {
         results![canonicalTypeProjectionIndex!] => canonicalTypeProjection!
         canonicalTypeProjection!.typeId >= 0 -> if {
-            recursiveSemanticTypes![canonicalTypeProjection!.typeId] => canonicalProjectedType
+            frozenRecursiveSemanticTypes[canonicalTypeProjection!.typeId] => canonicalProjectedType
             canonicalProjectedType.kind => canonicalTypeProjection!.typeKind
             canonicalProjectedType.origin => canonicalTypeProjection!.typeOrigin
             canonicalProjectedType.module => canonicalTypeProjection!.typeModule
             canonicalProjectedType.symbol => canonicalTypeProjection!.typeSymbol
-            recursiveTypeFlags![canonicalTypeProjection!.typeId] => canonicalTypeProjection!.typeFlags
+            recursiveTypeFlags[canonicalTypeProjection!.typeId] => canonicalTypeProjection!.typeFlags
             (canonicalProjectedType.kind >= 2 and canonicalProjectedType.kind <= 6) -> if {
                 10 + canonicalProjectedType.kind => canonicalTypeProjection!.typeOrigin
                 canonicalProjectedType.kind == 5 -> if {
-                    recursiveSemanticTypes![canonicalProjectedType.first].symbol => canonicalTypeProjection!.typeModule
-                    recursiveSemanticTypes![canonicalProjectedType.second].symbol => canonicalTypeProjection!.typeSymbol
+                    frozenRecursiveSemanticTypes[canonicalProjectedType.first].symbol => canonicalTypeProjection!.typeModule
+                    frozenRecursiveSemanticTypes[canonicalProjectedType.second].symbol => canonicalTypeProjection!.typeSymbol
                 } else {
-                    recursiveSemanticTypes![canonicalProjectedType.first].module => canonicalTypeProjection!.typeModule
-                    recursiveSemanticTypes![canonicalProjectedType.first].symbol => canonicalTypeProjection!.typeSymbol
+                    frozenRecursiveSemanticTypes[canonicalProjectedType.first].module => canonicalTypeProjection!.typeModule
+                    frozenRecursiveSemanticTypes[canonicalProjectedType.first].symbol => canonicalTypeProjection!.typeSymbol
                 }
             }
             canonicalTypeProjection! => results![canonicalTypeProjectionIndex!]

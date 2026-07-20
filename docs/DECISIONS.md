@@ -8018,6 +8018,56 @@ References:
 - [Mojo lifetimes, origins, and references](https://mojolang.org/docs/manual/values/lifetimes/)
 - [Swift memory safety and overlapping access](https://docs.swift.org/swift-book/documentation/the-swift-programming-language/memorysafety/)
 
+## D213L - Transitive Mutable Parallel Captures Become Production E18
+
+Status: implemented and fixed-point verified
+Date: 2026-07-20
+
+The checked self-host compiler now treats mutable parallel-capture diagnostic
+E18 as fatal before LLVM emission. Capture analysis starts from calls inside a
+`parallel` or `tryParallel` body, resolves their local function targets in the
+canonical typed IR, and walks the local call graph transitively. Name uses in
+each reachable helper resolve back to their stable outer binding. A mutable
+binding is rejected even for a read-only use because its lexical owner still
+permits access to shared mutable storage while workers execute. Recursive call
+graphs use a visited set, and repeated uses produce one diagnostic per binding.
+
+This follows Swift's rule that concurrently executing sendable closures cannot
+capture mutable variables and Rust's structural rule that closure sendability
+is derived from the exact capture modes and captured types. Sollang keeps its
+surface concise: the standard `parallel` roles establish this boundary without
+adding an annotation to every callback. Immutable structurally sendable values
+remain ordinary read-only captures.
+
+The first production Stage2 run rejected six construction-time typed-IR tables
+captured by its own per-function parallelizer. Copying those compiler-sized
+arrays would have weakened the memory objective. The final implementation moves
+each completed mutable builder through a typed freeze helper into an immutable
+owner, a zero-copy ownership transition. Worker callbacks borrow only those
+frozen names, and the old mutable bindings are unavailable.
+
+Examples 497 and 498 lock direct, transitive, immutable, and checked-driver
+behavior with English scenario comments. A dedicated Stage2 fixture proves
+that Stage1 and Stage2 both reject E18 before printing an LLVM target header.
+Release builds have zero warnings and errors. Windows/Linux full suites pass
+**666/666**. Windows Stage2 passes **7/7** with **11,840,360 LLVM bytes**,
+**3,496,608 bitcode bytes**, and a **1,650,176-byte executable**. Linux Stage2
+passes **6/6** with **11,836,939 LLVM bytes**, **3,494,820 bitcode bytes**, and
+a **3,331,320-byte executable**.
+
+The required periodic Stage3 is byte-for-byte equal to Stage2 at **11,840,360
+LLVM bytes**, assembles successfully, and has SHA-256
+`E0B91E9140B90D04F3417926C80C3B2BE38CF5B35EC975D119757B8C75C2BBF9`.
+The cadence resets to **0/10**. Formal progress remains **49 complete, 8
+partial, 3 missing: 53/60 (88.3%)** because E19-E20 production precision still
+keeps the broader ownership/storage gate partial.
+
+References:
+
+- [Swift sendable closure captures](https://docs.swift.org/compiler/documentation/diagnostics/sendable-closure-captures/)
+- [Swift sending closure data-race diagnostics](https://docs.swift.org/compiler/documentation/diagnostics/sending-closure-risks-data-race/)
+- [Rust closure capture precision and `Send`/`Sync`](https://doc.rust-lang.org/reference/types/closure.html)
+
 ## D213K - Reachable Partial Moves Become Production E17
 
 Status: implemented and cross-target Stage2 verified

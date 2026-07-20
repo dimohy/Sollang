@@ -746,6 +746,14 @@ omitted return types are constrained by tail expressions and explicit returns.
 All constraints must agree. Local functions lower to private LLVM functions
 with stable local symbols and explicit capture parameters.
 
+When a `parallel` or `tryParallel` callback calls a local helper, every capture
+reachable through that helper's transitive local call graph is part of the
+callback capture set. A mutable binding is rejected even when the helper only
+reads it, because the submitting scope still names mutable storage that worker
+invocations could share. Immutable structurally sendable values remain legal
+read-only captures. Recursive helper graphs terminate through a compiler
+visited set and one unsafe binding produces one diagnostic per callback.
+
 ## Block Functions
 
 Sollang models executable blocks as values passed to block functions at the
