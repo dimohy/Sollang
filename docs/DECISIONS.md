@@ -9225,3 +9225,17 @@ References:
 - [Mojo lifetimes and origins](https://docs.modular.com/mojo/manual/values/lifetimes)
 - [Swift Dictionary](https://developer.apple.com/documentation/swift/dictionary)
 - [Rust HashMap](https://doc.rust-lang.org/std/collections/struct.HashMap.html)
+
+## D227 - Self-host Dictionary Recursive Type Recovery
+
+The self-host recursive type arena now performs a deferred dictionary pass
+after binding and path inference. This repairs untyped dictionary literals
+whose value is an enum constructor carrying a readonly reference, and then
+propagates the dictionary value type into an indexed access. Example 541
+verifies both the dictionary and index expression type IDs (`1/1`) on the
+self-host path.
+
+This is intentionally a type-recovery checkpoint, not completion of the
+dictionary stored-reference gate: ownership diagnostics and self-host LLVM
+entry-pointer lowering still need to consume the recovered value type. The
+formal roadmap remains 53/60 (88.3%) until that end-to-end behavior is proven.

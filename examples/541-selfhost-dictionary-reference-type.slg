@@ -1,0 +1,28 @@
+import sollang.compiler.semantic.expression_type_ids as expressionTypeIds
+import sollang.compiler.ast as ast
+
+# Verifies self-host recursive type recovery for a dictionary carrying an enum ref.
+main {
+    [
+        """
+        enum IntView { Empty Ref(ref Int) }
+        same value: ref Int -> ref Int { value }
+        main {
+            [10, 20, ~] => owner!
+            IntView.Ref(owner![0] -> same) => payload
+            {1: payload} => stored
+            stored[1] -> println
+        }
+        """,
+        ~
+    ] => sources!
+    sources! -> expressionTypeIds.resolve => resolved!
+    sources![0] -> ast.lower => nodes!
+    0 => dictionaries!
+    0 => indexes!
+    resolved!.expressions -> each expression {
+        nodes![expression.astNode].kind == 38 -> if { dictionaries! + 1 => dictionaries! }
+        nodes![expression.astNode].kind == 41 -> if { indexes! + 1 => indexes! }
+    }
+    "dictionary=$(dictionaries!),index=$(indexes!)" -> println
+}

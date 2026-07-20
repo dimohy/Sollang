@@ -2914,6 +2914,11 @@ covered for dictionary values on both native targets. Dictionary keys remain
 non-addressable, and self-host typed-IR/type recovery plus LLVM entry-pointer
 lowering are still pending; the formal score remains **53/60 (88.3%)**.
 
+D227/example 541 adds deferred recursive type recovery for untyped dictionaries
+whose enum values carry readonly references, including the subsequent
+dictionary index type. Ownership diagnostics and self-host LLVM entry-pointer
+lowering remain open, so this checkpoint does not advance the formal score.
+
 1. Multi-file compilation (implemented by example 52).
 2. Import-driven file discovery with cycle and duplicate-module diagnostics
    (implemented after example 52).

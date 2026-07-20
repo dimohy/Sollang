@@ -1931,6 +1931,32 @@ public inferContext prepared: semanticContext.SemanticSnapshot -> [ExpressionTyp
                             })
                             true => changed!
                         }
+                        # The recursive composite resolver can already know the
+                        # dictionary's key/value identities even when a value
+                        # expression (for example an enum constructor carrying
+                        # a ref) has no shallow ExpressionType of its own.
+                        not dictionaryInferred! -> if {
+                            0 => dictionaryCompositeSearch!
+                            dictionaryCompositeSearch! < (prepared.composite -> len) -> while {
+                                prepared.composite[dictionaryCompositeSearch!] => dictionaryComposite
+                                (dictionaryComposite.sourceModule == sourceIndex! and dictionaryComposite.typeAst == dictionaryIndex! and dictionaryComposite.kind == 5) -> if {
+                                    inferred! -> push(ExpressionType {
+                                        sourceModule: sourceIndex!
+                                        astNode: dictionaryIndex!
+                                        origin: 15
+                                        targetModule: dictionaryComposite.keySymbol
+                                        targetSymbol: dictionaryComposite.valueSymbol
+                                        keyOrigin: dictionaryComposite.keyOrigin
+                                        keyModule: dictionaryComposite.keyModule
+                                        valueOrigin: dictionaryComposite.valueOrigin
+                                        valueModule: dictionaryComposite.valueModule
+                                    })
+                                    true => dictionaryInferred!
+                                    true => changed!
+                                }
+                                dictionaryCompositeSearch! + 1 => dictionaryCompositeSearch!
+                            }
+                        }
                     }
                 }
                 dictionaryIndex! + 1 => dictionaryIndex!

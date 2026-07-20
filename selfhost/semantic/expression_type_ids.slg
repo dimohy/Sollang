@@ -946,6 +946,95 @@ public resolveContext prepared: semanticContext.SemanticSnapshot -> ExpressionTy
                         compositeExpressionIndex => expressionIndexByAst![compositeGlobalAst]
                         true => compositeChanged!
                     }
+                    # Untyped dictionary literals may contain a constructor
+                    # call whose concrete type is attached to a qualified
+                    # child path rather than to the call node itself. The
+                    # generic nearest-candidate pass can therefore miss the
+                    # value side. Resolve each direct dictionary child from
+                    # its nearest descendant candidate as a fallback.
+                    (compositeNode.kind == 38 and expressionIndexByAst![compositeGlobalAst] < 0) -> if {
+                        -1 => directDictionaryFirstChild!
+                        -1 => directDictionarySecondChild!
+                        0 => directDictionaryChildSearch!
+                        directDictionaryChildSearch! < compositeRange.astCount -> while {
+                            prepared.package.nodes[compositeRange.astStart + directDictionaryChildSearch!] => directDictionaryChild
+                            directDictionaryChild.parent == compositeAstIndex! -> if {
+                                directDictionaryFirstChild! < 0 -> if {
+                                    directDictionaryChildSearch! => directDictionaryFirstChild!
+                                } else {
+                                    directDictionarySecondChild! < 0 -> if { directDictionaryChildSearch! => directDictionarySecondChild! }
+                                }
+                            }
+                            directDictionaryChildSearch! + 1 => directDictionaryChildSearch!
+                        }
+                        -1 => directDictionaryFirstType!
+                        -1 => directDictionarySecondType!
+                        directDictionaryFirstChild! >= 0 -> if {
+                            1000000 => directDictionaryDistance!
+                            0 => directDictionaryCandidateSearch!
+                            directDictionaryCandidateSearch! < (expressions! -> len) -> while {
+                                expressions![directDictionaryCandidateSearch!] => directDictionaryCandidate
+                                directDictionaryCandidate.sourceModule == compositeSourceIndex! -> if {
+                                    prepared.package.nodes[compositeRange.astStart + directDictionaryCandidate.astNode].parent => directDictionaryAncestor!
+                                    1 => directDictionaryCandidateDistance!
+                                    false => directDictionaryBelongs!
+                                    (directDictionaryAncestor! >= 0 and not directDictionaryBelongs!) -> while {
+                                        directDictionaryAncestor! == directDictionaryFirstChild! -> if { true => directDictionaryBelongs! } else {
+                                            prepared.package.nodes[compositeRange.astStart + directDictionaryAncestor!].parent => directDictionaryAncestor!
+                                            directDictionaryCandidateDistance! + 1 => directDictionaryCandidateDistance!
+                                        }
+                                    }
+                                    (directDictionaryBelongs! and directDictionaryCandidateDistance! < directDictionaryDistance!) -> if {
+                                        directDictionaryCandidateDistance! => directDictionaryDistance!
+                                        directDictionaryCandidate.typeId => directDictionaryFirstType!
+                                    }
+                                }
+                                directDictionaryCandidateSearch! + 1 => directDictionaryCandidateSearch!
+                            }
+                        }
+                        directDictionarySecondChild! >= 0 -> if {
+                            1000000 => directDictionaryDistance!
+                            0 => directDictionaryCandidateSearch!
+                            directDictionaryCandidateSearch! < (expressions! -> len) -> while {
+                                expressions![directDictionaryCandidateSearch!] => directDictionaryCandidate
+                                directDictionaryCandidate.sourceModule == compositeSourceIndex! -> if {
+                                    prepared.package.nodes[compositeRange.astStart + directDictionaryCandidate.astNode].parent => directDictionaryAncestor!
+                                    1 => directDictionaryCandidateDistance!
+                                    false => directDictionaryBelongs!
+                                    (directDictionaryAncestor! >= 0 and not directDictionaryBelongs!) -> while {
+                                        directDictionaryAncestor! == directDictionarySecondChild! -> if { true => directDictionaryBelongs! } else {
+                                            prepared.package.nodes[compositeRange.astStart + directDictionaryAncestor!].parent => directDictionaryAncestor!
+                                            directDictionaryCandidateDistance! + 1 => directDictionaryCandidateDistance!
+                                        }
+                                    }
+                                    (directDictionaryBelongs! and directDictionaryCandidateDistance! < directDictionaryDistance!) -> if {
+                                        directDictionaryCandidateDistance! => directDictionaryDistance!
+                                        directDictionaryCandidate.typeId => directDictionarySecondType!
+                                    }
+                                }
+                                directDictionaryCandidateSearch! + 1 => directDictionaryCandidateSearch!
+                            }
+                        }
+                        (directDictionaryFirstType! >= 0 and directDictionarySecondType! >= 0) -> if {
+                            types! -> len => directDictionaryType!
+                            types! -> push(typeIds.SemanticType {
+                                kind: 5
+                                origin: -1
+                                module: -1
+                                symbol: -1
+                                first: directDictionaryFirstType!
+                                second: directDictionarySecondType!
+                                length: -1
+                                lengthHash: UInt64(0)
+                                containsParameter: types![directDictionaryFirstType!].containsParameter or types![directDictionarySecondType!].containsParameter
+                                status: 0
+                            })
+                            expressions! -> len => directDictionaryExpressionIndex
+                            expressions! -> push(ExpressionTypeId { sourceModule: compositeSourceIndex!, astNode: compositeAstIndex!, typeId: directDictionaryType!, status: 0 })
+                            directDictionaryExpressionIndex => expressionIndexByAst![compositeGlobalAst]
+                            true => compositeChanged!
+                        }
+                    }
                 }
                 compositeAstIndex! + 1 => compositeAstIndex!
             }
@@ -1797,6 +1886,141 @@ public resolveContext prepared: semanticContext.SemanticSnapshot -> ExpressionTy
             }
             pathSourceIndex! + 1 => pathSourceIndex!
         }
+    }
+
+    # Revisit untyped dictionary literals after binding and indexed-path
+    # inference. A value such as `payload` may only acquire its enum type in
+    # the binding pass, which runs after the initial composite sweep.
+    0 => lateDictionarySourceIndex!
+    lateDictionarySourceIndex! < (prepared.package.ranges -> len) -> while {
+        prepared.package.ranges[lateDictionarySourceIndex!] => lateDictionaryRange
+        0 => lateDictionaryAstIndex!
+        lateDictionaryAstIndex! < lateDictionaryRange.astCount -> while {
+            prepared.package.nodes[lateDictionaryRange.astStart + lateDictionaryAstIndex!] => lateDictionaryNode
+            lateDictionaryRange.astStart + lateDictionaryAstIndex! => lateDictionaryGlobalAst
+            (lateDictionaryNode.kind == 38 and expressionIndexByAst![lateDictionaryGlobalAst] < 0) -> if {
+                -1 => lateDictionaryFirstChild!
+                -1 => lateDictionarySecondChild!
+                0 => lateDictionaryChildSearch!
+                lateDictionaryChildSearch! < lateDictionaryRange.astCount -> while {
+                    prepared.package.nodes[lateDictionaryRange.astStart + lateDictionaryChildSearch!] => lateDictionaryChild
+                    lateDictionaryChild.parent == lateDictionaryAstIndex! -> if {
+                        lateDictionaryFirstChild! < 0 -> if { lateDictionaryChildSearch! => lateDictionaryFirstChild! } else {
+                            lateDictionarySecondChild! < 0 -> if { lateDictionaryChildSearch! => lateDictionarySecondChild! }
+                        }
+                    }
+                    lateDictionaryChildSearch! + 1 => lateDictionaryChildSearch!
+                }
+                -1 => lateDictionaryFirstType!
+                -1 => lateDictionarySecondType!
+                lateDictionaryFirstChild! >= 0 -> if {
+                    1000000 => lateDictionaryDistance!
+                    0 => lateDictionaryCandidateSearch!
+                    lateDictionaryCandidateSearch! < (expressions! -> len) -> while {
+                        expressions![lateDictionaryCandidateSearch!] => lateDictionaryCandidate
+                        lateDictionaryCandidate.sourceModule == lateDictionarySourceIndex! -> if {
+                            prepared.package.nodes[lateDictionaryRange.astStart + lateDictionaryCandidate.astNode].parent => lateDictionaryAncestor!
+                            1 => lateDictionaryCandidateDistance!
+                            false => lateDictionaryBelongs!
+                            (lateDictionaryAncestor! >= 0 and not lateDictionaryBelongs!) -> while {
+                                lateDictionaryAncestor! == lateDictionaryFirstChild! -> if { true => lateDictionaryBelongs! } else {
+                                    prepared.package.nodes[lateDictionaryRange.astStart + lateDictionaryAncestor!].parent => lateDictionaryAncestor!
+                                    lateDictionaryCandidateDistance! + 1 => lateDictionaryCandidateDistance!
+                                }
+                            }
+                            (lateDictionaryBelongs! and lateDictionaryCandidateDistance! < lateDictionaryDistance!) -> if {
+                                lateDictionaryCandidateDistance! => lateDictionaryDistance!
+                                lateDictionaryCandidate.typeId => lateDictionaryFirstType!
+                            }
+                        }
+                        lateDictionaryCandidateSearch! + 1 => lateDictionaryCandidateSearch!
+                    }
+                }
+                lateDictionarySecondChild! >= 0 -> if {
+                    1000000 => lateDictionaryDistance!
+                    0 => lateDictionaryCandidateSearch!
+                    lateDictionaryCandidateSearch! < (expressions! -> len) -> while {
+                        expressions![lateDictionaryCandidateSearch!] => lateDictionaryCandidate
+                        lateDictionaryCandidate.sourceModule == lateDictionarySourceIndex! -> if {
+                            prepared.package.nodes[lateDictionaryRange.astStart + lateDictionaryCandidate.astNode].parent => lateDictionaryAncestor!
+                            1 => lateDictionaryCandidateDistance!
+                            false => lateDictionaryBelongs!
+                            (lateDictionaryAncestor! >= 0 and not lateDictionaryBelongs!) -> while {
+                                lateDictionaryAncestor! == lateDictionarySecondChild! -> if { true => lateDictionaryBelongs! } else {
+                                    prepared.package.nodes[lateDictionaryRange.astStart + lateDictionaryAncestor!].parent => lateDictionaryAncestor!
+                                    lateDictionaryCandidateDistance! + 1 => lateDictionaryCandidateDistance!
+                                }
+                            }
+                            (lateDictionaryBelongs! and lateDictionaryCandidateDistance! < lateDictionaryDistance!) -> if {
+                                lateDictionaryCandidateDistance! => lateDictionaryDistance!
+                                lateDictionaryCandidate.typeId => lateDictionarySecondType!
+                            }
+                        }
+                        lateDictionaryCandidateSearch! + 1 => lateDictionaryCandidateSearch!
+                    }
+                }
+                (lateDictionaryFirstType! >= 0 and lateDictionarySecondType! >= 0) -> if {
+                    types! -> len => lateDictionaryType!
+                    types! -> push(typeIds.SemanticType {
+                        kind: 5
+                        origin: -1
+                        module: -1
+                        symbol: -1
+                        first: lateDictionaryFirstType!
+                        second: lateDictionarySecondType!
+                        length: -1
+                        lengthHash: UInt64(0)
+                        containsParameter: types![lateDictionaryFirstType!].containsParameter or types![lateDictionarySecondType!].containsParameter
+                        status: 0
+                    })
+                    expressions! -> len => lateDictionaryExpressionIndex
+                    expressions! -> push(ExpressionTypeId { sourceModule: lateDictionarySourceIndex!, astNode: lateDictionaryAstIndex!, typeId: lateDictionaryType!, status: 0 })
+                    lateDictionaryExpressionIndex => expressionIndexByAst![lateDictionaryGlobalAst]
+                }
+            }
+            lateDictionaryAstIndex! + 1 => lateDictionaryAstIndex!
+        }
+    lateDictionarySourceIndex! + 1 => lateDictionarySourceIndex!
+    }
+
+    # The late dictionary type must also feed an index expression in the same
+    # pass; the normal path sweep has already run by this point.
+    0 => lateDictionaryIndexSource!
+    lateDictionaryIndexSource! < (prepared.package.ranges -> len) -> while {
+        prepared.package.ranges[lateDictionaryIndexSource!] => lateDictionaryIndexRange
+        0 => lateDictionaryIndexAst!
+        lateDictionaryIndexAst! < lateDictionaryIndexRange.astCount -> while {
+            prepared.package.nodes[lateDictionaryIndexRange.astStart + lateDictionaryIndexAst!] => lateDictionaryIndexNode
+            lateDictionaryIndexNode.kind == 41 -> if {
+                lateDictionaryIndexRange.astStart + lateDictionaryIndexAst! => lateDictionaryIndexGlobal!
+                expressionIndexByAst![lateDictionaryIndexGlobal!] < 0 -> if {
+                    -1 => lateDictionaryBaseType!
+                    0 => lateDictionaryBaseSearch!
+                    lateDictionaryBaseSearch! < (expressions! -> len) -> while {
+                        expressions![lateDictionaryBaseSearch!] => lateDictionaryBaseCandidate
+                        lateDictionaryBaseCandidate.sourceModule == lateDictionaryIndexSource! -> if {
+                            prepared.package.nodes[lateDictionaryIndexRange.astStart + lateDictionaryBaseCandidate.astNode].parent => lateDictionaryBaseAncestor!
+                            false => lateDictionaryBaseBelongs!
+                            (lateDictionaryBaseAncestor! >= 0 and not lateDictionaryBaseBelongs!) -> while {
+                                lateDictionaryBaseAncestor! == lateDictionaryIndexAst! -> if { true => lateDictionaryBaseBelongs! } else {
+                                    prepared.package.nodes[lateDictionaryIndexRange.astStart + lateDictionaryBaseAncestor!].parent => lateDictionaryBaseAncestor!
+                                }
+                            }
+                            lateDictionaryBaseBelongs! -> if { lateDictionaryBaseCandidate.typeId => lateDictionaryBaseType! }
+                        }
+                        lateDictionaryBaseSearch! + 1 => lateDictionaryBaseSearch!
+                    }
+                    (lateDictionaryBaseType! >= 0 and lateDictionaryBaseType! < (types! -> len) and types![lateDictionaryBaseType!].kind == 5) -> if {
+                        types![lateDictionaryBaseType!].second => lateDictionaryElementType!
+                        expressions! -> len => lateDictionaryIndexExpression!
+                        expressions! -> push(ExpressionTypeId { sourceModule: lateDictionaryIndexSource!, astNode: lateDictionaryIndexAst!, typeId: lateDictionaryElementType!, status: 0 })
+                        lateDictionaryIndexExpression! => expressionIndexByAst![lateDictionaryIndexGlobal!]
+                    }
+                }
+            }
+            lateDictionaryIndexAst! + 1 => lateDictionaryIndexAst!
+        }
+        lateDictionaryIndexSource! + 1 => lateDictionaryIndexSource!
     }
 
     # Generic specialization and literal inference can append semantic types
