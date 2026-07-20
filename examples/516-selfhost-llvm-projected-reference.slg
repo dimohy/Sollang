@@ -1,0 +1,39 @@
+import sollang.compiler.llvm.text as llvm
+
+# Verifies nested projected ref GEPs and a disjoint mutable-field update.
+main {
+    [
+        """
+        struct Inner {
+            first: Int
+            second: Int
+        }
+
+        struct Outer {
+            inner: Inner
+            tail: Int
+        }
+
+        same value: ref Int -> ref Int {
+            value
+        }
+
+        read value: ref Int -> Int {
+            value
+        }
+
+        main {
+            Outer {
+                inner: Inner { first: 11, second: 21 }
+                tail: 31
+            } => outer!
+            outer!.inner.first -> same => borrowed
+            32 => outer!.tail
+            borrowed -> read => observed
+            "$(observed)" -> println
+        }
+        """,
+        ~
+    ] => sources!
+    sources! -> llvm.emitLinuxChecked => diagnosticCount
+}

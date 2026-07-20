@@ -1188,7 +1188,9 @@ emitCore context: EmitContext -> Unit uses Console {
                     referenceRootBinding >= 0 -> if {
                         context.ir[referenceRootBinding].flags == 1 -> if { true => referenceUsesMutableSlot! }
                     }
-                    not referenceUsesMutableSlot! -> if {
+                    referenceUsesMutableSlot! -> if {
+                        referenceArgumentIndex -> emitMutableReferenceMemberPlace(referenceRootBinding, callIndex, ordinal) => emittedReferenceProjectionDepth
+                    } else {
                     "  %callref" -> print
                     callIndex -> writeDecimal
                     "_arg" -> print
@@ -1539,6 +1541,120 @@ emitCore context: EmitContext -> Unit uses Console {
             }
         }
     }
+    referencePlaceProjectionDepth placeIndex: Int -> Int {
+        placeIndex => projected!
+        0 => depth!
+        (projected! >= 0 and (context.ir[projected!].kind == 13 or context.ir[projected!].kind == 15)) -> while {
+            depth! + 1 => depth!
+            context.ir[projected!].operand0 => projected!
+        }
+        depth!
+    }
+    referencePlaceProjectionAt placeIndex: Int, ordinal: Int -> Int {
+        placeIndex -> referencePlaceProjectionDepth => depth
+        placeIndex => projected!
+        depth - 1 => currentOrdinal!
+        (projected! >= 0 and currentOrdinal! > ordinal) -> while {
+            context.ir[projected!].operand0 => projected!
+            currentOrdinal! - 1 => currentOrdinal!
+        }
+        projected!
+    }
+    referenceMemberPathDepth placeIndex: Int -> Int {
+        context.ir[placeIndex] => memberPlace
+        0 => depth!
+        memberPlace.kind == 13 -> if {
+            memberPlace.operand0 => memberBaseIndex!
+            (memberBaseIndex! >= 0 and context.ir[memberBaseIndex!].kind == 13) -> while {
+                context.ir[memberBaseIndex!].operand0 => memberBaseIndex!
+            }
+            memberPlace -> sourceNode => memberPlaceAst
+            context.ir[memberBaseIndex!] -> sourceNode => memberBaseAst
+            memberBaseAst.start + memberBaseAst.length => memberBaseEnd
+            memberPlaceAst.firstToken => memberTokenIndex!
+            memberTokenIndex! < memberPlaceAst.firstToken + memberPlaceAst.tokenCount -> while {
+                context.tokens[context.ranges[memberPlace.sourceModule].tokenStart + memberTokenIndex!] => memberToken
+                (memberToken.span.start >= memberBaseEnd and memberToken.kind == grammar.tokenIdIdentifier) -> if {
+                    depth! + 1 => depth!
+                }
+                memberTokenIndex! + 1 => memberTokenIndex!
+            }
+        }
+        depth!
+    }
+    emitMutableReferenceMemberPlace placeIndex: Int, rootBinding: Int, callIndex: Int, ordinal: Int -> Int uses Console {
+        context.ir[placeIndex] => memberPlace
+        placeIndex -> referenceMemberPathDepth => memberDepth
+        memberDepth == 0 -> if { 0 } else {
+            memberPlace.operand0 => memberBaseIndex!
+            (memberBaseIndex! >= 0 and context.ir[memberBaseIndex!].kind == 13) -> while {
+                context.ir[memberBaseIndex!].operand0 => memberBaseIndex!
+            }
+            memberPlace -> sourceNode => memberPlaceAst
+            context.ir[memberBaseIndex!] -> sourceNode => memberBaseAst
+            memberBaseAst.start + memberBaseAst.length => memberBaseEnd
+            context.ir[rootBinding].typeId => memberOwnerType!
+            0 => memberProjectionOrdinal!
+            memberPlaceAst.firstToken => memberTokenIndex!
+            memberTokenIndex! < memberPlaceAst.firstToken + memberPlaceAst.tokenCount -> while {
+                context.tokens[context.ranges[memberPlace.sourceModule].tokenStart + memberTokenIndex!] => memberToken
+                (memberToken.span.start >= memberBaseEnd and memberToken.kind == grammar.tokenIdIdentifier) -> if {
+                    -1 => memberFieldOrdinal!
+                    -1 => memberFieldType!
+                    0 => memberFieldSearch!
+                    memberFieldSearch! < (context.fields -> len) -> while {
+                        context.fields[memberFieldSearch!] => memberField
+                        (memberField.status == 0 and memberField.ownerType == memberOwnerType!) -> if {
+                            context.ranges[memberField.sourceModule] => memberFieldRange
+                            context.symbols[memberFieldRange.symbolStart + memberField.fieldSymbol] => memberFieldSymbol
+                            context.tokens[memberFieldRange.tokenStart + memberFieldSymbol.nameToken] => memberFieldNameToken
+                            memberToken.span.length == memberFieldNameToken.span.length => memberFieldMatches!
+                            UIntSize(0) => memberFieldByte!
+                            (memberFieldMatches! and memberFieldByte! < memberToken.span.length) -> while {
+                                (context.sources[memberPlace.sourceModule] -> byte(memberToken.span.start + memberFieldByte!)) != (context.sources[memberField.sourceModule] -> byte(memberFieldNameToken.span.start + memberFieldByte!)) -> if {
+                                    false => memberFieldMatches!
+                                }
+                                memberFieldByte! + UIntSize(1) => memberFieldByte!
+                            }
+                            memberFieldMatches! -> if {
+                                memberField.ordinal => memberFieldOrdinal!
+                                memberField.fieldType => memberFieldType!
+                            }
+                        }
+                        memberFieldSearch! + 1 => memberFieldSearch!
+                    }
+                    memberFieldOrdinal! >= 0 -> if {
+                        "  %callref" -> print
+                        callIndex -> writeDecimal
+                        "_arg" -> print
+                        ordinal -> writeDecimal
+                        "_place" -> print
+                        memberProjectionOrdinal! -> writeDecimal
+                        " = getelementptr inbounds " -> print
+                        memberOwnerType! -> writeSemanticTypeId
+                        ", ptr " -> print
+                        memberProjectionOrdinal! == 0 -> if {
+                            rootBinding -> mutableBindingRoot => referenceMutableRoot
+                            "%slot$(referenceMutableRoot)" -> print
+                        } else {
+                            "%callref" -> print
+                            callIndex -> writeDecimal
+                            "_arg" -> print
+                            ordinal -> writeDecimal
+                            "_place" -> print
+                            memberProjectionOrdinal! - 1 -> writeDecimal
+                        }
+                        ", i32 0, i32 " -> print
+                        memberFieldOrdinal! -> writeDecimalLine
+                        memberFieldType! => memberOwnerType!
+                        memberProjectionOrdinal! + 1 => memberProjectionOrdinal!
+                    }
+                }
+                memberTokenIndex! + 1 => memberTokenIndex!
+            }
+            memberProjectionOrdinal!
+        }
+    }
     additionalParameterOrdinal functionIndex: Int, symbol: Int -> Int {
         context.ir[functionIndex].nextOperand -> findAdditionalParameterOrdinal(symbol, 1)
     }
@@ -1582,7 +1698,17 @@ emitCore context: EmitContext -> Unit uses Console {
             }
             referenceValueUsesMutableSlot! -> if {
                 referenceValueRoot -> mutableBindingRoot => referenceMutableRoot
-                "ptr %slot$(referenceMutableRoot)" -> print
+                referenceValueIndex -> referenceMemberPathDepth => referenceValueProjectionDepth
+                referenceValueProjectionDepth > 0 -> if {
+                    "ptr %callref" -> print
+                    callIndex -> writeDecimal
+                    "_arg" -> print
+                    ordinal -> writeDecimal
+                    "_place" -> print
+                    referenceValueProjectionDepth - 1 -> writeDecimal
+                } else {
+                    "ptr %slot$(referenceMutableRoot)" -> print
+                }
             } else {
                 "ptr %callref" -> print
                 callIndex -> writeDecimal

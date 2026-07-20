@@ -1,0 +1,39 @@
+import sollang.compiler.llvm.text as llvm
+
+# Verifies self-host E23 for a live nested projected readonly reference.
+main {
+    [
+        """
+        struct Inner {
+            first: Int
+            second: Int
+        }
+
+        struct Outer {
+            inner: Inner
+            tail: Int
+        }
+
+        same value: ref Int -> ref Int {
+            value
+        }
+
+        read value: ref Int -> Int {
+            value
+        }
+
+        main {
+            Outer {
+                inner: Inner { first: 11, second: 21 }
+                tail: 31
+            } => outer!
+            outer!.inner.first -> same => borrowed
+            Inner { first: 12, second: 22 } => outer!.inner
+            borrowed -> read -> println
+        }
+        """,
+        ~
+    ] => sources!
+    sources! -> llvm.emitLinuxChecked => diagnosticCount
+    "blocked=$diagnosticCount" -> println
+}

@@ -2657,7 +2657,8 @@ This does not yet close the ownership/storage gate.
 - [ ] complete C# origin/liveness conflict analysis
 - [x] C# mutable-owner root origins with last-use mutation conflicts
 - [x] C# inferred return-parameter origins and branch-selected origin unions
-- [ ] stored references and aggregate/index projections
+- [x] C# nested stored-field reference places and disjoint-field mutation precision
+- [ ] stored references and indexed projections
 - [x] self-host recursive type arena, typed-IR field projection, pointer ABI,
   projected address return, and transparent return load
 - [x] self-host caller-side address formation for stable immutable bindings and
@@ -2665,6 +2666,7 @@ This does not yet close the ownership/storage gate.
 - [ ] complete self-host origin/liveness conflict analysis
 - [x] self-host mutable-owner slots and first production E23 liveness conflict
 - [x] self-host return-parameter origin unions and additional `ref` parameter ABI
+- [x] self-host nested stored-field reference ABI and E23 overlap precision
 - [x] cross-target regression and Stage2 verification of the C# vertical slice
 
 Formal progress stays at **49 complete, 8 partial, 3 missing: 53/60 (88.3%)**
@@ -2757,6 +2759,25 @@ Linux Stage2 passes **6/6** at **12,017,757 LLVM bytes**. Formal progress remain
 projected-place precision, owner move/rebind/drop conflicts, branch-local loan
 liveness, and stored references remain open. The periodic Stage3 cadence is
 **6/10**, so Stage3 is not due.
+
+D219 represents readonly-reference origins as a root plus a field-projection
+path. Distinct stored fields are disjoint, while equal, prefix-related, and
+whole-owner paths overlap. The C# backend now forms nested member addresses;
+the self-host backend reconstructs the source-backed member chain, emits each
+GEP, and passes the deepest pointer. E23 therefore permits mutation of
+`outer.tail` while `outer.inner.first` is live but rejects replacement of
+`outer.inner` before the reference's final use.
+
+Examples 515-516 and the projected-place diagnostic cover C# execution,
+self-host analysis, native LLVM validation, and prefix-conflict rejection. The
+Stage2 fixture combines projected fields with the D218 origin union. Release
+builds have zero warnings and errors; Windows/Linux full suites pass **691/691**.
+Windows Stage2 passes **7/7** at **12,072,227 LLVM bytes**, and Linux Stage2
+passes **6/6** at **12,068,806 LLVM bytes**. Indexed reference projections,
+owner move/rebind/drop conflicts, branch-local loan liveness, and references
+stored in user aggregates remain open, so formal progress remains **49
+complete, 8 partial, 3 missing: 53/60 (88.3%)**. Stage3 cadence advances to
+**7/10**, so Stage3 is not due.
 
 1. Multi-file compilation (implemented by example 52).
 2. Import-driven file discovery with cycle and duplicate-module diagnostics

@@ -8861,3 +8861,48 @@ References:
 - [Mojo lifetimes, origins, and references](https://docs.modular.com/mojo/manual/values/lifetimes)
 - [Polonius relation rules](https://rust-lang.github.io/polonius/rules/relations.html)
 - [Swift memory safety](https://docs.swift.org/swift-book/documentation/the-swift-programming-language/memorysafety/)
+
+## D219 - Projected Readonly-Reference Places
+
+Status: implemented nested stored-field vertical and cross-target Stage2 verified
+Date: 2026-07-21
+
+A readonly-reference origin is now an internal place consisting of a root
+binding plus its field-projection path. Equal places, a whole owner and any
+descendant, and prefix-related paths overlap. Different stored fields are
+provably disjoint, so a loan of `outer.inner.first` does not prevent mutation
+of `outer.tail`; replacing `outer.inner` still conflicts while the loan is
+live. This adds no lifetime or place-path punctuation to Sollang source.
+
+The C# compiler forms reference arguments from addressable name and nested
+member places, emits the corresponding recursive `getelementptr` chain, and
+uses the existing projected origin in last-use conflict checks. The self-host
+LLVM backend reconstructs the nested member path from source-backed typed IR,
+passes the deepest projected pointer to `ref T`, and applies the same E23
+overlap rule before LLVM emission. Constant and dynamic array-index projection
+precision is intentionally not claimed by this checkpoint; dynamic indices
+remain conservative.
+
+Example 515 proves the C# execution path. The projected-place diagnostic proves
+that replacing a live borrowed prefix is rejected. Examples 516 prove direct
+self-host E23 classification plus native LLVM assembly, link, and execution.
+The Stage2 E23 fixture combines the D218 branch-selected origin union with the
+D219 nested field place. Release builds have zero warnings and errors; Windows
+and Linux full suites pass 691/691. Windows Stage2 passes 7/7 at 12,072,227
+LLVM bytes, and Linux Stage2 passes 6/6 at 12,068,806 LLVM bytes. Formal
+progress remains 53/60 (88.3%) because indexed reference places, owner
+move/rebind/drop conflicts, branch-local loan liveness, and references stored
+in user aggregates remain open. Stage3 cadence advances to 7/10, so the
+periodic Stage3 run is not due.
+
+The design follows Rust's knowledge of disjoint struct fields and its
+projection-based capture paths, Swift's stored-property overlap rule, Mojo's
+derived origins, and Polonius's live-loan invalidation model.
+
+References:
+
+- [Rust borrow splitting](https://doc.rust-lang.org/nomicon/borrow-splitting.html)
+- [Rust closure capture place projections](https://doc.rust-lang.org/stable/reference/types/closure.html)
+- [Swift memory safety](https://docs.swift.org/swift-book/documentation/the-swift-programming-language/memorysafety/)
+- [Mojo lifetimes, origins, and references](https://docs.modular.com/mojo/manual/values/lifetimes)
+- [Polonius loan rules](https://rust-lang.github.io/polonius/rules/loans.html)

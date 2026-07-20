@@ -1,0 +1,34 @@
+# Verifies nested ref places and disjoint stored-field mutation before last use.
+struct Inner {
+    first: Int
+    second: Int
+}
+
+struct Outer {
+    inner: Inner
+    tail: Int
+}
+
+same value: ref Int -> ref Int {
+    value
+}
+
+read value: ref Int -> Int {
+    value
+}
+
+main {
+    Outer {
+        inner: Inner { first: 11, second: 21 }
+        tail: 31
+    } => outer!
+    outer!.inner.first -> same => borrowed
+
+    # The tail field is disjoint from the borrowed inner.first place.
+    32 => outer!.tail
+    borrowed -> read => observed
+
+    # The projected loan ends above, so its owner prefix may change afterward.
+    Inner { first: 12, second: 22 } => outer!.inner
+    "observed=$observed" -> println
+}

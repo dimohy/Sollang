@@ -203,6 +203,45 @@ public analyzeLoweredContext prepared: semanticContext.SemanticSnapshot, typed: 
         }
         same!
     }
+    referencePlaceOverlapsMemberAssignment placeIr: Int, assignmentIr: Int -> Bool {
+        placeIr -> placeProjectionDepth => depth
+        true => overlap!
+        depth > 0 -> if {
+            placeIr -> placeProjectionAt(0) => firstProjectionIr
+            typed[firstProjectionIr] => firstProjection
+            firstProjection.kind == 13 -> if {
+                prepared.package.ranges[firstProjection.sourceModule] => projectionRange
+                prepared.package.nodes[projectionRange.astStart + firstProjection.astNode] => projectionAst
+                typed[firstProjection.operand0] => projectionBase
+                prepared.package.nodes[projectionRange.astStart + projectionBase.astNode] => projectionBaseAst
+                projectionBaseAst.start + projectionBaseAst.length => projectionBaseEnd
+                -1 => projectionFieldToken!
+                projectionAst.firstToken => projectionTokenIndex!
+                (projectionFieldToken! < 0 and projectionTokenIndex! < projectionAst.firstToken + projectionAst.tokenCount) -> while {
+                    prepared.package.tokens[projectionRange.tokenStart + projectionTokenIndex!] => projectionToken
+                    (projectionToken.span.start >= projectionBaseEnd and projectionToken.kind == grammar.tokenIdIdentifier) -> if {
+                        projectionTokenIndex! => projectionFieldToken!
+                    }
+                    projectionTokenIndex! + 1 => projectionTokenIndex!
+                }
+                prepared.package.ranges[typed[assignmentIr].sourceModule] => assignmentRange
+                prepared.package.nodes[assignmentRange.astStart + typed[assignmentIr].astNode] => assignmentAst
+                (projectionFieldToken! >= 0 and assignmentAst.secondaryToken >= 0) -> if {
+                    prepared.package.tokens[projectionRange.tokenStart + projectionFieldToken!] => projectionField
+                    prepared.package.tokens[assignmentRange.tokenStart + assignmentAst.secondaryToken] => assignmentField
+                    projectionField.span.length == assignmentField.span.length => overlap!
+                    UIntSize(0) => fieldByte!
+                    (overlap! and fieldByte! < projectionField.span.length) -> while {
+                        (prepared.package.sources[firstProjection.sourceModule] -> byte(projectionField.span.start + fieldByte!)) != (prepared.package.sources[typed[assignmentIr].sourceModule] -> byte(assignmentField.span.start + fieldByte!)) -> if {
+                            false => overlap!
+                        }
+                        fieldByte! + UIntSize(1) => fieldByte!
+                    }
+                }
+            }
+        }
+        overlap!
+    }
     placesOverlap leftPlaceIr: Int, rightPlaceIr: Int -> Bool {
         leftPlaceIr -> placeProjectionDepth => leftDepth
         rightPlaceIr -> placeProjectionDepth => rightDepth
@@ -599,7 +638,7 @@ public analyzeLoweredContext prepared: semanticContext.SemanticSnapshot, typed: 
                             }
                             referenceArgumentIr! -> placeRootBinding => referenceOwnerBinding
                             false => mutatesReferenceOwner!
-                            (referenceOwnerBinding >= 0 and referenceMutation.kind == 25 and referenceMutation.sourceModule == typed[referenceOwnerBinding].sourceModule and referenceMutation.symbol == typed[referenceOwnerBinding].symbol) -> if {
+                            (referenceOwnerBinding >= 0 and referenceMutation.kind == 25 and referenceMutation.sourceModule == typed[referenceOwnerBinding].sourceModule and referenceMutation.symbol == typed[referenceOwnerBinding].symbol and (referenceArgumentIr! -> referencePlaceOverlapsMemberAssignment(referenceMutationIndex!))) -> if {
                                 true => mutatesReferenceOwner!
                             }
                             (mutatesReferenceOwner! and referenceBindingIndex! < referenceMutationIndex! and (referenceBindingIndex! -> borrowedBindingUsedAfterSite(referenceMutationIndex!))) -> if {

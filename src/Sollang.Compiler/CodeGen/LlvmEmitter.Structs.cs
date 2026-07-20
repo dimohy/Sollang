@@ -250,10 +250,29 @@ internal sealed partial class LlvmEmitter
     private RuntimeReference EmitReferencePlace(Expression expression)
     {
         if (expression is NameExpression name
-            && _locals.TryGetValue(name.Name, out var local)
-            && local is RuntimeReference reference)
+            && _locals.TryGetValue(name.Name, out var local))
         {
-            return reference;
+            if (local is RuntimeReference reference)
+            {
+                return reference;
+            }
+            if (_mutableStructSlots.TryGetValue(name.Name, out var mutablePointer))
+            {
+                var mutableReferenceType = _program.Types.GetOrAddReference(local.Type);
+                return new RuntimeReference(mutableReferenceType, local.Type, mutablePointer);
+            }
+            if (_readonlyCaptureBorrowPointers.TryGetValue(name.Name, out var capturePointer))
+            {
+                var captureReferenceType = _program.Types.GetOrAddReference(local.Type);
+                return new RuntimeReference(captureReferenceType, local.Type, capturePointer);
+            }
+
+            var materialized = MaterializeAggregateValue(local);
+            var pointer = NextTemp("ref_place");
+            EmitAlloca(pointer, materialized.TypeName, RuntimeAlignment(local.Type));
+            EmitStore(materialized.TypeName, materialized.ValueName, pointer, RuntimeAlignment(local.Type));
+            var referenceType = _program.Types.GetOrAddReference(local.Type);
+            return new RuntimeReference(referenceType, local.Type, pointer);
         }
 
         if (expression is FieldAccessExpression field)

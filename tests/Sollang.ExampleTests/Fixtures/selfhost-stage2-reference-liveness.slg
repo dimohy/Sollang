@@ -1,24 +1,33 @@
-# A branch-selected readonly reference locks every possible mutable owner.
-struct Pair {
+# A branch-selected projected ref locks every overlapping owner place.
+struct Inner {
     first: Int
 }
 
-choose condition: Bool, left: ref Pair, right: ref Pair -> ref Pair {
+struct Outer {
+    left: Inner
+    right: Inner
+    tail: Int
+}
+
+choose condition: Bool, left: ref Int, right: ref Int -> ref Int {
     condition -> if {
         left -> return
     }
     right
 }
 
-read pair: ref Pair -> Int {
-    pair.first
+read value: ref Int -> Int {
+    value
 }
 
 main {
-    Pair { first: 41 } => left!
-    Pair { first: 51 } => right!
-    choose(true, left!, right!) => borrowed
-    52 => right!.first
+    Outer {
+        left: Inner { first: 41 }
+        right: Inner { first: 51 }
+        tail: 61
+    } => outer!
+    choose(true, outer!.left.first, outer!.right.first) => borrowed
+    Inner { first: 42 } => outer!.left
     borrowed -> read => observed
     "$(observed)" -> println
 }

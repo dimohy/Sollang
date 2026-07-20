@@ -1433,7 +1433,19 @@ internal sealed partial class LlvmEmitter
         string path)
     {
         var elementType = _program.Types.GetReference(referenceType).ElementType;
-        if (expression is not NameExpression name || !_locals.TryGetValue(name.Name, out var stored))
+        if (expression is not NameExpression)
+        {
+            var place = EmitReferencePlace(expression);
+            if (place.ElementType != elementType)
+            {
+                throw new SollangException(
+                    $"function '{path}' expects a reference to {elementType} but received {place.ElementType}");
+            }
+            return new RuntimeReference(referenceType, elementType, place.PointerName);
+        }
+
+        var name = (NameExpression)expression;
+        if (!_locals.TryGetValue(name.Name, out var stored))
         {
             throw new SollangException(
                 $"function '{path}' requires a named addressable owner or reference");
