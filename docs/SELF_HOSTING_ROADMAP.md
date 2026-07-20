@@ -2532,6 +2532,38 @@ Research basis:
 - [Swift sending closure data-race diagnostics](https://docs.swift.org/compiler/documentation/diagnostics/sending-closure-risks-data-race/)
 - [Rust closure capture precision and `Send`/`Sync`](https://doc.rust-lang.org/reference/types/closure.html)
 
+## Production E19 for Transitive Non-Sendable Parallel Captures (D213M)
+
+D213M makes E19 a production-blocking diagnostic in the checked self-host
+compiler. Direct captures and captures hidden behind any reachable local helper
+use the same recursive structural classifier. Unsafe Arena, Arguments, mapping,
+and nested aggregate captures are rejected once per binding per callback before
+LLVM emission.
+
+The classifier now separates async Send-like ownership transfer from structured
+parallel Sync-like immutable sharing. `SourceText` may be borrowed by a parallel
+callback because the parent cannot move or drop it until the callback joins;
+async transfer remains unchanged. This is a builtin structural property rather
+than a special case for the compiler's `SemanticSnapshot`, so user code cannot
+spoof an internal nominal identity.
+
+Examples 499-502 and the transitive diagnostic prove direct, helper-hidden,
+nested, deduplicated, checked-driver, builtin-Arena-typing, and valid SourceText
+sharing behavior. Windows/Linux full suites pass **671/671**. Windows Stage2
+passes **7/7** at **11,858,370 LLVM bytes**, **3,501,240 bitcode bytes**, and a
+**1,652,736-byte executable**. Linux Stage2 passes **6/6** at **11,854,949 LLVM
+bytes**, **3,499,448 bitcode bytes**, and a **3,339,560-byte executable**.
+
+Stage3 cadence advances from the D213L reset to **1/10**. Formal progress stays
+at **49 complete, 8 partial, 3 missing: 53/60 (88.3%)**; E20 and wider ownership
+and storage precision remain open.
+
+Research basis:
+
+- [Swift sendable closure captures](https://docs.swift.org/compiler/documentation/diagnostics/sendable-closure-captures/)
+- [Swift sending closure data-race diagnostics](https://docs.swift.org/compiler/documentation/diagnostics/sending-closure-risks-data-race/)
+- [Rust closure capture precision and `Send`/`Sync`](https://doc.rust-lang.org/reference/types/closure.html)
+
 ## Production E17 for Reachable Partial Moves (D213K)
 
 D213K promotes explicit partial-move diagnostic E17 into the checked self-host

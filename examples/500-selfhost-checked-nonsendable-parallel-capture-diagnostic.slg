@@ -1,0 +1,30 @@
+import sollang.compiler.llvm.text as llvm
+
+# Verifies that the checked self-host compiler reports E19 for a transitive
+# non-sendable parallel capture and stops before emitting an LLVM target header.
+
+main {
+    [
+        """
+        inspect seed: Int -> [Int; ~] {
+            addUsage value: Int -> Int {
+                value + Int(memory -> used)
+            }
+
+            Arena(8) => memory
+            [1, 2, 3, ~] => values!
+            values! -> parallel value {
+                value -> addUsage
+            } => shifted!
+            shifted!
+        }
+
+        main {
+            0 -> inspect => shifted!
+        }
+        """,
+        ~
+    ] => sources!
+    sources! -> llvm.emitLinuxChecked => diagnosticCount
+    "blocked=$diagnosticCount" -> println
+}

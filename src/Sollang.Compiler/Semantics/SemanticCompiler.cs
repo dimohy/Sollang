@@ -1433,10 +1433,10 @@ internal sealed partial class SemanticCompiler
             }
 
             // Parallel is structured and joins before the enclosing scope can
-            // resume, so immutable owned aggregates may be borrowed read-only.
-            // Reuse the structural value check to reject affine/runtime views
-            // such as Arena, mappings, SourceText, Arguments, and Task.
-            if (!IsAsyncValueTypeSupported(type))
+            // resume. Immutable SourceText is therefore shared read-only like
+            // a Sync value, while async still requires transferable Send-like
+            // values. Other affine/runtime views remain unsupported.
+            if (!IsParallelSharedTypeSupported(type))
             {
                 throw Error(
                     call.Line,
@@ -8254,13 +8254,22 @@ internal sealed partial class SemanticCompiler
 
     private bool IsAsyncValueTypeSupported(BoundType type)
     {
-        return IsAsyncValueTypeSupported(type, []);
+        return IsValueTypeSupported(type, allowSharedSourceText: false, []);
     }
 
-    private bool IsAsyncValueTypeSupported(BoundType type, HashSet<BoundType> visiting)
+    private bool IsParallelSharedTypeSupported(BoundType type)
+    {
+        return IsValueTypeSupported(type, allowSharedSourceText: true, []);
+    }
+
+    private bool IsValueTypeSupported(
+        BoundType type,
+        bool allowSharedSourceText,
+        HashSet<BoundType> visiting)
     {
         if (type is BoundType.Unit or BoundType.Text or BoundType.Bool
             or BoundType.DynamicIntArray or BoundType.IntDictionary
+            || (allowSharedSourceText && type == BoundType.SourceText)
             || IsNumericType(type))
         {
             return true;
@@ -8276,31 +8285,31 @@ internal sealed partial class SemanticCompiler
             if (_types.IsStruct(type))
             {
                 return _types.GetStruct(type).Fields.All(
-                    field => IsAsyncValueTypeSupported(field.Type, visiting));
+                    field => IsValueTypeSupported(field.Type, allowSharedSourceText, visiting));
             }
             if (_types.IsEnum(type))
             {
                 return _types.GetEnum(type).Variants.All(
                     variant => variant.PayloadType is null
-                        || IsAsyncValueTypeSupported(variant.PayloadType.Value, visiting));
+                        || IsValueTypeSupported(variant.PayloadType.Value, allowSharedSourceText, visiting));
             }
             if (_types.IsBox(type))
             {
-                return IsAsyncValueTypeSupported(_types.GetBox(type).ElementType, visiting);
+                return IsValueTypeSupported(_types.GetBox(type).ElementType, allowSharedSourceText, visiting);
             }
             if (_types.IsStaticArray(type))
             {
-                return IsAsyncValueTypeSupported(_types.GetStaticArray(type).ElementType, visiting);
+                return IsValueTypeSupported(_types.GetStaticArray(type).ElementType, allowSharedSourceText, visiting);
             }
             if (_types.IsDynamicArray(type))
             {
-                return IsAsyncValueTypeSupported(_types.GetDynamicArray(type).ElementType, visiting);
+                return IsValueTypeSupported(_types.GetDynamicArray(type).ElementType, allowSharedSourceText, visiting);
             }
             if (_types.IsDictionary(type))
             {
                 var dictionary = _types.GetDictionary(type);
-                return IsAsyncValueTypeSupported(dictionary.KeyType, visiting)
-                    && IsAsyncValueTypeSupported(dictionary.ValueType, visiting);
+                return IsValueTypeSupported(dictionary.KeyType, allowSharedSourceText, visiting)
+                    && IsValueTypeSupported(dictionary.ValueType, allowSharedSourceText, visiting);
             }
 
             return false;

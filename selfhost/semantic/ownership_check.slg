@@ -71,6 +71,66 @@ public analyzeLoweredContext prepared: semanticContext.SemanticSnapshot, typed: 
         }
         belongs!
     }
+    # Structured parallel callbacks borrow captures and join before the parent
+    # resumes. SourceText is an immutable shared view here (Sync-like), not an
+    # async ownership transfer (Send-like). Other affine runtime owners remain
+    # rejected, including Arena, Arguments, and mapped byte views.
+    captureBindingIsParallelShareable bindingIndex: Int -> Bool {
+        typed[bindingIndex] => binding
+        [Int; ~] => pendingTypes!
+        [Int; ~] => visitedTypes!
+        true => shareable!
+        binding.typeId >= 0 -> if {
+            pendingTypes! -> push(binding.typeId)
+        } else {
+            (binding.typeOrigin == 1 and (binding.typeSymbol == 15 or binding.typeSymbol == 16 or binding.typeSymbol == 17 or binding.typeSymbol == 18)) -> if { false => shareable! }
+        }
+        0 => pendingTypeIndex!
+        (shareable! and pendingTypeIndex! < (pendingTypes! -> len)) -> while {
+            pendingTypes![pendingTypeIndex!] => pendingTypeId
+            false => typeVisited!
+            0 => visitedTypeIndex!
+            visitedTypeIndex! < (visitedTypes! -> len) -> while {
+                visitedTypes![visitedTypeIndex!] == pendingTypeId -> if { true => typeVisited! }
+                visitedTypeIndex! + 1 => visitedTypeIndex!
+            }
+            not typeVisited! -> if {
+                visitedTypes! -> push(pendingTypeId)
+                (pendingTypeId < 0 or pendingTypeId >= (prepared.semantic.types -> len)) -> if {
+                    false => shareable!
+                } else {
+                    prepared.semantic.types[pendingTypeId] => pendingType
+                    pendingType.status != 0 -> if { false => shareable! } else {
+                        pendingType.kind == 1 -> if {
+                            pendingType.origin == 1 -> if {
+                                (pendingType.symbol == 15 or pendingType.symbol == 16 or pendingType.symbol == 17 or pendingType.symbol == 18) -> if { false => shareable! }
+                            } else {
+                                (pendingType.origin == 0 or pendingType.origin == 2) -> if {
+                                    0 => fieldIndex!
+                                    fieldIndex! < (prepared.semantic.fields -> len) -> while {
+                                        prepared.semantic.fields[fieldIndex!] => field
+                                        (field.status == 0 and field.ownerType == pendingTypeId) -> if { pendingTypes! -> push(field.fieldType) }
+                                        fieldIndex! + 1 => fieldIndex!
+                                    }
+                                } else { false => shareable! }
+                            }
+                        } else {
+                            (pendingType.kind == 3 or pendingType.kind == 4 or pendingType.kind == 6) -> if {
+                                pendingTypes! -> push(pendingType.first)
+                            } else {
+                                pendingType.kind == 5 -> if {
+                                    pendingTypes! -> push(pendingType.first)
+                                    pendingTypes! -> push(pendingType.second)
+                                } else { false => shareable! }
+                            }
+                        }
+                    }
+                }
+            }
+            pendingTypeIndex! + 1 => pendingTypeIndex!
+        }
+        shareable!
+    }
     sameBindingName leftIndex: Int, rightIndex: Int -> Bool {
         typed[leftIndex] => left
         typed[rightIndex] => right
@@ -880,6 +940,7 @@ public analyzeLoweredContext prepared: semanticContext.SemanticSnapshot, typed: 
                 }
                 isParallel! -> if {
                     [Int; ~] => reportedMutableCaptures!
+                    [Int; ~] => reportedNonSendableCaptures!
                     0 => captureUseIndex!
                     captureUseIndex! < (typed -> len) -> while {
                         typed[captureUseIndex!] => captureUse
@@ -943,59 +1004,15 @@ public analyzeLoweredContext prepared: semanticContext.SemanticSnapshot, typed: 
                                                 })
                                             }
                                         } else {
-                                            [Int; ~] => pendingTypes!
-                                            [Int; ~] => visitedTypes!
-                                            true => captureSendable!
-                                            captureBinding.typeId >= 0 -> if {
-                                                pendingTypes! -> push(captureBinding.typeId)
-                                            } else {
-                                                (captureBinding.typeOrigin == 1 and (captureBinding.typeSymbol == 15 or captureBinding.typeSymbol == 16 or captureBinding.typeSymbol == 17 or captureBinding.typeSymbol == 18 or captureBinding.typeSymbol == 24)) -> if { false => captureSendable! }
-                                            }
-                                            0 => pendingTypeIndex!
-                                            (captureSendable! and pendingTypeIndex! < (pendingTypes! -> len)) -> while {
-                                                pendingTypes![pendingTypeIndex!] => pendingTypeId
-                                                false => typeVisited!
-                                                0 => visitedTypeIndex!
-                                                visitedTypeIndex! < (visitedTypes! -> len) -> while {
-                                                    visitedTypes![visitedTypeIndex!] == pendingTypeId -> if { true => typeVisited! }
-                                                    visitedTypeIndex! + 1 => visitedTypeIndex!
+                                            not (captureBindingIndex! -> captureBindingIsParallelShareable) -> if {
+                                                false => nonSendableCaptureReported!
+                                                0 => reportedNonSendableIndex!
+                                                reportedNonSendableIndex! < (reportedNonSendableCaptures! -> len) -> while {
+                                                    reportedNonSendableCaptures![reportedNonSendableIndex!] == captureBindingIndex! -> if { true => nonSendableCaptureReported! }
+                                                    reportedNonSendableIndex! + 1 => reportedNonSendableIndex!
                                                 }
-                                                not typeVisited! -> if {
-                                                    visitedTypes! -> push(pendingTypeId)
-                                                    (pendingTypeId < 0 or pendingTypeId >= (prepared.semantic.types -> len)) -> if {
-                                                        false => captureSendable!
-                                                    } else {
-                                                        prepared.semantic.types[pendingTypeId] => pendingType
-                                                        pendingType.status != 0 -> if { false => captureSendable! } else {
-                                                            pendingType.kind == 1 -> if {
-                                                                pendingType.origin == 1 -> if {
-                                                                    (pendingType.symbol == 15 or pendingType.symbol == 16 or pendingType.symbol == 17 or pendingType.symbol == 18 or pendingType.symbol == 24) -> if { false => captureSendable! }
-                                                                } else {
-                                                                    (pendingType.origin == 0 or pendingType.origin == 2) -> if {
-                                                                        0 => captureFieldIndex!
-                                                                        captureFieldIndex! < (prepared.semantic.fields -> len) -> while {
-                                                                            prepared.semantic.fields[captureFieldIndex!] => captureField
-                                                                            (captureField.status == 0 and captureField.ownerType == pendingTypeId) -> if { pendingTypes! -> push(captureField.fieldType) }
-                                                                            captureFieldIndex! + 1 => captureFieldIndex!
-                                                                        }
-                                                                    } else { false => captureSendable! }
-                                                                }
-                                                            } else {
-                                                                (pendingType.kind == 3 or pendingType.kind == 4 or pendingType.kind == 6) -> if {
-                                                                    pendingTypes! -> push(pendingType.first)
-                                                                } else {
-                                                                    pendingType.kind == 5 -> if {
-                                                                        pendingTypes! -> push(pendingType.first)
-                                                                        pendingTypes! -> push(pendingType.second)
-                                                                    } else { false => captureSendable! }
-                                                                }
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                                pendingTypeIndex! + 1 => pendingTypeIndex!
-                                            }
-                                            not captureSendable! -> if {
+                                                not nonSendableCaptureReported! -> if {
+                                                    reportedNonSendableCaptures! -> push(captureBindingIndex!)
                                                 diagnostics! -> push(OwnershipDiagnostic {
                                                     code: 19
                                                     sourceModule: captureUse.sourceModule
@@ -1009,6 +1026,7 @@ public analyzeLoweredContext prepared: semanticContext.SemanticSnapshot, typed: 
                                                     actualBuiltin: captureBinding.typeSymbol
                                                     span: syntax.SourceSpan { fileId: captureUse.sourceModule, start: captureUseAst.start, length: captureUseAst.length }
                                                 })
+                                                }
                                             }
                                         }
                                     }
@@ -1104,6 +1122,33 @@ public analyzeLoweredContext prepared: semanticContext.SemanticSnapshot, typed: 
                                                         actualBuiltin: functionCaptureBinding.typeSymbol
                                                         span: syntax.SourceSpan { fileId: functionCaptureNode.sourceModule, start: functionCaptureAst.start, length: functionCaptureAst.length }
                                                     })
+                                                }
+                                            } else {
+                                                not (functionCaptureBindingIndex! -> captureBindingIsParallelShareable) -> if {
+                                                    false => functionNonSendableReported!
+                                                    0 => functionNonSendableReportedIndex!
+                                                    functionNonSendableReportedIndex! < (reportedNonSendableCaptures! -> len) -> while {
+                                                        reportedNonSendableCaptures![functionNonSendableReportedIndex!] == functionCaptureBindingIndex! -> if { true => functionNonSendableReported! }
+                                                        functionNonSendableReportedIndex! + 1 => functionNonSendableReportedIndex!
+                                                    }
+                                                    not functionNonSendableReported! -> if {
+                                                        reportedNonSendableCaptures! -> push(functionCaptureBindingIndex!)
+                                                        prepared.package.ranges[functionCaptureNode.sourceModule] => functionCaptureRange
+                                                        prepared.package.nodes[functionCaptureRange.astStart + functionCaptureNode.astNode] => functionCaptureAst
+                                                        diagnostics! -> push(OwnershipDiagnostic {
+                                                            code: 19
+                                                            sourceModule: functionCaptureNode.sourceModule
+                                                            functionSymbol: typed[captureFunctionIr].symbol
+                                                            expectedOrigin: -1
+                                                            expectedModule: -1
+                                                            expectedSymbol: -1
+                                                            actualOrigin: functionCaptureBinding.typeOrigin
+                                                            actualModule: functionCaptureBinding.typeModule
+                                                            actualSymbol: functionCaptureBinding.typeSymbol
+                                                            actualBuiltin: functionCaptureBinding.typeSymbol
+                                                            span: syntax.SourceSpan { fileId: functionCaptureNode.sourceModule, start: functionCaptureAst.start, length: functionCaptureAst.length }
+                                                        })
+                                                    }
                                                 }
                                             }
                                         }

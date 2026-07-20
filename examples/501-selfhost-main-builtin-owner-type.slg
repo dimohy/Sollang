@@ -1,0 +1,24 @@
+import sollang.compiler.ir.typed as typedIr
+
+# Verifies that a main-scope binding initialized by Arena preserves the
+# canonical builtin owner type on its binding and subsequent reads.
+
+main {
+    [
+        """
+        main {
+            Arena(8) => memory
+            memory -> used => bytes
+        }
+        """,
+        ~
+    ] -> typedIr.lower => ir!
+    ir! -> each node {
+        node.kind == 17 -> if {
+            "binding=$(node.typeOrigin),$(node.typeModule),$(node.typeSymbol),$(node.typeId)" -> println
+        }
+        (node.kind == 5 and node.typeSymbol == 15) -> if {
+            "read=$(node.typeOrigin),$(node.typeModule),$(node.typeSymbol),$(node.typeId)" -> println
+        }
+    }
+}

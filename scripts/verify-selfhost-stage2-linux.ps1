@@ -31,8 +31,9 @@ $borrowAggregateConflictSource = Join-Path $repoRoot "tests\Sollang.ExampleTests
 $borrowProjectionConflictSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-borrow-projection-conflict.slg"
 $partialMoveConflictSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-partial-move-conflict.slg"
 $parallelMutableCaptureSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-parallel-mutable-capture.slg"
+$parallelNonSendableCaptureSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-parallel-nonsendable-capture.slg"
 $borrowSourceRuntime = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-borrow-source.slg"
-$expectedStage2Bytes = 11836939L
+$expectedStage2Bytes = 11854949L
 
 New-Item -ItemType Directory -Force -Path $artifactsDir | Out-Null
 
@@ -221,7 +222,7 @@ Build-And-ExecuteLinuxLlvm $singleStage2Llvm "linux-stage2-check-single" "stage2
 Build-And-ExecuteLinuxLlvm $multiStage2Llvm "linux-stage2-check-multi" "stage2-multi-ok"
 Write-Host "[linux-stage2 5/6] PASS Linux stage-2 products execute."
 
-Write-Host "[linux-stage2 6/6] Enforce production ownership diagnostics E17, E18, and E21."
+Write-Host "[linux-stage2 6/6] Enforce production ownership diagnostics E17, E18, E19, and E21."
 foreach ($conflict in @(
     @($borrowConflictSource, "single"),
     @($borrowUnionConflictSource, "union"),
@@ -302,4 +303,28 @@ foreach ($candidate in @(
         throw "$($candidate[2]) began LLVM emission before rejecting parallel-capture diagnostic E18"
     }
 }
-Write-Host "[linux-stage2 6/6] PASS E17 partial moves, E18 mutable captures, and all E21 origin conflicts block LLVM emission in stage-1 and stage-2."
+$stage1NonSendableCaptureOutput = Join-Path $artifactsDir "linux-stage2-check-parallel-nonsendable-capture-stage1.txt"
+$stage1NonSendableCaptureError = Join-Path $artifactsDir "linux-stage2-check-parallel-nonsendable-capture-stage1.err"
+$stage1NonSendableCapture = Invoke-ProcessToFile $stage1Path @("linux", $parallelNonSendableCaptureSource) $stage1NonSendableCaptureOutput $stage1NonSendableCaptureError
+$stage2NonSendableCaptureOutput = Join-Path $artifactsDir "linux-stage2-check-parallel-nonsendable-capture-stage2.txt"
+$stage2NonSendableCaptureError = Join-Path $artifactsDir "linux-stage2-check-parallel-nonsendable-capture-stage2.err"
+$stage2NonSendableCapture = Invoke-ProcessToFile "wsl.exe" @(
+    "-d", $Distribution, "--", (Convert-ToWslPath $stage2Path), "linux",
+    (Convert-ToWslPath $parallelNonSendableCaptureSource)
+) $stage2NonSendableCaptureOutput $stage2NonSendableCaptureError
+foreach ($candidate in @(
+    @($stage1NonSendableCapture, $stage1NonSendableCaptureOutput, "stage1"),
+    @($stage2NonSendableCapture, $stage2NonSendableCaptureOutput, "stage2")
+)) {
+    $candidate[0].WaitForExit()
+    $candidate[0].Refresh()
+    if ($candidate[0].ExitCode -eq 0) { throw "$($candidate[2]) accepted a transitive non-sendable parallel capture" }
+    $diagnosticText = [System.IO.File]::ReadAllText($candidate[1])
+    if ($diagnosticText -notmatch 'error\[E19\].*non-sendable binding captured by a parallel callback') {
+        throw "$($candidate[2]) did not emit ownership diagnostic E19: '$diagnosticText'"
+    }
+    if ($diagnosticText -match '^target (datalayout|triple)') {
+        throw "$($candidate[2]) began LLVM emission before rejecting parallel-capture diagnostic E19"
+    }
+}
+Write-Host "[linux-stage2 6/6] PASS E17 partial moves, E18 mutable captures, E19 non-sendable captures, and all E21 origin conflicts block LLVM emission in stage-1 and stage-2."

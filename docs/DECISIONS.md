@@ -8068,6 +8068,53 @@ References:
 - [Swift sending closure data-race diagnostics](https://docs.swift.org/compiler/documentation/diagnostics/sending-closure-risks-data-race/)
 - [Rust closure capture precision and `Send`/`Sync`](https://doc.rust-lang.org/reference/types/closure.html)
 
+## D213M - Transitive Non-Sendable Parallel Captures Become Production E19
+
+Status: implemented and cross-target Stage2 verified
+Date: 2026-07-20
+
+D213M promotes non-sendable parallel-capture diagnostic E19 into the checked
+self-host compiler. The ownership pass applies one recursive structural
+classifier to direct captures and to every local helper reachable from a
+`parallel` or `tryParallel` callback. Repeated uses of the same unsafe binding
+produce one diagnostic per callback. Arena, Arguments, mapped byte views, and
+values containing them are rejected before LLVM emission.
+
+Structured parallel sharing is deliberately distinct from async transfer.
+Async owns or transfers a value across a task boundary and keeps the existing
+Send-like classifier. A structured parallel callback only borrows immutable
+captures and joins before its parent resumes, so `SourceText` is allowed as a
+read-only Sync-like view. User types containing `SourceText` become shareable
+through the same structural rule; there is no compiler-internal nominal-name
+exception that user code could imitate. Mutable captures remain E18 regardless
+of their field types.
+
+The first Stage2 proof also exposed a canonical builtin-type gap: a local
+`Arena(8)` binding retained its type origin but lost its builtin symbol in the
+self-host typed IR. Constructor typing now recognizes Arena and binding/read
+propagation preserves builtin owner markers even before a recursive type ID is
+available. Examples 499-502 cover direct, transitive, nested, deduplicated, and
+checked E19 behavior, canonical Arena typing, and valid immutable SourceText
+sharing. Every new source includes English `#` comments explaining its purpose.
+
+The Release build has zero warnings and errors. Windows and Linux full suites
+pass **671/671**. Windows Stage2 passes **7/7** at **11,858,370 LLVM bytes**,
+**3,501,240 bitcode bytes**, and a **1,652,736-byte executable**. Linux Stage2
+passes **6/6** at **11,854,949 LLVM bytes**, **3,499,448 bitcode bytes**, and a
+**3,339,560-byte executable**. Both Stage1 and Stage2 reject E17, E18, E19, and
+E21 fixtures before emitting a target header.
+
+The required D213L Stage3 reset the periodic cadence to 0/10; D213M advances it
+to **1/10**, so no new Stage3 run is due. Formal progress remains **49 complete,
+8 partial, 3 missing: 53/60 (88.3%)** because E20 and the remaining ownership
+and storage precision still keep the broader gate partial.
+
+Research basis:
+
+- [Swift sendable closure captures](https://docs.swift.org/compiler/documentation/diagnostics/sendable-closure-captures/)
+- [Swift sending closure data-race diagnostics](https://docs.swift.org/compiler/documentation/diagnostics/sending-closure-risks-data-race/)
+- [Rust closure capture precision and `Send`/`Sync`](https://doc.rust-lang.org/reference/types/closure.html)
+
 ## D213K - Reachable Partial Moves Become Production E17
 
 Status: implemented and cross-target Stage2 verified

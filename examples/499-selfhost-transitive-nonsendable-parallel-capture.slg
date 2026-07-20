@@ -1,0 +1,98 @@
+import sollang.compiler.semantic.ownership_check as ownershipCheck
+
+# Verifies that E19 follows local-function calls from a parallel callback and
+# recursively classifies captured struct fields. Plain immutable values remain
+# valid when every field is structurally sendable.
+
+countE19 source: Text -> Int {
+    [source, ~] => unit!
+    unit! -> ownershipCheck.analyze => errors!
+    0 => count!
+    errors! -> each error {
+        error.code == 19 -> if { count! + 1 => count! }
+    }
+    count!
+}
+
+main {
+    # Repeated direct reads of one Arena produce one E19 for the callback.
+    """
+    main {
+        Arena(8) => memory
+        [1, 2, 3, ~] => values!
+        values! -> parallel value {
+            value + Int(memory -> used) + Int(memory -> used)
+        } => shifted!
+    }
+    """ -> countE19 => direct
+
+    # A helper cannot hide Arena, and repeated helper reads still deduplicate.
+    """
+    inspect seed: Int -> [Int; ~] {
+        addUsage value: Int -> Int {
+            value + Int(memory -> used) + Int(memory -> used)
+        }
+
+        Arena(8) => memory
+        [1, 2, 3, ~] => values!
+        values! -> parallel value {
+            value -> addUsage
+        } => shifted!
+        shifted!
+    }
+
+    main {
+        0 -> inspect => shifted!
+    }
+    """ -> countE19 => transitive
+
+    # Sendability is recursive, so a struct field containing Arena is E19.
+    """
+    struct MemoryBox {
+        memory: Arena
+    }
+
+    inspect seed: Int -> [Int; ~] {
+        addUsage value: Int -> Int {
+            value + Int(box.memory -> used)
+        }
+
+        MemoryBox { memory: Arena(8) } => box
+        [1, 2, 3, ~] => values!
+        values! -> parallel value {
+            value -> addUsage
+        } => shifted!
+        shifted!
+    }
+
+    main {
+        0 -> inspect => shifted!
+    }
+    """ -> countE19 => nested
+
+    # An immutable struct made only from sendable fields remains valid.
+    """
+    struct Offset {
+        value: Int
+    }
+
+    shift seed: Int -> [Int; ~] {
+        addOffset value: Int -> Int {
+            value + offset.value
+        }
+
+        Offset { value: 10 } => offset
+        [1, 2, 3, ~] => values!
+        values! -> parallel value {
+            value -> addOffset
+        } => shifted!
+        shifted!
+    }
+
+    main {
+        0 -> shift => shifted!
+    }
+    """ -> countE19 => sendable
+
+    "direct=$direct, transitive=$transitive, nested=$nested, sendable=$sendable" -> println
+}
