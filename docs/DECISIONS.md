@@ -7465,3 +7465,54 @@ References:
 - [Cargo workspaces](https://doc.rust-lang.org/cargo/reference/workspaces.html)
 - [SwiftPM package dependencies](https://docs.swift.org/swiftpm/documentation/packagemanagerdocs/addingdependencies/)
 - [Zig build system](https://ziglang.org/learn/build-system/)
+
+## D208B - Versioned Local Identity And Deterministic Workspace Lock
+
+Status: implemented; Windows/Linux full suites and Stage2 verified
+Date: 2026-07-20
+
+Every `sollang.project` declares a canonical SemVer 2.0.0 `version`, making the
+local package identity `name@version` instead of a path or an unversioned name.
+Dependencies may use the concise legacy path string for an unconstrained local
+edge or an explicit `{ path, version }` record. Requirements support `*`, exact
+and `=` versions, compatible `^` and `~` ranges, and whitespace-separated
+`>`, `>=`, `<`, and `<=` intersections. Resolution verifies the declared
+dependency version before source discovery.
+
+One workspace owns one checked-in `sollang.lock`. `sollang resolve` renders the
+complete member graph in canonical package-identity order with normalized
+`path:` sources and exact dependency identities, then replaces the file
+atomically only when its bytes differ. Workspace builds keep that shared lock
+current; `--locked` changes mismatch or absence into an error. A standalone
+project writes a lock only when explicitly resolved, avoiding incidental files
+for one-off project builds and diagnostic fixtures. The lock joins the
+incremental frontend identity whenever it exists.
+
+The self-host boundary is split into `selfhost/package_versions.slg` and
+`selfhost/package_lock.slg`. The former parses SemVer and evaluates the same
+requirement families, including prerelease precedence. The latter tokenizes the
+canonical lock shape and validates package/dependency identities, local source
+tags, and duplicate package IDs. Examples 440 and 441 exercise these contracts
+without delegating their parsing to the C# manifest reader.
+
+The lock intentionally does not hash mutable local source trees: source control
+is the authority for local workspace bytes. Registry archives, Git revisions,
+content hashes, signing, and multi-version remote resolution remain later D208
+layers. This follows Cargo's one-lock-per-workspace reproducibility, SwiftPM's
+resolved exact versions after constraint solving, Go's explicit module-version
+identity, and Zig's content-addressed direction without pretending that local
+paths are immutable packages.
+
+References:
+
+- [Cargo workspaces](https://doc.rust-lang.org/stable/cargo/reference/workspaces.html)
+- [SwiftPM resolving package versions](https://docs.swift.org/swiftpm/documentation/packagemanagerdocs/resolvingpackageversions/)
+- [SwiftPM adding dependencies](https://docs.swift.org/swiftpm/documentation/packagemanagerdocs/addingdependencies/)
+- [Go modules reference](https://go.dev/ref/mod)
+- [Zig 0.11 package management notes](https://ziglang.org/download/0.11.0/release-notes.html)
+
+Validation: Release build has zero warnings and errors; Windows and Linux each
+pass 590/590; Windows Stage2 passes 6/6 at 10,752,017 LLVM text bytes; Linux
+Stage2 passes 5/5 at 10,748,620 LLVM text bytes. The Windows native Stage2
+executable is approximately 1.4 MiB; the 10.8 MB measurement is generated LLVM
+text, not executable size. This is Stage3 cadence checkpoint 8/10.

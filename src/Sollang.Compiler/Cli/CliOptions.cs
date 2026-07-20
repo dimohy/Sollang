@@ -9,7 +9,8 @@ internal sealed record CliOptions(
     string? LlvmHome,
     CompilationTarget Target,
     bool KeepTemps,
-    string? OptimizationLevel)
+    string? OptimizationLevel,
+    bool Locked)
 {
     public static CliOptions Parse(string[] args)
     {
@@ -27,6 +28,7 @@ internal sealed record CliOptions(
         string? productName = null;
         var target = CompilationTarget.WindowsX64;
         var keepTemps = false;
+        var locked = false;
         string? optimizationLevel = null;
 
         for (var i = 1; i < args.Length; i++)
@@ -58,6 +60,9 @@ internal sealed record CliOptions(
                     break;
                 case "--keep-temps":
                     keepTemps = true;
+                    break;
+                case "--locked":
+                    locked = true;
                     break;
                 case "-O0":
                 case "-O1":
@@ -96,6 +101,10 @@ internal sealed record CliOptions(
         {
             throw new SollangException("--package cannot be combined with --project");
         }
+        if (locked && sources.Count > 0)
+        {
+            throw new SollangException("--locked requires a project or workspace build");
+        }
 
         ProjectBuild? project = null;
         if (sources.Count == 0)
@@ -129,6 +138,10 @@ internal sealed record CliOptions(
                     $"no source file, {ProjectManifest.FileName}, or {WorkspaceManifest.FileName} was found; {Usage}");
             }
             sources.Add(project.Product.RootSource);
+            if (project.Workspace is not null || locked)
+            {
+                PackageLock.Ensure(project, locked);
+            }
         }
 
         output ??= project is null
@@ -142,7 +155,8 @@ internal sealed record CliOptions(
             llvmHome is null ? null : Path.GetFullPath(llvmHome),
             target,
             keepTemps,
-            optimizationLevel);
+            optimizationLevel,
+            locked);
     }
 
     private static string DefaultSourceOutput(string source, CompilationTarget target) =>
@@ -189,7 +203,7 @@ internal sealed record CliOptions(
         "usage: sollang build [<source.slg> ... | --project <sollang.project|directory> "
         + "| --workspace <sollang.workspace|directory> --package <name>] [--product <name>] "
         + "[-o <output>] [--target windows-x64|linux-x64|wasm32-browser] "
-        + "[--llvm <dir>] [-O0|-O1|-O2|-O3] [--keep-temps]";
+        + "[--llvm <dir>] [-O0|-O1|-O2|-O3] [--keep-temps] [--locked]";
 
     private static CompilationTarget ParseTarget(string value)
     {

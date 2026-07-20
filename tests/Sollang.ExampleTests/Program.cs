@@ -705,6 +705,10 @@ Parallel.ForEach(diagnosticFiles, new ParallelOptions { MaxDegreeOfParallelism =
         else if (string.Equals(Path.GetExtension(sourcePath), ".workspace", StringComparison.OrdinalIgnoreCase))
         {
             diagnosticArguments.AddRange(["--workspace", sourcePath]);
+            if (name.Contains("lock-stale", StringComparison.Ordinal))
+            {
+                diagnosticArguments.Add("--locked");
+            }
         }
         else
         {

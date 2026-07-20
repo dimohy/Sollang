@@ -465,6 +465,7 @@ For a normal project, put the root module in a compact language-shaped
 ```sollang
 project {
     name: "compiler"
+    version: "0.1.0"
     root: "src/main.slg"
 }
 ```
@@ -483,12 +484,16 @@ Use `products` when one project produces several executables, and use
 ```sollang
 project {
     name: "tools"
+    version: "0.1.0"
     products: {
         compiler: "src/compiler.slg"
         formatter: "src/formatter.slg"
     }
     dependencies: {
-        syntax: "../syntax"
+        syntax: {
+            path: "../syntax"
+            version: "^1.2.0"
+        }
     }
 }
 ```
@@ -505,9 +510,10 @@ must expose a product with the same name. Source imports use that first segment,
 such as `import syntax.tree as tree`. Each package can see only its own direct
 dependencies; a dependency's dependencies do not become ambient imports of the
 parent. The compiler resolves the complete local graph in sorted order and
-rejects dependency cycles and duplicate project names before parsing sources.
-Versioned registries, Git sources, and lock files are not yet part of this
-bootstrap format.
+rejects dependency cycles, duplicate project names, malformed SemVer values,
+and unsatisfied dependency versions before parsing sources. Requirements accept
+`*`, exact versions, `^`, `~`, and whitespace-separated comparator
+intersections such as `>=1.2.0 <2.0.0`.
 
 Put tightly coupled local projects in one `sollang.workspace`:
 
@@ -535,7 +541,13 @@ project and enclosing workspace and selects that member automatically. Default
 outputs live under
 `build/<target>/<package>/<product>[.exe|.wasm]`, so different packages and
 targets cannot overwrite one another. The workspace manifest participates in
-the persistent frontend-cache identity.
+the persistent frontend-cache identity. Run
+`sollang resolve --workspace <file-or-directory>` to write the workspace's
+canonical, sorted `sollang.lock`. Normal workspace builds update a stale lock;
+`sollang build --locked` rejects a missing or stale lock for reproducible CI.
+The lock records exact `name@version` dependency identities and normalized
+local `path:` sources. Registries, Git sources, and content hashes remain later
+distribution layers.
 
 When only the root file is supplied, each non-`sys` import is mapped from its
 dotted module path to a `.slg` file relative to the root directory. For example,

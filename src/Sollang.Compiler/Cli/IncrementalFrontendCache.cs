@@ -280,6 +280,11 @@ internal static class IncrementalFrontendCache
         {
             projectManifests.Add(Path.GetFullPath(options.Project.Workspace.Path));
         }
+        var lockPath = Path.GetFullPath(PackageLock.PathFor(options.Project));
+        if (File.Exists(lockPath))
+        {
+            projectManifests.Add(lockPath);
+        }
         return projectManifests.Order(PathComparer);
     }
 

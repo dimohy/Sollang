@@ -6,8 +6,9 @@ namespace Sollang.Compiler.Cli;
 internal sealed record ProjectManifest(
     string Path,
     string Name,
+    SemanticVersion Version,
     IReadOnlyDictionary<string, string> Products,
-    IReadOnlyDictionary<string, string> Dependencies)
+    IReadOnlyDictionary<string, ProjectDependency> Dependencies)
 {
     public const string FileName = "sollang.project";
 
@@ -87,12 +88,19 @@ internal sealed record ProjectManifest(
                 StringComparer.Ordinal);
         }
 
-        var dependencies = (parsed.Dependencies ?? new Dictionary<string, string>(StringComparer.Ordinal))
+        var version = SemanticVersion.Parse(parsed.Version, $"project manifest {manifestPath}");
+        var dependencies = (parsed.Dependencies ?? new Dictionary<string, ParsedDependency>(StringComparer.Ordinal))
             .ToDictionary(
                 pair => ValidateEntryName(pair.Key, "dependency", manifestPath),
-                pair => ResolveDependencyPath(pair.Value, projectDirectory, manifestPath),
+                pair => new ProjectDependency(
+                    ResolveDependencyPath(pair.Value.Path, projectDirectory, manifestPath),
+                    pair.Value.Version is null
+                        ? VersionRequirement.Any
+                        : VersionRequirement.Parse(
+                            pair.Value.Version,
+                            $"dependency '{pair.Key}' in {manifestPath}")),
                 StringComparer.Ordinal);
-        return new ProjectManifest(manifestPath, parsed.Name, products, dependencies);
+        return new ProjectManifest(manifestPath, parsed.Name, version, products, dependencies);
     }
 
     public static string? FindFrom(string startDirectory)
@@ -191,9 +199,10 @@ internal sealed record ProjectManifest(
             Expect(TokenKind.LeftBrace, "'{'");
 
             string? name = null;
+            string? version = null;
             string? root = null;
             Dictionary<string, string>? products = null;
-            Dictionary<string, string>? dependencies = null;
+            Dictionary<string, ParsedDependency>? dependencies = null;
             SkipSeparators();
             while (!Check(TokenKind.RightBrace))
             {
@@ -204,6 +213,9 @@ internal sealed record ProjectManifest(
                     case "name" when name is null:
                         name = Expect(TokenKind.String, "string literal").Text;
                         break;
+                    case "version" when version is null:
+                        version = Expect(TokenKind.String, "string literal").Text;
+                        break;
                     case "root" when root is null:
                         root = Expect(TokenKind.String, "string literal").Text;
                         break;
@@ -211,9 +223,9 @@ internal sealed record ProjectManifest(
                         products = ParseStringMap("products");
                         break;
                     case "dependencies" when dependencies is null:
-                        dependencies = ParseStringMap("dependencies");
+                        dependencies = ParseDependencyMap();
                         break;
-                    case "name" or "root" or "products" or "dependencies":
+                    case "name" or "version" or "root" or "products" or "dependencies":
                         throw Error(field, $"duplicate project field '{field.Text}'");
                     default:
                         throw Error(field, $"unknown project field '{field.Text}'");
@@ -230,7 +242,69 @@ internal sealed record ProjectManifest(
             {
                 throw new SollangException($"project manifest is missing required field 'name': {path}");
             }
-            return new ParsedManifest(name, root, products, dependencies);
+            if (version is null)
+            {
+                throw new SollangException($"project manifest is missing required field 'version': {path}");
+            }
+            return new ParsedManifest(name, version, root, products, dependencies);
+        }
+
+        private Dictionary<string, ParsedDependency> ParseDependencyMap()
+        {
+            Expect(TokenKind.LeftBrace, "'{'");
+            var values = new Dictionary<string, ParsedDependency>(StringComparer.Ordinal);
+            SkipSeparators();
+            while (!Check(TokenKind.RightBrace))
+            {
+                var key = Expect(TokenKind.Identifier, "dependencies entry name");
+                Expect(TokenKind.Colon, "':'");
+                ParsedDependency value;
+                if (Check(TokenKind.String))
+                {
+                    value = new ParsedDependency(Expect(TokenKind.String, "string literal").Text, null);
+                }
+                else
+                {
+                    Expect(TokenKind.LeftBrace, "'{' or path string");
+                    string? dependencyPath = null;
+                    string? dependencyVersion = null;
+                    SkipSeparators();
+                    while (!Check(TokenKind.RightBrace))
+                    {
+                        var field = Expect(TokenKind.Identifier, "dependency field name");
+                        Expect(TokenKind.Colon, "':'");
+                        switch (field.Text)
+                        {
+                            case "path" when dependencyPath is null:
+                                dependencyPath = Expect(TokenKind.String, "string literal").Text;
+                                break;
+                            case "version" when dependencyVersion is null:
+                                dependencyVersion = Expect(TokenKind.String, "string literal").Text;
+                                break;
+                            case "path" or "version":
+                                throw Error(field, $"duplicate dependency field '{field.Text}'");
+                            default:
+                                throw Error(field, $"unknown dependency field '{field.Text}'");
+                        }
+                        RequireSeparator("dependency fields");
+                        SkipSeparators();
+                    }
+                    Expect(TokenKind.RightBrace, "'}'");
+                    if (dependencyPath is null)
+                    {
+                        throw Error(key, $"dependency '{key.Text}' is missing required field 'path'");
+                    }
+                    value = new ParsedDependency(dependencyPath, dependencyVersion);
+                }
+                if (!values.TryAdd(key.Text, value))
+                {
+                    throw Error(key, $"duplicate dependencies entry '{key.Text}'");
+                }
+                RequireSeparator("dependencies entries");
+                SkipSeparators();
+            }
+            Expect(TokenKind.RightBrace, "'}'");
+            return values;
         }
 
         private Dictionary<string, string> ParseStringMap(string fieldName)
@@ -301,9 +375,14 @@ internal sealed record ProjectManifest(
 
     private sealed record ParsedManifest(
         string Name,
+        string Version,
         string? Root,
         Dictionary<string, string>? Products,
-        Dictionary<string, string>? Dependencies);
+        Dictionary<string, ParsedDependency>? Dependencies);
+
+    private sealed record ParsedDependency(string Path, string? Version);
 }
 
 internal sealed record ProjectProduct(string Name, string RootSource);
+
+internal sealed record ProjectDependency(string Path, VersionRequirement Version);

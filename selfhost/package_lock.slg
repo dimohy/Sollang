@@ -1,0 +1,182 @@
+namespace sollang.compiler.package_lock
+
+import sollang.compiler.lexer
+import sollang.compiler.syntax
+import sollang.compiler.package_versions as versions
+import syntax.generated.slg as grammar
+
+public struct PackageLock {
+    status: Int
+    packages: Int
+    dependencies: Int
+}
+
+struct TextSpan {
+    start: UIntSize
+    length: UIntSize
+}
+
+textIs source: Text, token: syntax.SyntaxToken, expected: Text -> Bool {
+    token.span.length == (expected -> len) => matches!
+    UIntSize(0) => index!
+    (matches! and index! < token.span.length) -> while {
+        (source -> byte(token.span.start + index!)) != (expected -> byte(index!)) -> if { false => matches! }
+        index! + UIntSize(1) => index!
+    }
+    matches!
+}
+
+skipSeparators start: Int, tokens: [syntax.SyntaxToken; ~] -> Int {
+    start => index!
+    (tokens[index!].kind == grammar.tokenIdNewLine or tokens[index!].kind == grammar.tokenIdComma) -> while { index! + 1 => index! }
+    index!
+}
+
+sameText source: Text, left: TextSpan, right: TextSpan -> Bool {
+    left.length == right.length => same!
+    UIntSize(0) => index!
+    (same! and index! < left.length) -> while {
+        (source -> byte(left.start + index!)) != (source -> byte(right.start + index!)) -> if { false => same! }
+        index! + UIntSize(1) => index!
+    }
+    same!
+}
+
+validPackageId source: Text, value: TextSpan -> Bool {
+    value.start + value.length => end
+    value.start => index!
+    value.start => at!
+    false => found!
+    (index! < end) -> while {
+        (source -> byte(index!)) == UInt8(64) -> if {
+            index! => at!
+            true => found!
+        }
+        index! + UIntSize(1) => index!
+    }
+    found! and at! > value.start and at! + UIntSize(1) < end => valid!
+    valid! -> if {
+        source -> slice(at! + UIntSize(1), end - at! - UIntSize(1)) => versionText
+        versionText -> versions.parse => version
+        version.status == 0 => valid!
+    }
+    valid!
+}
+
+# Status: 0 valid, 1 lock keyword, 2 opening brace, 3 format field,
+# 4 format value, 5 packages field, 6 opening package array,
+# 7 package object, 8 id field, 9 invalid package id, 10 duplicate id,
+# 11 source field, 12 non-path source, 13 dependencies field,
+# 14 dependency array, 15 invalid dependency id, 16 trailing input.
+public parse source: Text -> PackageLock {
+    source -> lexer.lex => rawTokens!
+    [syntax.SyntaxToken; ~] => tokens!
+    rawTokens! -> each token {
+        (token.kind != grammar.triviaIdWhitespace and token.kind != grammar.triviaIdComment) -> if { tokens! -> push(token) }
+    }
+    [TextSpan; ~] => ids!
+    0 => status!
+    0 => packages!
+    0 => dependencies!
+    0 => index!
+    index! -> skipSeparators(tokens!) => index!
+    (tokens![index!].kind == grammar.tokenIdIdentifier and (source -> textIs(tokens![index!], "lock"))) -> if { index! + 1 => index! } else { 1 => status! }
+    status! == 0 -> if {
+        index! -> skipSeparators(tokens!) => index!
+        tokens![index!].kind == grammar.tokenIdLeftBrace -> if { index! + 1 => index! } else { 2 => status! }
+    }
+    status! == 0 -> if {
+        index! -> skipSeparators(tokens!) => index!
+        (tokens![index!].kind == grammar.tokenIdIdentifier and (source -> textIs(tokens![index!], "format"))) -> if { index! + 1 => index! } else { 3 => status! }
+    }
+    status! == 0 -> if {
+        index! -> skipSeparators(tokens!) => index!
+        tokens![index!].kind == grammar.tokenIdColon -> if { index! + 1 => index! } else { 3 => status! }
+        index! -> skipSeparators(tokens!) => index!
+        (tokens![index!].kind == grammar.tokenIdNumber and (source -> textIs(tokens![index!], "1"))) -> if { index! + 1 => index! } else { 4 => status! }
+    }
+    status! == 0 -> if {
+        index! -> skipSeparators(tokens!) => index!
+        (tokens![index!].kind == grammar.tokenIdIdentifier and (source -> textIs(tokens![index!], "packages"))) -> if { index! + 1 => index! } else { 5 => status! }
+    }
+    status! == 0 -> if {
+        index! -> skipSeparators(tokens!) => index!
+        tokens![index!].kind == grammar.tokenIdColon -> if { index! + 1 => index! } else { 5 => status! }
+        index! -> skipSeparators(tokens!) => index!
+        tokens![index!].kind == grammar.tokenIdLeftBracket -> if { index! + 1 => index! } else { 6 => status! }
+    }
+    status! == 0 -> if {
+        index! -> skipSeparators(tokens!) => index!
+        (status! == 0 and tokens![index!].kind != grammar.tokenIdRightBracket) -> while {
+            tokens![index!].kind == grammar.tokenIdLeftBrace -> if { index! + 1 => index! } else { 7 => status! }
+            status! == 0 -> if {
+                index! -> skipSeparators(tokens!) => index!
+                (tokens![index!].kind == grammar.tokenIdIdentifier and (source -> textIs(tokens![index!], "id"))) -> if { index! + 1 => index! } else { 8 => status! }
+                index! -> skipSeparators(tokens!) => index!
+                tokens![index!].kind == grammar.tokenIdColon -> if { index! + 1 => index! } else { 8 => status! }
+                index! -> skipSeparators(tokens!) => index!
+                tokens![index!].kind == grammar.tokenIdString -> if {
+                    tokens![index!] => idToken
+                    TextSpan { start: idToken.span.start + UIntSize(1), length: idToken.span.length - UIntSize(2) } => id
+                    not (source -> validPackageId(id)) -> if { 9 => status! }
+                    false => duplicate!
+                    0 => idIndex!
+                    (status! == 0 and not duplicate! and idIndex! < (ids! -> len)) -> while {
+                        source -> sameText(ids![idIndex!], id) -> if { true => duplicate! }
+                        idIndex! + 1 => idIndex!
+                    }
+                    duplicate! -> if { 10 => status! } else { ids! -> push(id) }
+                    index! + 1 => index!
+                } else { 8 => status! }
+            }
+            status! == 0 -> if {
+                index! -> skipSeparators(tokens!) => index!
+                (tokens![index!].kind == grammar.tokenIdIdentifier and (source -> textIs(tokens![index!], "source"))) -> if { index! + 1 => index! } else { 11 => status! }
+                index! -> skipSeparators(tokens!) => index!
+                tokens![index!].kind == grammar.tokenIdColon -> if { index! + 1 => index! } else { 11 => status! }
+                index! -> skipSeparators(tokens!) => index!
+                tokens![index!].kind == grammar.tokenIdString -> if {
+                    tokens![index!] => sourceToken
+                    (sourceToken.span.length >= UIntSize(7) and (source -> byte(sourceToken.span.start + UIntSize(1))) == UInt8(112) and (source -> byte(sourceToken.span.start + UIntSize(2))) == UInt8(97) and (source -> byte(sourceToken.span.start + UIntSize(3))) == UInt8(116) and (source -> byte(sourceToken.span.start + UIntSize(4))) == UInt8(104) and (source -> byte(sourceToken.span.start + UIntSize(5))) == UInt8(58)) -> if { index! + 1 => index! } else { 12 => status! }
+                } else { 11 => status! }
+            }
+            status! == 0 -> if {
+                index! -> skipSeparators(tokens!) => index!
+                (tokens![index!].kind == grammar.tokenIdIdentifier and (source -> textIs(tokens![index!], "dependencies"))) -> if { index! + 1 => index! } else { 13 => status! }
+                index! -> skipSeparators(tokens!) => index!
+                tokens![index!].kind == grammar.tokenIdColon -> if { index! + 1 => index! } else { 13 => status! }
+                index! -> skipSeparators(tokens!) => index!
+                tokens![index!].kind == grammar.tokenIdLeftBracket -> if { index! + 1 => index! } else { 14 => status! }
+            }
+            status! == 0 -> if {
+                index! -> skipSeparators(tokens!) => index!
+                (status! == 0 and tokens![index!].kind != grammar.tokenIdRightBracket) -> while {
+                    tokens![index!].kind == grammar.tokenIdString -> if {
+                        tokens![index!] => dependencyToken
+                        TextSpan { start: dependencyToken.span.start + UIntSize(1), length: dependencyToken.span.length - UIntSize(2) } => dependency
+                        source -> validPackageId(dependency) -> if { dependencies! + 1 => dependencies! } else { 15 => status! }
+                        index! + 1 => index!
+                        index! -> skipSeparators(tokens!) => index!
+                    } else { 15 => status! }
+                }
+                status! == 0 -> if { index! + 1 => index! }
+            }
+            status! == 0 -> if {
+                index! -> skipSeparators(tokens!) => index!
+                tokens![index!].kind == grammar.tokenIdRightBrace -> if {
+                    index! + 1 => index!
+                    packages! + 1 => packages!
+                } else { 7 => status! }
+                index! -> skipSeparators(tokens!) => index!
+            }
+        }
+        status! == 0 -> if { index! + 1 => index! }
+    }
+    status! == 0 -> if {
+        index! -> skipSeparators(tokens!) => index!
+        tokens![index!].kind == grammar.tokenIdRightBrace -> if { index! + 1 => index! } else { 2 => status! }
+        index! -> skipSeparators(tokens!) => index!
+        tokens![index!].kind != grammar.tokenIdEnd -> if { 16 => status! }
+    }
+    PackageLock { status: status!, packages: packages!, dependencies: dependencies! }
+}

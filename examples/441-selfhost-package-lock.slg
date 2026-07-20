@@ -1,0 +1,36 @@
+import sollang.compiler.package_lock as locks
+
+main {
+    """lock {
+            format: 1
+            packages: [
+                {
+                    id: "app@0.1.0"
+                    source: "path:apps/app"
+                    dependencies: ["math@1.2.3"]
+                }
+                {
+                    id: "math@1.2.3"
+                    source: "path:packages/math"
+                    dependencies: []
+                }
+            ]
+        }
+        """ -> locks.parse => resolved
+    """lock {
+            format: 1
+            packages: [{ id: "app@bad" source: "path:app" dependencies: [] }]
+        }
+        """ -> locks.parse => invalidVersion
+    """lock {
+            format: 1
+            packages: [
+                { id: "app@1.0.0" source: "path:first" dependencies: [] }
+                { id: "app@1.0.0" source: "path:second" dependencies: [] }
+            ]
+        }
+        """ -> locks.parse => duplicate
+    "lock = $(resolved.status),$(resolved.packages),$(resolved.dependencies)" -> println
+    "invalid version = $(invalidVersion.status)" -> println
+    "duplicate = $(duplicate.status)" -> println
+}

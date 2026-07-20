@@ -21,13 +21,30 @@ internal sealed record ProjectBuild(
     {
         var workspace = WorkspaceManifest.Load(pathOrDirectory);
         var rootManifest = workspace.SelectMember(packageName);
-        return Load(rootManifest, productName, workspace);
+        return Load(rootManifest, productName, workspace, includeAllWorkspaceMembers: true);
+    }
+
+    public static ProjectBuild LoadWorkspaceForResolution(string pathOrDirectory)
+    {
+        var workspace = WorkspaceManifest.Load(pathOrDirectory);
+        var rootManifest = workspace.Members[0];
+        return Load(rootManifest, rootManifest.Name, workspace, includeAllWorkspaceMembers: true);
+    }
+
+    public static ProjectBuild LoadProjectForResolution(string pathOrDirectory)
+    {
+        var manifest = ProjectManifest.Load(pathOrDirectory);
+        var product = manifest.Products.ContainsKey(manifest.Name)
+            ? manifest.Name
+            : manifest.Products.Keys.Order(StringComparer.Ordinal).First();
+        return Load(manifest, product, workspace: null);
     }
 
     private static ProjectBuild Load(
         ProjectManifest rootManifest,
         string? productName,
-        WorkspaceManifest? workspace)
+        WorkspaceManifest? workspace,
+        bool includeAllWorkspaceMembers = false)
     {
         var manifestsByPath = new Dictionary<string, ProjectPackage>(StringComparer.OrdinalIgnoreCase);
         var manifestsByName = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -43,6 +60,29 @@ internal sealed record ProjectBuild(
             states,
             workspaceMembers,
             []);
+        if (includeAllWorkspaceMembers)
+        {
+            foreach (var member in workspace!.Members)
+            {
+                if (manifestsByPath.ContainsKey(member.Path))
+                {
+                    continue;
+                }
+                var memberProduct = member.Products.TryGetValue(member.Name, out var memberRoot)
+                    ? new ProjectProduct(member.Name, memberRoot)
+                    : new ProjectProduct(
+                        member.Products.Keys.Order(StringComparer.Ordinal).First(),
+                        member.Products.OrderBy(static pair => pair.Key, StringComparer.Ordinal).First().Value);
+                LoadPackage(
+                    member,
+                    memberProduct,
+                    manifestsByPath,
+                    manifestsByName,
+                    states,
+                    workspaceMembers,
+                    []);
+            }
+        }
         return new ProjectBuild(
             root,
             root.Product,
@@ -84,7 +124,7 @@ internal sealed record ProjectBuild(
         var nextChain = chain.Append(manifest.Name).ToArray();
         foreach (var dependency in manifest.Dependencies.OrderBy(static pair => pair.Key, StringComparer.Ordinal))
         {
-            var dependencyManifest = ProjectManifest.Load(dependency.Value);
+            var dependencyManifest = ProjectManifest.Load(dependency.Value.Path);
             if (workspaceMembers is not null
                 && !workspaceMembers.ContainsKey(dependencyManifest.Path))
             {
@@ -96,6 +136,12 @@ internal sealed record ProjectBuild(
             {
                 throw new SollangException(
                     $"dependency '{dependency.Key}' resolves to project '{dependencyManifest.Name}' in '{dependencyManifest.Path}'");
+            }
+            if (!dependency.Value.Version.Accepts(dependencyManifest.Version))
+            {
+                throw new SollangException(
+                    $"dependency '{dependency.Key}' requires version '{dependency.Value.Version.Text}', "
+                    + $"but project '{dependencyManifest.Name}' declares '{dependencyManifest.Version}'");
             }
             dependencies.Add(
                 dependency.Key,
@@ -127,6 +173,8 @@ internal sealed record ProjectPackage(
     ProjectProduct Product,
     IReadOnlyDictionary<string, ProjectPackage> Dependencies)
 {
+    public string Identity => $"{Manifest.Name}@{Manifest.Version}";
+
     public string SourceRoot => Path.GetDirectoryName(Product.RootSource)
         ?? System.IO.Directory.GetCurrentDirectory();
 }

@@ -28,6 +28,10 @@ internal static class CompilerApp
                 GrammarCompiler.Build(args[2..]);
                 return 0;
             }
+            if (args is ["resolve", ..])
+            {
+                return PackageLock.Resolve(args);
+            }
             var options = CliOptions.Parse(args);
             Build(options);
             return 0;

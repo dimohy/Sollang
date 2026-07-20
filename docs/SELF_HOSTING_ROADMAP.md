@@ -1710,6 +1710,34 @@ References:
 - [SwiftPM package dependencies](https://docs.swift.org/swiftpm/documentation/packagemanagerdocs/addingdependencies/)
 - [Zig build system](https://ziglang.org/learn/build-system/)
 
+## Versioned Local Packages And Workspace Lock (D208B)
+
+D208B gives every project a SemVer identity, checks local dependency version
+requirements, and introduces one deterministic `sollang.lock` per workspace.
+The lock records the complete workspace member graph in sorted `name@version`
+order, exact dependency identities, and normalized local `path:` sources.
+`sollang resolve` writes it explicitly, workspace builds refresh it, and
+`--locked` rejects drift. Local source bytes remain governed by source control;
+remote content hashes are deliberately not claimed by this checkpoint.
+
+The native self-host package now contains independent SemVer/requirement and
+lock-manifest parsers. Examples 440 and 441 cover valid parsing, leading-zero
+and prerelease rejection, release precedence, compatible/comparator ranges,
+canonical lock counts, invalid package versions, and duplicate IDs. Reference
+diagnostics additionally cover missing/invalid project versions, malformed and
+unsatisfied dependency requirements, missing dependency paths, and stale locks.
+
+D208 distributable package work is now **3/5 (60%)**: local workspaces,
+semantic versions, and deterministic locks are implemented; registries and
+content-pinned Git sources remain. The formal roadmap stays **48 complete,
+9 partial, 3 missing: 52.5/60 (87.5%)** because D208 remains a partial gate.
+Release build is warning/error-free. Windows and Linux each pass **590/590**;
+Windows Stage2 passes **6/6** at **10,752,017 LLVM text bytes**, and Linux
+Stage2 passes **5/5** at **10,748,620 LLVM text bytes**. The Windows native
+Stage2 executable is about **1.4 MiB**; the roughly 10.8 MB figures are emitted
+LLVM text rather than executable size. Periodic Stage3 cadence advances to
+**8/10**, so Stage3 is not due at this checkpoint.
+
 ## Immediate Implementation Order
 
 1. Multi-file compilation (implemented by example 52).

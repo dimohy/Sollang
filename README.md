@@ -267,6 +267,7 @@ A project root can be named without repeating its source path on every build:
 ```sollang
 project {
     name: "hello"
+    version: "0.1.0"
     root: "src/main.slg"
 }
 ```
@@ -281,20 +282,27 @@ maps instead of repeating compiler source arguments:
 ```sollang
 project {
     name: "tools"
+    version: "0.1.0"
     products: {
         compiler: "src/compiler.slg"
         formatter: "src/formatter.slg"
     }
     dependencies: {
-        syntax: "../syntax"
+        syntax: {
+            path: "../syntax"
+            version: "^1.2.0"
+        }
     }
 }
 ```
 
-Use `sollang build --product compiler`. A dependency path points to the exact
-directory containing another `sollang.project`; its name is also its first
-import segment, for example `import syntax.tree` binds `tree`. Dependency
-paths are local and resolved from the declaring manifest.
+Use `sollang build --product compiler`. Every project has a canonical SemVer
+identity such as `tools@0.1.0`. A dependency path points to the exact directory
+containing another `sollang.project`; its name is also its first import segment,
+for example `import syntax.tree` binds `tree`. Version requirements accept
+exact versions, `^`, `~`, and comparator intersections such as
+`>=1.2.0 <2.0.0`. The legacy path-only dependency value remains accepted as an
+unconstrained local dependency.
 
 Related local packages can share one explicit workspace without duplicating
 their names in a second map:
@@ -316,6 +324,10 @@ package must be a declared workspace member. From inside a member directory,
 plain `sollang build` discovers both the member project and its workspace.
 Workspace outputs are separated as
 `build/<target>/<package>/<product>[.exe|.wasm]` under the workspace root.
+`sollang resolve --workspace <path>` writes one canonical, sorted
+`sollang.lock` for all workspace members. Normal workspace builds refresh a
+stale lock; `sollang build --locked` instead rejects a missing or stale lock,
+which is the reproducible CI mode. Commit `sollang.lock` with the workspace.
 
 ## Self-Hosting Progress
 
@@ -328,9 +340,10 @@ The measured roadmap is currently **52.5/60 gates (87.5%)**:
 
 The Sollang-written compiler is split into lexer, parser/CST/AST, semantic,
 typed-IR, ownership, module-cache, and LLVM modules. It builds a native Stage 2
-compiler and passes Windows and Linux differential gates. Local workspaces are
-implemented; versioned/locked local package graphs are the active next layer,
-while registries and content-pinned Git dependencies remain unfinished. Exact
+compiler and passes Windows and Linux differential gates. Local package
+identities, SemVer requirements, shared deterministic workspace locks, and
+self-host parsers for both versions and lock manifests are implemented;
+registries and content-pinned Git dependencies remain unfinished. Exact
 counts and the evidence behind every gate live in the
 [self-hosting roadmap](docs/SELF_HOSTING_ROADMAP.md).
 
