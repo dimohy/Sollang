@@ -1,0 +1,40 @@
+import sollang.compiler.llvm.text as llvm
+
+# Verifies self-host LLVM execution for CFG-sensitive readonly-reference loans.
+main {
+    [
+        """
+        struct Pair {
+            first: Int
+            second: Int
+        }
+
+        same value: ref Int -> ref Int {
+            value
+        }
+
+        read value: ref Int -> Int {
+            value
+        }
+
+        choose condition: Bool -> Int {
+            Pair { first: 50, second: 60 } => pair!
+            pair!.first -> same => borrowed
+            condition -> if {
+                # The rebind and reference use are mutually exclusive.
+                Pair { first: 70, second: 80 } => pair!
+                pair!.first
+            } else {
+                borrowed -> read
+            }
+        }
+
+        main {
+            false -> choose => observed
+            "observed=$observed" -> println
+        }
+        """,
+        ~
+    ] => sources!
+    sources! -> llvm.emitLinuxChecked => diagnosticCount
+}

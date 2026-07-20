@@ -121,6 +121,78 @@ referenceBindingUsedAfterIndexSite prepared: semanticContext.SemanticSnapshot, t
     used!
 }
 
+referenceForwardUseReachable prepared: semanticContext.SemanticSnapshot, typed: [typedIr.TypedIrNode; ~], moveIndex: Int, useIndex: Int -> Bool {
+    false => exclusive!
+    moveIndex => moveAncestor!
+    (moveAncestor! >= 0 and moveAncestor! < (typed -> len) and not exclusive!) -> while {
+        typed[moveAncestor!] => moveAncestorNode
+        moveAncestorNode.kind == 19 -> if {
+            moveAncestorNode.parent >= 0 -> if {
+                moveAncestorNode.parent < (typed -> len) -> if {
+                    (typed[moveAncestorNode.parent].kind == 18 or typed[moveAncestorNode.parent].kind == 27) -> if {
+                        useIndex => useAncestor!
+                        (useAncestor! >= 0 and useAncestor! < (typed -> len) and typed[useAncestor!].parent != moveAncestorNode.parent) -> while {
+                            typed[useAncestor!].parent => useAncestor!
+                        }
+                        (useAncestor! >= 0 and useAncestor! < (typed -> len) and useAncestor! != moveAncestor! and typed[useAncestor!].kind == 19) -> if {
+                            true => exclusive!
+                        }
+                    }
+                }
+            }
+            (not exclusive! and moveAncestorNode.sourceModule >= 0 and moveAncestorNode.sourceModule < (prepared.package.ranges -> len) and moveAncestorNode.astNode >= 0) -> if {
+                prepared.package.ranges[moveAncestorNode.sourceModule] => moveAncestorRange
+                moveAncestorNode.astNode < moveAncestorRange.astCount -> if {
+                    prepared.package.nodes[moveAncestorRange.astStart + moveAncestorNode.astNode].kind == 58 -> if {
+                        moveAncestorNode.nextOperand => nextAlternative!
+                        (nextAlternative! >= 0 and nextAlternative! < (typed -> len)) -> if {
+                            useIndex => alternativeUseAncestor!
+                            false => useInAlternative!
+                            (alternativeUseAncestor! >= 0 and alternativeUseAncestor! < (typed -> len) and not useInAlternative!) -> while {
+                                alternativeUseAncestor! == nextAlternative! -> if {
+                                    true => useInAlternative!
+                                } else {
+                                    typed[alternativeUseAncestor!].parent => alternativeUseAncestor!
+                                }
+                            }
+                            useInAlternative! -> if { true => exclusive! }
+                        }
+                    }
+                }
+            }
+        }
+        moveAncestorNode.parent => moveAncestor!
+    }
+    exclusive! -> if {
+        false
+    } else {
+        moveIndex => moveRegion!
+        (moveRegion! >= 0 and moveRegion! < (typed -> len) and typed[moveRegion!].kind != 19 and typed[moveRegion!].kind != 20) -> while {
+            typed[moveRegion!].parent => moveRegion!
+        }
+        prepared.package.ranges[typed[moveIndex].sourceModule] => reachabilityRange
+        prepared.package.nodes[reachabilityRange.astStart + typed[moveIndex].astNode].start => moveStart
+        prepared.package.nodes[reachabilityRange.astStart + typed[useIndex].astNode].start => useStart
+        false => stopped!
+        0 => exitIndex!
+        (not stopped! and exitIndex! < (typed -> len)) -> while {
+            typed[exitIndex!] => exitCandidate
+            (exitCandidate.sourceModule == typed[moveIndex].sourceModule and exitCandidate.astNode >= 0 and (exitCandidate.kind == 23 or (exitCandidate.kind == 21 and exitCandidate.opcode == 0))) -> if {
+                exitIndex! => exitRegion!
+                (exitRegion! >= 0 and exitRegion! < (typed -> len) and typed[exitRegion!].kind != 19 and typed[exitRegion!].kind != 20) -> while {
+                    typed[exitRegion!].parent => exitRegion!
+                }
+                exitRegion! == moveRegion! -> if {
+                    prepared.package.nodes[reachabilityRange.astStart + exitCandidate.astNode].start => exitStart
+                    (moveStart < exitStart and exitStart < useStart) -> if { true => stopped! }
+                }
+            }
+            exitIndex! + 1 => exitIndex!
+        }
+        not stopped!
+    }
+}
+
 public analyze sources: [Text; ~] -> [OwnershipDiagnostic; ~] {
     sources -> semanticContext.prepare => prepared
     prepared -> analyzeContext
@@ -385,16 +457,63 @@ public analyzeLoweredContext prepared: semanticContext.SemanticSnapshot, typed: 
         }
         hasTake!
     }
-    borrowedBindingUsedAfterSite bindingIr: Int, siteIr: Int -> Bool {
+    borrowedBindingUsedAfterSite borrowedPrepared: semanticContext.SemanticSnapshot, borrowedTyped: [typedIr.TypedIrNode; ~], bindingIr: Int, siteIr: Int -> Bool {
         false => used!
-        prepared.package.ranges[typed[siteIr].sourceModule] => useRange
-        prepared.package.nodes[useRange.astStart + typed[siteIr].astNode].start => siteStart
+        borrowedPrepared.package.ranges[borrowedTyped[siteIr].sourceModule] => useRange
+        borrowedPrepared.package.nodes[useRange.astStart + borrowedTyped[siteIr].astNode].start => siteStart
+        siteIr => borrowedSiteAncestor!
+        -1 => borrowedSiteLoop!
+        (borrowedSiteAncestor! >= 0 and borrowedSiteAncestor! < (borrowedTyped -> len) and borrowedSiteLoop! < 0) -> while {
+            borrowedTyped[borrowedSiteAncestor!].kind == 20 -> if {
+                borrowedSiteAncestor! => borrowedSiteLoop!
+            } else {
+                borrowedTyped[borrowedSiteAncestor!].parent => borrowedSiteAncestor!
+            }
+        }
+        borrowedPrepared -> referenceBindingUsedAfterIndexSite(borrowedTyped, bindingIr, siteIr) => sourceOrderUsed
+        (sourceOrderUsed or borrowedSiteLoop! >= 0) => searchReachableUses
         0 => useIndex!
-        (not used! and useIndex! < (typed -> len)) -> while {
-            typed[useIndex!] => use
-            (use.kind == 5 and use.sourceModule == typed[siteIr].sourceModule and use.astNode >= 0 and use.operand0 == bindingIr) -> if {
-                prepared.package.nodes[useRange.astStart + use.astNode].start > siteStart -> if {
-                    siteIr -> useReachableAfterMove(useIndex!) -> if { true => used! }
+        (searchReachableUses and not used! and useIndex! < (borrowedTyped -> len)) -> while {
+            borrowedTyped[useIndex!] => use
+            (siteStart >= UIntSize(0) and use.kind == 5 and use.sourceModule == borrowedTyped[siteIr].sourceModule and use.astNode >= 0 and use.operand0 == bindingIr) -> if {
+                borrowedPrepared.package.nodes[useRange.astStart + use.astNode].start => useStart
+                useStart > siteStart -> if {
+                    borrowedPrepared -> referenceForwardUseReachable(borrowedTyped, siteIr, useIndex!) -> if { true => used! }
+                } else {
+                    borrowedSiteLoop! >= 0 -> if {
+                    useIndex! => borrowedUseAncestor!
+                    false => borrowedUseInLoop!
+                    (borrowedUseAncestor! >= 0 and not borrowedUseInLoop!) -> while {
+                        borrowedUseAncestor! == borrowedSiteLoop! -> if {
+                            true => borrowedUseInLoop!
+                        } else {
+                            borrowedTyped[borrowedUseAncestor!].parent => borrowedUseAncestor!
+                        }
+                    }
+                    borrowedUseInLoop! -> if {
+                        true => reachesBackEdge!
+                        siteIr => siteRegion!
+                        (siteRegion! >= 0 and borrowedTyped[siteRegion!].kind != 19 and borrowedTyped[siteRegion!].kind != 20) -> while {
+                            borrowedTyped[siteRegion!].parent => siteRegion!
+                        }
+                        siteIr => siteStatement!
+                        (siteStatement! >= 0 and borrowedTyped[siteStatement!].parent != siteRegion!) -> while {
+                            borrowedTyped[siteStatement!].parent => siteStatement!
+                        }
+                        siteStatement! >= 0 -> if {
+                            borrowedTyped[siteStatement!].nextOperand => followingStatement!
+                            (reachesBackEdge! and followingStatement! >= 0) -> while {
+                                borrowedTyped[followingStatement!] => following
+                                (following.kind == 23 or (following.kind == 21 and following.opcode == 0)) -> if {
+                                    false => reachesBackEdge!
+                                } else {
+                                    following.nextOperand => followingStatement!
+                                }
+                            }
+                        }
+                        reachesBackEdge! -> if { true => used! }
+                    }
+                    }
                 }
             }
             useIndex! + 1 => useIndex!
@@ -418,38 +537,97 @@ public analyzeLoweredContext prepared: semanticContext.SemanticSnapshot, typed: 
         false => exclusive!
         (leftAncestor! >= 0 and not exclusive!) -> while {
             typed[leftAncestor!].parent => branchControl!
-            (typed[leftAncestor!].kind == 19 and typed[leftAncestor!].operand1 >= 0 and typed[leftAncestor!].nextOperand >= 0) -> if {
-                leftIndex -> nodeBelongsTo(typed[leftAncestor!].operand1) => leftInArm
-                leftIndex -> nodeBelongsTo(typed[leftAncestor!].nextOperand) => leftInAlternative
-                rightIndex -> nodeBelongsTo(typed[leftAncestor!].operand1) => rightInArm
-                rightIndex -> nodeBelongsTo(typed[leftAncestor!].nextOperand) => rightInAlternative
-                ((leftInArm and rightInAlternative) or (leftInAlternative and rightInArm)) -> if {
-                    true => exclusive!
+            typed[leftAncestor!] => leftAncestorNode
+            (leftAncestorNode.kind == 19 and leftAncestorNode.sourceModule >= 0 and leftAncestorNode.sourceModule < (prepared.package.ranges -> len) and leftAncestorNode.astNode >= 0) -> if {
+                prepared.package.ranges[leftAncestorNode.sourceModule] => leftAncestorRange
+                leftAncestorNode.astNode < leftAncestorRange.astCount -> if {
+                    prepared.package.nodes[leftAncestorRange.astStart + leftAncestorNode.astNode].kind == 58 -> if {
+                        leftAncestorNode.nextOperand => nextAlternative!
+                        (nextAlternative! >= 0 and nextAlternative! < (typed -> len)) -> if {
+                            (typed[nextAlternative!].kind == 19 and typed[nextAlternative!].parent == branchControl!) -> if {
+                                rightIndex -> nodeBelongsTo(nextAlternative!) -> if {
+                                    true => exclusive!
+                                }
+                            }
+                        }
+                    }
                 }
             }
-            (typed[leftAncestor!].kind == 19 and branchControl! >= 0 and (typed[branchControl!].kind == 18 or typed[branchControl!].kind == 27)) -> if {
-                rightIndex => rightAncestor!
-                (rightAncestor! >= 0 and typed[rightAncestor!].parent != branchControl!) -> while {
-                    typed[rightAncestor!].parent => rightAncestor!
-                }
-                (rightAncestor! >= 0 and typed[rightAncestor!].kind == 19 and typed[rightAncestor!].parent == branchControl! and rightAncestor! != leftAncestor!) -> if {
-                    true => exclusive!
+            (typed[leftAncestor!].kind == 19 and branchControl! >= 0) -> if {
+                (typed[branchControl!].kind == 18 or typed[branchControl!].kind == 27) -> if {
+                    rightIndex => rightAncestor!
+                    (rightAncestor! >= 0 and typed[rightAncestor!].parent != branchControl!) -> while {
+                        typed[rightAncestor!].parent => rightAncestor!
+                    }
+                    rightAncestor! >= 0 -> if {
+                        (typed[rightAncestor!].kind == 19 and typed[rightAncestor!].parent == branchControl! and rightAncestor! != leftAncestor!) -> if {
+                            true => exclusive!
+                        }
+                    }
                 }
             }
             typed[leftAncestor!].parent => leftAncestor!
         }
         exclusive!
     }
+    firstDirectExitAfter siteIndex: Int -> Int {
+        -1 => firstExit!
+        UIntSize(0) => firstExitStart!
+        prepared.package.ranges[typed[siteIndex].sourceModule] => exitRange
+        prepared.package.nodes[exitRange.astStart + typed[siteIndex].astNode].start => siteStart
+        0 => exitSearch!
+        exitSearch! < (typed -> len) -> while {
+            typed[exitSearch!] => exitCandidate
+            (exitCandidate.sourceModule == typed[siteIndex].sourceModule and exitCandidate.parent == typed[siteIndex].parent and exitCandidate.astNode >= 0 and (exitCandidate.kind == 21 or exitCandidate.kind == 23)) -> if {
+                    prepared.package.nodes[exitRange.astStart + exitCandidate.astNode].start => exitStart
+                    (exitStart > siteStart and (firstExit! < 0 or exitStart < firstExitStart!)) -> if {
+                        exitSearch! => firstExit!
+                        exitStart => firstExitStart!
+                    }
+            }
+            exitSearch! + 1 => exitSearch!
+        }
+        firstExit!
+    }
     useReachableAfterMove moveIndex: Int, useIndex: Int -> Bool {
-        moveIndex -> enclosingLoopFor => moveLoop
-        (moveLoop >= 0 and (useIndex -> nodeBelongsTo(moveLoop))) -> if {
-            true
-        } else {
+        typed[moveIndex].kind != 6 -> if {
             moveIndex -> mutuallyExclusiveBranches(useIndex) -> if {
                 false
             } else {
+                moveIndex -> enclosingLoopFor => moveLoop
                 prepared.package.ranges[typed[moveIndex].sourceModule] => reachabilityRange
-                prepared.package.nodes[reachabilityRange.astStart + typed[useIndex].astNode].start > prepared.package.nodes[reachabilityRange.astStart + typed[moveIndex].astNode].start
+                prepared.package.nodes[reachabilityRange.astStart + typed[moveIndex].astNode].start => moveStart
+                prepared.package.nodes[reachabilityRange.astStart + typed[useIndex].astNode].start => useStart
+                moveIndex -> firstDirectExitAfter => directExit
+                false => directExitStopsPath!
+                directExit >= 0 -> if {
+                    typed[directExit] => directExitNode
+                    (directExitNode.kind == 23 or (directExitNode.kind == 21 and directExitNode.opcode == 0)) -> if {
+                        true => directExitStopsPath!
+                    }
+                }
+                useStart > moveStart -> if {
+                    directExitStopsPath! -> if {
+                        prepared.package.nodes[reachabilityRange.astStart + typed[directExit].astNode].start => directExitStart
+                        directExitStart < useStart -> if { false } else { true }
+                    } else {
+                        true
+                    }
+                } else {
+                    (moveLoop >= 0 and (useIndex -> nodeBelongsTo(moveLoop)) and not directExitStopsPath!)
+                }
+            }
+        } else {
+            moveIndex -> enclosingLoopFor => moveLoop
+            (moveLoop >= 0 and (useIndex -> nodeBelongsTo(moveLoop))) -> if {
+                true
+            } else {
+                moveIndex -> mutuallyExclusiveBranches(useIndex) -> if {
+                    false
+                } else {
+                    prepared.package.ranges[typed[moveIndex].sourceModule] => reachabilityRange
+                    prepared.package.nodes[reachabilityRange.astStart + typed[useIndex].astNode].start > prepared.package.nodes[reachabilityRange.astStart + typed[moveIndex].astNode].start
+                }
             }
         }
     }
@@ -754,10 +932,10 @@ public analyzeLoweredContext prepared: semanticContext.SemanticSnapshot, typed: 
                             }
                             (mutatesReferenceOwner! and referenceBindingIndex! < referenceMutationIndex!) -> if {
                             false => referenceBorrowUsedAfterMutation!
-                            (referenceMutation.kind == 6 or referenceMutation.kind == 12 or referenceMutation.kind == 14 or referenceMutation.kind == 16 or referenceMutation.kind == 17 or referenceMutation.kind == 24) -> if {
+                            (referenceMutation.kind == 6 or referenceMutation.kind == 24) -> if {
                                 prepared -> referenceBindingUsedAfterIndexSite(typed, referenceBindingIndex!, referenceMutationIndex!) => referenceBorrowUsedAfterMutation!
                             } else {
-                                referenceBindingIndex! -> borrowedBindingUsedAfterSite(referenceMutationIndex!) => referenceBorrowUsedAfterMutation!
+                                prepared -> borrowedBindingUsedAfterSite(typed, referenceBindingIndex!, referenceMutationIndex!) => referenceBorrowUsedAfterMutation!
                             }
                             referenceBorrowUsedAfterMutation! -> if {
                             prepared.package.ranges[referenceMutation.sourceModule] => referenceMutationRange
@@ -1139,7 +1317,7 @@ public analyzeLoweredContext prepared: semanticContext.SemanticSnapshot, typed: 
                 0 => borrowedTakeOriginSearch!
                 borrowedTakeOriginSearch! < (borrowedBindings! -> len) -> while {
                     borrowedBindings![borrowedTakeOriginSearch!] => borrowedTakeOrigin
-                    (borrowedTakeOrigin.ownerBindingIr == borrowedTakeOwnerBinding and (borrowedTakeOrigin.ownerPlaceIr -> placeOverlapsIndexedProjection(borrowedTakeElementIndex!)) and borrowedTakeOrigin.bindingIr < borrowedTakeIndex! and (borrowedTakeOrigin.bindingIr -> borrowedBindingUsedAfterSite(borrowedTakeIndex!))) -> if {
+                    (borrowedTakeOrigin.ownerBindingIr == borrowedTakeOwnerBinding and (borrowedTakeOrigin.ownerPlaceIr -> placeOverlapsIndexedProjection(borrowedTakeElementIndex!)) and borrowedTakeOrigin.bindingIr < borrowedTakeIndex! and (prepared -> borrowedBindingUsedAfterSite(typed, borrowedTakeOrigin.bindingIr, borrowedTakeIndex!))) -> if {
                         prepared.package.ranges[borrowedTake.sourceModule] => borrowedTakeRange
                         prepared.package.nodes[borrowedTakeRange.astStart + borrowedTake.astNode] => borrowedTakeAst
                         diagnostics! -> push(OwnershipDiagnostic {

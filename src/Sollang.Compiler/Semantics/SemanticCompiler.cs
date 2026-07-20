@@ -2539,7 +2539,8 @@ internal sealed partial class SemanticCompiler
                             loopControl.Column,
                             $"'{loopControl.Kind.ToString().ToLowerInvariant()}' is only valid inside a loop");
                     }
-                    break;
+                    _borrowedTextContinuationNames = parentBorrowedTextContinuation;
+                    return;
                 case GuardLoopControlStatement guardLoopControl:
                     if (_loopDepth == 0)
                     {
@@ -3356,7 +3357,7 @@ internal sealed partial class SemanticCompiler
     {
         _loopDepth++;
         var loopEntryBorrowedTextOrigins = CaptureBorrowedTextOriginState();
-        Dictionary<string, IReadOnlySet<string>>? loopExitBorrowedTextOrigins = null;
+        BorrowOriginState? loopExitBorrowedTextOrigins = null;
         try
         {
             var loopContinuation = new HashSet<string>(
@@ -3364,7 +3365,8 @@ internal sealed partial class SemanticCompiler
                 StringComparer.Ordinal);
             foreach (var binding in _activeBorrowedTextOrigins.Keys)
             {
-                if (statements.Any(statement =>
+                if (BorrowLoopMayReachBackEdge(statements)
+                    && statements.Any(statement =>
                         StoragePlacementAnalyzer.ReferencesName(statement, binding)))
                 {
                     loopContinuation.Add(binding);
@@ -4527,13 +4529,31 @@ internal sealed partial class SemanticCompiler
         }
 
         var branchEntryBorrowedTextOrigins = CaptureBorrowedTextOriginState();
-        var thenType = InferBlockBody(
-            expression.Then,
-            functions,
-            bindings,
-            allowReadIntCall,
-            allowedOwnedOuterResultName,
-            mutableBindings);
+        var outerBorrowedContinuation = _borrowedTextContinuationNames;
+        BoundType InferBranch(BlockBody body)
+        {
+            var previousContinuation = _borrowedTextContinuationNames;
+            try
+            {
+                _borrowedTextContinuationNames = BorrowBlockMayReachContinuation(body)
+                    ? outerBorrowedContinuation
+                    : new HashSet<string>(StringComparer.Ordinal);
+                return InferBlockBody(
+                    body,
+                    functions,
+                    bindings,
+                    allowReadIntCall,
+                    allowedOwnedOuterResultName,
+                    mutableBindings);
+            }
+            finally
+            {
+                _borrowedTextContinuationNames = previousContinuation;
+            }
+        }
+
+        var thenReachesJoin = BorrowBlockMayReachContinuation(expression.Then);
+        var thenType = InferBranch(expression.Then);
         var thenBorrowedTextOrigins = CaptureBorrowedTextOriginState();
         RestoreBorrowedTextOriginState(branchEntryBorrowedTextOrigins);
         if (expression.Else is null)
@@ -4544,7 +4564,9 @@ internal sealed partial class SemanticCompiler
             }
 
             RestoreBorrowedTextOriginState(MergeBorrowedTextOriginStates(
-                [branchEntryBorrowedTextOrigins, thenBorrowedTextOrigins]));
+                thenReachesJoin
+                    ? [branchEntryBorrowedTextOrigins, thenBorrowedTextOrigins]
+                    : [branchEntryBorrowedTextOrigins]));
             ExpireBorrowedTextOriginsBeforeStatement(
                 [],
                 0,
@@ -4553,16 +4575,17 @@ internal sealed partial class SemanticCompiler
             return BoundType.Unit;
         }
 
-        var elseType = InferBlockBody(
-            expression.Else,
-            functions,
-            bindings,
-            allowReadIntCall,
-            allowedOwnedOuterResultName,
-            mutableBindings);
+        var elseReachesJoin = BorrowBlockMayReachContinuation(expression.Else);
+        var elseType = InferBranch(expression.Else);
         var elseBorrowedTextOrigins = CaptureBorrowedTextOriginState();
         RestoreBorrowedTextOriginState(MergeBorrowedTextOriginStates(
-            [thenBorrowedTextOrigins, elseBorrowedTextOrigins]));
+            (thenReachesJoin, elseReachesJoin) switch
+            {
+                (true, true) => [thenBorrowedTextOrigins, elseBorrowedTextOrigins],
+                (true, false) => [thenBorrowedTextOrigins],
+                (false, true) => [elseBorrowedTextOrigins],
+                _ => []
+            }));
         if (thenType != elseType)
         {
             throw Error(
@@ -4616,7 +4639,8 @@ internal sealed partial class SemanticCompiler
 
         BoundType? resultType = null;
         var branchEntryBorrowedTextOrigins = CaptureBorrowedTextOriginState();
-        var branchExitBorrowedTextOrigins = new List<IReadOnlyDictionary<string, IReadOnlySet<string>>>();
+        var branchExitBorrowedTextOrigins = new List<BorrowOriginState>();
+        var outerBorrowedContinuation = _borrowedTextContinuationNames;
         foreach (var arm in expression.Arms)
         {
             RestoreBorrowedTextOriginState(branchEntryBorrowedTextOrigins);
@@ -4638,33 +4662,64 @@ internal sealed partial class SemanticCompiler
                 throw Error(arm.Condition.Line, arm.Condition.Column, "when arm condition must be Bool");
             }
 
-            var armType = InferBlockBody(
-                arm.Body,
-                    functions,
-                    bindings,
-                    allowReadIntCall,
-                    allowedOwnedOuterResultName,
-                    mutableBindings);
-            branchExitBorrowedTextOrigins.Add(CaptureBorrowedTextOriginState());
-            resultType ??= armType;
-            if (armType != resultType)
+            var armReachesJoin = BorrowBlockMayReachContinuation(arm.Body);
+            var previousContinuation = _borrowedTextContinuationNames;
+            try
             {
-                throw Error(
-                    arm.Line,
-                    arm.Column,
-                    $"when arms must return the same type, got {FormatType(resultType.Value)} and {FormatType(armType)}");
+                _borrowedTextContinuationNames = armReachesJoin
+                    ? outerBorrowedContinuation
+                    : new HashSet<string>(StringComparer.Ordinal);
+                var armType = InferBlockBody(
+                    arm.Body,
+                        functions,
+                        bindings,
+                        allowReadIntCall,
+                        allowedOwnedOuterResultName,
+                        mutableBindings);
+                if (armReachesJoin)
+                {
+                    branchExitBorrowedTextOrigins.Add(CaptureBorrowedTextOriginState());
+                }
+                resultType ??= armType;
+                if (armType != resultType)
+                {
+                    throw Error(
+                        arm.Line,
+                        arm.Column,
+                        $"when arms must return the same type, got {FormatType(resultType.Value)} and {FormatType(armType)}");
+                }
+            }
+            finally
+            {
+                _borrowedTextContinuationNames = previousContinuation;
             }
         }
 
         RestoreBorrowedTextOriginState(branchEntryBorrowedTextOrigins);
-        var elseType = InferBlockBody(
-            expression.Else,
-            functions,
-            bindings,
-            allowReadIntCall,
-            allowedOwnedOuterResultName,
-            mutableBindings);
-        branchExitBorrowedTextOrigins.Add(CaptureBorrowedTextOriginState());
+        var elseReachesJoin = BorrowBlockMayReachContinuation(expression.Else);
+        var previousElseContinuation = _borrowedTextContinuationNames;
+        BoundType elseType;
+        try
+        {
+            _borrowedTextContinuationNames = elseReachesJoin
+                ? outerBorrowedContinuation
+                : new HashSet<string>(StringComparer.Ordinal);
+            elseType = InferBlockBody(
+                expression.Else,
+                functions,
+                bindings,
+                allowReadIntCall,
+                allowedOwnedOuterResultName,
+                mutableBindings);
+            if (elseReachesJoin)
+            {
+                branchExitBorrowedTextOrigins.Add(CaptureBorrowedTextOriginState());
+            }
+        }
+        finally
+        {
+            _borrowedTextContinuationNames = previousElseContinuation;
+        }
         RestoreBorrowedTextOriginState(MergeBorrowedTextOriginStates(
             branchExitBorrowedTextOrigins));
         resultType ??= elseType;
@@ -4713,8 +4768,12 @@ internal sealed partial class SemanticCompiler
         var definition = _types.GetEnum(subjectType);
         var covered = new HashSet<string>(StringComparer.Ordinal);
         BoundType? resultType = null;
+        var branchEntryBorrowedTextOrigins = CaptureBorrowedTextOriginState();
+        var branchExitBorrowedTextOrigins = new List<BorrowOriginState>();
+        var outerBorrowedContinuation = _borrowedTextContinuationNames;
         foreach (var arm in expression.Arms)
         {
+            RestoreBorrowedTextOriginState(branchEntryBorrowedTextOrigins);
             var pattern = (EnumPatternExpression)arm.Condition;
             var patternType = subjectType;
             if (pattern.TypeName.Length > 0
@@ -4764,13 +4823,30 @@ internal sealed partial class SemanticCompiler
                     $"variant '{definition.Name}.{variant.Name}' has no payload to bind");
             }
 
-            var armType = InferBlockBody(
-                arm.Body,
-                functions,
-                armBindings,
-                allowReadIntCall,
-                allowedOwnedOuterResultName,
-                mutableBindings);
+            var armReachesJoin = BorrowBlockMayReachContinuation(arm.Body);
+            var previousContinuation = _borrowedTextContinuationNames;
+            BoundType armType;
+            try
+            {
+                _borrowedTextContinuationNames = armReachesJoin
+                    ? outerBorrowedContinuation
+                    : new HashSet<string>(StringComparer.Ordinal);
+                armType = InferBlockBody(
+                    arm.Body,
+                    functions,
+                    armBindings,
+                    allowReadIntCall,
+                    allowedOwnedOuterResultName,
+                    mutableBindings);
+                if (armReachesJoin)
+                {
+                    branchExitBorrowedTextOrigins.Add(CaptureBorrowedTextOriginState());
+                }
+            }
+            finally
+            {
+                _borrowedTextContinuationNames = previousContinuation;
+            }
             resultType ??= armType;
             if (armType != resultType)
             {
@@ -4781,6 +4857,7 @@ internal sealed partial class SemanticCompiler
             }
         }
 
+        RestoreBorrowedTextOriginState(branchEntryBorrowedTextOrigins);
         if (expression.Else is null)
         {
             var missing = definition.Variants.Where(variant => !covered.Contains(variant.Name)).ToArray();
@@ -4799,13 +4876,30 @@ internal sealed partial class SemanticCompiler
                 throw Error(expression.Else.Line, expression.Else.Column, "enum when else arm is unreachable because all variants are covered");
             }
 
-            var elseType = InferBlockBody(
-                expression.Else,
-                functions,
-                bindings,
-                allowReadIntCall,
-                allowedOwnedOuterResultName,
-                mutableBindings);
+            var elseReachesJoin = BorrowBlockMayReachContinuation(expression.Else);
+            var previousContinuation = _borrowedTextContinuationNames;
+            BoundType elseType;
+            try
+            {
+                _borrowedTextContinuationNames = elseReachesJoin
+                    ? outerBorrowedContinuation
+                    : new HashSet<string>(StringComparer.Ordinal);
+                elseType = InferBlockBody(
+                    expression.Else,
+                    functions,
+                    bindings,
+                    allowReadIntCall,
+                    allowedOwnedOuterResultName,
+                    mutableBindings);
+                if (elseReachesJoin)
+                {
+                    branchExitBorrowedTextOrigins.Add(CaptureBorrowedTextOriginState());
+                }
+            }
+            finally
+            {
+                _borrowedTextContinuationNames = previousContinuation;
+            }
             resultType ??= elseType;
             if (elseType != resultType)
             {
@@ -4816,6 +4910,12 @@ internal sealed partial class SemanticCompiler
             }
         }
 
+        RestoreBorrowedTextOriginState(MergeBorrowedTextOriginStates(branchExitBorrowedTextOrigins));
+        ExpireBorrowedTextOriginsBeforeStatement(
+            [],
+            0,
+            null,
+            _borrowedTextContinuationNames);
         return resultType ?? BoundType.Unit;
     }
 

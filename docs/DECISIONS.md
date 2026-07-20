@@ -9004,3 +9004,49 @@ References:
 - [Rust E0506: assignment while borrowed](https://doc.rust-lang.org/error_codes/E0506.html)
 - [Mojo lifetimes, origins, and references](https://docs.modular.com/mojo/manual/values/lifetimes)
 - [Polonius loan rules](https://rust-lang.github.io/polonius/rules/loans.html)
+
+## D222 - Control-Flow-Sensitive Readonly-Reference Liveness
+
+Status: implemented branch-local and loop-sensitive vertical with Stage3 verification
+Date: 2026-07-21
+
+Sollang now determines a readonly reference's remaining lifetime from reachable
+control flow rather than source order alone. An early-returning alternative does
+not inherit reference uses after the join, and sibling `if`, `when`, and enum
+alternatives do not keep one another's loans live. Within a loop, an
+unconditional `break` removes the back edge, while `continue` preserves it; a
+reference used in the next iteration therefore still protects its owner. The
+language keeps lifetime notation implicit.
+
+The C# semantic pass snapshots the origin map and active readonly-reference
+bindings together, summarizes branch and loop control exits, and merges only
+states that can reach the continuation. The self-host ownership pass applies
+the same reachability rule to source-backed typed IR. Its helper takes the
+semantic snapshot and typed statements explicitly instead of capturing them;
+this avoids an invalid captured-aggregate ABI path that was exposed by the
+Linux native self-host executable.
+
+Examples 529-531 prove early return, mutually exclusive alternatives,
+post-last-use break, loop-carried continue, checked self-host classification,
+and native LLVM execution. A dedicated diagnostic and Stage2 fixture preserve
+E23 for the loop-carried loan. Release builds have zero warnings and errors.
+Windows and Linux full suites pass 711/711. Windows Stage2 passes 7/7 at
+12,229,189 LLVM bytes, and Linux Stage2 passes 6/6 at 12,225,768 LLVM bytes.
+The required Stage3 run passes 3/3 and reproduces normalized SHA-256
+`73B84663339F8C691EFAD3D291C92E97E2B54CA4FEA0C8DE2818A1410C5BF5FB`.
+The cadence resets to 0/10. Formal progress remains 53/60 (88.3%) because
+references stored in user aggregates remain open.
+
+The rule follows Rust NLL's CFG-based non-lexical regions and Polonius's
+location-sensitive live-loan and invalidation relations. Mojo's inferred
+origins confirm that Sollang can retain this precision without exposing
+explicit lifetime parameters.
+
+References:
+
+- [Rust non-lexical lifetimes RFC](https://rust-lang.github.io/rfcs/2094-nll.html)
+- [Polonius loan analysis](https://rust-lang.github.io/polonius/rules/loans.html)
+- [Polonius relations](https://rust-lang.github.io/polonius/rules/relations.html)
+- [Polonius implementation](https://github.com/rust-lang/polonius)
+- [Mojo lifetimes and origins](https://docs.modular.com/mojo/manual/values/lifetimes)
+- [Mojo value lifecycle](https://docs.modular.com/mojo/manual/lifecycle/life)

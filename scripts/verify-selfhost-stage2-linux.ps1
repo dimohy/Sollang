@@ -36,6 +36,7 @@ $parallelNonSendableCaptureSource = Join-Path $repoRoot "tests\Sollang.ExampleTe
 $referenceTemporarySource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-reference-temporary.slg"
 $referenceLivenessSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-reference-liveness.slg"
 $referenceOwnerMoveSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-reference-owner-move.slg"
+$referenceLoopContinueSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-reference-loop-continue.slg"
 $borrowSourceRuntime = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-borrow-source.slg"
 $expectedStage2Bytes = 11987197L
 
@@ -380,7 +381,8 @@ foreach ($candidate in @(
 }
 foreach ($referenceConflict in @(
     @($referenceLivenessSource, "mutation"),
-    @($referenceOwnerMoveSource, "move")
+    @($referenceOwnerMoveSource, "move"),
+    @($referenceLoopContinueSource, "loop-continue")
 )) {
     $stage1ReferenceOutput = Join-Path $artifactsDir "linux-stage2-check-reference-$($referenceConflict[1])-stage1.txt"
     $stage1ReferenceError = Join-Path $artifactsDir "linux-stage2-check-reference-$($referenceConflict[1])-stage1.err"

@@ -2831,6 +2831,26 @@ complete, 8 partial, 3 missing: 53/60 (88.3%)** because branch-local and
 loop-sensitive loan liveness plus references stored in user aggregates remain
 open. Stage3 cadence advances to **9/10**, so Stage3 is not due.
 
+D222 makes readonly-reference liveness control-flow sensitive. Only branch
+states that can reach a join contribute loans to that continuation; early
+`return` paths and mutually exclusive alternatives therefore do not extend a
+loan. Loop analysis distinguishes `break`, which removes the back edge, from
+`continue`, which keeps a next-iteration reference use reachable. The C# and
+self-host ownership passes enforce the same rule without adding lifetime
+syntax. The self-host helper receives its semantic snapshot and typed IR
+explicitly, avoiding the Linux native ABI failure found with captured aggregate
+state.
+
+Examples 529-531, the loop-continue diagnostic, and its Stage2 fixture cover
+positive execution and E23 rejection. Release builds have zero warnings and
+errors. Windows and Linux full suites pass **711/711**. Windows Stage2 passes
+**7/7** at **12,229,189 LLVM bytes**, and Linux Stage2 passes **6/6** at
+**12,225,768 LLVM bytes**. Stage3 passes **3/3** at normalized SHA-256
+`73B84663339F8C691EFAD3D291C92E97E2B54CA4FEA0C8DE2818A1410C5BF5FB`,
+resetting the periodic cadence to **0/10**. References stored in user aggregates
+remain open, so formal progress stays **49 complete, 8 partial, 3 missing:
+53/60 (88.3%)**.
+
 1. Multi-file compilation (implemented by example 52).
 2. Import-driven file discovery with cycle and duplicate-module diagnostics
    (implemented after example 52).

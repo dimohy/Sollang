@@ -4,6 +4,20 @@ namespace Sollang.Compiler.Semantics;
 
 internal sealed partial class SemanticCompiler
 {
+    private sealed record BorrowOriginState(
+        IReadOnlyDictionary<string, IReadOnlySet<string>> Origins,
+        IReadOnlySet<string> ReadonlyReferenceBindings);
+
+    [Flags]
+    private enum BorrowControlExit
+    {
+        None = 0,
+        Fallthrough = 1,
+        Break = 2,
+        Continue = 4,
+        Return = 8
+    }
+
     private void DiscoverReadonlyReferenceReturnOrigins(
         IReadOnlyDictionary<string, BoundFunction> functions)
     {
@@ -1068,25 +1082,33 @@ internal sealed partial class SemanticCompiler
         return live;
     }
 
-    private Dictionary<string, IReadOnlySet<string>> CaptureBorrowedTextOriginState() =>
-        new(_activeBorrowedTextOrigins, StringComparer.Ordinal);
+    private BorrowOriginState CaptureBorrowedTextOriginState() => new(
+        new Dictionary<string, IReadOnlySet<string>>(
+            _activeBorrowedTextOrigins,
+            StringComparer.Ordinal),
+        new HashSet<string>(
+            _activeReadonlyReferenceBindings,
+            StringComparer.Ordinal));
 
-    private void RestoreBorrowedTextOriginState(IReadOnlyDictionary<string, IReadOnlySet<string>> state)
+    private void RestoreBorrowedTextOriginState(BorrowOriginState state)
     {
         _activeBorrowedTextOrigins.Clear();
-        foreach (var pair in state)
+        foreach (var pair in state.Origins)
         {
             _activeBorrowedTextOrigins.Add(pair.Key, pair.Value);
         }
+        _activeReadonlyReferenceBindings.Clear();
+        _activeReadonlyReferenceBindings.UnionWith(state.ReadonlyReferenceBindings);
     }
 
-    private static Dictionary<string, IReadOnlySet<string>> MergeBorrowedTextOriginStates(
-        IEnumerable<IReadOnlyDictionary<string, IReadOnlySet<string>>> states)
+    private static BorrowOriginState MergeBorrowedTextOriginStates(
+        IEnumerable<BorrowOriginState> states)
     {
         var merged = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+        var readonlyReferenceBindings = new HashSet<string>(StringComparer.Ordinal);
         foreach (var state in states)
         {
-            foreach (var pair in state)
+            foreach (var pair in state.Origins)
             {
                 if (!merged.TryGetValue(pair.Key, out var origins))
                 {
@@ -1095,12 +1117,86 @@ internal sealed partial class SemanticCompiler
                 }
                 origins.UnionWith(pair.Value);
             }
+            readonlyReferenceBindings.UnionWith(state.ReadonlyReferenceBindings);
         }
-        return merged.ToDictionary(
-            static pair => pair.Key,
-            static pair => (IReadOnlySet<string>)pair.Value,
-            StringComparer.Ordinal);
+        return new BorrowOriginState(
+            merged.ToDictionary(
+                static pair => pair.Key,
+                static pair => (IReadOnlySet<string>)pair.Value,
+                StringComparer.Ordinal),
+            readonlyReferenceBindings);
     }
+
+    private static bool BorrowBlockMayReachContinuation(BlockBody body) =>
+        (BorrowControlExits(body) & BorrowControlExit.Fallthrough) != 0;
+
+    private static bool BorrowLoopMayReachBackEdge(IReadOnlyList<Statement> statements)
+    {
+        var exits = BorrowControlExits(statements, result: null);
+        return (exits & (BorrowControlExit.Fallthrough | BorrowControlExit.Continue)) != 0;
+    }
+
+    private static BorrowControlExit BorrowControlExits(BlockBody body) =>
+        BorrowControlExits(body.Statements, body.Value);
+
+    private static BorrowControlExit BorrowControlExits(
+        IReadOnlyList<Statement> statements,
+        Expression? result)
+    {
+        var exits = BorrowControlExit.Fallthrough;
+        foreach (var statement in statements)
+        {
+            if ((exits & BorrowControlExit.Fallthrough) == 0)
+            {
+                break;
+            }
+            exits = (exits & ~BorrowControlExit.Fallthrough) | BorrowControlExits(statement);
+        }
+
+        if ((exits & BorrowControlExit.Fallthrough) != 0 && result is not null)
+        {
+            exits = (exits & ~BorrowControlExit.Fallthrough) | BorrowControlExits(result);
+        }
+        return exits;
+    }
+
+    private static BorrowControlExit BorrowControlExits(Statement statement) => statement switch
+    {
+        ReturnStatement => BorrowControlExit.Return,
+        LoopControlStatement { Kind: LoopControlKind.Break } => BorrowControlExit.Break,
+        LoopControlStatement { Kind: LoopControlKind.Continue } => BorrowControlExit.Continue,
+        GuardLoopControlStatement { Kind: LoopControlKind.Break } =>
+            BorrowControlExit.Fallthrough | BorrowControlExit.Break,
+        GuardLoopControlStatement { Kind: LoopControlKind.Continue } =>
+            BorrowControlExit.Fallthrough | BorrowControlExit.Continue,
+        BindingStatement binding => BorrowControlExits(binding.Value),
+        IndexAssignmentStatement assignment =>
+            BorrowControlExits(assignment.Index) | BorrowControlExits(assignment.Value),
+        FieldAssignmentStatement assignment => BorrowControlExits(assignment.Value),
+        ExpressionStatement expression => BorrowControlExits(expression.Expression),
+        BlockFunctionCallStatement block =>
+            BorrowControlExit.Fallthrough | (BorrowControlExits(block.Body, result: null) & BorrowControlExit.Return),
+        _ => BorrowControlExit.Fallthrough
+    };
+
+    private static BorrowControlExit BorrowControlExits(Expression expression) => expression switch
+    {
+        IfExpression conditional => BorrowControlExits(conditional.Then)
+            | (conditional.Else is null
+                ? BorrowControlExit.Fallthrough
+                : BorrowControlExits(conditional.Else)),
+        WhenExpression whenExpression => whenExpression.Arms
+            .Select(arm => BorrowControlExits(arm.Body))
+            .Aggregate(BorrowControlExit.None, static (left, right) => left | right)
+            | BorrowControlExits(whenExpression.Else),
+        EnumMatchExpression match => match.Arms
+            .Select(arm => BorrowControlExits(arm.Body))
+            .Aggregate(BorrowControlExit.None, static (left, right) => left | right)
+            | (match.Else is null
+                ? BorrowControlExit.None
+                : BorrowControlExits(match.Else)),
+        _ => BorrowControlExit.Fallthrough
+    };
 
     private void RejectBorrowedTextOriginMutation(string name, int line, int column)
     {

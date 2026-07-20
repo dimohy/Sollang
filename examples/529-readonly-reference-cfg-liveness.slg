@@ -1,0 +1,59 @@
+# Verifies path-sensitive readonly-reference liveness across branches and loops.
+struct Pair {
+    first: Int
+    second: Int
+}
+
+same value: ref Int -> ref Int {
+    value
+}
+
+read value: ref Int -> Int {
+    value
+}
+
+earlyExit condition: Bool -> Int {
+    Pair { first: 10, second: 20 } => pair!
+    pair!.first -> same => borrowed
+    condition -> if {
+        # This path never reaches the later reference use.
+        Pair { first: 30, second: 40 } => pair!
+        pair!.first -> return
+    }
+    borrowed -> read
+}
+
+exclusive condition: Bool -> Int {
+    Pair { first: 50, second: 60 } => pair!
+    pair!.first -> same => borrowed
+    condition -> if {
+        # The invalidation and reference use are in exclusive branches.
+        Pair { first: 70, second: 80 } => pair!
+        pair!.first
+    } else {
+        borrowed -> read
+    }
+}
+
+breakAfterLastUse: -> Int {
+    Pair { first: 90, second: 100 } => pair!
+    pair!.first -> same => borrowed
+    0 => observed!
+    true -> while {
+        borrowed -> read => observed!
+
+        # The unconditional break removes the loop back-edge after rebind.
+        Pair { first: 110, second: 120 } => pair!
+        break
+    }
+    observed!
+}
+
+main {
+    true -> earlyExit => early
+    false -> earlyExit => kept
+    true -> exclusive => selected
+    false -> exclusive => borrowed
+    breakAfterLastUse => loop
+    "early=$early,kept=$kept,selected=$selected,borrowed=$borrowed,loop=$loop" -> println
+}

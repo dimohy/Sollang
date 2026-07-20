@@ -1,0 +1,155 @@
+import sollang.compiler.semantic.ownership_check as ownershipCheck
+
+# Verifies self-host E23 reachability across branches and loop back-edges.
+main {
+    [
+        """
+        struct Pair {
+            first: Int
+            second: Int
+        }
+
+        same value: ref Int -> ref Int {
+            value
+        }
+
+        read value: ref Int -> Int {
+            value
+        }
+
+        choose condition: Bool -> Int {
+            Pair { first: 10, second: 20 } => pair!
+            pair!.first -> same => borrowed
+            condition -> if {
+                # Returning prevents this path from reaching the later use.
+                Pair { first: 30, second: 40 } => pair!
+                pair!.first -> return
+            }
+            borrowed -> read
+        }
+
+        main {
+            true -> choose -> println
+        }
+        """,
+        ~
+    ] => returnSources!
+    returnSources! -> ownershipCheck.analyze => returnDiagnostics!
+    0 => returns!
+    returnDiagnostics! -> each diagnostic {
+        diagnostic.code == 23 -> if { returns! + 1 => returns! }
+    }
+
+    [
+        """
+        struct Pair {
+            first: Int
+            second: Int
+        }
+
+        same value: ref Int -> ref Int {
+            value
+        }
+
+        read value: ref Int -> Int {
+            value
+        }
+
+        choose condition: Bool -> Int {
+            Pair { first: 50, second: 60 } => pair!
+            pair!.first -> same => borrowed
+            condition -> if {
+                # The rebind and use belong to exclusive alternatives.
+                Pair { first: 70, second: 80 } => pair!
+                pair!.first
+            } else {
+                borrowed -> read
+            }
+        }
+
+        main {
+            false -> choose -> println
+        }
+        """,
+        ~
+    ] => exclusiveSources!
+    exclusiveSources! -> ownershipCheck.analyze => exclusiveDiagnostics!
+    0 => exclusive!
+    exclusiveDiagnostics! -> each diagnostic {
+        diagnostic.code == 23 -> if { exclusive! + 1 => exclusive! }
+    }
+
+    [
+        """
+        struct Pair {
+            first: Int
+            second: Int
+        }
+
+        same value: ref Int -> ref Int {
+            value
+        }
+
+        read value: ref Int -> Int {
+            value
+        }
+
+        main {
+            Pair { first: 90, second: 100 } => pair!
+            pair!.first -> same => borrowed
+            true -> while {
+                borrowed -> read => observed
+
+                # Break removes the back-edge after the rebind.
+                Pair { first: 110, second: 120 } => pair!
+                break
+            }
+        }
+        """,
+        ~
+    ] => breakSources!
+    breakSources! -> ownershipCheck.analyze => breakDiagnostics!
+    0 => breaks!
+    breakDiagnostics! -> each diagnostic {
+        diagnostic.code == 23 -> if { breaks! + 1 => breaks! }
+    }
+
+    [
+        """
+        struct Pair {
+            first: Int
+            second: Int
+        }
+
+        same value: ref Int -> ref Int {
+            value
+        }
+
+        read value: ref Int -> Int {
+            value
+        }
+
+        main {
+            Pair { first: 130, second: 140 } => pair!
+            pair!.first -> same => borrowed
+            0 => iteration!
+            iteration! < 2 -> while {
+                borrowed -> read => observed
+
+                # Continue reaches the next iteration's reference use.
+                Pair { first: 150, second: 160 } => pair!
+                iteration! + 1 => iteration!
+                continue
+            }
+        }
+        """,
+        ~
+    ] => continueSources!
+    continueSources! -> ownershipCheck.analyze => continueDiagnostics!
+    0 => continues!
+    continueDiagnostics! -> each diagnostic {
+        diagnostic.code == 23 -> if { continues! + 1 => continues! }
+    }
+
+    "return=$(returns!),exclusive=$(exclusive!),break=$(breaks!),continue=$(continues!)" -> println
+}
