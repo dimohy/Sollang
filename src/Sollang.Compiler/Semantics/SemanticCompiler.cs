@@ -3706,7 +3706,7 @@ internal sealed partial class SemanticCompiler
                 throw Error(
                     expression.Line,
                     expression.Column,
-                    $"indexing owned array element type {FormatType(elementType)} requires move extraction, which is not implemented yet");
+                    $"indexing owned array element type {FormatType(elementType)} may only borrow it directly for a readonly call; use take to move it out");
             }
             return elementType;
         }
@@ -3726,17 +3726,17 @@ internal sealed partial class SemanticCompiler
                 throw Error(
                     expression.Line,
                     expression.Column,
-                    $"indexing owned array element type {FormatType(elementType)} requires move extraction, which is not implemented yet");
+                    $"indexing owned array element type {FormatType(elementType)} may only borrow it directly for a readonly call; use take to move it out");
             }
             return elementType;
         }
         if (_types.IsDictionary(sourceType))
         {
             var valueType = _types.GetDictionary(sourceType).ValueType;
-            if (_types.ContainsOwnedStorage(valueType))
+            if (_types.ContainsOwnedStorage(valueType) && !allowOwnedElementBorrow)
             {
                 throw Error(expression.Line, expression.Column,
-                    $"indexing owned dictionary value type {FormatType(valueType)} requires move extraction, which is not implemented yet");
+                    $"indexing owned dictionary value type {FormatType(valueType)} may only borrow it directly for a readonly call; use take to move it out");
             }
             return valueType;
         }

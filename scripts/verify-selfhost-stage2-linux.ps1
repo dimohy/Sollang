@@ -24,7 +24,7 @@ $compilerRuntimeSources = Get-Content $runtimeManifestPath |
 $singleSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-single-smoke.slg"
 $multiLibrarySource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-library-smoke.slg"
 $multiMainSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-main-smoke.slg"
-$expectedStage2Bytes = 9544344L
+$expectedStage2Bytes = 11281803L
 
 New-Item -ItemType Directory -Force -Path $artifactsDir | Out-Null
 

@@ -29,7 +29,7 @@ $semanticContextSource = Join-Path $repoRoot "selfhost\semantic\context.slg"
 $compilerRuntimeSources = Get-Content $runtimeManifestPath |
     Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
     ForEach-Object { Join-Path $repoRoot $_.Trim() }
-$expectedStage2Bytes = 9545859L
+$expectedStage2Bytes = 11285200L
 
 New-Item -ItemType Directory -Force -Path $artifactsDir | Out-Null
 

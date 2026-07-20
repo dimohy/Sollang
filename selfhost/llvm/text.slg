@@ -8772,6 +8772,26 @@ emitCore context: move EmitContext -> Unit uses Console {
         @sollang_directory_error_io = private constant [2 x i8] c"io"
         """ -> println
     }
+    # Primitive named types must be complete before nominal types and drop
+    # helpers use them as sized fields or getelementptr base elements.
+    false => usesText!
+    0 => textTypeSearch!
+    textTypeSearch! < (context.ir -> len) -> while {
+        context.ir[textTypeSearch!].typeSymbol == 1 -> if { true => usesText! }
+        textTypeSearch! + 1 => textTypeSearch!
+    }
+    (usesSourceText! or usesOwnedFile!) -> if { true => usesText! }
+    false => requiresEarlyTextType!
+    0 => earlyTextFieldIndex!
+    earlyTextFieldIndex! < (context.fields -> len) -> while {
+        context.fields[earlyTextFieldIndex!] => earlyTextField
+        (earlyTextField.status == 0 and earlyTextField.ownerType >= 0 and earlyTextField.ownerType < (dropTypeActive! -> len) and dropTypeActive![earlyTextField.ownerType] == 1 and earlyTextField.fieldType >= 0 and earlyTextField.fieldType < (context.types -> len)) -> if {
+            context.types[earlyTextField.fieldType] => earlyTextFieldType
+            (earlyTextFieldType.kind == 1 and earlyTextFieldType.origin == 1 and earlyTextFieldType.symbol == 1) -> if { true => requiresEarlyTextType! }
+        }
+        earlyTextFieldIndex! + 1 => earlyTextFieldIndex!
+    }
+    requiresEarlyTextType! -> if { "%sollang.text = type { ptr, i64 }" -> println }
     false => usesTaskType!
     0 => taskTypeSearch!
     taskTypeSearch! < (context.types -> len) -> while {
@@ -8864,15 +8884,8 @@ emitCore context: move EmitContext -> Unit uses Console {
     }
     dropTypeActive! -> emitSemanticDropHelpers
     (usesDictionary! or usesEnumMatch! or usesSourceText!) -> if { "declare void @llvm.trap()" -> println }
-    false => usesText!
-    0 => textTypeSearch!
-    textTypeSearch! < (context.ir -> len) -> while {
-        context.ir[textTypeSearch!].typeSymbol == 1 -> if { true => usesText! }
-        textTypeSearch! + 1 => textTypeSearch!
-    }
-    (usesSourceText! or usesOwnedFile!) -> if { true => usesText! }
+    (usesText! and not requiresEarlyTextType!) -> if { "%sollang.text = type { ptr, i64 }" -> println }
     usesText! -> if {
-        "%sollang.text = type { ptr, i64 }" -> println
         0 => textGlobalIndex!
         textGlobalIndex! < (context.ir -> len) -> while {
             context.ir[textGlobalIndex!] => textConstant

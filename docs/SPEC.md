@@ -1059,6 +1059,11 @@ Container rules in the current slice:
   readonly use of the empty value performs no heap allocation.
 - Indexing is checked. Out-of-bounds array access and missing dictionary keys
   trap in the current runtime slice.
+- An indexed element that recursively owns storage is a place, not a copied
+  value. It may be passed directly to a default readonly function input; that
+  borrow lasts only for the call expression. Binding, returning, storing, or
+  mutating through the indexed result is rejected. Use
+  `owner! -> take(indexOrKey) => value!` to transfer ownership out explicitly.
 - `push`, `put`, and indexed assignment require a named mutable owner binding
   created with `=> name!`.
 - `array -> each item { ... }` binds `item` to the concrete element type for
@@ -2171,8 +2176,9 @@ Current backend:
 - copyable user `struct` and `enum` elements receive an element-specific
   parametric array type and use their exact LLVM aggregate layout; arrays of
   recursively owned elements call static element drop glue for every initialized
-  slot before freeing the backing buffer; owned-element indexing remains blocked
-  until move extraction can transfer one slot without leaving a second owner
+  slot before freeing the backing buffer; an owned indexed element can be
+  borrowed only as a direct readonly-call argument, while `take` transfers one
+  slot without leaving a second owner
 - growable arrays preserve `Text` and user-value element layouts, support typed
   empty capacity hints, checked indexing, `len`/`capacity`, type-checked mutable
   `push`, aggregate-aware growth copying, and runtime-length recursive drop

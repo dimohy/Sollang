@@ -7784,3 +7784,57 @@ References:
 - [Rust trait implementation coherence](https://doc.rust-lang.org/stable/reference/items/implementations.html)
 - [Swift dictionary types](https://docs.swift.org/swift-book/documentation/the-swift-programming-language/types/)
 - [Swift module access control](https://docs.swift.org/swift-book/documentation/the-swift-programming-language/accesscontrol/)
+
+## D211A - Call-Scoped Indexed Place Borrows
+
+Status: implemented and cross-target Stage2 verified
+Date: 2026-07-20
+
+An indexed array element or dictionary value that recursively owns storage is
+not an ordinary copied expression. It is a place owned by its container.
+Sollang now permits that place only as the direct argument of a default
+readonly function input. The borrow ends with the call expression, so the
+container remains the sole owner and may subsequently replace or extract the
+element. Binding, returning, storing, or mutating through the indexed result is
+rejected. `take` is the separate operation that moves the value out and clears
+the source slot.
+
+The C# semantic compiler applies one call-input context to both array and
+dictionary indexing. Outside that context it reports that the owned element may
+only be borrowed directly for a readonly call. The self-host LLVM path passes
+the loaded aggregate under the same readonly ABI and does not schedule a drop
+for the temporary argument. Consequently the call has no hidden copy and no
+second owner.
+
+The owned dictionary test also found an LLVM declaration-order defect that was
+previously latent. A nominal struct containing `Text` can cause its drop helper
+to use the struct in a sized GEP before `%sollang.text` has been completed. The
+self-host emitter now detects only an active nominal drop type with a direct
+owned `Text` field and emits the text type before that closure. All other
+programs keep the previous ordering, avoiding broad snapshot churn.
+
+Examples 456 and 457 exercise repeated readonly borrows, replacement, `take`,
+output, and recursive destruction in the reference and self-host LLVM paths.
+The dictionary escape diagnostic proves that a borrow cannot be bound beyond
+the call. `scripts/verify-call-scoped-container-borrows.ps1` compiles and runs
+both products under ASan/UBSan with leak detection. Release builds report zero
+warnings and errors; Windows and Linux full suites pass 617/617. Windows
+Stage2 passes 6/6 at 11,285,200 LLVM text bytes and Linux Stage2 passes 5/5 at
+11,281,803 bytes. Stage3 cadence advances to 5/10. Formal progress remains 49
+complete, 8 partial, and 3 missing: 53/60 (88.3%); stored and returned
+references and full path-sensitive conflict analysis remain open.
+
+The design follows Rust's place-expression and borrow model but intentionally
+ships a smaller non-escaping lifetime first. Rust's borrow splitting explains
+the additional analysis required for simultaneous disjoint paths. Mojo's
+origin model similarly ties borrowed references to the lifetime of the owned
+storage. Sollang preserves its pipeline syntax while making the ownership
+boundary statically visible.
+
+References:
+
+- [Rust place expressions](https://doc.rust-lang.org/stable/reference/expressions.html#place-expressions-and-value-expressions)
+- [Rust borrow expressions](https://doc.rust-lang.org/reference/expressions/operator-expr.html#borrow-operators)
+- [Rust field borrowing](https://doc.rust-lang.org/reference/expressions/field-expr.html#borrowing)
+- [Rust borrow splitting](https://doc.rust-lang.org/nomicon/borrow-splitting.html)
+- [Mojo lifetimes, origins, and references](https://docs.modular.com/mojo/manual/values/lifetimes/)

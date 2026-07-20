@@ -881,6 +881,10 @@ approved syntax.
   `examples/455-imported-owned-dictionary-key.slg`: module-qualified owned key
   types in typed dictionary literals and function signatures, with static
   cross-module `Hash`/`Eq`, replacement, extraction, and recursive drop
+- `examples/456-owned-dictionary-value-call-borrow.slg` and
+  `examples/457-selfhost-llvm-owned-dictionary-value-call-borrow.slg`:
+  call-scoped readonly borrowing of an indexed recursively owned dictionary
+  value, followed by safe replacement, extraction, and deterministic cleanup
 - `examples/88-grammar-table-module.slg`: compiles the generated grammar-table
   module as a separate source file and reads its public metadata
 - `examples/browser`: static HTML/JS runner for the WebAssembly sample

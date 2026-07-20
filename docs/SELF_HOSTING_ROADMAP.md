@@ -1939,6 +1939,51 @@ witness specialization.
 - [Swift dictionary types](https://docs.swift.org/swift-book/documentation/the-swift-programming-language/types/)
 - [Swift access control](https://docs.swift.org/swift-book/documentation/the-swift-programming-language/accesscontrol/)
 
+## Call-Scoped Indexed Place Borrows (D211A)
+
+D211A extends the existing array-element borrow boundary to recursively owned
+dictionary values. `symbols![key] -> inspect` and
+`inspect(symbols![key])` treat the indexed value as a readonly place borrow for
+that direct call only. The dictionary remains the sole owner, the callee gains
+no drop obligation, and replacement or `take` remains valid after the call.
+Binding, returning, storing, or mutating through the indexed result is rejected;
+`take` remains the explicit ownership-transfer operation.
+
+The reference semantic compiler admits the borrow only while checking a
+default readonly call input. Reference and self-host LLVM load the aggregate
+for that ABI without creating a second owner. The new nominal-struct case also
+exposed an LLVM type-ordering requirement: drop glue that performs a sized GEP
+through a struct containing `Text` needs `%sollang.text` complete first. The
+self-host emitter now moves that declaration early only for the affected drop
+closure, preserving every unrelated LLVM snapshot.
+
+Examples 456 and 457 cover reference and self-host LLVM compilation, repeated
+borrows, replacement, extraction, and deterministic cleanup. The new escape
+diagnostic rejects a bound indexed owner, and
+`scripts/verify-call-scoped-container-borrows.ps1` instruments both backends
+with ASan/UBSan leak, double-free, use-after-free, and undefined-behavior
+checks.
+
+Validation is a zero-warning Release build, Windows/Linux full suites at
+**617/617**, Windows Stage2 **6/6** at **11,285,200 bytes**, and Linux Stage2
+**5/5** at **11,281,803 bytes**. The periodic Stage3 cadence advances to
+**5/10**. Formal progress remains **49 complete, 8 partial, 3 missing: 53/60
+(88.3%)** because stored and returned references plus full path-sensitive
+conflict analysis remain open within the existing ownership/storage gate.
+
+Research basis: Rust defines indexing as a place expression and makes borrowing
+explicitly refer to a place without transferring its value. Rust's borrow
+splitting discussion shows why disjoint paths require deeper structural
+analysis, while Mojo's origins tie a reference lifetime to owned storage.
+Sollang takes the conservative call-lifetime subset now and keeps wider
+reference escape for the next ownership gate.
+
+- [Rust place expressions](https://doc.rust-lang.org/stable/reference/expressions.html#place-expressions-and-value-expressions)
+- [Rust borrow expressions](https://doc.rust-lang.org/reference/expressions/operator-expr.html#borrow-operators)
+- [Rust field borrowing](https://doc.rust-lang.org/reference/expressions/field-expr.html#borrowing)
+- [Rust borrow splitting](https://doc.rust-lang.org/nomicon/borrow-splitting.html)
+- [Mojo lifetimes, origins, and references](https://docs.modular.com/mojo/manual/values/lifetimes/)
+
 ## Immediate Implementation Order
 
 1. Multi-file compilation (implemented by example 52).
