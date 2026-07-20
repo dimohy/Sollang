@@ -2343,6 +2343,47 @@ Research basis:
 - [Polonius loan propagation and liveness](https://rust-lang.github.io/polonius/rules/loans.html)
 - [Rust lifetime elision](https://doc.rust-lang.org/reference/lifetime-elision.html)
 
+## Inferred Origin Transfer Across Reference Reassignment (D213G)
+
+D213G makes the inferred origin of a mutable `Text` binding follow its current
+value. Borrowed reassignment replaces the old origin set, assignment from an
+owned or static value clears it, and an alias receives the full origin set of
+the source view. No runtime lifetime object is added.
+
+At control-flow joins, possible exit origins are unioned. If every `if` or
+`when` alternative overwrites the binding, the prior loan is killed; mixed
+alternatives retain both possible states. A loop retains its entry origin as
+well as any body-exit origin because zero iterations are possible. The
+self-host analyzer implements the same rules over branch-local typed-IR
+definitions, preserving exact definition edges and using source-token identity
+only where lowering splits one source binding into multiple definitions.
+
+Examples 477-480 and four diagnostics cover replacement, alias transfer,
+all-branch kills, mixed joins, and loop back-edge/zero-iteration behavior. The
+Stage2 production gate checks single, union, and transferred origins with both
+the Stage1 and Stage2 compilers.
+
+Validation is a zero-warning, zero-error Release build and focused ownership
+coverage of **23 tests**. Windows/Linux full suites pass **646/646** in **56.5
+seconds** and **59.5 seconds** respectively. Fresh
+Windows Stage2 passes **7/7 in 70.5 seconds** at **11,663,233 LLVM text
+bytes**, **3,448,648 bitcode bytes**, and a **1,635,328-byte native
+executable**. Fresh Linux Stage2 passes **6/6 in 146.0 seconds** at **11,659,812
+LLVM text bytes**, **3,446,856 bitcode bytes**, and a **3,285,776-byte native
+executable**.
+
+The periodic Stage3 cadence advances to **5/10**, so Stage3 is not due. Formal
+progress remains **49 complete, 8 partial, 3 missing: 53/60 (88.3%)**. The
+remaining ownership work is aggregate borrowed returns, disjoint projected
+conflicts, and production precision for E17-E20.
+
+Research basis:
+
+- [Mojo lifetimes, origins, and reference bindings](https://mojolang.org/docs/manual/values/lifetimes/)
+- [Mojo variables and reference bindings](https://mojolang.org/docs/manual/variables/)
+- [Mojo ownership](https://mojolang.org/docs/manual/values/ownership/)
+- [Polonius loan-kill and loan-liveness rules](https://rust-lang.github.io/polonius/rules/loans.html)
+
 ## Immediate Implementation Order
 
 1. Multi-file compilation (implemented by example 52).

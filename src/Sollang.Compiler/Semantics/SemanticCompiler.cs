@@ -2476,7 +2476,19 @@ internal sealed partial class SemanticCompiler
                     {
                         mutableBindings.Add(binding.Name);
                     }
-                    if (TryGetBorrowedTextCallOrigins(binding.Value, functions, bindings, out var borrowedOrigins))
+                    var hasBorrowedTextOrigins = TryGetBorrowedTextCallOrigins(
+                        binding.Value,
+                        functions,
+                        bindings,
+                        out var borrowedOrigins);
+                    if (isMutableRebind)
+                    {
+                        // Rebinding a view kills its previous loan. If the new
+                        // value is another view, install that origin set below;
+                        // an owned/static Text leaves no active origin.
+                        _activeBorrowedTextOrigins.Remove(binding.Name);
+                    }
+                    if (hasBorrowedTextOrigins)
                     {
                         _activeBorrowedTextOrigins[binding.Name] = borrowedOrigins;
                     }
@@ -3305,6 +3317,7 @@ internal sealed partial class SemanticCompiler
     {
         _loopDepth++;
         var loopEntryBorrowedTextOrigins = CaptureBorrowedTextOriginState();
+        Dictionary<string, IReadOnlySet<string>>? loopExitBorrowedTextOrigins = null;
         try
         {
             var loopContinuation = new HashSet<string>(
@@ -3327,10 +3340,14 @@ internal sealed partial class SemanticCompiler
                 allowContainerBindings,
                 shortenBorrowRegions: true,
                 borrowRegionContinuation: loopContinuation);
+            loopExitBorrowedTextOrigins = CaptureBorrowedTextOriginState();
         }
         finally
         {
-            RestoreBorrowedTextOriginState(loopEntryBorrowedTextOrigins);
+            RestoreBorrowedTextOriginState(loopExitBorrowedTextOrigins is null
+                ? loopEntryBorrowedTextOrigins
+                : MergeBorrowedTextOriginStates(
+                    [loopEntryBorrowedTextOrigins, loopExitBorrowedTextOrigins]));
             _loopDepth--;
         }
     }
@@ -4470,6 +4487,7 @@ internal sealed partial class SemanticCompiler
             allowReadIntCall,
             allowedOwnedOuterResultName,
             mutableBindings);
+        var thenBorrowedTextOrigins = CaptureBorrowedTextOriginState();
         RestoreBorrowedTextOriginState(branchEntryBorrowedTextOrigins);
         if (expression.Else is null)
         {
@@ -4478,6 +4496,8 @@ internal sealed partial class SemanticCompiler
                 throw Error(expression.Line, expression.Column, "if used as a value requires an else block");
             }
 
+            RestoreBorrowedTextOriginState(MergeBorrowedTextOriginStates(
+                [branchEntryBorrowedTextOrigins, thenBorrowedTextOrigins]));
             ExpireBorrowedTextOriginsBeforeStatement(
                 [],
                 0,
@@ -4493,7 +4513,9 @@ internal sealed partial class SemanticCompiler
             allowReadIntCall,
             allowedOwnedOuterResultName,
             mutableBindings);
-        RestoreBorrowedTextOriginState(branchEntryBorrowedTextOrigins);
+        var elseBorrowedTextOrigins = CaptureBorrowedTextOriginState();
+        RestoreBorrowedTextOriginState(MergeBorrowedTextOriginStates(
+            [thenBorrowedTextOrigins, elseBorrowedTextOrigins]));
         if (thenType != elseType)
         {
             throw Error(
@@ -4547,6 +4569,7 @@ internal sealed partial class SemanticCompiler
 
         BoundType? resultType = null;
         var branchEntryBorrowedTextOrigins = CaptureBorrowedTextOriginState();
+        var branchExitBorrowedTextOrigins = new List<IReadOnlyDictionary<string, IReadOnlySet<string>>>();
         foreach (var arm in expression.Arms)
         {
             RestoreBorrowedTextOriginState(branchEntryBorrowedTextOrigins);
@@ -4575,6 +4598,7 @@ internal sealed partial class SemanticCompiler
                     allowReadIntCall,
                     allowedOwnedOuterResultName,
                     mutableBindings);
+            branchExitBorrowedTextOrigins.Add(CaptureBorrowedTextOriginState());
             resultType ??= armType;
             if (armType != resultType)
             {
@@ -4593,7 +4617,9 @@ internal sealed partial class SemanticCompiler
             allowReadIntCall,
             allowedOwnedOuterResultName,
             mutableBindings);
-        RestoreBorrowedTextOriginState(branchEntryBorrowedTextOrigins);
+        branchExitBorrowedTextOrigins.Add(CaptureBorrowedTextOriginState());
+        RestoreBorrowedTextOriginState(MergeBorrowedTextOriginStates(
+            branchExitBorrowedTextOrigins));
         resultType ??= elseType;
         if (elseType != resultType)
         {

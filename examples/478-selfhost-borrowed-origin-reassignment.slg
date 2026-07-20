@@ -1,0 +1,71 @@
+import sollang.compiler.semantic.ownership_check as ownershipCheck
+
+conflictCount sources: [Text; ~] -> Int {
+    sources -> ownershipCheck.analyze => errors!
+    0 => conflicts!
+    0 => index!
+    index! < (errors! -> len) -> while {
+        errors![index!].code == 21 -> if {
+            conflicts! + 1 => conflicts!
+        }
+        index! + 1 => index!
+    }
+    conflicts!
+}
+
+main {
+    """
+    namespace sys.file
+
+    public struct SourceText {
+        token: UInt64
+    }
+
+    borrowText text: Text -> SourceText = intrinsic
+    """ => fileSource
+
+    """
+    import sys.file as file
+
+    prefix source: file.SourceText -> Text {
+        source -> slice(UIntSize(0), UIntSize(3))
+    }
+
+    consume source: move file.SourceText -> Unit {
+        source -> len -> println
+    }
+
+    main {
+        "lexer" -> file.borrowText => source!
+        source! -> prefix => view!
+        "owned" => view!
+        source! -> consume
+        view! -> println
+    }
+    """ => killedLoanSource
+
+    """
+    import sys.file as file
+
+    prefix source: file.SourceText -> Text {
+        source -> slice(UIntSize(0), UIntSize(3))
+    }
+
+    consume source: move file.SourceText -> Unit {
+        source -> len -> println
+    }
+
+    main {
+        "lexer" -> file.borrowText => source!
+        source! -> prefix => view!
+        view! => alias
+        "owned" => view!
+        source! -> consume
+        alias -> println
+    }
+    """ => transferredLoanSource
+
+    [killedLoanSource, fileSource, ~] -> conflictCount => killedConflicts
+    [transferredLoanSource, fileSource, ~] -> conflictCount => transferredConflicts
+    "reassigned origin conflicts=$killedConflicts,$transferredConflicts" -> println
+}

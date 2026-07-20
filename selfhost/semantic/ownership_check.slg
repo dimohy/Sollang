@@ -70,6 +70,25 @@ public analyzeLoweredContext prepared: semanticContext.SemanticSnapshot, typed: 
         }
         belongs!
     }
+    sameBindingName leftIndex: Int, rightIndex: Int -> Bool {
+        typed[leftIndex] => left
+        typed[rightIndex] => right
+        false => same!
+        (left.sourceModule == right.sourceModule and left.payloadToken >= 0 and right.payloadToken >= 0) -> if {
+            prepared.package.ranges[left.sourceModule] => nameRange
+            prepared.package.tokens[nameRange.tokenStart + left.payloadToken] => leftName
+            prepared.package.tokens[nameRange.tokenStart + right.payloadToken] => rightName
+            leftName.span.length == rightName.span.length => same!
+            UIntSize(0) => nameByte!
+            (same! and nameByte! < leftName.span.length) -> while {
+                (prepared.package.sources[left.sourceModule] -> byte(leftName.span.start + nameByte!)) != (prepared.package.sources[right.sourceModule] -> byte(rightName.span.start + nameByte!)) -> if {
+                    false => same!
+                }
+                nameByte! + UIntSize(1) => nameByte!
+            }
+        }
+        same!
+    }
     enclosingLoopFor nodeIndex: Int -> Int {
         nodeIndex => ancestor!
         -1 => loop!
@@ -120,6 +139,64 @@ public analyzeLoweredContext prepared: semanticContext.SemanticSnapshot, typed: 
                 prepared.package.ranges[typed[moveIndex].sourceModule] => reachabilityRange
                 prepared.package.nodes[reachabilityRange.astStart + typed[useIndex].astNode].start > prepared.package.nodes[reachabilityRange.astStart + typed[moveIndex].astNode].start
             }
+        }
+    }
+    enclosingAlternativeControl nodeIndex: Int -> Int {
+        nodeIndex => ancestor!
+        -1 => control!
+        (ancestor! >= 0 and control! < 0) -> while {
+            typed[ancestor!].kind == 19 -> if {
+                typed[ancestor!].parent => candidateControl!
+                (candidateControl! >= 0 and (typed[candidateControl!].kind == 18 or typed[candidateControl!].kind == 27 or (typed[candidateControl!].kind == 19 and typed[candidateControl!].operand1 >= 0 and typed[candidateControl!].nextOperand >= 0))) -> if {
+                    candidateControl! => control!
+                } else {
+                    typed[ancestor!].parent => ancestor!
+                }
+            } else {
+                typed[ancestor!].parent => ancestor!
+            }
+        }
+        control!
+    }
+    alternativeRebindsBefore regionIndex: Int, definitionIndex: Int, beforeStart: UIntSize -> Bool {
+        false => rebinds!
+        0 => candidateIndex!
+        candidateIndex! < (typed -> len) -> while {
+            typed[candidateIndex!] => candidate
+            (candidate.kind == 17 and candidate.astNode >= 0 and (candidateIndex! -> nodeBelongsTo(regionIndex)) and (definitionIndex -> sameBindingName(candidateIndex!))) -> if {
+                prepared.package.ranges[candidate.sourceModule] => candidateRange
+                prepared.package.nodes[candidateRange.astStart + candidate.astNode].start < beforeStart -> if {
+                    true => rebinds!
+                }
+            }
+            candidateIndex! + 1 => candidateIndex!
+        }
+        rebinds!
+    }
+    linkedAlternativesRebindBefore controlIndex: Int, definitionIndex: Int, beforeStart: UIntSize -> Bool {
+        typed[controlIndex] => control
+        control.operand1 -> alternativeRebindsBefore(definitionIndex, beforeStart) => currentRebinds
+        false => remainingRebinds!
+        control.nextOperand >= 0 -> if {
+            typed[control.nextOperand] => nextAlternative
+            (nextAlternative.kind == 19 and nextAlternative.operand1 >= 0 and nextAlternative.nextOperand >= 0) -> if {
+                control.nextOperand -> linkedAlternativesRebindBefore(definitionIndex, beforeStart) => remainingRebinds!
+            } else {
+                control.nextOperand -> alternativeRebindsBefore(definitionIndex, beforeStart) => remainingRebinds!
+            }
+        }
+        currentRebinds and remainingRebinds!
+    }
+    allAlternativesRebindBefore controlIndex: Int, definitionIndex: Int, beforeStart: UIntSize -> Bool {
+        typed[controlIndex] => control
+        (control.kind == 18 and control.operand1 >= 0 and control.nextOperand >= 0) -> if {
+            control.operand1 -> alternativeRebindsBefore(definitionIndex, beforeStart) => thenRebinds
+            control.nextOperand -> alternativeRebindsBefore(definitionIndex, beforeStart) => elseRebinds
+            thenRebinds and elseRebinds
+        } else {
+            (control.kind == 19 and control.operand1 >= 0 and control.nextOperand >= 0) -> if {
+                controlIndex -> linkedAlternativesRebindBefore(definitionIndex, beforeStart)
+            } else { false }
         }
     }
     memberMoveMatchesAssignment moveIndex: Int, assignmentIndex: Int -> Bool {
@@ -277,6 +354,48 @@ public analyzeLoweredContext prepared: semanticContext.SemanticSnapshot, typed: 
         borrowedBindingSearch! + 1 => borrowedBindingSearch!
     }
 
+    # A binding-to-binding assignment transfers the symbolic origin set. Each
+    # mutable rebind already has a distinct typed-IR definition, so assigning an
+    # owned/static Text creates no edge and naturally kills the previous loan.
+    # Iterate to a fixed point so alias chains preserve every union-origin edge.
+    true => borrowedAliasChanged!
+    borrowedAliasChanged! -> while {
+        false => borrowedAliasChanged!
+        0 => borrowedAliasBindingSearch!
+        borrowedAliasBindingSearch! < (typed -> len) -> while {
+            typed[borrowedAliasBindingSearch!] => borrowedAliasBinding
+            (borrowedAliasBinding.kind == 17 and borrowedAliasBinding.operand0 >= 0) -> if {
+                typed[borrowedAliasBinding.operand0] => borrowedAliasValue
+                (borrowedAliasValue.kind == 5 and borrowedAliasValue.operand0 >= 0) -> if {
+                    0 => borrowedAliasOriginSearch!
+                    borrowedAliasOriginSearch! < (borrowedBindings! -> len) -> while {
+                        borrowedBindings![borrowedAliasOriginSearch!] => borrowedAliasOrigin
+                        borrowedAliasOrigin.bindingIr == borrowedAliasValue.operand0 -> if {
+                            false => duplicateBorrowedAlias!
+                            0 => borrowedAliasDuplicateSearch!
+                            borrowedAliasDuplicateSearch! < (borrowedBindings! -> len) -> while {
+                                borrowedBindings![borrowedAliasDuplicateSearch!] => existingBorrowedAlias
+                                (existingBorrowedAlias.bindingIr == borrowedAliasBindingSearch! and existingBorrowedAlias.ownerBindingIr == borrowedAliasOrigin.ownerBindingIr) -> if {
+                                    true => duplicateBorrowedAlias!
+                                }
+                                borrowedAliasDuplicateSearch! + 1 => borrowedAliasDuplicateSearch!
+                            }
+                            not duplicateBorrowedAlias! -> if {
+                                borrowedBindings! -> push(BorrowedTextBinding {
+                                    bindingIr: borrowedAliasBindingSearch!
+                                    ownerBindingIr: borrowedAliasOrigin.ownerBindingIr
+                                })
+                                true => borrowedAliasChanged!
+                            }
+                        }
+                        borrowedAliasOriginSearch! + 1 => borrowedAliasOriginSearch!
+                    }
+                }
+            }
+            borrowedAliasBindingSearch! + 1 => borrowedAliasBindingSearch!
+        }
+    }
+
     0 => borrowedMoveIndex!
     borrowedMoveIndex! < (moves! -> len) -> while {
         moves![borrowedMoveIndex!] => borrowedMove
@@ -289,7 +408,9 @@ public analyzeLoweredContext prepared: semanticContext.SemanticSnapshot, typed: 
                     0 => activeBorrowIndex!
                     activeBorrowIndex! < (borrowedBindings! -> len) -> while {
                         borrowedBindings![activeBorrowIndex!] => activeBorrow
-                        (activeBorrow.ownerBindingIr == movedOwnerBinding and activeBorrow.bindingIr < borrowedMove.siteIr) -> if {
+                        activeBorrow.bindingIr => activeBorrowBindingIr
+                        activeBorrow.ownerBindingIr => activeBorrowOwnerBindingIr
+                        (activeBorrowOwnerBindingIr == movedOwnerBinding and activeBorrowBindingIr < borrowedMove.siteIr) -> if {
                             prepared.package.ranges[borrowedMove.sourceModule] => borrowedMoveRange
                             typed[borrowedMove.siteIr] => borrowedMoveSite
                             prepared.package.nodes[borrowedMoveRange.astStart + borrowedMoveSite.astNode].start => borrowedMoveStart
@@ -297,9 +418,62 @@ public analyzeLoweredContext prepared: semanticContext.SemanticSnapshot, typed: 
                             0 => borrowedUseSearch!
                             borrowedUseSearch! < (typed -> len) -> while {
                                 typed[borrowedUseSearch!] => borrowedUse
-                                (borrowedUse.kind == 5 and borrowedUse.sourceModule == borrowedMove.sourceModule and borrowedUse.operand0 == activeBorrow.bindingIr and borrowedUse.astNode >= 0) -> if {
-                                    borrowedMove.siteIr -> useReachableAfterMove(borrowedUseSearch!) -> if {
-                                        true => borrowedViewUsedAfterMove!
+                                (borrowedUse.kind == 5 and borrowedUse.sourceModule == borrowedMove.sourceModule and borrowedUse.astNode >= 0) -> if {
+                                    typed[activeBorrowBindingIr] => activeBorrowDefinition
+                                    (borrowedUse.operand0 == activeBorrowBindingIr and activeBorrowDefinition.flags % 2 == 0) -> if {
+                                        borrowedMove.siteIr -> useReachableAfterMove(borrowedUseSearch!) -> if {
+                                            true => borrowedViewUsedAfterMove!
+                                        }
+                                    } else {
+                                    # Preserve the direct definition edge as the
+                                    # fast path. Name/CFG matching is needed only
+                                    # when branch lowering creates a distinct
+                                    # definition for the same source binding.
+                                    false => borrowedDefinitionReachesUse!
+                                    borrowedUse.operand0 == activeBorrowBindingIr -> if {
+                                        true => borrowedDefinitionReachesUse!
+                                    } else {
+                                        activeBorrowBindingIr -> sameBindingName(borrowedUseSearch!) -> if {
+                                            activeBorrowBindingIr -> useReachableAfterMove(borrowedUseSearch!) => borrowedDefinitionReachesUse!
+                                        }
+                                    }
+                                    borrowedDefinitionReachesUse! -> if {
+                                            typed[activeBorrowBindingIr] => borrowedDefinition
+                                            prepared.package.ranges[borrowedDefinition.sourceModule] => borrowedDefinitionRange
+                                            prepared.package.nodes[borrowedDefinitionRange.astStart + borrowedDefinition.astNode].start => borrowedDefinitionStart
+                                            prepared.package.nodes[borrowedDefinitionRange.astStart + borrowedUse.astNode].start => borrowedUseStart
+                                            0 => borrowedRebindSearch!
+                                            (borrowedDefinition.flags % 2 == 1 and borrowedRebindSearch! < (typed -> len)) -> while {
+                                                typed[borrowedRebindSearch!] => borrowedRebind
+                                                (borrowedRebindSearch! != activeBorrowBindingIr and borrowedRebind.kind == 17 and borrowedRebind.sourceModule == borrowedDefinition.sourceModule and borrowedRebind.astNode >= 0 and (activeBorrowBindingIr -> sameBindingName(borrowedRebindSearch!))) -> if {
+                                                    prepared.package.nodes[borrowedDefinitionRange.astStart + borrowedRebind.astNode].start => borrowedRebindStart
+                                                    (borrowedDefinitionStart < borrowedRebindStart and borrowedRebindStart < borrowedUseStart and not (activeBorrowBindingIr -> mutuallyExclusiveBranches(borrowedRebindSearch!)) and not (borrowedRebindSearch! -> mutuallyExclusiveBranches(borrowedUseSearch!))) -> if {
+                                                        borrowedRebindSearch! -> enclosingAlternativeControl => borrowedRebindControl
+                                                        borrowedRebindSearch! -> enclosingLoopFor => borrowedRebindLoop
+                                                        (borrowedRebindLoop >= 0 and not (borrowedUseSearch! -> nodeBelongsTo(borrowedRebindLoop))) -> if {
+                                                            # A loop may execute zero times, so an assignment in
+                                                            # its body cannot kill the entry origin after exit.
+                                                        } else {
+                                                            borrowedRebindControl < 0 -> if {
+                                                                false => borrowedDefinitionReachesUse!
+                                                            } else {
+                                                                borrowedUseSearch! -> nodeBelongsTo(borrowedRebindControl) -> if {
+                                                                    false => borrowedDefinitionReachesUse!
+                                                                } else {
+                                                                    borrowedRebindControl -> allAlternativesRebindBefore(activeBorrowBindingIr, borrowedUseStart) -> if {
+                                                                        false => borrowedDefinitionReachesUse!
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                                borrowedRebindSearch! + 1 => borrowedRebindSearch!
+                                            }
+                                        }
+                                        (borrowedDefinitionReachesUse! and (borrowedMove.siteIr -> useReachableAfterMove(borrowedUseSearch!))) -> if {
+                                            true => borrowedViewUsedAfterMove!
+                                        }
                                     }
                                 }
                                 borrowedUseSearch! + 1 => borrowedUseSearch!
@@ -314,7 +488,7 @@ public analyzeLoweredContext prepared: semanticContext.SemanticSnapshot, typed: 
                                     expectedSymbol: movedOwnerBinding
                                     actualOrigin: -1
                                     actualModule: -1
-                                    actualSymbol: activeBorrow.bindingIr
+                                    actualSymbol: activeBorrowBindingIr
                                     actualBuiltin: -1
                                     span: syntax.SourceSpan { fileId: borrowedMove.sourceModule, start: borrowedMoveStart, length: prepared.package.nodes[borrowedMoveRange.astStart + borrowedMoveSite.astNode].length }
                                 })

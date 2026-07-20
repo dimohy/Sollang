@@ -256,6 +256,12 @@ internal sealed partial class SemanticCompiler
         IReadOnlyDictionary<string, BoundType> bindings,
         out IReadOnlySet<string> origins)
     {
+        if (expression is NameExpression name
+            && _activeBorrowedTextOrigins.TryGetValue(name.Name, out origins!))
+        {
+            return true;
+        }
+
         if (expression is CallExpression call
             && TryGetFunction(call.Path, functions, out var called)
             && _borrowedTextReturnOrigins.TryGetValue(called, out var returnOrigins))
@@ -445,6 +451,28 @@ internal sealed partial class SemanticCompiler
         {
             _activeBorrowedTextOrigins.Add(pair.Key, pair.Value);
         }
+    }
+
+    private static Dictionary<string, IReadOnlySet<string>> MergeBorrowedTextOriginStates(
+        IEnumerable<IReadOnlyDictionary<string, IReadOnlySet<string>>> states)
+    {
+        var merged = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+        foreach (var state in states)
+        {
+            foreach (var pair in state)
+            {
+                if (!merged.TryGetValue(pair.Key, out var origins))
+                {
+                    origins = new HashSet<string>(StringComparer.Ordinal);
+                    merged.Add(pair.Key, origins);
+                }
+                origins.UnionWith(pair.Value);
+            }
+        }
+        return merged.ToDictionary(
+            static pair => pair.Key,
+            static pair => (IReadOnlySet<string>)pair.Value,
+            StringComparer.Ordinal);
     }
 
     private void RejectBorrowedTextOriginMutation(string name, int line, int column)

@@ -8018,6 +8018,63 @@ References:
 - [Mojo lifetimes, origins, and references](https://mojolang.org/docs/manual/values/lifetimes/)
 - [Swift memory safety and overlapping access](https://docs.swift.org/swift-book/documentation/the-swift-programming-language/memorysafety/)
 
+## D213G - Inferred Origin Transfer Across Reference Reassignment
+
+Status: implemented and cross-target Stage2 verified
+Date: 2026-07-20
+
+A mutable `Text` binding now carries a compile-time origin set that changes
+with reassignment. Rebinding from another borrowed view installs the right-hand
+origin set, assigning an owned or static `Text` kills the previous loan, and
+binding-to-binding assignment transfers every possible origin without adding a
+runtime tag. This follows the reference-binding model used by Mojo while
+retaining Sollang's punctuation-free inferred common case.
+
+Control-flow joins operate on possible exit states. An `if` or `when` unions
+the origin sets from its alternatives; when every reachable alternative
+overwrites the binding with the same new origin, the old loan is absent after
+the join. Loops conservatively union the entry and body-exit states because the
+body may execute zero times. This is the structured equivalent of Polonius'
+point-sensitive loan-kill and loan-liveness relations.
+
+The self-host typed IR intentionally gives branch-local reassignments distinct
+definition identities. Its ownership analysis therefore keeps the exact
+definition edge as the fast path and compares source-token spelling only when
+control-flow lowering creates another definition for the same binding. A
+fixed-point alias pass transfers union-origin edges, while the reachability
+solver treats all-alternative overwrites as kills and mixed branches or loop
+exits as unions. Keeping the exact edge also prevents optimized Stage2 builds
+from weakening the established single-origin E21 gate.
+
+Examples 477-480 cover straight-line replacement, owned/static loan kills,
+alias retention, all-branch overwrite, mixed `if` and `when` joins, and loop
+zero-iteration behavior. Four diagnostics cover alias transfer and unsafe
+`if`, `when`, and loop joins. The production Stage2 gate now requires Stage1
+and Stage2 to reject single, union, and transferred-origin moves before LLVM
+emission.
+
+Validation is a zero-warning, zero-error Release build. Focused ownership
+verification covers 23 tests, and Windows/Linux full suites pass **646/646**
+in **56.5 seconds** and **59.5 seconds** respectively.
+Fresh Windows Stage2 passes **7/7 in 70.5 seconds** at **11,663,233 LLVM text
+bytes**, **3,448,648 bitcode bytes**, and a **1,635,328-byte executable**.
+Fresh Linux Stage2 passes **6/6 in 146.0 seconds** at **11,659,812 LLVM text
+bytes**, **3,446,856 bitcode bytes**, and a **3,285,776-byte executable**. The
+periodic Stage3 cadence
+advances to **5/10**, so Stage3 is intentionally deferred.
+
+Formal progress remains 49 complete, 8 partial, and 3 missing: **53/60
+(88.3%)**. Reference reassignment closes another ownership sub-gate, while
+aggregate borrowed returns, disjoint projected conflicts, and production
+enforcement precision for E17-E20 remain.
+
+References:
+
+- [Mojo lifetimes, origins, and reference bindings](https://mojolang.org/docs/manual/values/lifetimes/)
+- [Mojo variables and reference bindings](https://mojolang.org/docs/manual/variables/)
+- [Mojo ownership](https://mojolang.org/docs/manual/values/ownership/)
+- [Polonius loan-kill and loan-liveness rules](https://rust-lang.github.io/polonius/rules/loans.html)
+
 ## D213F - Inferred Union Origins Across Multiple Borrowed Inputs
 
 Status: implemented and cross-target Stage2 verified
