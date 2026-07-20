@@ -1179,6 +1179,12 @@ emitCore context: EmitContext -> Unit uses Console {
                 context.ir[referenceParameterIndex] => referenceParameter
                 (referenceParameter.typeId >= 0 and context.types[referenceParameter.typeId].kind == 8 and not (callArgument.typeId >= 0 and context.types[callArgument.typeId].kind == 8)) -> if {
                     context.types[referenceParameter.typeId].first => referenceOwnerType
+                    referenceArgumentIndex -> referencePlaceRootBinding => referenceRootBinding
+                    false => referenceUsesMutableSlot!
+                    referenceRootBinding >= 0 -> if {
+                        context.ir[referenceRootBinding].flags == 1 -> if { true => referenceUsesMutableSlot! }
+                    }
+                    not referenceUsesMutableSlot! -> if {
                     "  %callref" -> print
                     callIndex -> writeDecimal
                     "_arg" -> print
@@ -1197,6 +1203,7 @@ emitCore context: EmitContext -> Unit uses Console {
                     ordinal -> writeDecimal
                     ", align " -> print
                     context.typeAligns[referenceOwnerType] -> writeDecimalLine
+                    }
                 }
             }
             context.ir[argumentIndex].nextOperand -> emitReferenceArgumentValues(callIndex, ownerIndex, ordinal + 1)
@@ -1348,6 +1355,15 @@ emitCore context: EmitContext -> Unit uses Console {
             }
         }
         owned!
+    }
+    referencePlaceRootBinding placeIndex: Int -> Int {
+        placeIndex => root!
+        (root! >= 0 and (context.ir[root!].kind == 13 or context.ir[root!].kind == 15)) -> while {
+            context.ir[root!].operand0 => root!
+        }
+        (root! >= 0 and context.ir[root!].kind == 5 and context.ir[root!].operand0 >= 0) -> if {
+            context.ir[root!].operand0
+        } else { -1 }
     }
     aggregateValueIndex wrapperIndex: Int -> Int {
         wrapperIndex => resolved!
@@ -1532,10 +1548,21 @@ emitCore context: EmitContext -> Unit uses Console {
             (argumentParameter.typeId >= 0 and context.types[argumentParameter.typeId].kind == 8 and not (argument.typeId >= 0 and context.types[argument.typeId].kind == 8)) -> if { true => argumentNeedsReferenceSlot! }
         }
         argumentNeedsReferenceSlot! -> if {
-            "ptr %callref" -> print
-            callIndex -> writeDecimal
-            "_arg" -> print
-            ordinal -> writeDecimal
+            argumentIndex -> aggregateValueIndex => referenceValueIndex
+            referenceValueIndex -> referencePlaceRootBinding => referenceValueRoot
+            false => referenceValueUsesMutableSlot!
+            referenceValueRoot >= 0 -> if {
+                context.ir[referenceValueRoot].flags == 1 -> if { true => referenceValueUsesMutableSlot! }
+            }
+            referenceValueUsesMutableSlot! -> if {
+                referenceValueRoot -> mutableBindingRoot => referenceMutableRoot
+                "ptr %slot$(referenceMutableRoot)" -> print
+            } else {
+                "ptr %callref" -> print
+                callIndex -> writeDecimal
+                "_arg" -> print
+                ordinal -> writeDecimal
+            }
         } else {
         argument -> writeIrType
         " " -> print
@@ -12057,6 +12084,13 @@ emitOwnershipDiagnostics context: EmitContext -> Unit uses Console {
                                 diagnosticSpan.start => diagnosticStart
                                 diagnosticSpan.length => diagnosticLength
                                 "; sollang error[E22]: readonly reference argument requires stable immutable storage (source $(diagnostic.sourceModule), byte $diagnosticStart, length $diagnosticLength)" -> println
+                            } else {
+                                diagnostic.code == 23 -> if {
+                                    diagnostic.span => diagnosticSpan
+                                    diagnosticSpan.start => diagnosticStart
+                                    diagnostic.span.length => diagnosticLength
+                                    "; sollang error[E23]: owner mutation conflicts with a live readonly reference (source $(diagnostic.sourceModule), byte $diagnosticStart, length $diagnosticLength)" -> println
+                                }
                             }
                         }
                     }
@@ -12078,6 +12112,7 @@ blockingOwnershipDiagnosticCount context: EmitContext -> Int {
         diagnosticCode == 20 -> if { count! + 1 => count! }
         diagnosticCode == 21 -> if { count! + 1 => count! }
         diagnosticCode == 22 -> if { count! + 1 => count! }
+        diagnosticCode == 23 -> if { count! + 1 => count! }
         diagnosticIndex! + 1 => diagnosticIndex!
     }
     count!

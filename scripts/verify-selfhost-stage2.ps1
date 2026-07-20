@@ -29,6 +29,7 @@ $branchPartialMoveConflictSource = Join-Path $repoRoot "tests\Sollang.ExampleTes
 $parallelMutableCaptureSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-parallel-mutable-capture.slg"
 $parallelNonSendableCaptureSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-parallel-nonsendable-capture.slg"
 $referenceTemporarySource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-reference-temporary.slg"
+$referenceLivenessSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-reference-liveness.slg"
 $borrowSourceRuntime = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-borrow-source.slg"
 $runtimeManifestPath = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-compiler-runtime.sources.txt"
 $fingerprintSources = @(
@@ -40,7 +41,7 @@ $semanticContextSource = Join-Path $repoRoot "selfhost\semantic\context.slg"
 $compilerRuntimeSources = Get-Content $runtimeManifestPath |
     Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
     ForEach-Object { Join-Path $repoRoot $_.Trim() }
-$expectedStage2Bytes = 11963482L
+$expectedStage2Bytes = 11990618L
 
 New-Item -ItemType Directory -Force -Path $artifactsDir | Out-Null
 
@@ -339,7 +340,7 @@ if ($stage2CodegenText -ne $stage1CodegenText) {
 }
 Write-Host "[stage2 5/7] PASS execution, native build, fingerprints, module cache, typed-IR artifacts, and codegen-unit parity."
 
-Write-Host "[stage2 6/7] Enforce production ownership diagnostics E17 through E22."
+Write-Host "[stage2 6/7] Enforce production ownership diagnostics E17 through E23."
 foreach ($conflict in @(
     @($borrowConflictSource, "single"),
     @($borrowUnionConflictSource, "union"),
@@ -486,7 +487,25 @@ foreach ($compiler in @(
         throw "$($compiler[1]) began LLVM emission before rejecting readonly-reference diagnostic E22"
     }
 }
-Write-Host "[stage2 6/7] PASS E17-E22 ownership violations block LLVM emission in stage-1 and stage-2."
+foreach ($compiler in @(
+    @($stage1Path, "stage1"),
+    @($stage2Path, "stage2")
+)) {
+    $diagnosticOutput = Join-Path $artifactsDir "stage2-check-reference-liveness-$($compiler[1]).txt"
+    $diagnosticError = Join-Path $artifactsDir "stage2-check-reference-liveness-$($compiler[1]).err"
+    $diagnosticProcess = Invoke-ProcessToFile $compiler[0] @("windows", $referenceLivenessSource) $diagnosticOutput $diagnosticError
+    $diagnosticProcess.WaitForExit()
+    $diagnosticProcess.Refresh()
+    if ($diagnosticProcess.ExitCode -eq 0) { throw "$($compiler[1]) accepted owner mutation with a live readonly reference" }
+    $diagnosticText = [System.IO.File]::ReadAllText($diagnosticOutput)
+    if ($diagnosticText -notmatch 'error\[E23\].*owner mutation conflicts with a live readonly reference') {
+        throw "$($compiler[1]) did not emit ownership diagnostic E23: '$diagnosticText'"
+    }
+    if ($diagnosticText -match '^target (datalayout|triple)') {
+        throw "$($compiler[1]) began LLVM emission before rejecting readonly-reference liveness diagnostic E23"
+    }
+}
+Write-Host "[stage2 6/7] PASS E17-E23 ownership violations block LLVM emission in stage-1 and stage-2."
 
 Write-Host "[stage2 7/7] Compare C# reference and native Sollang compiler runtime behavior."
 & dotnet run --project $runnerProject -c Release --no-build -- `

@@ -274,7 +274,7 @@ public analyzeLoweredContext prepared: semanticContext.SemanticSnapshot, typed: 
             typed[useIndex!] => use
             (use.kind == 5 and use.sourceModule == typed[siteIr].sourceModule and use.astNode >= 0 and use.operand0 == bindingIr) -> if {
                 prepared.package.nodes[useRange.astStart + use.astNode].start > siteStart -> if {
-                    true => used!
+                    siteIr -> useReachableAfterMove(useIndex!) -> if { true => used! }
                 }
             }
             useIndex! + 1 => useIndex!
@@ -477,7 +477,7 @@ public analyzeLoweredContext prepared: semanticContext.SemanticSnapshot, typed: 
                         false => referenceAddressable!
                         referenceRootBinding >= 0 -> if {
                             typed[referenceRootBinding] => referenceRoot
-                            ((referenceRoot.kind == 10 or referenceRoot.kind == 17) and referenceRoot.flags % 2 == 0) -> if { true => referenceAddressable! }
+                            (referenceRoot.kind == 10 or referenceRoot.kind == 17) -> if { true => referenceAddressable! }
                         }
                         not referenceAddressable! -> if {
                             prepared.package.ranges[referenceArgument.sourceModule] => referenceArgumentRange
@@ -505,6 +505,55 @@ public analyzeLoweredContext prepared: semanticContext.SemanticSnapshot, typed: 
             }
         }
         referenceCallIndex! + 1 => referenceCallIndex!
+    }
+
+    # A mutable owner may be borrowed, but its storage cannot change while a
+    # returned readonly reference still has a reachable use.
+    0 => referenceBindingIndex!
+    referenceBindingIndex! < (typed -> len) -> while {
+        typed[referenceBindingIndex!] => referenceBinding
+        false => referenceBindingIsReadonlyReference!
+        (referenceBinding.kind == 17 and referenceBinding.operand0 >= 0) -> if {
+            typed[referenceBinding.operand0] => referenceBindingValue
+            (referenceBindingValue.kind == 6 and referenceBindingValue.typeId >= 0 and referenceBindingValue.typeId < (prepared.semantic.types -> len)) -> if {
+                prepared.semantic.types[referenceBindingValue.typeId].kind == 8 -> if { true => referenceBindingIsReadonlyReference! }
+            }
+        }
+        referenceBindingIsReadonlyReference! -> if {
+            typed[referenceBinding.operand0] => referenceCall
+            (referenceCall.kind == 6 and referenceCall.operand0 >= 0) -> if {
+                referenceCall.operand0 -> placeRootBinding => referenceOwnerBinding
+                referenceOwnerBinding >= 0 -> if {
+                    0 => referenceMutationIndex!
+                    referenceMutationIndex! < (typed -> len) -> while {
+                        typed[referenceMutationIndex!] => referenceMutation
+                        false => mutatesReferenceOwner!
+                        (referenceMutation.kind == 25 and referenceMutation.sourceModule == typed[referenceOwnerBinding].sourceModule and referenceMutation.symbol == typed[referenceOwnerBinding].symbol) -> if {
+                            true => mutatesReferenceOwner!
+                        }
+                        (mutatesReferenceOwner! and referenceBindingIndex! < referenceMutationIndex! and (referenceBindingIndex! -> borrowedBindingUsedAfterSite(referenceMutationIndex!))) -> if {
+                            prepared.package.ranges[referenceMutation.sourceModule] => referenceMutationRange
+                            prepared.package.nodes[referenceMutationRange.astStart + referenceMutation.astNode] => referenceMutationAst
+                            diagnostics! -> push(OwnershipDiagnostic {
+                                code: 23
+                                sourceModule: referenceMutation.sourceModule
+                                functionSymbol: referenceCall.symbol
+                                expectedOrigin: -1
+                                expectedModule: referenceCall.targetModule
+                                expectedSymbol: referenceOwnerBinding
+                                actualOrigin: -1
+                                actualModule: -1
+                                actualSymbol: referenceBindingIndex!
+                                actualBuiltin: -1
+                                span: syntax.SourceSpan { fileId: referenceMutation.sourceModule, start: referenceMutationAst.start, length: referenceMutationAst.length }
+                            })
+                        }
+                        referenceMutationIndex! + 1 => referenceMutationIndex!
+                    }
+                }
+            }
+        }
+        referenceBindingIndex! + 1 => referenceBindingIndex!
     }
 
     # Semantic type children precede their owners. Classify Text containment

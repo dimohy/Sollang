@@ -8791,3 +8791,31 @@ and the Stage2 fixture prove E22 in both compiler generations. Linux passes
 example 381 is rerun alone. Windows Stage2 passes 7/7 at 11,963,482 LLVM bytes;
 Linux Stage2 passes 6/6 at 11,960,061 LLVM bytes. Formal progress remains
 53/60 (88.3%), and the periodic Stage3 cadence advances to 4/10.
+
+## D217 - Inferred Readonly-Reference Last Use
+
+Status: implemented first mutable-owner vertical and cross-target Stage2 verified
+Date: 2026-07-21
+
+Sollang permits a mutable owner to be passed to `ref T` when the compiler can
+keep the reference tied to stable owner storage. The language adds no explicit
+lifetime syntax. The compiler infers the symbolic owner root and treats a
+mutation as conflicting only while a returned readonly reference has a later
+reachable use. This combines Polonius-style live-loan invalidation, Mojo-style
+inferred origins, and Swift's duration/location overlap rule.
+
+The C# compiler records reference-call origins in the existing last-use state,
+rejects overlapping mutable-field writes while the loan is live, and expires
+the loan before a safe mutation after the final use. The self-host LLVM backend
+passes the existing mutable struct `%slot` pointer instead of copying the
+aggregate into a temporary. Its ownership pass emits blocking E23 before LLVM
+for a live-reference mutation; E22 continues to reject literal, constructor,
+and call-result temporaries.
+
+Examples 509-511 prove the positive C# path, checked self-host E23, and native
+self-host LLVM assembly/link/execution. The Stage2 fixtures enforce E17-E23 in
+both compiler generations. Windows passes 683/683 and Stage2 7/7 at 11,990,618
+LLVM bytes. Linux covers 683/683 and Stage2 6/6 at 11,987,197 LLVM bytes. Formal
+progress remains 53/60 (88.3%) because branch-sensitive reference uses, origin
+unions, indexed/nested places, owner moves/rebinds, and stored references remain
+open. This is Stage3 cadence 5/10, so the periodic Stage3 run is not due.

@@ -20,6 +20,8 @@ internal sealed partial class SemanticCompiler
         new(ReferenceEqualityComparer.Instance);
     private readonly Dictionary<string, IReadOnlySet<string>> _activeBorrowedTextOrigins =
         new(StringComparer.Ordinal);
+    private readonly HashSet<string> _activeReadonlyReferenceBindings =
+        new(StringComparer.Ordinal);
     private IReadOnlySet<string> _borrowedTextContinuationNames =
         new HashSet<string>(StringComparer.Ordinal);
     private Dictionary<string, BoundFunction>? _boundFunctions;
@@ -1455,6 +1457,7 @@ internal sealed partial class SemanticCompiler
             _activeBorrowedTextOrigins,
             StringComparer.Ordinal);
         _activeBorrowedTextOrigins.Clear();
+        _activeReadonlyReferenceBindings.Clear();
         var selectedCapturedBindings = SelectCapturedBindings(function, capturedBindings, out var calledFunctions);
         _functionCapturedBindings[function] = new Dictionary<string, BoundType>(
             selectedCapturedBindings,
@@ -1465,6 +1468,7 @@ internal sealed partial class SemanticCompiler
         {
             ValidateUserBlockFunction(function, parentFunctions, selectedCapturedBindings);
             _activeBorrowedTextOrigins.Clear();
+            _activeReadonlyReferenceBindings.Clear();
             foreach (var pair in parentBorrowedTextOrigins)
             {
                 _activeBorrowedTextOrigins[pair.Key] = pair.Value;
@@ -1529,6 +1533,7 @@ internal sealed partial class SemanticCompiler
             ValidateUserFunction(localFunction, scopedFunctions, bodyBindings);
         }
         _activeBorrowedTextOrigins.Clear();
+        _activeReadonlyReferenceBindings.Clear();
         foreach (var pair in functionBorrowedTextOrigins)
         {
             _activeBorrowedTextOrigins[pair.Key] = pair.Value;
@@ -1620,6 +1625,7 @@ internal sealed partial class SemanticCompiler
             StringComparer.Ordinal);
 
         _activeBorrowedTextOrigins.Clear();
+        _activeReadonlyReferenceBindings.Clear();
         foreach (var pair in parentBorrowedTextOrigins)
         {
             _activeBorrowedTextOrigins[pair.Key] = pair.Value;
@@ -2327,6 +2333,7 @@ internal sealed partial class SemanticCompiler
         _currentFunctionIsAsync = true;
         _currentFunctionEffects = null;
         _activeBorrowedTextOrigins.Clear();
+        _activeReadonlyReferenceBindings.Clear();
         var bindings = new Dictionary<string, BoundType>(StringComparer.Ordinal);
         var mutableBindings = new HashSet<string>(StringComparer.Ordinal);
         BindStatements(
@@ -2486,10 +2493,20 @@ internal sealed partial class SemanticCompiler
                         // value is another view, install that origin set below;
                         // an owned/static Text leaves no active origin.
                         _activeBorrowedTextOrigins.Remove(binding.Name);
+                        _activeReadonlyReferenceBindings.Remove(binding.Name);
                     }
                     if (hasBorrowedTextOrigins)
                     {
                         _activeBorrowedTextOrigins[binding.Name] = borrowedOrigins;
+                    }
+                    else if (TryGetReadonlyReferenceCallOrigins(
+                                 binding.Value,
+                                 functions,
+                                 bindings,
+                                 out var readonlyReferenceOrigins))
+                    {
+                        _activeBorrowedTextOrigins[binding.Name] = readonlyReferenceOrigins;
+                        _activeReadonlyReferenceBindings.Add(binding.Name);
                     }
 
                     break;
@@ -2649,6 +2666,15 @@ internal sealed partial class SemanticCompiler
                                 out var flowBorrowedOrigins))
                         {
                             _activeBorrowedTextOrigins[bindingEffect.Name] = flowBorrowedOrigins;
+                        }
+                        else if (TryGetReadonlyReferenceCallOrigins(
+                                     expressionStatement.Expression,
+                                     functions,
+                                     bindings,
+                                     out var flowReferenceOrigins))
+                        {
+                            _activeBorrowedTextOrigins[bindingEffect.Name] = flowReferenceOrigins;
+                            _activeReadonlyReferenceBindings.Add(bindingEffect.Name);
                         }
                     }
 
@@ -8307,13 +8333,6 @@ internal sealed partial class SemanticCompiler
                 expression.Line,
                 expression.Column,
                 $"function '{path}' requires an addressable owner or reference; literals and temporary values cannot be borrowed");
-        }
-        if (mutableBindings?.Contains(root) == true)
-        {
-            throw Error(
-                expression.Line,
-                expression.Column,
-                $"function '{path}' cannot borrow mutable owner '{root}' until reference liveness is proven");
         }
     }
 

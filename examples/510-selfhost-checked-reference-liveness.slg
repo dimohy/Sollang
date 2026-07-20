@@ -1,0 +1,31 @@
+import sollang.compiler.llvm.text as llvm
+
+# Verifies that self-host CFG analysis blocks owner mutation before ref last use.
+main {
+    [
+        """
+        struct Pair {
+            first: Int
+        }
+
+        first pair: ref Pair -> ref Int {
+            pair.first
+        }
+
+        read value: ref Int -> Int {
+            value
+        }
+
+        main {
+            Pair { first: 41 } => pair!
+            pair! -> first => borrowed
+            42 => pair!.first
+            borrowed -> read => observed
+            "$(observed)" -> println
+        }
+        """,
+        ~
+    ] => sources!
+    sources! -> llvm.emitLinuxChecked => diagnosticCount
+    "blocked=$diagnosticCount" -> println
+}

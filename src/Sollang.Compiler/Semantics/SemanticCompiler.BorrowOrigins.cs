@@ -503,6 +503,88 @@ internal sealed partial class SemanticCompiler
         return false;
     }
 
+    private bool TryGetReadonlyReferenceCallOrigins(
+        Expression expression,
+        IReadOnlyDictionary<string, BoundFunction> functions,
+        IReadOnlyDictionary<string, BoundType> bindings,
+        out IReadOnlySet<string> origins)
+    {
+        if (expression is NameExpression name
+            && _activeReadonlyReferenceBindings.Contains(name.Name)
+            && _activeBorrowedTextOrigins.TryGetValue(name.Name, out origins!))
+        {
+            return true;
+        }
+
+        if (expression is CallExpression call
+            && TryGetFunction(call.Path, functions, out var called)
+            && _types.IsReference(called.ReturnType))
+        {
+            return TryMapReadonlyReferenceCallOrigins(
+                called,
+                call.Arguments,
+                functions,
+                bindings,
+                out origins);
+        }
+
+        if (expression is FlowExpression flow
+            && flow.Targets.Count > 0)
+        {
+            var target = flow.Targets[^1];
+            if (TryGetFunction(target.Path, functions, out var flowed)
+                && _types.IsReference(flowed.ReturnType))
+            {
+                var arguments = new Expression[] { flow.Source }
+                    .Concat(target.Arguments)
+                    .ToArray();
+                return TryMapReadonlyReferenceCallOrigins(
+                    flowed,
+                    arguments,
+                    functions,
+                    bindings,
+                    out origins);
+            }
+        }
+
+        origins = EmptyBorrowOrigins();
+        return false;
+    }
+
+    private bool TryMapReadonlyReferenceCallOrigins(
+        BoundFunction called,
+        IReadOnlyList<Expression> arguments,
+        IReadOnlyDictionary<string, BoundFunction> functions,
+        IReadOnlyDictionary<string, BoundType> bindings,
+        out IReadOnlySet<string> origins)
+    {
+        var parameterTypes = FunctionParameterTypes(called);
+        var union = new HashSet<string>(StringComparer.Ordinal);
+        for (var index = 0; index < parameterTypes.Count && index < arguments.Count; index++)
+        {
+            if (!_types.IsReference(parameterTypes[index]))
+            {
+                continue;
+            }
+
+            if (TryGetReadonlyReferenceCallOrigins(
+                    arguments[index],
+                    functions,
+                    bindings,
+                    out var propagated))
+            {
+                union.UnionWith(propagated);
+            }
+            else if (TryGetConcreteBorrowOrigins(arguments[index], bindings, out var concrete))
+            {
+                union.UnionWith(concrete);
+            }
+        }
+
+        origins = union;
+        return union.Count > 0;
+    }
+
     private bool TryUnionCallSiteBorrowedOrigins(
         IEnumerable<Expression> expressions,
         IReadOnlyDictionary<string, BoundFunction> functions,
@@ -695,6 +777,7 @@ internal sealed partial class SemanticCompiler
             if (!isLive)
             {
                 _activeBorrowedTextOrigins.Remove(binding);
+                _activeReadonlyReferenceBindings.Remove(binding);
             }
         }
     }
@@ -772,6 +855,14 @@ internal sealed partial class SemanticCompiler
         }
 
         var origin = borrowed.Value.First(candidate => BorrowPlacesConflict(candidate, name));
+
+        if (_activeReadonlyReferenceBindings.Contains(borrowed.Key))
+        {
+            throw Error(
+                line,
+                column,
+                $"cannot move or mutate owner '{origin}' while readonly reference '{borrowed.Key}' is live in this scope");
+        }
 
         throw Error(
             line,

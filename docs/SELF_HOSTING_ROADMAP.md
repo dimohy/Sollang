@@ -2655,12 +2655,14 @@ This does not yet close the ownership/storage gate.
 - [x] pointer ABI and struct-field return place
 - [x] executable owner -> function -> returned reference -> read path
 - [ ] complete C# origin/liveness conflict analysis
+- [x] C# mutable-owner root origins with last-use mutation conflicts
 - [ ] stored references and aggregate/index projections
 - [x] self-host recursive type arena, typed-IR field projection, pointer ABI,
   projected address return, and transparent return load
 - [x] self-host caller-side address formation for stable immutable bindings and
   production rejection of temporary origins
 - [ ] complete self-host origin/liveness conflict analysis
+- [x] self-host mutable-owner slots and first production E23 liveness conflict
 - [x] cross-target regression and Stage2 verification of the C# vertical slice
 
 Formal progress stays at **49 complete, 8 partial, 3 missing: 53/60 (88.3%)**
@@ -2704,6 +2706,31 @@ missed the optional parent-help event. Windows Stage2 passes **7/7** at
 Linux Stage2 passes **6/6** at **11,960,061 LLVM bytes**. Formal progress stays
 at **49 complete, 8 partial, 3 missing: 53/60 (88.3%)**. Stage3 cadence advances
 to **4/10**, so Stage3 is not due.
+
+D217 unlocks mutable owners for the first inferred readonly-reference lifetime
+slice. The C# compiler now records the owner origin of a returned `ref T`, keeps
+that loan active only while the reference has a later use, rejects an
+overlapping field mutation while it is live, and permits the same mutation
+after its last use. This follows Rust/Polonius loan liveness, Mojo's inferred
+origins, and Swift's overlapping-access rule without adding lifetime syntax.
+
+The self-host compiler mirrors the vertical slice. Mutable structs pass their
+existing `%slot` address instead of a copied temporary, reference-to-reference
+calls forward the pointer, and production diagnostic E23 blocks owner mutation
+when a returned reference is still used later. Examples 509-511 cover C#
+execution, checked self-host E23, and native self-host LLVM assembly, link, and
+execution. E22 remains responsible for temporary origins.
+
+This is not the complete general borrow checker: branch-sensitive reference
+uses, origin unions, indexed/nested projected places, owner moves/rebinds, and
+references stored in user aggregates remain open. The Release build has zero
+warnings and errors. Windows passes **683/683**. Linux covers **683/683** after
+the new native LLVM success example is narrowed and rerun through `llvm-as`,
+link, and execution. Windows Stage2 passes **7/7** at **11,990,618 LLVM bytes**;
+Linux Stage2 passes **6/6** at **11,987,197 LLVM bytes**. Both enforce E17-E23
+in Stage1 and Stage2 before LLVM emission. Formal progress remains **49
+complete, 8 partial, 3 missing: 53/60 (88.3%)**. The periodic Stage3 cadence
+advances to **5/10**, so Stage3 is not due.
 
 1. Multi-file compilation (implemented by example 52).
 2. Import-driven file discovery with cycle and duplicate-module diagnostics
