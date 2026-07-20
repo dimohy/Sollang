@@ -1152,6 +1152,17 @@ internal sealed partial class SemanticCompiler
             {
                 yield return "[*]" + nested;
             }
+            yield break;
+        }
+        if (_types.IsDictionary(type))
+        {
+            // Dictionary keys are lookup-only values in the safe surface. A
+            // value reference is tied to the Swiss-table entry and therefore
+            // uses a wildcard slot: probing and rehashing can move it.
+            foreach (var nested in ReadonlyReferenceLeafPaths(_types.GetDictionary(type).ValueType))
+            {
+                yield return "[*]" + nested;
+            }
         }
     }
 

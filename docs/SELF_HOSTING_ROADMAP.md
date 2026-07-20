@@ -2906,6 +2906,14 @@ bytes**. The formal score remains **49 complete, 8 partial, 3 missing: 53/60
 (88.3%)** because dictionary element storage is still open. Stage3 cadence
 remains **2/10** until the next Stage2 checkpoint.
 
+D226 begins the dictionary element vertical in the reference compiler. Generic
+Swiss-table value slots now expose a pointer for reference-returning lookups,
+while semantic origins use the conservative wildcard path `[*]` so constant
+keys do not imply stable addresses across probing or rehash. E22 and E23 are
+covered for dictionary values on both native targets. Dictionary keys remain
+non-addressable, and self-host typed-IR/type recovery plus LLVM entry-pointer
+lowering are still pending; the formal score remains **53/60 (88.3%)**.
+
 1. Multi-file compilation (implemented by example 52).
 2. Import-driven file discovery with cycle and duplicate-module diagnostics
    (implemented after example 52).

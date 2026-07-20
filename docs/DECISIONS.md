@@ -9192,3 +9192,36 @@ References:
 - [Mojo lifetimes and origins](https://docs.modular.com/mojo/manual/values/lifetimes)
 - [Rust borrow splitting](https://doc.rust-lang.org/nomicon/borrow-splitting.html)
 - [Swift Collection](https://developer.apple.com/documentation/swift/collection)
+
+## D226 - Conservative Origins for Swiss-Table Dictionary Values
+
+Status: reference-compiler storage slice implemented; self-host parity remains open
+Date: 2026-07-21
+
+Dictionary values that contain `ref T` now participate in the C# compiler's
+origin model. A value lookup is represented as the wildcard entry path `[*]`,
+because Swiss-table probing, insertion, growth, and rehashing can move a value
+even when the source key is constant. The value slot pointer is recovered from
+the existing generic dictionary entry layout, so `key -> same` can return a
+reference without copying the value. E22 rejects a dictionary returned with a
+callee-local reference, and E23 protects an owner referenced by a stored value.
+
+Dictionary keys remain outside this first safe surface: lookup keys are not
+addressable reference places and key types must satisfy the existing hash and
+equality contracts. A later slice may add explicit key views if the runtime can
+preserve their address through rehash. The self-host typed-IR and LLVM paths
+still need dictionary element type recovery and entry-pointer lowering before
+this gate can be promoted from partial.
+
+Example 540 and two diagnostics pass on Windows and Linux. The formal roadmap
+score remains 53/60 (88.3%). This conservative wildcard follows Rust's warning
+that collection disjointness is not generally proven for mutable indexing,
+Mojo's symbolic origin sets, Swift's collection mutation invalidation, and the
+Swiss-table implementation's relocation behavior.
+
+References:
+
+- [Rust borrow splitting](https://doc.rust-lang.org/nomicon/borrow-splitting.html)
+- [Mojo lifetimes and origins](https://docs.modular.com/mojo/manual/values/lifetimes)
+- [Swift Dictionary](https://developer.apple.com/documentation/swift/dictionary)
+- [Rust HashMap](https://doc.rust-lang.org/std/collections/struct.HashMap.html)

@@ -1,0 +1,25 @@
+# Verifies that a dictionary value carrying an enum ref keeps its owner live.
+enum IntView {
+    Empty
+    Ref(ref Int)
+}
+
+same value: ref Int -> ref Int {
+    value
+}
+
+read value: ref Int -> Int {
+    value
+}
+
+main {
+    [10, 20, ~] => owner!
+    {1: IntView.Ref(owner![0] -> same)} => stored!
+    stored![1] -> when {
+        Empty => 0
+        Ref(value) => value -> read
+    } => observed
+    # The payload's final use has ended, so replacing the dictionary value is safe.
+    IntView.Empty => stored![1]
+    "observed=$observed" -> println
+}

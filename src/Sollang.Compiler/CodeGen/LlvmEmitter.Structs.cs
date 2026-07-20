@@ -315,8 +315,12 @@ internal sealed partial class LlvmEmitter
     private RuntimeReference EmitReferenceIndexPlace(IndexExpression expression)
     {
         var source = EmitExpression(expression.Source);
-        var index = EmitIntExpression(expression.Index);
-        var indexSize = EmitIntAsSize(index, "ref_index_size");
+        var indexSize = string.Empty;
+        if (source is not RuntimeInlineDictionary)
+        {
+            var index = EmitIntExpression(expression.Index);
+            indexSize = EmitIntAsSize(index, "ref_index_size");
+        }
 
         BoundType elementType;
         string pointer;
@@ -371,8 +375,20 @@ internal sealed partial class LlvmEmitter
                     indexSize,
                     "ref_dynamic_inline_array");
                 break;
+            case RuntimeInlineDictionary dictionary:
+                elementType = dictionary.ValueType;
+                var key = EmitExpression(expression.Index);
+                var found = EmitInlineDictionaryFindSlot(dictionary, key);
+                EmitTrapUnless(found.FoundName, "ref_dictionary_missing");
+                var definition = _program.Types.GetDictionary(dictionary.DictionaryType);
+                pointer = EmitInlineDictionaryEntryPointer(
+                    dictionary,
+                    found.SlotName,
+                    definition.ValueOffset,
+                    "ref_dictionary_value");
+                break;
             default:
-                throw new SollangException("reference indexing currently requires an array or IntSlice place");
+                throw new SollangException("reference indexing currently requires an array, dictionary, or IntSlice place");
         }
 
         return new RuntimeReference(_program.Types.GetOrAddReference(elementType), elementType, pointer);
