@@ -2645,8 +2645,8 @@ internal sealed partial class SemanticCompiler
     private void BindIndexAssignment(
         IndexAssignmentStatement assignment,
         IReadOnlyDictionary<string, BoundFunction> functions,
-        IReadOnlyDictionary<string, BoundType> bindings,
-        IReadOnlySet<string> mutableBindings,
+        Dictionary<string, BoundType> bindings,
+        HashSet<string> mutableBindings,
         BoundType? yieldInputType)
     {
         if (!bindings.TryGetValue(assignment.Name, out var targetType))
@@ -2701,15 +2701,58 @@ internal sealed partial class SemanticCompiler
             : isDynamicArray
                 ? _types.GetDynamicArray(targetType).ElementType
                 : BoundType.Int;
-        if (isDynamicArray && _types.ContainsOwnedStorage(expectedValueType))
-        {
-            throw Error(assignment.Line, assignment.Column,
-                "indexed replacement of owned array elements is not supported yet; move-aware replacement must drop the previous element");
-        }
         if (valueType != expectedValueType)
         {
             throw Error(assignment.Value.Line, assignment.Value.Column,
                 $"indexed assignment value must be {FormatType(expectedValueType)}");
+        }
+
+        if (!isDynamicArray || !_types.ContainsOwnedStorage(expectedValueType))
+        {
+            return;
+        }
+
+        var transferred = new HashSet<string>(StringComparer.Ordinal);
+        var movedSourceName = GetMoveConsumingContainerSourceName(assignment.Value);
+        if (movedSourceName is not null)
+        {
+            transferred.Add(movedSourceName);
+        }
+        foreach (var consumedName in GetOwnedParameterConsumedSourceNames(
+                     assignment.Value, functions, bindings))
+        {
+            transferred.Add(consumedName);
+        }
+        foreach (var fieldSourceName in GetOwnedStructFieldSourceNames(
+                     assignment.Value, bindings))
+        {
+            transferred.Add(fieldSourceName);
+        }
+
+        if (assignment.Value is NameExpression sourceName)
+        {
+            if (string.Equals(sourceName.Name, assignment.Name, StringComparison.Ordinal))
+            {
+                throw Error(
+                    assignment.Line,
+                    assignment.Column,
+                    "an owned array element cannot be replaced from its containing owner");
+            }
+            transferred.Add(sourceName.Name);
+        }
+
+        if (transferred.Count == 0 && !IsContainerCreationExpression(assignment.Value))
+        {
+            throw Error(
+                assignment.Value.Line,
+                assignment.Value.Column,
+                "owned array element replacement requires a fresh value or a named owner transfer");
+        }
+
+        foreach (var transferredName in transferred)
+        {
+            bindings.Remove(transferredName);
+            mutableBindings.Remove(transferredName);
         }
     }
 

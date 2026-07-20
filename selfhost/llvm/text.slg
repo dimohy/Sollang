@@ -3642,6 +3642,15 @@ emitCore context: move EmitContext -> Unit uses Console {
                     assignmentBinding -> writeArrayElementType
                     "" -> println
                 }
+                (assignmentTargetElementTypeId >= 0 and (assignmentTargetElementTypeId -> semanticTypeOwns)) -> if {
+                    "  %assign$(request.nodeIndex)_previous = load " -> print
+                    assignmentTargetElementTypeId -> writeSemanticTypeId
+                    ", ptr %assign$(request.nodeIndex)_ptr, align " -> print
+                    context.typeAligns[assignmentTargetElementTypeId] -> writeDecimalLine
+                    "  call void @sollang_drop_t$(assignmentTargetElementTypeId)(" -> print
+                    assignmentTargetElementTypeId -> writeSemanticTypeId
+                    " %assign$(request.nodeIndex)_previous)" -> println
+                }
                 "  store " -> print
                 assignmentBinding -> writeArrayElementType
                 " " -> print
@@ -8916,6 +8925,86 @@ emitCore context: move EmitContext -> Unit uses Console {
                         TextLiteralRequest { sourceModule: entryExpression.sourceModule, token: entryExpressionToken } -> textLiteralLength => entryExpressionLength
                         "  %v$(entryExpressionIndex!)_ptr = insertvalue %sollang.text poison, ptr @sollang_str_$(entryExpressionIndex!), 0" -> println
                         "  %v$(entryExpressionIndex!) = insertvalue %sollang.text %v$(entryExpressionIndex!)_ptr, i64 $entryExpressionLength, 1" -> println
+                    }
+                    entryExpression.kind == 12 -> if {
+                        entryExpression.operand0 < 0 -> if {
+                            "  %v$(entryExpressionIndex!) = freeze " -> print
+                            entryExpression -> writeIrType
+                            " zeroinitializer" -> println
+                        }
+                        entryExpression.operand0 => entryFieldValueIndex!
+                        0 => entryFieldPosition!
+                        entryFieldValueIndex! >= 0 -> while {
+                            context.ir[entryFieldValueIndex!] => entryFieldValue
+                            entryFieldValueIndex! -> aggregateValueIndex => entryEmittedFieldIndex
+                            context.ir[entryEmittedFieldIndex] => entryEmittedFieldValue
+                            entryExpression.typeId => entryStructOwnerTypeId!
+                            0 => entryStructOwnerTypeSearch!
+                            entryStructOwnerTypeSearch! < (context.types -> len) -> while {
+                                context.types[entryStructOwnerTypeSearch!] => entryStructOwnerTypeCandidate
+                                (entryStructOwnerTypeCandidate.status == 0 and entryStructOwnerTypeCandidate.kind == 1 and entryStructOwnerTypeCandidate.origin == entryExpression.typeOrigin and entryStructOwnerTypeCandidate.module == entryExpression.typeModule and entryStructOwnerTypeCandidate.symbol == entryExpression.typeSymbol) -> if { entryStructOwnerTypeSearch! => entryStructOwnerTypeId! }
+                                entryStructOwnerTypeSearch! + 1 => entryStructOwnerTypeSearch!
+                            }
+                            -1 => entryTargetFieldTypeId!
+                            0 => entryTargetFieldOrdinal!
+                            0 => entryTargetFieldSearch!
+                            entryTargetFieldSearch! < (context.fields -> len) -> while {
+                                context.fields[entryTargetFieldSearch!] => entryTargetField
+                                (entryTargetField.status == 0 and entryTargetField.ownerType == entryStructOwnerTypeId!) -> if {
+                                    entryTargetFieldOrdinal! == entryFieldPosition! -> if { entryTargetField.fieldType => entryTargetFieldTypeId! }
+                                    entryTargetFieldOrdinal! + 1 => entryTargetFieldOrdinal!
+                                }
+                                entryTargetFieldSearch! + 1 => entryTargetFieldSearch!
+                            }
+                            entryEmittedFieldValue -> integerNodeWidth => entrySourceFieldWidth!
+                            0 => entryTargetFieldWidth!
+                            entryTargetFieldTypeId! >= 0 -> if {
+                                context.types[entryTargetFieldTypeId!] => entryTargetFieldSemanticType
+                                entryTargetFieldSemanticType.origin == 1 -> if { entryTargetFieldSemanticType.symbol -> integerWidth => entryTargetFieldWidth! }
+                            }
+                            (entrySourceFieldWidth! > 0 and entryTargetFieldWidth! > 0 and entrySourceFieldWidth! != entryTargetFieldWidth! and entryEmittedFieldValue.kind != 3 and entryEmittedFieldValue.kind != 4) => castEntryStructField!
+                            castEntryStructField! -> if {
+                                "  %v$(entryExpressionIndex!)_field$(entryFieldPosition!)_cast = " -> print
+                                entryTargetFieldWidth! < entrySourceFieldWidth! -> if { "trunc " -> print } else {
+                                    entryEmittedFieldValue -> integerNodeSigned -> if { "sext " -> print } else { "zext " -> print }
+                                }
+                                entryEmittedFieldValue -> writeIrType
+                                " %v$(entryEmittedFieldIndex) to " -> print
+                                entryTargetFieldTypeId! -> writeSemanticTypeId
+                                "" -> println
+                            }
+                            "  " -> print
+                            entryFieldValue.nextOperand < 0 -> if { "%v$(entryExpressionIndex!)" -> print } else { "%v$(entryExpressionIndex!)_f$(entryFieldPosition!)" -> print }
+                            " = insertvalue " -> print
+                            entryExpression -> writeIrType
+                            " " -> print
+                            entryFieldPosition! == 0 -> if { "poison" -> print } else {
+                                "%v$(entryExpressionIndex!)_f" -> print
+                                entryFieldPosition! - 1 -> writeDecimal
+                            }
+                            ", " -> print
+                            entryTargetFieldTypeId! >= 0 -> if { entryTargetFieldTypeId! -> writeSemanticTypeId } else { entryEmittedFieldValue -> writeIrType }
+                            " " -> print
+                            entryEmittedFieldValue.kind == 2 -> if {
+                                entryEmittedFieldValue -> sourceToken => entryFieldTextToken
+                                Int(TextLiteralRequest { sourceModule: entryEmittedFieldValue.sourceModule, token: entryFieldTextToken } -> textLiteralLength) => entryFieldTextLength
+                                "{ ptr @sollang_str_$(entryEmittedFieldIndex), i64 $entryFieldTextLength }" -> print
+                            } else {
+                                (entryEmittedFieldValue.kind == 3 or entryEmittedFieldValue.kind == 4) -> if {
+                                    entryEmittedFieldValue -> sourceToken => entryFieldToken
+                                    entryEmittedFieldValue.kind == 3 -> if {
+                                        context.sources[entryEmittedFieldValue.sourceModule] -> slice(entryFieldToken.span.start, entryFieldToken.span.length) -> print
+                                    } else {
+                                        ((context.sources[entryEmittedFieldValue.sourceModule] -> byte(entryFieldToken.span.start)) == UInt8(116)) -> if { "1" -> print } else { "0" -> print }
+                                    }
+                                } else {
+                                    castEntryStructField! -> if { "%v$(entryExpressionIndex!)_field$(entryFieldPosition!)_cast" -> print } else { "%v$(entryEmittedFieldIndex)" -> print }
+                                }
+                            }
+                            ", $(entryFieldPosition!)" -> println
+                            entryFieldValue.nextOperand => entryFieldValueIndex!
+                            entryFieldPosition! + 1 => entryFieldPosition!
+                        }
                     }
                     (entryExpression.kind == 5 and not (entryExpression.typeOrigin == 1 and entryExpression.typeSymbol == 16)) -> if {
                         -1 => entryBindingValueIr!

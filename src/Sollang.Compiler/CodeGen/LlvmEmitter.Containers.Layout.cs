@@ -153,7 +153,17 @@ internal sealed partial class LlvmEmitter
         EmitCompare(inBounds, "ult", "i64", index, array.LengthName);
         EmitTrapUnless(inBounds, "dynamic_inline_assign_bounds");
         var definition = _program.Types.GetDynamicArray(array.ArrayType);
-        StoreDynamicInlineArrayElement(array.PointerName, definition, index, value);
+        var llvmType = LlvmType(definition.ElementType);
+        var slot = NextTemp("dynamic_inline_assign_slot");
+        EmitAssign(slot, $"getelementptr {llvmType}, ptr {array.PointerName}, i64 {index}");
+        if (_program.Types.ContainsOwnedStorage(definition.ElementType))
+        {
+            var previous = NextTemp("dynamic_inline_assign_previous");
+            EmitLoad(previous, llvmType, slot, definition.ElementAlignment);
+            DropOwnedRuntimeValue(DematerializeAggregateValue(definition.ElementType, previous));
+        }
+        var materialized = MaterializeAggregateValue(value);
+        EmitStore(llvmType, materialized.ValueName, slot, definition.ElementAlignment);
     }
 
     private RuntimeInt EmitIntSliceLoad(RuntimeIntSlice slice, string index)

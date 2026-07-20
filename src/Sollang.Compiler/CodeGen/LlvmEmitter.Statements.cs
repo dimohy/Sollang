@@ -330,8 +330,15 @@ internal sealed partial class LlvmEmitter
             EmitMappedStore(mapped, assignment.Index, mappedValue);
             return;
         }
-        var index = EmitIntExpression(assignment.Index);
+        var movedSourceName = GetMoveConsumingContainerSourceName(assignment.Value);
+        var structFieldSourceNames = GetOwnedStructFieldSourceNames(assignment.Value);
+        var directOwnedSourceName = assignment.Value is NameExpression sourceName
+            && _locals.TryGetValue(sourceName.Name, out var sourceValue)
+            && _program.Types.ContainsOwnedStorage(sourceValue.Type)
+                ? sourceName.Name
+                : null;
         var value = EmitExpression(assignment.Value);
+        var index = EmitIntExpression(assignment.Index);
         switch (target)
         {
             case RuntimeStaticIntArray array:
@@ -343,6 +350,18 @@ internal sealed partial class LlvmEmitter
             case RuntimeDynamicInlineArray array:
                 EnsureRuntimeType(value, array.ElementType, "array indexed assignment");
                 EmitDynamicInlineArrayAssign(array, EmitIntAsSize(index, "assignment_index"), value);
+                if (movedSourceName is not null)
+                {
+                    RemoveLocal(movedSourceName);
+                }
+                if (directOwnedSourceName is not null)
+                {
+                    RemoveLocal(directOwnedSourceName);
+                }
+                foreach (var transferredName in structFieldSourceNames)
+                {
+                    RemoveLocal(transferredName);
+                }
                 return;
             case RuntimeIntDictionary dictionary:
                 EmitDictionaryAssignExisting(dictionary, index.ValueName, ((RuntimeInt)value).ValueName);

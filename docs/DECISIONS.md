@@ -7598,3 +7598,48 @@ Stage2 passes 5/5 at 10,847,652 bytes. The scheduled Stage3 gate regenerates
 10,851,049 bytes and matches Stage2 at normalized SHA-256
 `0A8E471CCCC2A97895537FB6279DC84579D052AD4AFECBAA03BDFBA4794FE0DD`.
 The ten-checkpoint cadence resets to 0/10.
+
+## D209A - Treat Owned Array Index Assignment As Place Replacement
+
+Status: implemented and cross-target verified
+Date: 2026-07-20
+
+An indexed assignment into an owned dynamic array is a place replacement, not a
+bitwise overwrite. The replacement is established as an owned temporary, the
+index is bounds checked, the previous element is loaded and destroyed through
+its canonical recursive drop witness, and the new value is stored. A named
+source transfers exactly once and becomes unavailable; a fresh aggregate can be
+stored directly. The containing array cannot be used as its own replacement.
+
+This follows Rust's specified assignment order at the ownership boundary: the
+old initialized place is dropped before the new value occupies it. It also
+matches Mojo's unique-owner rule and deterministic destructor model. Sollang
+keeps the operation fully static: concrete array specialization selects the
+layout and `sollang_drop_t<ID>` function, so values gain no runtime type tag or
+per-element witness pointer.
+
+The reference semantic pass now transfers owned sources for index assignment,
+and the LLVM backend loads/drops the previous concrete element before storing.
+The self-host expression passes assign `Unit` to both index and member
+assignment, typed IR records kind-24 owned replacement as a move event, and the
+self-host LLVM emitter invokes the same recursive witness. The test also exposed
+that main-entry emission scheduled struct constructors but did not lower them;
+main now has the same canonical field construction and numeric conversion path
+as ordinary functions.
+
+Examples 446 and 447 cover reference and self-host replacement. The generated
+self-host LLVM contains the previous-element load, recursive drop call, and new
+store, then assembles, links, and executes on both targets.
+`scripts/verify-owned-indexed-replacement.ps1` instruments reference and
+self-host Linux modules with ASan/UBSan and verifies leak, double-free, and UB
+freedom. Release builds report zero warnings and errors; Windows/Linux full
+suites pass 602/602. Windows Stage2 passes 6/6 at 10,904,470 LLVM text bytes;
+Linux Stage2 passes 5/5 at 10,901,073 bytes. Formal progress remains 53/60
+(88.3%) because generic dictionary replacement and wider container/borrow work
+remain. Stage3 cadence advances to 1/10.
+
+References:
+
+- [Rust assignment expressions](https://doc.rust-lang.org/stable/reference/expressions/operator-expr.html#assignment-expressions)
+- [Rust `mem::replace`](https://doc.rust-lang.org/std/mem/fn.replace.html)
+- [Mojo ownership](https://docs.modular.com/mojo/manual/values/ownership/)

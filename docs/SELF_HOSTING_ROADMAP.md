@@ -286,9 +286,9 @@ milestone without changing the broader 60-gate language-capability score.
 - Missing (1): a complete path-sensitive borrow checker for references returned
   from functions and stored in user values.
 
-### Modules, visibility, and builds — 7.5 / 8
+### Modules, visibility, and builds — 8 / 8
 
-- Complete (7): file namespaces/import aliases; multiple user source files in
+- Complete (8): file namespaces/import aliases; multiple user source files in
   one compilation unit; root imports recursively discover module files with
   missing, cycle, namespace-mismatch, and duplicate-module diagnostics;
   functions, structs, enums, and traits are internal by default with explicit
@@ -299,14 +299,17 @@ milestone without changing the broader 60-gate language-capability score.
   relative-path order and verifies path-to-namespace identity; ordinary builds
   use validated exact-input frontend and product generations, persistent
   prefix/module/suffix LLVM units, and schema-4 partial-source semantic body
-  rehydration with atomic publication and Windows/Linux invalidation parity.
-- Partial (1): the package graph has deterministic multiple-product selection,
-  exact local path dependencies,
+  rehydration with atomic publication and Windows/Linux invalidation parity;
+  the package graph has deterministic multiple-product selection, exact local
+  path dependencies,
   direct-dependency visibility, transitive resolution, and cycle/name-collision
   diagnostics. A confined `sollang.workspace` now provides explicit local member
   discovery, package selection, workspace-closed dependency validation, shared
-  target/package output roots, cache identity, and ancestor discovery. Versions,
-  registries, Git sources, and a lock file remain.
+  target/package output roots, cache identity, and ancestor discovery. Exact Git
+  revisions and a checksummed sparse static registry share lock format 2,
+  preserve compatible pins on ordinary builds, and update only through explicit
+  `sollang resolve`.
+- Partial (0).
 - Missing (0).
 
 ### Compiler-construction primitives — 11.5 / 12
@@ -347,8 +350,9 @@ milestone without changing the broader 60-gate language-capability score.
   user-value serialization remains. The package/build surface has confined
   roots, automatic discovery, selected products, deterministic local dependency
   resolution, recursive imports, target output, and confined local workspaces,
-  but not versioned/remote resolution, a lock file, tests, or a general build
-  DAG.
+  with versioned path/Git/registry resolution and a reproducible lock. Publishing,
+  private-registry authentication, package signing, and a general build DAG
+  remain tooling work.
   The owned portable Path layer has explicit Posix/Windows lexical normalization
   and confined joins. Windows/Linux directory reads now return sorted owned
   snapshots with entry kind metadata; canonical queries and richer metadata
@@ -1791,6 +1795,42 @@ Windows Stage2 **6/6** at **10,851,049 bytes**, and Linux Stage2 **5/5** at
 and matches Stage2 at normalized SHA-256
 `0A8E471CCCC2A97895537FB6279DC84579D052AD4AFECBAA03BDFBA4794FE0DD`.
 The periodic cadence therefore resets from **10/10** to **0/10**.
+
+## Move-Aware Owned Array Element Replacement (D209A)
+
+D209A turns a mutable dynamic-array index into a real owned place. For an owned
+element type, `replacement! => values![index]` now evaluates the replacement,
+checks the index, loads and recursively drops the previous element, stores the
+new value, and marks the source binding transferred. Fresh struct/container
+expressions follow the same path. Reusing the containing array as its own
+replacement remains a compile-time error.
+
+The reference backend performs the operation from the canonical concrete
+element type. The self-host typed IR records index replacement as a move site,
+its expression/type-ID passes retain the assignment's `Unit` type, and its LLVM
+backend calls the specialized `sollang_drop_t<ID>` witness before the store.
+Main-entry struct construction was added to the self-host emitter because the
+new place operation exposed a function/main parity gap.
+
+Examples 446 and 447 execute the reference and self-host forms on Windows and
+Linux. `scripts/verify-owned-indexed-replacement.ps1` additionally instruments
+both Linux modules with AddressSanitizer and UndefinedBehaviorSanitizer and
+passes leak, double-free, and UB detection. Release builds have zero warnings
+and errors; both full suites pass **602/602**. Windows Stage2 passes **6/6** at
+**10,904,470 LLVM bytes** and Linux Stage2 passes **5/5** at **10,901,073
+bytes**. This closes the array-replacement slice, while generic dictionary
+replacement and the broader borrow/container gates remain. Formal progress is
+therefore still **53/60 (88.3%)**, and the periodic Stage3 cadence advances to
+**1/10**.
+
+Research basis: Rust assignment drops the old place before moving or copying
+the new value, while Mojo requires unique ownership transfer and deterministic
+destruction. Sollang applies those rules statically without a per-element
+runtime witness table.
+
+- [Rust assignment expressions](https://doc.rust-lang.org/stable/reference/expressions/operator-expr.html#assignment-expressions)
+- [Rust `mem::replace`](https://doc.rust-lang.org/std/mem/fn.replace.html)
+- [Mojo ownership](https://docs.modular.com/mojo/manual/values/ownership/)
 
 ## Immediate Implementation Order
 
