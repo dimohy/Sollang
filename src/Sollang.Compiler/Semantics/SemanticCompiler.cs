@@ -3349,7 +3349,12 @@ internal sealed partial class SemanticCompiler
                 allowReadIntCall,
                 allowOwnedElementBorrow),
             StructLiteralExpression literal => InferStructLiteralExpression(literal, functions, bindings, allowReadIntCall),
-            FieldAccessExpression field => InferFieldAccessExpression(field, functions, bindings, allowReadIntCall),
+            FieldAccessExpression field => InferFieldAccessExpression(
+                field,
+                functions,
+                bindings,
+                allowReadIntCall,
+                allowOwnedElementBorrow),
             TryExpression attempt => InferTryExpression(attempt, functions, bindings, allowReadIntCall),
             BoxExpression box => InferBoxExpression(box, functions, bindings, allowReadIntCall),
             MapExpression mapping => InferMapExpression(mapping, functions, bindings, allowReadIntCall),
@@ -3656,7 +3661,8 @@ internal sealed partial class SemanticCompiler
             bindings,
             allowPrintCall: false,
             allowReadIntCall,
-            allowFlowBindingTarget: false);
+            allowFlowBindingTarget: false,
+            allowOwnedElementBorrow: allowOwnedElementBorrow);
         if (sourceType is not (BoundType.IntSlice
             or BoundType.StaticIntArray
             or BoundType.StaticTextArray
@@ -3866,7 +3872,8 @@ internal sealed partial class SemanticCompiler
         FieldAccessExpression expression,
         IReadOnlyDictionary<string, BoundFunction> functions,
         IReadOnlyDictionary<string, BoundType> bindings,
-        bool allowReadIntCall)
+        bool allowReadIntCall,
+        bool allowOwnedElementBorrow)
     {
         if (expression.Source is NameExpression functionOwner
             && !bindings.ContainsKey(functionOwner.Name)
@@ -3951,7 +3958,8 @@ internal sealed partial class SemanticCompiler
             bindings,
             allowPrintCall: false,
             allowReadIntCall,
-            allowFlowBindingTarget: false);
+            allowFlowBindingTarget: false,
+            allowOwnedElementBorrow: allowOwnedElementBorrow);
         if (_types.IsBox(sourceType))
         {
             sourceType = _types.GetBox(sourceType).ElementType;

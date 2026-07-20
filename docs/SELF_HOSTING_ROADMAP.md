@@ -1984,6 +1984,47 @@ reference escape for the next ownership gate.
 - [Rust borrow splitting](https://doc.rust-lang.org/nomicon/borrow-splitting.html)
 - [Mojo lifetimes, origins, and references](https://docs.modular.com/mojo/manual/values/lifetimes/)
 
+## Projected Indexed Place Borrows (D211B)
+
+D211B preserves the D211A place-borrow context through field and nested-index
+projections. A readonly call may therefore consume `symbols![key].payload`,
+`symbols![key].name`, or `(symbols![key].payload)[index]` without copying the
+recursively owned dictionary value or transferring any drop obligation. The
+borrow still ends at the direct call; binding a projected owner remains an
+escape error, and `take` remains the explicit ownership-transfer operation.
+
+The reference semantic compiler propagates the call-only admission context
+through `FieldAccessExpression` and nested `IndexExpression` nodes. The
+reference LLVM emitter now discovers drop helpers from dictionary key/value
+storage only when those types recursively own data, preserving allocation-free
+stack promotion for scalar containers. The self-host main emitter gains the
+dynamic-array branch that its ordinary-function index emitter already had, so
+a projected array element is scheduled and defined before its consuming call.
+
+Examples 458 and 459 cover dictionary-to-struct-to-array projections in the
+reference and self-host paths. The projection-escape diagnostic preserves the
+non-escaping boundary. The expanded
+`scripts/verify-call-scoped-container-borrows.ps1` validates all four D211
+products on Linux and instruments all four products with ASan/UBSan leak,
+double-free, use-after-free, and undefined-behavior checks.
+
+Validation is a zero-warning Release build, Windows/Linux full suites at
+**620/620**, Windows Stage2 **6/6** at **11,297,708 bytes**, and Linux Stage2
+**5/5** at **11,294,311 bytes**. The periodic Stage3 cadence advances to
+**6/10**. Formal progress remains **49 complete, 8 partial, 3 missing: 53/60
+(88.3%)** because escaping references and simultaneous path-sensitive borrow
+conflicts remain open inside the existing ownership/storage gate.
+
+Research basis: Rust field expressions borrow their base place and its borrow
+splitting rules distinguish disjoint projections. Mojo origins similarly carry
+the lifetime source through derived references. Sollang keeps the narrower
+direct-call lifetime while now retaining the complete projected place path.
+
+- [Rust field borrowing](https://doc.rust-lang.org/reference/expressions/field-expr.html#borrowing)
+- [Rust place expressions](https://doc.rust-lang.org/stable/reference/expressions.html#place-expressions-and-value-expressions)
+- [Rust borrow splitting](https://doc.rust-lang.org/nomicon/borrow-splitting.html)
+- [Mojo lifetimes, origins, and references](https://docs.modular.com/mojo/manual/values/lifetimes/)
+
 ## Immediate Implementation Order
 
 1. Multi-file compilation (implemented by example 52).

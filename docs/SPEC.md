@@ -1060,9 +1060,11 @@ Container rules in the current slice:
 - Indexing is checked. Out-of-bounds array access and missing dictionary keys
   trap in the current runtime slice.
 - An indexed element that recursively owns storage is a place, not a copied
-  value. It may be passed directly to a default readonly function input; that
-  borrow lasts only for the call expression. Binding, returning, storing, or
-  mutating through the indexed result is rejected. Use
+  value. Field and nested-index projections preserve that place identity, so
+  `symbols![key].payload -> inspect` and `(symbols![key].payload)[0] -> inspect`
+  may be passed directly to a default readonly function input. That borrow
+  lasts only for the call expression. Binding, returning, storing, or mutating
+  through the indexed result or one of its projections is rejected. Use
   `owner! -> take(indexOrKey) => value!` to transfer ownership out explicitly.
 - `push`, `put`, and indexed assignment require a named mutable owner binding
   created with `=> name!`.

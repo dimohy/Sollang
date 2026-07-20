@@ -11,8 +11,14 @@ $compilerProject = Join-Path $repoRoot "src\Sollang.Compiler\Sollang.Compiler.cs
 $runnerProject = Join-Path $repoRoot "tests\Sollang.ExampleTests\Sollang.ExampleTests.csproj"
 $llvmDir = Join-Path $repoRoot ".tools\llvm-22.1.8"
 $clangPath = Join-Path $llvmDir "bin\clang.exe"
-$referenceName = "456-owned-dictionary-value-call-borrow"
-$selfHostName = "457-selfhost-llvm-owned-dictionary-value-call-borrow"
+$referenceNames = @(
+    "456-owned-dictionary-value-call-borrow",
+    "458-owned-index-projected-call-borrow"
+)
+$selfHostNames = @(
+    "457-selfhost-llvm-owned-dictionary-value-call-borrow",
+    "459-selfhost-llvm-owned-index-projected-call-borrow"
+)
 
 function Convert-ToWslPath {
     param([string]$Path)
@@ -37,43 +43,48 @@ New-Item -ItemType Directory -Force -Path $artifactsDir | Out-Null
 
 Write-Host "[call-borrow 1/4] Verify reference and self-host behavior on Linux."
 & dotnet run --project $runnerProject -c Release --no-build -- `
-    --exact $referenceName `
-    --exact $selfHostName `
+    --exact $referenceNames[0] `
+    --exact $referenceNames[1] `
+    --exact $selfHostNames[0] `
+    --exact $selfHostNames[1] `
     --target linux-x64 `
     --skip-bootstrap `
-    --jobs 2
+    --jobs 4
 if ($LASTEXITCODE -ne 0) {
     throw "Call-scoped container borrow examples failed"
 }
 Write-Host "[call-borrow 1/4] PASS Linux reference and self-host execution"
 
 Write-Host "[call-borrow 2/4] Emit reference LLVM and collect self-host LLVM."
-$referenceOutput = Join-Path $artifactsDir "$referenceName-asan"
-& dotnet run --project $compilerProject -c Release --no-build -- build `
-    (Join-Path $repoRoot "examples\$referenceName.slg") `
-    -o $referenceOutput `
-    --target linux-x64 `
-    --llvm $llvmDir `
-    -O0 `
-    --keep-temps
-if ($LASTEXITCODE -ne 0) {
-    throw "Reference call-scoped borrow LLVM emission failed"
-}
-$modules = @(
-    [pscustomobject]@{
+$modules = @()
+foreach ($referenceName in $referenceNames) {
+    $referenceOutput = Join-Path $artifactsDir "$referenceName-asan"
+    & dotnet run --project $compilerProject -c Release --no-build -- build `
+        (Join-Path $repoRoot "examples\$referenceName.slg") `
+        -o $referenceOutput `
+        --target linux-x64 `
+        --llvm $llvmDir `
+        -O0 `
+        --keep-temps
+    if ($LASTEXITCODE -ne 0) {
+        throw "Reference call-scoped borrow LLVM emission failed: $referenceName"
+    }
+    $modules += [pscustomobject]@{
         Name = $referenceName
         Llvm = [System.IO.Path]::ChangeExtension($referenceOutput, ".ll")
         Expected = Join-Path $repoRoot "examples\expected\$referenceName.stdout.txt"
-    },
-    [pscustomobject]@{
+    }
+}
+foreach ($selfHostName in $selfHostNames) {
+    $modules += [pscustomobject]@{
         Name = $selfHostName
         Llvm = Join-Path $linuxArtifactsDir "$selfHostName.stdout.ll"
         Expected = Join-Path $repoRoot "examples\expected\$selfHostName.stdout.llvm.linux.execute.txt"
     }
-)
+}
 Write-Host "[call-borrow 2/4] PASS LLVM modules collected"
 
-Write-Host "[call-borrow 3/4] Instrument both modules with ASan and UBSan."
+Write-Host "[call-borrow 3/4] Instrument all modules with ASan and UBSan."
 foreach ($module in $modules) {
     $objectPath = Join-Path $artifactsDir "$($module.Name).asan.o"
     & $clangPath "--target=x86_64-unknown-linux-gnu" -c $module.Llvm -O1 -g `

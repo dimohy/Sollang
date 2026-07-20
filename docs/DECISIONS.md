@@ -7838,3 +7838,49 @@ References:
 - [Rust field borrowing](https://doc.rust-lang.org/reference/expressions/field-expr.html#borrowing)
 - [Rust borrow splitting](https://doc.rust-lang.org/nomicon/borrow-splitting.html)
 - [Mojo lifetimes, origins, and references](https://docs.modular.com/mojo/manual/values/lifetimes/)
+
+## D211B - Projected Indexed Place Borrows
+
+Status: implemented and cross-target Stage2 verified
+Date: 2026-07-20
+
+The call-scoped place introduced by D211A now survives field and nested-index
+projection. `symbols![key].payload -> inspect`, `symbols![key].name -> len`, and
+`(symbols![key].payload)[index] -> inspect` borrow only the selected place for
+the direct readonly call. No projected aggregate becomes a second owner. A
+binding, return, store, or mutation through that projection is still rejected,
+and `take` remains the operation that transfers ownership.
+
+The C# semantic compiler threads the readonly call-input context through field
+and index inference. The reference LLVM helper-discovery rule now examines
+dictionary key/value ownership directly. This emits the nominal or nested
+container drop closure required by a dictionary of owned values without adding
+heap cleanup to scalar-only stack-promoted containers.
+
+The self-host main-entry emitter had a narrower index implementation than its
+ordinary-function emitter: it handled argument views and dictionaries but not
+dynamic arrays. Consequently a nested projected array index was present in
+typed IR but had no LLVM definition. Main emission now uses the same dynamic
+array data extraction, index widening, GEP, load, alignment, and dependency
+ordering as the function path.
+
+Examples 458 and 459 cover projected `Text`, array, and array-element borrows;
+the projection-escape diagnostic fixes the lifetime boundary. The expanded
+call-borrow verifier runs all four D211 examples on Linux and checks all emitted
+LLVM products with ASan/UBSan. Release builds report zero warnings and errors;
+Windows and Linux full suites pass 620/620. Windows Stage2 passes 6/6 at
+11,297,708 LLVM text bytes and Linux Stage2 passes 5/5 at 11,294,311 bytes.
+Stage3 cadence advances to 6/10. Formal progress remains 49 complete, 8 partial,
+and 3 missing: 53/60 (88.3%), because stored/returned references and general
+path-sensitive conflict analysis remain open.
+
+The design follows Rust's field-place borrowing and structural borrow splitting
+while retaining Sollang's conservative non-escaping call lifetime. Mojo's
+origin model supports carrying the source lifetime through derived projections.
+
+References:
+
+- [Rust field borrowing](https://doc.rust-lang.org/reference/expressions/field-expr.html#borrowing)
+- [Rust place expressions](https://doc.rust-lang.org/stable/reference/expressions.html#place-expressions-and-value-expressions)
+- [Rust borrow splitting](https://doc.rust-lang.org/nomicon/borrow-splitting.html)
+- [Mojo lifetimes, origins, and references](https://docs.modular.com/mojo/manual/values/lifetimes/)

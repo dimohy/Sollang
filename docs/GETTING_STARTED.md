@@ -885,6 +885,10 @@ approved syntax.
   `examples/457-selfhost-llvm-owned-dictionary-value-call-borrow.slg`:
   call-scoped readonly borrowing of an indexed recursively owned dictionary
   value, followed by safe replacement, extraction, and deterministic cleanup
+- `examples/458-owned-index-projected-call-borrow.slg` and
+  `examples/459-selfhost-llvm-owned-index-projected-call-borrow.slg`:
+  call-scoped readonly borrowing through field and nested-index projections,
+  with the container retaining sole ownership
 - `examples/88-grammar-table-module.slg`: compiles the generated grammar-table
   module as a separate source file and reads its public metadata
 - `examples/browser`: static HTML/JS runner for the WebAssembly sample

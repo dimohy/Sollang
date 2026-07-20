@@ -23,7 +23,11 @@ internal sealed partial class LlvmEmitter
                 _program.Types.ContainsOwnedStorage(definition.ElementType))
             || _program.Types.DynamicArrays.Any(definition =>
                 ShouldEmitTypeDefinition(definition.Id)
-                && _program.Types.ContainsOwnedStorage(definition.ElementType));
+                && _program.Types.ContainsOwnedStorage(definition.ElementType))
+            || _program.Types.Dictionaries.Any(definition =>
+                ShouldEmitTypeDefinition(definition.Id)
+                && (_program.Types.ContainsOwnedStorage(definition.KeyType)
+                    || _program.Types.ContainsOwnedStorage(definition.ValueType)));
         if (!needsHelpers)
         {
             return;

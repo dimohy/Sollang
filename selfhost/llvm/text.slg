@@ -9740,6 +9740,27 @@ emitCore context: move EmitContext -> Unit uses Console {
                                 entryIndexedDictionaryValueTypeId! >= 0 -> if { entryIndexedDictionaryValueTypeId! -> writeSemanticTypeId } else { entryIndexedValue.typeSymbol -> llvmType -> print }
                                 ", ptr %v$(entryExpressionIndex!)_value_ptr, align " -> print
                                 entryIndexedDictionaryValueTypeId! >= 0 -> if { context.typeAligns[entryIndexedDictionaryValueTypeId!] -> writeDecimalLine } else { entryIndexedValue.typeSymbol -> legacyStorageAlign -> writeDecimalLine }
+                            } else {
+                                "  %v$(entryExpressionIndex!)_data = extractvalue %sollang.array.i32 %v$(entryExpression.operand0), 0" -> println
+                                entryIndexValue -> integerNodeWidth => entryArrayIndexWidth
+                                (entryIndexValue.kind != 3 and entryArrayIndexWidth > 0 and entryArrayIndexWidth < 64) -> if {
+                                    "  %v$(entryExpressionIndex!)_index = " -> print
+                                    entryIndexValue -> integerNodeSigned -> if { "sext " -> print } else { "zext " -> print }
+                                    "i$(entryArrayIndexWidth) %v$(entryExpression.operand1) to i64" -> println
+                                }
+                                "  %v$(entryExpressionIndex!)_ptr = getelementptr " -> print
+                                entryExpression -> writeIrType
+                                ", ptr %v$(entryExpressionIndex!)_data, i64 " -> print
+                                entryIndexValue.kind == 3 -> if {
+                                    entryIndexValue -> sourceToken => entryArrayIndexToken
+                                    context.sources[entryIndexValue.sourceModule] -> slice(entryArrayIndexToken.span.start, entryArrayIndexToken.span.length) -> println
+                                } else {
+                                    (entryArrayIndexWidth > 0 and entryArrayIndexWidth < 64) -> if { "%v$(entryExpressionIndex!)_index" -> println } else { "%v$(entryExpression.operand1)" -> println }
+                                }
+                                "  %v$(entryExpressionIndex!) = load " -> print
+                                entryExpression -> writeIrType
+                                ", ptr %v$(entryExpressionIndex!)_ptr, align " -> print
+                                entryExpression -> storageAlign -> writeDecimalLine
                             }
                         }
                     }
