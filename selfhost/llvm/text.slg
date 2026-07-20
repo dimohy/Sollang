@@ -3591,6 +3591,86 @@ emitCore context: move EmitContext -> Unit uses Console {
                 context.ir[assignmentRoot] => assignmentBinding
                 context.ir[assignment.operand0] => assignmentValue
                 context.ir[assignment.operand1] => assignmentIndex
+                assignmentBinding -> isDictionaryType -> if {
+                    -1 => assignmentKeyTypeId!
+                    -1 => assignmentValueTypeId!
+                    assignmentBinding.typeId >= 0 -> if {
+                        context.types[assignmentBinding.typeId] => assignmentDictionaryType
+                        assignmentDictionaryType.kind == 5 -> if {
+                            assignmentDictionaryType.first => assignmentKeyTypeId!
+                            assignmentDictionaryType.second => assignmentValueTypeId!
+                        }
+                    }
+                    "  %assign$(request.nodeIndex)_dictionary = load %sollang.dict, ptr %slot$(assignmentRoot), align 8" -> println
+                    "  %assign$(request.nodeIndex)_keys = extractvalue %sollang.dict %assign$(request.nodeIndex)_dictionary, 0" -> println
+                    "  %assign$(request.nodeIndex)_values = extractvalue %sollang.dict %assign$(request.nodeIndex)_dictionary, 1" -> println
+                    "  %assign$(request.nodeIndex)_length = extractvalue %sollang.dict %assign$(request.nodeIndex)_dictionary, 2" -> println
+                    "  br label %assign$(request.nodeIndex)_find_start" -> println
+                    "assign$(request.nodeIndex)_find_start:" -> println
+                    "  br label %assign$(request.nodeIndex)_find" -> println
+                    "assign$(request.nodeIndex)_find:" -> println
+                    "  %assign$(request.nodeIndex)_find_index = phi i64 [ 0, %assign$(request.nodeIndex)_find_start ], [ %assign$(request.nodeIndex)_find_next, %assign$(request.nodeIndex)_find_advance ]" -> println
+                    "  %assign$(request.nodeIndex)_find_active = icmp ult i64 %assign$(request.nodeIndex)_find_index, %assign$(request.nodeIndex)_length" -> println
+                    "  br i1 %assign$(request.nodeIndex)_find_active, label %assign$(request.nodeIndex)_find_check, label %assign$(request.nodeIndex)_missing" -> println
+                    "assign$(request.nodeIndex)_find_check:" -> println
+                    "  %assign$(request.nodeIndex)_key_ptr = getelementptr " -> print
+                    assignmentKeyTypeId! >= 0 -> if { assignmentKeyTypeId! -> writeSemanticTypeId } else { assignmentBinding.typeModule -> llvmType -> print }
+                    ", ptr %assign$(request.nodeIndex)_keys, i64 %assign$(request.nodeIndex)_find_index" -> println
+                    "  %assign$(request.nodeIndex)_key = load " -> print
+                    assignmentKeyTypeId! >= 0 -> if { assignmentKeyTypeId! -> writeSemanticTypeId } else { assignmentBinding.typeModule -> llvmType -> print }
+                    ", ptr %assign$(request.nodeIndex)_key_ptr, align " -> print
+                    assignmentKeyTypeId! >= 0 -> if { context.typeAligns[assignmentKeyTypeId!] -> writeDecimalLine } else { assignmentBinding.typeModule -> legacyStorageAlign -> writeDecimalLine }
+                    "  %assign$(request.nodeIndex)_found = icmp eq " -> print
+                    assignmentKeyTypeId! >= 0 -> if { assignmentKeyTypeId! -> writeSemanticTypeId } else { assignmentBinding.typeModule -> llvmType -> print }
+                    " %assign$(request.nodeIndex)_key, " -> print
+                    (assignmentIndex.kind == 3 or assignmentIndex.kind == 4) -> if {
+                        assignmentIndex -> sourceToken => assignmentDictionaryKeyToken
+                        assignmentIndex.kind == 3 -> if {
+                            context.sources[assignmentIndex.sourceModule] -> slice(assignmentDictionaryKeyToken.span.start, assignmentDictionaryKeyToken.span.length) -> println
+                        } else {
+                            ((context.sources[assignmentIndex.sourceModule] -> byte(assignmentDictionaryKeyToken.span.start)) == UInt8(116)) -> if { "1" -> println } else { "0" -> println }
+                        }
+                    } else {
+                        (request.ownerIndex >= 0 and context.ir[request.ownerIndex].kind == 0 and context.ir[request.ownerIndex].operand1 >= 0 and assignmentIndex.kind == 5 and assignmentIndex.symbol == context.ir[context.ir[request.ownerIndex].operand1].symbol) -> if { "%arg" -> println } else { "%v$(assignment.operand1)" -> println }
+                    }
+                    "  br i1 %assign$(request.nodeIndex)_found, label %assign$(request.nodeIndex)_hit, label %assign$(request.nodeIndex)_find_advance" -> println
+                    "assign$(request.nodeIndex)_find_advance:" -> println
+                    "  %assign$(request.nodeIndex)_find_next = add i64 %assign$(request.nodeIndex)_find_index, 1" -> println
+                    "  br label %assign$(request.nodeIndex)_find" -> println
+                    "assign$(request.nodeIndex)_missing:" -> println
+                    "  call void @llvm.trap()" -> println
+                    "  unreachable" -> println
+                    "assign$(request.nodeIndex)_hit:" -> println
+                    "  %assign$(request.nodeIndex)_value_ptr = getelementptr " -> print
+                    assignmentValueTypeId! >= 0 -> if { assignmentValueTypeId! -> writeSemanticTypeId } else { assignmentBinding.typeSymbol -> llvmType -> print }
+                    ", ptr %assign$(request.nodeIndex)_values, i64 %assign$(request.nodeIndex)_find_index" -> println
+                    (assignmentValueTypeId! >= 0 and (assignmentValueTypeId! -> semanticTypeOwns)) -> if {
+                        "  %assign$(request.nodeIndex)_previous = load " -> print
+                        assignmentValueTypeId! -> writeSemanticTypeId
+                        ", ptr %assign$(request.nodeIndex)_value_ptr, align " -> print
+                        context.typeAligns[assignmentValueTypeId!] -> writeDecimalLine
+                        "  call void @sollang_drop_t$(assignmentValueTypeId!)(" -> print
+                        assignmentValueTypeId! -> writeSemanticTypeId
+                        " %assign$(request.nodeIndex)_previous)" -> println
+                    }
+                    "  store " -> print
+                    assignmentValueTypeId! >= 0 -> if { assignmentValueTypeId! -> writeSemanticTypeId } else { assignmentBinding.typeSymbol -> llvmType -> print }
+                    " " -> print
+                    (assignmentValue.kind == 3 or assignmentValue.kind == 4) -> if {
+                        assignmentValue -> sourceToken => assignmentDictionaryValueToken
+                        assignmentValue.kind == 3 -> if {
+                            context.sources[assignmentValue.sourceModule] -> slice(assignmentDictionaryValueToken.span.start, assignmentDictionaryValueToken.span.length) -> print
+                        } else {
+                            ((context.sources[assignmentValue.sourceModule] -> byte(assignmentDictionaryValueToken.span.start)) == UInt8(116)) -> if { "1" -> print } else { "0" -> print }
+                        }
+                    } else {
+                        (request.ownerIndex >= 0 and context.ir[request.ownerIndex].kind == 0 and context.ir[request.ownerIndex].operand1 >= 0 and assignmentValue.kind == 5 and assignmentValue.symbol == context.ir[context.ir[request.ownerIndex].operand1].symbol) -> if { "%arg" -> print } else { "%v$(assignment.operand0)" -> print }
+                    }
+                    ", ptr %assign$(request.nodeIndex)_value_ptr, align " -> print
+                    assignmentValueTypeId! >= 0 -> if { context.typeAligns[assignmentValueTypeId!] -> writeDecimalLine } else { assignmentBinding.typeSymbol -> legacyStorageAlign -> writeDecimalLine }
+                    "  br label %assign$(request.nodeIndex)_done" -> println
+                    "assign$(request.nodeIndex)_done:" -> println
+                } else {
                 "  %assign$(request.nodeIndex)_array = load %sollang.array.i32, ptr %slot$(assignmentRoot), align 4" -> println
                 "  %assign$(request.nodeIndex)_data = extractvalue %sollang.array.i32 %assign$(request.nodeIndex)_array, 0" -> println
                 assignmentIndex -> integerNodeWidth => assignmentIndexWidth
@@ -3666,6 +3746,7 @@ emitCore context: move EmitContext -> Unit uses Console {
                 }
                 ", ptr %assign$(request.nodeIndex)_ptr, align " -> print
                 assignmentBinding -> arrayElementAlign -> writeDecimalLine
+                }
             }
         }
     }

@@ -332,24 +332,37 @@ internal sealed partial class LlvmEmitter
         }
         var movedSourceName = GetMoveConsumingContainerSourceName(assignment.Value);
         var structFieldSourceNames = GetOwnedStructFieldSourceNames(assignment.Value);
+        var expectedValueType = target switch
+        {
+            RuntimeDynamicInlineArray array => array.ElementType,
+            RuntimeInlineDictionary dictionary => dictionary.ValueType,
+            _ => (BoundType?)null
+        };
         var directOwnedSourceName = assignment.Value is NameExpression sourceName
             && _locals.TryGetValue(sourceName.Name, out var sourceValue)
+            && expectedValueType == sourceValue.Type
             && _program.Types.ContainsOwnedStorage(sourceValue.Type)
                 ? sourceName.Name
                 : null;
-        var value = EmitExpression(assignment.Value);
-        var index = EmitIntExpression(assignment.Index);
+        var value = assignment.Value is DictionaryLiteralExpression contextualValue
+            && expectedValueType is { } contextualValueType
+            && _program.Types.IsStruct(contextualValueType)
+                ? EmitContextualStructLiteral(contextualValue, contextualValueType)
+                : EmitExpression(assignment.Value);
         switch (target)
         {
             case RuntimeStaticIntArray array:
-                EmitStaticArrayAssign(array, EmitIntAsSize(index, "assignment_index"), ((RuntimeInt)value).ValueName);
+                var staticIndex = EmitIntExpression(assignment.Index);
+                EmitStaticArrayAssign(array, EmitIntAsSize(staticIndex, "assignment_index"), ((RuntimeInt)value).ValueName);
                 return;
             case RuntimeDynamicIntArray array:
-                EmitDynamicArrayAssign(array, EmitIntAsSize(index, "assignment_index"), ((RuntimeInt)value).ValueName);
+                var dynamicIndex = EmitIntExpression(assignment.Index);
+                EmitDynamicArrayAssign(array, EmitIntAsSize(dynamicIndex, "assignment_index"), ((RuntimeInt)value).ValueName);
                 return;
             case RuntimeDynamicInlineArray array:
+                var inlineIndex = EmitIntExpression(assignment.Index);
                 EnsureRuntimeType(value, array.ElementType, "array indexed assignment");
-                EmitDynamicInlineArrayAssign(array, EmitIntAsSize(index, "assignment_index"), value);
+                EmitDynamicInlineArrayAssign(array, EmitIntAsSize(inlineIndex, "assignment_index"), value);
                 if (movedSourceName is not null)
                 {
                     RemoveLocal(movedSourceName);
@@ -364,7 +377,29 @@ internal sealed partial class LlvmEmitter
                 }
                 return;
             case RuntimeIntDictionary dictionary:
-                EmitDictionaryAssignExisting(dictionary, index.ValueName, ((RuntimeInt)value).ValueName);
+                var dictionaryIndex = EmitIntExpression(assignment.Index);
+                EmitDictionaryAssignExisting(dictionary, dictionaryIndex.ValueName, ((RuntimeInt)value).ValueName);
+                return;
+            case RuntimeInlineDictionary dictionary:
+                var inlineDictionaryKey = assignment.Index is DictionaryLiteralExpression contextualKey
+                    && _program.Types.IsStruct(dictionary.KeyType)
+                        ? EmitContextualStructLiteral(contextualKey, dictionary.KeyType)
+                        : EmitExpression(assignment.Index);
+                EnsureRuntimeType(inlineDictionaryKey, dictionary.KeyType, "dictionary indexed assignment key");
+                EnsureRuntimeType(value, dictionary.ValueType, "dictionary indexed assignment value");
+                EmitInlineDictionaryAssignExisting(dictionary, inlineDictionaryKey, value);
+                if (movedSourceName is not null)
+                {
+                    RemoveLocal(movedSourceName);
+                }
+                if (directOwnedSourceName is not null)
+                {
+                    RemoveLocal(directOwnedSourceName);
+                }
+                foreach (var transferredName in structFieldSourceNames)
+                {
+                    RemoveLocal(transferredName);
+                }
                 return;
             default:
                 throw new SollangException("indexed assignment expects an array or dictionary owner");

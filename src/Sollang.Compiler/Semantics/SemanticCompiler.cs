@@ -2500,7 +2500,7 @@ internal sealed partial class SemanticCompiler
                     var movedExpressionSourceName = GetMoveConsumingContainerSourceName(
                         expressionStatement.Expression);
                     var effect = InferExpressionStatement(expressionStatement.Expression, functions, bindings, mutableBindings, yieldInputType);
-                    var pushedOwnedSourceNames = GetOwnedPushConsumedSourceNames(
+                    var mutatedContainerSourceNames = GetOwnedContainerMutationConsumedSourceNames(
                         expressionStatement.Expression,
                         bindings);
                     if (effect is FlowBindingEffect bindingEffect)
@@ -2534,10 +2534,10 @@ internal sealed partial class SemanticCompiler
                         bindings.Remove(movedExpressionSourceName);
                         mutableBindings.Remove(movedExpressionSourceName);
                     }
-                    foreach (var pushedOwnedSourceName in pushedOwnedSourceNames)
+                    foreach (var transferredSourceName in mutatedContainerSourceNames)
                     {
-                        bindings.Remove(pushedOwnedSourceName);
-                        mutableBindings.Remove(pushedOwnedSourceName);
+                        bindings.Remove(transferredSourceName);
+                        mutableBindings.Remove(transferredSourceName);
                     }
 
                     break;
@@ -2655,8 +2655,9 @@ internal sealed partial class SemanticCompiler
         }
 
         var isDynamicArray = _types.IsDynamicArray(targetType);
+        var isGenericDictionary = _types.IsDictionary(targetType);
         if (targetType is not (BoundType.StaticIntArray or BoundType.DynamicIntArray or BoundType.IntDictionary
-            or BoundType.MutableMappedBytes) && !isDynamicArray)
+            or BoundType.MutableMappedBytes) && !isDynamicArray && !isGenericDictionary)
         {
             throw Error(assignment.Line, assignment.Column, "indexed assignment expects an array or dictionary owner");
         }
@@ -2669,90 +2670,110 @@ internal sealed partial class SemanticCompiler
                 $"indexed assignment requires a mutable owner binding; use '=> {assignment.Name.TrimEnd('!')}!'");
         }
 
-        var indexType = assignment.Index is NumberExpression && targetType == BoundType.MutableMappedBytes
+        var expectedIndexType = targetType == BoundType.MutableMappedBytes
             ? BoundType.UIntSize
-            : InferExpression(
-            assignment.Index,
-            functions,
-            bindings,
-            allowPrintCall: false,
-            allowReadIntCall: true,
-            allowFlowBindingTarget: false,
-            yieldInputType: yieldInputType,
-            mutableBindings: mutableBindings);
-        var expectedIndexType = targetType == BoundType.MutableMappedBytes ? BoundType.UIntSize : BoundType.Int;
-        if (indexType != expectedIndexType)
-        {
-            throw Error(assignment.Index.Line, assignment.Index.Column,
-                $"indexed assignment index must be {FormatType(expectedIndexType)}");
-        }
-
-        var valueType = InferExpression(
-            assignment.Value,
-            functions,
-            bindings,
-            allowPrintCall: false,
-            allowReadIntCall: true,
-            allowFlowBindingTarget: false,
-            yieldInputType: yieldInputType,
-            mutableBindings: mutableBindings);
+            : isGenericDictionary
+                ? _types.GetDictionary(targetType).KeyType
+                : BoundType.Int;
         var expectedValueType = targetType == BoundType.MutableMappedBytes
             ? BoundType.UInt8
             : isDynamicArray
                 ? _types.GetDynamicArray(targetType).ElementType
-                : BoundType.Int;
+                : isGenericDictionary
+                    ? _types.GetDictionary(targetType).ValueType
+                    : BoundType.Int;
+        var valueType = assignment.Value is DictionaryLiteralExpression contextualValue
+            && _types.IsStruct(expectedValueType)
+                ? InferContextualStructLiteral(
+                    contextualValue,
+                    expectedValueType,
+                    functions,
+                    bindings,
+                    allowReadIntCall: true)
+                : InferExpression(
+                    assignment.Value,
+                    functions,
+                    bindings,
+                    allowPrintCall: false,
+                    allowReadIntCall: true,
+                    allowFlowBindingTarget: false,
+                    yieldInputType: yieldInputType,
+                    mutableBindings: mutableBindings);
         if (valueType != expectedValueType)
         {
             throw Error(assignment.Value.Line, assignment.Value.Column,
                 $"indexed assignment value must be {FormatType(expectedValueType)}");
         }
 
-        if (!isDynamicArray || !_types.ContainsOwnedStorage(expectedValueType))
+        if (_types.ContainsOwnedStorage(expectedValueType))
         {
-            return;
-        }
+            var transferred = new HashSet<string>(StringComparer.Ordinal);
+            var movedSourceName = GetMoveConsumingContainerSourceName(assignment.Value);
+            if (movedSourceName is not null)
+            {
+                transferred.Add(movedSourceName);
+            }
+            foreach (var consumedName in GetOwnedParameterConsumedSourceNames(
+                         assignment.Value, functions, bindings))
+            {
+                transferred.Add(consumedName);
+            }
+            foreach (var fieldSourceName in GetOwnedStructFieldSourceNames(
+                         assignment.Value, bindings))
+            {
+                transferred.Add(fieldSourceName);
+            }
 
-        var transferred = new HashSet<string>(StringComparer.Ordinal);
-        var movedSourceName = GetMoveConsumingContainerSourceName(assignment.Value);
-        if (movedSourceName is not null)
-        {
-            transferred.Add(movedSourceName);
-        }
-        foreach (var consumedName in GetOwnedParameterConsumedSourceNames(
-                     assignment.Value, functions, bindings))
-        {
-            transferred.Add(consumedName);
-        }
-        foreach (var fieldSourceName in GetOwnedStructFieldSourceNames(
-                     assignment.Value, bindings))
-        {
-            transferred.Add(fieldSourceName);
-        }
+            if (assignment.Value is NameExpression sourceName)
+            {
+                if (string.Equals(sourceName.Name, assignment.Name, StringComparison.Ordinal))
+                {
+                    throw Error(
+                        assignment.Line,
+                        assignment.Column,
+                        "an owned indexed value cannot be replaced from its containing owner");
+                }
+                transferred.Add(sourceName.Name);
+            }
 
-        if (assignment.Value is NameExpression sourceName)
-        {
-            if (string.Equals(sourceName.Name, assignment.Name, StringComparison.Ordinal))
+            if (transferred.Count == 0 && !IsContainerCreationExpression(assignment.Value))
             {
                 throw Error(
-                    assignment.Line,
-                    assignment.Column,
-                    "an owned array element cannot be replaced from its containing owner");
+                    assignment.Value.Line,
+                    assignment.Value.Column,
+                    "owned indexed replacement requires a fresh value or a named owner transfer");
             }
-            transferred.Add(sourceName.Name);
+
+            foreach (var transferredName in transferred)
+            {
+                bindings.Remove(transferredName);
+                mutableBindings.Remove(transferredName);
+            }
         }
 
-        if (transferred.Count == 0 && !IsContainerCreationExpression(assignment.Value))
+        var indexType = assignment.Index is NumberExpression && targetType == BoundType.MutableMappedBytes
+            ? BoundType.UIntSize
+            : assignment.Index is DictionaryLiteralExpression contextualIndex
+              && _types.IsStruct(expectedIndexType)
+                ? InferContextualStructLiteral(
+                    contextualIndex,
+                    expectedIndexType,
+                    functions,
+                    bindings,
+                    allowReadIntCall: true)
+                : InferExpression(
+                    assignment.Index,
+                    functions,
+                    bindings,
+                    allowPrintCall: false,
+                    allowReadIntCall: true,
+                    allowFlowBindingTarget: false,
+                    yieldInputType: yieldInputType,
+                    mutableBindings: mutableBindings);
+        if (indexType != expectedIndexType)
         {
-            throw Error(
-                assignment.Value.Line,
-                assignment.Value.Column,
-                "owned array element replacement requires a fresh value or a named owner transfer");
-        }
-
-        foreach (var transferredName in transferred)
-        {
-            bindings.Remove(transferredName);
-            mutableBindings.Remove(transferredName);
+            throw Error(assignment.Index.Line, assignment.Index.Column,
+                $"indexed assignment index must be {FormatType(expectedIndexType)}");
         }
     }
 
@@ -8418,36 +8439,106 @@ internal sealed partial class SemanticCompiler
         }
     }
 
-    private IReadOnlyList<string> GetOwnedPushConsumedSourceNames(
+    private IReadOnlyList<string> GetOwnedContainerMutationConsumedSourceNames(
         Expression expression,
         IReadOnlyDictionary<string, BoundType> bindings)
     {
         if (expression is not FlowExpression flow
-            || flow.Source is not NameExpression arrayName
-            || !bindings.TryGetValue(arrayName.Name, out var arrayType)
-            || !_types.IsDynamicArray(arrayType))
-        {
-            return [];
-        }
-
-        var elementType = _types.GetDynamicArray(arrayType).ElementType;
-        if (!_types.ContainsOwnedStorage(elementType))
+            || flow.Source is not NameExpression containerName
+            || !bindings.TryGetValue(containerName.Name, out var containerType))
         {
             return [];
         }
 
         var consumed = new List<string>();
-        foreach (var target in flow.Targets)
+        if (_types.IsDynamicArray(containerType))
         {
-            if (target.Path.Count == 1
-                && target.Path[0] == "push"
-                && target.Arguments.Count == 1
-                && target.Arguments[0] is NameExpression sourceName)
+            var elementType = _types.GetDynamicArray(containerType).ElementType;
+            foreach (var target in flow.Targets)
             {
-                consumed.Add(sourceName.Name);
+                if (target.Path.Count == 1
+                    && target.Path[0] == "push"
+                    && target.Arguments.Count == 1)
+                {
+                    CollectOwnedLiteralSourceNames(target.Arguments[0], elementType, bindings, consumed);
+                }
             }
         }
+        else if (_types.IsDictionary(containerType))
+        {
+            var definition = _types.GetDictionary(containerType);
+            foreach (var target in flow.Targets)
+            {
+                if (target.Path.Count == 1
+                    && target.Path[0] == "put"
+                    && target.Arguments.Count == 2)
+                {
+                    CollectOwnedLiteralSourceNames(target.Arguments[0], definition.KeyType, bindings, consumed);
+                    CollectOwnedLiteralSourceNames(target.Arguments[1], definition.ValueType, bindings, consumed);
+                }
+            }
+        }
+        var duplicatedOwner = consumed
+            .GroupBy(static name => name, StringComparer.Ordinal)
+            .FirstOrDefault(static group => group.Count() > 1);
+        if (duplicatedOwner is not null)
+        {
+            throw Error(
+                expression.Line,
+                expression.Column,
+                $"owned value '{duplicatedOwner.Key}' cannot be transferred into a container more than once");
+        }
         return consumed;
+    }
+
+    private void CollectOwnedLiteralSourceNames(
+        Expression expression,
+        BoundType expectedType,
+        IReadOnlyDictionary<string, BoundType> bindings,
+        List<string> consumed)
+    {
+        if (!_types.ContainsOwnedStorage(expectedType))
+        {
+            return;
+        }
+        if (expression is NameExpression name)
+        {
+            if (bindings.TryGetValue(name.Name, out var sourceType) && sourceType == expectedType)
+            {
+                consumed.Add(name.Name);
+            }
+            return;
+        }
+        if (!_types.IsStruct(expectedType))
+        {
+            return;
+        }
+
+        var initializers = expression switch
+        {
+            StructLiteralExpression structure => structure.Fields.ToDictionary(
+                static field => field.Name,
+                static field => field.Value,
+                StringComparer.Ordinal),
+            DictionaryLiteralExpression contextual => contextual.Entries
+                .Where(static entry => entry.Key is NameExpression)
+                .ToDictionary(
+                    static entry => ((NameExpression)entry.Key).Name,
+                    static entry => entry.Value,
+                    StringComparer.Ordinal),
+            _ => null
+        };
+        if (initializers is null)
+        {
+            return;
+        }
+        foreach (var field in _types.GetStruct(expectedType).Fields)
+        {
+            if (initializers.TryGetValue(field.Name, out var initializer))
+            {
+                CollectOwnedLiteralSourceNames(initializer, field.Type, bindings, consumed);
+            }
+        }
     }
 
     private IReadOnlyList<string> GetOwnedParameterConsumedSourceNames(

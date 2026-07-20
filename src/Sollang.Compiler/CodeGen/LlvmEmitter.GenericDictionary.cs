@@ -432,7 +432,7 @@ internal sealed partial class LlvmEmitter
         EmitConditionalBranch(found.FoundName, update, insert); EmitFunctionLine();
         EmitLabel(update);
         _currentBlockLabel = update;
-        StoreInlineDictionaryEntry(dictionary, found.SlotName, key, value);
+        EmitInlineDictionaryReplaceValue(dictionary, found.SlotName, key, value);
         EmitBranch(done);
         var updateEnd = _currentBlockLabel; EmitFunctionLine();
         EmitLabel(insert);
@@ -467,6 +467,43 @@ internal sealed partial class LlvmEmitter
         EmitPhi(capacity, "i64", (dictionary.CapacityName, updateEnd), (dictionary.CapacityName, currentEnd), (grown.CapacityName, grownEnd));
         _currentBlockLabel = done;
         return dictionary with { PointerName = pointer, LengthName = length, CapacityName = capacity };
+    }
+
+    private void EmitInlineDictionaryAssignExisting(
+        RuntimeInlineDictionary dictionary,
+        RuntimeValue key,
+        RuntimeValue value)
+    {
+        var definition = _program.Types.GetDictionary(dictionary.DictionaryType);
+        var found = EmitInlineDictionaryFindSlot(dictionary, key);
+        EmitTrapUnless(found.FoundName, "generic_dict_assign_missing");
+        EmitInlineDictionaryReplaceValue(dictionary, found.SlotName, discardedEqualKey: null, value);
+    }
+
+    private void EmitInlineDictionaryReplaceValue(
+        RuntimeInlineDictionary dictionary,
+        string slot,
+        RuntimeValue? discardedEqualKey,
+        RuntimeValue value)
+    {
+        var definition = _program.Types.GetDictionary(dictionary.DictionaryType);
+        if (discardedEqualKey is not null && _program.Types.ContainsOwnedStorage(definition.KeyType))
+        {
+            DropOwnedRuntimeValue(discardedEqualKey);
+        }
+        var valueSlot = EmitInlineDictionaryEntryPointer(
+            dictionary,
+            slot,
+            definition.ValueOffset,
+            "generic_dict_assign_value");
+        if (_program.Types.ContainsOwnedStorage(definition.ValueType))
+        {
+            var previous = NextTemp("generic_dict_assign_previous");
+            EmitLoad(previous, LlvmType(definition.ValueType), valueSlot, definition.ValueAlignment);
+            DropOwnedRuntimeValue(DematerializeAggregateValue(definition.ValueType, previous));
+        }
+        var materialized = MaterializeAggregateValue(value);
+        EmitStore(materialized.TypeName, materialized.ValueName, valueSlot, definition.ValueAlignment);
     }
 
     private (RuntimeInlineDictionary Dictionary, RuntimeValue Value) EmitInlineDictionaryTake(

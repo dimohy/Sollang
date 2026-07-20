@@ -609,6 +609,8 @@ internal sealed partial class LlvmEmitter
                             ? EmitContextualStructLiteral(contextualValue, inlineDictionary.ValueType)
                             : EmitExpression(target.Arguments[1]);
                     var inlineUpdated = EmitInlineDictionaryPut(inlineDictionary, inlineKey, inlineValue);
+                    RemoveOwnedLiteralSources(target.Arguments[0], inlineDictionary.KeyType);
+                    RemoveOwnedLiteralSources(target.Arguments[1], inlineDictionary.ValueType);
                     StoreMutableContainer(inlineName, inlineUpdated);
                     _locals[inlineName] = inlineUpdated;
                     result = new RuntimeFlowResult(null, null, _mainOk);

@@ -1832,6 +1832,47 @@ runtime witness table.
 - [Rust `mem::replace`](https://doc.rust-lang.org/std/mem/fn.replace.html)
 - [Mojo ownership](https://docs.modular.com/mojo/manual/values/ownership/)
 
+## Move-Aware Owned Dictionary Value Replacement (D209B)
+
+D209B makes `replacement! => values![key]` an occupied-entry replacement for
+generic dictionaries. The replacement is evaluated before key lookup. A
+missing key traps; a present key stays canonical while its previous owned value
+is recursively dropped and replaced. The replacement source then becomes
+unavailable. Contextual struct keys and values use their inferred concrete
+types in the reference compiler.
+
+Generic `put` now uses the same replacement primitive for an occupied entry.
+It preserves the stored key, destroys the old value, and installs the new
+value. Its backend is also ready to destroy an incoming equal key when the
+admitted concrete key type owns storage; fully owned key admission remains a
+later gate. A vacant entry instead receives incoming key/value storage. This
+distinction prevents both the former raw-overwrite leak and accidental double
+ownership.
+
+The reference backend performs SwissTable lookup and writes only the value
+field. The self-host backend performs equivalent checked replacement over its
+canonical parallel key/value representation and calls the concrete
+`sollang_drop_t<ID>` witness. Examples 448-450 and two move diagnostics cover
+reference replacement, self-host lowering, `put` update/insertion, and source
+invalidation. `scripts/verify-owned-dictionary-replacement.ps1` runs all three
+Linux products under ASan/UBSan with leak detection.
+
+Release builds have zero warnings and errors; Windows/Linux full suites pass
+**607/607**. Windows Stage2 passes **6/6** at **10,962,922 LLVM bytes** and
+Linux Stage2 passes **5/5** at **10,959,525 bytes**. Owned-key generality and
+wider path-sensitive container borrows still keep the formal roadmap at
+**53/60 (88.3%)**, with **7 equivalent gates remaining**. The periodic Stage3
+cadence advances to **2/10**.
+
+Research basis: Rust models occupied and vacant hash-map entries separately,
+while Swift returns the displaced value from explicit dictionary replacement.
+Sollang keeps its concise index/`put` syntax while making the same distinction
+inside static ownership lowering.
+
+- [Rust `HashMap::insert`](https://doc.rust-lang.org/std/collections/hash_map/struct.HashMap.html#method.insert)
+- [Rust `HashMap::Entry`](https://doc.rust-lang.org/stable/std/collections/hash_map/enum.Entry.html)
+- [Swift `Dictionary.updateValue`](https://developer.apple.com/documentation/swift/dictionary/updatevalue(_:forkey:))
+
 ## Immediate Implementation Order
 
 1. Multi-file compilation (implemented by example 52).

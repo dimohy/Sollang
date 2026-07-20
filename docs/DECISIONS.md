@@ -7643,3 +7643,46 @@ References:
 - [Rust assignment expressions](https://doc.rust-lang.org/stable/reference/expressions/operator-expr.html#assignment-expressions)
 - [Rust `mem::replace`](https://doc.rust-lang.org/std/mem/fn.replace.html)
 - [Mojo ownership](https://docs.modular.com/mojo/manual/values/ownership/)
+
+## D209B - Preserve Dictionary Keys And Replace Owned Values Exactly Once
+
+Status: implemented and cross-target verified
+Date: 2026-07-20
+
+Mutable generic-dictionary indexing is an occupied-entry replacement. The
+right-hand value is established first, the key is looked up without taking its
+ownership, a missing key traps, the previous value is recursively destroyed,
+and the replacement is stored in the existing value slot. The stored key is
+never rewritten. Named replacement owners transfer once and become
+unavailable.
+
+Generic `put` now shares the same occupied-entry primitive. On an existing key,
+the canonical stored key is retained, the old value is destroyed, and the new
+value is installed. The backend also destroys an incoming equal key whenever
+its admitted concrete key type owns storage; admitting fully owned key types is
+a later gate. On a vacant entry, incoming key/value storage transfers into the
+dictionary. This repairs the previous raw-overwrite leak and makes insertion
+and replacement ownership explicit.
+
+The reference semantic pass accepts concrete `Dictionary<K, V>` index
+assignment with contextual struct keys/values and removes transferred owners.
+The reference LLVM backend uses the SwissTable slot search and replaces only
+the value field. The self-host LLVM backend performs the equivalent operation
+over its current canonical parallel key/value representation and emits the
+specialized `sollang_drop_t<ID>` witness before the store.
+
+Examples 448 and 449 cover reference and self-host indexed replacement; example
+450 covers owned `put` update and insertion. Two diagnostics prove use-after-move
+rejection. `scripts/verify-owned-dictionary-replacement.ps1` instruments all
+three Linux products with ASan/UBSan and passes leak, double-free, and UB
+detection. Release builds have zero warnings and errors; Windows/Linux full
+suites pass 607/607. Windows Stage2 passes 6/6 at 10,962,922 LLVM text bytes;
+Linux Stage2 passes 5/5 at 10,959,525 bytes. Formal progress remains 53/60
+(88.3%) because owned-key generality and wider path-sensitive container borrows
+are not yet complete. Stage3 cadence advances to 2/10.
+
+References:
+
+- [Rust `HashMap::insert`](https://doc.rust-lang.org/std/collections/hash_map/struct.HashMap.html#method.insert)
+- [Rust `HashMap::Entry`](https://doc.rust-lang.org/stable/std/collections/hash_map/enum.Entry.html)
+- [Swift `Dictionary.updateValue`](https://developer.apple.com/documentation/swift/dictionary/updatevalue(_:forkey:))
