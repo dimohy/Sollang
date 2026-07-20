@@ -1134,7 +1134,7 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                                 flags: expression.flags
                             })
                         } else {
-                            (expressionTypeIndex! >= 0 or recursiveExpressionTypeId! >= 0 or knownParameterReference! or knownPatternReference! or expression.kind == 41 or expression.kind == 56 or (expression.kind == 15 and expression.parent >= 0 and prepared.package.nodes[sourceRange.astStart + expression.parent].kind == 41) or knownBooleanExpression! or knownCallExpression! or knownNumericExpression! or knownPushExpression! or knownMapTextExpression! or knownMapPathExpression! or knownBorrowTextExpression! or knownIndexAssignment! or knownMemberAssignment!) -> if {
+                            (expressionTypeIndex! >= 0 or recursiveExpressionTypeId! >= 0 or knownParameterReference! or knownPatternReference! or expression.kind == 37 or expression.kind == 41 or expression.kind == 56 or (expression.kind == 15 and expression.parent >= 0 and prepared.package.nodes[sourceRange.astStart + expression.parent].kind == 41) or knownBooleanExpression! or knownCallExpression! or knownNumericExpression! or knownPushExpression! or knownMapTextExpression! or knownMapPathExpression! or knownBorrowTextExpression! or knownIndexAssignment! or knownMemberAssignment!) -> if {
                             9 => expressionKind!
                             expression.kind == 13 -> if { 2 => expressionKind! }
                             expression.kind == 14 -> if { 3 => expressionKind! }
@@ -2431,7 +2431,7 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                                     flags: entryExpression.flags
                                 })
                             } else {
-                                (entryExpressionTypeIndex! >= 0 or recursiveEntryExpressionTypeId! >= 0 or knownEntryPatternReference! or entryExpression.kind == 41 or entryExpression.kind == 56 or (entryExpression.kind == 15 and entryExpression.parent >= 0 and prepared.package.nodes[sourceRange.astStart + entryExpression.parent].kind == 41) or knownEntryBooleanExpression! or knownEntryCallExpression! or knownEntryNumericExpression! or knownEntryPushExpression! or knownEntryMapTextExpression! or knownEntryMapPathExpression! or knownEntryBorrowTextExpression! or knownEntryIndexAssignment! or knownEntryMemberAssignment!) -> if {
+                                (entryExpressionTypeIndex! >= 0 or recursiveEntryExpressionTypeId! >= 0 or knownEntryPatternReference! or entryExpression.kind == 37 or entryExpression.kind == 41 or entryExpression.kind == 56 or (entryExpression.kind == 15 and entryExpression.parent >= 0 and prepared.package.nodes[sourceRange.astStart + entryExpression.parent].kind == 41) or knownEntryBooleanExpression! or knownEntryCallExpression! or knownEntryNumericExpression! or knownEntryPushExpression! or knownEntryMapTextExpression! or knownEntryMapPathExpression! or knownEntryBorrowTextExpression! or knownEntryIndexAssignment! or knownEntryMemberAssignment!) -> if {
                                 9 => entryExpressionKind!
                                 entryExpression.kind == 13 -> if { 2 => entryExpressionKind! }
                                 entryExpression.kind == 14 -> if { 3 => entryExpressionKind! }
@@ -4026,6 +4026,45 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
             }
             fileMatchIndex! + 1 => fileMatchIndex!
         }
+    }
+    # Non-empty growable array literals can infer their canonical array type
+    # directly from the first element after binding-read types are repaired.
+    # The tilde token distinguishes them from fixed arrays of the same values.
+    0 => contextualDynamicArrayIndex!
+    contextualDynamicArrayIndex! < (results! -> len) -> while {
+        results![contextualDynamicArrayIndex!] => contextualDynamicArray!
+        (contextualDynamicArray!.kind == 14 and contextualDynamicArray!.typeId < 0 and contextualDynamicArray!.operand0 >= 0) -> if {
+            prepared.package.ranges[contextualDynamicArray!.sourceModule] => contextualDynamicArrayRange
+            prepared.package.nodes[contextualDynamicArrayRange.astStart + contextualDynamicArray!.astNode] => contextualDynamicArrayAst
+            false => contextualDynamicArrayHasTilde!
+            contextualDynamicArrayAst.firstToken => contextualDynamicArrayTokenIndex!
+            contextualDynamicArrayTokenIndex! < contextualDynamicArrayAst.firstToken + contextualDynamicArrayAst.tokenCount -> while {
+                prepared.package.tokens[contextualDynamicArrayRange.tokenStart + contextualDynamicArrayTokenIndex!].kind == grammar.tokenIdTilde -> if {
+                    true => contextualDynamicArrayHasTilde!
+                }
+                contextualDynamicArrayTokenIndex! + 1 => contextualDynamicArrayTokenIndex!
+            }
+            contextualDynamicArrayHasTilde! -> if {
+                results![contextualDynamicArray!.operand0] => contextualDynamicArrayElement
+                contextualDynamicArrayElement.typeId >= 0 -> if {
+                    0 => contextualDynamicArrayTypeSearch!
+                    contextualDynamicArrayTypeSearch! < (recursiveSemanticTypes! -> len) -> while {
+                        recursiveSemanticTypes![contextualDynamicArrayTypeSearch!] => contextualDynamicArrayType
+                        (contextualDynamicArrayType.kind == 3 and contextualDynamicArrayType.first == contextualDynamicArrayElement.typeId) -> if {
+                            contextualDynamicArrayTypeSearch! => contextualDynamicArray!.typeId
+                            contextualDynamicArrayType.kind => contextualDynamicArray!.typeKind
+                            contextualDynamicArrayType.origin => contextualDynamicArray!.typeOrigin
+                            contextualDynamicArrayType.module => contextualDynamicArray!.typeModule
+                            contextualDynamicArrayType.symbol => contextualDynamicArray!.typeSymbol
+                            recursiveTypeFlags![contextualDynamicArrayTypeSearch!] => contextualDynamicArray!.typeFlags
+                        }
+                        contextualDynamicArrayTypeSearch! + 1 => contextualDynamicArrayTypeSearch!
+                    }
+                    contextualDynamicArray! => results![contextualDynamicArrayIndex!]
+                }
+            }
+        }
+        contextualDynamicArrayIndex! + 1 => contextualDynamicArrayIndex!
     }
     # Collection literals returned directly from a function are contextually
     # typed by that function's declared result. Perform this after source IR

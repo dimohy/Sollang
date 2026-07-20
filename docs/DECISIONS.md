@@ -8018,6 +8018,51 @@ References:
 - [Mojo lifetimes, origins, and references](https://mojolang.org/docs/manual/values/lifetimes/)
 - [Swift memory safety and overlapping access](https://docs.swift.org/swift-book/documentation/the-swift-programming-language/memorysafety/)
 
+## D213H - Collection-Argument ABI Integrity at the Stage3 Fixed Point
+
+Status: implemented, cross-target Stage2 verified, and Stage3 fixed point verified
+Date: 2026-07-20
+
+The voluntary Stage3 probe after D213G exposed two independent self-host LLVM
+ABI defects. First, a growable array literal made only from binding reads could
+disappear from typed IR when shallow expression inference had not assigned the
+literal itself a type. Its element reads then became separate call arguments.
+LLVM opaque pointers allowed that direct-call arity/type mismatch to assemble,
+and the callee interpreted source text bytes as an array header. Typed lowering
+now preserves every array-literal node and infers a non-empty growable array's
+canonical type from its first typed element.
+
+Second, short-circuit `while`-style boolean emission scheduled and printed only
+the first operand of an ordinary function call. A call nested under `and`,
+`or`, or `not` could therefore target a multi-parameter function with missing
+arguments. The while-value scheduler now visits the complete canonical
+`operand0`/`nextOperand` chain, and its call writer emits every argument with
+the correct while-local value spelling. Text literals in that chain are
+written as inline two-word Text constants instead of undefined while-local SSA
+names.
+
+Examples 481 and 482 lock both boundaries. Example 481 passes two bound Text
+values as one growable array value and executes `count=2`. Example 482 emits a
+three-argument call, including a Text literal, from a nested short-circuit
+boolean expression. Both self-host LLVM products assemble, execute, and agree
+with the C# reference compiler. The original example 480 is also compiled by
+the rebuilt Stage2 executable and again reports
+`reassigned cfg conflicts=0,1,1,1,1,1`.
+
+The Release build has zero warnings and errors. Windows and Linux full suites
+pass **648/648**. Fresh Windows Stage2 passes **7/7** at **11,698,851 LLVM
+bytes**, **3,457,924 bitcode bytes**, and a **1,637,376-byte executable**.
+Fresh Linux Stage2 passes **6/6** at **11,695,430 LLVM bytes**, **3,456,132
+bitcode bytes**, and a **3,294,008-byte executable**. A voluntary Stage3 run
+regenerates **11,698,851 identical LLVM bytes** and passes fixed-point hash
+`07281B4A9C220FC5C49A474705F9108EA64FE2E8F0C159CF2EF7A1DA55E8A75D`.
+
+This is Stage2 checkpoint **6/10**. The early Stage3 proof does not reset the
+periodic cadence. Formal progress remains **49 complete, 8 partial, 3 missing:
+53/60 (88.3%)** because D213H repairs fixed-point correctness without closing
+aggregate borrowed returns, disjoint projected conflicts, or production
+precision for E17-E20.
+
 ## D213G - Inferred Origin Transfer Across Reference Reassignment
 
 Status: implemented and cross-target Stage2 verified

@@ -28,7 +28,7 @@ $borrowConflictSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures
 $borrowUnionConflictSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-borrow-union-conflict.slg"
 $borrowAliasConflictSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-borrow-alias-conflict.slg"
 $borrowSourceRuntime = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-borrow-source.slg"
-$expectedStage2Bytes = 11659812L
+$expectedStage2Bytes = 11695430L
 
 New-Item -ItemType Directory -Force -Path $artifactsDir | Out-Null
 

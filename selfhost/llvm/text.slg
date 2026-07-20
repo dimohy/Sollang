@@ -3663,6 +3663,11 @@ emitCore context: EmitContext -> Unit uses Console {
     }
     writeWhileValue request: WhileValueRequest -> Unit uses Console {
         context.ir[request.nodeIndex] => value
+        value.kind == 2 -> if {
+            value -> sourceToken => whileTextToken
+            Int(TextLiteralRequest { sourceModule: value.sourceModule, token: whileTextToken } -> textLiteralLength) => whileTextLength
+            "{ ptr @sollang_str_$(request.nodeIndex), i64 $whileTextLength }" -> print
+        } else {
         (value.kind == 3 or value.kind == 4) -> if {
             value -> sourceToken => valueToken
             value.kind == 3 -> if {
@@ -3706,6 +3711,7 @@ emitCore context: EmitContext -> Unit uses Console {
                 request.nodeIndex -> eachRoleOwner => whileEachRoleOwner
                 (capturedWhileValue! or whileEachRoleOwner >= 0) -> if { "%v$(request.nodeIndex)" -> print } else { "%while$(request.whileIndex)_v$(request.nodeIndex)" -> print }
             }
+        }
         }
     }
     emitIndexAssignment request: WhileValueRequest -> Unit uses Console {
@@ -4110,6 +4116,16 @@ emitCore context: EmitContext -> Unit uses Console {
             memberTokenIndex! + 1 => memberTokenIndex!
         }
     }
+    emitWhileCallArgumentChain argumentIndex: Int, callIndex: Int, whileIndex: Int, ownerIndex: Int, separator: Bool -> Unit uses Console {
+        (argumentIndex >= 0 and context.ir[argumentIndex].parent == callIndex) -> if {
+            separator -> if { ", " -> print }
+            context.ir[argumentIndex] => argument
+            argument -> writeIrType
+            " " -> print
+            WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: argumentIndex } -> writeWhileValue
+            argument.nextOperand -> emitWhileCallArgumentChain(callIndex, whileIndex, ownerIndex, true)
+        }
+    }
     emitWhileBranch request: WhileBranchRequest -> Unit uses Console {
         request.whileIndex => whileIndex
         request.ownerIndex => ownerIndex
@@ -4209,10 +4225,20 @@ emitCore context: EmitContext -> Unit uses Console {
                                         valueTaskSize! + 1 => valueTaskSize!
                                     }
                                 }
-                                valueNode.operand0 >= 0 -> if {
-                                    valueNode.operand0 + 1 => firstValueTask
-                                    valueTaskSize! == (valueTasks! -> len) -> if { valueTasks! -> push(firstValueTask) } else { firstValueTask => valueTasks![valueTaskSize!] }
-                                    valueTaskSize! + 1 => valueTaskSize!
+                                valueNode.kind == 6 -> if {
+                                    valueNode.operand0 => callArgumentTaskIndex!
+                                    callArgumentTaskIndex! >= 0 -> while {
+                                        callArgumentTaskIndex! + 1 => callArgumentTask
+                                        valueTaskSize! == (valueTasks! -> len) -> if { valueTasks! -> push(callArgumentTask) } else { callArgumentTask => valueTasks![valueTaskSize!] }
+                                        valueTaskSize! + 1 => valueTaskSize!
+                                        context.ir[callArgumentTaskIndex!].nextOperand => callArgumentTaskIndex!
+                                    }
+                                } else {
+                                    valueNode.operand0 >= 0 -> if {
+                                        valueNode.operand0 + 1 => firstValueTask
+                                        valueTaskSize! == (valueTasks! -> len) -> if { valueTasks! -> push(firstValueTask) } else { firstValueTask => valueTasks![valueTaskSize!] }
+                                        valueTaskSize! + 1 => valueTaskSize!
+                                    }
                                 }
                             }
                         } else {
@@ -4280,12 +4306,7 @@ emitCore context: EmitContext -> Unit uses Console {
                                     valueNode -> writeIrType
                                     " @sollang_m$(valueNode.targetModule)_s$(valueNode.symbol)(" -> print
                                     CallEnvironmentRequest { callerIndex: ownerIndex, callIndex: valueNodeIndex, targetModule: valueNode.targetModule, targetSymbol: valueNode.symbol, hasArgument: valueNode.operand0 >= 0 } -> emitCallEnvironment => whileCallEnvironment
-                                    valueNode.operand0 >= 0 -> if {
-                                        context.ir[valueNode.operand0] => callArgument
-                                        callArgument -> writeIrType
-                                        " " -> print
-                                        WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: valueNode.operand0 } -> writeWhileValue
-                                    }
+                                    valueNode.operand0 -> emitWhileCallArgumentChain(valueNodeIndex, whileIndex, ownerIndex, false)
                                     ")" -> println
                                 }
                             }

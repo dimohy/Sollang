@@ -2384,6 +2384,34 @@ Research basis:
 - [Mojo ownership](https://mojolang.org/docs/manual/values/ownership/)
 - [Polonius loan-kill and loan-liveness rules](https://rust-lang.github.io/polonius/rules/loans.html)
 
+## Collection-Argument ABI Integrity at the Stage3 Fixed Point (D213H)
+
+The voluntary Stage3 probe after D213G found that `[first, second, ~]` could
+lose its array-literal typed-IR node when both elements were binding reads. The
+LLVM call then exposed the two Text elements as separate parameters to a
+function declared with one array parameter. Typed lowering now retains array
+literals independent of shallow type inference and assigns non-empty growable
+arrays their canonical element-derived type.
+
+The follow-up fixed a second ABI edge in short-circuit boolean lowering. Its
+specialized while-value emitter previously scheduled and wrote only a call's
+first argument. It now traverses the complete argument chain and emits nested
+Text literals as inline Text constants. Examples 481 and 482 cover the array
+aggregate and nested multi-argument call independently; example 480 compiled
+by Stage2 again produces `0,1,1,1,1,1` ownership conflicts.
+
+Windows/Linux full suites pass **648/648**. Windows Stage2 passes **7/7** at
+**11,698,851 LLVM bytes**, **3,457,924 bitcode bytes**, and a **1,637,376-byte
+executable**. Linux Stage2 passes **6/6** at **11,695,430 LLVM bytes**,
+**3,456,132 bitcode bytes**, and a **3,294,008-byte executable**. Voluntary
+Stage3 regenerates the Windows LLVM byte-for-byte and passes fixed-point hash
+`07281B4A9C220FC5C49A474705F9108EA64FE2E8F0C159CF2EF7A1DA55E8A75D`.
+
+The periodic cadence advances to **6/10** and is not reset by this early
+fixed-point proof. Formal progress remains **49 complete, 8 partial, 3
+missing: 53/60 (88.3%)**; this checkpoint restores correctness but does not
+claim one of the remaining feature gates.
+
 ## Immediate Implementation Order
 
 1. Multi-file compilation (implemented by example 52).
