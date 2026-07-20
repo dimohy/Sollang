@@ -2656,7 +2656,9 @@ This does not yet close the ownership/storage gate.
 - [x] executable owner -> function -> returned reference -> read path
 - [ ] complete C# origin/liveness conflict analysis
 - [ ] stored references and aggregate/index projections
-- [ ] self-host parser, semantic type, typed IR, ownership, and LLVM parity
+- [x] self-host recursive type arena, typed-IR field projection, pointer ABI,
+  projected address return, and transparent return load
+- [ ] self-host caller-side address formation and origin/ownership enforcement
 - [x] cross-target regression and Stage2 verification of the C# vertical slice
 
 Formal progress stays at **49 complete, 8 partial, 3 missing: 53/60 (88.3%)**
@@ -2664,6 +2666,17 @@ until the unchecked boxes above close the general reference gate.
 Windows/Linux full suites pass **677/677**. Windows Stage2 passes **7/7** at
 **11,862,180 LLVM bytes**, and Linux Stage2 passes **6/6** at **11,858,759 LLVM
 bytes**. Stage3 cadence remains **2/10**.
+
+D215 completes the first self-host `ref T` compiler vertical: example 506 proves
+canonical reference type IDs, readonly member projection, non-owning traits,
+and pointer-sized x64/wasm layouts; example 507 proves LLVM `ptr` signatures,
+struct-field `getelementptr`, and transparent load-on-value-return with
+`llvm-as` validation. It does not yet form reference arguments automatically at
+call sites or enforce owner conflicts in the self-host ownership pass, so the
+general reference gate remains open. Windows/Linux full suites pass **679/679**.
+Windows Stage2 passes **7/7** at **11,910,020 LLVM bytes**, and Linux Stage2
+passes **6/6** at **11,906,599 LLVM bytes**. Formal progress remains **49
+complete, 8 partial, 3 missing: 53/60 (88.3%)**. Stage3 cadence is **3/10**.
 
 1. Multi-file compilation (implemented by example 52).
 2. Import-driven file discovery with cycle and duplicate-module diagnostics

@@ -8,7 +8,7 @@ import syntax.generated.slg as grammar
 # A semantic type is a canonical, index-addressed tree. Argument fields point
 # back into the same arena, so nested types do not require recursive objects.
 # Kinds: 1 nominal, 2 slice, 3 dynamic array, 4 fixed array,
-# 5 dictionary, 6 box, 7 nominal application.
+# 5 dictionary, 6 box, 7 nominal application, 8 readonly reference.
 public struct TypeTerm {
     astNode: Int
     canonical: Int
@@ -100,11 +100,15 @@ public lowerPrepared request: TypeTermRequest -> [TypeTerm; ~] {
                         firstToken! => nameToken!
                         request.tokens[firstToken!] => firstName
                         firstName.span.length == UIntSize(3) -> if {
-                            request.source -> byte(firstName.span.start) => boxByte0
-                            request.source -> byte(firstName.span.start + UIntSize(1)) => boxByte1
-                            request.source -> byte(firstName.span.start + UIntSize(2)) => boxByte2
-                            (boxByte0 == UInt8(98) and boxByte1 == UInt8(111) and boxByte2 == UInt8(120)) -> if {
+                            request.source -> byte(firstName.span.start) => keywordByte0
+                            request.source -> byte(firstName.span.start + UIntSize(1)) => keywordByte1
+                            request.source -> byte(firstName.span.start + UIntSize(2)) => keywordByte2
+                            (keywordByte0 == UInt8(98) and keywordByte1 == UInt8(111) and keywordByte2 == UInt8(120)) -> if {
                                 6 => kind!
+                                -1 => nameToken!
+                            }
+                            (keywordByte0 == UInt8(114) and keywordByte1 == UInt8(101) and keywordByte2 == UInt8(102)) -> if {
+                                8 => kind!
                                 -1 => nameToken!
                             }
                         }

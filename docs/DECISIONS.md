@@ -8301,7 +8301,10 @@ Completion checklist:
 - [ ] owner mutation/move/drop conflicts through CFG last use
 - [ ] references stored in user values
 - [ ] generic substitution and trait interactions verified by examples
-- [ ] Sollang self-host semantic, typed-IR, ownership, and LLVM parity
+- [x] Sollang self-host type arena, typed-IR reference projection, pointer ABI,
+  projected field address, and transparent return load
+- [ ] Sollang self-host caller-side address formation, origin/ownership
+  enforcement, and executable returned-reference path
 - [x] Windows/Linux regression suites and the required Stage2 checkpoint
 
 The design combines Mojo's explicit `ref` surface and inferred origins with
@@ -8313,6 +8316,21 @@ Checkpoint validation is a zero-warning Release build, Windows/Linux full
 suites at 677/677, Windows Stage2 at 7/7 with 11,862,180 LLVM bytes, and Linux
 Stage2 at 6/6 with 11,858,759 LLVM bytes. Stage3 cadence remains 2/10 because
 this checkpoint does not claim self-host `ref T` implementation parity.
+
+The D215 self-host vertical slice adds reference kind 8 to the recursive type
+arena, preserves it through expression typing and typed IR, and emits pointer
+parameters/results, projected field GEPs, and transparent loads when a reference
+is consumed as a value. Example 506 verifies canonical interning, typed member
+identity, non-owning classification, and 64/32-bit pointer layouts. Example 507
+assembles the generated LLVM for `ref Pair -> ref Int` field projection and
+`ref Int -> Int` transparent read. The remaining self-host work is caller-side
+automatic address formation plus the same origin and owner-lock rules enforced
+by the C# compiler; therefore the general gate and formal score do not advance.
+
+D215 validation is a zero-warning Release build, Windows/Linux full suites at
+679/679, Windows Stage2 at 7/7 with 11,910,020 LLVM bytes, and Linux Stage2 at
+6/6 with 11,906,599 LLVM bytes. The periodic Stage3 cadence advances to 3/10,
+so Stage3 is not due.
 
 References:
 

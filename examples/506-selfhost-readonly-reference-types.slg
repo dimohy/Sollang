@@ -1,0 +1,68 @@
+import sollang.compiler.llvm.text as llvm
+import sollang.compiler.ir.typed as typedIr
+import sollang.compiler.semantic.type_ids as typeIds
+
+# Verifies that the self-host arena interns ref T as a non-owning pointer type.
+main {
+    [
+        """
+        namespace sample.references
+
+        public struct Pair {
+            first: Int
+            second: Int
+        }
+
+        public first pair: ref Pair -> ref Int {
+            pair.first
+        }
+
+        main { }
+        """,
+        ~
+    ] => sources!
+
+    sources! -> typeIds.resolve => semantic
+    sources! -> typedIr.lower => ir!
+    -1 => pairReference!
+    -1 => intReference!
+    0 => referenceTypes!
+    0 => typeIndex!
+    typeIndex! < (semantic.types -> len) -> while {
+        semantic.types[typeIndex!] => current
+        current.kind == 8 -> if {
+            referenceTypes! + 1 => referenceTypes!
+            semantic.types[current.first] => target
+            (target.kind == 1 and target.origin == 0) -> if { typeIndex! => pairReference! }
+            (target.kind == 1 and target.origin == 1 and target.symbol == 2) -> if { typeIndex! => intReference! }
+        }
+        typeIndex! + 1 => typeIndex!
+    }
+    0 => projectedMembers!
+    ir! -> each node {
+        (node.kind == 13 and node.symbol == 0 and node.typeId == intReference! and node.typeFlags == 0) -> if { projectedMembers! + 1 => projectedMembers! }
+    }
+
+    [typeIds.SemanticType; ~] => x64Types!
+    [typeIds.SemanticType; ~] => wasmTypes!
+    semantic.types -> each currentType {
+        x64Types! -> push(currentType)
+        wasmTypes! -> push(currentType)
+    }
+    [typeIds.NominalField; ~] => x64Fields!
+    [typeIds.NominalField; ~] => wasmFields!
+    semantic.fields -> each currentField {
+        x64Fields! -> push(currentField)
+        wasmFields! -> push(currentField)
+    }
+    llvm.TypeLayoutRequest { types: x64Types!, fields: x64Fields!, typeId: -1, pointerBitWidth: 64 } => x64Request!
+    llvm.TypeLayoutRequest { types: wasmTypes!, fields: wasmFields!, typeId: -1, pointerBitWidth: 32 } => wasmRequest!
+    x64Request! -> llvm.layoutsFor => x64
+    wasmRequest! -> llvm.layoutsFor => wasm
+
+    (referenceTypes! == 2 and pairReference! >= 0 and intReference! >= 0 and projectedMembers! == 1 and x64.sizes[pairReference!] == 8 and x64.aligns[intReference!] == 8 and wasm.sizes[pairReference!] == 4 and wasm.aligns[intReference!] == 4) -> if {
+        "selfhost readonly reference types = valid"
+    } else {
+        "selfhost readonly reference types = invalid"
+    } -> println
+}

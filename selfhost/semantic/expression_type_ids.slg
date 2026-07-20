@@ -1657,6 +1657,8 @@ public resolveContext prepared: semanticContext.SemanticSnapshot -> ExpressionTy
                     expressions![pathBaseExpression![pathGlobalAst]] => baseExpression
                     pathNode.kind == 36 -> if {
                         baseExpression.typeId => memberCurrentType!
+                        false => memberReadonlyProjection!
+                        types![memberCurrentType!].kind == 8 -> if { true => memberReadonlyProjection! }
                         true => memberPathValid!
                         false => memberResolvedField!
                         prepared.package.nodes[pathRange.astStart + baseExpression.astNode] => memberBaseNode
@@ -1665,11 +1667,13 @@ public resolveContext prepared: semanticContext.SemanticSnapshot -> ExpressionTy
                         memberTokenIndex! < pathNode.firstToken + pathNode.tokenCount -> while {
                             prepared.package.tokens[pathRange.tokenStart + memberTokenIndex!] => memberToken
                             (memberPathValid! and memberToken.kind == grammar.tokenIdIdentifier and memberToken.span.start >= memberBaseEnd) -> if {
+                                memberCurrentType! => memberOwnerType!
+                                (memberReadonlyProjection! and types![memberOwnerType!].kind == 8) -> if { types![memberOwnerType!].first => memberOwnerType! }
                                 -1 => matchedFieldType!
                                 0 => memberFieldIndex!
                                 memberFieldIndex! < (fields! -> len) -> while {
                                     fields![memberFieldIndex!] => memberField
-                                    (memberField.status == 0 and memberField.ownerType == memberCurrentType!) -> if {
+                                    (memberField.status == 0 and memberField.ownerType == memberOwnerType!) -> if {
                                         prepared.package.ranges[memberField.sourceModule] => memberFieldRange
                                         prepared.package.sources[memberField.sourceModule] -> len => memberFieldSourceLength
                                         prepared.package.sources[memberField.sourceModule] -> slice(UIntSize(0), memberFieldSourceLength) => memberFieldSource
@@ -1688,7 +1692,20 @@ public resolveContext prepared: semanticContext.SemanticSnapshot -> ExpressionTy
                                     memberFieldIndex! + 1 => memberFieldIndex!
                                 }
                                 matchedFieldType! >= 0 -> if {
-                                    matchedFieldType! => memberCurrentType!
+                                    memberReadonlyProjection! -> if {
+                                        -1 => projectedReferenceType!
+                                        0 => projectedReferenceSearch!
+                                        (projectedReferenceSearch! < (types! -> len) and projectedReferenceType! < 0) -> while {
+                                            types![projectedReferenceSearch!] => projectedReferenceCandidate
+                                            (projectedReferenceCandidate.kind == 8 and projectedReferenceCandidate.first == matchedFieldType! and projectedReferenceCandidate.status == 0) -> if { projectedReferenceSearch! => projectedReferenceType! }
+                                            projectedReferenceSearch! + 1 => projectedReferenceSearch!
+                                        }
+                                        projectedReferenceType! < 0 -> if {
+                                            types! -> len => projectedReferenceType!
+                                            types! -> push(typeIds.SemanticType { kind: 8, origin: -1, module: -1, symbol: -1, first: matchedFieldType!, second: -1, length: -1, lengthHash: UInt64(0), containsParameter: types![matchedFieldType!].containsParameter, status: 0 })
+                                        }
+                                        projectedReferenceType! => memberCurrentType!
+                                    } else { matchedFieldType! => memberCurrentType! }
                                     true => memberResolvedField!
                                 } else {
                                     false => memberPathValid!

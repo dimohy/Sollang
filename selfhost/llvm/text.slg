@@ -272,6 +272,11 @@ public layoutsFor request: TypeLayoutRequest -> TypeLayouts {
                 pointerSize => align!
                 0 => status!
             }
+            current.kind == 8 -> if {
+                pointerSize => size!
+                pointerSize => align!
+                0 => status!
+            }
             current.kind == 7 -> if {
                 (current.origin == 4 and current.symbol == 2) -> if {
                     pointerSize * 2 => size!
@@ -2257,6 +2262,7 @@ emitCore context: EmitContext -> Unit uses Console {
                 current.kind == 3 -> if { "%sollang.array.i32" -> print }
                 current.kind == 5 -> if { "%sollang.dict" -> print }
                 current.kind == 6 -> if { "ptr" -> print }
+                current.kind == 8 -> if { "ptr" -> print }
                 current.kind == 7 -> if {
                     (current.origin == 4 and (current.symbol == 0 or current.symbol == 1)) -> if { "%sollang.enum.t$(typeTask)" -> print }
                     (current.origin == 4 and current.symbol == 2) -> if { "%sollang.task" -> print }
@@ -7242,6 +7248,15 @@ emitCore context: EmitContext -> Unit uses Console {
                     }
                 }
                 expression.kind == 13 -> if {
+                    (expression.operand0 >= 0 and context.ir[expression.operand0].typeId >= 0 and context.types[context.ir[expression.operand0].typeId].kind == 8) -> if {
+                        context.ir[expression.operand0] => referenceMemberBase
+                        context.types[referenceMemberBase.typeId].first => referenceMemberOwnerType
+                        "  %v$(expressionIndex!) = getelementptr inbounds " -> print
+                        referenceMemberOwnerType -> writeSemanticTypeId
+                        ", ptr " -> print
+                        (referenceMemberBase.kind == 5 and function.operand1 >= 0 and referenceMemberBase.symbol == context.ir[function.operand1].symbol) -> if { "%arg" -> print } else { "%v$(expression.operand0)" -> print }
+                        ", i32 0, i32 $(expression.symbol)" -> println
+                    } else {
                     (expression.typeOrigin == 1 and expression.typeSymbol == 16) -> if {
                     } else {
                     context.ir[expression.operand0] => memberBase
@@ -7345,6 +7360,7 @@ emitCore context: EmitContext -> Unit uses Console {
                             memberIdentifierOrdinal! + 1 => memberIdentifierOrdinal!
                         }
                         memberTokenIndex! + 1 => memberTokenIndex!
+                    }
                     }
                     }
                 }
@@ -8669,10 +8685,23 @@ emitCore context: EmitContext -> Unit uses Console {
                     }
                 }
             }
+            false => transparentReferenceReturn!
+            -1 => transparentReferenceTarget!
+            (returnOperand.typeId >= 0 and context.types[returnOperand.typeId].kind == 8 and not (function.typeId >= 0 and context.types[function.typeId].kind == 8)) -> if {
+                true => transparentReferenceReturn!
+                context.types[returnOperand.typeId].first => transparentReferenceTarget!
+                "  %return_ref_value = load " -> print
+                transparentReferenceTarget! -> writeSemanticTypeId
+                ", ptr " -> print
+                (returnOperand.kind == 5 and function.operand1 >= 0 and returnOperand.symbol == context.ir[function.operand1].symbol) -> if { "%arg" -> print } else { "%v$(returnValueIndex)" -> print }
+                ", align " -> print
+                context.typeAligns[transparentReferenceTarget!] -> writeDecimalLine
+            }
             (function.typeOrigin == 1 and function.typeSymbol == 0) -> if { "  ret void" -> println } else {
             "  ret " -> print
             function -> writeIrType
             " " -> print
+            transparentReferenceReturn! -> if { "%return_ref_value" -> println } else {
             (returnOperand.kind == 3 or returnOperand.kind == 4) -> if {
                 returnOperand -> sourceToken => returnToken
                 returnOperand.kind == 3 -> if {
@@ -8685,6 +8714,7 @@ emitCore context: EmitContext -> Unit uses Console {
                     "%v" -> print
                     returnValueIndex -> writeDecimalLine
                 }
+            }
             }
             }
             "}" -> println
