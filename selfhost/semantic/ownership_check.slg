@@ -818,12 +818,14 @@ public analyzeLoweredContext prepared: semanticContext.SemanticSnapshot, typed: 
     0 => partialMoveIndex!
     partialMoveIndex! < (moves! -> len) -> while {
         moves![partialMoveIndex!] => partialMove
+        false => partialMoveIsExplicitExtraction!
         # A member nested inside an aggregate literal may be a shallow,
         # call-scoped request projection. `movesFrom` still retains that event
         # for drop suppression, but E17 becomes production-blocking only for
         # explicit extraction/call/assignment move sites whose ownership
         # context is already canonical.
         (partialMove.memberIr >= 0 and typed[partialMove.siteIr].kind != 13) -> if {
+            true => partialMoveIsExplicitExtraction!
             typed[partialMove.siteIr] => partialMoveSite
             prepared.package.ranges[partialMove.sourceModule] => sourceRange
             prepared.package.nodes[sourceRange.astStart + partialMoveSite.astNode].start => partialMoveStart
@@ -885,7 +887,11 @@ public analyzeLoweredContext prepared: semanticContext.SemanticSnapshot, typed: 
                 movedUseIndex! + 1 => movedUseIndex!
             }
         }
-        (partialMove.memberIr >= 0 and partialMove.regionIr >= 0 and (typed[partialMove.regionIr].kind == 19 or typed[partialMove.regionIr].kind == 20)) -> if {
+        # A kind-13 site is a read-only member projection nested in a
+        # call-scoped request literal. It remains in the move table for drop
+        # planning, but it does not deinitialize the source path at a CFG join.
+        # Explicit field extraction is represented by its kind-17 binding.
+        (partialMoveIsExplicitExtraction! and partialMove.regionIr >= 0 and (typed[partialMove.regionIr].kind == 19 or typed[partialMove.regionIr].kind == 20)) -> if {
             prepared.package.ranges[partialMove.sourceModule] => branchRange
             prepared.package.nodes[branchRange.astStart + typed[partialMove.regionIr].astNode] => branchAst
             branchAst.start + branchAst.length => branchEnd

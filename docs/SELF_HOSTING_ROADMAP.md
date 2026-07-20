@@ -2564,6 +2564,45 @@ Research basis:
 - [Swift sending closure data-race diagnostics](https://docs.swift.org/compiler/documentation/diagnostics/sending-closure-risks-data-race/)
 - [Rust closure capture precision and `Send`/`Sync`](https://doc.rust-lang.org/reference/types/closure.html)
 
+## Production E20 for Branch and Loop Partial-Move Joins (D213N)
+
+D213N makes E20 production-blocking in the checked self-host compiler. Every
+normal branch join and loop back-edge must preserve a definitely initialized
+move-path state. A field moved on only one reaching path is rejected before
+LLVM emission. Reinitializing the exact path repairs the state, and a moving
+branch that returns contributes no normal successor to the join.
+
+Production validation initially reported eleven compiler-internal false
+positives. The sites were read-only field projections inside call-scoped
+request literals. Those kind-13 projections remain visible to drop planning,
+but only explicit kind-17 extraction sites deinitialize a path for E17 and E20.
+The distinction preserves conservative cleanup information without treating a
+read-only request construction as an ownership move.
+
+Examples 503 and 504 cover checked diagnostics, request-literal precision,
+branch joins, loop back-edges, and exact-path reinitialization. The Stage2
+fixture proves that Stage1 and Stage2 both emit E20 and stop before a target
+header. The Release build has zero warnings and errors, and Windows/Linux full
+suites pass **673/673**. Windows Stage2 passes **7/7** at **11,860,813 LLVM
+bytes**, **3,502,048 bitcode bytes**, and a **1,653,248-byte executable**.
+Linux Stage2 passes **6/6** at **11,857,392 LLVM bytes**, **3,500,252 bitcode
+bytes**, and a **3,339,560-byte executable**. The checked self-host boundary now enforces the
+complete E17-E21 production diagnostic band.
+
+Stage3 cadence advances to **2/10**. Formal progress remains **49 complete, 8
+partial, 3 missing: 53/60 (88.3%)** because the broader ownership/storage gate
+still needs a full path-sensitive stored/returned-reference checker and fully
+generic container ownership.
+
+Research basis:
+
+- [rustc moves and initialization](https://rustc-dev-guide.rust-lang.org/borrow-check/moves-and-initialization.html)
+- [rustc move paths](https://rustc-dev-guide.rust-lang.org/borrow-check/moves-and-initialization/move-paths.html)
+- [Rust variable initialization](https://doc.rust-lang.org/stable/reference/variables.html)
+- [Rust move deinitialization](https://doc.rust-lang.org/stable/reference/expressions.html#move-and-copy-semantics)
+- [Rust partial initialization and destructors](https://doc.rust-lang.org/reference/destructors.html)
+- [Swift definite initialization](https://docs.swift.org/swift-book/documentation/the-swift-programming-language/declarations/)
+
 ## Production E17 for Reachable Partial Moves (D213K)
 
 D213K promotes explicit partial-move diagnostic E17 into the checked self-host

@@ -8115,6 +8115,51 @@ Research basis:
 - [Swift sending closure data-race diagnostics](https://docs.swift.org/compiler/documentation/diagnostics/sending-closure-risks-data-race/)
 - [Rust closure capture precision and `Send`/`Sync`](https://doc.rust-lang.org/reference/types/closure.html)
 
+## D213N - Branch and Loop Partial-Move Joins Become Production E20
+
+Status: implemented and cross-target Stage2 verified
+Date: 2026-07-20
+
+D213N promotes partial-move join diagnostic E20 into the checked self-host
+compiler. Every normal `if`, `when`, and loop join or back-edge must preserve a
+definitely initialized move-path state. Moving an owned field on only one path
+therefore blocks LLVM emission. Reinitializing the exact path before the join
+repairs the state, while a moving branch that returns does not contribute a
+normal successor and needs no artificial repair.
+
+The first production run found eleven false positives in the compiler itself.
+They were read-only field projections nested in call-scoped request literals,
+not ownership extractions. Kind-13 request projections remain in the move table
+for drop planning, but E20 now deinitializes only the same explicit kind-17
+extraction sites already recognized by E17. This keeps the drop planner
+conservative without making a read-only request construction mutate its owner.
+
+Examples 503 and 504 cover the checked diagnostic, request-literal precision,
+branch joins, loop back-edges, and exact-path reinitialization. A dedicated
+Stage2 fixture requires both Stage1 and Stage2 to emit E20 with a nonzero exit
+before any LLVM target header. The Release build has zero warnings and errors,
+and Windows/Linux full suites pass **673/673**. Windows Stage2 passes **7/7**
+at **11,860,813 LLVM bytes**, **3,502,048 bitcode bytes**, and a
+**1,653,248-byte executable**.
+Linux Stage2 passes **6/6** at **11,857,392 LLVM bytes**, **3,500,252 bitcode
+bytes**, and a **3,339,560-byte executable**. Both checked drivers now enforce
+the complete E17-E21 production diagnostic band.
+
+The Stage3 cadence advances from **1/10** to **2/10**, so no new fixed-point run
+is due. Formal progress remains **49 complete, 8 partial, 3 missing: 53/60
+(88.3%)**. E20 closes the remaining production-diagnostic sub-boundary, but the
+broader ownership/storage gate still lacks a full path-sensitive checker for
+stored and returned references and fully generic container ownership.
+
+Research basis:
+
+- [rustc moves and initialization](https://rustc-dev-guide.rust-lang.org/borrow-check/moves-and-initialization.html)
+- [rustc move paths](https://rustc-dev-guide.rust-lang.org/borrow-check/moves-and-initialization/move-paths.html)
+- [Rust variable initialization](https://doc.rust-lang.org/stable/reference/variables.html)
+- [Rust move deinitialization](https://doc.rust-lang.org/stable/reference/expressions.html#move-and-copy-semantics)
+- [Rust partial initialization and destructors](https://doc.rust-lang.org/reference/destructors.html)
+- [Swift definite initialization](https://docs.swift.org/swift-book/documentation/the-swift-programming-language/declarations/)
+
 ## D213K - Reachable Partial Moves Become Production E17
 
 Status: implemented and cross-target Stage2 verified

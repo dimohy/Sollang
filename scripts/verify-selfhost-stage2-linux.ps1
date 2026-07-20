@@ -30,10 +30,11 @@ $borrowAliasConflictSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fix
 $borrowAggregateConflictSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-borrow-aggregate-conflict.slg"
 $borrowProjectionConflictSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-borrow-projection-conflict.slg"
 $partialMoveConflictSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-partial-move-conflict.slg"
+$branchPartialMoveConflictSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-branch-partial-move-conflict.slg"
 $parallelMutableCaptureSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-parallel-mutable-capture.slg"
 $parallelNonSendableCaptureSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-parallel-nonsendable-capture.slg"
 $borrowSourceRuntime = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-borrow-source.slg"
-$expectedStage2Bytes = 11854949L
+$expectedStage2Bytes = 11857392L
 
 New-Item -ItemType Directory -Force -Path $artifactsDir | Out-Null
 
@@ -222,7 +223,7 @@ Build-And-ExecuteLinuxLlvm $singleStage2Llvm "linux-stage2-check-single" "stage2
 Build-And-ExecuteLinuxLlvm $multiStage2Llvm "linux-stage2-check-multi" "stage2-multi-ok"
 Write-Host "[linux-stage2 5/6] PASS Linux stage-2 products execute."
 
-Write-Host "[linux-stage2 6/6] Enforce production ownership diagnostics E17, E18, E19, and E21."
+Write-Host "[linux-stage2 6/6] Enforce production ownership diagnostics E17 through E21."
 foreach ($conflict in @(
     @($borrowConflictSource, "single"),
     @($borrowUnionConflictSource, "union"),
@@ -279,6 +280,30 @@ foreach ($candidate in @(
         throw "$($candidate[2]) began LLVM emission before rejecting partial-move diagnostic E17"
     }
 }
+$stage1BranchPartialMoveOutput = Join-Path $artifactsDir "linux-stage2-check-branch-partial-move-stage1.txt"
+$stage1BranchPartialMoveError = Join-Path $artifactsDir "linux-stage2-check-branch-partial-move-stage1.err"
+$stage1BranchPartialMove = Invoke-ProcessToFile $stage1Path @("linux", $branchPartialMoveConflictSource) $stage1BranchPartialMoveOutput $stage1BranchPartialMoveError
+$stage2BranchPartialMoveOutput = Join-Path $artifactsDir "linux-stage2-check-branch-partial-move-stage2.txt"
+$stage2BranchPartialMoveError = Join-Path $artifactsDir "linux-stage2-check-branch-partial-move-stage2.err"
+$stage2BranchPartialMove = Invoke-ProcessToFile "wsl.exe" @(
+    "-d", $Distribution, "--", (Convert-ToWslPath $stage2Path), "linux",
+    (Convert-ToWslPath $branchPartialMoveConflictSource)
+) $stage2BranchPartialMoveOutput $stage2BranchPartialMoveError
+foreach ($candidate in @(
+    @($stage1BranchPartialMove, $stage1BranchPartialMoveOutput, "stage1"),
+    @($stage2BranchPartialMove, $stage2BranchPartialMoveOutput, "stage2")
+)) {
+    $candidate[0].WaitForExit()
+    $candidate[0].Refresh()
+    if ($candidate[0].ExitCode -eq 0) { throw "$($candidate[2]) accepted a branch that exits with a partial move" }
+    $diagnosticText = [System.IO.File]::ReadAllText($candidate[1])
+    if ($diagnosticText -notmatch 'error\[E20\].*partial move exits a branch or loop without reinitialization') {
+        throw "$($candidate[2]) did not emit ownership diagnostic E20: '$diagnosticText'"
+    }
+    if ($diagnosticText -match '^target (datalayout|triple)') {
+        throw "$($candidate[2]) began LLVM emission before rejecting branch-partial-move diagnostic E20"
+    }
+}
 $stage1ParallelCaptureOutput = Join-Path $artifactsDir "linux-stage2-check-parallel-mutable-capture-stage1.txt"
 $stage1ParallelCaptureError = Join-Path $artifactsDir "linux-stage2-check-parallel-mutable-capture-stage1.err"
 $stage1ParallelCapture = Invoke-ProcessToFile $stage1Path @("linux", $parallelMutableCaptureSource) $stage1ParallelCaptureOutput $stage1ParallelCaptureError
@@ -327,4 +352,4 @@ foreach ($candidate in @(
         throw "$($candidate[2]) began LLVM emission before rejecting parallel-capture diagnostic E19"
     }
 }
-Write-Host "[linux-stage2 6/6] PASS E17 partial moves, E18 mutable captures, E19 non-sendable captures, and all E21 origin conflicts block LLVM emission in stage-1 and stage-2."
+Write-Host "[linux-stage2 6/6] PASS E17-E20 ownership violations and all E21 origin conflicts block LLVM emission in stage-1 and stage-2."

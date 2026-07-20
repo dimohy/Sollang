@@ -1,0 +1,28 @@
+import sollang.compiler.llvm.text as llvm
+
+# Verifies that the checked self-host compiler reports E20 when a branch can
+# reach its join with an owned field still moved, before LLVM emission starts.
+
+main {
+    [
+        """
+        struct Pair {
+            left: [Int; ~]
+            right: [Int; ~]
+        }
+
+        invalid flag: Bool -> UIntSize {
+            Pair { left: [1, ~], right: [2, ~] } => pair!
+            flag -> if {
+                pair!.left => moved!
+            }
+            pair!.right -> len
+        }
+
+        main { }
+        """,
+        ~
+    ] => sources!
+    sources! -> llvm.emitLinuxChecked => diagnosticCount
+    "blocked=$diagnosticCount" -> println
+}

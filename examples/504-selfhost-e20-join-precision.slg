@@ -1,0 +1,94 @@
+import sollang.compiler.semantic.ownership_check as ownershipCheck
+
+# Verifies that E20 distinguishes a read-only projected field used inside a
+# request literal from an explicit extraction that deinitializes an owned path.
+
+main {
+    # A projected array read inside a request literal borrows its source.
+    """
+    struct Layouts {
+        sizes: [Int; ~]
+    }
+
+    struct Request {
+        size: Int
+    }
+
+    inspect layouts: Layouts, flag: Bool -> Request {
+        flag -> if {
+            Request { size: layouts.sizes[0] } => request
+        }
+        Request { size: 0 }
+    }
+
+    main { }
+    """ => safeSource
+    [safeSource, ~] -> ownershipCheck.analyze => safeErrors!
+    safeErrors! -> len => safe
+
+    # Binding an owned field is a real move and must be repaired before join.
+    """
+    struct Pair {
+        left: [Int; ~]
+        right: [Int; ~]
+    }
+
+    inspect flag: Bool -> UIntSize {
+        Pair { left: [1, ~], right: [2, ~] } => pair!
+        flag -> if {
+            pair!.left => moved!
+        }
+        pair!.right -> len
+    }
+
+    main { }
+    """ => branchSource
+    [branchSource, ~] -> ownershipCheck.analyze => branchErrors!
+    branchErrors! -> len => branch
+
+    # A loop back-edge may revisit the move, so an unrepaired path is E20.
+    """
+    struct Holder {
+        values: [Int; ~]
+    }
+
+    inspect flag: Bool -> UIntSize {
+        Holder { values: [1, ~] } => holder!
+        flag => running!
+        running! -> while {
+            holder!.values => moved!
+            false => running!
+        }
+        0
+    }
+
+    main { }
+    """ => loopSource
+    [loopSource, ~] -> ownershipCheck.analyze => loopErrors!
+    loopErrors! -> len => loop
+
+    # Reinitializing the exact path before the back-edge restores the owner.
+    """
+    struct Holder {
+        values: [Int; ~]
+    }
+
+    inspect flag: Bool -> UIntSize {
+        Holder { values: [1, ~] } => holder!
+        flag => running!
+        running! -> while {
+            holder!.values => moved!
+            [2, ~] => replacement!
+            replacement! => holder!.values
+            false => running!
+        }
+        holder!.values -> len
+    }
+
+    main { }
+    """ => repairedSource
+    [repairedSource, ~] -> ownershipCheck.analyze => repairedErrors!
+    repairedErrors! -> len => repaired
+
+    "safe=$safe, branch=$branch, loop=$loop, repaired=$repaired" -> println
+}
