@@ -1,0 +1,54 @@
+import sollang.compiler.llvm.text as llvm
+
+# Verifies owned dictionary key transfer, equal-key discard, growth, and cleanup.
+main {
+    [
+        """
+        struct OwnedKey {
+            id: Int
+            payload: [Int; ~]
+        }
+
+        trait Hash {
+            hash: self -> Int
+        }
+
+        trait Eq {
+            eq: self -> Int
+        }
+
+        impl Hash for OwnedKey {
+            hash: self -> Int {
+                self.id
+            }
+        }
+
+        impl Eq for OwnedKey {
+            eq: self -> Int {
+                self.id
+            }
+        }
+
+        main {
+            {
+                OwnedKey { id: 1, payload: [10, ~] }: 10,
+                OwnedKey { id: 2, payload: [20, ~] }: 20
+            } => values!
+
+            OwnedKey { id: 1, payload: [30, ~] } => equalKey!
+            values! -> put(equalKey!, 100)
+
+            OwnedKey { id: 3, payload: [40, ~] } => insertedKey!
+            values! -> put(insertedKey!, 300)
+
+            OwnedKey { id: 1, payload: [50, ~] } => lookup1!
+            OwnedKey { id: 3, payload: [60, ~] } => lookup3!
+            values![lookup1!] + values![lookup3!] == 400 -> if {
+                "owned-key-put" -> println
+            }
+        }
+        """,
+        ~,
+    ] => sources!
+    sources! -> llvm.emit
+}

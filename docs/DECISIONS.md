@@ -9608,3 +9608,34 @@ checkpoint does not close another equivalent gate: formal progress remains
 **55/60 (91.7%)**, with **5 equivalent gates remaining**. Seven checkpoints
 have accumulated from D240 through D246, below the ten-checkpoint Stage 3
 cadence boundary.
+
+## D247 - Owned Dictionary Keys Use the Static Hash/Eq Contract
+
+Self-host dictionary lowering now resolves `Hash.hash` and `Eq.eq` from the
+canonical nominal key type, including an imported type's defining module. The
+same signed 32-to-64-bit mix drives literal control bytes, indexed lookup,
+`take`, `put`, and growth-time rehashing in normal function, region, and entry
+emission. This removes the transitional zero-hash bucket and makes the stored
+H2 byte, initial probe slot, equality check, and rehash destination agree with
+the C# reference compiler.
+
+The ownership rule follows stable-key replacement semantics. Inserting a new
+key transfers its owner into the table. Finding an equal resident key keeps the
+resident allocation, destroys the incoming equal key exactly once, drops any
+resident owned value before replacement, and stores only the new value. Final
+function and region/entry cleanup exclude the exact key and value bindings
+consumed by opcode `-223`; dictionary drop glue remains their single owner.
+
+Example 561 covers local owned nominal keys and example 562 repeats the same
+replacement, insertion, 2-to-4 growth, lookup, and recursive cleanup through an
+imported key module. Generated LLVM directly calls the correct module's
+`Hash.hash`/`Eq.eq`. LLVM validation, linking, execution, and C# versus
+self-host differential verification pass on Windows and Linux. Existing
+examples 452 and 454 now snapshot trait-hashed local and imported lookup/take
+paths. The complete self-host suite passes **351/351** on both targets, and the
+Release solution build has zero warnings and zero errors.
+
+This completes the owned generic-dictionary key/value mutation boundary and
+advances formal progress to **56/60 (93.3%)**, with **4 equivalent gates
+remaining**. D240 through D247 comprise eight checkpoints, so the ten-checkpoint
+Stage 3 cadence boundary is not yet due.

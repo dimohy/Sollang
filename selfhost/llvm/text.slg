@@ -3832,10 +3832,15 @@ emitCore context: EmitContext -> Unit uses Console {
                 putKeyStorageSize! < 0 -> if { putSource.typeModule -> storageSize => putKeyStorageSize! }
                 putValueStorageSize! < 0 -> if { putSource.typeSymbol -> storageSize => putValueStorageSize! }
                 false => putKeyIsText!
+                -1 => putHashMethod!
+                -1 => putEqMethod!
                 putKeyTypeId! >= 0 -> if {
                     context.types[putKeyTypeId!] => putCanonicalKeyType
                     (putCanonicalKeyType.kind == 1 and putCanonicalKeyType.origin == 1 and putCanonicalKeyType.symbol == 1) -> if { true => putKeyIsText! }
+                    putKeyTypeId! -> traitMethodSymbol("Hash", "hash") => putHashMethod!
+                    putKeyTypeId! -> traitMethodSymbol("Eq", "eq") => putEqMethod!
                 }
+                (putHashMethod! >= 0 and putEqMethod! >= 0) => putKeyIsNominal!
                 (putKeyStorageSize! == 1) -> if {
                     putKeyTypeId! >= 0 -> if { context.types[putKeyTypeId!].symbol -> integerWidth } else { -1 }
                 } else {
@@ -3857,6 +3862,18 @@ emitCore context: EmitContext -> Unit uses Console {
                     (request.ownerIndex >= 0 and context.ir[request.ownerIndex].kind == 0 and context.ir[request.ownerIndex].operand1 >= 0 and putKey.kind == 5 and putKey.symbol == context.ir[context.ir[request.ownerIndex].operand1].symbol) -> if { "%arg" -> print } else { "%v$(putKeyIndex)" -> print }
                     ")" -> println
                 } else {
+                putKeyIsNominal! -> if {
+                    context.types[putKeyTypeId!] => putNominalHashKeyType
+                    "  %put$(putIndex)_hash_value = call i32 @sollang_m$(putNominalHashKeyType.module)_s$(putHashMethod!)(" -> print
+                    putKeyTypeId! -> writeSemanticTypeId
+                    " " -> print
+                    (request.ownerIndex >= 0 and context.ir[request.ownerIndex].kind == 0 and context.ir[request.ownerIndex].operand1 >= 0 and putKey.kind == 5 and putKey.symbol == context.ir[context.ir[request.ownerIndex].operand1].symbol) -> if { "%arg" -> print } else { "%v$(putKeyIndex)" -> print }
+                    ")" -> println
+                    "  %put$(putIndex)_hash_key = sext i32 %put$(putIndex)_hash_value to i64" -> println
+                    "  %put$(putIndex)_hash_high = lshr i64 %put$(putIndex)_hash_key, 32" -> println
+                    "  %put$(putIndex)_hash_fold = xor i64 %put$(putIndex)_hash_key, %put$(putIndex)_hash_high" -> println
+                    "  %put$(putIndex)_hash = mul i64 %put$(putIndex)_hash_fold, -7046029254386353131" -> println
+                } else {
                     "  %put$(putIndex)_key64 = " -> print
                     putHashWidth == 64 -> if { "add i64 0, " -> print } else {
                         putHashSigned! -> if { "sext " -> print } else { "zext " -> print }
@@ -3872,6 +3889,7 @@ emitCore context: EmitContext -> Unit uses Console {
                     "  %put$(putIndex)_hash_high = lshr i64 %put$(putIndex)_key64, 32" -> println
                     "  %put$(putIndex)_hash_fold = xor i64 %put$(putIndex)_key64, %put$(putIndex)_hash_high" -> println
                     "  %put$(putIndex)_hash = mul i64 %put$(putIndex)_hash_fold, -7046029254386353131" -> println
+                }
                 }
                 "  %put$(putIndex)_h2_shifted = lshr i64 %put$(putIndex)_hash, 57" -> println
                 "  %put$(putIndex)_h2_raw = and i64 %put$(putIndex)_h2_shifted, 127" -> println
@@ -3916,6 +3934,18 @@ emitCore context: EmitContext -> Unit uses Console {
                     (request.ownerIndex >= 0 and context.ir[request.ownerIndex].kind == 0 and context.ir[request.ownerIndex].operand1 >= 0 and putKey.kind == 5 and putKey.symbol == context.ir[context.ir[request.ownerIndex].operand1].symbol) -> if { "%arg" -> print } else { "%v$(putKeyIndex)" -> print }
                     ")" -> println
                 } else {
+                putKeyIsNominal! -> if {
+                    context.types[putKeyTypeId!] => putNominalLookupKeyType
+                    "  %put$(putIndex)_lookup_stored_eq = call i32 @sollang_m$(putNominalLookupKeyType.module)_s$(putEqMethod!)(" -> print
+                    putKeyTypeId! -> writeSemanticTypeId
+                    " %put$(putIndex)_lookup_stored_key)" -> println
+                    "  %put$(putIndex)_lookup_query_eq = call i32 @sollang_m$(putNominalLookupKeyType.module)_s$(putEqMethod!)(" -> print
+                    putKeyTypeId! -> writeSemanticTypeId
+                    " " -> print
+                    (request.ownerIndex >= 0 and context.ir[request.ownerIndex].kind == 0 and context.ir[request.ownerIndex].operand1 >= 0 and putKey.kind == 5 and putKey.symbol == context.ir[context.ir[request.ownerIndex].operand1].symbol) -> if { "%arg" -> print } else { "%v$(putKeyIndex)" -> print }
+                    ")" -> println
+                    "  %put$(putIndex)_lookup_found = icmp eq i32 %put$(putIndex)_lookup_stored_eq, %put$(putIndex)_lookup_query_eq" -> println
+                } else {
                     "  %put$(putIndex)_lookup_found = icmp eq " -> print
                     putKeyTypeId! >= 0 -> if { putKeyTypeId! -> writeSemanticTypeId } else { putSource.typeModule -> llvmType -> print }
                     " %put$(putIndex)_lookup_stored_key, " -> print
@@ -3925,6 +3955,7 @@ emitCore context: EmitContext -> Unit uses Console {
                     } else {
                         (request.ownerIndex >= 0 and context.ir[request.ownerIndex].kind == 0 and context.ir[request.ownerIndex].operand1 >= 0 and putKey.kind == 5 and putKey.symbol == context.ir[context.ir[request.ownerIndex].operand1].symbol) -> if { "%arg" -> println } else { "%v$(putKeyIndex)" -> println }
                     }
+                }
                 }
                 "  br i1 %put$(putIndex)_lookup_found, label %put$(putIndex)_update_in_place, label %put$(putIndex)_lookup_advance" -> println
                 "put$(putIndex)_lookup_advance:" -> println
@@ -3937,6 +3968,13 @@ emitCore context: EmitContext -> Unit uses Console {
                 "  %put$(putIndex)_lookup_reuses_deleted = icmp ne i64 %put$(putIndex)_lookup_first_deleted, %put$(putIndex)_old_capacity" -> println
                 "  br i1 %put$(putIndex)_lookup_reuses_deleted, label %put$(putIndex)_new_key, label %put$(putIndex)_grow" -> println
                 "put$(putIndex)_update_in_place:" -> println
+                (putKeyTypeId! >= 0 and (putKeyTypeId! -> semanticTypeOwns)) -> if {
+                    "  call void @sollang_drop_t$(putKeyTypeId!)(" -> print
+                    putKeyTypeId! -> writeSemanticTypeId
+                    " " -> print
+                    (request.ownerIndex >= 0 and context.ir[request.ownerIndex].kind == 0 and context.ir[request.ownerIndex].operand1 >= 0 and putKey.kind == 5 and putKey.symbol == context.ir[context.ir[request.ownerIndex].operand1].symbol) -> if { "%arg" -> print } else { "%v$(putKeyIndex)" -> print }
+                    ")" -> println
+                }
                 "  %put$(putIndex)_update_in_place_ptr = getelementptr " -> print
                 putValueTypeId! >= 0 -> if { putValueTypeId! -> writeSemanticTypeId } else { putSource.typeSymbol -> llvmType -> print }
                 ", ptr %put$(putIndex)_old_values, i64 %put$(putIndex)_lookup_slot" -> println
@@ -4044,6 +4082,16 @@ emitCore context: EmitContext -> Unit uses Console {
                 putKeyIsText! -> if {
                     "  %put$(putIndex)_rehash_hash = call i64 @sollang_dictionary_hash_text(%sollang.text %put$(putIndex)_rehash_key)" -> println
                 } else {
+                putKeyIsNominal! -> if {
+                    context.types[putKeyTypeId!] => putNominalRehashKeyType
+                    "  %put$(putIndex)_rehash_hash_value = call i32 @sollang_m$(putNominalRehashKeyType.module)_s$(putHashMethod!)(" -> print
+                    putKeyTypeId! -> writeSemanticTypeId
+                    " %put$(putIndex)_rehash_key)" -> println
+                    "  %put$(putIndex)_rehash_hash_key = sext i32 %put$(putIndex)_rehash_hash_value to i64" -> println
+                    "  %put$(putIndex)_rehash_hash_high = lshr i64 %put$(putIndex)_rehash_hash_key, 32" -> println
+                    "  %put$(putIndex)_rehash_hash_fold = xor i64 %put$(putIndex)_rehash_hash_key, %put$(putIndex)_rehash_hash_high" -> println
+                    "  %put$(putIndex)_rehash_hash = mul i64 %put$(putIndex)_rehash_hash_fold, -7046029254386353131" -> println
+                } else {
                     "  %put$(putIndex)_rehash_key64 = " -> print
                     putHashWidth == 64 -> if { "add i64 0, " -> print } else {
                         putHashSigned! -> if { "sext " -> print } else { "zext " -> print }
@@ -4054,6 +4102,7 @@ emitCore context: EmitContext -> Unit uses Console {
                     "  %put$(putIndex)_rehash_hash_high = lshr i64 %put$(putIndex)_rehash_key64, 32" -> println
                     "  %put$(putIndex)_rehash_hash_fold = xor i64 %put$(putIndex)_rehash_key64, %put$(putIndex)_rehash_hash_high" -> println
                     "  %put$(putIndex)_rehash_hash = mul i64 %put$(putIndex)_rehash_hash_fold, -7046029254386353131" -> println
+                }
                 }
                 "  %put$(putIndex)_rehash_h2_shifted = lshr i64 %put$(putIndex)_rehash_hash, 57" -> println
                 "  %put$(putIndex)_rehash_h2_raw = and i64 %put$(putIndex)_rehash_h2_shifted, 127" -> println
@@ -4200,6 +4249,8 @@ emitCore context: EmitContext -> Unit uses Console {
             } => takeHashWidth
             false => takeHashSigned!
             takeKeyTypeId! >= 0 -> if { context.types[takeKeyTypeId!].symbol -> integerSigned => takeHashSigned! }
+            -1 => takeHashMethod!
+            takeKeyTypeId! >= 0 -> if { takeKeyTypeId! -> traitMethodSymbol("Hash", "hash") => takeHashMethod! }
             (takeHashWidth > 0 and takeHashWidth <= 64) -> if {
                 "  %take$(takeIndex)_hash_key = " -> print
                 takeHashWidth == 64 -> if { "add i64 0, " -> print } else {
@@ -4222,8 +4273,26 @@ emitCore context: EmitContext -> Unit uses Console {
                 "  %take$(takeIndex)_h2_value = select i1 %take$(takeIndex)_h2_zero, i64 1, i64 %take$(takeIndex)_h2_raw" -> println
                 "  %take$(takeIndex)_h2 = trunc i64 %take$(takeIndex)_h2_value to i8" -> println
             } else {
-                "  %take$(takeIndex)_hash = add i64 0, 0" -> println
-                "  %take$(takeIndex)_h2 = add i8 0, 1" -> println
+                takeHashMethod! >= 0 -> if {
+                    context.types[takeKeyTypeId!] => takeNominalHashKeyType
+                    "  %take$(takeIndex)_hash_value = call i32 @sollang_m$(takeNominalHashKeyType.module)_s$(takeHashMethod!)(" -> print
+                    takeKeyTypeId! -> writeSemanticTypeId
+                    " " -> print
+                    (request.ownerIndex >= 0 and context.ir[request.ownerIndex].kind == 0 and context.ir[request.ownerIndex].operand1 >= 0 and takeArgument.kind == 5 and takeArgument.symbol == context.ir[context.ir[request.ownerIndex].operand1].symbol) -> if { "%arg" -> print } else { "%v$(takeNode.operand1)" -> print }
+                    ")" -> println
+                    "  %take$(takeIndex)_hash_key = sext i32 %take$(takeIndex)_hash_value to i64" -> println
+                    "  %take$(takeIndex)_hash_high = lshr i64 %take$(takeIndex)_hash_key, 32" -> println
+                    "  %take$(takeIndex)_hash_fold = xor i64 %take$(takeIndex)_hash_key, %take$(takeIndex)_hash_high" -> println
+                    "  %take$(takeIndex)_hash = mul i64 %take$(takeIndex)_hash_fold, -7046029254386353131" -> println
+                    "  %take$(takeIndex)_h2_shifted = lshr i64 %take$(takeIndex)_hash, 57" -> println
+                    "  %take$(takeIndex)_h2_raw = and i64 %take$(takeIndex)_h2_shifted, 127" -> println
+                    "  %take$(takeIndex)_h2_zero = icmp eq i64 %take$(takeIndex)_h2_raw, 0" -> println
+                    "  %take$(takeIndex)_h2_value = select i1 %take$(takeIndex)_h2_zero, i64 1, i64 %take$(takeIndex)_h2_raw" -> println
+                    "  %take$(takeIndex)_h2 = trunc i64 %take$(takeIndex)_h2_value to i8" -> println
+                } else {
+                    "  %take$(takeIndex)_hash = add i64 0, 0" -> println
+                    "  %take$(takeIndex)_h2 = add i8 0, 1" -> println
+                }
             }
             "  %take$(takeIndex)_has_capacity = icmp ugt i64 %take$(takeIndex)_capacity, 0" -> println
             "  br i1 %take$(takeIndex)_has_capacity, label %take$(takeIndex)_find_start, label %take$(takeIndex)_missing" -> println
@@ -5250,6 +5319,16 @@ emitCore context: EmitContext -> Unit uses Console {
                     context.ir[ownedPutMoveIndex!] => ownedPutMove
                     (ownedPutMove.kind == 9 and ownedPutMove.opcode == -223 and ownedPutMove.operand1 >= 0 and ownedPutMove.operand1 < (context.ir -> len)) -> if {
                         context.ir[ownedPutMove.operand1] => ownedPutMoveKey
+                        (ownedPutMoveKey.kind == 5 and ownedPutMoveKey.operand0 >= 0 and ownedPutMoveKey.operand0 < (context.ir -> len)) -> if {
+                            ownedPutMoveKey.operand0 -> mutableBindingRoot => ownedPutMoveKeyRoot
+                            true => ownedPutKeyBeforeEdge!
+                            request.beforeAst >= 0 -> if {
+                                (ownedPutMove -> sourceStart) >= dropBeforeStart! -> if { false => ownedPutKeyBeforeEdge! }
+                            }
+                            (ownedPutMoveKeyRoot == ownedDropRoot! and (ownedPutMove -> sourceStart) > (ownedDropCandidate -> sourceStart) and ownedPutKeyBeforeEdge!) -> if {
+                                true => ownedDropMoved!
+                            }
+                        }
                         ownedPutMoveKey.nextOperand => ownedPutMoveValueIndex
                         (ownedPutMoveValueIndex >= 0 and ownedPutMoveValueIndex < (context.ir -> len)) -> if {
                             context.ir[ownedPutMoveValueIndex] => ownedPutMoveValue
@@ -6268,6 +6347,8 @@ emitCore context: EmitContext -> Unit uses Console {
                 -1 => regionControlHashStorageSize
                 regionDictionaryKeyByteLength! / (regionDictionaryItemCount! / 2) => regionControlHashStorageSize!
                 -1 => regionControlHashWidth!
+                -1 => regionControlHashMethod!
+                regionDictionaryKeyTypeId! >= 0 -> if { regionDictionaryKeyTypeId! -> traitMethodSymbol("Hash", "hash") => regionControlHashMethod! }
                 (regionDictionaryFirstKeyIndex! >= 0 and context.ir[regionDictionaryFirstKeyIndex!].nextOperand >= 0) -> if {
                     ((context.ir[context.ir[regionDictionaryFirstKeyIndex!].nextOperand].typeKind == 8) or (context.ir[context.ir[regionDictionaryFirstKeyIndex!].nextOperand].typeId >= 0 and context.types[context.ir[context.ir[regionDictionaryFirstKeyIndex!].nextOperand].typeId].kind == 8)) -> if { regionDictionaryLength * (context.pointerBitWidth / 8) => regionDictionaryValueByteLength! }
                 }
@@ -6339,7 +6420,28 @@ emitCore context: EmitContext -> Unit uses Console {
                                 "  %v$(regionNodeIndex!)_control_h2$(regionDictionaryEntryPosition) = trunc i64 %v$(regionNodeIndex!)_control_h2_value$(regionDictionaryEntryPosition) to i8" -> println
                                 "  store i8 %v$(regionNodeIndex!)_control_h2$(regionDictionaryEntryPosition), ptr %v$(regionNodeIndex!)_control_ptr$(regionDictionaryEntryPosition), align 1" -> println
                             } else {
-                                "  store i8 1, ptr %v$(regionNodeIndex!)_control_ptr$(regionDictionaryEntryPosition), align 1" -> println
+                                regionControlHashMethod! >= 0 -> if {
+                                    context.types[regionDictionaryKeyTypeId!] => regionControlNominalKeyType
+                                    "  %v$(regionNodeIndex!)_control_hash_loaded$(regionDictionaryEntryPosition) = load " -> print
+                                    regionDictionaryKeyTypeId! -> writeSemanticTypeId
+                                    ", ptr %v$(regionNodeIndex!)_$(regionDictionarySide)_ptr$(regionDictionaryEntryPosition), align " -> print
+                                    context.typeAligns[regionDictionaryKeyTypeId!] -> writeDecimalLine
+                                    "  %v$(regionNodeIndex!)_control_hash_value$(regionDictionaryEntryPosition) = call i32 @sollang_m$(regionControlNominalKeyType.module)_s$(regionControlHashMethod!)(" -> print
+                                    regionDictionaryKeyTypeId! -> writeSemanticTypeId
+                                    " %v$(regionNodeIndex!)_control_hash_loaded$(regionDictionaryEntryPosition))" -> println
+                                    "  %v$(regionNodeIndex!)_control_hash_key$(regionDictionaryEntryPosition) = sext i32 %v$(regionNodeIndex!)_control_hash_value$(regionDictionaryEntryPosition) to i64" -> println
+                                    "  %v$(regionNodeIndex!)_control_hash_high$(regionDictionaryEntryPosition) = lshr i64 %v$(regionNodeIndex!)_control_hash_key$(regionDictionaryEntryPosition), 32" -> println
+                                    "  %v$(regionNodeIndex!)_control_hash_fold$(regionDictionaryEntryPosition) = xor i64 %v$(regionNodeIndex!)_control_hash_key$(regionDictionaryEntryPosition), %v$(regionNodeIndex!)_control_hash_high$(regionDictionaryEntryPosition)" -> println
+                                    "  %v$(regionNodeIndex!)_control_hash$(regionDictionaryEntryPosition) = mul i64 %v$(regionNodeIndex!)_control_hash_fold$(regionDictionaryEntryPosition), -7046029254386353131" -> println
+                                    "  %v$(regionNodeIndex!)_control_h2_shifted$(regionDictionaryEntryPosition) = lshr i64 %v$(regionNodeIndex!)_control_hash$(regionDictionaryEntryPosition), 57" -> println
+                                    "  %v$(regionNodeIndex!)_control_h2_raw$(regionDictionaryEntryPosition) = and i64 %v$(regionNodeIndex!)_control_h2_shifted$(regionDictionaryEntryPosition), 127" -> println
+                                    "  %v$(regionNodeIndex!)_control_h2_zero$(regionDictionaryEntryPosition) = icmp eq i64 %v$(regionNodeIndex!)_control_h2_raw$(regionDictionaryEntryPosition), 0" -> println
+                                    "  %v$(regionNodeIndex!)_control_h2_value$(regionDictionaryEntryPosition) = select i1 %v$(regionNodeIndex!)_control_h2_zero$(regionDictionaryEntryPosition), i64 1, i64 %v$(regionNodeIndex!)_control_h2_raw$(regionDictionaryEntryPosition)" -> println
+                                    "  %v$(regionNodeIndex!)_control_h2$(regionDictionaryEntryPosition) = trunc i64 %v$(regionNodeIndex!)_control_h2_value$(regionDictionaryEntryPosition) to i8" -> println
+                                    "  store i8 %v$(regionNodeIndex!)_control_h2$(regionDictionaryEntryPosition), ptr %v$(regionNodeIndex!)_control_ptr$(regionDictionaryEntryPosition), align 1" -> println
+                                } else {
+                                    "  store i8 1, ptr %v$(regionNodeIndex!)_control_ptr$(regionDictionaryEntryPosition), align 1" -> println
+                                }
                             }
                         }
                     }
@@ -6402,6 +6504,8 @@ emitCore context: EmitContext -> Unit uses Console {
                                 }
                             }
                         } => regionIndexedDictionaryHashWidth
+                        -1 => regionIndexedDictionaryHashMethod!
+                        regionIndexedDictionaryKeyTypeId! >= 0 -> if { regionIndexedDictionaryKeyTypeId! -> traitMethodSymbol("Hash", "hash") => regionIndexedDictionaryHashMethod! }
                         (regionIndexedDictionaryHashWidth > 0 and regionIndexedDictionaryHashWidth <= 64) -> if {
                             "  %v$(regionNodeIndex!)_hash_key = " -> print
                             regionIndexedDictionaryHashWidth == 64 -> if { "add i64 0, " -> print } else {
@@ -6436,8 +6540,27 @@ emitCore context: EmitContext -> Unit uses Console {
                                 "  %v$(regionNodeIndex!)_h2 = trunc i64 %v$(regionNodeIndex!)_h2_value to i8" -> println
                                 "  %v$(regionNodeIndex!)_start_slot = urem i64 %v$(regionNodeIndex!)_hash, %v$(regionNodeIndex!)_capacity" -> println
                             } else {
-                                "  %v$(regionNodeIndex!)_h2 = add i8 0, 1" -> println
-                                "  %v$(regionNodeIndex!)_start_slot = add i64 0, 0" -> println
+                                regionIndexedDictionaryHashMethod! >= 0 -> if {
+                                    context.types[regionIndexedDictionaryKeyTypeId!] => regionIndexedDictionaryHashKeyType
+                                    "  %v$(regionNodeIndex!)_hash_value = call i32 @sollang_m$(regionIndexedDictionaryHashKeyType.module)_s$(regionIndexedDictionaryHashMethod!)(" -> print
+                                    regionIndexedDictionaryKeyTypeId! -> writeSemanticTypeId
+                                    " " -> print
+                                    (regionIndexValue.kind == 5 and ownerIndex! >= 0 and context.ir[ownerIndex!].kind == 0 and context.ir[ownerIndex!].operand1 >= 0 and regionIndexValue.symbol == context.ir[context.ir[ownerIndex!].operand1].symbol) -> if { "%arg" -> print } else { "%v$(regionNode.operand1)" -> print }
+                                    ")" -> println
+                                    "  %v$(regionNodeIndex!)_hash_key = sext i32 %v$(regionNodeIndex!)_hash_value to i64" -> println
+                                    "  %v$(regionNodeIndex!)_hash_high = lshr i64 %v$(regionNodeIndex!)_hash_key, 32" -> println
+                                    "  %v$(regionNodeIndex!)_hash_fold = xor i64 %v$(regionNodeIndex!)_hash_key, %v$(regionNodeIndex!)_hash_high" -> println
+                                    "  %v$(regionNodeIndex!)_hash = mul i64 %v$(regionNodeIndex!)_hash_fold, -7046029254386353131" -> println
+                                    "  %v$(regionNodeIndex!)_h2_shifted = lshr i64 %v$(regionNodeIndex!)_hash, 57" -> println
+                                    "  %v$(regionNodeIndex!)_h2_raw = and i64 %v$(regionNodeIndex!)_h2_shifted, 127" -> println
+                                    "  %v$(regionNodeIndex!)_h2_zero = icmp eq i64 %v$(regionNodeIndex!)_h2_raw, 0" -> println
+                                    "  %v$(regionNodeIndex!)_h2_value = select i1 %v$(regionNodeIndex!)_h2_zero, i64 1, i64 %v$(regionNodeIndex!)_h2_raw" -> println
+                                    "  %v$(regionNodeIndex!)_h2 = trunc i64 %v$(regionNodeIndex!)_h2_value to i8" -> println
+                                    "  %v$(regionNodeIndex!)_start_slot = urem i64 %v$(regionNodeIndex!)_hash, %v$(regionNodeIndex!)_capacity" -> println
+                                } else {
+                                    "  %v$(regionNodeIndex!)_h2 = add i8 0, 1" -> println
+                                    "  %v$(regionNodeIndex!)_start_slot = add i64 0, 0" -> println
+                                }
                             }
                         }
                         "  br label %dict$(regionNodeIndex!)_start" -> println
@@ -8377,6 +8500,8 @@ emitCore context: EmitContext -> Unit uses Console {
                             }
                         }
                     } => dictionaryControlHashWidth
+                    -1 => dictionaryControlHashMethod!
+                    dictionaryKeyTypeId! >= 0 -> if { dictionaryKeyTypeId! -> traitMethodSymbol("Hash", "hash") => dictionaryControlHashMethod! }
                     dictionaryItemIndex! >= 0 -> while {
                         context.ir[dictionaryItemIndex!] => dictionaryItem
                         dictionaryItemPosition! / 2 => dictionaryEntryPosition
@@ -8435,7 +8560,28 @@ emitCore context: EmitContext -> Unit uses Console {
                                     "  %v$(expressionIndex!)_control_h2$(dictionaryEntryPosition) = trunc i64 %v$(expressionIndex!)_control_h2_value$(dictionaryEntryPosition) to i8" -> println
                                     "  store i8 %v$(expressionIndex!)_control_h2$(dictionaryEntryPosition), ptr %v$(expressionIndex!)_control_ptr$(dictionaryEntryPosition), align 1" -> println
                                 } else {
-                                    "  store i8 1, ptr %v$(expressionIndex!)_control_ptr$(dictionaryEntryPosition), align 1" -> println
+                                    dictionaryControlHashMethod! >= 0 -> if {
+                                        context.types[dictionaryKeyTypeId!] => dictionaryControlNominalKeyType
+                                        "  %v$(expressionIndex!)_control_hash_loaded$(dictionaryEntryPosition) = load " -> print
+                                        dictionaryKeyTypeId! -> writeSemanticTypeId
+                                        ", ptr %v$(expressionIndex!)_$(dictionarySide)_ptr$(dictionaryEntryPosition), align " -> print
+                                        context.typeAligns[dictionaryKeyTypeId!] -> writeDecimalLine
+                                        "  %v$(expressionIndex!)_control_hash_value$(dictionaryEntryPosition) = call i32 @sollang_m$(dictionaryControlNominalKeyType.module)_s$(dictionaryControlHashMethod!)(" -> print
+                                        dictionaryKeyTypeId! -> writeSemanticTypeId
+                                        " %v$(expressionIndex!)_control_hash_loaded$(dictionaryEntryPosition))" -> println
+                                        "  %v$(expressionIndex!)_control_hash_key$(dictionaryEntryPosition) = sext i32 %v$(expressionIndex!)_control_hash_value$(dictionaryEntryPosition) to i64" -> println
+                                        "  %v$(expressionIndex!)_control_hash_high$(dictionaryEntryPosition) = lshr i64 %v$(expressionIndex!)_control_hash_key$(dictionaryEntryPosition), 32" -> println
+                                        "  %v$(expressionIndex!)_control_hash_fold$(dictionaryEntryPosition) = xor i64 %v$(expressionIndex!)_control_hash_key$(dictionaryEntryPosition), %v$(expressionIndex!)_control_hash_high$(dictionaryEntryPosition)" -> println
+                                        "  %v$(expressionIndex!)_control_hash$(dictionaryEntryPosition) = mul i64 %v$(expressionIndex!)_control_hash_fold$(dictionaryEntryPosition), -7046029254386353131" -> println
+                                        "  %v$(expressionIndex!)_control_h2_shifted$(dictionaryEntryPosition) = lshr i64 %v$(expressionIndex!)_control_hash$(dictionaryEntryPosition), 57" -> println
+                                        "  %v$(expressionIndex!)_control_h2_raw$(dictionaryEntryPosition) = and i64 %v$(expressionIndex!)_control_h2_shifted$(dictionaryEntryPosition), 127" -> println
+                                        "  %v$(expressionIndex!)_control_h2_zero$(dictionaryEntryPosition) = icmp eq i64 %v$(expressionIndex!)_control_h2_raw$(dictionaryEntryPosition), 0" -> println
+                                        "  %v$(expressionIndex!)_control_h2_value$(dictionaryEntryPosition) = select i1 %v$(expressionIndex!)_control_h2_zero$(dictionaryEntryPosition), i64 1, i64 %v$(expressionIndex!)_control_h2_raw$(dictionaryEntryPosition)" -> println
+                                        "  %v$(expressionIndex!)_control_h2$(dictionaryEntryPosition) = trunc i64 %v$(expressionIndex!)_control_h2_value$(dictionaryEntryPosition) to i8" -> println
+                                        "  store i8 %v$(expressionIndex!)_control_h2$(dictionaryEntryPosition), ptr %v$(expressionIndex!)_control_ptr$(dictionaryEntryPosition), align 1" -> println
+                                    } else {
+                                        "  store i8 1, ptr %v$(expressionIndex!)_control_ptr$(dictionaryEntryPosition), align 1" -> println
+                                    }
                                 }
                             }
                         }
@@ -8509,6 +8655,8 @@ emitCore context: EmitContext -> Unit uses Console {
                                  }
                              }
                          } => indexedDictionaryHashWidth
+                         -1 => indexedDictionaryHashMethod!
+                         indexedDictionaryKeyTypeId! >= 0 -> if { indexedDictionaryKeyTypeId! -> traitMethodSymbol("Hash", "hash") => indexedDictionaryHashMethod! }
                          (indexedDictionaryHashWidth > 0 and indexedDictionaryHashWidth <= 64) -> if {
                              "  %v$(expressionIndex!)_hash_key = " -> print
                              indexedDictionaryHashWidth == 64 -> if { "add i64 0, " -> print } else {
@@ -8543,8 +8691,27 @@ emitCore context: EmitContext -> Unit uses Console {
                                  "  %v$(expressionIndex!)_h2 = trunc i64 %v$(expressionIndex!)_h2_value to i8" -> println
                                  "  %v$(expressionIndex!)_start_slot = urem i64 %v$(expressionIndex!)_hash, %v$(expressionIndex!)_capacity" -> println
                              } else {
-                                 "  %v$(expressionIndex!)_h2 = add i8 0, 1" -> println
-                                 "  %v$(expressionIndex!)_start_slot = add i64 0, 0" -> println
+                                 indexedDictionaryHashMethod! >= 0 -> if {
+                                     context.types[indexedDictionaryKeyTypeId!] => indexedDictionaryHashKeyType
+                                     "  %v$(expressionIndex!)_hash_value = call i32 @sollang_m$(indexedDictionaryHashKeyType.module)_s$(indexedDictionaryHashMethod!)(" -> print
+                                     indexedDictionaryKeyTypeId! -> writeSemanticTypeId
+                                     " " -> print
+                                     (arrayIndex.kind == 5 and function.operand1 >= 0 and arrayIndex.symbol == context.ir[function.operand1].symbol) -> if { "%arg" -> print } else { "%v$(expression.operand1)" -> print }
+                                     ")" -> println
+                                     "  %v$(expressionIndex!)_hash_key = sext i32 %v$(expressionIndex!)_hash_value to i64" -> println
+                                     "  %v$(expressionIndex!)_hash_high = lshr i64 %v$(expressionIndex!)_hash_key, 32" -> println
+                                     "  %v$(expressionIndex!)_hash_fold = xor i64 %v$(expressionIndex!)_hash_key, %v$(expressionIndex!)_hash_high" -> println
+                                     "  %v$(expressionIndex!)_hash = mul i64 %v$(expressionIndex!)_hash_fold, -7046029254386353131" -> println
+                                     "  %v$(expressionIndex!)_h2_shifted = lshr i64 %v$(expressionIndex!)_hash, 57" -> println
+                                     "  %v$(expressionIndex!)_h2_raw = and i64 %v$(expressionIndex!)_h2_shifted, 127" -> println
+                                     "  %v$(expressionIndex!)_h2_zero = icmp eq i64 %v$(expressionIndex!)_h2_raw, 0" -> println
+                                     "  %v$(expressionIndex!)_h2_value = select i1 %v$(expressionIndex!)_h2_zero, i64 1, i64 %v$(expressionIndex!)_h2_raw" -> println
+                                     "  %v$(expressionIndex!)_h2 = trunc i64 %v$(expressionIndex!)_h2_value to i8" -> println
+                                     "  %v$(expressionIndex!)_start_slot = urem i64 %v$(expressionIndex!)_hash, %v$(expressionIndex!)_capacity" -> println
+                                 } else {
+                                     "  %v$(expressionIndex!)_h2 = add i8 0, 1" -> println
+                                     "  %v$(expressionIndex!)_start_slot = add i64 0, 0" -> println
+                                 }
                              }
                          }
                          "  br label %dict$(expressionIndex!)_start" -> println
@@ -9640,6 +9807,12 @@ emitCore context: EmitContext -> Unit uses Console {
                         context.ir[putMoveIndex!] => putMove
                         (putMove.kind == 9 and putMove.opcode == -223 and putMove.operand1 >= 0 and putMove.operand1 < (context.ir -> len)) -> if {
                             context.ir[putMove.operand1] => putMoveKey
+                            (putMoveKey.kind == 5 and putMoveKey.operand0 >= 0 and putMoveKey.operand0 < (context.ir -> len)) -> if {
+                                putMoveKey.operand0 -> mutableBindingRoot => putMoveKeyRoot
+                                (putMoveKeyRoot == dropCandidateRoot! and (putMove -> sourceStart) > (dropCandidate -> sourceStart)) -> if {
+                                    true => dropCandidateMoved!
+                                }
+                            }
                             putMoveKey.nextOperand => putMoveValueIndex
                             (putMoveValueIndex >= 0 and putMoveValueIndex < (context.ir -> len)) -> if {
                                 context.ir[putMoveValueIndex] => putMoveValue
@@ -10892,6 +11065,8 @@ emitCore context: EmitContext -> Unit uses Console {
                                 }
                             }
                         } => entryDictionaryControlHashWidth
+                        -1 => entryDictionaryControlHashMethod!
+                        entryDictionaryKeyTypeId! >= 0 -> if { entryDictionaryKeyTypeId! -> traitMethodSymbol("Hash", "hash") => entryDictionaryControlHashMethod! }
                         entryDictionaryItemIndex! >= 0 -> while {
                             context.ir[entryDictionaryItemIndex!] => entryDictionaryItem
                             entryDictionaryItemPosition! / 2 => entryDictionaryEntryPosition
@@ -10948,7 +11123,28 @@ emitCore context: EmitContext -> Unit uses Console {
                                          "  %v$(entryExpressionIndex!)_control_h2$(entryDictionaryEntryPosition) = trunc i64 %v$(entryExpressionIndex!)_control_h2_value$(entryDictionaryEntryPosition) to i8" -> println
                                          "  store i8 %v$(entryExpressionIndex!)_control_h2$(entryDictionaryEntryPosition), ptr %v$(entryExpressionIndex!)_control_ptr$(entryDictionaryEntryPosition), align 1" -> println
                                      } else {
-                                         "  store i8 1, ptr %v$(entryExpressionIndex!)_control_ptr$(entryDictionaryEntryPosition), align 1" -> println
+                                         entryDictionaryControlHashMethod! >= 0 -> if {
+                                             context.types[entryDictionaryKeyTypeId!] => entryDictionaryControlNominalKeyType
+                                             "  %v$(entryExpressionIndex!)_control_hash_loaded$(entryDictionaryEntryPosition) = load " -> print
+                                             entryDictionaryKeyTypeId! -> writeSemanticTypeId
+                                             ", ptr %v$(entryExpressionIndex!)_$(entryDictionarySide)_ptr$(entryDictionaryEntryPosition), align " -> print
+                                             context.typeAligns[entryDictionaryKeyTypeId!] -> writeDecimalLine
+                                             "  %v$(entryExpressionIndex!)_control_hash_value$(entryDictionaryEntryPosition) = call i32 @sollang_m$(entryDictionaryControlNominalKeyType.module)_s$(entryDictionaryControlHashMethod!)(" -> print
+                                             entryDictionaryKeyTypeId! -> writeSemanticTypeId
+                                             " %v$(entryExpressionIndex!)_control_hash_loaded$(entryDictionaryEntryPosition))" -> println
+                                             "  %v$(entryExpressionIndex!)_control_hash_key$(entryDictionaryEntryPosition) = sext i32 %v$(entryExpressionIndex!)_control_hash_value$(entryDictionaryEntryPosition) to i64" -> println
+                                             "  %v$(entryExpressionIndex!)_control_hash_high$(entryDictionaryEntryPosition) = lshr i64 %v$(entryExpressionIndex!)_control_hash_key$(entryDictionaryEntryPosition), 32" -> println
+                                             "  %v$(entryExpressionIndex!)_control_hash_fold$(entryDictionaryEntryPosition) = xor i64 %v$(entryExpressionIndex!)_control_hash_key$(entryDictionaryEntryPosition), %v$(entryExpressionIndex!)_control_hash_high$(entryDictionaryEntryPosition)" -> println
+                                             "  %v$(entryExpressionIndex!)_control_hash$(entryDictionaryEntryPosition) = mul i64 %v$(entryExpressionIndex!)_control_hash_fold$(entryDictionaryEntryPosition), -7046029254386353131" -> println
+                                             "  %v$(entryExpressionIndex!)_control_h2_shifted$(entryDictionaryEntryPosition) = lshr i64 %v$(entryExpressionIndex!)_control_hash$(entryDictionaryEntryPosition), 57" -> println
+                                             "  %v$(entryExpressionIndex!)_control_h2_raw$(entryDictionaryEntryPosition) = and i64 %v$(entryExpressionIndex!)_control_h2_shifted$(entryDictionaryEntryPosition), 127" -> println
+                                             "  %v$(entryExpressionIndex!)_control_h2_zero$(entryDictionaryEntryPosition) = icmp eq i64 %v$(entryExpressionIndex!)_control_h2_raw$(entryDictionaryEntryPosition), 0" -> println
+                                             "  %v$(entryExpressionIndex!)_control_h2_value$(entryDictionaryEntryPosition) = select i1 %v$(entryExpressionIndex!)_control_h2_zero$(entryDictionaryEntryPosition), i64 1, i64 %v$(entryExpressionIndex!)_control_h2_raw$(entryDictionaryEntryPosition)" -> println
+                                             "  %v$(entryExpressionIndex!)_control_h2$(entryDictionaryEntryPosition) = trunc i64 %v$(entryExpressionIndex!)_control_h2_value$(entryDictionaryEntryPosition) to i8" -> println
+                                             "  store i8 %v$(entryExpressionIndex!)_control_h2$(entryDictionaryEntryPosition), ptr %v$(entryExpressionIndex!)_control_ptr$(entryDictionaryEntryPosition), align 1" -> println
+                                         } else {
+                                             "  store i8 1, ptr %v$(entryExpressionIndex!)_control_ptr$(entryDictionaryEntryPosition), align 1" -> println
+                                         }
                                      }
                                  }
                              }
@@ -11056,6 +11252,8 @@ emitCore context: EmitContext -> Unit uses Console {
                                          }
                                      }
                                  } => entryIndexedDictionaryHashWidth
+                                 -1 => entryIndexedDictionaryHashMethod!
+                                 entryIndexedDictionaryKeyTypeId! >= 0 -> if { entryIndexedDictionaryKeyTypeId! -> traitMethodSymbol("Hash", "hash") => entryIndexedDictionaryHashMethod! }
                                      (entryIndexedDictionaryHashWidth > 0 and entryIndexedDictionaryHashWidth <= 64) -> if {
                                      "  %v$(entryExpressionIndex!)_hash_key = " -> print
                                      entryIndexedDictionaryHashWidth == 64 -> if { "add i64 0, " -> print } else {
@@ -11088,8 +11286,27 @@ emitCore context: EmitContext -> Unit uses Console {
                                          "  %v$(entryExpressionIndex!)_h2 = trunc i64 %v$(entryExpressionIndex!)_h2_value to i8" -> println
                                          "  %v$(entryExpressionIndex!)_start_slot = urem i64 %v$(entryExpressionIndex!)_hash, %v$(entryExpressionIndex!)_capacity" -> println
                                      } else {
-                                         "  %v$(entryExpressionIndex!)_h2 = add i8 0, 1" -> println
-                                         "  %v$(entryExpressionIndex!)_start_slot = add i64 0, 0" -> println
+                                         entryIndexedDictionaryHashMethod! >= 0 -> if {
+                                             context.types[entryIndexedDictionaryKeyTypeId!] => entryIndexedDictionaryHashKeyType
+                                             "  %v$(entryExpressionIndex!)_hash_value = call i32 @sollang_m$(entryIndexedDictionaryHashKeyType.module)_s$(entryIndexedDictionaryHashMethod!)(" -> print
+                                             entryIndexedDictionaryKeyTypeId! -> writeSemanticTypeId
+                                             " " -> print
+                                             (entryDictionaryIndexNode.kind == 5 and function.operand1 >= 0 and entryDictionaryIndexNode.symbol == context.ir[function.operand1].symbol) -> if { "%arg" -> print } else { "%v$(entryExpression.operand1)" -> print }
+                                             ")" -> println
+                                             "  %v$(entryExpressionIndex!)_hash_key = sext i32 %v$(entryExpressionIndex!)_hash_value to i64" -> println
+                                             "  %v$(entryExpressionIndex!)_hash_high = lshr i64 %v$(entryExpressionIndex!)_hash_key, 32" -> println
+                                             "  %v$(entryExpressionIndex!)_hash_fold = xor i64 %v$(entryExpressionIndex!)_hash_key, %v$(entryExpressionIndex!)_hash_high" -> println
+                                             "  %v$(entryExpressionIndex!)_hash = mul i64 %v$(entryExpressionIndex!)_hash_fold, -7046029254386353131" -> println
+                                             "  %v$(entryExpressionIndex!)_h2_shifted = lshr i64 %v$(entryExpressionIndex!)_hash, 57" -> println
+                                             "  %v$(entryExpressionIndex!)_h2_raw = and i64 %v$(entryExpressionIndex!)_h2_shifted, 127" -> println
+                                             "  %v$(entryExpressionIndex!)_h2_zero = icmp eq i64 %v$(entryExpressionIndex!)_h2_raw, 0" -> println
+                                             "  %v$(entryExpressionIndex!)_h2_value = select i1 %v$(entryExpressionIndex!)_h2_zero, i64 1, i64 %v$(entryExpressionIndex!)_h2_raw" -> println
+                                             "  %v$(entryExpressionIndex!)_h2 = trunc i64 %v$(entryExpressionIndex!)_h2_value to i8" -> println
+                                             "  %v$(entryExpressionIndex!)_start_slot = urem i64 %v$(entryExpressionIndex!)_hash, %v$(entryExpressionIndex!)_capacity" -> println
+                                         } else {
+                                             "  %v$(entryExpressionIndex!)_h2 = add i8 0, 1" -> println
+                                             "  %v$(entryExpressionIndex!)_start_slot = add i64 0, 0" -> println
+                                         }
                                      }
                                  }
                                  "  br label %dict$(entryExpressionIndex!)_start" -> println

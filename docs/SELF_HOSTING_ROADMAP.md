@@ -3175,3 +3175,28 @@ differential verification pass. The complete self-host suite passes
 open, so formal progress stays **55/60 (91.7%)**, with **5 equivalent gates
 remaining**. D240 through D246 comprise seven checkpoints; the ten-checkpoint
 Stage 3 cadence boundary is not yet due.
+
+## D247/examples 561 and 562 - Owned Nominal Key Hash/Eq Mutation
+
+The self-host LLVM backend now resolves `Hash.hash` and `Eq.eq` from the
+canonical nominal dictionary key type. Literal control-byte construction,
+normal/region/entry indexed lookup, `take`, `put`, and growth rehashing all use
+the same trait result and 64-bit mix as the reference compiler. Imported keys
+call the implementation in their defining module rather than falling back to a
+zero hash.
+
+An inserted owned key transfers into the table. An equal incoming key is
+destroyed while the resident key remains stable, and cleanup does not destroy
+either inserted key/value source again after opcode `-223` consumes it.
+Example 561 proves this for a local key containing a growable array; example
+562 proves the same replacement, insertion, 2-to-4 growth, lookup, and cleanup
+through an imported module. Examples 452 and 454 retain lookup, assignment, and
+`take` coverage with trait-derived H2 fingerprints.
+
+Windows and Linux LLVM validation, linking, execution, and C# versus self-host
+differential verification pass for examples 561 and 562. The complete
+self-host suite passes **351/351** on both targets, and the Release solution
+build has zero warnings and zero errors. This closes the fully generic owned
+dictionary mutation boundary and advances formal progress to **56/60 (93.3%)**,
+with **4 equivalent gates remaining**. D240 through D247 comprise eight
+checkpoints; Stage 3 remains scheduled for the tenth.

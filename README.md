@@ -348,8 +348,8 @@ selects the newest compatible non-yanked release. See the
 
 ## Self-Hosting Progress
 
-The measured roadmap is currently **55/60 equivalent gates (91.7%)**, with
-**5 equivalent gates remaining**.
+The measured roadmap is currently **56/60 equivalent gates (93.3%)**, with
+**4 equivalent gates remaining**.
 
 The Sollang-written compiler is split into lexer, parser/CST/AST, semantic,
 typed-IR, ownership, module-cache, and LLVM modules. It builds a native Stage 2
@@ -368,6 +368,11 @@ dictionaries now use their canonical key/value widths throughout `put`,
 growth, and rehashing. Text-key literals, lookups, and mutation share the
 reference compiler's deterministic byte hash and equality in function, region,
 and entry paths, including replacement and growth-time rehashing.
+Owned nominal dictionary keys and values now transfer exactly once during
+`put`; local and imported key types use their static `Hash.hash`/`Eq.eq`
+implementations for literal construction, lookup, take, mutation, and growth,
+while equal-key replacement retains the resident key and destroys the incoming
+owner.
 Owned nominal values now transfer into dictionary storage, displaced values are
 dropped before replacement, and growth preserves the single owner. Owned
 nominal keys and their Hash/Eq contract remain open.

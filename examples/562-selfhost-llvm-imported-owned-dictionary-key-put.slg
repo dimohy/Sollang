@@ -1,0 +1,59 @@
+import sollang.compiler.llvm.text as llvm
+
+# Verifies imported owned dictionary keys use their module's Hash/Eq methods.
+main {
+    [
+        """
+        import sample.keys as keys
+
+        main {
+            {
+                keys.OwnedKey { id: 1, payload: [10, ~] }: 10,
+                keys.OwnedKey { id: 2, payload: [20, ~] }: 20
+            } => values!
+
+            keys.OwnedKey { id: 1, payload: [30, ~] } => equalKey!
+            values! -> put(equalKey!, 100)
+
+            keys.OwnedKey { id: 3, payload: [40, ~] } => insertedKey!
+            values! -> put(insertedKey!, 300)
+
+            keys.OwnedKey { id: 1, payload: [50, ~] } => lookup1!
+            keys.OwnedKey { id: 3, payload: [60, ~] } => lookup3!
+            values![lookup1!] + values![lookup3!] == 400 -> if {
+                "imported-owned-key-put" -> println
+            }
+        }
+        """,
+        """
+        namespace sample.keys
+
+        public struct OwnedKey {
+            id: Int
+            payload: [Int; ~]
+        }
+
+        trait Hash {
+            hash: self -> Int
+        }
+
+        trait Eq {
+            eq: self -> Int
+        }
+
+        impl Hash for OwnedKey {
+            hash: self -> Int {
+                self.id
+            }
+        }
+
+        impl Eq for OwnedKey {
+            eq: self -> Int {
+                self.id
+            }
+        }
+        """,
+        ~,
+    ] => sources!
+    sources! -> llvm.emit
+}
