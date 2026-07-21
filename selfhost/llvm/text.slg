@@ -4049,6 +4049,12 @@ emitCore context: EmitContext -> Unit uses Console {
                     "  %assign$(request.nodeIndex)_keys = extractvalue %sollang.dict %assign$(request.nodeIndex)_dictionary, 0" -> println
                     "  %assign$(request.nodeIndex)_values = extractvalue %sollang.dict %assign$(request.nodeIndex)_dictionary, 1" -> println
                     "  %assign$(request.nodeIndex)_length = extractvalue %sollang.dict %assign$(request.nodeIndex)_dictionary, 2" -> println
+                    "  %assign$(request.nodeIndex)_capacity = extractvalue %sollang.dict %assign$(request.nodeIndex)_dictionary, 3" -> println
+                    -1 => assignmentKeyStorageSize!
+                    assignmentKeyTypeId! >= 0 -> if { context.typeSizes[assignmentKeyTypeId!] => assignmentKeyStorageSize! }
+                    assignmentKeyStorageSize! < 0 -> if { assignmentBinding.typeModule -> storageSize => assignmentKeyStorageSize! }
+                    "  %assign$(request.nodeIndex)_control_offset = mul i64 %assign$(request.nodeIndex)_capacity, $(assignmentKeyStorageSize!)" -> println
+                    "  %assign$(request.nodeIndex)_controls = getelementptr i8, ptr %assign$(request.nodeIndex)_keys, i64 %assign$(request.nodeIndex)_control_offset" -> println
                     "  br label %assign$(request.nodeIndex)_find_start" -> println
                     "assign$(request.nodeIndex)_find_start:" -> println
                     "  br label %assign$(request.nodeIndex)_find" -> println
@@ -4057,6 +4063,11 @@ emitCore context: EmitContext -> Unit uses Console {
                     "  %assign$(request.nodeIndex)_find_active = icmp ult i64 %assign$(request.nodeIndex)_find_index, %assign$(request.nodeIndex)_length" -> println
                     "  br i1 %assign$(request.nodeIndex)_find_active, label %assign$(request.nodeIndex)_find_check, label %assign$(request.nodeIndex)_missing" -> println
                     "assign$(request.nodeIndex)_find_check:" -> println
+                    "  %assign$(request.nodeIndex)_control_ptr = getelementptr i8, ptr %assign$(request.nodeIndex)_controls, i64 %assign$(request.nodeIndex)_find_index" -> println
+                    "  %assign$(request.nodeIndex)_control = load i8, ptr %assign$(request.nodeIndex)_control_ptr, align 1" -> println
+                    "  %assign$(request.nodeIndex)_occupied = icmp ne i8 %assign$(request.nodeIndex)_control, 0" -> println
+                    "  br i1 %assign$(request.nodeIndex)_occupied, label %assign$(request.nodeIndex)_key_check, label %assign$(request.nodeIndex)_missing" -> println
+                    "assign$(request.nodeIndex)_key_check:" -> println
                     "  %assign$(request.nodeIndex)_key_ptr = getelementptr " -> print
                     assignmentKeyTypeId! >= 0 -> if { assignmentKeyTypeId! -> writeSemanticTypeId } else { assignmentBinding.typeModule -> llvmType -> print }
                     ", ptr %assign$(request.nodeIndex)_keys, i64 %assign$(request.nodeIndex)_find_index" -> println
