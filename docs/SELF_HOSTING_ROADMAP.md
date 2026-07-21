@@ -3015,3 +3015,20 @@ every `put` and is intentionally limited to the first `Int`/`Int` vertical;
 load-factor growth, direct grouped-candidate selection, generic key/value
 lowering, and one-byte/non-integer hashing remain. Formal progress therefore
 stays **54/60 (90.0%)**, with **6 equivalent gates remaining**.
+
+## D238/example 554 - Load-factor-aware Dictionary Growth
+
+The self-host `Int` dictionary `put` path now follows the Swiss-table 7/8
+load-factor boundary. It probes before allocating, updates matching keys in
+place, inserts a missing key into an available slot while the next length is
+at most 87.5% of capacity, and doubles capacity only when that insertion would
+cross the boundary. Growth still reuses the existing control-byte/H2 layout
+and rehashes only occupied entries.
+
+Example 554 forces 2-to-4 and 4-to-8 growth, then executes an insertion within
+the spare capacity and a replacement of an existing key. Windows and Linux
+LLVM assembly, linking, and execution print `30`, `40`, `50`, and `222`; the
+complete Windows self-host suite passes **343/343**. Generic key/value lowering,
+group-match candidate selection, tombstones, and one-byte/non-integer hashing
+remain open. Formal progress stays **54/60 (90.0%)**, with **6 equivalent gates
+remaining**.

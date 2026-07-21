@@ -3808,9 +3808,95 @@ emitCore context: EmitContext -> Unit uses Console {
                 "  %put$(putIndex)_old_values = extractvalue %sollang.dict %put$(putIndex)_dictionary, 1" -> println
                 "  %put$(putIndex)_old_length = extractvalue %sollang.dict %put$(putIndex)_dictionary, 2" -> println
                 "  %put$(putIndex)_old_capacity = extractvalue %sollang.dict %put$(putIndex)_dictionary, 3" -> println
-                "  %put$(putIndex)_capacity_base = add i64 %put$(putIndex)_old_capacity, 4" -> println
-                "  %put$(putIndex)_capacity_nonzero = icmp ult i64 %put$(putIndex)_old_capacity, 1" -> println
-                "  %put$(putIndex)_capacity = select i1 %put$(putIndex)_capacity_nonzero, i64 4, i64 %put$(putIndex)_capacity_base" -> println
+                "  %put$(putIndex)_key64 = " -> print
+                (putKey.kind == 3 or putKey.kind == 4) -> if {
+                    "add i64 0, " -> print
+                    putKey -> sourceToken => putKeyToken
+                    putKey.kind == 3 -> if { context.sources[putKey.sourceModule] -> slice(putKeyToken.span.start, putKeyToken.span.length) -> print } else { "0" -> print }
+                    "" -> println
+                } else {
+                    "zext i32 %v$(putKeyIndex) to i64" -> println
+                }
+                "  %put$(putIndex)_hash_high = lshr i64 %put$(putIndex)_key64, 32" -> println
+                "  %put$(putIndex)_hash_fold = xor i64 %put$(putIndex)_key64, %put$(putIndex)_hash_high" -> println
+                "  %put$(putIndex)_hash = mul i64 %put$(putIndex)_hash_fold, -7046029254386353131" -> println
+                "  %put$(putIndex)_h2_shifted = lshr i64 %put$(putIndex)_hash, 57" -> println
+                "  %put$(putIndex)_h2_raw = and i64 %put$(putIndex)_h2_shifted, 127" -> println
+                "  %put$(putIndex)_h2_zero = icmp eq i64 %put$(putIndex)_h2_raw, 0" -> println
+                "  %put$(putIndex)_h2_value = select i1 %put$(putIndex)_h2_zero, i64 1, i64 %put$(putIndex)_h2_raw" -> println
+                "  %put$(putIndex)_h2 = trunc i64 %put$(putIndex)_h2_value to i8" -> println
+                "  %put$(putIndex)_old_key_bytes = mul i64 %put$(putIndex)_old_capacity, 4" -> println
+                "  %put$(putIndex)_old_controls = getelementptr i8, ptr %put$(putIndex)_old_keys, i64 %put$(putIndex)_old_key_bytes" -> println
+                "  %put$(putIndex)_has_capacity = icmp ugt i64 %put$(putIndex)_old_capacity, 0" -> println
+                "  br i1 %put$(putIndex)_has_capacity, label %put$(putIndex)_lookup_start, label %put$(putIndex)_grow" -> println
+                "put$(putIndex)_lookup_start:" -> println
+                "  %put$(putIndex)_lookup_start_slot = urem i64 %put$(putIndex)_hash, %put$(putIndex)_old_capacity" -> println
+                "  br label %put$(putIndex)_lookup" -> println
+                "put$(putIndex)_lookup:" -> println
+                "  %put$(putIndex)_lookup_slot = phi i64 [ %put$(putIndex)_lookup_start_slot, %put$(putIndex)_lookup_start ], [ %put$(putIndex)_lookup_next, %put$(putIndex)_lookup_advance ]" -> println
+                "  %put$(putIndex)_lookup_probe = phi i64 [ 0, %put$(putIndex)_lookup_start ], [ %put$(putIndex)_lookup_probe_next, %put$(putIndex)_lookup_advance ]" -> println
+                "  %put$(putIndex)_lookup_active = icmp ult i64 %put$(putIndex)_lookup_probe, %put$(putIndex)_old_capacity" -> println
+                "  br i1 %put$(putIndex)_lookup_active, label %put$(putIndex)_lookup_check, label %put$(putIndex)_grow" -> println
+                "put$(putIndex)_lookup_check:" -> println
+                "  %put$(putIndex)_lookup_control_ptr = getelementptr i8, ptr %put$(putIndex)_old_controls, i64 %put$(putIndex)_lookup_slot" -> println
+                "  %put$(putIndex)_lookup_control = load i8, ptr %put$(putIndex)_lookup_control_ptr, align 1" -> println
+                "  %put$(putIndex)_lookup_empty = icmp eq i8 %put$(putIndex)_lookup_control, 0" -> println
+                "  br i1 %put$(putIndex)_lookup_empty, label %put$(putIndex)_new_key, label %put$(putIndex)_lookup_h2" -> println
+                "put$(putIndex)_lookup_h2:" -> println
+                "  %put$(putIndex)_lookup_h2_match = icmp eq i8 %put$(putIndex)_lookup_control, %put$(putIndex)_h2" -> println
+                "  br i1 %put$(putIndex)_lookup_h2_match, label %put$(putIndex)_lookup_key, label %put$(putIndex)_lookup_advance" -> println
+                "put$(putIndex)_lookup_key:" -> println
+                "  %put$(putIndex)_lookup_key_ptr = getelementptr i32, ptr %put$(putIndex)_old_keys, i64 %put$(putIndex)_lookup_slot" -> println
+                "  %put$(putIndex)_lookup_stored_key = load i32, ptr %put$(putIndex)_lookup_key_ptr, align 4" -> println
+                "  %put$(putIndex)_lookup_found = icmp eq i32 %put$(putIndex)_lookup_stored_key, " -> print
+                (putKey.kind == 3 or putKey.kind == 4) -> if {
+                    putKey -> sourceToken => putLookupKeyToken
+                    putKey.kind == 3 -> if { context.sources[putKey.sourceModule] -> slice(putLookupKeyToken.span.start, putLookupKeyToken.span.length) -> println } else { "0" -> println }
+                } else { "%v$(putKeyIndex)" -> println }
+                "  br i1 %put$(putIndex)_lookup_found, label %put$(putIndex)_update_in_place, label %put$(putIndex)_lookup_advance" -> println
+                "put$(putIndex)_lookup_advance:" -> println
+                "  %put$(putIndex)_lookup_next_unwrapped = add i64 %put$(putIndex)_lookup_slot, 1" -> println
+                "  %put$(putIndex)_lookup_next = urem i64 %put$(putIndex)_lookup_next_unwrapped, %put$(putIndex)_old_capacity" -> println
+                "  %put$(putIndex)_lookup_probe_next = add i64 %put$(putIndex)_lookup_probe, 1" -> println
+                "  br label %put$(putIndex)_lookup" -> println
+                "put$(putIndex)_update_in_place:" -> println
+                "  %put$(putIndex)_update_in_place_ptr = getelementptr i32, ptr %put$(putIndex)_old_values, i64 %put$(putIndex)_lookup_slot" -> println
+                "  store i32 " -> print
+                (putValue.kind == 3 or putValue.kind == 4) -> if {
+                    putValue -> sourceToken => putUpdateValueToken
+                    putValue.kind == 3 -> if { context.sources[putValue.sourceModule] -> slice(putUpdateValueToken.span.start, putUpdateValueToken.span.length) -> print } else { "0" -> print }
+                } else { "%v$(putValueIndex)" -> print }
+                ", ptr %put$(putIndex)_update_in_place_ptr, align 4" -> println
+                "  br label %put$(putIndex)_complete" -> println
+                "put$(putIndex)_new_key:" -> println
+                "  %put$(putIndex)_candidate_length = add i64 %put$(putIndex)_old_length, 1" -> println
+                "  %put$(putIndex)_candidate_scaled = mul i64 %put$(putIndex)_candidate_length, 8" -> println
+                "  %put$(putIndex)_load_limit = mul i64 %put$(putIndex)_old_capacity, 7" -> println
+                "  %put$(putIndex)_fits = icmp ule i64 %put$(putIndex)_candidate_scaled, %put$(putIndex)_load_limit" -> println
+                "  br i1 %put$(putIndex)_fits, label %put$(putIndex)_insert_in_place, label %put$(putIndex)_grow" -> println
+                "put$(putIndex)_insert_in_place:" -> println
+                "  %put$(putIndex)_insert_in_place_key_ptr = getelementptr i32, ptr %put$(putIndex)_old_keys, i64 %put$(putIndex)_lookup_slot" -> println
+                "  store i32 " -> print
+                (putKey.kind == 3 or putKey.kind == 4) -> if {
+                    putKey -> sourceToken => putInPlaceKeyToken
+                    putKey.kind == 3 -> if { context.sources[putKey.sourceModule] -> slice(putInPlaceKeyToken.span.start, putInPlaceKeyToken.span.length) -> print } else { "0" -> print }
+                } else { "%v$(putKeyIndex)" -> print }
+                ", ptr %put$(putIndex)_insert_in_place_key_ptr, align 4" -> println
+                "  %put$(putIndex)_insert_in_place_value_ptr = getelementptr i32, ptr %put$(putIndex)_old_values, i64 %put$(putIndex)_lookup_slot" -> println
+                "  store i32 " -> print
+                (putValue.kind == 3 or putValue.kind == 4) -> if {
+                    putValue -> sourceToken => putInPlaceValueToken
+                    putValue.kind == 3 -> if { context.sources[putValue.sourceModule] -> slice(putInPlaceValueToken.span.start, putInPlaceValueToken.span.length) -> print } else { "0" -> print }
+                } else { "%v$(putValueIndex)" -> print }
+                ", ptr %put$(putIndex)_insert_in_place_value_ptr, align 4" -> println
+                "  store i8 %put$(putIndex)_h2, ptr %put$(putIndex)_lookup_control_ptr, align 1" -> println
+                "  %put$(putIndex)_in_place_result = insertvalue %sollang.dict %put$(putIndex)_dictionary, i64 %put$(putIndex)_candidate_length, 2" -> println
+                "  store %sollang.dict %put$(putIndex)_in_place_result, ptr %slot$(putRoot), align 8" -> println
+                "  br label %put$(putIndex)_complete" -> println
+                "put$(putIndex)_grow:" -> println
+                "  %put$(putIndex)_capacity_double = mul i64 %put$(putIndex)_old_capacity, 2" -> println
+                "  %put$(putIndex)_capacity_small = icmp ult i64 %put$(putIndex)_old_capacity, 4" -> println
+                "  %put$(putIndex)_capacity = select i1 %put$(putIndex)_capacity_small, i64 4, i64 %put$(putIndex)_capacity_double" -> println
                 "  %put$(putIndex)_key_bytes = mul i64 %put$(putIndex)_capacity, 4" -> println
                 "  %put$(putIndex)_key_allocation = add i64 %put$(putIndex)_key_bytes, %put$(putIndex)_capacity" -> println
                 "  %put$(putIndex)_keys = call ptr @malloc(i64 %put$(putIndex)_key_allocation)" -> println
@@ -3873,24 +3959,6 @@ emitCore context: EmitContext -> Unit uses Console {
                 "put$(putIndex)_rehash_done:" -> println
                 "  call void @free(ptr %put$(putIndex)_old_keys)" -> println
                 "  call void @free(ptr %put$(putIndex)_old_values)" -> println
-                "  %put$(putIndex)_length = add i64 0, %put$(putIndex)_old_length" -> println
-                "  %put$(putIndex)_key64 = " -> print
-                (putKey.kind == 3 or putKey.kind == 4) -> if {
-                    "add i64 0, " -> print
-                    putKey -> sourceToken => putKeyToken
-                    putKey.kind == 3 -> if { context.sources[putKey.sourceModule] -> slice(putKeyToken.span.start, putKeyToken.span.length) -> print } else { "0" -> print }
-                    "" -> println
-                } else {
-                    "zext i32 %v$(putKeyIndex) to i64" -> println
-                }
-                "  %put$(putIndex)_hash_high = lshr i64 %put$(putIndex)_key64, 32" -> println
-                "  %put$(putIndex)_hash_fold = xor i64 %put$(putIndex)_key64, %put$(putIndex)_hash_high" -> println
-                "  %put$(putIndex)_hash = mul i64 %put$(putIndex)_hash_fold, -7046029254386353131" -> println
-                "  %put$(putIndex)_h2_shifted = lshr i64 %put$(putIndex)_hash, 57" -> println
-                "  %put$(putIndex)_h2_raw = and i64 %put$(putIndex)_h2_shifted, 127" -> println
-                "  %put$(putIndex)_h2_zero = icmp eq i64 %put$(putIndex)_h2_raw, 0" -> println
-                "  %put$(putIndex)_h2_value = select i1 %put$(putIndex)_h2_zero, i64 1, i64 %put$(putIndex)_h2_raw" -> println
-                "  %put$(putIndex)_h2 = trunc i64 %put$(putIndex)_h2_value to i8" -> println
                 "  %put$(putIndex)_start = urem i64 %put$(putIndex)_hash, %put$(putIndex)_capacity" -> println
                 "  br label %put$(putIndex)_loop_entry" -> println
                 "put$(putIndex)_loop:" -> println
@@ -3903,19 +3971,7 @@ emitCore context: EmitContext -> Unit uses Console {
                 "  %put$(putIndex)_control_slot = getelementptr i8, ptr %put$(putIndex)_control_ptr, i64 %put$(putIndex)_slot" -> println
                 "  %put$(putIndex)_control = load i8, ptr %put$(putIndex)_control_slot, align 1" -> println
                 "  %put$(putIndex)_empty = icmp eq i8 %put$(putIndex)_control, 0" -> println
-                "  br i1 %put$(putIndex)_empty, label %put$(putIndex)_insert, label %put$(putIndex)_compare_h2" -> println
-                "put$(putIndex)_compare_h2:" -> println
-                "  %put$(putIndex)_h2_match = icmp eq i8 %put$(putIndex)_control, %put$(putIndex)_h2" -> println
-                "  br i1 %put$(putIndex)_h2_match, label %put$(putIndex)_compare_key, label %put$(putIndex)_advance" -> println
-                "put$(putIndex)_compare_key:" -> println
-                "  %put$(putIndex)_key_ptr = getelementptr i32, ptr %put$(putIndex)_keys, i64 %put$(putIndex)_slot" -> println
-                "  %put$(putIndex)_stored_key = load i32, ptr %put$(putIndex)_key_ptr, align 4" -> println
-                "  %put$(putIndex)_found = icmp eq i32 %put$(putIndex)_stored_key, " -> print
-                (putKey.kind == 3 or putKey.kind == 4) -> if {
-                    putKey -> sourceToken => putKeyCompareToken
-                    putKey.kind == 3 -> if { context.sources[putKey.sourceModule] -> slice(putKeyCompareToken.span.start, putKeyCompareToken.span.length) -> println } else { "0" -> println }
-                } else { "%v$(putKeyIndex)" -> println }
-                "  br i1 %put$(putIndex)_found, label %put$(putIndex)_update, label %put$(putIndex)_advance" -> println
+                "  br i1 %put$(putIndex)_empty, label %put$(putIndex)_insert, label %put$(putIndex)_advance" -> println
                 "put$(putIndex)_advance:" -> println
                 "  %put$(putIndex)_next_unwrapped = add i64 %put$(putIndex)_slot, 1" -> println
                 "  %put$(putIndex)_next = urem i64 %put$(putIndex)_next_unwrapped, %put$(putIndex)_capacity" -> println
@@ -3937,29 +3993,19 @@ emitCore context: EmitContext -> Unit uses Console {
                 } else { "%v$(putValueIndex)" -> print }
                 ", ptr %put$(putIndex)_insert_value_ptr, align 4" -> println
                 "  store i8 %put$(putIndex)_h2, ptr %put$(putIndex)_control_slot, align 1" -> println
-                "  %put$(putIndex)_insert_length = add i64 %put$(putIndex)_length, 1" -> println
-                "  br label %put$(putIndex)_done" -> println
-                "put$(putIndex)_update:" -> println
-                "  %put$(putIndex)_update_ptr = getelementptr i32, ptr %put$(putIndex)_values, i64 %put$(putIndex)_slot" -> println
-                "  store i32 " -> print
-                (putValue.kind == 3 or putValue.kind == 4) -> if {
-                    putValue -> sourceToken => putValueUpdateToken
-                    putValue.kind == 3 -> if { context.sources[putValue.sourceModule] -> slice(putValueUpdateToken.span.start, putValueUpdateToken.span.length) -> print } else { "0" -> print }
-                } else { "%v$(putValueIndex)" -> print }
-                ", ptr %put$(putIndex)_update_ptr, align 4" -> println
-                "  br label %put$(putIndex)_done" -> println
-                "put$(putIndex)_missing:" -> println
-                "  call void @llvm.trap()" -> println
-                "  unreachable" -> println
-                "put$(putIndex)_loop_entry:" -> println
-                "  br label %put$(putIndex)_loop" -> println
-                "put$(putIndex)_done:" -> println
-                "  %put$(putIndex)_new_length = phi i64 [ %put$(putIndex)_insert_length, %put$(putIndex)_insert ], [ %put$(putIndex)_length, %put$(putIndex)_update ]" -> println
+                "  %put$(putIndex)_new_length = add i64 %put$(putIndex)_old_length, 1" -> println
                 "  %put$(putIndex)_result0 = insertvalue %sollang.dict poison, ptr %put$(putIndex)_keys, 0" -> println
                 "  %put$(putIndex)_result1 = insertvalue %sollang.dict %put$(putIndex)_result0, ptr %put$(putIndex)_values, 1" -> println
                 "  %put$(putIndex)_result2 = insertvalue %sollang.dict %put$(putIndex)_result1, i64 %put$(putIndex)_new_length, 2" -> println
                 "  %put$(putIndex)_result3 = insertvalue %sollang.dict %put$(putIndex)_result2, i64 %put$(putIndex)_capacity, 3" -> println
                 "  store %sollang.dict %put$(putIndex)_result3, ptr %slot$(putRoot), align 8" -> println
+                "  br label %put$(putIndex)_complete" -> println
+                "put$(putIndex)_missing:" -> println
+                "  call void @llvm.trap()" -> println
+                "  unreachable" -> println
+                "put$(putIndex)_loop_entry:" -> println
+                "  br label %put$(putIndex)_loop" -> println
+                "put$(putIndex)_complete:" -> println
             }
         }
     }

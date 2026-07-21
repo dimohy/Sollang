@@ -9375,3 +9375,32 @@ passes **342/342**. This remains a first vertical: it currently specializes
 Threshold-based growth, direct grouped-candidate selection, and the remaining
 one-byte/non-integer key families stay open, so formal progress remains
 **54/60 (90.0%)**.
+
+## D238 - Swiss-table Load-factor Growth
+
+Sollang adopts the production Swiss-table resize boundary documented by
+Abseil: a maximum load factor of 87.5%, followed by capacity doubling. The
+self-host `Int` dictionary `put` path now probes the current table before any
+allocation. A matching key updates its value in place. A missing key inserts
+into the discovered empty slot while `(length + 1) * 8 <= capacity * 7`; only
+an insertion beyond that boundary allocates a table with doubled capacity and
+rehashes occupied entries. Capacities below four grow to four so the first
+allocation also establishes useful probe space.
+
+This ordering is semantically important as well as faster: replacement keeps
+key/value addresses and the dictionary aggregate stable, while insertion
+changes only the length until growth is actually required. Example 554 drives
+the 2-to-4 and 4-to-8 growth paths, then proves an in-place insertion and an
+in-place replacement in the same dictionary. It prints `30`, `40`, `50`, and
+`222` after LLVM assembly, linking, and execution on Windows and Linux. The
+complete Windows self-host suite passes **343/343**.
+
+Direct matching-candidate selection from the grouped control scan, generic
+key/value lowering, tombstones, and one-byte/non-integer hashing remain open,
+so formal progress stays **54/60 (90.0%)**.
+
+Research basis:
+
+- [Abseil container guide](https://abseil.io/docs/cpp/guides/container)
+- [Abseil Performance Tip #90](https://abseil.io/fast/90)
+- [hashbrown `HashTable::reserve`](https://docs.rs/hashbrown/latest/hashbrown/struct.HashTable.html#method.reserve)
