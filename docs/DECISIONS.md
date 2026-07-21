@@ -9239,3 +9239,16 @@ This is intentionally a type-recovery checkpoint, not completion of the
 dictionary stored-reference gate: ownership diagnostics and self-host LLVM
 entry-pointer lowering still need to consume the recovered value type. The
 formal roadmap remains 53/60 (88.3%) until that end-to-end behavior is proven.
+
+## D228 - Preserve Dictionary Enum Pattern Reference Payloads
+
+The self-host typed-IR lowering path now has a legacy-inference fallback when
+selecting an enum pattern subject. If a dictionary index already has a shallow
+enum identity but its recursive AST map is late, the fallback reconstructs the
+canonical enum type and emits the pattern payload binding with the real
+readonly-reference type (`typeKind == 8`). Example 546 verifies this directly;
+the Windows and Linux checks both pass.
+
+This closes type preservation only. The ownership analyzer still needs to
+recognize the dictionary carrier as the owner of that payload before the
+formal stored-reference gate can advance beyond 53/60 (88.3%).

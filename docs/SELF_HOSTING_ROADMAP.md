@@ -2919,6 +2919,11 @@ whose enum values carry readonly references, including the subsequent
 dictionary index type. Ownership diagnostics and self-host LLVM entry-pointer
 lowering remain open, so this checkpoint does not advance the formal score.
 
+D228/example 546 now preserves `ref` payload types for enum patterns whose
+subject comes from a dictionary index. The typed-IR check passes on Windows and
+Linux. Dictionary-carrier ownership recognition remains the next open step,
+so the formal score stays **53/60 (88.3%)**.
+
 1. Multi-file compilation (implemented by example 52).
 2. Import-driven file discovery with cycle and duplicate-module diagnostics
    (implemented after example 52).

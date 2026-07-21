@@ -1,0 +1,22 @@
+import sollang.compiler.ir.typed as typedIr
+
+# Verifies the baseline enum pattern payload reference type without a dictionary.
+main {
+    [
+        """
+        enum IntView { Empty Ref(ref Int) }
+        same value: ref Int -> ref Int { value }
+        read value: ref Int -> Int { value }
+        main {
+            10 => owner!
+            IntView.Ref(owner! -> same) => stored
+            stored -> when { Empty => 0 Ref(value) => value -> read } -> println
+        }
+        """,
+        ~
+    ] => sources!
+    sources! -> typedIr.lower => ir!
+    0 => payloadReferences!
+    ir! -> each node { (node.kind == 29 and node.typeKind == 8) -> if { payloadReferences! + 1 => payloadReferences! } }
+    "payload-ref=$(payloadReferences!)" -> println
+}

@@ -2293,9 +2293,47 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                                         entryPatternSubjectAst.start => entryPatternSubjectStart!
                                     }
                                 }
-                                entryPatternSubjectSearch! + 1 => entryPatternSubjectSearch!
+                            entryPatternSubjectSearch! + 1 => entryPatternSubjectSearch!
+                        }
+                        # Legacy expression inference can know the result of
+                        # an indexed dictionary access before the recursive
+                        # expression map is materialized. Reconstruct the
+                        # nominal enum subject from that shallow identity so
+                        # its payload binding is still emitted.
+                        entryPatternSubjectTypeId! < 0 -> if {
+                            -1 => entryPatternLegacySubjectOrigin!
+                            -1 => entryPatternLegacySubjectModule!
+                            -1 => entryPatternLegacySubjectSymbol!
+                            0 => entryPatternLegacySubjectSearch!
+                            entryPatternLegacySubjectSearch! < (inferred -> len) -> while {
+                                inferred[entryPatternLegacySubjectSearch!] => entryPatternLegacySubject
+                                (entryPatternLegacySubject.sourceModule == sourceIndex! and entryPatternLegacySubject.origin == 0) -> if {
+                                    prepared.package.nodes[sourceRange.astStart + entryPatternLegacySubject.astNode].parent => entryPatternLegacyAncestor!
+                                    false => entryPatternLegacyBelongs!
+                                    (entryPatternLegacyAncestor! >= 0 and not entryPatternLegacyBelongs!) -> while {
+                                        entryPatternLegacyAncestor! == entryPatternFlowAst -> if { true => entryPatternLegacyBelongs! } else {
+                                            prepared.package.nodes[sourceRange.astStart + entryPatternLegacyAncestor!].parent => entryPatternLegacyAncestor!
+                                        }
+                                    }
+                                    (entryPatternLegacySubject.targetModule >= 0 and entryPatternLegacySubject.targetSymbol >= 0 and prepared.package.nodes[sourceRange.astStart + entryPatternLegacySubject.astNode].start < prepared.package.nodes[sourceRange.astStart + entryPatternMatchAst].start) -> if {
+                                        entryPatternLegacySubject.targetModule => entryPatternLegacySubjectModule!
+                                        entryPatternLegacySubject.targetSymbol => entryPatternLegacySubjectSymbol!
+                                    }
+                                }
+                                entryPatternLegacySubjectSearch! + 1 => entryPatternLegacySubjectSearch!
                             }
-                            entryPatternSubjectTypeId! >= 0 -> if {
+                            (entryPatternLegacySubjectModule! >= 0 and entryPatternLegacySubjectSymbol! >= 0) -> if {
+                                0 => entryPatternLegacyTypeSearch!
+                                (entryPatternLegacyTypeSearch! < (frozenRecursiveSemanticTypes -> len) and entryPatternSubjectTypeId! < 0) -> while {
+                                    frozenRecursiveSemanticTypes[entryPatternLegacyTypeSearch!] => entryPatternLegacyType
+                                    (entryPatternLegacyType.kind == 1 and entryPatternLegacyType.module == entryPatternLegacySubjectModule! and entryPatternLegacyType.symbol == entryPatternLegacySubjectSymbol!) -> if {
+                                        entryPatternLegacyTypeSearch! => entryPatternSubjectTypeId!
+                                    }
+                                    entryPatternLegacyTypeSearch! + 1 => entryPatternLegacyTypeSearch!
+                                }
+                            }
+                        }
+                        entryPatternSubjectTypeId! >= 0 -> if {
                                 frozenRecursiveSemanticTypes[entryPatternSubjectTypeId!] => entryPatternSubjectType
                                 prepared.package.tokens[sourceRange.tokenStart + entryPatternTypeNode.payloadToken] => entryPatternVariantToken
                                 entryPatternSubjectType.kind == 7 -> if {
