@@ -2932,12 +2932,12 @@ before the later dictionary pattern match. Windows examples 545, 546, 536, and
 coverage are still pending, so the formal score remains **53/60 (88.3%)**.
 
 D230/example 548 adds the first end-to-end self-host LLVM reference-dictionary
-slice. An explicitly typed `{Int: ref Int; ...}` literal receives pointer-width
-value storage even when its shallow dictionary projection is stale; lookup
+slice. An inferred `{1: owner! -> same}` literal receives pointer-width value
+storage even when its shallow dictionary projection is stale; lookup
 returns the stored pointer, and LLVM assembly, Windows/Linux linking, and
-execution pass (`observed=40`). Inferred reference literals, enum-payload
-projection, Swiss-table entry addressing, and the complete ownership gate are
-still pending, so the formal score remains **53/60 (88.3%)**.
+execution pass (`observed=40`). Enum-payload projection, Swiss-table entry
+addressing, and the complete ownership gate are still pending, so the formal
+score remains **53/60 (88.3%)**.
 
 1. Multi-file compilation (implemented by example 52).
 2. Import-driven file discovery with cycle and duplicate-module diagnostics

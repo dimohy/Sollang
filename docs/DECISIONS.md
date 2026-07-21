@@ -9268,12 +9268,12 @@ remain open, so the formal score stays **53/60 (88.3%)**.
 ## D230 - Self-host LLVM Reference Dictionary Slots
 
 The self-host LLVM text emitter now preserves direct readonly-reference values
-in explicitly typed dictionary literals (`{Int: ref Int; ...}`). When
-recursive type recovery leaves the value projection shallow, the emitter still
+in inferred dictionary literals (`{1: owner! -> same}`). When recursive type
+recovery leaves the value projection shallow, the emitter still
 allocates pointer-width storage, emits `ptr` element GEPs, and stores the
 reference pointer with pointer alignment. Example 548 compiles a dictionary
 reference lookup through a self-hosted LLVM module; LLVM assembly, Windows/Linux
-linking, and execution all pass with `observed=40`. General inferred reference
-values, enum payload projection, Swiss-table entry addressing, and complete
-dictionary ownership remain open, so the formal score remains **53/60
+linking, and execution all pass with `observed=40`. Enum payload projection,
+Swiss-table entry addressing, and complete dictionary ownership remain open, so
+the formal score remains **53/60
 (88.3%)**.
