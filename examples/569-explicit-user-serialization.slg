@@ -1,0 +1,33 @@
+# Verifies the standard-library serialization contract and canonical byte file
+# output without exposing a user struct's native ABI layout.
+import sys.file as file
+
+struct Packet {
+    first: UInt8
+    second: UInt8
+}
+
+impl file.BinarySerializable for Packet {
+    serialize: self -> [UInt8; ~] {
+        [UInt8; ~] => bytes!
+        bytes! -> push(self.first)
+        bytes! -> push(self.second)
+        bytes!
+    }
+}
+
+main {
+    Packet { first: UInt8(65), second: UInt8(90) } -> file.BinarySerializable.serialize => bytes!
+    "artifacts/example-tests/569-explicit-user-serialization.bin" -> file.openWriter
+    bytes! -> each byte {
+        byte -> file.write
+    }
+    file.closeWriter
+
+    map read "artifacts/example-tests/569-explicit-user-serialization.bin" => stored
+    stored -> len => count
+    "serialized byte count = $count" -> println
+    stored -> each byte {
+        "serialized byte = $byte" -> println
+    }
+}

@@ -956,7 +956,17 @@ emitCore context: EmitContext -> Unit uses Console {
                     0 => implSearch!
                     implSearch! < receiverRange.symbolCount -> while {
                         context.symbols[receiverRange.symbolStart + implSearch!] => implCandidate
-                        (resolvedMethod! < 0 and implCandidate.kind == 6 and implCandidate.parent < 0 and (receiverSource -> sourceTokenIs(implCandidate.nameToken, traitName))) -> if {
+                        (resolvedMethod! < 0 and implCandidate.kind == 6 and implCandidate.parent < 0) -> if {
+                            false => traitHeaderMatched!
+                            context.nodes[receiverRange.astStart + implCandidate.astNode] => implAst
+                            implAst.firstToken => implTokenSearch!
+                            implTokenSearch! < implAst.firstToken + implAst.tokenCount -> while {
+                                context.tokens[receiverRange.tokenStart + implTokenSearch!].kind == grammar.tokenIdIdentifier -> if {
+                                    receiverSource -> sourceTokenIs(implTokenSearch!, traitName) -> if { true => traitHeaderMatched! }
+                                }
+                                implTokenSearch! + 1 => implTokenSearch!
+                            }
+                            traitHeaderMatched! -> if {
                             -1 => targetPath!
                             UIntSize(0) => targetPathStart!
                             0 => targetPathSearch!
@@ -990,10 +1000,41 @@ emitCore context: EmitContext -> Unit uses Console {
                                     methodSearch! + 1 => methodSearch!
                                 }
                             }
+                            }
                         }
                         implSearch! + 1 => implSearch!
                     }
                 }
+            }
+        }
+        resolvedMethod!
+    }
+    # Resolves `alias.Trait.method` against the concrete receiver. The typed
+    # IR preserves the static call as opcode -226 so return types, including
+    # owned aggregates, remain the ordinary semantic result type.
+    staticTraitMethodSymbol nodeIndex: Int -> Int {
+        -1 => resolvedMethod!
+        context.ir[nodeIndex] => dispatch
+        (dispatch.operand0 >= 0 and dispatch.sourceModule >= 0 and dispatch.astNode >= 0) -> if {
+            context.ranges[dispatch.sourceModule] => dispatchRange
+            -1 => traitToken!
+            -1 => methodToken!
+            context.nodes[dispatchRange.astStart + dispatch.astNode] => dispatchAst
+            0 => tokenSearch!
+            tokenSearch! < dispatchRange.tokenCount -> while {
+                context.tokens[dispatchRange.tokenStart + tokenSearch!] => dispatchToken
+                (dispatchToken.kind == grammar.tokenIdIdentifier and dispatchToken.span.start >= dispatchAst.start and dispatchToken.span.start < dispatchAst.start + dispatchAst.length) -> if {
+                    methodToken! >= 0 -> if { methodToken! => traitToken! }
+                    tokenSearch! => methodToken!
+                }
+                tokenSearch! + 1 => tokenSearch!
+            }
+            (traitToken! >= 0 and methodToken! >= 0) -> if {
+                context.tokens[dispatchRange.tokenStart + traitToken!] => traitNameToken
+                context.tokens[dispatchRange.tokenStart + methodToken!] => methodNameToken
+                context.sources[dispatch.sourceModule] -> slice(traitNameToken.span.start, traitNameToken.span.length) => traitName
+                context.sources[dispatch.sourceModule] -> slice(methodNameToken.span.start, methodNameToken.span.length) => methodName
+                context.ir[dispatch.operand0].typeId -> traitMethodSymbol(traitName, methodName) => resolvedMethod!
             }
         }
         resolvedMethod!
@@ -6330,6 +6371,19 @@ emitCore context: EmitContext -> Unit uses Console {
                 "  %v$(regionNodeIndex!)_method = load ptr, ptr %v$(regionNodeIndex!)_slot, align $(context.pointerBitWidth / 8)" -> println
                 "  %v$(regionNodeIndex!) = call i32 %v$(regionNodeIndex!)_method(ptr %v$(regionNodeIndex!)_data)" -> println
             }
+            (regionNode.kind == 9 and regionNode.opcode == -226 and regionNode.operand0 >= 0) -> if {
+                regionNodeIndex! -> staticTraitMethodSymbol => regionStaticTraitMethod
+                regionStaticTraitMethod >= 0 -> if {
+                    context.ir[regionNode.operand0] => regionStaticTraitReceiver
+                    "  %v$(regionNodeIndex!) = call " -> print
+                    regionNode -> writeIrType
+                    " @sollang_m$(regionStaticTraitReceiver.typeModule)_s$(regionStaticTraitMethod)(" -> print
+                    regionStaticTraitReceiver -> writeIrType
+                    " " -> print
+                    regionNode.operand0 -> writeValue(ownerIndex!)
+                    ")" -> println
+                }
+            }
             ((regionNode.kind == 9 or regionNode.kind == 6) and regionNode.opcode == -201 and regionNode.operand0 >= 0) -> if {
                 context.ir[regionNode.operand0] => regionLengthBase
                 (regionLengthBase.typeOrigin == 1 and regionLengthBase.typeSymbol == 16) -> if {
@@ -11184,6 +11238,19 @@ emitCore context: EmitContext -> Unit uses Console {
                         "  %v$(entryExpressionIndex!)_method = load ptr, ptr %v$(entryExpressionIndex!)_slot, align $(context.pointerBitWidth / 8)" -> println
                         "  %v$(entryExpressionIndex!) = call i32 %v$(entryExpressionIndex!)_method(ptr %v$(entryExpressionIndex!)_data)" -> println
                     }
+                    (entryExpression.kind == 9 and entryExpression.opcode == -226 and entryExpression.operand0 >= 0) -> if {
+                        entryExpressionIndex! -> staticTraitMethodSymbol => entryStaticTraitMethod
+                        entryStaticTraitMethod >= 0 -> if {
+                            context.ir[entryExpression.operand0] => entryStaticTraitReceiver
+                            "  %v$(entryExpressionIndex!) = call " -> print
+                            entryExpression -> writeIrType
+                            " @sollang_m$(entryStaticTraitReceiver.typeModule)_s$(entryStaticTraitMethod)(" -> print
+                            entryStaticTraitReceiver -> writeIrType
+                            " " -> print
+                            entryExpression.operand0 -> writeValue(functionIndex!)
+                            ")" -> println
+                        }
+                    }
                     ((entryExpression.kind == 9 or entryExpression.kind == 6) and entryExpression.opcode == -201 and entryExpression.operand0 >= 0) -> if {
                         context.ir[entryExpression.operand0] => entryLengthBase
                         (entryLengthBase.typeOrigin == 1 and entryLengthBase.typeSymbol == 16) -> if {
@@ -14018,6 +14085,13 @@ emitWindowsContext context: EmitContext -> Unit uses Console {
         context.modules[runtimeModuleSearch!] => moduleIdentity
         moduleIdentity.pathHash == UInt64(12254170256457402476) -> if { moduleIdentity.sourceIndex => runtimeModule! }
         runtimeModuleSearch! + 1 => runtimeModuleSearch!
+    }
+    (needsOwnedFileRuntime and runtimeModule! < 0) -> if {
+        "declare dllimport ptr @CreateFileA(ptr, i32, i32, ptr, i32, i32, ptr)" -> println
+        "declare dllimport i32 @CloseHandle(ptr)" -> println
+        (not usesTextOutput and not capturesParallelOutput) -> if {
+            "declare dllimport i32 @WriteFile(ptr, ptr, i32, ptr, ptr)" -> println
+        }
     }
     needsProcessRuntime -> if { emitProcessTypeRuntime }
     context -> emitCore

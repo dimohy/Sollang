@@ -9863,3 +9863,52 @@ Research basis:
 - [Rust trait objects](https://doc.rust-lang.org/stable/reference/types/trait-object.html)
 - [Rust dyn compatibility](https://doc.rust-lang.org/stable/reference/items/traits.html#dyn-compatibility)
 - [Swift existential types](https://docs.swift.org/swift-book/documentation/the-swift-programming-language/types/)
+
+## D254 - User Values Serialize Through an Explicit Trait
+
+Status: implemented and cross-target verified; 60/60 roadmap complete
+
+Sollang user types opt into binary serialization through the public
+`sys.file.BinarySerializable` trait:
+
+```sollang
+public trait BinarySerializable {
+    serialize: self -> [UInt8; ~]
+}
+```
+
+An implementation constructs an owned canonical byte array. It defines field
+order, framing, byte order, and versioning itself. The compiler does not use
+reflection, copy padding or pointers from a native struct layout, or provide a
+fallback encoder. This matches Sollang's explicit ownership and capability
+model: serialization is ordinary typed code and the returned buffer has one
+clear owner.
+
+The C# bootstrap semantic compiler now permits an external implementation of a
+verified public `sys.*` trait while retaining the reserved-namespace rejection
+for arbitrary user declarations. The Sollang self-host compiler represents an
+imported static trait call with typed-IR opcode `-226`, scans the complete
+qualified impl header for the real trait name rather than the import alias, and
+resolves the concrete implementation's owned aggregate result. LLVM lowering
+emits the direct concrete call. Raw Windows self-host modules without
+`sys.runtime` also receive the required owned-file runtime declarations instead
+of producing invalid LLVM.
+
+Example 568 proves imported public-trait implementation, owned byte-array
+return, LLVM validation, native execution, and C# versus self-host differential
+output on Windows and Linux. Example 569 implements the actual
+`sys.file.BinarySerializable` contract, writes bytes `65,90`, maps the result,
+and verifies the exact two-byte payload on both targets. Owned-dictionary and
+dynamic-dispatch regressions 452, 454, and 567 pass on both targets. The full
+self-host suite passes **357/357** on Windows and **357/357** on Linux, and the
+Release solution build has zero warnings and zero errors.
+
+This closes the final partial standard-library/tooling gate. Formal progress is
+**60 complete, 0 partial, 0 missing: 60/60 (100%)**, with **no equivalent gates
+remaining**. Stage 3 cadence advances to **5/10**.
+
+Research basis:
+
+- [Serde `Serialize` implementation](https://serde.rs/impl-serialize.html)
+- [Serde custom serialization](https://serde.rs/custom-serialization.html)
+- [Swift encoding and decoding custom types](https://developer.apple.com/documentation/Foundation/encoding-and-decoding-custom-types)

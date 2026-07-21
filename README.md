@@ -372,8 +372,8 @@ selects the newest compatible non-yanked release. See the
 
 ## Self-Hosting Progress
 
-The measured roadmap is currently **59.5/60 equivalent gates (99.2%)**, with
-**0.5 equivalent gates remaining**.
+The measured roadmap is complete at **60/60 equivalent gates (100%)**, with
+**no equivalent gates remaining**.
 
 The Sollang-written compiler is split into lexer, parser/CST/AST, semantic,
 typed-IR, ownership, module-cache, and LLVM modules. It builds a native Stage 2
@@ -404,6 +404,10 @@ C# bootstrap versus self-host LLVM differential verification.
 Explicit `value -> dyn<Trait>` conversion now creates an affine two-pointer
 trait object. `object -> Trait.method` selects the declaration-ordered vtable
 slot at runtime, and slot zero performs deterministic erased cleanup.
+User-defined values implement `sys.file.BinarySerializable` to construct an
+owned canonical `[UInt8; ~]` representation. Serialization remains explicit:
+the implementation defines field order, framing, and byte encoding instead of
+dumping a target-dependent in-memory ABI layout.
 Owned nominal values now transfer into dictionary storage, displaced values are
 dropped before replacement, and growth preserves the single owner. Owned
 nominal keys use the same static `Hash`/`Eq` contract across lookup, mutation,

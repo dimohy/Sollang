@@ -1000,7 +1000,9 @@ internal sealed partial class SemanticCompiler
             throw Error(function.Line, function.Column, $"function name '{function.Name}' is reserved");
         }
 
-        if (!function.IsStandardLibrary && function.Name.StartsWith("sys.", StringComparison.Ordinal))
+        if (!function.IsStandardLibrary
+            && function.TraitName is null
+            && function.Name.StartsWith("sys.", StringComparison.Ordinal))
         {
             throw Error(function.Line, function.Column, "the sys namespace is reserved for the standard library");
         }

@@ -1,6 +1,6 @@
 # Sollang Self-Hosting Roadmap
 
-Status: active
+Status: complete
 Updated: 2026-07-21
 
 The end state is an Sollang compiler written in Sollang that reads a multi-file Sollang
@@ -136,10 +136,10 @@ not lines of code.
 | Ownership and storage | 10 | 10 | 0 | 0 | 10.0 |
 | Modules, visibility, and builds | 8 | 8 | 0 | 0 | 8.0 |
 | Compiler-construction primitives | 12 | 12 | 0 | 0 | 12.0 |
-| Standard library and tooling | 8 | 7 | 1 | 0 | 7.5 |
-| **Total** | **60** | **59** | **1** | **0** | **59.5 / 60** |
+| Standard library and tooling | 8 | 8 | 0 | 0 | 8.0 |
+| **Total** | **60** | **60** | **0** | **0** | **60 / 60** |
 
-Current count-based progress: **99.2% (59.5 of 60 equivalent gates)**.
+Current count-based progress: **100% (60 of 60 equivalent gates)**.
 
 The frontend parallel-compilation subproject is **28/28 checks (100%)**. Its
 source-local product boundary, typed callback-result role slice, nested-call
@@ -150,9 +150,10 @@ reject mutable or structurally non-sendable captures. The submitting parent now
 helps drain its task group before the structured join. Exact cancellation and
 partial-result destruction plus full Windows/Linux suite parity are proven.
 This completed feature-local subproject does not promote a roadmap gate.
-There are **0.5 equivalent gates remaining**. Because the remaining compiler
-primitives are harder than early syntax gates, this is not an elapsed-time
-estimate.
+There are **no equivalent gates remaining**. Publishing, signing, registry
+authentication, broader codecs, and other language/tooling extensions remain
+valuable follow-on work, but they are outside this measured self-hosting
+equivalence boundary.
 
 The async executor now has an owned, target-neutral task-control ABI with
 context/resume/destroy pointers, FIFO ready linkage, lifecycle status, and a
@@ -337,36 +338,39 @@ milestone without changing the broader 60-gate language-capability score.
 - Partial (0).
 - Missing (0).
 
-### Standard library and tooling — 7.5 / 8
+### Standard library and tooling — 8 / 8
 
-- Complete (7): basic `sys.io`, three LLVM-backed target link paths, the
+- Complete (8): basic `sys.io`, three LLVM-backed target link paths, the
   reproducible package/build surface, a generated-parser-backed canonical
   formatter and LSP server, VS Code parser-backed document formatting, and an
   owned portable Path API with target-native canonical queries plus portable
   kind, byte-length, and modification-time metadata, and a native `sollang
   test` framework that discovers project test modules, selects zero-input
   `test_*: -> Bool` functions, generates one Sollang harness, and reports its
-  native Windows/Linux success or failure status.
-- Partial (1): file/random/time APIs remain narrow compiler intrinsics. File
-  I/O now
+  native Windows/Linux success or failure status, and explicit user-value
+  serialization through `sys.file.BinarySerializable`. Each implementation
+  constructs an owned canonical byte array and controls field order, framing,
+  and byte encoding without exposing the target ABI layout. File I/O
   monomorphizes canonical scalar `write<T>` and
   zero-input `read<T>` calls with explicit EOF/error results. Affine `File`
   owners and position-based `readAt<T>`/`readAtAsync<T>` remove shared-cursor
   races. Affine `FileWriter` and scalar `writeAt<T>` now provide the symmetric
   output path; `writeAtAsync<T>` owns copied bytes and a duplicate handle while
   it is pending, `syncAsync` provides an explicit durability barrier, and async
-  open owns its path and transfers its newly opened handle on await. Explicit
-  user-value serialization remains. The package/build surface has confined
+  open owns its path and transfers its newly opened handle on await. The
+  package/build surface has confined
   roots, automatic discovery, selected products, deterministic local dependency
   resolution, recursive imports, target output, and confined local workspaces,
-  with versioned path/Git/registry resolution and a reproducible lock. Publishing,
-  private-registry authentication, package signing, and a general build DAG
-  remain tooling work.
+  with versioned path/Git/registry resolution and a reproducible lock.
+  Publishing, private-registry authentication, package signing, a general
+  build DAG, and broader format-specific codecs remain future extensions
+  outside the measured self-hosting equivalence boundary.
   The owned portable Path layer has explicit Posix/Windows lexical normalization
   and confined joins. Windows/Linux directory reads return sorted owned
   snapshots with entry kind metadata, while `sys.path.query` follows links and
   returns an owned canonical target path, portable kind, byte length, and
   nanosecond modification timestamp.
+- Partial (0).
 - Missing (0).
 
 ## Critical Path To Self-Hosting
@@ -3331,3 +3335,40 @@ Research basis:
 - [Rust trait objects](https://doc.rust-lang.org/stable/reference/types/trait-object.html)
 - [Rust dyn compatibility](https://doc.rust-lang.org/stable/reference/items/traits.html#dyn-compatibility)
 - [Swift existential types](https://docs.swift.org/swift-book/documentation/the-swift-programming-language/types/)
+
+## D254/examples 568 and 569 - Explicit User-Value Serialization
+
+Sollang user types now opt into binary serialization by implementing the
+public `sys.file.BinarySerializable` trait. Its
+`serialize: self -> [UInt8; ~]` method returns an owned canonical byte array;
+the implementation, not the compiler ABI, defines field order, framing, and
+byte encoding. There is no reflection, implicit pointer-bearing memory dump,
+or fallback encoding. Callers explicitly pass the returned bytes to the file
+API or another sink.
+
+The C# bootstrap semantic compiler permits an external implementation of a
+verified public `sys.*` trait while continuing to reject arbitrary user
+declarations in the reserved namespace. The Sollang self-host typed IR uses
+opcode `-226` for imported static trait dispatch, resolves the concrete
+implementation from its complete qualified impl header, and preserves owned
+aggregate returns. The LLVM backend emits the imported implementation call
+directly. On Windows it also declares the required owned-file runtime imports
+when a raw self-host input does not contain `sys.runtime`.
+
+Example 568 proves imported static trait dispatch, owned byte construction,
+LLVM validation, native execution, and C# versus self-host differential output
+on Windows and Linux. Example 569 implements the actual standard-library trait,
+writes bytes `65,90`, maps the file, and verifies the exact byte count and
+contents on both targets. Regressions 452, 454, and 567 pass on both targets.
+The complete self-host suite passes **357/357** on Windows and **357/357** on
+Linux; the Release solution build has zero warnings and zero errors.
+
+This promotes explicit user-value serialization from partial to complete.
+Formal progress is **60 complete, 0 partial, 0 missing: 60/60 (100%)**, with
+**no equivalent gates remaining**. The Stage 3 cadence advances to **5/10**.
+
+Research basis:
+
+- [Serde `Serialize` implementation](https://serde.rs/impl-serialize.html)
+- [Serde custom serialization](https://serde.rs/custom-serialization.html)
+- [Swift encoding and decoding custom types](https://developer.apple.com/documentation/Foundation/encoding-and-decoding-custom-types)

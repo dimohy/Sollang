@@ -1534,6 +1534,45 @@ the same as `write<T>`. Empty parentheses remain invalid for zero-input calls,
 so `read<UInt16>()` is rejected. Arbitrary structs still require an explicit
 serialization contract rather than implicit ABI dumping.
 
+## Explicit User-Value Serialization
+
+`sys.file.BinarySerializable` is the standard opt-in contract for converting a
+user-defined value into canonical binary data:
+
+```sollang
+import sys.file as file
+
+struct Packet {
+    first: UInt8
+    second: UInt8
+}
+
+impl file.BinarySerializable for Packet {
+    serialize: self -> [UInt8; ~] {
+        [UInt8; ~] => bytes!
+        bytes! -> push(self.first)
+        bytes! -> push(self.second)
+        bytes!
+    }
+}
+
+Packet { first: UInt8(65), second: UInt8(90) }
+    -> file.BinarySerializable.serialize => bytes!
+```
+
+The required signature is `serialize: self -> [UInt8; ~]`. The result owns its
+storage. The implementation defines field order, framing, integer byte order,
+version tags, and any validation metadata required by its format. The compiler
+does not reflect over fields or copy a struct's target-dependent ABI layout.
+Pointer-bearing values therefore cannot leak addresses or padding through an
+implicit fallback. Callers explicitly write or otherwise consume the returned
+bytes; decoding remains a separate format-specific contract.
+
+Qualified calls to imported traits use static dispatch when the receiver has a
+known concrete type. Both bootstrap and self-host compilers resolve the actual
+implementation, including a trait imported through a module alias, and transfer
+the owned byte result to the caller.
+
 The asynchronous counterpart is a zero-input generic property as well:
 
 ```sollang
