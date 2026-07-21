@@ -1,5 +1,10 @@
 # Container Optimization Plan - 2026-07-09
 
+Status: historical plan; follow-up state recorded 2026-07-22
+
+This file preserves the measurements and decisions made on 2026-07-09. It is
+not the current implementation inventory; see the follow-up below.
+
 ## Sources Checked
 
 - Abseil Swiss Tables design notes: control-byte metadata, H1/H2 split, SIMD candidate filtering.
@@ -74,3 +79,16 @@ Current median from the same workload:
 
 5. Add allocator counters.
    Sollang currently reports estimated live backing storage. Allocation-count and total-allocated-byte counters would make memory benchmarking comparable to C# allocation metrics.
+
+## Follow-Up State - 2026-07-22
+
+- Group probing is implemented with control bytes, integer/Text H2 hashing,
+  wrapped eight-slot scans, and direct candidate selection (D234-D245).
+- Dictionary growth uses an 87.5% threshold, tombstones preserve probe chains,
+  and typed `put` supports replacement, insertion, growth, and rehashing in the
+  self-host backend (D237-D247).
+- Capacity-hint syntax is implemented for typed empty growable arrays and
+  dictionaries.
+- Native optimization level is an explicit `-O0` through `-O3` build option.
+- Mirrored/sentinel control storage and allocator counters remain benchmark
+  extensions; they are not self-hosting blockers.

@@ -1,7 +1,8 @@
 # Sollang Package Registry Protocol
 
-Status: implemented read protocol
+Status: read protocol implemented and cross-platform verified
 Version: 1
+Updated: 2026-07-22
 
 Sollang registries are static, cache-friendly HTTPS resources. A registry does
 not execute resolver code and does not need a custom client library.
@@ -100,5 +101,8 @@ resolution; the checked-in lock authenticates repeat builds by exact SHA-256.
 - [x] Explicit `sollang resolve` update
 - [x] Self-host index selection and lock parsing
 - [x] Windows and Linux integration coverage
+
+Optional service/tooling extensions outside the completed self-hosting roadmap:
+
 - [ ] Publishing and private-registry authentication tooling
 - [ ] Signed namespace policy and transparency service

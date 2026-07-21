@@ -31,8 +31,9 @@ the result and records that collaboration as part of the project's history.
 
 Sollang compiles `.slg` source to LLVM IR and links native Windows x64 and Linux
 x64 programs or browser WebAssembly. The reference compiler is written in C#;
-the growing compiler written in Sollang already emits LLVM itself and passes
-native Windows and Linux Stage 2 differential verification. The language favors
+the compiler written in Sollang reads multi-file source, performs frontend and
+ownership analysis, emits LLVM IR, drives native Windows/Linux builds, and
+passes the completed **60/60 self-hosting roadmap**. The language favors
 explicit value flow with `value -> target` and expression-first bindings with
 `value => name`.
 
@@ -73,7 +74,8 @@ explicit value flow with `value -> target` and expression-first bindings with
 - import discovery with the final path segment as the default alias, local
   packages, products, and explicit workspaces
 - a Sollang standard library under `stdlib/sys`
-- source-generated lexer/parser code from compact grammar files
+- one compact lexer/grammar source set consumed by the C# bootstrap and the
+  Sollang lexer/parser/CST/AST pipeline
 - LLVM-backed Windows x64, Linux x64, and browser WebAssembly output
 - content-validated incremental builds whose exact-input warm path skips parsing,
   semantic analysis, LLVM emission, and linking, with byte-identical artifacts,
@@ -253,7 +255,13 @@ returns a nonzero native process status when any test fails.
 - [Language specification](docs/SPEC.md)
 - [Decision log](docs/DECISIONS.md)
 - [Self-hosting roadmap and measured progress](docs/SELF_HOSTING_ROADMAP.md)
+- [Implementation roadmap](docs/ROADMAP.md)
 - [Array, dictionary, and ownership design](docs/ARRAYS.md)
+- [Grammar bootstrap and self-host frontend](docs/GRAMMAR_BOOTSTRAP.md)
+- [Deterministic parallel compilation](docs/PARALLEL_COMPILATION.md)
+- [Typed role blocks](docs/ROLE_BLOCKS.md)
+- [Package registry protocol](docs/PACKAGE_REGISTRY.md)
+- [Benchmarks](benchmarks/README.md)
 - [VS Code language support extension](tools/vscode-sollang/README.md)
 - [Example programs](examples)
 
@@ -374,6 +382,9 @@ selects the newest compatible non-yanked release. See the
 
 The measured roadmap is complete at **60/60 equivalent gates (100%)**, with
 **no equivalent gates remaining**.
+
+The D254 completion baseline passes **357/357 self-host examples on Windows**
+and **357/357 on Linux**, with a zero-warning, zero-error solution build.
 
 The Sollang-written compiler is split into lexer, parser/CST/AST, semantic,
 typed-IR, ownership, module-cache, and LLVM modules. It builds a native Stage 2

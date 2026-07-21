@@ -1,7 +1,7 @@
 # Typed Role Blocks
 
-Status: accepted design, common foundation implemented; roles in progress  
-Updated: 2026-07-14
+Status: common result-block foundation implemented; specialized roles are follow-on work
+Updated: 2026-07-22
 
 This document is the canonical design and completion checklist for Sollang
 blocks that perform a typed role. A checkbox is completed only when the linked
@@ -84,10 +84,12 @@ The original model keeps `yield` one-way. The deterministic parallel-compilation
 work now adds the compatible callback-result declaration
 `block item: Item -> YieldResult`. In that form the caller block's final
 expression is returned from `yield`; omitting `-> YieldResult` preserves the
-existing Unit callback exactly. Reference semantic analysis and LLVM execution
-plus self-host grammar parsing are covered by examples 324 and 325. Self-host
-semantic and LLVM parity remain tracked in
-[`PARALLEL_COMPILATION.md`](PARALLEL_COMPILATION.md).
+existing Unit callback exactly. Reference semantic analysis, LLVM execution,
+and self-host callback-result parity are covered by examples 324 and 325 and
+the completed 28/28 parallel-compilation checklist in
+[`PARALLEL_COMPILATION.md`](PARALLEL_COMPILATION.md). The unchecked items below
+refer to broader builder/context/lexical-handler contracts, not that completed
+parallel role.
 
 ### Builder
 
@@ -220,23 +222,26 @@ of the former shallow component slots.
 [`284-generic-composite-role-block.slg`](../examples/284-generic-composite-role-block.slg)
 proves reference semantic specialization, `yield`, caller binding, LLVM
 execution, and owned cleanup for a composite generic item; the matching
-diagnostic rejects a specialized `yield` mismatch. The semantic checkbox
-remains open until every expression/type consumer uses the recursive arena and
-ownership/capability escape and effect rules have matching self-host diagnostics.
+diagnostic rejects a specialized `yield` mismatch. At that checkpoint the
+broader semantic checkbox remained open. The current unchecked scope is the
+specialized builder/context/lexical-handler contract described above, not the
+generic callback-result foundation.
 
 Regression evidence on 2026-07-14: the Release solution build completed with
 zero warnings and errors. After adding recursive semantic type terms and
 generic composite role items, the coordinated eight-worker runner passed all
 399 cases plus byte-for-byte grammar table determinism in 389.8 seconds.
-The canonical roadmap remains 42 complete, 13 partial, and 5 missing gates
-(48.5/60, 80.8%). This partial role-block slice does not promote a roadmap gate.
+At this historical checkpoint the roadmap was 42 complete, 13 partial, and 5
+missing gates (48.5/60, 80.8%). The canonical self-host roadmap later completed
+at **60/60 (100%)**. The unchecked specialized-role items in this document are
+follow-on language/library extensions outside that closed gate count.
 The common foundation baseline is commit `d2b07db`; self-host semantic/IR
 recognition and the first block-input contract slice are covered by examples
 279 and 280.
 
 ## Definition of Done
 
-The feature is complete only when every checkbox in sections A through E is
-checked with repository evidence. If only the common foundation or one role is
-implemented, the document remains `implementation in progress` and progress is
-reported by subsection rather than as a completed language feature.
+The specialized role family is complete only when every checkbox in sections A
+through E is checked with repository evidence. Until then, report completion by
+subsection; do not reinterpret the completed common result-block and parallel
+callback foundations as proof of builder or lexical-handler semantics.

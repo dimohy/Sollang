@@ -1,9 +1,12 @@
 # Sollang Self-Hosting Roadmap
 
 Status: complete
-Updated: 2026-07-21
+Updated: 2026-07-22
 
-The end state is an Sollang compiler written in Sollang that reads a multi-file Sollang
+Completion baseline: commit `8be125d`, D254, Windows/Linux self-host suites
+**357/357**, Release build with zero warnings and zero errors.
+
+The end state is a Sollang compiler written in Sollang that reads a multi-file Sollang
 program, performs lexical, syntactic, type, ownership, and module analysis,
 emits LLVM IR, and invokes the platform toolchain. The existing C# compiler is
 the bootstrap compiler until the Sollang compiler passes a reproducible stage-2

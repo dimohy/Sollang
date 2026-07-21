@@ -1,5 +1,12 @@
 # Sollang Decision Log
 
+Updated: 2026-07-22
+Current accepted checkpoint: D254, self-hosting roadmap 60/60
+
+Entries are chronological. Progress counts and "remaining" work inside an
+older decision describe that decision's checkpoint; D254 and
+`SELF_HOSTING_ROADMAP.md` define the current completion state.
+
 This file records accepted or working decisions so the language design can
 evolve without losing context.
 

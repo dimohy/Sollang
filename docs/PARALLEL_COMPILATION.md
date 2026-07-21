@@ -1,7 +1,7 @@
 # Deterministic Parallel Compilation
 
-Status: accepted direction, implementation in progress  
-Updated: 2026-07-18
+Status: implemented and verified (28/28)
+Updated: 2026-07-22
 
 This document defines Sollang's CPU-parallel execution model and the concrete
 self-host compiler migration. A worker-count message is not implementation
@@ -146,7 +146,7 @@ the checked compiler stops before LLVM emission. Before parallel typed-IR and
 LLVM work begins, construction-time tables move into immutable owners without
 copying, so worker callbacks never capture mutable builders.
 
-### E. Verification (5/6)
+### E. Verification (6/6)
 
 - [x] A 24-processor machine shows more than two active frontend workers.
 - [x] Frontend CPU-time/wall-time ratio materially exceeds 2.0.
@@ -160,8 +160,8 @@ self-host grammar/parser accepts the same declaration and call form. The two
 `block-callback-result-*` diagnostics cover missing and mismatched results.
 
 Parallel-compilation progress is **28/28 checks (100%)**. This is a feature-local
-metric and does not promote the canonical self-host roadmap, which remains
-**48.5/60 equivalent gates (80.8%)** until a full checklist audit proves a gate.
+metric. The canonical self-host roadmap subsequently completed at
+**60/60 equivalent gates (100%)**.
 
 ## Definition of Done
 
@@ -209,8 +209,9 @@ self-host emitter executes the same ABI from entry, ordinary-function, and
 nested-region positions (examples 392-394). Example 395 proves deterministic
 earliest-error selection and prefix-only output over competing failures.
 Example 396 returns owned dynamic arrays from callbacks and verifies the error
-path under Linux AddressSanitizer with leak detection enabled. This closes C.6;
-only full Windows/Linux suite parity remains open.
+path under Linux AddressSanitizer with leak detection enabled. This closed C.6
+at that checkpoint; the later full Windows/Linux suite run closed the remaining
+verification item.
 
 - [POSIX `pthread_create`](https://pubs.opengroup.org/onlinepubs/000095399/functions/pthread_create.html)
 - [POSIX `pthread_join`](https://pubs.opengroup.org/onlinepubs/009695399/functions/pthread_join.html)
@@ -249,3 +250,8 @@ compiles and executes all ordinary examples and diagnostics under WSL, emits
 Linux LLVM for every reusable self-host case, assembles all of those modules,
 and links/executes every case with a runtime expectation. The resulting Linux
 gate passes 523/523, closing the final checklist item.
+
+The current repository completion baseline is D254: the feature remains 28/28,
+the full self-host inventory passes 357/357 on both Windows and Linux, and the
+solution builds with zero warnings and zero errors. Earlier 516/523 counts and
+fixed-point hashes above are retained as dated checkpoint evidence.

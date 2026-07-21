@@ -1,19 +1,15 @@
 # Sollang Array And Ownership Design
 
-Status: implemented slice plus future design
-Date: 2026-07-09
+Status: generic container and ownership model implemented; extensions noted
+Updated: 2026-07-22
 
-This document records the proposed static and dynamic array model for
-Sollang and the first implemented container slice.
-
-The implemented slice is intentionally narrower than the final design. It
-supports `Int` static arrays, `Int` dynamic arrays, and `{Int: Int}`
-dictionaries, with deterministic drop insertion for owned heap containers.
-It also supports move-consuming owner transforms for growable arrays and
-dictionaries, mutable indexing assignment, typed empty dynamic arrays and
-dictionaries, block-local drop scopes for heap-owning containers, and owned
-growable array/dictionary parameters and returns in functions. Borrowed slices
-and generic element types remain future work.
+This document records the container and ownership design together with its
+historical first slice. The current compiler supports generic fixed/growable
+arrays and Swiss-table dictionaries, readonly views and `ref T` origins,
+mutable borrows, explicit moves and `take`, recursively owned elements/keys,
+static local/imported `Hash`/`Eq` dispatch, deterministic drop, and stack/heap
+placement. Sections explicitly called a proposal remain follow-on design rather
+than current syntax.
 
 ## Rust Reference Points
 
@@ -56,13 +52,13 @@ ownership, and unproven cyclic ownership from the safe surface.
 
 ## Core Decision
 
-Sollang should split array concepts by ownership:
+Sollang splits array concepts by ownership:
 
 ```text
 [T; N]      owned fixed-size array
 [T; ~]      owned growable heap array
-&[T]        shared borrowed slice view
-&mut [T]    exclusive mutable borrowed slice view
+[T]         readonly borrowed array view
+mut [T; ~]  exclusive mutable borrow of a growable array
 ```
 
 This avoids the common GC-language ambiguity where a dynamic array value may or
@@ -79,9 +75,10 @@ inside the `[]` family and use `~` to show that the sequence is open and
 growable. A number immediately before `~`, as in `[Int; 1024~]`, is a capacity
 hint, not an initial length.
 
-## Implemented Container Slice
+## Implemented Container Surface
 
-The current compiler implements the first `Int` container slice:
+The following `Int` example is the original baseline; the same container forms
+are now parametric over supported element, key, and value types:
 
 ```sollang
 main {
@@ -176,7 +173,9 @@ Current safety boundary:
   obligation. Conditional returns must transfer it on every branch or none.
 - Browser WebAssembly currently rejects heap-owning containers because the
   browser target does not yet provide a linear-memory allocator.
-- `Text` arrays and generic containers are not implemented yet.
+- `Text`, fixed-width scalar, copyable nominal, and recursively owned nominal
+  elements are supported. Dictionary keys additionally require the static
+  `Hash` and `Eq` contract.
 
 ## Function Call Surface
 
@@ -194,7 +193,7 @@ Sollang should instead remove the empty-parentheses marker for value-flow
 calls whose only explicit input is the value on the left:
 
 ```sollang
-getName() => name
+getName => name
 7 -> square => num
 values -> len => count
 ```
@@ -385,12 +384,13 @@ The final type form should be:
 {Int: Text}
 ```
 
-The implemented slice supports only `{Int: Int}`. It normally stores owned heap
-data behind a small owner handle and frees that storage at the owning binding's
-drop point. Proven local readonly literals instead own one aligned stack block
-and require no free. Lookup is checked: a missing key traps in the current
-runtime slice instead of returning an arbitrary fallback value. A later `get`
-API should return `Option<T>` once option types exist.
+The current implementation supports generic `{K: V}` dictionaries. Built-in
+integer and Text keys use canonical hashes; local and imported nominal keys use
+their static `Hash.hash` and `Eq.eq` implementations. Owned keys and values
+transfer exactly once, replacement retains the resident equal key, and `take`
+is the explicit value-transfer boundary. Proven local readonly literals may use
+one aligned stack block; escaping or mutable owners use heap storage. Checked
+indexing traps on a missing key rather than inventing a fallback value.
 
 The empty literal `{}` is intentionally not accepted yet because it needs an
 explicit type annotation or constructor form to avoid guessing key and value
@@ -398,11 +398,11 @@ types.
 
 ## Borrowed Slices
 
-Most read-only array functions should accept a slice, not an owned dynamic
+Most read-only array functions accept a view rather than an owned dynamic
 array:
 
 ```sollang
-sum values: &[Int] -> Int {
+sum values: [Int] -> Int {
     values -> fold 0 total, value {
         total + value
     }
@@ -415,8 +415,8 @@ numbers -> sum => total
 Slices are non-owning views:
 
 ```text
-&[T]      ptr + len, read-only
-&mut [T]  ptr + len, exclusive mutable
+[T]         ptr + len, read-only
+mut [T; ~]  borrowed growable owner handle, exclusive mutable
 ```
 
 Rules:
@@ -450,8 +450,8 @@ Rules:
 - `value => name!` creates a mutable owner binding.
 - Assigning to `values![index]` requires a mutable owner binding or mutable
   borrow.
-- Borrowing a mutable binding as `&mut` is exclusive for the duration of the
-  borrow.
+- Passing a mutable binding to a `mut [T; ~]` parameter is exclusive for the
+  duration of the borrow.
 
 This is Rust-inspired, but keeps the binding direction aligned with Sollang's
 existing flow syntax.
@@ -497,10 +497,10 @@ Known tradeoffs:
   yet.
 - `updated` consumes the source owner, so keeping multiple immutable versions
   alive still requires a future persistent-container design.
-- Dictionaries now use a scalar Swiss-style open-addressed hash table. Lookup,
-  update, and insert are expected O(1), with a 75% grow threshold. The current
-  implementation scans control bytes scalar-by-scalar; target-specific SIMD
-  group scans remain a future optimization.
+- Dictionaries use Swiss-style open addressing with a 7/8 grow threshold,
+  tombstones, H2 control bytes, and wrapped eight-slot group scans with direct
+  candidate selection. Lookup, update, insertion, growth, and rehashing share
+  the same canonical key contract in the C# and self-host backends.
 
 Recommended follow-up direction:
 
@@ -531,7 +531,7 @@ Rules:
 - Safe indexing checks bounds.
 - Out-of-bounds access is a runtime failure in the first slice, not undefined
   behavior and not an arbitrary fallback value.
-- A later `get` API can return an `Option<T>` once option types exist.
+- A future fallible `get` convenience can return the implemented `Option<T>`.
 
 Iteration should extend the existing block-function model:
 
@@ -575,9 +575,9 @@ Design rule:
 Examples:
 
 ```text
-len: &[T] -> Int
-push: &mut [T; ~], T -> Unit
-reserve: &mut [T; ~], Int -> Unit
+len: [T] -> Int
+push: mut [T; ~], T -> Unit
+reserve: mut [T; ~], Int -> Unit
 ```
 
 The target function or intrinsic decides whether the left value is read,
@@ -720,7 +720,7 @@ clearly marked as unsafe or advanced and must not be used by normal array code.
 Returning a slice into a local owner is rejected:
 
 ```sollang
-makeView: -> &[Int] {
+makeView: -> [Int] {
     [1, 2, 3] => numbers
     numbers -> slice
 }
@@ -748,7 +748,7 @@ values! -> len => count
 The `consume` call moves ownership. The later `len` call would read a
 moved-from binding, so it fails at compile time.
 
-## First Implementation Slice
+## Implementation History And Current Baseline
 
 The first useful implementation is now present:
 
@@ -787,13 +787,10 @@ The first useful implementation is now present:
   plus automatic large fixed-array heap placement, verified by examples 30, 41,
   and 42.
 
-The next slice should add:
-
-- builder/transient containers for efficient bulk immutable construction
-- generic `[T; N]`, `[T; ~]`, and `{K: V}` containers
-
-`pop`, `get`, and fallible allocation APIs should wait until `Option` and
-`Result` exist.
+Generic `[T; N]`, `[T; ~]`, and `{K: V}` containers, `Option`, and `Result` are
+now implemented. Builder/transient containers, a fallible lookup convenience,
+and allocator instrumentation remain optional API/performance extensions rather
+than ownership gaps.
 
 ## Non-Goals
 

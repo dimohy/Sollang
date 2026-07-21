@@ -1,5 +1,7 @@
 # The Sollang Philosophy
 
+Updated: 2026-07-22
+
 Sollang is shaped by four distinct meanings of `Sol`. They belong together,
 but none should disappear into a vague promise of simplicity. Every language
 decision should be explainable through one or more of these commitments.
@@ -59,6 +61,11 @@ solution, and gives creators a compact but logical composition tool. The same
 standard applies beyond syntax: ownership should be visible, compile-time work
 should remove runtime burden, tooling should explain rather than obscure, and
 self-hosting should prove that the language can build itself honestly.
+
+That proof is now executable rather than aspirational: the Sollang-written
+compiler completes the measured 60/60 self-hosting roadmap, emits LLVM, and
+builds native Windows and Linux programs while remaining differential-tested
+against the C# bootstrap compiler.
 
 The four meanings are not ranked. A design that satisfies only one of them is
 unfinished; the goal is code that is bright, harmonious, useful, and distinctly

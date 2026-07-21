@@ -1,13 +1,12 @@
 # Sollang Grammar Bootstrap
 
-Status: table generation, Sollang lexer, and Sollang parser recognizer implemented
-Updated: 2026-07-12
+Status: self-host lexer/parser/CST/AST frontend implemented and verified
+Updated: 2026-07-22
 
 ## Goal
 
-Sollang must eventually compile its own lexer and parser without requiring a
-C# source generator, a Rust-style macro system, or opaque generated parser
-logic. The canonical inputs remain the concise files
+Sollang compiles its own lexer/parser/CST/AST frontend without opaque generated
+parser logic. The canonical inputs remain the concise files
 `syntax/sollang.lexer` and `syntax/sollang.grammar`.
 
 The selected architecture is:
@@ -82,24 +81,31 @@ previous stable rule ids and keyword operator codes do not move.
 
 ## Lexer Descriptor Kinds
 
-The first descriptor format represents whitespace, line comments, identifiers,
+The descriptor format represents whitespace, line comments, identifiers,
 quoted strings, numbers, newlines, end-of-input, and fixed literals. The Sollang
-lexer VM will implement longest fixed-literal matching before the named scalar
-patterns and will attach byte-offset spans to every token.
+lexer VM implements longest fixed-literal matching before the named scalar
+patterns and attaches byte-offset spans to every token.
 
 ## CST Before AST
 
-The table VM will initially produce a lossless concrete syntax tree containing
-tokens, trivia, byte spans, rule ids, and explicit error nodes. A separate Sollang
-lowering layer will build the compiler AST. This same CST can later power the
+The table VM produces a lossless concrete syntax tree containing tokens,
+trivia, byte spans, rule ids, and explicit error nodes. A separate Sollang
+lowering layer builds the compiler AST. The same canonical grammar powers the
 formatter and language server, avoiding a second editor-only grammar.
 
-## Remaining Bootstrap Stages
+## Bootstrap Stage History And Follow-On Work
 
-1. Reusable byte-offset `SourceSpan` and `SyntaxToken` are present in
-   `selfhost/syntax/source.slg`; add lossless CST node and diagnostic types.
-2. Expand `selfhost/syntax/lexer.slg` from the executable bootstrap lexer to full
-   escape, number, trivia, and error parity with the current C# lexer.
+Items 1-5 below describe the implemented progression from token spans through
+AST lowering. The self-host pipeline continues through semantics, typed IR,
+ownership, LLVM, and native linking and is covered by the completed 60/60
+roadmap and 357/357 Windows/Linux self-host suites. Items 6-7 are optional
+bootstrap-retirement work: the C# reference compiler may continue producing the
+checked grammar table without weakening self-host compiler execution.
+
+1. Reusable byte-offset `SourceSpan`, `SyntaxToken`, lossless CST nodes, and
+   diagnostic types are implemented under `selfhost/syntax`.
+2. `selfhost/syntax/lexer.slg` implements the bootstrap lexer surface, trivia,
+   invalid-byte preservation, and token spans consumed by later passes.
 3. `selfhost/syntax/parser.slg` now emits deterministic enter-rule, exit-rule,
    token, and outcome events while recognizing input. Backtracking rewinds and
    overwrites abandoned events before the result escapes.
@@ -108,8 +114,8 @@ formatter and language server, avoiding a second editor-only grammar.
    spans. The lexer assigns generated trivia token ids to contiguous whitespace
    and line comments; the parser ignores them for grammar matching while
    retaining them in CST events. Unknown bytes receive a generated `Invalid`
-   token id, remain in CST spans, and force a rejected parse. Add structured
-   recovery for malformed sequences. `selfhost/syntax/diagnostics.slg` reports
+   token id, remain in CST spans, and force a rejected parse. Structured
+   recovery handles malformed sequences. `selfhost/syntax/diagnostics.slg` reports
    invalid bytes and the furthest unexpected token with stable UTF-8 spans. It
    also exposes the deduplicated set of token kinds and grammar keywords
    expected by every alternative at that furthest position. The parser emits a
@@ -125,18 +131,24 @@ formatter and language server, avoiding a second editor-only grammar.
    present; each records the exact operator token and preserves precedence in
    AST parent links. Logical `or`, `and`, and `not` plus `box` use the same
    negative keyword-code convention as syntax diagnostics, with exact payload
-   token indexes. Expand this ordinary Sollang lowering to declaration
-   parameters and every remaining rule. A second lowering pass now resolves
+   token indexes. Declaration parameters and remaining compiler rules use the
+   same lowering. A second lowering pass resolves
    namespace/import/impl/function names from their nearest path child and
    extracts nominal type names, struct fields, enum variants, trait members,
    associated types, methods, and generic clauses directly from header tokens.
    Function and method nodes additionally carry a secondary parameter/`self`
    token plus flags (`1` move, `2` mutable borrow, `4` public, `8` async).
-6. Reimplement `grammar build` itself in Sollang and require byte-identical output.
-7. Remove the C# source generators only after the Sollang compiler reproduces all
-   parser behavior and diagnostics.
+6. Optional: expose grammar-table production as a Sollang-native maintenance
+   command while retaining byte-identical output.
+7. Optional: retire the C# bootstrap source generators only if the replacement
+   preserves the reference compiler's parser behavior and diagnostics.
 
 ## Semantic Bootstrap
+
+The remainder of this document is a chronological implementation record.
+Statements that a capability "remains" describe the checkpoint in that
+paragraph; the current status is the completed frontend summary above and the
+latest D254/60-of-60 evidence in the roadmap.
 
 `selfhost/semantic/symbols.slg` starts the semantic phase with a relocatable flat
 symbol table. It collects nominal declarations, functions, fields, variants,

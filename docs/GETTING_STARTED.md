@@ -1,10 +1,16 @@
 # Sollang Guide
 
-This guide keeps the longer project notes out of the README while preserving the
-details needed to build, run, and understand the current Sollang slice.
+Status: current implementation guide
+Updated: 2026-07-22
 
-Sollang is in an early compiler-building phase. The implementation is scoped
-to the accepted language specification and decision log.
+This guide keeps the longer project notes out of the README while preserving the
+details needed to build, run, and understand the current Sollang implementation.
+
+Sollang has completed its measured 60/60 self-hosting roadmap. The C# compiler
+remains the bootstrap/reference implementation; the Sollang-written compiler
+reads multi-file programs, analyzes them, emits LLVM IR, and drives native
+Windows/Linux builds. The accepted language specification and decision log
+remain authoritative for syntax and compatibility.
 
 ## What Works Today
 
@@ -15,7 +21,7 @@ to the accepted language specification and decision log.
 - single-expression function bodies with `name: Input -> Output => expression`
 - local functions declared inside a function body, scoped to that containing
   function
-- expression-first bindings with `"value" => name`, `getName() => name`, and
+- expression-first bindings with `"value" => name`, `getName => name`, and
   `7 -> square => num`
 - integer `+`, `-`, `*`, `/`, `%`, unary `-`, and parenthesized expressions
 - line comments with `#`
@@ -82,11 +88,19 @@ to the accepted language specification and decision log.
 - Linux x64 executable linking through Windows LLVM object generation and WSL
   `cc`
 - browser WebAssembly module linking through `clang` and `wasm-ld`
+- generic `[T; N]`/`[T; ~]` arrays and `{K: V}` Swiss-table dictionaries,
+  including local/imported nominal keys with static `Hash`/`Eq`
+- explicit readonly `ref T` origins, move-path checking, deterministic nested
+  owner cleanup, and explicit owned `dyn<Trait>` dispatch
+- explicit user-value binary serialization through
+  `sys.file.BinarySerializable`
+- native `sollang test`, parser-backed `sollang format`, JSON-RPC
+  `sollang language-server`, deterministic package/workspace locks, and
+  content-validated incremental builds
 
-With the current Windows linker settings, representative executable sizes are
-**1,536 bytes** for `01-function-basic-hello.slg` and `05-function-local.slg`,
-**2,048 bytes** for `08-block-each-default-it.slg`, and **2,560 bytes** for the
-container and sorted-int-file workflow samples.
+Executable size depends on the selected target, optimization level, runtime
+features, and LLVM version. Use the dated files under `benchmarks/` for measured
+snapshots rather than treating an old linker size as a language guarantee.
 
 ## Build And Run
 
@@ -945,8 +959,8 @@ approved syntax.
 - `stdlib/sys/io.slg`: Sollang implementation of `sys.io` wrappers
 - `stdlib/sys/random.slg`: Sollang wrappers for pseudo-random runtime
   intrinsics
-- `stdlib/sys/file.slg`: legacy sorted-`Int` helpers plus generic canonical
-  scalar `write<T>` and `read<T>` file intrinsics
+- `stdlib/sys/file.slg`: affine sync/async file owners, legacy sorted-`Int`
+  helpers, canonical scalar I/O, and the explicit `BinarySerializable` contract
 - `scripts/sollang.ps1`: local build/bootstrap script
 - `tools/vscode-sollang`: local VS Code extension for `.slg` syntax
   highlighting
@@ -964,6 +978,8 @@ approved syntax.
 - `src/Sollang.Compiler/CodeGen`: common LLVM IR generation plus target
   runtime platform layers
 - `src/Sollang.Compiler/Tooling`: LLVM/lld tool integration
+- `selfhost`: the Sollang-written compiler frontend, semantic/ownership passes,
+  typed IR, incremental cache, LLVM backend, and native driver
 - `tests/Sollang.ExampleTests`: expected stdout test runner for samples
 - `docs/SPEC.md`: living language specification
 - `docs/DECISIONS.md`: decision log
@@ -971,6 +987,6 @@ approved syntax.
 ## Notes
 
 This repository does not commit LLVM binaries or generated executables. The
-current compiler backend supports Windows x64, Linux x64, and browser
-WebAssembly. Linux linking uses WSL and requires a Linux `cc` in the WSL
-distribution.
+compiler backend supports Windows x64, Linux x64, and browser WebAssembly.
+When invoked from Windows, Linux linking uses WSL and requires a Linux `cc` in
+the selected distribution; a packaged Linux compiler uses the native toolchain.

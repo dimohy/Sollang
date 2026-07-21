@@ -1,7 +1,7 @@
 # Sollang Implementation Roadmap
 
-Status: active
-Updated: 2026-07-12
+Status: core implementation roadmap complete
+Updated: 2026-07-22
 
 Every completed slice must add cumulative `.slg` examples, keep safe-code leak
 freedom statically provable, build with zero warnings, and pass the complete
@@ -63,19 +63,35 @@ ownership behavior is part of the feature.
 - [x] Monomorphization with deterministic ownership/drop behavior for inline values
 - [x] Associated types and equality constraints for container and iterator contracts
 - [x] Explicit heap-only `box T` for stable identity or recursive-size breaks
-- [ ] Explicit `dyn Trait` and vtables for runtime polymorphism
+- [x] Explicit owned `dyn<Trait>` and vtables for runtime polymorphism
 
 ## Compiler Primitives
 
 - [x] UTF-8 `Text` iteration as validated Unicode `CodePoint` values
 - [x] Owned byte `Arena` with aligned bump allocation, stable offsets, growth,
   reset, checked byte access, move/mut ABI, and one-shot drop
-- [ ] Reusable byte-offset source spans and diagnostics
+- [x] Reusable byte-offset source spans and diagnostics
 - [x] Command-line argument and environment access
 - [x] Shell-free argv-based child-process execution with typed status/errors
 - [x] Deterministic lexer-descriptor/parser-bytecode generation into `.slg`
 - [x] Deterministic source-root discovery with sorted owned `.slg` paths
-- [ ] Sollang lexer/parser VM over generated grammar tables
+- [x] Sollang lexer/parser VM, lossless CST, AST lowering, semantics, typed IR,
+  ownership analysis, and LLVM emission over generated grammar tables
+
+## Standard Library And Tooling
+
+- [x] Canonical scalar file I/O plus affine random-access and async file owners
+- [x] Explicit user-value serialization through `BinarySerializable`
+- [x] Deterministic projects, products, packages, workspaces, and lock files
+- [x] Confined path/Git/registry dependency resolution
+- [x] Parser-backed formatter, language server, and VS Code formatting
+- [x] Native `sollang test` discovery, generated harness, filtering, and status
+- [x] Windows/Linux Stage 2 differential and full self-host suite verification
+
+The auditable self-hosting roadmap is **60/60 (100%)**. Publishing, registry
+authentication, signing, broader codecs, and richer editor features are
+follow-on product work rather than incomplete self-hosting gates. See
+[`SELF_HOSTING_ROADMAP.md`](SELF_HOSTING_ROADMAP.md) for gate evidence.
 
 ## Design Direction
 

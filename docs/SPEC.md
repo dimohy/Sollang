@@ -1,90 +1,39 @@
-# Sollang Language Specification Draft
+# Sollang Language Specification
 
-Status: draft
-Date: 2026-07-09
+Status: implemented living specification
+Updated: 2026-07-22
 
-This document is the living specification for Sollang. It records the language
-shape before implementation so design decisions do not get lost.
+This document is the living specification for Sollang. Normative language
+rules follow the current compiler and executable examples; historical design
+rationale is retained where it still explains the accepted syntax.
 
 ## Current Boundary
 
-Sollang implementation has started for the smallest approved language slice.
+The implemented language includes:
 
-The implementation boundary is intentionally narrow:
+- expression-first bindings, fluent calls, functions, local functions,
+  structured control flow, block roles, compile-time ranges, and interpolation;
+- fixed-width and target-sized numerics, strict UTF-8 `Text`, raw strings,
+  nominal structs/enums/traits, associated types, type/value generics, `box`,
+  static trait dispatch, and explicit owned `dyn<Trait>` dispatch;
+- generic fixed/growable arrays and Swiss-table dictionaries, checked places,
+  readonly references with inferred origins, mutable borrows, move paths,
+  deterministic recursive drop, and structured async/parallel ownership;
+- multi-file namespaces/imports, visibility, deterministic projects/products,
+  packages/workspaces, path/Git/registry dependencies, and reproducible locks;
+- canonical scalar and affine async/random-access file I/O, portable paths and
+  directory snapshots, child processes, memory maps, and explicit user-value
+  serialization through `sys.file.BinarySerializable`;
+- a parser-backed formatter, language server, VS Code integration, and native
+  `sollang test` harness generation; and
+- a Sollang-written compiler pipeline from lexer/parser/CST/AST through
+  semantics, typed IR, ownership, LLVM emission, and Windows/Linux native
+  toolchain orchestration.
 
-- explicit `main` block or omitted `main` with top-level executable statements
-- zero-argument and one-input expression functions with default `it` or an
-  explicit input name
-- single-expression function bodies with `name: Input -> Output => expression`
-- nested local function declarations scoped to their containing function
-- local bindings with `value => name`
-- fixed-width signed `Int8`, `Int16`, `Int32`, `Int64` and unsigned
-  `UInt8`, `UInt16`, `UInt32`, `UInt64` values; `Int` aliases `Int32` and
-  `Long` aliases `Int64`
-- IEEE-754 `Float32` and `Float64` values; `Float` aliases `Float32` and
-  `Double` aliases `Float64`
-- decimal integer and floating-point literals
-- same-type numeric `+`, `-`, `*`, `/`, comparisons, integer `%`, unary `-`,
-  and parenthesized expressions
-- line comments with `#`
-- `Bool` values from `true`/`false` literals and integer comparison expressions
-- logical `and`, `or`, and `not`
-- simple string interpolation with `$name`
-- fluent value-flow calls and result bindings with `value -> function => name`
-- receiver-only value-flow target syntax with `value -> function`
-- flow-oriented conditionals with `condition -> if { ... } else { ... }`
-- multi-branch `when { condition { ... } else { ... } }` expressions
-- subject-value `when` with `value -> when { >= limit { ... } else { ... } }`
-- subject-value `when` range arms with `value -> when { start..end { ... } }`
-- compact `when` arms with `condition => value`, including implicit `it` subject
-  inside one-input functions
-- parenthesized calls with `function(value)`
-- Sollang standard library functions `sys.io.print`, `sys.io.println`, and
-  `sys.io.readInt` through global import aliases `print`, `println`, and
-  `readInt`
-- optional source-file `namespace` declaration and `import ... as ...` aliases
-- integer input with `readInt` or `sys.io.readInt`
-- line output with `println` or `sys.io.println`
-- block-function calls, with `each` and `repeat` as the first built-ins
-- closed integer range loops with `start..end -> each item { ... }`
-- default loop item binding with `start..end -> each { ... }`, exposed as `it`
-- integer folds with `start..end -> fold initial acc, item { nextAcc }`
-- owned `Int` static arrays with `[1, 2, 3]` and `[0; 8]`
-- owned growable `Int` arrays with `[1, 2, ~]`, typed empty `[Int; ~]`, and
-  capacity hint `[Int; 1024~]`
-- owned `{Int: Int}` dictionaries with `{ 1: 100, 2: 200 }` and typed empty
-  `{Int: Int}` or capacity hint `{Int: Int; 1024~}`
-- checked array and dictionary indexing with `container[index]`
-- mutable owner bindings with `value => name!`
-- mutable indexing assignment with `value => owner![index]`
-- receiver-flow container operations: `len`, `capacity`, `push(value)`, and
-  `put(key, value)`
-- move-consuming owner-returning container operations: `append(value)` and
-  `updated(keyOrIndex, value)`
-- deterministic drop emission for heap-owning dynamic arrays and dictionaries
-  on native targets
-- automatic stack promotion for small dynamic-array and dictionary literals
-  whose owners are proven not to grow or escape their function frame
-- function-entry stack slots, last-use lifetime markers, and non-overlapping
-  payload reuse in nested branches and loops
-- block-local drop emission for heap-owning dynamic arrays and dictionaries
-- readonly `[Int]` function parameters that accept static and growable `Int`
-  arrays without taking ownership
-- readonly `{Int: Int}` function parameters that inspect a dictionary without
-  taking ownership or copying its heap allocation
-- `mut [Int; ~]` and `mut {Int: Int}` function parameters that can mutate a
-  caller-owned growable container without taking ownership
-- explicit `move` growable array and dictionary parameters that may return the
-  consumed input owner
-- purpose-oriented pseudo-random integer generation with `seedRandom` and
-  `randomBelow`
-- binary sorted `Int` file writing with `openIntWriter`, `writeInt`, and
-  `closeIntWriter`
-- nearest-value lookup over a sorted binary `Int` file with `openIntReader`,
-  `closestInt`, and `closeIntReader`
-- Windows x64, Linux x64, and browser WebAssembly output through LLVM
-
-Anything beyond that remains specification work until explicitly approved.
+The auditable self-hosting boundary is complete at **60/60 gates (100%)**.
+Browser WebAssembly remains a supported output target with a deliberately
+narrower host-capability surface. Publishing/signing services, broader codecs,
+and richer editor features are product extensions, not implicit language rules.
 
 ## Core Goals
 
@@ -97,14 +46,16 @@ Anything beyond that remains specification work until explicitly approved.
 - Use the latest .NET and latest C# Preview features for the compiler
   implementation unless a later constraint requires otherwise.
 
-## Non-Goals For The Current Phase
+## Non-Goals
 
-- No implementation beyond the explicitly approved current slice.
-- No final type system.
-- No final memory model.
-- No final module/package system.
-- No finalized LLVM binding choice.
-- No runtime design beyond the minimum needed to specify initial output.
+- No tracing garbage collector, implicit reference counting, or hidden owner
+  duplication in the safe language surface.
+- No class inheritance, implicit null, or implicit runtime dispatch.
+- No silent target fallback, target-dependent ABI serialization, or unchecked
+  safe indexing.
+- No private grammar embedded inside block roles or package manifests.
+- No requirement that bootstrap-maintenance tooling be written in Sollang when
+  the Sollang compiler can already consume the canonical generated product.
 
 ## Compilation Model
 
@@ -179,7 +130,7 @@ square: Int -> Int {
 }
 
 main {
-    getName() => name
+    getName => name
     7 -> square => num
     "Hello, $name. square = $num" -> print
 }
@@ -244,7 +195,7 @@ The executable `main` wrapper can be omitted. These top-level statements are
 compiled as the main body:
 
 ```sollang
-getName() => name
+getName => name
 7 -> square => num
 "Hello, $name. square = $num" -> sys.io.print
 ```
@@ -318,7 +269,7 @@ square: Int -> Int {
 }
 
 main {
-    getName() => name
+    getName => name
     7 -> square => num
     "Hello, $name. square = $num" -> print
 }
@@ -327,7 +278,7 @@ main {
 For short executable scripts, the `main` wrapper may be omitted:
 
 ```sollang
-getName() => name
+getName => name
 7 -> square => num
 "Hello, $name. square = $num" -> print
 ```
@@ -343,7 +294,7 @@ Rationale:
 - `getName: -> Text { ... }`, `square: Int -> Int { ... }`, and
   `square n: Int -> Int { ... }` introduce the smallest zero-input and one-input
   function declaration shapes.
-- `getName() => name` and `7 -> square => num` make returned values bindable
+- `getName => name` and `7 -> square => num` make returned values bindable
   without hiding the flow behind assignment syntax.
 - `"..." -> print` makes the primary data flow visible at the call site.
 - The executable entry point can be explicit with `main { ... }` or implicit
@@ -443,10 +394,10 @@ Notes:
   compatibility syntax.
 - A statement-level expression followed by `=> name` introduces a local binding
   in the current block.
-- `source -> path item? { ... }` introduces a block-function call. The supported
-  block-function targets in the current slice are `each` and `repeat`. This is
-  the only function-like call form that intentionally omits `()` because the
-  following brace block is the code block argument.
+- `source -> path item? { ... }` introduces a block-function call. Built-in
+  `each`, `repeat`, and `fold`, user-defined result roles, and the standard
+  `parallel`/`tryParallel` roles use this surface. The following brace block is
+  the call marker, so empty parentheses are omitted.
 - `condition -> if { ... } else { ... }` introduces the current conditional
   expression form. The value flowing into `if` must be `Bool`.
 - `when { condition { ... } else { ... } }` is the current multi-branch
@@ -463,11 +414,12 @@ Notes:
   inputs should still use `input -> when { ... }`.
 - `range -> fold initial acc, item { nextAcc }` returns the final integer
   accumulator value after direct loop lowering.
-- `+`, `-`, `*`, `/`, and `%` are initially defined only for integers.
-- Unary `-` is initially defined only for integers.
+- `+`, `-`, `*`, and `/` require matching numeric types; `%` is integer-only.
+- Unary `-` accepts a signed numeric operand.
 - Parentheses group expressions.
 - `#` starts a line comment outside string literals.
-- comparison operators initially compare integers and return `Bool`.
+- numeric comparison operators require compatible numeric operands and return
+  `Bool`.
 - `and` and `or` short-circuit and require `Bool` operands.
 - `not` requires a `Bool` operand.
 - `value -> function` is parsed as a fluent flow expression with `value` as the
@@ -766,8 +718,9 @@ semantic layer:
 }
 ```
 
-In the current slice, `each` and `repeat` are the supported block-function
-targets. For `each`, the range expression flows into `each`, the optional
+`each`, `repeat`, and `fold` are built-in block-function targets. User-defined
+block functions and typed result roles use the same grammar and ownership
+rules. For `each`, the range expression flows into `each`, the optional
 identifier names the block input for each invocation, and the brace body is the
 executable block argument. For `repeat`, an integer count flows into `repeat` and
 the block receives repeat numbers from `1` through that count:
@@ -910,12 +863,13 @@ closestInt target: Int -> Int
 closeIntReader: -> Unit
 ```
 
-The current `Int` file format is binary, little-endian, signed 64-bit records.
+The legacy sorted-`Int` file format is binary, little-endian, signed 64-bit records.
 `writeInt` appends to the current writer through an internal buffer. `closestInt`
 expects the current reader file to be sorted ascending and performs a binary
-search over fixed-width records. These APIs are intentionally current-file
-intrinsics for the first large-data workflow; general file handles and arbitrary
-binary/text formats remain future language work.
+search over fixed-width records. General affine sync/async file handles,
+position-based reads/writes, canonical scalar I/O, mapping, and explicit
+user-value serialization are specified in the later file sections. Broader
+text/binary codecs remain format-specific library work.
 
 The 100,000,000-record generator avoids a separate sort by dividing
 `1..1,000,000,000` into 100,000,000 10-wide buckets and choosing one
@@ -934,7 +888,7 @@ main {
         value -> writeInt
     }
 
-    closeIntWriter()
+    closeIntWriter
 }
 ```
 
@@ -1075,9 +1029,9 @@ scores! -> len => count
 frozenScores -> updated(2, 250) => frozenScores
 ```
 
-Container rules in the current slice:
+Container rules:
 
-- Static arrays are owned fixed-size `Int` values stored inline in the owner.
+- Static arrays are owned fixed-size `[T; N]` values stored inline in the owner.
 - Dynamic arrays own `ptr`, `len`, and `capacity` metadata plus their payload
   storage. The normal payload placement is heap storage.
 - A nonempty dynamic-array literal bound to an immutable local may instead use
@@ -1086,8 +1040,9 @@ Container rules in the current slice:
   source type or syntax.
 - Dictionaries infer homogeneous key/value types and own Swiss-style control
   bytes plus type-aligned key-value entries. `Int` and `Text` currently provide
-  the required built-in hash/equality operations. Values may be scalar, `Text`,
-  or inline user values; owned values receive recursive entry destruction.
+  the required built-in hash/equality operations; local/imported nominal keys
+  use explicit static `Hash`/`Eq` implementations. Values may be scalar, `Text`,
+  or inline/owned user values; owned entries receive recursive destruction.
   `{Key: Value; N~}` creates an empty typed dictionary with a capacity hint.
   `{Key: Value; keyExpression: valueExpression, ...}` gives nonempty entries
   an explicit type context. Key and value annotations accept imported qualified
@@ -1211,11 +1166,11 @@ Container rules in the current slice:
 - Browser WebAssembly rejects heap-placed containers until the target has a
   linear-memory allocator. Stack-promoted readonly dynamic arrays and
   dictionaries require no allocator and are accepted.
-- Fixed-array generic function contracts, collection iterators, and user-defined
-  dictionary `Hash`/`Eq` key dispatch remain future work. Compile-time `Int`
-  value parameters specialize fixed
-  repeat counts and fixed `Int` array input contracts. `[Int; N]` accepts only a
-  fixed array whose compile-time length equals the explicit call specialization.
+- Fixed-array generic contracts, type-preserving collection iterators, and
+  user-defined local/imported dictionary `Hash`/`Eq` key dispatch are
+  implemented. Compile-time `Int` value parameters specialize fixed repeat
+  counts and `[T; N]` input contracts; a fixed array must match the specialized
+  compile-time length.
 
 ## Lexical Design
 
@@ -1488,9 +1443,9 @@ operating system does not promise enumeration order. Windows and Linux support
 the operation; browser wasm rejects it until a host filesystem capability is
 provided. The supplied `Path.Style` must match the target path syntax.
 
-Canonical filesystem resolution and richer metadata remain future layers;
-lexical normalization and directory snapshots do not claim to resolve symlink
-targets.
+`sys.path.query` adds target-native canonical resolution, file/directory kind,
+byte length, and nanosecond modification time. Lexical normalization remains a
+separate operation and does not claim to resolve symlinks by itself.
 
 ## Generic Binary Scalar I/O
 
@@ -2043,7 +1998,7 @@ input value should be visually explicit:
 
 ```sollang
 main {
-    getName() => name
+    getName => name
     7 -> square => num
     "Hello, $name. square = $num" -> print
 }
@@ -2058,14 +2013,14 @@ print("Hello, $name. square = $num")
 ```
 
 This makes argument flow and return flow visible without discarding normal
-parenthesized calls where they are useful. Parenthesized calls remain valid for
-ordinary calls such as `getName()`, but the value-flow form is the preferred
+parenthesized calls where they supply arguments. Zero-input functions use
+property syntax such as `getName`; the value-flow form is the preferred
 Sollang style for single-primary-input operations.
 
 Return values are bound with `=>`:
 
 ```sollang
-getName() => name
+getName => name
 7 -> square => num
 name -> greeting => message
 ```
@@ -2202,7 +2157,7 @@ square: Int -> Int {
 }
 
 main {
-    getName() => name
+    getName => name
     7 -> square => num
     "Hello, $name. square = $num" -> print
 }
@@ -2240,7 +2195,7 @@ Optimization requirements:
 - Platform output calls should be direct and inlinable when practical.
 - The final executable should be produced through LLVM's native target pipeline.
 
-## Current Implementation Slice
+## Implemented Language Surface
 
 The current compiler supports:
 
@@ -2254,7 +2209,7 @@ square: Int -> Int {
 }
 
 main {
-    getName() => name
+    getName => name
     7 -> square => num
     "Hello, $name. square = $num" -> print
 }
@@ -2291,7 +2246,7 @@ Current backend:
   equality constraints such as `<T: Source<Item = Int>>`, receiver-argument
   flow targets, explicit `box T` owners, recursively sized user types through
   boxed fields or enum payloads, readonly owned-value borrows, static recursive
-  drop glue, and expression-first bindings are type-checked for the current slice
+  drop glue, and expression-first bindings are type-checked
 - fixed array literals preserve homogeneous element type for `Int` and `Text`;
   `Text` arrays use 16-byte `%sollang.text` elements, checked indexing returns
   `Text`, and their backing storage is deterministically released
@@ -2391,9 +2346,9 @@ Current backend:
 - Linux entry point: `main`
 - Linux imports: `read`, `write`
 - Linux linker: WSL `cc` after producing an ELF object with Windows LLVM `clang`
-- current representative Windows executable sizes: 1,536 bytes for `01-function-basic-hello.slg`
-  and `05-function-local.slg`, 2,048 bytes for `08-block-each-default-it.slg`, and 2,560
-  bytes for the sorted-int-file workflow samples
+- executable size is toolchain, optimization-level, and feature dependent;
+  dated measurements belong in `benchmarks/`, not in the normative language
+  contract
 
 The current runtime backend keeps source-language lowering shared across
 targets. It calls generated user Sollang functions, inlines standard library
@@ -2416,28 +2371,24 @@ The compiler implementation is organized by responsibility:
 - `stdlib/sys`: Sollang standard library modules for I/O, random, file
   workflow wrappers, and intrinsic boundary declarations
 - `tests/Sollang.ExampleTests`: executable sample expected stdout runner
+- `selfhost`: Sollang lexer/parser/CST/AST, semantics, typed IR, ownership,
+  incremental cache, LLVM emission, and native compiler driver modules
 
 Lexer rules are expressed in the compact `syntax/sollang.lexer` file. The source
 generator reads that file as an MSBuild `AdditionalFiles` input and emits
 `TokenKind` plus the deterministic lexer during C# compilation.
 
 Parser rules are expressed in the compact `syntax/sollang.grammar` file. The
-source generator validates the first approved grammar slice and emits the
-recursive descent parser during C# compilation. This keeps the grammar visible
-without introducing a separate external parser generation toolchain at this
-stage.
+source generator emits the C# bootstrap parser, while the generated ordinary
+Sollang table drives the self-host lexer/parser/CST/AST pipeline. Byte-for-byte
+table determinism prevents the two paths from silently drifting.
 
-## Open Questions
+## Follow-On Design Extensions
 
-- Should the language include additional output conveniences beyond `println`?
-- What is the exact error model for I/O failure?
-- Does `main` return an explicit exit code later?
-- What is the final string type: owned string, slice, UTF-8 view, or multiple
-  forms?
-- What escape sequences are allowed in string literals?
-- Should string interpolation support additional display formatting later?
-- What is the mutability/reassignment model after `=>` binding?
-- What comment syntax should be adopted?
-- What is the first official target matrix?
-- Which LLVM integration strategy will the .NET compiler use?
-- How much core library is required before the first executable?
+The core syntax, ownership model, target matrix, compiler pipeline, and
+self-hosting boundary are implemented. Possible future specifications must be
+accepted explicitly and include their own executable evidence. Current
+extension areas include richer format-specific serialization/decoding,
+publishing/signing services, additional editor refactorings, and wider browser
+host capabilities. None of these imply a fallback or weaken the existing
+Windows/Linux/native ownership guarantees.

@@ -1,5 +1,8 @@
 # Sollang Language Support
 
+Version: 0.6.0
+Updated: 2026-07-22
+
 VS Code language support for Sollang `.slg` files and language-shaped project
 manifests.
 
@@ -33,7 +36,7 @@ From this folder:
 
 ```powershell
 npx --yes @vscode/vsce package --no-dependencies --allow-missing-repository
-code --install-extension .\sollang-language-support-0.5.1.vsix --force
+code --install-extension .\sollang-language-support-0.6.0.vsix --force
 ```
 
 For extension development, open this folder in VS Code and run the extension host

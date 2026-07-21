@@ -2,7 +2,14 @@
 
 ## Container Throughput
 
-`containers-throughput.slg` measures the current array and dictionary container paths with the runtime timer exposed as `nowMillis()`.
+`containers-throughput.slg` measures the current array and dictionary container
+paths with the zero-input runtime timer exposed as `nowMillis`.
+
+The checked-in numeric report is a dated machine-local snapshot, not a claim
+about the latest compiler. Since that run, dictionary lowering gained 87.5%
+load-factor growth, tombstones, H2 control bytes, wrapped eight-slot group
+scans, direct candidate selection, and generic local/imported `Hash`/`Eq` key
+dispatch. Re-run the commands below before making current performance claims.
 
 Run:
 
@@ -46,4 +53,5 @@ Reported fields:
 
 The benchmark follows common public benchmark metrics: elapsed time, input/iteration count, items-per-second throughput, and memory size. Exact allocation counters should be added when the Sollang runtime exposes allocator statistics.
 
-`containers-smoke.slg` is a smaller correctness check for `nowMillis()`, mutable array push, dictionary put, fold, and lookup.
+`containers-smoke.slg` is a smaller correctness check for `nowMillis`, mutable
+array push, dictionary put, fold, and lookup.
