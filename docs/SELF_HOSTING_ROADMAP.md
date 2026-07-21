@@ -2967,8 +2967,8 @@ keys. The four-field ABI remains compatible and Windows/Linux LLVM execution
 passes. The control-tail occupancy marker, matching H2 fingerprints for
 16/32/64-bit integer keys, hash-based start slots, and bounded wrapped scalar
 probes are now implemented. Grouped probing, one-byte/non-integer key hashing,
-insertion, growth, and rehashing are still pending, so formal progress remains
-**53/60 (88.3%)**.
+insertion, growth, and rehashing are still pending, so formal progress is now
+**54/60 (90.0%)**.
 
 1. Multi-file compilation (implemented by example 52).
 2. Import-driven file discovery with cycle and duplicate-module diagnostics
