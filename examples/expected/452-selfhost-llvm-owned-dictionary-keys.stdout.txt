@@ -107,11 +107,19 @@ entry:
   %keys = extractvalue %sollang.dict %value, 0
   %values = extractvalue %sollang.dict %value, 1
   %length = extractvalue %sollang.dict %value, 2
+  %capacity = extractvalue %sollang.dict %value, 3
+  %control_offset = mul i64 %capacity, 32
+  %controls = getelementptr i8, ptr %keys, i64 %control_offset
   br label %loop
 loop:
   %index = phi i64 [ 0, %entry ], [ %next, %continue ]
-  %in_range = icmp ult i64 %index, %length
-  br i1 %in_range, label %item, label %done
+  %in_range = icmp ult i64 %index, %capacity
+  br i1 %in_range, label %check, label %done
+check:
+  %control_slot = getelementptr i8, ptr %controls, i64 %index
+  %control = load i8, ptr %control_slot, align 1
+  %occupied = icmp sgt i8 %control, 0
+  br i1 %occupied, label %item, label %continue
 item:
   %key_slot = getelementptr %sollang.struct.m0_s0, ptr %keys, i64 %index
   %key = load %sollang.struct.m0_s0, ptr %key_slot, align 8
@@ -444,18 +452,34 @@ dict49_missing:
 dict49_hit:
   %v49_value_ptr = getelementptr i32, ptr %v49_values, i64 %v49_group_candidate_slot
   %v49 = load i32, ptr %v49_value_ptr, align 4
-  %take52_keys = extractvalue %sollang.dict %v53, 0
-  %take52_values = extractvalue %sollang.dict %v53, 1
-  %take52_length = extractvalue %sollang.dict %v53, 2
-  %take52_capacity = extractvalue %sollang.dict %v53, 3
-  br label %take52_find_start
+  %take52_dictionary = load %sollang.dict, ptr %slot11, align 8
+  %take52_keys = extractvalue %sollang.dict %take52_dictionary, 0
+  %take52_values = extractvalue %sollang.dict %take52_dictionary, 1
+  %take52_length = extractvalue %sollang.dict %take52_dictionary, 2
+  %take52_capacity = extractvalue %sollang.dict %take52_dictionary, 3
+  %take52_control_offset = mul i64 %take52_capacity, 32
+  %take52_controls = getelementptr i8, ptr %take52_keys, i64 %take52_control_offset
+  %take52_hash = add i64 0, 0
+  %take52_h2 = add i8 0, 1
+  %take52_has_capacity = icmp ugt i64 %take52_capacity, 0
+  br i1 %take52_has_capacity, label %take52_find_start, label %take52_missing
 take52_find_start:
+  %take52_start_slot = urem i64 %take52_hash, %take52_capacity
   br label %take52_find
 take52_find:
-  %take52_find_index = phi i64 [ 0, %take52_find_start ], [ %take52_find_next, %take52_find_advance ]
-  %take52_find_active = icmp ult i64 %take52_find_index, %take52_length
+  %take52_find_index = phi i64 [ %take52_start_slot, %take52_find_start ], [ %take52_find_next, %take52_find_advance ]
+  %take52_find_probe = phi i64 [ 0, %take52_find_start ], [ %take52_find_probe_next, %take52_find_advance ]
+  %take52_find_active = icmp ult i64 %take52_find_probe, %take52_capacity
   br i1 %take52_find_active, label %take52_find_check, label %take52_missing
 take52_find_check:
+  %take52_control_ptr = getelementptr i8, ptr %take52_controls, i64 %take52_find_index
+  %take52_control = load i8, ptr %take52_control_ptr, align 1
+  %take52_empty = icmp eq i8 %take52_control, 0
+  br i1 %take52_empty, label %take52_missing, label %take52_h2_check
+take52_h2_check:
+  %take52_h2_match = icmp eq i8 %take52_control, %take52_h2
+  br i1 %take52_h2_match, label %take52_key_check, label %take52_find_advance
+take52_key_check:
   %take52_key_ptr = getelementptr %sollang.struct.m0_s0, ptr %take52_keys, i64 %take52_find_index
   %take52_key = load %sollang.struct.m0_s0, ptr %take52_key_ptr, align 8
   %take52_stored_eq = call i32 @sollang_m0_s10(%sollang.struct.m0_s0 %take52_key)
@@ -463,7 +487,9 @@ take52_find_check:
   %take52_found = icmp eq i32 %take52_stored_eq, %take52_query_eq
   br i1 %take52_found, label %take52_hit, label %take52_find_advance
 take52_find_advance:
-  %take52_find_next = add i64 %take52_find_index, 1
+  %take52_find_next_unwrapped = add i64 %take52_find_index, 1
+  %take52_find_next = urem i64 %take52_find_next_unwrapped, %take52_capacity
+  %take52_find_probe_next = add i64 %take52_find_probe, 1
   br label %take52_find
 take52_missing:
   call void @llvm.trap()
@@ -472,29 +498,10 @@ take52_hit:
   %take52_value_ptr = getelementptr i32, ptr %take52_values, i64 %take52_find_index
   %v52 = load i32, ptr %take52_value_ptr, align 4
   call void @sollang_drop_t26(%sollang.struct.m0_s0 %take52_key)
+  store i8 -1, ptr %take52_control_ptr, align 1
   %take52_new_length = sub i64 %take52_length, 1
-  br label %take52_shift
-take52_shift:
-  %take52_shift_index = phi i64 [ %take52_find_index, %take52_hit ], [ %take52_shift_next, %take52_shift_body ]
-  %take52_shift_active = icmp ult i64 %take52_shift_index, %take52_new_length
-  br i1 %take52_shift_active, label %take52_shift_body, label %take52_done
-take52_shift_body:
-  %take52_shift_next = add i64 %take52_shift_index, 1
-  %take52_source_key_ptr = getelementptr %sollang.struct.m0_s0, ptr %take52_keys, i64 %take52_shift_next
-  %take52_source_key = load %sollang.struct.m0_s0, ptr %take52_source_key_ptr, align 8
-  %take52_target_key_ptr = getelementptr %sollang.struct.m0_s0, ptr %take52_keys, i64 %take52_shift_index
-  store %sollang.struct.m0_s0 %take52_source_key, ptr %take52_target_key_ptr, align 8
-  %take52_source_value_ptr = getelementptr i32, ptr %take52_values, i64 %take52_shift_next
-  %take52_source_value = load i32, ptr %take52_source_value_ptr, align 4
-  %take52_target_value_ptr = getelementptr i32, ptr %take52_values, i64 %take52_shift_index
-  store i32 %take52_source_value, ptr %take52_target_value_ptr, align 4
-  br label %take52_shift
-take52_done:
-  %take52_dict0 = insertvalue %sollang.dict poison, ptr %take52_keys, 0
-  %take52_dict1 = insertvalue %sollang.dict %take52_dict0, ptr %take52_values, 1
-  %take52_dict2 = insertvalue %sollang.dict %take52_dict1, i64 %take52_new_length, 2
-  %take52_dict3 = insertvalue %sollang.dict %take52_dict2, i64 %take52_capacity, 3
-  store %sollang.dict %take52_dict3, ptr %slot11, align 8
+  %take52_result = insertvalue %sollang.dict %take52_dictionary, i64 %take52_new_length, 2
+  store %sollang.dict %take52_result, ptr %slot11, align 8
   %v55_expression_literal0 = getelementptr i8, ptr @sollang_str_56, i64 0
   call void @sollang_runtime_print(ptr %v55_expression_literal0, i64 10, i1 false)
   call void @sollang_runtime_print_i32(i32 %v31, i1 false)

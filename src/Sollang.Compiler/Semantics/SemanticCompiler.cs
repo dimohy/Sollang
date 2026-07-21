@@ -8413,7 +8413,7 @@ internal sealed partial class SemanticCompiler
 
     private bool IsSupportedDictionaryKeyType(BoundType type)
     {
-        if (type is BoundType.Int or BoundType.Text)
+        if (IsIntegerType(type) || type == BoundType.Text)
         {
             return true;
         }

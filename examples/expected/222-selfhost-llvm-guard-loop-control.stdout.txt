@@ -72,6 +72,7 @@ entry:
   %keys = extractvalue %sollang.dict %value, 0
   %values = extractvalue %sollang.dict %value, 1
   %length = extractvalue %sollang.dict %value, 2
+  %capacity = extractvalue %sollang.dict %value, 3
   call void @free(ptr %keys)
   call void @free(ptr %values)
   ret void
@@ -116,7 +117,17 @@ while9_body:
   %v19_keys_ptr0 = getelementptr i32, ptr %v19_keys, i64 0
   store i32 %v20, ptr %v19_keys_ptr0, align 4
   %v19_control_ptr0 = getelementptr i8, ptr %v19_controls, i64 0
-  store i8 1, ptr %v19_control_ptr0, align 1
+  %v19_control_hash_loaded0 = load i32, ptr %v19_keys_ptr0, align 4
+  %v19_control_hash_key0 = sext i32 %v19_control_hash_loaded0 to i64
+  %v19_control_hash_high0 = lshr i64 %v19_control_hash_key0, 32
+  %v19_control_hash_fold0 = xor i64 %v19_control_hash_key0, %v19_control_hash_high0
+  %v19_control_hash0 = mul i64 %v19_control_hash_fold0, -7046029254386353131
+  %v19_control_h2_shifted0 = lshr i64 %v19_control_hash0, 57
+  %v19_control_h2_raw0 = and i64 %v19_control_h2_shifted0, 127
+  %v19_control_h2_zero0 = icmp eq i64 %v19_control_h2_raw0, 0
+  %v19_control_h2_value0 = select i1 %v19_control_h2_zero0, i64 1, i64 %v19_control_h2_raw0
+  %v19_control_h20 = trunc i64 %v19_control_h2_value0 to i8
+  store i8 %v19_control_h20, ptr %v19_control_ptr0, align 1
   %v19_values_ptr0 = getelementptr i32, ptr %v19_values, i64 0
   store i32 %v21, ptr %v19_values_ptr0, align 4
   %v19_0 = insertvalue %sollang.dict poison, ptr %v19_keys, 0

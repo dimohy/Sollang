@@ -32,11 +32,19 @@ entry:
   %keys = extractvalue %sollang.dict %value, 0
   %values = extractvalue %sollang.dict %value, 1
   %length = extractvalue %sollang.dict %value, 2
+  %capacity = extractvalue %sollang.dict %value, 3
+  %control_offset = mul i64 %capacity, 4
+  %controls = getelementptr i8, ptr %keys, i64 %control_offset
   br label %loop
 loop:
   %index = phi i64 [ 0, %entry ], [ %next, %continue ]
-  %in_range = icmp ult i64 %index, %length
-  br i1 %in_range, label %item, label %done
+  %in_range = icmp ult i64 %index, %capacity
+  br i1 %in_range, label %check, label %done
+check:
+  %control_slot = getelementptr i8, ptr %controls, i64 %index
+  %control = load i8, ptr %control_slot, align 1
+  %occupied = icmp sgt i8 %control, 0
+  br i1 %occupied, label %item, label %continue
 item:
   %value_slot = getelementptr %sollang.array.i32, ptr %values, i64 %index
   %item_value = load %sollang.array.i32, ptr %value_slot, align 8
@@ -55,20 +63,20 @@ declare void @llvm.trap()
 @sollang_str_39 = private unnamed_addr constant [21 x i8] c"owned dictionary take"
 define %sollang.dict @sollang_m0_s0() {
 entry:
-  %v4_data = call ptr @malloc(i64 4)
+  %v4_data = call ptr @malloc(i64 8)
   %v4_ptr0 = getelementptr i32, ptr %v4_data, i64 0
-  store i32 30, ptr %v4_ptr0, align 4
+  store i32 40, ptr %v4_ptr0, align 4
+  %v4_ptr1 = getelementptr i32, ptr %v4_data, i64 1
+  store i32 41, ptr %v4_ptr1, align 4
   %v4_0 = insertvalue %sollang.array.i32 poison, ptr %v4_data, 0
-  %v4_1 = insertvalue %sollang.array.i32 %v4_0, i64 1, 1
-  %v4 = insertvalue %sollang.array.i32 %v4_1, i64 1, 2
-  %v7_data = call ptr @malloc(i64 8)
-  %v7_ptr0 = getelementptr i32, ptr %v7_data, i64 0
-  store i32 40, ptr %v7_ptr0, align 4
-  %v7_ptr1 = getelementptr i32, ptr %v7_data, i64 1
-  store i32 41, ptr %v7_ptr1, align 4
-  %v7_0 = insertvalue %sollang.array.i32 poison, ptr %v7_data, 0
-  %v7_1 = insertvalue %sollang.array.i32 %v7_0, i64 2, 1
-  %v7 = insertvalue %sollang.array.i32 %v7_1, i64 2, 2
+  %v4_1 = insertvalue %sollang.array.i32 %v4_0, i64 2, 1
+  %v4 = insertvalue %sollang.array.i32 %v4_1, i64 2, 2
+  %v8_data = call ptr @malloc(i64 4)
+  %v8_ptr0 = getelementptr i32, ptr %v8_data, i64 0
+  store i32 30, ptr %v8_ptr0, align 4
+  %v8_0 = insertvalue %sollang.array.i32 poison, ptr %v8_data, 0
+  %v8_1 = insertvalue %sollang.array.i32 %v8_0, i64 1, 1
+  %v8 = insertvalue %sollang.array.i32 %v8_1, i64 1, 2
   %v2_keys = call ptr @malloc(i64 10)
   %v2_controls = getelementptr i8, ptr %v2_keys, i64 8
   call void @llvm.memset.p0.i64(ptr %v2_controls, i8 0, i64 2, i1 false)
@@ -77,7 +85,7 @@ entry:
   store i32 1, ptr %v2_keys_ptr0, align 4
   %v2_control_ptr0 = getelementptr i8, ptr %v2_controls, i64 0
   %v2_control_hash_loaded0 = load i32, ptr %v2_keys_ptr0, align 4
-  %v2_control_hash_key0 = zext i32 %v2_control_hash_loaded0 to i64
+  %v2_control_hash_key0 = sext i32 %v2_control_hash_loaded0 to i64
   %v2_control_hash_high0 = lshr i64 %v2_control_hash_key0, 32
   %v2_control_hash_fold0 = xor i64 %v2_control_hash_key0, %v2_control_hash_high0
   %v2_control_hash0 = mul i64 %v2_control_hash_fold0, -7046029254386353131
@@ -90,10 +98,10 @@ entry:
   %v2_values_ptr0 = getelementptr %sollang.array.i32, ptr %v2_values, i64 0
   store %sollang.array.i32 %v4, ptr %v2_values_ptr0, align 8
   %v2_keys_ptr1 = getelementptr i32, ptr %v2_keys, i64 1
-  store i32 2, ptr %v2_keys_ptr1, align 4
+  store i32 5, ptr %v2_keys_ptr1, align 4
   %v2_control_ptr1 = getelementptr i8, ptr %v2_controls, i64 1
   %v2_control_hash_loaded1 = load i32, ptr %v2_keys_ptr1, align 4
-  %v2_control_hash_key1 = zext i32 %v2_control_hash_loaded1 to i64
+  %v2_control_hash_key1 = sext i32 %v2_control_hash_loaded1 to i64
   %v2_control_hash_high1 = lshr i64 %v2_control_hash_key1, 32
   %v2_control_hash_fold1 = xor i64 %v2_control_hash_key1, %v2_control_hash_high1
   %v2_control_hash1 = mul i64 %v2_control_hash_fold1, -7046029254386353131
@@ -104,7 +112,7 @@ entry:
   %v2_control_h21 = trunc i64 %v2_control_h2_value1 to i8
   store i8 %v2_control_h21, ptr %v2_control_ptr1, align 1
   %v2_values_ptr1 = getelementptr %sollang.array.i32, ptr %v2_values, i64 1
-  store %sollang.array.i32 %v7, ptr %v2_values_ptr1, align 8
+  store %sollang.array.i32 %v8, ptr %v2_values_ptr1, align 8
   %v2_0 = insertvalue %sollang.dict poison, ptr %v2_keys, 0
   %v2_1 = insertvalue %sollang.dict %v2_0, ptr %v2_values, 1
   %v2_2 = insertvalue %sollang.dict %v2_1, i64 2, 2
@@ -124,24 +132,49 @@ entry:
   %v20 = call %sollang.dict @sollang_m0_s0()
   store %sollang.dict %v20, ptr %slot16, align 8
   %v22 = load %sollang.dict, ptr %slot16, align 8
-  %take21_keys = extractvalue %sollang.dict %v22, 0
-  %take21_values = extractvalue %sollang.dict %v22, 1
-  %take21_length = extractvalue %sollang.dict %v22, 2
-  %take21_capacity = extractvalue %sollang.dict %v22, 3
-  br label %take21_find_start
+  %take21_dictionary = load %sollang.dict, ptr %slot16, align 8
+  %take21_keys = extractvalue %sollang.dict %take21_dictionary, 0
+  %take21_values = extractvalue %sollang.dict %take21_dictionary, 1
+  %take21_length = extractvalue %sollang.dict %take21_dictionary, 2
+  %take21_capacity = extractvalue %sollang.dict %take21_dictionary, 3
+  %take21_control_offset = mul i64 %take21_capacity, 4
+  %take21_controls = getelementptr i8, ptr %take21_keys, i64 %take21_control_offset
+  %take21_hash_key = sext i32 1 to i64
+  %take21_hash_high = lshr i64 %take21_hash_key, 32
+  %take21_hash_fold = xor i64 %take21_hash_key, %take21_hash_high
+  %take21_hash = mul i64 %take21_hash_fold, -7046029254386353131
+  %take21_h2_shifted = lshr i64 %take21_hash, 57
+  %take21_h2_raw = and i64 %take21_h2_shifted, 127
+  %take21_h2_zero = icmp eq i64 %take21_h2_raw, 0
+  %take21_h2_value = select i1 %take21_h2_zero, i64 1, i64 %take21_h2_raw
+  %take21_h2 = trunc i64 %take21_h2_value to i8
+  %take21_has_capacity = icmp ugt i64 %take21_capacity, 0
+  br i1 %take21_has_capacity, label %take21_find_start, label %take21_missing
 take21_find_start:
+  %take21_start_slot = urem i64 %take21_hash, %take21_capacity
   br label %take21_find
 take21_find:
-  %take21_find_index = phi i64 [ 0, %take21_find_start ], [ %take21_find_next, %take21_find_advance ]
-  %take21_find_active = icmp ult i64 %take21_find_index, %take21_length
+  %take21_find_index = phi i64 [ %take21_start_slot, %take21_find_start ], [ %take21_find_next, %take21_find_advance ]
+  %take21_find_probe = phi i64 [ 0, %take21_find_start ], [ %take21_find_probe_next, %take21_find_advance ]
+  %take21_find_active = icmp ult i64 %take21_find_probe, %take21_capacity
   br i1 %take21_find_active, label %take21_find_check, label %take21_missing
 take21_find_check:
+  %take21_control_ptr = getelementptr i8, ptr %take21_controls, i64 %take21_find_index
+  %take21_control = load i8, ptr %take21_control_ptr, align 1
+  %take21_empty = icmp eq i8 %take21_control, 0
+  br i1 %take21_empty, label %take21_missing, label %take21_h2_check
+take21_h2_check:
+  %take21_h2_match = icmp eq i8 %take21_control, %take21_h2
+  br i1 %take21_h2_match, label %take21_key_check, label %take21_find_advance
+take21_key_check:
   %take21_key_ptr = getelementptr i32, ptr %take21_keys, i64 %take21_find_index
   %take21_key = load i32, ptr %take21_key_ptr, align 4
-  %take21_found = icmp eq i32 %take21_key, 2
+  %take21_found = icmp eq i32 %take21_key, 1
   br i1 %take21_found, label %take21_hit, label %take21_find_advance
 take21_find_advance:
-  %take21_find_next = add i64 %take21_find_index, 1
+  %take21_find_next_unwrapped = add i64 %take21_find_index, 1
+  %take21_find_next = urem i64 %take21_find_next_unwrapped, %take21_capacity
+  %take21_find_probe_next = add i64 %take21_find_probe, 1
   br label %take21_find
 take21_missing:
   call void @llvm.trap()
@@ -149,34 +182,16 @@ take21_missing:
 take21_hit:
   %take21_value_ptr = getelementptr %sollang.array.i32, ptr %take21_values, i64 %take21_find_index
   %v21 = load %sollang.array.i32, ptr %take21_value_ptr, align 8
+  store i8 -1, ptr %take21_control_ptr, align 1
   %take21_new_length = sub i64 %take21_length, 1
-  br label %take21_shift
-take21_shift:
-  %take21_shift_index = phi i64 [ %take21_find_index, %take21_hit ], [ %take21_shift_next, %take21_shift_body ]
-  %take21_shift_active = icmp ult i64 %take21_shift_index, %take21_new_length
-  br i1 %take21_shift_active, label %take21_shift_body, label %take21_done
-take21_shift_body:
-  %take21_shift_next = add i64 %take21_shift_index, 1
-  %take21_source_key_ptr = getelementptr i32, ptr %take21_keys, i64 %take21_shift_next
-  %take21_source_key = load i32, ptr %take21_source_key_ptr, align 4
-  %take21_target_key_ptr = getelementptr i32, ptr %take21_keys, i64 %take21_shift_index
-  store i32 %take21_source_key, ptr %take21_target_key_ptr, align 4
-  %take21_source_value_ptr = getelementptr %sollang.array.i32, ptr %take21_values, i64 %take21_shift_next
-  %take21_source_value = load %sollang.array.i32, ptr %take21_source_value_ptr, align 8
-  %take21_target_value_ptr = getelementptr %sollang.array.i32, ptr %take21_values, i64 %take21_shift_index
-  store %sollang.array.i32 %take21_source_value, ptr %take21_target_value_ptr, align 8
-  br label %take21_shift
-take21_done:
-  %take21_dict0 = insertvalue %sollang.dict poison, ptr %take21_keys, 0
-  %take21_dict1 = insertvalue %sollang.dict %take21_dict0, ptr %take21_values, 1
-  %take21_dict2 = insertvalue %sollang.dict %take21_dict1, i64 %take21_new_length, 2
-  %take21_dict3 = insertvalue %sollang.dict %take21_dict2, i64 %take21_capacity, 3
-  store %sollang.dict %take21_dict3, ptr %slot16, align 8
+  %take21_result = insertvalue %sollang.dict %take21_dictionary, i64 %take21_new_length, 2
+  store %sollang.dict %take21_result, ptr %slot16, align 8
   store %sollang.array.i32 %v21, ptr %slot17, align 8
   %v25 = load %sollang.array.i32, ptr %slot17, align 8
   %v27 = load %sollang.dict, ptr %slot16, align 8
   %v24 = call i64 @sollang_m0_s1(%sollang.array.i32 %v25)
-  %v26 = extractvalue %sollang.dict %v27, 2
+  %v26_length_source = load %sollang.dict, ptr %slot16, align 8
+  %v26 = extractvalue %sollang.dict %v26_length_source, 2
   %while36_v31 = freeze i64 %v24
   %while36_v30 = icmp eq i64 %while36_v31, 2
   br i1 %while36_v30, label %while36_bool29_rhs, label %while36_exit

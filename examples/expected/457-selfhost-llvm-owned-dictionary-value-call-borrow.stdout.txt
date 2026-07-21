@@ -108,11 +108,19 @@ entry:
   %keys = extractvalue %sollang.dict %value, 0
   %values = extractvalue %sollang.dict %value, 1
   %length = extractvalue %sollang.dict %value, 2
+  %capacity = extractvalue %sollang.dict %value, 3
+  %control_offset = mul i64 %capacity, 4
+  %controls = getelementptr i8, ptr %keys, i64 %control_offset
   br label %loop
 loop:
   %index = phi i64 [ 0, %entry ], [ %next, %continue ]
-  %in_range = icmp ult i64 %index, %length
-  br i1 %in_range, label %item, label %done
+  %in_range = icmp ult i64 %index, %capacity
+  br i1 %in_range, label %check, label %done
+check:
+  %control_slot = getelementptr i8, ptr %controls, i64 %index
+  %control = load i8, ptr %control_slot, align 1
+  %occupied = icmp sgt i8 %control, 0
+  br i1 %occupied, label %item, label %continue
 item:
   %value_slot = getelementptr %sollang.struct.m0_s0, ptr %values, i64 %index
   %item_value = load %sollang.struct.m0_s0, ptr %value_slot, align 8
@@ -172,7 +180,7 @@ entry:
   store i32 1, ptr %v14_keys_ptr0, align 4
   %v14_control_ptr0 = getelementptr i8, ptr %v14_controls, i64 0
   %v14_control_hash_loaded0 = load i32, ptr %v14_keys_ptr0, align 4
-  %v14_control_hash_key0 = zext i32 %v14_control_hash_loaded0 to i64
+  %v14_control_hash_key0 = sext i32 %v14_control_hash_loaded0 to i64
   %v14_control_hash_high0 = lshr i64 %v14_control_hash_key0, 32
   %v14_control_hash_fold0 = xor i64 %v14_control_hash_key0, %v14_control_hash_high0
   %v14_control_hash0 = mul i64 %v14_control_hash_fold0, -7046029254386353131
@@ -197,7 +205,7 @@ entry:
   %v21_capacity = extractvalue %sollang.dict %v21_dictionary, 3
   %v21_control_offset = mul i64 %v21_capacity, 4
   %v21_controls = getelementptr i8, ptr %v21_keys, i64 %v21_control_offset
-  %v21_hash_key = zext i32 1 to i64
+  %v21_hash_key = sext i32 1 to i64
   %v21_hash_high = lshr i64 %v21_hash_key, 32
   %v21_hash_fold = xor i64 %v21_hash_key, %v21_hash_high
   %v21_hash = mul i64 %v21_hash_fold, -7046029254386353131
@@ -343,7 +351,7 @@ assign24_done:
   %v31_capacity = extractvalue %sollang.dict %v31_dictionary, 3
   %v31_control_offset = mul i64 %v31_capacity, 4
   %v31_controls = getelementptr i8, ptr %v31_keys, i64 %v31_control_offset
-  %v31_hash_key = zext i32 1 to i64
+  %v31_hash_key = sext i32 1 to i64
   %v31_hash_high = lshr i64 %v31_hash_key, 32
   %v31_hash_fold = xor i64 %v31_hash_key, %v31_hash_high
   %v31_hash = mul i64 %v31_hash_fold, -7046029254386353131
@@ -442,24 +450,49 @@ dict31_missing:
 dict31_hit:
   %v31_value_ptr = getelementptr %sollang.struct.m0_s0, ptr %v31_values, i64 %v31_group_candidate_slot
   %v31 = load %sollang.struct.m0_s0, ptr %v31_value_ptr, align 8
-  %take34_keys = extractvalue %sollang.dict %v35, 0
-  %take34_values = extractvalue %sollang.dict %v35, 1
-  %take34_length = extractvalue %sollang.dict %v35, 2
-  %take34_capacity = extractvalue %sollang.dict %v35, 3
-  br label %take34_find_start
+  %take34_dictionary = load %sollang.dict, ptr %slot10, align 8
+  %take34_keys = extractvalue %sollang.dict %take34_dictionary, 0
+  %take34_values = extractvalue %sollang.dict %take34_dictionary, 1
+  %take34_length = extractvalue %sollang.dict %take34_dictionary, 2
+  %take34_capacity = extractvalue %sollang.dict %take34_dictionary, 3
+  %take34_control_offset = mul i64 %take34_capacity, 4
+  %take34_controls = getelementptr i8, ptr %take34_keys, i64 %take34_control_offset
+  %take34_hash_key = sext i32 1 to i64
+  %take34_hash_high = lshr i64 %take34_hash_key, 32
+  %take34_hash_fold = xor i64 %take34_hash_key, %take34_hash_high
+  %take34_hash = mul i64 %take34_hash_fold, -7046029254386353131
+  %take34_h2_shifted = lshr i64 %take34_hash, 57
+  %take34_h2_raw = and i64 %take34_h2_shifted, 127
+  %take34_h2_zero = icmp eq i64 %take34_h2_raw, 0
+  %take34_h2_value = select i1 %take34_h2_zero, i64 1, i64 %take34_h2_raw
+  %take34_h2 = trunc i64 %take34_h2_value to i8
+  %take34_has_capacity = icmp ugt i64 %take34_capacity, 0
+  br i1 %take34_has_capacity, label %take34_find_start, label %take34_missing
 take34_find_start:
+  %take34_start_slot = urem i64 %take34_hash, %take34_capacity
   br label %take34_find
 take34_find:
-  %take34_find_index = phi i64 [ 0, %take34_find_start ], [ %take34_find_next, %take34_find_advance ]
-  %take34_find_active = icmp ult i64 %take34_find_index, %take34_length
+  %take34_find_index = phi i64 [ %take34_start_slot, %take34_find_start ], [ %take34_find_next, %take34_find_advance ]
+  %take34_find_probe = phi i64 [ 0, %take34_find_start ], [ %take34_find_probe_next, %take34_find_advance ]
+  %take34_find_active = icmp ult i64 %take34_find_probe, %take34_capacity
   br i1 %take34_find_active, label %take34_find_check, label %take34_missing
 take34_find_check:
+  %take34_control_ptr = getelementptr i8, ptr %take34_controls, i64 %take34_find_index
+  %take34_control = load i8, ptr %take34_control_ptr, align 1
+  %take34_empty = icmp eq i8 %take34_control, 0
+  br i1 %take34_empty, label %take34_missing, label %take34_h2_check
+take34_h2_check:
+  %take34_h2_match = icmp eq i8 %take34_control, %take34_h2
+  br i1 %take34_h2_match, label %take34_key_check, label %take34_find_advance
+take34_key_check:
   %take34_key_ptr = getelementptr i32, ptr %take34_keys, i64 %take34_find_index
   %take34_key = load i32, ptr %take34_key_ptr, align 4
   %take34_found = icmp eq i32 %take34_key, 1
   br i1 %take34_found, label %take34_hit, label %take34_find_advance
 take34_find_advance:
-  %take34_find_next = add i64 %take34_find_index, 1
+  %take34_find_next_unwrapped = add i64 %take34_find_index, 1
+  %take34_find_next = urem i64 %take34_find_next_unwrapped, %take34_capacity
+  %take34_find_probe_next = add i64 %take34_find_probe, 1
   br label %take34_find
 take34_missing:
   call void @llvm.trap()
@@ -467,29 +500,10 @@ take34_missing:
 take34_hit:
   %take34_value_ptr = getelementptr %sollang.struct.m0_s0, ptr %take34_values, i64 %take34_find_index
   %v34 = load %sollang.struct.m0_s0, ptr %take34_value_ptr, align 8
+  store i8 -1, ptr %take34_control_ptr, align 1
   %take34_new_length = sub i64 %take34_length, 1
-  br label %take34_shift
-take34_shift:
-  %take34_shift_index = phi i64 [ %take34_find_index, %take34_hit ], [ %take34_shift_next, %take34_shift_body ]
-  %take34_shift_active = icmp ult i64 %take34_shift_index, %take34_new_length
-  br i1 %take34_shift_active, label %take34_shift_body, label %take34_done
-take34_shift_body:
-  %take34_shift_next = add i64 %take34_shift_index, 1
-  %take34_source_key_ptr = getelementptr i32, ptr %take34_keys, i64 %take34_shift_next
-  %take34_source_key = load i32, ptr %take34_source_key_ptr, align 4
-  %take34_target_key_ptr = getelementptr i32, ptr %take34_keys, i64 %take34_shift_index
-  store i32 %take34_source_key, ptr %take34_target_key_ptr, align 4
-  %take34_source_value_ptr = getelementptr %sollang.struct.m0_s0, ptr %take34_values, i64 %take34_shift_next
-  %take34_source_value = load %sollang.struct.m0_s0, ptr %take34_source_value_ptr, align 8
-  %take34_target_value_ptr = getelementptr %sollang.struct.m0_s0, ptr %take34_values, i64 %take34_shift_index
-  store %sollang.struct.m0_s0 %take34_source_value, ptr %take34_target_value_ptr, align 8
-  br label %take34_shift
-take34_done:
-  %take34_dict0 = insertvalue %sollang.dict poison, ptr %take34_keys, 0
-  %take34_dict1 = insertvalue %sollang.dict %take34_dict0, ptr %take34_values, 1
-  %take34_dict2 = insertvalue %sollang.dict %take34_dict1, i64 %take34_new_length, 2
-  %take34_dict3 = insertvalue %sollang.dict %take34_dict2, i64 %take34_capacity, 3
-  store %sollang.dict %take34_dict3, ptr %slot10, align 8
+  %take34_result = insertvalue %sollang.dict %take34_dictionary, i64 %take34_new_length, 2
+  store %sollang.dict %take34_result, ptr %slot10, align 8
   %v30 = call i32 @sollang_m0_s3(%sollang.struct.m0_s0 %v31)
   store %sollang.struct.m0_s0 %v34, ptr %slot13, align 8
   %v37_expression_literal0 = getelementptr i8, ptr @sollang_str_38, i64 0

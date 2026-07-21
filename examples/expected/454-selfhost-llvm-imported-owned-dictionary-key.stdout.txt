@@ -100,11 +100,19 @@ entry:
   %keys = extractvalue %sollang.dict %value, 0
   %values = extractvalue %sollang.dict %value, 1
   %length = extractvalue %sollang.dict %value, 2
+  %capacity = extractvalue %sollang.dict %value, 3
+  %control_offset = mul i64 %capacity, 32
+  %controls = getelementptr i8, ptr %keys, i64 %control_offset
   br label %loop
 loop:
   %index = phi i64 [ 0, %entry ], [ %next, %continue ]
-  %in_range = icmp ult i64 %index, %length
-  br i1 %in_range, label %item, label %done
+  %in_range = icmp ult i64 %index, %capacity
+  br i1 %in_range, label %check, label %done
+check:
+  %control_slot = getelementptr i8, ptr %controls, i64 %index
+  %control = load i8, ptr %control_slot, align 1
+  %occupied = icmp sgt i8 %control, 0
+  br i1 %occupied, label %item, label %continue
 item:
   %key_slot = getelementptr %sollang.struct.m1_s0, ptr %keys, i64 %index
   %key = load %sollang.struct.m1_s0, ptr %key_slot, align 8
@@ -429,18 +437,34 @@ dict38_missing:
 dict38_hit:
   %v38_value_ptr = getelementptr i32, ptr %v38_values, i64 %v38_group_candidate_slot
   %v38 = load i32, ptr %v38_value_ptr, align 4
-  %take41_keys = extractvalue %sollang.dict %v42, 0
-  %take41_values = extractvalue %sollang.dict %v42, 1
-  %take41_length = extractvalue %sollang.dict %v42, 2
-  %take41_capacity = extractvalue %sollang.dict %v42, 3
-  br label %take41_find_start
+  %take41_dictionary = load %sollang.dict, ptr %slot9, align 8
+  %take41_keys = extractvalue %sollang.dict %take41_dictionary, 0
+  %take41_values = extractvalue %sollang.dict %take41_dictionary, 1
+  %take41_length = extractvalue %sollang.dict %take41_dictionary, 2
+  %take41_capacity = extractvalue %sollang.dict %take41_dictionary, 3
+  %take41_control_offset = mul i64 %take41_capacity, 32
+  %take41_controls = getelementptr i8, ptr %take41_keys, i64 %take41_control_offset
+  %take41_hash = add i64 0, 0
+  %take41_h2 = add i8 0, 1
+  %take41_has_capacity = icmp ugt i64 %take41_capacity, 0
+  br i1 %take41_has_capacity, label %take41_find_start, label %take41_missing
 take41_find_start:
+  %take41_start_slot = urem i64 %take41_hash, %take41_capacity
   br label %take41_find
 take41_find:
-  %take41_find_index = phi i64 [ 0, %take41_find_start ], [ %take41_find_next, %take41_find_advance ]
-  %take41_find_active = icmp ult i64 %take41_find_index, %take41_length
+  %take41_find_index = phi i64 [ %take41_start_slot, %take41_find_start ], [ %take41_find_next, %take41_find_advance ]
+  %take41_find_probe = phi i64 [ 0, %take41_find_start ], [ %take41_find_probe_next, %take41_find_advance ]
+  %take41_find_active = icmp ult i64 %take41_find_probe, %take41_capacity
   br i1 %take41_find_active, label %take41_find_check, label %take41_missing
 take41_find_check:
+  %take41_control_ptr = getelementptr i8, ptr %take41_controls, i64 %take41_find_index
+  %take41_control = load i8, ptr %take41_control_ptr, align 1
+  %take41_empty = icmp eq i8 %take41_control, 0
+  br i1 %take41_empty, label %take41_missing, label %take41_h2_check
+take41_h2_check:
+  %take41_h2_match = icmp eq i8 %take41_control, %take41_h2
+  br i1 %take41_h2_match, label %take41_key_check, label %take41_find_advance
+take41_key_check:
   %take41_key_ptr = getelementptr %sollang.struct.m1_s0, ptr %take41_keys, i64 %take41_find_index
   %take41_key = load %sollang.struct.m1_s0, ptr %take41_key_ptr, align 8
   %take41_stored_eq = call i32 @sollang_m1_s10(%sollang.struct.m1_s0 %take41_key)
@@ -448,7 +472,9 @@ take41_find_check:
   %take41_found = icmp eq i32 %take41_stored_eq, %take41_query_eq
   br i1 %take41_found, label %take41_hit, label %take41_find_advance
 take41_find_advance:
-  %take41_find_next = add i64 %take41_find_index, 1
+  %take41_find_next_unwrapped = add i64 %take41_find_index, 1
+  %take41_find_next = urem i64 %take41_find_next_unwrapped, %take41_capacity
+  %take41_find_probe_next = add i64 %take41_find_probe, 1
   br label %take41_find
 take41_missing:
   call void @llvm.trap()
@@ -457,29 +483,10 @@ take41_hit:
   %take41_value_ptr = getelementptr i32, ptr %take41_values, i64 %take41_find_index
   %v41 = load i32, ptr %take41_value_ptr, align 4
   call void @sollang_drop_t25(%sollang.struct.m1_s0 %take41_key)
+  store i8 -1, ptr %take41_control_ptr, align 1
   %take41_new_length = sub i64 %take41_length, 1
-  br label %take41_shift
-take41_shift:
-  %take41_shift_index = phi i64 [ %take41_find_index, %take41_hit ], [ %take41_shift_next, %take41_shift_body ]
-  %take41_shift_active = icmp ult i64 %take41_shift_index, %take41_new_length
-  br i1 %take41_shift_active, label %take41_shift_body, label %take41_done
-take41_shift_body:
-  %take41_shift_next = add i64 %take41_shift_index, 1
-  %take41_source_key_ptr = getelementptr %sollang.struct.m1_s0, ptr %take41_keys, i64 %take41_shift_next
-  %take41_source_key = load %sollang.struct.m1_s0, ptr %take41_source_key_ptr, align 8
-  %take41_target_key_ptr = getelementptr %sollang.struct.m1_s0, ptr %take41_keys, i64 %take41_shift_index
-  store %sollang.struct.m1_s0 %take41_source_key, ptr %take41_target_key_ptr, align 8
-  %take41_source_value_ptr = getelementptr i32, ptr %take41_values, i64 %take41_shift_next
-  %take41_source_value = load i32, ptr %take41_source_value_ptr, align 4
-  %take41_target_value_ptr = getelementptr i32, ptr %take41_values, i64 %take41_shift_index
-  store i32 %take41_source_value, ptr %take41_target_value_ptr, align 4
-  br label %take41_shift
-take41_done:
-  %take41_dict0 = insertvalue %sollang.dict poison, ptr %take41_keys, 0
-  %take41_dict1 = insertvalue %sollang.dict %take41_dict0, ptr %take41_values, 1
-  %take41_dict2 = insertvalue %sollang.dict %take41_dict1, i64 %take41_new_length, 2
-  %take41_dict3 = insertvalue %sollang.dict %take41_dict2, i64 %take41_capacity, 3
-  store %sollang.dict %take41_dict3, ptr %slot9, align 8
+  %take41_result = insertvalue %sollang.dict %take41_dictionary, i64 %take41_new_length, 2
+  store %sollang.dict %take41_result, ptr %slot9, align 8
   %v44_expression_literal0 = getelementptr i8, ptr @sollang_str_45, i64 0
   call void @sollang_runtime_print(ptr %v44_expression_literal0, i64 19, i1 false)
   call void @sollang_runtime_print_i32(i32 %v28, i1 false)

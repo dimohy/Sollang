@@ -3049,3 +3049,49 @@ The complete Windows self-host suite passes **343/343**. Native mask lowering,
 tombstones, generic key/value mutation, and one-byte/non-integer hashing remain,
 so formal progress stays **54/60 (90.0%)**, with **6 equivalent gates
 remaining**.
+
+## D240/example 555 - One-byte Integer Key Hashing
+
+Self-host dictionary literal and lookup lowering now recognize the semantic
+width and signedness of `Int8` and `UInt8`. Signed bytes are sign-extended and
+unsigned bytes are zero-extended before the common 64-bit H2 mix in normal,
+region, and entry paths. The reference compiler accepts all fixed-width integer
+families as dictionary keys, and self-host conversion expressions resolve
+`Int8` and `UInt8` to their canonical builtin type IDs.
+
+Example 555 assembles, links, and executes signed, unsigned, and region-local
+byte-key lookups on Windows and Linux. This closes the one-byte integer slice;
+non-integer hashing and generic key/value mutation remain open. Formal progress
+stays **54/60 (90.0%)**, with **6 equivalent gates remaining**.
+
+## D241/example 556 - Tombstone-Aware Dictionary Mutation
+
+Self-host dictionary deletion now preserves the hash-table probe invariant.
+Control byte `255` marks a deleted slot, while `0` remains the terminating empty
+state and positive bytes remain H2 fingerprints. `take` marks the located slot
+instead of shifting storage; `put` remembers and reuses the first tombstone only
+after proving that the key is absent. Growth rehash skips tombstones, compacting
+them without adding an ABI field. Mutable dictionary length reads reload the
+current slot after mutation.
+
+Example 556 proves a collision chain across deletion and tombstone reuse, then
+assembles, links, and executes the result on Windows and Linux. This closes a
+correctness boundary inside the partial generic-container/tooling gate but does
+not yet complete generic key/value mutation or non-integer hashing. Formal
+progress therefore remains **54/60 (90.0%)**, with **6 equivalent gates
+remaining**. The combined Windows self-host suite passes **345/345**.
+
+## D242 - Cross-process Validation Isolation
+
+The example runner retains worker-level parallelism but uses named mutexes for
+the two artifact identities that must not overlap across independent sessions:
+the shared reusable self-host bootstrap and each repository/target/test output.
+Unrelated cases still execute concurrently. Repeated full-suite failures caused
+by one process deleting another process's `.slg-tmp` directory are therefore
+prevented without turning the suite into a global serial run.
+
+An isolated Release build of the runner has zero warnings and errors, and two
+simultaneous example-410 invocations both pass. The complete Windows self-host
+suite passes **345/345**. This improves validation reliability rather than
+adding a language capability, so formal progress stays **54/60 (90.0%)**, with
+**6 equivalent gates remaining**.

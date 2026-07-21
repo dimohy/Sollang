@@ -1,0 +1,25 @@
+import sollang.compiler.llvm.text as llvm
+
+# Verifies signed and unsigned one-byte dictionary H2 hashing in every emitter path.
+main {
+    [
+        """
+        lookupSigned values: {Int8: Int} -> Int => values[Int8(-7)]
+
+        lookupUnsigned values: {UInt8: Int} -> Int => values[UInt8(250)]
+
+        main {
+            { Int8(-7): 70, Int8(3): 30 } -> lookupSigned => signed
+            { UInt8(250): 2500, UInt8(4): 40 } -> lookupUnsigned => unsigned
+            signed == 70 -> if { "signed" -> println }
+            unsigned == 2500 -> if { "unsigned" -> println }
+            true -> if {
+                { Int8(-9): 90, Int8(5): 50 } => local
+                local[Int8(-9)] == 90 -> if { "region" -> println }
+            }
+        }
+        """,
+        ~
+    ] => sources!
+    sources! -> llvm.emit
+}

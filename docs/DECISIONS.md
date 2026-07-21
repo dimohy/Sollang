@@ -9430,3 +9430,61 @@ open, so formal progress stays **54/60 (90.0%)**.
 Research basis:
 
 - [Abseil Swiss Tables Design Notes](https://abseil.io/about/design/swisstables)
+
+## D240 - Signed and Unsigned Byte-Key Hashing
+
+The reference semantic compiler now accepts every fixed-width integer family
+as a dictionary key, while the self-host semantic conversion tables use the
+canonical builtin order (`Int8` type 3 and `UInt8` type 8). Dictionary literal
+and indexed-lookup lowering derive one-byte hash width from the semantic integer
+symbol rather than treating every one-byte key as a non-hashable fallback.
+
+Signed keys sign-extend and unsigned keys zero-extend before the shared 64-bit
+mix. The normal, region, and entry emitter paths apply the same rule. Example
+555 proves `Int8(-7)`, `UInt8(250)`, and a region-local `Int8(-9)` dictionary;
+its LLVM assembles, links, and executes on Windows and Linux. Wider integer
+families already use their storage widths, while non-integer hashing and generic
+mutation remain open. Formal progress stays **54/60 (90.0%)**.
+
+## D241 - Dictionary Tombstones Preserve Probe Chains
+
+The self-host LLVM dictionary now uses three control-byte states without
+changing the four-field `%sollang.dict` ABI: `0` is empty, `1..127` is an H2
+fingerprint, and `255` is deleted. Dictionary `take` hashes and probes the key,
+returns the value, drops an owned key when required, writes the deleted marker,
+and decrements the live length without shifting unrelated slots. Lookup passes
+over deleted controls and still terminates at an empty control.
+
+The `put` probe remembers the first deleted slot, continues searching for an
+existing equal key, and reuses that slot only when insertion is required. A
+full probe also reuses a remembered tombstone instead of growing. Rehash copies
+only positive H2 controls, so deleted storage is compacted naturally. Mutable
+dictionary `len` now reloads its source slot at the extraction point, preventing
+a pre-mutation SSA snapshot from hiding the updated length.
+
+Example 556 uses colliding integer keys `1`, `5`, and `9`: after taking `1`, it
+still finds `5`, reuses the tombstone for `9`, and reports length two. The
+generated LLVM assembles, links, and executes on Windows and Linux. Generic
+key/value mutation and non-integer hashing remain open, so formal progress stays
+**54/60 (90.0%)**. The combined Windows self-host suite passes **345/345**.
+
+Research basis:
+
+- [Abseil Swiss Tables Design Notes](https://abseil.io/about/design/swisstables)
+- [`hashbrown::HashTable`](https://docs.rs/hashbrown/latest/hashbrown/struct.HashTable.html)
+
+## D242 - Cross-process Example Artifact Locks
+
+The example runner now serializes only colliding work across runner processes.
+A repository-scoped named mutex protects the reusable self-host compiler
+bootstrap, and a repository/target/test-scoped mutex protects each expected or
+diagnostic artifact path. Different tests remain parallel inside and across
+processes; only two invocations of the same case wait for one another.
+
+This fixes `.slg-tmp` deletion and temporary object rename failures observed
+when two sessions ran the same self-host case concurrently. Two simultaneous
+isolated-runner invocations of example 410 both pass, with the second duration
+including its short lock wait. The isolated Release test-runner build completes
+with zero warnings and zero errors, and the complete Windows self-host suite
+passes **345/345**. This reliability checkpoint does not change the formal
+**54/60 (90.0%)** language-capability score.

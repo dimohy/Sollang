@@ -360,8 +360,11 @@ values. The self-host LLVM backend now uses control bytes, integer H2 hashes,
 wrapped eight-slot group scans with direct candidate selection, and an `Int`
 dictionary `put` path that updates
 existing keys in place, inserts into available slots, and doubles and rehashes
-only when the next insertion would exceed 87.5% load. General key/value
-families remain open. Local package
+only when the next insertion would exceed 87.5% load. Dictionary `take` leaves
+a reusable tombstone, preserving collision chains without shifting entries.
+Signed and unsigned one-byte integer keys now use their real H2 hash width in
+all self-host emitter paths. Generic mutation and non-integer key families
+remain open. Local package
 identities, SemVer requirements, content-pinned Git dependencies, shared
 deterministic workspace locks, and self-host parsers for both versions and
 lock manifests and registry-index selection are implemented. Exact

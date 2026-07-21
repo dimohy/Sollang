@@ -236,6 +236,20 @@ var selfHostDriverSourcesPath = Path.Combine(
     "selfhost-sollangc-driver.sources.txt");
 if (expectedFiles.Any(IsReusableSelfHostCompilerTest))
 {
+    using var bootstrapMutex = new Mutex(
+        initiallyOwned: false,
+        TestMutexName(repoRoot, "selfhost-bootstrap"));
+    var bootstrapLockTaken = false;
+    try
+    {
+        try
+        {
+            bootstrapLockTaken = bootstrapMutex.WaitOne();
+        }
+        catch (AbandonedMutexException)
+        {
+            bootstrapLockTaken = true;
+        }
     var selfHostDriverSources = File.ReadLines(selfHostDriverSourcesPath)
         .Where(static line => !string.IsNullOrWhiteSpace(line))
         .Select(line => Path.GetFullPath(line.Trim(), repoRoot))
@@ -276,6 +290,14 @@ if (expectedFiles.Any(IsReusableSelfHostCompilerTest))
         Console.WriteLine("[selfhost bootstrap] REUSE current native sollangc");
     }
     Console.Out.Flush();
+    }
+    finally
+    {
+        if (bootstrapLockTaken)
+        {
+            bootstrapMutex.ReleaseMutex();
+        }
+    }
 }
 
 if (expectedFiles.Any(file => string.Equals(
@@ -328,8 +350,20 @@ Parallel.ForEach(
     var name = Path.GetFileName(expectedFile)[..^".stdout.txt".Length];
     var passed = false;
     ReportStarted(name);
+    using var testMutex = new Mutex(
+        initiallyOwned: false,
+        TestMutexName(repoRoot, $"expected:{TestTargetName(testTarget)}:{name}"));
+    var testLockTaken = false;
     try
     {
+    try
+    {
+        testLockTaken = testMutex.WaitOne();
+    }
+    catch (AbandonedMutexException)
+    {
+        testLockTaken = true;
+    }
     var defaultSourcePath = Path.Combine(repoRoot, "examples", name + ".slg");
     var targetSourcePath = Path.Combine(repoRoot, "examples", name + "." + TestTargetName(testTarget) + ".slg");
     var sourcePath = File.Exists(targetSourcePath) ? targetSourcePath : defaultSourcePath;
@@ -679,6 +713,10 @@ Parallel.ForEach(
     }
     finally
     {
+        if (testLockTaken)
+        {
+            testMutex.ReleaseMutex();
+        }
         ReportCompleted(name, passed, stopwatch.Elapsed);
     }
 });
@@ -690,8 +728,20 @@ Parallel.ForEach(diagnosticFiles, new ParallelOptions { MaxDegreeOfParallelism =
     var displayName = $"diagnostic/{name}";
     var passed = false;
     ReportStarted(displayName);
+    using var testMutex = new Mutex(
+        initiallyOwned: false,
+        TestMutexName(repoRoot, $"diagnostic:{TestTargetName(testTarget)}:{name}"));
+    var testLockTaken = false;
     try
     {
+    try
+    {
+        testLockTaken = testMutex.WaitOne();
+    }
+    catch (AbandonedMutexException)
+    {
+        testLockTaken = true;
+    }
     var expectedPath = Path.Combine(diagnosticDir, name + ".stderr.contains.txt");
     var sourcesPath = Path.Combine(diagnosticDir, name + ".sources.txt");
     var diagnosticTarget = name.Contains("-wasm32-", StringComparison.Ordinal)
@@ -756,6 +806,10 @@ Parallel.ForEach(diagnosticFiles, new ParallelOptions { MaxDegreeOfParallelism =
     }
     finally
     {
+        if (testLockTaken)
+        {
+            testMutex.ReleaseMutex();
+        }
         ReportCompleted(displayName, passed, stopwatch.Elapsed);
     }
 });
@@ -768,6 +822,12 @@ if (failures == 0)
 
 Console.Error.WriteLine($"{failures} example test(s) failed.");
 return 1;
+
+static string TestMutexName(string repoRoot, string scope)
+{
+    var identity = Encoding.UTF8.GetBytes(Path.GetFullPath(repoRoot) + "\n" + scope);
+    return "Sollang.ExampleTests." + Convert.ToHexString(SHA256.HashData(identity));
+}
 
 static string FindRepositoryRoot(string startPath)
 {

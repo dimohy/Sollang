@@ -64,6 +64,7 @@ entry:
   %keys = extractvalue %sollang.dict %value, 0
   %values = extractvalue %sollang.dict %value, 1
   %length = extractvalue %sollang.dict %value, 2
+  %capacity = extractvalue %sollang.dict %value, 3
   call void @free(ptr %keys)
   call void @free(ptr %values)
   ret void
@@ -83,7 +84,7 @@ entry:
   store i32 1, ptr %v2_keys_ptr0, align 4
   %v2_control_ptr0 = getelementptr i8, ptr %v2_controls, i64 0
   %v2_control_hash_loaded0 = load i32, ptr %v2_keys_ptr0, align 4
-  %v2_control_hash_key0 = zext i32 %v2_control_hash_loaded0 to i64
+  %v2_control_hash_key0 = sext i32 %v2_control_hash_loaded0 to i64
   %v2_control_hash_high0 = lshr i64 %v2_control_hash_key0, 32
   %v2_control_hash_fold0 = xor i64 %v2_control_hash_key0, %v2_control_hash_high0
   %v2_control_hash0 = mul i64 %v2_control_hash_fold0, -7046029254386353131
@@ -99,7 +100,7 @@ entry:
   store i32 2, ptr %v2_keys_ptr1, align 4
   %v2_control_ptr1 = getelementptr i8, ptr %v2_controls, i64 1
   %v2_control_hash_loaded1 = load i32, ptr %v2_keys_ptr1, align 4
-  %v2_control_hash_key1 = zext i32 %v2_control_hash_loaded1 to i64
+  %v2_control_hash_key1 = sext i32 %v2_control_hash_loaded1 to i64
   %v2_control_hash_high1 = lshr i64 %v2_control_hash_key1, 32
   %v2_control_hash_fold1 = xor i64 %v2_control_hash_key1, %v2_control_hash_high1
   %v2_control_hash1 = mul i64 %v2_control_hash_fold1, -7046029254386353131
@@ -143,11 +144,16 @@ put7_lookup_start:
 put7_lookup:
   %put7_lookup_slot = phi i64 [ %put7_lookup_start_slot, %put7_lookup_start ], [ %put7_lookup_next, %put7_lookup_advance ]
   %put7_lookup_probe = phi i64 [ 0, %put7_lookup_start ], [ %put7_lookup_probe_next, %put7_lookup_advance ]
+  %put7_lookup_first_deleted = phi i64 [ %put7_old_capacity, %put7_lookup_start ], [ %put7_lookup_next_first_deleted, %put7_lookup_advance ]
   %put7_lookup_active = icmp ult i64 %put7_lookup_probe, %put7_old_capacity
-  br i1 %put7_lookup_active, label %put7_lookup_check, label %put7_grow
+  br i1 %put7_lookup_active, label %put7_lookup_check, label %put7_lookup_exhausted
 put7_lookup_check:
   %put7_lookup_control_ptr = getelementptr i8, ptr %put7_old_controls, i64 %put7_lookup_slot
   %put7_lookup_control = load i8, ptr %put7_lookup_control_ptr, align 1
+  %put7_lookup_deleted = icmp eq i8 %put7_lookup_control, -1
+  %put7_lookup_without_deleted = icmp eq i64 %put7_lookup_first_deleted, %put7_old_capacity
+  %put7_lookup_capture_deleted = and i1 %put7_lookup_deleted, %put7_lookup_without_deleted
+  %put7_lookup_captured_deleted = select i1 %put7_lookup_capture_deleted, i64 %put7_lookup_slot, i64 %put7_lookup_first_deleted
   %put7_lookup_empty = icmp eq i8 %put7_lookup_control, 0
   br i1 %put7_lookup_empty, label %put7_new_key, label %put7_lookup_h2
 put7_lookup_h2:
@@ -162,23 +168,30 @@ put7_lookup_advance:
   %put7_lookup_next_unwrapped = add i64 %put7_lookup_slot, 1
   %put7_lookup_next = urem i64 %put7_lookup_next_unwrapped, %put7_old_capacity
   %put7_lookup_probe_next = add i64 %put7_lookup_probe, 1
+  %put7_lookup_next_first_deleted = add i64 %put7_lookup_captured_deleted, 0
   br label %put7_lookup
+put7_lookup_exhausted:
+  %put7_lookup_reuses_deleted = icmp ne i64 %put7_lookup_first_deleted, %put7_old_capacity
+  br i1 %put7_lookup_reuses_deleted, label %put7_new_key, label %put7_grow
 put7_update_in_place:
   %put7_update_in_place_ptr = getelementptr i32, ptr %put7_old_values, i64 %put7_lookup_slot
   store i32 30, ptr %put7_update_in_place_ptr, align 4
   br label %put7_complete
 put7_new_key:
+  %put7_new_key_has_deleted = icmp ne i64 %put7_lookup_first_deleted, %put7_old_capacity
+  %put7_new_key_slot = select i1 %put7_new_key_has_deleted, i64 %put7_lookup_first_deleted, i64 %put7_lookup_slot
   %put7_candidate_length = add i64 %put7_old_length, 1
   %put7_candidate_scaled = mul i64 %put7_candidate_length, 8
   %put7_load_limit = mul i64 %put7_old_capacity, 7
   %put7_fits = icmp ule i64 %put7_candidate_scaled, %put7_load_limit
   br i1 %put7_fits, label %put7_insert_in_place, label %put7_grow
 put7_insert_in_place:
-  %put7_insert_in_place_key_ptr = getelementptr i32, ptr %put7_old_keys, i64 %put7_lookup_slot
+  %put7_insert_in_place_key_ptr = getelementptr i32, ptr %put7_old_keys, i64 %put7_new_key_slot
   store i32 3, ptr %put7_insert_in_place_key_ptr, align 4
-  %put7_insert_in_place_value_ptr = getelementptr i32, ptr %put7_old_values, i64 %put7_lookup_slot
+  %put7_insert_in_place_value_ptr = getelementptr i32, ptr %put7_old_values, i64 %put7_new_key_slot
   store i32 30, ptr %put7_insert_in_place_value_ptr, align 4
-  store i8 %put7_h2, ptr %put7_lookup_control_ptr, align 1
+  %put7_insert_in_place_control_ptr = getelementptr i8, ptr %put7_old_controls, i64 %put7_new_key_slot
+  store i8 %put7_h2, ptr %put7_insert_in_place_control_ptr, align 1
   %put7_in_place_result = insertvalue %sollang.dict %put7_dictionary, i64 %put7_candidate_length, 2
   store %sollang.dict %put7_in_place_result, ptr %slot1, align 8
   br label %put7_complete
@@ -203,14 +216,14 @@ put7_rehash_check:
   %put7_old_control_ptr = getelementptr i8, ptr %put7_old_keys, i64 %put7_old_control_offset
   %put7_old_control_slot = getelementptr i8, ptr %put7_old_control_ptr, i64 %put7_rehash_index
   %put7_old_control = load i8, ptr %put7_old_control_slot, align 1
-  %put7_rehash_occupied = icmp ne i8 %put7_old_control, 0
+  %put7_rehash_occupied = icmp sgt i8 %put7_old_control, 0
   br i1 %put7_rehash_occupied, label %put7_rehash_copy, label %put7_rehash_advance
 put7_rehash_copy:
   %put7_rehash_key_ptr = getelementptr i32, ptr %put7_old_keys, i64 %put7_rehash_index
   %put7_rehash_key = load i32, ptr %put7_rehash_key_ptr, align 4
   %put7_rehash_value_ptr = getelementptr i32, ptr %put7_old_values, i64 %put7_rehash_index
   %put7_rehash_value = load i32, ptr %put7_rehash_value_ptr, align 4
-  %put7_rehash_key64 = zext i32 %put7_rehash_key to i64
+  %put7_rehash_key64 = sext i32 %put7_rehash_key to i64
   %put7_rehash_hash_high = lshr i64 %put7_rehash_key64, 32
   %put7_rehash_hash_fold = xor i64 %put7_rehash_key64, %put7_rehash_hash_high
   %put7_rehash_hash = mul i64 %put7_rehash_hash_fold, -7046029254386353131
@@ -309,11 +322,16 @@ put11_lookup_start:
 put11_lookup:
   %put11_lookup_slot = phi i64 [ %put11_lookup_start_slot, %put11_lookup_start ], [ %put11_lookup_next, %put11_lookup_advance ]
   %put11_lookup_probe = phi i64 [ 0, %put11_lookup_start ], [ %put11_lookup_probe_next, %put11_lookup_advance ]
+  %put11_lookup_first_deleted = phi i64 [ %put11_old_capacity, %put11_lookup_start ], [ %put11_lookup_next_first_deleted, %put11_lookup_advance ]
   %put11_lookup_active = icmp ult i64 %put11_lookup_probe, %put11_old_capacity
-  br i1 %put11_lookup_active, label %put11_lookup_check, label %put11_grow
+  br i1 %put11_lookup_active, label %put11_lookup_check, label %put11_lookup_exhausted
 put11_lookup_check:
   %put11_lookup_control_ptr = getelementptr i8, ptr %put11_old_controls, i64 %put11_lookup_slot
   %put11_lookup_control = load i8, ptr %put11_lookup_control_ptr, align 1
+  %put11_lookup_deleted = icmp eq i8 %put11_lookup_control, -1
+  %put11_lookup_without_deleted = icmp eq i64 %put11_lookup_first_deleted, %put11_old_capacity
+  %put11_lookup_capture_deleted = and i1 %put11_lookup_deleted, %put11_lookup_without_deleted
+  %put11_lookup_captured_deleted = select i1 %put11_lookup_capture_deleted, i64 %put11_lookup_slot, i64 %put11_lookup_first_deleted
   %put11_lookup_empty = icmp eq i8 %put11_lookup_control, 0
   br i1 %put11_lookup_empty, label %put11_new_key, label %put11_lookup_h2
 put11_lookup_h2:
@@ -328,23 +346,30 @@ put11_lookup_advance:
   %put11_lookup_next_unwrapped = add i64 %put11_lookup_slot, 1
   %put11_lookup_next = urem i64 %put11_lookup_next_unwrapped, %put11_old_capacity
   %put11_lookup_probe_next = add i64 %put11_lookup_probe, 1
+  %put11_lookup_next_first_deleted = add i64 %put11_lookup_captured_deleted, 0
   br label %put11_lookup
+put11_lookup_exhausted:
+  %put11_lookup_reuses_deleted = icmp ne i64 %put11_lookup_first_deleted, %put11_old_capacity
+  br i1 %put11_lookup_reuses_deleted, label %put11_new_key, label %put11_grow
 put11_update_in_place:
   %put11_update_in_place_ptr = getelementptr i32, ptr %put11_old_values, i64 %put11_lookup_slot
   store i32 222, ptr %put11_update_in_place_ptr, align 4
   br label %put11_complete
 put11_new_key:
+  %put11_new_key_has_deleted = icmp ne i64 %put11_lookup_first_deleted, %put11_old_capacity
+  %put11_new_key_slot = select i1 %put11_new_key_has_deleted, i64 %put11_lookup_first_deleted, i64 %put11_lookup_slot
   %put11_candidate_length = add i64 %put11_old_length, 1
   %put11_candidate_scaled = mul i64 %put11_candidate_length, 8
   %put11_load_limit = mul i64 %put11_old_capacity, 7
   %put11_fits = icmp ule i64 %put11_candidate_scaled, %put11_load_limit
   br i1 %put11_fits, label %put11_insert_in_place, label %put11_grow
 put11_insert_in_place:
-  %put11_insert_in_place_key_ptr = getelementptr i32, ptr %put11_old_keys, i64 %put11_lookup_slot
+  %put11_insert_in_place_key_ptr = getelementptr i32, ptr %put11_old_keys, i64 %put11_new_key_slot
   store i32 2, ptr %put11_insert_in_place_key_ptr, align 4
-  %put11_insert_in_place_value_ptr = getelementptr i32, ptr %put11_old_values, i64 %put11_lookup_slot
+  %put11_insert_in_place_value_ptr = getelementptr i32, ptr %put11_old_values, i64 %put11_new_key_slot
   store i32 222, ptr %put11_insert_in_place_value_ptr, align 4
-  store i8 %put11_h2, ptr %put11_lookup_control_ptr, align 1
+  %put11_insert_in_place_control_ptr = getelementptr i8, ptr %put11_old_controls, i64 %put11_new_key_slot
+  store i8 %put11_h2, ptr %put11_insert_in_place_control_ptr, align 1
   %put11_in_place_result = insertvalue %sollang.dict %put11_dictionary, i64 %put11_candidate_length, 2
   store %sollang.dict %put11_in_place_result, ptr %slot1, align 8
   br label %put11_complete
@@ -369,14 +394,14 @@ put11_rehash_check:
   %put11_old_control_ptr = getelementptr i8, ptr %put11_old_keys, i64 %put11_old_control_offset
   %put11_old_control_slot = getelementptr i8, ptr %put11_old_control_ptr, i64 %put11_rehash_index
   %put11_old_control = load i8, ptr %put11_old_control_slot, align 1
-  %put11_rehash_occupied = icmp ne i8 %put11_old_control, 0
+  %put11_rehash_occupied = icmp sgt i8 %put11_old_control, 0
   br i1 %put11_rehash_occupied, label %put11_rehash_copy, label %put11_rehash_advance
 put11_rehash_copy:
   %put11_rehash_key_ptr = getelementptr i32, ptr %put11_old_keys, i64 %put11_rehash_index
   %put11_rehash_key = load i32, ptr %put11_rehash_key_ptr, align 4
   %put11_rehash_value_ptr = getelementptr i32, ptr %put11_old_values, i64 %put11_rehash_index
   %put11_rehash_value = load i32, ptr %put11_rehash_value_ptr, align 4
-  %put11_rehash_key64 = zext i32 %put11_rehash_key to i64
+  %put11_rehash_key64 = sext i32 %put11_rehash_key to i64
   %put11_rehash_hash_high = lshr i64 %put11_rehash_key64, 32
   %put11_rehash_hash_fold = xor i64 %put11_rehash_key64, %put11_rehash_hash_high
   %put11_rehash_hash = mul i64 %put11_rehash_hash_fold, -7046029254386353131
@@ -458,7 +483,7 @@ put11_complete:
   %v17_capacity = extractvalue %sollang.dict %v17_dictionary, 3
   %v17_control_offset = mul i64 %v17_capacity, 4
   %v17_controls = getelementptr i8, ptr %v17_keys, i64 %v17_control_offset
-  %v17_hash_key = zext i32 3 to i64
+  %v17_hash_key = sext i32 3 to i64
   %v17_hash_high = lshr i64 %v17_hash_key, 32
   %v17_hash_fold = xor i64 %v17_hash_key, %v17_hash_high
   %v17_hash = mul i64 %v17_hash_fold, -7046029254386353131
@@ -573,7 +598,7 @@ if21_merge:
   %v27_capacity = extractvalue %sollang.dict %v27_dictionary, 3
   %v27_control_offset = mul i64 %v27_capacity, 4
   %v27_controls = getelementptr i8, ptr %v27_keys, i64 %v27_control_offset
-  %v27_hash_key = zext i32 2 to i64
+  %v27_hash_key = sext i32 2 to i64
   %v27_hash_high = lshr i64 %v27_hash_key, 32
   %v27_hash_fold = xor i64 %v27_hash_key, %v27_hash_high
   %v27_hash = mul i64 %v27_hash_fold, -7046029254386353131

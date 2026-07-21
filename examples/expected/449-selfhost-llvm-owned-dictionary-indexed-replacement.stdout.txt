@@ -32,11 +32,19 @@ entry:
   %keys = extractvalue %sollang.dict %value, 0
   %values = extractvalue %sollang.dict %value, 1
   %length = extractvalue %sollang.dict %value, 2
+  %capacity = extractvalue %sollang.dict %value, 3
+  %control_offset = mul i64 %capacity, 4
+  %controls = getelementptr i8, ptr %keys, i64 %control_offset
   br label %loop
 loop:
   %index = phi i64 [ 0, %entry ], [ %next, %continue ]
-  %in_range = icmp ult i64 %index, %length
-  br i1 %in_range, label %item, label %done
+  %in_range = icmp ult i64 %index, %capacity
+  br i1 %in_range, label %check, label %done
+check:
+  %control_slot = getelementptr i8, ptr %controls, i64 %index
+  %control = load i8, ptr %control_slot, align 1
+  %occupied = icmp sgt i8 %control, 0
+  br i1 %occupied, label %item, label %continue
 item:
   %value_slot = getelementptr %sollang.array.i32, ptr %values, i64 %index
   %item_value = load %sollang.array.i32, ptr %value_slot, align 8
@@ -77,7 +85,7 @@ entry:
   store i32 1, ptr %v2_keys_ptr0, align 4
   %v2_control_ptr0 = getelementptr i8, ptr %v2_controls, i64 0
   %v2_control_hash_loaded0 = load i32, ptr %v2_keys_ptr0, align 4
-  %v2_control_hash_key0 = zext i32 %v2_control_hash_loaded0 to i64
+  %v2_control_hash_key0 = sext i32 %v2_control_hash_loaded0 to i64
   %v2_control_hash_high0 = lshr i64 %v2_control_hash_key0, 32
   %v2_control_hash_fold0 = xor i64 %v2_control_hash_key0, %v2_control_hash_high0
   %v2_control_hash0 = mul i64 %v2_control_hash_fold0, -7046029254386353131
@@ -93,7 +101,7 @@ entry:
   store i32 2, ptr %v2_keys_ptr1, align 4
   %v2_control_ptr1 = getelementptr i8, ptr %v2_controls, i64 1
   %v2_control_hash_loaded1 = load i32, ptr %v2_keys_ptr1, align 4
-  %v2_control_hash_key1 = zext i32 %v2_control_hash_loaded1 to i64
+  %v2_control_hash_key1 = sext i32 %v2_control_hash_loaded1 to i64
   %v2_control_hash_high1 = lshr i64 %v2_control_hash_key1, 32
   %v2_control_hash_fold1 = xor i64 %v2_control_hash_key1, %v2_control_hash_high1
   %v2_control_hash1 = mul i64 %v2_control_hash_fold1, -7046029254386353131
