@@ -265,6 +265,37 @@ legacyTypes recursive: expressionTypeIds.ExpressionTypeIdSet -> [expressionTypes
     projected!
 }
 
+# Typed-empty dictionaries have no value-expression child for their capacity.
+# Preserve the source capacity hint in the flat IR opcode so LLVM lowering does
+# not have to reinterpret a type child as an integer literal.
+dictionaryCapacityHint source: Text, node: ast.AstNode -> Int {
+    -1 => capacity!
+    0 => value!
+    false => afterSemicolon!
+    false => sawDigit!
+    false => validHint!
+    true => active!
+    UIntSize(0) => offset!
+    (offset! < node.length and active!) -> while {
+        source -> byte(node.start + offset!) => character
+        character == UInt8(59) -> if {
+            true => afterSemicolon!
+        } else {
+            (afterSemicolon! and character >= UInt8(48) and character <= UInt8(57)) -> if {
+                value! * 10 + Int(character - UInt8(48)) => value!
+                true => sawDigit!
+            }
+            (afterSemicolon! and not (character >= UInt8(48) and character <= UInt8(57)) and character != UInt8(32) and character != UInt8(9) and character != UInt8(10) and character != UInt8(13)) -> if {
+                (sawDigit! and character == UInt8(126)) -> if { true => validHint! }
+                false => active!
+            }
+        }
+        offset! + UIntSize(1) => offset!
+    }
+    validHint! -> if { value! => capacity! }
+    capacity!
+}
+
 public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; ~] {
     freezeSemanticTypes values: move [typeIds.SemanticType; ~] -> [typeIds.SemanticType; ~] {
         values
@@ -1247,6 +1278,9 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                             -1 => expressionTargetModule!
                             expression.flags => expressionFlags!
                             expression.operatorKind => expressionOpcode!
+                            expressionKind! == 16 -> if {
+                                source -> dictionaryCapacityHint(expression) => expressionOpcode!
+                            }
                             expressionKind! == 13 -> if {
                                 0 => valuePathSearch!
                                 valuePathSearch! < (prepared.qualified -> len) -> while {
@@ -2588,6 +2622,9 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                                 -1 => entryExpressionTargetModule!
                                 entryExpression.flags => entryExpressionFlags!
                                 entryExpression.operatorKind => entryExpressionOpcode!
+                                entryExpressionKind! == 16 -> if {
+                                    source -> dictionaryCapacityHint(entryExpression) => entryExpressionOpcode!
+                                }
                                 entryExpressionKind! == 13 -> if {
                                     0 => entryValuePathSearch!
                                     entryValuePathSearch! < (prepared.qualified -> len) -> while {

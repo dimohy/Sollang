@@ -9639,3 +9639,34 @@ This completes the owned generic-dictionary key/value mutation boundary and
 advances formal progress to **56/60 (93.3%)**, with **4 equivalent gates
 remaining**. D240 through D247 comprise eight checkpoints, so the ten-checkpoint
 Stage 3 cadence boundary is not yet due.
+
+## D248 - Typed-Empty Dictionaries Preserve Capacity in Typed IR
+
+Sollang's `{K: V; N~}` expression represents an empty dictionary whose logical
+length is zero and whose initial capacity is `N`. The self-host AST has no
+runtime value child for `N`, so typed IR now records the validated capacity hint
+in the dictionary node's otherwise unused nonnegative opcode. LLVM lowering
+consumes that metadata in normal, region, and entry paths instead of dividing
+by a zero item count or interpreting a type child as an integer literal.
+
+The capacity scanner accepts only the compact typed-empty suffix: optional
+whitespace, decimal digits, and `~` immediately after the type separator.
+Ordinary typed dictionary literals such as `{K: V; key: value}` retain opcode
+`-1`; this prevents source digits in their entries from becoming accidental
+capacities. Example 563 proves `length=0`, `capacity=4`, four zeroed control
+bytes, correctly sized key/value allocations, insertion, lookup, and execution.
+
+This follows the same semantic contract as Rust `HashMap::with_capacity` and
+Swift `Dictionary.init(minimumCapacity:)`: capacity reserves storage without
+creating elements. Windows and Linux LLVM validation, linking, execution, and
+C# versus self-host differential verification pass. The complete self-host
+suite, including the following projection fixture, passes **353/353** on both
+targets, and the Release solution build has zero warnings and zero errors.
+This hardens an already counted generic-container gate, so formal progress
+remains **56/60 (93.3%)**, with **4 equivalent gates remaining**. D240 through
+D248 comprise nine checkpoints; Stage 3 is due after the next checkpoint.
+
+Research basis:
+
+- [Rust `HashMap::with_capacity`](https://doc.rust-lang.org/std/collections/struct.HashMap.html#method.with_capacity)
+- [Swift `Dictionary.init(minimumCapacity:)`](https://developer.apple.com/documentation/swift/dictionary/init%28minimumcapacity%3A%29)

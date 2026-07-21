@@ -6328,7 +6328,16 @@ emitCore context: EmitContext -> Unit uses Console {
                     regionDictionaryItemCount! + 1 => regionDictionaryItemCount!
                     context.ir[regionDictionaryCountIndex!].nextOperand => regionDictionaryCountIndex!
                 }
-                regionDictionaryItemCount! / 2 => regionDictionaryLength
+                regionDictionaryItemCount! / 2 => regionDictionaryLength!
+                regionDictionaryLength! => regionDictionaryCapacity!
+                regionNode.operand0 => regionDictionaryItemStart!
+                regionNode.opcode >= 0 -> if {
+                    regionNode.opcode => regionDictionaryCapacity!
+                    0 => regionDictionaryItemCount!
+                    0 => regionDictionaryLength!
+                    -1 => regionDictionaryCountIndex!
+                    -1 => regionDictionaryItemStart!
+                }
                 -1 => regionDictionaryKeyTypeId!
                 -1 => regionDictionaryValueTypeId!
                 regionNode.typeId >= 0 -> if {
@@ -6338,27 +6347,25 @@ emitCore context: EmitContext -> Unit uses Console {
                         canonicalRegionDictionaryType.second => regionDictionaryValueTypeId!
                     }
                 }
-                regionDictionaryLength * (regionNode.typeModule -> storageSize) => regionDictionaryKeyByteLength!
-                regionDictionaryLength * (regionNode.typeSymbol -> storageSize) => regionDictionaryValueByteLength!
-                regionDictionaryKeyTypeId! >= 0 -> if { regionDictionaryLength * context.typeSizes[regionDictionaryKeyTypeId!] => regionDictionaryKeyByteLength! }
-                regionDictionaryValueTypeId! >= 0 -> if { regionDictionaryLength * context.typeSizes[regionDictionaryValueTypeId!] => regionDictionaryValueByteLength! }
-                regionDictionaryKeyByteLength! + regionDictionaryLength => regionDictionaryAllocationByteLength
-                regionNode.operand0 => regionDictionaryFirstKeyIndex!
-                -1 => regionControlHashStorageSize
-                regionDictionaryKeyByteLength! / (regionDictionaryItemCount! / 2) => regionControlHashStorageSize!
+                regionDictionaryCapacity! * (regionNode.typeModule -> storageSize) => regionDictionaryKeyByteLength!
+                regionDictionaryCapacity! * (regionNode.typeSymbol -> storageSize) => regionDictionaryValueByteLength!
+                regionDictionaryKeyTypeId! >= 0 -> if { regionDictionaryCapacity! * context.typeSizes[regionDictionaryKeyTypeId!] => regionDictionaryKeyByteLength! }
+                regionDictionaryValueTypeId! >= 0 -> if { regionDictionaryCapacity! * context.typeSizes[regionDictionaryValueTypeId!] => regionDictionaryValueByteLength! }
+                regionDictionaryKeyByteLength! + regionDictionaryCapacity! => regionDictionaryAllocationByteLength
+                regionDictionaryItemStart! => regionDictionaryFirstKeyIndex!
                 -1 => regionControlHashWidth!
                 -1 => regionControlHashMethod!
                 regionDictionaryKeyTypeId! >= 0 -> if { regionDictionaryKeyTypeId! -> traitMethodSymbol("Hash", "hash") => regionControlHashMethod! }
                 (regionDictionaryFirstKeyIndex! >= 0 and context.ir[regionDictionaryFirstKeyIndex!].nextOperand >= 0) -> if {
-                    ((context.ir[context.ir[regionDictionaryFirstKeyIndex!].nextOperand].typeKind == 8) or (context.ir[context.ir[regionDictionaryFirstKeyIndex!].nextOperand].typeId >= 0 and context.types[context.ir[context.ir[regionDictionaryFirstKeyIndex!].nextOperand].typeId].kind == 8)) -> if { regionDictionaryLength * (context.pointerBitWidth / 8) => regionDictionaryValueByteLength! }
+                    ((context.ir[context.ir[regionDictionaryFirstKeyIndex!].nextOperand].typeKind == 8) or (context.ir[context.ir[regionDictionaryFirstKeyIndex!].nextOperand].typeId >= 0 and context.types[context.ir[context.ir[regionDictionaryFirstKeyIndex!].nextOperand].typeId].kind == 8)) -> if { regionDictionaryCapacity! * (context.pointerBitWidth / 8) => regionDictionaryValueByteLength! }
                 }
                 regionDictionaryKeyByteLength! => regionDictionaryKeyByteLength
                 regionDictionaryValueByteLength! => regionDictionaryValueByteLength
                 "  %v$(regionNodeIndex!)_keys = call ptr @malloc(i64 $regionDictionaryAllocationByteLength)" -> println
                 "  %v$(regionNodeIndex!)_controls = getelementptr i8, ptr %v$(regionNodeIndex!)_keys, i64 $(regionDictionaryKeyByteLength)" -> println
-                "  call void @llvm.memset.p0.i64(ptr %v$(regionNodeIndex!)_controls, i8 0, i64 $(regionDictionaryLength), i1 false)" -> println
+                "  call void @llvm.memset.p0.i64(ptr %v$(regionNodeIndex!)_controls, i8 0, i64 $(regionDictionaryCapacity!), i1 false)" -> println
                 "  %v$(regionNodeIndex!)_values = call ptr @malloc(i64 $regionDictionaryValueByteLength)" -> println
-                regionNode.operand0 => regionDictionaryItemIndex!
+                regionDictionaryItemStart! => regionDictionaryItemIndex!
                 0 => regionDictionaryItemPosition!
                 regionDictionaryItemIndex! >= 0 -> while {
                     context.ir[regionDictionaryItemIndex!] => regionDictionaryItem
@@ -6384,10 +6391,10 @@ emitCore context: EmitContext -> Unit uses Console {
                     (regionDictionaryItem.typeKind == 8 or (regionDictionaryItem.typeId >= 0 and context.types[regionDictionaryItem.typeId].kind == 8)) -> if { context.pointerBitWidth / 8 -> writeDecimalLine } else { regionDictionaryItemTypeId >= 0 -> if { context.typeAligns[regionDictionaryItemTypeId] -> writeDecimalLine } else { regionDictionaryItemSymbol -> legacyStorageAlign -> writeDecimalLine } }
                     regionDictionaryItemPosition! % 2 == 0 -> if {
                         "  %v$(regionNodeIndex!)_control_ptr$(regionDictionaryEntryPosition) = getelementptr i8, ptr %v$(regionNodeIndex!)_controls, i64 $(regionDictionaryEntryPosition)" -> println
-                            regionDictionaryKeyByteLength! / (regionDictionaryItemCount! / 2) == 1 -> if { regionDictionaryItem -> integerNodeWidth => regionControlHashWidth! }
-                            regionDictionaryKeyByteLength! / (regionDictionaryItemCount! / 2) == 2 -> if { 16 => regionControlHashWidth! }
-                            regionDictionaryKeyByteLength! / (regionDictionaryItemCount! / 2) == 4 -> if { 32 => regionControlHashWidth! }
-                            regionDictionaryKeyByteLength! / (regionDictionaryItemCount! / 2) == 8 -> if { 64 => regionControlHashWidth! }
+                            regionDictionaryKeyByteLength! / regionDictionaryCapacity! == 1 -> if { regionDictionaryItem -> integerNodeWidth => regionControlHashWidth! }
+                            regionDictionaryKeyByteLength! / regionDictionaryCapacity! == 2 -> if { 16 => regionControlHashWidth! }
+                            regionDictionaryKeyByteLength! / regionDictionaryCapacity! == 4 -> if { 32 => regionControlHashWidth! }
+                            regionDictionaryKeyByteLength! / regionDictionaryCapacity! == 8 -> if { 64 => regionControlHashWidth! }
                         (regionControlHashWidth! > 0 and regionControlHashWidth! <= 64) -> if {
                             "  %v$(regionNodeIndex!)_control_hash_loaded$(regionDictionaryEntryPosition) = load " -> print
                             "i$(regionControlHashWidth!)" -> print
@@ -6450,8 +6457,8 @@ emitCore context: EmitContext -> Unit uses Console {
                 }
                 "  %v$(regionNodeIndex!)_0 = insertvalue %sollang.dict poison, ptr %v$(regionNodeIndex!)_keys, 0" -> println
                 "  %v$(regionNodeIndex!)_1 = insertvalue %sollang.dict %v$(regionNodeIndex!)_0, ptr %v$(regionNodeIndex!)_values, 1" -> println
-                "  %v$(regionNodeIndex!)_2 = insertvalue %sollang.dict %v$(regionNodeIndex!)_1, i64 $(regionDictionaryLength), 2" -> println
-                "  %v$(regionNodeIndex!) = insertvalue %sollang.dict %v$(regionNodeIndex!)_2, i64 $(regionDictionaryLength), 3" -> println
+                "  %v$(regionNodeIndex!)_2 = insertvalue %sollang.dict %v$(regionNodeIndex!)_1, i64 $(regionDictionaryLength!), 2" -> println
+                "  %v$(regionNodeIndex!) = insertvalue %sollang.dict %v$(regionNodeIndex!)_2, i64 $(regionDictionaryCapacity!), 3" -> println
             }
             regionNode.kind == 15 -> if {
                 context.ir[regionNode.operand0] => regionIndexedValue
@@ -8464,7 +8471,16 @@ emitCore context: EmitContext -> Unit uses Console {
                         dictionaryItemCount! + 1 => dictionaryItemCount!
                         context.ir[dictionaryCountIndex!].nextOperand => dictionaryCountIndex!
                     }
-                    dictionaryItemCount! / 2 => dictionaryLength
+                    dictionaryItemCount! / 2 => dictionaryLength!
+                    dictionaryLength! => dictionaryCapacity!
+                    expression.operand0 => dictionaryItemStart!
+                    expression.opcode >= 0 -> if {
+                        expression.opcode => dictionaryCapacity!
+                        0 => dictionaryItemCount!
+                        0 => dictionaryLength!
+                        -1 => dictionaryCountIndex!
+                        -1 => dictionaryItemStart!
+                    }
                     -1 => dictionaryKeyTypeId!
                     -1 => dictionaryValueTypeId!
                     expression.typeId >= 0 -> if {
@@ -8474,32 +8490,35 @@ emitCore context: EmitContext -> Unit uses Console {
                             canonicalDictionaryType.second => dictionaryValueTypeId!
                         }
                     }
-                    dictionaryLength * (expression.typeModule -> storageSize) => dictionaryKeyByteLength!
-                    dictionaryLength * (expression.typeSymbol -> storageSize) => dictionaryValueByteLength!
-                    dictionaryKeyTypeId! >= 0 -> if { dictionaryLength * context.typeSizes[dictionaryKeyTypeId!] => dictionaryKeyByteLength! }
-                    dictionaryValueTypeId! >= 0 -> if { dictionaryLength * context.typeSizes[dictionaryValueTypeId!] => dictionaryValueByteLength! }
-                    dictionaryKeyByteLength! + dictionaryLength => dictionaryAllocationByteLength
-                    expression.operand0 => dictionaryFirstKeyIndex!
+                    dictionaryCapacity! * (expression.typeModule -> storageSize) => dictionaryKeyByteLength!
+                    dictionaryCapacity! * (expression.typeSymbol -> storageSize) => dictionaryValueByteLength!
+                    dictionaryKeyTypeId! >= 0 -> if { dictionaryCapacity! * context.typeSizes[dictionaryKeyTypeId!] => dictionaryKeyByteLength! }
+                    dictionaryValueTypeId! >= 0 -> if { dictionaryCapacity! * context.typeSizes[dictionaryValueTypeId!] => dictionaryValueByteLength! }
+                    dictionaryKeyByteLength! + dictionaryCapacity! => dictionaryAllocationByteLength
+                    dictionaryItemStart! => dictionaryFirstKeyIndex!
                     (dictionaryFirstKeyIndex! >= 0 and context.ir[dictionaryFirstKeyIndex!].nextOperand >= 0) -> if {
-                        ((context.ir[context.ir[dictionaryFirstKeyIndex!].nextOperand].typeKind == 8) or (context.ir[context.ir[dictionaryFirstKeyIndex!].nextOperand].typeId >= 0 and context.types[context.ir[context.ir[dictionaryFirstKeyIndex!].nextOperand].typeId].kind == 8)) -> if { dictionaryLength * (context.pointerBitWidth / 8) => dictionaryValueByteLength! }
+                        ((context.ir[context.ir[dictionaryFirstKeyIndex!].nextOperand].typeKind == 8) or (context.ir[context.ir[dictionaryFirstKeyIndex!].nextOperand].typeId >= 0 and context.types[context.ir[context.ir[dictionaryFirstKeyIndex!].nextOperand].typeId].kind == 8)) -> if { dictionaryCapacity! * (context.pointerBitWidth / 8) => dictionaryValueByteLength! }
                     }
                     dictionaryKeyByteLength! => dictionaryKeyByteLength
                     dictionaryValueByteLength! => dictionaryValueByteLength
                     "  %v$(expressionIndex!)_keys = call ptr @malloc(i64 $dictionaryAllocationByteLength)" -> println
                     "  %v$(expressionIndex!)_controls = getelementptr i8, ptr %v$(expressionIndex!)_keys, i64 $(dictionaryKeyByteLength)" -> println
-                    "  call void @llvm.memset.p0.i64(ptr %v$(expressionIndex!)_controls, i8 0, i64 $(dictionaryLength), i1 false)" -> println
+                    "  call void @llvm.memset.p0.i64(ptr %v$(expressionIndex!)_controls, i8 0, i64 $(dictionaryCapacity!), i1 false)" -> println
                     "  %v$(expressionIndex!)_values = call ptr @malloc(i64 $dictionaryValueByteLength)" -> println
-                    expression.operand0 => dictionaryItemIndex!
+                    dictionaryItemStart! => dictionaryItemIndex!
                     0 => dictionaryItemPosition!
-                    (dictionaryKeyByteLength! / (dictionaryItemCount! / 2) == 1) -> if {
+                    -1 => dictionaryControlHashWidth!
+                    dictionaryItemCount! > 0 -> if {
+                    (dictionaryKeyByteLength! / dictionaryCapacity! == 1) -> if {
                         dictionaryKeyTypeId! >= 0 -> if { context.types[dictionaryKeyTypeId!].symbol -> integerWidth } else { -1 }
                     } else {
-                        (dictionaryKeyByteLength! / (dictionaryItemCount! / 2) == 2) -> if { 16 } else {
-                            (dictionaryKeyByteLength! / (dictionaryItemCount! / 2) == 4) -> if { 32 } else {
-                                (dictionaryKeyByteLength! / (dictionaryItemCount! / 2) == 8) -> if { 64 } else { -1 }
+                        (dictionaryKeyByteLength! / dictionaryCapacity! == 2) -> if { 16 } else {
+                            (dictionaryKeyByteLength! / dictionaryCapacity! == 4) -> if { 32 } else {
+                                (dictionaryKeyByteLength! / dictionaryCapacity! == 8) -> if { 64 } else { -1 }
                             }
                         }
-                    } => dictionaryControlHashWidth
+                    } => dictionaryControlHashWidth!
+                    }
                     -1 => dictionaryControlHashMethod!
                     dictionaryKeyTypeId! >= 0 -> if { dictionaryKeyTypeId! -> traitMethodSymbol("Hash", "hash") => dictionaryControlHashMethod! }
                     dictionaryItemIndex! >= 0 -> while {
@@ -8528,18 +8547,18 @@ emitCore context: EmitContext -> Unit uses Console {
                         (dictionaryItem.typeKind == 8 or (dictionaryItem.typeId >= 0 and context.types[dictionaryItem.typeId].kind == 8)) -> if { context.pointerBitWidth / 8 -> writeDecimalLine } else { dictionaryItemTypeId >= 0 -> if { context.typeAligns[dictionaryItemTypeId] -> writeDecimalLine } else { dictionaryItemSymbol -> legacyStorageAlign -> writeDecimalLine } }
                         dictionaryItemPosition! % 2 == 0 -> if {
                             "  %v$(expressionIndex!)_control_ptr$(dictionaryEntryPosition) = getelementptr i8, ptr %v$(expressionIndex!)_controls, i64 $(dictionaryEntryPosition)" -> println
-                            (dictionaryControlHashWidth > 0 and dictionaryControlHashWidth <= 64) -> if {
+                            (dictionaryControlHashWidth! > 0 and dictionaryControlHashWidth! <= 64) -> if {
                                 "  %v$(expressionIndex!)_control_hash_loaded$(dictionaryEntryPosition) = load " -> print
-                                "i$(dictionaryControlHashWidth)" -> print
+                                "i$(dictionaryControlHashWidth!)" -> print
                                 ", ptr %v$(expressionIndex!)_$(dictionarySide)_ptr$(dictionaryEntryPosition), align " -> print
                                 dictionaryItem -> storageAlign -> writeDecimalLine
                                 "  %v$(expressionIndex!)_control_hash_key$(dictionaryEntryPosition) = " -> print
-                                dictionaryControlHashWidth == 64 -> if { "add i64 0, " -> print } else {
+                                dictionaryControlHashWidth! == 64 -> if { "add i64 0, " -> print } else {
                                     dictionaryItem -> integerNodeSigned -> if { "sext " -> print } else { "zext " -> print }
-                                    "i$(dictionaryControlHashWidth) " -> print
+                                    "i$(dictionaryControlHashWidth!) " -> print
                                 }
                                 "%v$(expressionIndex!)_control_hash_loaded$(dictionaryEntryPosition)" -> print
-                                dictionaryControlHashWidth == 64 -> if { "" -> println } else { " to i64" -> println }
+                                dictionaryControlHashWidth! == 64 -> if { "" -> println } else { " to i64" -> println }
                                 "  %v$(expressionIndex!)_control_hash_high$(dictionaryEntryPosition) = lshr i64 %v$(expressionIndex!)_control_hash_key$(dictionaryEntryPosition), 32" -> println
                                 "  %v$(expressionIndex!)_control_hash_fold$(dictionaryEntryPosition) = xor i64 %v$(expressionIndex!)_control_hash_key$(dictionaryEntryPosition), %v$(expressionIndex!)_control_hash_high$(dictionaryEntryPosition)" -> println
                                 "  %v$(expressionIndex!)_control_hash$(dictionaryEntryPosition) = mul i64 %v$(expressionIndex!)_control_hash_fold$(dictionaryEntryPosition), -7046029254386353131" -> println
@@ -8590,8 +8609,8 @@ emitCore context: EmitContext -> Unit uses Console {
                     }
                     "  %v$(expressionIndex!)_0 = insertvalue %sollang.dict poison, ptr %v$(expressionIndex!)_keys, 0" -> println
                     "  %v$(expressionIndex!)_1 = insertvalue %sollang.dict %v$(expressionIndex!)_0, ptr %v$(expressionIndex!)_values, 1" -> println
-                    "  %v$(expressionIndex!)_2 = insertvalue %sollang.dict %v$(expressionIndex!)_1, i64 $(dictionaryLength), 2" -> println
-                    "  %v$(expressionIndex!) = insertvalue %sollang.dict %v$(expressionIndex!)_2, i64 $(dictionaryLength), 3" -> println
+                    "  %v$(expressionIndex!)_2 = insertvalue %sollang.dict %v$(expressionIndex!)_1, i64 $(dictionaryLength!), 2" -> println
+                    "  %v$(expressionIndex!) = insertvalue %sollang.dict %v$(expressionIndex!)_2, i64 $(dictionaryCapacity!), 3" -> println
                 }
                 expression.kind == 15 -> if {
                     context.ir[expression.operand0] => indexedArray
@@ -11026,7 +11045,16 @@ emitCore context: EmitContext -> Unit uses Console {
                             entryDictionaryItemCount! + 1 => entryDictionaryItemCount!
                             context.ir[entryDictionaryCountIndex!].nextOperand => entryDictionaryCountIndex!
                         }
-                        entryDictionaryItemCount! / 2 => entryDictionaryLength
+                        entryDictionaryItemCount! / 2 => entryDictionaryLength!
+                        entryDictionaryLength! => entryDictionaryCapacity!
+                        entryExpression.operand0 => entryDictionaryItemStart!
+                        entryExpression.opcode >= 0 -> if {
+                            entryExpression.opcode => entryDictionaryCapacity!
+                            0 => entryDictionaryItemCount!
+                            0 => entryDictionaryLength!
+                            -1 => entryDictionaryCountIndex!
+                            -1 => entryDictionaryItemStart!
+                        }
                         -1 => entryDictionaryKeyTypeId!
                         -1 => entryDictionaryValueTypeId!
                         entryExpression.typeId >= 0 -> if {
@@ -11036,35 +11064,38 @@ emitCore context: EmitContext -> Unit uses Console {
                                 canonicalEntryDictionaryType.second => entryDictionaryValueTypeId!
                             }
                         }
-                        entryDictionaryLength * (entryExpression.typeModule -> storageSize) => entryDictionaryKeyByteLength!
-                        entryDictionaryLength * (entryExpression.typeSymbol -> storageSize) => entryDictionaryValueByteLength!
-                        entryDictionaryKeyTypeId! >= 0 -> if { entryDictionaryLength * context.typeSizes[entryDictionaryKeyTypeId!] => entryDictionaryKeyByteLength! }
-                         entryDictionaryValueTypeId! >= 0 -> if { entryDictionaryLength * context.typeSizes[entryDictionaryValueTypeId!] => entryDictionaryValueByteLength! }
-                         entryDictionaryKeyByteLength! + entryDictionaryLength => entryDictionaryAllocationByteLength
+                        entryDictionaryCapacity! * (entryExpression.typeModule -> storageSize) => entryDictionaryKeyByteLength!
+                        entryDictionaryCapacity! * (entryExpression.typeSymbol -> storageSize) => entryDictionaryValueByteLength!
+                        entryDictionaryKeyTypeId! >= 0 -> if { entryDictionaryCapacity! * context.typeSizes[entryDictionaryKeyTypeId!] => entryDictionaryKeyByteLength! }
+                        entryDictionaryValueTypeId! >= 0 -> if { entryDictionaryCapacity! * context.typeSizes[entryDictionaryValueTypeId!] => entryDictionaryValueByteLength! }
+                        entryDictionaryKeyByteLength! + entryDictionaryCapacity! => entryDictionaryAllocationByteLength
                         # A late recursive dictionary type may leave the value
                         # type ID unresolved. Preserve the ABI width of a
                         # direct readonly reference from its typed-IR node.
-                        entryExpression.operand0 => entryDictionaryFirstKeyIndex!
+                        entryDictionaryItemStart! => entryDictionaryFirstKeyIndex!
                         (entryDictionaryFirstKeyIndex! >= 0 and context.ir[entryDictionaryFirstKeyIndex!].nextOperand >= 0) -> if {
-                            ((context.ir[context.ir[entryDictionaryFirstKeyIndex!].nextOperand].typeKind == 8) or (context.ir[context.ir[entryDictionaryFirstKeyIndex!].nextOperand].typeId >= 0 and context.types[context.ir[context.ir[entryDictionaryFirstKeyIndex!].nextOperand].typeId].kind == 8)) -> if { entryDictionaryLength * (context.pointerBitWidth / 8) => entryDictionaryValueByteLength! }
+                            ((context.ir[context.ir[entryDictionaryFirstKeyIndex!].nextOperand].typeKind == 8) or (context.ir[context.ir[entryDictionaryFirstKeyIndex!].nextOperand].typeId >= 0 and context.types[context.ir[context.ir[entryDictionaryFirstKeyIndex!].nextOperand].typeId].kind == 8)) -> if { entryDictionaryCapacity! * (context.pointerBitWidth / 8) => entryDictionaryValueByteLength! }
                         }
                         entryDictionaryKeyByteLength! => entryDictionaryKeyByteLength
                         entryDictionaryValueByteLength! => entryDictionaryValueByteLength
-                         "  %v$(entryExpressionIndex!)_keys = call ptr @malloc(i64 $entryDictionaryAllocationByteLength)" -> println
+                        "  %v$(entryExpressionIndex!)_keys = call ptr @malloc(i64 $entryDictionaryAllocationByteLength)" -> println
                          "  %v$(entryExpressionIndex!)_controls = getelementptr i8, ptr %v$(entryExpressionIndex!)_keys, i64 $(entryDictionaryKeyByteLength)" -> println
-                         "  call void @llvm.memset.p0.i64(ptr %v$(entryExpressionIndex!)_controls, i8 0, i64 $(entryDictionaryLength), i1 false)" -> println
+                        "  call void @llvm.memset.p0.i64(ptr %v$(entryExpressionIndex!)_controls, i8 0, i64 $(entryDictionaryCapacity!), i1 false)" -> println
                         "  %v$(entryExpressionIndex!)_values = call ptr @malloc(i64 $entryDictionaryValueByteLength)" -> println
-                        entryExpression.operand0 => entryDictionaryItemIndex!
+                        entryDictionaryItemStart! => entryDictionaryItemIndex!
                         0 => entryDictionaryItemPosition!
-                        (entryDictionaryKeyByteLength! / (entryDictionaryItemCount! / 2) == 1) -> if {
+                        -1 => entryDictionaryControlHashWidth!
+                        entryDictionaryItemCount! > 0 -> if {
+                        (entryDictionaryKeyByteLength! / entryDictionaryCapacity! == 1) -> if {
                             entryDictionaryKeyTypeId! >= 0 -> if { context.types[entryDictionaryKeyTypeId!].symbol -> integerWidth } else { -1 }
                         } else {
-                            (entryDictionaryKeyByteLength! / (entryDictionaryItemCount! / 2) == 2) -> if { 16 } else {
-                                (entryDictionaryKeyByteLength! / (entryDictionaryItemCount! / 2) == 4) -> if { 32 } else {
-                                    (entryDictionaryKeyByteLength! / (entryDictionaryItemCount! / 2) == 8) -> if { 64 } else { -1 }
+                            (entryDictionaryKeyByteLength! / entryDictionaryCapacity! == 2) -> if { 16 } else {
+                                (entryDictionaryKeyByteLength! / entryDictionaryCapacity! == 4) -> if { 32 } else {
+                                    (entryDictionaryKeyByteLength! / entryDictionaryCapacity! == 8) -> if { 64 } else { -1 }
                                 }
                             }
-                        } => entryDictionaryControlHashWidth
+                        } => entryDictionaryControlHashWidth!
+                        }
                         -1 => entryDictionaryControlHashMethod!
                         entryDictionaryKeyTypeId! >= 0 -> if { entryDictionaryKeyTypeId! -> traitMethodSymbol("Hash", "hash") => entryDictionaryControlHashMethod! }
                         entryDictionaryItemIndex! >= 0 -> while {
@@ -11091,18 +11122,18 @@ emitCore context: EmitContext -> Unit uses Console {
                              (entryDictionaryItem.typeKind == 8 or (entryDictionaryItem.typeId >= 0 and context.types[entryDictionaryItem.typeId].kind == 8)) -> if { context.pointerBitWidth / 8 -> writeDecimalLine } else { entryDictionaryItemTypeId >= 0 -> if { context.typeAligns[entryDictionaryItemTypeId] -> writeDecimalLine } else { entryDictionaryItemSymbol -> legacyStorageAlign -> writeDecimalLine } }
                              entryDictionaryItemPosition! % 2 == 0 -> if {
                                  "  %v$(entryExpressionIndex!)_control_ptr$(entryDictionaryEntryPosition) = getelementptr i8, ptr %v$(entryExpressionIndex!)_controls, i64 $(entryDictionaryEntryPosition)" -> println
-                                 (entryDictionaryControlHashWidth > 0 and entryDictionaryControlHashWidth <= 64) -> if {
+                                 (entryDictionaryControlHashWidth! > 0 and entryDictionaryControlHashWidth! <= 64) -> if {
                                      "  %v$(entryExpressionIndex!)_control_hash_loaded$(entryDictionaryEntryPosition) = load " -> print
-                                     "i$(entryDictionaryControlHashWidth)" -> print
+                                     "i$(entryDictionaryControlHashWidth!)" -> print
                                      ", ptr %v$(entryExpressionIndex!)_$(entryDictionarySide)_ptr$(entryDictionaryEntryPosition), align " -> print
                                      entryDictionaryItem -> storageAlign -> writeDecimalLine
                                      "  %v$(entryExpressionIndex!)_control_hash_key$(entryDictionaryEntryPosition) = " -> print
-                                     entryDictionaryControlHashWidth == 64 -> if { "add i64 0, " -> print } else {
+                                     entryDictionaryControlHashWidth! == 64 -> if { "add i64 0, " -> print } else {
                                          entryDictionaryItem -> integerNodeSigned -> if { "sext " -> print } else { "zext " -> print }
-                                         "i$(entryDictionaryControlHashWidth) " -> print
+                                         "i$(entryDictionaryControlHashWidth!) " -> print
                                      }
                                      "%v$(entryExpressionIndex!)_control_hash_loaded$(entryDictionaryEntryPosition)" -> print
-                                     entryDictionaryControlHashWidth == 64 -> if { "" -> println } else { " to i64" -> println }
+                                     entryDictionaryControlHashWidth! == 64 -> if { "" -> println } else { " to i64" -> println }
                                      "  %v$(entryExpressionIndex!)_control_hash_high$(entryDictionaryEntryPosition) = lshr i64 %v$(entryExpressionIndex!)_control_hash_key$(entryDictionaryEntryPosition), 32" -> println
                                      "  %v$(entryExpressionIndex!)_control_hash_fold$(entryDictionaryEntryPosition) = xor i64 %v$(entryExpressionIndex!)_control_hash_key$(entryDictionaryEntryPosition), %v$(entryExpressionIndex!)_control_hash_high$(entryDictionaryEntryPosition)" -> println
                                      "  %v$(entryExpressionIndex!)_control_hash$(entryDictionaryEntryPosition) = mul i64 %v$(entryExpressionIndex!)_control_hash_fold$(entryDictionaryEntryPosition), -7046029254386353131" -> println
@@ -11153,8 +11184,8 @@ emitCore context: EmitContext -> Unit uses Console {
                         }
                         "  %v$(entryExpressionIndex!)_0 = insertvalue %sollang.dict poison, ptr %v$(entryExpressionIndex!)_keys, 0" -> println
                         "  %v$(entryExpressionIndex!)_1 = insertvalue %sollang.dict %v$(entryExpressionIndex!)_0, ptr %v$(entryExpressionIndex!)_values, 1" -> println
-                        "  %v$(entryExpressionIndex!)_2 = insertvalue %sollang.dict %v$(entryExpressionIndex!)_1, i64 $(entryDictionaryLength), 2" -> println
-                        "  %v$(entryExpressionIndex!) = insertvalue %sollang.dict %v$(entryExpressionIndex!)_2, i64 $(entryDictionaryLength), 3" -> println
+                        "  %v$(entryExpressionIndex!)_2 = insertvalue %sollang.dict %v$(entryExpressionIndex!)_1, i64 $(entryDictionaryLength!), 2" -> println
+                        "  %v$(entryExpressionIndex!) = insertvalue %sollang.dict %v$(entryExpressionIndex!)_2, i64 $(entryDictionaryCapacity!), 3" -> println
                     }
                     (entryExpression.kind == 17 and entryExpression.flags == 1) -> if {
                         entryExpressionIndex! -> mutableBindingRoot => entryMutableRoot

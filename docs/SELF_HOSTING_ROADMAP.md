@@ -3200,3 +3200,19 @@ build has zero warnings and zero errors. This closes the fully generic owned
 dictionary mutation boundary and advances formal progress to **56/60 (93.3%)**,
 with **4 equivalent gates remaining**. D240 through D247 comprise eight
 checkpoints; Stage 3 remains scheduled for the tenth.
+
+## D248/example 563 - Typed-Empty Dictionary Capacity
+
+The self-host typed IR now preserves the capacity in `{K: V; N~}` as metadata
+on the dictionary node. Normal, region, and entry LLVM emission allocate for
+that capacity while keeping logical length zero, zero every control byte, and
+avoid all empty-literal divisions. A strict suffix scan distinguishes the
+typed-empty form from ordinary typed dictionary entries.
+
+Example 563 snapshots `length=0`, `capacity=4`, a 20-byte Int key/control
+allocation, a 16-byte Int value allocation, insertion, lookup, and execution.
+Windows/Linux LLVM validation and C# versus self-host differential verification
+pass. The complete self-host suite, with the following projection fixture also
+present, passes **353/353** on both targets; the Release build has zero warnings
+and zero errors. Formal progress remains **56/60 (93.3%)**, with **4 equivalent
+gates remaining**. Stage 3 cadence advances to **9/10**.
