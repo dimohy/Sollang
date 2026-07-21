@@ -2954,6 +2954,12 @@ instead of flattening to `Int`. The reference/self-host checks pass, while
 Swiss-table entry addressing and complete dictionary ownership remain open;
 formal progress stays **53/60 (88.3%)**.
 
+D233/example 552 adds direct dictionary reference ownership coverage:
+replacing an owner after `{1: owner! -> same}` reports exactly one conflict 23
+on both Windows and Linux. This confirms the direct carrier path, but complete
+dictionary mutation/drop coverage and Swiss-table entry addressing remain
+open; formal progress stays **53/60 (88.3%)**.
+
 1. Multi-file compilation (implemented by example 52).
 2. Import-driven file discovery with cycle and duplicate-module diagnostics
    (implemented after example 52).

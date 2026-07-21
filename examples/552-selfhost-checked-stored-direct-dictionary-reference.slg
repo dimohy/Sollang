@@ -1,0 +1,27 @@
+import sollang.compiler.semantic.ownership_check as ownershipCheck
+
+main {
+    [
+        """
+        same value: ref Int -> ref Int {
+            value
+        }
+        read value: ref Int -> Int {
+            value
+        }
+        main {
+            10 => owner!
+            {1: owner! -> same} => stored
+            20 => owner!
+            stored[1] -> read -> println
+        }
+        """,
+        ~
+    ] => sources!
+    sources! -> ownershipCheck.analyze => diagnostics!
+    0 => conflicts!
+    diagnostics! -> each diagnostic {
+        diagnostic.code == 23 -> if { conflicts! + 1 => conflicts! }
+    }
+    "conflicts=$(conflicts!)" -> println
+}

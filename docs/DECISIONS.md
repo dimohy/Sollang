@@ -9301,3 +9301,13 @@ Example 551 asserts the recovered value type is kind 8 (`ref`) and passes with
 the reference compiler and self-host compiler. This repairs type identity but
 does not advance the broader Swiss-table entry-addressing or ownership gates;
 formal progress remains **53/60 (88.3%)**.
+
+## D233 - Direct Dictionary Reference Ownership Coverage
+
+Example 552 adds the missing direct-value ownership check for
+`{1: owner! -> same}`: replacing the owner while the stored reference is live
+must produce conflict 23. The self-host ownership analyzer reports exactly
+one conflict and passes on both Windows and Linux. This confirms the direct
+carrier path alongside the enum-payload path; full dictionary mutation/drop
+coverage and Swiss-table entry addressing remain open, so formal progress is
+still **53/60 (88.3%)**.
