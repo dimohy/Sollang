@@ -3831,6 +3831,11 @@ emitCore context: EmitContext -> Unit uses Console {
                 putValueTypeId! >= 0 -> if { context.typeSizes[putValueTypeId!] => putValueStorageSize! }
                 putKeyStorageSize! < 0 -> if { putSource.typeModule -> storageSize => putKeyStorageSize! }
                 putValueStorageSize! < 0 -> if { putSource.typeSymbol -> storageSize => putValueStorageSize! }
+                false => putKeyIsText!
+                putKeyTypeId! >= 0 -> if {
+                    context.types[putKeyTypeId!] => putCanonicalKeyType
+                    (putCanonicalKeyType.kind == 1 and putCanonicalKeyType.origin == 1 and putCanonicalKeyType.symbol == 1) -> if { true => putKeyIsText! }
+                }
                 (putKeyStorageSize! == 1) -> if {
                     putKeyTypeId! >= 0 -> if { context.types[putKeyTypeId!].symbol -> integerWidth } else { -1 }
                 } else {
@@ -3847,21 +3852,27 @@ emitCore context: EmitContext -> Unit uses Console {
                 "  %put$(putIndex)_old_values = extractvalue %sollang.dict %put$(putIndex)_dictionary, 1" -> println
                 "  %put$(putIndex)_old_length = extractvalue %sollang.dict %put$(putIndex)_dictionary, 2" -> println
                 "  %put$(putIndex)_old_capacity = extractvalue %sollang.dict %put$(putIndex)_dictionary, 3" -> println
-                "  %put$(putIndex)_key64 = " -> print
-                putHashWidth == 64 -> if { "add i64 0, " -> print } else {
-                    putHashSigned! -> if { "sext " -> print } else { "zext " -> print }
-                    "i$(putHashWidth) " -> print
-                }
-                (putKey.kind == 3 or putKey.kind == 4) -> if {
-                    putKey -> sourceToken => putKeyToken
-                    putKey.kind == 3 -> if { context.sources[putKey.sourceModule] -> slice(putKeyToken.span.start, putKeyToken.span.length) -> print } else { "0" -> print }
-                } else {
+                putKeyIsText! -> if {
+                    "  %put$(putIndex)_hash = call i64 @sollang_dictionary_hash_text(%sollang.text " -> print
                     (request.ownerIndex >= 0 and context.ir[request.ownerIndex].kind == 0 and context.ir[request.ownerIndex].operand1 >= 0 and putKey.kind == 5 and putKey.symbol == context.ir[context.ir[request.ownerIndex].operand1].symbol) -> if { "%arg" -> print } else { "%v$(putKeyIndex)" -> print }
+                    ")" -> println
+                } else {
+                    "  %put$(putIndex)_key64 = " -> print
+                    putHashWidth == 64 -> if { "add i64 0, " -> print } else {
+                        putHashSigned! -> if { "sext " -> print } else { "zext " -> print }
+                        "i$(putHashWidth) " -> print
+                    }
+                    (putKey.kind == 3 or putKey.kind == 4) -> if {
+                        putKey -> sourceToken => putKeyToken
+                        putKey.kind == 3 -> if { context.sources[putKey.sourceModule] -> slice(putKeyToken.span.start, putKeyToken.span.length) -> print } else { "0" -> print }
+                    } else {
+                        (request.ownerIndex >= 0 and context.ir[request.ownerIndex].kind == 0 and context.ir[request.ownerIndex].operand1 >= 0 and putKey.kind == 5 and putKey.symbol == context.ir[context.ir[request.ownerIndex].operand1].symbol) -> if { "%arg" -> print } else { "%v$(putKeyIndex)" -> print }
+                    }
+                    putHashWidth == 64 -> if { "" -> println } else { " to i64" -> println }
+                    "  %put$(putIndex)_hash_high = lshr i64 %put$(putIndex)_key64, 32" -> println
+                    "  %put$(putIndex)_hash_fold = xor i64 %put$(putIndex)_key64, %put$(putIndex)_hash_high" -> println
+                    "  %put$(putIndex)_hash = mul i64 %put$(putIndex)_hash_fold, -7046029254386353131" -> println
                 }
-                putHashWidth == 64 -> if { "" -> println } else { " to i64" -> println }
-                "  %put$(putIndex)_hash_high = lshr i64 %put$(putIndex)_key64, 32" -> println
-                "  %put$(putIndex)_hash_fold = xor i64 %put$(putIndex)_key64, %put$(putIndex)_hash_high" -> println
-                "  %put$(putIndex)_hash = mul i64 %put$(putIndex)_hash_fold, -7046029254386353131" -> println
                 "  %put$(putIndex)_h2_shifted = lshr i64 %put$(putIndex)_hash, 57" -> println
                 "  %put$(putIndex)_h2_raw = and i64 %put$(putIndex)_h2_shifted, 127" -> println
                 "  %put$(putIndex)_h2_zero = icmp eq i64 %put$(putIndex)_h2_raw, 0" -> println
@@ -3900,14 +3911,20 @@ emitCore context: EmitContext -> Unit uses Console {
                 putKeyTypeId! >= 0 -> if { putKeyTypeId! -> writeSemanticTypeId } else { putSource.typeModule -> llvmType -> print }
                 ", ptr %put$(putIndex)_lookup_key_ptr, align " -> print
                 putKeyTypeId! >= 0 -> if { context.typeAligns[putKeyTypeId!] -> writeDecimalLine } else { putSource.typeModule -> legacyStorageAlign -> writeDecimalLine }
-                "  %put$(putIndex)_lookup_found = icmp eq " -> print
-                putKeyTypeId! >= 0 -> if { putKeyTypeId! -> writeSemanticTypeId } else { putSource.typeModule -> llvmType -> print }
-                " %put$(putIndex)_lookup_stored_key, " -> print
-                (putKey.kind == 3 or putKey.kind == 4) -> if {
-                    putKey -> sourceToken => putLookupKeyToken
-                    putKey.kind == 3 -> if { context.sources[putKey.sourceModule] -> slice(putLookupKeyToken.span.start, putLookupKeyToken.span.length) -> println } else { "0" -> println }
+                putKeyIsText! -> if {
+                    "  %put$(putIndex)_lookup_found = call i1 @sollang_dictionary_text_equal(%sollang.text %put$(putIndex)_lookup_stored_key, %sollang.text " -> print
+                    (request.ownerIndex >= 0 and context.ir[request.ownerIndex].kind == 0 and context.ir[request.ownerIndex].operand1 >= 0 and putKey.kind == 5 and putKey.symbol == context.ir[context.ir[request.ownerIndex].operand1].symbol) -> if { "%arg" -> print } else { "%v$(putKeyIndex)" -> print }
+                    ")" -> println
                 } else {
-                    (request.ownerIndex >= 0 and context.ir[request.ownerIndex].kind == 0 and context.ir[request.ownerIndex].operand1 >= 0 and putKey.kind == 5 and putKey.symbol == context.ir[context.ir[request.ownerIndex].operand1].symbol) -> if { "%arg" -> println } else { "%v$(putKeyIndex)" -> println }
+                    "  %put$(putIndex)_lookup_found = icmp eq " -> print
+                    putKeyTypeId! >= 0 -> if { putKeyTypeId! -> writeSemanticTypeId } else { putSource.typeModule -> llvmType -> print }
+                    " %put$(putIndex)_lookup_stored_key, " -> print
+                    (putKey.kind == 3 or putKey.kind == 4) -> if {
+                        putKey -> sourceToken => putLookupKeyToken
+                        putKey.kind == 3 -> if { context.sources[putKey.sourceModule] -> slice(putLookupKeyToken.span.start, putLookupKeyToken.span.length) -> println } else { "0" -> println }
+                    } else {
+                        (request.ownerIndex >= 0 and context.ir[request.ownerIndex].kind == 0 and context.ir[request.ownerIndex].operand1 >= 0 and putKey.kind == 5 and putKey.symbol == context.ir[context.ir[request.ownerIndex].operand1].symbol) -> if { "%arg" -> println } else { "%v$(putKeyIndex)" -> println }
+                    }
                 }
                 "  br i1 %put$(putIndex)_lookup_found, label %put$(putIndex)_update_in_place, label %put$(putIndex)_lookup_advance" -> println
                 "put$(putIndex)_lookup_advance:" -> println
@@ -4015,16 +4032,20 @@ emitCore context: EmitContext -> Unit uses Console {
                 putValueTypeId! >= 0 -> if { putValueTypeId! -> writeSemanticTypeId } else { putSource.typeSymbol -> llvmType -> print }
                 ", ptr %put$(putIndex)_rehash_value_ptr, align " -> print
                 putValueTypeId! >= 0 -> if { context.typeAligns[putValueTypeId!] -> writeDecimalLine } else { putSource.typeSymbol -> legacyStorageAlign -> writeDecimalLine }
-                "  %put$(putIndex)_rehash_key64 = " -> print
-                putHashWidth == 64 -> if { "add i64 0, " -> print } else {
-                    putHashSigned! -> if { "sext " -> print } else { "zext " -> print }
-                    "i$(putHashWidth) " -> print
+                putKeyIsText! -> if {
+                    "  %put$(putIndex)_rehash_hash = call i64 @sollang_dictionary_hash_text(%sollang.text %put$(putIndex)_rehash_key)" -> println
+                } else {
+                    "  %put$(putIndex)_rehash_key64 = " -> print
+                    putHashWidth == 64 -> if { "add i64 0, " -> print } else {
+                        putHashSigned! -> if { "sext " -> print } else { "zext " -> print }
+                        "i$(putHashWidth) " -> print
+                    }
+                    "%put$(putIndex)_rehash_key" -> print
+                    putHashWidth == 64 -> if { "" -> println } else { " to i64" -> println }
+                    "  %put$(putIndex)_rehash_hash_high = lshr i64 %put$(putIndex)_rehash_key64, 32" -> println
+                    "  %put$(putIndex)_rehash_hash_fold = xor i64 %put$(putIndex)_rehash_key64, %put$(putIndex)_rehash_hash_high" -> println
+                    "  %put$(putIndex)_rehash_hash = mul i64 %put$(putIndex)_rehash_hash_fold, -7046029254386353131" -> println
                 }
-                "%put$(putIndex)_rehash_key" -> print
-                putHashWidth == 64 -> if { "" -> println } else { " to i64" -> println }
-                "  %put$(putIndex)_rehash_hash_high = lshr i64 %put$(putIndex)_rehash_key64, 32" -> println
-                "  %put$(putIndex)_rehash_hash_fold = xor i64 %put$(putIndex)_rehash_key64, %put$(putIndex)_rehash_hash_high" -> println
-                "  %put$(putIndex)_rehash_hash = mul i64 %put$(putIndex)_rehash_hash_fold, -7046029254386353131" -> println
                 "  %put$(putIndex)_rehash_h2_shifted = lshr i64 %put$(putIndex)_rehash_hash, 57" -> println
                 "  %put$(putIndex)_rehash_h2_raw = and i64 %put$(putIndex)_rehash_h2_shifted, 127" -> println
                 "  %put$(putIndex)_rehash_h2_zero = icmp eq i64 %put$(putIndex)_rehash_h2_raw, 0" -> println

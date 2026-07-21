@@ -1,0 +1,32 @@
+import sollang.compiler.llvm.text as llvm
+
+# Verifies Text-key dictionary mutation in every emitter path.
+main {
+    [
+        """
+        verifyText key: Text -> Unit uses Console {
+            { "alpha": 10, "beta": 20 } => words!
+            words! -> put(key, 30)
+            words! -> put("beta", 222)
+            words!["gamma"] == 30 -> if { "function-insert" -> println }
+            words!["beta"] == 222 -> if { "function-update" -> println }
+        }
+
+        main {
+            "gamma" -> verifyText
+
+            { "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7 } => grown!
+            grown! -> put("eight", 8)
+            grown!["eight"] == 8 -> if { "entry-growth" -> println }
+
+            true -> if {
+                { "left": 11, "right": 22 } => local!
+                local! -> put("middle", 33)
+                local!["middle"] == 33 -> if { "region-insert" -> println }
+            }
+        }
+        """,
+        ~,
+    ] => sources!
+    sources! -> llvm.emit
+}

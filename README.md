@@ -348,8 +348,8 @@ selects the newest compatible non-yanked release. See the
 
 ## Self-Hosting Progress
 
-The measured roadmap is currently **54/60 equivalent gates (90.0%)**, with
-**6 equivalent gates remaining**.
+The measured roadmap is currently **55/60 equivalent gates (91.7%)**, with
+**5 equivalent gates remaining**.
 
 The Sollang-written compiler is split into lexer, parser/CST/AST, semantic,
 typed-IR, ownership, module-cache, and LLVM modules. It builds a native Stage 2
@@ -365,10 +365,11 @@ a reusable tombstone, preserving collision chains without shifting entries.
 Signed and unsigned one-byte integer keys now use their real H2 hash width in
 all self-host emitter paths. Fixed-width signed and unsigned integer
 dictionaries now use their canonical key/value widths throughout `put`,
-growth, and rehashing. Text-key literals and lookups share the
+growth, and rehashing. Text-key literals, lookups, and mutation share the
 reference compiler's deterministic byte hash and equality in function, region,
-and entry paths. Owned/composite mutation and the remaining non-integer key
-families remain open. Local package
+and entry paths, including replacement and growth-time rehashing.
+Owned/composite mutation and the remaining nominal key families remain open.
+Local package
 identities, SemVer requirements, content-pinned Git dependencies, shared
 deterministic workspace locks, and self-host parsers for both versions and
 lock manifests and registry-index selection are implemented. Exact

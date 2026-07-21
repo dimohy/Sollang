@@ -9547,3 +9547,36 @@ the Release solution build has zero warnings and zero errors. Owned/composite
 key and value mutation still requires transfer,
 replacement-drop, equality, and hashing integration, so generic mutation is not
 closed and formal progress remains **54/60 (90.0%)**.
+
+## D245 - Text Dictionary Mutation Reuses the Canonical Hash Boundary
+
+Self-host dictionary `put` now recognizes a canonical `Text` key independently
+of its 16-byte aggregate storage size. The initial probe hashes the requested
+key through `sollang_dictionary_hash_text`, key matching calls
+`sollang_dictionary_text_equal`, and growth rehashes every occupied stored key
+through the same helper. This removes the invalid transitional lowering that
+treated an aggregate Text key as an integer with width `-1` and attempted an
+aggregate `icmp eq`.
+
+The replacement contract follows Rust's map behavior: when an equal key is
+already stored, the stored key remains stable and only the associated value is
+replaced. This also matches Swift's explicit old-value replacement model and
+keeps the later owned-key rule well-defined: an incoming equal owned key must
+be discarded while the resident key remains. Text itself is a borrowed runtime
+slice, so this checkpoint needs no element drop; owned nominal keys and values
+remain the next ownership boundary.
+
+Example 559 passes a Text function parameter as the inserted key, replaces an
+existing Text key, forces load-factor growth and rehashing, and repeats mutation
+in entry and region paths. LLVM validation, linking, execution, and C# versus
+self-host differential verification pass on Windows and Linux. The complete
+self-host suite passes **348/348** on both targets, and the Release solution
+build has zero warnings and zero errors. This closes the Text-key mutation
+slice and advances formal progress to **55/60 (91.7%)**, with **5 equivalent
+gates remaining**. D240 through D245 account for six checkpoints since the last
+Stage 3 cadence boundary, so the ten-checkpoint Stage 3 run is not due yet.
+
+Research basis:
+
+- [Rust `HashMap::insert`](https://doc.rust-lang.org/std/collections/struct.HashMap.html#method.insert)
+- [Swift `Dictionary.updateValue(_:forKey:)`](https://developer.apple.com/documentation/swift/dictionary/updatevalue%28_%3Aforkey%3A%29)

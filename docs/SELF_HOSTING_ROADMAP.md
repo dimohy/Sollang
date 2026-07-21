@@ -3134,3 +3134,22 @@ the remaining non-integer key families stay open. The complete self-host suite
 passes **347/347** on Windows and Linux, and the Release solution build has zero
 warnings and zero errors. Formal progress remains **54/60 (90.0%)**, with **6
 equivalent gates remaining**.
+
+## D245/example 559 - Text Dictionary Mutation
+
+The self-host `put` path now classifies `Text` from the canonical dictionary
+key type rather than inferring an integer width from its 16-byte storage. It
+uses the shared deterministic Text hash for the requested key and every stored
+key moved during growth, and uses byte equality when checking an H2 candidate.
+The same lowering handles a function-parameter key, entry mutation, region
+mutation, replacement, insertion, and load-factor growth.
+
+Example 559 passes LLVM validation, linking, execution, and C# versus self-host
+differential verification on Windows and Linux. The complete self-host suite
+passes **348/348** on both targets, and the Release solution build has zero
+warnings and zero errors. Text is a borrowed runtime slice, so the remaining
+generic mutation work is owned nominal/composite key and value transfer,
+replacement drop, and trait-based Hash/Eq integration. Formal progress advances
+to **55/60 (91.7%)**, with **5 equivalent gates remaining**. Six checkpoints
+have accumulated from D240 through D245, so Stage 3 remains scheduled for the
+ten-checkpoint cadence boundary.
