@@ -9442,9 +9442,11 @@ symbol rather than treating every one-byte key as a non-hashable fallback.
 Signed keys sign-extend and unsigned keys zero-extend before the shared 64-bit
 mix. The normal, region, and entry emitter paths apply the same rule. Example
 555 proves `Int8(-7)`, `UInt8(250)`, and a region-local `Int8(-9)` dictionary;
-its LLVM assembles, links, and executes on Windows and Linux. Wider integer
-families already use their storage widths, while non-integer hashing and generic
-mutation remain open. Formal progress stays **54/60 (90.0%)**.
+its LLVM assembles, links, and executes on Windows and Linux, and differential
+verification against the C# compiler passes on both targets. The complete
+self-host suite passes **345/345** on Windows and Linux. Wider integer families
+already use their storage widths, while non-integer hashing and generic mutation
+remain open. Formal progress stays **54/60 (90.0%)**.
 
 ## D241 - Dictionary Tombstones Preserve Probe Chains
 
@@ -9466,7 +9468,8 @@ Example 556 uses colliding integer keys `1`, `5`, and `9`: after taking `1`, it
 still finds `5`, reuses the tombstone for `9`, and reports length two. The
 generated LLVM assembles, links, and executes on Windows and Linux. Generic
 key/value mutation and non-integer hashing remain open, so formal progress stays
-**54/60 (90.0%)**. The combined Windows self-host suite passes **345/345**.
+**54/60 (90.0%)**. The combined self-host suite passes **345/345** on Windows
+and Linux.
 
 Research basis:
 
@@ -9483,8 +9486,7 @@ processes; only two invocations of the same case wait for one another.
 
 This fixes `.slg-tmp` deletion and temporary object rename failures observed
 when two sessions ran the same self-host case concurrently. Two simultaneous
-isolated-runner invocations of example 410 both pass, with the second duration
-including its short lock wait. The isolated Release test-runner build completes
-with zero warnings and zero errors, and the complete Windows self-host suite
-passes **345/345**. This reliability checkpoint does not change the formal
+Release-runner invocations of example 410 both pass. The Release solution build
+completes with zero warnings and zero errors, and the mutex-enabled Windows
+self-host suite passes **345/345**. This reliability checkpoint does not change the formal
 **54/60 (90.0%)** language-capability score.

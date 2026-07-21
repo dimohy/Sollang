@@ -3060,9 +3060,11 @@ families as dictionary keys, and self-host conversion expressions resolve
 `Int8` and `UInt8` to their canonical builtin type IDs.
 
 Example 555 assembles, links, and executes signed, unsigned, and region-local
-byte-key lookups on Windows and Linux. This closes the one-byte integer slice;
-non-integer hashing and generic key/value mutation remain open. Formal progress
-stays **54/60 (90.0%)**, with **6 equivalent gates remaining**.
+byte-key lookups on Windows and Linux, with C# differential verification on
+both targets. The complete self-host suite passes **345/345** on Windows and
+Linux. This closes the one-byte integer slice; non-integer hashing and generic
+key/value mutation remain open. Formal progress stays **54/60 (90.0%)**, with
+**6 equivalent gates remaining**.
 
 ## D241/example 556 - Tombstone-Aware Dictionary Mutation
 
@@ -3080,6 +3082,8 @@ correctness boundary inside the partial generic-container/tooling gate but does
 not yet complete generic key/value mutation or non-integer hashing. Formal
 progress therefore remains **54/60 (90.0%)**, with **6 equivalent gates
 remaining**. The combined Windows self-host suite passes **345/345**.
+remaining**. The combined self-host suite passes **345/345** on Windows and
+Linux.
 
 ## D242 - Cross-process Validation Isolation
 
@@ -3090,8 +3094,8 @@ Unrelated cases still execute concurrently. Repeated full-suite failures caused
 by one process deleting another process's `.slg-tmp` directory are therefore
 prevented without turning the suite into a global serial run.
 
-An isolated Release build of the runner has zero warnings and errors, and two
-simultaneous example-410 invocations both pass. The complete Windows self-host
-suite passes **345/345**. This improves validation reliability rather than
+The Release solution build has zero warnings and errors, and two simultaneous
+example-410 invocations both pass. The mutex-enabled Windows self-host suite
+passes **345/345**. This improves validation reliability rather than
 adding a language capability, so formal progress stays **54/60 (90.0%)**, with
 **6 equivalent gates remaining**.
