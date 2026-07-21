@@ -9711,3 +9711,39 @@ Research basis:
 - [Mojo ownership](https://docs.modular.com/mojo/manual/values/ownership)
 - [Mojo lifetimes and origins](https://docs.modular.com/mojo/manual/values/lifetimes)
 - [Swift subscripts](https://docs.swift.org/swift-book/documentation/the-swift-programming-language/subscripts/)
+
+## D250 - One Parser Owns Formatting and LSP Syntax Diagnostics
+
+Sollang now exposes `sollang format` for files, `--check`, and standard-input
+editor integration. The formatter first parses with the compiler's generated
+lexer/parser, canonicalizes block indentation, line endings, trailing spaces,
+and the final newline while preserving multiline-string bodies, then parses the
+result again. Invalid input is never rewritten, and formatting is idempotent.
+
+`sollang language-server` implements LSP JSON-RPC framing, initialize/shutdown,
+whole-document synchronization, parser diagnostics, and document formatting
+over standard input/output. VS Code language support 0.6.0 registers the same
+compiler formatter through the official document-formatting provider API and
+allows an explicit `sollang.compilerPath`; the packaged VSIX contains the
+runtime extension rather than remaining grammar-only.
+
+`scripts/verify-language-tools.mjs` runs the compiler as a real process and
+checks formatter output/idempotence, invalid-source parser diagnostics,
+file/`--check` behavior, and LSP framing/capabilities/formatting/diagnostics/
+shutdown. It passes **4/4** on Windows against the Release DLL and **4/4** on
+Linux against a self-contained `linux-x64` publication. The complete self-host
+suite remains **353/353** on both targets. The VS Code extension packages as
+`sollang-language-support-0.6.0.vsix`; the Release solution build has zero
+warnings and zero errors.
+
+This promotes the grammar-only VS Code gate from partial to complete and the
+missing parser-backed formatter/language-server gate to complete. Formal
+progress advances to **56 complete, 3 partial, 1 missing: 57.5/60 (95.8%)**,
+with **2.5 equivalent gates remaining**. The Stage 3 cadence advances to
+**1/10**.
+
+Research basis:
+
+- [Language Server Protocol](https://microsoft.github.io/language-server-protocol/)
+- [VS Code programmatic language features](https://code.visualstudio.com/api/language-extensions/programmatic-language-features)
+- [VS Code formatting provider API](https://code.visualstudio.com/api/references/vscode-api)

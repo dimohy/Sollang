@@ -133,13 +133,13 @@ not lines of code.
 | --- | ---: | ---: | ---: | ---: | ---: |
 | Core syntax and control flow | 10 | 10 | 0 | 0 | 10.0 |
 | Types, traits, and generics | 12 | 11 | 0 | 1 | 11.0 |
-| Ownership and storage | 10 | 7 | 2 | 1 | 8.0 |
+| Ownership and storage | 10 | 10 | 0 | 0 | 10.0 |
 | Modules, visibility, and builds | 8 | 8 | 0 | 0 | 8.0 |
-| Compiler-construction primitives | 12 | 11 | 1 | 0 | 11.5 |
-| Standard library and tooling | 8 | 2 | 5 | 1 | 4.5 |
-| **Total** | **60** | **49** | **8** | **3** | **53.0 / 60** |
+| Compiler-construction primitives | 12 | 12 | 0 | 0 | 12.0 |
+| Standard library and tooling | 8 | 5 | 3 | 0 | 6.5 |
+| **Total** | **60** | **56** | **3** | **1** | **57.5 / 60** |
 
-Current count-based progress: **88.3% (53 of 60 equivalent gates)**.
+Current count-based progress: **95.8% (57.5 of 60 equivalent gates)**.
 
 The frontend parallel-compilation subproject is **28/28 checks (100%)**. Its
 source-local product boundary, typed callback-result role slice, nested-call
@@ -150,7 +150,7 @@ reject mutable or structurally non-sendable captures. The submitting parent now
 helps drain its task group before the structured join. Exact cancellation and
 partial-result destruction plus full Windows/Linux suite parity are proven.
 This completed feature-local subproject does not promote a roadmap gate.
-There are **7 equivalent gates remaining**. Because the remaining compiler
+There are **2.5 equivalent gates remaining**. Because the remaining compiler
 primitives are harder than early syntax gates, this is not an elapsed-time
 estimate.
 
@@ -276,15 +276,15 @@ milestone without changing the broader 60-gate language-capability score.
 - Partial (0).
 - Missing (1): explicit `dyn Trait`.
 
-### Ownership and storage — 8.0 / 10
+### Ownership and storage — 10 / 10
 
-- Complete (7): unique owned values, readonly borrow by default, `mut` borrow,
+- Complete (10): unique owned values, readonly borrow by default, `mut` borrow,
   explicit `move`, recursive static drop glue, lifetime-based stack placement,
-  explicit `box T`.
-- Partial (2): borrow lifetimes are intentionally narrow; ownership through
-  fully generic containers is not implemented.
-- Missing (1): a complete path-sensitive borrow checker for references returned
-  from functions and stored in user values.
+  explicit `box T`, CFG-sensitive last-use borrow origins, references returned
+  from functions and stored in user values/containers, and recursively owned
+  generic array/dictionary transfer and destruction.
+- Partial (0).
+- Missing (0).
 
 ### Modules, visibility, and builds — 8 / 8
 
@@ -312,9 +312,9 @@ milestone without changing the broader 60-gate language-capability score.
 - Partial (0).
 - Missing (0).
 
-### Compiler-construction primitives — 11.5 / 12
+### Compiler-construction primitives — 12 / 12
 
-- Complete (11): Text values with allocation-free UTF-8 byte search, prefix,
+- Complete (12): Text values with allocation-free UTF-8 byte search, prefix,
   suffix, containment, ordinal comparison, and ASCII case-insensitive equality;
   validated UTF-8 iteration as fixed-width Unicode
   `CodePoint` scalar values, deterministic native file I/O wrappers needed by
@@ -331,16 +331,17 @@ milestone without changing the broader 60-gate language-capability score.
   launch/wait/signal error on Windows and Linux. Reusable source spans now flow
   through Sollang lexer tokens, flat green CST nodes, invalid-byte diagnostics, and
   furthest-unexpected-token diagnostics.
-- Partial (1): generic arrays/dictionaries cover compiler-useful `Int`, `Text`,
-  and user-value payloads plus function contracts, but fully general generic
-  container ownership remains tied to the ownership/storage gate.
+- Partial (0).
+- Missing (0).
 
-### Standard library and tooling — 4.5 / 8
+### Standard library and tooling — 6.5 / 8
 
-- Complete (2): basic `sys.io` and three LLVM-backed target link paths.
-- Partial (5): file/random/time APIs are narrow compiler intrinsics; VS Code
-  support is grammar-only; tests are example-driven without an Sollang unit-test
-  framework. File I/O now monomorphizes canonical scalar `write<T>` and
+- Complete (5): basic `sys.io`, three LLVM-backed target link paths, the
+  reproducible package/build surface, a generated-parser-backed canonical
+  formatter and LSP server, and VS Code parser-backed document formatting.
+- Partial (3): file/random/time APIs remain narrow compiler intrinsics; tests
+  are example-driven without an Sollang unit-test framework. File I/O now
+  monomorphizes canonical scalar `write<T>` and
   zero-input `read<T>` calls with explicit EOF/error results. Affine `File`
   owners and position-based `readAt<T>`/`readAtAsync<T>` remove shared-cursor
   races. Affine `FileWriter` and scalar `writeAt<T>` now provide the symmetric
@@ -357,7 +358,7 @@ milestone without changing the broader 60-gate language-capability score.
   and confined joins. Windows/Linux directory reads now return sorted owned
   snapshots with entry kind metadata; canonical queries and richer metadata
   remain.
-- Missing (1): formatter and language server based on the real parser.
+- Missing (0).
 
 ## Critical Path To Self-Hosting
 

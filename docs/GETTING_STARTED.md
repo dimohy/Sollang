@@ -621,6 +621,30 @@ conditionals, types, and operators, and includes snippets for common forms.
 See [tools/vscode-sollang/README.md](../tools/vscode-sollang/README.md) for
 extension-specific notes.
 
+## Formatting And Language Server
+
+The compiler formats one or more valid Sollang source files in place with its
+generated parser. `--check` performs the same parse and canonicalization but
+returns a nonzero exit code instead of writing changed files:
+
+```powershell
+dotnet run --project src/Sollang.Compiler -- format src/main.slg
+dotnet run --project src/Sollang.Compiler -- format --check src/main.slg
+```
+
+Editor integrations can use standard input without temporary files:
+
+```powershell
+Get-Content src/main.slg -Raw |
+    dotnet run --project src/Sollang.Compiler -- format --stdin
+```
+
+`sollang language-server` speaks JSON-RPC/LSP over standard input and output.
+It synchronizes whole documents, publishes diagnostics from the same generated
+parser, and implements `textDocument/formatting`. The VS Code extension invokes
+the parser-backed formatter directly; set `sollang.compilerPath` if the compiler
+is not on `PATH`.
+
 ## Pipeline
 
 ```mermaid

@@ -32,6 +32,14 @@ internal static class CompilerApp
             {
                 return PackageLock.Resolve(args);
             }
+            if (args is ["format", ..])
+            {
+                return SourceFormatter.Run(args[1..]);
+            }
+            if (args is ["language-server", ..])
+            {
+                return LanguageServer.Run(args[1..]);
+            }
             var options = CliOptions.Parse(args);
             Build(options);
             return 0;
