@@ -9670,3 +9670,44 @@ Research basis:
 
 - [Rust `HashMap::with_capacity`](https://doc.rust-lang.org/std/collections/struct.HashMap.html#method.with_capacity)
 - [Swift `Dictionary.init(minimumCapacity:)`](https://developer.apple.com/documentation/swift/dictionary/init%28minimumcapacity%3A%29)
+
+## D249 - Indexed Owned Elements Remain Places Through Copyable Projection
+
+An index into an owned array or dictionary does not produce a freely movable
+copy of the complete element. It remains a place rooted in the container.
+Field projection preserves that place identity, so a copyable leaf such as an
+`Int` may be loaded directly through `values![key].id` or `items![index].id`
+without pretending that the surrounding owned aggregate escaped the table or
+array.
+
+The reference semantic compiler now infers the indexed source under a bounded
+place borrow and applies the escape decision to the selected field. A field
+that recursively contains owned storage still emits the existing array or
+dictionary diagnostic unless the operation is an allowed readonly borrow;
+moving it out continues to require `take` at the container boundary. This
+keeps the C# compiler aligned with the self-host LLVM emitter, which already
+loaded only the selected copyable field and retained container ownership.
+
+Example 564 covers both dictionary and growable-array projection from an owned
+struct containing a growable payload. Existing projection/index escape
+diagnostics retain the negative contract. Windows and Linux LLVM validation,
+linking, execution, and C# versus self-host differential verification pass.
+The complete self-host suite passes **353/353** on both targets, and the
+Release solution build has zero warnings and zero errors. This hardens the
+already counted generic-container ownership boundary, so formal progress
+remains **56/60 (93.3%)**, with **4 equivalent gates remaining**. D240 through
+D249 reach the required ten-checkpoint Stage 3 boundary. The Windows Stage 2
+compiler passes all **7/7** gates at **13,655,571 LLVM bytes**. Stage 3 emits
+the same 13,655,571 bytes with normalized SHA-256
+`79C50CB68E1CAE235C0B03B4DA85664EA5A3D88B0349B709D23D0356F67D5C1B`,
+and `llvm-as` accepts the result. Linux Stage 2 passes **6/6** at
+**13,652,150 LLVM bytes**. The periodic cadence therefore resets to **0/10**.
+
+Research basis:
+
+- [Rust place expressions and move semantics](https://doc.rust-lang.org/reference/expressions.html#place-expressions-and-value-expressions)
+- [Rust `Index`](https://doc.rust-lang.org/core/ops/trait.Index.html)
+- [Rust `HashMap::entry`](https://doc.rust-lang.org/stable/std/collections/hash_map/enum.Entry.html)
+- [Mojo ownership](https://docs.modular.com/mojo/manual/values/ownership)
+- [Mojo lifetimes and origins](https://docs.modular.com/mojo/manual/values/lifetimes)
+- [Swift subscripts](https://docs.swift.org/swift-book/documentation/the-swift-programming-language/subscripts/)

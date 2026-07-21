@@ -3216,3 +3216,40 @@ pass. The complete self-host suite, with the following projection fixture also
 present, passes **353/353** on both targets; the Release build has zero warnings
 and zero errors. Formal progress remains **56/60 (93.3%)**, with **4 equivalent
 gates remaining**. Stage 3 cadence advances to **9/10**.
+
+## D249/example 564 - Copyable Projection Through Owned Container Elements
+
+Indexing an owned array element or dictionary value now remains a place through
+field projection. The reference semantic compiler permits a direct read only
+when the selected field is copyable; it does not move or duplicate the owned
+aggregate containing that field. Selecting a field that recursively owns
+storage continues to produce the existing escape diagnostic, and `take`
+remains the explicit container-boundary operation for transferring ownership.
+
+Example 564 reads `Int` fields through both an owned dictionary value and an
+owned growable-array element whose enclosing struct also owns a growable
+payload. It prints `owned-direct-projection`, while the existing array,
+dictionary-index, and dictionary-projection diagnostics retain the rejected
+owned-leaf cases. Windows/Linux LLVM validation, execution, and C# versus
+self-host differential verification pass. The complete self-host suite passes
+**353/353** on both targets, and the Release build has zero warnings and zero
+errors.
+
+This is ownership precision inside an already counted gate, so formal progress
+remains **56/60 (93.3%)**, with **4 equivalent gates remaining**. D240 through
+D249 reach **10/10**; the required Stage 3 fixed-point result below resets the
+cadence to **0/10**.
+
+Windows Stage 2 passes **7/7** at **13,655,571 LLVM bytes**. Stage 3 reproduces
+the same byte count and normalized SHA-256
+`79C50CB68E1CAE235C0B03B4DA85664EA5A3D88B0349B709D23D0356F67D5C1B`;
+`llvm-as` accepts the fixed point. Linux Stage 2 independently passes **6/6**
+at **13,652,150 LLVM bytes**. This completes the scheduled reset to **0/10**.
+
+Research basis:
+
+- [Rust place expressions](https://doc.rust-lang.org/reference/expressions.html#place-expressions-and-value-expressions)
+- [Rust `Index`](https://doc.rust-lang.org/core/ops/trait.Index.html)
+- [Mojo ownership and borrowing](https://docs.modular.com/mojo/manual/values/ownership)
+- [Mojo lifetime origins](https://docs.modular.com/mojo/manual/values/lifetimes)
+- [Swift subscripts](https://docs.swift.org/swift-book/documentation/the-swift-programming-language/subscripts/)

@@ -4159,7 +4159,9 @@ internal sealed partial class SemanticCompiler
             allowPrintCall: false,
             allowReadIntCall,
             allowFlowBindingTarget: false,
-            allowOwnedElementBorrow: allowOwnedElementBorrow);
+            // Field access keeps an indexed element as a place. The selected
+            // field below decides whether an owned value would escape.
+            allowOwnedElementBorrow: true);
         if (_types.IsReference(sourceType))
         {
             sourceType = _types.GetReference(sourceType).ElementType;
@@ -4177,6 +4179,38 @@ internal sealed partial class SemanticCompiler
         var field = definition.Fields.FirstOrDefault(candidate => candidate.Name == expression.FieldName);
         if (field is not null)
         {
+            if (_types.ContainsOwnedStorage(field.Type)
+                && !allowOwnedElementBorrow
+                && IndexedProjectionRoot(expression.Source) is { } indexedRoot)
+            {
+                var indexedSourceType = InferExpression(
+                    indexedRoot.Source,
+                    functions,
+                    bindings,
+                    allowPrintCall: false,
+                    allowReadIntCall,
+                    allowFlowBindingTarget: false,
+                    allowOwnedElementBorrow: true);
+                if (_types.IsReference(indexedSourceType))
+                {
+                    indexedSourceType = _types.GetReference(indexedSourceType).ElementType;
+                }
+
+                var indexedElementType = _types.IsDictionary(indexedSourceType)
+                    ? _types.GetDictionary(indexedSourceType).ValueType
+                    : _types.IsStaticArray(indexedSourceType)
+                        ? _types.GetStaticArray(indexedSourceType).ElementType
+                        : _types.IsDynamicArray(indexedSourceType)
+                            ? _types.GetDynamicArray(indexedSourceType).ElementType
+                            : sourceType;
+                var containerName = _types.IsDictionary(indexedSourceType)
+                    ? "dictionary value"
+                    : "array element";
+                throw Error(
+                    indexedRoot.Line,
+                    indexedRoot.Column,
+                    $"indexing owned {containerName} type {FormatType(indexedElementType)} may only borrow it directly for a readonly call; use take to move it out");
+            }
             return field.Type;
         }
 
@@ -4190,6 +4224,15 @@ internal sealed partial class SemanticCompiler
             expression.Line,
             expression.Column,
             $"struct '{definition.Name}' has no field or readonly computed member '{expression.FieldName}'");
+    }
+
+    private static IndexExpression? IndexedProjectionRoot(Expression expression)
+    {
+        while (expression is FieldAccessExpression field)
+        {
+            expression = field.Source;
+        }
+        return expression as IndexExpression;
     }
 
     private BoundType InferTryExpression(

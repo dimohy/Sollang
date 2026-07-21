@@ -1,0 +1,316 @@
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc"
+@sollang_runtime_newline = private constant [1 x i8] c"\0A"
+@sollang_runtime_stdout_buffer = private global [1048576 x i8] zeroinitializer
+@sollang_runtime_stdout_count = private global i64 0
+@sollang_runtime_stdout_written = private global i32 0
+declare ptr @GetStdHandle(i32)
+declare i32 @WriteFile(ptr, ptr, i32, ptr, ptr)
+declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1 immarg)
+define internal void @sollang_runtime_flush_stdout() {
+entry:
+  %count = load i64, ptr @sollang_runtime_stdout_count, align 8
+  %has_data = icmp ugt i64 %count, 0
+  br i1 %has_data, label %write, label %done
+write:
+  %handle = call ptr @GetStdHandle(i32 -11)
+  %count32 = trunc i64 %count to i32
+  %ok = call i32 @WriteFile(ptr %handle, ptr @sollang_runtime_stdout_buffer, i32 %count32, ptr @sollang_runtime_stdout_written, ptr null)
+  store i64 0, ptr @sollang_runtime_stdout_count, align 8
+  br label %done
+done:
+  ret void
+}
+define internal void @sollang_runtime_append_stdout(ptr %data, i64 %len) {
+entry:
+  %count = load i64, ptr @sollang_runtime_stdout_count, align 8
+  %total = add i64 %count, %len
+  %fits = icmp ule i64 %total, 1048576
+  br i1 %fits, label %append, label %flush
+flush:
+  call void @sollang_runtime_flush_stdout()
+  %large = icmp ugt i64 %len, 1048576
+  br i1 %large, label %direct, label %append_empty
+direct:
+  %handle = call ptr @GetStdHandle(i32 -11)
+  %len32 = trunc i64 %len to i32
+  %ok = call i32 @WriteFile(ptr %handle, ptr %data, i32 %len32, ptr @sollang_runtime_stdout_written, ptr null)
+  ret void
+append_empty:
+  call void @llvm.memcpy.p0.p0.i64(ptr @sollang_runtime_stdout_buffer, ptr %data, i64 %len, i1 false)
+  store i64 %len, ptr @sollang_runtime_stdout_count, align 8
+  ret void
+append:
+  %slot = getelementptr i8, ptr @sollang_runtime_stdout_buffer, i64 %count
+  call void @llvm.memcpy.p0.p0.i64(ptr %slot, ptr %data, i64 %len, i1 false)
+  store i64 %total, ptr @sollang_runtime_stdout_count, align 8
+  ret void
+}
+define internal void @sollang_runtime_print(ptr %data, i64 %len, i1 %newline) {
+entry:
+  call void @sollang_runtime_append_stdout(ptr %data, i64 %len)
+  br i1 %newline, label %write_newline, label %done
+write_newline:
+  call void @sollang_runtime_append_stdout(ptr @sollang_runtime_newline, i64 1)
+  br label %done
+done:
+  ret void
+}
+%sollang.struct.m0_s0 = type { i32, %sollang.array.i32 }
+%sollang.array.i32 = type { ptr, i64, i64 }
+declare ptr @malloc(i64)
+declare void @free(ptr)
+%sollang.dict = type { ptr, ptr, i64, i64 }
+define internal void @sollang_drop_t25(%sollang.array.i32 %value) {
+entry:
+  %data = extractvalue %sollang.array.i32 %value, 0
+  %length = extractvalue %sollang.array.i32 %value, 1
+  call void @free(ptr %data)
+  ret void
+}
+define internal void @sollang_drop_t26(%sollang.struct.m0_s0 %value) {
+entry:
+  %field1 = extractvalue %sollang.struct.m0_s0 %value, 1
+  call void @sollang_drop_t25(%sollang.array.i32 %field1)
+  ret void
+}
+define internal void @sollang_drop_t28(%sollang.array.i32 %value) {
+entry:
+  %data = extractvalue %sollang.array.i32 %value, 0
+  %length = extractvalue %sollang.array.i32 %value, 1
+  br label %loop
+loop:
+  %index = phi i64 [ 0, %entry ], [ %next, %continue ]
+  %in_range = icmp ult i64 %index, %length
+  br i1 %in_range, label %item, label %done
+item:
+  %slot = getelementptr %sollang.struct.m0_s0, ptr %data, i64 %index
+  %element = load %sollang.struct.m0_s0, ptr %slot, align 8
+  call void @sollang_drop_t26(%sollang.struct.m0_s0 %element)
+  br label %continue
+continue:
+  %next = add i64 %index, 1
+  br label %loop
+done:
+  call void @free(ptr %data)
+  ret void
+}
+define internal void @sollang_drop_t29(%sollang.dict %value) {
+entry:
+  %keys = extractvalue %sollang.dict %value, 0
+  %values = extractvalue %sollang.dict %value, 1
+  %length = extractvalue %sollang.dict %value, 2
+  %capacity = extractvalue %sollang.dict %value, 3
+  %control_offset = mul i64 %capacity, 4
+  %controls = getelementptr i8, ptr %keys, i64 %control_offset
+  br label %loop
+loop:
+  %index = phi i64 [ 0, %entry ], [ %next, %continue ]
+  %in_range = icmp ult i64 %index, %capacity
+  br i1 %in_range, label %check, label %done
+check:
+  %control_slot = getelementptr i8, ptr %controls, i64 %index
+  %control = load i8, ptr %control_slot, align 1
+  %occupied = icmp sgt i8 %control, 0
+  br i1 %occupied, label %item, label %continue
+item:
+  %value_slot = getelementptr %sollang.struct.m0_s0, ptr %values, i64 %index
+  %item_value = load %sollang.struct.m0_s0, ptr %value_slot, align 8
+  call void @sollang_drop_t26(%sollang.struct.m0_s0 %item_value)
+  br label %continue
+continue:
+  %next = add i64 %index, 1
+  br label %loop
+done:
+  call void @free(ptr %keys)
+  call void @free(ptr %values)
+  ret void
+}
+declare void @llvm.trap()
+%sollang.text = type { ptr, i64 }
+@sollang_str_31 = private unnamed_addr constant [23 x i8] c"owned-direct-projection"
+define i32 @main() {
+entry:
+  %slot1 = alloca %sollang.dict, align 8
+  %slot2 = alloca %sollang.array.i32, align 8
+  %v7_data = call ptr @malloc(i64 8)
+  %v7_ptr0 = getelementptr i32, ptr %v7_data, i64 0
+  store i32 10, ptr %v7_ptr0, align 4
+  %v7_ptr1 = getelementptr i32, ptr %v7_data, i64 1
+  store i32 20, ptr %v7_ptr1, align 4
+  %v7_0 = insertvalue %sollang.array.i32 poison, ptr %v7_data, 0
+  %v7_1 = insertvalue %sollang.array.i32 %v7_0, i64 2, 1
+  %v7 = insertvalue %sollang.array.i32 %v7_1, i64 2, 2
+  %v13_data = call ptr @malloc(i64 8)
+  %v13_ptr0 = getelementptr i32, ptr %v13_data, i64 0
+  store i32 30, ptr %v13_ptr0, align 4
+  %v13_ptr1 = getelementptr i32, ptr %v13_data, i64 1
+  store i32 40, ptr %v13_ptr1, align 4
+  %v13_0 = insertvalue %sollang.array.i32 poison, ptr %v13_data, 0
+  %v13_1 = insertvalue %sollang.array.i32 %v13_0, i64 2, 1
+  %v13 = insertvalue %sollang.array.i32 %v13_1, i64 2, 2
+  %v5_f0 = insertvalue %sollang.struct.m0_s0 poison, i32 42, 0
+  %v5 = insertvalue %sollang.struct.m0_s0 %v5_f0, %sollang.array.i32 %v7, 1
+  %v11_f0 = insertvalue %sollang.struct.m0_s0 poison, i32 8, 0
+  %v11 = insertvalue %sollang.struct.m0_s0 %v11_f0, %sollang.array.i32 %v13, 1
+  %v3_keys = call ptr @malloc(i64 5)
+  %v3_controls = getelementptr i8, ptr %v3_keys, i64 4
+  call void @llvm.memset.p0.i64(ptr %v3_controls, i8 0, i64 1, i1 false)
+  %v3_values = call ptr @malloc(i64 32)
+  %v3_keys_ptr0 = getelementptr i32, ptr %v3_keys, i64 0
+  store i32 1, ptr %v3_keys_ptr0, align 4
+  %v3_control_ptr0 = getelementptr i8, ptr %v3_controls, i64 0
+  %v3_control_hash_loaded0 = load i32, ptr %v3_keys_ptr0, align 4
+  %v3_control_hash_key0 = sext i32 %v3_control_hash_loaded0 to i64
+  %v3_control_hash_high0 = lshr i64 %v3_control_hash_key0, 32
+  %v3_control_hash_fold0 = xor i64 %v3_control_hash_key0, %v3_control_hash_high0
+  %v3_control_hash0 = mul i64 %v3_control_hash_fold0, -7046029254386353131
+  %v3_control_h2_shifted0 = lshr i64 %v3_control_hash0, 57
+  %v3_control_h2_raw0 = and i64 %v3_control_h2_shifted0, 127
+  %v3_control_h2_zero0 = icmp eq i64 %v3_control_h2_raw0, 0
+  %v3_control_h2_value0 = select i1 %v3_control_h2_zero0, i64 1, i64 %v3_control_h2_raw0
+  %v3_control_h20 = trunc i64 %v3_control_h2_value0 to i8
+  store i8 %v3_control_h20, ptr %v3_control_ptr0, align 1
+  %v3_values_ptr0 = getelementptr %sollang.struct.m0_s0, ptr %v3_values, i64 0
+  store %sollang.struct.m0_s0 %v5, ptr %v3_values_ptr0, align 8
+  %v3_0 = insertvalue %sollang.dict poison, ptr %v3_keys, 0
+  %v3_1 = insertvalue %sollang.dict %v3_0, ptr %v3_values, 1
+  %v3_2 = insertvalue %sollang.dict %v3_1, i64 1, 2
+  %v3 = insertvalue %sollang.dict %v3_2, i64 1, 3
+  %v10_data = call ptr @malloc(i64 32)
+  %v10_ptr0 = getelementptr %sollang.struct.m0_s0, ptr %v10_data, i64 0
+  store %sollang.struct.m0_s0 %v11, ptr %v10_ptr0, align 8
+  %v10_0 = insertvalue %sollang.array.i32 poison, ptr %v10_data, 0
+  %v10_1 = insertvalue %sollang.array.i32 %v10_0, i64 1, 1
+  %v10 = insertvalue %sollang.array.i32 %v10_1, i64 1, 2
+  store %sollang.dict %v3, ptr %slot1, align 8
+  store %sollang.array.i32 %v10, ptr %slot2, align 8
+  %v21 = load %sollang.dict, ptr %slot1, align 8
+  %v25 = load %sollang.array.i32, ptr %slot2, align 8
+  %v20_dictionary = load %sollang.dict, ptr %slot1, align 8
+  %v20_keys = extractvalue %sollang.dict %v20_dictionary, 0
+  %v20_values = extractvalue %sollang.dict %v20_dictionary, 1
+  %v20_length = extractvalue %sollang.dict %v20_dictionary, 2
+  %v20_capacity = extractvalue %sollang.dict %v20_dictionary, 3
+  %v20_control_offset = mul i64 %v20_capacity, 4
+  %v20_controls = getelementptr i8, ptr %v20_keys, i64 %v20_control_offset
+  %v20_hash_key = sext i32 1 to i64
+  %v20_hash_high = lshr i64 %v20_hash_key, 32
+  %v20_hash_fold = xor i64 %v20_hash_key, %v20_hash_high
+  %v20_hash = mul i64 %v20_hash_fold, -7046029254386353131
+  %v20_h2_shifted = lshr i64 %v20_hash, 57
+  %v20_h2_raw = and i64 %v20_h2_shifted, 127
+  %v20_h2_zero = icmp eq i64 %v20_h2_raw, 0
+  %v20_h2_value = select i1 %v20_h2_zero, i64 1, i64 %v20_h2_raw
+  %v20_h2 = trunc i64 %v20_h2_value to i8
+  %v20_start_slot = urem i64 %v20_hash, %v20_capacity
+  br label %dict20_start
+dict20_start:
+  br label %dict20_loop
+dict20_loop:
+  %v20_slot = phi i64 [ %v20_start_slot, %dict20_start ], [ %v20_next, %dict20_advance ], [ %v20_group_next, %dict20_group_advance ]
+  %v20_probe = phi i64 [ 0, %dict20_start ], [ %v20_probe_next, %dict20_advance ], [ %v20_group_probe_next, %dict20_group_advance ]
+  %v20_in_range = icmp ult i64 %v20_probe, %v20_capacity
+  br i1 %v20_in_range, label %dict20_check, label %dict20_missing
+dict20_check:
+  %v20_control_ptr = getelementptr i8, ptr %v20_controls, i64 %v20_slot
+  %v20_control = load i8, ptr %v20_control_ptr, align 1
+  %v20_occupied = icmp ne i8 %v20_control, 0
+  %v20_group_unwrapped1 = add i64 %v20_slot, 1
+  %v20_group_slot1 = urem i64 %v20_group_unwrapped1, %v20_capacity
+  %v20_group_unwrapped2 = add i64 %v20_slot, 2
+  %v20_group_slot2 = urem i64 %v20_group_unwrapped2, %v20_capacity
+  %v20_group_unwrapped3 = add i64 %v20_slot, 3
+  %v20_group_slot3 = urem i64 %v20_group_unwrapped3, %v20_capacity
+  %v20_group_unwrapped4 = add i64 %v20_slot, 4
+  %v20_group_slot4 = urem i64 %v20_group_unwrapped4, %v20_capacity
+  %v20_group_unwrapped5 = add i64 %v20_slot, 5
+  %v20_group_slot5 = urem i64 %v20_group_unwrapped5, %v20_capacity
+  %v20_group_unwrapped6 = add i64 %v20_slot, 6
+  %v20_group_slot6 = urem i64 %v20_group_unwrapped6, %v20_capacity
+  %v20_group_unwrapped7 = add i64 %v20_slot, 7
+  %v20_group_slot7 = urem i64 %v20_group_unwrapped7, %v20_capacity
+  %v20_group_ptr1 = getelementptr i8, ptr %v20_controls, i64 %v20_group_slot1
+  %v20_group_ptr2 = getelementptr i8, ptr %v20_controls, i64 %v20_group_slot2
+  %v20_group_ptr3 = getelementptr i8, ptr %v20_controls, i64 %v20_group_slot3
+  %v20_group_ptr4 = getelementptr i8, ptr %v20_controls, i64 %v20_group_slot4
+  %v20_group_ptr5 = getelementptr i8, ptr %v20_controls, i64 %v20_group_slot5
+  %v20_group_ptr6 = getelementptr i8, ptr %v20_controls, i64 %v20_group_slot6
+  %v20_group_ptr7 = getelementptr i8, ptr %v20_controls, i64 %v20_group_slot7
+  %v20_group_control1 = load i8, ptr %v20_group_ptr1, align 1
+  %v20_group_control2 = load i8, ptr %v20_group_ptr2, align 1
+  %v20_group_control3 = load i8, ptr %v20_group_ptr3, align 1
+  %v20_group_control4 = load i8, ptr %v20_group_ptr4, align 1
+  %v20_group_control5 = load i8, ptr %v20_group_ptr5, align 1
+  %v20_group_control6 = load i8, ptr %v20_group_ptr6, align 1
+  %v20_group_control7 = load i8, ptr %v20_group_ptr7, align 1
+  %v20_group_match0 = icmp eq i8 %v20_control, %v20_h2
+  %v20_group_match1 = icmp eq i8 %v20_group_control1, %v20_h2
+  %v20_group_match2 = icmp eq i8 %v20_group_control2, %v20_h2
+  %v20_group_match3 = icmp eq i8 %v20_group_control3, %v20_h2
+  %v20_group_match4 = icmp eq i8 %v20_group_control4, %v20_h2
+  %v20_group_match5 = icmp eq i8 %v20_group_control5, %v20_h2
+  %v20_group_match6 = icmp eq i8 %v20_group_control6, %v20_h2
+  %v20_group_match7 = icmp eq i8 %v20_group_control7, %v20_h2
+  %v20_group_match01 = or i1 %v20_group_match0, %v20_group_match1
+  %v20_group_match23 = or i1 %v20_group_match2, %v20_group_match3
+  %v20_group_match45 = or i1 %v20_group_match4, %v20_group_match5
+  %v20_group_match67 = or i1 %v20_group_match6, %v20_group_match7
+  %v20_group_match0123 = or i1 %v20_group_match01, %v20_group_match23
+  %v20_group_match4567 = or i1 %v20_group_match45, %v20_group_match67
+  %v20_group_has_match = or i1 %v20_group_match0123, %v20_group_match4567
+  %v20_group_candidate_offset7 = select i1 %v20_group_match7, i64 7, i64 0
+  %v20_group_candidate_offset6 = select i1 %v20_group_match6, i64 6, i64 %v20_group_candidate_offset7
+  %v20_group_candidate_offset5 = select i1 %v20_group_match5, i64 5, i64 %v20_group_candidate_offset6
+  %v20_group_candidate_offset4 = select i1 %v20_group_match4, i64 4, i64 %v20_group_candidate_offset5
+  %v20_group_candidate_offset3 = select i1 %v20_group_match3, i64 3, i64 %v20_group_candidate_offset4
+  %v20_group_candidate_offset2 = select i1 %v20_group_match2, i64 2, i64 %v20_group_candidate_offset3
+  %v20_group_candidate_offset1 = select i1 %v20_group_match1, i64 1, i64 %v20_group_candidate_offset2
+  %v20_group_candidate_offset = select i1 %v20_group_match0, i64 0, i64 %v20_group_candidate_offset1
+  %v20_group_candidate_unwrapped = add i64 %v20_slot, %v20_group_candidate_offset
+  %v20_group_candidate_slot = urem i64 %v20_group_candidate_unwrapped, %v20_capacity
+  br i1 %v20_group_has_match, label %dict20_h2_check, label %dict20_group_advance
+dict20_group_advance:
+  %v20_group_next_unwrapped = add i64 %v20_slot, 8
+  %v20_group_next = urem i64 %v20_group_next_unwrapped, %v20_capacity
+  %v20_group_probe_next = add i64 %v20_probe, 8
+  br label %dict20_loop
+dict20_h2_check:
+  br label %dict20_key_check
+dict20_key_check:
+  %v20_key_ptr = getelementptr i32, ptr %v20_keys, i64 %v20_group_candidate_slot
+  %v20_key = load i32, ptr %v20_key_ptr, align 4
+  %v20_found = icmp eq i32 %v20_key, 1
+  br i1 %v20_found, label %dict20_hit, label %dict20_advance
+dict20_advance:
+  %v20_next_unwrapped = add i64 %v20_slot, 1
+  %v20_next = urem i64 %v20_next_unwrapped, %v20_capacity
+  %v20_probe_next = add i64 %v20_probe, 1
+  br label %dict20_loop
+dict20_missing:
+  call void @llvm.trap()
+  unreachable
+dict20_hit:
+  %v20_value_ptr = getelementptr %sollang.struct.m0_s0, ptr %v20_values, i64 %v20_group_candidate_slot
+  %v20 = load %sollang.struct.m0_s0, ptr %v20_value_ptr, align 8
+  %v24_data = extractvalue %sollang.array.i32 %v25, 0
+  %v24_ptr = getelementptr %sollang.struct.m0_s0, ptr %v24_data, i64 0
+  %v24 = load %sollang.struct.m0_s0, ptr %v24_ptr, align 8
+  %v19 = extractvalue %sollang.struct.m0_s0 %v20, 0
+  %v23 = extractvalue %sollang.struct.m0_s0 %v24, 0
+  %v18 = add i32 %v19, %v23
+  %v17 = icmp eq i32 %v18, 50
+  br i1 %v17, label %if28_then, label %if28_merge
+if28_then:
+  %v31_ptr = insertvalue %sollang.text poison, ptr @sollang_str_31, 0
+  %v31 = insertvalue %sollang.text %v31_ptr, i64 23, 1
+  call void @sollang_runtime_print(ptr @sollang_str_31, i64 23, i1 true)
+  br label %if28_merge
+if28_merge:
+  %cleanup6_b2_current = load %sollang.array.i32, ptr %slot2, align 8
+  call void @sollang_drop_t28(%sollang.array.i32 %cleanup6_b2_current)
+  %cleanup6_b1_current = load %sollang.dict, ptr %slot1, align 8
+  call void @sollang_drop_t29(%sollang.dict %cleanup6_b1_current)
+  call void @sollang_runtime_flush_stdout()
+  ret i32 0
+}

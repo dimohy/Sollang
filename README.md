@@ -375,7 +375,10 @@ while equal-key replacement retains the resident key and destroys the incoming
 owner.
 Owned nominal values now transfer into dictionary storage, displaced values are
 dropped before replacement, and growth preserves the single owner. Owned
-nominal keys and their Hash/Eq contract remain open.
+nominal keys use the same static `Hash`/`Eq` contract across lookup, mutation,
+growth, and rehashing. Copyable fields may be read directly through indexed
+owned array or dictionary elements, while moving an owned field still requires
+an explicit `take` at the container boundary.
 Local package
 identities, SemVer requirements, content-pinned Git dependencies, shared
 deterministic workspace locks, and self-host parsers for both versions and
