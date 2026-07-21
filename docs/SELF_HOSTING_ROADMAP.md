@@ -3081,7 +3081,6 @@ assembles, links, and executes the result on Windows and Linux. This closes a
 correctness boundary inside the partial generic-container/tooling gate but does
 not yet complete generic key/value mutation or non-integer hashing. Formal
 progress therefore remains **54/60 (90.0%)**, with **6 equivalent gates
-remaining**. The combined Windows self-host suite passes **345/345**.
 remaining**. The combined self-host suite passes **345/345** on Windows and
 Linux.
 

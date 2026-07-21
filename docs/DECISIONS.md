@@ -9488,5 +9488,5 @@ This fixes `.slg-tmp` deletion and temporary object rename failures observed
 when two sessions ran the same self-host case concurrently. Two simultaneous
 Release-runner invocations of example 410 both pass. The Release solution build
 completes with zero warnings and zero errors, and the mutex-enabled Windows
-self-host suite passes **345/345**. This reliability checkpoint does not change the formal
-**54/60 (90.0%)** language-capability score.
+self-host suite passes **345/345**. This reliability checkpoint does not change
+the formal **54/60 (90.0%)** language-capability score.
