@@ -9580,3 +9580,31 @@ Research basis:
 
 - [Rust `HashMap::insert`](https://doc.rust-lang.org/std/collections/struct.HashMap.html#method.insert)
 - [Swift `Dictionary.updateValue(_:forKey:)`](https://developer.apple.com/documentation/swift/dictionary/updatevalue%28_%3Aforkey%3A%29)
+
+## D246 - Dictionary Put Transfers Owned Values Exactly Once
+
+Self-host dictionary `put` now treats an owned value argument as a transfer
+into the table. Final function and region/entry cleanup recognize the exact
+value binding consumed by opcode `-223`, including nominal types whose
+ownership is carried by the canonical semantic type rather than a shallow IR
+origin. The source binding is therefore not destroyed after the dictionary has
+taken responsibility for it.
+
+When lookup finds an equal key, lowering loads and drops the resident owned
+value before storing the replacement. Insertion stores the incoming owner
+without copying its drop obligation. Growth moves occupied values into the new
+allocation, then frees only the old raw key/value buffers; element destruction
+remains the responsibility of the new table. These rules prevent both the
+previous replacement leak and the source/table double free.
+
+Example 560 uses `Int` keys and an owned nominal value containing a growable
+array. It replaces an existing value, inserts another value across load-factor
+growth, reads both results, and exits through dictionary cleanup. LLVM
+validation, linking, execution, and C# versus self-host differential
+verification pass on Windows and Linux. The complete self-host suite passes
+**349/349** on both targets. Owned nominal keys still require the resident-key
+retention, incoming-key destruction, and trait-based Hash/Eq contract, so this
+checkpoint does not close another equivalent gate: formal progress remains
+**55/60 (91.7%)**, with **5 equivalent gates remaining**. Seven checkpoints
+have accumulated from D240 through D246, below the ten-checkpoint Stage 3
+cadence boundary.

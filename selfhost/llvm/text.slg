@@ -3940,6 +3940,15 @@ emitCore context: EmitContext -> Unit uses Console {
                 "  %put$(putIndex)_update_in_place_ptr = getelementptr " -> print
                 putValueTypeId! >= 0 -> if { putValueTypeId! -> writeSemanticTypeId } else { putSource.typeSymbol -> llvmType -> print }
                 ", ptr %put$(putIndex)_old_values, i64 %put$(putIndex)_lookup_slot" -> println
+                (putValueTypeId! >= 0 and (putValueTypeId! -> semanticTypeOwns)) -> if {
+                    "  %put$(putIndex)_update_previous = load " -> print
+                    putValueTypeId! -> writeSemanticTypeId
+                    ", ptr %put$(putIndex)_update_in_place_ptr, align " -> print
+                    context.typeAligns[putValueTypeId!] -> writeDecimalLine
+                    "  call void @sollang_drop_t$(putValueTypeId!)(" -> print
+                    putValueTypeId! -> writeSemanticTypeId
+                    " %put$(putIndex)_update_previous)" -> println
+                }
                 "  store " -> print
                 putValueTypeId! >= 0 -> if { putValueTypeId! -> writeSemanticTypeId } else { putSource.typeSymbol -> llvmType -> print }
                 " " -> print
@@ -5217,11 +5226,11 @@ emitCore context: EmitContext -> Unit uses Console {
             false => ownedDropHasPartialMoves!
             true => ownedDropIsRoot!
             ownedDropIndex! => ownedDropRoot!
-            (ownedDropCandidate.kind == 17 and ownedDropCandidate.parent == request.regionIndex and (ownedDropCandidate -> ownsType)) -> if {
+            (ownedDropCandidate.kind == 17 and ownedDropCandidate.parent == request.regionIndex and ((ownedDropCandidate -> ownsType) or (ownedDropCandidate.typeId >= 0 and (ownedDropCandidate.typeId -> semanticTypeOwns)))) -> if {
                 ownedDropIndex! -> mutableBindingRoot => ownedDropRoot!
                 ownedDropRoot! != ownedDropIndex! -> if { false => ownedDropIsRoot! }
             }
-            (ownedDropCandidate.kind == 17 and (ownedDropCandidate -> ownsType)) -> if {
+            (ownedDropCandidate.kind == 17 and ((ownedDropCandidate -> ownsType) or (ownedDropCandidate.typeId >= 0 and (ownedDropCandidate.typeId -> semanticTypeOwns)))) -> if {
                 0 => ownedMoveIndex!
                 (ownedMoveIndex! < (context.moves -> len) and not ownedDropMoved!) -> while {
                     context.moves[ownedMoveIndex!] => ownedMove
@@ -5235,6 +5244,28 @@ emitCore context: EmitContext -> Unit uses Console {
                         ((ownedMoveCall -> sourceStart) > (ownedDropCandidate -> sourceStart) and ownedMoveBeforeEdge!) -> if { true => ownedDropMoved! }
                     }
                     ownedMoveIndex! + 1 => ownedMoveIndex!
+                }
+                0 => ownedPutMoveIndex!
+                (ownedPutMoveIndex! < (context.ir -> len) and not ownedDropMoved!) -> while {
+                    context.ir[ownedPutMoveIndex!] => ownedPutMove
+                    (ownedPutMove.kind == 9 and ownedPutMove.opcode == -223 and ownedPutMove.operand1 >= 0 and ownedPutMove.operand1 < (context.ir -> len)) -> if {
+                        context.ir[ownedPutMove.operand1] => ownedPutMoveKey
+                        ownedPutMoveKey.nextOperand => ownedPutMoveValueIndex
+                        (ownedPutMoveValueIndex >= 0 and ownedPutMoveValueIndex < (context.ir -> len)) -> if {
+                            context.ir[ownedPutMoveValueIndex] => ownedPutMoveValue
+                            (ownedPutMoveValue.kind == 5 and ownedPutMoveValue.operand0 >= 0 and ownedPutMoveValue.operand0 < (context.ir -> len)) -> if {
+                                ownedPutMoveValue.operand0 -> mutableBindingRoot => ownedPutMoveRoot
+                                true => ownedPutMoveBeforeEdge!
+                                request.beforeAst >= 0 -> if {
+                                    (ownedPutMove -> sourceStart) >= dropBeforeStart! -> if { false => ownedPutMoveBeforeEdge! }
+                                }
+                                (ownedPutMoveRoot == ownedDropRoot! and (ownedPutMove -> sourceStart) > (ownedDropCandidate -> sourceStart) and ownedPutMoveBeforeEdge!) -> if {
+                                    true => ownedDropMoved!
+                                }
+                            }
+                        }
+                    }
+                    ownedPutMoveIndex! + 1 => ownedPutMoveIndex!
                 }
             }
             (ownedDropBeforeEdge! and ownedDropIsRoot! and not ownedDropMoved! and not ownedDropHasPartialMoves! and ownedDropCandidate.kind == 17 and ownedDropCandidate.parent == request.regionIndex and ownedDropCandidate.typeId >= 0 and (ownedDropCandidate.typeId -> semanticTypeOwns) and ownedDropCandidate.symbol != request.transferredSymbol) -> if {
@@ -9576,7 +9607,7 @@ emitCore context: EmitContext -> Unit uses Console {
                 false => dropCandidateHasPartialMoves!
                 true => dropCandidateIsRoot!
                 dropIndex! => dropCandidateRoot!
-                (dropCandidate.kind == 17 and dropCandidate.parent == function.operand0 and (dropCandidate -> ownsType)) -> if {
+                (dropCandidate.kind == 17 and dropCandidate.parent == function.operand0 and ((dropCandidate -> ownsType) or (dropCandidate.typeId >= 0 and (dropCandidate.typeId -> semanticTypeOwns)))) -> if {
                     dropIndex! -> mutableBindingRoot => dropCandidateRoot!
                     dropCandidateRoot! != dropIndex! -> if { false => dropCandidateIsRoot! }
                 }
@@ -9588,7 +9619,7 @@ emitCore context: EmitContext -> Unit uses Console {
                         returnedBindingRoot == dropCandidateRoot! -> if { true => dropCandidateReturned! }
                     }
                 }
-                (dropCandidate.kind == 17 and (dropCandidate -> ownsType)) -> if {
+                (dropCandidate.kind == 17 and ((dropCandidate -> ownsType) or (dropCandidate.typeId >= 0 and (dropCandidate.typeId -> semanticTypeOwns)))) -> if {
                     0 => dropMoveIndex!
                     (dropMoveIndex! < (context.moves -> len) and not dropCandidateMoved!) -> while {
                         context.moves[dropMoveIndex!] => dropMove
@@ -9598,6 +9629,29 @@ emitCore context: EmitContext -> Unit uses Console {
                             (dropMoveCall -> sourceStart) > (dropCandidate -> sourceStart) -> if { true => dropCandidateMoved! }
                         }
                         dropMoveIndex! + 1 => dropMoveIndex!
+                    }
+                    # Dictionary put transfers its value argument into the
+                    # resident table. Detect that call locally for final
+                    # cleanup so adding the container contract does not
+                    # retroactively change ownership while compiling the
+                    # self-host compiler itself.
+                    0 => putMoveIndex!
+                    (putMoveIndex! < (context.ir -> len) and not dropCandidateMoved!) -> while {
+                        context.ir[putMoveIndex!] => putMove
+                        (putMove.kind == 9 and putMove.opcode == -223 and putMove.operand1 >= 0 and putMove.operand1 < (context.ir -> len)) -> if {
+                            context.ir[putMove.operand1] => putMoveKey
+                            putMoveKey.nextOperand => putMoveValueIndex
+                            (putMoveValueIndex >= 0 and putMoveValueIndex < (context.ir -> len)) -> if {
+                                context.ir[putMoveValueIndex] => putMoveValue
+                                (putMoveValue.kind == 5 and putMoveValue.operand0 >= 0 and putMoveValue.operand0 < (context.ir -> len)) -> if {
+                                    putMoveValue.operand0 -> mutableBindingRoot => putMoveRoot
+                                    (putMoveRoot == dropCandidateRoot! and (putMove -> sourceStart) > (dropCandidate -> sourceStart)) -> if {
+                                        true => dropCandidateMoved!
+                                    }
+                                }
+                            }
+                        }
+                        putMoveIndex! + 1 => putMoveIndex!
                     }
                 }
                 ((dropCandidate.kind == 12 or dropCandidate.kind == 14 or dropCandidate.kind == 16 or dropCandidate.kind == 26) and dropCandidate.typeId >= 0 and (dropCandidate.typeId -> semanticTypeOwns) and dropCandidate.parent == function.operand0 and dropIndex! != returnValueIndex) -> if {

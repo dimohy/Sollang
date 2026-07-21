@@ -368,7 +368,9 @@ dictionaries now use their canonical key/value widths throughout `put`,
 growth, and rehashing. Text-key literals, lookups, and mutation share the
 reference compiler's deterministic byte hash and equality in function, region,
 and entry paths, including replacement and growth-time rehashing.
-Owned/composite mutation and the remaining nominal key families remain open.
+Owned nominal values now transfer into dictionary storage, displaced values are
+dropped before replacement, and growth preserves the single owner. Owned
+nominal keys and their Hash/Eq contract remain open.
 Local package
 identities, SemVer requirements, content-pinned Git dependencies, shared
 deterministic workspace locks, and self-host parsers for both versions and

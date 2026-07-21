@@ -3153,3 +3153,25 @@ replacement drop, and trait-based Hash/Eq integration. Formal progress advances
 to **55/60 (91.7%)**, with **5 equivalent gates remaining**. Six checkpoints
 have accumulated from D240 through D245, so Stage 3 remains scheduled for the
 ten-checkpoint cadence boundary.
+
+## D246/example 560 - Owned Dictionary Value Transfer
+
+The self-host `put` path now transfers an owned nominal value into dictionary
+storage. Cleanup in normal functions and region/entry edges detects the exact
+value binding passed to opcode `-223`, including canonical semantic ownership
+that is not visible through the shallow legacy type origin. A moved source is
+not dropped again after the table takes ownership.
+
+Equal-key replacement loads and drops the resident owned value before storing
+the incoming owner. Missing-key insertion stores that owner directly, while
+growth rehashes occupied aggregates into new storage and frees only the old raw
+buffers. Example 560 combines replacement, insertion, 2-to-4 growth, indexed
+reads, and final recursive dictionary cleanup with an owned struct containing
+a growable array.
+
+Windows and Linux LLVM validation, linking, execution, and C# versus self-host
+differential verification pass. The complete self-host suite passes
+**349/349** on both targets. Owned nominal keys and trait-based Hash/Eq remain
+open, so formal progress stays **55/60 (91.7%)**, with **5 equivalent gates
+remaining**. D240 through D246 comprise seven checkpoints; the ten-checkpoint
+Stage 3 cadence boundary is not yet due.

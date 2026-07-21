@@ -1,0 +1,1107 @@
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc"
+@sollang_runtime_newline = private constant [1 x i8] c"\0A"
+@sollang_runtime_stdout_buffer = private global [1048576 x i8] zeroinitializer
+@sollang_runtime_stdout_count = private global i64 0
+@sollang_runtime_stdout_written = private global i32 0
+declare ptr @GetStdHandle(i32)
+declare i32 @WriteFile(ptr, ptr, i32, ptr, ptr)
+declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1 immarg)
+define internal void @sollang_runtime_flush_stdout() {
+entry:
+  %count = load i64, ptr @sollang_runtime_stdout_count, align 8
+  %has_data = icmp ugt i64 %count, 0
+  br i1 %has_data, label %write, label %done
+write:
+  %handle = call ptr @GetStdHandle(i32 -11)
+  %count32 = trunc i64 %count to i32
+  %ok = call i32 @WriteFile(ptr %handle, ptr @sollang_runtime_stdout_buffer, i32 %count32, ptr @sollang_runtime_stdout_written, ptr null)
+  store i64 0, ptr @sollang_runtime_stdout_count, align 8
+  br label %done
+done:
+  ret void
+}
+define internal void @sollang_runtime_append_stdout(ptr %data, i64 %len) {
+entry:
+  %count = load i64, ptr @sollang_runtime_stdout_count, align 8
+  %total = add i64 %count, %len
+  %fits = icmp ule i64 %total, 1048576
+  br i1 %fits, label %append, label %flush
+flush:
+  call void @sollang_runtime_flush_stdout()
+  %large = icmp ugt i64 %len, 1048576
+  br i1 %large, label %direct, label %append_empty
+direct:
+  %handle = call ptr @GetStdHandle(i32 -11)
+  %len32 = trunc i64 %len to i32
+  %ok = call i32 @WriteFile(ptr %handle, ptr %data, i32 %len32, ptr @sollang_runtime_stdout_written, ptr null)
+  ret void
+append_empty:
+  call void @llvm.memcpy.p0.p0.i64(ptr @sollang_runtime_stdout_buffer, ptr %data, i64 %len, i1 false)
+  store i64 %len, ptr @sollang_runtime_stdout_count, align 8
+  ret void
+append:
+  %slot = getelementptr i8, ptr @sollang_runtime_stdout_buffer, i64 %count
+  call void @llvm.memcpy.p0.p0.i64(ptr %slot, ptr %data, i64 %len, i1 false)
+  store i64 %total, ptr @sollang_runtime_stdout_count, align 8
+  ret void
+}
+define internal void @sollang_runtime_print(ptr %data, i64 %len, i1 %newline) {
+entry:
+  call void @sollang_runtime_append_stdout(ptr %data, i64 %len)
+  br i1 %newline, label %write_newline, label %done
+write_newline:
+  call void @sollang_runtime_append_stdout(ptr @sollang_runtime_newline, i64 1)
+  br label %done
+done:
+  ret void
+}
+%sollang.struct.m0_s0 = type { i32, %sollang.array.i32 }
+%sollang.array.i32 = type { ptr, i64, i64 }
+declare ptr @malloc(i64)
+declare void @free(ptr)
+%sollang.dict = type { ptr, ptr, i64, i64 }
+define internal void @sollang_drop_t25(%sollang.struct.m0_s0 %value) {
+entry:
+  %field1 = extractvalue %sollang.struct.m0_s0 %value, 1
+  call void @sollang_drop_t26(%sollang.array.i32 %field1)
+  ret void
+}
+define internal void @sollang_drop_t26(%sollang.array.i32 %value) {
+entry:
+  %data = extractvalue %sollang.array.i32 %value, 0
+  %length = extractvalue %sollang.array.i32 %value, 1
+  call void @free(ptr %data)
+  ret void
+}
+define internal void @sollang_drop_t28(%sollang.dict %value) {
+entry:
+  %keys = extractvalue %sollang.dict %value, 0
+  %values = extractvalue %sollang.dict %value, 1
+  %length = extractvalue %sollang.dict %value, 2
+  %capacity = extractvalue %sollang.dict %value, 3
+  %control_offset = mul i64 %capacity, 4
+  %controls = getelementptr i8, ptr %keys, i64 %control_offset
+  br label %loop
+loop:
+  %index = phi i64 [ 0, %entry ], [ %next, %continue ]
+  %in_range = icmp ult i64 %index, %capacity
+  br i1 %in_range, label %check, label %done
+check:
+  %control_slot = getelementptr i8, ptr %controls, i64 %index
+  %control = load i8, ptr %control_slot, align 1
+  %occupied = icmp sgt i8 %control, 0
+  br i1 %occupied, label %item, label %continue
+item:
+  %value_slot = getelementptr %sollang.struct.m0_s0, ptr %values, i64 %index
+  %item_value = load %sollang.struct.m0_s0, ptr %value_slot, align 8
+  call void @sollang_drop_t25(%sollang.struct.m0_s0 %item_value)
+  br label %continue
+continue:
+  %next = add i64 %index, 1
+  br label %loop
+done:
+  call void @free(ptr %keys)
+  call void @free(ptr %values)
+  ret void
+}
+declare void @llvm.trap()
+%sollang.text = type { ptr, i64 }
+@sollang_str_79 = private unnamed_addr constant [9 x i8] c"owned-put"
+define i32 @sollang_m0_s3(%sollang.struct.m0_s0 %arg) {
+entry:
+  %v3 = extractvalue %sollang.struct.m0_s0 %arg, 0
+  ret i32 %v3
+}
+define i32 @main() {
+entry:
+  %slot6 = alloca %sollang.dict, align 8
+  %slot7 = alloca %sollang.struct.m0_s0, align 8
+  %slot8 = alloca %sollang.struct.m0_s0, align 8
+  %slot9 = alloca %sollang.struct.m0_s0, align 8
+  %v17_data = call ptr @malloc(i64 8)
+  %v17_ptr0 = getelementptr i32, ptr %v17_data, i64 0
+  store i32 1, ptr %v17_ptr0, align 4
+  %v17_ptr1 = getelementptr i32, ptr %v17_data, i64 1
+  store i32 2, ptr %v17_ptr1, align 4
+  %v17_0 = insertvalue %sollang.array.i32 poison, ptr %v17_data, 0
+  %v17_1 = insertvalue %sollang.array.i32 %v17_0, i64 2, 1
+  %v17 = insertvalue %sollang.array.i32 %v17_1, i64 2, 2
+  %v23_data = call ptr @malloc(i64 8)
+  %v23_ptr0 = getelementptr i32, ptr %v23_data, i64 0
+  store i32 3, ptr %v23_ptr0, align 4
+  %v23_ptr1 = getelementptr i32, ptr %v23_data, i64 1
+  store i32 4, ptr %v23_ptr1, align 4
+  %v23_0 = insertvalue %sollang.array.i32 poison, ptr %v23_data, 0
+  %v23_1 = insertvalue %sollang.array.i32 %v23_0, i64 2, 1
+  %v23 = insertvalue %sollang.array.i32 %v23_1, i64 2, 2
+  %v28_data = call ptr @malloc(i64 8)
+  %v28_ptr0 = getelementptr i32, ptr %v28_data, i64 0
+  store i32 5, ptr %v28_ptr0, align 4
+  %v28_ptr1 = getelementptr i32, ptr %v28_data, i64 1
+  store i32 6, ptr %v28_ptr1, align 4
+  %v28_0 = insertvalue %sollang.array.i32 poison, ptr %v28_data, 0
+  %v28_1 = insertvalue %sollang.array.i32 %v28_0, i64 2, 1
+  %v28 = insertvalue %sollang.array.i32 %v28_1, i64 2, 2
+  %v37_data = call ptr @malloc(i64 8)
+  %v37_ptr0 = getelementptr i32, ptr %v37_data, i64 0
+  store i32 7, ptr %v37_ptr0, align 4
+  %v37_ptr1 = getelementptr i32, ptr %v37_data, i64 1
+  store i32 8, ptr %v37_ptr1, align 4
+  %v37_0 = insertvalue %sollang.array.i32 poison, ptr %v37_data, 0
+  %v37_1 = insertvalue %sollang.array.i32 %v37_0, i64 2, 1
+  %v37 = insertvalue %sollang.array.i32 %v37_1, i64 2, 2
+  %v15_f0 = insertvalue %sollang.struct.m0_s0 poison, i32 10, 0
+  %v15 = insertvalue %sollang.struct.m0_s0 %v15_f0, %sollang.array.i32 %v17, 1
+  %v21_f0 = insertvalue %sollang.struct.m0_s0 poison, i32 20, 0
+  %v21 = insertvalue %sollang.struct.m0_s0 %v21_f0, %sollang.array.i32 %v23, 1
+  %v26_f0 = insertvalue %sollang.struct.m0_s0 poison, i32 100, 0
+  %v26 = insertvalue %sollang.struct.m0_s0 %v26_f0, %sollang.array.i32 %v28, 1
+  %v35_f0 = insertvalue %sollang.struct.m0_s0 poison, i32 300, 0
+  %v35 = insertvalue %sollang.struct.m0_s0 %v35_f0, %sollang.array.i32 %v37, 1
+  %v13_keys = call ptr @malloc(i64 10)
+  %v13_controls = getelementptr i8, ptr %v13_keys, i64 8
+  call void @llvm.memset.p0.i64(ptr %v13_controls, i8 0, i64 2, i1 false)
+  %v13_values = call ptr @malloc(i64 64)
+  %v13_keys_ptr0 = getelementptr i32, ptr %v13_keys, i64 0
+  store i32 1, ptr %v13_keys_ptr0, align 4
+  %v13_control_ptr0 = getelementptr i8, ptr %v13_controls, i64 0
+  %v13_control_hash_loaded0 = load i32, ptr %v13_keys_ptr0, align 4
+  %v13_control_hash_key0 = sext i32 %v13_control_hash_loaded0 to i64
+  %v13_control_hash_high0 = lshr i64 %v13_control_hash_key0, 32
+  %v13_control_hash_fold0 = xor i64 %v13_control_hash_key0, %v13_control_hash_high0
+  %v13_control_hash0 = mul i64 %v13_control_hash_fold0, -7046029254386353131
+  %v13_control_h2_shifted0 = lshr i64 %v13_control_hash0, 57
+  %v13_control_h2_raw0 = and i64 %v13_control_h2_shifted0, 127
+  %v13_control_h2_zero0 = icmp eq i64 %v13_control_h2_raw0, 0
+  %v13_control_h2_value0 = select i1 %v13_control_h2_zero0, i64 1, i64 %v13_control_h2_raw0
+  %v13_control_h20 = trunc i64 %v13_control_h2_value0 to i8
+  store i8 %v13_control_h20, ptr %v13_control_ptr0, align 1
+  %v13_values_ptr0 = getelementptr %sollang.struct.m0_s0, ptr %v13_values, i64 0
+  store %sollang.struct.m0_s0 %v15, ptr %v13_values_ptr0, align 8
+  %v13_keys_ptr1 = getelementptr i32, ptr %v13_keys, i64 1
+  store i32 2, ptr %v13_keys_ptr1, align 4
+  %v13_control_ptr1 = getelementptr i8, ptr %v13_controls, i64 1
+  %v13_control_hash_loaded1 = load i32, ptr %v13_keys_ptr1, align 4
+  %v13_control_hash_key1 = sext i32 %v13_control_hash_loaded1 to i64
+  %v13_control_hash_high1 = lshr i64 %v13_control_hash_key1, 32
+  %v13_control_hash_fold1 = xor i64 %v13_control_hash_key1, %v13_control_hash_high1
+  %v13_control_hash1 = mul i64 %v13_control_hash_fold1, -7046029254386353131
+  %v13_control_h2_shifted1 = lshr i64 %v13_control_hash1, 57
+  %v13_control_h2_raw1 = and i64 %v13_control_h2_shifted1, 127
+  %v13_control_h2_zero1 = icmp eq i64 %v13_control_h2_raw1, 0
+  %v13_control_h2_value1 = select i1 %v13_control_h2_zero1, i64 1, i64 %v13_control_h2_raw1
+  %v13_control_h21 = trunc i64 %v13_control_h2_value1 to i8
+  store i8 %v13_control_h21, ptr %v13_control_ptr1, align 1
+  %v13_values_ptr1 = getelementptr %sollang.struct.m0_s0, ptr %v13_values, i64 1
+  store %sollang.struct.m0_s0 %v21, ptr %v13_values_ptr1, align 8
+  %v13_0 = insertvalue %sollang.dict poison, ptr %v13_keys, 0
+  %v13_1 = insertvalue %sollang.dict %v13_0, ptr %v13_values, 1
+  %v13_2 = insertvalue %sollang.dict %v13_1, i64 2, 2
+  %v13 = insertvalue %sollang.dict %v13_2, i64 2, 3
+  store %sollang.dict %v13, ptr %slot6, align 8
+  store %sollang.struct.m0_s0 %v26, ptr %slot7, align 8
+  store %sollang.struct.m0_s0 %v35, ptr %slot8, align 8
+  %v32 = load %sollang.dict, ptr %slot6, align 8
+  %v34 = load %sollang.struct.m0_s0, ptr %slot7, align 8
+  %v41 = load %sollang.dict, ptr %slot6, align 8
+  %v43 = load %sollang.struct.m0_s0, ptr %slot8, align 8
+  %put31_dictionary = load %sollang.dict, ptr %slot6, align 8
+  %put31_old_keys = extractvalue %sollang.dict %put31_dictionary, 0
+  %put31_old_values = extractvalue %sollang.dict %put31_dictionary, 1
+  %put31_old_length = extractvalue %sollang.dict %put31_dictionary, 2
+  %put31_old_capacity = extractvalue %sollang.dict %put31_dictionary, 3
+  %put31_key64 = sext i32 1 to i64
+  %put31_hash_high = lshr i64 %put31_key64, 32
+  %put31_hash_fold = xor i64 %put31_key64, %put31_hash_high
+  %put31_hash = mul i64 %put31_hash_fold, -7046029254386353131
+  %put31_h2_shifted = lshr i64 %put31_hash, 57
+  %put31_h2_raw = and i64 %put31_h2_shifted, 127
+  %put31_h2_zero = icmp eq i64 %put31_h2_raw, 0
+  %put31_h2_value = select i1 %put31_h2_zero, i64 1, i64 %put31_h2_raw
+  %put31_h2 = trunc i64 %put31_h2_value to i8
+  %put31_old_key_bytes = mul i64 %put31_old_capacity, 4
+  %put31_old_controls = getelementptr i8, ptr %put31_old_keys, i64 %put31_old_key_bytes
+  %put31_has_capacity = icmp ugt i64 %put31_old_capacity, 0
+  br i1 %put31_has_capacity, label %put31_lookup_start, label %put31_grow
+put31_lookup_start:
+  %put31_lookup_start_slot = urem i64 %put31_hash, %put31_old_capacity
+  br label %put31_lookup
+put31_lookup:
+  %put31_lookup_slot = phi i64 [ %put31_lookup_start_slot, %put31_lookup_start ], [ %put31_lookup_next, %put31_lookup_advance ]
+  %put31_lookup_probe = phi i64 [ 0, %put31_lookup_start ], [ %put31_lookup_probe_next, %put31_lookup_advance ]
+  %put31_lookup_first_deleted = phi i64 [ %put31_old_capacity, %put31_lookup_start ], [ %put31_lookup_next_first_deleted, %put31_lookup_advance ]
+  %put31_lookup_active = icmp ult i64 %put31_lookup_probe, %put31_old_capacity
+  br i1 %put31_lookup_active, label %put31_lookup_check, label %put31_lookup_exhausted
+put31_lookup_check:
+  %put31_lookup_control_ptr = getelementptr i8, ptr %put31_old_controls, i64 %put31_lookup_slot
+  %put31_lookup_control = load i8, ptr %put31_lookup_control_ptr, align 1
+  %put31_lookup_deleted = icmp eq i8 %put31_lookup_control, -1
+  %put31_lookup_without_deleted = icmp eq i64 %put31_lookup_first_deleted, %put31_old_capacity
+  %put31_lookup_capture_deleted = and i1 %put31_lookup_deleted, %put31_lookup_without_deleted
+  %put31_lookup_captured_deleted = select i1 %put31_lookup_capture_deleted, i64 %put31_lookup_slot, i64 %put31_lookup_first_deleted
+  %put31_lookup_empty = icmp eq i8 %put31_lookup_control, 0
+  br i1 %put31_lookup_empty, label %put31_new_key, label %put31_lookup_h2
+put31_lookup_h2:
+  %put31_lookup_h2_match = icmp eq i8 %put31_lookup_control, %put31_h2
+  br i1 %put31_lookup_h2_match, label %put31_lookup_key, label %put31_lookup_advance
+put31_lookup_key:
+  %put31_lookup_key_ptr = getelementptr i32, ptr %put31_old_keys, i64 %put31_lookup_slot
+  %put31_lookup_stored_key = load i32, ptr %put31_lookup_key_ptr, align 4
+  %put31_lookup_found = icmp eq i32 %put31_lookup_stored_key, 1
+  br i1 %put31_lookup_found, label %put31_update_in_place, label %put31_lookup_advance
+put31_lookup_advance:
+  %put31_lookup_next_unwrapped = add i64 %put31_lookup_slot, 1
+  %put31_lookup_next = urem i64 %put31_lookup_next_unwrapped, %put31_old_capacity
+  %put31_lookup_probe_next = add i64 %put31_lookup_probe, 1
+  %put31_lookup_next_first_deleted = add i64 %put31_lookup_captured_deleted, 0
+  br label %put31_lookup
+put31_lookup_exhausted:
+  %put31_lookup_reuses_deleted = icmp ne i64 %put31_lookup_first_deleted, %put31_old_capacity
+  br i1 %put31_lookup_reuses_deleted, label %put31_new_key, label %put31_grow
+put31_update_in_place:
+  %put31_update_in_place_ptr = getelementptr %sollang.struct.m0_s0, ptr %put31_old_values, i64 %put31_lookup_slot
+  %put31_update_previous = load %sollang.struct.m0_s0, ptr %put31_update_in_place_ptr, align 8
+  call void @sollang_drop_t25(%sollang.struct.m0_s0 %put31_update_previous)
+  store %sollang.struct.m0_s0 %v34, ptr %put31_update_in_place_ptr, align 8
+  br label %put31_complete
+put31_new_key:
+  %put31_new_key_has_deleted = icmp ne i64 %put31_lookup_first_deleted, %put31_old_capacity
+  %put31_new_key_slot = select i1 %put31_new_key_has_deleted, i64 %put31_lookup_first_deleted, i64 %put31_lookup_slot
+  %put31_candidate_length = add i64 %put31_old_length, 1
+  %put31_candidate_scaled = mul i64 %put31_candidate_length, 8
+  %put31_load_limit = mul i64 %put31_old_capacity, 7
+  %put31_fits = icmp ule i64 %put31_candidate_scaled, %put31_load_limit
+  br i1 %put31_fits, label %put31_insert_in_place, label %put31_grow
+put31_insert_in_place:
+  %put31_insert_in_place_key_ptr = getelementptr i32, ptr %put31_old_keys, i64 %put31_new_key_slot
+  store i32 1, ptr %put31_insert_in_place_key_ptr, align 4
+  %put31_insert_in_place_value_ptr = getelementptr %sollang.struct.m0_s0, ptr %put31_old_values, i64 %put31_new_key_slot
+  store %sollang.struct.m0_s0 %v34, ptr %put31_insert_in_place_value_ptr, align 8
+  %put31_insert_in_place_control_ptr = getelementptr i8, ptr %put31_old_controls, i64 %put31_new_key_slot
+  store i8 %put31_h2, ptr %put31_insert_in_place_control_ptr, align 1
+  %put31_in_place_result = insertvalue %sollang.dict %put31_dictionary, i64 %put31_candidate_length, 2
+  store %sollang.dict %put31_in_place_result, ptr %slot6, align 8
+  br label %put31_complete
+put31_grow:
+  %put31_capacity_double = mul i64 %put31_old_capacity, 2
+  %put31_capacity_small = icmp ult i64 %put31_old_capacity, 4
+  %put31_capacity = select i1 %put31_capacity_small, i64 4, i64 %put31_capacity_double
+  %put31_key_bytes = mul i64 %put31_capacity, 4
+  %put31_key_allocation = add i64 %put31_key_bytes, %put31_capacity
+  %put31_keys = call ptr @malloc(i64 %put31_key_allocation)
+  %put31_controls = getelementptr i8, ptr %put31_keys, i64 %put31_key_bytes
+  call void @llvm.memset.p0.i64(ptr %put31_controls, i8 0, i64 %put31_capacity, i1 false)
+  %put31_value_bytes = mul i64 %put31_capacity, 32
+  %put31_values = call ptr @malloc(i64 %put31_value_bytes)
+  br label %put31_rehash_start
+put31_rehash_loop:
+  %put31_rehash_index = phi i64 [ 0, %put31_rehash_start ], [ %put31_rehash_next, %put31_rehash_advance ]
+  %put31_rehash_active = icmp ult i64 %put31_rehash_index, %put31_old_capacity
+  br i1 %put31_rehash_active, label %put31_rehash_check, label %put31_rehash_done
+put31_rehash_check:
+  %put31_old_control_offset = mul i64 %put31_old_capacity, 4
+  %put31_old_control_ptr = getelementptr i8, ptr %put31_old_keys, i64 %put31_old_control_offset
+  %put31_old_control_slot = getelementptr i8, ptr %put31_old_control_ptr, i64 %put31_rehash_index
+  %put31_old_control = load i8, ptr %put31_old_control_slot, align 1
+  %put31_rehash_occupied = icmp sgt i8 %put31_old_control, 0
+  br i1 %put31_rehash_occupied, label %put31_rehash_copy, label %put31_rehash_advance
+put31_rehash_copy:
+  %put31_rehash_key_ptr = getelementptr i32, ptr %put31_old_keys, i64 %put31_rehash_index
+  %put31_rehash_key = load i32, ptr %put31_rehash_key_ptr, align 4
+  %put31_rehash_value_ptr = getelementptr %sollang.struct.m0_s0, ptr %put31_old_values, i64 %put31_rehash_index
+  %put31_rehash_value = load %sollang.struct.m0_s0, ptr %put31_rehash_value_ptr, align 8
+  %put31_rehash_key64 = sext i32 %put31_rehash_key to i64
+  %put31_rehash_hash_high = lshr i64 %put31_rehash_key64, 32
+  %put31_rehash_hash_fold = xor i64 %put31_rehash_key64, %put31_rehash_hash_high
+  %put31_rehash_hash = mul i64 %put31_rehash_hash_fold, -7046029254386353131
+  %put31_rehash_h2_shifted = lshr i64 %put31_rehash_hash, 57
+  %put31_rehash_h2_raw = and i64 %put31_rehash_h2_shifted, 127
+  %put31_rehash_h2_zero = icmp eq i64 %put31_rehash_h2_raw, 0
+  %put31_rehash_h2_value = select i1 %put31_rehash_h2_zero, i64 1, i64 %put31_rehash_h2_raw
+  %put31_rehash_h2 = trunc i64 %put31_rehash_h2_value to i8
+  %put31_rehash_start_slot = urem i64 %put31_rehash_hash, %put31_capacity
+  br label %put31_rehash_find_start
+put31_rehash_find_start:
+  br label %put31_rehash_find
+put31_rehash_find:
+  %put31_rehash_slot = phi i64 [ %put31_rehash_start_slot, %put31_rehash_find_start ], [ %put31_rehash_next_slot, %put31_rehash_find_advance ]
+  %put31_rehash_control_slot = getelementptr i8, ptr %put31_controls, i64 %put31_rehash_slot
+  %put31_rehash_control = load i8, ptr %put31_rehash_control_slot, align 1
+  %put31_rehash_empty = icmp eq i8 %put31_rehash_control, 0
+  br i1 %put31_rehash_empty, label %put31_rehash_store, label %put31_rehash_find_advance
+put31_rehash_find_advance:
+  %put31_rehash_next_unwrapped = add i64 %put31_rehash_slot, 1
+  %put31_rehash_next_slot = urem i64 %put31_rehash_next_unwrapped, %put31_capacity
+  br label %put31_rehash_find
+put31_rehash_store:
+  %put31_rehash_new_key_ptr = getelementptr i32, ptr %put31_keys, i64 %put31_rehash_slot
+  store i32 %put31_rehash_key, ptr %put31_rehash_new_key_ptr, align 4
+  %put31_rehash_new_value_ptr = getelementptr %sollang.struct.m0_s0, ptr %put31_values, i64 %put31_rehash_slot
+  store %sollang.struct.m0_s0 %put31_rehash_value, ptr %put31_rehash_new_value_ptr, align 8
+  store i8 %put31_rehash_h2, ptr %put31_rehash_control_slot, align 1
+  br label %put31_rehash_advance
+put31_rehash_advance:
+  %put31_rehash_next = add i64 %put31_rehash_index, 1
+  br label %put31_rehash_loop
+put31_rehash_start:
+  br label %put31_rehash_loop
+put31_rehash_done:
+  call void @free(ptr %put31_old_keys)
+  call void @free(ptr %put31_old_values)
+  %put31_start = urem i64 %put31_hash, %put31_capacity
+  br label %put31_loop_entry
+put31_loop:
+  %put31_slot = phi i64 [ %put31_start, %put31_loop_entry ], [ %put31_next, %put31_advance ]
+  %put31_probe = phi i64 [ 0, %put31_loop_entry ], [ %put31_probe_next, %put31_advance ]
+  %put31_active = icmp ult i64 %put31_probe, %put31_capacity
+  br i1 %put31_active, label %put31_check, label %put31_missing
+put31_check:
+  %put31_control_ptr = getelementptr i8, ptr %put31_controls, i64 0
+  %put31_control_slot = getelementptr i8, ptr %put31_control_ptr, i64 %put31_slot
+  %put31_control = load i8, ptr %put31_control_slot, align 1
+  %put31_empty = icmp eq i8 %put31_control, 0
+  br i1 %put31_empty, label %put31_insert, label %put31_advance
+put31_advance:
+  %put31_next_unwrapped = add i64 %put31_slot, 1
+  %put31_next = urem i64 %put31_next_unwrapped, %put31_capacity
+  %put31_probe_next = add i64 %put31_probe, 1
+  br label %put31_loop
+put31_insert:
+  %put31_insert_key_ptr = getelementptr i32, ptr %put31_keys, i64 %put31_slot
+  store i32 1, ptr %put31_insert_key_ptr, align 4
+  %put31_insert_value_ptr = getelementptr %sollang.struct.m0_s0, ptr %put31_values, i64 %put31_slot
+  store %sollang.struct.m0_s0 %v34, ptr %put31_insert_value_ptr, align 8
+  store i8 %put31_h2, ptr %put31_control_slot, align 1
+  %put31_new_length = add i64 %put31_old_length, 1
+  %put31_result0 = insertvalue %sollang.dict poison, ptr %put31_keys, 0
+  %put31_result1 = insertvalue %sollang.dict %put31_result0, ptr %put31_values, 1
+  %put31_result2 = insertvalue %sollang.dict %put31_result1, i64 %put31_new_length, 2
+  %put31_result3 = insertvalue %sollang.dict %put31_result2, i64 %put31_capacity, 3
+  store %sollang.dict %put31_result3, ptr %slot6, align 8
+  br label %put31_complete
+put31_missing:
+  call void @llvm.trap()
+  unreachable
+put31_loop_entry:
+  br label %put31_loop
+put31_complete:
+  %put40_dictionary = load %sollang.dict, ptr %slot6, align 8
+  %put40_old_keys = extractvalue %sollang.dict %put40_dictionary, 0
+  %put40_old_values = extractvalue %sollang.dict %put40_dictionary, 1
+  %put40_old_length = extractvalue %sollang.dict %put40_dictionary, 2
+  %put40_old_capacity = extractvalue %sollang.dict %put40_dictionary, 3
+  %put40_key64 = sext i32 3 to i64
+  %put40_hash_high = lshr i64 %put40_key64, 32
+  %put40_hash_fold = xor i64 %put40_key64, %put40_hash_high
+  %put40_hash = mul i64 %put40_hash_fold, -7046029254386353131
+  %put40_h2_shifted = lshr i64 %put40_hash, 57
+  %put40_h2_raw = and i64 %put40_h2_shifted, 127
+  %put40_h2_zero = icmp eq i64 %put40_h2_raw, 0
+  %put40_h2_value = select i1 %put40_h2_zero, i64 1, i64 %put40_h2_raw
+  %put40_h2 = trunc i64 %put40_h2_value to i8
+  %put40_old_key_bytes = mul i64 %put40_old_capacity, 4
+  %put40_old_controls = getelementptr i8, ptr %put40_old_keys, i64 %put40_old_key_bytes
+  %put40_has_capacity = icmp ugt i64 %put40_old_capacity, 0
+  br i1 %put40_has_capacity, label %put40_lookup_start, label %put40_grow
+put40_lookup_start:
+  %put40_lookup_start_slot = urem i64 %put40_hash, %put40_old_capacity
+  br label %put40_lookup
+put40_lookup:
+  %put40_lookup_slot = phi i64 [ %put40_lookup_start_slot, %put40_lookup_start ], [ %put40_lookup_next, %put40_lookup_advance ]
+  %put40_lookup_probe = phi i64 [ 0, %put40_lookup_start ], [ %put40_lookup_probe_next, %put40_lookup_advance ]
+  %put40_lookup_first_deleted = phi i64 [ %put40_old_capacity, %put40_lookup_start ], [ %put40_lookup_next_first_deleted, %put40_lookup_advance ]
+  %put40_lookup_active = icmp ult i64 %put40_lookup_probe, %put40_old_capacity
+  br i1 %put40_lookup_active, label %put40_lookup_check, label %put40_lookup_exhausted
+put40_lookup_check:
+  %put40_lookup_control_ptr = getelementptr i8, ptr %put40_old_controls, i64 %put40_lookup_slot
+  %put40_lookup_control = load i8, ptr %put40_lookup_control_ptr, align 1
+  %put40_lookup_deleted = icmp eq i8 %put40_lookup_control, -1
+  %put40_lookup_without_deleted = icmp eq i64 %put40_lookup_first_deleted, %put40_old_capacity
+  %put40_lookup_capture_deleted = and i1 %put40_lookup_deleted, %put40_lookup_without_deleted
+  %put40_lookup_captured_deleted = select i1 %put40_lookup_capture_deleted, i64 %put40_lookup_slot, i64 %put40_lookup_first_deleted
+  %put40_lookup_empty = icmp eq i8 %put40_lookup_control, 0
+  br i1 %put40_lookup_empty, label %put40_new_key, label %put40_lookup_h2
+put40_lookup_h2:
+  %put40_lookup_h2_match = icmp eq i8 %put40_lookup_control, %put40_h2
+  br i1 %put40_lookup_h2_match, label %put40_lookup_key, label %put40_lookup_advance
+put40_lookup_key:
+  %put40_lookup_key_ptr = getelementptr i32, ptr %put40_old_keys, i64 %put40_lookup_slot
+  %put40_lookup_stored_key = load i32, ptr %put40_lookup_key_ptr, align 4
+  %put40_lookup_found = icmp eq i32 %put40_lookup_stored_key, 3
+  br i1 %put40_lookup_found, label %put40_update_in_place, label %put40_lookup_advance
+put40_lookup_advance:
+  %put40_lookup_next_unwrapped = add i64 %put40_lookup_slot, 1
+  %put40_lookup_next = urem i64 %put40_lookup_next_unwrapped, %put40_old_capacity
+  %put40_lookup_probe_next = add i64 %put40_lookup_probe, 1
+  %put40_lookup_next_first_deleted = add i64 %put40_lookup_captured_deleted, 0
+  br label %put40_lookup
+put40_lookup_exhausted:
+  %put40_lookup_reuses_deleted = icmp ne i64 %put40_lookup_first_deleted, %put40_old_capacity
+  br i1 %put40_lookup_reuses_deleted, label %put40_new_key, label %put40_grow
+put40_update_in_place:
+  %put40_update_in_place_ptr = getelementptr %sollang.struct.m0_s0, ptr %put40_old_values, i64 %put40_lookup_slot
+  %put40_update_previous = load %sollang.struct.m0_s0, ptr %put40_update_in_place_ptr, align 8
+  call void @sollang_drop_t25(%sollang.struct.m0_s0 %put40_update_previous)
+  store %sollang.struct.m0_s0 %v43, ptr %put40_update_in_place_ptr, align 8
+  br label %put40_complete
+put40_new_key:
+  %put40_new_key_has_deleted = icmp ne i64 %put40_lookup_first_deleted, %put40_old_capacity
+  %put40_new_key_slot = select i1 %put40_new_key_has_deleted, i64 %put40_lookup_first_deleted, i64 %put40_lookup_slot
+  %put40_candidate_length = add i64 %put40_old_length, 1
+  %put40_candidate_scaled = mul i64 %put40_candidate_length, 8
+  %put40_load_limit = mul i64 %put40_old_capacity, 7
+  %put40_fits = icmp ule i64 %put40_candidate_scaled, %put40_load_limit
+  br i1 %put40_fits, label %put40_insert_in_place, label %put40_grow
+put40_insert_in_place:
+  %put40_insert_in_place_key_ptr = getelementptr i32, ptr %put40_old_keys, i64 %put40_new_key_slot
+  store i32 3, ptr %put40_insert_in_place_key_ptr, align 4
+  %put40_insert_in_place_value_ptr = getelementptr %sollang.struct.m0_s0, ptr %put40_old_values, i64 %put40_new_key_slot
+  store %sollang.struct.m0_s0 %v43, ptr %put40_insert_in_place_value_ptr, align 8
+  %put40_insert_in_place_control_ptr = getelementptr i8, ptr %put40_old_controls, i64 %put40_new_key_slot
+  store i8 %put40_h2, ptr %put40_insert_in_place_control_ptr, align 1
+  %put40_in_place_result = insertvalue %sollang.dict %put40_dictionary, i64 %put40_candidate_length, 2
+  store %sollang.dict %put40_in_place_result, ptr %slot6, align 8
+  br label %put40_complete
+put40_grow:
+  %put40_capacity_double = mul i64 %put40_old_capacity, 2
+  %put40_capacity_small = icmp ult i64 %put40_old_capacity, 4
+  %put40_capacity = select i1 %put40_capacity_small, i64 4, i64 %put40_capacity_double
+  %put40_key_bytes = mul i64 %put40_capacity, 4
+  %put40_key_allocation = add i64 %put40_key_bytes, %put40_capacity
+  %put40_keys = call ptr @malloc(i64 %put40_key_allocation)
+  %put40_controls = getelementptr i8, ptr %put40_keys, i64 %put40_key_bytes
+  call void @llvm.memset.p0.i64(ptr %put40_controls, i8 0, i64 %put40_capacity, i1 false)
+  %put40_value_bytes = mul i64 %put40_capacity, 32
+  %put40_values = call ptr @malloc(i64 %put40_value_bytes)
+  br label %put40_rehash_start
+put40_rehash_loop:
+  %put40_rehash_index = phi i64 [ 0, %put40_rehash_start ], [ %put40_rehash_next, %put40_rehash_advance ]
+  %put40_rehash_active = icmp ult i64 %put40_rehash_index, %put40_old_capacity
+  br i1 %put40_rehash_active, label %put40_rehash_check, label %put40_rehash_done
+put40_rehash_check:
+  %put40_old_control_offset = mul i64 %put40_old_capacity, 4
+  %put40_old_control_ptr = getelementptr i8, ptr %put40_old_keys, i64 %put40_old_control_offset
+  %put40_old_control_slot = getelementptr i8, ptr %put40_old_control_ptr, i64 %put40_rehash_index
+  %put40_old_control = load i8, ptr %put40_old_control_slot, align 1
+  %put40_rehash_occupied = icmp sgt i8 %put40_old_control, 0
+  br i1 %put40_rehash_occupied, label %put40_rehash_copy, label %put40_rehash_advance
+put40_rehash_copy:
+  %put40_rehash_key_ptr = getelementptr i32, ptr %put40_old_keys, i64 %put40_rehash_index
+  %put40_rehash_key = load i32, ptr %put40_rehash_key_ptr, align 4
+  %put40_rehash_value_ptr = getelementptr %sollang.struct.m0_s0, ptr %put40_old_values, i64 %put40_rehash_index
+  %put40_rehash_value = load %sollang.struct.m0_s0, ptr %put40_rehash_value_ptr, align 8
+  %put40_rehash_key64 = sext i32 %put40_rehash_key to i64
+  %put40_rehash_hash_high = lshr i64 %put40_rehash_key64, 32
+  %put40_rehash_hash_fold = xor i64 %put40_rehash_key64, %put40_rehash_hash_high
+  %put40_rehash_hash = mul i64 %put40_rehash_hash_fold, -7046029254386353131
+  %put40_rehash_h2_shifted = lshr i64 %put40_rehash_hash, 57
+  %put40_rehash_h2_raw = and i64 %put40_rehash_h2_shifted, 127
+  %put40_rehash_h2_zero = icmp eq i64 %put40_rehash_h2_raw, 0
+  %put40_rehash_h2_value = select i1 %put40_rehash_h2_zero, i64 1, i64 %put40_rehash_h2_raw
+  %put40_rehash_h2 = trunc i64 %put40_rehash_h2_value to i8
+  %put40_rehash_start_slot = urem i64 %put40_rehash_hash, %put40_capacity
+  br label %put40_rehash_find_start
+put40_rehash_find_start:
+  br label %put40_rehash_find
+put40_rehash_find:
+  %put40_rehash_slot = phi i64 [ %put40_rehash_start_slot, %put40_rehash_find_start ], [ %put40_rehash_next_slot, %put40_rehash_find_advance ]
+  %put40_rehash_control_slot = getelementptr i8, ptr %put40_controls, i64 %put40_rehash_slot
+  %put40_rehash_control = load i8, ptr %put40_rehash_control_slot, align 1
+  %put40_rehash_empty = icmp eq i8 %put40_rehash_control, 0
+  br i1 %put40_rehash_empty, label %put40_rehash_store, label %put40_rehash_find_advance
+put40_rehash_find_advance:
+  %put40_rehash_next_unwrapped = add i64 %put40_rehash_slot, 1
+  %put40_rehash_next_slot = urem i64 %put40_rehash_next_unwrapped, %put40_capacity
+  br label %put40_rehash_find
+put40_rehash_store:
+  %put40_rehash_new_key_ptr = getelementptr i32, ptr %put40_keys, i64 %put40_rehash_slot
+  store i32 %put40_rehash_key, ptr %put40_rehash_new_key_ptr, align 4
+  %put40_rehash_new_value_ptr = getelementptr %sollang.struct.m0_s0, ptr %put40_values, i64 %put40_rehash_slot
+  store %sollang.struct.m0_s0 %put40_rehash_value, ptr %put40_rehash_new_value_ptr, align 8
+  store i8 %put40_rehash_h2, ptr %put40_rehash_control_slot, align 1
+  br label %put40_rehash_advance
+put40_rehash_advance:
+  %put40_rehash_next = add i64 %put40_rehash_index, 1
+  br label %put40_rehash_loop
+put40_rehash_start:
+  br label %put40_rehash_loop
+put40_rehash_done:
+  call void @free(ptr %put40_old_keys)
+  call void @free(ptr %put40_old_values)
+  %put40_start = urem i64 %put40_hash, %put40_capacity
+  br label %put40_loop_entry
+put40_loop:
+  %put40_slot = phi i64 [ %put40_start, %put40_loop_entry ], [ %put40_next, %put40_advance ]
+  %put40_probe = phi i64 [ 0, %put40_loop_entry ], [ %put40_probe_next, %put40_advance ]
+  %put40_active = icmp ult i64 %put40_probe, %put40_capacity
+  br i1 %put40_active, label %put40_check, label %put40_missing
+put40_check:
+  %put40_control_ptr = getelementptr i8, ptr %put40_controls, i64 0
+  %put40_control_slot = getelementptr i8, ptr %put40_control_ptr, i64 %put40_slot
+  %put40_control = load i8, ptr %put40_control_slot, align 1
+  %put40_empty = icmp eq i8 %put40_control, 0
+  br i1 %put40_empty, label %put40_insert, label %put40_advance
+put40_advance:
+  %put40_next_unwrapped = add i64 %put40_slot, 1
+  %put40_next = urem i64 %put40_next_unwrapped, %put40_capacity
+  %put40_probe_next = add i64 %put40_probe, 1
+  br label %put40_loop
+put40_insert:
+  %put40_insert_key_ptr = getelementptr i32, ptr %put40_keys, i64 %put40_slot
+  store i32 3, ptr %put40_insert_key_ptr, align 4
+  %put40_insert_value_ptr = getelementptr %sollang.struct.m0_s0, ptr %put40_values, i64 %put40_slot
+  store %sollang.struct.m0_s0 %v43, ptr %put40_insert_value_ptr, align 8
+  store i8 %put40_h2, ptr %put40_control_slot, align 1
+  %put40_new_length = add i64 %put40_old_length, 1
+  %put40_result0 = insertvalue %sollang.dict poison, ptr %put40_keys, 0
+  %put40_result1 = insertvalue %sollang.dict %put40_result0, ptr %put40_values, 1
+  %put40_result2 = insertvalue %sollang.dict %put40_result1, i64 %put40_new_length, 2
+  %put40_result3 = insertvalue %sollang.dict %put40_result2, i64 %put40_capacity, 3
+  store %sollang.dict %put40_result3, ptr %slot6, align 8
+  br label %put40_complete
+put40_missing:
+  call void @llvm.trap()
+  unreachable
+put40_loop_entry:
+  br label %put40_loop
+put40_complete:
+  br i1 1, label %if46_then, label %if46_merge
+if46_then:
+  %v50_data = call ptr @malloc(i64 8)
+  %v50_ptr0 = getelementptr i32, ptr %v50_data, i64 0
+  store i32 9, ptr %v50_ptr0, align 4
+  %v50_ptr1 = getelementptr i32, ptr %v50_data, i64 1
+  store i32 10, ptr %v50_ptr1, align 4
+  %v50_0 = insertvalue %sollang.array.i32 poison, ptr %v50_data, 0
+  %v50_1 = insertvalue %sollang.array.i32 %v50_0, i64 2, 1
+  %v50 = insertvalue %sollang.array.i32 %v50_1, i64 2, 2
+  %v48_f0 = insertvalue %sollang.struct.m0_s0 poison, i32 400, 0
+  %v48 = insertvalue %sollang.struct.m0_s0 %v48_f0, %sollang.array.i32 %v50, 1
+  store %sollang.struct.m0_s0 %v48, ptr %slot9, align 8
+  %v54 = load %sollang.dict, ptr %slot6, align 8
+  %v56 = load %sollang.struct.m0_s0, ptr %slot9, align 8
+  %put53_dictionary = load %sollang.dict, ptr %slot6, align 8
+  %put53_old_keys = extractvalue %sollang.dict %put53_dictionary, 0
+  %put53_old_values = extractvalue %sollang.dict %put53_dictionary, 1
+  %put53_old_length = extractvalue %sollang.dict %put53_dictionary, 2
+  %put53_old_capacity = extractvalue %sollang.dict %put53_dictionary, 3
+  %put53_key64 = sext i32 4 to i64
+  %put53_hash_high = lshr i64 %put53_key64, 32
+  %put53_hash_fold = xor i64 %put53_key64, %put53_hash_high
+  %put53_hash = mul i64 %put53_hash_fold, -7046029254386353131
+  %put53_h2_shifted = lshr i64 %put53_hash, 57
+  %put53_h2_raw = and i64 %put53_h2_shifted, 127
+  %put53_h2_zero = icmp eq i64 %put53_h2_raw, 0
+  %put53_h2_value = select i1 %put53_h2_zero, i64 1, i64 %put53_h2_raw
+  %put53_h2 = trunc i64 %put53_h2_value to i8
+  %put53_old_key_bytes = mul i64 %put53_old_capacity, 4
+  %put53_old_controls = getelementptr i8, ptr %put53_old_keys, i64 %put53_old_key_bytes
+  %put53_has_capacity = icmp ugt i64 %put53_old_capacity, 0
+  br i1 %put53_has_capacity, label %put53_lookup_start, label %put53_grow
+put53_lookup_start:
+  %put53_lookup_start_slot = urem i64 %put53_hash, %put53_old_capacity
+  br label %put53_lookup
+put53_lookup:
+  %put53_lookup_slot = phi i64 [ %put53_lookup_start_slot, %put53_lookup_start ], [ %put53_lookup_next, %put53_lookup_advance ]
+  %put53_lookup_probe = phi i64 [ 0, %put53_lookup_start ], [ %put53_lookup_probe_next, %put53_lookup_advance ]
+  %put53_lookup_first_deleted = phi i64 [ %put53_old_capacity, %put53_lookup_start ], [ %put53_lookup_next_first_deleted, %put53_lookup_advance ]
+  %put53_lookup_active = icmp ult i64 %put53_lookup_probe, %put53_old_capacity
+  br i1 %put53_lookup_active, label %put53_lookup_check, label %put53_lookup_exhausted
+put53_lookup_check:
+  %put53_lookup_control_ptr = getelementptr i8, ptr %put53_old_controls, i64 %put53_lookup_slot
+  %put53_lookup_control = load i8, ptr %put53_lookup_control_ptr, align 1
+  %put53_lookup_deleted = icmp eq i8 %put53_lookup_control, -1
+  %put53_lookup_without_deleted = icmp eq i64 %put53_lookup_first_deleted, %put53_old_capacity
+  %put53_lookup_capture_deleted = and i1 %put53_lookup_deleted, %put53_lookup_without_deleted
+  %put53_lookup_captured_deleted = select i1 %put53_lookup_capture_deleted, i64 %put53_lookup_slot, i64 %put53_lookup_first_deleted
+  %put53_lookup_empty = icmp eq i8 %put53_lookup_control, 0
+  br i1 %put53_lookup_empty, label %put53_new_key, label %put53_lookup_h2
+put53_lookup_h2:
+  %put53_lookup_h2_match = icmp eq i8 %put53_lookup_control, %put53_h2
+  br i1 %put53_lookup_h2_match, label %put53_lookup_key, label %put53_lookup_advance
+put53_lookup_key:
+  %put53_lookup_key_ptr = getelementptr i32, ptr %put53_old_keys, i64 %put53_lookup_slot
+  %put53_lookup_stored_key = load i32, ptr %put53_lookup_key_ptr, align 4
+  %put53_lookup_found = icmp eq i32 %put53_lookup_stored_key, 4
+  br i1 %put53_lookup_found, label %put53_update_in_place, label %put53_lookup_advance
+put53_lookup_advance:
+  %put53_lookup_next_unwrapped = add i64 %put53_lookup_slot, 1
+  %put53_lookup_next = urem i64 %put53_lookup_next_unwrapped, %put53_old_capacity
+  %put53_lookup_probe_next = add i64 %put53_lookup_probe, 1
+  %put53_lookup_next_first_deleted = add i64 %put53_lookup_captured_deleted, 0
+  br label %put53_lookup
+put53_lookup_exhausted:
+  %put53_lookup_reuses_deleted = icmp ne i64 %put53_lookup_first_deleted, %put53_old_capacity
+  br i1 %put53_lookup_reuses_deleted, label %put53_new_key, label %put53_grow
+put53_update_in_place:
+  %put53_update_in_place_ptr = getelementptr %sollang.struct.m0_s0, ptr %put53_old_values, i64 %put53_lookup_slot
+  %put53_update_previous = load %sollang.struct.m0_s0, ptr %put53_update_in_place_ptr, align 8
+  call void @sollang_drop_t25(%sollang.struct.m0_s0 %put53_update_previous)
+  store %sollang.struct.m0_s0 %v56, ptr %put53_update_in_place_ptr, align 8
+  br label %put53_complete
+put53_new_key:
+  %put53_new_key_has_deleted = icmp ne i64 %put53_lookup_first_deleted, %put53_old_capacity
+  %put53_new_key_slot = select i1 %put53_new_key_has_deleted, i64 %put53_lookup_first_deleted, i64 %put53_lookup_slot
+  %put53_candidate_length = add i64 %put53_old_length, 1
+  %put53_candidate_scaled = mul i64 %put53_candidate_length, 8
+  %put53_load_limit = mul i64 %put53_old_capacity, 7
+  %put53_fits = icmp ule i64 %put53_candidate_scaled, %put53_load_limit
+  br i1 %put53_fits, label %put53_insert_in_place, label %put53_grow
+put53_insert_in_place:
+  %put53_insert_in_place_key_ptr = getelementptr i32, ptr %put53_old_keys, i64 %put53_new_key_slot
+  store i32 4, ptr %put53_insert_in_place_key_ptr, align 4
+  %put53_insert_in_place_value_ptr = getelementptr %sollang.struct.m0_s0, ptr %put53_old_values, i64 %put53_new_key_slot
+  store %sollang.struct.m0_s0 %v56, ptr %put53_insert_in_place_value_ptr, align 8
+  %put53_insert_in_place_control_ptr = getelementptr i8, ptr %put53_old_controls, i64 %put53_new_key_slot
+  store i8 %put53_h2, ptr %put53_insert_in_place_control_ptr, align 1
+  %put53_in_place_result = insertvalue %sollang.dict %put53_dictionary, i64 %put53_candidate_length, 2
+  store %sollang.dict %put53_in_place_result, ptr %slot6, align 8
+  br label %put53_complete
+put53_grow:
+  %put53_capacity_double = mul i64 %put53_old_capacity, 2
+  %put53_capacity_small = icmp ult i64 %put53_old_capacity, 4
+  %put53_capacity = select i1 %put53_capacity_small, i64 4, i64 %put53_capacity_double
+  %put53_key_bytes = mul i64 %put53_capacity, 4
+  %put53_key_allocation = add i64 %put53_key_bytes, %put53_capacity
+  %put53_keys = call ptr @malloc(i64 %put53_key_allocation)
+  %put53_controls = getelementptr i8, ptr %put53_keys, i64 %put53_key_bytes
+  call void @llvm.memset.p0.i64(ptr %put53_controls, i8 0, i64 %put53_capacity, i1 false)
+  %put53_value_bytes = mul i64 %put53_capacity, 32
+  %put53_values = call ptr @malloc(i64 %put53_value_bytes)
+  br label %put53_rehash_start
+put53_rehash_loop:
+  %put53_rehash_index = phi i64 [ 0, %put53_rehash_start ], [ %put53_rehash_next, %put53_rehash_advance ]
+  %put53_rehash_active = icmp ult i64 %put53_rehash_index, %put53_old_capacity
+  br i1 %put53_rehash_active, label %put53_rehash_check, label %put53_rehash_done
+put53_rehash_check:
+  %put53_old_control_offset = mul i64 %put53_old_capacity, 4
+  %put53_old_control_ptr = getelementptr i8, ptr %put53_old_keys, i64 %put53_old_control_offset
+  %put53_old_control_slot = getelementptr i8, ptr %put53_old_control_ptr, i64 %put53_rehash_index
+  %put53_old_control = load i8, ptr %put53_old_control_slot, align 1
+  %put53_rehash_occupied = icmp sgt i8 %put53_old_control, 0
+  br i1 %put53_rehash_occupied, label %put53_rehash_copy, label %put53_rehash_advance
+put53_rehash_copy:
+  %put53_rehash_key_ptr = getelementptr i32, ptr %put53_old_keys, i64 %put53_rehash_index
+  %put53_rehash_key = load i32, ptr %put53_rehash_key_ptr, align 4
+  %put53_rehash_value_ptr = getelementptr %sollang.struct.m0_s0, ptr %put53_old_values, i64 %put53_rehash_index
+  %put53_rehash_value = load %sollang.struct.m0_s0, ptr %put53_rehash_value_ptr, align 8
+  %put53_rehash_key64 = sext i32 %put53_rehash_key to i64
+  %put53_rehash_hash_high = lshr i64 %put53_rehash_key64, 32
+  %put53_rehash_hash_fold = xor i64 %put53_rehash_key64, %put53_rehash_hash_high
+  %put53_rehash_hash = mul i64 %put53_rehash_hash_fold, -7046029254386353131
+  %put53_rehash_h2_shifted = lshr i64 %put53_rehash_hash, 57
+  %put53_rehash_h2_raw = and i64 %put53_rehash_h2_shifted, 127
+  %put53_rehash_h2_zero = icmp eq i64 %put53_rehash_h2_raw, 0
+  %put53_rehash_h2_value = select i1 %put53_rehash_h2_zero, i64 1, i64 %put53_rehash_h2_raw
+  %put53_rehash_h2 = trunc i64 %put53_rehash_h2_value to i8
+  %put53_rehash_start_slot = urem i64 %put53_rehash_hash, %put53_capacity
+  br label %put53_rehash_find_start
+put53_rehash_find_start:
+  br label %put53_rehash_find
+put53_rehash_find:
+  %put53_rehash_slot = phi i64 [ %put53_rehash_start_slot, %put53_rehash_find_start ], [ %put53_rehash_next_slot, %put53_rehash_find_advance ]
+  %put53_rehash_control_slot = getelementptr i8, ptr %put53_controls, i64 %put53_rehash_slot
+  %put53_rehash_control = load i8, ptr %put53_rehash_control_slot, align 1
+  %put53_rehash_empty = icmp eq i8 %put53_rehash_control, 0
+  br i1 %put53_rehash_empty, label %put53_rehash_store, label %put53_rehash_find_advance
+put53_rehash_find_advance:
+  %put53_rehash_next_unwrapped = add i64 %put53_rehash_slot, 1
+  %put53_rehash_next_slot = urem i64 %put53_rehash_next_unwrapped, %put53_capacity
+  br label %put53_rehash_find
+put53_rehash_store:
+  %put53_rehash_new_key_ptr = getelementptr i32, ptr %put53_keys, i64 %put53_rehash_slot
+  store i32 %put53_rehash_key, ptr %put53_rehash_new_key_ptr, align 4
+  %put53_rehash_new_value_ptr = getelementptr %sollang.struct.m0_s0, ptr %put53_values, i64 %put53_rehash_slot
+  store %sollang.struct.m0_s0 %put53_rehash_value, ptr %put53_rehash_new_value_ptr, align 8
+  store i8 %put53_rehash_h2, ptr %put53_rehash_control_slot, align 1
+  br label %put53_rehash_advance
+put53_rehash_advance:
+  %put53_rehash_next = add i64 %put53_rehash_index, 1
+  br label %put53_rehash_loop
+put53_rehash_start:
+  br label %put53_rehash_loop
+put53_rehash_done:
+  call void @free(ptr %put53_old_keys)
+  call void @free(ptr %put53_old_values)
+  %put53_start = urem i64 %put53_hash, %put53_capacity
+  br label %put53_loop_entry
+put53_loop:
+  %put53_slot = phi i64 [ %put53_start, %put53_loop_entry ], [ %put53_next, %put53_advance ]
+  %put53_probe = phi i64 [ 0, %put53_loop_entry ], [ %put53_probe_next, %put53_advance ]
+  %put53_active = icmp ult i64 %put53_probe, %put53_capacity
+  br i1 %put53_active, label %put53_check, label %put53_missing
+put53_check:
+  %put53_control_ptr = getelementptr i8, ptr %put53_controls, i64 0
+  %put53_control_slot = getelementptr i8, ptr %put53_control_ptr, i64 %put53_slot
+  %put53_control = load i8, ptr %put53_control_slot, align 1
+  %put53_empty = icmp eq i8 %put53_control, 0
+  br i1 %put53_empty, label %put53_insert, label %put53_advance
+put53_advance:
+  %put53_next_unwrapped = add i64 %put53_slot, 1
+  %put53_next = urem i64 %put53_next_unwrapped, %put53_capacity
+  %put53_probe_next = add i64 %put53_probe, 1
+  br label %put53_loop
+put53_insert:
+  %put53_insert_key_ptr = getelementptr i32, ptr %put53_keys, i64 %put53_slot
+  store i32 4, ptr %put53_insert_key_ptr, align 4
+  %put53_insert_value_ptr = getelementptr %sollang.struct.m0_s0, ptr %put53_values, i64 %put53_slot
+  store %sollang.struct.m0_s0 %v56, ptr %put53_insert_value_ptr, align 8
+  store i8 %put53_h2, ptr %put53_control_slot, align 1
+  %put53_new_length = add i64 %put53_old_length, 1
+  %put53_result0 = insertvalue %sollang.dict poison, ptr %put53_keys, 0
+  %put53_result1 = insertvalue %sollang.dict %put53_result0, ptr %put53_values, 1
+  %put53_result2 = insertvalue %sollang.dict %put53_result1, i64 %put53_new_length, 2
+  %put53_result3 = insertvalue %sollang.dict %put53_result2, i64 %put53_capacity, 3
+  store %sollang.dict %put53_result3, ptr %slot6, align 8
+  br label %put53_complete
+put53_missing:
+  call void @llvm.trap()
+  unreachable
+put53_loop_entry:
+  br label %put53_loop
+put53_complete:
+  br label %if46_merge
+if46_merge:
+  %v59 = load %sollang.dict, ptr %slot6, align 8
+  %v63 = load %sollang.dict, ptr %slot6, align 8
+  %v67 = load %sollang.dict, ptr %slot6, align 8
+  %v58_dictionary = load %sollang.dict, ptr %slot6, align 8
+  %v58_keys = extractvalue %sollang.dict %v58_dictionary, 0
+  %v58_values = extractvalue %sollang.dict %v58_dictionary, 1
+  %v58_length = extractvalue %sollang.dict %v58_dictionary, 2
+  %v58_capacity = extractvalue %sollang.dict %v58_dictionary, 3
+  %v58_control_offset = mul i64 %v58_capacity, 4
+  %v58_controls = getelementptr i8, ptr %v58_keys, i64 %v58_control_offset
+  %v58_hash_key = sext i32 1 to i64
+  %v58_hash_high = lshr i64 %v58_hash_key, 32
+  %v58_hash_fold = xor i64 %v58_hash_key, %v58_hash_high
+  %v58_hash = mul i64 %v58_hash_fold, -7046029254386353131
+  %v58_h2_shifted = lshr i64 %v58_hash, 57
+  %v58_h2_raw = and i64 %v58_h2_shifted, 127
+  %v58_h2_zero = icmp eq i64 %v58_h2_raw, 0
+  %v58_h2_value = select i1 %v58_h2_zero, i64 1, i64 %v58_h2_raw
+  %v58_h2 = trunc i64 %v58_h2_value to i8
+  %v58_start_slot = urem i64 %v58_hash, %v58_capacity
+  br label %dict58_start
+dict58_start:
+  br label %dict58_loop
+dict58_loop:
+  %v58_slot = phi i64 [ %v58_start_slot, %dict58_start ], [ %v58_next, %dict58_advance ], [ %v58_group_next, %dict58_group_advance ]
+  %v58_probe = phi i64 [ 0, %dict58_start ], [ %v58_probe_next, %dict58_advance ], [ %v58_group_probe_next, %dict58_group_advance ]
+  %v58_in_range = icmp ult i64 %v58_probe, %v58_capacity
+  br i1 %v58_in_range, label %dict58_check, label %dict58_missing
+dict58_check:
+  %v58_control_ptr = getelementptr i8, ptr %v58_controls, i64 %v58_slot
+  %v58_control = load i8, ptr %v58_control_ptr, align 1
+  %v58_occupied = icmp ne i8 %v58_control, 0
+  %v58_group_unwrapped1 = add i64 %v58_slot, 1
+  %v58_group_slot1 = urem i64 %v58_group_unwrapped1, %v58_capacity
+  %v58_group_unwrapped2 = add i64 %v58_slot, 2
+  %v58_group_slot2 = urem i64 %v58_group_unwrapped2, %v58_capacity
+  %v58_group_unwrapped3 = add i64 %v58_slot, 3
+  %v58_group_slot3 = urem i64 %v58_group_unwrapped3, %v58_capacity
+  %v58_group_unwrapped4 = add i64 %v58_slot, 4
+  %v58_group_slot4 = urem i64 %v58_group_unwrapped4, %v58_capacity
+  %v58_group_unwrapped5 = add i64 %v58_slot, 5
+  %v58_group_slot5 = urem i64 %v58_group_unwrapped5, %v58_capacity
+  %v58_group_unwrapped6 = add i64 %v58_slot, 6
+  %v58_group_slot6 = urem i64 %v58_group_unwrapped6, %v58_capacity
+  %v58_group_unwrapped7 = add i64 %v58_slot, 7
+  %v58_group_slot7 = urem i64 %v58_group_unwrapped7, %v58_capacity
+  %v58_group_ptr1 = getelementptr i8, ptr %v58_controls, i64 %v58_group_slot1
+  %v58_group_ptr2 = getelementptr i8, ptr %v58_controls, i64 %v58_group_slot2
+  %v58_group_ptr3 = getelementptr i8, ptr %v58_controls, i64 %v58_group_slot3
+  %v58_group_ptr4 = getelementptr i8, ptr %v58_controls, i64 %v58_group_slot4
+  %v58_group_ptr5 = getelementptr i8, ptr %v58_controls, i64 %v58_group_slot5
+  %v58_group_ptr6 = getelementptr i8, ptr %v58_controls, i64 %v58_group_slot6
+  %v58_group_ptr7 = getelementptr i8, ptr %v58_controls, i64 %v58_group_slot7
+  %v58_group_control1 = load i8, ptr %v58_group_ptr1, align 1
+  %v58_group_control2 = load i8, ptr %v58_group_ptr2, align 1
+  %v58_group_control3 = load i8, ptr %v58_group_ptr3, align 1
+  %v58_group_control4 = load i8, ptr %v58_group_ptr4, align 1
+  %v58_group_control5 = load i8, ptr %v58_group_ptr5, align 1
+  %v58_group_control6 = load i8, ptr %v58_group_ptr6, align 1
+  %v58_group_control7 = load i8, ptr %v58_group_ptr7, align 1
+  %v58_group_match0 = icmp eq i8 %v58_control, %v58_h2
+  %v58_group_match1 = icmp eq i8 %v58_group_control1, %v58_h2
+  %v58_group_match2 = icmp eq i8 %v58_group_control2, %v58_h2
+  %v58_group_match3 = icmp eq i8 %v58_group_control3, %v58_h2
+  %v58_group_match4 = icmp eq i8 %v58_group_control4, %v58_h2
+  %v58_group_match5 = icmp eq i8 %v58_group_control5, %v58_h2
+  %v58_group_match6 = icmp eq i8 %v58_group_control6, %v58_h2
+  %v58_group_match7 = icmp eq i8 %v58_group_control7, %v58_h2
+  %v58_group_match01 = or i1 %v58_group_match0, %v58_group_match1
+  %v58_group_match23 = or i1 %v58_group_match2, %v58_group_match3
+  %v58_group_match45 = or i1 %v58_group_match4, %v58_group_match5
+  %v58_group_match67 = or i1 %v58_group_match6, %v58_group_match7
+  %v58_group_match0123 = or i1 %v58_group_match01, %v58_group_match23
+  %v58_group_match4567 = or i1 %v58_group_match45, %v58_group_match67
+  %v58_group_has_match = or i1 %v58_group_match0123, %v58_group_match4567
+  %v58_group_candidate_offset7 = select i1 %v58_group_match7, i64 7, i64 0
+  %v58_group_candidate_offset6 = select i1 %v58_group_match6, i64 6, i64 %v58_group_candidate_offset7
+  %v58_group_candidate_offset5 = select i1 %v58_group_match5, i64 5, i64 %v58_group_candidate_offset6
+  %v58_group_candidate_offset4 = select i1 %v58_group_match4, i64 4, i64 %v58_group_candidate_offset5
+  %v58_group_candidate_offset3 = select i1 %v58_group_match3, i64 3, i64 %v58_group_candidate_offset4
+  %v58_group_candidate_offset2 = select i1 %v58_group_match2, i64 2, i64 %v58_group_candidate_offset3
+  %v58_group_candidate_offset1 = select i1 %v58_group_match1, i64 1, i64 %v58_group_candidate_offset2
+  %v58_group_candidate_offset = select i1 %v58_group_match0, i64 0, i64 %v58_group_candidate_offset1
+  %v58_group_candidate_unwrapped = add i64 %v58_slot, %v58_group_candidate_offset
+  %v58_group_candidate_slot = urem i64 %v58_group_candidate_unwrapped, %v58_capacity
+  br i1 %v58_group_has_match, label %dict58_h2_check, label %dict58_group_advance
+dict58_group_advance:
+  %v58_group_next_unwrapped = add i64 %v58_slot, 8
+  %v58_group_next = urem i64 %v58_group_next_unwrapped, %v58_capacity
+  %v58_group_probe_next = add i64 %v58_probe, 8
+  br label %dict58_loop
+dict58_h2_check:
+  br label %dict58_key_check
+dict58_key_check:
+  %v58_key_ptr = getelementptr i32, ptr %v58_keys, i64 %v58_group_candidate_slot
+  %v58_key = load i32, ptr %v58_key_ptr, align 4
+  %v58_found = icmp eq i32 %v58_key, 1
+  br i1 %v58_found, label %dict58_hit, label %dict58_advance
+dict58_advance:
+  %v58_next_unwrapped = add i64 %v58_slot, 1
+  %v58_next = urem i64 %v58_next_unwrapped, %v58_capacity
+  %v58_probe_next = add i64 %v58_probe, 1
+  br label %dict58_loop
+dict58_missing:
+  call void @llvm.trap()
+  unreachable
+dict58_hit:
+  %v58_value_ptr = getelementptr %sollang.struct.m0_s0, ptr %v58_values, i64 %v58_group_candidate_slot
+  %v58 = load %sollang.struct.m0_s0, ptr %v58_value_ptr, align 8
+  %v62_dictionary = load %sollang.dict, ptr %slot6, align 8
+  %v62_keys = extractvalue %sollang.dict %v62_dictionary, 0
+  %v62_values = extractvalue %sollang.dict %v62_dictionary, 1
+  %v62_length = extractvalue %sollang.dict %v62_dictionary, 2
+  %v62_capacity = extractvalue %sollang.dict %v62_dictionary, 3
+  %v62_control_offset = mul i64 %v62_capacity, 4
+  %v62_controls = getelementptr i8, ptr %v62_keys, i64 %v62_control_offset
+  %v62_hash_key = sext i32 3 to i64
+  %v62_hash_high = lshr i64 %v62_hash_key, 32
+  %v62_hash_fold = xor i64 %v62_hash_key, %v62_hash_high
+  %v62_hash = mul i64 %v62_hash_fold, -7046029254386353131
+  %v62_h2_shifted = lshr i64 %v62_hash, 57
+  %v62_h2_raw = and i64 %v62_h2_shifted, 127
+  %v62_h2_zero = icmp eq i64 %v62_h2_raw, 0
+  %v62_h2_value = select i1 %v62_h2_zero, i64 1, i64 %v62_h2_raw
+  %v62_h2 = trunc i64 %v62_h2_value to i8
+  %v62_start_slot = urem i64 %v62_hash, %v62_capacity
+  br label %dict62_start
+dict62_start:
+  br label %dict62_loop
+dict62_loop:
+  %v62_slot = phi i64 [ %v62_start_slot, %dict62_start ], [ %v62_next, %dict62_advance ], [ %v62_group_next, %dict62_group_advance ]
+  %v62_probe = phi i64 [ 0, %dict62_start ], [ %v62_probe_next, %dict62_advance ], [ %v62_group_probe_next, %dict62_group_advance ]
+  %v62_in_range = icmp ult i64 %v62_probe, %v62_capacity
+  br i1 %v62_in_range, label %dict62_check, label %dict62_missing
+dict62_check:
+  %v62_control_ptr = getelementptr i8, ptr %v62_controls, i64 %v62_slot
+  %v62_control = load i8, ptr %v62_control_ptr, align 1
+  %v62_occupied = icmp ne i8 %v62_control, 0
+  %v62_group_unwrapped1 = add i64 %v62_slot, 1
+  %v62_group_slot1 = urem i64 %v62_group_unwrapped1, %v62_capacity
+  %v62_group_unwrapped2 = add i64 %v62_slot, 2
+  %v62_group_slot2 = urem i64 %v62_group_unwrapped2, %v62_capacity
+  %v62_group_unwrapped3 = add i64 %v62_slot, 3
+  %v62_group_slot3 = urem i64 %v62_group_unwrapped3, %v62_capacity
+  %v62_group_unwrapped4 = add i64 %v62_slot, 4
+  %v62_group_slot4 = urem i64 %v62_group_unwrapped4, %v62_capacity
+  %v62_group_unwrapped5 = add i64 %v62_slot, 5
+  %v62_group_slot5 = urem i64 %v62_group_unwrapped5, %v62_capacity
+  %v62_group_unwrapped6 = add i64 %v62_slot, 6
+  %v62_group_slot6 = urem i64 %v62_group_unwrapped6, %v62_capacity
+  %v62_group_unwrapped7 = add i64 %v62_slot, 7
+  %v62_group_slot7 = urem i64 %v62_group_unwrapped7, %v62_capacity
+  %v62_group_ptr1 = getelementptr i8, ptr %v62_controls, i64 %v62_group_slot1
+  %v62_group_ptr2 = getelementptr i8, ptr %v62_controls, i64 %v62_group_slot2
+  %v62_group_ptr3 = getelementptr i8, ptr %v62_controls, i64 %v62_group_slot3
+  %v62_group_ptr4 = getelementptr i8, ptr %v62_controls, i64 %v62_group_slot4
+  %v62_group_ptr5 = getelementptr i8, ptr %v62_controls, i64 %v62_group_slot5
+  %v62_group_ptr6 = getelementptr i8, ptr %v62_controls, i64 %v62_group_slot6
+  %v62_group_ptr7 = getelementptr i8, ptr %v62_controls, i64 %v62_group_slot7
+  %v62_group_control1 = load i8, ptr %v62_group_ptr1, align 1
+  %v62_group_control2 = load i8, ptr %v62_group_ptr2, align 1
+  %v62_group_control3 = load i8, ptr %v62_group_ptr3, align 1
+  %v62_group_control4 = load i8, ptr %v62_group_ptr4, align 1
+  %v62_group_control5 = load i8, ptr %v62_group_ptr5, align 1
+  %v62_group_control6 = load i8, ptr %v62_group_ptr6, align 1
+  %v62_group_control7 = load i8, ptr %v62_group_ptr7, align 1
+  %v62_group_match0 = icmp eq i8 %v62_control, %v62_h2
+  %v62_group_match1 = icmp eq i8 %v62_group_control1, %v62_h2
+  %v62_group_match2 = icmp eq i8 %v62_group_control2, %v62_h2
+  %v62_group_match3 = icmp eq i8 %v62_group_control3, %v62_h2
+  %v62_group_match4 = icmp eq i8 %v62_group_control4, %v62_h2
+  %v62_group_match5 = icmp eq i8 %v62_group_control5, %v62_h2
+  %v62_group_match6 = icmp eq i8 %v62_group_control6, %v62_h2
+  %v62_group_match7 = icmp eq i8 %v62_group_control7, %v62_h2
+  %v62_group_match01 = or i1 %v62_group_match0, %v62_group_match1
+  %v62_group_match23 = or i1 %v62_group_match2, %v62_group_match3
+  %v62_group_match45 = or i1 %v62_group_match4, %v62_group_match5
+  %v62_group_match67 = or i1 %v62_group_match6, %v62_group_match7
+  %v62_group_match0123 = or i1 %v62_group_match01, %v62_group_match23
+  %v62_group_match4567 = or i1 %v62_group_match45, %v62_group_match67
+  %v62_group_has_match = or i1 %v62_group_match0123, %v62_group_match4567
+  %v62_group_candidate_offset7 = select i1 %v62_group_match7, i64 7, i64 0
+  %v62_group_candidate_offset6 = select i1 %v62_group_match6, i64 6, i64 %v62_group_candidate_offset7
+  %v62_group_candidate_offset5 = select i1 %v62_group_match5, i64 5, i64 %v62_group_candidate_offset6
+  %v62_group_candidate_offset4 = select i1 %v62_group_match4, i64 4, i64 %v62_group_candidate_offset5
+  %v62_group_candidate_offset3 = select i1 %v62_group_match3, i64 3, i64 %v62_group_candidate_offset4
+  %v62_group_candidate_offset2 = select i1 %v62_group_match2, i64 2, i64 %v62_group_candidate_offset3
+  %v62_group_candidate_offset1 = select i1 %v62_group_match1, i64 1, i64 %v62_group_candidate_offset2
+  %v62_group_candidate_offset = select i1 %v62_group_match0, i64 0, i64 %v62_group_candidate_offset1
+  %v62_group_candidate_unwrapped = add i64 %v62_slot, %v62_group_candidate_offset
+  %v62_group_candidate_slot = urem i64 %v62_group_candidate_unwrapped, %v62_capacity
+  br i1 %v62_group_has_match, label %dict62_h2_check, label %dict62_group_advance
+dict62_group_advance:
+  %v62_group_next_unwrapped = add i64 %v62_slot, 8
+  %v62_group_next = urem i64 %v62_group_next_unwrapped, %v62_capacity
+  %v62_group_probe_next = add i64 %v62_probe, 8
+  br label %dict62_loop
+dict62_h2_check:
+  br label %dict62_key_check
+dict62_key_check:
+  %v62_key_ptr = getelementptr i32, ptr %v62_keys, i64 %v62_group_candidate_slot
+  %v62_key = load i32, ptr %v62_key_ptr, align 4
+  %v62_found = icmp eq i32 %v62_key, 3
+  br i1 %v62_found, label %dict62_hit, label %dict62_advance
+dict62_advance:
+  %v62_next_unwrapped = add i64 %v62_slot, 1
+  %v62_next = urem i64 %v62_next_unwrapped, %v62_capacity
+  %v62_probe_next = add i64 %v62_probe, 1
+  br label %dict62_loop
+dict62_missing:
+  call void @llvm.trap()
+  unreachable
+dict62_hit:
+  %v62_value_ptr = getelementptr %sollang.struct.m0_s0, ptr %v62_values, i64 %v62_group_candidate_slot
+  %v62 = load %sollang.struct.m0_s0, ptr %v62_value_ptr, align 8
+  %v66_dictionary = load %sollang.dict, ptr %slot6, align 8
+  %v66_keys = extractvalue %sollang.dict %v66_dictionary, 0
+  %v66_values = extractvalue %sollang.dict %v66_dictionary, 1
+  %v66_length = extractvalue %sollang.dict %v66_dictionary, 2
+  %v66_capacity = extractvalue %sollang.dict %v66_dictionary, 3
+  %v66_control_offset = mul i64 %v66_capacity, 4
+  %v66_controls = getelementptr i8, ptr %v66_keys, i64 %v66_control_offset
+  %v66_hash_key = sext i32 4 to i64
+  %v66_hash_high = lshr i64 %v66_hash_key, 32
+  %v66_hash_fold = xor i64 %v66_hash_key, %v66_hash_high
+  %v66_hash = mul i64 %v66_hash_fold, -7046029254386353131
+  %v66_h2_shifted = lshr i64 %v66_hash, 57
+  %v66_h2_raw = and i64 %v66_h2_shifted, 127
+  %v66_h2_zero = icmp eq i64 %v66_h2_raw, 0
+  %v66_h2_value = select i1 %v66_h2_zero, i64 1, i64 %v66_h2_raw
+  %v66_h2 = trunc i64 %v66_h2_value to i8
+  %v66_start_slot = urem i64 %v66_hash, %v66_capacity
+  br label %dict66_start
+dict66_start:
+  br label %dict66_loop
+dict66_loop:
+  %v66_slot = phi i64 [ %v66_start_slot, %dict66_start ], [ %v66_next, %dict66_advance ], [ %v66_group_next, %dict66_group_advance ]
+  %v66_probe = phi i64 [ 0, %dict66_start ], [ %v66_probe_next, %dict66_advance ], [ %v66_group_probe_next, %dict66_group_advance ]
+  %v66_in_range = icmp ult i64 %v66_probe, %v66_capacity
+  br i1 %v66_in_range, label %dict66_check, label %dict66_missing
+dict66_check:
+  %v66_control_ptr = getelementptr i8, ptr %v66_controls, i64 %v66_slot
+  %v66_control = load i8, ptr %v66_control_ptr, align 1
+  %v66_occupied = icmp ne i8 %v66_control, 0
+  %v66_group_unwrapped1 = add i64 %v66_slot, 1
+  %v66_group_slot1 = urem i64 %v66_group_unwrapped1, %v66_capacity
+  %v66_group_unwrapped2 = add i64 %v66_slot, 2
+  %v66_group_slot2 = urem i64 %v66_group_unwrapped2, %v66_capacity
+  %v66_group_unwrapped3 = add i64 %v66_slot, 3
+  %v66_group_slot3 = urem i64 %v66_group_unwrapped3, %v66_capacity
+  %v66_group_unwrapped4 = add i64 %v66_slot, 4
+  %v66_group_slot4 = urem i64 %v66_group_unwrapped4, %v66_capacity
+  %v66_group_unwrapped5 = add i64 %v66_slot, 5
+  %v66_group_slot5 = urem i64 %v66_group_unwrapped5, %v66_capacity
+  %v66_group_unwrapped6 = add i64 %v66_slot, 6
+  %v66_group_slot6 = urem i64 %v66_group_unwrapped6, %v66_capacity
+  %v66_group_unwrapped7 = add i64 %v66_slot, 7
+  %v66_group_slot7 = urem i64 %v66_group_unwrapped7, %v66_capacity
+  %v66_group_ptr1 = getelementptr i8, ptr %v66_controls, i64 %v66_group_slot1
+  %v66_group_ptr2 = getelementptr i8, ptr %v66_controls, i64 %v66_group_slot2
+  %v66_group_ptr3 = getelementptr i8, ptr %v66_controls, i64 %v66_group_slot3
+  %v66_group_ptr4 = getelementptr i8, ptr %v66_controls, i64 %v66_group_slot4
+  %v66_group_ptr5 = getelementptr i8, ptr %v66_controls, i64 %v66_group_slot5
+  %v66_group_ptr6 = getelementptr i8, ptr %v66_controls, i64 %v66_group_slot6
+  %v66_group_ptr7 = getelementptr i8, ptr %v66_controls, i64 %v66_group_slot7
+  %v66_group_control1 = load i8, ptr %v66_group_ptr1, align 1
+  %v66_group_control2 = load i8, ptr %v66_group_ptr2, align 1
+  %v66_group_control3 = load i8, ptr %v66_group_ptr3, align 1
+  %v66_group_control4 = load i8, ptr %v66_group_ptr4, align 1
+  %v66_group_control5 = load i8, ptr %v66_group_ptr5, align 1
+  %v66_group_control6 = load i8, ptr %v66_group_ptr6, align 1
+  %v66_group_control7 = load i8, ptr %v66_group_ptr7, align 1
+  %v66_group_match0 = icmp eq i8 %v66_control, %v66_h2
+  %v66_group_match1 = icmp eq i8 %v66_group_control1, %v66_h2
+  %v66_group_match2 = icmp eq i8 %v66_group_control2, %v66_h2
+  %v66_group_match3 = icmp eq i8 %v66_group_control3, %v66_h2
+  %v66_group_match4 = icmp eq i8 %v66_group_control4, %v66_h2
+  %v66_group_match5 = icmp eq i8 %v66_group_control5, %v66_h2
+  %v66_group_match6 = icmp eq i8 %v66_group_control6, %v66_h2
+  %v66_group_match7 = icmp eq i8 %v66_group_control7, %v66_h2
+  %v66_group_match01 = or i1 %v66_group_match0, %v66_group_match1
+  %v66_group_match23 = or i1 %v66_group_match2, %v66_group_match3
+  %v66_group_match45 = or i1 %v66_group_match4, %v66_group_match5
+  %v66_group_match67 = or i1 %v66_group_match6, %v66_group_match7
+  %v66_group_match0123 = or i1 %v66_group_match01, %v66_group_match23
+  %v66_group_match4567 = or i1 %v66_group_match45, %v66_group_match67
+  %v66_group_has_match = or i1 %v66_group_match0123, %v66_group_match4567
+  %v66_group_candidate_offset7 = select i1 %v66_group_match7, i64 7, i64 0
+  %v66_group_candidate_offset6 = select i1 %v66_group_match6, i64 6, i64 %v66_group_candidate_offset7
+  %v66_group_candidate_offset5 = select i1 %v66_group_match5, i64 5, i64 %v66_group_candidate_offset6
+  %v66_group_candidate_offset4 = select i1 %v66_group_match4, i64 4, i64 %v66_group_candidate_offset5
+  %v66_group_candidate_offset3 = select i1 %v66_group_match3, i64 3, i64 %v66_group_candidate_offset4
+  %v66_group_candidate_offset2 = select i1 %v66_group_match2, i64 2, i64 %v66_group_candidate_offset3
+  %v66_group_candidate_offset1 = select i1 %v66_group_match1, i64 1, i64 %v66_group_candidate_offset2
+  %v66_group_candidate_offset = select i1 %v66_group_match0, i64 0, i64 %v66_group_candidate_offset1
+  %v66_group_candidate_unwrapped = add i64 %v66_slot, %v66_group_candidate_offset
+  %v66_group_candidate_slot = urem i64 %v66_group_candidate_unwrapped, %v66_capacity
+  br i1 %v66_group_has_match, label %dict66_h2_check, label %dict66_group_advance
+dict66_group_advance:
+  %v66_group_next_unwrapped = add i64 %v66_slot, 8
+  %v66_group_next = urem i64 %v66_group_next_unwrapped, %v66_capacity
+  %v66_group_probe_next = add i64 %v66_probe, 8
+  br label %dict66_loop
+dict66_h2_check:
+  br label %dict66_key_check
+dict66_key_check:
+  %v66_key_ptr = getelementptr i32, ptr %v66_keys, i64 %v66_group_candidate_slot
+  %v66_key = load i32, ptr %v66_key_ptr, align 4
+  %v66_found = icmp eq i32 %v66_key, 4
+  br i1 %v66_found, label %dict66_hit, label %dict66_advance
+dict66_advance:
+  %v66_next_unwrapped = add i64 %v66_slot, 1
+  %v66_next = urem i64 %v66_next_unwrapped, %v66_capacity
+  %v66_probe_next = add i64 %v66_probe, 1
+  br label %dict66_loop
+dict66_missing:
+  call void @llvm.trap()
+  unreachable
+dict66_hit:
+  %v66_value_ptr = getelementptr %sollang.struct.m0_s0, ptr %v66_values, i64 %v66_group_candidate_slot
+  %v66 = load %sollang.struct.m0_s0, ptr %v66_value_ptr, align 8
+  %v57 = call i32 @sollang_m0_s3(%sollang.struct.m0_s0 %v58)
+  %v61 = call i32 @sollang_m0_s3(%sollang.struct.m0_s0 %v62)
+  %v65 = call i32 @sollang_m0_s3(%sollang.struct.m0_s0 %v66)
+  %v72 = freeze i32 %v57
+  %v73 = freeze i32 %v61
+  %v74 = freeze i32 %v65
+  %v80 = add i32 %v72, %v73
+  %v71 = add i32 %v80, %v74
+  %v70 = icmp eq i32 %v71, 800
+  br i1 %v70, label %if76_then, label %if76_merge
+if76_then:
+  %v79_ptr = insertvalue %sollang.text poison, ptr @sollang_str_79, 0
+  %v79 = insertvalue %sollang.text %v79_ptr, i64 9, 1
+  call void @sollang_runtime_print(ptr @sollang_str_79, i64 9, i1 true)
+  br label %if76_merge
+if76_merge:
+  %cleanup56_b6_current = load %sollang.dict, ptr %slot6, align 8
+  call void @sollang_drop_t28(%sollang.dict %cleanup56_b6_current)
+  call void @sollang_runtime_flush_stdout()
+  ret i32 0
+}
