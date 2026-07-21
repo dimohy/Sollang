@@ -224,6 +224,28 @@ python -m http.server 5080
 
 Then open `http://localhost:5080/examples/browser/`.
 
+## Native Unit Tests
+
+Declare tests as ordinary zero-input `Bool` functions whose names start with
+`test_`. A false result fails the suite. Project tests under `tests/**/*.slg`
+are discovered only by `sollang test`, so ordinary product builds do not pull
+test modules into release artifacts.
+
+```sollang
+test_addition: -> Bool => 20 + 22 == 42
+test_subtraction: -> Bool => 44 - 2 == 42
+```
+
+Build and run one native suite, or select tests by qualified-name substring:
+
+```powershell
+sollang test --project . --target windows-x64
+sollang test --project . --target linux-x64 --filter addition
+```
+
+The generated harness is Sollang code, reports every selected function, and
+returns a nonzero native process status when any test fails.
+
 ## Documentation
 
 - [Getting started and implementation guide](docs/GETTING_STARTED.md)
@@ -243,6 +265,7 @@ Then open `http://localhost:5080/examples/browser/`.
 - `src/Sollang.Compiler`: compiler CLI, semantic lowering, and LLVM codegen
 - `src/Sollang.Compiler.Generators`: source generators for lexing/parsing
 - `tests/Sollang.ExampleTests`: expected stdout test runner
+- `tests/Sollang.NativeTestFixtures`: native `sollang test` success/failure fixtures
 - `tools/vscode-sollang`: local VS Code language support extension
 
 Multiple user files can be compiled as one program. Library files contribute
@@ -348,8 +371,8 @@ selects the newest compatible non-yanked release. See the
 
 ## Self-Hosting Progress
 
-The measured roadmap is currently **58/60 equivalent gates (96.7%)**, with
-**2 equivalent gates remaining**.
+The measured roadmap is currently **58.5/60 equivalent gates (97.5%)**, with
+**1.5 equivalent gates remaining**.
 
 The Sollang-written compiler is split into lexer, parser/CST/AST, semantic,
 typed-IR, ownership, module-cache, and LLVM modules. It builds a native Stage 2
@@ -373,6 +396,10 @@ Owned nominal dictionary keys and values now transfer exactly once during
 implementations for literal construction, lookup, take, mutation, and growth,
 while equal-key replacement retains the resident key and destroys the incoming
 owner.
+The native `sollang test` command discovers project test modules, validates
+zero-input `Bool` contracts, supports qualified-name filtering, and executes a
+generated Sollang harness on Windows or Linux. The same harness shape passes
+C# bootstrap versus self-host LLVM differential verification.
 Owned nominal values now transfer into dictionary storage, displaced values are
 dropped before replacement, and growth preserves the single owner. Owned
 nominal keys use the same static `Hash`/`Eq` contract across lookup, mutation,

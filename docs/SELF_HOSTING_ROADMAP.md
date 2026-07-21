@@ -136,10 +136,10 @@ not lines of code.
 | Ownership and storage | 10 | 10 | 0 | 0 | 10.0 |
 | Modules, visibility, and builds | 8 | 8 | 0 | 0 | 8.0 |
 | Compiler-construction primitives | 12 | 12 | 0 | 0 | 12.0 |
-| Standard library and tooling | 8 | 6 | 2 | 0 | 7.0 |
-| **Total** | **60** | **57** | **2** | **1** | **58.0 / 60** |
+| Standard library and tooling | 8 | 7 | 1 | 0 | 7.5 |
+| **Total** | **60** | **58** | **1** | **1** | **58.5 / 60** |
 
-Current count-based progress: **96.7% (58 of 60 equivalent gates)**.
+Current count-based progress: **97.5% (58.5 of 60 equivalent gates)**.
 
 The frontend parallel-compilation subproject is **28/28 checks (100%)**. Its
 source-local product boundary, typed callback-result role slice, nested-call
@@ -150,7 +150,7 @@ reject mutable or structurally non-sendable captures. The submitting parent now
 helps drain its task group before the structured join. Exact cancellation and
 partial-result destruction plus full Windows/Linux suite parity are proven.
 This completed feature-local subproject does not promote a roadmap gate.
-There are **2 equivalent gates remaining**. Because the remaining compiler
+There are **1.5 equivalent gates remaining**. Because the remaining compiler
 primitives are harder than early syntax gates, this is not an elapsed-time
 estimate.
 
@@ -334,15 +334,18 @@ milestone without changing the broader 60-gate language-capability score.
 - Partial (0).
 - Missing (0).
 
-### Standard library and tooling — 7 / 8
+### Standard library and tooling — 7.5 / 8
 
-- Complete (6): basic `sys.io`, three LLVM-backed target link paths, the
+- Complete (7): basic `sys.io`, three LLVM-backed target link paths, the
   reproducible package/build surface, a generated-parser-backed canonical
   formatter and LSP server, VS Code parser-backed document formatting, and an
   owned portable Path API with target-native canonical queries plus portable
-  kind, byte-length, and modification-time metadata.
-- Partial (2): file/random/time APIs remain narrow compiler intrinsics; tests
-  are example-driven without an Sollang unit-test framework. File I/O now
+  kind, byte-length, and modification-time metadata, and a native `sollang
+  test` framework that discovers project test modules, selects zero-input
+  `test_*: -> Bool` functions, generates one Sollang harness, and reports its
+  native Windows/Linux success or failure status.
+- Partial (1): file/random/time APIs remain narrow compiler intrinsics. File
+  I/O now
   monomorphizes canonical scalar `write<T>` and
   zero-input `read<T>` calls with explicit EOF/error results. Affine `File`
   owners and position-based `readAt<T>`/`readAtAsync<T>` remove shared-cursor
@@ -3257,3 +3260,35 @@ Research basis:
 - [Mojo ownership and borrowing](https://docs.modular.com/mojo/manual/values/ownership)
 - [Mojo lifetime origins](https://docs.modular.com/mojo/manual/values/lifetimes)
 - [Swift subscripts](https://docs.swift.org/swift-book/documentation/the-swift-programming-language/subscripts/)
+
+## D252/example 566 - Sollang-Native Unit-Test Harness
+
+`sollang test` treats ordinary zero-input `Bool` functions whose names start
+with `test_` as native unit tests. Project builds discover sorted
+`tests/**/*.slg` modules without adding those modules to ordinary product
+builds. The command validates every opted-in signature, supports an optional
+qualified-name substring filter, makes selected private functions visible only
+inside the synthesized test compilation, and generates one Sollang `main`
+harness that executes every selected test, reports pass/fail lines, counts
+failures, and sends a portable zero/nonzero status to `sys.process.exit`.
+
+The C# host performs discovery and native process orchestration, but it does
+not decide test outcomes: the generated Sollang program evaluates each Bool
+result and produces the suite exit status. `scripts/verify-native-tests.ps1`
+checks project discovery, filtering, a false-result nonzero exit, and invalid
+signature diagnostics on Windows and Linux (**4/4** each). Example 566 fixes
+the same test-function and harness shape in the self-host LLVM suite; C# versus
+self-host differential verification, LLVM validation, linking, and execution
+pass on both targets. The complete self-host suite passes **355/355** on
+Windows and **355/355** on Linux.
+
+This closes the Sollang-native unit-test gate. Formal progress advances to
+**58 complete, 1 partial, 1 missing: 58.5/60 (97.5%)**, with **1.5 equivalent
+gates remaining**. The Stage 3 cadence advances to **3/10**.
+
+Research basis:
+
+- [Go built-in test naming and command](https://go.dev/doc/tutorial/add-a-test)
+- [Rust test functions and generated runner](https://doc.rust-lang.org/stable/book/ch11-01-writing-tests.html)
+- [Zig test declarations](https://ziglang.org/documentation/0.15.2/#Zig-Test)
+- [Swift Testing function declarations](https://developer.apple.com/documentation/Testing/DefiningTests)

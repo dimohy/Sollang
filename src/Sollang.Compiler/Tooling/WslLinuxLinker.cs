@@ -56,7 +56,7 @@ internal sealed class WslLinuxLinker(LlvmToolchain toolchain)
         }
     }
 
-    private static string ToWslPath(string path)
+    internal static string ToWslPath(string path)
     {
         var fullPath = Path.GetFullPath(path);
         if (fullPath.Length >= 3 && fullPath[1] == ':' && fullPath[2] == Path.DirectorySeparatorChar)

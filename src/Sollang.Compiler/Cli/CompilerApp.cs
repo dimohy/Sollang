@@ -40,6 +40,10 @@ internal static class CompilerApp
             {
                 return LanguageServer.Run(args[1..]);
             }
+            if (args is ["test", ..])
+            {
+                return NativeTestRunner.Run(args);
+            }
             var options = CliOptions.Parse(args);
             Build(options);
             return 0;
@@ -178,6 +182,59 @@ internal static class CompilerApp
         }
     }
 
+    internal static void CompileStandalone(CliOptions options, SollangProgram program)
+    {
+        var toolchain = LlvmToolchain.From(options.LlvmHome);
+        Directory.CreateDirectory(Path.GetDirectoryName(options.OutputPath)
+            ?? Directory.GetCurrentDirectory());
+        var pointerBitWidth = options.Target == CompilationTarget.Wasm32Browser ? 32 : 64;
+        var boundProgram = new SemanticCompiler(program, pointerBitWidth).Compile();
+        WriteAndLinkStandalone(options, toolchain, boundProgram);
+        PrintOutput(options.OutputPath);
+    }
+
+    private static void WriteAndLinkStandalone(
+        CliOptions options,
+        LlvmToolchain toolchain,
+        BoundProgram program)
+    {
+        var workDir = Path.Combine(
+            Path.GetDirectoryName(Path.GetFullPath(options.OutputPath))
+                ?? Directory.GetCurrentDirectory(),
+            Path.GetFileNameWithoutExtension(options.OutputPath) + ".slg-tmp");
+
+        if (Directory.Exists(workDir))
+        {
+            Directory.Delete(workDir, recursive: true);
+        }
+
+        Directory.CreateDirectory(workDir);
+        try
+        {
+            var llPath = Path.Combine(workDir, Path.GetFileNameWithoutExtension(options.OutputPath) + ".ll");
+            using (var writer = new StreamWriter(
+                llPath,
+                append: false,
+                new UTF8Encoding(encoderShouldEmitUTF8Identifier: false)))
+            {
+                LlvmIrGenerator.WriteProgram(program, options.Target, writer);
+            }
+            LinkLlvmIr(options, toolchain, llPath, workDir);
+
+            if (options.KeepTemps)
+            {
+                File.Copy(llPath, Path.ChangeExtension(options.OutputPath, ".ll"), overwrite: true);
+            }
+        }
+        finally
+        {
+            if (!options.KeepTemps && Directory.Exists(workDir))
+            {
+                Directory.Delete(workDir, recursive: true);
+            }
+        }
+    }
+
     private static void PrintOutput(string outputPath)
     {
         var exeInfo = new FileInfo(outputPath);
@@ -202,7 +259,7 @@ internal static class CompilerApp
         }
     }
 
-    private static LoadedCompilation LoadProgram(
+    internal static LoadedCompilation LoadProgram(
         IReadOnlyList<string> sourcePaths,
         ProjectBuild? project)
     {
@@ -267,6 +324,14 @@ internal static class CompilerApp
             ?? new Dictionary<string, ProjectPackage>(StringComparer.Ordinal);
         var states = new Dictionary<string, ModuleVisitState>(StringComparer.OrdinalIgnoreCase);
         VisitImports(root, moduleRoot, packagesByName, loadedByPath, modules, states, []);
+        foreach (var sourcePath in sourcePaths)
+        {
+            var explicitSource = loadedByPath[Path.GetFullPath(sourcePath)];
+            if (!ReferenceEquals(explicitSource, root))
+            {
+                VisitImports(explicitSource, moduleRoot, packagesByName, loadedByPath, modules, states, []);
+            }
+        }
         return loadedByPath.Values.OrderBy(static source => source.Path, StringComparer.OrdinalIgnoreCase).ToArray();
     }
 

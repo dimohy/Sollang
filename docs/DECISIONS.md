@@ -9784,3 +9784,41 @@ Research basis:
 - [Rust filesystem metadata](https://doc.rust-lang.org/std/fs/struct.Metadata.html)
 - [Go `filepath.EvalSymlinks`](https://pkg.go.dev/path/filepath#EvalSymlinks)
 - [Go `os.FileInfo`](https://pkg.go.dev/os#FileInfo)
+
+## D252 - Native Tests Are Ordinary Bool Functions with a Generated Harness
+
+Sollang unit tests use the existing function grammar rather than introducing
+an attribute or a second declaration form. Any ordinary non-generic,
+zero-input, non-intrinsic function whose name starts with `test_` opts into the
+test contract and must return `Bool`. The snake-case convention follows
+Sollang style while retaining Go's discoverable naming model. It also keeps
+the C# generated parser and Sollang self-host parser on exactly the same source
+language.
+
+`sollang test` accepts the build target, project/workspace selection, LLVM and
+optimization options, plus `--filter`. For a project it adds sorted
+`tests/**/*.slg` files only to the test compilation. It then synthesizes a
+Sollang `main` program that invokes the selected functions, prints stable
+per-test results and a summary, counts failures in a mutable Sollang binding,
+and passes a portable zero/nonzero status to `sys.process.exit`. The host only
+discovers, compiles, links, and starts this program; test truth and the nonzero result are evaluated
+inside the target-native Sollang executable. A five-minute process boundary
+prevents a hanging suite from being reported as success.
+
+`scripts/verify-native-tests.ps1` verifies project discovery, name filtering,
+false-result failure status, and signature rejection (**4/4**) on Windows and
+Linux. Example 566 snapshots the generated-style harness and passes C# versus
+self-host differential LLVM verification, assembly, linking, and execution on
+both targets. The complete self-host suite passes **355/355** on both targets,
+and the Release solution build has zero warnings and zero errors.
+
+This promotes the Sollang-native unit-test gate from partial to complete.
+Formal progress becomes **58 complete, 1 partial, 1 missing: 58.5/60 (97.5%)**,
+with **1.5 equivalent gates remaining**. Stage 3 cadence advances to **3/10**.
+
+Research basis:
+
+- [Go built-in test naming and command](https://go.dev/doc/tutorial/add-a-test)
+- [Rust test functions and generated runner](https://doc.rust-lang.org/stable/book/ch11-01-writing-tests.html)
+- [Zig test declarations](https://ziglang.org/documentation/0.15.2/#Zig-Test)
+- [Swift Testing function declarations](https://developer.apple.com/documentation/Testing/DefiningTests)
