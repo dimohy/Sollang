@@ -59,6 +59,7 @@ done:
 %sollang.array.i32 = type { ptr, i64, i64 }
 declare ptr @malloc(i64)
 declare void @free(ptr)
+%sollang.dict = type { ptr, ptr, i64, i64 }
 define internal void @sollang_drop_t25(%sollang.array.i32 %value) {
 entry:
   %data = extractvalue %sollang.array.i32 %value, 0
@@ -66,14 +67,24 @@ entry:
   call void @free(ptr %data)
   ret void
 }
+define internal void @sollang_drop_t26(%sollang.dict %value) {
+entry:
+  %keys = extractvalue %sollang.dict %value, 0
+  %values = extractvalue %sollang.dict %value, 1
+  %length = extractvalue %sollang.dict %value, 2
+  call void @free(ptr %keys)
+  call void @free(ptr %values)
+  ret void
+}
+declare void @llvm.trap()
 %sollang.text = type { ptr, i64 }
-@sollang_str_32 = private unnamed_addr constant [6 x i8] c"normal"
-@sollang_str_34 = private unnamed_addr constant [4 x i8] c"done"
+@sollang_str_33 = private unnamed_addr constant [6 x i8] c"normal"
+@sollang_str_35 = private unnamed_addr constant [4 x i8] c"done"
 define i32 @main() {
 entry:
   %slot1 = alloca i32, align 4
-  %v34_ptr = insertvalue %sollang.text poison, ptr @sollang_str_34, 0
-  %v34 = insertvalue %sollang.text %v34_ptr, i64 4, 1
+  %v35_ptr = insertvalue %sollang.text poison, ptr @sollang_str_35, 0
+  %v35 = insertvalue %sollang.text %v35_ptr, i64 4, 1
   store i32 0, ptr %slot1, align 4
   br label %while9_header
 while9_header:
@@ -95,30 +106,46 @@ while9_body:
   %v14_0 = insertvalue %sollang.array.i32 poison, ptr %v14_data, 0
   %v14_1 = insertvalue %sollang.array.i32 %v14_0, i64 2, 1
   %v14 = insertvalue %sollang.array.i32 %v14_1, i64 2, 2
-  %v19 = load i32, ptr %slot1, align 4
-  %v21 = load i32, ptr %slot1, align 4
-  %v20 = add i32 %v21, 100
-  %v25 = load i32, ptr %slot1, align 4
-  %v24 = icmp eq i32 %v25, 2
-  br i1 %v24, label %guard23_exit, label %guard23_next
-guard23_exit:
+  %v20 = load i32, ptr %slot1, align 4
+  %v22 = load i32, ptr %slot1, align 4
+  %v21 = add i32 %v22, 100
+  %v19_keys = call ptr @malloc(i64 5)
+  %v19_controls = getelementptr i8, ptr %v19_keys, i64 4
+  %v19_values = call ptr @malloc(i64 4)
+  %v19_keys_ptr0 = getelementptr i32, ptr %v19_keys, i64 0
+  store i32 %v20, ptr %v19_keys_ptr0, align 4
+  %v19_control_ptr0 = getelementptr i8, ptr %v19_controls, i64 0
+  store i8 1, ptr %v19_control_ptr0, align 1
+  %v19_values_ptr0 = getelementptr i32, ptr %v19_values, i64 0
+  store i32 %v21, ptr %v19_values_ptr0, align 4
+  %v19_0 = insertvalue %sollang.dict poison, ptr %v19_keys, 0
+  %v19_1 = insertvalue %sollang.dict %v19_0, ptr %v19_values, 1
+  %v19_2 = insertvalue %sollang.dict %v19_1, i64 1, 2
+  %v19 = insertvalue %sollang.dict %v19_2, i64 1, 3
+  %v26 = load i32, ptr %slot1, align 4
+  %v25 = icmp eq i32 %v26, 2
+  br i1 %v25, label %guard24_exit, label %guard24_next
+guard24_exit:
+  call void @sollang_drop_t26(%sollang.dict %v19)
   call void @sollang_drop_t25(%sollang.array.i32 %v14)
   br label %while9_header
-guard23_next:
-  %v29 = load i32, ptr %slot1, align 4
-  %v28 = icmp eq i32 %v29, 3
-  br i1 %v28, label %guard27_exit, label %guard27_next
-guard27_exit:
+guard24_next:
+  %v30 = load i32, ptr %slot1, align 4
+  %v29 = icmp eq i32 %v30, 3
+  br i1 %v29, label %guard28_exit, label %guard28_next
+guard28_exit:
+  call void @sollang_drop_t26(%sollang.dict %v19)
   call void @sollang_drop_t25(%sollang.array.i32 %v14)
   br label %while9_exit
-guard27_next:
-  %v32_ptr = insertvalue %sollang.text poison, ptr @sollang_str_32, 0
-  %v32 = insertvalue %sollang.text %v32_ptr, i64 6, 1
-  call void @sollang_runtime_print(ptr @sollang_str_32, i64 6, i1 true)
+guard28_next:
+  %v33_ptr = insertvalue %sollang.text poison, ptr @sollang_str_33, 0
+  %v33 = insertvalue %sollang.text %v33_ptr, i64 6, 1
+  call void @sollang_runtime_print(ptr @sollang_str_33, i64 6, i1 true)
+  call void @sollang_drop_t26(%sollang.dict %v19)
   call void @sollang_drop_t25(%sollang.array.i32 %v14)
   br label %while9_header
 while9_exit:
-  call void @sollang_runtime_print(ptr @sollang_str_34, i64 4, i1 true)
+  call void @sollang_runtime_print(ptr @sollang_str_35, i64 4, i1 true)
   call void @sollang_runtime_flush_stdout()
   ret i32 0
 }

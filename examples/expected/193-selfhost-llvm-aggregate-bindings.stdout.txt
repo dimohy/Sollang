@@ -16,7 +16,7 @@ entry:
   call void @free(ptr %data)
   ret void
 }
-define internal void @sollang_drop_t27(%sollang.dict %value) {
+define internal void @sollang_drop_t28(%sollang.dict %value) {
 entry:
   %keys = extractvalue %sollang.dict %value, 0
   %values = extractvalue %sollang.dict %value, 1
@@ -53,14 +53,19 @@ entry:
 }
 define i32 @sollang_m0_s6() {
 entry:
-  %v19_keys = call ptr @malloc(i64 8)
+  %v19_keys = call ptr @malloc(i64 10)
+  %v19_controls = getelementptr i8, ptr %v19_keys, i64 8
   %v19_values = call ptr @malloc(i64 8)
   %v19_keys_ptr0 = getelementptr i32, ptr %v19_keys, i64 0
   store i32 1, ptr %v19_keys_ptr0, align 4
+  %v19_control_ptr0 = getelementptr i8, ptr %v19_controls, i64 0
+  store i8 1, ptr %v19_control_ptr0, align 1
   %v19_values_ptr0 = getelementptr i32, ptr %v19_values, i64 0
   store i32 10, ptr %v19_values_ptr0, align 4
   %v19_keys_ptr1 = getelementptr i32, ptr %v19_keys, i64 1
   store i32 2, ptr %v19_keys_ptr1, align 4
+  %v19_control_ptr1 = getelementptr i8, ptr %v19_controls, i64 1
+  store i8 1, ptr %v19_control_ptr1, align 1
   %v19_values_ptr1 = getelementptr i32, ptr %v19_values, i64 1
   store i32 20, ptr %v19_values_ptr1, align 4
   %v19_0 = insertvalue %sollang.dict poison, ptr %v19_keys, 0
@@ -71,6 +76,9 @@ entry:
   %v24_keys = extractvalue %sollang.dict %v25, 0
   %v24_values = extractvalue %sollang.dict %v25, 1
   %v24_length = extractvalue %sollang.dict %v25, 2
+  %v24_capacity = extractvalue %sollang.dict %v25, 3
+  %v24_control_offset = mul i64 %v24_capacity, 4
+  %v24_controls = getelementptr i8, ptr %v24_keys, i64 %v24_control_offset
   br label %dict24_start
 dict24_start:
   br label %dict24_loop
@@ -79,6 +87,11 @@ dict24_loop:
   %v24_in_range = icmp ult i64 %v24_slot, %v24_length
   br i1 %v24_in_range, label %dict24_check, label %dict24_missing
 dict24_check:
+  %v24_control_ptr = getelementptr i8, ptr %v24_controls, i64 %v24_slot
+  %v24_control = load i8, ptr %v24_control_ptr, align 1
+  %v24_occupied = icmp ne i8 %v24_control, 0
+  br i1 %v24_occupied, label %dict24_key_check, label %dict24_advance
+dict24_key_check:
   %v24_key_ptr = getelementptr i32, ptr %v24_keys, i64 %v24_slot
   %v24_key = load i32, ptr %v24_key_ptr, align 4
   %v24_found = icmp eq i32 %v24_key, 2
@@ -92,7 +105,7 @@ dict24_missing:
 dict24_hit:
   %v24_value_ptr = getelementptr i32, ptr %v24_values, i64 %v24_slot
   %v24 = load i32, ptr %v24_value_ptr, align 4
-  call void @sollang_drop_t27(%sollang.dict %v19)
+  call void @sollang_drop_t28(%sollang.dict %v19)
   ret i32 %v24
 }
 define i32 @main() {

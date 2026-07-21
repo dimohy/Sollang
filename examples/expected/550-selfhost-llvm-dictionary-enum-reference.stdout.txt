@@ -192,10 +192,13 @@ entry:
   %v26_enum_payload = getelementptr inbounds %sollang.enum.t25, ptr %v26_enum_slot, i32 0, i32 1
   store ptr %v27, ptr %v26_enum_payload, align 8
   %v26 = load %sollang.enum.t25, ptr %v26_enum_slot, align 8
-  %v24_keys = call ptr @malloc(i64 4)
+  %v24_keys = call ptr @malloc(i64 5)
+  %v24_controls = getelementptr i8, ptr %v24_keys, i64 4
   %v24_values = call ptr @malloc(i64 8)
   %v24_keys_ptr0 = getelementptr i32, ptr %v24_keys, i64 0
   store i32 1, ptr %v24_keys_ptr0, align 4
+  %v24_control_ptr0 = getelementptr i8, ptr %v24_controls, i64 0
+  store i8 1, ptr %v24_control_ptr0, align 1
   %v24_values_ptr0 = getelementptr %sollang.enum.t25, ptr %v24_values, i64 0
   store %sollang.enum.t25 %v26, ptr %v24_values_ptr0, align 8
   %v24_0 = insertvalue %sollang.dict poison, ptr %v24_keys, 0
@@ -206,6 +209,9 @@ entry:
   %v30_keys = extractvalue %sollang.dict %v31, 0
   %v30_values = extractvalue %sollang.dict %v31, 1
   %v30_length = extractvalue %sollang.dict %v31, 2
+  %v30_capacity = extractvalue %sollang.dict %v31, 3
+  %v30_control_offset = mul i64 %v30_capacity, 4
+  %v30_controls = getelementptr i8, ptr %v30_keys, i64 %v30_control_offset
   br label %dict30_start
 dict30_start:
   br label %dict30_loop
@@ -214,6 +220,11 @@ dict30_loop:
   %v30_in_range = icmp ult i64 %v30_slot, %v30_length
   br i1 %v30_in_range, label %dict30_check, label %dict30_missing
 dict30_check:
+  %v30_control_ptr = getelementptr i8, ptr %v30_controls, i64 %v30_slot
+  %v30_control = load i8, ptr %v30_control_ptr, align 1
+  %v30_occupied = icmp ne i8 %v30_control, 0
+  br i1 %v30_occupied, label %dict30_key_check, label %dict30_advance
+dict30_key_check:
   %v30_key_ptr = getelementptr i32, ptr %v30_keys, i64 %v30_slot
   %v30_key = load i32, ptr %v30_key_ptr, align 4
   %v30_found = icmp eq i32 %v30_key, 1

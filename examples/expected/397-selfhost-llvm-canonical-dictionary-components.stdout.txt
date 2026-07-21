@@ -141,14 +141,19 @@ declare void @llvm.trap()
 @sollang_str_19 = private unnamed_addr constant [14 x i8] c"value = $value"
 define %sollang.dict @sollang_m0_s0() {
 entry:
-  %v2_keys = call ptr @malloc(i64 4)
+  %v2_keys = call ptr @malloc(i64 6)
+  %v2_controls = getelementptr i8, ptr %v2_keys, i64 4
   %v2_values = call ptr @malloc(i64 16)
   %v2_keys_ptr0 = getelementptr i16, ptr %v2_keys, i64 0
   store i16 1, ptr %v2_keys_ptr0, align 2
+  %v2_control_ptr0 = getelementptr i8, ptr %v2_controls, i64 0
+  store i8 1, ptr %v2_control_ptr0, align 1
   %v2_values_ptr0 = getelementptr i64, ptr %v2_values, i64 0
   store i64 9, ptr %v2_values_ptr0, align 8
   %v2_keys_ptr1 = getelementptr i16, ptr %v2_keys, i64 1
   store i16 2, ptr %v2_keys_ptr1, align 2
+  %v2_control_ptr1 = getelementptr i8, ptr %v2_controls, i64 1
+  store i8 1, ptr %v2_control_ptr1, align 1
   %v2_values_ptr1 = getelementptr i64, ptr %v2_values, i64 1
   store i64 5, ptr %v2_values_ptr1, align 8
   %v2_0 = insertvalue %sollang.dict poison, ptr %v2_keys, 0
@@ -163,6 +168,9 @@ entry:
   %v10_keys = extractvalue %sollang.dict %arg, 0
   %v10_values = extractvalue %sollang.dict %arg, 1
   %v10_length = extractvalue %sollang.dict %arg, 2
+  %v10_capacity = extractvalue %sollang.dict %arg, 3
+  %v10_control_offset = mul i64 %v10_capacity, 2
+  %v10_controls = getelementptr i8, ptr %v10_keys, i64 %v10_control_offset
   br label %dict10_start
 dict10_start:
   br label %dict10_loop
@@ -171,6 +179,11 @@ dict10_loop:
   %v10_in_range = icmp ult i64 %v10_slot, %v10_length
   br i1 %v10_in_range, label %dict10_check, label %dict10_missing
 dict10_check:
+  %v10_control_ptr = getelementptr i8, ptr %v10_controls, i64 %v10_slot
+  %v10_control = load i8, ptr %v10_control_ptr, align 1
+  %v10_occupied = icmp ne i8 %v10_control, 0
+  br i1 %v10_occupied, label %dict10_key_check, label %dict10_advance
+dict10_key_check:
   %v10_key_ptr = getelementptr i16, ptr %v10_keys, i64 %v10_slot
   %v10_key = load i16, ptr %v10_key_ptr, align 2
   %v10_found = icmp eq i16 %v10_key, %v12

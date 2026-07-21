@@ -164,10 +164,13 @@ entry:
   %v16 = insertvalue %sollang.struct.m0_s0 %v16_f0, %sollang.array.i32 %v18, 1
   %v25_f0 = insertvalue %sollang.struct.m0_s0 poison, %sollang.text { ptr @sollang_str_26, i64 6 }, 0
   %v25 = insertvalue %sollang.struct.m0_s0 %v25_f0, %sollang.array.i32 %v27, 1
-  %v14_keys = call ptr @malloc(i64 4)
+  %v14_keys = call ptr @malloc(i64 5)
+  %v14_controls = getelementptr i8, ptr %v14_keys, i64 4
   %v14_values = call ptr @malloc(i64 40)
   %v14_keys_ptr0 = getelementptr i32, ptr %v14_keys, i64 0
   store i32 1, ptr %v14_keys_ptr0, align 4
+  %v14_control_ptr0 = getelementptr i8, ptr %v14_controls, i64 0
+  store i8 1, ptr %v14_control_ptr0, align 1
   %v14_values_ptr0 = getelementptr %sollang.struct.m0_s0, ptr %v14_values, i64 0
   store %sollang.struct.m0_s0 %v16, ptr %v14_values_ptr0, align 8
   %v14_0 = insertvalue %sollang.dict poison, ptr %v14_keys, 0
@@ -179,6 +182,9 @@ entry:
   %v21_keys = extractvalue %sollang.dict %v22, 0
   %v21_values = extractvalue %sollang.dict %v22, 1
   %v21_length = extractvalue %sollang.dict %v22, 2
+  %v21_capacity = extractvalue %sollang.dict %v22, 3
+  %v21_control_offset = mul i64 %v21_capacity, 4
+  %v21_controls = getelementptr i8, ptr %v21_keys, i64 %v21_control_offset
   br label %dict21_start
 dict21_start:
   br label %dict21_loop
@@ -187,6 +193,11 @@ dict21_loop:
   %v21_in_range = icmp ult i64 %v21_slot, %v21_length
   br i1 %v21_in_range, label %dict21_check, label %dict21_missing
 dict21_check:
+  %v21_control_ptr = getelementptr i8, ptr %v21_controls, i64 %v21_slot
+  %v21_control = load i8, ptr %v21_control_ptr, align 1
+  %v21_occupied = icmp ne i8 %v21_control, 0
+  br i1 %v21_occupied, label %dict21_key_check, label %dict21_advance
+dict21_key_check:
   %v21_key_ptr = getelementptr i32, ptr %v21_keys, i64 %v21_slot
   %v21_key = load i32, ptr %v21_key_ptr, align 4
   %v21_found = icmp eq i32 %v21_key, 1
@@ -235,6 +246,9 @@ assign24_done:
   %v31_keys = extractvalue %sollang.dict %v32, 0
   %v31_values = extractvalue %sollang.dict %v32, 1
   %v31_length = extractvalue %sollang.dict %v32, 2
+  %v31_capacity = extractvalue %sollang.dict %v32, 3
+  %v31_control_offset = mul i64 %v31_capacity, 4
+  %v31_controls = getelementptr i8, ptr %v31_keys, i64 %v31_control_offset
   br label %dict31_start
 dict31_start:
   br label %dict31_loop
@@ -243,6 +257,11 @@ dict31_loop:
   %v31_in_range = icmp ult i64 %v31_slot, %v31_length
   br i1 %v31_in_range, label %dict31_check, label %dict31_missing
 dict31_check:
+  %v31_control_ptr = getelementptr i8, ptr %v31_controls, i64 %v31_slot
+  %v31_control = load i8, ptr %v31_control_ptr, align 1
+  %v31_occupied = icmp ne i8 %v31_control, 0
+  br i1 %v31_occupied, label %dict31_key_check, label %dict31_advance
+dict31_key_check:
   %v31_key_ptr = getelementptr i32, ptr %v31_keys, i64 %v31_slot
   %v31_key = load i32, ptr %v31_key_ptr, align 4
   %v31_found = icmp eq i32 %v31_key, 1

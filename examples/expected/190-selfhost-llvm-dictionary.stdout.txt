@@ -12,17 +12,31 @@ entry:
   call void @free(ptr %values)
   ret void
 }
+define internal void @sollang_drop_t27(%sollang.dict %value) {
+entry:
+  %keys = extractvalue %sollang.dict %value, 0
+  %values = extractvalue %sollang.dict %value, 1
+  %length = extractvalue %sollang.dict %value, 2
+  call void @free(ptr %keys)
+  call void @free(ptr %values)
+  ret void
+}
 declare void @llvm.trap()
 define %sollang.dict @sollang_m0_s0() {
 entry:
-  %v2_keys = call ptr @malloc(i64 8)
+  %v2_keys = call ptr @malloc(i64 10)
+  %v2_controls = getelementptr i8, ptr %v2_keys, i64 8
   %v2_values = call ptr @malloc(i64 8)
   %v2_keys_ptr0 = getelementptr i32, ptr %v2_keys, i64 0
   store i32 1, ptr %v2_keys_ptr0, align 4
+  %v2_control_ptr0 = getelementptr i8, ptr %v2_controls, i64 0
+  store i8 1, ptr %v2_control_ptr0, align 1
   %v2_values_ptr0 = getelementptr i32, ptr %v2_values, i64 0
   store i32 10, ptr %v2_values_ptr0, align 4
   %v2_keys_ptr1 = getelementptr i32, ptr %v2_keys, i64 1
   store i32 2, ptr %v2_keys_ptr1, align 4
+  %v2_control_ptr1 = getelementptr i8, ptr %v2_controls, i64 1
+  store i8 1, ptr %v2_control_ptr1, align 1
   %v2_values_ptr1 = getelementptr i32, ptr %v2_values, i64 1
   store i32 20, ptr %v2_values_ptr1, align 4
   %v2_0 = insertvalue %sollang.dict poison, ptr %v2_keys, 0
@@ -40,6 +54,9 @@ entry:
   %v14_keys = extractvalue %sollang.dict %arg, 0
   %v14_values = extractvalue %sollang.dict %arg, 1
   %v14_length = extractvalue %sollang.dict %arg, 2
+  %v14_capacity = extractvalue %sollang.dict %arg, 3
+  %v14_control_offset = mul i64 %v14_capacity, 4
+  %v14_controls = getelementptr i8, ptr %v14_keys, i64 %v14_control_offset
   br label %dict14_start
 dict14_start:
   br label %dict14_loop
@@ -48,6 +65,11 @@ dict14_loop:
   %v14_in_range = icmp ult i64 %v14_slot, %v14_length
   br i1 %v14_in_range, label %dict14_check, label %dict14_missing
 dict14_check:
+  %v14_control_ptr = getelementptr i8, ptr %v14_controls, i64 %v14_slot
+  %v14_control = load i8, ptr %v14_control_ptr, align 1
+  %v14_occupied = icmp ne i8 %v14_control, 0
+  br i1 %v14_occupied, label %dict14_key_check, label %dict14_advance
+dict14_key_check:
   %v14_key_ptr = getelementptr i32, ptr %v14_keys, i64 %v14_slot
   %v14_key = load i32, ptr %v14_key_ptr, align 4
   %v14_found = icmp eq i32 %v14_key, 2
@@ -65,21 +87,26 @@ dict14_hit:
 }
 define i32 @sollang_m0_s3() {
 entry:
-  %v19_keys = call ptr @malloc(i64 8)
+  %v19_keys = call ptr @malloc(i64 10)
+  %v19_controls = getelementptr i8, ptr %v19_keys, i64 8
   %v19_values = call ptr @malloc(i64 8)
   %v19_keys_ptr0 = getelementptr i32, ptr %v19_keys, i64 0
   store i32 3, ptr %v19_keys_ptr0, align 4
+  %v19_control_ptr0 = getelementptr i8, ptr %v19_controls, i64 0
+  store i8 1, ptr %v19_control_ptr0, align 1
   %v19_values_ptr0 = getelementptr i32, ptr %v19_values, i64 0
   store i32 30, ptr %v19_values_ptr0, align 4
   %v19_keys_ptr1 = getelementptr i32, ptr %v19_keys, i64 1
   store i32 4, ptr %v19_keys_ptr1, align 4
+  %v19_control_ptr1 = getelementptr i8, ptr %v19_controls, i64 1
+  store i8 1, ptr %v19_control_ptr1, align 1
   %v19_values_ptr1 = getelementptr i32, ptr %v19_values, i64 1
   store i32 40, ptr %v19_values_ptr1, align 4
   %v19_0 = insertvalue %sollang.dict poison, ptr %v19_keys, 0
   %v19_1 = insertvalue %sollang.dict %v19_0, ptr %v19_values, 1
   %v19_2 = insertvalue %sollang.dict %v19_1, i64 2, 2
   %v19 = insertvalue %sollang.dict %v19_2, i64 2, 3
-  call void @sollang_drop_t25(%sollang.dict %v19)
+  call void @sollang_drop_t27(%sollang.dict %v19)
   ret i32 0
 }
 define i32 @sollang_m0_s4(%sollang.dict %arg) {

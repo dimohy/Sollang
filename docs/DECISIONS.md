@@ -9311,3 +9311,15 @@ one conflict and passes on both Windows and Linux. This confirms the direct
 carrier path alongside the enum-payload path; full dictionary mutation/drop
 coverage and Swiss-table entry addressing remain open, so formal progress is
 still **53/60 (88.3%)**.
+
+## D234 - Self-host Dictionary Control-Byte Storage
+
+The self-host LLVM emitter now reserves a control-byte tail after each
+dictionary key allocation, marks occupied literal slots, and checks the byte
+before loading a key during indexed lookup. The existing four-field dictionary
+ABI remains unchanged, so values and drop/free ownership continue to work.
+Examples 548 and 550 produce, assemble, link, and execute on Windows and
+Linux with the new layout. This is the first self-host Swiss-table storage
+slice, not the complete algorithm: H2 hash fingerprints, grouped probing,
+insertion, growth, and rehashing remain open; formal progress stays
+**53/60 (88.3%)**.

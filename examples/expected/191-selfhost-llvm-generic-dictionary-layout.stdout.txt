@@ -22,14 +22,19 @@ entry:
   %v4 = insertvalue %sollang.text %v4_ptr, i64 3, 1
   %v6_ptr = insertvalue %sollang.text poison, ptr @sollang_str_6, 0
   %v6 = insertvalue %sollang.text %v6_ptr, i64 2, 1
-  %v2_keys = call ptr @malloc(i64 2)
+  %v2_keys = call ptr @malloc(i64 4)
+  %v2_controls = getelementptr i8, ptr %v2_keys, i64 2
   %v2_values = call ptr @malloc(i64 32)
   %v2_keys_ptr0 = getelementptr i1, ptr %v2_keys, i64 0
   store i1 1, ptr %v2_keys_ptr0, align 1
+  %v2_control_ptr0 = getelementptr i8, ptr %v2_controls, i64 0
+  store i8 1, ptr %v2_control_ptr0, align 1
   %v2_values_ptr0 = getelementptr %sollang.text, ptr %v2_values, i64 0
   store %sollang.text %v4, ptr %v2_values_ptr0, align 8
   %v2_keys_ptr1 = getelementptr i1, ptr %v2_keys, i64 1
   store i1 0, ptr %v2_keys_ptr1, align 1
+  %v2_control_ptr1 = getelementptr i8, ptr %v2_controls, i64 1
+  store i8 1, ptr %v2_control_ptr1, align 1
   %v2_values_ptr1 = getelementptr %sollang.text, ptr %v2_values, i64 1
   store %sollang.text %v6, ptr %v2_values_ptr1, align 8
   %v2_0 = insertvalue %sollang.dict poison, ptr %v2_keys, 0
@@ -43,6 +48,9 @@ entry:
   %v10_keys = extractvalue %sollang.dict %arg, 0
   %v10_values = extractvalue %sollang.dict %arg, 1
   %v10_length = extractvalue %sollang.dict %arg, 2
+  %v10_capacity = extractvalue %sollang.dict %arg, 3
+  %v10_control_offset = mul i64 %v10_capacity, 1
+  %v10_controls = getelementptr i8, ptr %v10_keys, i64 %v10_control_offset
   br label %dict10_start
 dict10_start:
   br label %dict10_loop
@@ -51,6 +59,11 @@ dict10_loop:
   %v10_in_range = icmp ult i64 %v10_slot, %v10_length
   br i1 %v10_in_range, label %dict10_check, label %dict10_missing
 dict10_check:
+  %v10_control_ptr = getelementptr i8, ptr %v10_controls, i64 %v10_slot
+  %v10_control = load i8, ptr %v10_control_ptr, align 1
+  %v10_occupied = icmp ne i8 %v10_control, 0
+  br i1 %v10_occupied, label %dict10_key_check, label %dict10_advance
+dict10_key_check:
   %v10_key_ptr = getelementptr i1, ptr %v10_keys, i64 %v10_slot
   %v10_key = load i1, ptr %v10_key_ptr, align 1
   %v10_found = icmp eq i1 %v10_key, 0

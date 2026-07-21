@@ -5827,13 +5827,15 @@ emitCore context: EmitContext -> Unit uses Console {
                 regionDictionaryLength * (regionNode.typeSymbol -> storageSize) => regionDictionaryValueByteLength!
                 regionDictionaryKeyTypeId! >= 0 -> if { regionDictionaryLength * context.typeSizes[regionDictionaryKeyTypeId!] => regionDictionaryKeyByteLength! }
                 regionDictionaryValueTypeId! >= 0 -> if { regionDictionaryLength * context.typeSizes[regionDictionaryValueTypeId!] => regionDictionaryValueByteLength! }
+                regionDictionaryKeyByteLength! + regionDictionaryLength => regionDictionaryAllocationByteLength
                 regionNode.operand0 => regionDictionaryFirstKeyIndex!
                 (regionDictionaryFirstKeyIndex! >= 0 and context.ir[regionDictionaryFirstKeyIndex!].nextOperand >= 0) -> if {
                     ((context.ir[context.ir[regionDictionaryFirstKeyIndex!].nextOperand].typeKind == 8) or (context.ir[context.ir[regionDictionaryFirstKeyIndex!].nextOperand].typeId >= 0 and context.types[context.ir[context.ir[regionDictionaryFirstKeyIndex!].nextOperand].typeId].kind == 8)) -> if { regionDictionaryLength * (context.pointerBitWidth / 8) => regionDictionaryValueByteLength! }
                 }
                 regionDictionaryKeyByteLength! => regionDictionaryKeyByteLength
                 regionDictionaryValueByteLength! => regionDictionaryValueByteLength
-                "  %v$(regionNodeIndex!)_keys = call ptr @malloc(i64 $regionDictionaryKeyByteLength)" -> println
+                "  %v$(regionNodeIndex!)_keys = call ptr @malloc(i64 $regionDictionaryAllocationByteLength)" -> println
+                "  %v$(regionNodeIndex!)_controls = getelementptr i8, ptr %v$(regionNodeIndex!)_keys, i64 $(regionDictionaryKeyByteLength)" -> println
                 "  %v$(regionNodeIndex!)_values = call ptr @malloc(i64 $regionDictionaryValueByteLength)" -> println
                 regionNode.operand0 => regionDictionaryItemIndex!
                 0 => regionDictionaryItemPosition!
@@ -5859,6 +5861,10 @@ emitCore context: EmitContext -> Unit uses Console {
                     } else { "%v$(regionDictionaryItemIndex!)" -> print }
                     ", ptr %v$(regionNodeIndex!)_$(regionDictionarySide)_ptr$(regionDictionaryEntryPosition), align " -> print
                     (regionDictionaryItem.typeKind == 8 or (regionDictionaryItem.typeId >= 0 and context.types[regionDictionaryItem.typeId].kind == 8)) -> if { context.pointerBitWidth / 8 -> writeDecimalLine } else { regionDictionaryItemTypeId >= 0 -> if { context.typeAligns[regionDictionaryItemTypeId] -> writeDecimalLine } else { regionDictionaryItemSymbol -> legacyStorageAlign -> writeDecimalLine } }
+                    regionDictionaryItemPosition! % 2 == 0 -> if {
+                        "  %v$(regionNodeIndex!)_control_ptr$(regionDictionaryEntryPosition) = getelementptr i8, ptr %v$(regionNodeIndex!)_controls, i64 $(regionDictionaryEntryPosition)" -> println
+                        "  store i8 1, ptr %v$(regionNodeIndex!)_control_ptr$(regionDictionaryEntryPosition), align 1" -> println
+                    }
                     regionDictionaryItem.nextOperand => regionDictionaryItemIndex!
                     regionDictionaryItemPosition! + 1 => regionDictionaryItemPosition!
                 }
@@ -5899,6 +5905,14 @@ emitCore context: EmitContext -> Unit uses Console {
                         "  %v$(regionNodeIndex!)_length = extractvalue %sollang.dict " -> print
                         (regionIndexedValue.kind == 5 and ownerIndex! >= 0 and context.ir[ownerIndex!].kind == 0 and context.ir[ownerIndex!].operand1 >= 0 and regionIndexedValue.symbol == context.ir[context.ir[ownerIndex!].operand1].symbol) -> if { "%arg" -> print } else { "%v$(regionNode.operand0)" -> print }
                         ", 2" -> println
+                        "  %v$(regionNodeIndex!)_capacity = extractvalue %sollang.dict " -> print
+                        (regionIndexedValue.kind == 5 and ownerIndex! >= 0 and context.ir[ownerIndex!].kind == 0 and context.ir[ownerIndex!].operand1 >= 0 and regionIndexedValue.symbol == context.ir[context.ir[ownerIndex!].operand1].symbol) -> if { "%arg" -> print } else { "%v$(regionNode.operand0)" -> print }
+                        ", 3" -> println
+                        -1 => regionIndexedDictionaryKeyStorageSize!
+                        regionIndexedDictionaryKeyTypeId! >= 0 -> if { context.typeSizes[regionIndexedDictionaryKeyTypeId!] => regionIndexedDictionaryKeyStorageSize! }
+                        regionIndexedDictionaryKeyStorageSize! < 0 -> if { regionIndexedValue.typeModule -> storageSize => regionIndexedDictionaryKeyStorageSize! }
+                        "  %v$(regionNodeIndex!)_control_offset = mul i64 %v$(regionNodeIndex!)_capacity, $(regionIndexedDictionaryKeyStorageSize!)" -> println
+                        "  %v$(regionNodeIndex!)_controls = getelementptr i8, ptr %v$(regionNodeIndex!)_keys, i64 %v$(regionNodeIndex!)_control_offset" -> println
                         "  br label %dict$(regionNodeIndex!)_start" -> println
                         "dict$(regionNodeIndex!)_start:" -> println
                         "  br label %dict$(regionNodeIndex!)_loop" -> println
@@ -5907,6 +5921,11 @@ emitCore context: EmitContext -> Unit uses Console {
                         "  %v$(regionNodeIndex!)_in_range = icmp ult i64 %v$(regionNodeIndex!)_slot, %v$(regionNodeIndex!)_length" -> println
                         "  br i1 %v$(regionNodeIndex!)_in_range, label %dict$(regionNodeIndex!)_check, label %dict$(regionNodeIndex!)_missing" -> println
                         "dict$(regionNodeIndex!)_check:" -> println
+                        "  %v$(regionNodeIndex!)_control_ptr = getelementptr i8, ptr %v$(regionNodeIndex!)_controls, i64 %v$(regionNodeIndex!)_slot" -> println
+                        "  %v$(regionNodeIndex!)_control = load i8, ptr %v$(regionNodeIndex!)_control_ptr, align 1" -> println
+                        "  %v$(regionNodeIndex!)_occupied = icmp ne i8 %v$(regionNodeIndex!)_control, 0" -> println
+                        "  br i1 %v$(regionNodeIndex!)_occupied, label %dict$(regionNodeIndex!)_key_check, label %dict$(regionNodeIndex!)_advance" -> println
+                        "dict$(regionNodeIndex!)_key_check:" -> println
                         "  %v$(regionNodeIndex!)_key_ptr = getelementptr " -> print
                         regionIndexedDictionaryKeyTypeId! >= 0 -> if { regionIndexedDictionaryKeyTypeId! -> writeSemanticTypeId } else { regionIndexedValue.typeModule -> llvmType -> print }
                         ", ptr %v$(regionNodeIndex!)_keys, i64 %v$(regionNodeIndex!)_slot" -> println
@@ -7734,13 +7753,15 @@ emitCore context: EmitContext -> Unit uses Console {
                     dictionaryLength * (expression.typeSymbol -> storageSize) => dictionaryValueByteLength!
                     dictionaryKeyTypeId! >= 0 -> if { dictionaryLength * context.typeSizes[dictionaryKeyTypeId!] => dictionaryKeyByteLength! }
                     dictionaryValueTypeId! >= 0 -> if { dictionaryLength * context.typeSizes[dictionaryValueTypeId!] => dictionaryValueByteLength! }
+                    dictionaryKeyByteLength! + dictionaryLength => dictionaryAllocationByteLength
                     expression.operand0 => dictionaryFirstKeyIndex!
                     (dictionaryFirstKeyIndex! >= 0 and context.ir[dictionaryFirstKeyIndex!].nextOperand >= 0) -> if {
                         ((context.ir[context.ir[dictionaryFirstKeyIndex!].nextOperand].typeKind == 8) or (context.ir[context.ir[dictionaryFirstKeyIndex!].nextOperand].typeId >= 0 and context.types[context.ir[context.ir[dictionaryFirstKeyIndex!].nextOperand].typeId].kind == 8)) -> if { dictionaryLength * (context.pointerBitWidth / 8) => dictionaryValueByteLength! }
                     }
                     dictionaryKeyByteLength! => dictionaryKeyByteLength
                     dictionaryValueByteLength! => dictionaryValueByteLength
-                    "  %v$(expressionIndex!)_keys = call ptr @malloc(i64 $dictionaryKeyByteLength)" -> println
+                    "  %v$(expressionIndex!)_keys = call ptr @malloc(i64 $dictionaryAllocationByteLength)" -> println
+                    "  %v$(expressionIndex!)_controls = getelementptr i8, ptr %v$(expressionIndex!)_keys, i64 $(dictionaryKeyByteLength)" -> println
                     "  %v$(expressionIndex!)_values = call ptr @malloc(i64 $dictionaryValueByteLength)" -> println
                     expression.operand0 => dictionaryItemIndex!
                     0 => dictionaryItemPosition!
@@ -7768,6 +7789,10 @@ emitCore context: EmitContext -> Unit uses Console {
                         }
                         ", ptr %v$(expressionIndex!)_$(dictionarySide)_ptr$(dictionaryEntryPosition), align " -> print
                         (dictionaryItem.typeKind == 8 or (dictionaryItem.typeId >= 0 and context.types[dictionaryItem.typeId].kind == 8)) -> if { context.pointerBitWidth / 8 -> writeDecimalLine } else { dictionaryItemTypeId >= 0 -> if { context.typeAligns[dictionaryItemTypeId] -> writeDecimalLine } else { dictionaryItemSymbol -> legacyStorageAlign -> writeDecimalLine } }
+                        dictionaryItemPosition! % 2 == 0 -> if {
+                            "  %v$(expressionIndex!)_control_ptr$(dictionaryEntryPosition) = getelementptr i8, ptr %v$(expressionIndex!)_controls, i64 $(dictionaryEntryPosition)" -> println
+                            "  store i8 1, ptr %v$(expressionIndex!)_control_ptr$(dictionaryEntryPosition), align 1" -> println
+                        }
                         dictionaryItem.nextOperand => dictionaryItemIndex!
                         dictionaryItemPosition! + 1 => dictionaryItemPosition!
                     }
@@ -7818,15 +7843,28 @@ emitCore context: EmitContext -> Unit uses Console {
                         ", 1" -> println
                         "  %v$(expressionIndex!)_length = extractvalue %sollang.dict " -> print
                         (indexedArray.kind == 5 and function.operand1 >= 0 and indexedArray.symbol == context.ir[function.operand1].symbol) -> if { "%arg" -> print } else { "%v$(expression.operand0)" -> print }
-                        ", 2" -> println
-                        "  br label %dict$(expressionIndex!)_start" -> println
+                         ", 2" -> println
+                         "  %v$(expressionIndex!)_capacity = extractvalue %sollang.dict " -> print
+                         (indexedArray.kind == 5 and function.operand1 >= 0 and indexedArray.symbol == context.ir[function.operand1].symbol) -> if { "%arg" -> print } else { "%v$(expression.operand0)" -> print }
+                         ", 3" -> println
+                         -1 => indexedDictionaryKeyStorageSize!
+                         indexedDictionaryKeyTypeId! >= 0 -> if { context.typeSizes[indexedDictionaryKeyTypeId!] => indexedDictionaryKeyStorageSize! }
+                         indexedDictionaryKeyStorageSize! < 0 -> if { indexedArray.typeModule -> storageSize => indexedDictionaryKeyStorageSize! }
+                         "  %v$(expressionIndex!)_control_offset = mul i64 %v$(expressionIndex!)_capacity, $(indexedDictionaryKeyStorageSize!)" -> println
+                         "  %v$(expressionIndex!)_controls = getelementptr i8, ptr %v$(expressionIndex!)_keys, i64 %v$(expressionIndex!)_control_offset" -> println
+                         "  br label %dict$(expressionIndex!)_start" -> println
                         "dict$(expressionIndex!)_start:" -> println
                         "  br label %dict$(expressionIndex!)_loop" -> println
                         "dict$(expressionIndex!)_loop:" -> println
                         "  %v$(expressionIndex!)_slot = phi i64 [ 0, %dict$(expressionIndex!)_start ], [ %v$(expressionIndex!)_next, %dict$(expressionIndex!)_advance ]" -> println
                         "  %v$(expressionIndex!)_in_range = icmp ult i64 %v$(expressionIndex!)_slot, %v$(expressionIndex!)_length" -> println
                         "  br i1 %v$(expressionIndex!)_in_range, label %dict$(expressionIndex!)_check, label %dict$(expressionIndex!)_missing" -> println
-                        "dict$(expressionIndex!)_check:" -> println
+                         "dict$(expressionIndex!)_check:" -> println
+                         "  %v$(expressionIndex!)_control_ptr = getelementptr i8, ptr %v$(expressionIndex!)_controls, i64 %v$(expressionIndex!)_slot" -> println
+                         "  %v$(expressionIndex!)_control = load i8, ptr %v$(expressionIndex!)_control_ptr, align 1" -> println
+                         "  %v$(expressionIndex!)_occupied = icmp ne i8 %v$(expressionIndex!)_control, 0" -> println
+                         "  br i1 %v$(expressionIndex!)_occupied, label %dict$(expressionIndex!)_key_check, label %dict$(expressionIndex!)_advance" -> println
+                         "dict$(expressionIndex!)_key_check:" -> println
                         "  %v$(expressionIndex!)_key_ptr = getelementptr " -> print
                         indexedDictionaryKeyTypeId! >= 0 -> if { indexedDictionaryKeyTypeId! -> writeSemanticTypeId } else { indexedArray.typeModule -> llvmType -> print }
                         ", ptr %v$(expressionIndex!)_keys, i64 %v$(expressionIndex!)_slot" -> println
@@ -10016,7 +10054,8 @@ emitCore context: EmitContext -> Unit uses Console {
                         entryDictionaryLength * (entryExpression.typeModule -> storageSize) => entryDictionaryKeyByteLength!
                         entryDictionaryLength * (entryExpression.typeSymbol -> storageSize) => entryDictionaryValueByteLength!
                         entryDictionaryKeyTypeId! >= 0 -> if { entryDictionaryLength * context.typeSizes[entryDictionaryKeyTypeId!] => entryDictionaryKeyByteLength! }
-                        entryDictionaryValueTypeId! >= 0 -> if { entryDictionaryLength * context.typeSizes[entryDictionaryValueTypeId!] => entryDictionaryValueByteLength! }
+                         entryDictionaryValueTypeId! >= 0 -> if { entryDictionaryLength * context.typeSizes[entryDictionaryValueTypeId!] => entryDictionaryValueByteLength! }
+                         entryDictionaryKeyByteLength! + entryDictionaryLength => entryDictionaryAllocationByteLength
                         # A late recursive dictionary type may leave the value
                         # type ID unresolved. Preserve the ABI width of a
                         # direct readonly reference from its typed-IR node.
@@ -10026,7 +10065,8 @@ emitCore context: EmitContext -> Unit uses Console {
                         }
                         entryDictionaryKeyByteLength! => entryDictionaryKeyByteLength
                         entryDictionaryValueByteLength! => entryDictionaryValueByteLength
-                        "  %v$(entryExpressionIndex!)_keys = call ptr @malloc(i64 $entryDictionaryKeyByteLength)" -> println
+                         "  %v$(entryExpressionIndex!)_keys = call ptr @malloc(i64 $entryDictionaryAllocationByteLength)" -> println
+                         "  %v$(entryExpressionIndex!)_controls = getelementptr i8, ptr %v$(entryExpressionIndex!)_keys, i64 $(entryDictionaryKeyByteLength)" -> println
                         "  %v$(entryExpressionIndex!)_values = call ptr @malloc(i64 $entryDictionaryValueByteLength)" -> println
                         entryExpression.operand0 => entryDictionaryItemIndex!
                         0 => entryDictionaryItemPosition!
@@ -10051,7 +10091,11 @@ emitCore context: EmitContext -> Unit uses Console {
                                 }
                             } else { "%v$(entryDictionaryItemIndex!)" -> print }
                             ", ptr %v$(entryExpressionIndex!)_$(entryDictionarySide)_ptr$(entryDictionaryEntryPosition), align " -> print
-                            (entryDictionaryItem.typeKind == 8 or (entryDictionaryItem.typeId >= 0 and context.types[entryDictionaryItem.typeId].kind == 8)) -> if { context.pointerBitWidth / 8 -> writeDecimalLine } else { entryDictionaryItemTypeId >= 0 -> if { context.typeAligns[entryDictionaryItemTypeId] -> writeDecimalLine } else { entryDictionaryItemSymbol -> legacyStorageAlign -> writeDecimalLine } }
+                             (entryDictionaryItem.typeKind == 8 or (entryDictionaryItem.typeId >= 0 and context.types[entryDictionaryItem.typeId].kind == 8)) -> if { context.pointerBitWidth / 8 -> writeDecimalLine } else { entryDictionaryItemTypeId >= 0 -> if { context.typeAligns[entryDictionaryItemTypeId] -> writeDecimalLine } else { entryDictionaryItemSymbol -> legacyStorageAlign -> writeDecimalLine } }
+                             entryDictionaryItemPosition! % 2 == 0 -> if {
+                                 "  %v$(entryExpressionIndex!)_control_ptr$(entryDictionaryEntryPosition) = getelementptr i8, ptr %v$(entryExpressionIndex!)_controls, i64 $(entryDictionaryEntryPosition)" -> println
+                                 "  store i8 1, ptr %v$(entryExpressionIndex!)_control_ptr$(entryDictionaryEntryPosition), align 1" -> println
+                             }
                             entryDictionaryItem.nextOperand => entryDictionaryItemIndex!
                             entryDictionaryItemPosition! + 1 => entryDictionaryItemPosition!
                         }
@@ -10129,15 +10173,26 @@ emitCore context: EmitContext -> Unit uses Console {
                                 }
                                 "  %v$(entryExpressionIndex!)_keys = extractvalue %sollang.dict %v$(entryExpression.operand0), 0" -> println
                                 "  %v$(entryExpressionIndex!)_values = extractvalue %sollang.dict %v$(entryExpression.operand0), 1" -> println
-                                "  %v$(entryExpressionIndex!)_length = extractvalue %sollang.dict %v$(entryExpression.operand0), 2" -> println
-                                "  br label %dict$(entryExpressionIndex!)_start" -> println
+                                 "  %v$(entryExpressionIndex!)_length = extractvalue %sollang.dict %v$(entryExpression.operand0), 2" -> println
+                                 "  %v$(entryExpressionIndex!)_capacity = extractvalue %sollang.dict %v$(entryExpression.operand0), 3" -> println
+                                 -1 => entryIndexedDictionaryKeyStorageSize!
+                                 entryIndexedDictionaryKeyTypeId! >= 0 -> if { context.typeSizes[entryIndexedDictionaryKeyTypeId!] => entryIndexedDictionaryKeyStorageSize! }
+                                 entryIndexedDictionaryKeyStorageSize! < 0 -> if { entryIndexedValue.typeModule -> storageSize => entryIndexedDictionaryKeyStorageSize! }
+                                 "  %v$(entryExpressionIndex!)_control_offset = mul i64 %v$(entryExpressionIndex!)_capacity, $(entryIndexedDictionaryKeyStorageSize!)" -> println
+                                 "  %v$(entryExpressionIndex!)_controls = getelementptr i8, ptr %v$(entryExpressionIndex!)_keys, i64 %v$(entryExpressionIndex!)_control_offset" -> println
+                                 "  br label %dict$(entryExpressionIndex!)_start" -> println
                                 "dict$(entryExpressionIndex!)_start:" -> println
                                 "  br label %dict$(entryExpressionIndex!)_loop" -> println
                                 "dict$(entryExpressionIndex!)_loop:" -> println
                                 "  %v$(entryExpressionIndex!)_slot = phi i64 [ 0, %dict$(entryExpressionIndex!)_start ], [ %v$(entryExpressionIndex!)_next, %dict$(entryExpressionIndex!)_advance ]" -> println
                                 "  %v$(entryExpressionIndex!)_in_range = icmp ult i64 %v$(entryExpressionIndex!)_slot, %v$(entryExpressionIndex!)_length" -> println
                                 "  br i1 %v$(entryExpressionIndex!)_in_range, label %dict$(entryExpressionIndex!)_check, label %dict$(entryExpressionIndex!)_missing" -> println
-                                "dict$(entryExpressionIndex!)_check:" -> println
+                                 "dict$(entryExpressionIndex!)_check:" -> println
+                                 "  %v$(entryExpressionIndex!)_control_ptr = getelementptr i8, ptr %v$(entryExpressionIndex!)_controls, i64 %v$(entryExpressionIndex!)_slot" -> println
+                                 "  %v$(entryExpressionIndex!)_control = load i8, ptr %v$(entryExpressionIndex!)_control_ptr, align 1" -> println
+                                 "  %v$(entryExpressionIndex!)_occupied = icmp ne i8 %v$(entryExpressionIndex!)_control, 0" -> println
+                                 "  br i1 %v$(entryExpressionIndex!)_occupied, label %dict$(entryExpressionIndex!)_key_check, label %dict$(entryExpressionIndex!)_advance" -> println
+                                 "dict$(entryExpressionIndex!)_key_check:" -> println
                                 "  %v$(entryExpressionIndex!)_key_ptr = getelementptr " -> print
                                 entryIndexedDictionaryKeyTypeId! >= 0 -> if { entryIndexedDictionaryKeyTypeId! -> writeSemanticTypeId } else { entryIndexedValue.typeModule -> llvmType -> print }
                                 ", ptr %v$(entryExpressionIndex!)_keys, i64 %v$(entryExpressionIndex!)_slot" -> println
