@@ -386,6 +386,13 @@ internal sealed partial class LlvmEmitter
                     found.SlotName,
                     definition.ValueOffset,
                     "ref_dictionary_value");
+                if (_program.Types.IsReference(elementType))
+                {
+                    var storedPointer = NextTemp("ref_dictionary_stored");
+                    EmitLoad(storedPointer, "ptr", pointer, RuntimeAlignment(elementType));
+                    pointer = storedPointer;
+                    elementType = _program.Types.GetReference(elementType).ElementType;
+                }
                 break;
             default:
                 throw new SollangException("reference indexing currently requires an array, dictionary, or IntSlice place");

@@ -9273,7 +9273,9 @@ recovery leaves the value projection shallow, the emitter still
 allocates pointer-width storage, emits `ptr` element GEPs, and stores the
 reference pointer with pointer alignment. Example 548 compiles a dictionary
 reference lookup through a self-hosted LLVM module; LLVM assembly, Windows/Linux
-linking, and execution all pass with `observed=40`. Enum payload projection,
+linking, and execution all pass with `observed=40`. The reference C# emitter
+also unwraps a stored `ref T` slot before returning its pointer, and the
+Windows/Linux differential checks pass. Enum payload projection,
 Swiss-table entry addressing, and complete dictionary ownership remain open, so
 the formal score remains **53/60
 (88.3%)**.

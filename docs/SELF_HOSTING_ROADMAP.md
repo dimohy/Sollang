@@ -2936,8 +2936,9 @@ slice. An inferred `{1: owner! -> same}` literal receives pointer-width value
 storage even when its shallow dictionary projection is stale; lookup
 returns the stored pointer, and LLVM assembly, Windows/Linux linking, and
 execution pass (`observed=40`). Enum-payload projection, Swiss-table entry
-addressing, and the complete ownership gate are still pending, so the formal
-score remains **53/60 (88.3%)**.
+addressing, and the complete ownership gate are still pending. The reference
+C# emitter and self-host emitter now agree on the direct reference path on both
+targets, so the formal score remains **53/60 (88.3%)**.
 
 1. Multi-file compilation (implemented by example 52).
 2. Import-driven file discovery with cycle and duplicate-module diagnostics
