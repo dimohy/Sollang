@@ -5827,6 +5827,10 @@ emitCore context: EmitContext -> Unit uses Console {
                 regionDictionaryLength * (regionNode.typeSymbol -> storageSize) => regionDictionaryValueByteLength!
                 regionDictionaryKeyTypeId! >= 0 -> if { regionDictionaryLength * context.typeSizes[regionDictionaryKeyTypeId!] => regionDictionaryKeyByteLength! }
                 regionDictionaryValueTypeId! >= 0 -> if { regionDictionaryLength * context.typeSizes[regionDictionaryValueTypeId!] => regionDictionaryValueByteLength! }
+                regionNode.operand0 => regionDictionaryFirstKeyIndex!
+                (regionDictionaryFirstKeyIndex! >= 0 and context.ir[regionDictionaryFirstKeyIndex!].nextOperand >= 0) -> if {
+                    ((context.ir[context.ir[regionDictionaryFirstKeyIndex!].nextOperand].typeKind == 8) or (context.ir[context.ir[regionDictionaryFirstKeyIndex!].nextOperand].typeId >= 0 and context.types[context.ir[context.ir[regionDictionaryFirstKeyIndex!].nextOperand].typeId].kind == 8)) -> if { regionDictionaryLength * (context.pointerBitWidth / 8) => regionDictionaryValueByteLength! }
+                }
                 regionDictionaryKeyByteLength! => regionDictionaryKeyByteLength
                 regionDictionaryValueByteLength! => regionDictionaryValueByteLength
                 "  %v$(regionNodeIndex!)_keys = call ptr @malloc(i64 $regionDictionaryKeyByteLength)" -> println
@@ -5840,10 +5844,10 @@ emitCore context: EmitContext -> Unit uses Console {
                     regionDictionaryItemPosition! % 2 == 0 -> if { regionNode.typeModule } else { regionNode.typeSymbol } => regionDictionaryItemSymbol
                     regionDictionaryItemPosition! % 2 == 0 -> if { regionDictionaryKeyTypeId! } else { regionDictionaryValueTypeId! } => regionDictionaryItemTypeId
                     "  %v$(regionNodeIndex!)_$(regionDictionarySide)_ptr$(regionDictionaryEntryPosition) = getelementptr " -> print
-                    regionDictionaryItemTypeId >= 0 -> if { regionDictionaryItemTypeId -> writeSemanticTypeId } else { regionDictionaryItemSymbol -> llvmType -> print }
+                    regionDictionaryItemTypeId >= 0 -> if { regionDictionaryItemTypeId -> writeSemanticTypeId } else { (regionDictionaryItem.typeKind == 8 or (regionDictionaryItem.typeId >= 0 and context.types[regionDictionaryItem.typeId].kind == 8)) -> if { "ptr" -> print } else { regionDictionaryItemSymbol -> llvmType -> print } }
                     ", ptr %v$(regionNodeIndex!)_$(regionDictionarySide), i64 $(regionDictionaryEntryPosition)" -> println
                     "  store " -> print
-                    regionDictionaryItemTypeId >= 0 -> if { regionDictionaryItemTypeId -> writeSemanticTypeId } else { regionDictionaryItemSymbol -> llvmType -> print }
+                    regionDictionaryItemTypeId >= 0 -> if { regionDictionaryItemTypeId -> writeSemanticTypeId } else { (regionDictionaryItem.typeKind == 8 or (regionDictionaryItem.typeId >= 0 and context.types[regionDictionaryItem.typeId].kind == 8)) -> if { "ptr" -> print } else { regionDictionaryItemSymbol -> llvmType -> print } }
                     " " -> print
                     (regionDictionaryItem.kind == 3 or regionDictionaryItem.kind == 4) -> if {
                         regionDictionaryItem -> sourceToken => regionDictionaryItemToken
@@ -5854,7 +5858,7 @@ emitCore context: EmitContext -> Unit uses Console {
                         }
                     } else { "%v$(regionDictionaryItemIndex!)" -> print }
                     ", ptr %v$(regionNodeIndex!)_$(regionDictionarySide)_ptr$(regionDictionaryEntryPosition), align " -> print
-                    regionDictionaryItemTypeId >= 0 -> if { context.typeAligns[regionDictionaryItemTypeId] -> writeDecimalLine } else { regionDictionaryItemSymbol -> legacyStorageAlign -> writeDecimalLine }
+                    regionDictionaryItemTypeId >= 0 -> if { context.typeAligns[regionDictionaryItemTypeId] -> writeDecimalLine } else { (regionDictionaryItem.typeKind == 8 or (regionDictionaryItem.typeId >= 0 and context.types[regionDictionaryItem.typeId].kind == 8)) -> if { context.pointerBitWidth / 8 -> writeDecimalLine } else { regionDictionaryItemSymbol -> legacyStorageAlign -> writeDecimalLine } }
                     regionDictionaryItem.nextOperand => regionDictionaryItemIndex!
                     regionDictionaryItemPosition! + 1 => regionDictionaryItemPosition!
                 }
@@ -7730,6 +7734,10 @@ emitCore context: EmitContext -> Unit uses Console {
                     dictionaryLength * (expression.typeSymbol -> storageSize) => dictionaryValueByteLength!
                     dictionaryKeyTypeId! >= 0 -> if { dictionaryLength * context.typeSizes[dictionaryKeyTypeId!] => dictionaryKeyByteLength! }
                     dictionaryValueTypeId! >= 0 -> if { dictionaryLength * context.typeSizes[dictionaryValueTypeId!] => dictionaryValueByteLength! }
+                    expression.operand0 => dictionaryFirstKeyIndex!
+                    (dictionaryFirstKeyIndex! >= 0 and context.ir[dictionaryFirstKeyIndex!].nextOperand >= 0) -> if {
+                        ((context.ir[context.ir[dictionaryFirstKeyIndex!].nextOperand].typeKind == 8) or (context.ir[context.ir[dictionaryFirstKeyIndex!].nextOperand].typeId >= 0 and context.types[context.ir[context.ir[dictionaryFirstKeyIndex!].nextOperand].typeId].kind == 8)) -> if { dictionaryLength * (context.pointerBitWidth / 8) => dictionaryValueByteLength! }
+                    }
                     dictionaryKeyByteLength! => dictionaryKeyByteLength
                     dictionaryValueByteLength! => dictionaryValueByteLength
                     "  %v$(expressionIndex!)_keys = call ptr @malloc(i64 $dictionaryKeyByteLength)" -> println
@@ -7743,10 +7751,10 @@ emitCore context: EmitContext -> Unit uses Console {
                         dictionaryItemPosition! % 2 == 0 -> if { expression.typeModule } else { expression.typeSymbol } => dictionaryItemSymbol
                         dictionaryItemPosition! % 2 == 0 -> if { dictionaryKeyTypeId! } else { dictionaryValueTypeId! } => dictionaryItemTypeId
                         "  %v$(expressionIndex!)_$(dictionarySide)_ptr$(dictionaryEntryPosition) = getelementptr " -> print
-                        dictionaryItemTypeId >= 0 -> if { dictionaryItemTypeId -> writeSemanticTypeId } else { dictionaryItemSymbol -> llvmType -> print }
+                        dictionaryItemTypeId >= 0 -> if { dictionaryItemTypeId -> writeSemanticTypeId } else { (dictionaryItem.typeKind == 8 or (dictionaryItem.typeId >= 0 and context.types[dictionaryItem.typeId].kind == 8)) -> if { "ptr" -> print } else { dictionaryItemSymbol -> llvmType -> print } }
                         ", ptr %v$(expressionIndex!)_$(dictionarySide), i64 $(dictionaryEntryPosition)" -> println
                         "  store " -> print
-                        dictionaryItemTypeId >= 0 -> if { dictionaryItemTypeId -> writeSemanticTypeId } else { dictionaryItemSymbol -> llvmType -> print }
+                        dictionaryItemTypeId >= 0 -> if { dictionaryItemTypeId -> writeSemanticTypeId } else { (dictionaryItem.typeKind == 8 or (dictionaryItem.typeId >= 0 and context.types[dictionaryItem.typeId].kind == 8)) -> if { "ptr" -> print } else { dictionaryItemSymbol -> llvmType -> print } }
                         " " -> print
                         (dictionaryItem.kind == 3 or dictionaryItem.kind == 4) -> if {
                             dictionaryItem -> sourceToken => dictionaryItemToken
@@ -7759,7 +7767,7 @@ emitCore context: EmitContext -> Unit uses Console {
                             (dictionaryItem.kind == 5 and function.operand1 >= 0 and dictionaryItem.symbol == context.ir[function.operand1].symbol) -> if { "%arg" -> print } else { "%v$(dictionaryItemIndex!)" -> print }
                         }
                         ", ptr %v$(expressionIndex!)_$(dictionarySide)_ptr$(dictionaryEntryPosition), align " -> print
-                        dictionaryItemTypeId >= 0 -> if { context.typeAligns[dictionaryItemTypeId] -> writeDecimalLine } else { dictionaryItemSymbol -> legacyStorageAlign -> writeDecimalLine }
+                        dictionaryItemTypeId >= 0 -> if { context.typeAligns[dictionaryItemTypeId] -> writeDecimalLine } else { (dictionaryItem.typeKind == 8 or (dictionaryItem.typeId >= 0 and context.types[dictionaryItem.typeId].kind == 8)) -> if { context.pointerBitWidth / 8 -> writeDecimalLine } else { dictionaryItemSymbol -> legacyStorageAlign -> writeDecimalLine } }
                         dictionaryItem.nextOperand => dictionaryItemIndex!
                         dictionaryItemPosition! + 1 => dictionaryItemPosition!
                     }
@@ -10009,6 +10017,13 @@ emitCore context: EmitContext -> Unit uses Console {
                         entryDictionaryLength * (entryExpression.typeSymbol -> storageSize) => entryDictionaryValueByteLength!
                         entryDictionaryKeyTypeId! >= 0 -> if { entryDictionaryLength * context.typeSizes[entryDictionaryKeyTypeId!] => entryDictionaryKeyByteLength! }
                         entryDictionaryValueTypeId! >= 0 -> if { entryDictionaryLength * context.typeSizes[entryDictionaryValueTypeId!] => entryDictionaryValueByteLength! }
+                        # A late recursive dictionary type may leave the value
+                        # type ID unresolved. Preserve the ABI width of a
+                        # direct readonly reference from its typed-IR node.
+                        entryExpression.operand0 => entryDictionaryFirstKeyIndex!
+                        (entryDictionaryFirstKeyIndex! >= 0 and context.ir[entryDictionaryFirstKeyIndex!].nextOperand >= 0) -> if {
+                            ((context.ir[context.ir[entryDictionaryFirstKeyIndex!].nextOperand].typeKind == 8) or (context.ir[context.ir[entryDictionaryFirstKeyIndex!].nextOperand].typeId >= 0 and context.types[context.ir[context.ir[entryDictionaryFirstKeyIndex!].nextOperand].typeId].kind == 8)) -> if { entryDictionaryLength * (context.pointerBitWidth / 8) => entryDictionaryValueByteLength! }
+                        }
                         entryDictionaryKeyByteLength! => entryDictionaryKeyByteLength
                         entryDictionaryValueByteLength! => entryDictionaryValueByteLength
                         "  %v$(entryExpressionIndex!)_keys = call ptr @malloc(i64 $entryDictionaryKeyByteLength)" -> println
@@ -10022,10 +10037,10 @@ emitCore context: EmitContext -> Unit uses Console {
                             entryDictionaryItemPosition! % 2 == 0 -> if { entryExpression.typeModule } else { entryExpression.typeSymbol } => entryDictionaryItemSymbol
                             entryDictionaryItemPosition! % 2 == 0 -> if { entryDictionaryKeyTypeId! } else { entryDictionaryValueTypeId! } => entryDictionaryItemTypeId
                             "  %v$(entryExpressionIndex!)_$(entryDictionarySide)_ptr$(entryDictionaryEntryPosition) = getelementptr " -> print
-                            entryDictionaryItemTypeId >= 0 -> if { entryDictionaryItemTypeId -> writeSemanticTypeId } else { entryDictionaryItemSymbol -> llvmType -> print }
+                            entryDictionaryItemTypeId >= 0 -> if { entryDictionaryItemTypeId -> writeSemanticTypeId } else { (entryDictionaryItem.typeKind == 8 or (entryDictionaryItem.typeId >= 0 and context.types[entryDictionaryItem.typeId].kind == 8)) -> if { "ptr" -> print } else { entryDictionaryItemSymbol -> llvmType -> print } }
                             ", ptr %v$(entryExpressionIndex!)_$(entryDictionarySide), i64 $(entryDictionaryEntryPosition)" -> println
                             "  store " -> print
-                            entryDictionaryItemTypeId >= 0 -> if { entryDictionaryItemTypeId -> writeSemanticTypeId } else { entryDictionaryItemSymbol -> llvmType -> print }
+                            entryDictionaryItemTypeId >= 0 -> if { entryDictionaryItemTypeId -> writeSemanticTypeId } else { (entryDictionaryItem.typeKind == 8 or (entryDictionaryItem.typeId >= 0 and context.types[entryDictionaryItem.typeId].kind == 8)) -> if { "ptr" -> print } else { entryDictionaryItemSymbol -> llvmType -> print } }
                             " " -> print
                             (entryDictionaryItem.kind == 3 or entryDictionaryItem.kind == 4) -> if {
                                 entryDictionaryItem -> sourceToken => entryDictionaryItemToken
@@ -10036,7 +10051,7 @@ emitCore context: EmitContext -> Unit uses Console {
                                 }
                             } else { "%v$(entryDictionaryItemIndex!)" -> print }
                             ", ptr %v$(entryExpressionIndex!)_$(entryDictionarySide)_ptr$(entryDictionaryEntryPosition), align " -> print
-                            entryDictionaryItemTypeId >= 0 -> if { context.typeAligns[entryDictionaryItemTypeId] -> writeDecimalLine } else { entryDictionaryItemSymbol -> legacyStorageAlign -> writeDecimalLine }
+                            entryDictionaryItemTypeId >= 0 -> if { context.typeAligns[entryDictionaryItemTypeId] -> writeDecimalLine } else { (entryDictionaryItem.typeKind == 8 or (entryDictionaryItem.typeId >= 0 and context.types[entryDictionaryItem.typeId].kind == 8)) -> if { context.pointerBitWidth / 8 -> writeDecimalLine } else { entryDictionaryItemSymbol -> legacyStorageAlign -> writeDecimalLine } }
                             entryDictionaryItem.nextOperand => entryDictionaryItemIndex!
                             entryDictionaryItemPosition! + 1 => entryDictionaryItemPosition!
                         }
