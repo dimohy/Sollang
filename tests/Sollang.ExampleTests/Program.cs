@@ -263,25 +263,57 @@ if (expectedFiles.Any(IsReusableSelfHostCompilerTest))
         .Append(Path.Combine(repoRoot, "tests", "Sollang.ExampleTests", "Program.cs"))
         .Append(compilerDll)
         .ToArray();
-    if (!IsOutputCurrent(selfHostDriverPath, selfHostDriverInputs))
+    var selfHostDriverFingerprintPath = selfHostDriverPath + ".inputs.sha256";
+    var selfHostDriverFingerprint = ComputeInputFingerprint(selfHostDriverInputs);
+    if (!IsOutputCurrent(
+            selfHostDriverPath,
+            selfHostDriverFingerprintPath,
+            selfHostDriverFingerprint))
     {
-        Console.WriteLine("[selfhost bootstrap] Building the reusable native sollangc...");
-        Console.Out.Flush();
-        var driverArguments = new List<string> { compilerDll, "build" };
-        driverArguments.AddRange(selfHostDriverSources);
-        driverArguments.AddRange([
-            "-o", selfHostDriverPath,
-            "--target", "windows-x64",
-            "--llvm", llvmDir,
-            "-O1"
-        ]);
-        var driverBuild = Run("dotnet", driverArguments, input: null, repoRoot, relayOutput: true);
-        if (driverBuild.ExitCode != 0)
+        File.Delete(selfHostDriverFingerprintPath);
+        while (true)
         {
-            Console.Error.WriteLine("FAIL reusable native sollangc bootstrap");
-            Console.Error.WriteLine(driverBuild.Stdout);
-            Console.Error.WriteLine(driverBuild.Stderr);
-            return 1;
+            var buildFingerprint = ComputeInputFingerprint(selfHostDriverInputs);
+            if (buildFingerprint is null)
+            {
+                Console.Error.WriteLine("FAIL reusable native sollangc bootstrap input is missing");
+                return 1;
+            }
+
+            Console.WriteLine("[selfhost bootstrap] Building the reusable native sollangc...");
+            Console.Out.Flush();
+            var driverArguments = new List<string> { compilerDll, "build" };
+            driverArguments.AddRange(selfHostDriverSources);
+            driverArguments.AddRange([
+                "-o", selfHostDriverPath,
+                "--target", "windows-x64",
+                "--llvm", llvmDir,
+                "-O1"
+            ]);
+            var driverBuild = Run("dotnet", driverArguments, input: null, repoRoot, relayOutput: true);
+            if (driverBuild.ExitCode != 0)
+            {
+                Console.Error.WriteLine("FAIL reusable native sollangc bootstrap");
+                Console.Error.WriteLine(driverBuild.Stdout);
+                Console.Error.WriteLine(driverBuild.Stderr);
+                return 1;
+            }
+
+            var verifiedFingerprint = ComputeInputFingerprint(selfHostDriverInputs);
+            if (StringComparer.Ordinal.Equals(buildFingerprint, verifiedFingerprint))
+            {
+                WriteFingerprintAtomically(selfHostDriverFingerprintPath, buildFingerprint);
+                var publishedFingerprint = ComputeInputFingerprint(selfHostDriverInputs);
+                if (StringComparer.Ordinal.Equals(buildFingerprint, publishedFingerprint))
+                {
+                    break;
+                }
+
+                File.Delete(selfHostDriverFingerprintPath);
+            }
+
+            Console.WriteLine("[selfhost bootstrap] Inputs changed during build; rebuilding from the current snapshot...");
+            Console.Out.Flush();
         }
         Console.WriteLine("[selfhost bootstrap] PASS reusable native sollangc");
     }
@@ -1006,15 +1038,59 @@ static string[] MaterializeSelfHostSources(
     }).ToArray();
 }
 
-static bool IsOutputCurrent(string outputPath, IEnumerable<string> inputPaths)
+static bool IsOutputCurrent(
+    string outputPath,
+    string fingerprintPath,
+    string? inputFingerprint)
 {
-    if (!File.Exists(outputPath))
+    if (!File.Exists(outputPath)
+        || inputFingerprint is null
+        || !File.Exists(fingerprintPath))
     {
         return false;
     }
 
-    var outputTime = File.GetLastWriteTimeUtc(outputPath);
-    return inputPaths.All(path => File.Exists(path) && File.GetLastWriteTimeUtc(path) <= outputTime);
+    return StringComparer.Ordinal.Equals(
+        File.ReadAllText(fingerprintPath).Trim(),
+        inputFingerprint);
+}
+
+static string? ComputeInputFingerprint(IEnumerable<string> inputPaths)
+{
+    using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+    var buffer = new byte[64 * 1024];
+    foreach (var inputPath in inputPaths
+        .Select(Path.GetFullPath)
+        .Distinct(StringComparer.OrdinalIgnoreCase)
+        .Order(StringComparer.OrdinalIgnoreCase))
+    {
+        if (!File.Exists(inputPath))
+        {
+            return null;
+        }
+
+        var normalizedPath = inputPath.Replace('\\', '/');
+        var pathBytes = Encoding.UTF8.GetBytes(normalizedPath);
+        hash.AppendData(BitConverter.GetBytes(pathBytes.Length));
+        hash.AppendData(pathBytes);
+
+        using var input = File.OpenRead(inputPath);
+        hash.AppendData(BitConverter.GetBytes(input.Length));
+        int read;
+        while ((read = input.Read(buffer, 0, buffer.Length)) != 0)
+        {
+            hash.AppendData(buffer, 0, read);
+        }
+    }
+
+    return Convert.ToHexString(hash.GetHashAndReset());
+}
+
+static void WriteFingerprintAtomically(string fingerprintPath, string fingerprint)
+{
+    var temporaryPath = fingerprintPath + "." + Environment.ProcessId + ".tmp";
+    File.WriteAllText(temporaryPath, fingerprint + Environment.NewLine, new UTF8Encoding(false));
+    File.Move(temporaryPath, fingerprintPath, overwrite: true);
 }
 
 static bool IsSelfHostTest(string path) => Path
