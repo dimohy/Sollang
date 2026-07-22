@@ -104,6 +104,7 @@ internal sealed class WindowsLinker(LlvmToolchain toolchain)
             GetStdHandle
             ExitProcess
             GetConsoleMode
+            WriteConsoleW
             CreateProcessW
             GetExitCodeProcess
             ReadFile

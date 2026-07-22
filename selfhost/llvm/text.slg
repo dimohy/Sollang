@@ -13494,15 +13494,58 @@ emitMemoryOutputSinkRuntime: -> Unit uses Console {
 }
 
 emitWindowsTextRuntime capturesParallelOutput: Bool -> Unit uses Console {
+    """
+    @sollang_runtime_stdout_written = private global i32 0
+    declare ptr @GetStdHandle(i32)
+    declare i32 @GetConsoleMode(ptr, ptr)
+    declare i32 @WriteConsoleW(ptr, ptr, i32, ptr, ptr)
+    declare i32 @WriteFile(ptr, ptr, i32, ptr, ptr)
+    declare i32 @MultiByteToWideChar(i32, i32, ptr, i32, ptr, i32)
+    declare ptr @GetProcessHeap()
+    declare ptr @HeapAlloc(ptr, i32, i64)
+    declare i32 @HeapFree(ptr, i32, ptr)
+    define internal i32 @sollang_runtime_write_stdout_bytes(ptr %handle, ptr %data, i32 %len) {
+    entry:
+      %mode = alloca i32, align 4
+      %console_status = call i32 @GetConsoleMode(ptr %handle, ptr %mode)
+      %is_console = icmp ne i32 %console_status, 0
+      br i1 %is_console, label %console_prepare, label %redirected
+    redirected:
+      %redirected_ok = call i32 @WriteFile(ptr %handle, ptr %data, i32 %len, ptr @sollang_runtime_stdout_written, ptr null)
+      ret i32 %redirected_ok
+    console_prepare:
+      %wide_chars = call i32 @MultiByteToWideChar(i32 65001, i32 8, ptr %data, i32 %len, ptr null, i32 0)
+      %valid_utf8 = icmp sgt i32 %wide_chars, 0
+      br i1 %valid_utf8, label %allocate, label %conversion_failed
+    allocate:
+      %wide_bytes32 = shl i32 %wide_chars, 1
+      %wide_bytes = zext i32 %wide_bytes32 to i64
+      %heap = call ptr @GetProcessHeap()
+      %wide = call ptr @HeapAlloc(ptr %heap, i32 0, i64 %wide_bytes)
+      %allocated = icmp ne ptr %wide, null
+      br i1 %allocated, label %convert, label %conversion_failed
+    convert:
+      %converted = call i32 @MultiByteToWideChar(i32 65001, i32 8, ptr %data, i32 %len, ptr %wide, i32 %wide_chars)
+      %converted_all = icmp eq i32 %converted, %wide_chars
+      br i1 %converted_all, label %console_write, label %conversion_free
+    console_write:
+      %console_ok = call i32 @WriteConsoleW(ptr %handle, ptr %wide, i32 %wide_chars, ptr @sollang_runtime_stdout_written, ptr null)
+      %freed = call i32 @HeapFree(ptr %heap, i32 0, ptr %wide)
+      ret i32 %console_ok
+    conversion_free:
+      %freed_after_failure = call i32 @HeapFree(ptr %heap, i32 0, ptr %wide)
+      br label %conversion_failed
+    conversion_failed:
+      store i32 0, ptr @sollang_runtime_stdout_written, align 4
+      ret i32 0
+    }
+    """ -> println
     capturesParallelOutput -> if {
     """
     @sollang_runtime_newline = private constant [1 x i8] c"\0A"
     @sollang_runtime_stdout_buffer = private global [1048576 x i8] zeroinitializer
     @sollang_runtime_stdout_count = private global i64 0
-    @sollang_runtime_stdout_written = private global i32 0
     @sollang_output_sink_tls = internal global i32 -1
-    declare ptr @GetStdHandle(i32)
-    declare i32 @WriteFile(ptr, ptr, i32, ptr, ptr)
     declare i32 @TlsAlloc()
     declare i32 @TlsSetValue(i32, ptr)
     declare ptr @TlsGetValue(i32)
@@ -13517,7 +13560,7 @@ emitWindowsTextRuntime capturesParallelOutput: Bool -> Unit uses Console {
     write:
       %handle = call ptr @GetStdHandle(i32 -11)
       %count32 = trunc i64 %count to i32
-      %ok = call i32 @WriteFile(ptr %handle, ptr @sollang_runtime_stdout_buffer, i32 %count32, ptr @sollang_runtime_stdout_written, ptr null)
+      %ok = call i32 @sollang_runtime_write_stdout_bytes(ptr %handle, ptr @sollang_runtime_stdout_buffer, i32 %count32)
       store i64 0, ptr @sollang_runtime_stdout_count, align 8
       br label %done
     done:
@@ -13536,7 +13579,7 @@ emitWindowsTextRuntime capturesParallelOutput: Bool -> Unit uses Console {
     direct:
       %handle = call ptr @GetStdHandle(i32 -11)
       %len32 = trunc i64 %len to i32
-      %ok = call i32 @WriteFile(ptr %handle, ptr %data, i32 %len32, ptr @sollang_runtime_stdout_written, ptr null)
+      %ok = call i32 @sollang_runtime_write_stdout_bytes(ptr %handle, ptr %data, i32 %len32)
       ret void
     append_empty:
       call void @llvm.memcpy.p0.p0.i64(ptr @sollang_runtime_stdout_buffer, ptr %data, i64 %len, i1 false)
@@ -13585,9 +13628,6 @@ emitWindowsTextRuntime capturesParallelOutput: Bool -> Unit uses Console {
     @sollang_runtime_newline = private constant [1 x i8] c"\0A"
     @sollang_runtime_stdout_buffer = private global [1048576 x i8] zeroinitializer
     @sollang_runtime_stdout_count = private global i64 0
-    @sollang_runtime_stdout_written = private global i32 0
-    declare ptr @GetStdHandle(i32)
-    declare i32 @WriteFile(ptr, ptr, i32, ptr, ptr)
     declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1 immarg)
     define internal void @sollang_runtime_flush_stdout() {
     entry:
@@ -13597,7 +13637,7 @@ emitWindowsTextRuntime capturesParallelOutput: Bool -> Unit uses Console {
     write:
       %handle = call ptr @GetStdHandle(i32 -11)
       %count32 = trunc i64 %count to i32
-      %ok = call i32 @WriteFile(ptr %handle, ptr @sollang_runtime_stdout_buffer, i32 %count32, ptr @sollang_runtime_stdout_written, ptr null)
+      %ok = call i32 @sollang_runtime_write_stdout_bytes(ptr %handle, ptr @sollang_runtime_stdout_buffer, i32 %count32)
       store i64 0, ptr @sollang_runtime_stdout_count, align 8
       br label %done
     done:
@@ -13616,7 +13656,7 @@ emitWindowsTextRuntime capturesParallelOutput: Bool -> Unit uses Console {
     direct:
       %handle = call ptr @GetStdHandle(i32 -11)
       %len32 = trunc i64 %len to i32
-      %ok = call i32 @WriteFile(ptr %handle, ptr %data, i32 %len32, ptr @sollang_runtime_stdout_written, ptr null)
+      %ok = call i32 @sollang_runtime_write_stdout_bytes(ptr %handle, ptr %data, i32 %len32)
       ret void
     append_empty:
       call void @llvm.memcpy.p0.p0.i64(ptr @sollang_runtime_stdout_buffer, ptr %data, i64 %len, i1 false)

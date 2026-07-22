@@ -48,6 +48,7 @@ internal sealed class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
         }
         functions.AppendLine("declare dllimport ptr @GetStdHandle(i32)");
         functions.AppendLine("declare dllimport i32 @GetConsoleMode(ptr, ptr)");
+        functions.AppendLine("declare dllimport i32 @WriteConsoleW(ptr, ptr, i32, ptr, ptr)");
         functions.AppendLine("declare dllimport i32 @WriteFile(ptr, ptr, i32, ptr, ptr)");
         functions.AppendLine("declare dllimport i32 @ReadFile(ptr, ptr, i32, ptr, ptr)");
         functions.AppendLine("declare dllimport i32 @GetOverlappedResult(ptr, ptr, ptr, i32)");
@@ -1342,6 +1343,51 @@ internal sealed class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
               unreachable
             }
 
+            define internal i32 @sollang_write_stdout_bytes(ptr %stdout, ptr %data, i32 %len, ptr %written) #0 {
+            entry:
+              %is_console = load i1, ptr @sollang_stdout_line_buffered, align 1
+              br i1 %is_console, label %console_prepare, label %redirected
+
+            redirected:
+              %redirected_ok = call i32 @WriteFile(ptr %stdout, ptr %data, i32 %len, ptr %written, ptr null)
+              ret i32 %redirected_ok
+
+            console_prepare:
+              %wide_chars = call i32 @MultiByteToWideChar(i32 65001, i32 8, ptr %data, i32 %len, ptr null, i32 0)
+              %valid_utf8 = icmp sgt i32 %wide_chars, 0
+              br i1 %valid_utf8, label %allocate, label %conversion_failed
+
+            allocate:
+              %wide_bytes32 = shl i32 %wide_chars, 1
+              %wide_bytes = zext i32 %wide_bytes32 to i64
+              %heap = call ptr @GetProcessHeap()
+              %wide = call ptr @HeapAlloc(ptr %heap, i32 0, i64 %wide_bytes)
+              %allocated = icmp ne ptr %wide, null
+              br i1 %allocated, label %convert, label %conversion_failed
+
+            convert:
+              %converted = call i32 @MultiByteToWideChar(i32 65001, i32 8, ptr %data, i32 %len, ptr %wide, i32 %wide_chars)
+              %converted_all = icmp eq i32 %converted, %wide_chars
+              br i1 %converted_all, label %console_write, label %conversion_free
+
+            console_write:
+              %wide_written = alloca i32, align 4
+              %console_ok = call i32 @WriteConsoleW(ptr %stdout, ptr %wide, i32 %wide_chars, ptr %wide_written, ptr null)
+              %freed = call i32 @HeapFree(ptr %heap, i32 0, ptr %wide)
+              %console_succeeded = icmp ne i32 %console_ok, 0
+              %reported_written = select i1 %console_succeeded, i32 %len, i32 0
+              store i32 %reported_written, ptr %written, align 4
+              ret i32 %console_ok
+
+            conversion_free:
+              %freed_after_failure = call i32 @HeapFree(ptr %heap, i32 0, ptr %wide)
+              br label %conversion_failed
+
+            conversion_failed:
+              store i32 0, ptr %written, align 4
+              ret i32 0
+            }
+
             define internal i32 @sollang_flush_stdout(ptr %stdout, ptr %written) #0 {
             entry:
               %count64 = load i64, ptr @sollang_stdout_buffer_count, align 8
@@ -1351,7 +1397,7 @@ internal sealed class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
             write:
               %count = trunc i64 %count64 to i32
               %buffer = getelementptr inbounds [1048576 x i8], ptr @sollang_stdout_buffer, i64 0, i64 0
-              %ok = call i32 @WriteFile(ptr %stdout, ptr %buffer, i32 %count, ptr %written, ptr null)
+              %ok = call i32 @sollang_write_stdout_bytes(ptr %stdout, ptr %buffer, i32 %count, ptr %written)
               store i64 0, ptr @sollang_stdout_buffer_count, align 8
               ret i32 %ok
 
@@ -1401,7 +1447,7 @@ internal sealed class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
             write_direct_prepare:
               %flushed_direct = call i32 @sollang_flush_stdout(ptr %stdout, ptr %written)
               %direct_len = trunc i64 %len64 to i32
-              %direct_ok = call i32 @WriteFile(ptr %stdout, ptr %data, i32 %direct_len, ptr %written, ptr null)
+              %direct_ok = call i32 @sollang_write_stdout_bytes(ptr %stdout, ptr %data, i32 %direct_len, ptr %written)
               ret i32 %direct_ok
 
             buffer_prepare:
