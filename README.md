@@ -258,6 +258,14 @@ Linux uses `/usr` automatically when no explicit LLVM home is supplied.
 Release archives and `SHA256SUMS.txt` are published on GitHub Releases.
 Run `sollang --version` to verify the installed compiler version.
 
+Build and immediately run a source file with one command. Arguments after `--`
+are passed to the program:
+
+```powershell
+sollang run hello.slg
+sollang run hello.slg -- first second
+```
+
 The 0.2 archives also include `sollangc-stage3`, the native compiler reproduced
 by the Sollang-written compiler at its verified Stage 3 fixed point. The
 supported `sollang` CLI remains alongside it during the transition. See

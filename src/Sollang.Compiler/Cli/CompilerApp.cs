@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Globalization;
 using System.Text;
 using Sollang.Compiler.CodeGen;
@@ -44,6 +45,10 @@ internal static class CompilerApp
             {
                 return NativeTestRunner.Run(args);
             }
+            if (args is ["run", ..])
+            {
+                return RunProgram(args);
+            }
             var options = CliOptions.Parse(args);
             Build(options);
             return 0;
@@ -59,6 +64,62 @@ internal static class CompilerApp
             return 1;
         }
     }
+
+    private static int RunProgram(string[] args)
+    {
+        var separatorIndex = Array.IndexOf(args, "--");
+        var buildArgs = (separatorIndex < 0 ? args : args[..separatorIndex]).ToList();
+        var programArgs = separatorIndex < 0 ? [] : args[(separatorIndex + 1)..];
+        buildArgs[0] = "build";
+
+        var hostTarget = OperatingSystem.IsWindows()
+            ? CompilationTarget.WindowsX64
+            : OperatingSystem.IsLinux()
+                ? CompilationTarget.LinuxX64
+                : throw new SollangException("run is supported only on Windows and Linux hosts");
+        if (!buildArgs.Contains("--target", StringComparer.Ordinal))
+        {
+            buildArgs.Add("--target");
+            buildArgs.Add(TargetName(hostTarget));
+        }
+
+        var options = CliOptions.Parse([.. buildArgs]);
+        if (options.Target != hostTarget)
+        {
+            throw new SollangException(
+                $"run target must match the current host ({TargetName(hostTarget)}); "
+                + $"received {TargetName(options.Target)}");
+        }
+
+        Build(options);
+        using var process = Process.Start(new ProcessStartInfo
+        {
+            FileName = options.OutputPath,
+            UseShellExecute = false
+        }.WithArguments(programArgs))
+            ?? throw new SollangException($"failed to start '{options.OutputPath}'");
+        process.WaitForExit();
+        return process.ExitCode;
+    }
+
+    private static ProcessStartInfo WithArguments(
+        this ProcessStartInfo startInfo,
+        IReadOnlyList<string> arguments)
+    {
+        foreach (var argument in arguments)
+        {
+            startInfo.ArgumentList.Add(argument);
+        }
+        return startInfo;
+    }
+
+    private static string TargetName(CompilationTarget target) => target switch
+    {
+        CompilationTarget.WindowsX64 => "windows-x64",
+        CompilationTarget.LinuxX64 => "linux-x64",
+        CompilationTarget.Wasm32Browser => "wasm32-browser",
+        _ => throw new SollangException($"unsupported target '{target}'")
+    };
 
     private static void Build(CliOptions options)
     {

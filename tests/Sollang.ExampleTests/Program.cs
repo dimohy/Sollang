@@ -180,6 +180,36 @@ if (!skipBootstrap)
     }
     Console.WriteLine("[bootstrap 2/2] PASS grammar/table-determinism");
     Console.Out.Flush();
+
+    if (testTarget == TestTarget.WindowsX64)
+    {
+        Console.WriteLine("[cli] Verifying `sollang run <source.slg>`...");
+        Console.Out.Flush();
+        var cliRunOutput = Path.Combine(artifactsDir, "cli-run-smoke.exe");
+        var cliRun = Run(
+            "dotnet",
+            [
+                compilerDll,
+                "run",
+                Path.Combine(repoRoot, "examples", "03-flow-call-parens.slg"),
+                "-o", cliRunOutput,
+                "--llvm", llvmDir
+            ],
+            input: null,
+            repoRoot);
+        if (cliRun.ExitCode != 0
+            || !Normalize(cliRun.Stdout).EndsWith(
+                "Hello, dimohy. square = 49\n",
+                StringComparison.Ordinal))
+        {
+            Console.Error.WriteLine("FAIL cli/run-source");
+            Console.Error.WriteLine(cliRun.Stdout);
+            Console.Error.WriteLine(cliRun.Stderr);
+            return 1;
+        }
+        Console.WriteLine("[cli] PASS run-source");
+        Console.Out.Flush();
+    }
 }
 else if (!File.Exists(compilerDll))
 {
