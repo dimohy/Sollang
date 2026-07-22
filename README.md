@@ -259,7 +259,8 @@ Release archives and `SHA256SUMS.txt` are published on GitHub Releases.
 Run `sollang --version` to verify the installed compiler version.
 
 Build and immediately run a source file with one command. Arguments after `--`
-are passed to the program:
+are passed to the program. Successful compilation is quiet, so only the
+program's output is shown:
 
 ```powershell
 sollang run hello.slg

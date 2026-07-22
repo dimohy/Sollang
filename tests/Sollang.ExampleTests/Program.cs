@@ -198,9 +198,9 @@ if (!skipBootstrap)
             input: null,
             repoRoot);
         if (cliRun.ExitCode != 0
-            || !Normalize(cliRun.Stdout).EndsWith(
-                "Hello, dimohy. square = 49\n",
-                StringComparison.Ordinal))
+            || !StringComparer.Ordinal.Equals(
+                Normalize(cliRun.Stdout),
+                "Hello, dimohy. square = 49\n"))
         {
             Console.Error.WriteLine("FAIL cli/run-source");
             Console.Error.WriteLine(cliRun.Stdout);

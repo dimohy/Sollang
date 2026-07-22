@@ -91,7 +91,7 @@ internal static class CompilerApp
                 + $"received {TargetName(options.Target)}");
         }
 
-        Build(options);
+        BuildSilently(options);
         using var process = Process.Start(new ProcessStartInfo
         {
             FileName = options.OutputPath,
@@ -100,6 +100,20 @@ internal static class CompilerApp
             ?? throw new SollangException($"failed to start '{options.OutputPath}'");
         process.WaitForExit();
         return process.ExitCode;
+    }
+
+    private static void BuildSilently(CliOptions options)
+    {
+        var originalOutput = Console.Out;
+        try
+        {
+            Console.SetOut(TextWriter.Null);
+            Build(options);
+        }
+        finally
+        {
+            Console.SetOut(originalOutput);
+        }
     }
 
     private static ProcessStartInfo WithArguments(
