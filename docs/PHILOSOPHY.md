@@ -62,6 +62,13 @@ standard applies beyond syntax: ownership should be visible, compile-time work
 should remove runtime burden, tooling should explain rather than obscure, and
 self-hosting should prove that the language can build itself honestly.
 
+When a flow grows, its visual form should preserve that direction rather than
+force the reader back into nested calls. A leading `->` continues the value
+from the preceding line, and a leading `=>` names its result. Names such as
+`it` and fold's `acc` are omitted only where the grammatical role determines
+them uniquely; omission must remove noise without hiding ownership or changing
+evaluation order.
+
 That proof is now executable rather than aspirational: the Sollang-written
 compiler completes the measured 60/60 self-hosting roadmap, emits LLVM, and
 builds native Windows and Linux programs while remaining differential-tested

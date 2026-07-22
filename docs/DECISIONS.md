@@ -9919,3 +9919,49 @@ Research basis:
 - [Serde `Serialize` implementation](https://serde.rs/impl-serialize.html)
 - [Serde custom serialization](https://serde.rs/custom-serialization.html)
 - [Swift encoding and decoding custom types](https://developer.apple.com/documentation/Foundation/encoding-and-decoding-custom-types)
+
+## D255 - Flow Continuations and Predictable Role Names
+
+Status: implemented
+Date: 2026-07-22
+
+Sollang permits a newline before a continuing `->` and before the final `=>`:
+
+```sollang
+source
+    -> decode
+    -> validate
+    -> transform
+    => result
+```
+
+The rule is deterministic because neither arrow can begin an independent
+statement. Newlines are consumed only when the next token is the expected
+arrow; otherwise they remain ordinary statement boundaries. The C# parser
+keeps the same `FlowExpression` and `BindingStatement` AST shapes, and the
+generated grammar table applies the same rule to the self-host frontend.
+
+The formatter treats an arrow-led line as a continuation and indents it one
+level beyond its source. It does not reorder, fuse, or otherwise reinterpret
+pipeline stages.
+
+Sollang also extends its existing contextual `it` rule to folds. This:
+
+```sollang
+values -> fold 0 {
+    acc + it
+}
+```
+
+is the concise spelling of `values -> fold 0 acc, it { acc + it }`. Explicit
+accumulator and item names remain available. Omission is accepted only because
+the two grammatical roles determine `acc` and `it`; types, ownership markers,
+effect capabilities, and evaluation order are never inferred away.
+
+Example 570 verifies vertical multi-stage flow, vertical result binding,
+default fold names, native execution, and the expected result. The language
+tool verifier covers formatter syntax preservation, idempotence, CLI rewrite,
+LSP formatting, and parser diagnostics for the vertical form. The Release
+solution build has zero warnings and zero errors, grammar generation is
+byte-for-byte deterministic, and the full example suite passes **755/755** on
+both Windows x64 and Linux x64.

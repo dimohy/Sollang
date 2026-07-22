@@ -5078,7 +5078,10 @@ internal sealed partial class SemanticCompiler
         bool allowReadIntCall)
     {
         ValidateBindingName(expression.AccumulatorName, expression.Line, expression.Column);
-        ValidateBindingName(expression.ItemName, expression.Line, expression.Column);
+        if (expression.ItemName != "it")
+        {
+            ValidateBindingName(expression.ItemName, expression.Line, expression.Column);
+        }
         if (expression.AccumulatorName == expression.ItemName)
         {
             throw Error(expression.Line, expression.Column, "fold accumulator and item names must be different");
@@ -5089,7 +5092,7 @@ internal sealed partial class SemanticCompiler
             throw Error(expression.Line, expression.Column, $"binding '{expression.AccumulatorName}' already exists in this scope");
         }
 
-        if (bindings.ContainsKey(expression.ItemName))
+        if (expression.ItemName != "it" && bindings.ContainsKey(expression.ItemName))
         {
             throw Error(expression.Line, expression.Column, $"binding '{expression.ItemName}' already exists in this scope");
         }

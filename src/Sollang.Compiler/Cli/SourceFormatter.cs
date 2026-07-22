@@ -102,6 +102,10 @@ internal static class SourceFormatter
             ScanLine(trimmed, ref inTripleString, out var opens, out var closes);
             var leadingCloses = CountLeadingClosingBraces(trimmed);
             var lineDepth = Math.Max(0, depth - leadingCloses);
+            if (IsFlowContinuation(trimmed))
+            {
+                lineDepth++;
+            }
             result.Append(' ', lineDepth * 4).AppendLine(trimmed.TrimEnd());
             depth = Math.Max(0, depth + opens - closes);
         }
@@ -110,6 +114,10 @@ internal static class SourceFormatter
         Validate(formatted);
         return formatted;
     }
+
+    private static bool IsFlowContinuation(string line) =>
+        line.StartsWith("->", StringComparison.Ordinal)
+        || line.StartsWith("=>", StringComparison.Ordinal);
 
     private static int CountLeadingClosingBraces(string line)
     {

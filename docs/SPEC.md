@@ -2077,6 +2077,35 @@ for unary calls. Chained value-flow calls are parsed left-to-right:
 text -> trim -> lower -> slugify => slug
 ```
 
+A newline may appear before a continuing `->` or the result-binding `=>`.
+Because neither token can begin an independent statement, the continuation is
+unambiguous:
+
+```sollang
+text
+    -> trim
+    -> lower
+    -> slugify
+    => slug
+```
+
+The formatter indents continuation arrows one level beyond the source line.
+It preserves the exact left-to-right evaluation order; the vertical form does
+not create a different AST or an implicit scope.
+
+Role-local names may be omitted when they are uniquely determined. Function
+inputs and block items default to `it`. A fold with no explicit names defaults
+its accumulator to `acc` and its item to `it`:
+
+```sollang
+1..100 -> fold 0 {
+    acc + it
+} => total
+```
+
+The explicit `fold 0 total, value { ... }` form remains available when domain
+names communicate more meaning.
+
 Initial constraints:
 
 - The first supported argument is a displayable scalar expression.

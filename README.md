@@ -164,6 +164,31 @@ main {
 }
 ```
 
+Long flows can follow the same direction vertically. A newline before `->` or
+the final `=>` is an unambiguous continuation, and the formatter gives the
+arrows one additional indentation level:
+
+```sollang
+source
+    -> decode
+    -> validate
+    -> transform
+    => result
+```
+
+Names that the surrounding role determines may be omitted. An unnamed function
+input and block item use `it`; an unnamed fold uses `acc` and `it`:
+
+```sollang
+square: Int -> Int => it * it
+
+1..100
+    -> fold 0 {
+        acc + it
+    }
+    => total
+```
+
 The expected enum type supplies short `Ok` and `Err` patterns:
 
 ```sollang

@@ -77,8 +77,8 @@ function applyEdit(text, edit) {
 }
 
 console.log('[0/4] Running parser-backed language-tool verification.');
-const source = 'main {\n"ok" -> println\n}\n\n';
-const expected = 'main {\n    "ok" -> println\n}\n';
+const source = 'main {\n"ok"\n-> println\n}\n\n';
+const expected = 'main {\n    "ok"\n        -> println\n}\n';
 const first = await run(['format', '--stdin'], source);
 requireValue(first.code === 0, first.stderr || `formatter exited ${first.code}`);
 requireValue(first.stdout === expected, `unexpected formatter output: ${JSON.stringify(first.stdout)}`);
