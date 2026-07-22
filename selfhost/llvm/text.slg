@@ -5457,6 +5457,7 @@ emitCore context: EmitContext -> Unit uses Console {
         }
     }
     emitOwnedDrops request: OwnedDropRequest -> Unit uses Console {
+        context.pointerBitWidth / 8 => ownedPointerAlignment
         context.ir[request.regionIndex] => dropRegion
         UIntSize(0) => dropBeforeStart!
         request.beforeAst >= 0 -> if { context.nodes[context.ranges[dropRegion.sourceModule].astStart + request.beforeAst].start => dropBeforeStart! }
@@ -5565,7 +5566,7 @@ emitCore context: EmitContext -> Unit uses Console {
             }
             (ownedDropBeforeEdge! and ownedDropIsRoot! and not ownedDropMoved! and ownedDropCandidate.kind == 17 and ownedDropCandidate.parent == request.regionIndex and ownedDropCandidate.typeId < 0 and ownedDropCandidate.typeOrigin == 16 and ownedDropCandidate.symbol != request.transferredSymbol) -> if {
                 ownedDropCandidate.flags == 1 -> if {
-                    "  %cleanup$(request.edgeIndex)_b$(ownedDropIndex!)_current = load %sollang.dyn, ptr %slot$(ownedDropRoot!), align $(context.pointerBitWidth / 8)" -> println
+                    "  %cleanup$(request.edgeIndex)_b$(ownedDropIndex!)_current = load %sollang.dyn, ptr %slot$(ownedDropRoot!), align $ownedPointerAlignment" -> println
                     "  %cleanup$(request.edgeIndex)_b$(ownedDropIndex!)_data = extractvalue %sollang.dyn %cleanup$(request.edgeIndex)_b$(ownedDropIndex!)_current, 0" -> println
                     "  %cleanup$(request.edgeIndex)_b$(ownedDropIndex!)_vtable = extractvalue %sollang.dyn %cleanup$(request.edgeIndex)_b$(ownedDropIndex!)_current, 1" -> println
                 } else {
@@ -5573,7 +5574,7 @@ emitCore context: EmitContext -> Unit uses Console {
                     "  %cleanup$(request.edgeIndex)_b$(ownedDropIndex!)_vtable = extractvalue %sollang.dyn %v$(ownedDropCandidate.operand0), 1" -> println
                 }
                 "  %cleanup$(request.edgeIndex)_b$(ownedDropIndex!)_drop_slot = getelementptr ptr, ptr %cleanup$(request.edgeIndex)_b$(ownedDropIndex!)_vtable, i64 0" -> println
-                "  %cleanup$(request.edgeIndex)_b$(ownedDropIndex!)_drop = load ptr, ptr %cleanup$(request.edgeIndex)_b$(ownedDropIndex!)_drop_slot, align $(context.pointerBitWidth / 8)" -> println
+                "  %cleanup$(request.edgeIndex)_b$(ownedDropIndex!)_drop = load ptr, ptr %cleanup$(request.edgeIndex)_b$(ownedDropIndex!)_drop_slot, align $ownedPointerAlignment" -> println
                 "  call void %cleanup$(request.edgeIndex)_b$(ownedDropIndex!)_drop(ptr %cleanup$(request.edgeIndex)_b$(ownedDropIndex!)_data)" -> println
             }
             (ownedDropBeforeEdge! and ownedDropIsRoot! and not ownedDropMoved! and ownedDropCandidate.kind == 17 and ownedDropCandidate.parent == request.regionIndex and (ownedDropCandidate.typeId < 0 or ownedDropHasPartialMoves!) and (ownedDropCandidate -> isGenericEnumType) and ownedDropCandidate.symbol != request.transferredSymbol) -> if {
@@ -5628,6 +5629,7 @@ emitCore context: EmitContext -> Unit uses Console {
         returns!
     }
     emitRegion regionIndex: Int -> Unit uses Console {
+        context.pointerBitWidth / 8 => regionPointerAlignment
         context.ir[regionIndex] => region
         region.parent => ownerIndex!
         (ownerIndex! >= 0 and context.ir[ownerIndex!].kind != 0 and context.ir[ownerIndex!].kind != 11) -> while { context.ir[ownerIndex!].parent => ownerIndex! }
@@ -6368,7 +6370,7 @@ emitCore context: EmitContext -> Unit uses Console {
                 "  %v$(regionNodeIndex!)_data = extractvalue %sollang.dyn %v$(regionNode.operand0), 0" -> println
                 "  %v$(regionNodeIndex!)_vtable = extractvalue %sollang.dyn %v$(regionNode.operand0), 1" -> println
                 "  %v$(regionNodeIndex!)_slot = getelementptr ptr, ptr %v$(regionNodeIndex!)_vtable, i64 1" -> println
-                "  %v$(regionNodeIndex!)_method = load ptr, ptr %v$(regionNodeIndex!)_slot, align $(context.pointerBitWidth / 8)" -> println
+                "  %v$(regionNodeIndex!)_method = load ptr, ptr %v$(regionNodeIndex!)_slot, align $regionPointerAlignment" -> println
                 "  %v$(regionNodeIndex!) = call i32 %v$(regionNodeIndex!)_method(ptr %v$(regionNodeIndex!)_data)" -> println
             }
             (regionNode.kind == 9 and regionNode.opcode == -226 and regionNode.operand0 >= 0) -> if {
@@ -7775,8 +7777,14 @@ emitCore context: EmitContext -> Unit uses Console {
                     WhileValueRequest { whileIndex: armValueIndex, ownerIndex: matchIndex, nodeIndex: armValueIndex } -> emitEnumConstructor
                 }
                 (armBindingIndex! < 0 and (armValueIndex == armIndex! or (armValue.kind == 19 and armValue.operand0 < 0))) => directArmPayload
-                (armBindingIndex! >= 0 and armValue.kind == 5 and armValue.parent != armIndex! and (armValue.operand0 == armBindingIndex! or armValue.symbol == context.ir[armBindingIndex!].symbol)) => armValueUsesBlockBinding
-                (armBindingIndex! >= 0 and armValue.kind == 19 and armValue.operand0 < 0 and (match.typeKind == 7 or (match.typeId >= 0 and context.types[match.typeId].kind == 7))) => emptyPayloadlessArm
+                0 => safeArmBindingIndex!
+                armBindingIndex! >= 0 -> if { armBindingIndex! => safeArmBindingIndex! }
+                context.ir[safeArmBindingIndex!].symbol => resolvedArmBindingSymbol
+                (armBindingIndex! >= 0 and armValue.kind == 5 and armValue.parent != armIndex! and (armValue.operand0 == armBindingIndex! or armValue.symbol == resolvedArmBindingSymbol)) => armValueUsesBlockBinding
+                0 => safeMatchTypeIndex!
+                match.typeId >= 0 -> if { match.typeId => safeMatchTypeIndex! }
+                context.types[safeMatchTypeIndex!].kind => resolvedMatchTypeKind
+                (armBindingIndex! >= 0 and armValue.kind == 19 and armValue.operand0 < 0 and (match.typeKind == 7 or (match.typeId >= 0 and resolvedMatchTypeKind == 7))) => emptyPayloadlessArm
                 directArmPayload -> if {
                     "  %v$(matchIndex)_arm$(armOrdinal!)_direct_payload = getelementptr inbounds " -> print
                     subject -> writeIrType
@@ -10796,6 +10804,7 @@ emitCore context: EmitContext -> Unit uses Console {
         }
         parallelCallbackIndex! + 1 => parallelCallbackIndex!
     }
+    context.pointerBitWidth / 8 => entryPointerAlignment
     [Int; ~] => functionIndicesBeforeEntry!
     [Int; ~] => functionIndicesAfterEntry!
     false => functionEntrySeen!
@@ -11235,7 +11244,7 @@ emitCore context: EmitContext -> Unit uses Console {
                         "  %v$(entryExpressionIndex!)_data = extractvalue %sollang.dyn %v$(entryExpression.operand0), 0" -> println
                         "  %v$(entryExpressionIndex!)_vtable = extractvalue %sollang.dyn %v$(entryExpression.operand0), 1" -> println
                         "  %v$(entryExpressionIndex!)_slot = getelementptr ptr, ptr %v$(entryExpressionIndex!)_vtable, i64 1" -> println
-                        "  %v$(entryExpressionIndex!)_method = load ptr, ptr %v$(entryExpressionIndex!)_slot, align $(context.pointerBitWidth / 8)" -> println
+                        "  %v$(entryExpressionIndex!)_method = load ptr, ptr %v$(entryExpressionIndex!)_slot, align $entryPointerAlignment" -> println
                         "  %v$(entryExpressionIndex!) = call i32 %v$(entryExpressionIndex!)_method(ptr %v$(entryExpressionIndex!)_data)" -> println
                     }
                     (entryExpression.kind == 9 and entryExpression.opcode == -226 and entryExpression.operand0 >= 0) -> if {
@@ -14086,9 +14095,13 @@ emitWindowsContext context: EmitContext -> Unit uses Console {
         moduleIdentity.pathHash == UInt64(12254170256457402476) -> if { moduleIdentity.sourceIndex => runtimeModule! }
         runtimeModuleSearch! + 1 => runtimeModuleSearch!
     }
-    (needsOwnedFileRuntime and runtimeModule! < 0) -> if {
+    (needsOwnedFileRuntime or needsSourceTextRuntime or runtimeModule! >= 0) -> if {
         "declare dllimport ptr @CreateFileA(ptr, i32, i32, ptr, i32, i32, ptr)" -> println
+    }
+    (needsOwnedFileRuntime or needsDirectoryRuntime or needsSourceTextRuntime or runtimeModule! >= 0) -> if {
         "declare dllimport i32 @CloseHandle(ptr)" -> println
+    }
+    (needsOwnedFileRuntime and runtimeModule! < 0) -> if {
         (not usesTextOutput and not capturesParallelOutput) -> if {
             "declare dllimport i32 @WriteFile(ptr, ptr, i32, ptr, ptr)" -> println
         }

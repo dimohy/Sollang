@@ -624,7 +624,7 @@ Sollang includes a local VS Code language support extension:
 ```powershell
 Push-Location tools\vscode-sollang
 npx --yes @vscode/vsce package --no-dependencies --allow-missing-repository
-code --install-extension .\sollang-language-support-0.1.2.vsix
+code --install-extension .\sollang-language-support-0.6.0.vsix
 Pop-Location
 ```
 

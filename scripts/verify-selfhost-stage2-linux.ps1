@@ -1,5 +1,7 @@
 param(
     [string]$Distribution = "Ubuntu",
+    [ValidateRange(1, 64)]
+    [int]$Jobs = 4,
     [switch]$Rebuild
 )
 
@@ -17,6 +19,7 @@ $stage2Path = Join-Path $artifactsDir "selfhost-stage2-linux"
 $llvmDir = Join-Path $repoRoot ".tools\llvm-22.1.8"
 $llvmAsPath = Join-Path $llvmDir "bin\llvm-as.exe"
 $clangPath = Join-Path $llvmDir "bin\clang.exe"
+$linuxStackLinkerOption = "-Wl,-z,stack-size=67108864"
 $runtimeManifestPath = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-compiler-runtime.sources.txt"
 $compilerRuntimeSources = Get-Content $runtimeManifestPath |
     Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
@@ -159,7 +162,7 @@ if (Test-Stage2IsCurrent) {
     Write-Host ("[linux-stage2 2/6] phase 1/2 analyze {0:N0} source files / {1:N0} lines" -f $sourcePaths.Count, $sourceLineCount)
     $stage2Process = Invoke-ProcessToFile `
         -FilePath $stage1Path `
-        -ArgumentList (@("linux", "--jobs", "4") + $sourcePaths) `
+        -ArgumentList (@("linux", "--jobs", $Jobs.ToString()) + $sourcePaths) `
         -OutputPath $stage2LlvmPath `
         -ErrorPath $stage2ErrorPath
     while (-not $stage2Process.HasExited) {
@@ -181,9 +184,9 @@ if (Test-Stage2IsCurrent) {
     Assert-ProcessSucceeded $stage2Process $stage2ErrorPath "Linux stage-2 LLVM emission"
     & $llvmAsPath $stage2LlvmPath -o $stage2BitcodePath
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-    & $clangPath --target=x86_64-unknown-linux-gnu -c $stage2LlvmPath -O0 -o $stage2ObjectPath
+    & $clangPath --target=x86_64-unknown-linux-gnu -c $stage2LlvmPath -O1 -o $stage2ObjectPath
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-    & wsl.exe -d $Distribution -- gcc (Convert-ToWslPath $stage2ObjectPath) -pthread -o (Convert-ToWslPath $stage2Path)
+    & wsl.exe -d $Distribution -- gcc (Convert-ToWslPath $stage2ObjectPath) -pthread $linuxStackLinkerOption -o (Convert-ToWslPath $stage2Path)
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }
 Write-Host "[linux-stage2 2/6] PASS $((Get-Item $stage2LlvmPath).Length) LLVM bytes."

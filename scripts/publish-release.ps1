@@ -1,7 +1,9 @@
 [CmdletBinding()]
 param(
-    [string]$Version = "0.1",
-    [string]$OutputRoot
+    [string]$Version = "0.2",
+    [string]$OutputRoot,
+    [string]$WindowsStage3Path,
+    [string]$LinuxStage3Path
 )
 
 $ErrorActionPreference = "Stop"
@@ -13,6 +15,14 @@ if ([string]::IsNullOrWhiteSpace($OutputRoot)) {
 }
 $OutputRoot = [System.IO.Path]::GetFullPath($OutputRoot)
 $stagingRoot = Join-Path $OutputRoot "staging"
+if ([string]::IsNullOrWhiteSpace($WindowsStage3Path)) {
+    $WindowsStage3Path = Join-Path $repoRoot "artifacts\example-tests\selfhost-stage3.exe"
+}
+if ([string]::IsNullOrWhiteSpace($LinuxStage3Path)) {
+    $LinuxStage3Path = Join-Path $repoRoot "artifacts\example-tests\selfhost-stage3-linux"
+}
+$WindowsStage3Path = [System.IO.Path]::GetFullPath($WindowsStage3Path)
+$LinuxStage3Path = [System.IO.Path]::GetFullPath($LinuxStage3Path)
 
 function New-ReleasePackage {
     param(
@@ -36,6 +46,15 @@ function New-ReleasePackage {
     Copy-Item (Join-Path $repoRoot "README.md") $packageRoot
     Copy-Item (Join-Path $repoRoot "LICENSE") $packageRoot
     Copy-Item (Join-Path $repoRoot "Sollang.slnx") $packageRoot
+    $packageDocs = Join-Path $packageRoot "docs"
+    New-Item -ItemType Directory -Path $packageDocs -Force | Out-Null
+    Copy-Item (Join-Path $repoRoot "docs\STAGE3_COMPILER.md") $packageDocs
+    $stage3Source = if ($Runtime -eq "win-x64") { $WindowsStage3Path } else { $LinuxStage3Path }
+    $stage3Name = if ($Runtime -eq "win-x64") { "sollangc-stage3.exe" } else { "sollangc-stage3" }
+    if (-not (Test-Path -LiteralPath $stage3Source -PathType Leaf)) {
+        throw "verified Stage 3 compiler is missing: $stage3Source"
+    }
+    Copy-Item -LiteralPath $stage3Source -Destination (Join-Path $packageRoot $stage3Name)
 
     Write-Host "[release $PlatformName 2/3] Verify package contents."
     $executableName = if ($Runtime -eq "win-x64") { "sollang.exe" } else { "sollang" }
@@ -44,7 +63,9 @@ function New-ReleasePackage {
         (Join-Path $packageRoot "stdlib\sys\io.slg"),
         (Join-Path $packageRoot "README.md"),
         (Join-Path $packageRoot "LICENSE"),
-        (Join-Path $packageRoot "Sollang.slnx")
+        (Join-Path $packageRoot "Sollang.slnx"),
+        (Join-Path $packageRoot "docs\STAGE3_COMPILER.md"),
+        (Join-Path $packageRoot $stage3Name)
     )
     foreach ($path in $required) {
         if (-not (Test-Path -LiteralPath $path)) { throw "release package is missing $path" }

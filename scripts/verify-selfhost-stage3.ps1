@@ -15,8 +15,10 @@ $stage2LlvmPath = Join-Path $artifactsDir "selfhost-stage2.ll"
 $stage2Path = Join-Path $artifactsDir "selfhost-stage2.exe"
 $stage3LlvmPath = Join-Path $artifactsDir "selfhost-stage3.ll"
 $stage3BitcodePath = Join-Path $artifactsDir "selfhost-stage3.bc"
+$stage3Path = Join-Path $artifactsDir "selfhost-stage3.exe"
 $stage3ErrorPath = Join-Path $artifactsDir "selfhost-stage3.err.log"
 $llvmAsPath = Join-Path $repoRoot ".tools\llvm-22.1.8\bin\llvm-as.exe"
+$clangPath = Join-Path $repoRoot ".tools\llvm-22.1.8\bin\clang.exe"
 
 function Get-NormalizedHash {
     param([string]$Path)
@@ -60,7 +62,13 @@ $process = Start-Process `
     -RedirectStandardError $stage3ErrorPath `
     -PassThru `
     -WindowStyle Hidden
-$process.WaitForExit()
+$stage3StartedAt = [DateTimeOffset]::Now
+while (-not $process.WaitForExit(30000)) {
+    $elapsed = [DateTimeOffset]::Now - $stage3StartedAt
+    $outputBytes = if (Test-Path -LiteralPath $stage3LlvmPath) { (Get-Item -LiteralPath $stage3LlvmPath).Length } else { 0 }
+    $errorBytes = if (Test-Path -LiteralPath $stage3ErrorPath) { (Get-Item -LiteralPath $stage3ErrorPath).Length } else { 0 }
+    Write-Host ("[stage3 2/3] running {0:hh\:mm\:ss}; output {1:N0} bytes; errors {2:N0} bytes." -f $elapsed, $outputBytes, $errorBytes)
+}
 $process.Refresh()
 if ($process.ExitCode -ne 0) {
     $details = if (Test-Path $stage3ErrorPath) { Get-Content $stage3ErrorPath -Raw } else { "" }
@@ -75,5 +83,7 @@ if ($stage2Hash -ne $stage3Hash) {
     throw "complete compiler fixed point differs: stage2=$stage2Hash stage3=$stage3Hash"
 }
 & $llvmAsPath $stage3LlvmPath -o $stage3BitcodePath
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+& $clangPath -Wno-override-module $stage3LlvmPath -O1 -o $stage3Path
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 Write-Host "[stage3 3/3] PASS fixed point $stage3Hash"
