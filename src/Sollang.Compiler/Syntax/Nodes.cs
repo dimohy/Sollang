@@ -127,7 +127,14 @@ internal sealed record BlockFunctionCallStatement(
     bool ResultIsMutable,
     int Line,
     int Column,
-    bool UsesDefaultItemName)
+    bool UsesDefaultItemName,
+    bool ResultIsSynthetic = false)
+    : Statement;
+
+internal sealed record BlockFunctionPipelineStatement(
+    IReadOnlyList<BlockFunctionCallStatement> Calls,
+    int Line,
+    int Column)
     : Statement;
 
 internal sealed record ExpressionStatement(Expression Expression) : Statement;

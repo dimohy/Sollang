@@ -41,25 +41,38 @@ internal sealed partial class LlvmEmitter
     {
         foreach (var statement in statements)
         {
+            if (statement is BlockFunctionPipelineStatement pipeline)
+            {
+                foreach (var pipelineBlock in pipeline.Calls)
+                {
+                    CollectParallelCallback(pipelineBlock);
+                }
+                continue;
+            }
             if (statement is not BlockFunctionCallStatement block)
             {
                 continue;
             }
 
-            if (_program.ResolvedGenericCalls.TryGetValue(block, out var specialization)
-                && specialization.Kind == BoundFunctionKind.RuntimeParallel
-                && TryResolveDirectParallelTarget(block, out var target))
-            {
-                EmitDirectParallelCallback(block, specialization, target, isFallible: false);
-            }
-            else if (_program.ResolvedGenericCalls.TryGetValue(block, out specialization)
-                && specialization.Kind == BoundFunctionKind.RuntimeTryParallel
-                && TryResolveDirectParallelTarget(block, out target))
-            {
-                EmitDirectParallelCallback(block, specialization, target, isFallible: true);
-            }
-            CollectParallelCallbacks(block.Body);
+            CollectParallelCallback(block);
         }
+    }
+
+    private void CollectParallelCallback(BlockFunctionCallStatement block)
+    {
+        if (_program.ResolvedGenericCalls.TryGetValue(block, out var specialization)
+            && specialization.Kind == BoundFunctionKind.RuntimeParallel
+            && TryResolveDirectParallelTarget(block, out var target))
+        {
+            EmitDirectParallelCallback(block, specialization, target, isFallible: false);
+        }
+        else if (_program.ResolvedGenericCalls.TryGetValue(block, out specialization)
+            && specialization.Kind == BoundFunctionKind.RuntimeTryParallel
+            && TryResolveDirectParallelTarget(block, out target))
+        {
+            EmitDirectParallelCallback(block, specialization, target, isFallible: true);
+        }
+        CollectParallelCallbacks(block.Body);
     }
 
     private bool TryResolveDirectParallelTarget(

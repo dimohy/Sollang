@@ -1,0 +1,29 @@
+# The generated self-host grammar accepts chained result-block stages.
+import sollang.compiler.parser as parser
+
+main {
+    """
+    map value: Int -> Int block item: Int -> Int {
+        value -> yield
+    }
+
+    tap value: Int -> Int block item: Int {
+        value -> yield
+        value
+    }
+
+    main {
+        5
+            -> map { it * 2 }
+            -> tap { "value=$it" -> println }
+            => result
+    }
+    """ => source
+    source -> parser.parseEvents => events!
+    events! -> len => eventCount
+    events![eventCount - 1].value == 1 -> if {
+        "block pipeline parser = valid" -> println
+    } else {
+        "block pipeline parser = invalid" -> println
+    }
+}

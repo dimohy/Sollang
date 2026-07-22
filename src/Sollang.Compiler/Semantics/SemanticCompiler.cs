@@ -1144,6 +1144,25 @@ internal sealed partial class SemanticCompiler
                         locals.Add(block.ResultName);
                     }
                     break;
+                case BlockFunctionPipelineStatement pipeline:
+                    foreach (var block in pipeline.Calls)
+                    {
+                        CollectCapturedNames(block.Source, locals, candidates, referenced);
+                        if (block.Target.Count == 1)
+                        {
+                            _collectingLocalCalls?.Add(block.Target[0]);
+                        }
+                        var pipelineBlockLocals = new HashSet<string>(locals, StringComparer.Ordinal)
+                        {
+                            block.ItemName
+                        };
+                        CollectCapturedNames(block.Body, pipelineBlockLocals, candidates, referenced);
+                        if (block.ResultName is not null)
+                        {
+                            locals.Add(block.ResultName);
+                        }
+                    }
+                    break;
                 case ExpressionStatement expression:
                     CollectCapturedNames(expression.Expression, locals, candidates, referenced);
                     break;
@@ -2575,6 +2594,12 @@ internal sealed partial class SemanticCompiler
                 case BlockFunctionCallStatement blockFunctionCall:
                     BindBlockFunctionCall(blockFunctionCall, functions, bindings, mutableBindings, yieldInputType);
                     break;
+                case BlockFunctionPipelineStatement pipeline:
+                    foreach (var blockFunctionCall in pipeline.Calls)
+                    {
+                        BindBlockFunctionCall(blockFunctionCall, functions, bindings, mutableBindings, yieldInputType);
+                    }
+                    break;
                 case LoopControlStatement loopControl:
                     if (_loopDepth == 0)
                     {
@@ -3315,7 +3340,10 @@ internal sealed partial class SemanticCompiler
             return;
         }
 
-        ValidateBindingName(call.ResultName, call.Line, call.Column);
+        if (!call.ResultIsSynthetic)
+        {
+            ValidateBindingName(call.ResultName, call.Line, call.Column);
+        }
         if (function.ReturnType == BoundType.Unit)
         {
             throw Error(call.Line, call.Column, $"Unit block function '{target}' cannot bind a result");
@@ -9703,6 +9731,14 @@ internal sealed partial class SemanticCompiler
     {
         foreach (var statement in body.Statements)
         {
+            if (statement is BlockFunctionPipelineStatement pipeline)
+            {
+                foreach (var block in pipeline.Calls)
+                {
+                    ValidateOwnedParameterConsumptionExpression(block.Source, functions, bindings);
+                }
+                continue;
+            }
             var nested = statement switch
             {
                 BindingStatement binding => binding.Value,
@@ -9924,6 +9960,8 @@ internal sealed partial class SemanticCompiler
                         ExpressionStatement expression => ContainsSliceFlow(expression.Expression),
                         _ => false
                     }),
+                BlockFunctionPipelineStatement pipeline => pipeline.Calls.Any(block =>
+                    ContainsSliceFlow(block.Source) || ContainsSliceFlow(block.Body)),
                 _ => false
             });
     }
@@ -9943,6 +9981,10 @@ internal sealed partial class SemanticCompiler
                 BlockFunctionCallStatement blockFunctionCall => ContainsOwnedParameterCall(blockFunctionCall.Source, functions)
                     || blockFunctionCall.Body.Any(nested => nested is ExpressionStatement expression
                         && ContainsOwnedParameterCall(expression.Expression, functions)),
+                BlockFunctionPipelineStatement pipeline => pipeline.Calls.Any(blockFunctionCall =>
+                    ContainsOwnedParameterCall(blockFunctionCall.Source, functions)
+                    || blockFunctionCall.Body.Any(nested => nested is ExpressionStatement expression
+                        && ContainsOwnedParameterCall(expression.Expression, functions))),
                 _ => false
             })
             || (body.Value is not null && ContainsOwnedParameterCall(body.Value, functions));

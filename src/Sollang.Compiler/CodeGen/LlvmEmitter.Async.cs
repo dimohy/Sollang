@@ -872,6 +872,13 @@ internal sealed partial class LlvmEmitter
                         && string.Equals(block.Target[0], "while", StringComparison.Ordinal):
                     CollectCfgSuspensions(block.Body, nested: true, candidates);
                     break;
+                case BlockFunctionPipelineStatement pipeline:
+                    foreach (var block in pipeline.Calls)
+                    {
+                        CollectCfgSuspensions(block.Source, nested, candidates);
+                        CollectCfgSuspensions(block.Body, nested: true, candidates);
+                    }
+                    break;
             }
         }
     }

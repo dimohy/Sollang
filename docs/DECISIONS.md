@@ -10031,3 +10031,40 @@ execution, and boolean precedence; the language-tool verifier covers formatting
 idempotence, CLI rewrite, LSP formatting, and parser diagnostics.
 The Windows Release build completes with zero warnings and errors, and the
 Windows regression suite passes all 758 examples.
+
+## D258 - Result-Producing Block Pipelines
+
+Status: implemented
+Date: 2026-07-22
+
+Result-producing block functions are no longer forced to end a statement with
+an explicit binding. Consecutive block stages form one left-to-right pipeline:
+
+```sollang
+5
+    -> map { it * 3 }
+    -> tap { "mapped=$it" -> println }
+    -> filter { it > 10 }
+    => result
+```
+
+This is one general mechanism rather than special syntax for three names.
+`map`, `tap`, `filter`, builders, scoped contexts, and future roles all resolve
+as ordinary user block functions. Each intermediate function must return a
+non-`Unit` value matching the next stage's declared source type. The compiler
+uses inaccessible synthetic bindings internally so ownership, result typing,
+generic-call identity, and LLVM lowering continue through the existing checked
+paths; those names never enter source syntax.
+
+The AST groups a multi-stage call as `BlockFunctionPipelineStatement` while
+retaining the existing `BlockFunctionCallStatement` for every stage. Semantic,
+capture, borrow-origin, storage-placement, async/control-flow, runtime-feature,
+parallel-callback, stable-identity, and LLVM scans traverse every contained
+stage. Example 573 executes `map -> tap -> filter`, with `tap` genuinely in the
+middle. The `unit-block-pipeline-stage` diagnostic rejects a valueless
+intermediate stage. Example 574 proves the generated self-host grammar accepts
+the same surface, while full self-host semantic and LLVM lowering of chained
+block stages remains a later parity slice.
+The Windows Release build completes with zero warnings and errors, the
+language-tool verifier passes 4/4, and the Windows regression suite passes all
+761 examples.

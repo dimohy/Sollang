@@ -1301,6 +1301,23 @@ args -> each argument {
 }
 ```
 
+A block function with a non-`Unit` result may appear before another block stage.
+The previous result becomes the next source directly; no source-visible
+temporary binding is introduced:
+
+```sollang
+5
+    -> map { it * 3 }
+    -> tap { "mapped=$it" -> println }
+    -> filter { it > 10 }
+    => result
+```
+
+Every stage uses ordinary function lookup and the declared source, callback,
+and result types. `map`, `tap`, and `filter` are examples of user-defined names,
+not keywords or compiler intrinsics. An intermediate `Unit` block is rejected
+because it has no value to feed into the following stage.
+
 Generic block types are specialized from the ordinary input before either the
 function's `yield` sites or the caller body are checked. For example,
 `block items: [T; ~]` becomes `[Int; ~]` when an `Int` source fixes `T = Int`.

@@ -1848,6 +1848,13 @@ internal sealed partial class LlvmEmitter
                     ScanExpressionForStandaloneStandardLibraryFunctions(block.Source, scope, caller, visited);
                     ScanStatementsForStandaloneStandardLibraryFunctions(block.Body, scope, caller, visited);
                     break;
+                case BlockFunctionPipelineStatement pipeline:
+                    foreach (var block in pipeline.Calls)
+                    {
+                        ScanExpressionForStandaloneStandardLibraryFunctions(block.Source, scope, caller, visited);
+                        ScanStatementsForStandaloneStandardLibraryFunctions(block.Body, scope, caller, visited);
+                    }
+                    break;
                 case ExpressionStatement expression:
                     ScanExpressionForStandaloneStandardLibraryFunctions(expression.Expression, scope, caller, visited);
                     break;

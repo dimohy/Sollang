@@ -117,12 +117,16 @@ separate accepted design and are not implied by the word `handle`.
 - [x] Grammar accepts a tail expression in a block-function declaration.
 - [x] Grammar accepts `=> result` after a block-function call.
 - [x] AST records the block result binding without changing struct literals.
+- [x] A non-Unit block result can feed another block stage without an explicit
+  temporary binding.
 - [x] Semantic analysis validates the declared return type and binds the result.
 - [x] Unit block functions remain source-compatible.
 - [x] LLVM lowering emits the result and preserves caller/block scopes.
 - [x] Owned results transfer exactly once and are dropped exactly once.
 - [x] Invalid Unit binding, missing non-Unit result, and type mismatch diagnostics
   have regression tests.
+- [x] A Unit block used as an intermediate pipeline stage has a regression
+  diagnostic.
 - [x] Struct literal plus role block ambiguity has a regression test.
 
 Evidence:
@@ -131,6 +135,9 @@ Evidence:
   struct literal and a user-defined `build` block in one source file.
 - [`275-owned-result-role-block.slg`](../examples/275-owned-result-role-block.slg)
   covers mutable owned-result transfer and subsequent use.
+- [`573-result-block-pipeline.slg`](../examples/573-result-block-pipeline.slg)
+  proves that ordinary `map`, `tap`, and `filter` block functions compose and
+  that `tap` can occupy a true middle stage.
 - `examples/diagnostics/block-*.slg` covers Unit binding, missing result, result
   type mismatch, and discarded owned result.
 - [`12-block-function-user-defined-yield.slg`](../examples/12-block-function-user-defined-yield.slg)

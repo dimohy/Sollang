@@ -48,6 +48,8 @@ explicit value flow with `value -> target` and expression-first bindings with
   as `condition -> if continue`
 - long boolean conditions with line-leading `and`/`or` and a visible final
   `-> if` control stage
+- result-producing block pipelines such as `map { ... } -> tap { ... } ->
+  filter { ... }`, with no special keywords for those role names
 - expression-oriented `if` and `when`, with contextual enum patterns such as
   `Ok(value)` and `Err(error)`
 - nested structs, traits with associated types, explicit owned `dyn<Trait>`
@@ -166,6 +168,17 @@ main {
     answer -> await => value
     "$(squared), $(value)" -> println
 }
+```
+
+Any user-defined block function that returns a value can feed the next block
+stage. Names such as `map`, `tap`, and `filter` remain ordinary functions:
+
+```sollang
+5
+    -> map { it * 3 }
+    -> tap { "mapped=$it" -> println }
+    -> filter { it > 10 }
+    => result
 ```
 
 Long flows can follow the same direction vertically. A newline before `->` or

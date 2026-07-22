@@ -151,6 +151,12 @@ internal sealed partial class LlvmEmitter
             case BlockFunctionCallStatement blockFunctionCall:
                 EmitBlockFunctionCall(blockFunctionCall);
                 break;
+            case BlockFunctionPipelineStatement pipeline:
+                foreach (var blockFunctionCall in pipeline.Calls)
+                {
+                    EmitBlockFunctionCall(blockFunctionCall);
+                }
+                break;
             case LoopControlStatement loopControl:
                 EmitLoopControlStatement(loopControl);
                 return;

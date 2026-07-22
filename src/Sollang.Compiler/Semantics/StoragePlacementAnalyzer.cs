@@ -304,6 +304,13 @@ internal static class StoragePlacementAnalyzer
                     IndexNestedScopes(blockCall.Source, positions, ref next);
                     IndexStatements(blockCall.Body, positions, ref next);
                     break;
+                case BlockFunctionPipelineStatement pipeline:
+                    foreach (var blockCall in pipeline.Calls)
+                    {
+                        IndexNestedScopes(blockCall.Source, positions, ref next);
+                        IndexStatements(blockCall.Body, positions, ref next);
+                    }
+                    break;
                 case ExpressionStatement expression:
                     IndexNestedScopes(expression.Expression, positions, ref next);
                     break;
@@ -508,6 +515,13 @@ internal static class StoragePlacementAnalyzer
             case BlockFunctionCallStatement blockCall:
                 CollectNestedScopeCandidates(blockCall.Source, functions, positions, candidates);
                 CollectScopeCandidates(blockCall.Body, result: null, functions, positions, candidates);
+                break;
+            case BlockFunctionPipelineStatement pipeline:
+                foreach (var blockCall in pipeline.Calls)
+                {
+                    CollectNestedScopeCandidates(blockCall.Source, functions, positions, candidates);
+                    CollectScopeCandidates(blockCall.Body, result: null, functions, positions, candidates);
+                }
                 break;
             case ExpressionStatement expression:
                 CollectNestedScopeCandidates(expression.Expression, functions, positions, candidates);
@@ -900,6 +914,8 @@ internal static class StoragePlacementAnalyzer
                 && UsesOwnerReadOnly(assignment.Index, ownerName, kind, functions)
                 && UsesOwnerReadOnly(assignment.Value, ownerName, kind, functions),
             BlockFunctionCallStatement call => UsesOwnerReadOnly(call, ownerName, kind, functions),
+            BlockFunctionPipelineStatement pipeline => pipeline.Calls.All(
+                call => UsesOwnerReadOnly(call, ownerName, kind, functions)),
             ExpressionStatement expression => UsesOwnerReadOnly(expression.Expression, ownerName, kind, functions),
             ReturnStatement { Value: { } value } => UsesOwnerReadOnly(value, ownerName, kind, functions),
             GuardLoopControlStatement guard => UsesOwnerReadOnly(guard.Condition, ownerName, kind, functions),
@@ -1103,6 +1119,9 @@ internal static class StoragePlacementAnalyzer
                 || ContainsOwner(assignment.Value, ownerName),
             BlockFunctionCallStatement call => ContainsOwner(call.Source, ownerName)
                 || call.Body.Any(nested => ContainsOwner(nested, ownerName)),
+            BlockFunctionPipelineStatement pipeline => pipeline.Calls.Any(
+                call => ContainsOwner(call.Source, ownerName)
+                    || call.Body.Any(nested => ContainsOwner(nested, ownerName))),
             ExpressionStatement expression => ContainsOwner(expression.Expression, ownerName),
             ReturnStatement { Value: { } value } => ContainsOwner(value, ownerName),
             GuardLoopControlStatement guard => ContainsOwner(guard.Condition, ownerName),

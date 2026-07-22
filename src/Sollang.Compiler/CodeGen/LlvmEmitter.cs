@@ -120,6 +120,7 @@ internal sealed partial class LlvmEmitter
         IndexAssignmentStatement value => UsesChildProcess(value.Index) || UsesChildProcess(value.Value),
         FieldAssignmentStatement value => UsesChildProcess(value.Value),
         BlockFunctionCallStatement value => UsesChildProcess(value.Source) || value.Body.Any(UsesChildProcess),
+        BlockFunctionPipelineStatement value => value.Calls.Any(UsesChildProcess),
         GuardLoopControlStatement value => UsesChildProcess(value.Condition),
         ReturnStatement { Value: { } value } => UsesChildProcess(value),
         _ => false
@@ -183,6 +184,7 @@ internal sealed partial class LlvmEmitter
         IndexAssignmentStatement value => UsesProcessExit(value.Index) || UsesProcessExit(value.Value),
         FieldAssignmentStatement value => UsesProcessExit(value.Value),
         BlockFunctionCallStatement value => UsesProcessExit(value.Source) || value.Body.Any(UsesProcessExit),
+        BlockFunctionPipelineStatement value => value.Calls.Any(UsesProcessExit),
         GuardLoopControlStatement value => UsesProcessExit(value.Condition),
         ReturnStatement { Value: { } value } => UsesProcessExit(value),
         _ => false
@@ -246,6 +248,7 @@ internal sealed partial class LlvmEmitter
         IndexAssignmentStatement value => UsesRuntimeSleep(value.Index) || UsesRuntimeSleep(value.Value),
         FieldAssignmentStatement value => UsesRuntimeSleep(value.Value),
         BlockFunctionCallStatement value => UsesRuntimeSleep(value.Source) || value.Body.Any(UsesRuntimeSleep),
+        BlockFunctionPipelineStatement value => value.Calls.Any(UsesRuntimeSleep),
         GuardLoopControlStatement value => UsesRuntimeSleep(value.Condition),
         ReturnStatement { Value: { } value } => UsesRuntimeSleep(value),
         _ => false
@@ -306,6 +309,7 @@ internal sealed partial class LlvmEmitter
         FieldAssignmentStatement assignment => UsesProcessArguments(assignment.Value),
         BlockFunctionCallStatement block => UsesProcessArguments(block.Source)
             || block.Body.Any(UsesProcessArguments),
+        BlockFunctionPipelineStatement pipeline => pipeline.Calls.Any(UsesProcessArguments),
         GuardLoopControlStatement guard => UsesProcessArguments(guard.Condition),
         ReturnStatement { Value: { } value } => UsesProcessArguments(value),
         _ => false
@@ -379,6 +383,7 @@ internal sealed partial class LlvmEmitter
         FieldAssignmentStatement value => UsesProcessEnvironment(value.Value),
         BlockFunctionCallStatement value => UsesProcessEnvironment(value.Source)
             || value.Body.Any(UsesProcessEnvironment),
+        BlockFunctionPipelineStatement value => value.Calls.Any(UsesProcessEnvironment),
         GuardLoopControlStatement value => UsesProcessEnvironment(value.Condition),
         ReturnStatement { Value: { } value } => UsesProcessEnvironment(value),
         _ => false

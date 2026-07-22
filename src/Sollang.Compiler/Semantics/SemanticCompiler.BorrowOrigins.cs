@@ -116,6 +116,14 @@ internal sealed partial class SemanticCompiler
                     var blockLocals = new Dictionary<string, IReadOnlySet<string>>(locals, StringComparer.Ordinal);
                     CollectReadonlyReferenceReturnOrigins(block.Body, functions, blockLocals, union);
                     break;
+                case BlockFunctionPipelineStatement pipeline:
+                    foreach (var block in pipeline.Calls)
+                    {
+                        CollectNestedReadonlyReferenceReturnOrigins(block.Source, functions, locals, union);
+                        var pipelineLocals = new Dictionary<string, IReadOnlySet<string>>(locals, StringComparer.Ordinal);
+                        CollectReadonlyReferenceReturnOrigins(block.Body, functions, pipelineLocals, union);
+                    }
+                    break;
             }
         }
     }
@@ -456,6 +464,16 @@ internal sealed partial class SemanticCompiler
                         locals,
                         StringComparer.Ordinal);
                     CollectBorrowedTextReturnOrigins(block.Body, functions, blockLocals, union);
+                    break;
+                case BlockFunctionPipelineStatement pipeline:
+                    foreach (var block in pipeline.Calls)
+                    {
+                        CollectNestedBorrowedTextReturnOrigins(block.Source, functions, locals, union);
+                        var pipelineLocals = new Dictionary<string, IReadOnlySet<string>>(
+                            locals,
+                            StringComparer.Ordinal);
+                        CollectBorrowedTextReturnOrigins(block.Body, functions, pipelineLocals, union);
+                    }
                     break;
             }
         }
@@ -1587,6 +1605,9 @@ internal sealed partial class SemanticCompiler
             || ReferencesBorrowCarrier(assignment.Value, carrier),
         BlockFunctionCallStatement block => ReferencesBorrowCarrier(block.Source, carrier)
             || ReferencesBorrowCarrier(block.Body, carrier),
+        BlockFunctionPipelineStatement pipeline => pipeline.Calls.Any(
+            block => ReferencesBorrowCarrier(block.Source, carrier)
+                || ReferencesBorrowCarrier(block.Body, carrier)),
         ExpressionStatement expression => ReferencesBorrowCarrier(expression.Expression, carrier),
         ReturnStatement { Value: { } value } => ReferencesBorrowCarrier(value, carrier),
         GuardLoopControlStatement guard => ReferencesBorrowCarrier(guard.Condition, carrier),
@@ -1779,6 +1800,9 @@ internal sealed partial class SemanticCompiler
         ExpressionStatement expression => BorrowControlExits(expression.Expression),
         BlockFunctionCallStatement block =>
             BorrowControlExit.Fallthrough | (BorrowControlExits(block.Body, result: null) & BorrowControlExit.Return),
+        BlockFunctionPipelineStatement pipeline => pipeline.Calls.Aggregate(
+            BorrowControlExit.Fallthrough,
+            static (exits, block) => exits | (BorrowControlExits(block.Body, result: null) & BorrowControlExit.Return)),
         _ => BorrowControlExit.Fallthrough
     };
 

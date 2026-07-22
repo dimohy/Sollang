@@ -205,6 +205,15 @@ internal sealed partial class SemanticCompiler
                     changed |= AnalyzeStatements(
                         blockCall.Body, blockEnvironment, caller, locals, topLevel, returnedTypes);
                     break;
+                case BlockFunctionPipelineStatement pipeline:
+                    foreach (var call in pipeline.Calls)
+                    {
+                        AnalyzeExpression(call.Source, environment, caller, locals, topLevel, ref changed);
+                        var pipelineBlockEnvironment = new Dictionary<string, string>(environment, StringComparer.Ordinal);
+                        changed |= AnalyzeStatements(
+                            call.Body, pipelineBlockEnvironment, caller, locals, topLevel, returnedTypes);
+                    }
+                    break;
             }
         }
         return changed;

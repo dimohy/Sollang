@@ -312,6 +312,14 @@ internal static class SemanticStableIdentity
                     VisitExpression(block.Source, owner, result, ref ordinal);
                     VisitStatements(block.Body, owner, result, ref ordinal);
                     break;
+                case BlockFunctionPipelineStatement pipeline:
+                    foreach (var block in pipeline.Calls)
+                    {
+                        RegisterSyntaxCall(block, owner, result, ref ordinal);
+                        VisitExpression(block.Source, owner, result, ref ordinal);
+                        VisitStatements(block.Body, owner, result, ref ordinal);
+                    }
+                    break;
                 case ExpressionStatement expression:
                     VisitExpression(expression.Expression, owner, result, ref ordinal);
                     break;

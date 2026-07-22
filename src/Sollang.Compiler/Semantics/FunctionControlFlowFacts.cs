@@ -19,6 +19,7 @@ internal static class FunctionControlFlowFacts
         IndexAssignmentStatement assignment => ContainsStackCandidate(assignment.Index) || ContainsStackCandidate(assignment.Value),
         FieldAssignmentStatement assignment => ContainsStackCandidate(assignment.Value),
         BlockFunctionCallStatement block => ContainsStackCandidate(block.Source) || block.Body.Any(ContainsStackCandidate),
+        BlockFunctionPipelineStatement pipeline => pipeline.Calls.Any(ContainsStackCandidate),
         ExpressionStatement expression => ContainsStackCandidate(expression.Expression),
         GuardLoopControlStatement guard => ContainsStackCandidate(guard.Condition),
         ReturnStatement { Value: { } value } => ContainsStackCandidate(value),
@@ -88,6 +89,7 @@ internal static class FunctionControlFlowFacts
         IndexAssignmentStatement assignment => ContainsReturn(assignment.Index) || ContainsReturn(assignment.Value),
         FieldAssignmentStatement assignment => ContainsReturn(assignment.Value),
         BlockFunctionCallStatement block => ContainsReturn(block.Source) || block.Body.Any(ContainsReturn),
+        BlockFunctionPipelineStatement pipeline => pipeline.Calls.Any(ContainsReturn),
         ExpressionStatement expression => ContainsReturn(expression.Expression),
         GuardLoopControlStatement guard => ContainsReturn(guard.Condition),
         _ => false
