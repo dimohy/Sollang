@@ -61,7 +61,7 @@ internal sealed partial class LlvmEmitter
         var aggregate = "poison";
         foreach (var field in definition.Fields)
         {
-            var value = EmitExpression(initializers[field.Name].Value);
+            var value = EmitFunctionArgumentExpression(initializers[field.Name].Value, field.Type);
             EnsureRuntimeType(value, field.Type, $"{definition.Name}.{field.Name}");
             var materialized = MaterializeAggregateValue(value);
             var next = NextTemp("struct_init");
@@ -85,7 +85,7 @@ internal sealed partial class LlvmEmitter
         var aggregate = "poison";
         foreach (var field in definition.Fields)
         {
-            var value = EmitExpression(initializers[field.Name].Value);
+            var value = EmitFunctionArgumentExpression(initializers[field.Name].Value, field.Type);
             EnsureRuntimeType(value, field.Type, $"{definition.Name}.{field.Name}");
             var materialized = MaterializeAggregateValue(value);
             var next = NextTemp("contextual_struct_init");

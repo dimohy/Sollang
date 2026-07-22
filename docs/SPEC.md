@@ -1511,9 +1511,17 @@ impl file.BinarySerializable for Packet {
     }
 }
 
-Packet { first: UInt8(65), second: UInt8(90) }
+Packet { first: 65, second: 90 }
     -> file.BinarySerializable.serialize => bytes!
 ```
+
+An integer literal in a struct initializer inherits the declared integer type
+of its field. This removes a conversion that repeats information already visible
+in the declaration. The rule is literal-only: `first: 65` is context-typed as
+`UInt8`, but an `Int` variable or arithmetic expression is not silently narrowed.
+The compiler checks the literal at compile time, so `first: 256` is rejected as
+outside `UInt8`'s `0..255` range. Explicit conversions remain available when a
+runtime value intentionally crosses numeric types.
 
 The required signature is `serialize: self -> [UInt8; ~]`. The result owns its
 storage. The implementation defines field order, framing, integer byte order,

@@ -59,6 +59,8 @@ explicit value flow with `value -> target` and expression-first bindings with
   move-path checking for arrays, dictionaries, structs, and async frames
 - `Int8`/`Int16`/`Int32`/`Int64`, unsigned widths, `Float32`/`Float64`, and
   stable `Int`/`Float` aliases plus target-sized `Size` and `UIntSize`
+- context-typed integer literals in struct fields, so a `UInt8` field accepts
+  `65` directly while rejecting values outside `0..255`
 - automatic stack promotion for small, non-escaping, readonly dynamic-array
   and dictionary literals, with heap promotion when ownership or size requires it
 - lifetime-based function-entry stack slots reused across nested branches and

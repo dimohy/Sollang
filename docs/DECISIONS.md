@@ -9965,3 +9965,37 @@ LSP formatting, and parser diagnostics for the vertical form. The Release
 solution build has zero warnings and zero errors, grammar generation is
 byte-for-byte deterministic, and the full example suite passes **755/755** on
 both Windows x64 and Linux x64.
+
+## D256 - Struct Fields Context-Type Integer Literals
+
+Status: implemented
+Date: 2026-07-22
+
+A struct declaration already fixes every field's type, so repeating a numeric
+conversion at each literal site adds noise without adding information:
+
+```sollang
+struct Packet {
+    first: UInt8
+    second: UInt8
+}
+
+Packet { first: 65, second: 90 }
+```
+
+For integer-typed fields, a syntactic integer literal inherits the field type.
+The semantic compiler validates the literal against the target width and
+signedness, and LLVM emission materializes it directly with that type. Values
+outside the field range remain compile-time errors. The inference is deliberately
+limited to literals: variables, calls, and arithmetic expressions still require
+matching types or an explicit checked conversion, so no runtime narrowing is
+hidden.
+
+The same rule applies to named struct literals and existing contextual struct
+literals used by typed arrays and dictionaries. Examples 568 and 569 now use
+the concise Packet form, example 571 exercises direct construction and native
+execution, and the contextual-struct-integer-literal-out-of-range diagnostic
+proves that `UInt8` rejects `256`. The self-host compiler emits `i8 65` and
+`i8 90` for the concise form rather than relying on an implicit runtime cast.
+The Windows Release build completes with zero warnings and errors, and the
+Windows regression suite passes all 757 examples.

@@ -4009,13 +4009,8 @@ internal sealed partial class SemanticCompiler
                 throw Error(expression.Line, expression.Column,
                     $"contextual {definition.Name} literal is missing field '{field.Name}'");
             }
-            var actualType = InferExpression(
-                initializer.Value,
-                functions,
-                bindings,
-                allowPrintCall: false,
-                allowReadIntCall,
-                allowFlowBindingTarget: false);
+            var actualType = InferStructFieldValue(
+                initializer.Value, field.Type, functions, bindings, allowReadIntCall);
             if (actualType != field.Type)
             {
                 throw Error(initializer.Value.Line, initializer.Value.Column,
@@ -4070,13 +4065,8 @@ internal sealed partial class SemanticCompiler
                     $"struct '{definition.Name}' has no field '{initializer.Name}'");
             }
 
-            var actualType = InferExpression(
-                initializer.Value,
-                functions,
-                bindings,
-                allowPrintCall: false,
-                allowReadIntCall,
-                allowFlowBindingTarget: false);
+            var actualType = InferStructFieldValue(
+                initializer.Value, field.Type, functions, bindings, allowReadIntCall);
             if (actualType != field.Type)
             {
                 throw Error(
@@ -4096,6 +4086,28 @@ internal sealed partial class SemanticCompiler
         }
 
         return type;
+    }
+
+    private BoundType InferStructFieldValue(
+        Expression value,
+        BoundType expectedType,
+        IReadOnlyDictionary<string, BoundFunction> functions,
+        IReadOnlyDictionary<string, BoundType> bindings,
+        bool allowReadIntCall)
+    {
+        if (IsIntegerType(expectedType) && IsIntegerLiteralExpression(value))
+        {
+            ValidateNumericLiteralConversion(value, expectedType, FormatType(expectedType));
+            return expectedType;
+        }
+
+        return InferExpression(
+            value,
+            functions,
+            bindings,
+            allowPrintCall: false,
+            allowReadIntCall,
+            allowFlowBindingTarget: false);
     }
 
     private BoundType InferFieldAccessExpression(
