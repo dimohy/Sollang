@@ -1800,6 +1800,18 @@ println("Hello, $name. square = $num")
 sys.io.print("Hello, $name. square = $num")
 ```
 
+The explicit zero-argument call `println()` emits one empty line without
+requiring an empty string literal:
+
+```sollang
+"first section" -> println
+println()
+"second section" -> println
+```
+
+This call form is statement-only. It does not change the declared
+`println value: Text -> Unit` function signature and does not apply to `print`.
+
 Semantically, it resolves to:
 
 ```text
@@ -1807,8 +1819,8 @@ sys.io.print(utf8_output_expression)
 sys.io.println(utf8_output_expression)
 ```
 
-`print` emits exactly the requested bytes. `println` emits the requested bytes
-followed by a single line-feed byte in the current runtime slice.
+`print` emits exactly the requested text. `println` emits the requested text
+followed by one platform line break; `println()` emits only that line break.
 
 ## Input Surface Semantics
 

@@ -46,7 +46,8 @@ remain authoritative for syntax and compatibility.
   `import sample.math as mathApi`
 - integer input with `"n = ? " -> readInt => n` or
   `"n = ? " -> sys.io.readInt => n`
-- line output with `value -> println` or `value -> sys.io.println`
+- line output with `value -> println` or `value -> sys.io.println`, plus
+  `println()` for an empty line
 - block-function calls with `range -> each item { ... }` and
   `count -> repeat item { ... }`, where the brace block is the call argument and
   `each()`/`repeat()` are intentionally omitted

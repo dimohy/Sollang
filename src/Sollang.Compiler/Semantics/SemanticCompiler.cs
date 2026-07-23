@@ -6416,6 +6416,18 @@ internal sealed partial class SemanticCompiler
         EnsureFunctionVisible(function, expression.Line, expression.Column);
         EnsureAsyncRuntimeCallable(function, expression.Line, expression.Column, path);
 
+        if (expression.Arguments.Count == 0
+            && (function.Kind == BoundFunctionKind.RuntimePrintLine
+                || (function.IsStandardLibrary && function.Name == "sys.io.println")))
+        {
+            if (!allowPrintCall)
+            {
+                throw Error(expression.Line, expression.Column, $"{path} is only valid as an expression statement");
+            }
+
+            return BoundType.Unit;
+        }
+
         if (function.InputType is null
             && expression.Arguments.Count == 0
             && !(expression.Path.Count == 2

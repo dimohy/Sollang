@@ -279,6 +279,12 @@ public resolveModulesPrepared request: move ModuleCallRequest -> [ModuleCallReso
                     }
                     localSymbolIndex! + 1 => localSymbolIndex!
                 }
+                # Direct println calls use the stable runtime symbol so the
+                # explicit empty form println() does not inherit wrapper arity.
+                callNode.kind == 11 -> if {
+                    RuntimeNameRequest { source: source, token: tokens![callNameToken!] } -> runtimeFunctionSymbol => directRuntimeSymbol
+                    directRuntimeSymbol == -102 -> if { directRuntimeSymbol => localFunctionSymbol! }
+                }
                 ((callNode.kind == 10 or callNode.kind == 11 or callNode.kind == 15) and localFunctionSymbol! < 0) -> if {
                     RuntimeNameRequest { source: source, token: tokens![callNameToken!] } -> runtimeFunctionSymbol => runtimeSymbol
                     runtimeSymbol < -1 -> if { runtimeSymbol => localFunctionSymbol! }
@@ -328,7 +334,7 @@ public resolveModulesPrepared request: move ModuleCallRequest -> [ModuleCallReso
                         }
                     }
                     nodes![candidate.pathAst] => candidatePath
-                    (belongsToCall! and candidatePath.firstToken <= local.nameToken and local.nameToken < candidatePath.firstToken + candidatePath.tokenCount and candidatePath.firstToken + candidatePath.tokenCount <= callLeftParenToken!) -> if { qualifiedIndex! => importedIndex! }
+                    (local.functionSymbol >= -1 and belongsToCall! and candidatePath.firstToken <= local.nameToken and local.nameToken < candidatePath.firstToken + candidatePath.tokenCount and candidatePath.firstToken + candidatePath.tokenCount <= callLeftParenToken!) -> if { qualifiedIndex! => importedIndex! }
                 }
                 qualifiedIndex! + 1 => qualifiedIndex!
             }
@@ -482,6 +488,11 @@ public resolveModulesAnalyzed package: analysis.PackageAnalysis -> [ModuleCallRe
                     }
                     localSymbolIndex! + 1 => localSymbolIndex!
                 }
+                # Keep the analyzed-package path identical to the text path.
+                callNode.kind == 11 -> if {
+                    RuntimeNameRequest { source: source, token: package.tokens[sourceRange.tokenStart + callNameToken!] } -> runtimeFunctionSymbol => directRuntimeSymbol
+                    directRuntimeSymbol == -102 -> if { directRuntimeSymbol => localFunctionSymbol! }
+                }
                 ((callNode.kind == 10 or callNode.kind == 11 or callNode.kind == 15) and localFunctionSymbol! < 0) -> if {
                     RuntimeNameRequest { source: source, token: package.tokens[sourceRange.tokenStart + callNameToken!] } -> runtimeFunctionSymbol => runtimeSymbol
                     runtimeSymbol < -1 -> if { runtimeSymbol => localFunctionSymbol! }
@@ -531,7 +542,7 @@ public resolveModulesAnalyzed package: analysis.PackageAnalysis -> [ModuleCallRe
                         }
                     }
                     package.nodes[sourceRange.astStart + candidate.pathAst] => candidatePath
-                    (belongsToCall! and candidatePath.firstToken <= local.nameToken and local.nameToken < candidatePath.firstToken + candidatePath.tokenCount and candidatePath.firstToken + candidatePath.tokenCount <= callLeftParenToken!) -> if { qualifiedIndex! => importedIndex! }
+                    (local.functionSymbol >= -1 and belongsToCall! and candidatePath.firstToken <= local.nameToken and local.nameToken < candidatePath.firstToken + candidatePath.tokenCount and candidatePath.firstToken + candidatePath.tokenCount <= callLeftParenToken!) -> if { qualifiedIndex! => importedIndex! }
                 }
                 qualifiedIndex! + 1 => qualifiedIndex!
             }

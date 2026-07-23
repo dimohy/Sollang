@@ -39,11 +39,25 @@ internal sealed partial class LlvmEmitter
 
         if (TryGetRuntimeWrapperKind(function, out var wrapperKind))
         {
+            if (wrapperKind == BoundFunctionKind.RuntimePrintLine
+                && expression.Arguments.Count == 0)
+            {
+                _mainOk = EmitWriteText("\n", _mainOk);
+                return RuntimeUnit.Instance;
+            }
+
             return EmitRuntimeWrapperCall(expression, wrapperKind, path);
         }
 
         if (function.Kind is BoundFunctionKind.RuntimePrint or BoundFunctionKind.RuntimePrintLine)
         {
+            if (function.Kind == BoundFunctionKind.RuntimePrintLine
+                && expression.Arguments.Count == 0)
+            {
+                _mainOk = EmitWriteText("\n", _mainOk);
+                return RuntimeUnit.Instance;
+            }
+
             if (expression.Arguments.Count != 1)
             {
                 throw new SollangException($"{path} expects exactly one argument");
