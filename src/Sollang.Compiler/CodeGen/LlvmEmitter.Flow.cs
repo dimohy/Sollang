@@ -77,26 +77,39 @@ internal sealed partial class LlvmEmitter
 
             if (path == "yield")
             {
-                if (target.Arguments.Count != 0)
-                {
-                    throw new SollangException("yield does not accept arguments");
-                }
-
                 if (_currentBlockInvocation is null)
                 {
                     throw new SollangException("yield is only valid inside a block function");
                 }
 
-                if (!isLast)
+                if (!isLast
+                    && (expression.Targets[i + 1].Path.Count != 1
+                        || expression.Targets[i + 1].Path[0] != "emit"))
                 {
-                    throw new SollangException("yield must be the final value-flow target");
+                    throw new SollangException("yield may only flow onward to emit");
                 }
 
-                var yielded = EmitYield(current, _currentBlockInvocation);
-                return new RuntimeFlowResult(
-                    Value: yielded is RuntimeUnit ? null : yielded,
-                    Binding: null,
-                    Ok: ok);
+                var additionalValues = target.Arguments.Select(EmitExpression).ToArray();
+                var yielded = EmitYield(current, additionalValues, _currentBlockInvocation);
+                if (isLast)
+                {
+                    return new RuntimeFlowResult(
+                        Value: yielded is RuntimeUnit ? null : yielded,
+                        Binding: null,
+                        Ok: ok);
+                }
+                current = yielded;
+                continue;
+            }
+
+            if (path == "emit" && _currentStreamContinuation is not null)
+            {
+                if (!isLast || target.Arguments.Count != 0)
+                {
+                    throw new SollangException("emit must be the final argument-free value-flow target");
+                }
+                EmitStreamValue(current, _currentStreamContinuation);
+                return new RuntimeFlowResult(Value: null, Binding: null, Ok: ok);
             }
 
             if (_program.ResolvedGenericCalls.TryGetValue(target, out var function)
@@ -384,6 +397,25 @@ internal sealed partial class LlvmEmitter
                 StoreMutableContainer(resetName, reset);
                 _locals[resetName] = reset;
                 result = new RuntimeFlowResult(RuntimeUnit.Instance, null, _mainOk);
+                return true;
+            case "materialize" when current.Type == BoundType.Text:
+                if (target.Arguments.Count != 1)
+                {
+                    throw new SollangException("Text materialize expects one mutable Arena owner");
+                }
+                var materializeOwner = CreateMutableBorrowArgument(
+                    target.Arguments[0],
+                    BoundType.Arena,
+                    "materialize",
+                    "storage");
+                if (materializeOwner is not RuntimeMutableContainerReference arenaReference)
+                {
+                    throw new SollangException("Text materialize requires an addressable mutable Arena owner");
+                }
+                result = new RuntimeFlowResult(
+                    EmitMaterializedText(current, arenaReference),
+                    null,
+                    _mainOk);
                 return true;
             case "flush" when current is RuntimeMappedBytes mapped:
                 if (!isLast || target.Arguments.Count != 0)

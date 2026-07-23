@@ -13,6 +13,10 @@ internal sealed record ImportDeclaration(
     IReadOnlyList<string> Path,
     string Alias);
 
+internal sealed record OpenImportCandidate(
+    IReadOnlyList<string> Path,
+    string ModuleAlias);
+
 internal sealed record StructDeclaration(
     string Name,
     IReadOnlyList<StructFieldDeclaration> Fields,
@@ -82,7 +86,9 @@ internal sealed record FunctionDeclaration(
     bool IsAsync = false,
     IReadOnlyList<string>? Effects = null,
     string? BlockResultType = null,
-    IReadOnlyList<FunctionParameterDeclaration>? AdditionalParameters = null);
+    IReadOnlyList<FunctionParameterDeclaration>? AdditionalParameters = null,
+    IReadOnlyList<FunctionParameterDeclaration>? AdditionalBlockParameters = null,
+    string? StreamElementType = null);
 
 internal static class InferredFunctionType
 {
@@ -105,7 +111,13 @@ internal enum FunctionInputOwnership
 
 internal abstract record Statement;
 
-internal sealed record BindingStatement(string Name, Expression Value, int Line, int Column, bool IsMutable) : Statement;
+internal sealed record BindingStatement(
+    string Name,
+    Expression Value,
+    int Line,
+    int Column,
+    bool IsMutable,
+    bool IsStreamState = false) : Statement;
 
 internal sealed record IndexAssignmentStatement(string Name, Expression Index, Expression Value, int Line, int Column)
     : Statement;
@@ -128,7 +140,9 @@ internal sealed record BlockFunctionCallStatement(
     int Line,
     int Column,
     bool UsesDefaultItemName,
-    bool ResultIsSynthetic = false)
+    bool ResultIsSynthetic = false,
+    IReadOnlyList<Expression>? Arguments = null,
+    IReadOnlyList<string>? AdditionalItemNames = null)
     : Statement;
 
 internal sealed record BlockFunctionPipelineStatement(
@@ -146,6 +160,8 @@ internal enum LoopControlKind
 }
 
 internal sealed record LoopControlStatement(LoopControlKind Kind, int Line, int Column) : Statement;
+
+internal sealed record StreamStopStatement(int Line, int Column) : Statement;
 
 internal sealed record GuardLoopControlStatement(
     Expression Condition,

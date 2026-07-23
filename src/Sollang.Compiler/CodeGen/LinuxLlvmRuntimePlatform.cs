@@ -20,6 +20,9 @@ internal sealed class LinuxLlvmRuntimePlatform : LlvmRuntimePlatform
         globals.AppendLine("@sollang_file_reader_fd = internal global i32 -1");
         globals.AppendLine("@sollang_argument_count_value = internal global i64 0");
         globals.AppendLine("@sollang_argument_vector = internal global ptr null");
+        globals.AppendLine("@sollang_stdout_buffer = internal global [65536 x i8] zeroinitializer, align 16");
+        globals.AppendLine("@sollang_stdout_buffer_count = internal global i64 0");
+        globals.AppendLine("@sollang_stdout_line_buffered = internal global i1 false");
         if (UsesAsyncFile)
         {
             globals.AppendLine("@sollang_file_request_event_fd = internal global i32 -1");
@@ -45,6 +48,7 @@ internal sealed class LinuxLlvmRuntimePlatform : LlvmRuntimePlatform
         }
         functions.AppendLine("declare i64 @write(i32, ptr, i64)");
         functions.AppendLine("declare i64 @read(i32, ptr, i64)");
+        functions.AppendLine("declare i32 @isatty(i32)");
         functions.AppendLine("declare i64 @pread(i32, ptr, i64, i64)");
         functions.AppendLine("declare i64 @pwrite(i32, ptr, i64, i64)");
         functions.AppendLine("declare i32 @open(ptr, i32, i32)");
@@ -843,6 +847,32 @@ internal sealed class LinuxLlvmRuntimePlatform : LlvmRuntimePlatform
 
     public override void EmitIoPrimitives(StringBuilder functions)
     {
+        functions.AppendLine("""
+            define internal i32 @sollang_flush_stdout(ptr %stdout, ptr %written) #0 {
+            entry:
+              %count = load i64, ptr @sollang_stdout_buffer_count, align 8
+              %has_data = icmp ne i64 %count, 0
+              br i1 %has_data, label %write_buffer, label %empty
+
+            write_buffer:
+              %buffer = getelementptr inbounds [65536 x i8], ptr @sollang_stdout_buffer, i64 0, i64 0
+              %written64 = call i64 @write(i32 1, ptr %buffer, i64 %count)
+              %written32 = trunc i64 %written64 to i32
+              store i32 %written32, ptr %written, align 4
+              store i64 0, ptr @sollang_stdout_buffer_count, align 8
+              %nonnegative = icmp sge i64 %written64, 0
+              %complete = icmp eq i64 %written64, %count
+              %ok = and i1 %nonnegative, %complete
+              %ok32 = zext i1 %ok to i32
+              ret i32 %ok32
+
+            empty:
+              store i32 0, ptr %written, align 4
+              ret i32 1
+            }
+
+            """);
+
         if (UsesComputePool)
         {
             functions.AppendLine("""
@@ -854,7 +884,7 @@ internal sealed class LinuxLlvmRuntimePlatform : LlvmRuntimePlatform
               %is_stdout_fd = icmp eq i64 %stdout_value, 1
               %not_stdout_fd = xor i1 %is_stdout_fd, true
               %capturing = and i1 %has_sink_tag, %not_stdout_fd
-              br i1 %capturing, label %capture, label %write_direct
+              br i1 %capturing, label %capture, label %write_prepare
 
             capture:
               %sink_value = and i64 %stdout_value, -2
@@ -864,23 +894,7 @@ internal sealed class LinuxLlvmRuntimePlatform : LlvmRuntimePlatform
               store i32 %captured_len, ptr %written, align 4
               ret i32 1
 
-            write_direct:
-              %written64 = call i64 @write(i32 1, ptr %data, i64 %len64)
-              %written32 = trunc i64 %written64 to i32
-              store i32 %written32, ptr %written, align 4
-              %ok1 = icmp sge i64 %written64, 0
-              %ok2 = icmp eq i64 %written64, %len64
-              %ok = and i1 %ok1, %ok2
-              %ok32 = zext i1 %ok to i32
-              ret i32 %ok32
-            }
-
-            define internal void @sollang_memory_output_sink_write(ptr %context, ptr %data, i64 %len) #0 {
-            entry:
-              %written = call i64 @write(i32 1, ptr %data, i64 %len)
-              ret void
-            }
-
+            write_prepare:
             """);
         }
         else
@@ -888,22 +902,68 @@ internal sealed class LinuxLlvmRuntimePlatform : LlvmRuntimePlatform
             functions.AppendLine("""
             define internal i32 @sollang_write(ptr %stdout, ptr %data, i64 %len64, ptr %written) #0 {
             entry:
-              %written64 = call i64 @write(i32 1, ptr %data, i64 %len64)
-              %written32 = trunc i64 %written64 to i32
-              store i32 %written32, ptr %written, align 4
-              %ok1 = icmp sge i64 %written64, 0
-              %ok2 = icmp eq i64 %written64, %len64
-              %ok = and i1 %ok1, %ok2
-              %ok32 = zext i1 %ok to i32
-              ret i32 %ok32
-            }
+              br label %write_prepare
 
+            write_prepare:
             """);
         }
 
         functions.AppendLine("""
+              %oversized = icmp ugt i64 %len64, 65536
+              br i1 %oversized, label %write_direct_prepare, label %buffer_prepare
+
+            write_direct_prepare:
+              %flushed_direct = call i32 @sollang_flush_stdout(ptr %stdout, ptr %written)
+              %written64 = call i64 @write(i32 1, ptr %data, i64 %len64)
+              %written32 = trunc i64 %written64 to i32
+              store i32 %written32, ptr %written, align 4
+              %direct_nonnegative = icmp sge i64 %written64, 0
+              %direct_complete = icmp eq i64 %written64, %len64
+              %direct_ok = and i1 %direct_nonnegative, %direct_complete
+              %direct_ok32 = zext i1 %direct_ok to i32
+              ret i32 %direct_ok32
+
+            buffer_prepare:
+              %count = load i64, ptr @sollang_stdout_buffer_count, align 8
+              %combined = add i64 %count, %len64
+              %needs_flush = icmp ugt i64 %combined, 65536
+              br i1 %needs_flush, label %flush, label %append
+
+            flush:
+              %flushed = call i32 @sollang_flush_stdout(ptr %stdout, ptr %written)
+              br label %append
+
+            append:
+              %offset = phi i64 [ %count, %buffer_prepare ], [ 0, %flush ]
+              %destination = getelementptr inbounds [65536 x i8], ptr @sollang_stdout_buffer, i64 0, i64 %offset
+              %copied = call ptr @memcpy(ptr %destination, ptr %data, i64 %len64)
+              %next_count = add i64 %offset, %len64
+              store i64 %next_count, ptr @sollang_stdout_buffer_count, align 8
+              %appended32 = trunc i64 %len64 to i32
+              store i32 %appended32, ptr %written, align 4
+              %single_byte = icmp eq i64 %len64, 1
+              br i1 %single_byte, label %inspect_newline, label %done
+
+            inspect_newline:
+              %byte = load i8, ptr %data, align 1
+              %newline = icmp eq i8 %byte, 10
+              %line_buffered = load i1, ptr @sollang_stdout_line_buffered, align 1
+              %flush_newline = and i1 %newline, %line_buffered
+              br i1 %flush_newline, label %flush_line, label %done
+
+            flush_line:
+              %line_ok = call i32 @sollang_flush_stdout(ptr %stdout, ptr %written)
+              ret i32 %line_ok
+
+            done:
+              ret i32 1
+            }
+
             define internal i32 @sollang_read_stdin(ptr %stdin, ptr %data, i64 %len64, ptr %read) #0 {
             entry:
+              %stdout = inttoptr i64 1 to ptr
+              %written = alloca i32, align 4
+              %flushed = call i32 @sollang_flush_stdout(ptr %stdout, ptr %written)
               %read64 = call i64 @read(i32 0, ptr %data, i64 %len64)
               %read32 = trunc i64 %read64 to i32
               store i32 %read32, ptr %read, align 4
@@ -913,6 +973,21 @@ internal sealed class LinuxLlvmRuntimePlatform : LlvmRuntimePlatform
             }
 
             """);
+
+        if (UsesComputePool)
+        {
+            functions.AppendLine("""
+            define internal void @sollang_memory_output_sink_write(ptr %context, ptr %data, i64 %len) #0 {
+            entry:
+              %stdout_slot = getelementptr %sollang.compute_group, ptr %context, i32 0, i32 7
+              %stdout = load ptr, ptr %stdout_slot, align 8
+              %written_slot = getelementptr %sollang.compute_group, ptr %context, i32 0, i32 8
+              %write_ok = call i32 @sollang_write(ptr %stdout, ptr %data, i64 %len, ptr %written_slot)
+              ret void
+            }
+
+            """);
+        }
     }
 
     public override void EmitFilePrimitives(StringBuilder functions)
@@ -1563,6 +1638,14 @@ internal sealed class LinuxLlvmRuntimePlatform : LlvmRuntimePlatform
     {
         functions.AppendLine("  %stdin = inttoptr i64 0 to ptr");
         functions.AppendLine("  %stdout = inttoptr i64 1 to ptr");
+        functions.AppendLine("  %stdout_is_tty_status = call i32 @isatty(i32 1)");
+        functions.AppendLine("  %stdout_is_tty = icmp ne i32 %stdout_is_tty_status, 0");
+        functions.AppendLine("  store i1 %stdout_is_tty, ptr @sollang_stdout_line_buffered, align 1");
+    }
+
+    public override void EmitExitHandles(StringBuilder functions)
+    {
+        functions.AppendLine("  %stdout_flushed = call i32 @sollang_flush_stdout(ptr %stdout, ptr %written)");
     }
 
     public override void EmitProcessEntry(StringBuilder functions)

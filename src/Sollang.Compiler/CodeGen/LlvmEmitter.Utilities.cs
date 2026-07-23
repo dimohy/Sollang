@@ -113,21 +113,49 @@ internal sealed partial class LlvmEmitter
         return LoadMutableContainer(name, value);
     }
 
-    private RuntimeValue EmitYield(RuntimeValue value, RuntimeBlockInvocation invocation)
+    private RuntimeValue EmitYield(
+        RuntimeValue value,
+        IReadOnlyList<RuntimeValue> additionalValues,
+        RuntimeBlockInvocation invocation)
     {
         var blockFunctionLocals = CaptureLocals();
         var blockFunctionFunctions = _currentFunctions;
+        var blockFunction = _currentFunction;
         RestoreLocals(invocation.CallerLocals);
+        var callbackOuterLocals = CaptureLocals();
         _locals[invocation.ItemName] = value;
-        var yieldedBlockLocals = CaptureLocals();
+        if (additionalValues.Count != invocation.AdditionalItems.Count)
+        {
+            throw new SollangException(
+                $"block callback expects {invocation.AdditionalItems.Count} additional value(s)");
+        }
+        for (var index = 0; index < additionalValues.Count; index++)
+        {
+            var item = invocation.AdditionalItems[index];
+            EnsureRuntimeType(additionalValues[index], item.Type, item.Name);
+            _locals[item.Name] = additionalValues[index];
+        }
+        var yieldedBlockLocals = invocation.OwnsItem
+            ? callbackOuterLocals
+            : CaptureLocals();
         _currentFunctions = invocation.CallerFunctions;
+        _currentFunction = invocation.CallerFunction;
+        var adjustedLoopContext = false;
+        if (invocation.OwnsItem && _loopContexts.TryPeek(out var activeLoop))
+        {
+            _loopContexts.Push(activeLoop with { OuterScope = callbackOuterLocals });
+            adjustedLoopContext = true;
+        }
         RuntimeValue result = RuntimeUnit.Instance;
         try
         {
             if (invocation.ResultType == BoundType.Unit)
             {
                 EmitStatements(invocation.Body);
-                DropOwnedLocalsCreatedSince(yieldedBlockLocals, transferredOwnerName: null);
+                if (!_currentBlockTerminated)
+                {
+                    DropOwnedLocalsCreatedSince(yieldedBlockLocals, transferredOwnerName: null);
+                }
             }
             else
             {
@@ -141,18 +169,109 @@ internal sealed partial class LlvmEmitter
                 result = EmitExpression(callbackResult.Expression);
                 EnsureRuntimeType(result, invocation.ResultType, "block callback");
                 var transferredOwnerName = IsOwnedContainerRuntimeValue(result)
-                    ? GetMoveConsumingContainerSourceName(callbackResult.Expression)
+                    ? GetBlockResultTransferredOwnerName(callbackResult.Expression)
                     : null;
                 DropOwnedLocalsCreatedSince(yieldedBlockLocals, transferredOwnerName);
             }
         }
         finally
         {
+            if (adjustedLoopContext)
+            {
+                _loopContexts.Pop();
+            }
             _currentFunctions = blockFunctionFunctions;
+            _currentFunction = blockFunction;
             RestoreLocals(blockFunctionLocals);
         }
 
         return result;
+    }
+
+    private void EmitStreamValue(RuntimeValue value, RuntimeStreamSink sink)
+    {
+        switch (sink)
+        {
+            case RuntimeStreamConsumer consumer:
+                _ = EmitYield(value, [], consumer.Invocation);
+                return;
+            case RuntimeStreamStage stage:
+                EmitUserBlockFunctionCall(
+                    stage.Call with { ResultName = null, ResultIsSynthetic = false },
+                    stage.Function,
+                    stage.Next,
+                    streamedArgument: value,
+                    callSite: stage.CallSite,
+                    streamedAdditionalArguments: stage.AdditionalArguments);
+                return;
+            case RuntimeUserStreamStage stage:
+                EmitUserStreamStage(value, stage);
+                return;
+            case RuntimeStreamTerminalStage terminal:
+                EmitUserBlockFunctionCall(
+                    terminal.Call with { ResultName = null, ResultIsSynthetic = false },
+                    terminal.Function,
+                    streamedArgument: value,
+                    callSite: terminal.CallSite,
+                    streamedAdditionalArguments: terminal.AdditionalArguments);
+                return;
+            default:
+                throw new SollangException("unknown runtime stream sink");
+        }
+    }
+
+    private void EmitUserStreamStage(RuntimeValue value, RuntimeUserStreamStage stage)
+    {
+        var returnLocals = CaptureLocals();
+        var previousInvocation = _currentBlockInvocation;
+        var previousFunction = _currentFunction;
+        var previousFunctions = _currentFunctions;
+        var previousContinuation = _currentStreamContinuation;
+        try
+        {
+            RestoreLocals(stage.StateLocals);
+            _locals[stage.Function.InputName ?? "it"] = value;
+            if (stage.Function.BlockInputType is not null)
+            {
+                var additionalBlockParameters = stage.Function.AdditionalBlockParameters ?? [];
+                var additionalItemNames = stage.Call.AdditionalItemNames ?? [];
+                if (additionalItemNames.Count != additionalBlockParameters.Count)
+                {
+                    throw new SollangException(
+                        $"block function '{stage.Function.Name}' expects "
+                        + $"{1 + additionalBlockParameters.Count} block item name(s)");
+                }
+                _currentBlockInvocation = new RuntimeBlockInvocation(
+                    stage.Call.ItemName,
+                    additionalItemNames.Select((name, index) =>
+                        (name, additionalBlockParameters[index].Type)).ToArray(),
+                    stage.Call.Body,
+                    stage.CallSite.Locals,
+                    stage.CallSite.Functions,
+                    stage.CallSite.Function,
+                    stage.Function.BlockResultType ?? BoundType.Unit,
+                    OwnsItem: false);
+            }
+            _currentFunction = stage.Function;
+            _currentFunctions = CreateFunctionScope(stage.CallSite.Functions, stage.Function.LocalFunctions);
+            _currentStreamContinuation = stage.Next;
+            EmitStatements(stage.Function.BlockBody
+                .Where(static statement => statement is not BindingStatement { IsStreamState: true })
+                .ToArray());
+            if (!_currentBlockTerminated && stage.Function.Body is not null)
+            {
+                var result = EmitExpression(stage.Function.Body);
+                EnsureRuntimeType(result, stage.Function.ReturnType, stage.Function.Name);
+            }
+        }
+        finally
+        {
+            _currentBlockInvocation = previousInvocation;
+            _currentFunction = previousFunction;
+            _currentFunctions = previousFunctions;
+            _currentStreamContinuation = previousContinuation;
+            RestoreLocals(returnLocals);
+        }
     }
 
     private LocalScope CaptureLocals()
@@ -955,6 +1074,15 @@ internal sealed partial class LlvmEmitter
 
     private sealed record RuntimeText(string PointerName, string LengthName) : RuntimeValue(BoundType.Text);
 
+    private sealed record RuntimeFormattedText(IReadOnlyList<RuntimeFormattedTextSegment> Segments)
+        : RuntimeValue(BoundType.Text);
+
+    private abstract record RuntimeFormattedTextSegment;
+
+    private sealed record RuntimeFormattedTextLiteral(RuntimeText Text) : RuntimeFormattedTextSegment;
+
+    private sealed record RuntimeFormattedTextValue(RuntimeValue Value) : RuntimeFormattedTextSegment;
+
     private sealed record RuntimeInt(BoundType IntegerType, string ValueName) : RuntimeValue(IntegerType)
     {
         public RuntimeInt(string valueName) : this(BoundType.Int, valueName) { }
@@ -1126,9 +1254,43 @@ internal sealed partial class LlvmEmitter
 
     private sealed record RuntimeBlockInvocation(
         string ItemName,
+        IReadOnlyList<(string Name, BoundType Type)> AdditionalItems,
         IReadOnlyList<Statement> Body,
         LocalScope CallerLocals,
         IReadOnlyDictionary<string, BoundFunction> CallerFunctions,
-        BoundType ResultType);
+        BoundFunction? CallerFunction,
+        BoundType ResultType,
+        bool OwnsItem);
+
+    private sealed record RuntimeStreamCallSite(
+        LocalScope Locals,
+        IReadOnlyDictionary<string, BoundFunction> Functions,
+        BoundFunction? Function);
+
+    private abstract record RuntimeStreamSink;
+
+    private sealed record RuntimeStreamConsumer(RuntimeBlockInvocation Invocation) : RuntimeStreamSink;
+
+    private sealed record RuntimeStreamStage(
+        BlockFunctionCallStatement Call,
+        BoundFunction Function,
+        RuntimeStreamSink Next,
+        RuntimeStreamCallSite CallSite,
+        IReadOnlyList<RuntimeValue> AdditionalArguments) : RuntimeStreamSink;
+
+    private sealed record RuntimeUserStreamStage(
+        BlockFunctionCallStatement Call,
+        BoundFunction Function,
+        RuntimeStreamSink Next,
+        LocalScope StateLocals,
+        RuntimeStreamCallSite CallSite,
+        IReadOnlyList<RuntimeValue> AdditionalArguments,
+        string CancellationSlot) : RuntimeStreamSink;
+
+    private sealed record RuntimeStreamTerminalStage(
+        BlockFunctionCallStatement Call,
+        BoundFunction Function,
+        RuntimeStreamCallSite CallSite,
+        IReadOnlyList<RuntimeValue> AdditionalArguments) : RuntimeStreamSink;
 }
 

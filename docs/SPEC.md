@@ -835,6 +835,155 @@ println -> sys.io.println
 readInt -> sys.io.readInt
 ```
 
+General-purpose sequence operations live in `std.sequence` and require an
+explicit import. `range(start, endInclusive)` returns a first-class `Range`
+that stores only its two `Int` bounds. `each` consumes that value as a direct
+inclusive loop, so no element array is allocated. `map<R>` is declared with
+`-> stream R`: when followed by `each`, every emitted value is sent directly to
+that consumer without a mapped result array. Streaming stages may be chained;
+the final stage is `each` or a `Unit` block function.
+
+```sollang
+public map<R> values: Range -> stream R block item: Int -> R {
+    values -> each item {
+        item -> yield -> emit
+    }
+}
+```
+
+The growable-array counterpart is named `mapArray<T, R>` because the current
+language does not overload public functions by source type. One module import
+provides the complete sequence vocabulary without an ambiguous `map`:
+
+```sollang
+import std.sequence
+```
+
+The Range mapper declares `R` only in its callback result and stream element:
+
+```sollang
+public map<R> values: Range -> stream R block item: Int -> R
+```
+
+For a generic block function whose source and callback input are concrete, the
+callback's final expression may infer an otherwise output-only type parameter.
+This keeps `Range` lazy while allowing the projected type to be any valid
+Sollang value. `filter<T>` conditionally emits its input, and `tap<T>` invokes
+an effectful callback before emitting the unchanged value. `take<T>` and
+`skip<T>` are ordinary library stream functions, not compiler intrinsics.
+Generic parameters may also be inferred from additional arguments, allowing
+`scan<T, S>` to derive `S` directly from its initial accumulator.
+
+A stream function can declare pipeline-lifetime mutable state with
+`state name! = value`. The initializer runs once when that stage is created;
+ordinary statements run once per incoming item. `stop` requests upstream
+cancellation after the current item finishes downstream processing. Every
+enclosing source loop observes the same signal, including loops nested by
+`flatMap`.
+
+```sollang
+public take<T> value: T, count: Int -> stream T {
+    state taken! = 0
+    taken! < count -> if {
+        taken! + 1 => taken!
+        taken! >= count -> if { stop }
+        value -> emit
+    } else {
+        stop
+    }
+}
+```
+
+`scan<T, S>` combines callback execution and pipeline-lifetime state. For every
+incoming `T`, the callback receives the current `S` and the item, and its result
+becomes both the next state and the emitted value:
+
+```sollang
+public scan<T, S> value: T, initial: S -> stream S block accumulated: S, item: T -> S {
+    state current! = initial
+    current! -> yield(value) => current!
+    current! -> emit
+}
+```
+
+`yield` invokes the caller-supplied block and returns its result. `emit` forwards
+that result to the downstream consumer. Streaming is therefore a declared
+property of any user block function, not a compiler rule attached to `map`.
+
+```sollang
+values
+    -> map item { item * 10 }
+    -> each mapped {
+        "$mapped" -> println
+    }
+```
+
+The downstream `each` owns the mapped value for one iteration. Its `break` and
+`continue` control the original source loop, so mapping stops as soon as the
+consumer stops. `beforeEach` runs immediately before an outer range item enters
+the downstream chain. `afterEach` first emits the item and runs its callback
+only after downstream processing returns. This expresses scoped preprocessing
+and postprocessing without testing the first or last inner index:
+
+```sollang
+2..9
+    -> beforeEach dan { "$(dan)단" -> println }
+    -> afterEach dan { println() }
+    -> flatMap(1..9) dan, multiplier {
+        "$dan × $multiplier = $(dan * multiplier)"
+    }
+    -> each line {
+        line -> println
+    }
+```
+
+The compiler composes these callbacks as synchronous continuations and lowers
+the whole chain into the source loops. No intermediate array, iterator object,
+virtual dispatch, or callback allocation is introduced. Interpolated Text is
+kept as an ordered formatting plan whose holes are evaluated exactly once when
+the value is produced. A following print consumer writes those evaluated
+segments into the platform's buffered output sink without first allocating an
+owned Text buffer. This is a general stream-value rule rather than a special
+case for `flatMap` or `println`.
+
+Importing a module exposes each direct public symbol both through the module
+alias and as an unqualified name. Therefore `import std.sequence` permits both
+`sequence.flatMap` and `flatMap`. An import path may also end at one public
+symbol when a source wants to import only that name or assign an explicit
+alias:
+
+```sollang
+import std.sequence
+
+2..9
+    -> beforeEach outer { "$outer단" -> println }
+    -> afterEach outer { println() }
+    -> flatMap(1..9) outer, inner {
+        "$outer × $inner"
+    }
+    -> each line {
+        line -> println
+    }
+```
+
+Local declarations and explicit import aliases take precedence over names
+opened by a module import. If multiple imported modules expose the same short
+name, using that short name is a compile-time ambiguity. The diagnostic lists
+the candidates and directs the caller to a qualified spelling such as
+`sequence.flatMap` or to an alias for the module. Qualified module access
+remains valid regardless of short-name collisions.
+
+Block functions may declare multiple callback inputs after `block`, separated
+by commas. Calls provide the same number of item names. Inside the block
+function implementation, the flowed value supplies the first callback input
+and `yield` arguments supply the rest:
+
+```sollang
+pair source: Source -> Unit block outer: Int, inner: Text {
+    source.outer -> yield(source.inner)
+}
+```
+
 Source code can use either spelling:
 
 ```sollang
@@ -1255,6 +1404,17 @@ syntax! -> reset
 - `Arena` is affine: readonly borrowing, `mut Arena`, and `move Arena` follow the
   ordinary ownership rules. Final drop frees the current backing block exactly
   once. Individual arena allocations are never freed separately.
+- `deferredText -> materialize(arena!)` formats into one contiguous arena
+  allocation and returns an ordinary non-owning `Text` view. Interpolation
+  holes have already been evaluated once in source order; materialization only
+  formats their retained values.
+- A materialized `Text` borrows its arena owner. While that view is live,
+  `alloc`, `store`, `reset`, move, and drop of the conflicting arena are
+  rejected. The loan ends at the view's last reachable use and propagates
+  through functions that return the view.
+- Immediate sinks consume deferred interpolation directly and do not
+  materialize. The explicit boundary is for storage, return, indexing, or code
+  that intentionally fixes allocation timing and lifetime.
 - The native targets currently support arenas. Browser wasm remains blocked by
   its existing no-heap runtime boundary.
 

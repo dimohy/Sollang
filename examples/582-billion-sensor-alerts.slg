@@ -1,0 +1,34 @@
+# Scans a billion synthetic sensor readings lazily, without materializing the
+# range or intermediate map/filter results, and stops after five alerts.
+import std.sequence
+
+struct Reading {
+    sensorId: Int
+    celsius: Int
+}
+
+main {
+    0 => alertCount!
+    0 => scannedCount!
+
+    1..1000000000
+        -> map sensorId {
+            Reading {
+                sensorId: sensorId
+                celsius: 20 + ((sensorId % 97) * 17) % 40
+            }
+        }
+        -> tap reading {
+            reading.sensorId => scannedCount!
+        }
+        -> filter reading {
+            reading.celsius >= 57
+        }
+        -> take(5)
+        -> each alert {
+            alertCount! + 1 => alertCount!
+            "경보 $(alertCount!): 센서 $(alert.sensorId) = $(alert.celsius)°C" -> println
+        }
+
+    "탐색 중단: 10억 개 중 $(scannedCount!)개만 검사" -> println
+}

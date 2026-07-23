@@ -43,6 +43,8 @@ internal sealed partial class LlvmEmitter
     private readonly List<BoundFunction> _inlineFunctionStack = [];
     private StackFramePlan _currentStackFramePlan = StackFramePlan.Empty;
     private RuntimeBlockInvocation? _currentBlockInvocation;
+    private RuntimeStreamSink? _currentStreamContinuation;
+    private string? _currentStreamCancellationSlot;
     private BoundFunction? _currentFunction;
     private IReadOnlyDictionary<string, BoundFunction> _currentFunctions;
     private int _stringId;

@@ -15,7 +15,7 @@ internal sealed record IncrementalSemanticCacheProbe(
 internal sealed class IncrementalSemanticCache
 {
     private const ulong Magic = 6002245291165495635;
-    private const ulong Schema = 4;
+    private const ulong Schema = 5;
     private const int DigestLength = 32;
     private const int HeaderWords = 11;
     private const int MaximumRecords = 1_000_000;
@@ -334,6 +334,7 @@ internal sealed class IncrementalSemanticCache
                     target.BlockInputName,
                     StableType(program, target.BlockInputType),
                     StableType(program, target.BlockResultType),
+                    StableType(program, target.StreamElementType),
                     StableType(program, target.SpecializedType),
                     StableType(program, target.SpecializedSecondaryType),
                     StableType(program, target.SpecializedTertiaryType),
@@ -534,6 +535,7 @@ internal sealed class IncrementalSemanticCache
         WriteOptionalString(stream, checksum, specialization.BlockInputName);
         WriteOptionalString(stream, checksum, specialization.BlockInputType);
         WriteOptionalString(stream, checksum, specialization.BlockResultType);
+        WriteOptionalString(stream, checksum, specialization.StreamElementType);
         WriteOptionalString(stream, checksum, specialization.SpecializedType);
         WriteOptionalString(stream, checksum, specialization.SpecializedSecondaryType);
         WriteOptionalString(stream, checksum, specialization.SpecializedTertiaryType);
@@ -571,6 +573,7 @@ internal sealed class IncrementalSemanticCache
         var blockInputName = ReadOptionalString(stream, checksum);
         var blockInputType = ReadOptionalString(stream, checksum);
         var blockResultType = ReadOptionalString(stream, checksum);
+        var streamElementType = ReadOptionalString(stream, checksum);
         var specializedType = ReadOptionalString(stream, checksum);
         var specializedSecondaryType = ReadOptionalString(stream, checksum);
         var specializedTertiaryType = ReadOptionalString(stream, checksum);
@@ -599,6 +602,7 @@ internal sealed class IncrementalSemanticCache
             blockInputName,
             blockInputType,
             blockResultType,
+            streamElementType,
             specializedType,
             specializedSecondaryType,
             specializedTertiaryType,

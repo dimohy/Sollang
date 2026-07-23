@@ -44,8 +44,9 @@ struct LowerRequest {
 # 50 effect declaration, 51 effect operation, 52 effect reference,
 # 53 index assignment, 54 mutable struct member assignment.
 # 55 generic enum constructor, 56 subject when target, 57 standalone when,
-# 58 when arm, 59 enum pattern, 60 additional function input.
-# Function flags: 1 move input, 2 mutable input, 4 public, 8 async.
+# 58 when arm, 59 enum pattern, 60 additional function input,
+# 61 stream state binding, 62 stream stop statement.
+# Function flags: 1 move input, 2 mutable input, 4 public, 8 async, 64 stream.
 # Keyword operator codes use the same
 # -(keywordIndex + 1) representation as syntax diagnostics.
 classifyRule rule: Int -> Int {
@@ -112,6 +113,9 @@ classifyRule rule: Int -> Int {
     (rule == grammar.ruleIdWhenArm or rule == grammar.ruleIdSubjectWhenArm) -> if { 58 => kind! }
     rule == grammar.ruleIdEnumPattern -> if { 59 => kind! }
     rule == grammar.ruleIdAdditionalFunctionInput -> if { 60 => kind! }
+    rule == grammar.ruleIdStreamFunctionSignature -> if { 17 => kind! }
+    rule == grammar.ruleIdStreamStateBindingStatement -> if { 61 => kind! }
+    rule == grammar.ruleIdStreamStopStatement -> if { 62 => kind! }
     kind! => selected
     selected
 }
@@ -696,6 +700,17 @@ lowerFrom request: LowerRequest -> [AstNode; ~] {
                                     declaration!.flags + 8 => declaration!.flags
                                 }
                             }
+                            (asyncName.kind == grammar.tokenIdIdentifier and asyncName.span.length == UIntSize(6)) -> if {
+                                source -> byte(asyncName.span.start) => streamByte0
+                                source -> byte(asyncName.span.start + UIntSize(1)) => streamByte1
+                                source -> byte(asyncName.span.start + UIntSize(2)) => streamByte2
+                                source -> byte(asyncName.span.start + UIntSize(3)) => streamByte3
+                                source -> byte(asyncName.span.start + UIntSize(4)) => streamByte4
+                                source -> byte(asyncName.span.start + UIntSize(5)) => streamByte5
+                                (streamByte0 == UInt8(115) and streamByte1 == UInt8(116) and streamByte2 == UInt8(114) and streamByte3 == UInt8(101) and streamByte4 == UInt8(97) and streamByte5 == UInt8(109)) -> if {
+                                    declaration!.flags + 64 => declaration!.flags
+                                }
+                            }
                         }
                         signatureEnd => signatureToken!
                     } else {
@@ -854,6 +869,23 @@ lowerFrom request: LowerRequest -> [AstNode; ~] {
             }
             (bindingSuffixToken! < bindingEnd! and tokens![bindingSuffixToken!].kind == grammar.tokenIdBang) -> if {
                 1 => declaration!.flags
+            }
+        }
+        declaration!.kind == 61 -> if {
+            declaration!.firstToken + 1 => stateBindingToken!
+            declaration!.firstToken + declaration!.tokenCount => stateBindingEnd
+            (stateBindingToken! < stateBindingEnd and (tokens![stateBindingToken!].kind == grammar.triviaIdWhitespace or tokens![stateBindingToken!].kind == grammar.triviaIdComment)) -> while {
+                stateBindingToken! + 1 => stateBindingToken!
+            }
+            stateBindingToken! < stateBindingEnd -> if {
+                stateBindingToken! => declaration!.payloadToken
+                stateBindingToken! + 1 => stateBindingSuffixToken!
+                (stateBindingSuffixToken! < stateBindingEnd and (tokens![stateBindingSuffixToken!].kind == grammar.triviaIdWhitespace or tokens![stateBindingSuffixToken!].kind == grammar.triviaIdComment)) -> while {
+                    stateBindingSuffixToken! + 1 => stateBindingSuffixToken!
+                }
+                (stateBindingSuffixToken! < stateBindingEnd and tokens![stateBindingSuffixToken!].kind == grammar.tokenIdBang) -> if {
+                    1 => declaration!.flags
+                }
             }
         }
         declaration!.kind == 48 -> if {

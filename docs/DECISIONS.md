@@ -1,7 +1,7 @@
 # Sollang Decision Log
 
-Updated: 2026-07-22
-Current accepted checkpoint: D254, self-hosting roadmap 60/60
+Updated: 2026-07-23
+Current accepted checkpoint: D271, browser WASM playground
 
 Entries are chronological. Progress counts and "remaining" work inside an
 older decision describe that decision's checkpoint; D254 and
@@ -10068,3 +10068,420 @@ block stages remains a later parity slice.
 The Windows Release build completes with zero warnings and errors, the
 language-tool verifier passes 4/4, and the Windows regression suite passes all
 761 examples.
+
+## D259 - Generic Flow Sequence Operations
+
+Status: implemented
+Date: 2026-07-23
+
+LINQ-style projection is expressed through ordinary flow-oriented block
+functions in `std.sequence`: inclusive `range`, generic `map`, and generic
+two-value `flatMap`. A two-range Cartesian projection reads naturally without
+transport structs or query keywords:
+
+```sollang
+sequence.range(2, 9)
+    -> sequence.flatMap(sequence.range(1, 9)) dan, multiplier {
+        "$dan × $multiplier = $(dan * multiplier)" -> println
+    }
+```
+
+Block functions can now accept ordinary call arguments and multiple callback
+inputs. `outer -> yield(inner)` invokes a caller block declared as
+`outer, inner { ... }`. The original nested-range multiplication table remains
+example 575. Separate example 576 uses
+`range -> flatMap(range) dan, multiplier` and prints directly from the
+two-value block without a transport struct, intermediate result array, or
+following `each` pass. D260 replaces the initial eager array-backed range
+prototype with a first-class lazy `Range`.
+
+D263 replaces the initial eager result-array implementation of `map`. The
+generic operation now streams each projection directly into a following
+`each` consumer.
+
+## D260 - First-Class Lazy Range Consumption
+
+Status: implemented
+Date: 2026-07-23
+
+The initial `std.sequence.range` implementation eagerly pushed every integer
+into `[Int; ~]`. That contradicted the intended LINQ-style flow because memory
+grew with the number of values before the first consumer ran.
+
+`start..endInclusive` is now a first-class `Range` value containing only two
+`Int` bounds. A function may return or bind it, and `each` dispatches by the
+resulting `Range` type rather than requiring the range syntax at the call site.
+LLVM lowering extracts the two bounds and emits the existing inclusive loop;
+it does not allocate or populate an element buffer.
+
+`std.sequence.range` now returns `Range`, and range `flatMap` consumes two
+`Range` values directly. Example 576 therefore retains its concise two-value
+block while becoming fully streaming. Example 577 requests the range
+`1..1000000000`, prints only the first three values, and breaks, proving that
+the billion-element source is not materialized before consumption.
+
+## D261 - Range Literal and Selective Flow Imports
+
+Status: implemented
+Date: 2026-07-23
+
+LINQ-style range pipelines use the language's first-class inclusive range
+literal directly. `2..9` replaces the redundant `sequence.range(2, 9)` wrapper.
+Both produce `Range`, but the literal makes laziness and bounds visible without
+an extra function name.
+
+An import path may name a public symbol as well as a module. The final path
+segment becomes the local alias. Therefore `import std.sequence.flatMap`
+resolves an unqualified `flatMap` to `std.sequence.flatMap`. D262 subsequently
+extends module imports so `import std.sequence` provides both `flatMap` and
+`sequence.flatMap`. The selective form remains available:
+
+```sollang
+import std.sequence.flatMap
+
+2..9 -> flatMap(1..9) dan, multiplier {
+    "$dan × $multiplier = $(dan * multiplier)" -> println
+}
+```
+
+## D263 - Allocation-Free Streaming Map Consumption
+
+Status: implemented
+Date: 2026-07-23
+
+The first `std.sequence.map<T, R>` implementation created `[R; ~]`, appended
+every projected value with `push`, and returned the completed array. That was
+eager materialization under a LINQ-shaped name and duplicated the defect
+already removed from range in D260.
+
+The initial fix gave `map` a `Unit` result and taught the compiler the exact
+name `std.sequence.map`. That worked but made laziness an invisible name-based
+exception. The final design adds a general stream-function declaration:
+
+```sollang
+public map<T, R> values: [T; ~] -> stream R block item: T -> R {
+    values -> each item {
+        item -> yield -> emit
+    }
+}
+```
+
+`yield` executes the caller's projection block and returns `R`; `emit` forwards
+that value to the downstream consumer. In a direct `map -> each` pipeline, the
+compiler connects emitted values to the consumer immediately:
+
+```sollang
+values
+    -> map value {
+        value * 10
+    }
+    -> each mapped {
+        "$mapped" -> println
+    }
+```
+
+No `[R; ~]` owner, capacity growth, `push`, or iterator object is created.
+The consumer owns each projected value for that iteration, and downstream
+`break` or `continue` targets the original source loop. Ordinary `Unit`
+intermediate stages remain invalid. The rule applies to every function declared
+with `-> stream T`; neither the compiler nor the import system recognizes
+`map` by name.
+
+Example 579 verifies projection/consumption order and stops at the first
+mapped value, proving that later source items are never projected. Its LLVM
+regression rejects `realloc`, which the old growing mapped array required.
+
+This form imports only one public function. D262 defines safe collision handling
+when a whole module is opened.
+
+## D264 - Fused Stream Preprocessing And Postprocessing
+
+Status: implemented
+Date: 2026-07-23
+
+Testing `multiplier == 1` and `multiplier == 9` inside the multiplication-table
+body exposes traversal boundaries as arithmetic conditions and mixes group
+layout with row projection. Replacing those comparisons with example-specific
+helpers would only rename the condition.
+
+Stream pipelines now accept multiple general `-> stream T` stages before a
+terminal `each` or `Unit` block function. `std.sequence.beforeEach` executes its
+callback before emitting an outer range item. `afterEach` emits first, waits for
+the complete downstream continuation, and executes its callback afterward.
+D265 extends the initial D264 continuation chain so the current example reads:
+
+```sollang
+2..9
+    -> beforeEach dan { "$(dan)단" -> println }
+    -> afterEach dan { println() }
+    -> flatMap(1..9) dan, multiplier {
+        "$dan × $multiplier = $(dan * multiplier)"
+    }
+    -> each line {
+        line -> println
+    }
+```
+
+The compiler binds every downstream stream stage against the preceding emitted
+element type and specializes generic callbacks normally. LLVM lowering nests
+the stages as compile-time continuations. It emits the original range loops and
+direct print operations without a result array, iterator object, indirect call,
+or `realloc`. `emit` remains contextual so the existing ordinary function named
+`emit` in the self-hosted LLVM module is unaffected.
+
+## D265 - Consumer-Aware Deferred Interpolated Text
+
+Status: implemented
+Date: 2026-07-23
+
+The first D264 multiplication-table pipeline kept `flatMap` as an effectful
+terminal because the backend could print an interpolated literal directly but
+could not carry that interpolation as a `Text` value into `each`. Materializing
+one owned string per row would have restored a LINQ-shaped surface at the cost
+of an allocation in the hot loop.
+
+Interpolated `Text` now has a deferred runtime representation in fused codegen.
+Literal segments are static UTF-8 slices, and every interpolation hole is
+evaluated exactly once in source order when the value is produced. The runtime
+values, rather than their AST expressions, travel through the stream
+continuation. A print consumer writes those segments directly to the output
+sink, so example 576 can use a pure projection followed by consumption:
+
+```sollang
+2..9
+    -> beforeEach dan { "$(dan)단" -> println }
+    -> afterEach dan { println() }
+    -> flatMap(1..9) dan, multiplier {
+        "$dan × $multiplier = $(dan * multiplier)"
+    }
+    -> each line {
+        line -> println
+    }
+```
+
+`flatMap<T, R>` is consequently an ordinary `-> stream R` block function; it
+does not print and is not compiler-special by name. The existing continuation
+fusion passes the deferred value to `each` without a result array, iterator,
+callback object, or owned Text allocation. The LLVM regression for example 576
+rejects `realloc`.
+
+Small formatted segments must not become one operating-system write each.
+Windows already batches stdout in its Unicode-safe output layer. Linux now uses
+the same policy with a 64 KiB buffer, flushes line-by-line for a terminal, before
+stdin reads, and at normal process exit, while redirected output is flushed in
+larger batches. Compute-worker capture continues to bypass the shared stdout
+buffer and retain deterministic ordered merging.
+
+This slice keeps deferred formatting as an internal representation of
+source-level `Text`. D266 subsequently adds the ownership-correct explicit
+materialization boundary; leaking a heap buffer or returning a pointer to loop
+stack storage remains unacceptable.
+
+Release builds complete with zero warnings and errors. Examples 576 and 580
+verify final output, one-time source-order hole evaluation, and LLVM without
+`realloc`. The complete Windows and Linux suites both pass 769/769.
+
+## D266 - Arena-Owned Materialized Text Views
+
+Status: implemented
+Date: 2026-07-23
+
+Deferred interpolation is ideal for an immediate sink, but storage, return,
+indexing, and explicit lifetime control need a stable contiguous UTF-8 value.
+Making `Text { ptr, length }` silently own a heap allocation would lose the
+owner on ordinary copies and make deterministic drop impossible. Returning a
+pointer to a temporary stack format buffer would instead dangle.
+
+Sollang therefore keeps `Text` as a cheap non-owning view and exposes one
+flow-first lifetime boundary:
+
+```sollang
+formatLine value: Int, storage: mut Arena -> Text {
+    "value=$value" -> materialize(storage)
+}
+```
+
+`materialize` formats retained interpolation values into scratch space,
+computes the checked total byte length, reserves one contiguous arena region,
+and copies the segments once. Signed and unsigned integers share target-neutral
+decimal formatters, including their full 64-bit ranges. The result is an
+ordinary `Text`, while the supplied affine `Arena` remains its visible owner.
+
+Borrow-origin inference ties the returned view to that owner through local
+bindings and function returns. Arena growth, byte mutation, reset, move, and
+drop are rejected until the view's last reachable use. Reusing the same arena
+after that point is valid. This prevents both reallocation invalidation and
+use-after-free without adding reference counting or a hidden heap owner.
+
+Immediate `println` and fused stream consumers still read
+`RuntimeFormattedText` directly and allocate no `Text`. Explicit materialize is
+used only when code intentionally fixes storage and lifetime. Example 581
+verifies Korean UTF-8 bytes, function-return propagation, reuse after last use,
+single-region materialization, decimal formatting, and LLVM segment copies. The
+`materialized-text-owner-mutation` diagnostic proves that a returned view
+freezes its owner.
+
+The Release solution builds with zero warnings and errors. The final Windows
+and Linux suites both pass 771/771, including grammar determinism, CLI
+`sollang run`, self-host cases, native linking, and execution. The generated
+LLVM on both targets contains the checked length accumulation, signed and
+unsigned 64-bit format calls, and segment `llvm.memcpy` operations.
+
+## D262 - Module Imports Open Public Symbols Safely
+
+Status: implemented
+Date: 2026-07-23
+
+A module import provides both qualified and unqualified access to its direct
+public symbols. After `import std.sequence`, callers may write either
+`sequence.flatMap` or `flatMap`; the module alias remains available as the
+stable escape hatch.
+
+Open imports never use source-order precedence. A local declaration or an
+explicit import alias wins over an opened name. If two imported modules expose
+the same short name and that short name is used, compilation fails with the
+candidate paths and suggests a qualified module spelling or a module alias.
+Qualified calls continue to compile even when their short names collide.
+
+Example 576 uses the module-level form:
+
+```sollang
+import std.sequence
+
+2..9
+    -> beforeEach dan { "$(dan)단" -> println }
+    -> afterEach dan { println() }
+    -> flatMap(1..9) dan, multiplier {
+        "$dan × $multiplier = $(dan * multiplier)"
+    }
+    -> each line {
+        line -> println
+    }
+```
+
+## D267 - Standard Sequence Stages and Output-Inferred Range Map
+
+Status: implemented
+Date: 2026-07-23
+
+Reusable stream operations belong in the standard sequence library rather than
+being copied into a representative application example. Example 582 initially
+declared a `Reading`-specific local `map` and a generic local `filter`. That
+proved user-defined streams but obscured the sensor-scanning story and made the
+standard library appear incomplete.
+
+`std.sequence` now exports the output-inferred Range `map<R>`, growable-array
+`mapArray<T, R>`, and ordinary generic `filter<T>` and `tap<T>` stages. Sollang
+does not currently overload public functions by source type, so the distinct
+array name keeps one module import unambiguous:
+
+```sollang
+import std.sequence
+```
+
+The Range mapper has a concrete `std.sequence.Range` source and `Int` callback
+input while `R` appears only as the callback result and emitted element type.
+Generic block inference now derives such an output-only primary type parameter
+from the callback's final expression. This is a general semantic rule; neither
+the module path nor the name `map` receives compiler-special treatment.
+
+Example 582 scans the declared `1..1000000000` range through
+`map -> tap -> filter -> take(5) -> each`, prints the first five temperature
+alerts, and cancels the original source loop after inspecting only 54 values. Its LLVM
+regression rejects `realloc`. The Release solution builds with zero warnings
+and errors. Fresh bootstrap, grammar determinism, CLI run, self-host, native
+linking, diagnostics, and execution pass the complete Windows and Linux suites
+at 772/772 on each target.
+
+`take` and `enumerate` are not simulated with name-based intrinsics or hidden
+mutable counters. Stateful stream functions remain a separate general
+language-design concern.
+
+## D268 - Language-Level Stream State and Upstream Stop
+
+Status: implemented
+Date: 2026-07-23
+
+Stateful stages are expressed by general language semantics rather than
+compiler knowledge of sequence operation names. `state name! = value` declares
+mutable storage initialized once for one stage instance and retained for every
+incoming item. `stop` sets the pipeline cancellation signal; the current value
+may finish its downstream path, after which every enclosing source loop checks
+the signal and exits. This also unwinds nested `flatMap` loops without pulling
+an extra item.
+
+`std.sequence.take<T>` and `skip<T>` are ordinary non-intrinsic Sollang
+functions written with this state mechanism. Callback-free stages compose as
+`-> skip(3) -> take(4)` while existing callback stages retain their blocks.
+Example 582 now uses the real `take(5)` and still stops after 54 readings.
+Example 583 combines nested `flatMap`, `tap`, `skip(3)`, and `take(4)`; it emits
+14 through 17 and proves cancellation with a scan count of 7.
+
+Generated self-host grammar and AST parity preserve the existing rule and
+keyword IDs and append stream-specific IDs. Callback-free stages use a
+recursive grammar chain that must end in a block stage, preventing ordinary
+multi-target flows from being consumed as incomplete block pipelines.
+
+## D269 - Generic Stateful Scan
+
+Status: implemented
+Date: 2026-07-23
+
+`std.sequence.scan<T, S>` is an ordinary Sollang stream function. It accepts an
+initial accumulator, invokes a two-input callback with the current accumulator
+and incoming item, stores the callback result as the next pipeline-lifetime
+state, and emits that same value downstream:
+
+```sollang
+public scan<T, S> value: T, initial: S -> stream S block accumulated: S, item: T -> S {
+    state current! = initial
+    current! -> yield(value) => current!
+    current! -> emit
+}
+```
+
+Generic block-function inference now derives bare generic parameters from
+additional call arguments as well as the flowed source and callback result.
+Consequently `scan(AccountState { ... })` infers `S` without explicit type
+arguments. Stateful block stream stages retain their callback invocation and
+state slots across input items; they are not recreated for each item.
+
+Example 585 declares one billion synthetic transactions and composes
+`map -> tap -> scan -> filter -> take(5) -> each`. The first five threshold
+alerts occur at transaction IDs 5 through 9, and `take` cancels the original
+range after exactly nine scanned inputs. Its LLVM regression rejects both
+`malloc` and `realloc`, proving that neither the source nor intermediate stream
+values are materialized.
+
+The Release solution builds with zero warnings and errors. The complete Windows
+suite passes 777/777, including grammar determinism, CLI `sollang run`,
+self-host parsing and LLVM, diagnostics, native linking, and execution.
+
+## D270 — Release versions encode the release date
+
+Status: accepted
+Date: 2026-07-23
+
+Sollang release versions use `major.minor.yymmdd`. The third component is the
+six-digit release date, so the 2026-07-23 release is `0.2.260723`. The NuGet and
+informational versions carry the complete value. CLR assembly and file versions
+remain `0.2.0.0` because a CLR numeric version component cannot exceed 65534.
+The CLI and language server report the informational release version.
+
+## D271 — Browser playground runs the compiler client-side
+
+Status: implemented
+Date: 2026-07-23
+
+The public playground at `https://sollang.slogs.dev` loads the Sollang lexer,
+parser, semantic compiler, embedded standard library, and execution VM as a
+Blazor WebAssembly runtime. A Monaco editor provides editable Sollang syntax
+highlighting. Selecting one of the bundled samples replaces the current source;
+Run reparses, semantically validates, and executes that edited source without
+sending it to a compilation server.
+
+The published runtime lives under a release-versioned static path such as
+`/compiler-0.2.260723/`. This prevents stale content-addressed .NET runtime
+assets from mixing with a later compiler publish. Browser regression tests
+cover sample selection, stateful stream execution, editor mutation, output,
+syntax colors, and desktop/mobile layout.

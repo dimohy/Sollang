@@ -152,16 +152,20 @@ internal sealed partial class LlvmEmitter
                 EmitBlockFunctionCall(blockFunctionCall);
                 break;
             case BlockFunctionPipelineStatement pipeline:
-                foreach (var blockFunctionCall in pipeline.Calls)
-                {
-                    EmitBlockFunctionCall(blockFunctionCall);
-                }
+                EmitBlockFunctionPipeline(pipeline);
                 break;
             case LoopControlStatement loopControl:
                 EmitLoopControlStatement(loopControl);
                 return;
             case GuardLoopControlStatement guardLoopControl:
                 EmitGuardLoopControlStatement(guardLoopControl);
+                break;
+            case StreamStopStatement:
+                if (_currentStreamCancellationSlot is null)
+                {
+                    throw new SollangException("'stop' requires an active stream pipeline");
+                }
+                EmitStore("i1", "true", _currentStreamCancellationSlot, 1);
                 break;
             case ReturnStatement returnStatement:
                 EmitReturnStatement(returnStatement);
@@ -270,6 +274,22 @@ internal sealed partial class LlvmEmitter
             if (!_currentBlockTerminated)
             {
                 DropOwnedLocalsCreatedSince(outerScope, transferredOwnerName: null);
+            }
+            if (!_currentBlockTerminated && _currentStreamCancellationSlot is { } cancellationSlot)
+            {
+                var cancelled = NextTemp("stream_cancelled");
+                EmitLoad(cancelled, "i1", cancellationSlot, 1);
+                var cancelLabel = NextLabel("stream_cancel");
+                var keepRunningLabel = NextLabel("stream_continue");
+                EmitConditionalBranch(cancelled, cancelLabel, keepRunningLabel);
+
+                EmitLabel(cancelLabel);
+                _currentBlockLabel = cancelLabel;
+                breakEdges?.Add((CaptureLocals(), cancelLabel));
+                EmitBranch(breakLabel);
+
+                EmitLabel(keepRunningLabel);
+                _currentBlockLabel = keepRunningLabel;
             }
         }
         finally
@@ -445,12 +465,6 @@ internal sealed partial class LlvmEmitter
         switch (target)
         {
             case "each":
-                if (statement.Source is RangeExpression range)
-                {
-                    EmitEachBlockFunctionCall(statement, range);
-                    return;
-                }
-
                 EmitArrayEachBlockFunctionCall(statement);
                 return;
             case "eachKey":
@@ -490,10 +504,165 @@ internal sealed partial class LlvmEmitter
         }
     }
 
-    private void EmitEachBlockFunctionCall(BlockFunctionCallStatement statement, RangeExpression range)
+    private void EmitBlockFunctionPipeline(BlockFunctionPipelineStatement pipeline)
     {
-        var start = EmitIntExpression(range.Start);
-        var end = EmitIntExpression(range.End);
+        var firstCall = pipeline.Calls[0];
+        if ((_program.ResolvedGenericCalls.TryGetValue(firstCall, out var firstFunction)
+                || TryResolveFunction(firstCall.Target, out firstFunction))
+            && firstFunction.StreamElementType is not null)
+        {
+            EmitStreamingPipeline(pipeline, firstFunction);
+            return;
+        }
+
+        foreach (var call in pipeline.Calls)
+        {
+            EmitBlockFunctionCall(call);
+        }
+    }
+
+    private void EmitStreamingPipeline(
+        BlockFunctionPipelineStatement pipeline,
+        BoundFunction firstFunction)
+    {
+        var previousCancellationSlot = _currentStreamCancellationSlot;
+        var cancellationSlot = NextTemp("stream_cancelled");
+        EmitAlloca(cancellationSlot, "i1", 1);
+        EmitStore("i1", "false", cancellationSlot, 1);
+        _currentStreamCancellationSlot = cancellationSlot;
+
+        var callSite = new RuntimeStreamCallSite(CaptureLocals(), _currentFunctions, _currentFunction);
+        var lastCall = pipeline.Calls[^1];
+        RuntimeStreamSink sink;
+        if (string.Join('.', lastCall.Target) == "each")
+        {
+            sink = new RuntimeStreamConsumer(new RuntimeBlockInvocation(
+                lastCall.ItemName,
+                [],
+                lastCall.Body,
+                CaptureLocals(),
+                _currentFunctions,
+                _currentFunction,
+                BoundType.Unit,
+                OwnsItem: true));
+        }
+        else
+        {
+            if (!(_program.ResolvedGenericCalls.TryGetValue(lastCall, out var terminalFunction)
+                    || TryResolveFunction(lastCall.Target, out terminalFunction))
+                || terminalFunction.Kind != BoundFunctionKind.UserBlock
+                || terminalFunction.ReturnType != BoundType.Unit)
+            {
+                throw new SollangException("a streaming pipeline must end with each or a Unit block function");
+            }
+            var terminalArguments = (lastCall.Arguments ?? []).Select(EmitExpression).ToArray();
+            sink = new RuntimeStreamTerminalStage(lastCall, terminalFunction, callSite, terminalArguments);
+        }
+
+        for (var index = pipeline.Calls.Count - 2; index >= 1; index--)
+        {
+            var call = pipeline.Calls[index];
+            if (!(_program.ResolvedGenericCalls.TryGetValue(call, out var function)
+                    || TryResolveFunction(call.Target, out function))
+                || function.StreamElementType is null)
+            {
+                throw new SollangException("a streaming pipeline may contain only stream functions before its final each");
+            }
+            var arguments = (call.Arguments ?? []).Select(EmitExpression).ToArray();
+            if ((function.Kind == BoundFunctionKind.User
+                    && function.BlockInputType is null)
+                || function.BlockBody.Any(static statement =>
+                    statement is BindingStatement { IsStreamState: true }))
+            {
+                sink = CreateUserStreamStage(call, function, sink, callSite, arguments, cancellationSlot);
+            }
+            else
+            {
+                sink = new RuntimeStreamStage(call, function, sink, callSite, arguments);
+            }
+        }
+
+        try
+        {
+            EmitUserBlockFunctionCall(
+                firstCall: pipeline.Calls[0] with { ResultName = null, ResultIsSynthetic = false },
+                function: firstFunction,
+                continuation: sink);
+        }
+        finally
+        {
+            _currentStreamCancellationSlot = previousCancellationSlot;
+        }
+    }
+
+    private RuntimeUserStreamStage CreateUserStreamStage(
+        BlockFunctionCallStatement call,
+        BoundFunction function,
+        RuntimeStreamSink next,
+        RuntimeStreamCallSite callSite,
+        IReadOnlyList<RuntimeValue> arguments,
+        string cancellationSlot)
+    {
+        var outerLocals = CaptureLocals();
+        var previousFunction = _currentFunction;
+        var previousFunctions = _currentFunctions;
+        try
+        {
+            var stateLocals = new LocalScope(
+                new Dictionary<string, RuntimeValue>(StringComparer.Ordinal),
+                new HashSet<string>(StringComparer.Ordinal),
+                new HashSet<string>(StringComparer.Ordinal),
+                new HashSet<string>(StringComparer.Ordinal),
+                new Dictionary<string, MutableContainerSlot>(StringComparer.Ordinal),
+                new Dictionary<string, string>(StringComparer.Ordinal),
+                new Dictionary<string, string>(StringComparer.Ordinal),
+                new Dictionary<string, string>(StringComparer.Ordinal));
+            var parameters = function.AdditionalParameters ?? [];
+            if (parameters.Count != arguments.Count)
+            {
+                throw new SollangException(
+                    $"stream function '{function.Name}' expects {parameters.Count} additional argument(s)");
+            }
+            for (var index = 0; index < parameters.Count; index++)
+            {
+                EnsureRuntimeType(arguments[index], parameters[index].Type, parameters[index].Name);
+                stateLocals.Locals[parameters[index].Name] = arguments[index];
+            }
+
+            RestoreLocals(stateLocals);
+            _currentFunction = function;
+            _currentFunctions = CreateFunctionScope(callSite.Functions, function.LocalFunctions);
+            foreach (var stateBinding in function.BlockBody.OfType<BindingStatement>()
+                         .Where(static binding => binding.IsStreamState))
+            {
+                EmitStatement(stateBinding);
+            }
+            return new RuntimeUserStreamStage(
+                call,
+                function,
+                next,
+                CaptureLocals(),
+                callSite,
+                arguments,
+                cancellationSlot);
+        }
+        finally
+        {
+            _currentFunction = previousFunction;
+            _currentFunctions = previousFunctions;
+            RestoreLocals(outerLocals);
+        }
+    }
+
+    private void EmitRangeEachBlockFunctionCall(
+        BlockFunctionCallStatement statement,
+        RuntimeStruct range)
+    {
+        var llvmType = LlvmStructType(BoundType.Range);
+        var start = NextTemp("range_start");
+        EmitAssign(start, $"extractvalue {llvmType} {range.ValueName}, 0");
+        var end = NextTemp("range_end");
+        EmitAssign(end, $"extractvalue {llvmType} {range.ValueName}, 1");
         var bodyLabel = NextLabel("each_body");
         var continueLabel = NextLabel("each_continue");
         var endLabel = NextLabel("each_end");
@@ -501,13 +670,13 @@ internal sealed partial class LlvmEmitter
         var next = NextTemp("each_next");
         var initialDone = NextTemp("each_done");
 
-        EmitCompare(initialDone, "sgt", "i32", start.ValueName, end.ValueName);
+        EmitCompare(initialDone, "sgt", "i32", start, end);
         EmitConditionalBranch(initialDone, endLabel, bodyLabel);
 
         EmitLabel(bodyLabel);
         _currentBlockLabel = bodyLabel;
         var item = NextTemp(statement.ItemName);
-        EmitPhi(item, "i32", (start.ValueName, entryLabel), (next, continueLabel));
+        EmitPhi(item, "i32", (start, entryLabel), (next, continueLabel));
 
         var outerLocals = CaptureLocals();
         try
@@ -528,7 +697,7 @@ internal sealed partial class LlvmEmitter
         _currentBlockLabel = continueLabel;
         EmitBinary(next, "add", "i32", item, "1");
         var done = NextTemp("each_done");
-        EmitCompare(done, "sgt", "i32", next, end.ValueName);
+        EmitCompare(done, "sgt", "i32", next, end);
         EmitConditionalBranch(done, endLabel, bodyLabel);
         EmitLabel(endLabel);
         _currentBlockLabel = endLabel;
@@ -537,6 +706,11 @@ internal sealed partial class LlvmEmitter
     private void EmitArrayEachBlockFunctionCall(BlockFunctionCallStatement statement)
     {
         var source = EmitExpression(statement.Source);
+        if (source is RuntimeStruct { Type: BoundType.Range } range)
+        {
+            EmitRangeEachBlockFunctionCall(statement, range);
+            return;
+        }
         if (source is RuntimeText text)
         {
             EmitTextEachBlockFunctionCall(statement, text);
@@ -612,20 +786,40 @@ internal sealed partial class LlvmEmitter
         _currentBlockLabel = endLabel;
     }
 
-    private void EmitUserBlockFunctionCall(BlockFunctionCallStatement statement, BoundFunction function)
+    private void EmitUserBlockFunctionCall(
+        BlockFunctionCallStatement firstCall,
+        BoundFunction function,
+        RuntimeStreamSink? continuation = null,
+        RuntimeValue? streamedArgument = null,
+        RuntimeStreamCallSite? callSite = null,
+        IReadOnlyList<RuntimeValue>? streamedAdditionalArguments = null)
     {
+        var statement = firstCall;
         if (function.InputType is null || function.BlockInputType is null)
         {
             throw new SollangException($"block function '{function.Name}' is not callable");
         }
 
-        var argument = EmitExpression(statement.Source);
+        var argument = streamedArgument ?? EmitExpression(statement.Source);
         EnsureRuntimeType(argument, function.InputType.Value, function.Name);
+        var additionalParameters = function.AdditionalParameters ?? [];
+        var argumentExpressions = statement.Arguments ?? [];
+        if (argumentExpressions.Count != additionalParameters.Count)
+        {
+            throw new SollangException(
+                $"block function '{function.Name}' expects {additionalParameters.Count} additional argument(s)");
+        }
+        var additionalArguments = streamedAdditionalArguments
+            ?? argumentExpressions.Select(EmitExpression).ToArray();
 
-        var callerLocals = CaptureLocals();
-        var callerFunctions = _currentFunctions;
+        var returnLocals = CaptureLocals();
+        var callerLocals = callSite?.Locals ?? returnLocals;
+        var callerFunctions = callSite?.Functions ?? _currentFunctions;
+        var callerFunction = callSite?.Function ?? _currentFunction;
         var previousInvocation = _currentBlockInvocation;
+        var previousStreamContinuation = _currentStreamContinuation;
         var previousFunctions = _currentFunctions;
+        var previousFunction = _currentFunction;
         var blockLocals = new LocalScope(
             new Dictionary<string, RuntimeValue>(StringComparer.Ordinal)
             {
@@ -638,14 +832,36 @@ internal sealed partial class LlvmEmitter
             new Dictionary<string, string>(StringComparer.Ordinal),
             new Dictionary<string, string>(StringComparer.Ordinal),
             new Dictionary<string, string>(StringComparer.Ordinal));
+        for (var index = 0; index < additionalParameters.Count; index++)
+        {
+            var parameter = additionalParameters[index];
+            EnsureRuntimeType(additionalArguments[index], parameter.Type, parameter.Name);
+            blockLocals.Locals[parameter.Name] = additionalArguments[index];
+        }
+
+        var additionalBlockParameters = function.AdditionalBlockParameters ?? [];
+        var additionalItemNames = statement.AdditionalItemNames ?? [];
+        if (additionalItemNames.Count != additionalBlockParameters.Count)
+        {
+            throw new SollangException(
+                $"block function '{function.Name}' expects {1 + additionalBlockParameters.Count} block item name(s)");
+        }
 
         _currentBlockInvocation = new RuntimeBlockInvocation(
             statement.ItemName,
+            additionalItemNames.Select((name, index) =>
+                (name, additionalBlockParameters[index].Type)).ToArray(),
             statement.Body,
             callerLocals,
             callerFunctions,
-            function.BlockResultType ?? BoundType.Unit);
+            callerFunction,
+            function.BlockResultType ?? BoundType.Unit,
+            OwnsItem: false);
+        _currentStreamContinuation = function.StreamElementType is null
+            ? null
+            : continuation ?? throw new SollangException($"stream function '{function.Name}' requires a downstream consumer");
         _currentFunctions = CreateFunctionScope(_currentFunctions, function.LocalFunctions);
+        _currentFunction = function;
         RestoreLocals(blockLocals);
         RuntimeValue result = RuntimeUnit.Instance;
         try
@@ -661,12 +877,32 @@ internal sealed partial class LlvmEmitter
                     ? GetFunctionResultTransferredOwnerName(function, function.Body)
                     : null;
             DropOwnedLocalsCreatedSince(blockLocals, transferredOwnerName);
+            if (function.ReturnType == BoundType.Unit)
+            {
+                foreach (var parameter in additionalParameters.Where(parameter =>
+                    parameter.Ownership == BoundFunctionInputOwnership.Move))
+                {
+                    if (_locals.TryGetValue(parameter.Name, out var movedValue))
+                    {
+                        DropOwnedLocal(parameter.Name, movedValue);
+                        RemoveLocal(parameter.Name);
+                    }
+                }
+                if (function.InputOwnership == BoundFunctionInputOwnership.Move
+                    && _locals.TryGetValue(function.InputName ?? "it", out var movedInput))
+                {
+                    DropOwnedLocal(function.InputName ?? "it", movedInput);
+                    RemoveLocal(function.InputName ?? "it");
+                }
+            }
         }
         finally
         {
             _currentBlockInvocation = previousInvocation;
+            _currentStreamContinuation = previousStreamContinuation;
             _currentFunctions = previousFunctions;
-            RestoreLocals(callerLocals);
+            _currentFunction = previousFunction;
+            RestoreLocals(returnLocals);
         }
 
         if (statement.ResultName is null)

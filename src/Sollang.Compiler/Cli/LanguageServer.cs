@@ -39,7 +39,7 @@ internal static partial class LanguageServer
                                 textDocumentSync = 1,
                                 documentFormattingProvider = true
                             },
-                            serverInfo = new { name = "sollang", version = "0.2" }
+                            serverInfo = new { name = "sollang", version = CompilerVersion.Current }
                         });
                         break;
                     case "shutdown":

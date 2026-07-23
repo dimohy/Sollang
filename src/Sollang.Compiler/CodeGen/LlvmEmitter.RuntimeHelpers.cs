@@ -69,6 +69,60 @@ internal sealed partial class LlvmEmitter
               ret ptr %dest
             }
 
+            define internal i64 @sollang_format_u64(ptr %dest, i64 %value) #0 {
+            entry:
+              br label %count
+
+            count:
+              %count_n = phi i64 [ %value, %entry ], [ %count_q, %count_more ]
+              %length = phi i64 [ 1, %entry ], [ %next_length, %count_more ]
+              %count_q = udiv i64 %count_n, 10
+              %count_done = icmp eq i64 %count_q, 0
+              br i1 %count_done, label %write_entry, label %count_more
+
+            count_more:
+              %next_length = add i64 %length, 1
+              br label %count
+
+            write_entry:
+              %last_index = sub i64 %length, 1
+              br label %write
+
+            write:
+              %write_n = phi i64 [ %value, %write_entry ], [ %write_q, %write ]
+              %index = phi i64 [ %last_index, %write_entry ], [ %previous_index, %write ]
+              %digit = urem i64 %write_n, 10
+              %write_q = udiv i64 %write_n, 10
+              %digit8 = trunc i64 %digit to i8
+              %ascii = add i8 %digit8, 48
+              %slot = getelementptr i8, ptr %dest, i64 %index
+              store i8 %ascii, ptr %slot, align 1
+              %previous_index = sub i64 %index, 1
+              %write_done = icmp eq i64 %write_q, 0
+              br i1 %write_done, label %return, label %write
+
+            return:
+              ret i64 %length
+            }
+
+            define internal i64 @sollang_format_i64(ptr %dest, i64 %value) #0 {
+            entry:
+              %negative = icmp slt i64 %value, 0
+              br i1 %negative, label %negative_value, label %positive_value
+
+            negative_value:
+              store i8 45, ptr %dest, align 1
+              %digits_dest = getelementptr i8, ptr %dest, i64 1
+              %magnitude = sub i64 0, %value
+              %negative_digits = call i64 @sollang_format_u64(ptr %digits_dest, i64 %magnitude)
+              %negative_length = add i64 %negative_digits, 1
+              ret i64 %negative_length
+
+            positive_value:
+              %positive_length = call i64 @sollang_format_u64(ptr %dest, i64 %value)
+              ret i64 %positive_length
+            }
+
             define internal i32 @sollang_write_u64(ptr %stdout, i64 %value, ptr %written) #0 {
             entry:
               %buf = alloca [20 x i8], align 1

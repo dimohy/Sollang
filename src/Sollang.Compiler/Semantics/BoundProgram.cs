@@ -73,14 +73,18 @@ internal sealed record BoundFunction(
     string? BlockResultTypeTemplate = null,
     string? InputTypeTemplate = null,
     string? ReturnTypeTemplate = null,
-    IReadOnlyList<BoundFunctionParameter>? AdditionalParameters = null);
+    IReadOnlyList<BoundFunctionParameter>? AdditionalParameters = null,
+    IReadOnlyList<BoundFunctionParameter>? AdditionalBlockParameters = null,
+    BoundType? StreamElementType = null,
+    string? StreamElementTypeTemplate = null);
 
 internal sealed record BoundFunctionParameter(
     string Name,
     BoundType Type,
     BoundFunctionInputOwnership Ownership,
     int Line,
-    int Column);
+    int Column,
+    string? TypeTemplate = null);
 
 internal sealed record BoundTraitMethod(
     string Name,
@@ -200,6 +204,7 @@ internal enum TypeId
     DynamicDirectoryEntryArray,
     DirectoryRawResult,
     DirectoryReadResult,
+    Range,
     GenericParameter = 512,
     SecondaryGenericParameter = 513,
     TertiaryGenericParameter = 514,

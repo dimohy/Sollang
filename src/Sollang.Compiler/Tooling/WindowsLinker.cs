@@ -6,6 +6,8 @@ namespace Sollang.Compiler.Tooling;
 
 internal sealed class WindowsLinker(LlvmToolchain toolchain)
 {
+    private const long TargetBytesPerPartition = 1024 * 1024;
+
     public void LinkLlvmIr(string llPath, string outputPath, string workDir, string? optimizationLevel)
     {
         var outputName = Path.GetFileNameWithoutExtension(outputPath);
@@ -55,7 +57,25 @@ internal sealed class WindowsLinker(LlvmToolchain toolchain)
         string outputName,
         string optimizationLevel)
     {
-        var partitionCount = Math.Max(1, Environment.ProcessorCount);
+        var processorCount = Math.Max(1, Environment.ProcessorCount);
+        var maxPartitionCount = NativeJobLimit(processorCount);
+        var llvmByteLength = new FileInfo(llPath).Length;
+        // llvm-split and each clang process have a fixed cost. Keep small modules
+        // whole and add parallelism only as the amount of IR grows.
+        var sizeBasedPartitionCount = Math.Max(
+            1,
+            (int)Math.Min(
+                processorCount,
+                ((llvmByteLength - 1) / TargetBytesPerPartition) + 1));
+        var partitionCount = Math.Min(maxPartitionCount, sizeBasedPartitionCount);
+        if (partitionCount == 1)
+        {
+            return CompileSingleModule(
+                llPath,
+                Path.Combine(workDir, outputName + ".obj"),
+                optimizationLevel);
+        }
+
         var bitcodePath = Path.Combine(workDir, outputName + ".partition-input.bc");
         var partitionPrefix = Path.Combine(workDir, outputName + ".partition.bc");
 
@@ -92,6 +112,22 @@ internal sealed class WindowsLinker(LlvmToolchain toolchain)
         })).ToArray();
         Task.WhenAll(tasks).GetAwaiter().GetResult();
         return objectPaths;
+    }
+
+    private static int NativeJobLimit(int processorCount)
+    {
+        var configured = Environment.GetEnvironmentVariable("SOLLANG_NATIVE_JOBS");
+        if (string.IsNullOrWhiteSpace(configured))
+        {
+            return processorCount;
+        }
+
+        if (!int.TryParse(configured, out var requested) || requested < 1)
+        {
+            throw new SollangException("SOLLANG_NATIVE_JOBS must be a positive integer");
+        }
+
+        return Math.Min(requested, processorCount);
     }
 
     private string CreateKernel32ImportLibrary(string workDir)

@@ -132,6 +132,7 @@ internal static class SemanticStableIdentity
         Append(builder, Type(types, function.ReturnType));
         Append(builder, function.BlockInputType is { } blockInput ? Type(types, blockInput) : "-");
         Append(builder, function.BlockResultType is { } blockResult ? Type(types, blockResult) : "-");
+        Append(builder, function.StreamElementType is { } streamElement ? Type(types, streamElement) : "-");
         Append(builder, function.IsAsync ? "async" : "sync");
         Append(builder, function.GenericParameterName ?? "");
         Append(builder, function.SecondaryGenericParameterName ?? "");
@@ -155,11 +156,19 @@ internal static class SemanticStableIdentity
         Append(builder, function.ReturnTypeTemplate ?? "");
         Append(builder, function.BlockInputTypeTemplate ?? "");
         Append(builder, function.BlockResultTypeTemplate ?? "");
+        Append(builder, function.StreamElementTypeTemplate ?? "");
         foreach (var parameter in function.AdditionalParameters ?? [])
         {
             Append(builder, parameter.Name);
             Append(builder, Type(types, parameter.Type));
             Append(builder, ((int)parameter.Ownership).ToString(CultureInfo.InvariantCulture));
+            Append(builder, parameter.TypeTemplate ?? "");
+        }
+        foreach (var parameter in function.AdditionalBlockParameters ?? [])
+        {
+            Append(builder, parameter.Name);
+            Append(builder, Type(types, parameter.Type));
+            Append(builder, parameter.TypeTemplate ?? "");
         }
         foreach (var associated in (function.ImplAssociatedTypes
                      ?? new Dictionary<string, TypeId>(StringComparer.Ordinal))
@@ -310,6 +319,10 @@ internal static class SemanticStableIdentity
                     break;
                 case BlockFunctionCallStatement block:
                     VisitExpression(block.Source, owner, result, ref ordinal);
+                    foreach (var argument in block.Arguments ?? [])
+                    {
+                        VisitExpression(argument, owner, result, ref ordinal);
+                    }
                     VisitStatements(block.Body, owner, result, ref ordinal);
                     break;
                 case BlockFunctionPipelineStatement pipeline:
@@ -317,6 +330,10 @@ internal static class SemanticStableIdentity
                     {
                         RegisterSyntaxCall(block, owner, result, ref ordinal);
                         VisitExpression(block.Source, owner, result, ref ordinal);
+                        foreach (var argument in block.Arguments ?? [])
+                        {
+                            VisitExpression(argument, owner, result, ref ordinal);
+                        }
                         VisitStatements(block.Body, owner, result, ref ordinal);
                     }
                     break;

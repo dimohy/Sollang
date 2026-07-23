@@ -383,6 +383,7 @@ internal sealed partial class SemanticCompiler
         if (function.InputType is { } inputType
             && ((inputType == BoundType.SourceText
                     && function.InputOwnership == BoundFunctionInputOwnership.Default)
+                || inputType == BoundType.Arena
                 || TypeContains(inputType, BoundType.Text)))
         {
             yield return function.InputName ?? "it";
@@ -391,6 +392,7 @@ internal sealed partial class SemanticCompiler
         {
             if ((parameter.Type == BoundType.SourceText
                     && parameter.Ownership == BoundFunctionInputOwnership.Default)
+                || parameter.Type == BoundType.Arena
                 || TypeContains(parameter.Type, BoundType.Text))
             {
                 yield return parameter.Name;
@@ -586,6 +588,20 @@ internal sealed partial class SemanticCompiler
             {
                 var target = flow.Targets[targetIndex];
                 var path = string.Join('.', target.Path);
+                if (path == "materialize" && target.Arguments.Count == 1)
+                {
+                    if (targetIndex != flow.Targets.Count - 1
+                        || !TryInferBorrowedTextOrigins(
+                            target.Arguments[0],
+                            functions,
+                            locals,
+                            out origins))
+                    {
+                        origins = EmptyBorrowOrigins();
+                        return false;
+                    }
+                    return true;
+                }
                 if (path == "slice")
                 {
                     if (targetIndex != flow.Targets.Count - 1)
@@ -814,6 +830,20 @@ internal sealed partial class SemanticCompiler
             for (var targetIndex = 0; targetIndex < flow.Targets.Count; targetIndex++)
             {
                 var target = flow.Targets[targetIndex];
+                if (target.Path.Count == 1
+                    && target.Path[0] == "materialize"
+                    && target.Arguments.Count == 1)
+                {
+                    if (targetIndex == flow.Targets.Count - 1
+                        && TryGetConcreteBorrowOrigins(
+                            target.Arguments[0],
+                            bindings,
+                            out origins))
+                    {
+                        return true;
+                    }
+                    break;
+                }
                 if (target.Path.Count == 1 && target.Path[0] == "slice")
                 {
                     if (targetIndex == flow.Targets.Count - 1
@@ -1395,7 +1425,7 @@ internal sealed partial class SemanticCompiler
                 return false;
             }
 
-            if (parameterTypes[ordinal] == BoundType.SourceText)
+            if (parameterTypes[ordinal] is BoundType.SourceText or BoundType.Arena)
             {
                 if (!TryGetConcreteBorrowOrigins(arguments[ordinal], bindings, out var sourceOrigins))
                 {

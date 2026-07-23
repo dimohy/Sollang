@@ -582,6 +582,7 @@ internal sealed class IncrementalCodegenCache
             yield return function.ReturnType;
             yield return function.BlockInputType ?? "";
             yield return function.BlockResultType ?? "";
+            yield return function.StreamElementType ?? "";
             yield return function.IsAsync ? "async" : "sync";
             yield return function.GenericParameterName ?? "";
             yield return function.SecondaryGenericParameterName ?? "";

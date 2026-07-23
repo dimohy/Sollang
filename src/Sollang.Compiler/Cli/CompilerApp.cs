@@ -19,9 +19,7 @@ internal static class CompilerApp
         {
             if (args is ["--version"] or ["-v"])
             {
-                var version = typeof(CompilerApp).Assembly.GetName().Version
-                    ?? throw new SollangException("compiler version metadata is missing");
-                Console.WriteLine($"Sollang {version.Major}.{version.Minor}");
+                Console.WriteLine($"Sollang {CompilerVersion.Current}");
                 return 0;
             }
             if (args.Length >= 2 && args[0] == "grammar" && args[1] == "build")
@@ -152,6 +150,10 @@ internal static class CompilerApp
                 WriteAndLink(options, toolchain, frontendCache.Output);
                 IncrementalProductCache.Publish(frontendCache.Location, options.OutputPath);
             }
+            else if (options.KeepTemps)
+            {
+                WriteKeptLlvm(options.OutputPath, frontendCache.Output);
+            }
             Console.WriteLine(
                 $"[frontend-cache] {frontendCache.Status}; skipped parsing and semantic analysis for "
                 + $"{frontendCache.SourceCount.ToString(CultureInfo.InvariantCulture)} sources; "
@@ -257,6 +259,15 @@ internal static class CompilerApp
         }
     }
 
+    private static void WriteKeptLlvm(string outputPath, LlvmCodegenOutput codegenOutput)
+    {
+        using var writer = new StreamWriter(
+            Path.ChangeExtension(outputPath, ".ll"),
+            append: false,
+            new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+        codegenOutput.CopyTo(new TextWriterOutputSink(writer));
+    }
+
     internal static void CompileStandalone(CliOptions options, SollangProgram program)
     {
         var toolchain = LlvmToolchain.From(options.LlvmHome);
@@ -340,6 +351,12 @@ internal static class CompilerApp
     {
         var standardLibrary = LoadStandardLibrary(sourcePaths[0]);
         var sourcePrograms = LoadUserPrograms(sourcePaths, project);
+        var modules = standardLibrary
+            .Concat(sourcePrograms)
+            .Where(static source => source.ModuleName.Length > 0)
+            .ToDictionary(static source => source.ModuleName, StringComparer.Ordinal);
+        standardLibrary = ReparseOpenImports(standardLibrary, modules);
+        sourcePrograms = ReparseOpenImports(sourcePrograms, modules);
         var executableFiles = sourcePrograms.Where(static source => source.Program.Statements.Count > 0).ToArray();
         if (executableFiles.Length > 1)
         {
@@ -363,6 +380,154 @@ internal static class CompilerApp
                 .ToArray(),
             sourcePrograms.SelectMany(static source => source.Program.Statements).ToArray());
         return new LoadedCompilation(program, standardLibrary.Concat(sourcePrograms).ToArray());
+    }
+
+    private static IReadOnlyList<CompilationSource> ReparseOpenImports(
+        IReadOnlyList<CompilationSource> sources,
+        IReadOnlyDictionary<string, CompilationSource> modules)
+    {
+        return sources.Select(source =>
+        {
+            var openImports = BuildOpenImports(source, modules);
+            if (openImports.Count == 0)
+            {
+                return source;
+            }
+
+            var parsed = ParseSourceFile(source.Path, source.IsStandardLibrary, openImports);
+            return source with { Program = parsed.Program, SourceBytes = parsed.SourceBytes };
+        }).ToArray();
+    }
+
+    private static IReadOnlyDictionary<string, IReadOnlyList<OpenImportCandidate>> BuildOpenImports(
+        CompilationSource source,
+        IReadOnlyDictionary<string, CompilationSource> modules)
+    {
+        var localNames = DirectDeclarationNames(source.Program).ToHashSet(StringComparer.Ordinal);
+        var explicitAliases = source.Program.Imports
+            .Select(static import => import.Alias)
+            .ToHashSet(StringComparer.Ordinal);
+        var candidates = new Dictionary<string, List<OpenImportCandidate>>(StringComparer.Ordinal);
+
+        foreach (var import in source.Program.Imports)
+        {
+            var moduleName = string.Join('.', import.Path);
+            if (!modules.TryGetValue(moduleName, out var importedModule))
+            {
+                continue;
+            }
+
+            foreach (var (name, path) in PublicModuleSymbols(importedModule))
+            {
+                if (localNames.Contains(name) || explicitAliases.Contains(name))
+                {
+                    continue;
+                }
+
+                if (!candidates.TryGetValue(name, out var namedCandidates))
+                {
+                    namedCandidates = [];
+                    candidates.Add(name, namedCandidates);
+                }
+
+                if (!namedCandidates.Any(candidate => candidate.Path.SequenceEqual(path)))
+                {
+                    namedCandidates.Add(new OpenImportCandidate(path, import.Alias));
+                }
+            }
+        }
+
+        return candidates.ToDictionary(
+            static pair => pair.Key,
+            static pair => (IReadOnlyList<OpenImportCandidate>)pair.Value,
+            StringComparer.Ordinal);
+    }
+
+    private static IEnumerable<string> DirectDeclarationNames(SollangProgram program)
+    {
+        var moduleName = string.Join('.', program.NamespacePath);
+        foreach (var function in program.Functions)
+        {
+            if (TryGetDirectSymbolName(moduleName, function.Name, out var functionName))
+            {
+                yield return functionName;
+            }
+
+            foreach (var localName in LocalFunctionNames(function.LocalFunctions))
+            {
+                yield return localName;
+            }
+        }
+
+        foreach (var name in program.Structs.Select(static declaration => declaration.Name)
+                     .Concat(program.Enums.Select(static declaration => declaration.Name))
+                     .Concat(program.Traits.Select(static declaration => declaration.Name)))
+        {
+            if (TryGetDirectSymbolName(moduleName, name, out var symbolName))
+            {
+                yield return symbolName;
+            }
+        }
+    }
+
+    private static IEnumerable<string> LocalFunctionNames(IReadOnlyList<FunctionDeclaration> functions)
+    {
+        foreach (var function in functions)
+        {
+            if (!function.Name.Contains('.', StringComparison.Ordinal))
+            {
+                yield return function.Name;
+            }
+
+            foreach (var nestedName in LocalFunctionNames(function.LocalFunctions))
+            {
+                yield return nestedName;
+            }
+        }
+    }
+
+    private static IEnumerable<(string Name, IReadOnlyList<string> Path)> PublicModuleSymbols(
+        CompilationSource source)
+    {
+        foreach (var function in source.Program.Functions)
+        {
+            if ((function.IsPublic || source.IsStandardLibrary)
+                && TryGetDirectSymbolName(source.ModuleName, function.Name, out var name))
+            {
+                yield return (name, function.Name.Split('.'));
+            }
+        }
+
+        foreach (var (name, isPublic) in source.Program.Structs
+                     .Select(static declaration => (declaration.Name, declaration.IsPublic))
+                     .Concat(source.Program.Enums.Select(static declaration => (declaration.Name, declaration.IsPublic)))
+                     .Concat(source.Program.Traits.Select(static declaration => (declaration.Name, declaration.IsPublic))))
+        {
+            if (isPublic && TryGetDirectSymbolName(source.ModuleName, name, out var symbolName))
+            {
+                yield return (symbolName, name.Split('.'));
+            }
+        }
+    }
+
+    private static bool TryGetDirectSymbolName(string moduleName, string declarationName, out string symbolName)
+    {
+        var prefix = moduleName.Length == 0 ? string.Empty : moduleName + ".";
+        if (!declarationName.StartsWith(prefix, StringComparison.Ordinal))
+        {
+            symbolName = string.Empty;
+            return false;
+        }
+
+        var remainder = declarationName[prefix.Length..];
+        if (remainder.Length == 0 || remainder.Contains('.', StringComparison.Ordinal))
+        {
+            symbolName = string.Empty;
+            return false;
+        }
+
+        symbolName = remainder;
+        return true;
     }
 
     private static IReadOnlyList<CompilationSource> LoadUserPrograms(
@@ -486,7 +651,7 @@ internal static class CompilerApp
         var nextChain = chain.Append(ModuleName(source.Program)).ToArray();
         foreach (var import in source.Program.Imports)
         {
-            if (import.Path.Count > 0 && import.Path[0] == "sys")
+            if (import.Path.Count > 0 && import.Path[0] is "sys" or "std")
             {
                 continue;
             }
@@ -649,7 +814,10 @@ internal static class CompilerApp
         yield return AppContext.BaseDirectory;
     }
 
-    private static ParsedSource ParseSourceFile(string path, bool isStandardLibrary)
+    private static ParsedSource ParseSourceFile(
+        string path,
+        bool isStandardLibrary,
+        IReadOnlyDictionary<string, IReadOnlyList<OpenImportCandidate>>? openImports = null)
     {
         var sourceBytes = File.ReadAllBytes(path);
         using var stream = new MemoryStream(sourceBytes, writable: false);
@@ -659,7 +827,7 @@ internal static class CompilerApp
             detectEncodingFromByteOrderMarks: true);
         var sourceText = reader.ReadToEnd();
         var tokens = new Lexer(sourceText).Lex();
-        return new ParsedSource(new Parser(tokens, isStandardLibrary).Parse(), sourceBytes);
+        return new ParsedSource(new Parser(tokens, isStandardLibrary, openImports).Parse(), sourceBytes);
     }
 
     private sealed record ParsedSource(SollangProgram Program, byte[] SourceBytes);

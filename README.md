@@ -37,6 +37,13 @@ passes the completed **60/60 self-hosting roadmap**. The language favors
 explicit value flow with `value -> target` and expression-first bindings with
 `value => name`.
 
+## Try It Online
+
+Open [sollang.slogs.dev](https://sollang.slogs.dev), choose a sample, edit the
+syntax-highlighted source, and press **Run**. The real Sollang lexer, parser,
+semantic compiler, standard library, and playground VM run in WebAssembly
+inside the browser; source code is not sent to a compilation server.
+
 ## Quick Look
 
 - `.slg` source files
@@ -180,6 +187,49 @@ stage. Names such as `map`, `tap`, and `filter` remain ordinary functions:
     -> filter { it > 10 }
     => result
 ```
+
+Lazy stream functions use the same rhythm without creating intermediate
+collections. Sequence operations are ordinary standard-library functions:
+
+```sollang
+import std.sequence
+
+struct Reading {
+    sensorId: Int
+    celsius: Int
+}
+
+main {
+    0 => alertCount!
+    0 => scannedCount!
+
+    1..1000000000
+        -> map sensorId {
+            Reading {
+                sensorId: sensorId
+                celsius: 20 + ((sensorId % 97) * 17) % 40
+            }
+        }
+        -> tap reading {
+            reading.sensorId => scannedCount!
+        }
+        -> filter reading {
+            reading.celsius >= 57
+        }
+        -> take(5)
+        -> each alert {
+            alertCount! + 1 => alertCount!
+            "alert $(alert.sensorId) = $(alert.celsius) C" -> println
+        }
+
+    "scanned=$(scannedCount!)" -> println
+}
+```
+
+The range stores only its bounds. `map`, `tap`, `filter`, `scan`, and
+library-defined `take` fuse into the source loop. `scan` can carry a scalar or
+struct accumulator across items; `take` uses language-level stream state and
+upstream cancellation to stop immediately after the fifth alert.
 
 Long flows can follow the same direction vertically. A newline before `->` or
 the final `=>` is an unambiguous continuation, and the formatter gives the
@@ -338,7 +388,8 @@ returns a nonzero native process status when any test fails.
 
 - `examples`: cumulative `.slg` programs that track the grammar progression
 - `examples/browser`: static browser runner for the WebAssembly sample
-- `stdlib/sys`: standard library modules written in Sollang
+- `stdlib/sys`: runtime-facing standard library modules written in Sollang
+- `stdlib/std`: general-purpose standard library modules written in Sollang
 - `syntax`: lexer and grammar rule sources
 - `src/Sollang.Compiler`: compiler CLI, semantic lowering, and LLVM codegen
 - `src/Sollang.Compiler.Generators`: source generators for lexing/parsing

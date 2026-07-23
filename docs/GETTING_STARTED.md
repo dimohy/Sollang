@@ -387,6 +387,10 @@ and capacity reporting:
 
 On first use, the script downloads LLVM 22.1.8 into `.tools`. LLVM binaries,
 build outputs, and generated executables are intentionally ignored by Git.
+On Windows, optimized native compilation keeps LLVM IR up to 1 MiB in one
+module and adds one partition per additional MiB, capped by the logical CPU
+count. Set `SOLLANG_NATIVE_JOBS` to a positive integer to apply a lower cap when
+measuring constrained or highly concurrent build environments.
 
 Example stdout tests compile and run the samples listed under
 `examples/expected`:
@@ -728,7 +732,8 @@ rule InputTypeAnnotation = (Identifier("move") | Identifier("mut"))? TypeAnnotat
 rule FunctionBody = LeftBrace NewLine* FunctionDeclaration* Statement* Expression NewLine* RightBrace | FatArrow Expression | Arrow Expression | Equal Identifier("intrinsic")
 rule MainBlock = Identifier("main") LeftBrace NewLine* Statement* RightBrace
 rule Statement = BlockFunctionCallStatement | EachStatement | BindingStatement | ExpressionStatement
-rule BlockFunctionCallStatement = RangeOrLogicalExpression (NewLine* Arrow Path Identifier? LeftBrace NewLine* Statement* RightBrace)+ (NewLine* FatArrow MutableName)? NewLine*
+rule BlockFunctionCallStatement = RangeOrLogicalExpression NewLine* Arrow BlockFunctionStage (NewLine* FatArrow MutableName)? NewLine*
+rule BlockFunctionStage = Path FlowTargetCall? ((Identifier (Comma Identifier)*)? LeftBrace NewLine* Statement* RightBrace (NewLine* Arrow BlockFunctionStage)? | NewLine* Arrow BlockFunctionStage)
 rule EachStatement = Identifier("each") Identifier Identifier("in") RangeExpression LeftBrace NewLine* Statement* RightBrace
 rule BindingStatement = Identifier Equal Expression StatementEnd
 rule RangeExpression = LogicalOrExpression Range LogicalOrExpression
@@ -808,6 +813,108 @@ These files use `namespace sys.io`, `namespace sys.runtime`, and
 names. The compiler loads these standard library files before user code and
 globally aliases `print`, `println`, and `readInt` to `sys.io.print`,
 `sys.io.println`, and `sys.io.readInt`.
+
+`start..endInclusive` creates an inclusive lazy `Range`, represented only by
+its two bounds. `each` lowers a `Range` directly to a loop instead of allocating
+an array. `beforeEach` and `afterEach` wrap each outer item's downstream work,
+and `flatMap` visits its inner range without materializing pairs. Importing the
+module exposes its public functions by both their short and qualified names:
+
+```sollang
+import std.sequence
+
+2..9
+    -> beforeEach outer { "$outer단" -> println }
+    -> afterEach outer { println() }
+    -> flatMap(1..9) outer, inner {
+        "$outer × $inner"
+    }
+    -> each line {
+        line -> println
+    }
+```
+
+The interpolated value remains a deferred `Text` formatting plan through the
+fused stream. Its holes are evaluated once at production time, and `each line`
+passes the value to the buffered print sink without constructing a temporary
+string for every row.
+
+Range projections can select the Range-specific mapper while reusing generic
+stream stages:
+
+```sollang
+import std.sequence
+
+struct Reading {
+    sensorId: Int
+    celsius: Int
+}
+
+main {
+    0 => alertCount!
+    0 => scannedCount!
+
+    1..1000000000
+        -> map sensorId {
+            Reading {
+                sensorId: sensorId
+                celsius: 20 + ((sensorId % 97) * 17) % 40
+            }
+        }
+        -> tap reading {
+            reading.sensorId => scannedCount!
+        }
+        -> filter reading {
+            reading.celsius >= 57
+        }
+        -> take(5)
+        -> each alert {
+            alertCount! + 1 => alertCount!
+            "alert $(alert.sensorId) = $(alert.celsius) C" -> println
+        }
+
+    "scanned=$(scannedCount!)" -> println
+}
+```
+
+The library-defined `take` stage keeps its counter with `state name! = value` and uses
+language-level `stop` to cancel the original Range loop. In this example, the
+billion-element upper bound is never materialized or fully scanned.
+
+State can also be a user struct. `scan(initial) accumulated, item { ... }`
+updates one accumulator per input and emits every updated state. Its state type
+is inferred from `initial`, so callers do not repeat generic type arguments.
+Example `585-stream-transaction-risk-scan.slg` combines
+`map -> tap -> scan -> filter -> take(5) -> each`; although its source range
+contains one billion transaction IDs, upstream cancellation stops it after the
+ninth ID.
+
+When a formatted value must outlive immediate consumption, materialize it into
+an explicit mutable `Arena` owner:
+
+```sollang
+formatLine value: Int, storage: mut Arena -> Text {
+    "value=$value" -> materialize(storage)
+}
+
+main {
+    Arena(0) => textStorage!
+    42 -> formatLine(textStorage!) => line
+    line -> println
+}
+```
+
+`materialize` performs one arena allocation and returns an ordinary UTF-8
+`Text` view. The compiler keeps the arena borrowed until the view's last use,
+so growing, resetting, moving, or dropping `textStorage!` cannot invalidate
+`line`. Immediate `println` pipelines remain allocation-free and do not need
+an arena.
+
+The same import also permits `sequence.flatMap`. If two imported modules expose
+the same short name, the compiler asks for a qualified name or a module alias
+instead of choosing silently. These are ordinary Sollang functions
+rather than dedicated query syntax. A block function can declare and receive
+multiple values, using `outer -> yield(inner)` to invoke `outer, inner { ... }`.
 
 The grammar generator is intentionally narrow for the first language slice; it
 validates the declared rules and produces the parser shape needed by the
@@ -962,6 +1069,9 @@ approved syntax.
   intrinsics
 - `stdlib/sys/file.slg`: affine sync/async file owners, legacy sorted-`Int`
   helpers, canonical scalar I/O, and the explicit `BinarySerializable` contract
+- `stdlib/std/sequence.slg`: output-inferred lazy Range `map`, array
+  `mapArray`, and allocation-free `filter`, `tap`, `beforeEach`, `afterEach`,
+  `flatMap`, `take`, and `skip` stream stages
 - `scripts/sollang.ps1`: local build/bootstrap script
 - `tools/vscode-sollang`: local VS Code extension for `.slg` syntax
   highlighting

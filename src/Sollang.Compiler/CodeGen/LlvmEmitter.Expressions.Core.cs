@@ -102,10 +102,25 @@ internal sealed partial class LlvmEmitter
     {
         return value switch
         {
+            RuntimeFormattedText formatted => EmitWriteFormattedText(formatted, ok),
             RuntimeText text => EmitWriteTextValue(text, ok),
             RuntimeInt integer => EmitWriteIntegerValue(integer, ok),
             _ => throw new SollangException($"unsupported runtime value {value.GetType().Name}")
         };
+    }
+
+    private string EmitWriteFormattedText(RuntimeFormattedText formatted, string ok)
+    {
+        foreach (var segment in formatted.Segments)
+        {
+            ok = segment switch
+            {
+                RuntimeFormattedTextLiteral literal => EmitWriteTextValue(literal.Text, ok),
+                RuntimeFormattedTextValue value => EmitWriteValue(value.Value, ok),
+                _ => throw new SollangException("unsupported deferred text segment")
+            };
+        }
+        return ok;
     }
 
     private string EmitWriteText(string text, string ok)
@@ -139,6 +154,117 @@ internal sealed partial class LlvmEmitter
         var writer = IsSignedIntegerType(value.Type) ? "sollang_write_i64" : "sollang_write_u64";
         EmitCall(write, "i32", writer, $"ptr %stdout, i64 {printable}, ptr %written");
         return CombineWriteOk(write, ok);
+    }
+
+    private RuntimeText EmitMaterializedText(
+        RuntimeValue value,
+        RuntimeMutableContainerReference owner)
+    {
+        var segments = PrepareMaterializedTextSegments(value);
+        var totalLength = "0";
+        foreach (var segment in segments)
+        {
+            var nextLength = NextTemp("materialized_text_length");
+            EmitBinary(nextLength, "add", "i64", totalLength, segment.LengthName);
+            var noOverflow = NextTemp("materialized_text_length_ok");
+            EmitCompare(noOverflow, "uge", "i64", nextLength, totalLength);
+            EmitTrapUnless(noOverflow, "materialized_text_length_overflow");
+            totalLength = nextLength;
+        }
+
+        var ownerPointer = NextTemp("materialize_arena_ptr");
+        var ownerUsed = NextTemp("materialize_arena_used");
+        var ownerCapacity = NextTemp("materialize_arena_capacity");
+        EmitLoad(ownerPointer, "ptr", owner.PointerAddress, 8);
+        EmitLoad(ownerUsed, "i64", owner.LengthAddress, 8);
+        EmitLoad(ownerCapacity, "i64", owner.CapacityAddress, 8);
+        var allocation = EmitArenaAllocate(
+            new RuntimeArena(ownerPointer, ownerUsed, ownerCapacity),
+            new RuntimeInt(BoundType.UIntSize, totalLength),
+            new RuntimeInt(BoundType.UIntSize, "1"));
+        EmitStore("ptr", allocation.Arena.PointerName, owner.PointerAddress, 8);
+        EmitStore("i64", allocation.Arena.UsedName, owner.LengthAddress, 8);
+        EmitStore("i64", allocation.Arena.CapacityName, owner.CapacityAddress, 8);
+
+        var destination = NextTemp("materialized_text");
+        EmitAssign(
+            destination,
+            $"getelementptr i8, ptr {allocation.Arena.PointerName}, i64 {allocation.Offset.ValueName}");
+        var offset = "0";
+        foreach (var segment in segments)
+        {
+            var segmentDestination = NextTemp("materialized_text_segment");
+            EmitAssign(
+                segmentDestination,
+                $"getelementptr i8, ptr {destination}, i64 {offset}");
+            EmitInstruction(
+                $"call void @llvm.memcpy.p0.p0.i64(ptr {segmentDestination}, "
+                + $"ptr {segment.PointerName}, i64 {segment.LengthName}, i1 false)");
+            var nextOffset = NextTemp("materialized_text_offset");
+            EmitBinary(nextOffset, "add", "i64", offset, segment.LengthName);
+            offset = nextOffset;
+        }
+
+        return new RuntimeText(destination, totalLength);
+    }
+
+    private IReadOnlyList<RuntimeText> PrepareMaterializedTextSegments(RuntimeValue value)
+    {
+        var segments = new List<RuntimeText>();
+        AppendMaterializedTextSegments(value, segments);
+        return segments;
+    }
+
+    private void AppendMaterializedTextSegments(RuntimeValue value, List<RuntimeText> segments)
+    {
+        switch (value)
+        {
+            case RuntimeText text:
+                segments.Add(text);
+                return;
+            case RuntimeInt integer:
+                segments.Add(FormatIntegerToScratch(integer));
+                return;
+            case RuntimeFormattedText formatted:
+                foreach (var segment in formatted.Segments)
+                {
+                    switch (segment)
+                    {
+                        case RuntimeFormattedTextLiteral literal:
+                            segments.Add(literal.Text);
+                            break;
+                        case RuntimeFormattedTextValue formattedValue:
+                            AppendMaterializedTextSegments(formattedValue.Value, segments);
+                            break;
+                        default:
+                            throw new SollangException("unsupported deferred text segment");
+                    }
+                }
+                return;
+            default:
+                throw new SollangException(
+                    $"cannot materialize runtime value {value.GetType().Name} as Text");
+        }
+    }
+
+    private RuntimeText FormatIntegerToScratch(RuntimeInt value)
+    {
+        var printable = value.ValueName;
+        if (NumericBitWidth(value.Type) < 64)
+        {
+            printable = NextTemp("materialize_integer");
+            var extension = IsSignedIntegerType(value.Type) ? "sext" : "zext";
+            EmitAssign(printable, $"{extension} {LlvmType(value.Type)} {value.ValueName} to i64");
+        }
+
+        var buffer = NextTemp("materialize_integer_buffer");
+        EmitAlloca(buffer, "[21 x i8]", 1);
+        var length = NextTemp("materialize_integer_length");
+        var formatter = IsSignedIntegerType(value.Type)
+            ? "sollang_format_i64"
+            : "sollang_format_u64";
+        EmitCall(length, "i64", formatter, $"ptr {buffer}, i64 {printable}");
+        return new RuntimeText(buffer, length);
     }
 
     private RuntimeInt EmitSizeAsInt(string size, string prefix)
@@ -206,7 +332,7 @@ internal sealed partial class LlvmEmitter
             SubjectCompareExpression => throw new SollangException("subject comparison is only valid inside value-flow when"),
             SubjectRangeExpression => throw new SollangException("subject range is only valid inside value-flow when"),
             FoldExpression fold => EmitFoldExpression(fold),
-            RangeExpression => throw new SollangException("range values are only valid as block-function input"),
+            RangeExpression range => EmitRangeExpression(range),
             CallExpression call => EmitFunctionCall(call),
             FlowExpression flow => EmitFlowExpressionValue(flow),
             _ => throw new SollangException($"unsupported runtime expression {expression.GetType().Name}")
@@ -214,6 +340,18 @@ internal sealed partial class LlvmEmitter
 
         EmitStackLifetimeEndsAfter(expression);
         return value;
+    }
+
+    private RuntimeStruct EmitRangeExpression(RangeExpression expression)
+    {
+        var start = EmitIntExpression(expression.Start);
+        var endInclusive = EmitIntExpression(expression.End);
+        var llvmType = LlvmStructType(BoundType.Range);
+        var withStart = NextTemp("range");
+        EmitAssign(withStart, $"insertvalue {llvmType} poison, i32 {start.ValueName}, 0");
+        var value = NextTemp("range");
+        EmitAssign(value, $"insertvalue {llvmType} {withStart}, i32 {endInclusive.ValueName}, 1");
+        return new RuntimeStruct(BoundType.Range, value);
     }
 
     private RuntimeValue EmitNameExpression(NameExpression expression)
@@ -240,11 +378,37 @@ internal sealed partial class LlvmEmitter
         return EmitFunctionCall(function, argument: null);
     }
 
-    private RuntimeText EmitTextLiteral(StringExpression expression)
+    private RuntimeValue EmitTextLiteral(StringExpression expression)
     {
-        var text = GetPlainText(expression, expression.Line, expression.Column);
-        var global = AddGlobalString(text);
-        return new RuntimeText(global.Name, global.Length.ToString(CultureInfo.InvariantCulture));
+        if (expression.Segments.All(static segment => segment is TextSegment))
+        {
+            var text = GetPlainText(expression, expression.Line, expression.Column);
+            var global = AddGlobalString(text);
+            return new RuntimeText(global.Name, global.Length.ToString(CultureInfo.InvariantCulture));
+        }
+
+        var segments = new List<RuntimeFormattedTextSegment>(expression.Segments.Count);
+        foreach (var segment in expression.Segments)
+        {
+            switch (segment)
+            {
+                case TextSegment { Text.Length: > 0 } literal:
+                    var global = AddGlobalString(literal.Text);
+                    segments.Add(new RuntimeFormattedTextLiteral(
+                        new RuntimeText(global.Name, global.Length.ToString(CultureInfo.InvariantCulture))));
+                    break;
+                case TextSegment:
+                    break;
+                case InterpolationSegment interpolation:
+                    // Evaluate holes exactly once, in source order. The resulting runtime
+                    // values may then flow through fused stream stages without a Text buffer.
+                    segments.Add(new RuntimeFormattedTextValue(EmitExpression(interpolation.Expression)));
+                    break;
+                default:
+                    throw new SollangException($"unsupported string segment {segment.GetType().Name}");
+            }
+        }
+        return new RuntimeFormattedText(segments);
     }
 
     private RuntimeValue EmitArrayLiteral(ArrayLiteralExpression expression)
@@ -275,7 +439,7 @@ internal sealed partial class LlvmEmitter
     private RuntimeValue[] EmitArrayLiteralElements(ArrayLiteralExpression expression)
     {
         BoundType? elementType = expression.ElementType is not null
-            && _program.Types.TryResolve(expression.ElementType, out var declaredElementType)
+            && TryResolveRuntimeTypeName(expression.ElementType, out var declaredElementType)
                 ? declaredElementType
                 : null;
         var elements = new RuntimeValue[expression.Elements.Count];
@@ -388,6 +552,14 @@ internal sealed partial class LlvmEmitter
     private RuntimeValue EmitDynamicArrayLiteral(ArrayLiteralExpression expression)
     {
         var elements = EmitArrayLiteralElements(expression);
+        if (elements.Length == 0
+            && expression.ElementType is not null
+            && TryResolveRuntimeTypeName(expression.ElementType, out var declaredElementType)
+            && declaredElementType != BoundType.Int
+            && _program.Types.TryGetDynamicArrayForElement(declaredElementType, out var declaredArrayType))
+        {
+            return EmitDynamicInlineArrayLiteral(declaredArrayType, elements);
+        }
         if (elements.Length == 0 || elements.All(static value => value.Type == BoundType.Int))
         {
             return EmitDynamicIntArrayLiteral(expression, elements.Cast<RuntimeInt>().ToArray());
@@ -400,6 +572,36 @@ internal sealed partial class LlvmEmitter
         }
 
         throw new SollangException("growable array elements must have one supported runtime type");
+    }
+
+    private bool TryResolveRuntimeTypeName(string typeName, out BoundType type)
+    {
+        if (_program.Types.TryResolve(typeName, out type))
+        {
+            return true;
+        }
+        if (_currentFunction is { } function)
+        {
+            if (typeName == function.GenericParameterName && function.SpecializedType is { } primaryType)
+            {
+                type = primaryType;
+                return true;
+            }
+            if (typeName == function.SecondaryGenericParameterName
+                && function.SpecializedSecondaryType is { } secondaryType)
+            {
+                type = secondaryType;
+                return true;
+            }
+            if (typeName == function.TertiaryGenericParameterName
+                && function.SpecializedTertiaryType is { } tertiaryType)
+            {
+                type = tertiaryType;
+                return true;
+            }
+        }
+        type = default;
+        return false;
     }
 
     private RuntimeDynamicIntArray EmitDynamicIntArrayLiteral(
@@ -503,7 +705,8 @@ internal sealed partial class LlvmEmitter
 
     private RuntimeValue EmitTypedEmptyArray(TypedEmptyArrayExpression expression)
     {
-        if (expression.ElementType == "Int")
+        if (TryResolveRuntimeTypeName(expression.ElementType, out var elementType)
+            && elementType == BoundType.Int)
         {
             var intCapacity = expression.CapacityHint ?? 0;
             var intPointer = intCapacity == 0
@@ -511,7 +714,7 @@ internal sealed partial class LlvmEmitter
                 : EmitHeapAllocate(((long)intCapacity * 4).ToString(CultureInfo.InvariantCulture));
             return new RuntimeDynamicIntArray(intPointer, "0", intCapacity.ToString(CultureInfo.InvariantCulture));
         }
-        if (!_program.Types.TryResolve(expression.ElementType, out var elementType)
+        if (!TryResolveRuntimeTypeName(expression.ElementType, out elementType)
             || !_program.Types.TryGetDynamicArrayForElement(elementType, out var arrayType))
         {
             throw new SollangException($"unknown growable array element type '{expression.ElementType}'");

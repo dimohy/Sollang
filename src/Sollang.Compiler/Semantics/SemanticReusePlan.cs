@@ -19,6 +19,7 @@ internal sealed record SemanticSpecializationReuse(
     string? BlockInputName,
     string? BlockInputType,
     string? BlockResultType,
+    string? StreamElementType,
     string? SpecializedType,
     string? SpecializedSecondaryType,
     string? SpecializedTertiaryType,

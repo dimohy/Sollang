@@ -1,0 +1,46 @@
+# Detects transaction-risk thresholds with one fused stateful stream and stops
+# after five alerts without materializing the billion-item source.
+import std.sequence
+
+struct Transaction {
+    id: Int
+    amount: Int
+}
+
+struct AccountState {
+    lastTransactionId: Int
+    withdrawnToday: Int
+}
+
+main {
+    0 => scanned!
+
+    1..1000000000
+        -> map id {
+            Transaction {
+                id: id
+                amount: 100 + (id % 7) * 50
+            }
+        }
+        -> tap transaction {
+            scanned! + 1 => scanned!
+        }
+        -> scan(AccountState {
+            lastTransactionId: 0
+            withdrawnToday: 0
+        }) account, transaction {
+            AccountState {
+                lastTransactionId: transaction.id
+                withdrawnToday: account.withdrawnToday + transaction.amount
+            }
+        }
+        -> filter account {
+            account.withdrawnToday > 1000
+        }
+        -> take(5)
+        -> each warning {
+            "warning tx=$(warning.lastTransactionId), withdrawn=$(warning.withdrawnToday)" -> println
+        }
+
+    "scanned=$(scanned!)" -> println
+}

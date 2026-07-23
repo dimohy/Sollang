@@ -1,0 +1,27 @@
+# Deferred interpolation stays allocation-free until materialize fixes its
+# storage and lifetime in an explicit Arena owner.
+formatLine value: Int, storage: mut Arena -> Text {
+    "값=$value" -> materialize(storage)
+}
+
+main {
+    Arena(0) => textStorage!
+
+    42 -> formatLine(textStorage!) => first
+    first -> println
+    first -> len => firstBytes
+    "bytes=$firstBytes" -> println
+
+    # The first view is no longer live, so the same owner may grow again.
+    -7 -> formatLine(textStorage!) => second
+    second -> println
+
+    UInt64(18446744073709551615) => maximum
+    Long(-9223372036854775807) - Long(1) => minimum
+    "wide=$maximum,min=$minimum" -> materialize(textStorage!) => wide
+    wide -> println
+
+    "" -> materialize(textStorage!) => empty
+    empty -> len => emptyBytes
+    "empty=$emptyBytes" -> println
+}

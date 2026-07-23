@@ -38,6 +38,10 @@ internal sealed partial class SemanticCompiler
     private bool _currentFunctionIsAsync;
     private IReadOnlySet<string>? _currentFunctionEffects;
     private BoundType? _currentBlockYieldResultType;
+    private IReadOnlyList<BoundType> _currentBlockAdditionalYieldInputTypes = [];
+    private BoundType? _currentStreamElementType;
+    private IReadOnlyDictionary<string, BoundType> _activeGenericTypeArguments =
+        new Dictionary<string, BoundType>(StringComparer.Ordinal);
     private HashSet<string>? _collectingLocalCalls;
     private readonly int _pointerBitWidth;
     private int _loopDepth;
@@ -571,7 +575,10 @@ internal sealed partial class SemanticCompiler
                 IsAsync: recipe.IsAsync,
                 BlockResultType: recipe.BlockResultType is null
                     ? null
-                    : (BoundType)SemanticStableIdentity.ResolveType(_types, recipe.BlockResultType));
+                    : (BoundType)SemanticStableIdentity.ResolveType(_types, recipe.BlockResultType),
+                StreamElementType: recipe.StreamElementType is null
+                    ? null
+                    : (BoundType)SemanticStableIdentity.ResolveType(_types, recipe.StreamElementType));
         }
 
         return StringComparer.Ordinal.Equals(
@@ -710,7 +717,13 @@ internal sealed partial class SemanticCompiler
         }
 
         var isParallelRole = function.Name is "sys.runtime.parallel" or "sys.runtime.tryParallel";
-        var inputTypeTemplate = (isParallelRole || function.HasValueGenericFixedArrayInput)
+        var hasCompositeGenericInput = function.GenericParameterName is not null
+            && function.InputType is not null
+            && function.InputType != function.GenericParameterName
+            && (TypeSyntaxReferencesParameter(function.InputType, function.GenericParameterName)
+                || TypeSyntaxReferencesParameter(function.InputType, function.SecondaryGenericParameterName)
+                || TypeSyntaxReferencesParameter(function.InputType, function.TertiaryGenericParameterName));
+        var inputTypeTemplate = (isParallelRole || function.HasValueGenericFixedArrayInput || hasCompositeGenericInput)
             && function.InputType is not null
             && (function.HasValueGenericFixedArrayInput
                 || (function.InputType != function.GenericParameterName
@@ -734,7 +747,9 @@ internal sealed partial class SemanticCompiler
             inputType = BoundType.IntDictionaryView;
         }
 
-        var returnTypeTemplate = isParallelRole
+        var returnTypeTemplate = (isParallelRole
+                || function.ReturnType.StartsWith('[', StringComparison.Ordinal))
+            && function.GenericParameterName is not null
             && function.ReturnType != function.GenericParameterName
             && function.ReturnType != function.SecondaryGenericParameterName
             && function.ReturnType != function.TertiaryGenericParameterName
@@ -776,15 +791,28 @@ internal sealed partial class SemanticCompiler
             ? (BoundType?)null
             : function.BlockResultType is null
                 ? BoundType.Unit
-                : blockResultTypeTemplate is not null
-                    ? null
-                    : ParseFunctionType(
-                        function.BlockResultType,
-                        function.GenericParameterName,
-                        function.SecondaryGenericParameterName,
-                        function.TertiaryGenericParameterName,
-                        function.Line,
-                        function.Column);
+                : ParseFunctionType(
+                    function.BlockResultType,
+                    function.GenericParameterName,
+                    function.SecondaryGenericParameterName,
+                    function.TertiaryGenericParameterName,
+                    function.Line,
+                    function.Column);
+        var streamElementTypeTemplate = function.StreamElementType is not null
+            && (TypeSyntaxReferencesParameter(function.StreamElementType, function.GenericParameterName)
+                || TypeSyntaxReferencesParameter(function.StreamElementType, function.SecondaryGenericParameterName)
+                || TypeSyntaxReferencesParameter(function.StreamElementType, function.TertiaryGenericParameterName))
+                ? function.StreamElementType
+                : null;
+        var streamElementType = function.StreamElementType is null
+            ? (BoundType?)null
+            : ParseFunctionType(
+                function.StreamElementType,
+                function.GenericParameterName,
+                function.SecondaryGenericParameterName,
+                function.TertiaryGenericParameterName,
+                function.Line,
+                function.Column);
         var genericAssociatedTypeConstraint = function.GenericAssociatedTypeConstraint is null
             ? (TypeId?)null
             : ParseFunctionType(
@@ -808,13 +836,24 @@ internal sealed partial class SemanticCompiler
         var additionalParameters = (function.AdditionalParameters ?? [])
             .Select(parameter =>
             {
-                var parameterType = ParseFunctionType(
-                    parameter.TypeName,
-                    function.GenericParameterName,
-                    function.SecondaryGenericParameterName,
-                    function.TertiaryGenericParameterName,
-                    parameter.Line,
-                    parameter.Column);
+                var parameterTypeTemplate = function.GenericParameterName is not null
+                    && (TypeSyntaxReferencesParameter(parameter.TypeName, function.GenericParameterName)
+                        || TypeSyntaxReferencesParameter(parameter.TypeName, function.SecondaryGenericParameterName)
+                        || TypeSyntaxReferencesParameter(parameter.TypeName, function.TertiaryGenericParameterName))
+                    && parameter.TypeName != function.GenericParameterName
+                    && parameter.TypeName != function.SecondaryGenericParameterName
+                    && parameter.TypeName != function.TertiaryGenericParameterName
+                        ? parameter.TypeName
+                        : null;
+                var parameterType = parameterTypeTemplate is null
+                    ? ParseFunctionType(
+                        parameter.TypeName,
+                        function.GenericParameterName,
+                        function.SecondaryGenericParameterName,
+                        function.TertiaryGenericParameterName,
+                        parameter.Line,
+                        parameter.Column)
+                    : BoundType.Unit;
                 if (parameter.Ownership == FunctionInputOwnership.Default
                     && parameterType == BoundType.IntDictionary)
                 {
@@ -823,14 +862,36 @@ internal sealed partial class SemanticCompiler
                 return new BoundFunctionParameter(
                     parameter.Name,
                     parameterType,
-                    BindFunctionInputOwnership(
-                        parameter.Ownership,
-                        parameterType,
-                        parameter.Line,
-                        parameter.Column),
+                    parameterTypeTemplate is not null
+                        ? parameter.Ownership switch
+                        {
+                            FunctionInputOwnership.Move => BoundFunctionInputOwnership.Move,
+                            FunctionInputOwnership.MutableBorrow => BoundFunctionInputOwnership.MutableBorrow,
+                            _ => BoundFunctionInputOwnership.Default
+                        }
+                        : BindFunctionInputOwnership(
+                            parameter.Ownership,
+                            parameterType,
+                            parameter.Line,
+                            parameter.Column),
                     parameter.Line,
-                    parameter.Column);
+                    parameter.Column,
+                    parameterTypeTemplate);
             })
+            .ToArray();
+        var additionalBlockParameters = (function.AdditionalBlockParameters ?? [])
+            .Select(parameter => new BoundFunctionParameter(
+                parameter.Name,
+                ParseFunctionType(
+                    parameter.TypeName,
+                    function.GenericParameterName,
+                    function.SecondaryGenericParameterName,
+                    function.TertiaryGenericParameterName,
+                    parameter.Line,
+                    parameter.Column),
+                BoundFunctionInputOwnership.Default,
+                parameter.Line,
+                parameter.Column))
             .ToArray();
         var effects = BindFunctionEffects(function);
         var isAsyncRuntimeIntrinsic = function.IsStandardLibrary
@@ -891,7 +952,10 @@ internal sealed partial class SemanticCompiler
             BlockResultTypeTemplate: blockResultTypeTemplate,
             InputTypeTemplate: inputTypeTemplate,
             ReturnTypeTemplate: returnTypeTemplate,
-            AdditionalParameters: additionalParameters);
+            AdditionalParameters: additionalParameters,
+            AdditionalBlockParameters: additionalBlockParameters,
+            StreamElementType: streamElementType,
+            StreamElementTypeTemplate: streamElementTypeTemplate);
     }
 
     private IReadOnlySet<string> BindFunctionEffects(FunctionDeclaration function)
@@ -968,8 +1032,6 @@ internal sealed partial class SemanticCompiler
     {
         if (function.GenericParameterName is not null)
         {
-            var allowsCompositeGenericInput = function.IsStandardLibrary
-                && function.Name is "sys.runtime.parallel" or "sys.runtime.tryParallel";
             if (isLocal || function.TraitName is not null)
             {
                 throw Error(function.Line, function.Column, "generic local and impl functions are not implemented yet");
@@ -977,7 +1039,11 @@ internal sealed partial class SemanticCompiler
             if (!function.IsValueGeneric
                 && function.InputType is not null
                 && function.InputType != function.GenericParameterName
-                && !allowsCompositeGenericInput)
+                && !TypeSyntaxReferencesParameter(function.InputType, function.GenericParameterName)
+                && !TypeSyntaxReferencesParameter(function.InputType, function.SecondaryGenericParameterName)
+                && !TypeSyntaxReferencesParameter(function.InputType, function.TertiaryGenericParameterName)
+                && (function.BlockResultType is null
+                    || !TypeSyntaxReferencesParameter(function.BlockResultType, function.GenericParameterName)))
             {
                 throw Error(
                     function.Line,
@@ -1041,6 +1107,31 @@ internal sealed partial class SemanticCompiler
         if (function.BlockInputName is not null)
         {
             ValidateBindingName(function.BlockInputName, function.Line, function.Column);
+        }
+        var blockParameterNames = new HashSet<string>(StringComparer.Ordinal);
+        if (function.BlockInputName is not null)
+        {
+            blockParameterNames.Add(function.BlockInputName);
+        }
+        foreach (var parameter in function.AdditionalBlockParameters ?? [])
+        {
+            ValidateBindingName(parameter.Name, parameter.Line, parameter.Column);
+            if (!blockParameterNames.Add(parameter.Name))
+            {
+                throw Error(parameter.Line, parameter.Column, $"block parameter '{parameter.Name}' is declared more than once");
+            }
+        }
+
+        if (function.StreamElementType is not null)
+        {
+            if (function.IsAsync || function.ReturnType != "Unit")
+            {
+                throw Error(function.Line, function.Column, "stream functions must be synchronous and return Unit");
+            }
+            if (function.IsIntrinsic)
+            {
+                throw Error(function.Line, function.Column, "stream functions are user-defined language functions");
+            }
         }
 
     }
@@ -1487,6 +1578,7 @@ internal sealed partial class SemanticCompiler
         _activeBorrowedTextOrigins.Clear();
         _activeReadonlyReferenceBindings.Clear();
         var selectedCapturedBindings = SelectCapturedBindings(function, capturedBindings, out var calledFunctions);
+        var previousStreamElementType = _currentStreamElementType;
         _functionCapturedBindings[function] = new Dictionary<string, BoundType>(
             selectedCapturedBindings,
             StringComparer.Ordinal);
@@ -1529,6 +1621,7 @@ internal sealed partial class SemanticCompiler
         _currentFunctionAllowsEarlyReturn = true;
         _currentFunctionIsAsync = function.IsAsync;
         _currentFunctionEffects = function.Effects;
+        _currentStreamElementType = function.StreamElementType;
 
         var mutableBindings = new HashSet<string>(StringComparer.Ordinal);
         if (FunctionMutablyBorrowsInput(function))
@@ -1544,6 +1637,34 @@ internal sealed partial class SemanticCompiler
         }
 
         var returnedMoveInputName = ReturnedMoveInputName(function);
+
+        if (function.StreamElementType is not null)
+        {
+            var stateInitializerBindings = new Dictionary<string, BoundType>(
+                selectedCapturedBindings,
+                StringComparer.Ordinal);
+            foreach (var parameter in function.AdditionalParameters ?? [])
+            {
+                stateInitializerBindings[parameter.Name] = parameter.Type;
+            }
+            foreach (var stateBinding in function.BlockBody.OfType<BindingStatement>()
+                         .Where(static binding => binding.IsStreamState))
+            {
+                var stateType = InferExpression(
+                    stateBinding.Value,
+                    scopedFunctions,
+                    stateInitializerBindings,
+                    allowPrintCall: false,
+                    allowReadIntCall: function.IsStandardLibrary,
+                    allowFlowBindingTarget: false,
+                    mutableBindings: new HashSet<string>(StringComparer.Ordinal));
+                if (stateType == BoundType.Unit)
+                {
+                    throw Error(stateBinding.Line, stateBinding.Column, "stream state cannot be initialized with Unit");
+                }
+                stateInitializerBindings.Add(stateBinding.Name, stateType);
+            }
+        }
 
         BindStatements(
             function.BlockBody,
@@ -1596,6 +1717,7 @@ internal sealed partial class SemanticCompiler
         _currentFunctionAllowsEarlyReturn = true;
         _currentFunctionIsAsync = function.IsAsync;
         _currentFunctionEffects = function.Effects;
+        _currentStreamElementType = function.StreamElementType;
         _loopDepth = 0;
         var bodyType = function.Body is null
             ? BoundType.Unit
@@ -1667,6 +1789,7 @@ internal sealed partial class SemanticCompiler
         {
             _activeBorrowedTextOrigins[pair.Key] = pair.Value;
         }
+        _currentStreamElementType = previousStreamElementType;
 
     }
 
@@ -1683,8 +1806,26 @@ internal sealed partial class SemanticCompiler
         var previousIsAsync = _currentFunctionIsAsync;
         var previousEffects = _currentFunctionEffects;
         var previousLoopDepth = _loopDepth;
+        var previousGenericTypeArguments = _activeGenericTypeArguments;
         try
         {
+            var genericTypeArguments = new Dictionary<string, BoundType>(StringComparer.Ordinal);
+            if (function.GenericParameterName is { } primaryName
+                && function.SpecializedType is { } primaryType)
+            {
+                genericTypeArguments[primaryName] = primaryType;
+            }
+            if (function.SecondaryGenericParameterName is { } secondaryName
+                && function.SpecializedSecondaryType is { } secondaryType)
+            {
+                genericTypeArguments[secondaryName] = secondaryType;
+            }
+            if (function.TertiaryGenericParameterName is { } tertiaryName
+                && function.SpecializedTertiaryType is { } tertiaryType)
+            {
+                genericTypeArguments[tertiaryName] = tertiaryType;
+            }
+            _activeGenericTypeArguments = genericTypeArguments;
             ValidateUserFunction(
                 function,
                 parentFunctions,
@@ -1701,6 +1842,7 @@ internal sealed partial class SemanticCompiler
             _currentFunctionIsAsync = previousIsAsync;
             _currentFunctionEffects = previousEffects;
             _loopDepth = previousLoopDepth;
+            _activeGenericTypeArguments = previousGenericTypeArguments;
         }
     }
 
@@ -1714,7 +1856,13 @@ internal sealed partial class SemanticCompiler
             StringComparer.Ordinal);
         _currentFunctionIsAsync = false;
         var previousBlockYieldResultType = _currentBlockYieldResultType;
+        var previousAdditionalYieldInputTypes = _currentBlockAdditionalYieldInputTypes;
+        var previousStreamElementType = _currentStreamElementType;
         _currentBlockYieldResultType = function.BlockResultType ?? BoundType.Unit;
+        _currentBlockAdditionalYieldInputTypes = (function.AdditionalBlockParameters ?? [])
+            .Select(static parameter => parameter.Type)
+            .ToArray();
+        _currentStreamElementType = function.StreamElementType;
         if (function.InputType is null)
         {
             throw Error(function.Line, function.Column, $"block function '{function.Name}' requires an input");
@@ -1729,6 +1877,10 @@ internal sealed partial class SemanticCompiler
         {
             [function.InputName ?? "it"] = function.InputType.Value
         };
+        foreach (var parameter in function.AdditionalParameters ?? [])
+        {
+            bodyBindings[parameter.Name] = parameter.Type;
+        }
 
         var scopedFunctions = CreateFunctionScope(parentFunctions, function.LocalFunctions);
         foreach (var localFunction in function.LocalFunctions.Values)
@@ -1788,6 +1940,8 @@ internal sealed partial class SemanticCompiler
 
         _functionBindings[function] = new Dictionary<string, BoundType>(bodyBindings, StringComparer.Ordinal);
         _currentBlockYieldResultType = previousBlockYieldResultType;
+        _currentBlockAdditionalYieldInputTypes = previousAdditionalYieldInputTypes;
+        _currentStreamElementType = previousStreamElementType;
     }
 
     private IReadOnlyDictionary<string, BoundFunction> CreateFunctionScope(
@@ -2439,6 +2593,21 @@ internal sealed partial class SemanticCompiler
             switch (statement)
             {
                 case BindingStatement binding:
+                    if (binding.IsStreamState)
+                    {
+                        if (_currentStreamElementType is null)
+                        {
+                            throw Error(binding.Line, binding.Column, "state bindings are valid only inside stream functions");
+                        }
+                        if (!binding.IsMutable)
+                        {
+                            throw Error(binding.Line, binding.Column, "stream state must be mutable; use 'state name! = value'");
+                        }
+                        if (bindings.ContainsKey(binding.Name))
+                        {
+                            throw Error(binding.Line, binding.Column, $"stream state '{binding.Name}' is already declared");
+                        }
+                    }
                     ValidateBindingName(binding.Name, binding.Line, binding.Column);
                     var reboundType = default(BoundType);
                     var isMutableRebind = binding.IsMutable
@@ -2595,10 +2764,7 @@ internal sealed partial class SemanticCompiler
                     BindBlockFunctionCall(blockFunctionCall, functions, bindings, mutableBindings, yieldInputType);
                     break;
                 case BlockFunctionPipelineStatement pipeline:
-                    foreach (var blockFunctionCall in pipeline.Calls)
-                    {
-                        BindBlockFunctionCall(blockFunctionCall, functions, bindings, mutableBindings, yieldInputType);
-                    }
+                    BindBlockFunctionPipeline(pipeline, functions, bindings, mutableBindings, yieldInputType);
                     break;
                 case LoopControlStatement loopControl:
                     if (_loopDepth == 0)
@@ -2610,6 +2776,12 @@ internal sealed partial class SemanticCompiler
                     }
                     _borrowedTextContinuationNames = parentBorrowedTextContinuation;
                     return;
+                case StreamStopStatement stop:
+                    if (_currentStreamElementType is null)
+                    {
+                        throw Error(stop.Line, stop.Column, "'stop' is valid only inside a stream function");
+                    }
+                    break;
                 case GuardLoopControlStatement guardLoopControl:
                     if (_loopDepth == 0)
                     {
@@ -3051,6 +3223,160 @@ internal sealed partial class SemanticCompiler
         }
     }
 
+    private void BindBlockFunctionPipeline(
+        BlockFunctionPipelineStatement pipeline,
+        IReadOnlyDictionary<string, BoundFunction> functions,
+        Dictionary<string, BoundType> bindings,
+        HashSet<string> mutableBindings,
+        BoundType? yieldInputType)
+    {
+        if (TryBindStreamingPipeline(pipeline, functions, bindings, mutableBindings))
+        {
+            return;
+        }
+
+        for (var index = 0; index < pipeline.Calls.Count; index++)
+        {
+            BindBlockFunctionCall(pipeline.Calls[index], functions, bindings, mutableBindings, yieldInputType);
+        }
+    }
+
+    private bool TryBindStreamingPipeline(
+        BlockFunctionPipelineStatement pipeline,
+        IReadOnlyDictionary<string, BoundFunction> functions,
+        Dictionary<string, BoundType> bindings,
+        HashSet<string> mutableBindings)
+    {
+        var firstCall = pipeline.Calls[0];
+        if (!TryGetFunction(string.Join('.', firstCall.Target), functions, out var firstFunction)
+            || (firstFunction.StreamElementType is null
+                && firstFunction.StreamElementTypeTemplate is null))
+        {
+            return false;
+        }
+
+        BoundType? streamedInputType = null;
+        for (var index = 0; index < pipeline.Calls.Count; index++)
+        {
+            var call = pipeline.Calls[index];
+            if (string.Join('.', call.Target) == "each")
+            {
+                if (index != pipeline.Calls.Count - 1 || streamedInputType is null)
+                {
+                    throw Error(call.Line, call.Column, "each must terminate a streaming pipeline");
+                }
+                BindEachBlockBody(call, streamedInputType.Value, functions, bindings, mutableBindings);
+                return true;
+            }
+
+            if (!TryGetFunction(string.Join('.', call.Target), functions, out var streamFunction)
+                || (streamFunction.StreamElementType is null
+                    && streamFunction.StreamElementTypeTemplate is null))
+            {
+                if (index != pipeline.Calls.Count - 1
+                    || !TryGetFunction(string.Join('.', call.Target), functions, out var terminalFunction)
+                    || terminalFunction.Kind != BoundFunctionKind.UserBlock)
+                {
+                    throw Error(call.Line, call.Column, "a streaming pipeline may end only with each or a Unit block function");
+                }
+                BindUserBlockFunctionCall(
+                    call,
+                    terminalFunction,
+                    functions,
+                    bindings,
+                    mutableBindings,
+                    terminalFunction.Name,
+                    streamedInputType: streamedInputType);
+                if (terminalFunction.ReturnType != BoundType.Unit)
+                {
+                    throw Error(call.Line, call.Column, "a terminal streaming block function must return Unit");
+                }
+                return true;
+            }
+
+            if (streamFunction.Kind == BoundFunctionKind.User
+                && streamFunction.BlockInputType is null)
+            {
+                if (streamedInputType is null)
+                {
+                    throw Error(call.Line, call.Column, "a stateful stream function must follow a stream-producing function");
+                }
+                BindBlocklessStreamFunctionCall(
+                    call,
+                    streamFunction,
+                    functions,
+                    bindings,
+                    mutableBindings,
+                    streamedInputType.Value);
+            }
+            else
+            {
+                BindUserBlockFunctionCall(
+                    call,
+                    streamFunction,
+                    functions,
+                    bindings,
+                    mutableBindings,
+                    streamFunction.Name,
+                    suppressResultBinding: true,
+                    streamedInputType: streamedInputType);
+            }
+            streamFunction = _resolvedGenericCalls.TryGetValue(call, out var specialization)
+                ? specialization
+                : streamFunction;
+            streamedInputType = streamFunction.StreamElementType
+                ?? throw Error(call.Line, call.Column, "stream element type was not specialized");
+            if (streamedInputType == BoundType.Unit)
+            {
+                throw Error(call.Line, call.Column, "stream functions must emit a non-Unit value");
+            }
+        }
+
+        throw Error(firstCall.Line, firstCall.Column, "a streaming pipeline must end with each");
+    }
+
+    private void BindBlocklessStreamFunctionCall(
+        BlockFunctionCallStatement call,
+        BoundFunction function,
+        IReadOnlyDictionary<string, BoundFunction> functions,
+        IReadOnlyDictionary<string, BoundType> bindings,
+        IReadOnlySet<string> mutableBindings,
+        BoundType streamedInputType)
+    {
+        if (call.Body.Count != 0 || !call.UsesDefaultItemName || (call.AdditionalItemNames?.Count ?? 0) != 0)
+        {
+            throw Error(call.Line, call.Column, $"stream function '{function.Name}' does not accept a call-site block");
+        }
+        if (call.ResultName is not null && !call.ResultIsSynthetic)
+        {
+            throw Error(call.Line, call.Column, $"stream function '{function.Name}' cannot bind a result");
+        }
+
+        if (function.GenericParameterName is not null
+            && function.SpecializedType is null
+            && function.SpecializedValue is null)
+        {
+            function = ResolveGenericSpecialization(function, streamedInputType, functions, call);
+        }
+        if (function.InputType != streamedInputType)
+        {
+            throw Error(
+                call.Line,
+                call.Column,
+                $"stream function '{function.Name}' expects {FormatType(function.InputType ?? BoundType.Unit)} "
+                + $"but received {FormatType(streamedInputType)}");
+        }
+
+        ValidateAdditionalFunctionArguments(
+            function,
+            call.Arguments ?? [],
+            functions,
+            bindings,
+            allowReadIntCall: true,
+            mutableBindings,
+            function.Name);
+    }
+
     private void RejectBuiltInBlockResult(BlockFunctionCallStatement call, string target)
     {
         if (call.ResultName is not null)
@@ -3146,6 +3472,7 @@ internal sealed partial class SemanticCompiler
                 BoundType.StaticTextArray => BoundType.Text,
                 BoundType.Text => BoundType.CodePoint,
                 BoundType.Arguments => BoundType.Text,
+                BoundType.Range => BoundType.Int,
                 BoundType.MappedBytes or BoundType.MutableMappedBytes => BoundType.UInt8,
                 _ when _types.IsStaticArray(sourceType) => _types.GetStaticArray(sourceType).ElementType,
                 _ when _types.IsDynamicArray(sourceType) => _types.GetDynamicArray(sourceType).ElementType,
@@ -3154,8 +3481,29 @@ internal sealed partial class SemanticCompiler
             if (itemType == BoundType.Unit)
             {
                 throw Error(call.Source.Line, call.Source.Column,
-                    "each expects a range, Text, array, Arguments, or mapped byte view");
+                    "each expects a Range, Text, array, Arguments, or mapped byte view");
             }
+        }
+
+        BindEachBlockBody(call, itemType, functions, bindings, mutableBindings, yieldInputType);
+    }
+
+    private void BindEachBlockBody(
+        BlockFunctionCallStatement call,
+        BoundType itemType,
+        IReadOnlyDictionary<string, BoundFunction> functions,
+        Dictionary<string, BoundType> bindings,
+        HashSet<string> mutableBindings,
+        BoundType? yieldInputType = null)
+    {
+        RejectBuiltInBlockResult(call, "each");
+        if (!call.UsesDefaultItemName)
+        {
+            ValidateBindingName(call.ItemName, call.Line, call.Column);
+        }
+        if (bindings.ContainsKey(call.ItemName))
+        {
+            throw Error(call.Line, call.Column, $"binding '{call.ItemName}' already exists in this scope");
         }
 
         var bodyBindings = new Dictionary<string, BoundType>(bindings, StringComparer.Ordinal)
@@ -3177,7 +3525,9 @@ internal sealed partial class SemanticCompiler
         IReadOnlyDictionary<string, BoundFunction> functions,
         Dictionary<string, BoundType> bindings,
         HashSet<string> mutableBindings,
-        string target)
+        string target,
+        bool suppressResultBinding = false,
+        BoundType? streamedInputType = null)
     {
         if (!call.UsesDefaultItemName)
         {
@@ -3189,7 +3539,7 @@ internal sealed partial class SemanticCompiler
             throw Error(call.Line, call.Column, $"binding '{call.ItemName}' already exists in this scope");
         }
 
-        var inputType = InferExpression(
+        var inputType = streamedInputType ?? InferExpression(
             call.Source,
             functions,
             bindings,
@@ -3197,6 +3547,7 @@ internal sealed partial class SemanticCompiler
             allowReadIntCall: true,
             allowFlowBindingTarget: false,
             mutableBindings: mutableBindings);
+        BoundType? alreadyBoundCallbackResultType = null;
         if (function.Kind is BoundFunctionKind.RuntimeParallel or BoundFunctionKind.RuntimeTryParallel)
         {
             ValidateParallelCapturedBindings(call, functions, bindings, mutableBindings);
@@ -3262,6 +3613,211 @@ internal sealed partial class SemanticCompiler
                 explicitSecondaryType: parallelValueType,
                 explicitTertiaryType: parallelErrorType);
         }
+        if (function.Kind == BoundFunctionKind.UserBlock
+            && function.GenericParameterName is not null
+            && function.SpecializedType is null
+            && function.SpecializedValue is null
+            && (function.InputTypeTemplate is not null
+                || function.StreamElementTypeTemplate is not null))
+        {
+            BoundType? primaryType = null;
+            BoundType? secondaryType = null;
+            BoundType? tertiaryType = null;
+            if (function.InputTypeTemplate is not null)
+            {
+                InferGenericArgumentsFromTypeTemplate(
+                    function.InputTypeTemplate,
+                    inputType,
+                    function,
+                    ref primaryType,
+                    ref secondaryType,
+                    ref tertiaryType,
+                    call.Line,
+                    call.Column);
+            }
+            else
+            {
+                switch (function.InputType)
+                {
+                    case BoundType.GenericParameter:
+                        primaryType = inputType;
+                        break;
+                    case BoundType.SecondaryGenericParameter:
+                        secondaryType = inputType;
+                        break;
+                    case BoundType.TertiaryGenericParameter:
+                        tertiaryType = inputType;
+                        break;
+                }
+            }
+
+            var genericAdditionalParameters = function.AdditionalParameters ?? [];
+            var genericArguments = call.Arguments ?? [];
+            if (genericArguments.Count != genericAdditionalParameters.Count)
+            {
+                throw Error(
+                    call.Line,
+                    call.Column,
+                    $"function '{target}' expects {genericAdditionalParameters.Count} additional argument(s)");
+            }
+            for (var argumentIndex = 0; argumentIndex < genericArguments.Count; argumentIndex++)
+            {
+                var parameter = genericAdditionalParameters[argumentIndex];
+                var argument = genericArguments[argumentIndex];
+                var argumentType = InferExpression(
+                    argument,
+                    functions,
+                    bindings,
+                    allowPrintCall: false,
+                    allowReadIntCall: true,
+                    allowFlowBindingTarget: false,
+                    mutableBindings: mutableBindings);
+                if (parameter.TypeTemplate is not null)
+                {
+                    InferGenericArgumentsFromTypeTemplate(
+                        parameter.TypeTemplate,
+                        argumentType,
+                        function,
+                        ref primaryType,
+                        ref secondaryType,
+                        ref tertiaryType,
+                        argument.Line,
+                        argument.Column);
+                    continue;
+                }
+
+                switch (parameter.Type)
+                {
+                    case BoundType.GenericParameter:
+                        AssignInferredGenericType(
+                            function.GenericParameterName!,
+                            argumentType,
+                            ref primaryType,
+                            argument.Line,
+                            argument.Column);
+                        break;
+                    case BoundType.SecondaryGenericParameter:
+                        AssignInferredGenericType(
+                            function.SecondaryGenericParameterName!,
+                            argumentType,
+                            ref secondaryType,
+                            argument.Line,
+                            argument.Column);
+                        break;
+                    case BoundType.TertiaryGenericParameter:
+                        AssignInferredGenericType(
+                            function.TertiaryGenericParameterName!,
+                            argumentType,
+                            ref tertiaryType,
+                            argument.Line,
+                            argument.Column);
+                        break;
+                }
+            }
+
+            if (primaryType is null
+                || (function.SecondaryGenericParameterName is not null && secondaryType is null)
+                || (function.TertiaryGenericParameterName is not null && tertiaryType is null))
+            {
+                if (call.Body.Count == 0 || call.Body[^1] is not ExpressionStatement callbackResult)
+                {
+                    throw Error(call.Line, call.Column, $"{target} callback must end with a result expression");
+                }
+                var provisionalPrimaryType = primaryType ?? BoundType.Unit;
+                var provisionalBlockInputType = function.BlockInputTypeTemplate is null
+                    ? function.BlockInputType!.Value switch
+                    {
+                        BoundType.GenericParameter when primaryType is null => throw Error(
+                            call.Line,
+                            call.Column,
+                            $"generic block function '{target}' cannot infer type parameter '{function.GenericParameterName}'"),
+                        BoundType.SecondaryGenericParameter when secondaryType is null => throw Error(
+                            call.Line,
+                            call.Column,
+                            $"generic block function '{target}' cannot infer callback input type"),
+                        BoundType.TertiaryGenericParameter when tertiaryType is null => throw Error(
+                            call.Line,
+                            call.Column,
+                            $"generic block function '{target}' cannot infer callback input type"),
+                        _ => SubstituteGenericType(
+                            function.BlockInputType.Value,
+                            provisionalPrimaryType,
+                            secondaryType,
+                            tertiaryType)
+                    }
+                    : ParseSpecializedFunctionType(
+                        function.BlockInputTypeTemplate,
+                        function.GenericParameterName,
+                        provisionalPrimaryType,
+                        function.SecondaryGenericParameterName,
+                        secondaryType,
+                        function.TertiaryGenericParameterName,
+                        tertiaryType,
+                        call.Line,
+                        call.Column);
+                var provisionalBindings = new Dictionary<string, BoundType>(bindings, StringComparer.Ordinal)
+                {
+                    [call.ItemName] = provisionalBlockInputType
+                };
+                var provisionalAdditionalBlockParameters = function.AdditionalBlockParameters ?? [];
+                var provisionalAdditionalItemNames = call.AdditionalItemNames ?? [];
+                if (provisionalAdditionalItemNames.Count != provisionalAdditionalBlockParameters.Count)
+                {
+                    throw Error(
+                        call.Line,
+                        call.Column,
+                        $"block function '{target}' expects {1 + provisionalAdditionalBlockParameters.Count} block item name(s)");
+                }
+                for (var parameterIndex = 0; parameterIndex < provisionalAdditionalBlockParameters.Count; parameterIndex++)
+                {
+                    provisionalBindings[provisionalAdditionalItemNames[parameterIndex]] = SubstituteGenericType(
+                        provisionalAdditionalBlockParameters[parameterIndex].Type,
+                        provisionalPrimaryType,
+                        secondaryType,
+                        tertiaryType);
+                }
+                var provisionalMutableBindings = new HashSet<string>(mutableBindings, StringComparer.Ordinal);
+                BindStatements(
+                    call.Body.Take(call.Body.Count - 1).ToArray(),
+                    functions,
+                    provisionalBindings,
+                    provisionalMutableBindings,
+                    allowContainerBindings: true);
+                alreadyBoundCallbackResultType = InferExpression(
+                    callbackResult.Expression,
+                    functions,
+                    provisionalBindings,
+                    allowPrintCall: false,
+                    allowReadIntCall: true,
+                    allowFlowBindingTarget: false,
+                    mutableBindings: provisionalMutableBindings);
+                if (function.BlockResultTypeTemplate is null)
+                {
+                    throw Error(call.Line, call.Column, $"generic block function '{target}' cannot infer callback type parameters");
+                }
+                InferGenericArgumentsFromTypeTemplate(
+                    function.BlockResultTypeTemplate,
+                    alreadyBoundCallbackResultType.Value,
+                    function,
+                    ref primaryType,
+                    ref secondaryType,
+                    ref tertiaryType,
+                    callbackResult.Expression.Line,
+                    callbackResult.Expression.Column);
+            }
+
+            function = ResolveGenericSpecialization(
+                function,
+                primaryType ?? throw Error(
+                    call.Line,
+                    call.Column,
+                    $"generic block function '{target}' cannot infer type parameter '{function.GenericParameterName}'"),
+                functions,
+                call,
+                specializedInputType: inputType,
+                explicitSecondaryType: secondaryType,
+                explicitTertiaryType: tertiaryType);
+        }
         if (function.GenericParameterName is not null
             && function.SpecializedType is null
             && function.SpecializedValue is null)
@@ -3272,6 +3828,10 @@ internal sealed partial class SemanticCompiler
         {
             throw Error(call.Line, call.Column, $"block function '{target}' is not callable");
         }
+        if (function.StreamElementType is not null && !suppressResultBinding)
+        {
+            throw Error(call.Line, call.Column, $"stream function '{target}' must be followed directly by each");
+        }
         if (inputType != function.InputType.Value)
         {
             throw Error(
@@ -3280,10 +3840,41 @@ internal sealed partial class SemanticCompiler
                 $"block function '{target}' expects {FormatType(function.InputType.Value)} but received {FormatType(inputType)}");
         }
 
+        ValidateAdditionalFunctionArguments(
+            function,
+            call.Arguments ?? [],
+            functions,
+            bindings,
+            allowReadIntCall: true,
+            mutableBindings,
+            target);
+
+        var additionalBlockParameters = function.AdditionalBlockParameters ?? [];
+        var additionalItemNames = call.AdditionalItemNames ?? [];
+        if (additionalItemNames.Count != additionalBlockParameters.Count)
+        {
+            throw Error(
+                call.Line,
+                call.Column,
+                $"block function '{target}' expects {1 + additionalBlockParameters.Count} block item name(s)");
+        }
+        foreach (var itemName in additionalItemNames)
+        {
+            ValidateBindingName(itemName, call.Line, call.Column);
+            if (itemName == call.ItemName || bindings.ContainsKey(itemName))
+            {
+                throw Error(call.Line, call.Column, $"binding '{itemName}' already exists in this scope");
+            }
+        }
+
         var bodyBindings = new Dictionary<string, BoundType>(bindings, StringComparer.Ordinal)
         {
             [call.ItemName] = function.BlockInputType.Value
         };
+        for (var index = 0; index < additionalBlockParameters.Count; index++)
+        {
+            bodyBindings[additionalItemNames[index]] = additionalBlockParameters[index].Type;
+        }
         var callbackMutableBindings = new HashSet<string>(mutableBindings, StringComparer.Ordinal);
         var callbackResultType = function.BlockResultType ?? BoundType.Unit;
         if (callbackResultType == BoundType.Unit)
@@ -3305,20 +3896,12 @@ internal sealed partial class SemanticCompiler
                     $"block callback for '{target}' must end with {FormatType(callbackResultType)}");
             }
 
-            BindStatements(
-                call.Body.Take(call.Body.Count - 1).ToArray(),
+            var actualCallbackResultType = alreadyBoundCallbackResultType ?? InferBlockCallbackResult(
+                call,
+                callbackResult,
                 functions,
                 bodyBindings,
-                callbackMutableBindings,
-                allowContainerBindings: true);
-            var actualCallbackResultType = InferExpression(
-                callbackResult.Expression,
-                functions,
-                bodyBindings,
-                allowPrintCall: false,
-                allowReadIntCall: true,
-                allowFlowBindingTarget: false,
-                mutableBindings: callbackMutableBindings);
+                callbackMutableBindings);
             if (actualCallbackResultType != callbackResultType)
             {
                 throw Error(
@@ -3326,6 +3909,15 @@ internal sealed partial class SemanticCompiler
                     callbackResult.Expression.Column,
                     $"block callback for '{target}' returns {FormatType(actualCallbackResultType)} but expects {FormatType(callbackResultType)}");
             }
+        }
+
+        if (suppressResultBinding)
+        {
+            if (function.ReturnType != BoundType.Unit)
+            {
+                throw Error(call.Line, call.Column, $"stream function '{target}' must return Unit");
+            }
+            return;
         }
 
         if (call.ResultName is null)
@@ -3363,6 +3955,96 @@ internal sealed partial class SemanticCompiler
         {
             mutableBindings.Add(call.ResultName);
         }
+    }
+
+    private BoundType InferBlockCallbackResult(
+        BlockFunctionCallStatement call,
+        ExpressionStatement callbackResult,
+        IReadOnlyDictionary<string, BoundFunction> functions,
+        Dictionary<string, BoundType> bodyBindings,
+        HashSet<string> callbackMutableBindings)
+    {
+        BindStatements(
+            call.Body.Take(call.Body.Count - 1).ToArray(),
+            functions,
+            bodyBindings,
+            callbackMutableBindings,
+            allowContainerBindings: true);
+        return InferExpression(
+            callbackResult.Expression,
+            functions,
+            bodyBindings,
+            allowPrintCall: false,
+            allowReadIntCall: true,
+            allowFlowBindingTarget: false,
+            mutableBindings: callbackMutableBindings);
+    }
+
+    private void InferGenericArgumentsFromTypeTemplate(
+        string typeTemplate,
+        BoundType actualType,
+        BoundFunction function,
+        ref BoundType? primaryType,
+        ref BoundType? secondaryType,
+        ref BoundType? tertiaryType,
+        int line,
+        int column)
+    {
+        typeTemplate = typeTemplate.Trim();
+        if (typeTemplate == function.GenericParameterName)
+        {
+            AssignInferredGenericType(function.GenericParameterName!, actualType, ref primaryType, line, column);
+            return;
+        }
+        if (typeTemplate == function.SecondaryGenericParameterName)
+        {
+            AssignInferredGenericType(function.SecondaryGenericParameterName!, actualType, ref secondaryType, line, column);
+            return;
+        }
+        if (typeTemplate == function.TertiaryGenericParameterName)
+        {
+            AssignInferredGenericType(function.TertiaryGenericParameterName!, actualType, ref tertiaryType, line, column);
+            return;
+        }
+        if (typeTemplate.StartsWith('[', StringComparison.Ordinal)
+            && typeTemplate.EndsWith("; ~]", StringComparison.Ordinal))
+        {
+            var elementType = actualType == BoundType.DynamicIntArray
+                ? BoundType.Int
+                : _types.IsDynamicArray(actualType)
+                    ? _types.GetDynamicArray(actualType).ElementType
+                    : throw Error(line, column, $"expected a growable array but received {FormatType(actualType)}");
+            InferGenericArgumentsFromTypeTemplate(
+                typeTemplate[1..^4], elementType, function,
+                ref primaryType, ref secondaryType, ref tertiaryType, line, column);
+            return;
+        }
+
+        var expectedType = ParseType(typeTemplate, line, column);
+        if (expectedType != actualType)
+        {
+            throw Error(
+                line,
+                column,
+                $"generic type pattern {typeTemplate} expects {FormatType(expectedType)} but received {FormatType(actualType)}");
+        }
+    }
+
+    private void AssignInferredGenericType(
+        string parameterName,
+        BoundType inferredType,
+        ref BoundType? destination,
+        int line,
+        int column)
+    {
+        if (destination is { } existing && existing != inferredType)
+        {
+            throw Error(
+                line,
+                column,
+                $"type parameter '{parameterName}' was inferred as both {FormatType(existing)} and {FormatType(inferredType)}");
+        }
+        destination = inferredType;
     }
 
     private void BindDictionaryEachBlockFunctionCall(
@@ -3656,7 +4338,12 @@ internal sealed partial class SemanticCompiler
                 expression.Column,
                 "subject range is only valid inside value-flow when"),
             FoldExpression fold => InferFoldExpression(fold, functions, bindings, allowReadIntCall),
-            RangeExpression => throw Error(expression.Line, expression.Column, "range values are only valid as block-function input"),
+            RangeExpression range => InferRangeExpression(
+                range,
+                functions,
+                bindings,
+                allowReadIntCall,
+                mutableBindings),
             CallExpression call => InferCallExpression(call, functions, bindings, allowPrintCall, allowReadIntCall, mutableBindings),
             FlowExpression flow => InferFlowExpression(
                 flow,
@@ -3668,6 +4355,42 @@ internal sealed partial class SemanticCompiler
                 mutableBindings).Type,
             _ => throw Error(expression.Line, expression.Column, "expected an expression value")
         };
+    }
+
+    private BoundType InferRangeExpression(
+        RangeExpression expression,
+        IReadOnlyDictionary<string, BoundFunction> functions,
+        IReadOnlyDictionary<string, BoundType> bindings,
+        bool allowReadIntCall,
+        IReadOnlySet<string>? mutableBindings)
+    {
+        var startType = InferExpression(
+            expression.Start,
+            functions,
+            bindings,
+            allowPrintCall: false,
+            allowReadIntCall,
+            allowFlowBindingTarget: false,
+            mutableBindings: mutableBindings);
+        if (startType != BoundType.Int)
+        {
+            throw Error(expression.Start.Line, expression.Start.Column, "range start must be an integer");
+        }
+
+        var endType = InferExpression(
+            expression.End,
+            functions,
+            bindings,
+            allowPrintCall: false,
+            allowReadIntCall,
+            allowFlowBindingTarget: false,
+            mutableBindings: mutableBindings);
+        if (endType != BoundType.Int)
+        {
+            throw Error(expression.End.Line, expression.End.Column, "range end must be an integer");
+        }
+
+        return BoundType.Range;
     }
 
     private BoundType InferStringExpression(
@@ -5337,9 +6060,12 @@ internal sealed partial class SemanticCompiler
 
             if (path == "yield")
             {
-                if (target.Arguments.Count != 0)
+                if (target.Arguments.Count != _currentBlockAdditionalYieldInputTypes.Count)
                 {
-                    throw Error(target.Line, target.Column, "yield does not accept arguments");
+                    throw Error(
+                        target.Line,
+                        target.Column,
+                        $"yield expects {_currentBlockAdditionalYieldInputTypes.Count} additional argument(s)");
                 }
 
                 if (yieldInputType is null)
@@ -5347,9 +6073,11 @@ internal sealed partial class SemanticCompiler
                     throw Error(target.Line, target.Column, "yield() is only valid inside a block function");
                 }
 
-                if (!isLast)
+                if (!isLast
+                    && (expression.Targets[i + 1].Path.Count != 1
+                        || expression.Targets[i + 1].Path[0] != "emit"))
                 {
-                    throw Error(target.Line, target.Column, "yield must be the final value-flow target");
+                    throw Error(target.Line, target.Column, "yield may only flow onward to emit");
                 }
 
                 if (currentType != yieldInputType.Value)
@@ -5360,7 +6088,54 @@ internal sealed partial class SemanticCompiler
                         $"yield expects {FormatType(yieldInputType.Value)} but received {FormatType(currentType)}");
                 }
 
-                return new FlowResult(_currentBlockYieldResultType ?? BoundType.Unit, FlowEffect.None);
+                for (var argumentIndex = 0; argumentIndex < target.Arguments.Count; argumentIndex++)
+                {
+                    var argument = target.Arguments[argumentIndex];
+                    var actualArgumentType = InferExpression(
+                        argument,
+                        functions,
+                        bindings,
+                        allowPrintCall: false,
+                        allowReadIntCall,
+                        allowFlowBindingTarget: false,
+                        mutableBindings: mutableBindings);
+                    var expectedArgumentType = _currentBlockAdditionalYieldInputTypes[argumentIndex];
+                    if (actualArgumentType != expectedArgumentType)
+                    {
+                        throw Error(
+                            argument.Line,
+                            argument.Column,
+                            $"yield argument {argumentIndex + 1} expects {FormatType(expectedArgumentType)} "
+                            + $"but received {FormatType(actualArgumentType)}");
+                    }
+                }
+
+                currentType = _currentBlockYieldResultType ?? BoundType.Unit;
+                if (isLast)
+                {
+                    return new FlowResult(currentType, FlowEffect.None);
+                }
+                continue;
+            }
+
+            if (path == "emit" && _currentStreamElementType is not null)
+            {
+                if (!isLast)
+                {
+                    throw Error(target.Line, target.Column, "emit must be the final value-flow target");
+                }
+                if (target.Arguments.Count != 0)
+                {
+                    throw Error(target.Line, target.Column, "emit does not accept arguments");
+                }
+                if (currentType != _currentStreamElementType.Value)
+                {
+                    throw Error(
+                        expression.Line,
+                        expression.Column,
+                        $"emit expects {FormatType(_currentStreamElementType.Value)} but received {FormatType(currentType)}");
+                }
+                return new FlowResult(BoundType.Unit, FlowEffect.None);
             }
 
             if (TryGetFunction(path, functions, out var function)
@@ -5958,6 +6733,13 @@ internal sealed partial class SemanticCompiler
                         "arena alloc must be final and expects byte-count and alignment arguments");
                 }
                 EnsureMutableContainerSource(expression.Source, "alloc", mutableBindings);
+                if (expression.Source is NameExpression allocationOwnerName)
+                {
+                    RejectBorrowedTextOriginMutation(
+                        allocationOwnerName.Name,
+                        target.Line,
+                        target.Column);
+                }
                 foreach (var argument in target.Arguments)
                 {
                     var argumentType = InferExpression(argument, functions, bindings,
@@ -5984,6 +6766,13 @@ internal sealed partial class SemanticCompiler
                         "arena store must be final and expects offset and UInt8 value arguments");
                 }
                 EnsureMutableContainerSource(expression.Source, "store", mutableBindings);
+                if (expression.Source is NameExpression storeOwnerName)
+                {
+                    RejectBorrowedTextOriginMutation(
+                        storeOwnerName.Name,
+                        target.Line,
+                        target.Column);
+                }
                 var storeOffsetType = InferExpression(target.Arguments[0], functions, bindings,
                     allowPrintCall: false, allowReadIntCall, allowFlowBindingTarget: false);
                 var storeValueType = InferExpression(target.Arguments[1], functions, bindings,
@@ -6014,7 +6803,47 @@ internal sealed partial class SemanticCompiler
                     throw Error(target.Line, target.Column, "arena reset must be final and takes no arguments");
                 }
                 EnsureMutableContainerSource(expression.Source, "reset", mutableBindings);
+                if (expression.Source is NameExpression resetOwnerName)
+                {
+                    RejectBorrowedTextOriginMutation(
+                        resetOwnerName.Name,
+                        target.Line,
+                        target.Column);
+                }
                 result = new FlowResult(BoundType.Unit, FlowEffect.None);
+                return true;
+            case "materialize" when currentType == BoundType.Text:
+                if (target.Arguments.Count != 1)
+                {
+                    throw Error(
+                        target.Line,
+                        target.Column,
+                        "Text materialize expects one mutable Arena owner");
+                }
+                var materializeOwner = target.Arguments[0];
+                var materializeOwnerType = InferExpression(
+                    materializeOwner,
+                    functions,
+                    bindings,
+                    allowPrintCall: false,
+                    allowReadIntCall,
+                    allowFlowBindingTarget: false);
+                if (materializeOwnerType != BoundType.Arena)
+                {
+                    throw Error(
+                        materializeOwner.Line,
+                        materializeOwner.Column,
+                        $"Text materialize expects Arena but received {FormatType(materializeOwnerType)}");
+                }
+                EnsureMutableBorrowCallArgument(materializeOwner, "materialize", mutableBindings);
+                if (materializeOwner is NameExpression materializeOwnerName)
+                {
+                    RejectBorrowedTextOriginMutation(
+                        materializeOwnerName.Name,
+                        materializeOwner.Line,
+                        materializeOwner.Column);
+                }
+                result = new FlowResult(BoundType.Text, FlowEffect.None);
                 return true;
             case "len":
                 if (target.Arguments.Count != 0)
@@ -6420,11 +7249,6 @@ internal sealed partial class SemanticCompiler
             && (function.Kind == BoundFunctionKind.RuntimePrintLine
                 || (function.IsStandardLibrary && function.Name == "sys.io.println")))
         {
-            if (!allowPrintCall)
-            {
-                throw Error(expression.Line, expression.Column, $"{path} is only valid as an expression statement");
-            }
-
             return BoundType.Unit;
         }
 
@@ -6859,6 +7683,27 @@ internal sealed partial class SemanticCompiler
                 AdditionalParameters = (template.AdditionalParameters ?? [])
                     .Select(parameter => parameter with
                     {
+                        Type = parameter.TypeTemplate is null
+                            ? SubstituteGenericType(
+                                parameter.Type,
+                                actualType,
+                                inferredSecondaryType,
+                                inferredTertiaryType)
+                            : ParseSpecializedFunctionType(
+                                parameter.TypeTemplate,
+                                template.GenericParameterName,
+                                actualType,
+                                template.SecondaryGenericParameterName,
+                                inferredSecondaryType,
+                                template.TertiaryGenericParameterName,
+                                inferredTertiaryType,
+                                parameter.Line,
+                                parameter.Column)
+                    })
+                    .ToArray(),
+                AdditionalBlockParameters = (template.AdditionalBlockParameters ?? [])
+                    .Select(parameter => parameter with
+                    {
                         Type = SubstituteGenericType(
                             parameter.Type,
                             actualType,
@@ -6884,6 +7729,18 @@ internal sealed partial class SemanticCompiler
                     ? template.BlockResultType
                     : ParseSpecializedFunctionType(
                         template.BlockResultTypeTemplate,
+                        template.GenericParameterName,
+                        actualType,
+                        template.SecondaryGenericParameterName,
+                        inferredSecondaryType,
+                        template.TertiaryGenericParameterName,
+                        inferredTertiaryType,
+                        template.Line,
+                        template.Column),
+                StreamElementType = template.StreamElementTypeTemplate is null
+                    ? template.StreamElementType
+                    : ParseSpecializedFunctionType(
+                        template.StreamElementTypeTemplate,
                         template.GenericParameterName,
                         actualType,
                         template.SecondaryGenericParameterName,
@@ -7791,6 +8648,7 @@ internal sealed partial class SemanticCompiler
             or "repeat"
             or "block"
             or "yield"
+            or "stream"
             or "namespace"
             or "import"
             or "public"
@@ -7826,6 +8684,8 @@ internal sealed partial class SemanticCompiler
             ["Size"] = BoundType.Size,
             ["UIntSize"] = BoundType.UIntSize,
             ["CodePoint"] = BoundType.CodePoint,
+            ["Range"] = BoundType.Range,
+            ["std.sequence.Range"] = BoundType.Range,
             ["Arena"] = BoundType.Arena,
             ["SourceText"] = BoundType.SourceText,
             ["Arguments"] = BoundType.Arguments,
@@ -7977,7 +8837,19 @@ internal sealed partial class SemanticCompiler
             throw Error(line, column, $"unknown type '{typeName}'");
         }
 
-        var structs = new Dictionary<TypeId, BoundStructDefinition>();
+        var structs = new Dictionary<TypeId, BoundStructDefinition>
+        {
+            [TypeId.Range] = new BoundStructDefinition(
+                TypeId.Range,
+                "Range",
+                [
+                    new BoundStructField("start", TypeId.Int, 0, 0, 0),
+                    new BoundStructField("endInclusive", TypeId.Int, 1, 0, 0)
+                ],
+                0,
+                0,
+                IsPublic: true)
+        };
         foreach (var declaration in structDeclarations)
         {
             _currentModuleName = declaration.ModuleName;
@@ -8298,6 +9170,10 @@ internal sealed partial class SemanticCompiler
 
     private BoundType ParseType(string typeName, int line, int column)
     {
+        if (_activeGenericTypeArguments.TryGetValue(typeName, out var specializedType))
+        {
+            return specializedType;
+        }
         if (typeName.StartsWith("dyn ", StringComparison.Ordinal))
         {
             var requestedName = typeName[4..].Trim();
@@ -9238,7 +10114,7 @@ internal sealed partial class SemanticCompiler
 
     private void EnsureOwnedParameterCallArgument(Expression argument, string functionName)
     {
-        if (argument is not NameExpression)
+        if (argument is not NameExpression && !IsContainerCreationExpression(argument))
         {
             throw Error(
                 argument.Line,

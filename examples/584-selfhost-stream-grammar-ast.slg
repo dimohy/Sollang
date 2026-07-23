@@ -1,0 +1,52 @@
+# Verifies generated self-host grammar and AST parity for language-level
+# stream signatures, state, stop, and callback-free intermediate stages.
+import sollang.compiler.ast as ast
+import sollang.compiler.parser as parser
+
+main {
+    """
+    take<T> value: T, count: Int -> stream T {
+        state taken! = 0
+        taken! >= count -> if {
+            stop
+        }
+        value -> emit
+    }
+
+    main {
+        1..10
+            -> skip(3)
+            -> take(4)
+            -> each value {
+                "$value" -> println
+            }
+    }
+    """ => source
+
+    source -> parser.parseEvents => events!
+    events![(events! -> len) - 1].value == 1 -> if {
+        "stream grammar = valid" -> println
+    } else {
+        "stream grammar = invalid" -> println
+    }
+
+    source -> ast.lower => nodes!
+    0 => streamFunctions!
+    0 => stateBindings!
+    0 => stopStatements!
+    nodes! -> each node {
+        (node.kind == 7 and (node.flags / 64) % 2 == 1) -> if {
+            streamFunctions! + 1 => streamFunctions!
+        }
+        node.kind == 61 -> if {
+            stateBindings! + 1 => stateBindings!
+        }
+        node.kind == 62 -> if {
+            stopStatements! + 1 => stopStatements!
+        }
+    }
+
+    "stream functions = $(streamFunctions!)" -> println
+    "state bindings = $(stateBindings!)" -> println
+    "stop statements = $(stopStatements!)" -> println
+}

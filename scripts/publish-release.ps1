@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
-    [string]$Version = "0.2",
+    [ValidatePattern('^\d+\.\d+\.\d{6}$')]
+    [string]$Version = "0.2.260723",
     [string]$OutputRoot,
     [string]$WindowsStage3Path,
     [string]$LinuxStage3Path
@@ -9,7 +10,7 @@ param(
 $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $project = Join-Path $repoRoot "src\Sollang.Compiler\Sollang.Compiler.csproj"
-$packageVersion = if ($Version -match '^\d+\.\d+$') { "$Version.0" } else { $Version }
+$packageVersion = $Version
 if ([string]::IsNullOrWhiteSpace($OutputRoot)) {
     $OutputRoot = Join-Path $repoRoot "artifacts\release\$Version"
 }
@@ -38,7 +39,8 @@ function New-ReleasePackage {
         -p:DebugType=None `
         -p:DebugSymbols=false `
         -p:AssemblyName=sollang `
-        -p:Version=$packageVersion `
+        -p:PackageVersion=$packageVersion `
+        -p:InformationalVersion=$packageVersion `
         -o $packageRoot | Out-Host
     if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed for $Runtime" }
 
