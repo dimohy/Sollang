@@ -16,7 +16,8 @@ type StandardLibrarySource = {
 
 let standardLibraryPromise: Promise<StandardLibrarySource[]> | undefined;
 const toolBinaryPromises = new Map<string, Promise<ArrayBuffer>>();
-let toolManifestPromise: Promise<Record<string, string[]>> | undefined;
+const llvmAssetRoot =
+  "https://raw.githubusercontent.com/dimohy/Sollang/0db4acd36d9a1204afed2b67ba74035653d13485/public/llvm-16";
 
 type ToolModule = {
   FS: {
@@ -81,36 +82,6 @@ function loadToolBinary(url: string): Promise<ArrayBuffer> {
       return response.arrayBuffer();
     });
     toolBinaryPromises.set(url, pending);
-  }
-  return pending;
-}
-
-function loadChunkedToolBinary(toolName: string): Promise<ArrayBuffer> {
-  const cacheKey = `chunks:${toolName}`;
-  let pending = toolBinaryPromises.get(cacheKey);
-  if (!pending) {
-    toolManifestPromise ??= fetch("/llvm-16/tools.json").then(async response => {
-      if (!response.ok) {
-        throw new Error(`LLVM 도구 목록을 불러오지 못했습니다 (${response.status})`);
-      }
-      return await response.json() as Record<string, string[]>;
-    });
-    pending = toolManifestPromise.then(async manifest => {
-      const partNames = manifest[toolName];
-      if (!partNames?.length) throw new Error(`${toolName} LLVM 도구 조각이 없습니다`);
-      const parts = await Promise.all(
-        partNames.map(name => loadToolBinary(`/llvm-16/${name}`))
-      );
-      const byteLength = parts.reduce((total, part) => total + part.byteLength, 0);
-      const merged = new Uint8Array(byteLength);
-      let offset = 0;
-      for (const part of parts) {
-        merged.set(new Uint8Array(part), offset);
-        offset += part.byteLength;
-      }
-      return merged.buffer;
-    });
-    toolBinaryPromises.set(cacheKey, pending);
   }
   return pending;
 }
@@ -206,8 +177,8 @@ async function lowerLlvmToWasm(llvm: string): Promise<Uint8Array> {
   const [{ default: createLlc }, { default: createLld }, llcBinary, lldBinary] = await Promise.all([
     import(/* @vite-ignore */ llcModuleUrl) as Promise<{ default: ToolFactory }>,
     import(/* @vite-ignore */ lldModuleUrl) as Promise<{ default: ToolFactory }>,
-    loadChunkedToolBinary("llc"),
-    loadChunkedToolBinary("lld")
+    loadToolBinary(`${llvmAssetRoot}/llc.wasm`),
+    loadToolBinary(`${llvmAssetRoot}/lld.wasm`)
   ]);
 
   const llc = await createLlc({
