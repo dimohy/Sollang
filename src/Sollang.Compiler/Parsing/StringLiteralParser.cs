@@ -40,7 +40,9 @@ internal static class StringLiteralParser
                 }
 
                 var name = text[nameStart..nameEnd];
-                segments.Add(new InterpolationSegment(new NameExpression(name, token.Line, token.Column + nameStart)));
+                segments.Add(new InterpolationSegment(
+                    new NameExpression(name, token.Line, token.Column + nameStart),
+                    IsParenthesized: false));
                 i = nameEnd - 1;
                 start = nameEnd;
                 continue;
@@ -63,7 +65,9 @@ internal static class StringLiteralParser
                 throw ErrorAt(token, "empty interpolation expression is not allowed");
             }
 
-            segments.Add(new InterpolationSegment(ParseInterpolationExpression(expressionText, token)));
+            segments.Add(new InterpolationSegment(
+                ParseInterpolationExpression(expressionText, token),
+                IsParenthesized: true));
             i = close;
             start = i + 1;
         }

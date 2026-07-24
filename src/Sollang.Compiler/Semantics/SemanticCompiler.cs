@@ -4406,6 +4406,26 @@ internal sealed partial class SemanticCompiler
                 continue;
             }
 
+            if (!interpolation.IsParenthesized
+                && interpolation.Expression is NameExpression name
+                && !bindings.ContainsKey(name.Name)
+                && !TryGetFunction(name.Name, functions, out _))
+            {
+                var prefix = bindings.Keys
+                    .Where(candidate => name.Name.StartsWith(candidate, StringComparison.Ordinal)
+                        && candidate.Length < name.Name.Length)
+                    .OrderByDescending(static candidate => candidate.Length)
+                    .FirstOrDefault();
+                if (prefix is not null)
+                {
+                    var suffix = name.Name[prefix.Length..];
+                    throw Error(
+                        name.Line,
+                        name.Column,
+                        $"unknown binding '{name.Name}'; use '$({prefix}){suffix}' to mark the interpolation boundary");
+                }
+            }
+
             var interpolationType = InferExpression(
                 interpolation.Expression,
                 functions,

@@ -15330,7 +15330,38 @@ emitOwnershipDiagnostics context: EmitContext -> Unit uses Console {
     }
 }
 
-blockingOwnershipDiagnosticCount context: EmitContext -> Int {
+interpolationSourceModule context: EmitContext, nodeIndex: Int -> Int {
+    -1 => sourceModule!
+    0 => rangeIndex!
+    rangeIndex! < (context.interpolationRanges -> len) -> while {
+        context.interpolationRanges[rangeIndex!] => interpolationRange
+        (nodeIndex >= interpolationRange.nodeStart and nodeIndex < interpolationRange.nodeStart + interpolationRange.nodeCount) -> if {
+            interpolationRange.sourceModule => sourceModule!
+        }
+        rangeIndex! + 1 => rangeIndex!
+    }
+    sourceModule!
+}
+
+emitInterpolationDiagnostics context: EmitContext -> Unit uses Console {
+    0 => nodeIndex!
+    nodeIndex! < (context.interpolations -> len) -> while {
+        context.interpolations[nodeIndex!] => interpolationNode
+        (interpolationNode.kind == 1 and interpolationNode.symbol < 0) -> if {
+            context -> interpolationSourceModule(nodeIndex!) => sourceModule
+            sourceModule >= 0 -> if {
+                context.sources[sourceModule] -> slice(interpolationNode.payloadStart, interpolationNode.payloadLength) => name
+                "; sollang semantic error: unknown interpolation binding '$name' (source $sourceModule, byte $(interpolationNode.payloadStart), length $(interpolationNode.payloadLength))" -> println
+                "; hint: if text follows the name, use the parenthesized interpolation form to mark its boundary." -> println
+            } else {
+                "; sollang semantic error: unknown interpolation binding" -> println
+            }
+        }
+        nodeIndex! + 1 => nodeIndex!
+    }
+}
+
+blockingDiagnosticCount context: EmitContext -> Int {
     0 => count!
     0 => diagnosticIndex!
     diagnosticIndex! < (context.ownershipDiagnostics -> len) -> while {
@@ -15344,7 +15375,18 @@ blockingOwnershipDiagnosticCount context: EmitContext -> Int {
         diagnosticCode == 23 -> if { count! + 1 => count! }
         diagnosticIndex! + 1 => diagnosticIndex!
     }
+    0 => interpolationIndex!
+    interpolationIndex! < (context.interpolations -> len) -> while {
+        context.interpolations[interpolationIndex!] => interpolationNode
+        (interpolationNode.kind == 1 and interpolationNode.symbol < 0) -> if { count! + 1 => count! }
+        interpolationIndex! + 1 => interpolationIndex!
+    }
     count!
+}
+
+emitBlockingDiagnostics context: EmitContext -> Unit uses Console {
+    context -> emitOwnershipDiagnostics
+    context -> emitInterpolationDiagnostics
 }
 
 emitWindowsContext context: EmitContext -> Unit uses Console {
@@ -15468,12 +15510,12 @@ public emitChecked sources: move [Text; ~] -> Int uses Console {
     llvmTarget.windowsX64 => target
     PrepareRequest { sources: sources, pointerBitWidth: target.pointerBitWidth, supportsComputePool: true, expectedPathStyle: 1 } => prepareRequest!
     prepareRequest! -> prepare => context!
-    context! -> blockingOwnershipDiagnosticCount => diagnosticCount
+    context! -> blockingDiagnosticCount => diagnosticCount
     diagnosticCount == 0 -> if {
         target.dataLayoutLine -> println
         target.tripleLine -> println
         context! -> emitWindowsContext
-    } else { context! -> emitOwnershipDiagnostics }
+    } else { context! -> emitBlockingDiagnostics }
     diagnosticCount
 }
 
@@ -15481,12 +15523,12 @@ public emitLinuxChecked sources: move [Text; ~] -> Int uses Console {
     llvmTarget.linuxX64 => target
     PrepareRequest { sources: sources, pointerBitWidth: target.pointerBitWidth, supportsComputePool: true, expectedPathStyle: 0 } => prepareRequest!
     prepareRequest! -> prepare => context!
-    context! -> blockingOwnershipDiagnosticCount => diagnosticCount
+    context! -> blockingDiagnosticCount => diagnosticCount
     diagnosticCount == 0 -> if {
         target.dataLayoutLine -> println
         target.tripleLine -> println
         context! -> emitLinuxContext
-    } else { context! -> emitOwnershipDiagnostics }
+    } else { context! -> emitBlockingDiagnostics }
     diagnosticCount
 }
 
@@ -15494,12 +15536,12 @@ public emitWasmChecked sources: move [Text; ~] -> Int uses Console {
     llvmTarget.wasm32Browser => target
     PrepareRequest { sources: sources, pointerBitWidth: target.pointerBitWidth, supportsComputePool: false, expectedPathStyle: 0 } => prepareRequest!
     prepareRequest! -> prepare => context!
-    context! -> blockingOwnershipDiagnosticCount => diagnosticCount
+    context! -> blockingDiagnosticCount => diagnosticCount
     diagnosticCount == 0 -> if {
         target.dataLayoutLine -> println
         target.tripleLine -> println
         context! -> emitWasmContext
-    } else { context! -> emitOwnershipDiagnostics }
+    } else { context! -> emitBlockingDiagnostics }
     diagnosticCount
 }
 

@@ -17,6 +17,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { compileAndRun, CompilerResult, preloadStage2 } from "./compiler-client";
 import { samples } from "./samples";
 
+const basePath = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
+
 const keywords = [
   "main", "public", "namespace", "import", "as", "struct", "enum", "trait",
   "impl", "for", "where", "type", "block", "stream", "state", "stop", "each",
@@ -91,22 +93,29 @@ export default function PlaygroundPage() {
           [/#.*$/, "comment"],
           [/"""/, { token: "string.quote", next: "@multilineString" }],
           [/"/, { token: "string.quote", next: "@string" }],
+          [/[A-Za-z_\u0080-\uFFFF][A-Za-z0-9_!\u0080-\uFFFF]*(?=\s*(?:<[^>\n]+>)?\s*\()/, "function.call"],
+          [/(->)(\s*)([A-Za-z_\u0080-\uFFFF][A-Za-z0-9_!\u0080-\uFFFF]*)/, ["operator", "white", "function.call"]],
+          [/(=>)(\s*)([A-Za-z_\u0080-\uFFFF][A-Za-z0-9_!\u0080-\uFFFF]*)/, ["operator", "white", "variable.binding"]],
+          [/^(\s*)([A-Za-z_\u0080-\uFFFF][A-Za-z0-9_!\u0080-\uFFFF]*)(?=\s+(?:[A-Za-z_\u0080-\uFFFF][A-Za-z0-9_!\u0080-\uFFFF]*\s*:|:))/, ["white", "function.declaration"]],
+          [/\b(struct|enum|trait|namespace|import|type)\b(\s+)([A-Za-z_\u0080-\uFFFF][A-Za-z0-9_.\u0080-\uFFFF]*)/, ["keyword", "white", "type.declaration"]],
+          [/(\.)([A-Za-z_\u0080-\uFFFF][A-Za-z0-9_!\u0080-\uFFFF]*)/, ["delimiter", "property"]],
           [/[A-Z][\w]*/, "type.identifier"],
           [/[a-zA-Z_][\w]*/, {
             cases: {
               "@keywords": "keyword",
               "@typeKeywords": "type.identifier",
-              "@default": "identifier"
+              "@default": "variable"
             }
           }],
+          [/[^\W\d][\w\u0080-\uFFFF]*/u, "variable"],
           [/\d+/, "number"],
           [/->|=>|\.\.|==|!=|<=|>=/, "operator"],
           [/[+\-*/%=<>!]/, "operator"],
           [/[{}()[\],.:;]/, "delimiter"]
         ],
         string: [
-          [/\$\(/, { token: "variable", next: "@interpolation" }],
-          [/\$[a-zA-Z_][\w]*!?/, "variable"],
+          [/\$\(/, { token: "interpolation.delimiter", next: "@interpolation" }],
+          [/\$[A-Za-z_\u0080-\uFFFF][A-Za-z0-9_!\u0080-\uFFFF]*/, "variable.interpolation"],
           [/\\./, "string.escape"],
           [/[^\\$"]+/, "string"],
           [/"/, { token: "string.quote", next: "@pop" }]
@@ -117,8 +126,14 @@ export default function PlaygroundPage() {
           [/"/, "string"]
         ],
         interpolation: [
-          [/\)/, { token: "variable", next: "@pop" }],
-          [/[a-zA-Z_][\w]*!?/, "variable"],
+          [/\)/, { token: "interpolation.delimiter", next: "@pop" }],
+          [/[A-Za-z_\u0080-\uFFFF][A-Za-z0-9_!\u0080-\uFFFF]*(?=\s*\()/, "function.call"],
+          [/[A-Za-z_\u0080-\uFFFF][A-Za-z0-9_!\u0080-\uFFFF]*/, {
+            cases: {
+              "@keywords": "keyword",
+              "@default": "variable.interpolation"
+            }
+          }],
           [/\d+/, "number"],
           [/[-+*/%.]/, "operator"]
         ]
@@ -130,8 +145,15 @@ export default function PlaygroundPage() {
       rules: [
         { token: "comment", foreground: "67816F", fontStyle: "italic" },
         { token: "keyword", foreground: "FFB454" },
+        { token: "function.declaration", foreground: "82D2FF", fontStyle: "bold" },
+        { token: "function.call", foreground: "70C1FF" },
+        { token: "variable.binding", foreground: "D2A6FF", fontStyle: "bold" },
+        { token: "variable", foreground: "C8B6FF" },
+        { token: "variable.interpolation", foreground: "75C9F1", fontStyle: "bold" },
+        { token: "interpolation.delimiter", foreground: "FF7AB2", fontStyle: "bold" },
+        { token: "type.declaration", foreground: "79DCAA", fontStyle: "bold" },
         { token: "type.identifier", foreground: "79DCAA" },
-        { token: "identifier", foreground: "E7E8E5" },
+        { token: "property", foreground: "EBCB8B" },
         { token: "number", foreground: "D2A6FF" },
         { token: "string", foreground: "A8D58D" },
         { token: "string.escape", foreground: "F28FAD" },
@@ -160,8 +182,8 @@ export default function PlaygroundPage() {
   return (
     <main className="site-shell">
       <header className="site-header">
-        <a className="brand" href="/" aria-label="Sollang home">
-          <img src="/sollang-logo.svg" alt="" width={42} height={42} />
+        <a className="brand" href={`${basePath}/`} aria-label="Sollang home">
+          <img src={`${basePath}/sollang-logo.svg`} alt="" width={42} height={42} />
           <span>
             <strong>Sollang</strong>
             <small>PLAYGROUND</small>

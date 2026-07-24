@@ -6,6 +6,7 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."
 const wasmPath = process.argv[2] ?? path.join(repoRoot, "artifacts", "sollangc-browser.wasm");
 const sourcePath = process.argv[3] ?? path.join(repoRoot, "examples", "23-webassembly-browser.slg");
 const outputPath = process.argv[4] ?? path.join(repoRoot, "artifacts", "browser-stage2-output.ll");
+const expectedDiagnostic = process.argv[5];
 const wasmBytes = fs.readFileSync(wasmPath);
 const sourceBytes = fs.readFileSync(sourcePath);
 const stdlibRoot = path.join(repoRoot, "stdlib");
@@ -139,6 +140,17 @@ try {
 const output = outputChunks.map(chunk => decoder.decode(chunk, { stream: true })).join("")
   + decoder.decode();
 fs.writeFileSync(outputPath, output);
+
+if (expectedDiagnostic) {
+  if (!output.includes(expectedDiagnostic) || output.includes('target triple = "wasm32-unknown-unknown-wasm"')) {
+    throw new Error(
+      `Stage2 browser compiler diagnostic mismatch: expected=${JSON.stringify(expectedDiagnostic)}, `
+      + `exit=${exitCode}, output=${output.slice(0, 800)}`
+    );
+  }
+  console.log(`PASS Stage2 browser diagnostic: ${expectedDiagnostic}`);
+  process.exit(0);
+}
 
 if (exitCode !== 0 || !output.includes('target triple = "wasm32-unknown-unknown-wasm"')) {
   throw new Error(`Stage2 browser compiler failed: exit=${exitCode}, output=${output.slice(0, 400)}`);

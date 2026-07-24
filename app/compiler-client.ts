@@ -8,6 +8,8 @@ export type CompilerResult = {
 
 const decoder = new TextDecoder("utf-8");
 const encoder = new TextEncoder();
+const basePath = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
+const assetUrl = (path: string) => `${basePath}${path}`;
 let stage2BytesPromise: Promise<ArrayBuffer> | undefined;
 type StandardLibrarySource = {
   namespace: string;
@@ -28,9 +30,11 @@ type ToolModule = {
 };
 
 type ToolFactory = (options?: Record<string, unknown>) => Promise<ToolModule>;
+const importToolFactory = (url: string) =>
+  (new Function("url", "return import(url)") as (value: string) => Promise<{ default: ToolFactory }>)(url);
 
 export function preloadStage2(): Promise<ArrayBuffer> {
-  stage2BytesPromise ??= fetch("/sollangc-stage2-0.2.260723.wasm").then(response => {
+  stage2BytesPromise ??= fetch(assetUrl("/sollangc-stage2-0.2.260723.wasm")).then(response => {
     if (!response.ok) {
       throw new Error(`Stage2 WASM을 불러오지 못했습니다 (${response.status})`);
     }
@@ -40,7 +44,7 @@ export function preloadStage2(): Promise<ArrayBuffer> {
 }
 
 function loadStandardLibrary(): Promise<StandardLibrarySource[]> {
-  standardLibraryPromise ??= fetch("/stdlib-0.2.260723.json").then(async response => {
+  standardLibraryPromise ??= fetch(assetUrl("/stdlib-0.2.260723.json")).then(async response => {
     if (!response.ok) {
       throw new Error(`표준 라이브러리를 불러오지 못했습니다 (${response.status})`);
     }
@@ -166,55 +170,119 @@ async function compileWithStage2(source: string): Promise<string> {
     + decoder.decode();
 
   if (exitCode !== 0 || !llvm.includes('target triple = "wasm32-unknown-unknown-wasm"')) {
-    throw new Error(llvm.trim() || `Stage2 compiler exited ${exitCode}`);
+    throw new Error(formatCompilerDiagnostic(source, llvm.trim() || `Stage2 compiler exited ${exitCode}`));
   }
   return llvm;
 }
 
 async function lowerLlvmToWasm(llvm: string): Promise<Uint8Array> {
-  const llcModuleUrl = "/llvm-16/llc.js";
-  const lldModuleUrl = "/llvm-16/lld.js";
+  const llcModuleUrl = new URL(assetUrl("/llvm-16/llc.js"), window.location.href).href;
+  const lldModuleUrl = new URL(assetUrl("/llvm-16/lld.js"), window.location.href).href;
   const [{ default: createLlc }, { default: createLld }, llcBinary, lldBinary] = await Promise.all([
-    import(/* @vite-ignore */ llcModuleUrl) as Promise<{ default: ToolFactory }>,
-    import(/* @vite-ignore */ lldModuleUrl) as Promise<{ default: ToolFactory }>,
+    importToolFactory(llcModuleUrl),
+    importToolFactory(lldModuleUrl),
     loadToolBinary(`${llvmAssetRoot}/llc.wasm`),
     loadToolBinary(`${llvmAssetRoot}/lld.wasm`)
   ]);
 
+  const llcDiagnostics: string[] = [];
   const llc = await createLlc({
     noInitialRun: true,
     wasmBinary: llcBinary,
-    locateFile: (file: string) => `${llvmAssetRoot}/${file}`
+    locateFile: (file: string) => `${llvmAssetRoot}/${file}`,
+    print: (message: string) => llcDiagnostics.push(message),
+    printErr: (message: string) => llcDiagnostics.push(message)
   });
   llc.FS.writeFile("main.ll", llvm);
-  await llc.callMain([
-    "-mtriple=wasm32-unknown-unknown-wasm",
-    "-filetype=obj",
-    "main.ll",
-    "-o",
-    "main.o"
-  ]);
-  const object = llc.FS.readFile("main.o");
+  try {
+    await llc.callMain([
+      "-mtriple=wasm32-unknown-unknown-wasm",
+      "-filetype=obj",
+      "main.ll",
+      "-o",
+      "main.o"
+    ]);
+  } catch (error) {
+    throwToolError("LLVM 변환", llcDiagnostics, error);
+  }
+  let object: Uint8Array;
+  try {
+    object = llc.FS.readFile("main.o");
+  } catch (error) {
+    throwToolError("LLVM 변환", llcDiagnostics, error);
+  }
 
+  const lldDiagnostics: string[] = [];
   const lld = await createLld({
     noInitialRun: true,
     wasmBinary: lldBinary,
-    locateFile: (file: string) => `${llvmAssetRoot}/${file}`
+    locateFile: (file: string) => `${llvmAssetRoot}/${file}`,
+    print: (message: string) => lldDiagnostics.push(message),
+    printErr: (message: string) => lldDiagnostics.push(message)
   });
   lld.FS.writeFile("main.o", object);
-  await lld.callMain([
-    "-flavor",
-    "wasm",
-    "--no-entry",
-    "--export=sollang_start",
-    "--export-memory",
-    "--allow-undefined",
-    "--gc-sections",
-    "main.o",
-    "-o",
-    "main.wasm"
-  ]);
-  return lld.FS.readFile("main.wasm");
+  try {
+    await lld.callMain([
+      "-flavor",
+      "wasm",
+      "--no-entry",
+      "--export=sollang_start",
+      "--export-memory",
+      "--allow-undefined",
+      "--gc-sections",
+      "main.o",
+      "-o",
+      "main.wasm"
+    ]);
+    return lld.FS.readFile("main.wasm");
+  } catch (error) {
+    throwToolError("WebAssembly 링크", lldDiagnostics, error);
+  }
+}
+
+function throwToolError(stage: string, diagnostics: string[], error: unknown): never {
+  const details = diagnostics.map(line => line.trim()).filter(Boolean).join("\n");
+  if (details) {
+    throw new Error(`${stage}에 실패했습니다.\n${details}`);
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  throw new Error(`${stage}에 실패했습니다.${message === "FS error" ? "" : `\n${message}`}`);
+}
+
+function formatCompilerDiagnostic(source: string, raw: string): string {
+  const lines = raw.split(/\r?\n/)
+    .map(line => line.replace(/^;\s?/, "").trim())
+    .filter(line => line && !line.startsWith("sollang browser compilation failed"));
+  const locationPattern = /\(source 0, byte (\d+), length (\d+)\)/;
+  const errorLine = lines.find(line => line.includes("semantic error")) ?? lines[0] ?? raw;
+  const location = errorLine.match(locationPattern);
+  const prefix = location ? `${sourceLocation(source, Number(location[1]))}: ` : "";
+  const unknownInterpolation = errorLine.match(/unknown interpolation binding '([^']+)'/);
+  if (unknownInterpolation) {
+    const unknownName = unknownInterpolation[1];
+    const knownBinding = bindingNames(source)
+      .filter(name => unknownName.startsWith(name) && name.length < unknownName.length)
+      .sort((left, right) => right.length - left.length)[0];
+    const hint = knownBinding
+      ? `힌트: 변수 이름 뒤에 글자가 이어질 때는 '$(${knownBinding})${unknownName.slice(knownBinding.length)}'처럼 $(...)로 경계를 표시하세요.`
+      : "힌트: 문자열 보간의 변수 이름을 확인하고, 뒤에 글자가 이어지면 $(name) 형태로 경계를 표시하세요.";
+    return `${prefix}알 수 없는 문자열 보간 변수 '${unknownName}'\n${hint}`;
+  }
+  const unresolvedCall = errorLine.match(/unresolved call target '([^']+)'/);
+  if (unresolvedCall) {
+    return `${prefix}알 수 없는 함수 호출 '${unresolvedCall[1]}'\n힌트: 함수 호출은 '-> 함수이름', 값 바인딩은 '=> 이름'을 사용합니다.`;
+  }
+  return lines.join("\n") || raw;
+}
+
+function bindingNames(source: string): string[] {
+  return [...source.matchAll(/=>\s*([\p{L}_][\p{L}\p{N}_]*!?)/gu)].map(match => match[1]);
+}
+
+function sourceLocation(source: string, byteOffset: number): string {
+  const prefix = decoder.decode(encoder.encode(source).slice(0, byteOffset));
+  const lines = prefix.split(/\r?\n/);
+  return `main.slg:${lines.length}:${[...lines.at(-1)!].length + 1}`;
 }
 
 async function executeWasm(wasm: Uint8Array): Promise<string> {
@@ -223,7 +291,10 @@ async function executeWasm(wasm: Uint8Array): Promise<string> {
   const write = (pointer: number, length: number) => {
     chunks.push(new Uint8Array(memory.buffer.slice(pointer, pointer + length)));
   };
-  const { instance } = await WebAssembly.instantiate(wasm, {
+  const wasmBuffer = new Uint8Array(wasm.byteLength);
+  wasmBuffer.set(wasm);
+  const module = await WebAssembly.compile(wasmBuffer.buffer);
+  const instance = await WebAssembly.instantiate(module, {
     env: {
       sollang_write: write,
       sollang_browser_write: write,

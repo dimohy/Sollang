@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
-    [string]$Stage2Compiler = "artifacts\example-tests\selfhost-stage2.exe"
+    [string]$Stage2Compiler = "artifacts\example-tests\selfhost-stage2.exe",
+    [switch]$ReuseCompilerArtifact
 )
 
 $ErrorActionPreference = "Stop"
@@ -22,40 +23,48 @@ $browserSources = Get-Content -LiteralPath $manifestPath |
     Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
     ForEach-Object { (Resolve-Path (Join-Path $repoRoot $_.Trim())).Path }
 
-Write-Host "[browser 1/4] Emit the browser compiler with the verified Stage2 compiler."
-$process = Start-Process `
-    -FilePath $stage2Path `
-    -ArgumentList (@("wasm") + $browserSources) `
-    -RedirectStandardOutput $compilerLlvm `
-    -RedirectStandardError $compilerError `
-    -PassThru `
-    -WindowStyle Hidden `
-    -Wait
-if ($process.ExitCode -ne 0) {
-    throw "Stage2 browser emission failed.`n$([System.IO.File]::ReadAllText($compilerError))"
-}
+if ($ReuseCompilerArtifact) {
+    if (-not (Test-Path -LiteralPath $compilerArtifact)) {
+        throw "verified browser compiler artifact is missing: $compilerArtifact"
+    }
+    Write-Host "[browser 1/4] Reuse the explicitly selected browser compiler artifact."
+    Write-Host "[browser 2/4] Reused artifact: $compilerArtifact"
+} else {
+    Write-Host "[browser 1/4] Emit the browser compiler with the verified Stage2 compiler."
+    $process = Start-Process `
+        -FilePath $stage2Path `
+        -ArgumentList (@("wasm") + $browserSources) `
+        -RedirectStandardOutput $compilerLlvm `
+        -RedirectStandardError $compilerError `
+        -PassThru `
+        -WindowStyle Hidden `
+        -Wait
+    if ($process.ExitCode -ne 0) {
+        throw "Stage2 browser emission failed.`n$([System.IO.File]::ReadAllText($compilerError))"
+    }
 
-Write-Host "[browser 2/4] Verify and link the Stage2-emitted LLVM."
-& $llvmAs $compilerLlvm -o $compilerBitcode
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-& $clang `
-    -target wasm32-unknown-unknown-wasm `
-    -O2 `
-    -g `
-    -fno-addrsig `
-    -c $compilerLlvm `
-    -o $compilerObject
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-& $wasmLd `
-    --no-entry `
-    --export=sollang_start `
-    --export=sollang_alloc `
-    --export-memory `
-    --allow-undefined `
-    --gc-sections `
-    $compilerObject `
-    -o $compilerArtifact
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    Write-Host "[browser 2/4] Verify and link the Stage2-emitted LLVM."
+    & $llvmAs $compilerLlvm -o $compilerBitcode
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    & $clang `
+        -target wasm32-unknown-unknown-wasm `
+        -O2 `
+        -g `
+        -fno-addrsig `
+        -c $compilerLlvm `
+        -o $compilerObject
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    & $wasmLd `
+        --no-entry `
+        --export=sollang_start `
+        --export=sollang_alloc `
+        --export-memory `
+        --allow-undefined `
+        --gc-sections `
+        $compilerObject `
+        -o $compilerArtifact
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+}
 
 Write-Host "[browser 3/4] Execute browser compiler regressions."
 foreach ($case in @(
@@ -92,6 +101,13 @@ foreach ($case in @(
         (Join-Path $repoRoot "examples\expected\$($case[2])")
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }
+
+& node (Join-Path $PSScriptRoot "verify-browser-stage2.mjs") `
+    $compilerArtifact `
+    (Join-Path $repoRoot "examples\diagnostics\browser-interpolation-boundary.slg") `
+    (Join-Path $repoRoot "artifacts\browser-stage2-interpolation-diagnostic.txt") `
+    "unknown interpolation binding 'dimohy는'"
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 Write-Host "[browser 4/4] Publish only the verified compiler artifact."
 Copy-Item -LiteralPath $compilerArtifact -Destination $publicCompiler -Force
