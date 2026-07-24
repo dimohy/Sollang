@@ -184,7 +184,7 @@ async function lowerLlvmToWasm(llvm: string): Promise<Uint8Array> {
   const llc = await createLlc({
     noInitialRun: true,
     wasmBinary: llcBinary,
-    locateFile: (file: string) => `/llvm-16/${file}`
+    locateFile: (file: string) => `${llvmAssetRoot}/${file}`
   });
   llc.FS.writeFile("main.ll", llvm);
   await llc.callMain([
@@ -199,7 +199,7 @@ async function lowerLlvmToWasm(llvm: string): Promise<Uint8Array> {
   const lld = await createLld({
     noInitialRun: true,
     wasmBinary: lldBinary,
-    locateFile: (file: string) => `/llvm-16/${file}`
+    locateFile: (file: string) => `${llvmAssetRoot}/${file}`
   });
   lld.FS.writeFile("main.o", object);
   await lld.callMain([
