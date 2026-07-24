@@ -402,4 +402,4 @@ internal abstract record StringSegment;
 
 internal sealed record TextSegment(string Text) : StringSegment;
 
-internal sealed record InterpolationSegment(Expression Expression) : StringSegment;
+internal sealed record InterpolationSegment(Expression Expression, bool IsParenthesized = false) : StringSegment;
