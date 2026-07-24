@@ -1,5 +1,7 @@
 param(
-    [switch]$Rebuild
+    [switch]$Rebuild,
+    [ValidateRange(1, 64)]
+    [int]$Stage2BuildJobs = 8
 )
 
 $ErrorActionPreference = "Stop"
@@ -19,6 +21,12 @@ $singleSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhos
 $multiLibrarySource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-library-smoke.slg"
 $multiMainSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-main-smoke.slg"
 $groupedNotSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-grouped-not-smoke.slg"
+$sequenceSource = Join-Path $repoRoot "stdlib\std\sequence.slg"
+$streamTableSource = Join-Path $repoRoot "examples\576-linq-multiplication-table.slg"
+$streamDeferredTextSource = Join-Path $repoRoot "examples\580-deferred-text-evaluation.slg"
+$streamSensorSource = Join-Path $repoRoot "examples\582-billion-sensor-alerts.slg"
+$streamStateSource = Join-Path $repoRoot "examples\583-stream-state-take-skip.slg"
+$streamRiskSource = Join-Path $repoRoot "examples\585-stream-transaction-risk-scan.slg"
 $borrowConflictSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-borrow-conflict.slg"
 $borrowUnionConflictSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-borrow-union-conflict.slg"
 $borrowAliasConflictSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-borrow-alias-conflict.slg"
@@ -49,7 +57,7 @@ $semanticContextSource = Join-Path $repoRoot "selfhost\semantic\context.slg"
 $compilerRuntimeSources = Get-Content $runtimeManifestPath |
     Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
     ForEach-Object { Join-Path $repoRoot $_.Trim() }
-$expectedStage2Bytes = 11990618L
+$expectedStage2Bytes = 14282000L
 
 New-Item -ItemType Directory -Force -Path $artifactsDir | Out-Null
 
@@ -143,7 +151,7 @@ if (Test-Stage2IsCurrent) {
     Write-Host ("[stage2 2/7] phase 1/2 analyze {0:N0} source files / {1:N0} lines" -f $sourcePaths.Count, $sourceLineCount)
     $stage2Process = Invoke-ProcessToFile `
         -FilePath $stage1Path `
-        -ArgumentList (@("windows") + $sourcePaths) `
+        -ArgumentList (@("windows", "--jobs", $Stage2BuildJobs.ToString([System.Globalization.CultureInfo]::InvariantCulture)) + $sourcePaths) `
         -OutputPath $stage2LlvmPath `
         -ErrorPath $stage2ErrorPath
 
@@ -231,6 +239,36 @@ if ($multiStage1Hash -ne $multiStage2Hash) {
 }
 Write-Host "[stage2 4/7] PASS $multiStage2Hash"
 
+Write-Host "[stage2 4/7] Compare stage-1 and stage-2 LLVM for complete stream pipelines."
+$streamParityCases = @(
+    @("table", $streamTableSource, "576-linq-multiplication-table.stdout.txt"),
+    @("deferred-text", $streamDeferredTextSource, "580-deferred-text-evaluation.stdout.txt"),
+    @("sensor", $streamSensorSource, "582-billion-sensor-alerts.stdout.txt"),
+    @("state", $streamStateSource, "583-stream-state-take-skip.stdout.txt"),
+    @("risk", $streamRiskSource, "585-stream-transaction-risk-scan.stdout.txt")
+)
+$streamStage2LlvmPaths = @()
+foreach ($streamCase in $streamParityCases) {
+    $streamName = $streamCase[0]
+    $streamSource = $streamCase[1]
+    $streamStage1Llvm = Join-Path $artifactsDir "stage2-check-stream-$streamName-stage1.ll"
+    $streamStage2Llvm = Join-Path $artifactsDir "stage2-check-stream-$streamName-stage2.ll"
+    $streamStage1Error = Join-Path $artifactsDir "stage2-check-stream-$streamName-stage1.err"
+    $streamStage2Error = Join-Path $artifactsDir "stage2-check-stream-$streamName-stage2.err"
+    $streamArguments = @("windows", $streamSource, $sequenceSource)
+    $streamStage1Process = Invoke-ProcessToFile $stage1Path $streamArguments $streamStage1Llvm $streamStage1Error
+    $streamStage2Process = Invoke-ProcessToFile $stage2Path $streamArguments $streamStage2Llvm $streamStage2Error
+    Assert-ProcessSucceeded $streamStage1Process $streamStage1Error "stage-1 $streamName stream emission"
+    Assert-ProcessSucceeded $streamStage2Process $streamStage2Error "stage-2 $streamName stream emission"
+    $streamStage1Hash = Get-NormalizedHash $streamStage1Llvm
+    $streamStage2Hash = Get-NormalizedHash $streamStage2Llvm
+    if ($streamStage1Hash -ne $streamStage2Hash) {
+        throw "$streamName stream normalized LLVM differs: stage1=$streamStage1Hash stage2=$streamStage2Hash"
+    }
+    $streamStage2LlvmPaths += $streamStage2Llvm
+    Write-Host "[stage2 4/7] PASS stream-$streamName $streamStage2Hash"
+}
+
 Write-Host "[stage2 5/7] Assemble, link, execute, and exercise the native build path."
 foreach ($case in @(
     @($singleStage2Llvm, "stage2-check-single.exe", "stage2-single-ok"),
@@ -245,6 +283,22 @@ foreach ($case in @(
     $actual = (& $executablePath | Out-String).TrimEnd("`r", "`n")
     if ($LASTEXITCODE -ne 0 -or $actual -ne $case[2]) {
         throw "stage-2 smoke execution failed: expected '$($case[2])', actual '$actual'"
+    }
+}
+
+for ($streamExecutionIndex = 0; $streamExecutionIndex -lt $streamStage2LlvmPaths.Count; $streamExecutionIndex++) {
+    $streamName = $streamParityCases[$streamExecutionIndex][0]
+    $streamExecutablePath = Join-Path $artifactsDir "stage2-check-stream-$streamName.exe"
+    $streamBitcodePath = [System.IO.Path]::ChangeExtension($streamExecutablePath, ".bc")
+    & $llvmAsPath $streamStage2LlvmPaths[$streamExecutionIndex] -o $streamBitcodePath
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    & $clangPath -Wno-override-module $streamStage2LlvmPaths[$streamExecutionIndex] -o $streamExecutablePath
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    $streamActual = (& $streamExecutablePath | Out-String).Replace("`r`n", "`n").TrimEnd("`n")
+    $streamExpectedPath = Join-Path $repoRoot "examples\expected\$($streamParityCases[$streamExecutionIndex][2])"
+    $streamExpected = [System.IO.File]::ReadAllText($streamExpectedPath).Replace("`r`n", "`n").TrimEnd("`n")
+    if ($LASTEXITCODE -ne 0 -or $streamActual -ne $streamExpected) {
+        throw "stage-2 $streamName stream execution differs from the checked expectation"
     }
 }
 

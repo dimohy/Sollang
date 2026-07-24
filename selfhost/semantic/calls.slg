@@ -3,6 +3,7 @@ namespace sollang.compiler.semantic.calls
 import sollang.compiler.ast as ast
 import sollang.compiler.lexer as lexer
 import sollang.compiler.semantic.analysis as analysis
+import sollang.compiler.semantic.module_resolve as moduleResolve
 import sollang.compiler.semantic.modules as modules
 import sollang.compiler.semantic.qualified as qualified
 import sollang.compiler.semantic.symbols as symbols
@@ -400,6 +401,7 @@ public resolveModules sources: [Text; ~] -> [ModuleCallResolution; ~] {
 
 public resolveModulesAnalyzed package: analysis.PackageAnalysis -> [ModuleCallResolution; ~] {
     package -> modules.identitiesAnalyzed => identities!
+    package -> moduleResolve.resolveAnalyzed => resolvedImports!
     package -> qualified.resolveAnalyzed => qualifiedResults!
     [ModuleCallResolution; ~] => results!
     0 => sourceIndex!
@@ -435,7 +437,17 @@ public resolveModulesAnalyzed package: analysis.PackageAnalysis -> [ModuleCallRe
                 callNode.kind == 10 -> if {
                     0 => moduleFlowNameSearch!
                     moduleFlowNameSearch! < sourceRange.astCount -> while {
-                        (package.nodes[sourceRange.astStart + moduleFlowNameSearch!].parent == callAstIndex! and package.nodes[sourceRange.astStart + moduleFlowNameSearch!].kind == 16) -> if { package.nodes[sourceRange.astStart + moduleFlowNameSearch!].payloadToken => callNameToken! }
+                        (package.nodes[sourceRange.astStart + moduleFlowNameSearch!].parent == callAstIndex! and package.nodes[sourceRange.astStart + moduleFlowNameSearch!].kind == 16) -> if {
+                            package.nodes[sourceRange.astStart + moduleFlowNameSearch!] => moduleFlowPath
+                            moduleFlowPath.firstToken => moduleFlowPathToken!
+                            moduleFlowPath.firstToken + moduleFlowPath.tokenCount => moduleFlowPathEnd
+                            moduleFlowPathToken! < moduleFlowPathEnd -> while {
+                                package.tokens[sourceRange.tokenStart + moduleFlowPathToken!].kind == grammar.tokenIdIdentifier -> if {
+                                    moduleFlowPathToken! => callNameToken!
+                                }
+                                moduleFlowPathToken! + 1 => moduleFlowPathToken!
+                            }
+                        }
                         moduleFlowNameSearch! + 1 => moduleFlowNameSearch!
                     }
                 }
@@ -559,16 +571,99 @@ public resolveModulesAnalyzed package: analysis.PackageAnalysis -> [ModuleCallRe
                     package.ranges[targetSourceModule] => targetRange
                     package.symbols[targetRange.symbolStart + imported.targetSymbol].kind != 7 -> if { 2 => importedStatus! }
                 }
+                imported.targetSymbol => importedFunctionSymbol!
+                importedStatus! != 0 -> if {
+                    package.ranges[targetSourceModule] => importedTargetRange
+                    package.sources[targetSourceModule] -> len => importedTargetLength
+                    package.sources[targetSourceModule] -> slice(UIntSize(0), importedTargetLength) => importedTargetSource
+                    package.tokens[sourceRange.tokenStart + local.nameToken] => importedCallName
+                    0 => importedFunctionSearch!
+                    importedFunctionSearch! < importedTargetRange.symbolCount -> while {
+                        package.symbols[importedTargetRange.symbolStart + importedFunctionSearch!] => importedFunction
+                        (importedFunction.kind == 7 and importedFunction.flags / 4 % 2 == 1) -> if {
+                            package.tokens[importedTargetRange.tokenStart + importedFunction.nameToken] => importedFunctionName
+                            importedCallName.span.length == importedFunctionName.span.length => importedFunctionEqual!
+                            UIntSize(0) => importedFunctionByte!
+                            (importedFunctionEqual! and importedFunctionByte! < importedCallName.span.length) -> while {
+                                (source -> byte(importedCallName.span.start + importedFunctionByte!)) != (importedTargetSource -> byte(importedFunctionName.span.start + importedFunctionByte!)) -> if {
+                                    false => importedFunctionEqual!
+                                }
+                                importedFunctionByte! + UIntSize(1) => importedFunctionByte!
+                            }
+                            importedFunctionEqual! -> if {
+                                importedFunctionSearch! => importedFunctionSymbol!
+                                0 => importedStatus!
+                            }
+                        }
+                        importedFunctionSearch! + 1 => importedFunctionSearch!
+                    }
+                }
                 1 => resolvedOrigin!
                 imported.targetModule => resolvedTargetModule!
                 targetSourceModule => resolvedTargetSource!
-                imported.targetSymbol => resolvedFunctionSymbol!
+                importedFunctionSymbol! => resolvedFunctionSymbol!
                 importedStatus! => resolvedStatus!
             } else {
-                local.functionSymbol < -1 => runtimeCall
-                runtimeCall -> if {
-                    2 => resolvedOrigin!
-                    -1 => resolvedTargetSource!
+                # An unqualified name is also looked up in every directly
+                # imported module. This is the Stage1 open-import behavior used
+                # by `import std.sequence` followed by `-> map`, `-> filter`,
+                # and the other ordinary library stream functions.
+                false => openImportFound!
+                false => openImportAmbiguous!
+                (local.functionSymbol == -1 and localCallNode.kind == 48) -> if {
+                    0 => openImportIndex!
+                    openImportIndex! < (resolvedImports! -> len) -> while {
+                        resolvedImports![openImportIndex!] => openImport
+                        (openImport.sourceModule == sourceIndex! and openImport.status == 0) -> if {
+                            identities![openImport.targetModule].sourceIndex => openTargetSource
+                            package.ranges[openTargetSource] => openTargetRange
+                            package.sources[openTargetSource] -> len => openTargetLength
+                            package.sources[openTargetSource] -> slice(UIntSize(0), openTargetLength) => openTargetText
+                            0 => openSymbolIndex!
+                            openSymbolIndex! < openTargetRange.symbolCount -> while {
+                                package.symbols[openTargetRange.symbolStart + openSymbolIndex!] => openCandidate
+                                (openCandidate.kind == 7 and openCandidate.flags / 4 % 2 == 1) -> if {
+                                    package.tokens[sourceRange.tokenStart + local.nameToken] => openCallName
+                                    package.tokens[openTargetRange.tokenStart + openCandidate.nameToken] => openFunctionName
+                                    openCallName.span.length == openFunctionName.span.length => openNameEqual!
+                                    UIntSize(0) => openNameByte!
+                                    (openNameEqual! and openNameByte! < openCallName.span.length) -> while {
+                                        (source -> byte(openCallName.span.start + openNameByte!)) != (openTargetText -> byte(openFunctionName.span.start + openNameByte!)) -> if {
+                                            false => openNameEqual!
+                                        }
+                                        openNameByte! + UIntSize(1) => openNameByte!
+                                    }
+                                    openNameEqual! -> if {
+                                        openImportFound! -> if {
+                                            true => openImportAmbiguous!
+                                        } else {
+                                            true => openImportFound!
+                                            1 => resolvedOrigin!
+                                            openImport.targetModule => resolvedTargetModule!
+                                            openTargetSource => resolvedTargetSource!
+                                            openSymbolIndex! => resolvedFunctionSymbol!
+                                            0 => resolvedStatus!
+                                        }
+                                    }
+                                }
+                                openSymbolIndex! + 1 => openSymbolIndex!
+                            }
+                        }
+                        openImportIndex! + 1 => openImportIndex!
+                    }
+                    openImportAmbiguous! -> if {
+                        sourceIndex! => resolvedTargetModule!
+                        sourceIndex! => resolvedTargetSource!
+                        -1 => resolvedFunctionSymbol!
+                        2 => resolvedStatus!
+                    }
+                }
+                not openImportFound! -> if {
+                    local.functionSymbol < -1 => runtimeCall
+                    runtimeCall -> if {
+                        2 => resolvedOrigin!
+                        -1 => resolvedTargetSource!
+                    }
                 }
             }
             results! -> push(ModuleCallResolution {

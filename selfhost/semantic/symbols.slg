@@ -36,6 +36,7 @@ public collectPrepared nodes: [ast.AstNode; ~] -> [Symbol; ~] {
             node.kind <= 7 -> if { true => isSymbol! }
         }
         node.kind == 9 -> if { true => isSymbol! }
+        node.kind == 61 -> if { true => isSymbol! }
         node.kind == 48 -> if { true => isSymbol! }
         (node.kind == 50 or node.kind == 51) -> if { true => isSymbol! }
         node.kind == 58 -> if { true => isSymbol! }
@@ -71,6 +72,31 @@ public collectPrepared nodes: [ast.AstNode; ~] -> [Symbol; ~] {
             symbolIndex => astToSymbol![astIndex!]
         }
         astIndex! + 1 => astIndex!
+    }
+
+    # Stream pipeline expansion appends its synthetic nested call scopes after
+    # the original callback body nodes. During the first forward pass those
+    # later scopes are not mapped yet, so callback bindings can be attached to
+    # the outer terminal call. Recompute lexical parents once the complete
+    # AST-to-symbol map exists.
+    0 => reparentSymbolIndex!
+    reparentSymbolIndex! < (symbols! -> len) -> while {
+        symbols![reparentSymbolIndex!] => reparentSymbol!
+        nodes[reparentSymbol!.astNode].parent => reparentAst!
+        -1 => nearestParentSymbol!
+        (reparentAst! >= 0 and nearestParentSymbol! < 0) -> while {
+            astToSymbol![reparentAst!] => reparentCandidate
+            reparentCandidate >= 0 -> if {
+                reparentCandidate => nearestParentSymbol!
+            } else {
+                nodes[reparentAst!].parent => reparentAst!
+            }
+        }
+        (nearestParentSymbol! >= 0 and symbols![nearestParentSymbol!].kind == 48) -> if {
+            nearestParentSymbol! => reparentSymbol!.parent
+            reparentSymbol! => symbols![reparentSymbolIndex!]
+        }
+        reparentSymbolIndex! + 1 => reparentSymbolIndex!
     }
 
     # Attach each type node to its nearest symbol ancestor. The nearest rule

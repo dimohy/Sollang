@@ -1,5 +1,7 @@
 param(
-    [switch]$RebuildStage2
+    [switch]$RebuildStage2,
+    [ValidateRange(1, 64)]
+    [int]$Jobs = 8
 )
 
 $ErrorActionPreference = "Stop"
@@ -30,7 +32,7 @@ function Get-NormalizedHash {
 
 if ($RebuildStage2) {
     Write-Host "[stage3 1/3] Rebuild and verify stage 2."
-    & (Join-Path $PSScriptRoot "verify-selfhost-stage2.ps1") -Rebuild
+    & (Join-Path $PSScriptRoot "verify-selfhost-stage2.ps1") -Rebuild -Stage2BuildJobs $Jobs
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 } else {
     Write-Host "[stage3 1/3] Verify that the existing stage 2 is current."
@@ -57,7 +59,7 @@ Write-Host "[stage3 2/3] Generate stage 3 from the stage-2 compiler."
 Remove-Item -LiteralPath $stage3LlvmPath, $stage3ErrorPath -ErrorAction SilentlyContinue
 $process = Start-Process `
     -FilePath $stage2Path `
-    -ArgumentList (@("windows") + $sourcePaths) `
+    -ArgumentList (@("windows", "--jobs", $Jobs.ToString([System.Globalization.CultureInfo]::InvariantCulture)) + $sourcePaths) `
     -RedirectStandardOutput $stage3LlvmPath `
     -RedirectStandardError $stage3ErrorPath `
     -PassThru `

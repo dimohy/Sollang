@@ -1,7 +1,7 @@
 # Sollang Decision Log
 
 Updated: 2026-07-23
-Current accepted checkpoint: D271, browser WASM playground
+Current accepted checkpoint: D273, content-addressed self-host verification
 
 Entries are chronological. Progress counts and "remaining" work inside an
 older decision describe that decision's checkpoint; D254 and
@@ -10470,7 +10470,7 @@ The CLI and language server report the informational release version.
 
 ## D271 — Browser playground runs the compiler client-side
 
-Status: implemented
+Status: superseded by D272
 Date: 2026-07-23
 
 The public playground at `https://sollang.slogs.dev` loads the Sollang lexer,
@@ -10485,3 +10485,84 @@ The published runtime lives under a release-versioned static path such as
 assets from mixing with a later compiler publish. Browser regression tests
 cover sample selection, stateful stream execution, editor mutation, output,
 syntax colors, and desktop/mobile layout.
+
+## D272 — Browser playground uses the `.slg` Stage2 compiler
+
+Status: implemented
+Date: 2026-07-23
+
+The browser compiler is the self-hosted Sollang implementation from
+`selfhost/*.slg`, compiled to `wasm32-browser`. It is not the C# reference
+compiler hosted in .NET WebAssembly and it is not a reduced playground
+interpreter. The edited source and standard-library modules enter the same
+Stage2 parser, semantic analysis, typed IR, ownership checks, and LLVM emitter
+used by native self-host verification.
+
+Run performs a complete in-browser toolchain: Stage2 emits
+`wasm32-unknown-unknown-wasm` LLVM, browser-hosted LLVM lowers it to an object,
+the WebAssembly linker produces the program module, and the browser instantiates
+that module and captures its output. The browser gate compiles the complete 576,
+580, 582, 583, and 585 stream pipelines. Their `map`, `tap`, `scan`, `filter`,
+`beforeEach`, `afterEach`, `flatMap`, `skip`, and `take` stages must pass exact
+Stage1-Stage2 LLVM parity before the browser artifact is published.
+
+## D273 — Self-host development uses a content-addressed short loop
+
+Status: implemented
+Date: 2026-07-24
+
+A small compiler change does not trigger the complete multi-minute bootstrap.
+The compiler manifest, runtime sources, and focused fixture receive SHA-256
+content fingerprints. An unchanged Stage1-hosted self-host compiler is reused;
+the selected fixture still passes `llvm-as`, native execution, and checked-in
+stdout comparison. Stage1/Stage2 LLVM comparison is permitted only when the
+Stage2 artifact carries the exact current compiler fingerprint.
+
+The complete Stage2 bootstrap, exact differential gate, and full regression
+remain mandatory, but run once after the related implementation slice is
+closed. The first cold focused run completed in 44 seconds; exact warm checks
+then fell to 0.2–1.3 seconds. This follows query/action caching and focused
+compiler-test practice documented in
+`docs/INCREMENTAL_SELFHOST_WORKFLOW.md`.
+
+The Stage2 Stream emitter now covers fused range pipelines with `map`, `tap`,
+`scan`, `filter`, `beforeEach`/`afterEach`, per-stage `skip`/`take`, and nested
+`flatMap` cancellation. Focused examples 576, 580, 582, 583, and 585 assemble
+and produce their exact expected output without materializing intermediate
+collections.
+
+## D274 — Self-host lowering uses indexed ownership and AST locality
+
+Status: implemented
+Date: 2026-07-24
+
+The complete 47-file self-host input exposed a performance regression after the
+Stream slice: one compiler-to-LLVM generation took 1,051 seconds with eight
+workers. Profiling separated semantic analysis, typed IR, Stream planning,
+ownership analysis, recursive types, and final LLVM emission. The largest
+regression was a redundant legacy whole-AST type inference pass. The remaining
+hot paths repeatedly scanned all inferred expressions, all IR nodes, or every
+AST node in a source for each function and owned binding.
+
+Typed IR now builds nearest-descendant type maps and nearest-function AST groups
+once. Function lowering walks only the nodes owned by that function. Recursive
+type propagation uses the existing AST-indexed canonical map, owned aggregate
+repair walks constructor ancestor chains, and LLVM ownership/drop searches are
+bounded to the containing function. These indexes replace repeated quadratic
+searches without changing source or LLVM semantics.
+
+On the same 47 files and 39,001 source lines with `--jobs 8`, complete LLVM
+generation now takes 46.060 seconds after a 47.284-second first measurement:
+about 22.8 times faster and 95.6% less wall time. The two complete outputs are
+byte-identical at 14,345,663 bytes with SHA-256
+`9DC795723D6506C67D6A5F7D169BA878CE45113262F313BCD13BE6A82ACCDDCF`.
+Focused Stream examples 576, 580, 582, 583, and 585 retain their exact prior
+LLVM SHA-256 values and execution output.
+
+The incremental verification path measured on the same machine completes an
+exact cache hit in 28 ms. A compiler-source miss rebuilds the Stage1-hosted
+compiler and verifies a focused fixture in 8.36 seconds. The explicit full
+Stage2 bootstrap, LLVM verification, and native link complete in 78.61 seconds.
+For the grouped-not smoke fixture, Stage1 and Stage2 compile in 10.9 ms and
+6.3 ms respectively and emit byte-identical, `llvm-as`-valid LLVM with SHA-256
+`3656BE7142B9C84EF5260A3CDD27234882C05F32FD94277EF7E0DE10D42819C7`.

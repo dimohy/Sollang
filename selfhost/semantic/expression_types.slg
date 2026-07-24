@@ -81,7 +81,7 @@ public inferContext prepared: semanticContext.SemanticSnapshot -> [ExpressionTyp
         inferredSeed! + 1 => inferredSeed!
     }
     0 => inferredMappedCount!
-    ["Unit", "Text", "Int", "Int8", "Int16", "Int32", "Int64", "Long", "UInt8", "UInt16", "UInt32", "UInt64", "Size", "UIntSize", "CodePoint", "Arena", "Arguments", "MappedBytes", "MutableMappedBytes", "Float", "Float32", "Float64", "Double", "Bool", "SourceText", ~] => builtinNames!
+    ["Unit", "Text", "Int", "Int8", "Int16", "Int32", "Int64", "Long", "UInt8", "UInt16", "UInt32", "UInt64", "Size", "UIntSize", "CodePoint", "Arena", "Arguments", "MappedBytes", "MutableMappedBytes", "Float", "Float32", "Float64", "Double", "Bool", "SourceText", "Range", ~] => builtinNames!
     "process.arguments" => processArgumentsName
     requestedSourceIndex => sourceIndex!
         prepared.package.sources[sourceIndex!] -> len => sourceLength
@@ -1112,6 +1112,35 @@ public inferContext prepared: semanticContext.SemanticSnapshot -> [ExpressionTyp
                                     true => changed!
                                 }
                             }
+                            (intrinsicRoleSourceType.origin == 1 and intrinsicRoleSourceType.targetSymbol == 25) -> if {
+                                roleValueTypeIndex! >= 0 -> if {
+                                    inferred![roleValueTypeIndex!] => intrinsicRangeRoleValueType!
+                                    (intrinsicRangeRoleValueType!.origin != 1 or intrinsicRangeRoleValueType!.targetModule != -1 or intrinsicRangeRoleValueType!.targetSymbol != 2) -> if {
+                                        1 => intrinsicRangeRoleValueType!.origin
+                                        -1 => intrinsicRangeRoleValueType!.targetModule
+                                        2 => intrinsicRangeRoleValueType!.targetSymbol
+                                        -1 => intrinsicRangeRoleValueType!.keyOrigin
+                                        -1 => intrinsicRangeRoleValueType!.keyModule
+                                        -1 => intrinsicRangeRoleValueType!.valueOrigin
+                                        -1 => intrinsicRangeRoleValueType!.valueModule
+                                        intrinsicRangeRoleValueType! => inferred![roleValueTypeIndex!]
+                                        true => changed!
+                                    }
+                                } else {
+                                    inferred! -> push(ExpressionType {
+                                        sourceModule: sourceIndex!
+                                        astNode: roleReference.astNode
+                                        origin: 1
+                                        targetModule: -1
+                                        targetSymbol: 2
+                                        keyOrigin: -1
+                                        keyModule: -1
+                                        valueOrigin: -1
+                                        valueModule: -1
+                                    })
+                                    true => changed!
+                                }
+                            }
                         }
                     }
                     -1 => roleCallIndex!
@@ -1285,7 +1314,7 @@ public inferContext prepared: semanticContext.SemanticSnapshot -> [ExpressionTyp
             0 => bindingSymbolIndex!
             bindingSymbolIndex! < sourceRange.symbolCount -> while {
                 prepared.package.symbols[sourceRange.symbolStart + bindingSymbolIndex!] => bindingSymbol
-                bindingSymbol.kind == 9 -> if {
+                (bindingSymbol.kind == 9 or bindingSymbol.kind == 61) -> if {
                     -1 => bindingValueIndex!
                     1000000 => bindingDistance!
                     0 => valueSearch!
@@ -2103,16 +2132,16 @@ public inferContext prepared: semanticContext.SemanticSnapshot -> [ExpressionTyp
         sourceIndices! -> push(sourceIndex!)
         sourceIndex! + 1 => sourceIndex!
     }
-    sourceIndices! -> parallel sourceIndex {
-        sourceIndex -> inferSource
-    } => sourceResults!
     [ExpressionType; ~] => inferred!
-    sourceResults! -> each sourceResult {
+    0 => sourceResultIndex!
+    sourceResultIndex! < (sourceIndices! -> len) -> while {
+        sourceIndices![sourceResultIndex!] -> inferSource => sourceResult
         0 => sourceTypeIndex!
         sourceTypeIndex! < (sourceResult.types -> len) -> while {
             inferred! -> push(sourceResult.types[sourceTypeIndex!])
             sourceTypeIndex! + 1 => sourceTypeIndex!
         }
+        sourceResultIndex! + 1 => sourceResultIndex!
     }
     inferred!
 }

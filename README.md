@@ -40,9 +40,10 @@ explicit value flow with `value -> target` and expression-first bindings with
 ## Try It Online
 
 Open [sollang.slogs.dev](https://sollang.slogs.dev), choose a sample, edit the
-syntax-highlighted source, and press **Run**. The real Sollang lexer, parser,
-semantic compiler, standard library, and playground VM run in WebAssembly
-inside the browser; source code is not sent to a compilation server.
+syntax-highlighted source, and press **Run**. The `.slg` self-hosted Stage2
+compiler runs in WebAssembly, emits LLVM for the edited program, and lowers it
+to an executable WebAssembly module entirely inside the browser. The standard
+library and source code never travel to a compilation server.
 
 ## Quick Look
 

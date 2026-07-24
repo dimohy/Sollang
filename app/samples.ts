@@ -37,26 +37,9 @@ main {
 }`
   },
   {
-    id: "array",
-    title: "Arrays and each",
-    kicker: "03 · 컬렉션",
-    description: "배열을 순회하면서 하나의 mutable 합계를 갱신합니다.",
-    code: `main {
-    [3, 5, 8, 13, 21] => values
-    0 => total!
-
-    values -> each value {
-        total! + value => total!
-        "받은 값: $value" -> println
-    }
-
-    "합계 = $(total!)" -> println
-}`
-  },
-  {
     id: "struct",
     title: "Struct projection",
-    kicker: "04 · 구조체",
+    kicker: "03 · 구조체",
     description: "도메인 값을 구조체로 표현하고 필드를 자연스럽게 읽습니다.",
     code: `struct Point {
     x: Int
@@ -79,38 +62,29 @@ main {
 }`
   },
   {
-    id: "stream",
-    title: "Lazy stream",
-    kicker: "05 · 지연 스트림",
-    description: "10억 개 범위를 만들지 않고 21개만 읽은 뒤 upstream을 중단합니다.",
-    code: `import std.sequence
+    id: "loop",
+    title: "Mutable while",
+    kicker: "04 · 반복과 상태",
+    description: "명시적인 mutable 값과 while 흐름으로 작은 수열을 만듭니다.",
+    code: `main {
+    0 => current!
+    1 => next!
+    0 => count!
 
-main {
-    0 => scanned!
-
-    1..1000000000
-        -> map value {
-            value
-        }
-        -> tap value {
-            scanned! + 1 => scanned!
-        }
-        -> filter value {
-            value % 7 == 0
-        }
-        -> take(3)
-        -> each value {
-            "발견: $value" -> println
-        }
-
-    "10억 개 중 $(scanned!)개만 검사" -> println
+    count! < 8 -> while {
+        "fib = $(current!)" -> println
+        current! + next! => sum
+        next! => current!
+        sum => next!
+        count! + 1 => count!
+    }
 }`
   },
   {
-    id: "sensor",
-    title: "Billion sensor alerts",
-    kicker: "06 · 실시간 필터링",
-    description: "map·tap·filter·take가 하나의 루프로 융합되는 센서 경보 예제입니다.",
+    id: "sensor-stream",
+    title: "10억 센서 스트림",
+    kicker: "05 · 지연 스트림",
+    description: "10억 개를 만들지 않고 upstream을 필요한 만큼만 당겨 다섯 경보에서 즉시 멈춥니다.",
     code: `import std.sequence
 
 struct Reading {
@@ -119,7 +93,8 @@ struct Reading {
 }
 
 main {
-    0 => scanned!
+    0 => alertCount!
+    0 => scannedCount!
 
     1..1000000000
         -> map sensorId {
@@ -129,24 +104,53 @@ main {
             }
         }
         -> tap reading {
-            reading.sensorId => scanned!
+            reading.sensorId => scannedCount!
         }
         -> filter reading {
             reading.celsius >= 57
         }
         -> take(5)
         -> each alert {
-            "센서 $(alert.sensorId) = $(alert.celsius)°C" -> println
+            alertCount! + 1 => alertCount!
+            "경보 $(alertCount!): 센서 $(alert.sensorId) = $(alert.celsius)°C" -> println
         }
 
-    "실제 검사량 = $(scanned!)" -> println
+    "탐색 중단: 10억 개 중 $(scannedCount!)개만 검사" -> println
 }`
   },
   {
-    id: "scan",
-    title: "Stateful scan",
-    kicker: "07 · 누적 상태",
-    description: "구조체 상태를 스트림 전체에서 유지하면서 거래 위험 임계점을 찾습니다.",
+    id: "nested-stream",
+    title: "중첩 주문 스트림",
+    kicker: "06 · flatMap과 취소",
+    description: "flatMap의 중첩 upstream에서 skip과 take가 하나의 downstream 카운터로 동작하고 일곱 번째 값에서 전체 흐름을 멈춥니다.",
+    code: `import std.sequence
+
+main {
+    0 => scanned!
+
+    1..10
+        -> beforeEach outer {
+        }
+        -> flatMap(1..10) outer, inner {
+            outer * 10 + inner
+        }
+        -> tap value {
+            scanned! + 1 => scanned!
+        }
+        -> skip(3)
+        -> take(4)
+        -> each value {
+            "$value" -> println
+        }
+
+    "scanned=$(scanned!)" -> println
+}`
+  },
+  {
+    id: "risk-stream",
+    title: "거래 위험 스캔",
+    kicker: "07 · 상태 스트림",
+    description: "map·tap·scan·filter·take가 하나의 downstream 흐름으로 융합되어 중간 컬렉션 없이 실행됩니다.",
     code: `import std.sequence
 
 struct Transaction {
@@ -155,8 +159,8 @@ struct Transaction {
 }
 
 struct AccountState {
-    lastId: Int
-    withdrawn: Int
+    lastTransactionId: Int
+    withdrawnToday: Int
 }
 
 main {
@@ -173,23 +177,23 @@ main {
             scanned! + 1 => scanned!
         }
         -> scan(AccountState {
-            lastId: 0
-            withdrawn: 0
+            lastTransactionId: 0
+            withdrawnToday: 0
         }) account, transaction {
             AccountState {
-                lastId: transaction.id
-                withdrawn: account.withdrawn + transaction.amount
+                lastTransactionId: transaction.id
+                withdrawnToday: account.withdrawnToday + transaction.amount
             }
         }
         -> filter account {
-            account.withdrawn > 1000
+            account.withdrawnToday > 1000
         }
         -> take(5)
         -> each warning {
-            "거래 $(warning.lastId): $(warning.withdrawn)원" -> println
+            "warning tx=$(warning.lastTransactionId), withdrawn=$(warning.withdrawnToday)" -> println
         }
 
-    "검사한 거래 = $(scanned!)" -> println
+    "scanned=$(scanned!)" -> println
 }`
   }
 ];
