@@ -10,11 +10,14 @@ internal sealed class WasmBrowserLlvmRuntimePlatform : LlvmRuntimePlatform
 
     public override int PointerBitWidth => 32;
 
-    public override bool SupportsHeapAllocation => false;
+    public override bool SupportsHeapAllocation => true;
 
-    public override bool SupportsMemoryMapping => false;
+    // Browser compiler builds retain file-oriented helper functions for
+    // self-host parity. Their platform stubs fail at runtime, while the
+    // browser entry point uses the in-memory Text source path exclusively.
+    public override bool SupportsMemoryMapping => true;
 
-    public override bool SupportsProcessArguments => false;
+    public override bool SupportsProcessArguments => true;
 
     public override bool SupportsEnvironment => false;
 
@@ -24,10 +27,63 @@ internal sealed class WasmBrowserLlvmRuntimePlatform : LlvmRuntimePlatform
 
     public override void EmitProcessPrimitives(StringBuilder functions)
     {
+        functions.AppendLine("""
+            define internal i64 @sollang_argument_count() #0 {
+            entry:
+              %source_count32 = call i32 @sollang_browser_source_count()
+              %source_count = zext i32 %source_count32 to i64
+              %argument_count = add i64 %source_count, 1
+              ret i64 %argument_count
+            }
+
+            define internal %sollang.text @sollang_argument(i64 %index) #0 {
+            entry:
+              %source_count32 = call i32 @sollang_browser_source_count()
+              %source_count = zext i32 %source_count32 to i64
+              %source_index64 = sub i64 %index, 1
+              %has_source_index = icmp ugt i64 %index, 0
+              %source_index_in_bounds = icmp ult i64 %source_index64, %source_count
+              %is_source = and i1 %has_source_index, %source_index_in_bounds
+              br i1 %is_source, label %source, label %program
+
+            source:
+              %source_index = trunc i64 %source_index64 to i32
+              %source_ptr32 = call i32 @sollang_browser_source_pointer(i32 %source_index)
+              %source_ptr = inttoptr i32 %source_ptr32 to ptr
+              %source_len32 = call i32 @sollang_browser_source_length(i32 %source_index)
+              %source_len = zext i32 %source_len32 to i64
+              %source0 = insertvalue %sollang.text poison, ptr %source_ptr, 0
+              %source1 = insertvalue %sollang.text %source0, i64 %source_len, 1
+              ret %sollang.text %source1
+
+            program:
+              %program0 = insertvalue %sollang.text poison, ptr @sollang_browser_program_name, 0
+              %program1 = insertvalue %sollang.text %program0, i64 8, 1
+              ret %sollang.text %program1
+            }
+
+            """);
     }
 
     public override void EmitMappedFilePrimitives(StringBuilder functions)
     {
+        functions.AppendLine("""
+            define internal %sollang.mapped_bytes @sollang_map_file(ptr %path, i64 %path_len, i64 %offset, i64 %requested_len, i64 %requested_size, i1 %writable) #0 {
+            entry:
+              ret %sollang.mapped_bytes zeroinitializer
+            }
+
+            define internal i32 @sollang_mapped_flush(ptr %base, i64 %mapped_len) #0 {
+            entry:
+              ret i32 0
+            }
+
+            define internal void @sollang_mapped_unmap(ptr %base, i64 %mapped_len) #0 {
+            entry:
+              ret void
+            }
+
+            """);
     }
 
     public override void EmitDirectoryPrimitives(StringBuilder functions)
@@ -41,19 +97,31 @@ internal sealed class WasmBrowserLlvmRuntimePlatform : LlvmRuntimePlatform
             functions.AppendLine("declare void @exit(i32)");
         }
         functions.AppendLine("declare i32 @sollang_browser_write(ptr, i32)");
+        functions.AppendLine("declare void @sollang_browser_panic(ptr, i32)");
         functions.AppendLine("declare i64 @sollang_browser_now_millis()");
+        functions.AppendLine("declare i32 @sollang_browser_source_count()");
+        functions.AppendLine("declare i32 @sollang_browser_source_pointer(i32)");
+        functions.AppendLine("declare i32 @sollang_browser_source_length(i32)");
+    }
+
+    public override void EmitGlobals(StringBuilder globals)
+    {
+        globals.AppendLine("@sollang_browser_program_name = private constant [8 x i8] c\"sollangc\"");
     }
 
     public override void EmitMemoryDeclarations(StringBuilder functions)
     {
+        functions.AppendLine("declare i32 @sollang_browser_alloc(i64)");
     }
 
     public override void EmitMemoryPrimitives(StringBuilder functions)
     {
         functions.AppendLine("""
-            define internal ptr @sollang_alloc(i64 %bytes) #0 {
+            define ptr @sollang_alloc(i64 %bytes) #0 {
             entry:
-              unreachable
+              %ptr32 = call i32 @sollang_browser_alloc(i64 %bytes)
+              %ptr = inttoptr i32 %ptr32 to ptr
+              ret ptr %ptr
             }
 
             define internal void @sollang_free(ptr %ptr) #0 {

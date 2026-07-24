@@ -9,13 +9,32 @@ const browser = await chromium.launch({
 
 try {
   const page = await browser.newPage({ viewport: { width: 1440, height: 1080 } });
+  page.on("console", message => console.log(`[browser:${message.type()}] ${message.text()}`));
+  page.on("pageerror", error => console.error(`[browser:error] ${error.stack ?? error.message}`));
+  page.on("response", response => {
+    if (!response.ok()) console.error(`[browser:http] ${response.status()} ${response.url()}`);
+  });
   await page.goto(baseUrl, { waitUntil: "networkidle" });
   await page.getByText("WASM 준비됨").waitFor({ timeout: 60_000 });
 
-  await page.locator("#sample").selectOption("scan");
-  await page.getByRole("button", { name: /실행/ }).click();
-  await page.getByText("EXIT 0").waitFor({ timeout: 30_000 });
-  await page.getByText("검사한 거래 = 9", { exact: false }).waitFor();
+  const sampleOutputs = [
+    ["hello", "Hello from Sollang!"],
+    ["flow", "결과 = 158"],
+    ["struct", "거리의 제곱 = 25"],
+    ["loop", "fib = 13"],
+    ["sensor-stream", "10억 개 중 54개만 검사"],
+    ["nested-stream", "scanned=7"],
+    ["risk-stream", "scanned=9"]
+  ];
+  for (const [sample, expected] of sampleOutputs) {
+    await page.locator("#sample").selectOption(sample);
+    await page.getByRole("button", { name: /실행/ }).click();
+    await page.locator(".result-ok, .result-error").waitFor({ timeout: 120_000 });
+    if (await page.locator(".result-error").isVisible()) {
+      throw new Error(`${sample} browser compilation failed: ${await page.locator(".terminal").innerText()}`);
+    }
+    await page.locator(".terminal pre").getByText(expected, { exact: false }).waitFor();
+  }
 
   await page.locator("#sample").selectOption("hello");
   await page.locator(".monaco-editor .view-lines").click();

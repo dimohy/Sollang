@@ -1138,6 +1138,68 @@ public resolveContext prepared: semanticContext.SemanticSnapshot -> ExpressionTy
                                 0 => resultStatus!
                             }
                         }
+                        # A stream/block function can introduce a result
+                        # generic only through its caller-supplied block. The
+                        # primary source cannot select that parameter (for
+                        # example Range -> map<R>), so specialize the remaining
+                        # result from the block's final typed value.
+                        (types![resultTypeId!].containsParameter and function.flags / 64 % 2 == 1 and function.blockResultTypeNode >= 0 and callNode.kind == 48 and callNode.tertiaryToken >= 0) -> if {
+                            referenceIndexByTypeAst![targetRange.astStart + function.blockResultTypeNode] => blockResultReference!
+                            -1 => blockResultExpression!
+                            UIntSize(0) => blockResultEnd!
+                            1000000 => blockResultDistance!
+                            prepared.package.tokens[callRange.tokenStart + callNode.tertiaryToken].span.start => blockRoleStart
+                            0 => blockResultSearch!
+                            blockResultSearch! < (expressions! -> len) -> while {
+                                expressions![blockResultSearch!] => blockResultCandidate
+                                (blockResultCandidate.status == 0 and blockResultCandidate.sourceModule == call.sourceModule and not types![blockResultCandidate.typeId].containsParameter) -> if {
+                                    prepared.package.nodes[callRange.astStart + blockResultCandidate.astNode] => blockResultNode
+                                    (blockResultNode.start >= blockRoleStart and blockResultNode.start < callNode.start + callNode.length) -> if {
+                                        blockResultNode.parent => blockResultAncestor!
+                                        1 => blockCandidateDistance!
+                                        false => blockResultBelongs!
+                                        (blockResultAncestor! >= 0 and not blockResultBelongs!) -> while {
+                                            blockResultAncestor! == call.callAst -> if { true => blockResultBelongs! } else {
+                                                prepared.package.nodes[callRange.astStart + blockResultAncestor!].parent => blockResultAncestor!
+                                                blockCandidateDistance! + 1 => blockCandidateDistance!
+                                            }
+                                        }
+                                        blockResultNode.start + blockResultNode.length => blockCandidateEnd
+                                        (blockResultBelongs! and (blockResultExpression! < 0 or blockCandidateEnd > blockResultEnd! or (blockCandidateEnd == blockResultEnd! and blockCandidateDistance! < blockResultDistance!))) -> if {
+                                            blockResultSearch! => blockResultExpression!
+                                            blockCandidateEnd => blockResultEnd!
+                                            blockCandidateDistance! => blockResultDistance!
+                                        }
+                                    }
+                                }
+                                blockResultSearch! + 1 => blockResultSearch!
+                            }
+                            (blockResultReference! >= 0 and blockResultExpression! >= 0) -> if {
+                                [typeIds.SemanticType; ~] => blockSpecializationTypes!
+                                0 => blockSpecializationTypeIndex!
+                                blockSpecializationTypeIndex! < (types! -> len) -> while {
+                                    blockSpecializationTypes! -> push(types![blockSpecializationTypeIndex!])
+                                    blockSpecializationTypeIndex! + 1 => blockSpecializationTypeIndex!
+                                }
+                                typeIds.SpecializationRequest {
+                                    types: blockSpecializationTypes!
+                                    inputTemplate: references![blockResultReference!].typeId
+                                    actualInput: expressions![blockResultExpression!].typeId
+                                    resultTemplate: resultTypeId!
+                                } => blockSpecializationRequest
+                                blockSpecializationRequest -> typeIds.specialize => blockSpecialization
+                                blockSpecialization.status == 0 -> if {
+                                    types! -> len => blockPreviousTypeCount
+                                    blockPreviousTypeCount => blockSpecializedTypeIndex!
+                                    blockSpecializedTypeIndex! < (blockSpecialization.types -> len) -> while {
+                                        types! -> push(blockSpecialization.types[blockSpecializedTypeIndex!])
+                                        blockSpecializedTypeIndex! + 1 => blockSpecializedTypeIndex!
+                                    }
+                                    blockSpecialization.root => resultTypeId!
+                                    0 => resultStatus!
+                                }
+                            }
+                        }
                     }
                     prepared.package.ranges[call.sourceModule] => resultCallRange
                     expressions! -> len => callExpressionIndex
@@ -1410,13 +1472,190 @@ public resolveContext prepared: semanticContext.SemanticSnapshot -> ExpressionTy
         0 => bindingMapSymbol!
         bindingMapSymbol! < bindingMapRange.symbolCount -> while {
             prepared.package.symbols[bindingMapRange.symbolStart + bindingMapSymbol!] => bindingMapCandidate
-            (bindingMapCandidate.kind == 9 and bindingMapCandidate.astNode >= 0) -> if {
+            ((bindingMapCandidate.kind == 9 or bindingMapCandidate.kind == 61) and bindingMapCandidate.astNode >= 0) -> if {
                 bindingMapRange.symbolStart + bindingMapSymbol! => bindingSymbolByAst![bindingMapRange.astStart + bindingMapCandidate.astNode]
             }
             bindingMapSymbol! + 1 => bindingMapSymbol!
         }
         bindingMapSource! + 1 => bindingMapSource!
     }
+    # Complete stream generics in pipeline order. A stateful stage such as
+    # scan<T,S> introduces S through its explicit initial-state argument; later
+    # filter/take stages then inherit that now-concrete upstream element type.
+    0 => streamGenericCallIndex!
+    streamGenericCallIndex! < (prepared.calls -> len) -> while {
+        prepared.calls[streamGenericCallIndex!] => streamGenericCall
+        (streamGenericCall.status == 0 and streamGenericCall.targetSourceModule >= 0) -> if {
+            prepared.package.ranges[streamGenericCall.sourceModule] => streamGenericCallRange
+            prepared.package.nodes[streamGenericCallRange.astStart + streamGenericCall.callAst] => streamGenericCallAst
+            prepared.package.ranges[streamGenericCall.targetSourceModule] => streamGenericTargetRange
+            prepared.package.symbols[streamGenericTargetRange.symbolStart + streamGenericCall.functionSymbol] => streamGenericFunction
+            streamGenericCallRange.astStart + streamGenericCall.callAst => streamGenericGlobalAst
+            expressionIndexByAst![streamGenericGlobalAst] => streamGenericExpressionIndex!
+            (streamGenericCallAst.kind == 48 and streamGenericFunction.flags / 64 % 2 == 1 and streamGenericExpressionIndex! >= 0 and types![expressions![streamGenericExpressionIndex!].typeId].containsParameter) -> if {
+                -1 => streamGenericConcreteType!
+                prepared.package.tokens[streamGenericCallRange.tokenStart + streamGenericCallAst.payloadToken].span.start => streamGenericTargetStart
+                streamGenericCallAst.start + streamGenericCallAst.length => streamGenericBodyStart!
+                streamGenericCallAst.tertiaryToken >= 0 -> if {
+                    prepared.package.tokens[streamGenericCallRange.tokenStart + streamGenericCallAst.tertiaryToken].span.start => streamGenericBodyStart!
+                }
+                UIntSize(0) => streamGenericArgumentStart!
+                0 => streamGenericArgumentSearch!
+                streamGenericFunction.blockTypeNode < 0 -> if { expressions! -> len => streamGenericArgumentSearch! }
+                streamGenericArgumentSearch! < (expressions! -> len) -> while {
+                    expressions![streamGenericArgumentSearch!] => streamGenericArgument
+                    (streamGenericArgument.status == 0 and streamGenericArgument.sourceModule == streamGenericCall.sourceModule and not types![streamGenericArgument.typeId].containsParameter) -> if {
+                        prepared.package.nodes[streamGenericCallRange.astStart + streamGenericArgument.astNode] => streamGenericArgumentNode
+                        (streamGenericArgumentNode.start > streamGenericTargetStart and streamGenericArgumentNode.start < streamGenericBodyStart!) -> if {
+                            streamGenericArgumentNode.parent => streamGenericArgumentAncestor!
+                            false => streamGenericArgumentBelongs!
+                            (streamGenericArgumentAncestor! >= 0 and not streamGenericArgumentBelongs!) -> while {
+                                streamGenericArgumentAncestor! == streamGenericCall.callAst -> if {
+                                    true => streamGenericArgumentBelongs!
+                                } else {
+                                    prepared.package.nodes[streamGenericCallRange.astStart + streamGenericArgumentAncestor!].parent => streamGenericArgumentAncestor!
+                                }
+                            }
+                            (streamGenericArgumentBelongs! and (streamGenericConcreteType! < 0 or streamGenericArgumentNode.start < streamGenericArgumentStart!)) -> if {
+                                streamGenericArgument.typeId => streamGenericConcreteType!
+                                streamGenericArgumentNode.start => streamGenericArgumentStart!
+                            }
+                        }
+                    }
+                    streamGenericArgumentSearch! + 1 => streamGenericArgumentSearch!
+                }
+                streamGenericConcreteType! < 0 -> if {
+                    -1 => streamGenericSourceType!
+                    1000000 => streamGenericSourceDistance!
+                    0 => streamGenericSourceSearch!
+                    streamGenericSourceSearch! < (expressions! -> len) -> while {
+                        expressions![streamGenericSourceSearch!] => streamGenericSourceCandidate
+                        streamGenericSourceCandidate.sourceModule == streamGenericCall.sourceModule -> if {
+                            prepared.package.nodes[streamGenericCallRange.astStart + streamGenericSourceCandidate.astNode] => streamGenericSourceNode
+                            streamGenericSourceNode.start + streamGenericSourceNode.length <= streamGenericTargetStart -> if {
+                                streamGenericSourceNode.parent => streamGenericSourceAncestor!
+                                1 => streamGenericSourceCandidateDistance!
+                                false => streamGenericSourceBelongs!
+                                (streamGenericSourceAncestor! >= 0 and not streamGenericSourceBelongs!) -> while {
+                                    streamGenericSourceAncestor! == streamGenericCall.callAst -> if {
+                                        true => streamGenericSourceBelongs!
+                                    } else {
+                                        prepared.package.nodes[streamGenericCallRange.astStart + streamGenericSourceAncestor!].parent => streamGenericSourceAncestor!
+                                        streamGenericSourceCandidateDistance! + 1 => streamGenericSourceCandidateDistance!
+                                    }
+                                }
+                                (streamGenericSourceBelongs! and streamGenericSourceCandidateDistance! < streamGenericSourceDistance! and not types![streamGenericSourceCandidate.typeId].containsParameter) -> if {
+                                    streamGenericSourceCandidate.typeId => streamGenericSourceType!
+                                    streamGenericSourceCandidateDistance! => streamGenericSourceDistance!
+                                }
+                            }
+                        }
+                        streamGenericSourceSearch! + 1 => streamGenericSourceSearch!
+                    }
+                    streamGenericSourceType! => streamGenericConcreteType!
+                }
+                streamGenericConcreteType! >= 0 -> if {
+                    expressions![streamGenericExpressionIndex!] => streamGenericExpression!
+                    streamGenericConcreteType! => streamGenericExpression!.typeId
+                    0 => streamGenericExpression!.status
+                    streamGenericExpression! => expressions![streamGenericExpressionIndex!]
+                }
+            }
+        }
+        streamGenericCallIndex! + 1 => streamGenericCallIndex!
+    }
+
+    # A stream stage's caller block is typed from the value arriving from its
+    # upstream stage, not from an unrelated nearby expression. Seed those role
+    # references before the normal member/binary fixed point so projections
+    # such as `reading.sensorId` are inferred in the same canonical arena.
+    0 => streamRoleCallIndex!
+    streamRoleCallIndex! < (prepared.calls -> len) -> while {
+        prepared.calls[streamRoleCallIndex!] => streamRoleCall
+        (streamRoleCall.status == 0 and streamRoleCall.targetSourceModule >= 0) -> if {
+            prepared.package.ranges[streamRoleCall.sourceModule] => streamRoleCallRange
+            prepared.package.nodes[streamRoleCallRange.astStart + streamRoleCall.callAst] => streamRoleCallAst
+            prepared.package.ranges[streamRoleCall.targetSourceModule] => streamRoleTargetRange
+            prepared.package.symbols[streamRoleTargetRange.symbolStart + streamRoleCall.functionSymbol] => streamRoleFunction
+            (streamRoleCallAst.kind == 48 and streamRoleFunction.flags / 64 % 2 == 1) -> if {
+                -1 => streamRoleSourceType!
+                1000000 => streamRoleSourceDistance!
+                prepared.package.tokens[streamRoleCallRange.tokenStart + streamRoleCallAst.payloadToken].span.start => streamRoleTargetStart
+                0 => streamRoleSourceSearch!
+                streamRoleSourceSearch! < (expressions! -> len) -> while {
+                    expressions![streamRoleSourceSearch!] => streamRoleSourceCandidate
+                    streamRoleSourceCandidate.sourceModule == streamRoleCall.sourceModule -> if {
+                        prepared.package.nodes[streamRoleCallRange.astStart + streamRoleSourceCandidate.astNode] => streamRoleSourceNode
+                        streamRoleSourceNode.start + streamRoleSourceNode.length <= streamRoleTargetStart -> if {
+                            streamRoleSourceNode.parent => streamRoleSourceAncestor!
+                            1 => streamRoleCandidateDistance!
+                            false => streamRoleSourceBelongs!
+                            (streamRoleSourceAncestor! >= 0 and not streamRoleSourceBelongs!) -> while {
+                                streamRoleSourceAncestor! == streamRoleCall.callAst -> if {
+                                    true => streamRoleSourceBelongs!
+                                } else {
+                                    prepared.package.nodes[streamRoleCallRange.astStart + streamRoleSourceAncestor!].parent => streamRoleSourceAncestor!
+                                    streamRoleCandidateDistance! + 1 => streamRoleCandidateDistance!
+                                }
+                            }
+                            (streamRoleSourceBelongs! and streamRoleCandidateDistance! < streamRoleSourceDistance!) -> if {
+                                streamRoleSourceCandidate.typeId => streamRoleSourceType!
+                                streamRoleCandidateDistance! => streamRoleSourceDistance!
+                            }
+                        }
+                    }
+                    streamRoleSourceSearch! + 1 => streamRoleSourceSearch!
+                }
+                -1 => streamRoleElementType!
+                streamRoleSourceType! >= 0 -> if {
+                    types![streamRoleSourceType!] => streamRoleSourceSemantic
+                    streamRoleSourceType! => streamRoleElementType!
+                    (streamRoleSourceSemantic.kind >= 2 and streamRoleSourceSemantic.kind <= 4) -> if { streamRoleSourceSemantic.first => streamRoleElementType! }
+                    (streamRoleSourceSemantic.kind == 1 and streamRoleSourceSemantic.origin == 1 and streamRoleSourceSemantic.symbol == 25) -> if { 2 => streamRoleElementType! }
+                }
+                -1 => streamRoleOutputType!
+                expressionIndexByAst![streamRoleCallRange.astStart + streamRoleCall.callAst] => streamRoleCallExpression!
+                streamRoleCallExpression! >= 0 -> if { expressions![streamRoleCallExpression!].typeId => streamRoleOutputType! }
+                -1 => streamRoleCallScopeSymbol!
+                0 => streamRoleCallScopeSearch!
+                streamRoleCallScopeSearch! < streamRoleCallRange.symbolCount -> while {
+                    prepared.package.symbols[streamRoleCallRange.symbolStart + streamRoleCallScopeSearch!] => streamRoleCallScopeCandidate
+                    (streamRoleCallScopeCandidate.kind == 48 and streamRoleCallScopeCandidate.astNode == streamRoleCall.callAst) -> if { streamRoleCallScopeSearch! => streamRoleCallScopeSymbol! }
+                    streamRoleCallScopeSearch! + 1 => streamRoleCallScopeSearch!
+                }
+                0 => streamRoleCount!
+                0 => streamRoleSymbolSearch!
+                streamRoleSymbolSearch! < streamRoleCallRange.symbolCount -> while {
+                    prepared.package.symbols[streamRoleCallRange.symbolStart + streamRoleSymbolSearch!] => streamRoleSymbolCandidate
+                    (streamRoleSymbolCandidate.kind == 35 and streamRoleSymbolCandidate.parent == streamRoleCallScopeSymbol!) -> if { streamRoleCount! + 1 => streamRoleCount! }
+                    streamRoleSymbolSearch! + 1 => streamRoleSymbolSearch!
+                }
+                0 => streamRoleNameSearch!
+                streamRoleNameSearch! < streamRoleCallRange.nameCount -> while {
+                    prepared.package.names[streamRoleCallRange.nameStart + streamRoleNameSearch!] => streamRoleName
+                    prepared.package.symbols[streamRoleCallRange.symbolStart + streamRoleName.symbol] => streamRoleSymbol
+                    (streamRoleSymbol.kind == 35 and streamRoleSymbol.parent == streamRoleCallScopeSymbol!) -> if {
+                        streamRoleElementType! => streamRoleType!
+                        (streamRoleCount! > 1 and streamRoleSymbol.astNode == streamRoleCall.callAst and streamRoleOutputType! >= 0) -> if { streamRoleOutputType! => streamRoleType! }
+                        streamRoleCallRange.astStart + streamRoleName.astNode => streamRoleGlobalAst
+                        (streamRoleType! >= 0 and expressionIndexByAst![streamRoleGlobalAst] < 0) -> if {
+                            expressions! -> len => streamRoleExpressionIndex
+                            expressions! -> push(ExpressionTypeId {
+                                sourceModule: streamRoleCall.sourceModule
+                                astNode: streamRoleName.astNode
+                                typeId: streamRoleType!
+                                status: 0
+                            })
+                            streamRoleExpressionIndex => expressionIndexByAst![streamRoleGlobalAst]
+                        }
+                    }
+                    streamRoleNameSearch! + 1 => streamRoleNameSearch!
+                }
+            }
+        }
+        streamRoleCallIndex! + 1 => streamRoleCallIndex!
+    }
+
     true => pathChanged!
     pathChanged! -> while {
         false => pathChanged!
@@ -1607,6 +1846,20 @@ public resolveContext prepared: semanticContext.SemanticSnapshot -> ExpressionTy
                             types![expressions![eachSourceExpression!].typeId] => eachCollectionType
                             -1 => eachElementType!
                             (eachCollectionType.kind >= 2 and eachCollectionType.kind <= 4) -> if { eachCollectionType.first => eachElementType! }
+                            (eachCollectionType.kind == 1 and eachCollectionType.origin == 1 and eachCollectionType.symbol == 25) -> if { 2 => eachElementType! }
+                            eachElementType! < 0 -> if {
+                                expressions![eachSourceExpression!] => eachStreamSourceExpression
+                                0 => eachStreamCallSearch!
+                                eachStreamCallSearch! < (prepared.calls -> len) -> while {
+                                    prepared.calls[eachStreamCallSearch!] => eachStreamCall
+                                    (eachStreamCall.status == 0 and eachStreamCall.sourceModule == eachReferenceSource! and eachStreamCall.callAst == eachStreamSourceExpression.astNode and eachStreamCall.targetSourceModule >= 0) -> if {
+                                        prepared.package.ranges[eachStreamCall.targetSourceModule] => eachStreamTargetRange
+                                        prepared.package.symbols[eachStreamTargetRange.symbolStart + eachStreamCall.functionSymbol] => eachStreamFunction
+                                        eachStreamFunction.flags / 64 % 2 == 1 -> if { eachStreamSourceExpression.typeId => eachElementType! }
+                                    }
+                                    eachStreamCallSearch! + 1 => eachStreamCallSearch!
+                                }
+                            }
                             eachElementType! >= 0 -> if {
                                 eachReferenceRange.astStart + eachReference.astNode => eachReferenceGlobalAst
                                 expressionIndexByAst![eachReferenceGlobalAst] < 0 -> if {

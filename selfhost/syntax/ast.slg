@@ -2,6 +2,7 @@ namespace sollang.compiler.ast
 
 import sollang.compiler.cst as cst
 import sollang.compiler.lexer as lexer
+import sollang.compiler.syntax as syntax
 import syntax.generated.slg as grammar
 import sys.file as file
 
@@ -26,6 +27,206 @@ public struct AstNode {
 struct LowerRequest {
     source: Text
     startRule: Int
+}
+
+# The generated grammar deliberately recognizes a complete stream chain as one
+# block-function statement.  Semantic lowering is simpler and fully general
+# when every stage owns its callback and the preceding stage is its source, so
+# split that flat syntax node into nested kind-48 nodes before symbol creation.
+#
+# No source text is copied.  Synthetic nodes retain token/span indexes into the
+# original source and only the small flat AST arena grows.
+expandStreamPipelines tokens: [syntax.SyntaxToken; ~], nodes: move [AstNode; ~] -> [AstNode; ~] {
+    [AstNode; ~] => expanded!
+    nodes -> each node {
+        expanded! -> push(node)
+    }
+    0 => pipelineIndex!
+    expanded! -> len => originalNodeCount
+    pipelineIndex! < originalNodeCount -> while {
+        expanded![pipelineIndex!] => pipeline
+        pipeline.kind == 48 -> if {
+            [Int; ~] => arrows!
+            0 => groupDepth!
+            0 => stageBodyCount!
+            pipeline.firstToken => tokenIndex!
+            pipeline.firstToken + pipeline.tokenCount => tokenEnd
+            tokenIndex! < tokenEnd -> while {
+                tokens[tokenIndex!] => token
+                (groupDepth! == 0 and token.kind == grammar.tokenIdArrow) -> if {
+                    arrows! -> push(tokenIndex!)
+                }
+                (groupDepth! == 0 and token.kind == grammar.tokenIdLeftBrace) -> if {
+                    stageBodyCount! + 1 => stageBodyCount!
+                }
+                (token.kind == grammar.tokenIdLeftParen or token.kind == grammar.tokenIdLeftBracket or token.kind == grammar.tokenIdLeftBrace) -> if {
+                    groupDepth! + 1 => groupDepth!
+                }
+                (token.kind == grammar.tokenIdRightParen or token.kind == grammar.tokenIdRightBracket or token.kind == grammar.tokenIdRightBrace) -> if {
+                    groupDepth! - 1 => groupDepth!
+                }
+                tokenIndex! + 1 => tokenIndex!
+            }
+
+            ((arrows! -> len) > 1 and stageBodyCount! > 1) -> if {
+                [Int; ~] => stageNodes!
+                0 => stageIndex!
+                stageIndex! < Int(arrows! -> len) -> while {
+                    stageIndex! == Int(arrows! -> len) - 1 -> if {
+                        stageNodes! -> push(pipelineIndex!)
+                    } else {
+                        expanded! -> len => syntheticIndex
+                        stageNodes! -> push(syntheticIndex)
+                        expanded! -> push(AstNode {
+                            kind: 48
+                            parent: -1
+                            cstRuleId: pipeline.cstRuleId
+                            operatorKind: pipeline.operatorKind
+                            payloadToken: -1
+                            secondaryToken: -1
+                            tertiaryToken: -1
+                            flags: pipeline.flags
+                            firstToken: pipeline.firstToken
+                            tokenCount: 0
+                            start: pipeline.start
+                            length: UIntSize(0)
+                        })
+                    }
+                    stageIndex! + 1 => stageIndex!
+                }
+
+                0 => stageFixIndex!
+                stageFixIndex! < Int(stageNodes! -> len) -> while {
+                    stageNodes![stageFixIndex!] => stageNodeIndex
+                    expanded![stageNodeIndex] => stage!
+                    stageFixIndex! == Int(stageNodes! -> len) - 1 -> if {
+                        pipeline.parent => stage!.parent
+                    } else {
+                        stageNodes![stageFixIndex! + 1] => stage!.parent
+                    }
+
+                    arrows![stageFixIndex!] => stageArrow
+                    tokenEnd => stageTokenEnd!
+                    stageFixIndex! + 1 < Int(arrows! -> len) -> if {
+                        arrows![stageFixIndex! + 1] => stageTokenEnd!
+                    }
+                    stageTokenEnd! => stageEndToken
+                    tokens[stageEndToken - 1].span.start + tokens[stageEndToken - 1].span.length => stageEnd!
+                    stageFixIndex! + 1 < Int(arrows! -> len) -> if {
+                        tokens[stageTokenEnd!].span.start => stageEnd!
+                    }
+                    stageEnd! - pipeline.start => stage!.length
+                    stageTokenEnd! - pipeline.firstToken => stage!.tokenCount
+
+                    -1 => targetPath!
+                    UIntSize(0) => targetStart!
+                    0 => childSearch!
+                    childSearch! < originalNodeCount -> while {
+                        expanded![childSearch!] => child
+                        (child.parent == pipelineIndex! and child.kind == 16 and child.start > tokens[stageArrow].span.start and child.start < stageEnd!) -> if {
+                            (targetPath! < 0 or child.start < targetStart!) -> if {
+                                childSearch! => targetPath!
+                                child.start => targetStart!
+                            }
+                        }
+                        childSearch! + 1 => childSearch!
+                    }
+                    targetPath! >= 0 -> if {
+                        expanded![targetPath!] => target!
+                        target!.payloadToken => stage!.payloadToken
+                        stageNodeIndex => target!.parent
+                        target! => expanded![targetPath!]
+
+                        # Callback parameter names live after the target and its
+                        # optional call arguments, before the stage body brace.
+                        target!.firstToken + target!.tokenCount => roleToken!
+                        0 => roleGroupDepth!
+                        false => roleBodyReached!
+                        [Int; ~] => roleNames!
+                        (roleToken! < stageTokenEnd! and not roleBodyReached!) -> while {
+                            tokens[roleToken!] => roleCandidate
+                            (roleGroupDepth! == 0 and roleCandidate.kind == grammar.tokenIdLeftBrace) -> if {
+                                true => roleBodyReached!
+                            } else {
+                                (roleCandidate.kind == grammar.tokenIdLeftParen or roleCandidate.kind == grammar.tokenIdLeftBracket or roleCandidate.kind == grammar.tokenIdLess) -> if {
+                                    roleGroupDepth! + 1 => roleGroupDepth!
+                                }
+                                (roleCandidate.kind == grammar.tokenIdRightParen or roleCandidate.kind == grammar.tokenIdRightBracket or roleCandidate.kind == grammar.tokenIdGreater) -> if {
+                                    roleGroupDepth! - 1 => roleGroupDepth!
+                                }
+                                (roleGroupDepth! == 0 and roleCandidate.kind == grammar.tokenIdIdentifier) -> if {
+                                    roleNames! -> push(roleToken!)
+                                }
+                            }
+                            roleToken! + 1 => roleToken!
+                        }
+                        (roleNames! -> len) > 0 -> if {
+                            roleNames![0] => stage!.tertiaryToken
+                        }
+                        # Additional callback inputs (scan and future arities)
+                        # are ordinary synthetic parameter AST nodes.
+                        1 => additionalRoleIndex!
+                        additionalRoleIndex! < Int(roleNames! -> len) -> while {
+                            roleNames![additionalRoleIndex!] => additionalRoleToken
+                            expanded! -> push(AstNode {
+                                kind: 60
+                                parent: stageNodeIndex
+                                cstRuleId: pipeline.cstRuleId
+                                operatorKind: -1
+                                payloadToken: additionalRoleToken
+                                secondaryToken: -1
+                                tertiaryToken: -1
+                                flags: 0
+                                firstToken: additionalRoleToken
+                                tokenCount: 1
+                                start: tokens[additionalRoleToken].span.start
+                                length: tokens[additionalRoleToken].span.length
+                            })
+                            additionalRoleIndex! + 1 => additionalRoleIndex!
+                        }
+                    } else {
+                        # take(count) and skip(count) are grammar-level slice
+                        # stages and therefore have no Path child. Preserve the
+                        # identifier on the synthetic stage so normal imported
+                        # function resolution and stream planning see the same
+                        # target metadata as every other stage.
+                        stageArrow + 1 => sliceTargetToken!
+                        (sliceTargetToken! < stageTokenEnd! and stage!.payloadToken < 0) -> while {
+                            tokens[sliceTargetToken!].kind == grammar.tokenIdIdentifier -> if {
+                                sliceTargetToken! => stage!.payloadToken
+                            }
+                            sliceTargetToken! + 1 => sliceTargetToken!
+                        }
+                    }
+
+                    # Direct children belong either to the source of the first
+                    # stage or to the argument/callback region of this stage.
+                    0 => reparentSearch!
+                    reparentSearch! < originalNodeCount -> while {
+                        expanded![reparentSearch!] => child!
+                        child!.parent == pipelineIndex! -> if {
+                            false => belongsToStage!
+                            stageFixIndex! == 0 -> if {
+                                child!.start < tokens[arrows![0]].span.start -> if { true => belongsToStage! }
+                            }
+                            (child!.start > tokens[stageArrow].span.start and child!.start < stageEnd!) -> if {
+                                true => belongsToStage!
+                            }
+                            belongsToStage! -> if {
+                                stageNodeIndex => child!.parent
+                                child! => expanded![reparentSearch!]
+                            }
+                        }
+                        reparentSearch! + 1 => reparentSearch!
+                    }
+                    stage! => expanded![stageNodeIndex]
+                    stageFixIndex! + 1 => stageFixIndex!
+                }
+            }
+        }
+        pipelineIndex! + 1 => pipelineIndex!
+    }
+    expanded!
 }
 
 # Kinds: 0 source, 1 namespace, 2 import, 3 struct, 4 enum, 5 trait,
@@ -1084,7 +1285,7 @@ lowerFrom request: LowerRequest -> [AstNode; ~] {
         declarationIndex! + 1 => declarationIndex!
     }
 
-    ast!
+    expandStreamPipelines(tokens!, ast!)
 }
 
 public lowerSource source: file.SourceText -> [AstNode; ~] {

@@ -22,6 +22,28 @@ internal sealed partial class LlvmEmitter
         EmitConditionalBranch(condition, okLabel, failLabel);
         EmitFunctionLine();
         EmitLabel(failLabel);
+        if (_platform is WasmBrowserLlvmRuntimePlatform)
+        {
+            var message = AddGlobalString(failLabel);
+            EmitCall(
+                target: null,
+                "void",
+                "sollang_browser_panic",
+                $"ptr {message.Name}, i32 {message.Length}");
+        }
+        else if (_platform is WindowsLlvmRuntimePlatform)
+        {
+            var message = AddGlobalString(failLabel);
+            var stderr = NextTemp("trap_stderr");
+            var written = NextTemp("trap_written");
+            EmitAlloca(written, "i32", 4);
+            EmitCall(stderr, "ptr", "GetStdHandle", "i32 -12");
+            EmitCall(
+                target: null,
+                "i32",
+                "WriteFile",
+                $"ptr {stderr}, ptr {message.Name}, i32 {message.Length}, ptr {written}, ptr null");
+        }
         EmitTrap();
         EmitFunctionLine();
         EmitLabel(okLabel);

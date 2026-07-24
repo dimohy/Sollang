@@ -159,12 +159,14 @@ intrinsicOpcode request: IntrinsicNameRequest -> Int {
         ((request.source -> byte(request.token.span.start)) == UInt8(112) and (request.source -> byte(request.token.span.start + UIntSize(1))) == UInt8(117) and (request.source -> byte(request.token.span.start + UIntSize(2))) == UInt8(115) and (request.source -> byte(request.token.span.start + UIntSize(3))) == UInt8(104)) -> if { -204 => opcode! }
         ((request.source -> byte(request.token.span.start)) == UInt8(101) and (request.source -> byte(request.token.span.start + UIntSize(1))) == UInt8(97) and (request.source -> byte(request.token.span.start + UIntSize(2))) == UInt8(99) and (request.source -> byte(request.token.span.start + UIntSize(3))) == UInt8(104)) -> if { -208 => opcode! }
         ((request.source -> byte(request.token.span.start)) == UInt8(116) and (request.source -> byte(request.token.span.start + UIntSize(1))) == UInt8(97) and (request.source -> byte(request.token.span.start + UIntSize(2))) == UInt8(107) and (request.source -> byte(request.token.span.start + UIntSize(3))) == UInt8(101)) -> if { -213 => opcode! }
+        ((request.source -> byte(request.token.span.start)) == UInt8(101) and (request.source -> byte(request.token.span.start + UIntSize(1))) == UInt8(109) and (request.source -> byte(request.token.span.start + UIntSize(2))) == UInt8(105) and (request.source -> byte(request.token.span.start + UIntSize(3))) == UInt8(116)) -> if { -228 => opcode! }
     }
     request.token.span.length == UIntSize(3) -> if {
         ((request.source -> byte(request.token.span.start)) == UInt8(112) and (request.source -> byte(request.token.span.start + UIntSize(1))) == UInt8(117) and (request.source -> byte(request.token.span.start + UIntSize(2))) == UInt8(116)) -> if { -223 => opcode! }
     }
     request.token.span.length == UIntSize(5) -> if {
         ((request.source -> byte(request.token.span.start)) == UInt8(115) and (request.source -> byte(request.token.span.start + UIntSize(1))) == UInt8(108) and (request.source -> byte(request.token.span.start + UIntSize(2))) == UInt8(105) and (request.source -> byte(request.token.span.start + UIntSize(3))) == UInt8(99) and (request.source -> byte(request.token.span.start + UIntSize(4))) == UInt8(101)) -> if { -203 => opcode! }
+        ((request.source -> byte(request.token.span.start)) == UInt8(121) and (request.source -> byte(request.token.span.start + UIntSize(1))) == UInt8(105) and (request.source -> byte(request.token.span.start + UIntSize(2))) == UInt8(101) and (request.source -> byte(request.token.span.start + UIntSize(3))) == UInt8(108) and (request.source -> byte(request.token.span.start + UIntSize(4))) == UInt8(100)) -> if { -227 => opcode! }
     }
     request.token.span.length == UIntSize(6) -> if {
         ((request.source -> byte(request.token.span.start)) == UInt8(114) and (request.source -> byte(request.token.span.start + UIntSize(1))) == UInt8(101) and (request.source -> byte(request.token.span.start + UIntSize(2))) == UInt8(97) and (request.source -> byte(request.token.span.start + UIntSize(3))) == UInt8(100) and (request.source -> byte(request.token.span.start + UIntSize(4))) == UInt8(65) and (request.source -> byte(request.token.span.start + UIntSize(5))) == UInt8(116)) -> if { -220 => opcode! }
@@ -304,6 +306,9 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
     freezeExpressionTypes values: move [expressionTypeIds.ExpressionTypeId; ~] -> [expressionTypeIds.ExpressionTypeId; ~] {
         values
     }
+    freezeLegacyExpressionTypes values: move [expressionTypes.ExpressionType; ~] -> [expressionTypes.ExpressionType; ~] {
+        values
+    }
     freezeInts values: move [Int; ~] -> [Int; ~] {
         values
     }
@@ -397,40 +402,8 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
         request.symbolIndex => symbolIndex!
         prepared.package.symbols[sourceRange.symbolStart + symbolIndex!] => function
         (function.kind == 7 or function.kind == 31) -> if {
-            -1 => resultTypeIndex!
-            -1 => resultRootAst!
-            1000000 => resultDistance!
-            UIntSize(0) => resultTopLevelStart!
-            0 => typeSearch!
-            typeSearch! < (inferred -> len) -> while {
-                inferred[typeSearch!] => candidateType
-                candidateType.sourceModule == sourceIndex! -> if {
-                    prepared.package.nodes[sourceRange.astStart + candidateType.astNode].parent => ancestor!
-                    candidateType.astNode => functionChildAst!
-                    1 => distance!
-                    false => belongsToFunction!
-                    false => blockedByNestedFunction!
-                    (ancestor! >= 0 and not belongsToFunction! and not blockedByNestedFunction!) -> while {
-                        ancestor! == function.astNode -> if { true => belongsToFunction! } else {
-                            (prepared.package.nodes[sourceRange.astStart + ancestor!].kind == 7 or prepared.package.nodes[sourceRange.astStart + ancestor!].kind == 29 or prepared.package.nodes[sourceRange.astStart + ancestor!].kind == 31) -> if { true => blockedByNestedFunction! } else {
-                                ancestor! => functionChildAst!
-                                prepared.package.nodes[sourceRange.astStart + ancestor!].parent => ancestor!
-                                distance! + 1 => distance!
-                            }
-                        }
-                    }
-                    belongsToFunction! -> if {
-                        prepared.package.nodes[sourceRange.astStart + functionChildAst!].start => candidateTopLevelStart
-                        (resultTypeIndex! < 0 or candidateTopLevelStart > resultTopLevelStart! or (candidateTopLevelStart == resultTopLevelStart! and distance! < resultDistance!)) -> if {
-                            typeSearch! => resultTypeIndex!
-                            functionChildAst! => resultRootAst!
-                            distance! => resultDistance!
-                            candidateTopLevelStart => resultTopLevelStart!
-                        }
-                    }
-                }
-                typeSearch! + 1 => typeSearch!
-            }
+            frozenFunctionResultLegacyIndexByAst[sourceRange.astStart + function.astNode] => resultTypeIndex!
+            frozenFunctionResultRootAstByAst[sourceRange.astStart + function.astNode] => resultRootAst!
             resultTypeIndex! >= 0 -> if {
                 inferred[resultTypeIndex!] => resultType
                 resultType.origin => functionResultOrigin!
@@ -499,12 +472,7 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                         resolvedNames![parameterNameSearch!] => parameterName
                         parameterName.symbol == parameterSymbol! -> if {
                             parameterName.astNode => parameterReferenceAst!
-                            0 => parameterInferredSearch!
-                            parameterInferredSearch! < (inferred -> len) -> while {
-                                inferred[parameterInferredSearch!] => parameterInferred
-                                (parameterInferred.sourceModule == sourceIndex! and parameterInferred.astNode == parameterName.astNode) -> if { parameterInferredSearch! => parameterTypeIndex! }
-                                parameterInferredSearch! + 1 => parameterInferredSearch!
-                            }
+                            frozenInferredIndexByAst[sourceRange.astStart + parameterName.astNode] => parameterTypeIndex!
                         }
                         parameterNameSearch! + 1 => parameterNameSearch!
                     }
@@ -786,79 +754,58 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                     astMapIndex! + 1 => astMapIndex!
                 }
                 results! -> len => expressionIrStart
-                0 => bindingAstIndex!
-                bindingAstIndex! < sourceRange.astCount -> while {
+                sourceRange.astStart + function.astNode => functionGlobalAst
+                frozenFunctionNodeStartsByAst[functionGlobalAst] => functionNodeStart
+                functionNodeStart + frozenFunctionNodeCountsByAst[functionGlobalAst] => functionNodeEnd
+                functionNodeStart => bindingNodePosition!
+                bindingNodePosition! < functionNodeEnd -> while {
+                    frozenFunctionNodeIndices[bindingNodePosition!] => bindingAstIndex!
                     prepared.package.nodes[sourceRange.astStart + bindingAstIndex!] => bindingAst
-                    (bindingAst.kind == 9 or (bindingAst.kind == 48 and bindingAst.secondaryToken >= 0)) -> if {
-                        bindingAst.parent => bindingAncestor!
-                        false => bindingBelongsToFunction!
-                        false => bindingBlockedByNestedFunction!
-                        (bindingAncestor! >= 0 and not bindingBelongsToFunction! and not bindingBlockedByNestedFunction!) -> while {
-                            bindingAncestor! == function.astNode -> if { true => bindingBelongsToFunction! } else {
-                                (prepared.package.nodes[sourceRange.astStart + bindingAncestor!].kind == 7 or prepared.package.nodes[sourceRange.astStart + bindingAncestor!].kind == 29 or prepared.package.nodes[sourceRange.astStart + bindingAncestor!].kind == 31) -> if { true => bindingBlockedByNestedFunction! } else { prepared.package.nodes[sourceRange.astStart + bindingAncestor!].parent => bindingAncestor! }
-                            }
-                        }
+                    (bindingAst.kind == 9 or bindingAst.kind == 61 or (bindingAst.kind == 48 and bindingAst.secondaryToken >= 0)) -> if {
+                        true => bindingBelongsToFunction!
                         bindingBelongsToFunction! -> if {
                             -1 => bindingTypeIndex!
-                            1000000 => bindingTypeDistance!
-                            0 => bindingTypeSearch!
-                            bindingTypeSearch! < (inferred -> len) -> while {
-                                inferred[bindingTypeSearch!] => bindingTypeCandidate
-                                bindingTypeCandidate.sourceModule == sourceIndex! -> if {
-                                    prepared.package.nodes[sourceRange.astStart + bindingTypeCandidate.astNode].parent => bindingTypeAncestor!
-                                    1 => bindingDistance!
-                                    bindingTypeCandidate.astNode == bindingAstIndex! => belongsToBinding!
-                                    belongsToBinding! -> if { 0 => bindingDistance! }
-                                    (bindingTypeAncestor! >= 0 and not belongsToBinding!) -> while {
-                                        bindingTypeAncestor! == bindingAstIndex! -> if { true => belongsToBinding! } else {
-                                            prepared.package.nodes[sourceRange.astStart + bindingTypeAncestor!].parent => bindingTypeAncestor!
-                                            bindingDistance! + 1 => bindingDistance!
-                                        }
-                                    }
-                                    (belongsToBinding! and bindingDistance! < bindingTypeDistance!) -> if {
-                                        bindingTypeSearch! => bindingTypeIndex!
-                                        bindingDistance! => bindingTypeDistance!
-                                    }
-                                }
-                                bindingTypeSearch! + 1 => bindingTypeSearch!
-                            }
-                            -1 => bindingCanonicalTypeId!
-                            1000000 => bindingCanonicalDistance!
-                            0 => bindingCanonicalSearch!
-                            bindingCanonicalSearch! < (frozenRecursiveExpressions -> len) -> while {
-                                frozenRecursiveExpressions[bindingCanonicalSearch!] => bindingCanonicalCandidate
-                                (bindingCanonicalCandidate.status == 0 and bindingCanonicalCandidate.sourceModule == sourceIndex!) -> if {
-                                    0 => bindingCanonicalCandidateDistance!
-                                    bindingCanonicalCandidate.astNode == bindingAstIndex! => bindingCanonicalBelongs!
-                                    bindingCanonicalBelongs! -> if { 0 => bindingCanonicalCandidateDistance! } else {
-                                        prepared.package.nodes[sourceRange.astStart + bindingCanonicalCandidate.astNode].parent => bindingCanonicalAncestor!
-                                        1 => bindingCanonicalCandidateDistance!
-                                        (bindingCanonicalAncestor! >= 0 and not bindingCanonicalBelongs!) -> while {
-                                            bindingCanonicalAncestor! == bindingAstIndex! -> if { true => bindingCanonicalBelongs! } else {
-                                                prepared.package.nodes[sourceRange.astStart + bindingCanonicalAncestor!].parent => bindingCanonicalAncestor!
-                                                bindingCanonicalCandidateDistance! + 1 => bindingCanonicalCandidateDistance!
-                                            }
-                                        }
-                                    }
-                                    (bindingCanonicalBelongs! and bindingCanonicalCandidateDistance! < bindingCanonicalDistance!) -> if {
-                                        bindingCanonicalCandidate.typeId => bindingCanonicalTypeId!
-                                        bindingCanonicalCandidateDistance! => bindingCanonicalDistance!
-                                    }
-                                }
-                                bindingCanonicalSearch! + 1 => bindingCanonicalSearch!
-                            }
+                            frozenNearestLegacyIndexByAst[sourceRange.astStart + bindingAstIndex!] => bindingTypeIndex!
+                            frozenNearestCanonicalTypeByAst[sourceRange.astStart + bindingAstIndex!] => bindingCanonicalTypeId!
                             -1 => bindingSymbol!
                             0 => bindingSymbolSearch!
                             bindingSymbolSearch! < sourceRange.symbolCount -> while {
-                                (prepared.package.symbols[sourceRange.symbolStart + bindingSymbolSearch!].kind == 9 and prepared.package.symbols[sourceRange.symbolStart + bindingSymbolSearch!].astNode == bindingAstIndex!) -> if { bindingSymbolSearch! => bindingSymbol! }
+                                ((prepared.package.symbols[sourceRange.symbolStart + bindingSymbolSearch!].kind == 9 or prepared.package.symbols[sourceRange.symbolStart + bindingSymbolSearch!].kind == 61) and prepared.package.symbols[sourceRange.symbolStart + bindingSymbolSearch!].astNode == bindingAstIndex!) -> if { bindingSymbolSearch! => bindingSymbol! }
                                 bindingSymbolSearch! + 1 => bindingSymbolSearch!
+                            }
+                            # A mutable rebind inside a stream callback refers
+                            # to the existing outer slot. Its callback-local
+                            # symbol can have no standalone inferred type, so
+                            # recover canonical identity from the nearest prior
+                            # binding with the same source name.
+                            (bindingAst.flags == 1 and bindingAst.payloadToken >= 0) -> if {
+                                prepared.package.tokens[sourceRange.tokenStart + bindingAst.payloadToken] => mutableBindingName
+                                results! -> len => previousBindingSearch!
+                                previousBindingSearch! > 0 -> while {
+                                    previousBindingSearch! - 1 => previousBindingSearch!
+                                    results![previousBindingSearch!] => previousBinding
+                                    (previousBinding.kind == 17 and previousBinding.flags == 1 and previousBinding.sourceModule == sourceIndex! and previousBinding.payloadToken >= 0) -> if {
+                                        prepared.package.tokens[sourceRange.tokenStart + previousBinding.payloadToken] => previousBindingName
+                                        mutableBindingName.span.length == previousBindingName.span.length => previousBindingEqual!
+                                        UIntSize(0) => previousBindingByte!
+                                        (previousBindingEqual! and previousBindingByte! < mutableBindingName.span.length) -> while {
+                                            (source -> byte(mutableBindingName.span.start + previousBindingByte!)) != (source -> byte(previousBindingName.span.start + previousBindingByte!)) -> if { false => previousBindingEqual! }
+                                            previousBindingByte! + UIntSize(1) => previousBindingByte!
+                                        }
+                                        previousBindingEqual! -> if {
+                                            previousBinding.symbol => bindingSymbol!
+                                            previousBinding.typeId => bindingCanonicalTypeId!
+                                            0 => previousBindingSearch!
+                                        }
+                                    }
+                                }
                             }
                             bindingSymbol! >= 0 -> if {
                                 prepared.package.symbols[sourceRange.symbolStart + bindingSymbol!] => declaredBindingSymbol
                                 0 => bindingDeclaredReferenceSearch!
                                 bindingDeclaredReferenceSearch! < (prepared.semantic.references -> len) -> while {
                                     prepared.semantic.references[bindingDeclaredReferenceSearch!] => bindingDeclaredReference
-                                    (bindingDeclaredReference.sourceModule == sourceIndex! and bindingDeclaredReference.typeAst == declaredBindingSymbol.typeNode and bindingDeclaredReference.status == 0) -> if {
+                                    (bindingDeclaredReference.sourceModule == sourceIndex! and bindingDeclaredReference.typeAst == declaredBindingSymbol.typeNode and bindingDeclaredReference.status == 0 and bindingDeclaredReference.typeId >= 0) -> if {
                                         bindingDeclaredReference.typeId => bindingCanonicalTypeId!
                                     }
                                     bindingDeclaredReferenceSearch! + 1 => bindingDeclaredReferenceSearch!
@@ -934,19 +881,13 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                             }
                         }
                     }
-                    bindingAstIndex! + 1 => bindingAstIndex!
+                    bindingNodePosition! + 1 => bindingNodePosition!
                 }
-                0 => expressionAstIndex!
-                expressionAstIndex! < sourceRange.astCount -> while {
+                functionNodeStart => expressionNodePosition!
+                expressionNodePosition! < functionNodeEnd -> while {
+                    frozenFunctionNodeIndices[expressionNodePosition!] => expressionAstIndex!
                     prepared.package.nodes[sourceRange.astStart + expressionAstIndex!] => expression
-                    expression.parent => expressionAncestor!
-                    false => expressionBelongsToFunction!
-                    false => expressionBlockedByNestedFunction!
-                    (expressionAncestor! >= 0 and not expressionBelongsToFunction! and not expressionBlockedByNestedFunction!) -> while {
-                        expressionAncestor! == function.astNode -> if { true => expressionBelongsToFunction! } else {
-                            (prepared.package.nodes[sourceRange.astStart + expressionAncestor!].kind == 7 or prepared.package.nodes[sourceRange.astStart + expressionAncestor!].kind == 29 or prepared.package.nodes[sourceRange.astStart + expressionAncestor!].kind == 31) -> if { true => expressionBlockedByNestedFunction! } else { prepared.package.nodes[sourceRange.astStart + expressionAncestor!].parent => expressionAncestor! }
-                        }
-                    }
+                    true => expressionBelongsToFunction!
                     frozenInferredIndexByAst[sourceRange.astStart + expressionAstIndex!] => expressionTypeIndex!
                     frozenRecursiveTypeByAst[sourceRange.astStart + expressionAstIndex!] => recursiveExpressionTypeId!
                     1 => expressionTypeOrigin!
@@ -1086,29 +1027,13 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                     }
                     false => knownNumericExpression!
                     (expression.kind == 20 or expression.kind == 21) -> if {
-                        1000000 => knownNumericDistance!
-                        0 => knownNumericSearch!
-                        knownNumericSearch! < (inferred -> len) -> while {
-                            inferred[knownNumericSearch!] => knownNumericCandidate
-                            knownNumericCandidate.sourceModule == sourceIndex! -> if {
-                                prepared.package.nodes[sourceRange.astStart + knownNumericCandidate.astNode].parent => knownNumericAncestor!
-                                1 => knownNumericCandidateDistance!
-                                false => knownNumericBelongs!
-                                (knownNumericAncestor! >= 0 and not knownNumericBelongs!) -> while {
-                                    knownNumericAncestor! == expressionAstIndex! -> if { true => knownNumericBelongs! } else {
-                                        prepared.package.nodes[sourceRange.astStart + knownNumericAncestor!].parent => knownNumericAncestor!
-                                        knownNumericCandidateDistance! + 1 => knownNumericCandidateDistance!
-                                    }
-                                }
-                                (knownNumericBelongs! and knownNumericCandidateDistance! < knownNumericDistance!) -> if {
-                                    true => knownNumericExpression!
-                                    knownNumericCandidateDistance! => knownNumericDistance!
-                                    knownNumericCandidate.origin => expressionTypeOrigin!
-                                    knownNumericCandidate.targetModule => expressionTypeModule!
-                                    knownNumericCandidate.targetSymbol => expressionTypeSymbol!
-                                }
-                            }
-                            knownNumericSearch! + 1 => knownNumericSearch!
+                        frozenNearestLegacyIndexByAst[sourceRange.astStart + expressionAstIndex!] => knownNumericIndex
+                        knownNumericIndex >= 0 -> if {
+                            inferred[knownNumericIndex] => knownNumericCandidate
+                            true => knownNumericExpression!
+                            knownNumericCandidate.origin => expressionTypeOrigin!
+                            knownNumericCandidate.targetModule => expressionTypeModule!
+                            knownNumericCandidate.targetSymbol => expressionTypeSymbol!
                         }
                     }
                     expression.kind == 22 -> if {
@@ -1142,6 +1067,7 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                     false => knownBorrowTextExpression!
                     false => knownDynExpression!
                     false => knownDynDispatchExpression!
+                    false => knownStreamFlowExpression!
                     expression.kind == 53 => knownIndexAssignment!
                     expression.kind == 54 => knownMemberAssignment!
                     expression.kind == 10 -> if {
@@ -1152,6 +1078,7 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                         flowOpcode == -214 -> if { true => knownMapPathExpression! }
                         flowOpcode == -206 -> if { true => knownBorrowTextExpression! }
                         flowOpcode == -224 -> if { true => knownDynExpression! }
+                        (flowOpcode == -227 or flowOpcode == -228) -> if { true => knownStreamFlowExpression! }
                         expression.firstToken => knownDynTokenSearch!
                         knownDynTokenSearch! < expression.firstToken + expression.tokenCount -> while {
                             prepared.package.tokens[sourceRange.tokenStart + knownDynTokenSearch!] => knownDynToken
@@ -1302,7 +1229,7 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                         24 => expressionTypeSymbol!
                     }
                     expressionBelongsToFunction! -> if {
-                        (expression.kind == 42 or expression.kind == 43 or expression.kind == 44 or expression.kind == 45 or expression.kind == 46 or expression.kind == 47 or expression.kind == 58) -> if {
+                    (expression.kind == 42 or expression.kind == 43 or expression.kind == 44 or expression.kind == 45 or expression.kind == 46 or expression.kind == 47 or expression.kind == 58 or expression.kind == 62) -> if {
                             results! -> len => controlIr
                             controlIr => astToIr![expressionAstIndex!]
                             18 => controlKind!
@@ -1310,8 +1237,9 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                             expression.kind == 44 -> if { 20 => controlKind! }
                             expression.kind == 45 -> if { 21 => controlKind! }
                             expression.kind == 46 -> if { 22 => controlKind! }
-                            expression.kind == 47 -> if { 23 => controlKind! }
-                            expression.kind == 58 -> if { 19 => controlKind! }
+                        expression.kind == 47 -> if { 23 => controlKind! }
+                        expression.kind == 58 -> if { 19 => controlKind! }
+                        expression.kind == 62 -> if { 30 => controlKind! }
                             -1 => controlOpcode!
                             expression.kind == 45 -> if {
                                 0 => controlOpcode!
@@ -1362,7 +1290,7 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                                 flags: expression.flags
                             })
                         } else {
-                            (expressionTypeIndex! >= 0 or recursiveExpressionTypeId! >= 0 or knownParameterReference! or knownPatternReference! or expression.kind == 37 or expression.kind == 41 or expression.kind == 56 or (expression.kind == 15 and expression.parent >= 0 and prepared.package.nodes[sourceRange.astStart + expression.parent].kind == 41) or knownBooleanExpression! or knownCallExpression! or knownNumericExpression! or knownPushExpression! or knownPutExpression! or knownMapTextExpression! or knownMapPathExpression! or knownBorrowTextExpression! or knownDynExpression! or knownDynDispatchExpression! or knownIndexAssignment! or knownMemberAssignment!) -> if {
+                            (expressionTypeIndex! >= 0 or recursiveExpressionTypeId! >= 0 or knownParameterReference! or knownPatternReference! or expression.kind == 37 or expression.kind == 41 or expression.kind == 56 or (expression.kind == 15 and expression.parent >= 0 and prepared.package.nodes[sourceRange.astStart + expression.parent].kind == 41) or knownBooleanExpression! or knownCallExpression! or knownNumericExpression! or knownPushExpression! or knownPutExpression! or knownMapTextExpression! or knownMapPathExpression! or knownBorrowTextExpression! or knownDynExpression! or knownDynDispatchExpression! or knownStreamFlowExpression! or knownIndexAssignment! or knownMemberAssignment!) -> if {
                             9 => expressionKind!
                             expression.kind == 13 -> if { 2 => expressionKind! }
                             expression.kind == 14 -> if { 3 => expressionKind! }
@@ -1636,7 +1564,7 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                             }
                         }
                     }
-                    expressionAstIndex! + 1 => expressionAstIndex!
+                    expressionNodePosition! + 1 => expressionNodePosition!
                 }
 
                 results! -> len => expressionIrEnd
@@ -1658,7 +1586,7 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                 expressionIrStart => operandIrIndex!
                 operandIrIndex! < expressionIrEnd -> while {
                     results![operandIrIndex!] => operatorIr!
-                    (operatorIr!.kind == 6 or operatorIr!.kind == 7 or operatorIr!.kind == 8 or (operatorIr!.kind == 9 and ((operatorIr!.opcode <= -201 and (operatorIr!.opcode >= -206 or operatorIr!.opcode == -213 or operatorIr!.opcode == -223 or operatorIr!.opcode == -224 or operatorIr!.opcode == -225 or operatorIr!.opcode == -226)) or operatorIr!.opcode == -220 or operatorIr!.opcode == -221)) or operatorIr!.kind == 13 or operatorIr!.kind == 15 or operatorIr!.kind == 17 or operatorIr!.kind == 22 or operatorIr!.kind == 23 or operatorIr!.kind == 24 or operatorIr!.kind == 25 or operatorIr!.kind == 26) -> if {
+                    (operatorIr!.kind == 6 or operatorIr!.kind == 7 or operatorIr!.kind == 8 or (operatorIr!.kind == 9 and ((operatorIr!.opcode <= -201 and (operatorIr!.opcode >= -206 or operatorIr!.opcode == -213 or operatorIr!.opcode == -223 or operatorIr!.opcode == -224 or operatorIr!.opcode == -225 or operatorIr!.opcode == -226 or operatorIr!.opcode == -227 or operatorIr!.opcode == -228)) or operatorIr!.opcode == -220 or operatorIr!.opcode == -221)) or operatorIr!.kind == 13 or operatorIr!.kind == 15 or operatorIr!.kind == 17 or operatorIr!.kind == 22 or operatorIr!.kind == 23 or operatorIr!.kind == 24 or operatorIr!.kind == 25 or operatorIr!.kind == 26) -> if {
                         -1 => firstOperand!
                         -1 => secondOperand!
                         UIntSize(0) => firstStart!
@@ -1683,7 +1611,7 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                             childIrIndex! + 1 => childIrIndex!
                         }
                         firstOperand! => operatorIr!.operand0
-                        (operatorIr!.kind == 6 or operatorIr!.kind == 8 or (operatorIr!.kind == 9 and ((operatorIr!.opcode <= -201 and (operatorIr!.opcode >= -206 or operatorIr!.opcode == -213 or operatorIr!.opcode == -223 or operatorIr!.opcode == -224 or operatorIr!.opcode == -225 or operatorIr!.opcode == -226)) or operatorIr!.opcode == -220 or operatorIr!.opcode == -221)) or operatorIr!.kind == 15 or operatorIr!.kind == 24) -> if { secondOperand! => operatorIr!.operand1 }
+                        (operatorIr!.kind == 6 or operatorIr!.kind == 8 or (operatorIr!.kind == 9 and ((operatorIr!.opcode <= -201 and (operatorIr!.opcode >= -206 or operatorIr!.opcode == -213 or operatorIr!.opcode == -223 or operatorIr!.opcode == -224 or operatorIr!.opcode == -225 or operatorIr!.opcode == -226 or operatorIr!.opcode == -227)) or operatorIr!.opcode == -220 or operatorIr!.opcode == -221)) or operatorIr!.kind == 15 or operatorIr!.kind == 24) -> if { secondOperand! => operatorIr!.operand1 }
                         operatorIr!.kind == 22 -> if {
                             -1 => operatorIr!.operand0
                             firstOperand! => operatorIr!.operand1
@@ -2031,7 +1959,7 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                     bindingName!.kind == 5 -> if {
                         expressionIrStart => bindingDefinitionSearch!
                         bindingDefinitionSearch! < expressionIrEnd -> while {
-                            ((results![bindingDefinitionSearch!].kind == 17 or results![bindingDefinitionSearch!].kind == 29) and results![bindingDefinitionSearch!].symbol == bindingName!.symbol) -> if {
+                            ((results![bindingDefinitionSearch!].kind == 17 or results![bindingDefinitionSearch!].kind == 29) and results![bindingDefinitionSearch!].symbol == bindingName!.symbol and results![bindingDefinitionSearch!].astNode >= 0 and bindingName!.astNode >= 0 and prepared.package.nodes[sourceRange.astStart + results![bindingDefinitionSearch!].astNode].start <= prepared.package.nodes[sourceRange.astStart + bindingName!.astNode].start and bindingDefinitionSearch! != bindingName!.parent and results![bindingDefinitionSearch!].operand0 != bindingNameIrIndex!) -> if {
                                 bindingDefinitionSearch! => bindingName!.operand0
                             }
                             bindingDefinitionSearch! + 1 => bindingDefinitionSearch!
@@ -2274,10 +2202,9 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
             }
             symbolIndex! + 1 => symbolIndex!
         }
-        functionRequests! -> parallel functionRequest {
-            functionRequest -> lowerFunction
-        } => functionResults!
-        functionResults! -> each functionResult {
+        0 => functionRequestIndex!
+        functionRequestIndex! < (functionRequests! -> len) -> while {
+            functionRequests![functionRequestIndex!] -> lowerFunction => functionResult
             results! -> len => functionIrOffset
             0 => functionNodeIndex!
             functionNodeIndex! < (functionResult.nodes -> len) -> while {
@@ -2289,6 +2216,7 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                 results! -> push(functionNode!)
                 functionNodeIndex! + 1 => functionNodeIndex!
             }
+            functionRequestIndex! + 1 => functionRequestIndex!
         }
         0 => entryAstIndex!
         entryAstIndex! < sourceRange.astCount -> while {
@@ -2351,7 +2279,7 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                     0 => entryBindingAstIndex!
                     entryBindingAstIndex! < sourceRange.astCount -> while {
                         prepared.package.nodes[sourceRange.astStart + entryBindingAstIndex!] => entryBindingAst
-                        (entryBindingAst.kind == 9 or (entryBindingAst.kind == 48 and entryBindingAst.secondaryToken >= 0)) -> if {
+                        (entryBindingAst.kind == 9 or entryBindingAst.kind == 61 or (entryBindingAst.kind == 48 and entryBindingAst.secondaryToken >= 0)) -> if {
                             entryBindingAst.parent => entryBindingAncestor!
                             false => entryBindingBelongs!
                             false => entryBindingBlockedByNestedFunction!
@@ -2362,65 +2290,42 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                             }
                             entryBindingBelongs! -> if {
                                 -1 => entryBindingTypeIndex!
-                                1000000 => entryBindingTypeDistance!
-                                0 => entryBindingTypeSearch!
-                                entryBindingTypeSearch! < (inferred -> len) -> while {
-                                    inferred[entryBindingTypeSearch!] => entryBindingTypeCandidate
-                                    entryBindingTypeCandidate.sourceModule == sourceIndex! -> if {
-                                        prepared.package.nodes[sourceRange.astStart + entryBindingTypeCandidate.astNode].parent => entryBindingTypeAncestor!
-                                        1 => entryBindingDistance!
-                                        entryBindingTypeCandidate.astNode == entryBindingAstIndex! => entryBelongsToBinding!
-                                        entryBelongsToBinding! -> if { 0 => entryBindingDistance! }
-                                        (entryBindingTypeAncestor! >= 0 and not entryBelongsToBinding!) -> while {
-                                            entryBindingTypeAncestor! == entryBindingAstIndex! -> if { true => entryBelongsToBinding! } else {
-                                                prepared.package.nodes[sourceRange.astStart + entryBindingTypeAncestor!].parent => entryBindingTypeAncestor!
-                                                entryBindingDistance! + 1 => entryBindingDistance!
-                                            }
-                                        }
-                                        (entryBelongsToBinding! and entryBindingDistance! < entryBindingTypeDistance!) -> if {
-                                            entryBindingTypeSearch! => entryBindingTypeIndex!
-                                            entryBindingDistance! => entryBindingTypeDistance!
-                                        }
-                                    }
-                                    entryBindingTypeSearch! + 1 => entryBindingTypeSearch!
-                                }
-                                -1 => entryBindingCanonicalTypeId!
-                                1000000 => entryBindingCanonicalDistance!
-                                0 => entryBindingCanonicalSearch!
-                                entryBindingCanonicalSearch! < (frozenRecursiveExpressions -> len) -> while {
-                                    frozenRecursiveExpressions[entryBindingCanonicalSearch!] => entryBindingCanonicalCandidate
-                                    (entryBindingCanonicalCandidate.status == 0 and entryBindingCanonicalCandidate.sourceModule == sourceIndex!) -> if {
-                                        0 => entryBindingCanonicalCandidateDistance!
-                                        entryBindingCanonicalCandidate.astNode == entryBindingAstIndex! => entryBindingCanonicalBelongs!
-                                        entryBindingCanonicalBelongs! -> if { 0 => entryBindingCanonicalCandidateDistance! } else {
-                                            prepared.package.nodes[sourceRange.astStart + entryBindingCanonicalCandidate.astNode].parent => entryBindingCanonicalAncestor!
-                                            1 => entryBindingCanonicalCandidateDistance!
-                                            (entryBindingCanonicalAncestor! >= 0 and not entryBindingCanonicalBelongs!) -> while {
-                                                entryBindingCanonicalAncestor! == entryBindingAstIndex! -> if { true => entryBindingCanonicalBelongs! } else {
-                                                    prepared.package.nodes[sourceRange.astStart + entryBindingCanonicalAncestor!].parent => entryBindingCanonicalAncestor!
-                                                    entryBindingCanonicalCandidateDistance! + 1 => entryBindingCanonicalCandidateDistance!
-                                                }
-                                            }
-                                        }
-                                        (entryBindingCanonicalBelongs! and entryBindingCanonicalCandidateDistance! < entryBindingCanonicalDistance!) -> if {
-                                            entryBindingCanonicalCandidate.typeId => entryBindingCanonicalTypeId!
-                                            entryBindingCanonicalCandidateDistance! => entryBindingCanonicalDistance!
-                                        }
-                                    }
-                                    entryBindingCanonicalSearch! + 1 => entryBindingCanonicalSearch!
-                                }
+                                frozenNearestLegacyIndexByAst[sourceRange.astStart + entryBindingAstIndex!] => entryBindingTypeIndex!
+                                frozenNearestCanonicalTypeByAst[sourceRange.astStart + entryBindingAstIndex!] => entryBindingCanonicalTypeId!
                                 -1 => entryBindingSymbol!
                                 0 => entryBindingSymbolSearch!
                                 entryBindingSymbolSearch! < sourceRange.symbolCount -> while {
-                                    (prepared.package.symbols[sourceRange.symbolStart + entryBindingSymbolSearch!].kind == 9 and prepared.package.symbols[sourceRange.symbolStart + entryBindingSymbolSearch!].astNode == entryBindingAstIndex!) -> if { entryBindingSymbolSearch! => entryBindingSymbol! }
+                                    ((prepared.package.symbols[sourceRange.symbolStart + entryBindingSymbolSearch!].kind == 9 or prepared.package.symbols[sourceRange.symbolStart + entryBindingSymbolSearch!].kind == 61) and prepared.package.symbols[sourceRange.symbolStart + entryBindingSymbolSearch!].astNode == entryBindingAstIndex!) -> if { entryBindingSymbolSearch! => entryBindingSymbol! }
                                     entryBindingSymbolSearch! + 1 => entryBindingSymbolSearch!
+                                }
+                                (entryBindingAst.flags == 1 and entryBindingAst.payloadToken >= 0) -> if {
+                                    prepared.package.tokens[sourceRange.tokenStart + entryBindingAst.payloadToken] => entryMutableBindingName
+                                    results! -> len => entryPreviousBindingSearch!
+                                    entryPreviousBindingSearch! > 0 -> while {
+                                        entryPreviousBindingSearch! - 1 => entryPreviousBindingSearch!
+                                        results![entryPreviousBindingSearch!] => entryPreviousBinding
+                                        (entryPreviousBinding.kind == 17 and entryPreviousBinding.flags == 1 and entryPreviousBinding.sourceModule == sourceIndex! and entryPreviousBinding.payloadToken >= 0) -> if {
+                                            prepared.package.tokens[sourceRange.tokenStart + entryPreviousBinding.payloadToken] => entryPreviousBindingName
+                                            entryMutableBindingName.span.length == entryPreviousBindingName.span.length => entryPreviousBindingEqual!
+                                            UIntSize(0) => entryPreviousBindingByte!
+                                            (entryPreviousBindingEqual! and entryPreviousBindingByte! < entryMutableBindingName.span.length) -> while {
+                                                (source -> byte(entryMutableBindingName.span.start + entryPreviousBindingByte!)) != (source -> byte(entryPreviousBindingName.span.start + entryPreviousBindingByte!)) -> if { false => entryPreviousBindingEqual! }
+                                                entryPreviousBindingByte! + UIntSize(1) => entryPreviousBindingByte!
+                                            }
+                                            entryPreviousBindingEqual! -> if {
+                                                entryPreviousBinding.symbol => entryBindingSymbol!
+                                                entryPreviousBinding.typeId => entryBindingCanonicalTypeId!
+                                                0 => entryPreviousBindingSearch!
+                                            }
+                                        }
+                                    }
                                 }
                                 entryBindingSymbol! >= 0 -> if {
                                     prepared.package.symbols[sourceRange.symbolStart + entryBindingSymbol!] => declaredEntryBindingSymbol
                                     0 => entryBindingDeclaredReferenceSearch!
                                     entryBindingDeclaredReferenceSearch! < (prepared.semantic.references -> len) -> while {
                                         prepared.semantic.references[entryBindingDeclaredReferenceSearch!] => entryBindingDeclaredReference
-                                        (entryBindingDeclaredReference.sourceModule == sourceIndex! and entryBindingDeclaredReference.typeAst == declaredEntryBindingSymbol.typeNode and entryBindingDeclaredReference.status == 0) -> if {
+                                        (entryBindingDeclaredReference.sourceModule == sourceIndex! and entryBindingDeclaredReference.typeAst == declaredEntryBindingSymbol.typeNode and entryBindingDeclaredReference.status == 0 and entryBindingDeclaredReference.typeId >= 0) -> if {
                                             entryBindingDeclaredReference.typeId => entryBindingCanonicalTypeId!
                                         }
                                         entryBindingDeclaredReferenceSearch! + 1 => entryBindingDeclaredReferenceSearch!
@@ -2666,29 +2571,13 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                         }
                         false => knownEntryNumericExpression!
                         (entryExpression.kind == 20 or entryExpression.kind == 21) -> if {
-                            1000000 => knownEntryNumericDistance!
-                            0 => knownEntryNumericSearch!
-                            knownEntryNumericSearch! < (inferred -> len) -> while {
-                                inferred[knownEntryNumericSearch!] => knownEntryNumericCandidate
-                                knownEntryNumericCandidate.sourceModule == sourceIndex! -> if {
-                                    prepared.package.nodes[sourceRange.astStart + knownEntryNumericCandidate.astNode].parent => knownEntryNumericAncestor!
-                                    1 => knownEntryNumericCandidateDistance!
-                                    false => knownEntryNumericBelongs!
-                                    (knownEntryNumericAncestor! >= 0 and not knownEntryNumericBelongs!) -> while {
-                                        knownEntryNumericAncestor! == entryExpressionAst! -> if { true => knownEntryNumericBelongs! } else {
-                                            prepared.package.nodes[sourceRange.astStart + knownEntryNumericAncestor!].parent => knownEntryNumericAncestor!
-                                            knownEntryNumericCandidateDistance! + 1 => knownEntryNumericCandidateDistance!
-                                        }
-                                    }
-                                    (knownEntryNumericBelongs! and knownEntryNumericCandidateDistance! < knownEntryNumericDistance!) -> if {
-                                        true => knownEntryNumericExpression!
-                                        knownEntryNumericCandidateDistance! => knownEntryNumericDistance!
-                                        knownEntryNumericCandidate.origin => entryExpressionTypeOrigin!
-                                        knownEntryNumericCandidate.targetModule => entryExpressionTypeModule!
-                                        knownEntryNumericCandidate.targetSymbol => entryExpressionTypeSymbol!
-                                    }
-                                }
-                                knownEntryNumericSearch! + 1 => knownEntryNumericSearch!
+                            frozenNearestLegacyIndexByAst[sourceRange.astStart + entryExpressionAst!] => knownEntryNumericIndex
+                            knownEntryNumericIndex >= 0 -> if {
+                                inferred[knownEntryNumericIndex] => knownEntryNumericCandidate
+                                true => knownEntryNumericExpression!
+                                knownEntryNumericCandidate.origin => entryExpressionTypeOrigin!
+                                knownEntryNumericCandidate.targetModule => entryExpressionTypeModule!
+                                knownEntryNumericCandidate.targetSymbol => entryExpressionTypeSymbol!
                             }
                         }
                         entryExpression.kind == 22 -> if {
@@ -2722,6 +2611,7 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                         false => knownEntryBorrowTextExpression!
                         false => knownEntryDynExpression!
                         false => knownEntryDynDispatchExpression!
+                        false => knownEntryStreamFlowExpression!
                         entryExpression.kind == 53 => knownEntryIndexAssignment!
                         entryExpression.kind == 54 => knownEntryMemberAssignment!
                         entryExpression.kind == 10 -> if {
@@ -2732,6 +2622,7 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                             entryFlowOpcode == -214 -> if { true => knownEntryMapPathExpression! }
                             entryFlowOpcode == -206 -> if { true => knownEntryBorrowTextExpression! }
                             entryFlowOpcode == -224 -> if { true => knownEntryDynExpression! }
+                            (entryFlowOpcode == -227 or entryFlowOpcode == -228) -> if { true => knownEntryStreamFlowExpression! }
                             entryExpression.firstToken => knownEntryDynTokenSearch!
                             knownEntryDynTokenSearch! < entryExpression.firstToken + entryExpression.tokenCount -> while {
                                 prepared.package.tokens[sourceRange.tokenStart + knownEntryDynTokenSearch!] => knownEntryDynToken
@@ -2882,7 +2773,7 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                             24 => entryExpressionTypeSymbol!
                         }
                         entryExpressionBelongs! -> if {
-                            (entryExpression.kind == 42 or entryExpression.kind == 43 or entryExpression.kind == 44 or entryExpression.kind == 45 or entryExpression.kind == 46 or entryExpression.kind == 47 or entryExpression.kind == 58) -> if {
+                            (entryExpression.kind == 42 or entryExpression.kind == 43 or entryExpression.kind == 44 or entryExpression.kind == 45 or entryExpression.kind == 46 or entryExpression.kind == 47 or entryExpression.kind == 58 or entryExpression.kind == 62) -> if {
                                 results! -> len => entryControlIr
                                 entryControlIr => entryAstToIr![entryExpressionAst!]
                                 18 => entryControlKind!
@@ -2892,6 +2783,7 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                                 entryExpression.kind == 46 -> if { 22 => entryControlKind! }
                                 entryExpression.kind == 47 -> if { 23 => entryControlKind! }
                                 entryExpression.kind == 58 -> if { 19 => entryControlKind! }
+                                entryExpression.kind == 62 -> if { 30 => entryControlKind! }
                                 -1 => entryControlOpcode!
                                 entryExpression.kind == 45 -> if {
                                     0 => entryControlOpcode!
@@ -2942,7 +2834,7 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                                     flags: entryExpression.flags
                                 })
                             } else {
-                                (entryExpressionTypeIndex! >= 0 or recursiveEntryExpressionTypeId! >= 0 or knownEntryPatternReference! or entryExpression.kind == 37 or entryExpression.kind == 41 or entryExpression.kind == 56 or (entryExpression.kind == 15 and entryExpression.parent >= 0 and prepared.package.nodes[sourceRange.astStart + entryExpression.parent].kind == 41) or knownEntryBooleanExpression! or knownEntryCallExpression! or knownEntryNumericExpression! or knownEntryPushExpression! or knownEntryPutExpression! or knownEntryMapTextExpression! or knownEntryMapPathExpression! or knownEntryBorrowTextExpression! or knownEntryDynExpression! or knownEntryDynDispatchExpression! or knownEntryIndexAssignment! or knownEntryMemberAssignment!) -> if {
+                                (entryExpressionTypeIndex! >= 0 or recursiveEntryExpressionTypeId! >= 0 or knownEntryPatternReference! or entryExpression.kind == 37 or entryExpression.kind == 41 or entryExpression.kind == 56 or (entryExpression.kind == 15 and entryExpression.parent >= 0 and prepared.package.nodes[sourceRange.astStart + entryExpression.parent].kind == 41) or knownEntryBooleanExpression! or knownEntryCallExpression! or knownEntryNumericExpression! or knownEntryPushExpression! or knownEntryPutExpression! or knownEntryMapTextExpression! or knownEntryMapPathExpression! or knownEntryBorrowTextExpression! or knownEntryDynExpression! or knownEntryDynDispatchExpression! or knownEntryStreamFlowExpression! or knownEntryIndexAssignment! or knownEntryMemberAssignment!) -> if {
                                 9 => entryExpressionKind!
                                 entryExpression.kind == 13 -> if { 2 => entryExpressionKind! }
                                 entryExpression.kind == 14 -> if { 3 => entryExpressionKind! }
@@ -3229,7 +3121,7 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                     entryExpressionStart => entryOperandIr!
                     entryOperandIr! < entryExpressionEnd -> while {
                         results![entryOperandIr!] => entryOperator!
-                        (entryOperator!.kind == 6 or entryOperator!.kind == 7 or entryOperator!.kind == 8 or (entryOperator!.kind == 9 and ((entryOperator!.opcode <= -201 and (entryOperator!.opcode >= -206 or entryOperator!.opcode == -213 or entryOperator!.opcode == -223 or entryOperator!.opcode == -224 or entryOperator!.opcode == -225 or entryOperator!.opcode == -226)) or entryOperator!.opcode == -220 or entryOperator!.opcode == -221)) or entryOperator!.kind == 13 or entryOperator!.kind == 15 or entryOperator!.kind == 17 or entryOperator!.kind == 22 or entryOperator!.kind == 23 or entryOperator!.kind == 24 or entryOperator!.kind == 25 or entryOperator!.kind == 26) -> if {
+                        (entryOperator!.kind == 6 or entryOperator!.kind == 7 or entryOperator!.kind == 8 or (entryOperator!.kind == 9 and ((entryOperator!.opcode <= -201 and (entryOperator!.opcode >= -206 or entryOperator!.opcode == -213 or entryOperator!.opcode == -223 or entryOperator!.opcode == -224 or entryOperator!.opcode == -225 or entryOperator!.opcode == -226 or entryOperator!.opcode == -227 or entryOperator!.opcode == -228)) or entryOperator!.opcode == -220 or entryOperator!.opcode == -221)) or entryOperator!.kind == 13 or entryOperator!.kind == 15 or entryOperator!.kind == 17 or entryOperator!.kind == 22 or entryOperator!.kind == 23 or entryOperator!.kind == 24 or entryOperator!.kind == 25 or entryOperator!.kind == 26) -> if {
                             -1 => entryFirstOperand!
                             -1 => entrySecondOperand!
                             UIntSize(0) => entryFirstStart!
@@ -3252,7 +3144,7 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                                 entryChildIr! + 1 => entryChildIr!
                             }
                             entryFirstOperand! => entryOperator!.operand0
-                            (entryOperator!.kind == 6 or entryOperator!.kind == 8 or (entryOperator!.kind == 9 and ((entryOperator!.opcode <= -201 and (entryOperator!.opcode >= -206 or entryOperator!.opcode == -213 or entryOperator!.opcode == -223 or entryOperator!.opcode == -224 or entryOperator!.opcode == -225 or entryOperator!.opcode == -226)) or entryOperator!.opcode == -220 or entryOperator!.opcode == -221)) or entryOperator!.kind == 15 or entryOperator!.kind == 24) -> if { entrySecondOperand! => entryOperator!.operand1 }
+                            (entryOperator!.kind == 6 or entryOperator!.kind == 8 or (entryOperator!.kind == 9 and ((entryOperator!.opcode <= -201 and (entryOperator!.opcode >= -206 or entryOperator!.opcode == -213 or entryOperator!.opcode == -223 or entryOperator!.opcode == -224 or entryOperator!.opcode == -225 or entryOperator!.opcode == -226 or entryOperator!.opcode == -227)) or entryOperator!.opcode == -220 or entryOperator!.opcode == -221)) or entryOperator!.kind == 15 or entryOperator!.kind == 24) -> if { entrySecondOperand! => entryOperator!.operand1 }
                             entryOperator!.kind == 22 -> if {
                                 -1 => entryOperator!.operand0
                                 entryFirstOperand! => entryOperator!.operand1
@@ -3587,7 +3479,7 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                         entryBindingName!.kind == 5 -> if {
                             entryExpressionStart => entryBindingDefinitionSearch!
                             entryBindingDefinitionSearch! < entryExpressionEnd -> while {
-                                ((results![entryBindingDefinitionSearch!].kind == 17 or results![entryBindingDefinitionSearch!].kind == 29) and results![entryBindingDefinitionSearch!].symbol == entryBindingName!.symbol) -> if {
+                                ((results![entryBindingDefinitionSearch!].kind == 17 or results![entryBindingDefinitionSearch!].kind == 29) and results![entryBindingDefinitionSearch!].symbol == entryBindingName!.symbol and results![entryBindingDefinitionSearch!].astNode >= 0 and entryBindingName!.astNode >= 0 and prepared.package.nodes[sourceRange.astStart + results![entryBindingDefinitionSearch!].astNode].start <= prepared.package.nodes[sourceRange.astStart + entryBindingName!.astNode].start and entryBindingDefinitionSearch! != entryBindingName!.parent and results![entryBindingDefinitionSearch!].operand0 != entryBindingNameIr!) -> if {
                                     entryBindingDefinitionSearch! => entryBindingName!.operand0
                                 }
                                 entryBindingDefinitionSearch! + 1 => entryBindingDefinitionSearch!
@@ -3784,7 +3676,7 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
         }
         recursiveTypeMapIndex! + 1 => recursiveTypeMapIndex!
     }
-    recursiveTypes -> legacyTypes => inferred
+    recursiveTypes -> legacyTypes => inferred!
     [Int; ~] => inferredIndexByAst!
     0 => inferredIndexSeed!
     inferredIndexSeed! < (prepared.package.nodes -> len) -> while {
@@ -3792,8 +3684,8 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
         inferredIndexSeed! + 1 => inferredIndexSeed!
     }
     0 => inferredMapIndex!
-    inferredMapIndex! < (inferred -> len) -> while {
-        inferred[inferredMapIndex!] => mappedLegacy
+    inferredMapIndex! < (inferred! -> len) -> while {
+        inferred![inferredMapIndex!] => mappedLegacy
         (mappedLegacy.sourceModule >= 0 and mappedLegacy.sourceModule < (prepared.package.ranges -> len)) -> if {
             prepared.package.ranges[mappedLegacy.sourceModule] => mappedLegacyRange
             (mappedLegacy.astNode >= 0 and mappedLegacy.astNode < mappedLegacyRange.astCount) -> if {
@@ -3802,6 +3694,155 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
         }
         inferredMapIndex! + 1 => inferredMapIndex!
     }
+    # Precompute the nearest typed descendant for every AST node. Function and
+    # entry lowering previously rediscovered this relation by scanning every
+    # inferred expression for every binding and numeric expression.
+    [Int; ~] => nearestLegacyIndexByAst!
+    [Int; ~] => nearestLegacyDistanceByAst!
+    [Int; ~] => nearestCanonicalTypeByAst!
+    [Int; ~] => nearestCanonicalDistanceByAst!
+    [Int; ~] => functionResultLegacyIndexByAst!
+    [Int; ~] => functionResultRootAstByAst!
+    [Int; ~] => functionResultDistanceByAst!
+    [Int; ~] => functionResultTopStartByAst!
+    0 => nearestTypeSeed!
+    nearestTypeSeed! < (prepared.package.nodes -> len) -> while {
+        nearestLegacyIndexByAst! -> push(-1)
+        nearestLegacyDistanceByAst! -> push(1000000)
+        nearestCanonicalTypeByAst! -> push(-1)
+        nearestCanonicalDistanceByAst! -> push(1000000)
+        functionResultLegacyIndexByAst! -> push(-1)
+        functionResultRootAstByAst! -> push(-1)
+        functionResultDistanceByAst! -> push(1000000)
+        functionResultTopStartByAst! -> push(-1)
+        nearestTypeSeed! + 1 => nearestTypeSeed!
+    }
+    0 => nearestLegacyCandidateIndex!
+    nearestLegacyCandidateIndex! < (inferred! -> len) -> while {
+        inferred![nearestLegacyCandidateIndex!] => nearestLegacyCandidate
+        (nearestLegacyCandidate.sourceModule >= 0 and nearestLegacyCandidate.sourceModule < (prepared.package.ranges -> len)) -> if {
+            prepared.package.ranges[nearestLegacyCandidate.sourceModule] => nearestLegacyRange
+            nearestLegacyCandidate.astNode => nearestLegacyAncestor!
+            0 => nearestLegacyDistance!
+            (nearestLegacyAncestor! >= 0 and nearestLegacyAncestor! < nearestLegacyRange.astCount) -> while {
+                nearestLegacyRange.astStart + nearestLegacyAncestor! => nearestLegacyGlobalAst
+                nearestLegacyDistance! < nearestLegacyDistanceByAst![nearestLegacyGlobalAst] -> if {
+                    nearestLegacyCandidateIndex! => nearestLegacyIndexByAst![nearestLegacyGlobalAst]
+                    nearestLegacyDistance! => nearestLegacyDistanceByAst![nearestLegacyGlobalAst]
+                }
+                prepared.package.nodes[nearestLegacyRange.astStart + nearestLegacyAncestor!].parent => nearestLegacyAncestor!
+                nearestLegacyDistance! + 1 => nearestLegacyDistance!
+            }
+            nearestLegacyCandidate.astNode => resultRootAst!
+            prepared.package.nodes[nearestLegacyRange.astStart + nearestLegacyCandidate.astNode].parent => resultOwnerAst!
+            1 => resultCandidateDistance!
+            false => resultOwnerFound!
+            (resultOwnerAst! >= 0 and not resultOwnerFound!) -> while {
+                prepared.package.nodes[nearestLegacyRange.astStart + resultOwnerAst!] => resultOwnerNode
+                (resultOwnerNode.kind == 7 or resultOwnerNode.kind == 29 or resultOwnerNode.kind == 31) -> if {
+                    true => resultOwnerFound!
+                    nearestLegacyRange.astStart + resultOwnerAst! => resultOwnerGlobalAst
+                    Int(prepared.package.nodes[nearestLegacyRange.astStart + resultRootAst!].start) => resultCandidateTopStart
+                    (functionResultLegacyIndexByAst![resultOwnerGlobalAst] < 0 or resultCandidateTopStart > functionResultTopStartByAst![resultOwnerGlobalAst] or (resultCandidateTopStart == functionResultTopStartByAst![resultOwnerGlobalAst] and resultCandidateDistance! < functionResultDistanceByAst![resultOwnerGlobalAst])) -> if {
+                        nearestLegacyCandidateIndex! => functionResultLegacyIndexByAst![resultOwnerGlobalAst]
+                        resultRootAst! => functionResultRootAstByAst![resultOwnerGlobalAst]
+                        resultCandidateDistance! => functionResultDistanceByAst![resultOwnerGlobalAst]
+                        resultCandidateTopStart => functionResultTopStartByAst![resultOwnerGlobalAst]
+                    }
+                } else {
+                    resultOwnerAst! => resultRootAst!
+                    resultOwnerNode.parent => resultOwnerAst!
+                    resultCandidateDistance! + 1 => resultCandidateDistance!
+                }
+            }
+        }
+        nearestLegacyCandidateIndex! + 1 => nearestLegacyCandidateIndex!
+    }
+    0 => nearestCanonicalCandidateIndex!
+    nearestCanonicalCandidateIndex! < (recursiveExpressions! -> len) -> while {
+        recursiveExpressions![nearestCanonicalCandidateIndex!] => nearestCanonicalCandidate
+        (nearestCanonicalCandidate.status == 0 and nearestCanonicalCandidate.typeId >= 0 and nearestCanonicalCandidate.sourceModule >= 0 and nearestCanonicalCandidate.sourceModule < (prepared.package.ranges -> len)) -> if {
+            prepared.package.ranges[nearestCanonicalCandidate.sourceModule] => nearestCanonicalRange
+            nearestCanonicalCandidate.astNode => nearestCanonicalAncestor!
+            0 => nearestCanonicalDistance!
+            (nearestCanonicalAncestor! >= 0 and nearestCanonicalAncestor! < nearestCanonicalRange.astCount) -> while {
+                nearestCanonicalRange.astStart + nearestCanonicalAncestor! => nearestCanonicalGlobalAst
+                nearestCanonicalDistance! < nearestCanonicalDistanceByAst![nearestCanonicalGlobalAst] -> if {
+                    nearestCanonicalCandidate.typeId => nearestCanonicalTypeByAst![nearestCanonicalGlobalAst]
+                    nearestCanonicalDistance! => nearestCanonicalDistanceByAst![nearestCanonicalGlobalAst]
+                }
+                prepared.package.nodes[nearestCanonicalRange.astStart + nearestCanonicalAncestor!].parent => nearestCanonicalAncestor!
+                nearestCanonicalDistance! + 1 => nearestCanonicalDistance!
+            }
+        }
+        nearestCanonicalCandidateIndex! + 1 => nearestCanonicalCandidateIndex!
+    }
+    # Group each AST node by its nearest enclosing function once. Per-function
+    # lowering can then walk only its own nodes instead of rescanning the whole
+    # source and repeatedly climbing parents to reject sibling functions.
+    [Int; ~] => functionOwnerByAst!
+    [Int; ~] => functionNodeCountsByAst!
+    [Int; ~] => functionNodeStartsByAst!
+    [Int; ~] => functionNodeCursorsByAst!
+    [Int; ~] => functionNodeIndices!
+    0 => functionNodeSeed!
+    functionNodeSeed! < (prepared.package.nodes -> len) -> while {
+        functionOwnerByAst! -> push(-1)
+        functionNodeCountsByAst! -> push(0)
+        functionNodeStartsByAst! -> push(0)
+        functionNodeCursorsByAst! -> push(0)
+        functionNodeIndices! -> push(-1)
+        functionNodeSeed! + 1 => functionNodeSeed!
+    }
+    0 => functionOwnerSource!
+    functionOwnerSource! < (prepared.package.ranges -> len) -> while {
+        prepared.package.ranges[functionOwnerSource!] => functionOwnerRange
+        0 => functionOwnerLocalAst!
+        functionOwnerLocalAst! < functionOwnerRange.astCount -> while {
+            prepared.package.nodes[functionOwnerRange.astStart + functionOwnerLocalAst!].parent => functionOwnerAncestor!
+            -1 => functionOwnerGlobalAst!
+            (functionOwnerAncestor! >= 0 and functionOwnerGlobalAst! < 0) -> while {
+                prepared.package.nodes[functionOwnerRange.astStart + functionOwnerAncestor!] => functionOwnerCandidate
+                (functionOwnerCandidate.kind == 7 or functionOwnerCandidate.kind == 29 or functionOwnerCandidate.kind == 31) -> if {
+                    functionOwnerRange.astStart + functionOwnerAncestor! => functionOwnerGlobalAst!
+                } else {
+                    functionOwnerCandidate.parent => functionOwnerAncestor!
+                }
+            }
+            functionOwnerRange.astStart + functionOwnerLocalAst! => functionOwnedGlobalAst
+            functionOwnerGlobalAst! => functionOwnerByAst![functionOwnedGlobalAst]
+            functionOwnerGlobalAst! >= 0 -> if {
+                functionNodeCountsByAst![functionOwnerGlobalAst!] + 1 => functionNodeCountsByAst![functionOwnerGlobalAst!]
+            }
+            functionOwnerLocalAst! + 1 => functionOwnerLocalAst!
+        }
+        functionOwnerSource! + 1 => functionOwnerSource!
+    }
+    0 => functionNodePrefix!
+    0 => functionNodeOwnerIndex!
+    functionNodeOwnerIndex! < (functionNodeCountsByAst! -> len) -> while {
+        functionNodePrefix! => functionNodeStartsByAst![functionNodeOwnerIndex!]
+        functionNodePrefix! => functionNodeCursorsByAst![functionNodeOwnerIndex!]
+        functionNodePrefix! + functionNodeCountsByAst![functionNodeOwnerIndex!] => functionNodePrefix!
+        functionNodeOwnerIndex! + 1 => functionNodeOwnerIndex!
+    }
+    0 => functionFillSource!
+    functionFillSource! < (prepared.package.ranges -> len) -> while {
+        prepared.package.ranges[functionFillSource!] => functionFillRange
+        0 => functionFillLocalAst!
+        functionFillLocalAst! < functionFillRange.astCount -> while {
+            functionFillRange.astStart + functionFillLocalAst! => functionFillGlobalAst
+            functionOwnerByAst![functionFillGlobalAst] => functionFillOwner
+            functionFillOwner >= 0 -> if {
+                functionNodeCursorsByAst![functionFillOwner] => functionFillIndex
+                functionFillLocalAst! => functionNodeIndices![functionFillIndex]
+                functionFillIndex + 1 => functionNodeCursorsByAst![functionFillOwner]
+            }
+            functionFillLocalAst! + 1 => functionFillLocalAst!
+        }
+        functionFillSource! + 1 => functionFillSource!
+    }
+    inferred! -> freezeLegacyExpressionTypes => inferred
     # Transfer construction-time tables into immutable owners before the
     # per-function parallel region. This is a zero-copy ownership transition;
     # workers borrow the frozen values without sharing mutable bindings.
@@ -3809,6 +3850,13 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
     recursiveExpressions! -> freezeExpressionTypes => frozenRecursiveExpressions
     recursiveTypeByAst! -> freezeInts => frozenRecursiveTypeByAst
     inferredIndexByAst! -> freezeInts => frozenInferredIndexByAst
+    nearestLegacyIndexByAst! -> freezeInts => frozenNearestLegacyIndexByAst
+    nearestCanonicalTypeByAst! -> freezeInts => frozenNearestCanonicalTypeByAst
+    functionResultLegacyIndexByAst! -> freezeInts => frozenFunctionResultLegacyIndexByAst
+    functionResultRootAstByAst! -> freezeInts => frozenFunctionResultRootAstByAst
+    functionNodeStartsByAst! -> freezeInts => frozenFunctionNodeStartsByAst
+    functionNodeCountsByAst! -> freezeInts => frozenFunctionNodeCountsByAst
+    functionNodeIndices! -> freezeInts => frozenFunctionNodeIndices
     [Int; ~] => sourceIndices!
     0 => sourceIndex!
     sourceIndex! < (prepared.package.sources -> len) -> while {
@@ -3835,30 +3883,31 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
         }
         sourceLowerIndex! + 1 => sourceLowerIndex!
     }
-    0 => ownedBindingIndex!
-    ownedBindingIndex! < (results! -> len) -> while {
-        results![ownedBindingIndex!] => ownedBinding!
-        (ownedBinding!.kind == 17 and (ownedBinding!.typeOrigin == 13 or ownedBinding!.typeOrigin == 15)) -> if {
-            -1 => ownedBindingValue!
-            0 => ownedBindingValueSearch!
-            ownedBindingValueSearch! < (results! -> len) -> while {
-                results![ownedBindingValueSearch!] => ownedValueCandidate
-                ((ownedBinding!.typeOrigin == 13 and ownedValueCandidate.kind == 14) or (ownedBinding!.typeOrigin == 15 and ownedValueCandidate.kind == 16)) -> if {
-                    ownedValueCandidate.parent => ownedValueAncestor!
-                    false => ownedValueBelongs!
-                    (ownedValueAncestor! >= 0 and not ownedValueBelongs!) -> while {
-                        ownedValueAncestor! == ownedBindingIndex! -> if { true => ownedValueBelongs! } else { results![ownedValueAncestor!].parent => ownedValueAncestor! }
-                    }
-                    (ownedValueBelongs! and ownedBindingValue! < 0) -> if { ownedBindingValueSearch! => ownedBindingValue! }
+    # Visit each owned aggregate value once and walk only its ancestor chain.
+    # The former binding-first pass rescanned the complete compiler IR for
+    # every owned array/dictionary binding, making this repair O(n^2).
+    [Int; ~] => repairedOwnedBindings!
+    0 => repairedOwnedBindingSeed!
+    repairedOwnedBindingSeed! < (results! -> len) -> while {
+        repairedOwnedBindings! -> push(0)
+        repairedOwnedBindingSeed! + 1 => repairedOwnedBindingSeed!
+    }
+    0 => ownedValueIndex!
+    ownedValueIndex! < (results! -> len) -> while {
+        results![ownedValueIndex!] => ownedValueCandidate
+        (ownedValueCandidate.kind == 14 or ownedValueCandidate.kind == 16) -> if {
+            ownedValueCandidate.parent => ownedValueAncestor!
+            ownedValueAncestor! >= 0 -> while {
+                results![ownedValueAncestor!] => ownedBinding!
+                (ownedBinding!.kind == 17 and repairedOwnedBindings![ownedValueAncestor!] == 0 and ((ownedBinding!.typeOrigin == 13 and ownedValueCandidate.kind == 14) or (ownedBinding!.typeOrigin == 15 and ownedValueCandidate.kind == 16))) -> if {
+                    ownedValueIndex! => ownedBinding!.operand0
+                    ownedBinding! => results![ownedValueAncestor!]
+                    1 => repairedOwnedBindings![ownedValueAncestor!]
                 }
-                ownedBindingValueSearch! + 1 => ownedBindingValueSearch!
-            }
-            ownedBindingValue! >= 0 -> if {
-                ownedBindingValue! => ownedBinding!.operand0
-                ownedBinding! => results![ownedBindingIndex!]
+                ownedBinding!.parent => ownedValueAncestor!
             }
         }
-        ownedBindingIndex! + 1 => ownedBindingIndex!
+        ownedValueIndex! + 1 => ownedValueIndex!
     }
     0 => memberIndex!
     memberIndex! < (results! -> len) -> while {
@@ -4019,19 +4068,21 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
     0 => recursiveIrIndex!
     recursiveIrIndex! < (results! -> len) -> while {
         results![recursiveIrIndex!] => recursiveIr!
-        0 => recursiveExpressionIndex!
-        recursiveExpressionIndex! < (frozenRecursiveExpressions -> len) -> while {
-            frozenRecursiveExpressions[recursiveExpressionIndex!] => recursiveExpression
-            (recursiveExpression.status == 0 and recursiveExpression.sourceModule == recursiveIr!.sourceModule and recursiveExpression.astNode == recursiveIr!.astNode and recursiveIr!.kind != 0 and recursiveIr!.kind != 1 and recursiveIr!.kind != 10 and recursiveIr!.kind != 11) -> if {
-                recursiveExpression.typeId => recursiveIr!.typeId
-                frozenRecursiveSemanticTypes[recursiveExpression.typeId] => recursiveExpressionType
+        -1 => recursiveIrTypeId!
+        (recursiveIr!.sourceModule >= 0 and recursiveIr!.sourceModule < (prepared.package.ranges -> len) and recursiveIr!.astNode >= 0) -> if {
+            prepared.package.ranges[recursiveIr!.sourceModule] => recursiveIrRange
+            recursiveIr!.astNode < recursiveIrRange.astCount -> if {
+                frozenRecursiveTypeByAst[recursiveIrRange.astStart + recursiveIr!.astNode] => recursiveIrTypeId!
+            }
+        }
+        (recursiveIrTypeId! >= 0 and recursiveIr!.kind != 0 and recursiveIr!.kind != 1 and recursiveIr!.kind != 10 and recursiveIr!.kind != 11) -> if {
+                recursiveIrTypeId! => recursiveIr!.typeId
+                frozenRecursiveSemanticTypes[recursiveIrTypeId!] => recursiveExpressionType
                 recursiveExpressionType.kind => recursiveIr!.typeKind
                 recursiveExpressionType.origin => recursiveIr!.typeOrigin
                 recursiveExpressionType.module => recursiveIr!.typeModule
                 recursiveExpressionType.symbol => recursiveIr!.typeSymbol
-                recursiveTypeFlags[recursiveExpression.typeId] => recursiveIr!.typeFlags
-            }
-            recursiveExpressionIndex! + 1 => recursiveExpressionIndex!
+                recursiveTypeFlags[recursiveIrTypeId!] => recursiveIr!.typeFlags
         }
         recursiveIr! => results![recursiveIrIndex!]
         recursiveIrIndex! + 1 => recursiveIrIndex!
@@ -4157,7 +4208,7 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
     canonicalReferenceIndex! < (results! -> len) -> while {
         results![canonicalReferenceIndex!] => canonicalReference!
         false => canonicalDirectBindingResolved!
-        (canonicalReference!.kind == 5 and canonicalReference!.operand0 >= 0 and results![canonicalReference!.operand0].kind == 17) -> if {
+        (canonicalReference!.kind == 5 and canonicalReference!.operand0 >= 0 and results![canonicalReference!.operand0].kind == 17 and canonicalReference!.operand0 != canonicalReference!.parent and results![canonicalReference!.operand0].operand0 != canonicalReferenceIndex!) -> if {
             results![canonicalReference!.operand0] => canonicalReferenceBinding
             canonicalReference!.parent => canonicalDirectScope!
             (canonicalDirectScope! >= 0 and results![canonicalDirectScope!].kind != 0 and results![canonicalDirectScope!].kind != 1 and results![canonicalDirectScope!].kind != 11 and results![canonicalDirectScope!].kind != 19) -> while {
@@ -4200,7 +4251,7 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
             0 => canonicalReferenceCandidateIndex!
             canonicalReferenceCandidateIndex! < (results! -> len) -> while {
                 results![canonicalReferenceCandidateIndex!] => canonicalReferenceCandidate
-                (canonicalReferenceCandidateIndex! < canonicalReferenceIndex! and canonicalReferenceCandidate.kind == 17 and canonicalReferenceCandidate.sourceModule == canonicalReference!.sourceModule and canonicalReferenceCandidate.payloadToken >= 0) -> if {
+                (canonicalReferenceCandidateIndex! < canonicalReferenceIndex! and canonicalReferenceCandidateIndex! != canonicalReference!.parent and canonicalReferenceCandidate.kind == 17 and canonicalReferenceCandidate.operand0 != canonicalReferenceIndex! and canonicalReferenceCandidate.sourceModule == canonicalReference!.sourceModule and canonicalReferenceCandidate.astNode >= 0 and canonicalReference!.astNode >= 0 and prepared.package.nodes[canonicalReferenceRange.astStart + canonicalReferenceCandidate.astNode].start <= prepared.package.nodes[canonicalReferenceRange.astStart + canonicalReference!.astNode].start and canonicalReferenceCandidate.payloadToken >= 0) -> if {
                     canonicalReferenceCandidate.parent => canonicalReferenceCandidateOwner!
                     (canonicalReferenceCandidateOwner! >= 0 and results![canonicalReferenceCandidateOwner!].kind != 0 and results![canonicalReferenceCandidateOwner!].kind != 1 and results![canonicalReferenceCandidateOwner!].kind != 11) -> while {
                         results![canonicalReferenceCandidateOwner!].parent => canonicalReferenceCandidateOwner!

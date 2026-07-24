@@ -1,0 +1,276 @@
+namespace sollang.compiler.ir.stream
+
+import sollang.compiler.ir.typed as typed
+import sollang.compiler.semantic.context as semanticContext
+import syntax.generated.slg as grammar
+
+# Stream lowering keeps a separate continuation plan instead of pretending that
+# every pipeline stage is an ordinary eager call. The plan is flat and
+# index-based so native and browser backends consume the same representation.
+public struct StreamStage {
+    callIr: Int
+    callAst: Int
+    targetModule: Int
+    targetSymbol: Int
+    source0: Int
+    source1: Int
+    argument0: Int
+    argument1: Int
+    callbackStart: Int
+    callbackEnd: Int
+    callbackRoot: Int
+    roleToken: Int
+    flags: Int
+}
+
+public struct StreamPipeline {
+    terminalIr: Int
+    source0: Int
+    source1: Int
+    stageStart: Int
+    stageCount: Int
+    callbackStart: Int
+    callbackEnd: Int
+    callbackRoot: Int
+    roleToken: Int
+    status: Int
+}
+
+public struct StreamPlan {
+    pipelines: [StreamPipeline; ~]
+    stages: [StreamStage; ~]
+}
+
+struct StageParts {
+    source0: Int
+    source1: Int
+    argument0: Int
+    argument1: Int
+    callbackStart: Int
+    callbackEnd: Int
+    callbackRoot: Int
+    roleToken: Int
+}
+
+isStreamFunction node: typed.TypedIrNode, prepared: semanticContext.SemanticSnapshot -> Bool {
+    false => result!
+    (node.kind == 6 and node.targetModule >= 0 and node.targetModule < (prepared.package.ranges -> len) and node.symbol >= 0) -> if {
+        prepared.package.ranges[node.targetModule] => targetRange
+        node.symbol < targetRange.symbolCount -> if {
+            prepared.package.symbols[targetRange.symbolStart + node.symbol] => target
+            (target.kind == 7 and (target.flags / 64) % 2 == 1) -> if {
+                true => result!
+            }
+        }
+    }
+    result!
+}
+
+streamSliceKind node: typed.TypedIrNode, prepared: semanticContext.SemanticSnapshot -> Int {
+    0 => kind!
+    (node.kind == 6 and node.sourceModule >= 0 and node.sourceModule < (prepared.package.ranges -> len) and node.astNode >= 0) -> if {
+        prepared.package.ranges[node.sourceModule] => sourceRange
+        node.astNode < sourceRange.astCount -> if {
+            prepared.package.nodes[sourceRange.astStart + node.astNode] => callAst
+            (callAst.kind == 48 and callAst.payloadToken >= 0) -> if {
+                prepared.package.tokens[sourceRange.tokenStart + callAst.payloadToken] => target
+                target.span.length == UIntSize(4) -> if {
+                    ((prepared.package.sources[node.sourceModule] -> byte(target.span.start)) == UInt8(116) and (prepared.package.sources[node.sourceModule] -> byte(target.span.start + UIntSize(1))) == UInt8(97) and (prepared.package.sources[node.sourceModule] -> byte(target.span.start + UIntSize(2))) == UInt8(107) and (prepared.package.sources[node.sourceModule] -> byte(target.span.start + UIntSize(3))) == UInt8(101)) -> if {
+                        1 => kind!
+                    }
+                    ((prepared.package.sources[node.sourceModule] -> byte(target.span.start)) == UInt8(115) and (prepared.package.sources[node.sourceModule] -> byte(target.span.start + UIntSize(1))) == UInt8(107) and (prepared.package.sources[node.sourceModule] -> byte(target.span.start + UIntSize(2))) == UInt8(105) and (prepared.package.sources[node.sourceModule] -> byte(target.span.start + UIntSize(3))) == UInt8(112)) -> if {
+                        2 => kind!
+                    }
+                }
+                target.span.length == UIntSize(7) -> if {
+                    ((prepared.package.sources[node.sourceModule] -> byte(target.span.start)) == UInt8(102) and (prepared.package.sources[node.sourceModule] -> byte(target.span.start + UIntSize(1))) == UInt8(108) and (prepared.package.sources[node.sourceModule] -> byte(target.span.start + UIntSize(2))) == UInt8(97) and (prepared.package.sources[node.sourceModule] -> byte(target.span.start + UIntSize(3))) == UInt8(116) and (prepared.package.sources[node.sourceModule] -> byte(target.span.start + UIntSize(4))) == UInt8(77) and (prepared.package.sources[node.sourceModule] -> byte(target.span.start + UIntSize(5))) == UInt8(97) and (prepared.package.sources[node.sourceModule] -> byte(target.span.start + UIntSize(6))) == UInt8(112)) -> if {
+                        3 => kind!
+                    }
+                }
+                target.span.length == UIntSize(10) -> if {
+                    ((prepared.package.sources[node.sourceModule] -> byte(target.span.start)) == UInt8(98) and (prepared.package.sources[node.sourceModule] -> byte(target.span.start + UIntSize(1))) == UInt8(101) and (prepared.package.sources[node.sourceModule] -> byte(target.span.start + UIntSize(2))) == UInt8(102) and (prepared.package.sources[node.sourceModule] -> byte(target.span.start + UIntSize(3))) == UInt8(111) and (prepared.package.sources[node.sourceModule] -> byte(target.span.start + UIntSize(4))) == UInt8(114) and (prepared.package.sources[node.sourceModule] -> byte(target.span.start + UIntSize(5))) == UInt8(101) and (prepared.package.sources[node.sourceModule] -> byte(target.span.start + UIntSize(6))) == UInt8(69) and (prepared.package.sources[node.sourceModule] -> byte(target.span.start + UIntSize(7))) == UInt8(97) and (prepared.package.sources[node.sourceModule] -> byte(target.span.start + UIntSize(8))) == UInt8(99) and (prepared.package.sources[node.sourceModule] -> byte(target.span.start + UIntSize(9))) == UInt8(104)) -> if {
+                        4 => kind!
+                    }
+                }
+                target.span.length == UIntSize(9) -> if {
+                    ((prepared.package.sources[node.sourceModule] -> byte(target.span.start)) == UInt8(97) and (prepared.package.sources[node.sourceModule] -> byte(target.span.start + UIntSize(1))) == UInt8(102) and (prepared.package.sources[node.sourceModule] -> byte(target.span.start + UIntSize(2))) == UInt8(116) and (prepared.package.sources[node.sourceModule] -> byte(target.span.start + UIntSize(3))) == UInt8(101) and (prepared.package.sources[node.sourceModule] -> byte(target.span.start + UIntSize(4))) == UInt8(114) and (prepared.package.sources[node.sourceModule] -> byte(target.span.start + UIntSize(5))) == UInt8(69) and (prepared.package.sources[node.sourceModule] -> byte(target.span.start + UIntSize(6))) == UInt8(97) and (prepared.package.sources[node.sourceModule] -> byte(target.span.start + UIntSize(7))) == UInt8(99) and (prepared.package.sources[node.sourceModule] -> byte(target.span.start + UIntSize(8))) == UInt8(104)) -> if {
+                        5 => kind!
+                    }
+                }
+            }
+        }
+    }
+    kind!
+}
+
+isStreamStage node: typed.TypedIrNode, prepared: semanticContext.SemanticSnapshot -> Bool {
+    (node -> isStreamFunction(prepared)) or ((node -> streamSliceKind(prepared)) > 0)
+}
+
+stageParts prepared: semanticContext.SemanticSnapshot, ir: [typed.TypedIrNode; ~], callIndex: Int -> StageParts {
+    ir[callIndex] => call
+    prepared.package.ranges[call.sourceModule] => sourceRange
+    prepared.package.nodes[sourceRange.astStart + call.astNode] => callAst
+    prepared.package.tokens[sourceRange.tokenStart + callAst.payloadToken] => targetToken
+    callAst.start + callAst.length => bodyStart!
+    false => hasBody!
+    callAst.firstToken => tokenIndex!
+    callAst.firstToken + callAst.tokenCount => tokenEnd
+    tokenIndex! < tokenEnd -> while {
+        prepared.package.tokens[sourceRange.tokenStart + tokenIndex!] => token
+        (not hasBody! and token.kind == grammar.tokenIdLeftBrace and token.span.start > targetToken.span.start) -> if {
+            token.span.start => bodyStart!
+            true => hasBody!
+        }
+        tokenIndex! + 1 => tokenIndex!
+    }
+
+    -1 => source0!
+    -1 => source1!
+    -1 => argument0!
+    -1 => argument1!
+    -1 => callbackStart!
+    -1 => callbackEnd!
+    -1 => callbackRoot!
+    UIntSize(0) => source0Start!
+    UIntSize(0) => source1Start!
+    UIntSize(0) => argument0Start!
+    UIntSize(0) => argument1Start!
+    UIntSize(0) => callbackRootStart!
+    0 => childIndex!
+    childIndex! < (ir -> len) -> while {
+        ir[childIndex!] => child
+        (hasBody! and child.sourceModule == call.sourceModule) -> if {
+            prepared.package.nodes[sourceRange.astStart + child.astNode] => bodyCandidateAst
+            (bodyCandidateAst.start > bodyStart! and bodyCandidateAst.start < callAst.start + callAst.length) -> if {
+                bodyCandidateAst.parent => bodyAncestor!
+                false => bodyBelongs!
+                (bodyAncestor! >= 0 and not bodyBelongs!) -> while {
+                    bodyAncestor! == call.astNode -> if {
+                        true => bodyBelongs!
+                    } else {
+                        prepared.package.nodes[sourceRange.astStart + bodyAncestor!].parent => bodyAncestor!
+                    }
+                }
+                bodyBelongs! -> if {
+                    (callbackStart! < 0 or Int(childIndex!) < callbackStart!) -> if { Int(childIndex!) => callbackStart! }
+                    (callbackEnd! < 0 or Int(childIndex!) > callbackEnd!) -> if { Int(childIndex!) => callbackEnd! }
+                }
+            }
+        }
+        child.parent == callIndex -> if {
+            prepared.package.nodes[sourceRange.astStart + child.astNode] => childAst
+            childAst.start < targetToken.span.start -> if {
+                (source0! < 0 or childAst.start < source0Start!) -> if {
+                    source0! => source1!
+                    source0Start! => source1Start!
+                    childIndex! => source0!
+                    childAst.start => source0Start!
+                } else {
+                    (source1! < 0 or childAst.start < source1Start!) -> if {
+                        childIndex! => source1!
+                        childAst.start => source1Start!
+                    }
+                }
+            } else {
+                (hasBody! and childAst.start > bodyStart!) -> if {
+                    (callbackRoot! < 0 or childAst.start > callbackRootStart!) -> if {
+                        childIndex! => callbackRoot!
+                        childAst.start => callbackRootStart!
+                    }
+                } else {
+                    childAst.start > targetToken.span.start -> if {
+                        (argument0! < 0 or childAst.start < argument0Start!) -> if {
+                            argument0! => argument1!
+                            argument0Start! => argument1Start!
+                            childIndex! => argument0!
+                            childAst.start => argument0Start!
+                        } else {
+                            (argument1! < 0 or childAst.start < argument1Start!) -> if {
+                                childIndex! => argument1!
+                                childAst.start => argument1Start!
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        childIndex! + 1 => childIndex!
+    }
+    StageParts {
+        source0: source0!
+        source1: source1!
+        argument0: argument0!
+        argument1: argument1!
+        callbackStart: callbackStart!
+        callbackEnd: callbackEnd!
+        callbackRoot: callbackRoot!
+        roleToken: callAst.tertiaryToken
+    }
+}
+
+public build prepared: semanticContext.SemanticSnapshot, ir: [typed.TypedIrNode; ~] -> StreamPlan {
+    [StreamPipeline; ~] => pipelines!
+    [StreamStage; ~] => stages!
+    0 => terminalIndex!
+    terminalIndex! < (ir -> len) -> while {
+        ir[terminalIndex!] => terminal
+        (terminal.kind == 6 and terminal.opcode == -208 and terminal.operand0 >= 0 and (ir[terminal.operand0] -> isStreamStage(prepared))) -> if {
+            [Int; ~] => reverseCalls!
+            terminal.operand0 => stageIndex!
+            (stageIndex! >= 0 and (ir[stageIndex!] -> isStreamStage(prepared))) -> while {
+                reverseCalls! -> push(stageIndex!)
+                ir[stageIndex!].operand0 => stageIndex!
+            }
+            stages! -> len => stageStart
+            0 => stageCount!
+            Int(reverseCalls! -> len) => reverseIndex!
+            reverseIndex! > 0 -> while {
+                reverseIndex! - 1 => reverseIndex!
+                reverseCalls![reverseIndex!] => callIndex
+                prepared -> stageParts(ir, callIndex) => parts
+                ir[callIndex] => call
+                call -> streamSliceKind(prepared) => sliceKind
+                stages! -> push(StreamStage {
+                    callIr: callIndex
+                    callAst: call.astNode
+                    targetModule: call.targetModule
+                    targetSymbol: call.symbol
+                    source0: parts.source0
+                    source1: parts.source1
+                    argument0: parts.argument0
+                    argument1: parts.argument1
+                    callbackStart: parts.callbackStart
+                    callbackEnd: parts.callbackEnd
+                    callbackRoot: parts.callbackRoot
+                    roleToken: parts.roleToken
+                    flags: sliceKind
+                })
+                stageCount! + 1 => stageCount!
+            }
+            prepared -> stageParts(ir, terminalIndex!) => terminalParts
+            -1 => pipelineSource0!
+            -1 => pipelineSource1!
+            (stages! -> len) > stageStart -> if {
+                stages![stageStart] => firstStage
+                firstStage.source0 => pipelineSource0!
+                firstStage.source1 => pipelineSource1!
+            }
+            pipelines! -> push(StreamPipeline {
+                terminalIr: terminalIndex!
+                source0: pipelineSource0!
+                source1: pipelineSource1!
+                stageStart: Int(stageStart)
+                stageCount: stageCount!
+                callbackStart: terminalParts.callbackStart
+                callbackEnd: terminalParts.callbackEnd
+                callbackRoot: terminalParts.callbackRoot
+                roleToken: terminalParts.roleToken
+                status: 0
+            })
+        }
+        terminalIndex! + 1 => terminalIndex!
+    }
+    StreamPlan { pipelines: pipelines!, stages: stages! } => plan!
+    plan!
+}

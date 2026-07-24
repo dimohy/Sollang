@@ -15,6 +15,7 @@ internal sealed class WasmBrowserLinker(LlvmToolchain toolchain)
             "-target",
             "wasm32-unknown-unknown-wasm",
             optimizationLevel ?? "-Oz",
+            "-g",
             "-fno-addrsig",
             "-c",
             llPath,
@@ -26,10 +27,10 @@ internal sealed class WasmBrowserLinker(LlvmToolchain toolchain)
         [
             "--no-entry",
             "--export=sollang_start",
+            "--export=sollang_alloc",
             "--export-memory",
             "--allow-undefined",
             "--gc-sections",
-            "--strip-all",
             objectPath,
             "-o",
             outputPath
