@@ -65,7 +65,43 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> [QualifiedResolution
                         currentModuleSearch! + 1 => currentModuleSearch!
                     }
                     (currentModule! >= 0 and previousIdentifier! >= 0) -> if {
+                        0 => nativeFunctionSearch!
+                        nativeFunctionSearch! < sourceRange.symbolCount -> while {
+                            package.symbols[sourceRange.symbolStart + nativeFunctionSearch!] => nativeFunction
+                            (nativeFunction.kind == 7 and nativeFunction.flags / 128 % 2 == 1 and nativeFunction.astNode >= 0) -> if {
+                                package.nodes[sourceRange.astStart + nativeFunction.astNode] => nativeFunctionAst
+                                nativeFunctionAst.parent >= 0 -> if {
+                                    package.nodes[sourceRange.astStart + nativeFunctionAst.parent] => nativeLibraryAst
+                                    (nativeLibraryAst.kind == 65 and nativeLibraryAst.payloadToken >= 0 and nativeFunction.nameToken >= 0) -> if {
+                                        package.tokens[sourceRange.tokenStart + nativeLibraryAst.payloadToken] => nativeAliasName
+                                        package.tokens[sourceRange.tokenStart + firstIdentifier!] => nativeAliasReference
+                                        nativeAliasName.span.length == nativeAliasReference.span.length => nativeAliasEqual!
+                                        UIntSize(0) => nativeAliasByte!
+                                        (nativeAliasEqual! and nativeAliasByte! < nativeAliasName.span.length) -> while {
+                                            (source -> byte(nativeAliasName.span.start + nativeAliasByte!)) != (source -> byte(nativeAliasReference.span.start + nativeAliasByte!)) -> if { false => nativeAliasEqual! }
+                                            nativeAliasByte! + UIntSize(1) => nativeAliasByte!
+                                        }
+                                        package.tokens[sourceRange.tokenStart + nativeFunction.nameToken] => nativeFunctionName
+                                        package.tokens[sourceRange.tokenStart + lastIdentifier!] => nativeFunctionReference
+                                        nativeFunctionName.span.length == nativeFunctionReference.span.length => nativeFunctionEqual!
+                                        UIntSize(0) => nativeFunctionByte!
+                                        (nativeFunctionEqual! and nativeFunctionByte! < nativeFunctionName.span.length) -> while {
+                                            (source -> byte(nativeFunctionName.span.start + nativeFunctionByte!)) != (source -> byte(nativeFunctionReference.span.start + nativeFunctionByte!)) -> if { false => nativeFunctionEqual! }
+                                            nativeFunctionByte! + UIntSize(1) => nativeFunctionByte!
+                                        }
+                                        (nativeAliasEqual! and nativeFunctionEqual!) -> if {
+                                            QualifiedResolution { sourceModule: sourceIndex!, pathAst: pathAstIndex!, targetModule: currentModule!, targetSymbol: nativeFunctionSearch!, status: 0 } => nativeResult
+                                            results! -> push(nativeResult)
+                                            true => localVariantResolved!
+                                            sourceRange.symbolCount => nativeFunctionSearch!
+                                        }
+                                    }
+                                }
+                            }
+                            nativeFunctionSearch! + 1 => nativeFunctionSearch!
+                        }
                         0 => localEnumSearch!
+                        localVariantResolved! -> if { sourceRange.symbolCount => localEnumSearch! }
                         localEnumSearch! < sourceRange.symbolCount -> while {
                             package.symbols[sourceRange.symbolStart + localEnumSearch!] => localEnum
                             (localEnum.kind == 4 and localEnum.parent < 0) -> if {

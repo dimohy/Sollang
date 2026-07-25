@@ -29,6 +29,7 @@ internal sealed class WslLinuxLinker(LlvmToolchain toolchain)
                 "--exec",
                 "cc",
                 ToWslPath(objectPath),
+                "-ldl",
                 "-Wl,--gc-sections",
                 "-s",
                 "-o",
@@ -48,6 +49,7 @@ internal sealed class WslLinuxLinker(LlvmToolchain toolchain)
             Run("cc",
             [
                 objectPath,
+                "-ldl",
                 "-Wl,--gc-sections",
                 "-s",
                 "-o",

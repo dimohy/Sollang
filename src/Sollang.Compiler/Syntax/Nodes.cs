@@ -88,7 +88,9 @@ internal sealed record FunctionDeclaration(
     string? BlockResultType = null,
     IReadOnlyList<FunctionParameterDeclaration>? AdditionalParameters = null,
     IReadOnlyList<FunctionParameterDeclaration>? AdditionalBlockParameters = null,
-    string? StreamElementType = null);
+    string? StreamElementType = null,
+    string? NativeLibrary = null,
+    string? NativeSymbol = null);
 
 internal static class InferredFunctionType
 {

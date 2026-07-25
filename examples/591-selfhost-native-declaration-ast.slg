@@ -1,0 +1,37 @@
+import sollang.compiler.ast as ast
+import sollang.compiler.lexer as lexer
+
+main {
+    """
+    native fixture from "artifacts/native-interop/native_fixture" {
+        add left: Int32, right: Int32 -> Int32 as "native_add"
+        multiply left: Int64, right: Int64 -> Int64 as "native_mul_i64"
+    }
+
+    main {
+    }
+    """ => source
+    source -> ast.lower => nodes!
+    source -> lexer.lex => tokens!
+    nodes! -> each node {
+        node.kind == 65 -> if {
+            tokens![node.payloadToken] => aliasToken
+            tokens![node.secondaryToken] => libraryToken
+            source -> slice(aliasToken.span.start, aliasToken.span.length) => alias
+            source -> slice(libraryToken.span.start, libraryToken.span.length) => library
+            "native = $alias,$library" -> println
+        }
+        (node.kind == 7 and node.flags / 128 % 2 == 1) -> if {
+            tokens![node.payloadToken] => nameToken
+            tokens![node.secondaryToken] => inputToken
+            source -> slice(nameToken.span.start, nameToken.span.length) => name
+            source -> slice(inputToken.span.start, inputToken.span.length) => input
+            "function = $name,$input,$(node.flags)" -> println
+        }
+        node.kind == 12 -> if {
+            tokens![node.payloadToken] => typeToken
+            source -> slice(typeToken.span.start, typeToken.span.length) => typeName
+            "type = $(node.parent),$typeName" -> println
+        }
+    }
+}

@@ -85,7 +85,9 @@ internal sealed record BoundFunction(
     IReadOnlyList<BoundFunctionParameter>? AdditionalParameters = null,
     IReadOnlyList<BoundFunctionParameter>? AdditionalBlockParameters = null,
     BoundType? StreamElementType = null,
-    string? StreamElementTypeTemplate = null);
+    string? StreamElementTypeTemplate = null,
+    string? NativeLibrary = null,
+    string? NativeSymbol = null);
 
 internal sealed record BoundFunctionParameter(
     string Name,
@@ -167,7 +169,8 @@ internal enum BoundFunctionKind
     RuntimeSyncFile,
     RuntimeAtomicReplaceFile,
     RuntimeRangeStream,
-    RuntimeMouseEvents
+    RuntimeMouseEvents,
+    Native
 }
 
 internal enum TypeId

@@ -170,6 +170,9 @@ internal sealed class WindowsLinker(LlvmToolchain toolchain)
             GetEnvironmentVariableW
             GetLastError
             SetLastError
+            LoadLibraryA
+            GetProcAddress
+            FreeLibrary
             FindFirstFileA
             FindNextFileA
             FindClose

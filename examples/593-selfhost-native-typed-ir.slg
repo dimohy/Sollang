@@ -1,0 +1,26 @@
+import sollang.compiler.ir.typed as typedIr
+
+main {
+    [
+        """
+        native fixture from "artifacts/native-interop/native_fixture" {
+            add left: Int32, right: Int32 -> Int32 as "native_add"
+            multiply left: Int64, right: Int64 -> Int64 as "native_mul_i64"
+            hypotSquared left: Float64, right: Float64 -> Float64 as "native_hypot_squared"
+        }
+
+        main {
+            fixture.add(20, 22)
+            fixture.multiply(6, 7)
+            fixture.hypotSquared(3, 4)
+        }
+        """,
+        ~
+    ] => sources!
+    sources! -> typedIr.lower => ir!
+    ir! -> each node {
+        (node.kind == 0 or node.kind == 10 or node.kind == 6 or node.kind == 3) -> if {
+            "ir = $(node.kind),$(node.targetModule),$(node.symbol),$(node.typeSymbol),$(node.typeId),$(node.flags),$(node.operand0),$(node.operand1),$(node.nextOperand)" -> println
+        }
+    }
+}

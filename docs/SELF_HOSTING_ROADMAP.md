@@ -3375,3 +3375,37 @@ Research basis:
 - [Serde `Serialize` implementation](https://serde.rs/impl-serialize.html)
 - [Serde custom serialization](https://serde.rs/custom-serialization.html)
 - [Swift encoding and decoding custom types](https://developer.apple.com/documentation/Foundation/encoding-and-decoding-custom-types)
+
+## D255/examples 590-596 - Grouped Native C ABI
+
+Sollang now groups C ABI declarations behind one readable library alias:
+`native fixture from "path" { ... }`. Fixed-width integer and floating-point
+parameters and results cross the boundary without hidden allocation or copies.
+The native declaration supplies the expected type for bare numeric literals, so
+`fixture.multiply(6, 7)` lowers directly to `i64 6, i64 7`, while
+`fixture.hypotSquared(3, 4)` lowers to `double 3.0, double 4.0`. No wrapper
+conversion node is emitted.
+
+Windows binds each DLL and symbol once with `LoadLibraryA`/`GetProcAddress`;
+Linux uses `dlopen`/`dlsym`. Calls load one cached function pointer and invoke it
+indirectly. Cleanup closes each library once. Examples 590-593 fix parsing,
+qualified resolution, typed IR, and execution. Example 594 rejects native
+libraries on `wasm32-browser`, and example 595 proves the same lowering inside
+user functions and conditional regions. Example 596 fixes self-host diagnostic
+parity for unsafe types such as `Text`. `scripts/verify-native-interop.ps1`
+executes both Stage1 and Stage2 products against a real C DLL and `.so`.
+
+The complete suites pass **793/793** on Windows and **793/793** on Linux.
+Windows Stage2 passes **7/7** at **15,881,018 LLVM bytes**, and Stage3 reaches
+the identical fixed point at normalized SHA-256
+`E518A1898A6F8D787383B51C499BEFE9032B50B6906EFDA9B4A6C4A385E40735`.
+Linux Stage2 passes **6/6** at **15,872,611 LLVM bytes**, and Linux Stage3
+reaches the identical fixed point at
+`228D49B12310925B365A1723C5D370B49CE617A6DD496B333EDE5647CB2C362D`.
+The Stage3 cadence therefore resets to **0/10**.
+
+The compiler benchmark gate remains within its 5% warm-median threshold.
+Windows records 65.460 ms and 67.426 ms for examples 577 and 582; Linux records
+72.480 ms and 75.060 ms. This checkpoint completes the scalar C ABI vertical
+slice. Stable structures and pointers, Sollang library exports, COM, and the
+Clang-generated C++ shim remain on the separate 0.3 interoperability roadmap.

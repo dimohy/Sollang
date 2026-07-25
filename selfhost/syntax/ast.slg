@@ -247,8 +247,9 @@ expandStreamPipelines tokens: [syntax.SyntaxToken; ~], nodes: move [AstNode; ~] 
 # 55 generic enum constructor, 56 subject when target, 57 standalone when,
 # 58 when arm, 59 enum pattern, 60 additional function input,
 # 61 stream state binding, 62 stream stop statement, 63 range expression,
-# 64 fold flow target.
-# Function flags: 1 move input, 2 mutable input, 4 public, 8 async, 64 stream.
+# 64 fold flow target, 65 native library declaration.
+# Function flags: 1 move input, 2 mutable input, 4 public, 8 async, 64 stream,
+# 128 native ABI declaration.
 # Keyword operator codes use the same
 # -(keywordIndex + 1) representation as syntax diagnostics.
 classifyRule rule: Int -> Int {
@@ -261,6 +262,8 @@ classifyRule rule: Int -> Int {
     rule == grammar.ruleIdTraitDeclaration -> if { 5 => kind! }
     rule == grammar.ruleIdImplDeclaration -> if { 6 => kind! }
     rule == grammar.ruleIdFunctionDeclaration -> if { 7 => kind! }
+    rule == grammar.ruleIdNativeLibraryDeclaration -> if { 65 => kind! }
+    rule == grammar.ruleIdNativeFunctionDeclaration -> if { 7 => kind! }
     rule == grammar.ruleIdMainBlock -> if { 8 => kind! }
     rule == grammar.ruleIdBindingStatement -> if { 9 => kind! }
     rule == grammar.ruleIdFlowExpression -> if { 10 => kind! }
@@ -812,6 +815,35 @@ lowerFrom request: LowerRequest -> [AstNode; ~] {
                 parameterTokenIndex! + 1 => parameterTokenIndex!
             }
         }
+        declaration!.kind == 65 -> if {
+            -1 => nativeAliasToken!
+            -1 => nativeLibraryToken!
+            false => nativeKeywordSeen!
+            declaration!.firstToken => nativeHeaderToken!
+            declaration!.firstToken + declaration!.tokenCount => nativeHeaderEnd
+            nativeHeaderToken! < nativeHeaderEnd -> while {
+                tokens![nativeHeaderToken!].kind == grammar.tokenIdLeftBrace -> if {
+                    nativeHeaderEnd => nativeHeaderToken!
+                } else {
+                    (tokens![nativeHeaderToken!].kind == grammar.tokenIdIdentifier and nativeAliasToken! < 0) -> if {
+                        nativeKeywordSeen! -> if {
+                            nativeHeaderToken! => nativeAliasToken!
+                        } else {
+                            true => nativeKeywordSeen!
+                        }
+                    }
+                    (tokens![nativeHeaderToken!].kind == grammar.tokenIdString and nativeLibraryToken! < 0) -> if {
+                        nativeHeaderToken! => nativeLibraryToken!
+                    }
+                    nativeHeaderToken! + 1 => nativeHeaderToken!
+                }
+            }
+            nativeAliasToken! => declaration!.payloadToken
+            nativeLibraryToken! => declaration!.secondaryToken
+        }
+        declaration!.cstRuleId == grammar.ruleIdNativeFunctionDeclaration -> if {
+            declaration!.flags + 128 => declaration!.flags
+        }
         (declaration!.kind == 1 or declaration!.kind == 2 or declaration!.kind == 6 or declaration!.kind == 7) -> if {
             false => pathPayloadFound!
             0 => childIndex!
@@ -1011,7 +1043,7 @@ lowerFrom request: LowerRequest -> [AstNode; ~] {
                 }
             }
         }
-        (declaration!.kind == 7 or declaration!.kind == 31) -> if {
+        ((declaration!.kind == 7 and declaration!.flags / 128 % 2 == 0) or declaration!.kind == 31) -> if {
             declaration!.firstToken => blockHeaderToken!
             declaration!.firstToken + declaration!.tokenCount => blockHeaderEnd!
             false => blockKeywordFound!

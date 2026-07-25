@@ -989,7 +989,10 @@ internal sealed partial class SemanticCompiler
             AdditionalParameters: additionalParameters,
             AdditionalBlockParameters: additionalBlockParameters,
             StreamElementType: streamElementType,
-            StreamElementTypeTemplate: streamElementTypeTemplate);
+            StreamElementTypeTemplate: streamElementTypeTemplate,
+            NativeLibrary: function.NativeLibrary,
+            NativeSymbol: function.NativeSymbol
+                ?? function.Name[(function.Name.LastIndexOf('.') + 1)..]);
     }
 
     private IReadOnlySet<string> BindFunctionEffects(FunctionDeclaration function)
@@ -1168,6 +1171,59 @@ internal sealed partial class SemanticCompiler
             }
         }
 
+        if (function.NativeLibrary is not null)
+        {
+            if (isLocal)
+            {
+                throw Error(function.Line, function.Column, "native functions cannot be local");
+            }
+            if (function.NativeLibrary.Length == 0)
+            {
+                throw Error(function.Line, function.Column, "native library name must not be empty");
+            }
+            if (function.IsIntrinsic
+                || function.Body is not null
+                || function.BlockBody.Count > 0
+                || function.BlockInputName is not null
+                || function.GenericParameterName is not null
+                || function.IsAsync
+                || function.StreamElementType is not null)
+            {
+                throw Error(
+                    function.Line,
+                    function.Column,
+                    "native functions must be non-generic synchronous declarations without a body or block");
+            }
+            ValidateNativeAbiType(function.InputType, "input", function.Line, function.Column);
+            foreach (var parameter in function.AdditionalParameters ?? [])
+            {
+                ValidateNativeAbiType(
+                    parameter.TypeName,
+                    $"parameter '{parameter.Name}'",
+                    parameter.Line,
+                    parameter.Column);
+            }
+            ValidateNativeAbiType(function.ReturnType, "result", function.Line, function.Column);
+        }
+
+    }
+
+    private void ValidateNativeAbiType(string? typeName, string role, int line, int column)
+    {
+        if (typeName is null || typeName is
+            "Unit" or
+            "Int8" or "Int16" or "Int32" or "Int64" or
+            "UInt8" or "UInt16" or "UInt32" or "UInt64" or
+            "Float32" or "Float64")
+        {
+            return;
+        }
+
+        throw Error(
+            line,
+            column,
+            $"native function {role} type '{typeName}' is not ABI-safe; "
+            + "use a fixed-width scalar type in the first native ABI slice");
     }
 
     private IReadOnlyDictionary<string, BoundFunction> BindLocalFunctions(FunctionDeclaration owner)
@@ -2006,6 +2062,11 @@ internal sealed partial class SemanticCompiler
         BoundType returnType,
         bool isLocal)
     {
+        if (function.NativeLibrary is not null)
+        {
+            return BoundFunctionKind.Native;
+        }
+
         if (!function.IsIntrinsic)
         {
             return function.BlockInputName is null
@@ -6701,6 +6762,7 @@ internal sealed partial class SemanticCompiler
                         currentType = AsyncCallType(function);
                         continue;
                     case BoundFunctionKind.User:
+                    case BoundFunctionKind.Native:
                         if (function.GenericParameterName is not null
                             && function.SpecializedType is null
                             && function.SpecializedValue is null)
@@ -7935,6 +7997,7 @@ internal sealed partial class SemanticCompiler
                 return InferGenericCallExpression(
                     expression, function, functions, bindings, allowReadIntCall);
             case BoundFunctionKind.User:
+            case BoundFunctionKind.Native:
                 if (function.GenericParameterName is not null
                     && function.SpecializedType is null
                     && function.SpecializedValue is null)
@@ -8504,9 +8567,16 @@ internal sealed partial class SemanticCompiler
             return;
         }
         var text = negative ? "-" + number.Text : number.Text;
-        if (IsIntegerType(targetType) && !number.Text.Contains('.', StringComparison.Ordinal)
-            && !number.Text.Contains('e', StringComparison.OrdinalIgnoreCase))
+        if (IsIntegerType(targetType))
         {
+            if (number.Text.Contains('.', StringComparison.Ordinal)
+                || number.Text.Contains('e', StringComparison.OrdinalIgnoreCase))
+            {
+                throw Error(
+                    argument.Line,
+                    argument.Column,
+                    $"numeric literal {text} is not an integer for {targetName}");
+            }
             var value = BigInteger.Parse(text, CultureInfo.InvariantCulture);
             var bits = targetType switch
             {
@@ -8773,8 +8843,8 @@ internal sealed partial class SemanticCompiler
                 $"function '{path}' expects {1 + additionalParameters.Count} argument(s)");
         }
 
-        var argumentType = IsIntegerType(function.InputType.Value)
-            && IsIntegerLiteralExpression(expression.Arguments[0])
+        var argumentType = IsNumericType(function.InputType.Value)
+            && IsNumericLiteralExpression(expression.Arguments[0])
                 ? function.InputType.Value
                 : InferExpression(
                     expression.Arguments[0],
@@ -8786,7 +8856,7 @@ internal sealed partial class SemanticCompiler
                     allowOwnedElementBorrow:
                         function.InputOwnership == BoundFunctionInputOwnership.Default);
         if (argumentType == function.InputType.Value
-            && IsIntegerLiteralExpression(expression.Arguments[0]))
+            && IsNumericLiteralExpression(expression.Arguments[0]))
         {
             ValidateNumericLiteralConversion(
                 expression.Arguments[0],
@@ -8852,12 +8922,12 @@ internal sealed partial class SemanticCompiler
         {
             var parameter = parameters[index];
             var argument = arguments[index];
-            var actualType = IsIntegerType(parameter.Type) && IsIntegerLiteralExpression(argument)
+            var actualType = IsNumericType(parameter.Type) && IsNumericLiteralExpression(argument)
                 ? parameter.Type
                 : InferExpression(argument, functions, bindings, allowPrintCall: false,
                     allowReadIntCall, allowFlowBindingTarget: false,
                     allowOwnedElementBorrow: parameter.Ownership == BoundFunctionInputOwnership.Default);
-            if (actualType == parameter.Type && IsIntegerLiteralExpression(argument))
+            if (actualType == parameter.Type && IsNumericLiteralExpression(argument))
             {
                 ValidateNumericLiteralConversion(argument, parameter.Type, FormatType(parameter.Type));
             }
@@ -10212,6 +10282,9 @@ internal sealed partial class SemanticCompiler
             && !number.Text.Contains('e', StringComparison.OrdinalIgnoreCase),
         _ => false
     };
+
+    private static bool IsNumericLiteralExpression(Expression expression) => expression is
+        NumberExpression or NegateExpression { Value: NumberExpression };
 
     private void ValidateMouseEventCapacityLiteral(Expression expression)
     {

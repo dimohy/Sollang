@@ -407,13 +407,22 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
         (function.kind == 7 or function.kind == 31) -> if {
             frozenFunctionResultLegacyIndexByAst[sourceRange.astStart + function.astNode] => resultTypeIndex!
             frozenFunctionResultRootAstByAst[sourceRange.astStart + function.astNode] => resultRootAst!
-            resultTypeIndex! >= 0 -> if {
-                inferred[resultTypeIndex!] => resultType
-                resultType.origin => functionResultOrigin!
-                resultType.targetModule => functionResultModule!
-                resultType.targetSymbol => functionResultSymbol!
+            (function.flags / 128 % 2 == 1 and resultRootAst! < 0) -> if { function.astNode => resultRootAst! }
+            (resultTypeIndex! >= 0 or function.flags / 128 % 2 == 1) -> if {
+                -1 => functionResultOrigin!
+                -1 => functionResultModule!
+                -1 => functionResultSymbol!
+                function.astNode => resultTypeAstNode!
+                resultTypeIndex! >= 0 -> if {
+                    inferred[resultTypeIndex!] => resultType
+                    resultType.origin => functionResultOrigin!
+                    resultType.targetModule => functionResultModule!
+                    resultType.targetSymbol => functionResultSymbol!
+                    resultType.astNode => resultTypeAstNode!
+                }
                 function.typeNode => declaredResultAst!
                 function.secondaryTypeNode >= 0 -> if { function.secondaryTypeNode => declaredResultAst! }
+                (declaredResultAst! >= 0 and resultTypeIndex! < 0) -> if { declaredResultAst! => resultTypeAstNode! }
                 -1 => functionResultTypeId!
                 0 => functionResultReferenceSearch!
                 functionResultReferenceSearch! < (recursiveTypes.references -> len) -> while {
@@ -614,7 +623,7 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                     kind: 1
                     parent: functionIr!
                     sourceModule: sourceIndex!
-                    astNode: resultType.astNode
+                    astNode: resultTypeAstNode!
                     symbol: symbolIndex!
                     targetModule: -1
                     typeOrigin: functionResultOrigin!
@@ -5149,6 +5158,73 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
             canonicalTypeProjection! => results![canonicalTypeProjectionIndex!]
         }
         canonicalTypeProjectionIndex! + 1 => canonicalTypeProjectionIndex!
+    }
+    # Bare integer, decimal, and negated numeric literals at a native ABI call
+    # adopt the exact declared parameter type. This runs at the final IR
+    # boundary so later canonical projection cannot restore the default Int
+    # type. The source literal is reused directly: no conversion node, copy, or
+    # runtime work is introduced.
+    0 => contextualNativeCallIndex!
+    contextualNativeCallIndex! < (results! -> len) -> while {
+        results![contextualNativeCallIndex!] => contextualNativeCall
+        false => contextualNativeTarget!
+        (contextualNativeCall.kind == 6 and contextualNativeCall.targetModule >= 0 and contextualNativeCall.targetModule < (prepared.package.ranges -> len) and contextualNativeCall.symbol >= 0) -> if {
+            prepared.package.ranges[contextualNativeCall.targetModule] => contextualNativeTargetRange
+            contextualNativeCall.symbol < contextualNativeTargetRange.symbolCount -> if {
+                prepared.package.symbols[contextualNativeTargetRange.symbolStart + contextualNativeCall.symbol] => contextualNativeTargetSymbol
+                (contextualNativeTargetSymbol.kind == 7 and contextualNativeTargetSymbol.flags / 128 % 2 == 1) -> if { true => contextualNativeTarget! }
+            }
+        }
+        contextualNativeTarget! -> if {
+            -1 => contextualNativeFunctionIndex!
+            0 => contextualNativeFunctionSearch!
+            contextualNativeFunctionSearch! < (results! -> len) -> while {
+                results![contextualNativeFunctionSearch!] => contextualNativeFunctionCandidate
+                (contextualNativeFunctionCandidate.kind == 0 and contextualNativeFunctionCandidate.sourceModule == contextualNativeCall.targetModule and contextualNativeFunctionCandidate.symbol == contextualNativeCall.symbol and contextualNativeFunctionCandidate.flags / 128 % 2 == 1) -> if {
+                    contextualNativeFunctionSearch! => contextualNativeFunctionIndex!
+                }
+                contextualNativeFunctionSearch! + 1 => contextualNativeFunctionSearch!
+            }
+            contextualNativeFunctionIndex! >= 0 -> if {
+                results![contextualNativeFunctionIndex!] => contextualNativeFunction
+                contextualNativeCall.operand0 => contextualNativeArgumentIndex!
+                contextualNativeFunction.operand1 => contextualNativeParameterIndex!
+                true => contextualNativePrimaryParameter!
+                (contextualNativeArgumentIndex! >= 0 and contextualNativeParameterIndex! >= 0) -> while {
+                    results![contextualNativeArgumentIndex!] => contextualNativeArgument!
+                    results![contextualNativeParameterIndex!] => contextualNativeParameter
+                    contextualNativeArgumentIndex! => contextualNativeLiteralIndex!
+                    (contextualNativeArgument!.kind == 7 and contextualNativeArgument!.operand1 >= 0 and results![contextualNativeArgument!.operand1].kind == 3) -> if {
+                        contextualNativeArgument!.operand1 => contextualNativeLiteralIndex!
+                        contextualNativeParameter.typeOrigin => contextualNativeArgument!.typeOrigin
+                        contextualNativeParameter.typeModule => contextualNativeArgument!.typeModule
+                        contextualNativeParameter.typeSymbol => contextualNativeArgument!.typeSymbol
+                        contextualNativeParameter.typeId => contextualNativeArgument!.typeId
+                        contextualNativeParameter.typeKind => contextualNativeArgument!.typeKind
+                        contextualNativeParameter.typeFlags => contextualNativeArgument!.typeFlags
+                        contextualNativeArgument! => results![contextualNativeArgumentIndex!]
+                    }
+                    results![contextualNativeLiteralIndex!] => contextualNativeLiteral!
+                    contextualNativeLiteral!.kind == 3 -> if {
+                        contextualNativeParameter.typeOrigin => contextualNativeLiteral!.typeOrigin
+                        contextualNativeParameter.typeModule => contextualNativeLiteral!.typeModule
+                        contextualNativeParameter.typeSymbol => contextualNativeLiteral!.typeSymbol
+                        contextualNativeParameter.typeId => contextualNativeLiteral!.typeId
+                        contextualNativeParameter.typeKind => contextualNativeLiteral!.typeKind
+                        contextualNativeParameter.typeFlags => contextualNativeLiteral!.typeFlags
+                        contextualNativeLiteral! => results![contextualNativeLiteralIndex!]
+                    }
+                    contextualNativeArgument!.nextOperand => contextualNativeArgumentIndex!
+                    contextualNativePrimaryParameter! -> if {
+                        contextualNativeFunction.nextOperand => contextualNativeParameterIndex!
+                        false => contextualNativePrimaryParameter!
+                    } else {
+                        contextualNativeParameter.nextOperand => contextualNativeParameterIndex!
+                    }
+                }
+            }
+        }
+        contextualNativeCallIndex! + 1 => contextualNativeCallIndex!
     }
     results!
 }

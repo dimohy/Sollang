@@ -260,6 +260,7 @@ internal sealed partial class LlvmEmitter
                         current = EmitRuntimeSleepIntrinsic(function, current, path);
                         continue;
                     case BoundFunctionKind.User:
+                    case BoundFunctionKind.Native:
                         current = EmitFlowFunctionCall(function, current, expression.Source, target.Arguments);
                         continue;
                     default:

@@ -314,7 +314,7 @@ internal sealed partial class LlvmEmitter
             return RuntimeUnit.Instance;
         }
 
-        if (function.Kind != BoundFunctionKind.User)
+        if (function.Kind is not (BoundFunctionKind.User or BoundFunctionKind.Native))
         {
             throw new SollangException($"unsupported runtime function kind '{function.Kind}'");
         }
@@ -488,6 +488,16 @@ internal sealed partial class LlvmEmitter
         {
             return new RuntimeInt(expectedType, integerLiteral);
         }
+        if (IsFloatType(expectedType)
+            && TryGetNumericLiteralText(expression, out var floatingLiteral))
+        {
+            if (!floatingLiteral.Contains('.', StringComparison.Ordinal)
+                && !floatingLiteral.Contains('e', StringComparison.OrdinalIgnoreCase))
+            {
+                floatingLiteral += ".0";
+            }
+            return new RuntimeFloat(expectedType, floatingLiteral);
+        }
 
         return EmitExpression(expression);
     }
@@ -584,6 +594,22 @@ internal sealed partial class LlvmEmitter
             case NegateExpression { Value: NumberExpression number }
                 when !number.Text.Contains('.', StringComparison.Ordinal)
                     && !number.Text.Contains('e', StringComparison.OrdinalIgnoreCase):
+                text = "-" + number.Text;
+                return true;
+            default:
+                text = string.Empty;
+                return false;
+        }
+    }
+
+    private static bool TryGetNumericLiteralText(Expression expression, out string text)
+    {
+        switch (expression)
+        {
+            case NumberExpression number:
+                text = number.Text;
+                return true;
+            case NegateExpression { Value: NumberExpression number }:
                 text = "-" + number.Text;
                 return true;
             default:
@@ -813,6 +839,11 @@ internal sealed partial class LlvmEmitter
         RuntimeValue? argument,
         IReadOnlyList<RuntimeValue>? additionalArguments = null)
     {
+        if (function.Kind == BoundFunctionKind.Native)
+        {
+            return EmitNativeFunctionCall(function, argument, additionalArguments);
+        }
+
         if (function.Kind is BoundFunctionKind.RuntimePrint or BoundFunctionKind.RuntimePrintLine)
         {
             if (argument is null)
@@ -1086,7 +1117,7 @@ internal sealed partial class LlvmEmitter
             return EmitRuntimeIntIntrinsic(function, argument, function.Name);
         }
 
-        if (function.Kind != BoundFunctionKind.User)
+        if (function.Kind is not (BoundFunctionKind.User or BoundFunctionKind.Native))
         {
             throw new SollangException($"function '{function.Name}' does not produce a runtime value");
         }

@@ -777,6 +777,68 @@ emitCore context: EmitContext -> Unit uses Console {
     functionEnd functionIndex: Int -> Int {
         frozenFunctionEnds[functionIndex]
     }
+    isNativeFunction node: typedIr.TypedIrNode -> Bool {
+        node.kind == 0 and node.flags / 128 % 2 == 1
+    }
+    targetsNativeFunction node: typedIr.TypedIrNode -> Bool {
+        false => native!
+        (node.targetModule >= 0 and node.targetModule < (context.ranges -> len) and node.symbol >= 0) -> if {
+            context.ranges[node.targetModule] => nativeTargetRange
+            node.symbol < nativeTargetRange.symbolCount -> if {
+                context.symbols[nativeTargetRange.symbolStart + node.symbol] => nativeTargetSymbol
+                (nativeTargetSymbol.kind == 7 and nativeTargetSymbol.flags / 128 % 2 == 1) -> if { true => native! }
+            }
+        }
+        native!
+    }
+    emitNativeTargetLoad nodeIndex: Int, node: typedIr.TypedIrNode -> Unit uses Console {
+        node -> targetsNativeFunction -> if {
+            node.targetModule => nativeTargetModule
+            node.symbol => nativeTargetSymbol
+            "  %native_target_$(nodeIndex) = load ptr, ptr @sollang_native_function_m$(nativeTargetModule)_s$(nativeTargetSymbol), align 8" -> println
+        }
+    }
+    writeResolvedCallTarget nodeIndex: Int, node: typedIr.TypedIrNode -> Unit uses Console {
+        node -> targetsNativeFunction => resolvedNativeTarget
+        resolvedNativeTarget -> if {
+            " %native_target_$(nodeIndex)(" -> print
+        }
+        not resolvedNativeTarget -> if {
+            node.targetModule => resolvedTargetModule
+            node.symbol => resolvedTargetSymbol
+            " @sollang_m$(resolvedTargetModule)_s$(resolvedTargetSymbol)(" -> print
+        }
+    }
+    nativeLibraryAst function: typedIr.TypedIrNode -> Int {
+        -1 => libraryAst!
+        (function.sourceModule >= 0 and function.sourceModule < (context.ranges -> len) and function.symbol >= 0) -> if {
+            context.ranges[function.sourceModule] => nativeRange
+            function.symbol < nativeRange.symbolCount -> if {
+                context.symbols[nativeRange.symbolStart + function.symbol] => nativeSymbol
+                nativeSymbol.astNode >= 0 -> if {
+                    context.nodes[nativeRange.astStart + nativeSymbol.astNode] => nativeFunctionAst
+                    (nativeFunctionAst.parent >= 0 and context.nodes[nativeRange.astStart + nativeFunctionAst.parent].kind == 65) -> if {
+                        nativeFunctionAst.parent => libraryAst!
+                    }
+                }
+            }
+        }
+        libraryAst!
+    }
+    nativeSymbolToken function: typedIr.TypedIrNode -> Int {
+        context.ranges[function.sourceModule] => nativeRange
+        context.symbols[nativeRange.symbolStart + function.symbol] => nativeSymbol
+        nativeSymbol.nameToken => symbolToken!
+        context.nodes[nativeRange.astStart + nativeSymbol.astNode] => nativeFunctionAst
+        nativeFunctionAst.firstToken => nativeTokenSearch!
+        nativeTokenSearch! < nativeFunctionAst.firstToken + nativeFunctionAst.tokenCount -> while {
+            context.tokens[nativeRange.tokenStart + nativeTokenSearch!].kind == grammar.tokenIdString -> if {
+                nativeTokenSearch! => symbolToken!
+            }
+            nativeTokenSearch! + 1 => nativeTokenSearch!
+        }
+        symbolToken!
+    }
     irValueUsed nodeIndex: Int, ownerIndex: Int -> Bool {
         false => used!
         ownerIndex + 1 => useIndex!
@@ -2104,6 +2166,16 @@ emitCore context: EmitContext -> Unit uses Console {
                 argument -> sourceToken => literalArgumentToken
                 argument.kind == 3 -> if {
                     context.sources[argument.sourceModule] -> slice(literalArgumentToken.span.start, literalArgumentToken.span.length) -> print
+                    (argument.typeSymbol == 19 or argument.typeSymbol == 20 or argument.typeSymbol == 21 or argument.typeSymbol == 22) -> if {
+                        false => nativeFloatSeparator!
+                        literalArgumentToken.span.start => nativeFloatByte!
+                        nativeFloatByte! < literalArgumentToken.span.start + literalArgumentToken.span.length -> while {
+                            context.sources[argument.sourceModule] -> byte(nativeFloatByte!) => nativeFloatCharacter
+                            (nativeFloatCharacter == UInt8(46) or nativeFloatCharacter == UInt8(69) or nativeFloatCharacter == UInt8(101)) -> if { true => nativeFloatSeparator! }
+                            nativeFloatByte! + UIntSize(1) => nativeFloatByte!
+                        }
+                        not nativeFloatSeparator! -> if { ".0" -> print }
+                    }
                 } else {
                     ((context.sources[argument.sourceModule] -> byte(literalArgumentToken.span.start)) == UInt8(116)) -> if { "1" -> print } else { "0" -> print }
                 }
@@ -4239,6 +4311,196 @@ emitCore context: EmitContext -> Unit uses Console {
             }
         }
         context.sources[request.sourceModule] -> slice(request.token.span.start, UIntSize(1)) -> println
+    }
+    emitNativeSourceByte sourceModule: Int, byteIndex: UIntSize -> Unit uses Console {
+        context.sources[sourceModule] -> byte(byteIndex) => nativeByte
+        (nativeByte >= UInt8(32) and nativeByte <= UInt8(126) and nativeByte != UInt8(34) and nativeByte != UInt8(92)) -> if {
+            context.sources[sourceModule] -> slice(byteIndex, UIntSize(1)) -> print
+        } else {
+            nativeByte -> emitEscapedByte
+        }
+    }
+    emitNativeLibraryGlobals sourceModule: Int, libraryAst: Int -> Unit uses Console {
+        libraryAst => nativeLibraryAstValue
+        context.ranges[sourceModule] => nativeRange
+        context.nodes[nativeRange.astStart + libraryAst] => nativeLibrary
+        context.tokens[nativeRange.tokenStart + nativeLibrary.secondaryToken] => nativeLibraryToken
+        TextLiteralRequest { sourceModule: sourceModule, token: nativeLibraryToken } => nativeLibraryRequest
+        nativeLibraryRequest -> textLiteralLength => nativeLibraryBaseLength
+        context.expectedPathStyle == 1 -> if {
+            nativeLibraryBaseLength + UIntSize(5) => nativeLibraryLength
+            "@sollang_native_library_name_m$(sourceModule)_a$(nativeLibraryAstValue) = private unnamed_addr constant [$(nativeLibraryLength) x i8] " -> print
+        } else {
+            nativeLibraryBaseLength + UIntSize(7) => nativeLibraryLength
+            "@sollang_native_library_name_m$(sourceModule)_a$(nativeLibraryAstValue) = private unnamed_addr constant [$(nativeLibraryLength) x i8] " -> print
+        }
+        "c" -> print
+        context.sources[sourceModule] -> slice(nativeLibraryToken.span.start, UIntSize(1)) -> print
+        nativeLibraryRequest -> textLiteralStart => nativeLibraryByte!
+        nativeLibraryRequest -> textLiteralEnd => nativeLibraryEnd
+        nativeLibraryByte! => nativeLibraryNameStart!
+        nativeLibraryByte! => nativeLibrarySlashSearch!
+        nativeLibrarySlashSearch! < nativeLibraryEnd -> while {
+            context.sources[sourceModule] -> byte(nativeLibrarySlashSearch!) => nativePathByte
+            (nativePathByte == UInt8(47) or nativePathByte == UInt8(92)) -> if {
+                nativeLibrarySlashSearch! + UIntSize(1) => nativeLibraryNameStart!
+            }
+            nativeLibrarySlashSearch! + UIntSize(1) => nativeLibrarySlashSearch!
+        }
+        (context.expectedPathStyle == 0 and nativeLibraryNameStart! == nativeLibraryByte!) -> if { "lib" -> print }
+        nativeLibraryByte! < nativeLibraryEnd -> while {
+            (context.expectedPathStyle == 0 and nativeLibraryByte! == nativeLibraryNameStart! and nativeLibraryNameStart! != (nativeLibraryRequest -> textLiteralStart)) -> if { "lib" -> print }
+            sourceModule -> emitNativeSourceByte(nativeLibraryByte!)
+            nativeLibraryByte! + UIntSize(1) => nativeLibraryByte!
+        }
+        context.expectedPathStyle == 1 -> if { ".dll" -> print }
+        context.expectedPathStyle != 1 -> if { ".so" -> print }
+        "\" -> print
+        "00" -> print
+        context.sources[sourceModule] -> slice(nativeLibraryToken.span.start, UIntSize(1)) -> println
+        "@sollang_native_library_m$(sourceModule)_a$(nativeLibraryAstValue) = internal global ptr null, align 8" -> println
+    }
+    emitNativeSymbolGlobals function: typedIr.TypedIrNode -> Unit uses Console {
+        function.sourceModule => nativeFunctionSourceModule
+        function.symbol => nativeFunctionSymbol
+        context.ranges[function.sourceModule] => nativeRange
+        function -> nativeSymbolToken => nativeSymbolTokenIndex
+        context.tokens[nativeRange.tokenStart + nativeSymbolTokenIndex] => nativeNameToken
+        nativeNameToken.kind == grammar.tokenIdString -> if {
+            TextLiteralRequest { sourceModule: function.sourceModule, token: nativeNameToken } => nativeNameRequest
+            nativeNameRequest -> textLiteralLength => nativeNameContentLength
+            nativeNameContentLength + UIntSize(1) => nativeNameLength
+            "@sollang_native_symbol_name_m$(nativeFunctionSourceModule)_s$(nativeFunctionSymbol) = private unnamed_addr constant [$nativeNameLength x i8] " -> print
+            "c" -> print
+            context.sources[function.sourceModule] -> slice(nativeNameToken.span.start, UIntSize(1)) -> print
+            nativeNameRequest -> textLiteralStart => nativeNameByte!
+            nativeNameRequest -> textLiteralEnd => nativeNameEnd
+            nativeNameByte! < nativeNameEnd -> while {
+                function.sourceModule -> emitNativeSourceByte(nativeNameByte!)
+                nativeNameByte! + UIntSize(1) => nativeNameByte!
+            }
+            "\" -> print
+            "00" -> print
+            context.sources[function.sourceModule] -> slice(nativeNameToken.span.start, UIntSize(1)) -> println
+        }
+        nativeNameToken.kind != grammar.tokenIdString -> if {
+            nativeNameToken.span.length + UIntSize(1) => nativeNameLength
+            function -> nativeLibraryAst => nativeNameLibraryAst
+            context.nodes[nativeRange.astStart + nativeNameLibraryAst] => nativeNameLibrary
+            context.tokens[nativeRange.tokenStart + nativeNameLibrary.secondaryToken] => nativeNameLibraryToken
+            "@sollang_native_symbol_name_m$(nativeFunctionSourceModule)_s$(nativeFunctionSymbol) = private unnamed_addr constant [$nativeNameLength x i8] c" -> print
+            context.sources[function.sourceModule] -> slice(nativeNameLibraryToken.span.start, UIntSize(1)) -> print
+            nativeNameToken.span.start => nativeIdentifierByte!
+            nativeNameToken.span.start + nativeNameToken.span.length => nativeNameEnd
+            nativeIdentifierByte! < nativeNameEnd -> while {
+                function.sourceModule -> emitNativeSourceByte(nativeIdentifierByte!)
+                nativeIdentifierByte! + UIntSize(1) => nativeIdentifierByte!
+            }
+            "\" -> print
+            "00" -> print
+            context.sources[function.sourceModule] -> slice(nativeNameLibraryToken.span.start, UIntSize(1)) -> println
+        }
+        "@sollang_native_function_m$(nativeFunctionSourceModule)_s$(nativeFunctionSymbol) = internal global ptr null, align 8" -> println
+    }
+    emitNativeRuntime: -> Unit uses Console {
+        0 => nativeLibrarySource!
+        nativeLibrarySource! < (context.ranges -> len) -> while {
+            context.ranges[nativeLibrarySource!] => nativeLibraryRange
+            0 => nativeLibraryAstIndex!
+            nativeLibraryAstIndex! < nativeLibraryRange.astCount -> while {
+                context.nodes[nativeLibraryRange.astStart + nativeLibraryAstIndex!].kind == 65 -> if {
+                    nativeLibrarySource! -> emitNativeLibraryGlobals(nativeLibraryAstIndex!)
+                }
+                nativeLibraryAstIndex! + 1 => nativeLibraryAstIndex!
+            }
+            nativeLibrarySource! + 1 => nativeLibrarySource!
+        }
+        0 => nativeGlobalFunctionIndex!
+        nativeGlobalFunctionIndex! < (context.ir -> len) -> while {
+            context.ir[nativeGlobalFunctionIndex!] => nativeGlobalFunction
+            nativeGlobalFunction -> isNativeFunction -> if { nativeGlobalFunction -> emitNativeSymbolGlobals }
+            nativeGlobalFunctionIndex! + 1 => nativeGlobalFunctionIndex!
+        }
+        """
+        define internal ptr @sollang_native_require(ptr %value) {
+        entry:
+          %found = icmp ne ptr %value, null
+          br i1 %found, label %done, label %fail
+        fail:
+          call void @llvm.trap()
+          unreachable
+        done:
+          ret ptr %value
+        }
+        define internal void @sollang_native_init() {
+        entry:
+        """ -> println
+        0 => nativeInitLibrarySource!
+        nativeInitLibrarySource! < (context.ranges -> len) -> while {
+            context.ranges[nativeInitLibrarySource!] => nativeInitLibraryRange
+            0 => nativeInitLibraryAst!
+            nativeInitLibraryAst! < nativeInitLibraryRange.astCount -> while {
+                context.nodes[nativeInitLibraryRange.astStart + nativeInitLibraryAst!].kind == 65 -> if {
+                    context.expectedPathStyle == 1 -> if {
+                        "  %native_library_raw_m$(nativeInitLibrarySource!)_a$(nativeInitLibraryAst!) = call ptr @LoadLibraryA(ptr @sollang_native_library_name_m$(nativeInitLibrarySource!)_a$(nativeInitLibraryAst!))" -> println
+                    }
+                    context.expectedPathStyle != 1 -> if {
+                        "  %native_library_raw_m$(nativeInitLibrarySource!)_a$(nativeInitLibraryAst!) = call ptr @dlopen(ptr @sollang_native_library_name_m$(nativeInitLibrarySource!)_a$(nativeInitLibraryAst!), i32 2)" -> println
+                    }
+                    "  %native_library_checked_m$(nativeInitLibrarySource!)_a$(nativeInitLibraryAst!) = call ptr @sollang_native_require(ptr %native_library_raw_m$(nativeInitLibrarySource!)_a$(nativeInitLibraryAst!))" -> println
+                    "  store ptr %native_library_checked_m$(nativeInitLibrarySource!)_a$(nativeInitLibraryAst!), ptr @sollang_native_library_m$(nativeInitLibrarySource!)_a$(nativeInitLibraryAst!), align 8" -> println
+                }
+                nativeInitLibraryAst! + 1 => nativeInitLibraryAst!
+            }
+            nativeInitLibrarySource! + 1 => nativeInitLibrarySource!
+        }
+        0 => nativeInitFunctionIndex!
+        nativeInitFunctionIndex! < (context.ir -> len) -> while {
+            context.ir[nativeInitFunctionIndex!] => nativeInitFunction
+            nativeInitFunction -> isNativeFunction -> if {
+                nativeInitFunction -> nativeLibraryAst => nativeInitLibrary
+                nativeInitFunction.sourceModule => nativeInitSourceModule
+                nativeInitFunction.symbol => nativeInitSymbol
+                "  %native_library_m$(nativeInitSourceModule)_s$(nativeInitSymbol) = load ptr, ptr @sollang_native_library_m$(nativeInitSourceModule)_a$(nativeInitLibrary), align 8" -> println
+                context.expectedPathStyle == 1 -> if {
+                    "  %native_symbol_raw_m$(nativeInitSourceModule)_s$(nativeInitSymbol) = call ptr @GetProcAddress(ptr %native_library_m$(nativeInitSourceModule)_s$(nativeInitSymbol), ptr @sollang_native_symbol_name_m$(nativeInitSourceModule)_s$(nativeInitSymbol))" -> println
+                }
+                context.expectedPathStyle != 1 -> if {
+                    "  %native_symbol_raw_m$(nativeInitSourceModule)_s$(nativeInitSymbol) = call ptr @dlsym(ptr %native_library_m$(nativeInitSourceModule)_s$(nativeInitSymbol), ptr @sollang_native_symbol_name_m$(nativeInitSourceModule)_s$(nativeInitSymbol))" -> println
+                }
+                "  %native_symbol_checked_m$(nativeInitSourceModule)_s$(nativeInitSymbol) = call ptr @sollang_native_require(ptr %native_symbol_raw_m$(nativeInitSourceModule)_s$(nativeInitSymbol))" -> println
+                "  store ptr %native_symbol_checked_m$(nativeInitSourceModule)_s$(nativeInitSymbol), ptr @sollang_native_function_m$(nativeInitSourceModule)_s$(nativeInitSymbol), align 8" -> println
+            }
+            nativeInitFunctionIndex! + 1 => nativeInitFunctionIndex!
+        }
+        """
+          ret void
+        }
+        define internal void @sollang_native_cleanup() {
+        entry:
+        """ -> println
+        0 => nativeCleanupSource!
+        nativeCleanupSource! < (context.ranges -> len) -> while {
+            context.ranges[nativeCleanupSource!] => nativeCleanupRange
+            0 => nativeCleanupAst!
+            nativeCleanupAst! < nativeCleanupRange.astCount -> while {
+                context.nodes[nativeCleanupRange.astStart + nativeCleanupAst!].kind == 65 -> if {
+                    "  %native_close_handle_m$(nativeCleanupSource!)_a$(nativeCleanupAst!) = load ptr, ptr @sollang_native_library_m$(nativeCleanupSource!)_a$(nativeCleanupAst!), align 8" -> println
+                    context.expectedPathStyle == 1 -> if {
+                        "  %native_closed_m$(nativeCleanupSource!)_a$(nativeCleanupAst!) = call i32 @FreeLibrary(ptr %native_close_handle_m$(nativeCleanupSource!)_a$(nativeCleanupAst!))" -> println
+                    }
+                    context.expectedPathStyle != 1 -> if {
+                        "  %native_closed_m$(nativeCleanupSource!)_a$(nativeCleanupAst!) = call i32 @dlclose(ptr %native_close_handle_m$(nativeCleanupSource!)_a$(nativeCleanupAst!))" -> println
+                    }
+                }
+                nativeCleanupAst! + 1 => nativeCleanupAst!
+            }
+            nativeCleanupSource! + 1 => nativeCleanupSource!
+        }
+        """
+          ret void
+        }
+        """ -> println
     }
     mutableBindingRoot bindingIndex: Int -> Int {
         context.ir[bindingIndex] => binding
@@ -8105,10 +8367,14 @@ emitCore context: EmitContext -> Unit uses Console {
                         context.sources[regionIntegerArgument.sourceModule] -> slice(regionIntegerLiteralToken.span.start, regionIntegerLiteralToken.span.length) -> print
                         ", 0" -> println
                     } else {
-                    regionTargetWidth < regionInputWidth -> if { "trunc " -> print } else {
-                        regionTargetWidth > regionInputWidth -> if {
-                            regionIntegerArgument -> integerNodeSigned -> if { "sext " -> print } else { "zext " -> print }
-                        } else { "add " -> print }
+                    (regionIntegerArgument.typeSymbol == 19 or regionIntegerArgument.typeSymbol == 20 or regionIntegerArgument.typeSymbol == 21 or regionIntegerArgument.typeSymbol == 22) -> if {
+                        "fptosi " -> print
+                    } else {
+                        regionTargetWidth < regionInputWidth -> if { "trunc " -> print } else {
+                            regionTargetWidth > regionInputWidth -> if {
+                                regionIntegerArgument -> integerNodeSigned -> if { "sext " -> print } else { "zext " -> print }
+                            } else { "add " -> print }
+                        }
                     }
                     regionIntegerArgument -> writeIrType
                     " " -> print
@@ -8125,13 +8391,14 @@ emitCore context: EmitContext -> Unit uses Console {
                     }
                     }
                 } else {
+                    regionNodeIndex! -> emitNativeTargetLoad(regionNode)
                     CallEnvironmentRequest { callerIndex: ownerIndex!, callIndex: regionNodeIndex!, targetModule: regionNode.targetModule, targetSymbol: regionNode.symbol, hasArgument: regionNode.operand0 >= 0 } -> emitCallEnvironmentValues
                     (regionNode.typeOrigin == 1 and regionNode.typeSymbol == 0) -> if { "  call " -> print } else { "  %v$(regionNodeIndex!) = call " -> print }
                     regionNode -> writeIrType
                     regionNodeIndex! -> isRangeDeferCall -> if {
                         " @sollang_range_stream_create(" -> print
                     } else {
-                        regionNodeIndex! -> isMouseEventsCall -> if { " @sollang_mouse_event_stream_make(" -> print } else { " @sollang_m$(regionNode.targetModule)_s$(regionNode.symbol)(" -> print }
+                        regionNodeIndex! -> isMouseEventsCall -> if { " @sollang_mouse_event_stream_make(" -> print } else { regionNodeIndex! -> writeResolvedCallTarget(regionNode) }
                     }
                     CallEnvironmentRequest { callerIndex: ownerIndex!, callIndex: regionNodeIndex!, targetModule: regionNode.targetModule, targetSymbol: regionNode.symbol, hasArgument: regionNode.operand0 >= 0 } -> emitCallEnvironment => regionCallEnvironment
                     regionNodeIndex! -> emitCallArguments(ownerIndex!)
@@ -10602,10 +10869,14 @@ emitCore context: EmitContext -> Unit uses Console {
                             context.sources[functionIntegerArgument.sourceModule] -> slice(functionIntegerLiteralToken.span.start, functionIntegerLiteralToken.span.length) -> print
                             ", 0" -> println
                         } else {
-                        functionTargetWidth < functionInputWidth -> if { "trunc " -> print } else {
-                            functionTargetWidth > functionInputWidth -> if {
-                                functionIntegerArgument -> integerNodeSigned -> if { "sext " -> print } else { "zext " -> print }
-                            } else { "add " -> print }
+                        (functionIntegerArgument.typeSymbol == 19 or functionIntegerArgument.typeSymbol == 20 or functionIntegerArgument.typeSymbol == 21 or functionIntegerArgument.typeSymbol == 22) -> if {
+                            "fptosi " -> print
+                        } else {
+                            functionTargetWidth < functionInputWidth -> if { "trunc " -> print } else {
+                                functionTargetWidth > functionInputWidth -> if {
+                                    functionIntegerArgument -> integerNodeSigned -> if { "sext " -> print } else { "zext " -> print }
+                                } else { "add " -> print }
+                            }
                         }
                         functionIntegerArgument -> writeIrType
                         " " -> print
@@ -10622,13 +10893,14 @@ emitCore context: EmitContext -> Unit uses Console {
                         }
                         }
                     } else {
+                    expressionIndex! -> emitNativeTargetLoad(expression)
                     CallEnvironmentRequest { callerIndex: functionIndex!, callIndex: expressionIndex!, targetModule: expression.targetModule, targetSymbol: expression.symbol, hasArgument: expression.operand0 >= 0 } -> emitCallEnvironmentValues
                     (expression.typeOrigin == 1 and expression.typeSymbol == 0) -> if { "  call " -> print } else { "  %v$(expressionIndex!) = call " -> print }
                     expression -> writeIrType
                     expressionIndex! -> isRangeDeferCall -> if {
                         " @sollang_range_stream_create(" -> print
                     } else {
-                        expressionIndex! -> isMouseEventsCall -> if { " @sollang_mouse_event_stream_make(" -> print } else { " @sollang_m$(expression.targetModule)_s$(expression.symbol)(" -> print }
+                        expressionIndex! -> isMouseEventsCall -> if { " @sollang_mouse_event_stream_make(" -> print } else { expressionIndex! -> writeResolvedCallTarget(expression) }
                     }
                     CallEnvironmentRequest { callerIndex: functionIndex!, callIndex: expressionIndex!, targetModule: expression.targetModule, targetSymbol: expression.symbol, hasArgument: expression.operand0 >= 0 } -> emitCallEnvironment => functionCallEnvironment
                     expressionIndex! -> emitCallArguments(functionIndex!)
@@ -11596,7 +11868,25 @@ emitCore context: EmitContext -> Unit uses Console {
         }
     }
     dropTypeActive! -> emitSemanticDropHelpers
-    (usesDictionary! or usesEnumMatch! or usesSourceText!) -> if { "declare void @llvm.trap()" -> println }
+    false => usesNativeInterop!
+    0 => nativeInteropSearch!
+    nativeInteropSearch! < (context.ir -> len) -> while {
+        context.ir[nativeInteropSearch!] -> isNativeFunction -> if { true => usesNativeInterop! }
+        nativeInteropSearch! + 1 => nativeInteropSearch!
+    }
+    (usesDictionary! or usesEnumMatch! or usesSourceText! or usesNativeInterop!) -> if { "declare void @llvm.trap()" -> println }
+    usesNativeInterop! -> if {
+        context.expectedPathStyle == 1 -> if {
+            "declare dllimport ptr @LoadLibraryA(ptr)" -> println
+            "declare dllimport ptr @GetProcAddress(ptr, ptr)" -> println
+            "declare dllimport i32 @FreeLibrary(ptr)" -> println
+        } else {
+            "declare ptr @dlopen(ptr, i32)" -> println
+            "declare ptr @dlsym(ptr, ptr)" -> println
+            "declare i32 @dlclose(ptr)" -> println
+        }
+        emitNativeRuntime
+    }
     context -> usesProcessExit => needsProcessExit
     needsProcessExit -> if {
         context.expectedPathStyle == 1 -> if { "declare dllimport void @ExitProcess(i32)" -> println } else { "declare void @exit(i32)" -> println }
@@ -11818,7 +12108,7 @@ emitCore context: EmitContext -> Unit uses Console {
     0 => functionIndexCollect!
     functionIndexCollect! < (context.ir -> len) -> while {
         context.ir[functionIndexCollect!].kind == 11 -> if { true => functionEntrySeen! }
-        (context.ir[functionIndexCollect!].kind == 0 and not (functionIndexCollect! -> isStreamFunctionIr) and not (functionIndexCollect! -> isRangeFunctionIr)) -> if {
+        (context.ir[functionIndexCollect!].kind == 0 and not (context.ir[functionIndexCollect!] -> isNativeFunction) and not (functionIndexCollect! -> isStreamFunctionIr) and not (functionIndexCollect! -> isRangeFunctionIr)) -> if {
             functionEntrySeen! -> if { functionIndicesAfterEntry! -> push(functionIndexCollect!) } else { functionIndicesBeforeEntry! -> push(functionIndexCollect!) }
         }
         functionIndexCollect! + 1 => functionIndexCollect!
@@ -11838,6 +12128,7 @@ emitCore context: EmitContext -> Unit uses Console {
                     usesArguments! -> if { "define i32 @main(i32 %argc, ptr %argv) {" -> println } else { "define i32 @main() {" -> println }
                 }
                 "entry:" -> println
+                usesNativeInterop! -> if { "  call void @sollang_native_init()" -> println }
                 (usesArguments! and context.pointerBitWidth != 32) -> if {
                     "  %argc64 = zext i32 %argc to i64" -> println
                     "  store i64 %argc64, ptr @sollang_argc, align 8" -> println
@@ -14235,10 +14526,14 @@ emitCore context: EmitContext -> Unit uses Console {
                                 context.sources[entryIntegerArgument.sourceModule] -> slice(entryIntegerLiteralToken.span.start, entryIntegerLiteralToken.span.length) -> print
                                 ", 0" -> println
                             } else {
-                            entryTargetWidth < entryInputWidth -> if { "trunc " -> print } else {
-                                entryTargetWidth > entryInputWidth -> if {
-                                    entryIntegerArgument -> integerNodeSigned -> if { "sext " -> print } else { "zext " -> print }
-                                } else { "add " -> print }
+                            (entryIntegerArgument.typeSymbol == 19 or entryIntegerArgument.typeSymbol == 20 or entryIntegerArgument.typeSymbol == 21 or entryIntegerArgument.typeSymbol == 22) -> if {
+                                "fptosi " -> print
+                            } else {
+                                entryTargetWidth < entryInputWidth -> if { "trunc " -> print } else {
+                                    entryTargetWidth > entryInputWidth -> if {
+                                        entryIntegerArgument -> integerNodeSigned -> if { "sext " -> print } else { "zext " -> print }
+                                    } else { "add " -> print }
+                                }
                             }
                             entryIntegerArgument -> writeIrType
                             " " -> print
@@ -14253,13 +14548,14 @@ emitCore context: EmitContext -> Unit uses Console {
                             }
                             }
                         } else {
+                        entryExpressionIndex! -> emitNativeTargetLoad(entryExpression)
                         CallEnvironmentRequest { callerIndex: functionIndex!, callIndex: entryExpressionIndex!, targetModule: entryExpression.targetModule, targetSymbol: entryExpression.symbol, hasArgument: entryExpression.operand0 >= 0 } -> emitCallEnvironmentValues
                         (entryExpression.typeOrigin == 1 and entryExpression.typeSymbol == 0) -> if { "  call " -> print } else { "  %v$(entryExpressionIndex!) = call " -> print }
                         entryExpression -> writeIrType
                         entryExpressionIndex! -> isRangeDeferCall -> if {
                             " @sollang_range_stream_create(" -> print
                         } else {
-                            entryExpressionIndex! -> isMouseEventsCall -> if { " @sollang_mouse_event_stream_make(" -> print } else { " @sollang_m$(entryExpression.targetModule)_s$(entryExpression.symbol)(" -> print }
+                            entryExpressionIndex! -> isMouseEventsCall -> if { " @sollang_mouse_event_stream_make(" -> print } else { entryExpressionIndex! -> writeResolvedCallTarget(entryExpression) }
                         }
                         entryExpressionIndex! -> emitCallArguments(functionIndex!)
                         ")" -> println
@@ -14659,6 +14955,7 @@ emitCore context: EmitContext -> Unit uses Console {
                     entryOrderIndex! + 1 => entryOrderIndex!
                 }
                 OwnedDropRequest { regionIndex: functionIndex!, beforeAst: -1, edgeIndex: functionIndex! * 10 + 6, transferredSymbol: -1 } -> emitOwnedDrops
+                usesNativeInterop! -> if { "  call void @sollang_native_cleanup()" -> println }
                 (context.supportsComputePool and (context -> usesParallelRuntime)) -> if { "  call void @sollang_compute_shutdown()" -> println }
                 context -> usesTextRuntime -> if { "  call void @sollang_runtime_flush_stdout()" -> println }
                 "  ret i32 0" -> println
@@ -16467,6 +16764,116 @@ emitCallDiagnostics context: EmitContext -> Unit uses Console {
     }
 }
 
+nativeAbiTypeSafe node: typedIr.TypedIrNode -> Bool {
+    false => safe!
+    node.typeOrigin == 1 -> if {
+        node.typeSymbol == 0 -> if { true => safe! }
+        node.typeSymbol == 3 -> if { true => safe! }
+        node.typeSymbol == 4 -> if { true => safe! }
+        node.typeSymbol == 5 -> if { true => safe! }
+        node.typeSymbol == 6 -> if { true => safe! }
+        node.typeSymbol == 8 -> if { true => safe! }
+        node.typeSymbol == 9 -> if { true => safe! }
+        node.typeSymbol == 10 -> if { true => safe! }
+        node.typeSymbol == 11 -> if { true => safe! }
+        node.typeSymbol == 20 -> if { true => safe! }
+        node.typeSymbol == 21 -> if { true => safe! }
+    }
+    safe!
+}
+
+nativeAbiUnsafeTypeCount context: EmitContext -> Int {
+    0 => count!
+    0 => functionIndex!
+    functionIndex! < (context.ir -> len) -> while {
+        context.ir[functionIndex!] => function
+        (function.kind == 0 and function.flags / 128 % 2 == 1) -> if {
+            not (function -> nativeAbiTypeSafe) -> if { count! + 1 => count! }
+            function.operand1 >= 0 -> if {
+                not (context.ir[function.operand1] -> nativeAbiTypeSafe) -> if { count! + 1 => count! }
+            }
+            function.nextOperand => parameterIndex!
+            parameterIndex! >= 0 -> while {
+                context.ir[parameterIndex!] => parameter
+                not (parameter -> nativeAbiTypeSafe) -> if { count! + 1 => count! }
+                parameter.nextOperand => parameterIndex!
+            }
+        }
+        functionIndex! + 1 => functionIndex!
+    }
+    count!
+}
+
+writeNativeAbiTypeName typeSymbol: Int -> Unit uses Console {
+    typeSymbol == 0 -> if { "Unit" -> print }
+    typeSymbol == 1 -> if { "Text" -> print }
+    typeSymbol == 2 -> if { "Int" -> print }
+    typeSymbol == 3 -> if { "Int8" -> print }
+    typeSymbol == 4 -> if { "Int16" -> print }
+    typeSymbol == 5 -> if { "Int32" -> print }
+    typeSymbol == 6 -> if { "Int64" -> print }
+    typeSymbol == 7 -> if { "Long" -> print }
+    typeSymbol == 8 -> if { "UInt8" -> print }
+    typeSymbol == 9 -> if { "UInt16" -> print }
+    typeSymbol == 10 -> if { "UInt32" -> print }
+    typeSymbol == 11 -> if { "UInt64" -> print }
+    typeSymbol == 12 -> if { "Size" -> print }
+    typeSymbol == 13 -> if { "UIntSize" -> print }
+    typeSymbol == 14 -> if { "CodePoint" -> print }
+    typeSymbol == 19 -> if { "Float" -> print }
+    typeSymbol == 20 -> if { "Float32" -> print }
+    typeSymbol == 21 -> if { "Float64" -> print }
+    typeSymbol == 22 -> if { "Double" -> print }
+    typeSymbol == 23 -> if { "Bool" -> print }
+    (typeSymbol < 0 or typeSymbol > 23) -> if { "type#$typeSymbol" -> print }
+}
+
+emitNativeAbiTypeDiagnostic node: typedIr.TypedIrNode, role: Text -> Unit uses Console {
+    "; sollang semantic error: native function " -> print
+    role -> print
+    " type '" -> print
+    node.typeSymbol -> writeNativeAbiTypeName
+    "' is not ABI-safe; use a fixed-width scalar type in the first native ABI slice" -> println
+}
+
+emitNativeAbiDiagnostics context: EmitContext -> Unit uses Console {
+    0 => functionIndex!
+    functionIndex! < (context.ir -> len) -> while {
+        context.ir[functionIndex!] => function
+        (function.kind == 0 and function.flags / 128 % 2 == 1) -> if {
+            not (function -> nativeAbiTypeSafe) -> if { function -> emitNativeAbiTypeDiagnostic("result") }
+            function.operand1 >= 0 -> if {
+                context.ir[function.operand1] => primaryParameter
+                not (primaryParameter -> nativeAbiTypeSafe) -> if { primaryParameter -> emitNativeAbiTypeDiagnostic("input") }
+            }
+            function.nextOperand => parameterIndex!
+            parameterIndex! >= 0 -> while {
+                context.ir[parameterIndex!] => parameter
+                not (parameter -> nativeAbiTypeSafe) -> if { parameter -> emitNativeAbiTypeDiagnostic("parameter") }
+                parameter.nextOperand => parameterIndex!
+            }
+        }
+        functionIndex! + 1 => functionIndex!
+    }
+}
+
+nativeInteropFunctionCount context: EmitContext -> Int {
+    0 => count!
+    0 => nativeIndex!
+    nativeIndex! < (context.symbols -> len) -> while {
+        context.symbols[nativeIndex!] => nativeSymbol
+        (nativeSymbol.kind == 7 and nativeSymbol.flags / 128 % 2 == 1) -> if {
+            count! + 1 => count!
+        }
+        nativeIndex! + 1 => nativeIndex!
+    }
+    count!
+}
+
+emitWasmNativeInteropDiagnostic: -> Unit uses Console {
+    "; sollang semantic error: native libraries are unavailable on wasm32-browser" -> println
+}
+
 mouseEventLiteralCapacity context: EmitContext, callIndex: Int -> Int {
     -1 => capacity!
     (callIndex >= 0 and callIndex < (context.ir -> len)) -> if {
@@ -16553,6 +16960,8 @@ blockingDiagnosticCount context: EmitContext -> Int {
     }
     context -> invalidMouseEventCapacityCount => invalidMouseCapacities
     count! + invalidMouseCapacities => count!
+    context -> nativeAbiUnsafeTypeCount => invalidNativeAbiTypes
+    count! + invalidNativeAbiTypes => count!
     count!
 }
 
@@ -16561,6 +16970,7 @@ emitBlockingDiagnostics context: EmitContext -> Unit uses Console {
     context -> emitInterpolationDiagnostics
     context -> emitCallDiagnostics
     context -> emitMouseEventDiagnostics
+    context -> emitNativeAbiDiagnostics
 }
 
 emitWindowsMouseEventRuntime context: EmitContext -> Unit uses Console {
@@ -17467,11 +17877,16 @@ public emitLinux sources: move [Text; ~] -> Unit uses Console {
 
 public emitWasm sources: move [Text; ~] -> Unit uses Console {
     llvmTarget.wasm32Browser => target
-    target.dataLayoutLine -> println
-    target.tripleLine -> println
     PrepareRequest { sources: sources, pointerBitWidth: target.pointerBitWidth, supportsComputePool: false, expectedPathStyle: 0 } => prepareRequest!
     prepareRequest! -> prepare => context!
-    context! -> emitWasmContext
+    context! -> nativeInteropFunctionCount => nativeInteropCount
+    nativeInteropCount == 0 -> if {
+        target.dataLayoutLine -> println
+        target.tripleLine -> println
+        context! -> emitWasmContext
+    } else {
+        emitWasmNativeInteropDiagnostic
+    }
 }
 
 public emitChecked sources: move [Text; ~] -> Int uses Console {
@@ -17507,6 +17922,8 @@ public emitWasmChecked sources: move [Text; ~] -> Int uses Console {
     context! -> blockingDiagnosticCount => diagnosticCount!
     context! -> usesMouseEventsRuntime => usesUnsupportedMouseEvents
     usesUnsupportedMouseEvents -> if { diagnosticCount! + 1 => diagnosticCount! }
+    context! -> nativeInteropFunctionCount => unsupportedNativeInteropCount
+    unsupportedNativeInteropCount > 0 -> if { diagnosticCount! + 1 => diagnosticCount! }
     diagnosticCount! == 0 -> if {
         target.dataLayoutLine -> println
         target.tripleLine -> println
@@ -17515,6 +17932,9 @@ public emitWasmChecked sources: move [Text; ~] -> Int uses Console {
         context! -> emitBlockingDiagnostics
         usesUnsupportedMouseEvents -> if {
             "; sollang semantic error: mouse event streams are unavailable on wasm32-browser; browser events require host-driven callback lowering" -> println
+        }
+        unsupportedNativeInteropCount > 0 -> if {
+            emitWasmNativeInteropDiagnostic
         }
     }
     diagnosticCount!
