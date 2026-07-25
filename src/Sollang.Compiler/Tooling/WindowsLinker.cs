@@ -8,7 +8,12 @@ internal sealed class WindowsLinker(LlvmToolchain toolchain)
 {
     private const long TargetBytesPerPartition = 1024 * 1024;
 
-    public void LinkLlvmIr(string llPath, string outputPath, string workDir, string? optimizationLevel)
+    public void LinkLlvmIr(
+        string llPath,
+        string outputPath,
+        string workDir,
+        string? optimizationLevel,
+        bool sharedLibrary = false)
     {
         var outputName = Path.GetFileNameWithoutExtension(outputPath);
         var objectPath = Path.Combine(workDir, outputName + ".obj");
@@ -24,8 +29,6 @@ internal sealed class WindowsLinker(LlvmToolchain toolchain)
         {
             "/nologo",
             "/machine:x64",
-            "/subsystem:console",
-            "/entry:sollang_start",
             "/nodefaultlib",
             "/opt:ref",
             "/opt:icf",
@@ -35,6 +38,16 @@ internal sealed class WindowsLinker(LlvmToolchain toolchain)
             "/merge:.pdata=.text",
             "/merge:.xdata=.text",
         };
+        if (sharedLibrary)
+        {
+            linkArguments.Add("/dll");
+            linkArguments.Add("/noentry");
+        }
+        else
+        {
+            linkArguments.Add("/subsystem:console");
+            linkArguments.Add("/entry:sollang_start");
+        }
         linkArguments.AddRange(objects);
         linkArguments.AddRange([importLib, shellImportLib, ucrtImportLib, "/out:" + outputPath]);
         Run(toolchain.LldLink, linkArguments);

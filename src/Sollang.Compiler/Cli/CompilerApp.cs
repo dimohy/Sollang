@@ -141,40 +141,79 @@ internal static class CompilerApp
         var frontendCache = IncrementalFrontendCache.Open(options);
         if (frontendCache.Output is not null)
         {
-            var productCache = IncrementalProductCache.Open(
-                frontendCache.Location,
-                options.OutputPath,
-                frontendCache.SourceGenerationKey!);
-            if (!productCache.IsExact)
+            var libraryInterfacePath = options.OutputKind == CompilationOutputKind.SharedLibrary
+                ? SollangLibraryManifest.PathForOutput(options.OutputPath, options.Target)
+                : null;
+            var cachedLibraryInterfacePath = libraryInterfacePath is null
+                ? null
+                : SollangLibraryManifest.CachePath(frontendCache.Location);
+            if (cachedLibraryInterfacePath is not null
+                && !File.Exists(cachedLibraryInterfacePath))
             {
-                WriteAndLink(options, toolchain, frontendCache.Output);
-                IncrementalProductCache.Publish(frontendCache.Location, options.OutputPath);
+                frontendCache = frontendCache with
+                {
+                    Status = "miss: cached Sollang library interface is missing",
+                    Output = null
+                };
             }
-            else if (options.KeepTemps)
+            else
             {
-                WriteKeptLlvm(options.OutputPath, frontendCache.Output);
+                var productCache = IncrementalProductCache.Open(
+                    frontendCache.Location,
+                    options.OutputPath,
+                    frontendCache.SourceGenerationKey!,
+                    cachedLibraryInterfacePath);
+                if (cachedLibraryInterfacePath is not null && !productCache.IsExact)
+                {
+                    frontendCache = frontendCache with
+                    {
+                        Status = "miss: " + productCache.Status,
+                        Output = null
+                    };
+                }
+                else
+                {
+                    if (libraryInterfacePath is not null)
+                    {
+                        SollangLibraryManifest.RestoreCache(
+                            frontendCache.Location,
+                            options.OutputPath,
+                            options.Target);
+                    }
+                    if (!productCache.IsExact)
+                    {
+                        WriteAndLink(options, toolchain, frontendCache.Output);
+                        IncrementalProductCache.Publish(
+                            frontendCache.Location,
+                            options.OutputPath);
+                    }
+                    else if (options.KeepTemps)
+                    {
+                        WriteKeptLlvm(options.OutputPath, frontendCache.Output);
+                    }
+                    Console.WriteLine(
+                        $"[frontend-cache] {frontendCache.Status}; skipped parsing and semantic analysis for "
+                        + $"{frontendCache.SourceCount.ToString(CultureInfo.InvariantCulture)} sources; "
+                        + frontendCache.Location.SourceSnapshotPath);
+                    Console.WriteLine(
+                        $"[codegen-cache] exact; reused "
+                        + $"{frontendCache.Output.ReusedCount.ToString(CultureInfo.InvariantCulture)}/"
+                        + $"{frontendCache.Output.Units.Count.ToString(CultureInfo.InvariantCulture)} units; "
+                        + frontendCache.Location.CodegenPath);
+                    Console.WriteLine(
+                        $"[semantic-cache] exact via frontend; skipped semantic loading; "
+                        + frontendCache.Location.SemanticPath);
+                    Console.WriteLine(
+                        $"[product-cache] {productCache.Status}; "
+                        + (productCache.IsExact ? "skipped linking; " : "linked and published; ")
+                        + frontendCache.Location.ProductPath);
+                    PrintOutput(options.OutputPath);
+                    return;
+                }
             }
-            Console.WriteLine(
-                $"[frontend-cache] {frontendCache.Status}; skipped parsing and semantic analysis for "
-                + $"{frontendCache.SourceCount.ToString(CultureInfo.InvariantCulture)} sources; "
-                + frontendCache.Location.SourceSnapshotPath);
-            Console.WriteLine(
-                $"[codegen-cache] exact; reused "
-                + $"{frontendCache.Output.ReusedCount.ToString(CultureInfo.InvariantCulture)}/"
-                + $"{frontendCache.Output.Units.Count.ToString(CultureInfo.InvariantCulture)} units; "
-                + frontendCache.Location.CodegenPath);
-            Console.WriteLine(
-                $"[semantic-cache] exact via frontend; skipped semantic loading; "
-                + frontendCache.Location.SemanticPath);
-            Console.WriteLine(
-                $"[product-cache] {productCache.Status}; "
-                + (productCache.IsExact ? "skipped linking; " : "linked and published; ")
-                + frontendCache.Location.ProductPath);
-            PrintOutput(options.OutputPath);
-            return;
         }
 
-        var loaded = LoadProgram(options.SourcePaths, options.Project);
+        var loaded = LoadProgram(options.SourcePaths, options.Project, options.Target);
         var pointerBitWidth = options.Target == CompilationTarget.Wasm32Browser ? 32 : 64;
         var semanticProbe = IncrementalSemanticCache.Probe(frontendCache.Location, loaded);
         var boundProgram = new SemanticCompiler(loaded.Program, pointerBitWidth)
@@ -185,12 +224,38 @@ internal static class CompilerApp
             boundProgram,
             semanticProbe);
         var codegenCache = IncrementalCodegenCache.Open(loaded, boundProgram, options);
-        var codegenOutput = LlvmIrGenerator.GenerateUnits(boundProgram, options.Target, codegenCache.Reuse);
+        SollangLibraryManifestDocument? libraryManifest = null;
+        if (options.OutputKind == CompilationOutputKind.SharedLibrary)
+        {
+            libraryManifest = SollangLibraryManifest.Create(
+                loaded.Program,
+                boundProgram,
+                options.Target,
+                options.OutputPath);
+        }
+        var codegenOutput = LlvmIrGenerator.GenerateUnits(
+            boundProgram,
+            options.Target,
+            codegenCache.Reuse,
+            options.OutputKind == CompilationOutputKind.SharedLibrary);
         WriteAndLink(options, toolchain, codegenOutput);
+        if (libraryManifest is not null)
+        {
+            SollangLibraryManifest.Write(options.OutputPath, libraryManifest);
+            SollangLibraryManifest.PublishCache(
+                codegenCache.Location,
+                options.OutputPath,
+                options.Target);
+        }
         codegenCache.Publish(codegenOutput);
         semanticCache.Publish();
         IncrementalFrontendCache.Publish(loaded, options, codegenCache.Location);
-        IncrementalProductCache.Publish(codegenCache.Location, options.OutputPath);
+        IncrementalProductCache.Publish(
+            codegenCache.Location,
+            options.OutputPath,
+            libraryManifest is null
+                ? null
+                : SollangLibraryManifest.PathForOutput(options.OutputPath, options.Target));
         Console.WriteLine(
             $"[frontend-cache] {frontendCache.Status}; rebuilt and published "
             + $"{loaded.Sources.Count.ToString(CultureInfo.InvariantCulture)} sources; "
@@ -303,7 +368,11 @@ internal static class CompilerApp
                 append: false,
                 new UTF8Encoding(encoderShouldEmitUTF8Identifier: false)))
             {
-                LlvmIrGenerator.WriteProgram(program, options.Target, writer);
+                LlvmIrGenerator.WriteProgram(
+                    program,
+                    options.Target,
+                    writer,
+                    options.OutputKind == CompilationOutputKind.SharedLibrary);
             }
             LinkLlvmIr(options, toolchain, llPath, workDir);
 
@@ -332,10 +401,20 @@ internal static class CompilerApp
         switch (options.Target)
         {
             case CompilationTarget.WindowsX64:
-                new WindowsLinker(toolchain).LinkLlvmIr(llPath, options.OutputPath, workDir, options.OptimizationLevel);
+                new WindowsLinker(toolchain).LinkLlvmIr(
+                    llPath,
+                    options.OutputPath,
+                    workDir,
+                    options.OptimizationLevel,
+                    options.OutputKind == CompilationOutputKind.SharedLibrary);
                 break;
             case CompilationTarget.LinuxX64:
-                new WslLinuxLinker(toolchain).LinkLlvmIr(llPath, options.OutputPath, workDir, options.OptimizationLevel);
+                new WslLinuxLinker(toolchain).LinkLlvmIr(
+                    llPath,
+                    options.OutputPath,
+                    workDir,
+                    options.OptimizationLevel,
+                    options.OutputKind == CompilationOutputKind.SharedLibrary);
                 break;
             case CompilationTarget.Wasm32Browser:
                 new WasmBrowserLinker(toolchain).LinkLlvmIr(llPath, options.OutputPath, workDir, options.OptimizationLevel);
@@ -347,16 +426,17 @@ internal static class CompilerApp
 
     internal static LoadedCompilation LoadProgram(
         IReadOnlyList<string> sourcePaths,
-        ProjectBuild? project)
+        ProjectBuild? project,
+        CompilationTarget target)
     {
         var standardLibrary = LoadStandardLibrary(sourcePaths[0]);
-        var sourcePrograms = LoadUserPrograms(sourcePaths, project);
+        var sourcePrograms = LoadUserPrograms(sourcePaths, project, target);
         var modules = standardLibrary
             .Concat(sourcePrograms)
             .Where(static source => source.ModuleName.Length > 0)
             .ToDictionary(static source => source.ModuleName, StringComparer.Ordinal);
-        standardLibrary = ReparseOpenImports(standardLibrary, modules);
-        sourcePrograms = ReparseOpenImports(sourcePrograms, modules);
+        standardLibrary = ReparseOpenImports(standardLibrary, modules, target);
+        sourcePrograms = ReparseOpenImports(sourcePrograms, modules, target);
         var executableFiles = sourcePrograms.Where(static source => source.Program.Statements.Count > 0).ToArray();
         if (executableFiles.Length > 1)
         {
@@ -384,7 +464,8 @@ internal static class CompilerApp
 
     private static IReadOnlyList<CompilationSource> ReparseOpenImports(
         IReadOnlyList<CompilationSource> sources,
-        IReadOnlyDictionary<string, CompilationSource> modules)
+        IReadOnlyDictionary<string, CompilationSource> modules,
+        CompilationTarget target)
     {
         return sources.Select(source =>
         {
@@ -395,7 +476,16 @@ internal static class CompilerApp
             }
 
             var parsed = ParseSourceFile(source.Path, source.IsStandardLibrary, openImports);
-            return source with { Program = parsed.Program, SourceBytes = parsed.SourceBytes };
+            if (!source.IsStandardLibrary)
+            {
+                parsed = ExpandNativeLibraries(parsed, source.Path, target);
+            }
+            return source with
+            {
+                Program = parsed.Program,
+                SourceBytes = parsed.SourceBytes,
+                AdditionalInputs = parsed.AdditionalInputs
+            };
         }).ToArray();
     }
 
@@ -532,7 +622,8 @@ internal static class CompilerApp
 
     private static IReadOnlyList<CompilationSource> LoadUserPrograms(
         IReadOnlyList<string> sourcePaths,
-        ProjectBuild? project)
+        ProjectBuild? project,
+        CompilationTarget target)
     {
         var loadedByPath = new Dictionary<string, CompilationSource>(StringComparer.OrdinalIgnoreCase);
         var modules = new Dictionary<string, CompilationSource>(StringComparer.Ordinal);
@@ -543,6 +634,7 @@ internal static class CompilerApp
                 expectedModule: null,
                 project?.RootPackage,
                 isDependencyRoot: false,
+                target,
                 loadedByPath,
                 modules);
         }
@@ -563,13 +655,13 @@ internal static class CompilerApp
             StringComparer.Ordinal)
             ?? new Dictionary<string, ProjectPackage>(StringComparer.Ordinal);
         var states = new Dictionary<string, ModuleVisitState>(StringComparer.OrdinalIgnoreCase);
-        VisitImports(root, moduleRoot, packagesByName, loadedByPath, modules, states, []);
+        VisitImports(root, moduleRoot, packagesByName, target, loadedByPath, modules, states, []);
         foreach (var sourcePath in sourcePaths)
         {
             var explicitSource = loadedByPath[Path.GetFullPath(sourcePath)];
             if (!ReferenceEquals(explicitSource, root))
             {
-                VisitImports(explicitSource, moduleRoot, packagesByName, loadedByPath, modules, states, []);
+                VisitImports(explicitSource, moduleRoot, packagesByName, target, loadedByPath, modules, states, []);
             }
         }
         return loadedByPath.Values.OrderBy(static source => source.Path, StringComparer.OrdinalIgnoreCase).ToArray();
@@ -580,6 +672,7 @@ internal static class CompilerApp
         string? expectedModule,
         ProjectPackage? package,
         bool isDependencyRoot,
+        CompilationTarget target,
         IDictionary<string, CompilationSource> loadedByPath,
         IDictionary<string, CompilationSource> modules)
     {
@@ -598,7 +691,10 @@ internal static class CompilerApp
             throw new SollangException($"imported module file not found: {path}");
         }
 
-        var parsed = ParseSourceFile(path, isStandardLibrary: false);
+        var parsed = ExpandNativeLibraries(
+            ParseSourceFile(path, isStandardLibrary: false),
+            path,
+            target);
         var program = parsed.Program;
         var moduleName = string.Join('.', program.NamespacePath);
         if (expectedModule is not null && moduleName != expectedModule)
@@ -619,7 +715,13 @@ internal static class CompilerApp
                 $"module '{moduleName}' is declared by both '{duplicate.Path}' and '{path}'");
         }
 
-        var loaded = new CompilationSource(path, program, package, IsStandardLibrary: false, parsed.SourceBytes);
+        var loaded = new CompilationSource(
+            path,
+            program,
+            package,
+            IsStandardLibrary: false,
+            parsed.SourceBytes,
+            parsed.AdditionalInputs);
         loadedByPath.Add(path, loaded);
         if (moduleName.Length > 0)
         {
@@ -632,6 +734,7 @@ internal static class CompilerApp
         CompilationSource source,
         string moduleRoot,
         IReadOnlyDictionary<string, ProjectPackage> packagesByName,
+        CompilationTarget target,
         IDictionary<string, CompilationSource> loadedByPath,
         IDictionary<string, CompilationSource> modules,
         IDictionary<string, ModuleVisitState> states,
@@ -694,6 +797,7 @@ internal static class CompilerApp
                     moduleName,
                     importedPackage,
                     isDependencyRoot,
+                    target,
                     loadedByPath,
                     modules);
             }
@@ -701,6 +805,7 @@ internal static class CompilerApp
                 imported,
                 moduleRoot,
                 packagesByName,
+                target,
                 loadedByPath,
                 modules,
                 states,
@@ -830,7 +935,47 @@ internal static class CompilerApp
         return new ParsedSource(new Parser(tokens, isStandardLibrary, openImports).Parse(), sourceBytes);
     }
 
-    private sealed record ParsedSource(SollangProgram Program, byte[] SourceBytes);
+    private static ParsedSource ExpandNativeLibraries(
+        ParsedSource parsed,
+        string sourcePath,
+        CompilationTarget target)
+    {
+        var imports = parsed.Program.NativeLibraries ?? [];
+        if (imports.Count == 0)
+        {
+            return parsed;
+        }
+        if (target == CompilationTarget.Wasm32Browser)
+        {
+            throw new SollangException(
+                "Sollang library imports currently support windows-x64 and linux-x64");
+        }
+
+        var aliases = new HashSet<string>(StringComparer.Ordinal);
+        var functions = new List<FunctionDeclaration>(parsed.Program.Functions);
+        var inputs = new List<CompilationInput>(imports.Count);
+        foreach (var import in imports)
+        {
+            if (!aliases.Add(import.Alias))
+            {
+                throw new SollangException(
+                    $"{import.Line}:{import.Column}: library alias '{import.Alias}' already exists");
+            }
+            var loaded = SollangLibraryManifest.Load(import, sourcePath, target);
+            functions.AddRange(loaded.Functions);
+            inputs.Add(loaded.Input);
+        }
+
+        return new ParsedSource(
+            parsed.Program with { Functions = functions },
+            parsed.SourceBytes,
+            inputs);
+    }
+
+    private sealed record ParsedSource(
+        SollangProgram Program,
+        byte[] SourceBytes,
+        IReadOnlyList<CompilationInput>? AdditionalInputs = null);
 
     private enum ModuleVisitState
     {

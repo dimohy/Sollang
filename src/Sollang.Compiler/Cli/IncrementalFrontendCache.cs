@@ -15,7 +15,7 @@ internal sealed record IncrementalFrontendCacheProbe(
 internal static class IncrementalFrontendCache
 {
     private const ulong Magic = 6002245291164258120;
-    private const ulong Schema = 1;
+    private const ulong Schema = 2;
     private const int DigestLength = 32;
     private const int MaximumRecordCount = 1_000_000;
     private const int MaximumPathBytes = 1024 * 1024;
@@ -24,6 +24,7 @@ internal static class IncrementalFrontendCache
     private const byte ManifestKind = 1;
     private const byte StandardLibraryKind = 2;
     private const byte UserSourceKind = 3;
+    private const byte AdditionalInputKind = 4;
 
     private static readonly StringComparer PathComparer = OperatingSystem.IsWindows()
         ? StringComparer.OrdinalIgnoreCase
@@ -96,6 +97,12 @@ internal static class IncrementalFrontendCache
                     .OrderByDescending(static source => source.IsStandardLibrary)
                     .ThenBy(static source => source.Path, PathComparer)
                     .ToArray();
+                var additionalInputs = sources
+                    .SelectMany(static source => source.AdditionalInputs ?? [])
+                    .GroupBy(static input => Path.GetFullPath(input.Path), PathComparer)
+                    .Select(static group => group.First())
+                    .OrderBy(static input => input.Path, PathComparer)
+                    .ToArray();
                 WriteUInt64(stream, checksum, Magic);
                 WriteUInt64(stream, checksum, Schema);
                 WriteUInt64(stream, checksum, location.CompilerHash);
@@ -104,6 +111,7 @@ internal static class IncrementalFrontendCache
                 WriteBytes(stream, checksum, ComputeFileSha256(location.CodegenPath));
                 WriteUInt64(stream, checksum, checked((ulong)roots.Length));
                 WriteUInt64(stream, checksum, checked((ulong)manifests.Length));
+                WriteUInt64(stream, checksum, checked((ulong)additionalInputs.Length));
                 WriteUInt64(stream, checksum, checked((ulong)sources.Length));
                 WriteUInt64(
                     stream,
@@ -117,6 +125,15 @@ internal static class IncrementalFrontendCache
                 foreach (var manifest in manifests)
                 {
                     WriteRecord(stream, checksum, ManifestKind, manifest, File.ReadAllBytes(manifest));
+                }
+                foreach (var input in additionalInputs)
+                {
+                    WriteRecord(
+                        stream,
+                        checksum,
+                        AdditionalInputKind,
+                        input.Path,
+                        input.Bytes);
                 }
                 foreach (var source in sources)
                 {
@@ -145,7 +162,7 @@ internal static class IncrementalFrontendCache
     private static ValidatedSnapshot ValidateSnapshot(IncrementalCacheLocation location, CliOptions options)
     {
         var fileLength = new FileInfo(location.SourceSnapshotPath).Length;
-        if (fileLength < 9 * sizeof(ulong) + 2 * DigestLength)
+        if (fileLength < 10 * sizeof(ulong) + 2 * DigestLength)
         {
             throw new InvalidDataException("source snapshot is truncated");
         }
@@ -176,6 +193,7 @@ internal static class IncrementalFrontendCache
 
         var rootCount = CheckedCount(ReadUInt64(stream, checksum), "root");
         var manifestCount = CheckedCount(ReadUInt64(stream, checksum), "manifest");
+        var additionalInputCount = CheckedCount(ReadUInt64(stream, checksum), "additional input");
         var sourceCount = CheckedCount(ReadUInt64(stream, checksum), "source");
         var standardLibraryCount = CheckedCount(ReadUInt64(stream, checksum), "standard-library source");
         if (standardLibraryCount > sourceCount)
@@ -216,6 +234,11 @@ internal static class IncrementalFrontendCache
                 throw new FrontendCacheMissException("project manifest set changed");
             }
             CompareContent(stream, checksum, record, "project manifest");
+        }
+        for (var index = 0; index < additionalInputCount; index++)
+        {
+            var record = ReadRecordHeader(stream, checksum, AdditionalInputKind);
+            CompareContent(stream, checksum, record, "compiler input");
         }
 
         var standardLibraryIndex = 0;

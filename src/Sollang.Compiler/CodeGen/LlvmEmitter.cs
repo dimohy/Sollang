@@ -10,6 +10,7 @@ internal sealed partial class LlvmEmitter
 {
     private readonly BoundProgram _program;
     private readonly LlvmRuntimePlatform _platform;
+    private readonly bool _sharedLibrary;
     private readonly bool _usesProcessArguments;
     private readonly bool _usesProcessEnvironment;
     private readonly bool _usesChildProcesses;
@@ -61,10 +62,14 @@ internal sealed partial class LlvmEmitter
     private readonly Stack<LocalScope> _asyncScopeSnapshots = new();
     private AsyncCfgLowering? _activeAsyncCfg;
 
-    public LlvmEmitter(BoundProgram program, LlvmRuntimePlatform platform)
+    public LlvmEmitter(
+        BoundProgram program,
+        LlvmRuntimePlatform platform,
+        bool sharedLibrary = false)
     {
         _program = program;
         _platform = platform;
+        _sharedLibrary = sharedLibrary;
         _currentFunctions = program.Functions;
         RecordFunctionScopes(program.Functions.Values, program.Functions);
         CollectStandaloneStandardLibraryFunctions();
@@ -707,7 +712,14 @@ internal sealed partial class LlvmEmitter
 
         BeginUnit("suffix");
         EmitRuntimeHelpers();
-        EmitMain();
+        if (_sharedLibrary)
+        {
+            EmitLibraryExports();
+        }
+        else
+        {
+            EmitMain();
+        }
         EmitFunctionLine("attributes #0 = { nounwind }");
         var suffixKey = reuse?.SuffixKey ?? default;
         units.Add(reuse is not null

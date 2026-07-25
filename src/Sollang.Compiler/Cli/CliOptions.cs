@@ -10,7 +10,8 @@ internal sealed record CliOptions(
     CompilationTarget Target,
     bool KeepTemps,
     string? OptimizationLevel,
-    bool Locked)
+    bool Locked,
+    CompilationOutputKind OutputKind)
 {
     public static CliOptions Parse(string[] args)
     {
@@ -29,6 +30,7 @@ internal sealed record CliOptions(
         var target = CompilationTarget.WindowsX64;
         var keepTemps = false;
         var locked = false;
+        var outputKind = CompilationOutputKind.Executable;
         string? optimizationLevel = null;
 
         for (var i = 1; i < args.Length; i++)
@@ -63,6 +65,9 @@ internal sealed record CliOptions(
                     break;
                 case "--locked":
                     locked = true;
+                    break;
+                case "--library":
+                    outputKind = CompilationOutputKind.SharedLibrary;
                     break;
                 case "-O0":
                 case "-O1":
@@ -104,6 +109,11 @@ internal sealed record CliOptions(
         if (locked && sources.Count > 0)
         {
             throw new SollangException("--locked requires a project or workspace build");
+        }
+        if (outputKind == CompilationOutputKind.SharedLibrary
+            && target == CompilationTarget.Wasm32Browser)
+        {
+            throw new SollangException("--library currently supports windows-x64 and linux-x64");
         }
 
         ProjectBuild? project = null;
@@ -151,8 +161,12 @@ internal sealed record CliOptions(
         }
 
         output ??= project is null
-            ? DefaultSourceOutput(sources[0], target)
-            : DefaultProjectOutput(project, target);
+            ? DefaultSourceOutput(sources[0], target, outputKind)
+            : DefaultProjectOutput(project, target, outputKind);
+        if (outputKind == CompilationOutputKind.SharedLibrary)
+        {
+            ValidateSharedLibraryOutput(output, target);
+        }
 
         return new CliOptions(
             sources.Select(Path.GetFullPath).ToArray(),
@@ -162,10 +176,20 @@ internal sealed record CliOptions(
             target,
             keepTemps,
             optimizationLevel,
-            locked);
+            locked,
+            outputKind);
     }
 
-    private static string DefaultSourceOutput(string source, CompilationTarget target) =>
+    private static string DefaultSourceOutput(
+        string source,
+        CompilationTarget target,
+        CompilationOutputKind outputKind) =>
+        outputKind == CompilationOutputKind.SharedLibrary
+            ? SharedLibraryOutput(
+                Path.GetDirectoryName(source) ?? Directory.GetCurrentDirectory(),
+                Path.GetFileNameWithoutExtension(source),
+                target)
+            :
         target switch
         {
             CompilationTarget.WindowsX64 => Path.ChangeExtension(source, ".exe"),
@@ -176,26 +200,62 @@ internal sealed record CliOptions(
             _ => throw new SollangException($"unsupported target '{target}'")
         };
 
-    private static string DefaultProjectOutput(ProjectBuild project, CompilationTarget target) =>
+    private static string DefaultProjectOutput(
+        ProjectBuild project,
+        CompilationTarget target,
+        CompilationOutputKind outputKind) =>
         project.Workspace is null
             ? Path.Combine(
                 project.RootPackage.Manifest.Directory,
                 "build",
-                OutputFileName(project.Product.Name, target))
+                OutputFileName(project.Product.Name, target, outputKind))
             : Path.Combine(
                 project.Workspace.Directory,
                 "build",
                 TargetName(target),
                 project.RootPackage.Manifest.Name,
-                OutputFileName(project.Product.Name, target));
+                OutputFileName(project.Product.Name, target, outputKind));
 
-    private static string OutputFileName(string productName, CompilationTarget target) => target switch
+    private static string OutputFileName(
+        string productName,
+        CompilationTarget target,
+        CompilationOutputKind outputKind) =>
+        outputKind == CompilationOutputKind.SharedLibrary
+            ? Path.GetFileName(SharedLibraryOutput("", productName, target))
+            : target switch
     {
         CompilationTarget.WindowsX64 => productName + ".exe",
         CompilationTarget.LinuxX64 => productName,
         CompilationTarget.Wasm32Browser => productName + ".wasm",
         _ => throw new SollangException($"unsupported target '{target}'")
     };
+
+    private static string SharedLibraryOutput(
+        string directory,
+        string name,
+        CompilationTarget target) => target switch
+    {
+        CompilationTarget.WindowsX64 => Path.Combine(directory, name + ".dll"),
+        CompilationTarget.LinuxX64 => Path.Combine(directory, "lib" + name + ".so"),
+        _ => throw new SollangException($"shared libraries are unsupported for target '{target}'")
+    };
+
+    private static void ValidateSharedLibraryOutput(string output, CompilationTarget target)
+    {
+        var fileName = Path.GetFileName(output);
+        if (target == CompilationTarget.WindowsX64
+            && !fileName.EndsWith(".dll", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new SollangException("a windows-x64 library output must end with '.dll'");
+        }
+        if (target == CompilationTarget.LinuxX64
+            && (!fileName.StartsWith("lib", StringComparison.Ordinal)
+                || !fileName.EndsWith(".so", StringComparison.Ordinal)))
+        {
+            throw new SollangException(
+                "a linux-x64 library output must use the conventional 'lib<name>.so' form");
+        }
+    }
 
     private static string TargetName(CompilationTarget target) => target switch
     {
@@ -209,7 +269,7 @@ internal sealed record CliOptions(
         "usage: sollang build [<source.slg> ... | --project <sollang.project|directory> "
         + "| --workspace <sollang.workspace|directory> --package <name>] [--product <name>] "
         + "[-o <output>] [--target windows-x64|linux-x64|wasm32-browser] "
-        + "[--llvm <dir>] [-O0|-O1|-O2|-O3] [--keep-temps] [--locked]";
+        + "[--library] [--llvm <dir>] [-O0|-O1|-O2|-O3] [--keep-temps] [--locked]";
 
     private static CompilationTarget ParseTarget(string value)
     {
@@ -232,4 +292,10 @@ internal sealed record CliOptions(
         index++;
         return args[index];
     }
+}
+
+internal enum CompilationOutputKind
+{
+    Executable,
+    SharedLibrary
 }

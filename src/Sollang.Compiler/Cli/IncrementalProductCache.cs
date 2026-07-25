@@ -8,15 +8,16 @@ internal sealed record IncrementalProductCacheProbe(string Status, bool IsExact)
 internal static class IncrementalProductCache
 {
     private const ulong Magic = 6002245291165308018;
-    private const ulong Schema = 1;
+    private const ulong Schema = 2;
     private const int DigestLength = 32;
-    private const int PayloadLength = 5 * sizeof(ulong) + 3 * DigestLength;
+    private const int PayloadLength = 5 * sizeof(ulong) + 4 * DigestLength;
     private const int ArtifactLength = PayloadLength + DigestLength;
 
     public static IncrementalProductCacheProbe Open(
         IncrementalCacheLocation location,
         string outputPath,
-        ReadOnlySpan<byte> sourceGenerationKey)
+        ReadOnlySpan<byte> sourceGenerationKey,
+        string? auxiliaryOutputPath = null)
     {
         if (!File.Exists(location.ProductPath))
         {
@@ -61,6 +62,8 @@ internal static class IncrementalProductCache
             var codegenDigest = payload.Slice(offset, DigestLength);
             offset += DigestLength;
             var productDigest = payload.Slice(offset, DigestLength);
+            offset += DigestLength;
+            var auxiliaryDigest = payload.Slice(offset, DigestLength);
             if (!CryptographicOperations.FixedTimeEquals(sourceDigest, sourceGenerationKey))
             {
                 return new IncrementalProductCacheProbe("miss: source generation changed", false);
@@ -73,6 +76,12 @@ internal static class IncrementalProductCache
             {
                 return new IncrementalProductCacheProbe("miss: output changed", false);
             }
+            if (auxiliaryOutputPath is null
+                    ? !IsZeroDigest(auxiliaryDigest)
+                    : !MatchesFile(auxiliaryDigest, auxiliaryOutputPath))
+            {
+                return new IncrementalProductCacheProbe("miss: auxiliary output changed", false);
+            }
             return new IncrementalProductCacheProbe("exact hit", true);
         }
         catch (Exception error) when (error is IOException
@@ -83,7 +92,10 @@ internal static class IncrementalProductCache
         }
     }
 
-    public static void Publish(IncrementalCacheLocation location, string outputPath)
+    public static void Publish(
+        IncrementalCacheLocation location,
+        string outputPath,
+        string? auxiliaryOutputPath = null)
     {
         var directory = Path.GetDirectoryName(location.ProductPath)
             ?? throw new InvalidOperationException("product cache path has no directory");
@@ -99,6 +111,15 @@ internal static class IncrementalProductCache
         offset += DigestLength;
         WriteDigest(payload, ref offset, location.CodegenPath);
         WriteDigest(payload, ref offset, outputPath);
+        if (auxiliaryOutputPath is null)
+        {
+            payload.AsSpan(offset, DigestLength).Clear();
+            offset += DigestLength;
+        }
+        else
+        {
+            WriteDigest(payload, ref offset, auxiliaryOutputPath);
+        }
 
         var temporaryPath = location.ProductPath + "." + Guid.NewGuid().ToString("N") + ".tmp";
         try
@@ -142,6 +163,18 @@ internal static class IncrementalProductCache
         Span<byte> actual = stackalloc byte[DigestLength];
         SHA256.HashData(stream, actual);
         return CryptographicOperations.FixedTimeEquals(expected, actual);
+    }
+
+    private static bool IsZeroDigest(ReadOnlySpan<byte> digest)
+    {
+        foreach (var value in digest)
+        {
+            if (value != 0)
+            {
+                return false;
+            }
+        }
+        return true;
     }
 
     private static byte[] ReadSourceGenerationKey(string path)

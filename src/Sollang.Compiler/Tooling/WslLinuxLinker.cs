@@ -6,7 +6,12 @@ namespace Sollang.Compiler.Tooling;
 
 internal sealed class WslLinuxLinker(LlvmToolchain toolchain)
 {
-    public void LinkLlvmIr(string llPath, string outputPath, string workDir, string? optimizationLevel)
+    public void LinkLlvmIr(
+        string llPath,
+        string outputPath,
+        string workDir,
+        string? optimizationLevel,
+        bool sharedLibrary = false)
     {
         var objectPath = Path.Combine(workDir, Path.GetFileNameWithoutExtension(outputPath) + ".o");
 
@@ -16,6 +21,7 @@ internal sealed class WslLinuxLinker(LlvmToolchain toolchain)
             "x86_64-unknown-linux-gnu",
             optimizationLevel ?? "-Oz",
             "-fno-addrsig",
+            ..(sharedLibrary ? ["-fPIC"] : Array.Empty<string>()),
             "-c",
             llPath,
             "-o",
@@ -24,8 +30,8 @@ internal sealed class WslLinuxLinker(LlvmToolchain toolchain)
 
         if (OperatingSystem.IsWindows())
         {
-            Run("wsl.exe",
-            [
+            var linkArguments = new List<string>
+            {
                 "--exec",
                 "cc",
                 ToWslPath(objectPath),
@@ -34,27 +40,40 @@ internal sealed class WslLinuxLinker(LlvmToolchain toolchain)
                 "-s",
                 "-o",
                 ToWslPath(outputPath)
-            ]);
+            };
+            if (sharedLibrary)
+            {
+                linkArguments.Insert(3, "-shared");
+            }
+            Run("wsl.exe", linkArguments);
 
-            Run("wsl.exe",
-            [
-                "--exec",
-                "chmod",
-                "+x",
-                ToWslPath(outputPath)
-            ]);
+            if (!sharedLibrary)
+            {
+                Run("wsl.exe",
+                [
+                    "--exec",
+                    "chmod",
+                    "+x",
+                    ToWslPath(outputPath)
+                ]);
+            }
         }
         else
         {
-            Run("cc",
-            [
+            var linkArguments = new List<string>
+            {
                 objectPath,
                 "-ldl",
                 "-Wl,--gc-sections",
                 "-s",
                 "-o",
                 outputPath
-            ]);
+            };
+            if (sharedLibrary)
+            {
+                linkArguments.Insert(0, "-shared");
+            }
+            Run("cc", linkArguments);
         }
     }
 

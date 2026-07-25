@@ -29,7 +29,7 @@ internal static class NativeTestRunner
             SourcePaths = sourcePaths,
             OutputPath = TestOutputPath(options)
         };
-        var loaded = CompilerApp.LoadProgram(options.SourcePaths, options.Project);
+        var loaded = CompilerApp.LoadProgram(options.SourcePaths, options.Project, options.Target);
         var selected = SelectTests(loaded, options.Project, filter);
         var harness = BuildHarness(loaded.Program, selected);
 

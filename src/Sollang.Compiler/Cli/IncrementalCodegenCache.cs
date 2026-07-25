@@ -207,7 +207,8 @@ internal sealed class IncrementalCodegenCache
             typeof(CompilerApp).Assembly.ManifestModule.ModuleVersionId.ToString("N")
         ]);
         var targetName = TargetName(options.Target);
-        var configurationName = options.OptimizationLevel ?? "-O0";
+        var configurationName = (options.OptimizationLevel ?? "-O0")
+            + (options.OutputKind == CompilationOutputKind.SharedLibrary ? "-library" : "-executable");
         var outputDirectory = System.IO.Path.GetDirectoryName(options.OutputPath)
             ?? Directory.GetCurrentDirectory();
         var cacheDirectory = System.IO.Path.Combine(outputDirectory, ".sollang-cache");

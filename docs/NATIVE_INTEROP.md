@@ -2,10 +2,11 @@
 
 Status: implementation contract for Sollang 0.3
 
-Current vertical slice: grouped C ABI declarations, contextual numeric
+Current vertical slices: grouped C ABI declarations, contextual numeric
 literals, bind-once dynamic loading, cached indirect calls, and deterministic
-cleanup are implemented in both the C# reference compiler and the self-hosted
-compiler for Windows x64 and Linux x64.
+cleanup are implemented in both compilers. The C# reference compiler also
+builds and consumes scalar-only Sollang shared libraries on Windows x64 and
+Linux x64; self-hosted parity for that second slice remains in progress.
 
 Sollang native interoperability is one feature with four projections:
 
@@ -103,6 +104,42 @@ Numeric literals use the declared native parameter as their expected type.
 Consequently `multiply(6, 7)` emits `i64` literals for an `Int64` signature and
 `hypotSquared(3, 4)` emits `double 3.0, 4.0`; wrapper conversions are unnecessary.
 
+## Sollang shared libraries
+
+`--library` builds public, synchronous, effect-free scalar functions as a
+`.dll` or `.so`. Internal Sollang functions keep their optimized runtime
+context ABI; one thin C-compatible wrapper is emitted for every public entry.
+
+The compiler writes a deterministic target-specific interface beside the
+binary:
+
+- `math.windows-x64.slglib.json`
+- `math.linux-x64.slglib.json`
+
+A consumer needs no repeated signature block:
+
+```slg
+library fixture from "../build/fixture"
+
+main {
+    fixture.multiply(6, 7) => product
+    fixture.hypotSquared(3, 4) => squared
+}
+```
+
+The import path is resolved relative to the importing source file. Its
+interface is a tracked compiler input, so an ABI change invalidates frontend,
+semantic, codegen, and product caches. Exact warm builds restore and verify the
+cached interface without parsing or linking again.
+
+The complete ABI hash is embedded in every exported symbol name as well as the
+interface. A stale binary therefore cannot be called through a compatible-
+looking old symbol: binding fails before the first call. This costs no extra
+steady-state comparison, allocation, or lookup. Literal arguments are lowered
+directly from the imported signature, so `fixture.multiply(6, 7)` contains
+`i64 6, i64 7`, while `fixture.hypotSquared(3, 4)` contains
+`double 3.0, double 4.0`.
+
 ## Binding and linking
 
 Direct imports are preferred when the dependency is known at build time. They
@@ -123,14 +160,16 @@ ordinary builds; ordinals are allowed only through explicit generated metadata.
 ## Sollang library ABI
 
 A Sollang library exports a stable C-compatible surface, not its internal
-optimized function ABI. Its sidecar manifest records target, ABI schema,
-compiler compatibility, exported signatures, layout data, ownership, error
-rules, and a deterministic ABI hash.
+optimized function ABI. The implemented scalar slice records the target, ABI
+schema, exported signatures, target file, per-signature hashes, and a
+deterministic whole-interface ABI hash. Layout, ownership, and error metadata
+will be added with stable structures and opaque owners.
 
 Owned Sollang values never expose their private layout. They cross the boundary
 as opaque affine handles with generated retain-free move and drop operations, or
 through an explicitly stable value representation. Importing a Sollang library
-checks the ABI hash before linking.
+validates all manifest hashes at compile time and binds ABI-hash-qualified
+symbols at startup.
 
 ## COM
 
@@ -185,3 +224,9 @@ loads the cached function pointer exactly once. The self-hosted WebAssembly
 backend rejects native declarations before emitting invalid host-loader IR.
 Both compilers reject non-ABI-safe signatures such as `Text` before code
 generation.
+
+Run `scripts/verify-sollang-library-export.ps1` to build a Sollang DLL and
+Linux `.so`, consume both through a one-line `library` declaration, verify
+their exported hash-qualified symbols and exact output, inspect LLVM for
+directly typed numeric literals, and assert diagnostics for unsafe or empty
+public surfaces.

@@ -4,22 +4,30 @@ namespace Sollang.Compiler.CodeGen;
 
 internal static class LlvmIrGenerator
 {
-    public static string GenerateProgram(BoundProgram program, CompilationTarget target)
+    public static string GenerateProgram(
+        BoundProgram program,
+        CompilationTarget target,
+        bool sharedLibrary = false)
     {
-        return new LlvmEmitter(program, LlvmRuntimePlatform.Create(target)).Emit();
+        return new LlvmEmitter(program, LlvmRuntimePlatform.Create(target), sharedLibrary).Emit();
     }
 
-    public static void WriteProgram(BoundProgram program, CompilationTarget target, TextWriter writer)
+    public static void WriteProgram(
+        BoundProgram program,
+        CompilationTarget target,
+        TextWriter writer,
+        bool sharedLibrary = false)
     {
         var output = new TextWriterOutputSink(writer);
-        new LlvmEmitter(program, LlvmRuntimePlatform.Create(target)).Emit(output);
+        new LlvmEmitter(program, LlvmRuntimePlatform.Create(target), sharedLibrary).Emit(output);
     }
 
     public static LlvmCodegenOutput GenerateUnits(
         BoundProgram program,
         CompilationTarget target,
-        LlvmCodegenReuse reuse)
+        LlvmCodegenReuse reuse,
+        bool sharedLibrary = false)
     {
-        return new LlvmEmitter(program, LlvmRuntimePlatform.Create(target)).EmitUnits(reuse);
+        return new LlvmEmitter(program, LlvmRuntimePlatform.Create(target), sharedLibrary).EmitUnits(reuse);
     }
 }

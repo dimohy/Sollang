@@ -238,7 +238,7 @@ function Corrupt-Cache {
         [Parameter(Mandatory)] [string]$Target
     )
 
-    $cachePath = Join-Path $caseRoot "build\.sollang-cache\app.$Target.o0.cgu"
+    $cachePath = Join-Path $caseRoot "build\.sollang-cache\app.$Target.o0-executable.cgu"
     $stream = [System.IO.File]::Open($cachePath, 'Open', 'ReadWrite', 'None')
     try {
         $stream.Position = $stream.Length - 1
@@ -256,7 +256,7 @@ function Corrupt-FrontendCache {
         [Parameter(Mandatory)] [string]$Target
     )
 
-    $cachePath = Join-Path $caseRoot "build\.sollang-cache\app.$Target.o0.sources"
+    $cachePath = Join-Path $caseRoot "build\.sollang-cache\app.$Target.o0-executable.sources"
     $stream = [System.IO.File]::Open($cachePath, 'Open', 'ReadWrite', 'None')
     try {
         $stream.Position = $stream.Length - 1
@@ -274,7 +274,7 @@ function Corrupt-SemanticCache {
         [Parameter(Mandatory)] [string]$Target
     )
 
-    $cachePath = Join-Path $caseRoot "build\.sollang-cache\app.$Target.o0.semantic"
+    $cachePath = Join-Path $caseRoot "build\.sollang-cache\app.$Target.o0-executable.semantic"
     $stream = [System.IO.File]::Open($cachePath, 'Open', 'ReadWrite', 'None')
     try {
         $stream.Position = $stream.Length - 1

@@ -7,11 +7,18 @@ internal sealed record SollangProgram(
     IReadOnlyList<EnumDeclaration> Enums,
     IReadOnlyList<TraitDeclaration> Traits,
     IReadOnlyList<FunctionDeclaration> Functions,
-    IReadOnlyList<Statement> Statements);
+    IReadOnlyList<Statement> Statements,
+    IReadOnlyList<NativeLibraryImport>? NativeLibraries = null);
 
 internal sealed record ImportDeclaration(
     IReadOnlyList<string> Path,
     string Alias);
+
+internal sealed record NativeLibraryImport(
+    string Alias,
+    string Library,
+    int Line,
+    int Column);
 
 internal sealed record OpenImportCandidate(
     IReadOnlyList<string> Path,
