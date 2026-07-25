@@ -69,6 +69,7 @@ internal sealed partial class SemanticCompiler
         _program = program;
         _pointerBitWidth = pointerBitWidth;
         _types = BuildTypeDefinitions(program.Structs, program.Enums);
+        ValidateAbiStructDefinitions();
         _traits = BindTraits(program.Traits);
     }
 
@@ -936,6 +937,28 @@ internal sealed partial class SemanticCompiler
                 "async functions require a transferable result, a sendable input, and a non-local user declaration; owned inputs must use move");
         }
         var kind = BindFunctionKind(function, inputType, returnType, isLocal);
+        if (kind == BoundFunctionKind.Native)
+        {
+            if (inputType is { } nativeInputType)
+            {
+                ValidateNativeAbiParameter(
+                    nativeInputType,
+                    inputOwnership,
+                    "input",
+                    function.Line,
+                    function.Column);
+            }
+            foreach (var parameter in additionalParameters)
+            {
+                ValidateNativeAbiParameter(
+                    parameter.Type,
+                    parameter.Ownership,
+                    $"parameter '{parameter.Name}'",
+                    parameter.Line,
+                    parameter.Column);
+            }
+            ValidateNativeAbiResult(returnType, function.Line, function.Column);
+        }
         if (kind == BoundFunctionKind.RuntimeMouseEvents)
         {
             if (additionalParameters.Length != 1
@@ -1219,11 +1242,117 @@ internal sealed partial class SemanticCompiler
             return;
         }
 
+        if (_types.TryResolve(typeName, out var type)
+            && IsNativeAbiValueType(type))
+        {
+            return;
+        }
+        if (typeName.StartsWith("ref ", StringComparison.Ordinal)
+            && _types.TryResolve(typeName[4..].Trim(), out type)
+            && IsNativeAbiStruct(type))
+        {
+            return;
+        }
+
         throw Error(
             line,
             column,
             $"native function {role} type '{typeName}' is not ABI-safe; "
-            + "use a fixed-width scalar type in the first native ABI slice");
+            + "use a fixed-width scalar or an explicitly declared abi struct");
+    }
+
+    private void ValidateNativeAbiParameter(
+        BoundType type,
+        BoundFunctionInputOwnership ownership,
+        string role,
+        int line,
+        int column)
+    {
+        if (ownership == BoundFunctionInputOwnership.Move)
+        {
+            throw Error(line, column, $"native function {role} cannot transfer Sollang ownership");
+        }
+        if (ownership == BoundFunctionInputOwnership.MutableBorrow)
+        {
+            if (IsNativeAbiStruct(type))
+            {
+                return;
+            }
+            throw Error(line, column, $"native function {role} mut input requires an abi struct");
+        }
+        if (_types.IsReference(type))
+        {
+            if (IsNativeAbiStruct(_types.GetReference(type).ElementType))
+            {
+                return;
+            }
+            throw Error(line, column, $"native function {role} ref input requires an abi struct");
+        }
+        if (IsNativeAbiValueType(type))
+        {
+            return;
+        }
+
+        throw Error(line, column, $"native function {role} type '{FormatType(type)}' is not ABI-safe");
+    }
+
+    private void ValidateNativeAbiResult(BoundType type, int line, int column)
+    {
+        if (_types.IsReference(type))
+        {
+            throw Error(
+                line,
+                column,
+                "native function result cannot borrow foreign memory; use an owned handle API");
+        }
+        if (!IsNativeAbiValueType(type))
+        {
+            throw Error(line, column, $"native function result type '{FormatType(type)}' is not ABI-safe");
+        }
+    }
+
+    private bool IsNativeAbiValueType(BoundType type)
+    {
+        return type is BoundType.Unit
+            or BoundType.Int8 or BoundType.Int16 or BoundType.Int or BoundType.Int64
+            or BoundType.UInt8 or BoundType.UInt16 or BoundType.UInt32 or BoundType.UInt64
+            or BoundType.Float32 or BoundType.Float64
+            || IsNativeAbiStruct(type);
+    }
+
+    private bool IsNativeAbiStruct(BoundType type) =>
+        _types.IsStruct(type) && _types.GetStruct(type).IsAbi;
+
+    private void ValidateAbiStructDefinitions()
+    {
+        foreach (var structure in _types.Structs.Where(static value => value.IsAbi))
+        {
+            if (structure.Fields.Count == 0)
+            {
+                throw Error(
+                    structure.Line,
+                    structure.Column,
+                    $"abi struct '{structure.Name}' requires at least one field");
+            }
+            foreach (var field in structure.Fields)
+            {
+                if (field.Type is BoundType.Int8 or BoundType.Int16 or BoundType.Int or BoundType.Int64
+                    or BoundType.UInt8 or BoundType.UInt16 or BoundType.UInt32 or BoundType.UInt64
+                    or BoundType.Float32 or BoundType.Float64)
+                {
+                    continue;
+                }
+                if (_types.IsStruct(field.Type) && _types.GetStruct(field.Type).IsAbi)
+                {
+                    continue;
+                }
+
+                throw Error(
+                    field.Line,
+                    field.Column,
+                    $"abi struct field '{structure.Name}.{field.Name}' must use a fixed-width scalar or abi struct");
+            }
+        }
     }
 
     private IReadOnlyDictionary<string, BoundFunction> BindLocalFunctions(FunctionDeclaration owner)
@@ -9444,7 +9573,8 @@ internal sealed partial class SemanticCompiler
                 declaration.Column,
                 declaration.ModuleName,
                 declaration.IsPublic,
-                declaration.DeclaringTypeName));
+                declaration.DeclaringTypeName,
+                declaration.IsAbi));
         }
 
         var enums = new Dictionary<TypeId, BoundEnumDefinition>();

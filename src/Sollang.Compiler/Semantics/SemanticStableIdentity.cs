@@ -21,6 +21,7 @@ internal static class SemanticStableIdentity
             fields.Add(structure.Name);
             fields.Add(structure.DeclaringTypeName ?? "");
             fields.Add(structure.IsPublic ? "public" : "private");
+            fields.Add(structure.IsAbi ? "abi" : "sollang");
             foreach (var field in structure.Fields)
             {
                 fields.Add(field.Name);

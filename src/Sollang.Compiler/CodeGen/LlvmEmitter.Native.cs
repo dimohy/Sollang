@@ -160,8 +160,14 @@ internal sealed partial class LlvmEmitter
     {
         var address = NextTemp("native_target");
         EmitLoad(address, "ptr", NativeFunctionPointerGlobal(function), 8);
-        var arguments = ExplicitFunctionCallArgumentList(function, argument, additionalArguments);
-        var returnType = LlvmType(function.ReturnType);
+        if (UsesNativeAggregateAbi(function))
+        {
+            return EmitNativeAggregateFunctionCall(function, argument, additionalArguments, address);
+        }
+        var arguments = string.Join(
+            ", ",
+            NativeAggregateCallArguments(function, argument, additionalArguments, hasIndirectResult: false));
+        var returnType = NativeScalarReturnType(function.ReturnType);
         if (function.ReturnType == BoundType.Unit)
         {
             EmitIndirectCall(target: null, "void", address, arguments);
@@ -174,8 +180,426 @@ internal sealed partial class LlvmEmitter
             ? new RuntimeInt(function.ReturnType, result)
             : IsFloatType(function.ReturnType)
                 ? new RuntimeFloat(function.ReturnType, result)
+                : _program.Types.IsStruct(function.ReturnType)
+                    ? new RuntimeStruct(function.ReturnType, result)
                 : throw new SollangException(
                     $"native result type '{function.ReturnType}' is not implemented");
+    }
+
+    private bool UsesNativeAggregateAbi(BoundFunction function)
+    {
+        if (_program.Types.IsStruct(function.ReturnType))
+        {
+            return true;
+        }
+        if (function.InputType is { } input
+            && function.InputOwnership != BoundFunctionInputOwnership.MutableBorrow
+            && _program.Types.IsStruct(input))
+        {
+            return true;
+        }
+        return (function.AdditionalParameters ?? []).Any(parameter =>
+            parameter.Ownership != BoundFunctionInputOwnership.MutableBorrow
+            && _program.Types.IsStruct(parameter.Type));
+    }
+
+    private RuntimeValue EmitNativeAggregateFunctionCall(
+        BoundFunction function,
+        RuntimeValue? argument,
+        IReadOnlyList<RuntimeValue>? additionalArguments,
+        string address)
+    {
+        var resultPlan = _program.Types.IsStruct(function.ReturnType)
+            ? NativeAggregatePlan(function.ReturnType)
+            : null;
+        var arguments = NativeAggregateCallArguments(
+            function,
+            argument,
+            additionalArguments,
+            resultPlan?.IsIndirect == true);
+        if (!_program.Types.IsStruct(function.ReturnType))
+        {
+            var returnType = NativeScalarReturnType(function.ReturnType);
+            if (function.ReturnType == BoundType.Unit)
+            {
+                EmitIndirectCall(target: null, "void", address, string.Join(", ", arguments));
+                return RuntimeUnit.Instance;
+            }
+
+            var scalarResult = NextTemp("native_result");
+            EmitIndirectCall(scalarResult, returnType, address, string.Join(", ", arguments));
+            return IsIntegerType(function.ReturnType)
+                ? new RuntimeInt(function.ReturnType, scalarResult)
+                : new RuntimeFloat(function.ReturnType, scalarResult);
+        }
+
+        resultPlan ??= NativeAggregatePlan(function.ReturnType);
+        if (resultPlan.IsIndirect)
+        {
+            var resultPointer = NextTemp("native_sret");
+            var structType = LlvmStructType(function.ReturnType);
+            var alignment = RuntimeAlignment(function.ReturnType);
+            EmitAlloca(resultPointer, structType, alignment);
+            arguments.Insert(0, $"ptr sret({structType}) align {alignment.ToString(CultureInfo.InvariantCulture)} {resultPointer}");
+            EmitIndirectCall(target: null, "void", address, string.Join(", ", arguments));
+            var loaded = NextTemp("native_result");
+            EmitLoad(loaded, structType, resultPointer, alignment);
+            return new RuntimeStruct(function.ReturnType, loaded);
+        }
+
+        var coercionType = AggregateCoercionReturnType(resultPlan);
+        var coercedResult = NextTemp("native_result");
+        EmitIndirectCall(coercedResult, coercionType, address, string.Join(", ", arguments));
+        return UnpackNativeAggregateResult(function.ReturnType, resultPlan, coercedResult);
+    }
+
+    private List<string> NativeAggregateCallArguments(
+        BoundFunction function,
+        RuntimeValue? argument,
+        IReadOnlyList<RuntimeValue>? additionalArguments,
+        bool hasIndirectResult)
+    {
+        var result = new List<string>();
+        var registers = _platform is LinuxLlvmRuntimePlatform
+            ? new NativeAbiRegisterState(hasIndirectResult ? 1 : 0, 0)
+            : null;
+        if (function.InputType is { } inputType)
+        {
+            if (argument is null)
+            {
+                throw new SollangException($"function '{function.Name}' expects exactly one argument");
+            }
+            AppendNativeArgument(
+                result,
+                function.Name,
+                function.InputName ?? "input",
+                inputType,
+                function.InputOwnership,
+                argument,
+                registers);
+        }
+        else if (argument is not null)
+        {
+            throw new SollangException($"function '{function.Name}' does not accept arguments");
+        }
+
+        var parameters = function.AdditionalParameters ?? [];
+        additionalArguments ??= [];
+        if (additionalArguments.Count != parameters.Count)
+        {
+            throw new SollangException(
+                $"function '{function.Name}' expects {parameters.Count} additional argument(s)");
+        }
+        for (var index = 0; index < parameters.Count; index++)
+        {
+            var parameter = parameters[index];
+            AppendNativeArgument(
+                result,
+                function.Name,
+                parameter.Name,
+                parameter.Type,
+                parameter.Ownership,
+                additionalArguments[index],
+                registers);
+        }
+        return result;
+    }
+
+    private void AppendNativeArgument(
+        List<string> arguments,
+        string functionName,
+        string parameterName,
+        BoundType type,
+        BoundFunctionInputOwnership ownership,
+        RuntimeValue value,
+        NativeAbiRegisterState? registers)
+    {
+        EnsureFunctionArgumentRuntimeType(value, type, functionName);
+        if (ownership == BoundFunctionInputOwnership.MutableBorrow)
+        {
+            if (value is not RuntimeMutableStructReference mutable)
+            {
+                throw new SollangException(
+                    $"function '{functionName}' parameter '{parameterName}' requires a mutable borrow");
+            }
+            arguments.Add($"ptr {mutable.PointerAddress}");
+            registers?.ConsumeInteger();
+            return;
+        }
+        if (_program.Types.IsReference(type))
+        {
+            if (value is not RuntimeReference reference || reference.Type != type)
+            {
+                throw new SollangException(
+                    $"function '{functionName}' parameter '{parameterName}' requires {type}");
+            }
+            arguments.Add($"ptr {reference.PointerName}");
+            registers?.ConsumeInteger();
+            return;
+        }
+        if (_program.Types.IsStruct(type))
+        {
+            AppendNativeAggregateValue(arguments, type, value, registers);
+            return;
+        }
+
+        var materialized = MaterializeAggregateValue(value);
+        var extension = NativeScalarExtension(type);
+        arguments.Add(
+            $"{materialized.TypeName} "
+            + (extension.Length == 0 ? "" : extension + " ")
+            + materialized.ValueName);
+        if (IsFloatType(type))
+        {
+            registers?.ConsumeSse();
+        }
+        else
+        {
+            registers?.ConsumeInteger();
+        }
+    }
+
+    private void AppendNativeAggregateValue(
+        List<string> arguments,
+        BoundType type,
+        RuntimeValue value,
+        NativeAbiRegisterState? registers)
+    {
+        var materialized = MaterializeAggregateValue(value);
+        var plan = NativeAggregatePlan(type, registers);
+        if (plan.IsIndirect)
+        {
+            var pointer = NextTemp("native_byval");
+            var alignment = _platform is WindowsLlvmRuntimePlatform
+                ? 16
+                : RuntimeAlignment(type);
+            EmitAlloca(pointer, materialized.TypeName, alignment);
+            EmitStore(materialized.TypeName, materialized.ValueName, pointer, alignment);
+            arguments.Add(_platform is WindowsLlvmRuntimePlatform
+                ? $"ptr {pointer}"
+                : $"ptr byval({materialized.TypeName}) align {alignment.ToString(CultureInfo.InvariantCulture)} {pointer}");
+            return;
+        }
+
+        var scratch = CreateNativeAggregateScratch(type, materialized);
+        for (var index = 0; index < plan.CoercionTypes.Count; index++)
+        {
+            var pointer = NativeAggregateScratchAddress(scratch, index);
+            var coercionType = plan.CoercionTypes[index];
+            var loaded = NextTemp("native_arg");
+            EmitLoad(loaded, coercionType, pointer, NativeCoercionAlignment(coercionType));
+            arguments.Add($"{coercionType} {loaded}");
+        }
+    }
+
+    private RuntimeStruct UnpackNativeAggregateResult(
+        BoundType type,
+        NativeAggregateAbiPlan plan,
+        string coercedResult)
+    {
+        var scratch = NextTemp("native_result_storage");
+        EmitAlloca(scratch, "[2 x i64]", 8);
+        EmitStore("[2 x i64]", "zeroinitializer", scratch, 8);
+        for (var index = 0; index < plan.CoercionTypes.Count; index++)
+        {
+            var coercionType = plan.CoercionTypes[index];
+            var value = coercedResult;
+            if (plan.CoercionTypes.Count > 1)
+            {
+                value = NextTemp("native_result_part");
+                EmitAssign(
+                    value,
+                    $"extractvalue {AggregateCoercionReturnType(plan)} {coercedResult}, {index.ToString(CultureInfo.InvariantCulture)}");
+            }
+            var pointer = NativeAggregateScratchAddress(scratch, index);
+            EmitStore(coercionType, value, pointer, NativeCoercionAlignment(coercionType));
+        }
+
+        var result = NextTemp("native_result_value");
+        EmitLoad(result, LlvmStructType(type), scratch, RuntimeAlignment(type));
+        return new RuntimeStruct(type, result);
+    }
+
+    private string CreateNativeAggregateScratch(
+        BoundType type,
+        (string TypeName, string ValueName) materialized)
+    {
+        var scratch = NextTemp("native_arg_storage");
+        EmitAlloca(scratch, "[2 x i64]", 8);
+        EmitStore("[2 x i64]", "zeroinitializer", scratch, 8);
+        EmitStore(materialized.TypeName, materialized.ValueName, scratch, RuntimeAlignment(type));
+        return scratch;
+    }
+
+    private string NativeAggregateScratchAddress(string scratch, int index)
+    {
+        if (index == 0)
+        {
+            return scratch;
+        }
+        var pointer = NextTemp("native_eightbyte");
+        EmitAssign(pointer, $"getelementptr i8, ptr {scratch}, i64 {(index * 8).ToString(CultureInfo.InvariantCulture)}");
+        return pointer;
+    }
+
+    private NativeAggregateAbiPlan NativeAggregatePlan(
+        BoundType type,
+        NativeAbiRegisterState? registers = null)
+    {
+        var size = _program.Types.InlineSizeOf(type);
+        if (_platform is WindowsLlvmRuntimePlatform)
+        {
+            return size is 1 or 2 or 4 or 8
+                ? new NativeAggregateAbiPlan(false, [$"i{size * 8}"])
+                : new NativeAggregateAbiPlan(true, []);
+        }
+        if (size > 16)
+        {
+            return new NativeAggregateAbiPlan(true, []);
+        }
+
+        var classes = new NativeEightbyteClass[(size + 7) / 8];
+        var meaningfulEnds = new int[classes.Length];
+        var hasFloat64 = new bool[classes.Length];
+        ClassifySysVFields(type, 0, classes, meaningfulEnds, hasFloat64);
+        if (classes.Any(static value => value == NativeEightbyteClass.Memory))
+        {
+            return new NativeAggregateAbiPlan(true, []);
+        }
+
+        var coercions = new string[classes.Length];
+        for (var index = 0; index < classes.Length; index++)
+        {
+            var bytes = Math.Clamp(meaningfulEnds[index] - index * 8, 1, 8);
+            coercions[index] = classes[index] switch
+            {
+                NativeEightbyteClass.Sse when hasFloat64[index] => "double",
+                NativeEightbyteClass.Sse when bytes <= 4 => "float",
+                NativeEightbyteClass.Sse => "<2 x float>",
+                _ => $"i{RoundIntegerAbiBits(bytes)}"
+            };
+        }
+        if (registers is not null)
+        {
+            var integerCount = classes.Count(static value => value == NativeEightbyteClass.Integer);
+            var sseCount = classes.Count(static value => value == NativeEightbyteClass.Sse);
+            if (!registers.CanConsume(integerCount, sseCount))
+            {
+                return new NativeAggregateAbiPlan(true, []);
+            }
+            registers.Consume(integerCount, sseCount);
+        }
+        return new NativeAggregateAbiPlan(false, coercions);
+    }
+
+    private void ClassifySysVFields(
+        BoundType type,
+        int baseOffset,
+        NativeEightbyteClass[] classes,
+        int[] meaningfulEnds,
+        bool[] hasFloat64)
+    {
+        var structure = _program.Types.GetStruct(type);
+        foreach (var field in structure.Fields)
+        {
+            var offset = baseOffset + _program.Types.FieldOffsetOf(type, field.Index);
+            if (_program.Types.IsStruct(field.Type))
+            {
+                ClassifySysVFields(field.Type, offset, classes, meaningfulEnds, hasFloat64);
+                continue;
+            }
+
+            var size = _program.Types.InlineSizeOf(field.Type);
+            var alignment = _program.Types.AlignmentOf(field.Type);
+            if (offset % alignment != 0 || offset / 8 != (offset + size - 1) / 8)
+            {
+                classes[offset / 8] = NativeEightbyteClass.Memory;
+                continue;
+            }
+            var index = offset / 8;
+            var next = field.Type is BoundType.Float32 or BoundType.Float64
+                ? NativeEightbyteClass.Sse
+                : NativeEightbyteClass.Integer;
+            classes[index] = MergeNativeEightbyteClass(classes[index], next);
+            meaningfulEnds[index] = Math.Max(meaningfulEnds[index], offset + size);
+            hasFloat64[index] |= field.Type == BoundType.Float64;
+        }
+    }
+
+    private static NativeEightbyteClass MergeNativeEightbyteClass(
+        NativeEightbyteClass left,
+        NativeEightbyteClass right)
+    {
+        if (left == NativeEightbyteClass.Memory || right == NativeEightbyteClass.Memory)
+        {
+            return NativeEightbyteClass.Memory;
+        }
+        if (left == NativeEightbyteClass.Integer || right == NativeEightbyteClass.Integer)
+        {
+            return NativeEightbyteClass.Integer;
+        }
+        return right == NativeEightbyteClass.None ? left : right;
+    }
+
+    private static int RoundIntegerAbiBits(int bytes) => bytes switch
+    {
+        <= 1 => 8,
+        <= 2 => 16,
+        <= 4 => 32,
+        _ => 64
+    };
+
+    private static int NativeCoercionAlignment(string type) =>
+        type is "i8" ? 1 : type is "i16" ? 2 : type is "i32" or "float" ? 4 : 8;
+
+    private string NativeScalarReturnType(BoundType type)
+    {
+        var llvmType = LlvmType(type);
+        var extension = NativeScalarExtension(type);
+        return extension.Length == 0 ? llvmType : extension + " " + llvmType;
+    }
+
+    private static string NativeScalarExtension(BoundType type) => type switch
+    {
+        BoundType.Int8 or BoundType.Int16 => "signext",
+        BoundType.UInt8 or BoundType.UInt16 => "zeroext",
+        _ => ""
+    };
+
+    private static string AggregateCoercionReturnType(NativeAggregateAbiPlan plan) =>
+        plan.CoercionTypes.Count == 1
+            ? plan.CoercionTypes[0]
+            : "{ " + string.Join(", ", plan.CoercionTypes) + " }";
+
+    private enum NativeEightbyteClass
+    {
+        None,
+        Integer,
+        Sse,
+        Memory
+    }
+
+    private sealed record NativeAggregateAbiPlan(
+        bool IsIndirect,
+        IReadOnlyList<string> CoercionTypes);
+
+    private sealed class NativeAbiRegisterState(int integerCount, int sseCount)
+    {
+        private int IntegerCount { get; set; } = integerCount;
+        private int SseCount { get; set; } = sseCount;
+
+        public bool CanConsume(int integers, int sse) =>
+            IntegerCount + integers <= 6 && SseCount + sse <= 8;
+
+        public void Consume(int integers, int sse)
+        {
+            IntegerCount = Math.Min(IntegerCount + integers, 6);
+            SseCount = Math.Min(SseCount + sse, 8);
+        }
+
+        public void ConsumeInteger() => Consume(1, 0);
+
+        public void ConsumeSse() => Consume(0, 1);
     }
 
     private void EmitTrapIfNull(string pointer, string prefix)

@@ -238,7 +238,8 @@ internal sealed record BoundStructDefinition(
     int Column,
     string ModuleName = "",
     bool IsPublic = false,
-    string? DeclaringTypeName = null)
+    string? DeclaringTypeName = null,
+    bool IsAbi = false)
 {
     public BoundStructField GetField(string name)
     {
@@ -714,7 +715,7 @@ internal sealed class TypeDefinitionTable
             foreach (var field in structure.Fields)
             {
                 var size = InlineSizeOf(field.Type);
-                var alignment = Math.Min(Math.Max(size, 1), 8);
+                var alignment = AlignmentOf(field.Type);
                 offset = AlignUp(offset, alignment);
                 offset += size;
                 maxAlignment = Math.Max(maxAlignment, alignment);
@@ -745,6 +746,58 @@ internal sealed class TypeDefinitionTable
             TypeId.GenericParameter or TypeId.SecondaryGenericParameter or TypeId.TertiaryGenericParameter => 8,
             _ => throw new InvalidOperationException($"type {type} has no inline size")
         };
+    }
+
+    public int AlignmentOf(TypeId type)
+    {
+        if (_structs.TryGetValue(type, out var structure))
+        {
+            return structure.Fields.Count == 0
+                ? 1
+                : structure.Fields.Max(field => AlignmentOf(field.Type));
+        }
+        if (_boxes.ContainsKey(type) || _references.ContainsKey(type))
+        {
+            return _pointerSize;
+        }
+        if (_dynTraits.ContainsKey(type)
+            || IsDynamicArray(type)
+            || IsDictionary(type)
+            || IsTask(type)
+            || IsStream(type)
+            || IsEventStream(type))
+        {
+            return _pointerSize;
+        }
+
+        return type switch
+        {
+            TypeId.Unit or TypeId.Bool or TypeId.Int8 or TypeId.UInt8 => 1,
+            TypeId.Int16 or TypeId.UInt16 => 2,
+            TypeId.Int or TypeId.UInt32 or TypeId.Float32 or TypeId.CodePoint => 4,
+            TypeId.Int64 or TypeId.UInt64 or TypeId.Float64 => 8,
+            TypeId.Size or TypeId.UIntSize => _pointerSize,
+            TypeId.Text or TypeId.Arguments or TypeId.Arena
+                or TypeId.SourceText or TypeId.MappedBytes or TypeId.MutableMappedBytes => _pointerSize,
+            _ when _enums.ContainsKey(type) => 8,
+            _ => Math.Min(Math.Max(InlineSizeOf(type), 1), 8)
+        };
+    }
+
+    public int FieldOffsetOf(TypeId structType, int fieldIndex)
+    {
+        var structure = GetStruct(structType);
+        var offset = 0;
+        foreach (var field in structure.Fields)
+        {
+            offset = AlignUp(offset, AlignmentOf(field.Type));
+            if (field.Index == fieldIndex)
+            {
+                return offset;
+            }
+            offset = checked(offset + InlineSizeOf(field.Type));
+        }
+        throw new ArgumentOutOfRangeException(nameof(fieldIndex));
     }
 
     private static int AlignUp(int value, int alignment) =>

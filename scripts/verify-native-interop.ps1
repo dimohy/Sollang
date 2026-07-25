@@ -13,10 +13,13 @@ $source = Join-Path $repoRoot "examples\590-native-c-abi.slg"
 $expectedPath = Join-Path $repoRoot "examples\expected\590-native-c-abi.stdout.txt"
 $contextSource = Join-Path $repoRoot "examples\595-native-call-contexts.slg"
 $contextExpectedPath = Join-Path $repoRoot "examples\expected\595-native-call-contexts.stdout.txt"
+$aggregateSource = Join-Path $repoRoot "examples\597-native-abi-structs.slg"
+$aggregateExpectedPath = Join-Path $repoRoot "examples\expected\597-native-abi-structs.stdout.txt"
 $outputRoot = Join-Path $repoRoot "artifacts\native-interop"
 $clang = Join-Path $repoRoot ".tools\llvm-22.1.8\bin\clang.exe"
 $expected = ([System.IO.File]::ReadAllText($expectedPath)).Replace("`r`n", "`n").TrimEnd("`n")
 $contextExpected = ([System.IO.File]::ReadAllText($contextExpectedPath)).Replace("`r`n", "`n").TrimEnd("`n")
+$aggregateExpected = ([System.IO.File]::ReadAllText($aggregateExpectedPath)).Replace("`r`n", "`n").TrimEnd("`n")
 
 New-Item -ItemType Directory -Force -Path $outputRoot | Out-Null
 
@@ -82,6 +85,43 @@ if (-not $SkipStage1) {
     dotnet $compiler build $contextSource -o $stage1ContextLinux --target linux-x64 --llvm (Split-Path -Parent (Split-Path -Parent $clang)) -O2
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     Assert-Output -Executable $stage1ContextLinux -ExpectedText $contextExpected -Linux
+
+    $stage1AggregateWindows = Join-Path $outputRoot "stage1-native-abi-structs-windows.exe"
+    dotnet $compiler build $aggregateSource -o $stage1AggregateWindows --target windows-x64 --llvm (Split-Path -Parent (Split-Path -Parent $clang)) -O2 --keep-temps
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    Assert-Output -Executable $stage1AggregateWindows -ExpectedText $aggregateExpected
+    $aggregateWindowsTemp = [System.IO.Path]::ChangeExtension($stage1AggregateWindows, ".slg-tmp")
+    $aggregateWindowsLlvmPath = Join-Path $aggregateWindowsTemp (
+        [System.IO.Path]::GetFileNameWithoutExtension($stage1AggregateWindows) + ".ll")
+    $aggregateWindowsLlvm = [System.IO.File]::ReadAllText($aggregateWindowsLlvmPath)
+    if ($aggregateWindowsLlvm -notmatch "call double %native_target\d+\(ptr %native_byval" -or
+        $aggregateWindowsLlvm -notmatch "ptr sret\(%sollang\.struct\." -or
+        $aggregateWindowsLlvm -notmatch "call i32 %native_target\d+\(i64 %native_arg" -or
+        $aggregateWindowsLlvm -notmatch "call float %native_target\d+\(i64 %native_arg" -or
+        $aggregateWindowsLlvm -notmatch "call signext i16 %native_target\d+\(i16 signext 123\)" -or
+        $aggregateWindowsLlvm -notmatch "call zeroext i16 %native_target\d+\(i16 zeroext 40000, i16 zeroext 20000\)") {
+        throw "Stage1 Windows aggregate C ABI lowering regressed"
+    }
+
+    $stage1AggregateLinux = Join-Path $outputRoot "stage1-native-abi-structs-linux"
+    dotnet $compiler build $aggregateSource -o $stage1AggregateLinux --target linux-x64 --llvm (Split-Path -Parent (Split-Path -Parent $clang)) -O2 --keep-temps
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    Assert-Output -Executable $stage1AggregateLinux -ExpectedText $aggregateExpected -Linux
+    $aggregateLinuxTemp = $stage1AggregateLinux + ".slg-tmp"
+    $aggregateLinuxLlvmPath = Join-Path $aggregateLinuxTemp (
+        [System.IO.Path]::GetFileName($stage1AggregateLinux) + ".ll")
+    $aggregateLinuxLlvm = [System.IO.File]::ReadAllText($aggregateLinuxLlvmPath)
+    if ($aggregateLinuxLlvm -notmatch "call double %native_target\d+\(double %native_arg\d+, double %native_arg" -or
+        $aggregateLinuxLlvm -notmatch "call \{ double, double \} %native_target" -or
+        $aggregateLinuxLlvm -notmatch "call \{ i32, double \} %native_target" -or
+        $aggregateLinuxLlvm -notmatch "call <2 x float> %native_target" -or
+        $aggregateLinuxLlvm -notmatch "call signext i16 %native_target\d+\(i16 signext 123\)" -or
+        $aggregateLinuxLlvm -notmatch "call zeroext i16 %native_target\d+\(i16 zeroext 40000, i16 zeroext 20000\)" -or
+        $aggregateLinuxLlvm -notmatch "ptr byval\(%sollang\.struct\." -or
+        $aggregateLinuxLlvm -notmatch "ptr sret\(%sollang\.struct\." -or
+        ([regex]::Matches($aggregateLinuxLlvm, "ptr byval\(%sollang\.struct\.")).Count -lt 4) {
+        throw "Stage1 Linux SysV aggregate C ABI lowering regressed"
+    }
 }
 
 if (-not $SkipStage2) {
@@ -196,4 +236,5 @@ if (-not $SkipStage2) {
     }
 }
 
-Write-Host "Native interop verification passed for Stage1/Stage2 on Windows/Linux."
+$verifiedStages = if ($SkipStage2) { "Stage1" } elseif ($SkipStage1) { "Stage2" } else { "Stage1/Stage2" }
+Write-Host "Native interop verification passed for $verifiedStages on Windows/Linux."

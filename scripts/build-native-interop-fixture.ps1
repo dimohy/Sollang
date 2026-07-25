@@ -50,6 +50,31 @@ if ($Target -in @("windows-x64", "all")) {
         /export:native_add `
         /export:native_mul_i64 `
         /export:native_hypot_squared `
+        /export:native_negate_i16 `
+        /export:native_add_u16 `
+        /export:native_point_sum `
+        /export:native_point_sum_ref `
+        /export:native_point_translate `
+        /export:native_point_make `
+        /export:native_point_size `
+        /export:native_point_alignment `
+        /export:native_point_x_offset `
+        /export:native_point_y_offset `
+        /export:native_mixed_size `
+        /export:native_mixed_alignment `
+        /export:native_mixed_tag_offset `
+        /export:native_mixed_value_offset `
+        /export:native_mixed_code_offset `
+        /export:native_pair32_sum `
+        /export:native_pair32_make `
+        /export:native_int_double_sum `
+        /export:native_int_double_make `
+        /export:native_float_pair_sum `
+        /export:native_float_pair_make `
+        /export:native_mixed_sum `
+        /export:native_mixed_make `
+        /export:native_pair32_after_six `
+        /export:native_point_after_eight `
         $object `
         /out:$output
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

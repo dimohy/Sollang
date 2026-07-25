@@ -10653,3 +10653,40 @@ Stage2 browser runtime imports `sollang_browser_read`, requests bytes into
 linear memory, and parses them through the same Sollang runtime path as a
 native program. The host consumes one submitted stdin line per call. An exact
 regression supplies `12` and `30` to two reads and requires `Sum = 42`.
+
+## D277 — Native ABI Syntax Is Explicit, Flow-Oriented, and Cost-Free
+
+Status: implemented
+Date: 2026-07-26
+
+Sollang 0.3 spells a stable external value as `abi struct T`, a readonly
+borrow as `ref T`, a mutable borrow as `mut T`, and an ordinary by-value
+crossing as plain `T`. A normal `struct` is not ABI-stable and cannot cross a
+native boundary.
+
+This syntax was re-evaluated against the official language and interoperation
+designs of Rust, Zig, Swift, Mojo, and Carbon. Rust and Zig demonstrate that
+foreign layout must be an explicit opt-in because ordinary language layout is
+free to change. Swift and Mojo demonstrate that readonly access, mutable
+access, and ownership are useful source-level distinctions that can avoid
+copies. Carbon demonstrates that compatibility should be an explicit boundary
+and may use generated bridge code without making the language's private ABI
+public.
+
+Sollang keeps `abi struct` instead of importing Rust's attribute punctuation or
+overloading `extern` for both storage layout and foreign declarations. The
+modifier sits directly on the declaration whose layout it stabilizes, while
+`ref` and `mut` sit directly on the parameter whose access contract they
+express. This preserves the language's existing readable, flow-first form.
+
+In 0.3, `abi` means the common C-compatible value ABI shared by C calls,
+Sollang shared-library exports, COM projections, and generated C++ shims. A
+dialect spelling such as `abi(c) struct` is reserved until another implemented
+layout makes the distinction meaningful. Opaque ownership, callbacks,
+nullability, and error conventions must be designed with the same comparison
+and then proven by semantic, Windows/Linux ABI, allocation, and compiler-speed
+tests.
+
+The syntax itself has no runtime representation. By-value aggregates follow
+the target C ABI, `ref` and `mut` lower to borrowed pointers, and no wrapper
+object or hidden heap allocation is introduced.

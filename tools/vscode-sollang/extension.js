@@ -1,5 +1,6 @@
 const vscode = require('vscode');
 const { spawn } = require('child_process');
+const { findArrowOffsets } = require('./arrow-highlighting');
 
 function format(document) {
     const compiler = vscode.workspace.getConfiguration('sollang').get('compilerPath', 'sollang');
@@ -25,6 +26,39 @@ function format(document) {
 }
 
 function activate(context) {
+    const flowArrowDecoration = vscode.window.createTextEditorDecorationType({
+        color: new vscode.ThemeColor('sollang.flowArrowForeground'),
+        fontWeight: 'bold',
+        rangeBehavior: vscode.DecorationRangeBehavior.ClosedClosed
+    });
+    const bindingArrowDecoration = vscode.window.createTextEditorDecorationType({
+        color: new vscode.ThemeColor('sollang.bindingArrowForeground'),
+        fontWeight: 'bold',
+        rangeBehavior: vscode.DecorationRangeBehavior.ClosedClosed
+    });
+
+    const decorate = (editor) => {
+        if (!editor || editor.document.languageId !== 'sollang') return;
+        const arrows = findArrowOffsets(editor.document.getText());
+        const toRanges = (offsets) => offsets.map(([start, end]) => new vscode.Range(
+            editor.document.positionAt(start),
+            editor.document.positionAt(end)));
+        editor.setDecorations(flowArrowDecoration, toRanges(arrows.flow));
+        editor.setDecorations(bindingArrowDecoration, toRanges(arrows.binding));
+    };
+    const decorateVisible = () => vscode.window.visibleTextEditors.forEach(decorate);
+
+    context.subscriptions.push(
+        flowArrowDecoration,
+        bindingArrowDecoration,
+        vscode.window.onDidChangeVisibleTextEditors(decorateVisible),
+        vscode.workspace.onDidChangeTextDocument((event) => {
+            vscode.window.visibleTextEditors
+                .filter((editor) => editor.document === event.document)
+                .forEach(decorate);
+        }));
+    decorateVisible();
+
     const provider = vscode.languages.registerDocumentFormattingEditProvider('sollang', {
         async provideDocumentFormattingEdits(document) {
             try {

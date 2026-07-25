@@ -1,7 +1,7 @@
 # Sollang Language Support
 
-Version: 0.6.0
-Updated: 2026-07-22
+Version: 0.6.2
+Updated: 2026-07-26
 
 VS Code language support for Sollang `.slg` files and language-shaped project
 manifests.
@@ -23,7 +23,11 @@ source is left unchanged and the compiler's real parser diagnostic is shown.
   fields, and operators.
 - Adds Sollang-only default token colors for comments, strings, variables,
   parameters, keywords, types, namespaces, constants, numbers, operators, and
-  punctuation while leaving function colors to the active VS Code theme.
+  punctuation while leaving function colors to the active VS Code theme. The
+  central flow `->` and result binding `=>` use distinct bold cyan and gold
+  editor decorations so a pipeline remains visually traceable even when the
+  active theme gives all operators the same TextMate color. String and comment
+  contents are not decorated.
 - Adds indentation and bracket pairing for `{}`, `[]`, `()`, and `"`.
 - Formats `.slg` documents with the compiler's generated parser.
 - Provides snippets for `main`, functions, async functions, structs, enums,
@@ -36,7 +40,7 @@ From this folder:
 
 ```powershell
 npx --yes @vscode/vsce package --no-dependencies --allow-missing-repository
-code --install-extension .\sollang-language-support-0.6.0.vsix --force
+code --install-extension .\sollang-language-support-0.6.2.vsix --force
 ```
 
 For extension development, open this folder in VS Code and run the extension host

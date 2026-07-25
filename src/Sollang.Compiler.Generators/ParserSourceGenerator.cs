@@ -332,7 +332,7 @@ internal static class ParserEmitter
         builder.AppendLine("            SkipNewLines();");
         builder.AppendLine("        }");
         builder.AppendLine();
-        builder.AppendLine("        while (CheckDeclarationStart(\"struct\"))");
+        builder.AppendLine("        while (CheckStructDeclarationStart())");
         builder.AppendLine("        {");
         builder.AppendLine("            structs.Add(ParseStructDeclaration());");
         builder.AppendLine("            SkipNewLines();");
@@ -420,9 +420,11 @@ internal static class ParserEmitter
         builder.AppendLine();
         builder.AppendLine("    private StructDeclaration ParseStructDeclaration(string? declaringTypeName = null)");
         builder.AppendLine("    {");
-        builder.AppendLine("        // StructDeclaration = Identifier(\"struct\") Identifier LeftBrace NewLine* StructFieldDeclaration* RightBrace");
+        builder.AppendLine("        // StructDeclaration = Identifier(\"public\")? AbiMarker? Identifier(\"struct\") Identifier LeftBrace NewLine* StructFieldDeclaration* RightBrace");
         builder.AppendLine("        var isPublic = CheckIdentifier(\"public\");");
         builder.AppendLine("        if (isPublic) ExpectIdentifier(\"public\");");
+        builder.AppendLine("        var isAbi = CheckIdentifier(\"abi\");");
+        builder.AppendLine("        if (isAbi) ExpectIdentifier(\"abi\");");
         builder.AppendLine("        var keyword = ExpectIdentifier(\"struct\");");
         builder.AppendLine("        var name = ExpectIdentifier();");
         builder.AppendLine("        var declarationName = declaringTypeName is null ? QualifyTypeDeclarationName(name.Text) : declaringTypeName + \".\" + name.Text;");
@@ -433,7 +435,7 @@ internal static class ParserEmitter
         builder.AppendLine("        var fields = new List<StructFieldDeclaration>();");
         builder.AppendLine("        while (!Check(TokenKind.RightBrace) && !Check(TokenKind.End))");
         builder.AppendLine("        {");
-        builder.AppendLine("            if (CheckDeclarationStart(\"struct\"))");
+        builder.AppendLine("            if (CheckStructDeclarationStart())");
         builder.AppendLine("            {");
         builder.AppendLine("                _nestedStructs.Add(ParseStructDeclaration(declarationName));");
         builder.AppendLine("                SkipNewLines();");
@@ -452,7 +454,7 @@ internal static class ParserEmitter
         builder.AppendLine("        }");
         builder.AppendLine("        Expect(TokenKind.RightBrace);");
         builder.AppendLine("        _activeTypeScopes.Pop();");
-        builder.AppendLine("        return new StructDeclaration(declarationName, fields, keyword.Line, keyword.Column, string.Join('.', _namespacePath), isPublic, declaringTypeName);");
+        builder.AppendLine("        return new StructDeclaration(declarationName, fields, keyword.Line, keyword.Column, string.Join('.', _namespacePath), isPublic, declaringTypeName, isAbi);");
         builder.AppendLine("    }");
         builder.AppendLine();
         builder.AppendLine("    private EnumDeclaration ParseEnumDeclaration()");
@@ -2894,6 +2896,14 @@ internal static class ParserEmitter
         builder.AppendLine("                && _index + 1 < tokens.Count");
         builder.AppendLine("                && tokens[_index + 1].Kind == TokenKind.Identifier");
         builder.AppendLine("                && tokens[_index + 1].Text == keyword);");
+        builder.AppendLine("    }");
+        builder.AppendLine();
+        builder.AppendLine("    private bool CheckStructDeclarationStart()");
+        builder.AppendLine("    {");
+        builder.AppendLine("        var offset = 0;");
+        builder.AppendLine("        if (CheckAhead(offset, TokenKind.Identifier) && tokens[_index + offset].Text == \"public\") offset++;");
+        builder.AppendLine("        if (CheckAhead(offset, TokenKind.Identifier) && tokens[_index + offset].Text == \"abi\") offset++;");
+        builder.AppendLine("        return CheckAhead(offset, TokenKind.Identifier) && tokens[_index + offset].Text == \"struct\";");
         builder.AppendLine("    }");
         builder.AppendLine();
         builder.AppendLine("    private bool IsFunctionDeclarationStart()");
