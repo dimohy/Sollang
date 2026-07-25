@@ -1745,7 +1745,17 @@ emitCore context: EmitContext -> Unit uses Console {
         request -> textLiteralIsRaw -> if {
             request.token.span.start + request.token.span.length - UIntSize(3) => rawEnd
             request -> textLiteralClosingLineStart => closingLineStart
-            closingLineStart < rawEnd -> if {
+            false => rawClosingOwnLine!
+            closingLineStart > request.token.span.start + UIntSize(3) -> if {
+                true => rawClosingOwnLine!
+                closingLineStart => rawClosingByte!
+                (rawClosingOwnLine! and rawClosingByte! < rawEnd) -> while {
+                    context.sources[request.sourceModule] -> byte(rawClosingByte!) => rawClosingCharacter
+                    (rawClosingCharacter != UInt8(32) and rawClosingCharacter != UInt8(9)) -> if { false => rawClosingOwnLine! }
+                    rawClosingByte! + UIntSize(1) => rawClosingByte!
+                }
+            }
+            rawClosingOwnLine! -> if {
                 closingLineStart - UIntSize(1) => end!
                 (end! > request.token.span.start and (context.sources[request.sourceModule] -> byte(end! - UIntSize(1))) == UInt8(13)) -> if { end! - UIntSize(1) => end! }
             } else { rawEnd => end! }
@@ -1757,7 +1767,17 @@ emitCore context: EmitContext -> Unit uses Console {
         request -> textLiteralIsRaw -> if {
             request.token.span.start + request.token.span.length - UIntSize(3) => rawEnd
             request -> textLiteralClosingLineStart => closingLineStart
-            closingLineStart < rawEnd -> if { rawEnd - closingLineStart => indentation! }
+            false => rawIndentOwnLine!
+            closingLineStart > request.token.span.start + UIntSize(3) -> if {
+                true => rawIndentOwnLine!
+                closingLineStart => rawIndentByte!
+                (rawIndentOwnLine! and rawIndentByte! < rawEnd) -> while {
+                    context.sources[request.sourceModule] -> byte(rawIndentByte!) => rawIndentCharacter
+                    (rawIndentCharacter != UInt8(32) and rawIndentCharacter != UInt8(9)) -> if { false => rawIndentOwnLine! }
+                    rawIndentByte! + UIntSize(1) => rawIndentByte!
+                }
+            }
+            rawIndentOwnLine! -> if { rawEnd - closingLineStart => indentation! }
         }
         indentation!
     }
@@ -2100,9 +2120,12 @@ emitCore context: EmitContext -> Unit uses Console {
         ownerIndex => chainOwnerIndex
         separator => chainSeparator
         (argumentIndex >= 0 and context.ir[argumentIndex].parent == chainCallIndex) -> if {
-            chainSeparator -> if { ", " -> print }
-            argumentIndex -> writeCallArgument(chainCallIndex, chainOwnerIndex, ordinal)
-            context.ir[argumentIndex].nextOperand -> emitCallArgumentChain(chainCallIndex, chainOwnerIndex, ordinal + 1, true)
+            chainCallIndex -> callTargetParameter(ordinal) => chainParameterIndex
+            chainParameterIndex >= 0 -> if {
+                chainSeparator -> if { ", " -> print }
+                argumentIndex -> writeCallArgument(chainCallIndex, chainOwnerIndex, ordinal)
+            }
+            context.ir[argumentIndex].nextOperand -> emitCallArgumentChain(chainCallIndex, chainOwnerIndex, ordinal + 1, chainSeparator or chainParameterIndex >= 0)
         }
     }
     emitCallArguments callIndex: Int, ownerIndex: Int -> Unit uses Console {
@@ -3111,6 +3134,26 @@ emitCore context: EmitContext -> Unit uses Console {
             64 => width!
         }
         width!
+    }
+    nodeContainsReadIntAt nodeIndex: Int, depth: Int -> Bool {
+        false => contains!
+        (depth < 32 and nodeIndex >= 0 and nodeIndex < (context.ir -> len)) -> if {
+            context.ir[nodeIndex] => candidate
+            (candidate.kind == 6 and candidate.symbol == -103) -> if {
+                true => contains!
+            } else {
+                candidate.operand0 != nodeIndex -> if {
+                    candidate.operand0 -> nodeContainsReadIntAt(depth + 1) => contains!
+                }
+                (not contains! and candidate.operand1 != nodeIndex) -> if {
+                    candidate.operand1 -> nodeContainsReadIntAt(depth + 1) => contains!
+                }
+            }
+        }
+        contains!
+    }
+    nodeContainsReadInt rootIndex: Int -> Bool {
+        rootIndex -> nodeContainsReadIntAt(0)
     }
     integerComparisonOperation expression: typedIr.TypedIrNode -> Text {
         context.ir[expression.operand0] => operand
@@ -7776,7 +7819,18 @@ emitCore context: EmitContext -> Unit uses Console {
             (regionNode.kind == 6 and regionNode.symbol == -102 and regionNode.operand0 < 0) -> if {
                 "  call void @sollang_runtime_print(ptr @sollang_runtime_newline, i64 1, i1 false)" -> println
             }
-            (regionNode.kind == 6 and regionNode.symbol != -115 and not (regionNode.symbol == -102 and regionNode.operand0 < 0) and regionNode.opcode != -205 and regionNode.opcode != -206 and regionNode.opcode != -207 and regionNode.opcode != -208 and regionNode.opcode != -209 and regionNode.opcode != -210 and regionNode.opcode != -211 and regionNode.opcode != -212 and regionNode.opcode != -214 and regionNode.opcode != -215 and regionNode.opcode != -222 and (regionNode.opcode > -216 or regionNode.opcode < -221) and not (regionNode.parent >= 0 and context.ir[regionNode.parent].kind == 6 and (context.ir[regionNode.parent].opcode == -207 or context.ir[regionNode.parent].opcode == -209) and context.ir[regionNode.parent].operand1 == regionNodeIndex!)) -> if {
+            (regionNode.kind == 6 and regionNode.symbol == -103) -> if {
+                regionNodeIndex! -> callArgumentIndex => regionReadPromptIndex
+                context.ir[regionReadPromptIndex] => regionReadPrompt
+                regionReadPrompt.kind == 2 -> if {
+                    regionReadPrompt -> sourceToken => regionReadPromptToken
+                    Int(TextLiteralRequest { sourceModule: regionReadPrompt.sourceModule, token: regionReadPromptToken } -> textLiteralLength) => regionReadPromptLength
+                    "  %v$(regionNodeIndex!) = call i32 @sollang_runtime_read_int(ptr @sollang_str_$(regionReadPromptIndex), i64 $regionReadPromptLength)" -> println
+                } else {
+                    "  %v$(regionNodeIndex!) = call i32 @sollang_runtime_read_int(ptr null, i64 0)" -> println
+                }
+            }
+            (regionNode.kind == 6 and regionNode.symbol != -103 and regionNode.symbol != -115 and not (regionNode.symbol == -102 and regionNode.operand0 < 0) and regionNode.opcode != -205 and regionNode.opcode != -206 and regionNode.opcode != -207 and regionNode.opcode != -208 and regionNode.opcode != -209 and regionNode.opcode != -210 and regionNode.opcode != -211 and regionNode.opcode != -212 and regionNode.opcode != -214 and regionNode.opcode != -215 and regionNode.opcode != -222 and (regionNode.opcode > -216 or regionNode.opcode < -221) and not (regionNode.parent >= 0 and context.ir[regionNode.parent].kind == 6 and (context.ir[regionNode.parent].opcode == -207 or context.ir[regionNode.parent].opcode == -209) and context.ir[regionNode.parent].operand1 == regionNodeIndex!)) -> if {
                 (regionNode.symbol == -101 or regionNode.symbol == -102) -> if {
                     regionNodeIndex! -> callArgumentIndex => regionArgumentIndex
                     context.ir[regionArgumentIndex] => regionArgument
@@ -7815,7 +7869,12 @@ emitCore context: EmitContext -> Unit uses Console {
                                                 (context.ir[regionExpressionBindingSearch!].kind == 17 and context.ir[regionExpressionBindingSearch!].symbol == regionExpressionRoot.symbol) -> if { regionExpressionBindingSearch! => regionExpressionRootBinding! }
                                                 regionExpressionBindingSearch! + 1 => regionExpressionBindingSearch!
                                             }
-                                            regionExpressionRootBinding! >= 0 -> if { context.ir[regionExpressionRootBinding!].typeSymbol => regionExpressionRootTypeSymbol! }
+                                            regionExpressionRootBinding! >= 0 -> if {
+                                                context.ir[regionExpressionRootBinding!].typeSymbol => regionExpressionRootTypeSymbol!
+                                                context.ir[regionExpressionRootBinding!].operand0 >= 0 -> if {
+                                                    context.ir[context.ir[regionExpressionRootBinding!].operand0].typeSymbol => regionExpressionRootTypeSymbol!
+                                                }
+                                            }
                                         }
                                     }
                                     false => regionExpressionRootMutable!
@@ -7923,7 +7982,11 @@ emitCore context: EmitContext -> Unit uses Console {
                                     (regionExpressionRootTypeSymbol! == 12 or regionExpressionRootTypeSymbol! == 13) -> if { context.pointerBitWidth => regionExpressionRootWidth! }
                                     (regionExpressionRootBinding! >= 0 and not regionExpressionRootMutable! and context.ir[regionExpressionRootBinding!].operand0 >= 0) -> if {
                                         context.ir[context.ir[regionExpressionRootBinding!].operand0] -> integerNodeWidth => regionExpressionBoundWidth
-                                        regionExpressionBoundWidth > 0 -> if { regionExpressionBoundWidth => regionExpressionRootWidth! }
+                                        (regionExpressionBoundWidth > 0 and regionExpressionRootTypeSymbol! != 23) -> if {
+                                            regionExpressionBoundWidth => regionExpressionRootWidth!
+                                            context.ir[regionExpressionRootBinding!].operand0 -> nodeContainsReadInt => regionExpressionContainsReadInt
+                                            (regionExpressionRootTypeSymbol! <= 0 or regionExpressionContainsReadInt) -> if { 2 => regionExpressionRootTypeSymbol! }
+                                        }
                                     }
                                     regionExpressionRootTypeSymbol! == 1 -> if {
                                         "  %v$(regionNodeIndex!)_expression$(regionExpressionRootSearch!)_text_ptr = extractvalue %sollang.text " -> print
@@ -8609,7 +8672,7 @@ emitCore context: EmitContext -> Unit uses Console {
                                 context.ir[scheduleSibling!].nextOperand => scheduleSibling!
                             }
                         }
-                        (scheduleReady! and (scheduleNode.kind == 18 or scheduleNode.kind == 20)) -> if {
+                        (scheduleReady! and (scheduleNode.kind == 18 or scheduleNode.kind == 20 or scheduleNode.kind == 33)) -> if {
                             expressionStart => controlDependencySearch!
                             controlDependencySearch! < functionEnd! -> while {
                                 context.ir[controlDependencySearch!] => controlDependencyUse
@@ -8654,7 +8717,7 @@ emitCore context: EmitContext -> Unit uses Console {
                                 controlDependencySearch! + 1 => controlDependencySearch!
                             }
                         }
-                        (scheduleReady! and (scheduleNode.kind == 18 or scheduleNode.kind == 20)) -> if {
+                        (scheduleReady! and (scheduleNode.kind == 18 or scheduleNode.kind == 20 or scheduleNode.kind == 33)) -> if {
                             expressionStart => priorControlValueSearch!
                             priorControlValueSearch! < functionEnd! -> while {
                                 context.ir[priorControlValueSearch!] => priorControlValue
@@ -8707,7 +8770,7 @@ emitCore context: EmitContext -> Unit uses Console {
                                 }
                             }
                         }
-                        (scheduleReady! and (scheduleNode.kind == 6 or scheduleNode.kind == 18 or scheduleNode.kind == 20 or scheduleNode.kind == 24 or scheduleNode.kind == 25 or (scheduleNode.kind == 17 and scheduleNode.flags == 1) or (scheduleNode.kind == 9 and (scheduleNode.opcode == -204 or scheduleNode.opcode == -205 or scheduleNode.opcode == -213 or scheduleNode.opcode == -220 or scheduleNode.opcode == -221)))) -> if {
+                        (scheduleReady! and (scheduleNode.kind == 6 or scheduleNode.kind == 18 or scheduleNode.kind == 20 or scheduleNode.kind == 33 or scheduleNode.kind == 24 or scheduleNode.kind == 25 or (scheduleNode.kind == 17 and scheduleNode.flags == 1) or (scheduleNode.kind == 9 and (scheduleNode.opcode == -204 or scheduleNode.opcode == -205 or scheduleNode.opcode == -213 or scheduleNode.opcode == -220 or scheduleNode.opcode == -221)))) -> if {
                             true => rootEffect!
                             scheduleNode.parent => effectAncestor!
                             (effectAncestor! >= expressionStart and rootEffect!) -> while {
@@ -8928,29 +8991,50 @@ emitCore context: EmitContext -> Unit uses Console {
                     "  %v$(expressionIndex!)_value2 = insertvalue %sollang.source_text %v$(expressionIndex!)_value1, ptr null, 2" -> println
                     "  %v$(expressionIndex!) = insertvalue %sollang.source_text %v$(expressionIndex!)_value2, i64 0, 3" -> println
                 }
-                (expression.kind == 6 and expression.opcode == -208 and expression.operand0 >= 0 and expression.operand1 >= 0) -> if {
+                (expression.kind == 6 and expression.opcode == -208 and expression.operand0 >= 0 and expression.operand1 >= 0 and (expressionIndex! -> plannedStreamPipeline) < 0) -> if {
                     context.ir[expression.operand0] => eachSource
-                    "  %each$(expressionIndex!)_data = extractvalue %sollang.array.i32 " -> print
-                    (eachSource.kind == 5 and function.operand1 >= 0 and eachSource.symbol == context.ir[function.operand1].symbol) -> if { "%arg" -> print } else { "%v$(expression.operand0)" -> print }
-                    ", 0" -> println
-                    "  %each$(expressionIndex!)_length = extractvalue %sollang.array.i32 " -> print
-                    (eachSource.kind == 5 and function.operand1 >= 0 and eachSource.symbol == context.ir[function.operand1].symbol) -> if { "%arg" -> print } else { "%v$(expression.operand0)" -> print }
-                    ", 1" -> println
-                    "  %each$(expressionIndex!)_index_slot = alloca i64, align 8" -> println
-                    "  store i64 0, ptr %each$(expressionIndex!)_index_slot, align 8" -> println
-                    "  br label %each$(expressionIndex!)_header" -> println
-                    "each$(expressionIndex!)_header:" -> println
-                    "  %each$(expressionIndex!)_index = load i64, ptr %each$(expressionIndex!)_index_slot, align 8" -> println
-                    "  %each$(expressionIndex!)_done = icmp eq i64 %each$(expressionIndex!)_index, %each$(expressionIndex!)_length" -> println
-                    "  br i1 %each$(expressionIndex!)_done, label %each$(expressionIndex!)_exit, label %each$(expressionIndex!)_body" -> println
-                    "each$(expressionIndex!)_body:" -> println
-                    "  %each$(expressionIndex!)_item_ptr = getelementptr " -> print
-                    eachSource -> writeArrayElementType
-                    ", ptr %each$(expressionIndex!)_data, i64 %each$(expressionIndex!)_index" -> println
-                    "  %each$(expressionIndex!)_item = load " -> print
-                    eachSource -> writeArrayElementType
-                    ", ptr %each$(expressionIndex!)_item_ptr, align " -> print
-                    eachSource -> arrayElementAlign -> writeDecimalLine
+                    eachSource.kind == 31 -> if {
+                        "  %each$(expressionIndex!)_index_slot = alloca i32, align 4" -> println
+                        "  store i32 " -> print
+                        context.ir[eachSource.operand0].kind == 3 -> if {
+                            context.ir[eachSource.operand0] -> sourceToken => eachRangeStartToken
+                            context.sources[eachSource.sourceModule] -> slice(eachRangeStartToken.span.start, eachRangeStartToken.span.length) -> print
+                        } else { "%v$(eachSource.operand0)" -> print }
+                        ", ptr %each$(expressionIndex!)_index_slot, align 4" -> println
+                        "  br label %each$(expressionIndex!)_header" -> println
+                        "each$(expressionIndex!)_header:" -> println
+                        "  %each$(expressionIndex!)_index = load i32, ptr %each$(expressionIndex!)_index_slot, align 4" -> println
+                        "  %each$(expressionIndex!)_done = icmp sgt i32 %each$(expressionIndex!)_index, " -> print
+                        context.ir[eachSource.operand1].kind == 3 -> if {
+                            context.ir[eachSource.operand1] -> sourceToken => eachRangeEndToken
+                            context.sources[eachSource.sourceModule] -> slice(eachRangeEndToken.span.start, eachRangeEndToken.span.length) -> println
+                        } else { "%v$(eachSource.operand1)" -> println }
+                        "  br i1 %each$(expressionIndex!)_done, label %each$(expressionIndex!)_exit, label %each$(expressionIndex!)_body" -> println
+                        "each$(expressionIndex!)_body:" -> println
+                        "  %each$(expressionIndex!)_item = freeze i32 %each$(expressionIndex!)_index" -> println
+                    } else {
+                        "  %each$(expressionIndex!)_data = extractvalue %sollang.array.i32 " -> print
+                        (eachSource.kind == 5 and function.operand1 >= 0 and eachSource.symbol == context.ir[function.operand1].symbol) -> if { "%arg" -> print } else { "%v$(expression.operand0)" -> print }
+                        ", 0" -> println
+                        "  %each$(expressionIndex!)_length = extractvalue %sollang.array.i32 " -> print
+                        (eachSource.kind == 5 and function.operand1 >= 0 and eachSource.symbol == context.ir[function.operand1].symbol) -> if { "%arg" -> print } else { "%v$(expression.operand0)" -> print }
+                        ", 1" -> println
+                        "  %each$(expressionIndex!)_index_slot = alloca i64, align 8" -> println
+                        "  store i64 0, ptr %each$(expressionIndex!)_index_slot, align 8" -> println
+                        "  br label %each$(expressionIndex!)_header" -> println
+                        "each$(expressionIndex!)_header:" -> println
+                        "  %each$(expressionIndex!)_index = load i64, ptr %each$(expressionIndex!)_index_slot, align 8" -> println
+                        "  %each$(expressionIndex!)_done = icmp eq i64 %each$(expressionIndex!)_index, %each$(expressionIndex!)_length" -> println
+                        "  br i1 %each$(expressionIndex!)_done, label %each$(expressionIndex!)_exit, label %each$(expressionIndex!)_body" -> println
+                        "each$(expressionIndex!)_body:" -> println
+                        "  %each$(expressionIndex!)_item_ptr = getelementptr " -> print
+                        eachSource -> writeArrayElementType
+                        ", ptr %each$(expressionIndex!)_data, i64 %each$(expressionIndex!)_index" -> println
+                        "  %each$(expressionIndex!)_item = load " -> print
+                        eachSource -> writeArrayElementType
+                        ", ptr %each$(expressionIndex!)_item_ptr, align " -> print
+                        eachSource -> arrayElementAlign -> writeDecimalLine
+                    }
                     expressionStart => eachRoleUseIndex!
                     eachRoleUseIndex! < functionEnd! -> while {
                         context.ir[eachRoleUseIndex!] => eachRoleUse
@@ -8965,7 +9049,7 @@ emitCore context: EmitContext -> Unit uses Console {
                             }
                             eachRoleIsItem! -> if {
                                 "  %v$(eachRoleUseIndex!) = freeze " -> print
-                                eachSource -> writeArrayElementType
+                                eachSource.kind == 31 -> if { "i32" -> print } else { eachSource -> writeArrayElementType }
                                 " %each$(expressionIndex!)_item" -> println
                             }
                         }
@@ -8973,6 +9057,74 @@ emitCore context: EmitContext -> Unit uses Console {
                     }
                     activeEachSize! == (activeEach! -> len) -> if { activeEach! -> push(expressionIndex!) } else { expressionIndex! => activeEach![activeEachSize!] }
                     activeEachSize! + 1 => activeEachSize!
+                }
+                (expression.kind == 32 and expression.operand0 >= 0 and expression.operand1 >= 0 and expression.nextOperand >= 0) -> if {
+                    context.ir[expression.operand0] => foldSource
+                    "  %fold$(expressionIndex!)_acc_slot = alloca i32, align 4" -> println
+                    foldSource.kind == 31 -> if {
+                        "  %fold$(expressionIndex!)_item_slot = alloca i32, align 4" -> println
+                        "  store i32 " -> print
+                        foldSource.operand0 -> writeValue(functionIndex!)
+                        ", ptr %fold$(expressionIndex!)_item_slot, align 4" -> println
+                    } else {
+                        "  %fold$(expressionIndex!)_data = extractvalue %sollang.array.i32 %v$(expression.operand0), 0" -> println
+                        "  %fold$(expressionIndex!)_length = extractvalue %sollang.array.i32 %v$(expression.operand0), 1" -> println
+                        "  %fold$(expressionIndex!)_index_slot = alloca i64, align 8" -> println
+                        "  store i64 0, ptr %fold$(expressionIndex!)_index_slot, align 8" -> println
+                    }
+                    "  store i32 " -> print
+                    expression.operand1 -> writeValue(functionIndex!)
+                    ", ptr %fold$(expressionIndex!)_acc_slot, align 4" -> println
+                    "  br label %fold$(expressionIndex!)_header" -> println
+                    "fold$(expressionIndex!)_header:" -> println
+                    foldSource.kind == 31 -> if {
+                        "  %fold$(expressionIndex!)_item = load i32, ptr %fold$(expressionIndex!)_item_slot, align 4" -> println
+                        "  %fold$(expressionIndex!)_done = icmp sgt i32 %fold$(expressionIndex!)_item, " -> print
+                        foldSource.operand1 -> writeValue(functionIndex!)
+                        "" -> println
+                    } else {
+                        "  %fold$(expressionIndex!)_index = load i64, ptr %fold$(expressionIndex!)_index_slot, align 8" -> println
+                        "  %fold$(expressionIndex!)_done = icmp eq i64 %fold$(expressionIndex!)_index, %fold$(expressionIndex!)_length" -> println
+                    }
+                    "  br i1 %fold$(expressionIndex!)_done, label %fold$(expressionIndex!)_exit, label %fold$(expressionIndex!)_body" -> println
+                    "fold$(expressionIndex!)_body:" -> println
+                    foldSource.kind != 31 -> if {
+                        "  %fold$(expressionIndex!)_item_ptr = getelementptr i32, ptr %fold$(expressionIndex!)_data, i64 %fold$(expressionIndex!)_index" -> println
+                        "  %fold$(expressionIndex!)_item = load i32, ptr %fold$(expressionIndex!)_item_ptr, align 4" -> println
+                    }
+                    expression -> sourceNode => foldAst
+                    expressionStart => foldRoleUse!
+                    foldRoleUse! < functionEnd! -> while {
+                        context.ir[foldRoleUse!] => foldRoleNode
+                        NodeAncestorRequest { nodeIndex: foldRoleUse!, ownerIndex: expressionIndex! } => foldRoleAncestorRequest
+                        foldRoleAncestorRequest -> nodeDescendsFrom => foldRoleInside
+                        (foldRoleInside and foldRoleNode.kind == 5 and foldRoleNode.symbol >= 0) -> if {
+                            context.ranges[foldRoleNode.sourceModule] => foldRoleRange
+                            foldRoleNode.symbol < foldRoleRange.symbolCount -> if {
+                                context.symbols[foldRoleRange.symbolStart + foldRoleNode.symbol] => foldRoleSymbol
+                                foldRoleSymbol.nameToken == foldAst.secondaryToken -> if {
+                                    "  %v$(foldRoleUse!) = load i32, ptr %fold$(expressionIndex!)_acc_slot, align 4" -> println
+                                }
+                                foldRoleSymbol.nameToken == foldAst.tertiaryToken -> if {
+                                    "  %v$(foldRoleUse!) = freeze i32 %fold$(expressionIndex!)_item" -> println
+                                }
+                            }
+                        }
+                        foldRoleUse! + 1 => foldRoleUse!
+                    }
+                    expression.nextOperand -> emitRegion
+                    expression.nextOperand -> regionResultValueIndex => foldBodyResult
+                    "  store i32 %v$(foldBodyResult), ptr %fold$(expressionIndex!)_acc_slot, align 4" -> println
+                    foldSource.kind == 31 -> if {
+                        "  %fold$(expressionIndex!)_next = add i32 %fold$(expressionIndex!)_item, 1" -> println
+                        "  store i32 %fold$(expressionIndex!)_next, ptr %fold$(expressionIndex!)_item_slot, align 4" -> println
+                    } else {
+                        "  %fold$(expressionIndex!)_next = add i64 %fold$(expressionIndex!)_index, 1" -> println
+                        "  store i64 %fold$(expressionIndex!)_next, ptr %fold$(expressionIndex!)_index_slot, align 8" -> println
+                    }
+                    "  br label %fold$(expressionIndex!)_header" -> println
+                    "fold$(expressionIndex!)_exit:" -> println
+                    "  %v$(expressionIndex!) = load i32, ptr %fold$(expressionIndex!)_acc_slot, align 4" -> println
                 }
                 (expression.kind == 17 and expression.flags == 1) -> if {
                     expressionIndex! -> mutableBindingRoot => mutableRoot
@@ -9970,7 +10122,18 @@ emitCore context: EmitContext -> Unit uses Console {
                 (expression.kind == 6 and expression.symbol == -102 and expression.operand0 < 0) -> if {
                     "  call void @sollang_runtime_print(ptr @sollang_runtime_newline, i64 1, i1 false)" -> println
                 }
-                (expression.kind == 6 and expression.symbol != -115 and not (expression.symbol == -102 and expression.operand0 < 0) and expression.opcode != -205 and expression.opcode != -206 and expression.opcode != -207 and expression.opcode != -208 and expression.opcode != -209 and expression.opcode != -210 and expression.opcode != -211 and expression.opcode != -212 and expression.opcode != -214 and expression.opcode != -215 and expression.opcode != -222 and (expression.opcode > -216 or expression.opcode < -221) and not (expression.parent >= 0 and context.ir[expression.parent].kind == 6 and (context.ir[expression.parent].opcode == -207 or context.ir[expression.parent].opcode == -209) and context.ir[expression.parent].operand1 == expressionIndex!)) -> if {
+                (expression.kind == 6 and expression.symbol == -103) -> if {
+                    expressionIndex! -> callArgumentIndex => readPromptIndex
+                    context.ir[readPromptIndex] => readPrompt
+                    readPrompt.kind == 2 -> if {
+                        readPrompt -> sourceToken => readPromptToken
+                        Int(TextLiteralRequest { sourceModule: readPrompt.sourceModule, token: readPromptToken } -> textLiteralLength) => readPromptLength
+                        "  %v$(expressionIndex!) = call i32 @sollang_runtime_read_int(ptr @sollang_str_$(readPromptIndex), i64 $readPromptLength)" -> println
+                    } else {
+                        "  %v$(expressionIndex!) = call i32 @sollang_runtime_read_int(ptr null, i64 0)" -> println
+                    }
+                }
+                (expression.kind == 6 and expression.symbol != -103 and expression.symbol != -115 and not (expression.symbol == -102 and expression.operand0 < 0) and expression.opcode != -205 and expression.opcode != -206 and expression.opcode != -207 and expression.opcode != -208 and expression.opcode != -209 and expression.opcode != -210 and expression.opcode != -211 and expression.opcode != -212 and expression.opcode != -214 and expression.opcode != -215 and expression.opcode != -222 and (expression.opcode > -216 or expression.opcode < -221) and not (expression.parent >= 0 and context.ir[expression.parent].kind == 6 and (context.ir[expression.parent].opcode == -207 or context.ir[expression.parent].opcode == -209) and context.ir[expression.parent].operand1 == expressionIndex!)) -> if {
                     (expression.symbol == -101 or expression.symbol == -102) -> if {
                         expressionIndex! -> callArgumentIndex => runtimeArgumentIndex
                         context.ir[runtimeArgumentIndex] => runtimeArgument
@@ -10131,7 +10294,12 @@ emitCore context: EmitContext -> Unit uses Console {
                                                     (context.ir[functionExpressionRootBindingSearch!].kind == 17 and context.ir[functionExpressionRootBindingSearch!].symbol == functionExpressionRoot.symbol) -> if { functionExpressionRootBindingSearch! => functionExpressionRootBinding! }
                                                     functionExpressionRootBindingSearch! + 1 => functionExpressionRootBindingSearch!
                                                 }
-                                                functionExpressionRootBinding! >= 0 -> if { context.ir[functionExpressionRootBinding!].typeSymbol => functionExpressionRootTypeSymbol! }
+                                                functionExpressionRootBinding! >= 0 -> if {
+                                                    context.ir[functionExpressionRootBinding!].typeSymbol => functionExpressionRootTypeSymbol!
+                                                    context.ir[functionExpressionRootBinding!].operand0 >= 0 -> if {
+                                                        context.ir[context.ir[functionExpressionRootBinding!].operand0].typeSymbol => functionExpressionRootTypeSymbol!
+                                                    }
+                                                }
                                             }
                                         }
                                         false => functionExpressionRootMember!
@@ -10213,7 +10381,11 @@ emitCore context: EmitContext -> Unit uses Console {
                                         (functionExpressionRootTypeSymbol! == 12 or functionExpressionRootTypeSymbol! == 13) -> if { context.pointerBitWidth => functionExpressionRootWidth! }
                                         (functionExpressionRootBinding! >= 0 and context.ir[functionExpressionRootBinding!].operand0 >= 0) -> if {
                                             context.ir[context.ir[functionExpressionRootBinding!].operand0] -> integerNodeWidth => functionExpressionBoundWidth
-                                            functionExpressionBoundWidth > 0 -> if { functionExpressionBoundWidth => functionExpressionRootWidth! }
+                                            (functionExpressionBoundWidth > 0 and functionExpressionRootTypeSymbol! != 23) -> if {
+                                                functionExpressionBoundWidth => functionExpressionRootWidth!
+                                                context.ir[functionExpressionRootBinding!].operand0 -> nodeContainsReadInt => functionExpressionContainsReadInt
+                                                (functionExpressionRootTypeSymbol! <= 0 or functionExpressionContainsReadInt) -> if { 2 => functionExpressionRootTypeSymbol! }
+                                            }
                                         }
                                         functionExpressionRootTypeSymbol! == 1 -> if {
                                             "  %v$(expressionIndex!)_expression$(functionExpressionRootSearch!)_text_ptr = extractvalue %sollang.text " -> print
@@ -10521,6 +10693,30 @@ emitCore context: EmitContext -> Unit uses Console {
                         expression -> storageAlign -> writeDecimalLine
                     }
                 }
+                expression.kind == 33 -> if {
+                    expression.operand0 => whenArmIndex!
+                    true => whenArmOpen!
+                    (whenArmIndex! >= 0 and whenArmOpen!) -> while {
+                        context.ir[whenArmIndex!] => whenArm
+                        (whenArm.kind != 19 or whenArm.parent != expressionIndex!) -> if {
+                            false => whenArmOpen!
+                        } else {
+                            (whenArm.operand0 >= 0 and whenArm.operand1 >= 0 and whenArm.operand0 != whenArm.operand1 and context.ir[whenArm.operand0].kind != 19) -> if {
+                                WhileBranchRequest { whileIndex: whenArmIndex!, ownerIndex: functionIndex!, conditionIndex: whenArm.operand0 } -> emitWhileBranch
+                                "while$(whenArmIndex!)_body:" -> println
+                                whenArm.operand1 -> emitRegion
+                                "  br label %when$(expressionIndex!)_end" -> println
+                                "while$(whenArmIndex!)_exit:" -> println
+                            } else {
+                                whenArm.operand1 >= 0 -> if { whenArm.operand1 -> emitRegion } else { whenArm.operand0 -> emitRegion }
+                                "  br label %when$(expressionIndex!)_end" -> println
+                                false => whenArmOpen!
+                            }
+                            whenArmOpen! -> if { whenArm.nextOperand => whenArmIndex! }
+                        }
+                    }
+                    "when$(expressionIndex!)_end:" -> println
+                }
                 expression.kind == 20 -> if {
                     "  br label %while$(expressionIndex!)_header" -> println
                     "while$(expressionIndex!)_header:" -> println
@@ -10539,10 +10735,16 @@ emitCore context: EmitContext -> Unit uses Console {
                     false => nextInsideEach!
                     nextExpressionIndex! >= 0 -> if { NodeAncestorRequest { nodeIndex: nextExpressionIndex!, ownerIndex: activeEachIndex } -> nodeDescendsFrom => nextInsideEach! }
                     nextInsideEach! -> if { false => closeEachProgress! } else {
+                        context.ir[context.ir[activeEachIndex].operand0].kind == 31 => closeRangeEach
                         "  br label %each$(activeEachIndex)_continue" -> println
                         "each$(activeEachIndex)_continue:" -> println
-                        "  %each$(activeEachIndex)_next = add i64 %each$(activeEachIndex)_index, 1" -> println
-                        "  store i64 %each$(activeEachIndex)_next, ptr %each$(activeEachIndex)_index_slot, align 8" -> println
+                        closeRangeEach -> if {
+                            "  %each$(activeEachIndex)_next = add i32 %each$(activeEachIndex)_index, 1" -> println
+                            "  store i32 %each$(activeEachIndex)_next, ptr %each$(activeEachIndex)_index_slot, align 4" -> println
+                        } else {
+                            "  %each$(activeEachIndex)_next = add i64 %each$(activeEachIndex)_index, 1" -> println
+                            "  store i64 %each$(activeEachIndex)_next, ptr %each$(activeEachIndex)_index_slot, align 8" -> println
+                        }
                         "  br label %each$(activeEachIndex)_header" -> println
                         "each$(activeEachIndex)_exit:" -> println
                         activeEachSize! - 1 => activeEachSize!
@@ -11662,6 +11864,8 @@ emitCore context: EmitContext -> Unit uses Console {
                     entryScheduleInit! + 1 => entryScheduleInit!
                 }
                 [Int; ~] => entryOrder!
+                [Int; ~] => entryActiveEach!
+                0 => entryActiveEachSize!
                 true => entryScheduleProgress!
                 entryScheduleProgress! -> while {
                     false => entryScheduleProgress!
@@ -11807,7 +12011,7 @@ emitCore context: EmitContext -> Unit uses Console {
                                     context.ir[entryScheduleSibling!].nextOperand => entryScheduleSibling!
                                 }
                             }
-                            (entryScheduleReady! and (entryScheduleNode.kind == 18 or entryScheduleNode.kind == 20)) -> if {
+                            (entryScheduleReady! and (entryScheduleNode.kind == 18 or entryScheduleNode.kind == 20 or entryScheduleNode.kind == 33)) -> if {
                                 functionIndex! + 1 => entryPriorControlValueSearch!
                                 entryPriorControlValueSearch! < entryEnd! -> while {
                                     context.ir[entryPriorControlValueSearch!] => entryPriorControlValue
@@ -11848,7 +12052,7 @@ emitCore context: EmitContext -> Unit uses Console {
                                     }
                                 }
                             }
-                            (entryScheduleReady! and (entryScheduleNode.kind == 6 or entryScheduleNode.kind == 18 or entryScheduleNode.kind == 20 or entryScheduleNode.kind == 24 or entryScheduleNode.kind == 25 or (entryScheduleNode.kind == 17 and entryScheduleNode.flags == 1) or (entryScheduleNode.kind == 9 and (entryScheduleNode.opcode == -204 or entryScheduleNode.opcode == -205 or entryScheduleNode.opcode == -213 or entryScheduleNode.opcode == -220 or entryScheduleNode.opcode == -221)))) -> if {
+                            (entryScheduleReady! and (entryScheduleNode.kind == 6 or entryScheduleNode.kind == 18 or entryScheduleNode.kind == 20 or entryScheduleNode.kind == 33 or entryScheduleNode.kind == 24 or entryScheduleNode.kind == 25 or (entryScheduleNode.kind == 17 and entryScheduleNode.flags == 1) or (entryScheduleNode.kind == 9 and (entryScheduleNode.opcode == -204 or entryScheduleNode.opcode == -205 or entryScheduleNode.opcode == -213 or entryScheduleNode.opcode == -220 or entryScheduleNode.opcode == -221)))) -> if {
                                 true => entryRootEffect!
                                 entryScheduleNode.parent => entryEffectAncestor!
                                 (entryEffectAncestor! > functionIndex! and entryRootEffect!) -> while {
@@ -12083,7 +12287,7 @@ emitCore context: EmitContext -> Unit uses Console {
                                             context.ir[entryOpeningFlatMapUseSearch!] => entryOpeningFlatMapUse
                                             (entryOpeningFlatMapUse.kind == 5 and entryOpeningFlatMapUse.symbol == entryOpeningFlatMapRoleSearch!) -> if {
                                                 "  %v$(entryOpeningFlatMapUseSearch!) = freeze " -> print
-                                                entryOpeningFlatMapUse -> writeIrType
+                                                entryOpeningPipeline.status == 0 -> if { "i32" -> print } else { entryOpeningFlatMapUse -> writeIrType }
                                                 entryOpeningFlatMapRoleOrdinal! == 0 -> if { " %stream$(entryExpressionIndex!)_inner_item" -> println } else { " %stream$(entryExpressionIndex!)_item" -> println }
                                             }
                                             entryOpeningFlatMapUseSearch! + 1 => entryOpeningFlatMapUseSearch!
@@ -12470,6 +12674,135 @@ emitCore context: EmitContext -> Unit uses Console {
                         "  %v$(entryExpressionIndex!)_value1 = insertvalue %sollang.source_text %v$(entryExpressionIndex!)_value0, i64 %v$(entryExpressionIndex!)_length, 1" -> println
                         "  %v$(entryExpressionIndex!)_value2 = insertvalue %sollang.source_text %v$(entryExpressionIndex!)_value1, ptr null, 2" -> println
                         "  %v$(entryExpressionIndex!) = insertvalue %sollang.source_text %v$(entryExpressionIndex!)_value2, i64 0, 3" -> println
+                    }
+                    (entryExpression.kind == 6 and entryExpression.opcode == -208 and entryExpression.operand0 >= 0 and entryExpression.operand1 >= 0 and (entryExpressionIndex! -> plannedStreamPipeline) < 0) -> if {
+                        context.ir[entryExpression.operand0] => entryEachSource
+                        entryEachSource.kind == 31 -> if {
+                            "  %each$(entryExpressionIndex!)_index_slot = alloca i32, align 4" -> println
+                            "  store i32 " -> print
+                            context.ir[entryEachSource.operand0].kind == 3 -> if {
+                                context.ir[entryEachSource.operand0] -> sourceToken => entryEachStartToken
+                                context.sources[entryEachSource.sourceModule] -> slice(entryEachStartToken.span.start, entryEachStartToken.span.length) -> print
+                            } else { "%v$(entryEachSource.operand0)" -> print }
+                            ", ptr %each$(entryExpressionIndex!)_index_slot, align 4" -> println
+                            "  br label %each$(entryExpressionIndex!)_header" -> println
+                            "each$(entryExpressionIndex!)_header:" -> println
+                            "  %each$(entryExpressionIndex!)_index = load i32, ptr %each$(entryExpressionIndex!)_index_slot, align 4" -> println
+                            "  %each$(entryExpressionIndex!)_done = icmp sgt i32 %each$(entryExpressionIndex!)_index, " -> print
+                            context.ir[entryEachSource.operand1].kind == 3 -> if {
+                                context.ir[entryEachSource.operand1] -> sourceToken => entryEachEndToken
+                                context.sources[entryEachSource.sourceModule] -> slice(entryEachEndToken.span.start, entryEachEndToken.span.length) -> println
+                            } else { "%v$(entryEachSource.operand1)" -> println }
+                            "  br i1 %each$(entryExpressionIndex!)_done, label %each$(entryExpressionIndex!)_exit, label %each$(entryExpressionIndex!)_body" -> println
+                            "each$(entryExpressionIndex!)_body:" -> println
+                            "  %each$(entryExpressionIndex!)_item = freeze i32 %each$(entryExpressionIndex!)_index" -> println
+                        } else {
+                            "  %each$(entryExpressionIndex!)_data = extractvalue %sollang.array.i32 %v$(entryExpression.operand0), 0" -> println
+                            "  %each$(entryExpressionIndex!)_length = extractvalue %sollang.array.i32 %v$(entryExpression.operand0), 1" -> println
+                            "  %each$(entryExpressionIndex!)_index_slot = alloca i64, align 8" -> println
+                            "  store i64 0, ptr %each$(entryExpressionIndex!)_index_slot, align 8" -> println
+                            "  br label %each$(entryExpressionIndex!)_header" -> println
+                            "each$(entryExpressionIndex!)_header:" -> println
+                            "  %each$(entryExpressionIndex!)_index = load i64, ptr %each$(entryExpressionIndex!)_index_slot, align 8" -> println
+                            "  %each$(entryExpressionIndex!)_done = icmp eq i64 %each$(entryExpressionIndex!)_index, %each$(entryExpressionIndex!)_length" -> println
+                            "  br i1 %each$(entryExpressionIndex!)_done, label %each$(entryExpressionIndex!)_exit, label %each$(entryExpressionIndex!)_body" -> println
+                            "each$(entryExpressionIndex!)_body:" -> println
+                            "  %each$(entryExpressionIndex!)_item_ptr = getelementptr " -> print
+                            entryEachSource -> writeArrayElementType
+                            ", ptr %each$(entryExpressionIndex!)_data, i64 %each$(entryExpressionIndex!)_index" -> println
+                            "  %each$(entryExpressionIndex!)_item = load " -> print
+                            entryEachSource -> writeArrayElementType
+                            ", ptr %each$(entryExpressionIndex!)_item_ptr, align " -> print
+                            entryEachSource -> arrayElementAlign -> writeDecimalLine
+                        }
+                        functionIndex! + 1 => entryEachRoleUse!
+                        entryEachRoleUse! < entryEnd! -> while {
+                            context.ir[entryEachRoleUse!] => entryEachRoleNode
+                            NodeAncestorRequest { nodeIndex: entryEachRoleUse!, ownerIndex: entryExpressionIndex! } => entryEachRoleAncestorRequest
+                            entryEachRoleAncestorRequest -> irDescendsFrom => entryEachRoleInside
+                            (entryEachRoleNode.kind == 5 and entryEachRoleNode.operand0 < 0 and entryEachRoleNode.symbol >= 0 and entryEachRoleInside) -> if {
+                                context.ranges[entryEachRoleNode.sourceModule] => entryEachRoleRange
+                                entryEachRoleNode.symbol < entryEachRoleRange.symbolCount -> if {
+                                    context.symbols[entryEachRoleRange.symbolStart + entryEachRoleNode.symbol] => entryEachRoleSymbol
+                                    (entryEachRoleSymbol.kind == 35 and entryEachRoleSymbol.astNode == entryExpression.astNode) -> if {
+                                        "  %v$(entryEachRoleUse!) = freeze " -> print
+                                        entryEachSource.kind == 31 -> if { "i32" -> print } else { entryEachSource -> writeArrayElementType }
+                                        " %each$(entryExpressionIndex!)_item" -> println
+                                    }
+                                }
+                            }
+                            entryEachRoleUse! + 1 => entryEachRoleUse!
+                        }
+                        entryActiveEachSize! == (entryActiveEach! -> len) -> if { entryActiveEach! -> push(entryExpressionIndex!) } else { entryExpressionIndex! => entryActiveEach![entryActiveEachSize!] }
+                        entryActiveEachSize! + 1 => entryActiveEachSize!
+                    }
+                    (entryExpression.kind == 32 and entryExpression.operand0 >= 0 and entryExpression.operand1 >= 0 and entryExpression.nextOperand >= 0) -> if {
+                        context.ir[entryExpression.operand0] => entryFoldSource
+                        "  %fold$(entryExpressionIndex!)_acc_slot = alloca i32, align 4" -> println
+                        entryFoldSource.kind == 31 -> if {
+                            "  %fold$(entryExpressionIndex!)_item_slot = alloca i32, align 4" -> println
+                            "  store i32 " -> print
+                            entryFoldSource.operand0 -> writeValue(functionIndex!)
+                            ", ptr %fold$(entryExpressionIndex!)_item_slot, align 4" -> println
+                        } else {
+                            "  %fold$(entryExpressionIndex!)_data = extractvalue %sollang.array.i32 %v$(entryExpression.operand0), 0" -> println
+                            "  %fold$(entryExpressionIndex!)_length = extractvalue %sollang.array.i32 %v$(entryExpression.operand0), 1" -> println
+                            "  %fold$(entryExpressionIndex!)_index_slot = alloca i64, align 8" -> println
+                            "  store i64 0, ptr %fold$(entryExpressionIndex!)_index_slot, align 8" -> println
+                        }
+                        "  store i32 " -> print
+                        entryExpression.operand1 -> writeValue(functionIndex!)
+                        ", ptr %fold$(entryExpressionIndex!)_acc_slot, align 4" -> println
+                        "  br label %fold$(entryExpressionIndex!)_header" -> println
+                        "fold$(entryExpressionIndex!)_header:" -> println
+                        entryFoldSource.kind == 31 -> if {
+                            "  %fold$(entryExpressionIndex!)_item = load i32, ptr %fold$(entryExpressionIndex!)_item_slot, align 4" -> println
+                            "  %fold$(entryExpressionIndex!)_done = icmp sgt i32 %fold$(entryExpressionIndex!)_item, " -> print
+                            entryFoldSource.operand1 -> writeValue(functionIndex!)
+                            "" -> println
+                        } else {
+                            "  %fold$(entryExpressionIndex!)_index = load i64, ptr %fold$(entryExpressionIndex!)_index_slot, align 8" -> println
+                            "  %fold$(entryExpressionIndex!)_done = icmp eq i64 %fold$(entryExpressionIndex!)_index, %fold$(entryExpressionIndex!)_length" -> println
+                        }
+                        "  br i1 %fold$(entryExpressionIndex!)_done, label %fold$(entryExpressionIndex!)_exit, label %fold$(entryExpressionIndex!)_body" -> println
+                        "fold$(entryExpressionIndex!)_body:" -> println
+                        entryFoldSource.kind != 31 -> if {
+                            "  %fold$(entryExpressionIndex!)_item_ptr = getelementptr i32, ptr %fold$(entryExpressionIndex!)_data, i64 %fold$(entryExpressionIndex!)_index" -> println
+                            "  %fold$(entryExpressionIndex!)_item = load i32, ptr %fold$(entryExpressionIndex!)_item_ptr, align 4" -> println
+                        }
+                        entryExpression -> sourceNode => entryFoldAst
+                        functionIndex! + 1 => entryFoldRoleUse!
+                        entryFoldRoleUse! < entryEnd! -> while {
+                            context.ir[entryFoldRoleUse!] => entryFoldRoleNode
+                            NodeAncestorRequest { nodeIndex: entryFoldRoleUse!, ownerIndex: entryExpressionIndex! } => entryFoldRoleAncestorRequest
+                            entryFoldRoleAncestorRequest -> irDescendsFrom => entryFoldRoleInside
+                            (entryFoldRoleInside and entryFoldRoleNode.kind == 5 and entryFoldRoleNode.symbol >= 0) -> if {
+                                context.ranges[entryFoldRoleNode.sourceModule] => entryFoldRoleRange
+                                entryFoldRoleNode.symbol < entryFoldRoleRange.symbolCount -> if {
+                                    context.symbols[entryFoldRoleRange.symbolStart + entryFoldRoleNode.symbol] => entryFoldRoleSymbol
+                                    entryFoldRoleSymbol.nameToken == entryFoldAst.secondaryToken -> if {
+                                        "  %v$(entryFoldRoleUse!) = load i32, ptr %fold$(entryExpressionIndex!)_acc_slot, align 4" -> println
+                                    }
+                                    entryFoldRoleSymbol.nameToken == entryFoldAst.tertiaryToken -> if {
+                                        "  %v$(entryFoldRoleUse!) = freeze i32 %fold$(entryExpressionIndex!)_item" -> println
+                                    }
+                                }
+                            }
+                            entryFoldRoleUse! + 1 => entryFoldRoleUse!
+                        }
+                        entryExpression.nextOperand -> emitRegion
+                        entryExpression.nextOperand -> regionResultValueIndex => entryFoldBodyResult
+                        "  store i32 %v$(entryFoldBodyResult), ptr %fold$(entryExpressionIndex!)_acc_slot, align 4" -> println
+                        entryFoldSource.kind == 31 -> if {
+                            "  %fold$(entryExpressionIndex!)_next = add i32 %fold$(entryExpressionIndex!)_item, 1" -> println
+                            "  store i32 %fold$(entryExpressionIndex!)_next, ptr %fold$(entryExpressionIndex!)_item_slot, align 4" -> println
+                        } else {
+                            "  %fold$(entryExpressionIndex!)_next = add i64 %fold$(entryExpressionIndex!)_index, 1" -> println
+                            "  store i64 %fold$(entryExpressionIndex!)_next, ptr %fold$(entryExpressionIndex!)_index_slot, align 8" -> println
+                        }
+                        "  br label %fold$(entryExpressionIndex!)_header" -> println
+                        "fold$(entryExpressionIndex!)_exit:" -> println
+                        "  %v$(entryExpressionIndex!) = load i32, ptr %fold$(entryExpressionIndex!)_acc_slot, align 4" -> println
                     }
                     (entryExpression.kind == 6 and entryExpression.opcode == -215) -> if {
                         DirectoryCallRequest { callIndex: entryExpressionIndex!, ownerIndex: functionIndex! } -> emitDirectoryCall
@@ -13233,7 +13566,18 @@ emitCore context: EmitContext -> Unit uses Console {
                     (entryExpression.kind == 6 and entryExpression.symbol == -102 and entryExpression.operand0 < 0) -> if {
                         "  call void @sollang_runtime_print(ptr @sollang_runtime_newline, i64 1, i1 false)" -> println
                     }
-                    (entryExpression.kind == 6 and (entryExpressionIndex! -> plannedStreamStage) < 0 and entryExpression.symbol != -115 and not (entryExpression.symbol == -102 and entryExpression.operand0 < 0) and entryExpression.opcode != -205 and entryExpression.opcode != -207 and entryExpression.opcode != -208 and entryExpression.opcode != -209 and entryExpression.opcode != -210 and entryExpression.opcode != -211 and entryExpression.opcode != -212 and entryExpression.opcode != -215 and entryExpression.opcode != -222 and (entryExpression.opcode > -216 or entryExpression.opcode < -221) and not (entryExpression.parent >= 0 and context.ir[entryExpression.parent].kind == 6 and (context.ir[entryExpression.parent].opcode == -207 or context.ir[entryExpression.parent].opcode == -209) and context.ir[entryExpression.parent].operand1 == entryExpressionIndex!)) -> if {
+                    (entryExpression.kind == 6 and entryExpression.symbol == -103) -> if {
+                        entryExpressionIndex! -> callArgumentIndex => entryReadPromptIndex
+                        context.ir[entryReadPromptIndex] => entryReadPrompt
+                        entryReadPrompt.kind == 2 -> if {
+                            entryReadPrompt -> sourceToken => entryReadPromptToken
+                            Int(TextLiteralRequest { sourceModule: entryReadPrompt.sourceModule, token: entryReadPromptToken } -> textLiteralLength) => entryReadPromptLength
+                            "  %v$(entryExpressionIndex!) = call i32 @sollang_runtime_read_int(ptr @sollang_str_$(entryReadPromptIndex), i64 $entryReadPromptLength)" -> println
+                        } else {
+                            "  %v$(entryExpressionIndex!) = call i32 @sollang_runtime_read_int(ptr null, i64 0)" -> println
+                        }
+                    }
+                    (entryExpression.kind == 6 and (entryExpressionIndex! -> plannedStreamStage) < 0 and entryExpression.symbol != -103 and entryExpression.symbol != -115 and not (entryExpression.symbol == -102 and entryExpression.operand0 < 0) and entryExpression.opcode != -205 and entryExpression.opcode != -207 and entryExpression.opcode != -208 and entryExpression.opcode != -209 and entryExpression.opcode != -210 and entryExpression.opcode != -211 and entryExpression.opcode != -212 and entryExpression.opcode != -215 and entryExpression.opcode != -222 and (entryExpression.opcode > -216 or entryExpression.opcode < -221) and not (entryExpression.parent >= 0 and context.ir[entryExpression.parent].kind == 6 and (context.ir[entryExpression.parent].opcode == -207 or context.ir[entryExpression.parent].opcode == -209) and context.ir[entryExpression.parent].operand1 == entryExpressionIndex!)) -> if {
                         (entryExpression.symbol == -101 or entryExpression.symbol == -102) -> if {
                             entryExpressionIndex! -> callArgumentIndex => entryRuntimeArgumentIndex!
                             false => entryRuntimeStreamDirect!
@@ -13519,6 +13863,9 @@ emitCore context: EmitContext -> Unit uses Console {
                                                 }
                                                 entryExpressionRootBinding! >= 0 -> if {
                                                     context.ir[entryExpressionRootBinding!].typeSymbol => entryExpressionRootTypeSymbol!
+                                                    context.ir[entryExpressionRootBinding!].operand0 >= 0 -> if {
+                                                        context.ir[context.ir[entryExpressionRootBinding!].operand0].typeSymbol => entryExpressionRootTypeSymbol!
+                                                    }
                                                     context.ir[entryExpressionRootBinding!].flags == 1 -> if {
                                                         true => entryExpressionRootMutable!
                                                         entryExpressionRootBinding! -> mutableBindingRoot => entryExpressionMutableRoot
@@ -13704,7 +14051,11 @@ emitCore context: EmitContext -> Unit uses Console {
                                             (entryExpressionRootTypeSymbol! == 12 or entryExpressionRootTypeSymbol! == 13) -> if { context.pointerBitWidth => entryExpressionRootWidth! }
                                             (entryExpressionRootBinding! >= 0 and context.ir[entryExpressionRootBinding!].operand0 >= 0) -> if {
                                                 context.ir[context.ir[entryExpressionRootBinding!].operand0] -> integerNodeWidth => entryExpressionBoundWidth
-                                                entryExpressionBoundWidth > 0 -> if { entryExpressionBoundWidth => entryExpressionRootWidth! }
+                                                (entryExpressionBoundWidth > 0 and entryExpressionRootTypeSymbol! != 23) -> if {
+                                                    entryExpressionBoundWidth => entryExpressionRootWidth!
+                                                    context.ir[entryExpressionRootBinding!].operand0 -> nodeContainsReadInt => entryExpressionContainsReadInt
+                                                    (entryExpressionRootTypeSymbol! <= 0 or entryExpressionContainsReadInt) -> if { 2 => entryExpressionRootTypeSymbol! }
+                                                }
                                             }
                                             entryExpressionRootTypeSymbol! == 1 -> if {
                                                 "  %v$(entryExpressionIndex!)_expression$(entryExpressionRootSearch!)_text_ptr = extractvalue %sollang.text " -> print
@@ -13963,6 +14314,30 @@ emitCore context: EmitContext -> Unit uses Console {
                             entryExpression -> storageAlign -> writeDecimalLine
                         }
                     }
+                    entryExpression.kind == 33 -> if {
+                        entryExpression.operand0 => entryWhenArmIndex!
+                        true => entryWhenArmOpen!
+                        (entryWhenArmIndex! >= 0 and entryWhenArmOpen!) -> while {
+                            context.ir[entryWhenArmIndex!] => entryWhenArm
+                            (entryWhenArm.kind != 19 or entryWhenArm.parent != entryExpressionIndex!) -> if {
+                                false => entryWhenArmOpen!
+                            } else {
+                                (entryWhenArm.operand0 >= 0 and entryWhenArm.operand1 >= 0 and entryWhenArm.operand0 != entryWhenArm.operand1 and context.ir[entryWhenArm.operand0].kind != 19) -> if {
+                                    WhileBranchRequest { whileIndex: entryWhenArmIndex!, ownerIndex: functionIndex!, conditionIndex: entryWhenArm.operand0 } -> emitWhileBranch
+                                    "while$(entryWhenArmIndex!)_body:" -> println
+                                    entryWhenArm.operand1 -> emitRegion
+                                    "  br label %when$(entryExpressionIndex!)_end" -> println
+                                    "while$(entryWhenArmIndex!)_exit:" -> println
+                                } else {
+                                    entryWhenArm.operand1 >= 0 -> if { entryWhenArm.operand1 -> emitRegion } else { entryWhenArm.operand0 -> emitRegion }
+                                    "  br label %when$(entryExpressionIndex!)_end" -> println
+                                    false => entryWhenArmOpen!
+                                }
+                                entryWhenArmOpen! -> if { entryWhenArm.nextOperand => entryWhenArmIndex! }
+                            }
+                        }
+                        "when$(entryExpressionIndex!)_end:" -> println
+                    }
                     entryExpression.kind == 20 -> if {
                         "  br label %while$(entryExpressionIndex!)_header" -> println
                         "while$(entryExpressionIndex!)_header:" -> println
@@ -14035,7 +14410,7 @@ emitCore context: EmitContext -> Unit uses Console {
                                                         context.ir[entryBoundaryFlatMapUseSearch!] => entryBoundaryFlatMapUse
                                                         (entryBoundaryFlatMapUse.kind == 5 and entryBoundaryFlatMapUse.symbol == entryBoundaryFlatMapRoleSearch!) -> if {
                                                             "  %v$(entryBoundaryFlatMapUseSearch!) = freeze " -> print
-                                                            entryBoundaryFlatMapUse -> writeIrType
+                                                            entryBoundaryPipeline.status == 0 -> if { "i32" -> print } else { entryBoundaryFlatMapUse -> writeIrType }
                                                             entryBoundaryFlatMapRoleOrdinal! == 0 -> if { " %stream$(entryBoundaryPipeline.terminalIr)_inner_item" -> println } else { " %stream$(entryBoundaryPipeline.terminalIr)_item" -> println }
                                                         }
                                                         entryBoundaryFlatMapUseSearch! + 1 => entryBoundaryFlatMapUseSearch!
@@ -14182,6 +14557,30 @@ emitCore context: EmitContext -> Unit uses Console {
                     }
                     -1 => entryNextExpressionIndex!
                     entryOrderIndex! + 1 < (entryOrder! -> len) -> if { entryOrder![entryOrderIndex! + 1] => entryNextExpressionIndex! }
+                    true => entryCloseEachProgress!
+                    (entryActiveEachSize! > 0 and entryCloseEachProgress!) -> while {
+                        entryActiveEach![entryActiveEachSize! - 1] => entryCloseEachIndex
+                        false => entryNextInsideEach!
+                        entryNextExpressionIndex! >= 0 -> if {
+                            NodeAncestorRequest { nodeIndex: entryNextExpressionIndex!, ownerIndex: entryCloseEachIndex } => entryCloseEachAncestorRequest
+                            entryCloseEachAncestorRequest -> irDescendsFrom => entryNextInsideEach!
+                        }
+                        entryNextInsideEach! -> if { false => entryCloseEachProgress! } else {
+                            context.ir[context.ir[entryCloseEachIndex].operand0].kind == 31 => entryCloseRangeEach
+                            "  br label %each$(entryCloseEachIndex)_continue" -> println
+                            "each$(entryCloseEachIndex)_continue:" -> println
+                            entryCloseRangeEach -> if {
+                                "  %each$(entryCloseEachIndex)_next = add i32 %each$(entryCloseEachIndex)_index, 1" -> println
+                                "  store i32 %each$(entryCloseEachIndex)_next, ptr %each$(entryCloseEachIndex)_index_slot, align 4" -> println
+                            } else {
+                                "  %each$(entryCloseEachIndex)_next = add i64 %each$(entryCloseEachIndex)_index, 1" -> println
+                                "  store i64 %each$(entryCloseEachIndex)_next, ptr %each$(entryCloseEachIndex)_index_slot, align 8" -> println
+                            }
+                            "  br label %each$(entryCloseEachIndex)_header" -> println
+                            "each$(entryCloseEachIndex)_exit:" -> println
+                            entryActiveEachSize! - 1 => entryActiveEachSize!
+                        }
+                    }
                     true => entryCloseStreamProgress!
                     (entryActiveStreamSize! > 0 and entryCloseStreamProgress!) -> while {
                         entryActiveStreams![entryActiveStreamSize! - 1] => entryCloseStreamPipelineIndex
@@ -14278,7 +14677,7 @@ usesTextRuntime context: EmitContext -> Bool {
     false => usesRuntime!
     0 => nodeIndex!
     nodeIndex! < (context.ir -> len) -> while {
-        (context.ir[nodeIndex!].symbol == -101 or context.ir[nodeIndex!].symbol == -102) -> if { true => usesRuntime! }
+        (context.ir[nodeIndex!].symbol == -101 or context.ir[nodeIndex!].symbol == -102 or context.ir[nodeIndex!].symbol == -103) -> if { true => usesRuntime! }
         nodeIndex! + 1 => nodeIndex!
     }
     usesRuntime!
@@ -15701,6 +16100,7 @@ emitWasmTextRuntime: -> Unit uses Console {
     """
     @sollang_runtime_newline = private constant [1 x i8] c"\0A"
     declare i32 @sollang_browser_write(ptr, i32)
+    declare i32 @sollang_browser_read(ptr, i32)
     declare i64 @sollang_browser_now_millis()
     define internal i64 @sollang_now_millis() {
     entry:
@@ -15721,6 +16121,62 @@ emitWasmTextRuntime: -> Unit uses Console {
       br label %done
     done:
       ret void
+    }
+    define internal i32 @sollang_runtime_read_int(ptr %prompt, i64 %prompt_len) {
+    entry:
+      call void @sollang_runtime_print(ptr %prompt, i64 %prompt_len, i1 false)
+      %buf = alloca [64 x i8], align 1
+      %count = call i32 @sollang_browser_read(ptr %buf, i32 64)
+      %has_input = icmp sgt i32 %count, 0
+      br i1 %has_input, label %skip_header, label %empty
+    skip_header:
+      br label %skip
+    skip:
+      %skip_index = phi i32 [ 0, %skip_header ], [ %skip_next, %skip_space ]
+      %skip_in_bounds = icmp slt i32 %skip_index, %count
+      br i1 %skip_in_bounds, label %skip_check, label %empty
+    skip_check:
+      %skip_ptr = getelementptr i8, ptr %buf, i32 %skip_index
+      %skip_byte = load i8, ptr %skip_ptr, align 1
+      %is_space = icmp eq i8 %skip_byte, 32
+      %is_tab = icmp eq i8 %skip_byte, 9
+      %is_newline = icmp eq i8 %skip_byte, 10
+      %space_or_tab = or i1 %is_space, %is_tab
+      %is_whitespace = or i1 %space_or_tab, %is_newline
+      br i1 %is_whitespace, label %skip_space, label %sign
+    skip_space:
+      %skip_next = add i32 %skip_index, 1
+      br label %skip
+    sign:
+      %is_minus = icmp eq i8 %skip_byte, 45
+      %digit_start_delta = zext i1 %is_minus to i32
+      %digit_start = add i32 %skip_index, %digit_start_delta
+      br label %digits
+    digits:
+      %digit_index = phi i32 [ %digit_start, %sign ], [ %digit_next, %accumulate ]
+      %value = phi i32 [ 0, %sign ], [ %next_value, %accumulate ]
+      %digit_in_bounds = icmp slt i32 %digit_index, %count
+      br i1 %digit_in_bounds, label %digit_check, label %finish
+    digit_check:
+      %digit_ptr = getelementptr i8, ptr %buf, i32 %digit_index
+      %digit_byte = load i8, ptr %digit_ptr, align 1
+      %at_least_zero = icmp uge i8 %digit_byte, 48
+      %at_most_nine = icmp ule i8 %digit_byte, 57
+      %is_digit = and i1 %at_least_zero, %at_most_nine
+      br i1 %is_digit, label %accumulate, label %finish
+    accumulate:
+      %digit_i32 = zext i8 %digit_byte to i32
+      %digit = sub i32 %digit_i32, 48
+      %times_ten = mul i32 %value, 10
+      %next_value = add i32 %times_ten, %digit
+      %digit_next = add i32 %digit_index, 1
+      br label %digits
+    finish:
+      %negative_value = sub i32 0, %value
+      %result = select i1 %is_minus, i32 %negative_value, i32 %value
+      ret i32 %result
+    empty:
+      ret i32 0
     }
     """ -> println
 }
