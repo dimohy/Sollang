@@ -28,12 +28,8 @@ function findArrowOffsets(text) {
         }
 
         if (normalString) {
-            if (character === "\\") {
-                index = Math.min(text.length, index + 2);
-            } else {
-                index++;
-                if (character === '"') normalString = false;
-            }
+            index++;
+            if (character === '"') normalString = false;
             continue;
         }
 

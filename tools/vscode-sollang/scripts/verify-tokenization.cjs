@@ -111,13 +111,15 @@ async function main() {
   const arrowFixture = [
     "value -> transform => result # -> =>",
     "\"-> =>\" -> println",
+    "\"\\\" -> print",
+    "UInt16(value) -> hexDigit -> print",
     "\"\"\"",
     "-> =>",
     "\"\"\" => rawText"
   ].join("\n");
   const highlighted = findArrowOffsets(arrowFixture);
   const highlightedText = (ranges) => ranges.map(([start, end]) => arrowFixture.slice(start, end));
-  if (JSON.stringify(highlightedText(highlighted.flow)) !== JSON.stringify(["->", "->"])) {
+  if (JSON.stringify(highlightedText(highlighted.flow)) !== JSON.stringify(["->", "->", "->", "->", "->"])) {
     throw new Error(`flow decoration lexer mismatch: ${JSON.stringify(highlighted.flow)}`);
   }
   if (JSON.stringify(highlightedText(highlighted.binding)) !== JSON.stringify(["=>", "=>"])) {
@@ -159,6 +161,27 @@ async function main() {
     if (!scopes.includes(expectedScope)) {
       throw new Error(`${JSON.stringify(text)} scopes ${scopes.join(" ")} do not include ${expectedScope}`);
     }
+  }
+
+  let escapedDelimiterStack = textmate.INITIAL;
+  const escapedDelimiterLines = [
+    "\"\\\" -> print",
+    "UInt16(value) / UInt16(16) -> hexDigit -> print"
+  ];
+  const escapedDelimiterTokens = [];
+  for (const line of escapedDelimiterLines) {
+    const result = grammar.tokenizeLine(line, escapedDelimiterStack);
+    escapedDelimiterStack = result.ruleStack;
+    escapedDelimiterTokens.push(result.tokens);
+  }
+  const followingLineScopes = scopesFor(
+    escapedDelimiterTokens[1],
+    escapedDelimiterLines[1],
+    "UInt16");
+  if (followingLineScopes.includes("string.quoted.double.sollang")
+    || !followingLineScopes.includes("storage.type.builtin.sollang")) {
+    throw new Error(
+      `backslash delimiter leaked string state: ${followingLineScopes.join(" ")}`);
   }
 
   const extensionManifest = JSON.parse(fs.readFileSync(packagePath, "utf8"));

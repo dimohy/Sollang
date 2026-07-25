@@ -1,0 +1,260 @@
+namespace sollang.compiler.llvm.emitter.process_runtime
+
+public emitProcessRuntimeCommon: -> Unit uses Console {
+    """
+    define internal ptr @sollang_process_copy_text(ptr %data, i64 %length) {
+    entry:
+      %capacity = add i64 %length, 1
+      %copy = call ptr @malloc(i64 %capacity)
+      %allocated = icmp ne ptr %copy, null
+      br i1 %allocated, label %loop, label %fail
+    loop:
+      %index = phi i64 [ 0, %entry ], [ %next, %body ]
+      %done = icmp eq i64 %index, %length
+      br i1 %done, label %terminate, label %body
+    body:
+      %source = getelementptr i8, ptr %data, i64 %index
+      %byte = load i8, ptr %source, align 1
+      %destination = getelementptr i8, ptr %copy, i64 %index
+      store i8 %byte, ptr %destination, align 1
+      %next = add i64 %index, 1
+      br label %loop
+    terminate:
+      %null_slot = getelementptr i8, ptr %copy, i64 %length
+      store i8 0, ptr %null_slot, align 1
+      ret ptr %copy
+    fail:
+      ret ptr null
+    }
+    define internal void @sollang_process_dispose_argv(ptr %argv, i64 %count) {
+    entry:
+      br label %loop
+    loop:
+      %index = phi i64 [ 0, %entry ], [ %next, %body ]
+      %done = icmp eq i64 %index, %count
+      br i1 %done, label %finish, label %body
+    body:
+      %slot = getelementptr ptr, ptr %argv, i64 %index
+      %value = load ptr, ptr %slot, align 8
+      call void @free(ptr %value)
+      %next = add i64 %index, 1
+      br label %loop
+    finish:
+      call void @free(ptr %argv)
+      ret void
+    }
+    define internal ptr @sollang_process_build_argv(ptr %records, i64 %count) {
+    entry:
+      %slots = add i64 %count, 1
+      %bytes = mul i64 %slots, 8
+      %argv = call ptr @malloc(i64 %bytes)
+      %allocated = icmp ne ptr %argv, null
+      br i1 %allocated, label %loop, label %fail
+    loop:
+      %index = phi i64 [ 0, %entry ], [ %next, %stored ]
+      %done = icmp eq i64 %index, %count
+      br i1 %done, label %terminate, label %copy
+    copy:
+      %record = getelementptr %sollang.text, ptr %records, i64 %index
+      %data_slot = getelementptr inbounds %sollang.text, ptr %record, i32 0, i32 0
+      %data = load ptr, ptr %data_slot, align 8
+      %length_slot = getelementptr inbounds %sollang.text, ptr %record, i32 0, i32 1
+      %length = load i64, ptr %length_slot, align 8
+      %value = call ptr @sollang_process_copy_text(ptr %data, i64 %length)
+      %copied = icmp ne ptr %value, null
+      br i1 %copied, label %stored, label %cleanup
+    stored:
+      %slot = getelementptr ptr, ptr %argv, i64 %index
+      store ptr %value, ptr %slot, align 8
+      %next = add i64 %index, 1
+      br label %loop
+    cleanup:
+      call void @sollang_process_dispose_argv(ptr %argv, i64 %index)
+      ret ptr null
+    terminate:
+      %null_slot = getelementptr ptr, ptr %argv, i64 %count
+      store ptr null, ptr %null_slot, align 8
+      ret ptr %argv
+    fail:
+      ret ptr null
+    }
+    """ -> println
+}
+
+public emitProcessTypeRuntime: -> Unit uses Console {
+    """
+    %sollang.process_result = type { i32, i32 }
+    @sollang_process_error_spawn = private constant [5 x i8] c"spawn"
+    @sollang_process_error_wait = private constant [4 x i8] c"wait"
+    @sollang_process_error_signal = private constant [6 x i8] c"signal"
+    """ -> println
+}
+
+public emitWindowsProcessRuntime: -> Unit uses Console {
+    true -> if { emitProcessRuntimeCommon }
+    """
+    declare i64 @_spawnvp(i32, ptr, ptr)
+    declare i32 @_open(ptr, i32, i32)
+    declare i32 @_dup(i32)
+    declare i32 @_dup2(i32, i32)
+    declare i32 @_close(i32)
+    define internal %sollang.process_result @sollang_run_process(ptr %records, i64 %count) {
+    entry:
+      %has_program = icmp ugt i64 %count, 0
+      br i1 %has_program, label %build, label %error
+    build:
+      %argv = call ptr @sollang_process_build_argv(ptr %records, i64 %count)
+      %built = icmp ne ptr %argv, null
+      br i1 %built, label %spawn, label %error
+    spawn:
+      %program_slot = getelementptr ptr, ptr %argv, i64 0
+      %program = load ptr, ptr %program_slot, align 8
+      %raw = call i64 @_spawnvp(i32 0, ptr %program, ptr %argv)
+      call void @sollang_process_dispose_argv(ptr %argv, i64 %count)
+      %spawned = icmp ne i64 %raw, -1
+      br i1 %spawned, label %success, label %error
+    success:
+      %exit_code = trunc i64 %raw to i32
+      %ok0 = insertvalue %sollang.process_result poison, i32 %exit_code, 0
+      %ok1 = insertvalue %sollang.process_result %ok0, i32 0, 1
+      ret %sollang.process_result %ok1
+    error:
+      %error0 = insertvalue %sollang.process_result poison, i32 0, 0
+      %error1 = insertvalue %sollang.process_result %error0, i32 1, 1
+      ret %sollang.process_result %error1
+    }
+    define internal %sollang.process_result @sollang_run_process_to_file(ptr %records, i64 %count, ptr %path, i64 %path_length) {
+    entry:
+      %path_copy = call ptr @sollang_process_copy_text(ptr %path, i64 %path_length)
+      %path_ok = icmp ne ptr %path_copy, null
+      br i1 %path_ok, label %open, label %error
+    open:
+      %output = call i32 @_open(ptr %path_copy, i32 33537, i32 384)
+      call void @free(ptr %path_copy)
+      %opened = icmp sge i32 %output, 0
+      br i1 %opened, label %save, label %error
+    save:
+      %saved = call i32 @_dup(i32 1)
+      %saved_ok = icmp sge i32 %saved, 0
+      br i1 %saved_ok, label %redirect, label %close_error
+    redirect:
+      %redirected = call i32 @_dup2(i32 %output, i32 1)
+      %redirect_ok = icmp eq i32 %redirected, 0
+      br i1 %redirect_ok, label %run, label %restore_error
+    run:
+      %result = call %sollang.process_result @sollang_run_process(ptr %records, i64 %count)
+      %restored = call i32 @_dup2(i32 %saved, i32 1)
+      %closed_saved = call i32 @_close(i32 %saved)
+      %closed_output = call i32 @_close(i32 %output)
+      ret %sollang.process_result %result
+    restore_error:
+      %restore_failed = call i32 @_dup2(i32 %saved, i32 1)
+      %close_saved_failed = call i32 @_close(i32 %saved)
+      br label %close_error
+    close_error:
+      %close_output_failed = call i32 @_close(i32 %output)
+      br label %error
+    error:
+      %error0 = insertvalue %sollang.process_result poison, i32 0, 0
+      %error1 = insertvalue %sollang.process_result %error0, i32 1, 1
+      ret %sollang.process_result %error1
+    }
+    """ -> println
+}
+
+public emitLinuxProcessRuntime hasComputeRuntime: Bool -> Unit uses Console {
+    true -> if { emitProcessRuntimeCommon }
+    not hasComputeRuntime -> if { "declare i32 @close(i32)" -> println }
+    """
+    declare i32 @fork()
+    declare i32 @execvp(ptr, ptr)
+    declare i32 @waitpid(i32, ptr, i32)
+    declare void @_exit(i32)
+    declare i32 @open(ptr, i32, i32)
+    declare i32 @dup2(i32, i32)
+    define internal %sollang.process_result @sollang_run_process_with_output(ptr %records, i64 %count, i32 %output) {
+    entry:
+      %has_program = icmp ugt i64 %count, 0
+      br i1 %has_program, label %build, label %spawn_error
+    build:
+      %argv = call ptr @sollang_process_build_argv(ptr %records, i64 %count)
+      %built = icmp ne ptr %argv, null
+      br i1 %built, label %fork, label %spawn_error
+    fork:
+      %pid = call i32 @fork()
+      %fork_failed = icmp slt i32 %pid, 0
+      br i1 %fork_failed, label %cleanup_spawn_error, label %forked
+    forked:
+      %child = icmp eq i32 %pid, 0
+      br i1 %child, label %child_process, label %parent
+    child_process:
+      %redirect = icmp sge i32 %output, 0
+      br i1 %redirect, label %child_redirect, label %child_exec
+    child_redirect:
+      %redirected = call i32 @dup2(i32 %output, i32 1)
+      br label %child_exec
+    child_exec:
+      %program_slot = getelementptr ptr, ptr %argv, i64 0
+      %program = load ptr, ptr %program_slot, align 8
+      %exec_result = call i32 @execvp(ptr %program, ptr %argv)
+      call void @_exit(i32 127)
+      unreachable
+    parent:
+      %status_slot = alloca i32, align 4
+      %waited = call i32 @waitpid(i32 %pid, ptr %status_slot, i32 0)
+      call void @sollang_process_dispose_argv(ptr %argv, i64 %count)
+      %wait_ok = icmp eq i32 %waited, %pid
+      br i1 %wait_ok, label %decode, label %wait_error
+    decode:
+      %status = load i32, ptr %status_slot, align 4
+      %signal_bits = and i32 %status, 127
+      %exited = icmp eq i32 %signal_bits, 0
+      br i1 %exited, label %success, label %signal_error
+    success:
+      %shifted = ashr i32 %status, 8
+      %exit_code = and i32 %shifted, 255
+      %ok0 = insertvalue %sollang.process_result poison, i32 %exit_code, 0
+      %ok1 = insertvalue %sollang.process_result %ok0, i32 0, 1
+      ret %sollang.process_result %ok1
+    cleanup_spawn_error:
+      call void @sollang_process_dispose_argv(ptr %argv, i64 %count)
+      br label %spawn_error
+    spawn_error:
+      %spawn0 = insertvalue %sollang.process_result poison, i32 0, 0
+      %spawn1 = insertvalue %sollang.process_result %spawn0, i32 1, 1
+      ret %sollang.process_result %spawn1
+    wait_error:
+      %wait0 = insertvalue %sollang.process_result poison, i32 0, 0
+      %wait1 = insertvalue %sollang.process_result %wait0, i32 2, 1
+      ret %sollang.process_result %wait1
+    signal_error:
+      %signal0 = insertvalue %sollang.process_result poison, i32 0, 0
+      %signal1 = insertvalue %sollang.process_result %signal0, i32 3, 1
+      ret %sollang.process_result %signal1
+    }
+    define internal %sollang.process_result @sollang_run_process(ptr %records, i64 %count) {
+    entry:
+      %result = call %sollang.process_result @sollang_run_process_with_output(ptr %records, i64 %count, i32 -1)
+      ret %sollang.process_result %result
+    }
+    define internal %sollang.process_result @sollang_run_process_to_file(ptr %records, i64 %count, ptr %path, i64 %path_length) {
+    entry:
+      %path_copy = call ptr @sollang_process_copy_text(ptr %path, i64 %path_length)
+      %path_ok = icmp ne ptr %path_copy, null
+      br i1 %path_ok, label %open_output, label %error
+    open_output:
+      %output = call i32 @open(ptr %path_copy, i32 577, i32 438)
+      call void @free(ptr %path_copy)
+      %opened = icmp sge i32 %output, 0
+      br i1 %opened, label %run, label %error
+    run:
+      %result = call %sollang.process_result @sollang_run_process_with_output(ptr %records, i64 %count, i32 %output)
+      %closed = call i32 @close(i32 %output)
+      ret %sollang.process_result %result
+    error:
+      %error0 = insertvalue %sollang.process_result poison, i32 0, 0
+      %error1 = insertvalue %sollang.process_result %error0, i32 1, 1
+      ret %sollang.process_result %error1
+    }
+    """ -> println
+}

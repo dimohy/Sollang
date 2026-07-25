@@ -3409,3 +3409,19 @@ Windows records 65.460 ms and 67.426 ms for examples 577 and 582; Linux records
 72.480 ms and 75.060 ms. This checkpoint completes the scalar C ABI vertical
 slice. Stable structures and pointers, Sollang library exports, COM, and the
 Clang-generated C++ shim remain on the separate 0.3 interoperability roadmap.
+
+### LLVM emitter source modularization checkpoint
+
+The monolithic LLVM text backend now delegates five independent runtime
+generators to `selfhost/llvm/emitter/`: number formatting, compute-pool support,
+text output, process support, and mouse events. The main file is 2,085 lines
+smaller without adding runtime state, allocation, or copies. A structural gate
+keeps every self-host manifest complete and stops `text.slg` from silently
+growing beyond 17,000 lines.
+
+Further extraction of type layout, diagnostics, and ABI lowering is gated on a
+focused fix for imported aggregate type identity. Native self-host rebuilds
+proved that moving shared aggregate context today can map fields to the wrong
+LLVM type. Until that compiler defect is fixed, stateful code stays in the
+original namespace while only scalar/state-independent emitters cross module
+boundaries.

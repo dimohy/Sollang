@@ -15,11 +15,17 @@ $contextSource = Join-Path $repoRoot "examples\595-native-call-contexts.slg"
 $contextExpectedPath = Join-Path $repoRoot "examples\expected\595-native-call-contexts.stdout.txt"
 $aggregateSource = Join-Path $repoRoot "examples\597-native-abi-structs.slg"
 $aggregateExpectedPath = Join-Path $repoRoot "examples\expected\597-native-abi-structs.stdout.txt"
+$minimalAggregateSource = Join-Path $repoRoot "examples\599-native-abi-struct-minimal.slg"
+$minimalAggregateExpectedPath = Join-Path $repoRoot "examples\expected\599-native-abi-struct-minimal.stdout.txt"
+$pointAggregateSource = Join-Path $repoRoot "examples\600-native-abi-point-return.slg"
+$pointAggregateExpectedPath = Join-Path $repoRoot "examples\expected\600-native-abi-point-return.stdout.txt"
 $outputRoot = Join-Path $repoRoot "artifacts\native-interop"
 $clang = Join-Path $repoRoot ".tools\llvm-22.1.8\bin\clang.exe"
 $expected = ([System.IO.File]::ReadAllText($expectedPath)).Replace("`r`n", "`n").TrimEnd("`n")
 $contextExpected = ([System.IO.File]::ReadAllText($contextExpectedPath)).Replace("`r`n", "`n").TrimEnd("`n")
 $aggregateExpected = ([System.IO.File]::ReadAllText($aggregateExpectedPath)).Replace("`r`n", "`n").TrimEnd("`n")
+$minimalAggregateExpected = ([System.IO.File]::ReadAllText($minimalAggregateExpectedPath)).Replace("`r`n", "`n").TrimEnd("`n")
+$pointAggregateExpected = ([System.IO.File]::ReadAllText($pointAggregateExpectedPath)).Replace("`r`n", "`n").TrimEnd("`n")
 
 New-Item -ItemType Directory -Force -Path $outputRoot | Out-Null
 
@@ -206,6 +212,52 @@ if (-not $SkipStage2) {
     $contextWindowsLlvm = [System.IO.File]::ReadAllText($stage2ContextWindowsLlvm)
     if (([regex]::Matches($contextWindowsLlvm, "load ptr, ptr @sollang_native_function_")).Count -ne 3) {
         throw "Stage2 Windows nested native call lowering regressed"
+    }
+
+    $stage2MinimalAggregateWindowsLlvm = Join-Path $outputRoot "stage2-native-aggregate-minimal-windows.ll"
+    $stage2MinimalAggregateWindowsError = Join-Path $outputRoot "stage2-native-aggregate-minimal-windows.stderr.txt"
+    $stage2MinimalAggregateWindowsExecutable = Join-Path $outputRoot "stage2-native-aggregate-minimal-windows.exe"
+    $minimalAggregateWindowsProcess = Start-Process `
+        -FilePath $selfhostCompiler `
+        -ArgumentList @("windows", $minimalAggregateSource) `
+        -RedirectStandardOutput $stage2MinimalAggregateWindowsLlvm `
+        -RedirectStandardError $stage2MinimalAggregateWindowsError `
+        -PassThru `
+        -WindowStyle Hidden
+    $minimalAggregateWindowsProcess.WaitForExit()
+    if ($minimalAggregateWindowsProcess.ExitCode -ne 0) {
+        throw "Stage2 Windows minimal aggregate emission failed: $([System.IO.File]::ReadAllText($stage2MinimalAggregateWindowsError))"
+    }
+    & $clang -target x86_64-pc-windows-msvc -Wno-override-module -O2 $stage2MinimalAggregateWindowsLlvm -o $stage2MinimalAggregateWindowsExecutable -Xlinker /subsystem:console
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    Assert-Output -Executable $stage2MinimalAggregateWindowsExecutable -ExpectedText $minimalAggregateExpected
+    $minimalAggregateWindowsLlvm = [System.IO.File]::ReadAllText($stage2MinimalAggregateWindowsLlvm)
+    if ($minimalAggregateWindowsLlvm -notmatch "call i32 %native_target_\d+\(i64 %native_arg_bits_") {
+        throw "Stage2 Windows direct aggregate register coercion regressed"
+    }
+
+    $stage2PointAggregateWindowsLlvm = Join-Path $outputRoot "stage2-native-aggregate-point-windows.ll"
+    $stage2PointAggregateWindowsError = Join-Path $outputRoot "stage2-native-aggregate-point-windows.stderr.txt"
+    $stage2PointAggregateWindowsExecutable = Join-Path $outputRoot "stage2-native-aggregate-point-windows.exe"
+    $pointAggregateWindowsProcess = Start-Process `
+        -FilePath $selfhostCompiler `
+        -ArgumentList @("windows", $pointAggregateSource) `
+        -RedirectStandardOutput $stage2PointAggregateWindowsLlvm `
+        -RedirectStandardError $stage2PointAggregateWindowsError `
+        -PassThru `
+        -WindowStyle Hidden
+    $pointAggregateWindowsProcess.WaitForExit()
+    if ($pointAggregateWindowsProcess.ExitCode -ne 0) {
+        throw "Stage2 Windows point aggregate emission failed: $([System.IO.File]::ReadAllText($stage2PointAggregateWindowsError))"
+    }
+    & $clang -target x86_64-pc-windows-msvc -Wno-override-module -O2 $stage2PointAggregateWindowsLlvm -o $stage2PointAggregateWindowsExecutable -Xlinker /subsystem:console
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    Assert-Output -Executable $stage2PointAggregateWindowsExecutable -ExpectedText $pointAggregateExpected
+    $pointAggregateWindowsLlvm = [System.IO.File]::ReadAllText($stage2PointAggregateWindowsLlvm)
+    if ($pointAggregateWindowsLlvm -notmatch "call void %native_target_\d+\(ptr sret\(%sollang\.struct\." -or
+        $pointAggregateWindowsLlvm -notmatch "call double %native_target_\d+\(ptr %native_arg_" -or
+        $pointAggregateWindowsLlvm -notmatch "call void %native_target_\d+\(ptr %slot") {
+        throw "Stage2 Windows by-reference aggregate ABI lowering regressed"
     }
 
     $stage2ContextLinuxLlvm = Join-Path $outputRoot "stage2-native-contexts-linux.ll"

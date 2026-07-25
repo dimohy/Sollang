@@ -1,0 +1,24 @@
+abi struct Point {
+    x: Float64
+    y: Float64
+}
+
+native fixture from "artifacts/native-interop/native_fixture" {
+    pointSum point: Point -> Float64 as "native_point_sum"
+    pointSumRef point: ref Point -> Float64 as "native_point_sum_ref"
+    translate point: mut Point, dx: Float64, dy: Float64 -> Unit as "native_point_translate"
+    makePoint x: Float64, y: Float64 -> Point as "native_point_make"
+}
+
+main {
+    fixture.makePoint(3, 4) => point!
+    point! -> fixture.pointSum => byValue
+    point! -> fixture.pointSumRef => byReference
+    fixture.translate(point!, 10, 20)
+    point! -> fixture.pointSumRef => translated
+
+    Int64(byValue) => byValueInt
+    Int64(byReference) => byReferenceInt
+    Int64(translated) => translatedInt
+    "$byValueInt,$byReferenceInt,$translatedInt" -> println
+}

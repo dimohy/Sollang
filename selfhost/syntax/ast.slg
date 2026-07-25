@@ -249,7 +249,7 @@ expandStreamPipelines tokens: [syntax.SyntaxToken; ~], nodes: move [AstNode; ~] 
 # 61 stream state binding, 62 stream stop statement, 63 range expression,
 # 64 fold flow target, 65 native library declaration.
 # Function flags: 1 move input, 2 mutable input, 4 public, 8 async, 64 stream,
-# 128 native ABI declaration.
+# 128 native ABI declaration. Struct flag 256 marks an explicit `abi struct`.
 # Keyword operator codes use the same
 # -(keywordIndex + 1) representation as syntax diagnostics.
 classifyRule rule: Int -> Int {
@@ -866,6 +866,17 @@ lowerFrom request: LowerRequest -> [AstNode; ~] {
                     headerEnd => headerToken!
                 } else {
                     tokens![headerToken!].kind == grammar.tokenIdIdentifier -> if {
+                        declaration!.kind == 3 -> if {
+                            tokens![headerToken!] => structHeaderIdentifier
+                            structHeaderIdentifier.span.length == UIntSize(3) -> if {
+                                source -> byte(structHeaderIdentifier.span.start) => abiByte0
+                                source -> byte(structHeaderIdentifier.span.start + UIntSize(1)) => abiByte1
+                                source -> byte(structHeaderIdentifier.span.start + UIntSize(2)) => abiByte2
+                                (abiByte0 == UInt8(97) and abiByte1 == UInt8(98) and abiByte2 == UInt8(105)) -> if {
+                                    declaration!.flags + 256 => declaration!.flags
+                                }
+                            }
+                        }
                         headerToken! => declaration!.payloadToken
                     }
                     headerToken! + 1 => headerToken!
@@ -960,7 +971,7 @@ lowerFrom request: LowerRequest -> [AstNode; ~] {
                                     source -> byte(modifierToken.span.start + UIntSize(2)) => moveByte2
                                     source -> byte(modifierToken.span.start + UIntSize(3)) => moveByte3
                                     (moveByte0 == UInt8(109) and moveByte1 == UInt8(111) and moveByte2 == UInt8(118) and moveByte3 == UInt8(101)) -> if {
-                                        1 => declaration!.flags
+                                        declaration!.flags / 4 * 4 + 1 => declaration!.flags
                                         true => ownershipKeyword!
                                     }
                                 }
@@ -969,7 +980,7 @@ lowerFrom request: LowerRequest -> [AstNode; ~] {
                                     source -> byte(modifierToken.span.start + UIntSize(1)) => mutByte1
                                     source -> byte(modifierToken.span.start + UIntSize(2)) => mutByte2
                                     (mutByte0 == UInt8(109) and mutByte1 == UInt8(117) and mutByte2 == UInt8(116)) -> if {
-                                        2 => declaration!.flags
+                                        declaration!.flags / 4 * 4 + 2 => declaration!.flags
                                         true => ownershipKeyword!
                                     }
                                 }

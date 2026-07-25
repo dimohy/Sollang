@@ -6,6 +6,11 @@ import sollang.compiler.ir.stream as streamIr
 import sollang.compiler.ir.typed as typedIr
 import sollang.compiler.llvm.target as llvmTarget
 import sollang.compiler.llvm.runtime as llvmRuntime
+import sollang.compiler.llvm.emitter.number_format as numberFormat
+import sollang.compiler.llvm.emitter.compute_runtime as computeRuntime
+import sollang.compiler.llvm.emitter.text_output_runtime as textOutputRuntime
+import sollang.compiler.llvm.emitter.process_runtime as processRuntime
+import sollang.compiler.llvm.emitter.mouse_event_runtime as mouseEventRuntime
 import sollang.compiler.semantic.analysis as analysis
 import sollang.compiler.semantic.calls as calls
 import sollang.compiler.semantic.composite_types as compositeTypes
@@ -678,8 +683,8 @@ prepare request: move PrepareRequest -> EmitContext {
                         analysisNodes![nominalPayloadRange.astStart + nominalPayloadAncestor!] => nominalPayloadNode
                         (nominalPayloadNode.kind == 27 and nominalPayloadNode.parent == nominalEnumAst!) -> if { true => nominalPayloadBelongs! } else { nominalPayloadNode.parent => nominalPayloadAncestor! }
                     }
-                    (nominalPayloadBelongs! and nominalPayload.canonical < (layouts.sizes -> len) and nominalPayload.canonical < (typeTraits! -> len)) -> if {
-                        layouts.sizes[nominalPayload.canonical] > nominalEnumPayloadSize! -> if { layouts.sizes[nominalPayload.canonical] => nominalEnumPayloadSize! }
+                    (nominalPayloadBelongs! and nominalPayload.canonical < (typeSizes! -> len) and nominalPayload.canonical < (typeTraits! -> len)) -> if {
+                        typeSizes![nominalPayload.canonical] > nominalEnumPayloadSize! -> if { typeSizes![nominalPayload.canonical] => nominalEnumPayloadSize! }
                         typeTraits![nominalPayload.canonical] % 2 == 1 -> if { true => nominalEnumOwns! }
                         (typeTraits![nominalPayload.canonical] / 2) % 2 == 1 -> if { true => nominalEnumReachesHeap! }
                     }
@@ -697,8 +702,8 @@ prepare request: move PrepareRequest -> EmitContext {
                         analysisNodes![compositePayloadRange.astStart + compositePayloadAncestor!] => compositePayloadNode
                         (compositePayloadNode.kind == 27 and compositePayloadNode.parent == nominalEnumAst!) -> if { true => compositePayloadBelongs! } else { compositePayloadNode.parent => compositePayloadAncestor! }
                     }
-                    (compositePayloadBelongs! and compositePayload.canonical < (layouts.sizes -> len) and compositePayload.canonical < (typeTraits! -> len)) -> if {
-                        layouts.sizes[compositePayload.canonical] > nominalEnumPayloadSize! -> if { layouts.sizes[compositePayload.canonical] => nominalEnumPayloadSize! }
+                    (compositePayloadBelongs! and compositePayload.canonical < (typeSizes! -> len) and compositePayload.canonical < (typeTraits! -> len)) -> if {
+                        typeSizes![compositePayload.canonical] > nominalEnumPayloadSize! -> if { typeSizes![compositePayload.canonical] => nominalEnumPayloadSize! }
                         typeTraits![compositePayload.canonical] % 2 == 1 -> if { true => nominalEnumOwns! }
                         (typeTraits![compositePayload.canonical] / 2) % 2 == 1 -> if { true => nominalEnumReachesHeap! }
                     }
@@ -2118,11 +2123,14 @@ emitCore context: EmitContext -> Unit uses Console {
     writeCallArgument argumentIndex: Int, callIndex: Int, ownerIndex: Int, ordinal: Int -> Unit uses Console {
         ownerIndex => callOwnerIndex
         context.ir[argumentIndex] => argument
+        argumentIndex -> writeCallArgumentTypeAndValue(callIndex, ownerIndex, ordinal) => nativeArgumentHandled
+        not nativeArgumentHandled -> if {
         callIndex -> callTargetParameter(ordinal) => argumentParameterIndex
         false => argumentNeedsReferenceSlot!
         argumentParameterIndex >= 0 -> if {
             context.ir[argumentParameterIndex] => argumentParameter
             (argumentParameter.typeId >= 0 and context.types[argumentParameter.typeId].kind == 8 and not (argument.typeId >= 0 and context.types[argument.typeId].kind == 8)) -> if { true => argumentNeedsReferenceSlot! }
+            ((context.ir[callIndex] -> targetsNativeFunction) and argumentParameter.flags / 2 % 2 == 1 and (context -> nativeAbiStructTypeSafe(argumentParameter.typeId, 0))) -> if { true => argumentNeedsReferenceSlot! }
         }
         argumentNeedsReferenceSlot! -> if {
             argumentIndex -> aggregateValueIndex => referenceValueIndex
@@ -2186,6 +2194,7 @@ emitCore context: EmitContext -> Unit uses Console {
             }
         }
         }
+        }
     }
     emitCallArgumentChain argumentIndex: Int, callIndex: Int, ownerIndex: Int, ordinal: Int, separator: Bool -> Unit uses Console {
         callIndex => chainCallIndex
@@ -2202,7 +2211,436 @@ emitCore context: EmitContext -> Unit uses Console {
     }
     emitCallArguments callIndex: Int, ownerIndex: Int -> Unit uses Console {
         context.ir[callIndex] => call
-        call.operand0 -> emitCallArgumentChain(callIndex, ownerIndex, 0, false)
+        false => hasLeadingArgument!
+        ((call -> targetsNativeFunction) and call.typeId >= 0 and (context -> nativeAbiStructTypeSafe(call.typeId, 0)) and (call.typeId -> nativeAggregateIndirect)) -> if {
+            "ptr sret(" -> print
+            call -> writeIrType
+            ") %native_result_slot_$(callIndex)" -> print
+            true => hasLeadingArgument!
+        }
+        call.operand0 -> emitCallArgumentChain(callIndex, ownerIndex, 0, hasLeadingArgument!)
+    }
+    nativeWindowsDirectAggregateWidth typeId: Int -> Int {
+        0 => width!
+        (typeId >= 0 and typeId < (context.typeSizes -> len) and (context -> nativeAbiStructTypeSafe(typeId, 0))) -> if {
+            context.typeSizes[typeId] => size
+            size == 1 -> if { 8 => width! }
+            size == 2 -> if { 16 => width! }
+            size == 4 -> if { 32 => width! }
+            size == 8 -> if { 64 => width! }
+        }
+        width!
+    }
+    nativeAbiFieldTypeAt ownerType: Int, ordinal: Int -> Int {
+        -1 => fieldType!
+        0 => fieldIndex!
+        fieldIndex! < (context.fields -> len) -> while {
+            context.fields[fieldIndex!] => field
+            (field.status == 0 and field.ownerType == ownerType and field.ordinal == ordinal) -> if { field.fieldType => fieldType! }
+            fieldIndex! + 1 => fieldIndex!
+        }
+        fieldType!
+    }
+    nativeAbiFieldCount ownerType: Int -> Int {
+        0 => count!
+        0 => fieldIndex!
+        fieldIndex! < (context.fields -> len) -> while {
+            context.fields[fieldIndex!] => field
+            (field.status == 0 and field.ownerType == ownerType) -> if { count! + 1 => count! }
+            fieldIndex! + 1 => fieldIndex!
+        }
+        count!
+    }
+    nativeAbiFieldOffset ownerType: Int, targetOrdinal: Int -> Int {
+        0 => offset!
+        0 => ordinal!
+        ordinal! <= targetOrdinal -> while {
+            ownerType -> nativeAbiFieldTypeAt(ordinal!) => fieldType
+            fieldType >= 0 -> if {
+                context.typeAligns[fieldType] => fieldAlign
+                ((offset! + fieldAlign - 1) / fieldAlign) * fieldAlign => offset!
+                ordinal! < targetOrdinal -> if { offset! + context.typeSizes[fieldType] => offset! }
+            }
+            ordinal! + 1 => ordinal!
+        }
+        offset!
+    }
+    nativeSysVEightbyteClass typeId: Int, eightbyte: Int, baseOffset: Int, depth: Int -> Int {
+        0 => result!
+        (depth < 32 and typeId >= 0 and typeId < (context.types -> len)) -> if {
+            typeId -> nativeAbiFieldCount => fieldCount
+            0 => ordinal!
+            ordinal! < fieldCount -> while {
+                typeId -> nativeAbiFieldTypeAt(ordinal!) => fieldTypeId
+                fieldTypeId >= 0 -> if {
+                    baseOffset + (typeId -> nativeAbiFieldOffset(ordinal!)) => fieldOffset
+                    context.types[fieldTypeId] => fieldType
+                    (context -> nativeAbiStructTypeSafe(fieldTypeId, depth + 1)) -> if {
+                        fieldTypeId -> nativeSysVEightbyteClass(eightbyte, fieldOffset, depth + 1) => nestedClass
+                        (result! == 3 or nestedClass == 3) -> if { 3 => result! } else {
+                            (result! == 1 or nestedClass == 1) -> if { 1 => result! } else {
+                                nestedClass == 2 -> if { 2 => result! }
+                            }
+                        }
+                    } else {
+                        context.typeSizes[fieldTypeId] => fieldSize
+                        context.typeAligns[fieldTypeId] => fieldAlign
+                        fieldOffset / 8 => fieldFirstEightbyte
+                        (fieldOffset + fieldSize - 1) / 8 => fieldLastEightbyte
+                        (eightbyte >= fieldFirstEightbyte and eightbyte <= fieldLastEightbyte) -> if {
+                            (fieldOffset % fieldAlign != 0 or fieldFirstEightbyte != fieldLastEightbyte) -> if {
+                                3 => result!
+                            } else {
+                                1 => fieldClass!
+                                (fieldType.kind == 1 and fieldType.origin == 1 and (fieldType.symbol == 20 or fieldType.symbol == 21)) -> if { 2 => fieldClass! }
+                                (result! == 1 or fieldClass! == 1) -> if { 1 => result! } else { 2 => result! }
+                            }
+                        }
+                    }
+                }
+                ordinal! + 1 => ordinal!
+            }
+        }
+        result!
+    }
+    nativeSysVEightbyteMeaningfulEnd typeId: Int, eightbyte: Int, baseOffset: Int, depth: Int -> Int {
+        eightbyte * 8 => result!
+        (depth < 32 and typeId >= 0 and typeId < (context.types -> len)) -> if {
+            typeId -> nativeAbiFieldCount => fieldCount
+            0 => ordinal!
+            ordinal! < fieldCount -> while {
+                typeId -> nativeAbiFieldTypeAt(ordinal!) => fieldTypeId
+                fieldTypeId >= 0 -> if {
+                    baseOffset + (typeId -> nativeAbiFieldOffset(ordinal!)) => fieldOffset
+                    (context -> nativeAbiStructTypeSafe(fieldTypeId, depth + 1)) -> if {
+                        fieldTypeId -> nativeSysVEightbyteMeaningfulEnd(eightbyte, fieldOffset, depth + 1) => nestedEnd
+                        nestedEnd > result! -> if { nestedEnd => result! }
+                    } else {
+                        context.typeSizes[fieldTypeId] => fieldSize
+                        (fieldOffset / 8 == eightbyte) -> if {
+                            fieldOffset + fieldSize => fieldEnd
+                            fieldEnd > result! -> if { fieldEnd => result! }
+                        }
+                    }
+                }
+                ordinal! + 1 => ordinal!
+            }
+        }
+        result!
+    }
+    nativeSysVEightbyteHasFloat64 typeId: Int, eightbyte: Int, baseOffset: Int, depth: Int -> Bool {
+        false => found!
+        (depth < 32 and typeId >= 0 and typeId < (context.types -> len)) -> if {
+            typeId -> nativeAbiFieldCount => fieldCount
+            0 => ordinal!
+            ordinal! < fieldCount -> while {
+                typeId -> nativeAbiFieldTypeAt(ordinal!) => fieldTypeId
+                fieldTypeId >= 0 -> if {
+                    baseOffset + (typeId -> nativeAbiFieldOffset(ordinal!)) => fieldOffset
+                    context.types[fieldTypeId] => fieldType
+                    (context -> nativeAbiStructTypeSafe(fieldTypeId, depth + 1)) -> if {
+                        fieldTypeId -> nativeSysVEightbyteHasFloat64(eightbyte, fieldOffset, depth + 1) -> if { true => found! }
+                    } else {
+                        (fieldOffset / 8 == eightbyte and fieldType.kind == 1 and fieldType.origin == 1 and fieldType.symbol == 21) -> if { true => found! }
+                    }
+                }
+                ordinal! + 1 => ordinal!
+            }
+        }
+        found!
+    }
+    nativeSysVAggregateIndirect typeId: Int -> Bool {
+        false => indirect!
+        (typeId < 0 or typeId >= (context.typeSizes -> len) or context.typeSizes[typeId] > 16) -> if {
+            true => indirect!
+        } else {
+            (typeId -> nativeSysVEightbyteClass(0, 0, 0)) == 3 -> if { true => indirect! }
+            (context.typeSizes[typeId] > 8 and (typeId -> nativeSysVEightbyteClass(1, 0, 0)) == 3) -> if { true => indirect! }
+        }
+        indirect!
+    }
+    nativeAggregateIndirect typeId: Int -> Bool {
+        context.expectedPathStyle == 1 -> if {
+            context.typeSizes[typeId] > 8
+        } else {
+            typeId -> nativeSysVAggregateIndirect
+        }
+    }
+    writeNativeSysVCoercionType typeId: Int, eightbyte: Int -> Unit uses Console {
+        typeId -> nativeSysVEightbyteClass(eightbyte, 0, 0) => abiClass
+        typeId -> nativeSysVEightbyteMeaningfulEnd(eightbyte, 0, 0) => meaningfulEnd
+        meaningfulEnd - eightbyte * 8 => byteCount!
+        byteCount! < 1 -> if { 1 => byteCount! }
+        byteCount! > 8 -> if { 8 => byteCount! }
+        abiClass == 2 -> if {
+            typeId -> nativeSysVEightbyteHasFloat64(eightbyte, 0, 0) -> if {
+                "double" -> print
+            } else {
+                byteCount! <= 4 -> if { "float" -> print } else { "<2 x float>" -> print }
+            }
+        } else {
+            byteCount! <= 1 -> if { "i8" -> print } else {
+                byteCount! <= 2 -> if { "i16" -> print } else {
+                    byteCount! <= 4 -> if { "i32" -> print } else { "i64" -> print }
+                }
+            }
+        }
+    }
+    emitNativeWindowsArgumentValue argumentIndex: Int, callIndex: Int, ownerIndex: Int, ordinal: Int -> Unit uses Console {
+        callIndex -> callTargetParameter(ordinal) => parameterIndex
+        (parameterIndex >= 0 and argumentIndex >= 0) -> if {
+            context.ir[parameterIndex] => parameter
+            false => byValueAbiStruct!
+            (parameter.typeId >= 0 and parameter.typeId < (context.types -> len) and context.types[parameter.typeId].kind != 8 and parameter.flags / 2 % 2 == 0) -> if {
+                context -> nativeAbiStructTypeSafe(parameter.typeId, 0) => byValueAbiStruct!
+            }
+            byValueAbiStruct! -> if {
+                parameter.typeId -> nativeWindowsDirectAggregateWidth => directWidth
+                "  %native_arg_$(callIndex)_$(ordinal) = alloca " -> print
+                parameter -> writeIrType
+                ", align " -> print
+                directWidth == 0 -> if { "16" -> println } else { parameter -> storageAlign -> writeDecimalLine }
+                "  store " -> print
+                parameter -> writeIrType
+                " " -> print
+                argumentIndex -> writeValue(ownerIndex)
+                ", ptr %native_arg_$(callIndex)_$(ordinal), align " -> print
+                parameter -> storageAlign -> writeDecimalLine
+                directWidth > 0 -> if {
+                    "  %native_arg_bits_$(callIndex)_$(ordinal) = load i$(directWidth), ptr %native_arg_$(callIndex)_$(ordinal), align " -> print
+                    parameter -> storageAlign -> writeDecimalLine
+                }
+            }
+        }
+    }
+    emitNativeWindowsArgumentValues argumentIndex: Int, callIndex: Int, ownerIndex: Int, ordinal: Int -> Unit uses Console {
+        (argumentIndex >= 0 and context.ir[argumentIndex].parent == callIndex) -> if {
+            argumentIndex -> emitNativeWindowsArgumentValue(callIndex, ownerIndex, ordinal)
+            context.ir[argumentIndex].nextOperand -> emitNativeWindowsArgumentValues(callIndex, ownerIndex, ordinal + 1)
+        }
+    }
+    emitNativeWindowsCallValues callIndex: Int, ownerIndex: Int -> Unit uses Console {
+        context.ir[callIndex] => call
+        (context.expectedPathStyle == 1 and (call -> targetsNativeFunction)) -> if {
+            (call.typeId >= 0 and (context -> nativeAbiStructTypeSafe(call.typeId, 0))) -> if {
+                call.typeId -> nativeWindowsDirectAggregateWidth => resultWidth
+                "  %native_result_slot_$(callIndex) = alloca " -> print
+                call -> writeIrType
+                ", align " -> print
+                resultWidth == 0 -> if { "16" -> println } else { call -> storageAlign -> writeDecimalLine }
+            }
+            call.operand0 -> emitNativeWindowsArgumentValues(callIndex, ownerIndex, 0)
+        }
+    }
+    emitNativeSysVArgumentValue argumentIndex: Int, callIndex: Int, ownerIndex: Int, ordinal: Int -> Unit uses Console {
+        callIndex -> callTargetParameter(ordinal) => parameterIndex
+        (parameterIndex >= 0 and argumentIndex >= 0) -> if {
+            context.ir[parameterIndex] => parameter
+            false => byValueAbiStruct!
+            (parameter.typeId >= 0 and parameter.typeId < (context.types -> len) and context.types[parameter.typeId].kind != 8 and parameter.flags / 2 % 2 == 0) -> if {
+                context -> nativeAbiStructTypeSafe(parameter.typeId, 0) => byValueAbiStruct!
+            }
+            byValueAbiStruct! -> if {
+                parameter.typeId -> nativeSysVAggregateIndirect => indirect
+                indirect -> if {
+                    "  %native_arg_$(callIndex)_$(ordinal) = alloca " -> print
+                    parameter -> writeIrType
+                    ", align " -> print
+                    parameter -> storageAlign -> writeDecimalLine
+                    "  store " -> print
+                    parameter -> writeIrType
+                    " " -> print
+                    argumentIndex -> writeValue(ownerIndex)
+                    ", ptr %native_arg_$(callIndex)_$(ordinal), align " -> print
+                    parameter -> storageAlign -> writeDecimalLine
+                } else {
+                    "  %native_arg_storage_$(callIndex)_$(ordinal) = alloca [2 x i64], align 8" -> println
+                    "  store [2 x i64] zeroinitializer, ptr %native_arg_storage_$(callIndex)_$(ordinal), align 8" -> println
+                    "  store " -> print
+                    parameter -> writeIrType
+                    " " -> print
+                    argumentIndex -> writeValue(ownerIndex)
+                    ", ptr %native_arg_storage_$(callIndex)_$(ordinal), align " -> print
+                    parameter -> storageAlign -> writeDecimalLine
+                    "  %native_arg_part_$(callIndex)_$(ordinal)_0 = load " -> print
+                    parameter.typeId -> writeNativeSysVCoercionType(0)
+                    ", ptr %native_arg_storage_$(callIndex)_$(ordinal), align " -> print
+                    parameter -> storageAlign -> writeDecimalLine
+                    context.typeSizes[parameter.typeId] > 8 -> if {
+                        "  %native_arg_part_ptr_$(callIndex)_$(ordinal)_1 = getelementptr i8, ptr %native_arg_storage_$(callIndex)_$(ordinal), i64 8" -> println
+                        "  %native_arg_part_$(callIndex)_$(ordinal)_1 = load " -> print
+                        parameter.typeId -> writeNativeSysVCoercionType(1)
+                        ", ptr %native_arg_part_ptr_$(callIndex)_$(ordinal)_1, align 8" -> println
+                    }
+                }
+            }
+        }
+    }
+    emitNativeSysVArgumentValues argumentIndex: Int, callIndex: Int, ownerIndex: Int, ordinal: Int -> Unit uses Console {
+        (argumentIndex >= 0 and context.ir[argumentIndex].parent == callIndex) -> if {
+            argumentIndex -> emitNativeSysVArgumentValue(callIndex, ownerIndex, ordinal)
+            context.ir[argumentIndex].nextOperand -> emitNativeSysVArgumentValues(callIndex, ownerIndex, ordinal + 1)
+        }
+    }
+    emitNativeSysVCallValues callIndex: Int, ownerIndex: Int -> Unit uses Console {
+        context.ir[callIndex] => call
+        (context.expectedPathStyle == 0 and (call -> targetsNativeFunction)) -> if {
+            (call.typeId >= 0 and (context -> nativeAbiStructTypeSafe(call.typeId, 0))) -> if {
+                call.typeId -> nativeSysVAggregateIndirect => indirect
+                indirect -> if {
+                    "  %native_result_slot_$(callIndex) = alloca " -> print
+                    call -> writeIrType
+                    ", align " -> print
+                    call -> storageAlign -> writeDecimalLine
+                } else {
+                    "  %native_result_slot_$(callIndex) = alloca [2 x i64], align 8" -> println
+                    "  store [2 x i64] zeroinitializer, ptr %native_result_slot_$(callIndex), align 8" -> println
+                }
+            }
+            call.operand0 -> emitNativeSysVArgumentValues(callIndex, ownerIndex, 0)
+        }
+    }
+    emitNativeCallValues callIndex: Int, ownerIndex: Int -> Unit uses Console {
+        context.expectedPathStyle == 1 -> if {
+            callIndex -> emitNativeWindowsCallValues(ownerIndex)
+        } else {
+            callIndex -> emitNativeSysVCallValues(ownerIndex)
+        }
+    }
+    writeCallArgumentTypeAndValue argumentIndex: Int, callIndex: Int, ownerIndex: Int, ordinal: Int -> Bool uses Console {
+        false => handled!
+        (context.expectedPathStyle == 1 and (context.ir[callIndex] -> targetsNativeFunction)) -> if {
+            callIndex -> callTargetParameter(ordinal) => parameterIndex
+            parameterIndex >= 0 -> if {
+                context.ir[parameterIndex] => parameter
+                false => byValueAbiStruct!
+                (parameter.typeId >= 0 and parameter.typeId < (context.types -> len) and context.types[parameter.typeId].kind != 8 and parameter.flags / 2 % 2 == 0) -> if {
+                    context -> nativeAbiStructTypeSafe(parameter.typeId, 0) => byValueAbiStruct!
+                }
+                byValueAbiStruct! -> if {
+                    parameter.typeId -> nativeWindowsDirectAggregateWidth => directWidth
+                    directWidth > 0 -> if {
+                        "i$(directWidth) %native_arg_bits_$(callIndex)_$(ordinal)" -> print
+                    } else {
+                        "ptr %native_arg_$(callIndex)_$(ordinal)" -> print
+                    }
+                    true => handled!
+                }
+            }
+        }
+        (context.expectedPathStyle == 0 and (context.ir[callIndex] -> targetsNativeFunction)) -> if {
+            callIndex -> callTargetParameter(ordinal) => parameterIndex
+            parameterIndex >= 0 -> if {
+                context.ir[parameterIndex] => parameter
+                false => byValueAbiStruct!
+                (parameter.typeId >= 0 and parameter.typeId < (context.types -> len) and context.types[parameter.typeId].kind != 8 and parameter.flags / 2 % 2 == 0) -> if {
+                    context -> nativeAbiStructTypeSafe(parameter.typeId, 0) => byValueAbiStruct!
+                }
+                byValueAbiStruct! -> if {
+                    parameter.typeId -> nativeSysVAggregateIndirect => indirect
+                    indirect -> if {
+                        "ptr byval(" -> print
+                        parameter -> writeIrType
+                        ") align " -> print
+                        parameter -> storageAlign -> writeDecimal
+                        " %native_arg_$(callIndex)_$(ordinal)" -> print
+                    } else {
+                        parameter.typeId -> writeNativeSysVCoercionType(0)
+                        " %native_arg_part_$(callIndex)_$(ordinal)_0" -> print
+                        context.typeSizes[parameter.typeId] > 8 -> if {
+                            ", " -> print
+                            parameter.typeId -> writeNativeSysVCoercionType(1)
+                            " %native_arg_part_$(callIndex)_$(ordinal)_1" -> print
+                        }
+                    }
+                    true => handled!
+                }
+            }
+        }
+        handled!
+    }
+    writeCallResultPrefix callIndex: Int -> Unit uses Console {
+        context.ir[callIndex] => call
+        false => nativeAggregateResult!
+        0 => nativeAggregateWidth!
+        ((call -> targetsNativeFunction) and call.typeId >= 0) -> if {
+            context -> nativeAbiStructTypeSafe(call.typeId, 0) => nativeAggregateResult!
+            (nativeAggregateResult! and context.expectedPathStyle == 1) -> if { call.typeId -> nativeWindowsDirectAggregateWidth => nativeAggregateWidth! }
+        }
+        nativeAggregateResult! -> if {
+            context.expectedPathStyle == 1 -> if {
+                nativeAggregateWidth! > 0 -> if {
+                    "  %native_result_bits_$(callIndex) = call i$(nativeAggregateWidth!)" -> print
+                } else {
+                    "  call void" -> print
+                }
+            } else {
+                call.typeId -> nativeSysVAggregateIndirect -> if {
+                    "  call void" -> print
+                } else {
+                    "  %native_result_bits_$(callIndex) = call " -> print
+                    context.typeSizes[call.typeId] > 8 -> if {
+                        "{ " -> print
+                        call.typeId -> writeNativeSysVCoercionType(0)
+                        ", " -> print
+                        call.typeId -> writeNativeSysVCoercionType(1)
+                        " }" -> print
+                    } else {
+                        call.typeId -> writeNativeSysVCoercionType(0)
+                    }
+                }
+            }
+        } else {
+            (call.typeOrigin == 1 and call.typeSymbol == 0) -> if { "  call " -> print } else { "  %v$(callIndex) = call " -> print }
+            call -> writeIrType
+        }
+    }
+    emitCallResultFinish callIndex: Int -> Unit uses Console {
+        context.ir[callIndex] => call
+        ((call -> targetsNativeFunction) and call.typeId >= 0 and (context -> nativeAbiStructTypeSafe(call.typeId, 0))) -> if {
+            context.expectedPathStyle == 1 -> if {
+                call.typeId -> nativeWindowsDirectAggregateWidth => resultWidth
+                resultWidth > 0 -> if {
+                    "  store i$(resultWidth) %native_result_bits_$(callIndex), ptr %native_result_slot_$(callIndex), align " -> print
+                    call -> storageAlign -> writeDecimalLine
+                }
+                "  %v$(callIndex) = load " -> print
+                call -> writeIrType
+                ", ptr %native_result_slot_$(callIndex), align " -> print
+                call -> storageAlign -> writeDecimalLine
+            } else {
+                call.typeId -> nativeSysVAggregateIndirect => indirect
+                not indirect -> if {
+                    context.typeSizes[call.typeId] > 8 -> if {
+                        "  %native_result_part_$(callIndex)_0 = extractvalue { " -> print
+                        call.typeId -> writeNativeSysVCoercionType(0)
+                        ", " -> print
+                        call.typeId -> writeNativeSysVCoercionType(1)
+                        " } %native_result_bits_$(callIndex), 0" -> println
+                        "  %native_result_part_$(callIndex)_1 = extractvalue { " -> print
+                        call.typeId -> writeNativeSysVCoercionType(0)
+                        ", " -> print
+                        call.typeId -> writeNativeSysVCoercionType(1)
+                        " } %native_result_bits_$(callIndex), 1" -> println
+                        "  store " -> print
+                        call.typeId -> writeNativeSysVCoercionType(0)
+                        " %native_result_part_$(callIndex)_0, ptr %native_result_slot_$(callIndex), align 8" -> println
+                        "  %native_result_part_ptr_$(callIndex)_1 = getelementptr i8, ptr %native_result_slot_$(callIndex), i64 8" -> println
+                        "  store " -> print
+                        call.typeId -> writeNativeSysVCoercionType(1)
+                        " %native_result_part_$(callIndex)_1, ptr %native_result_part_ptr_$(callIndex)_1, align 8" -> println
+                    } else {
+                        "  store " -> print
+                        call.typeId -> writeNativeSysVCoercionType(0)
+                        " %native_result_bits_$(callIndex), ptr %native_result_slot_$(callIndex), align 8" -> println
+                    }
+                }
+                "  %v$(callIndex) = load " -> print
+                call -> writeIrType
+                ", ptr %native_result_slot_$(callIndex), align " -> print
+                call -> storageAlign -> writeDecimalLine
+            }
+        }
     }
     sourceStart node: typedIr.TypedIrNode -> UIntSize {
         context.nodes[context.ranges[node.sourceModule].astStart + node.astNode].start
@@ -8393,8 +8831,8 @@ emitCore context: EmitContext -> Unit uses Console {
                 } else {
                     regionNodeIndex! -> emitNativeTargetLoad(regionNode)
                     CallEnvironmentRequest { callerIndex: ownerIndex!, callIndex: regionNodeIndex!, targetModule: regionNode.targetModule, targetSymbol: regionNode.symbol, hasArgument: regionNode.operand0 >= 0 } -> emitCallEnvironmentValues
-                    (regionNode.typeOrigin == 1 and regionNode.typeSymbol == 0) -> if { "  call " -> print } else { "  %v$(regionNodeIndex!) = call " -> print }
-                    regionNode -> writeIrType
+                    regionNodeIndex! -> emitNativeCallValues(ownerIndex!)
+                    regionNodeIndex! -> writeCallResultPrefix
                     regionNodeIndex! -> isRangeDeferCall -> if {
                         " @sollang_range_stream_create(" -> print
                     } else {
@@ -8403,6 +8841,7 @@ emitCore context: EmitContext -> Unit uses Console {
                     CallEnvironmentRequest { callerIndex: ownerIndex!, callIndex: regionNodeIndex!, targetModule: regionNode.targetModule, targetSymbol: regionNode.symbol, hasArgument: regionNode.operand0 >= 0 } -> emitCallEnvironment => regionCallEnvironment
                     regionNodeIndex! -> emitCallArguments(ownerIndex!)
                     ")" -> println
+                    regionNodeIndex! -> emitCallResultFinish
                 }
             }
             }
@@ -10895,8 +11334,8 @@ emitCore context: EmitContext -> Unit uses Console {
                     } else {
                     expressionIndex! -> emitNativeTargetLoad(expression)
                     CallEnvironmentRequest { callerIndex: functionIndex!, callIndex: expressionIndex!, targetModule: expression.targetModule, targetSymbol: expression.symbol, hasArgument: expression.operand0 >= 0 } -> emitCallEnvironmentValues
-                    (expression.typeOrigin == 1 and expression.typeSymbol == 0) -> if { "  call " -> print } else { "  %v$(expressionIndex!) = call " -> print }
-                    expression -> writeIrType
+                    expressionIndex! -> emitNativeCallValues(functionIndex!)
+                    expressionIndex! -> writeCallResultPrefix
                     expressionIndex! -> isRangeDeferCall -> if {
                         " @sollang_range_stream_create(" -> print
                     } else {
@@ -10905,6 +11344,7 @@ emitCore context: EmitContext -> Unit uses Console {
                     CallEnvironmentRequest { callerIndex: functionIndex!, callIndex: expressionIndex!, targetModule: expression.targetModule, targetSymbol: expression.symbol, hasArgument: expression.operand0 >= 0 } -> emitCallEnvironment => functionCallEnvironment
                     expressionIndex! -> emitCallArguments(functionIndex!)
                     ")" -> println
+                    expressionIndex! -> emitCallResultFinish
                     }
                     }
                 }
@@ -14550,8 +14990,8 @@ emitCore context: EmitContext -> Unit uses Console {
                         } else {
                         entryExpressionIndex! -> emitNativeTargetLoad(entryExpression)
                         CallEnvironmentRequest { callerIndex: functionIndex!, callIndex: entryExpressionIndex!, targetModule: entryExpression.targetModule, targetSymbol: entryExpression.symbol, hasArgument: entryExpression.operand0 >= 0 } -> emitCallEnvironmentValues
-                        (entryExpression.typeOrigin == 1 and entryExpression.typeSymbol == 0) -> if { "  call " -> print } else { "  %v$(entryExpressionIndex!) = call " -> print }
-                        entryExpression -> writeIrType
+                        entryExpressionIndex! -> emitNativeCallValues(functionIndex!)
+                        entryExpressionIndex! -> writeCallResultPrefix
                         entryExpressionIndex! -> isRangeDeferCall -> if {
                             " @sollang_range_stream_create(" -> print
                         } else {
@@ -14559,6 +14999,7 @@ emitCore context: EmitContext -> Unit uses Console {
                         }
                         entryExpressionIndex! -> emitCallArguments(functionIndex!)
                         ")" -> println
+                        entryExpressionIndex! -> emitCallResultFinish
                         }
                         }
                     }
@@ -15152,1332 +15593,6 @@ usesBoolInterpolation context: EmitContext -> Bool {
     usesInterpolation!
 }
 
-emitIntTextRuntime: -> Unit uses Console {
-    """
-    define internal void @sollang_runtime_print_i32(i32 %value, i1 %newline) {
-    entry:
-      %buffer = alloca [12 x i8], align 1
-      %end = getelementptr [12 x i8], ptr %buffer, i64 0, i64 12
-      %wide = sext i32 %value to i64
-      %negative = icmp slt i64 %wide, 0
-      %negated = sub i64 0, %wide
-      %magnitude = select i1 %negative, i64 %negated, i64 %wide
-      br label %digits
-    digits:
-      %current = phi i64 [ %magnitude, %entry ], [ %quotient, %digits ]
-      %cursor = phi ptr [ %end, %entry ], [ %digit_slot, %digits ]
-      %digit = urem i64 %current, 10
-      %quotient = udiv i64 %current, 10
-      %digit_slot = getelementptr i8, ptr %cursor, i64 -1
-      %digit8 = trunc i64 %digit to i8
-      %ascii = add i8 %digit8, 48
-      store i8 %ascii, ptr %digit_slot, align 1
-      %more = icmp ne i64 %quotient, 0
-      br i1 %more, label %digits, label %digits_done
-    digits_done:
-      br i1 %negative, label %write_sign, label %emit
-    write_sign:
-      %sign_slot = getelementptr i8, ptr %digit_slot, i64 -1
-      store i8 45, ptr %sign_slot, align 1
-      br label %emit
-    emit:
-      %start = phi ptr [ %digit_slot, %digits_done ], [ %sign_slot, %write_sign ]
-      %end_address = ptrtoint ptr %end to i64
-      %start_address = ptrtoint ptr %start to i64
-      %length = sub i64 %end_address, %start_address
-      call void @sollang_runtime_print(ptr %start, i64 %length, i1 %newline)
-      ret void
-    }
-    """ -> println
-    """
-    define internal void @sollang_runtime_print_i64(i64 %value, i1 %signed, i1 %newline) {
-    entry:
-      %buffer = alloca [21 x i8], align 1
-      %end = getelementptr [21 x i8], ptr %buffer, i64 0, i64 21
-      %negative_value = icmp slt i64 %value, 0
-      %negative = and i1 %signed, %negative_value
-      %negated = sub i64 0, %value
-      %magnitude = select i1 %negative, i64 %negated, i64 %value
-      br label %digits
-    digits:
-      %current = phi i64 [ %magnitude, %entry ], [ %quotient, %digits ]
-      %cursor = phi ptr [ %end, %entry ], [ %digit_slot, %digits ]
-      %digit = urem i64 %current, 10
-      %quotient = udiv i64 %current, 10
-      %digit_slot = getelementptr i8, ptr %cursor, i64 -1
-      %digit8 = trunc i64 %digit to i8
-      %ascii = add i8 %digit8, 48
-      store i8 %ascii, ptr %digit_slot, align 1
-      %more = icmp ne i64 %quotient, 0
-      br i1 %more, label %digits, label %digits_done
-    digits_done:
-      br i1 %negative, label %write_sign, label %emit
-    write_sign:
-      %sign_slot = getelementptr i8, ptr %digit_slot, i64 -1
-      store i8 45, ptr %sign_slot, align 1
-      br label %emit
-    emit:
-      %start = phi ptr [ %digit_slot, %digits_done ], [ %sign_slot, %write_sign ]
-      %end_address = ptrtoint ptr %end to i64
-      %start_address = ptrtoint ptr %start to i64
-      %length = sub i64 %end_address, %start_address
-      call void @sollang_runtime_print(ptr %start, i64 %length, i1 %newline)
-      ret void
-    }
-    """ -> println
-}
-
-emitBoolTextRuntime: -> Unit uses Console {
-    """
-    @sollang_runtime_bool_true = private constant [4 x i8] c"true"
-    @sollang_runtime_bool_false = private constant [5 x i8] c"false"
-    define internal void @sollang_runtime_print_i1(i1 %value, i1 %newline) {
-    entry:
-      %data = select i1 %value, ptr @sollang_runtime_bool_true, ptr @sollang_runtime_bool_false
-      %length = select i1 %value, i64 4, i64 5
-      call void @sollang_runtime_print(ptr %data, i64 %length, i1 %newline)
-      ret void
-    }
-    """ -> println
-}
-
-emitWindowsComputeRuntime: -> Unit uses Console {
-    """
-    %sollang.compute_group = type { ptr, ptr, ptr, i64, ptr, ptr, ptr, ptr, ptr, ptr, ptr, i64, ptr }
-    @sollang_compute_semaphore = internal global ptr null
-    @sollang_compute_completion_event = internal global ptr null
-    @sollang_compute_worker_count = internal global i32 0
-    @sollang_compute_worker_limit = internal global i32 0
-    @sollang_compute_worker_handles = internal global [64 x ptr] zeroinitializer, align 8
-    @sollang_compute_group_current = internal global ptr null
-    @sollang_compute_next = internal global i64 0
-    @sollang_compute_active = internal global i32 0
-    @sollang_compute_barrier_departed = internal global i32 0
-    @sollang_compute_running = internal global i32 0
-    @sollang_compute_peak = internal global i32 0
-    @sollang_compute_stopping = internal global i32 0
-    declare dllimport i32 @WaitForSingleObject(ptr, i32)
-    declare dllimport ptr @CreateThread(ptr, i64, ptr, ptr, i32, ptr)
-    declare dllimport ptr @CreateEventA(ptr, i32, i32, ptr)
-    declare dllimport i32 @SetEvent(ptr)
-    declare dllimport ptr @CreateSemaphoreA(ptr, i32, i32, ptr)
-    declare dllimport i32 @ReleaseSemaphore(ptr, i32, ptr)
-    declare dllimport i32 @ResetEvent(ptr)
-    declare dllimport i32 @GetActiveProcessorCount(i16)
-    define internal i32 @sollang_windows_compute_worker(ptr %unused) {
-    entry:
-      br label %wait
-    wait:
-      %semaphore = load ptr, ptr @sollang_compute_semaphore, align 8
-      %waited = call i32 @WaitForSingleObject(ptr %semaphore, i32 -1)
-      %stopping_value = load atomic i32, ptr @sollang_compute_stopping acquire, align 4
-      %stopping = icmp ne i32 %stopping_value, 0
-      br i1 %stopping, label %stopped, label %take
-    take:
-      %group = load atomic ptr, ptr @sollang_compute_group_current acquire, align 8
-      %count_slot = getelementptr %sollang.compute_group, ptr %group, i32 0, i32 3
-      %count = load i64, ptr %count_slot, align 8
-      br label %claim
-    claim:
-      %index = atomicrmw add ptr @sollang_compute_next, i64 1 acq_rel
-      %within_count = icmp ult i64 %index, %count
-      %failure_limit_slot = getelementptr %sollang.compute_group, ptr %group, i32 0, i32 11
-      %failure_limit = load atomic i64, ptr %failure_limit_slot acquire, align 8
-      %before_failure = icmp ult i64 %index, %failure_limit
-      %has_work = and i1 %within_count, %before_failure
-      br i1 %has_work, label %work, label %complete
-    work:
-      %callback_slot = getelementptr %sollang.compute_group, ptr %group, i32 0, i32 0
-      %callback = load ptr, ptr %callback_slot, align 8
-      %sinks_slot = getelementptr %sollang.compute_group, ptr %group, i32 0, i32 5
-      %sinks = load ptr, ptr %sinks_slot, align 8
-      %sink = getelementptr %sollang.output_sink, ptr %sinks, i64 %index
-      %tls_index = load i32, ptr @sollang_output_sink_tls, align 4
-      %tls_set = call i32 @TlsSetValue(i32 %tls_index, ptr %sink)
-      %running_before = atomicrmw add ptr @sollang_compute_running, i32 1 acq_rel
-      %running_now = add i32 %running_before, 1
-      %peak_before = atomicrmw max ptr @sollang_compute_peak, i32 %running_now acq_rel
-      call void %callback(ptr %group, i64 %index)
-      %tls_clear = call i32 @TlsSetValue(i32 %tls_index, ptr null)
-      %running_after = atomicrmw sub ptr @sollang_compute_running, i32 1 acq_rel
-      br label %claim
-    complete:
-      %previous = atomicrmw sub ptr @sollang_compute_active, i32 1 acq_rel
-      %last = icmp eq i32 %previous, 1
-      br i1 %last, label %signal, label %barrier
-    barrier:
-      %barrier_event = load ptr, ptr @sollang_compute_completion_event, align 8
-      %barrier_waited = call i32 @WaitForSingleObject(ptr %barrier_event, i32 -1)
-      %departed_before = atomicrmw add ptr @sollang_compute_barrier_departed, i32 1 acq_rel
-      br label %wait
-    signal:
-      %event = load ptr, ptr @sollang_compute_completion_event, align 8
-      %signalled = call i32 @SetEvent(ptr %event)
-      br label %wait
-    stopped:
-      ret i32 0
-    }
-    define internal i1 @sollang_compute_start() {
-    entry:
-      %existing = load i32, ptr @sollang_compute_worker_count, align 4
-      %already = icmp sgt i32 %existing, 0
-      br i1 %already, label %ready, label %create_sync
-    create_sync:
-      %tls_index = call i32 @TlsAlloc()
-      %tls_ok = icmp ne i32 %tls_index, -1
-      br i1 %tls_ok, label %create_semaphore, label %fail
-    create_semaphore:
-      store i32 %tls_index, ptr @sollang_output_sink_tls, align 4
-      %semaphore = call ptr @CreateSemaphoreA(ptr null, i32 0, i32 64, ptr null)
-      %semaphore_ok = icmp ne ptr %semaphore, null
-      br i1 %semaphore_ok, label %create_event, label %fail
-    create_event:
-      store ptr %semaphore, ptr @sollang_compute_semaphore, align 8
-      %event = call ptr @CreateEventA(ptr null, i32 1, i32 0, ptr null)
-      %event_ok = icmp ne ptr %event, null
-      br i1 %event_ok, label %count, label %fail
-    count:
-      store ptr %event, ptr @sollang_compute_completion_event, align 8
-      %reported = call i32 @GetActiveProcessorCount(i16 -1)
-      %positive = icmp sgt i32 %reported, 0
-      %at_least_one = select i1 %positive, i32 %reported, i32 1
-      %configured = load i32, ptr @sollang_compute_worker_limit, align 4
-      %has_configured = icmp sgt i32 %configured, 0
-      %selected = select i1 %has_configured, i32 %configured, i32 %at_least_one
-      %too_many = icmp sgt i32 %selected, 64
-      %bounded = select i1 %too_many, i32 64, i32 %selected
-      br label %create_workers
-    create_workers:
-      %index = phi i32 [ 0, %count ], [ %next, %created ]
-      %done = icmp eq i32 %index, %bounded
-      br i1 %done, label %publish, label %create_one
-    create_one:
-      %worker = call ptr @CreateThread(ptr null, i64 0, ptr @sollang_windows_compute_worker, ptr null, i32 0, ptr null)
-      %worker_ok = icmp ne ptr %worker, null
-      br i1 %worker_ok, label %created, label %publish
-    created:
-      %slot = getelementptr [64 x ptr], ptr @sollang_compute_worker_handles, i32 0, i32 %index
-      store ptr %worker, ptr %slot, align 8
-      %next = add i32 %index, 1
-      br label %create_workers
-    publish:
-      %created_count = phi i32 [ %bounded, %create_workers ], [ %index, %create_one ]
-      store i32 %created_count, ptr @sollang_compute_worker_count, align 4
-      %has_workers = icmp sgt i32 %created_count, 0
-      br i1 %has_workers, label %ready, label %fail
-    ready:
-      ret i1 true
-    fail:
-      ret i1 false
-    }
-    define internal i32 @sollang_compute_limit_workers(i32 %requested) {
-    entry:
-      %existing = load i32, ptr @sollang_compute_worker_count, align 4
-      %already_started = icmp sgt i32 %existing, 0
-      br i1 %already_started, label %started, label %configure
-    configure:
-      %positive = icmp sgt i32 %requested, 0
-      %at_least_one = select i1 %positive, i32 %requested, i32 1
-      %too_many = icmp sgt i32 %at_least_one, 64
-      %bounded = select i1 %too_many, i32 64, i32 %at_least_one
-      store i32 %bounded, ptr @sollang_compute_worker_limit, align 4
-      %started_ok = call i1 @sollang_compute_start()
-      br i1 %started_ok, label %read, label %failed
-    started:
-      ret i32 %existing
-    read:
-      %workers = load i32, ptr @sollang_compute_worker_count, align 4
-      ret i32 %workers
-    failed:
-      ret i32 0
-    }
-    define internal void @sollang_compute_execute(ptr %group) {
-    entry:
-      %started = call i1 @sollang_compute_start()
-      br i1 %started, label %submit, label %failed
-    submit:
-      %count_slot = getelementptr %sollang.compute_group, ptr %group, i32 0, i32 3
-      %count = load i64, ptr %count_slot, align 8
-      %empty = icmp eq i64 %count, 0
-      br i1 %empty, label %cleanup_empty, label %publish
-    cleanup_empty:
-      %empty_sinks_slot = getelementptr %sollang.compute_group, ptr %group, i32 0, i32 5
-      %empty_sinks = load ptr, ptr %empty_sinks_slot, align 8
-      call void @sollang_memory_output_sink_array_dispose(ptr %empty_sinks, i64 0)
-      br label %done
-    publish:
-      store atomic i64 0, ptr @sollang_compute_next release, align 8
-      store atomic i32 0, ptr @sollang_compute_peak release, align 4
-      %workers = load i32, ptr @sollang_compute_worker_count, align 4
-      store atomic i32 %workers, ptr @sollang_compute_active release, align 4
-      store atomic ptr %group, ptr @sollang_compute_group_current release, align 8
-      %event = load ptr, ptr @sollang_compute_completion_event, align 8
-      %reset = call i32 @ResetEvent(ptr %event)
-      %help_first_index = atomicrmw add ptr @sollang_compute_next, i64 1 acq_rel
-      %semaphore = load ptr, ptr @sollang_compute_semaphore, align 8
-      %released = call i32 @ReleaseSemaphore(ptr %semaphore, i32 %workers, ptr null)
-      br label %help_work
-    help_claim:
-      %help_claimed_index = atomicrmw add ptr @sollang_compute_next, i64 1 acq_rel
-      %help_within_count = icmp ult i64 %help_claimed_index, %count
-      %help_failure_limit_slot = getelementptr %sollang.compute_group, ptr %group, i32 0, i32 11
-      %help_failure_limit = load atomic i64, ptr %help_failure_limit_slot acquire, align 8
-      %help_before_failure = icmp ult i64 %help_claimed_index, %help_failure_limit
-      %help_has_work = and i1 %help_within_count, %help_before_failure
-      br i1 %help_has_work, label %help_work, label %help_wait
-    help_work:
-      %help_index = phi i64 [ %help_first_index, %publish ], [ %help_claimed_index, %help_claim ]
-      %help_callback_slot = getelementptr %sollang.compute_group, ptr %group, i32 0, i32 0
-      %help_callback = load ptr, ptr %help_callback_slot, align 8
-      %help_sinks_slot = getelementptr %sollang.compute_group, ptr %group, i32 0, i32 5
-      %help_sinks = load ptr, ptr %help_sinks_slot, align 8
-      %help_sink = getelementptr %sollang.output_sink, ptr %help_sinks, i64 %help_index
-      %help_tls_index = load i32, ptr @sollang_output_sink_tls, align 4
-      %help_tls_set = call i32 @TlsSetValue(i32 %help_tls_index, ptr %help_sink)
-      %help_running_before = atomicrmw add ptr @sollang_compute_running, i32 1 acq_rel
-      %help_running_now = add i32 %help_running_before, 1
-      %help_peak_before = atomicrmw max ptr @sollang_compute_peak, i32 %help_running_now acq_rel
-      call void %help_callback(ptr %group, i64 %help_index)
-      %help_tls_clear = call i32 @TlsSetValue(i32 %help_tls_index, ptr null)
-      %help_running_after = atomicrmw sub ptr @sollang_compute_running, i32 1 acq_rel
-      br label %help_claim
-    help_wait:
-      %waited = call i32 @WaitForSingleObject(ptr %event, i32 -1)
-      br label %await_departure
-    await_departure:
-      %departed = load atomic i32, ptr @sollang_compute_barrier_departed acquire, align 4
-      %expected_departed = sub i32 %workers, 1
-      %all_departed = icmp eq i32 %departed, %expected_departed
-      br i1 %all_departed, label %departure_done, label %await_departure
-    departure_done:
-      store atomic i32 0, ptr @sollang_compute_barrier_departed release, align 4
-      %sinks_slot = getelementptr %sollang.compute_group, ptr %group, i32 0, i32 5
-      %sinks = load ptr, ptr %sinks_slot, align 8
-      %flush_limit_slot = getelementptr %sollang.compute_group, ptr %group, i32 0, i32 11
-      %flush_limit = load atomic i64, ptr %flush_limit_slot acquire, align 8
-      call void @sollang_memory_output_sink_array_flush_prefix(ptr %sinks, i64 %count, i64 %flush_limit, ptr %group, ptr @sollang_memory_output_sink_write)
-      store atomic ptr null, ptr @sollang_compute_group_current release, align 8
-      br label %done
-    failed:
-      unreachable
-    done:
-      ret void
-    }
-    define internal void @sollang_compute_shutdown() {
-    entry:
-      %workers = load i32, ptr @sollang_compute_worker_count, align 4
-      %started = icmp sgt i32 %workers, 0
-      br i1 %started, label %stop, label %done
-    stop:
-      store atomic i32 1, ptr @sollang_compute_stopping release, align 4
-      %semaphore = load ptr, ptr @sollang_compute_semaphore, align 8
-      %released = call i32 @ReleaseSemaphore(ptr %semaphore, i32 %workers, ptr null)
-      br label %join
-    join:
-      %index = phi i32 [ 0, %stop ], [ %next, %joined ]
-      %all_joined = icmp eq i32 %index, %workers
-      br i1 %all_joined, label %cleanup, label %join_one
-    join_one:
-      %slot = getelementptr [64 x ptr], ptr @sollang_compute_worker_handles, i32 0, i32 %index
-      %worker = load ptr, ptr %slot, align 8
-      %waited = call i32 @WaitForSingleObject(ptr %worker, i32 -1)
-      store ptr null, ptr %slot, align 8
-      br label %joined
-    joined:
-      %next = add i32 %index, 1
-      br label %join
-    cleanup:
-      %tls_index = load i32, ptr @sollang_output_sink_tls, align 4
-      %tls_freed = call i32 @TlsFree(i32 %tls_index)
-      store ptr null, ptr @sollang_compute_semaphore, align 8
-      store ptr null, ptr @sollang_compute_completion_event, align 8
-      store i32 0, ptr @sollang_compute_worker_count, align 4
-      br label %done
-    done:
-      ret void
-    }
-    """ -> println
-}
-
-emitLinuxComputeRuntime: -> Unit uses Console {
-    """
-    %sollang.compute_group = type { ptr, ptr, ptr, i64, ptr, ptr, ptr, ptr, ptr, ptr, ptr, i64, ptr }
-    @sollang_compute_work_event_fd = internal global i32 -1
-    @sollang_compute_completion_event_fd = internal global i32 -1
-    @sollang_compute_worker_count = internal global i32 0
-    @sollang_compute_worker_limit = internal global i32 0
-    @sollang_compute_worker_threads = internal global [64 x i64] zeroinitializer, align 8
-    @sollang_compute_group_current = internal global ptr null
-    @sollang_compute_next = internal global i64 0
-    @sollang_compute_active = internal global i32 0
-    @sollang_compute_running = internal global i32 0
-    @sollang_compute_peak = internal global i32 0
-    @sollang_compute_stopping = internal global i32 0
-    @sollang_compute_generation = internal global i32 0
-    declare i32 @eventfd(i32, i32)
-    declare i32 @close(i32)
-    declare i64 @read(i32, ptr, i64)
-    declare i64 @sysconf(i32)
-    declare i64 @syscall(i64, ...)
-    declare i32 @pthread_create(ptr, ptr, ptr, ptr)
-    declare i32 @pthread_join(i64, ptr)
-    define internal ptr @sollang_linux_compute_worker(ptr %unused) {
-    entry:
-      %event_value = alloca i64, align 8
-      br label %wait
-    wait:
-      %work_fd = load i32, ptr @sollang_compute_work_event_fd, align 4
-      %waited = call i64 @read(i32 %work_fd, ptr %event_value, i64 8)
-      %stopping_value = load atomic i32, ptr @sollang_compute_stopping acquire, align 4
-      %stopping = icmp ne i32 %stopping_value, 0
-      br i1 %stopping, label %stopped, label %take
-    take:
-      %generation = load atomic i32, ptr @sollang_compute_generation acquire, align 4
-      %group = load atomic ptr, ptr @sollang_compute_group_current acquire, align 8
-      %count_slot = getelementptr %sollang.compute_group, ptr %group, i32 0, i32 3
-      %count = load i64, ptr %count_slot, align 8
-      br label %claim
-    claim:
-      %index = atomicrmw add ptr @sollang_compute_next, i64 1 acq_rel
-      %within_count = icmp ult i64 %index, %count
-      %failure_limit_slot = getelementptr %sollang.compute_group, ptr %group, i32 0, i32 11
-      %failure_limit = load atomic i64, ptr %failure_limit_slot acquire, align 8
-      %before_failure = icmp ult i64 %index, %failure_limit
-      %has_work = and i1 %within_count, %before_failure
-      br i1 %has_work, label %work, label %complete
-    work:
-      %callback_slot = getelementptr %sollang.compute_group, ptr %group, i32 0, i32 0
-      %callback = load ptr, ptr %callback_slot, align 8
-      %sinks_slot = getelementptr %sollang.compute_group, ptr %group, i32 0, i32 5
-      %sinks = load ptr, ptr %sinks_slot, align 8
-      %sink = getelementptr %sollang.output_sink, ptr %sinks, i64 %index
-      %tls_index = load i32, ptr @sollang_output_sink_tls, align 4
-      %tls_set = call i32 @pthread_setspecific(i32 %tls_index, ptr %sink)
-      %running_before = atomicrmw add ptr @sollang_compute_running, i32 1 acq_rel
-      %running_now = add i32 %running_before, 1
-      %peak_before = atomicrmw max ptr @sollang_compute_peak, i32 %running_now acq_rel
-      call void %callback(ptr %group, i64 %index)
-      %tls_clear = call i32 @pthread_setspecific(i32 %tls_index, ptr null)
-      %running_after = atomicrmw sub ptr @sollang_compute_running, i32 1 acq_rel
-      br label %claim
-    complete:
-      %previous = atomicrmw sub ptr @sollang_compute_active, i32 1 acq_rel
-      %last = icmp eq i32 %previous, 1
-      br i1 %last, label %signal, label %barrier_check
-    barrier_check:
-      %current_generation = load atomic i32, ptr @sollang_compute_generation acquire, align 4
-      %generation_advanced = icmp ne i32 %current_generation, %generation
-      br i1 %generation_advanced, label %wait, label %barrier_wait
-    barrier_wait:
-      %futex_waited = call i64 (i64, ...) @syscall(i64 202, ptr @sollang_compute_generation, i32 128, i32 %generation, ptr null, ptr null, i32 0)
-      br label %barrier_check
-    signal:
-      %generation_before = atomicrmw add ptr @sollang_compute_generation, i32 1 acq_rel
-      %futex_woken = call i64 (i64, ...) @syscall(i64 202, ptr @sollang_compute_generation, i32 129, i32 2147483647, ptr null, ptr null, i32 0)
-      store i64 1, ptr %event_value, align 8
-      %completion_fd = load i32, ptr @sollang_compute_completion_event_fd, align 4
-      %signalled = call i64 @write(i32 %completion_fd, ptr %event_value, i64 8)
-      br label %wait
-    stopped:
-      ret ptr null
-    }
-    define internal i1 @sollang_compute_start() {
-    entry:
-      %existing = load i32, ptr @sollang_compute_worker_count, align 4
-      %already = icmp sgt i32 %existing, 0
-      br i1 %already, label %ready, label %create_tls
-    create_tls:
-      %tls_status = call i32 @pthread_key_create(ptr @sollang_output_sink_tls, ptr null)
-      %tls_ok = icmp eq i32 %tls_status, 0
-      br i1 %tls_ok, label %create_work_event, label %fail
-    create_work_event:
-      %work_fd = call i32 @eventfd(i32 0, i32 1)
-      %work_ok = icmp sge i32 %work_fd, 0
-      br i1 %work_ok, label %create_completion_event, label %delete_tls
-    create_completion_event:
-      store i32 %work_fd, ptr @sollang_compute_work_event_fd, align 4
-      %completion_fd = call i32 @eventfd(i32 0, i32 0)
-      %completion_ok = icmp sge i32 %completion_fd, 0
-      br i1 %completion_ok, label %count, label %close_work
-    count:
-      store i32 %completion_fd, ptr @sollang_compute_completion_event_fd, align 4
-      %reported = call i64 @sysconf(i32 84)
-      %positive = icmp sgt i64 %reported, 0
-      %at_least_one = select i1 %positive, i64 %reported, i64 1
-      %configured32 = load i32, ptr @sollang_compute_worker_limit, align 4
-      %configured = sext i32 %configured32 to i64
-      %has_configured = icmp sgt i64 %configured, 0
-      %selected = select i1 %has_configured, i64 %configured, i64 %at_least_one
-      %too_many = icmp sgt i64 %selected, 64
-      %bounded64 = select i1 %too_many, i64 64, i64 %selected
-      %bounded = trunc i64 %bounded64 to i32
-      br label %create_workers
-    create_workers:
-      %index = phi i32 [ 0, %count ], [ %next, %created ]
-      %done = icmp eq i32 %index, %bounded
-      br i1 %done, label %publish, label %create_one
-    create_one:
-      %slot = getelementptr [64 x i64], ptr @sollang_compute_worker_threads, i32 0, i32 %index
-      %create = call i32 @pthread_create(ptr %slot, ptr null, ptr @sollang_linux_compute_worker, ptr null)
-      %worker_ok = icmp eq i32 %create, 0
-      br i1 %worker_ok, label %created, label %publish
-    created:
-      %next = add i32 %index, 1
-      br label %create_workers
-    publish:
-      %created_count = phi i32 [ %bounded, %create_workers ], [ %index, %create_one ]
-      store i32 %created_count, ptr @sollang_compute_worker_count, align 4
-      %has_workers = icmp sgt i32 %created_count, 0
-      br i1 %has_workers, label %ready, label %close_both
-    close_work:
-      %closed_work_only = call i32 @close(i32 %work_fd)
-      store i32 -1, ptr @sollang_compute_work_event_fd, align 4
-      br label %delete_tls
-    close_both:
-      %closed_completion = call i32 @close(i32 %completion_fd)
-      %closed_work = call i32 @close(i32 %work_fd)
-      store i32 -1, ptr @sollang_compute_completion_event_fd, align 4
-      store i32 -1, ptr @sollang_compute_work_event_fd, align 4
-      br label %delete_tls
-    delete_tls:
-      %tls_index_failed = load i32, ptr @sollang_output_sink_tls, align 4
-      %tls_deleted_failed = call i32 @pthread_key_delete(i32 %tls_index_failed)
-      br label %fail
-    ready:
-      ret i1 true
-    fail:
-      ret i1 false
-    }
-    define internal i32 @sollang_compute_limit_workers(i32 %requested) {
-    entry:
-      %existing = load i32, ptr @sollang_compute_worker_count, align 4
-      %already_started = icmp sgt i32 %existing, 0
-      br i1 %already_started, label %started, label %configure
-    configure:
-      %positive = icmp sgt i32 %requested, 0
-      %at_least_one = select i1 %positive, i32 %requested, i32 1
-      %too_many = icmp sgt i32 %at_least_one, 64
-      %bounded = select i1 %too_many, i32 64, i32 %at_least_one
-      store i32 %bounded, ptr @sollang_compute_worker_limit, align 4
-      %started_ok = call i1 @sollang_compute_start()
-      br i1 %started_ok, label %read, label %failed
-    started:
-      ret i32 %existing
-    read:
-      %workers = load i32, ptr @sollang_compute_worker_count, align 4
-      ret i32 %workers
-    failed:
-      ret i32 0
-    }
-    define internal void @sollang_compute_execute(ptr %group) {
-    entry:
-      %started = call i1 @sollang_compute_start()
-      br i1 %started, label %submit, label %failed
-    submit:
-      %count_slot = getelementptr %sollang.compute_group, ptr %group, i32 0, i32 3
-      %count = load i64, ptr %count_slot, align 8
-      %empty = icmp eq i64 %count, 0
-      br i1 %empty, label %cleanup_empty, label %publish
-    cleanup_empty:
-      %empty_sinks_slot = getelementptr %sollang.compute_group, ptr %group, i32 0, i32 5
-      %empty_sinks = load ptr, ptr %empty_sinks_slot, align 8
-      call void @sollang_memory_output_sink_array_dispose(ptr %empty_sinks, i64 0)
-      br label %done
-    publish:
-      store atomic i64 0, ptr @sollang_compute_next release, align 8
-      store atomic i32 0, ptr @sollang_compute_peak release, align 4
-      %workers = load i32, ptr @sollang_compute_worker_count, align 4
-      store atomic i32 %workers, ptr @sollang_compute_active release, align 4
-      store atomic ptr %group, ptr @sollang_compute_group_current release, align 8
-      %workers64 = zext i32 %workers to i64
-      %event_value = alloca i64, align 8
-      store i64 %workers64, ptr %event_value, align 8
-      %help_first_index = atomicrmw add ptr @sollang_compute_next, i64 1 acq_rel
-      %work_fd = load i32, ptr @sollang_compute_work_event_fd, align 4
-      %released = call i64 @write(i32 %work_fd, ptr %event_value, i64 8)
-      br label %help_work
-    help_claim:
-      %help_claimed_index = atomicrmw add ptr @sollang_compute_next, i64 1 acq_rel
-      %help_within_count = icmp ult i64 %help_claimed_index, %count
-      %help_failure_limit_slot = getelementptr %sollang.compute_group, ptr %group, i32 0, i32 11
-      %help_failure_limit = load atomic i64, ptr %help_failure_limit_slot acquire, align 8
-      %help_before_failure = icmp ult i64 %help_claimed_index, %help_failure_limit
-      %help_has_work = and i1 %help_within_count, %help_before_failure
-      br i1 %help_has_work, label %help_work, label %help_wait
-    help_work:
-      %help_index = phi i64 [ %help_first_index, %publish ], [ %help_claimed_index, %help_claim ]
-      %help_callback_slot = getelementptr %sollang.compute_group, ptr %group, i32 0, i32 0
-      %help_callback = load ptr, ptr %help_callback_slot, align 8
-      %help_sinks_slot = getelementptr %sollang.compute_group, ptr %group, i32 0, i32 5
-      %help_sinks = load ptr, ptr %help_sinks_slot, align 8
-      %help_sink = getelementptr %sollang.output_sink, ptr %help_sinks, i64 %help_index
-      %help_tls_index = load i32, ptr @sollang_output_sink_tls, align 4
-      %help_tls_set = call i32 @pthread_setspecific(i32 %help_tls_index, ptr %help_sink)
-      %help_running_before = atomicrmw add ptr @sollang_compute_running, i32 1 acq_rel
-      %help_running_now = add i32 %help_running_before, 1
-      %help_peak_before = atomicrmw max ptr @sollang_compute_peak, i32 %help_running_now acq_rel
-      call void %help_callback(ptr %group, i64 %help_index)
-      %help_tls_clear = call i32 @pthread_setspecific(i32 %help_tls_index, ptr null)
-      %help_running_after = atomicrmw sub ptr @sollang_compute_running, i32 1 acq_rel
-      br label %help_claim
-    help_wait:
-      %completion_fd = load i32, ptr @sollang_compute_completion_event_fd, align 4
-      %waited = call i64 @read(i32 %completion_fd, ptr %event_value, i64 8)
-      br label %flush_prepare
-    flush_prepare:
-      %sinks_slot = getelementptr %sollang.compute_group, ptr %group, i32 0, i32 5
-      %sinks = load ptr, ptr %sinks_slot, align 8
-      %flush_limit_slot = getelementptr %sollang.compute_group, ptr %group, i32 0, i32 11
-      %flush_limit = load atomic i64, ptr %flush_limit_slot acquire, align 8
-      call void @sollang_memory_output_sink_array_flush_prefix(ptr %sinks, i64 %count, i64 %flush_limit, ptr %group, ptr @sollang_memory_output_sink_write)
-      store atomic ptr null, ptr @sollang_compute_group_current release, align 8
-      br label %done
-    failed:
-      unreachable
-    done:
-      ret void
-    }
-    define internal void @sollang_compute_shutdown() {
-    entry:
-      %workers = load i32, ptr @sollang_compute_worker_count, align 4
-      %started = icmp sgt i32 %workers, 0
-      br i1 %started, label %stop, label %done
-    stop:
-      store atomic i32 1, ptr @sollang_compute_stopping release, align 4
-      %workers64 = zext i32 %workers to i64
-      %event_value = alloca i64, align 8
-      store i64 %workers64, ptr %event_value, align 8
-      %work_fd = load i32, ptr @sollang_compute_work_event_fd, align 4
-      %released = call i64 @write(i32 %work_fd, ptr %event_value, i64 8)
-      br label %join
-    join:
-      %index = phi i32 [ 0, %stop ], [ %next, %joined ]
-      %all_joined = icmp eq i32 %index, %workers
-      br i1 %all_joined, label %cleanup, label %join_one
-    join_one:
-      %slot = getelementptr [64 x i64], ptr @sollang_compute_worker_threads, i32 0, i32 %index
-      %worker = load i64, ptr %slot, align 8
-      %joined_status = call i32 @pthread_join(i64 %worker, ptr null)
-      store i64 0, ptr %slot, align 8
-      br label %joined
-    joined:
-      %next = add i32 %index, 1
-      br label %join
-    cleanup:
-      %completion_fd = load i32, ptr @sollang_compute_completion_event_fd, align 4
-      %closed_completion = call i32 @close(i32 %completion_fd)
-      %closed_work = call i32 @close(i32 %work_fd)
-      %tls_index = load i32, ptr @sollang_output_sink_tls, align 4
-      %tls_deleted = call i32 @pthread_key_delete(i32 %tls_index)
-      store i32 -1, ptr @sollang_compute_completion_event_fd, align 4
-      store i32 -1, ptr @sollang_compute_work_event_fd, align 4
-      store i32 0, ptr @sollang_compute_worker_count, align 4
-      br label %done
-    done:
-      ret void
-    }
-    """ -> println
-}
-
-emitMemoryOutputSinkRuntime: -> Unit uses Console {
-    """
-    %sollang.output_sink = type { ptr, i64, i64 }
-    define internal void @sollang_memory_output_sink_append(ptr %sink, ptr %data, i64 %len) {
-    entry:
-      %data_slot = getelementptr %sollang.output_sink, ptr %sink, i32 0, i32 0
-      %length_slot = getelementptr %sollang.output_sink, ptr %sink, i32 0, i32 1
-      %capacity_slot = getelementptr %sollang.output_sink, ptr %sink, i32 0, i32 2
-      %length = load i64, ptr %length_slot, align 8
-      %capacity = load i64, ptr %capacity_slot, align 8
-      %required = add i64 %length, %len
-      %fits = icmp ule i64 %required, %capacity
-      br i1 %fits, label %append, label %grow
-    grow:
-      %doubled = shl i64 %capacity, 1
-      %minimum = icmp ult i64 %doubled, 256
-      %base_capacity = select i1 %minimum, i64 256, i64 %doubled
-      %enough = icmp uge i64 %base_capacity, %required
-      %new_capacity = select i1 %enough, i64 %base_capacity, i64 %required
-      %new_data = call ptr @malloc(i64 %new_capacity)
-      %old_data = load ptr, ptr %data_slot, align 8
-      %has_old = icmp ne ptr %old_data, null
-      br i1 %has_old, label %copy_old, label %publish
-    copy_old:
-      call void @llvm.memcpy.p0.p0.i64(ptr %new_data, ptr %old_data, i64 %length, i1 false)
-      call void @free(ptr %old_data)
-      br label %publish
-    publish:
-      store ptr %new_data, ptr %data_slot, align 8
-      store i64 %new_capacity, ptr %capacity_slot, align 8
-      br label %append
-    append:
-      %current_data = load ptr, ptr %data_slot, align 8
-      %destination = getelementptr i8, ptr %current_data, i64 %length
-      call void @llvm.memcpy.p0.p0.i64(ptr %destination, ptr %data, i64 %len, i1 false)
-      store i64 %required, ptr %length_slot, align 8
-      ret void
-    }
-    define internal void @sollang_memory_output_sink_array_flush_prefix(ptr %sinks, i64 %count, i64 %prefix, ptr %context, ptr %writer) {
-    entry:
-      br label %flush_loop
-    flush_loop:
-      %index = phi i64 [ 0, %entry ], [ %next, %flush_one_done ]
-      %done = icmp eq i64 %index, %count
-      br i1 %done, label %finish, label %flush_one
-    flush_one:
-      %sink = getelementptr %sollang.output_sink, ptr %sinks, i64 %index
-      %data_slot = getelementptr %sollang.output_sink, ptr %sink, i32 0, i32 0
-      %length_slot = getelementptr %sollang.output_sink, ptr %sink, i32 0, i32 1
-      %data = load ptr, ptr %data_slot, align 8
-      %length = load i64, ptr %length_slot, align 8
-      %has_data = icmp ne ptr %data, null
-      %in_prefix = icmp ult i64 %index, %prefix
-      %should_write = and i1 %has_data, %in_prefix
-      br i1 %should_write, label %write, label %dispose_one
-    write:
-      call void %writer(ptr %context, ptr %data, i64 %length)
-      br label %dispose_one
-    dispose_one:
-      call void @free(ptr %data)
-      br label %flush_one_done
-    flush_one_done:
-      %next = add i64 %index, 1
-      br label %flush_loop
-    finish:
-      call void @free(ptr %sinks)
-      ret void
-    }
-    define internal void @sollang_memory_output_sink_array_flush(ptr %sinks, i64 %count, ptr %context, ptr %writer) {
-    entry:
-      call void @sollang_memory_output_sink_array_flush_prefix(ptr %sinks, i64 %count, i64 %count, ptr %context, ptr %writer)
-      ret void
-    }
-    define internal void @sollang_memory_output_sink_array_dispose(ptr %sinks, i64 %count) {
-    entry:
-      br label %dispose_loop
-    dispose_loop:
-      %index = phi i64 [ 0, %entry ], [ %next, %dispose_one ]
-      %done = icmp eq i64 %index, %count
-      br i1 %done, label %finish, label %dispose_one
-    dispose_one:
-      %sink = getelementptr %sollang.output_sink, ptr %sinks, i64 %index
-      %data_slot = getelementptr %sollang.output_sink, ptr %sink, i32 0, i32 0
-      %data = load ptr, ptr %data_slot, align 8
-      call void @free(ptr %data)
-      %next = add i64 %index, 1
-      br label %dispose_loop
-    finish:
-      call void @free(ptr %sinks)
-      ret void
-    }
-    """ -> println
-}
-
-emitWindowsTextRuntime capturesParallelOutput: Bool -> Unit uses Console {
-    """
-    @sollang_runtime_stdout_written = private global i32 0
-    declare ptr @GetStdHandle(i32)
-    declare i32 @GetConsoleMode(ptr, ptr)
-    declare i32 @WriteConsoleW(ptr, ptr, i32, ptr, ptr)
-    declare i32 @WriteFile(ptr, ptr, i32, ptr, ptr)
-    declare i32 @MultiByteToWideChar(i32, i32, ptr, i32, ptr, i32)
-    declare ptr @GetProcessHeap()
-    declare ptr @HeapAlloc(ptr, i32, i64)
-    declare i32 @HeapFree(ptr, i32, ptr)
-    define internal i32 @sollang_runtime_write_stdout_bytes(ptr %handle, ptr %data, i32 %len) {
-    entry:
-      %mode = alloca i32, align 4
-      %console_status = call i32 @GetConsoleMode(ptr %handle, ptr %mode)
-      %is_console = icmp ne i32 %console_status, 0
-      br i1 %is_console, label %console_prepare, label %redirected
-    redirected:
-      %redirected_ok = call i32 @WriteFile(ptr %handle, ptr %data, i32 %len, ptr @sollang_runtime_stdout_written, ptr null)
-      ret i32 %redirected_ok
-    console_prepare:
-      %wide_chars = call i32 @MultiByteToWideChar(i32 65001, i32 8, ptr %data, i32 %len, ptr null, i32 0)
-      %valid_utf8 = icmp sgt i32 %wide_chars, 0
-      br i1 %valid_utf8, label %allocate, label %conversion_failed
-    allocate:
-      %wide_bytes32 = shl i32 %wide_chars, 1
-      %wide_bytes = zext i32 %wide_bytes32 to i64
-      %heap = call ptr @GetProcessHeap()
-      %wide = call ptr @HeapAlloc(ptr %heap, i32 0, i64 %wide_bytes)
-      %allocated = icmp ne ptr %wide, null
-      br i1 %allocated, label %convert, label %conversion_failed
-    convert:
-      %converted = call i32 @MultiByteToWideChar(i32 65001, i32 8, ptr %data, i32 %len, ptr %wide, i32 %wide_chars)
-      %converted_all = icmp eq i32 %converted, %wide_chars
-      br i1 %converted_all, label %console_write, label %conversion_free
-    console_write:
-      %console_ok = call i32 @WriteConsoleW(ptr %handle, ptr %wide, i32 %wide_chars, ptr @sollang_runtime_stdout_written, ptr null)
-      %freed = call i32 @HeapFree(ptr %heap, i32 0, ptr %wide)
-      ret i32 %console_ok
-    conversion_free:
-      %freed_after_failure = call i32 @HeapFree(ptr %heap, i32 0, ptr %wide)
-      br label %conversion_failed
-    conversion_failed:
-      store i32 0, ptr @sollang_runtime_stdout_written, align 4
-      ret i32 0
-    }
-    """ -> println
-    capturesParallelOutput -> if {
-    """
-    @sollang_runtime_newline = private constant [1 x i8] c"\0A"
-    @sollang_runtime_stdout_buffer = private global [1048576 x i8] zeroinitializer
-    @sollang_runtime_stdout_count = private global i64 0
-    @sollang_output_sink_tls = internal global i32 -1
-    declare i32 @TlsAlloc()
-    declare i32 @TlsSetValue(i32, ptr)
-    declare ptr @TlsGetValue(i32)
-    declare i32 @TlsFree(i32)
-    declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1 immarg)
-    declare void @llvm.memset.p0.i64(ptr, i8, i64, i1 immarg)
-    define internal void @sollang_runtime_flush_stdout() {
-    entry:
-      %count = load i64, ptr @sollang_runtime_stdout_count, align 8
-      %has_data = icmp ugt i64 %count, 0
-      br i1 %has_data, label %write, label %done
-    write:
-      %handle = call ptr @GetStdHandle(i32 -11)
-      %count32 = trunc i64 %count to i32
-      %ok = call i32 @sollang_runtime_write_stdout_bytes(ptr %handle, ptr @sollang_runtime_stdout_buffer, i32 %count32)
-      store i64 0, ptr @sollang_runtime_stdout_count, align 8
-      br label %done
-    done:
-      ret void
-    }
-    define internal void @sollang_runtime_append_stdout_direct(ptr %data, i64 %len) {
-    entry:
-      %count = load i64, ptr @sollang_runtime_stdout_count, align 8
-      %total = add i64 %count, %len
-      %fits = icmp ule i64 %total, 1048576
-      br i1 %fits, label %append, label %flush
-    flush:
-      call void @sollang_runtime_flush_stdout()
-      %large = icmp ugt i64 %len, 1048576
-      br i1 %large, label %direct, label %append_empty
-    direct:
-      %handle = call ptr @GetStdHandle(i32 -11)
-      %len32 = trunc i64 %len to i32
-      %ok = call i32 @sollang_runtime_write_stdout_bytes(ptr %handle, ptr %data, i32 %len32)
-      ret void
-    append_empty:
-      call void @llvm.memcpy.p0.p0.i64(ptr @sollang_runtime_stdout_buffer, ptr %data, i64 %len, i1 false)
-      store i64 %len, ptr @sollang_runtime_stdout_count, align 8
-      ret void
-    append:
-      %slot = getelementptr i8, ptr @sollang_runtime_stdout_buffer, i64 %count
-      call void @llvm.memcpy.p0.p0.i64(ptr %slot, ptr %data, i64 %len, i1 false)
-      store i64 %total, ptr @sollang_runtime_stdout_count, align 8
-      ret void
-    }
-    define internal void @sollang_memory_output_sink_write(ptr %context, ptr %data, i64 %len) {
-    entry:
-      call void @sollang_runtime_append_stdout_direct(ptr %data, i64 %len)
-      ret void
-    }
-    define internal void @sollang_runtime_append_stdout(ptr %data, i64 %len) {
-    entry:
-      %tls_index = load i32, ptr @sollang_output_sink_tls, align 4
-      %tls_valid = icmp ne i32 %tls_index, -1
-      br i1 %tls_valid, label %read_sink, label %direct
-    read_sink:
-      %sink = call ptr @TlsGetValue(i32 %tls_index)
-      %capturing = icmp ne ptr %sink, null
-      br i1 %capturing, label %capture, label %direct
-    capture:
-      call void @sollang_memory_output_sink_append(ptr %sink, ptr %data, i64 %len)
-      ret void
-    direct:
-      call void @sollang_runtime_append_stdout_direct(ptr %data, i64 %len)
-      ret void
-    }
-    define internal void @sollang_runtime_print(ptr %data, i64 %len, i1 %newline) {
-    entry:
-      call void @sollang_runtime_append_stdout(ptr %data, i64 %len)
-      br i1 %newline, label %write_newline, label %done
-    write_newline:
-      call void @sollang_runtime_append_stdout(ptr @sollang_runtime_newline, i64 1)
-      br label %done
-    done:
-      ret void
-    }
-    """ -> println
-    } else {
-    """
-    @sollang_runtime_newline = private constant [1 x i8] c"\0A"
-    @sollang_runtime_stdout_buffer = private global [1048576 x i8] zeroinitializer
-    @sollang_runtime_stdout_count = private global i64 0
-    declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1 immarg)
-    define internal void @sollang_runtime_flush_stdout() {
-    entry:
-      %count = load i64, ptr @sollang_runtime_stdout_count, align 8
-      %has_data = icmp ugt i64 %count, 0
-      br i1 %has_data, label %write, label %done
-    write:
-      %handle = call ptr @GetStdHandle(i32 -11)
-      %count32 = trunc i64 %count to i32
-      %ok = call i32 @sollang_runtime_write_stdout_bytes(ptr %handle, ptr @sollang_runtime_stdout_buffer, i32 %count32)
-      store i64 0, ptr @sollang_runtime_stdout_count, align 8
-      br label %done
-    done:
-      ret void
-    }
-    define internal void @sollang_runtime_append_stdout(ptr %data, i64 %len) {
-    entry:
-      %count = load i64, ptr @sollang_runtime_stdout_count, align 8
-      %total = add i64 %count, %len
-      %fits = icmp ule i64 %total, 1048576
-      br i1 %fits, label %append, label %flush
-    flush:
-      call void @sollang_runtime_flush_stdout()
-      %large = icmp ugt i64 %len, 1048576
-      br i1 %large, label %direct, label %append_empty
-    direct:
-      %handle = call ptr @GetStdHandle(i32 -11)
-      %len32 = trunc i64 %len to i32
-      %ok = call i32 @sollang_runtime_write_stdout_bytes(ptr %handle, ptr %data, i32 %len32)
-      ret void
-    append_empty:
-      call void @llvm.memcpy.p0.p0.i64(ptr @sollang_runtime_stdout_buffer, ptr %data, i64 %len, i1 false)
-      store i64 %len, ptr @sollang_runtime_stdout_count, align 8
-      ret void
-    append:
-      %slot = getelementptr i8, ptr @sollang_runtime_stdout_buffer, i64 %count
-      call void @llvm.memcpy.p0.p0.i64(ptr %slot, ptr %data, i64 %len, i1 false)
-      store i64 %total, ptr @sollang_runtime_stdout_count, align 8
-      ret void
-    }
-    define internal void @sollang_runtime_print(ptr %data, i64 %len, i1 %newline) {
-    entry:
-      call void @sollang_runtime_append_stdout(ptr %data, i64 %len)
-      br i1 %newline, label %write_newline, label %done
-    write_newline:
-      call void @sollang_runtime_append_stdout(ptr @sollang_runtime_newline, i64 1)
-      br label %done
-    done:
-      ret void
-    }
-    """ -> println
-    }
-}
-
-emitLinuxTextRuntime capturesParallelOutput: Bool -> Unit uses Console {
-    capturesParallelOutput -> if {
-    """
-    @sollang_runtime_newline = private constant [1 x i8] c"\0A"
-    @sollang_output_sink_tls = internal global i32 0
-    declare i64 @write(i32, ptr, i64)
-    declare i32 @pthread_key_create(ptr, ptr)
-    declare i32 @pthread_key_delete(i32)
-    declare i32 @pthread_setspecific(i32, ptr)
-    declare ptr @pthread_getspecific(i32)
-    declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1 immarg)
-    declare void @llvm.memset.p0.i64(ptr, i8, i64, i1 immarg)
-    define internal void @sollang_runtime_flush_stdout() {
-    entry:
-      ret void
-    }
-    define internal void @sollang_runtime_append_stdout_direct(ptr %data, i64 %len) {
-    entry:
-      %written = call i64 @write(i32 1, ptr %data, i64 %len)
-      ret void
-    }
-    define internal void @sollang_memory_output_sink_write(ptr %context, ptr %data, i64 %len) {
-    entry:
-      call void @sollang_runtime_append_stdout_direct(ptr %data, i64 %len)
-      ret void
-    }
-    define internal void @sollang_runtime_append_stdout(ptr %data, i64 %len) {
-    entry:
-      %tls_index = load i32, ptr @sollang_output_sink_tls, align 4
-      %sink = call ptr @pthread_getspecific(i32 %tls_index)
-      %capturing = icmp ne ptr %sink, null
-      br i1 %capturing, label %capture, label %direct
-    capture:
-      call void @sollang_memory_output_sink_append(ptr %sink, ptr %data, i64 %len)
-      ret void
-    direct:
-      call void @sollang_runtime_append_stdout_direct(ptr %data, i64 %len)
-      ret void
-    }
-    define internal void @sollang_runtime_print(ptr %data, i64 %len, i1 %newline) {
-    entry:
-      call void @sollang_runtime_append_stdout(ptr %data, i64 %len)
-      br i1 %newline, label %write_newline, label %done
-    write_newline:
-      call void @sollang_runtime_append_stdout(ptr @sollang_runtime_newline, i64 1)
-      br label %done
-    done:
-      ret void
-    }
-    """ -> println
-    } else {
-    """
-    @sollang_runtime_newline = private constant [1 x i8] c"\0A"
-    declare i64 @write(i32, ptr, i64)
-    define internal void @sollang_runtime_flush_stdout() {
-    entry:
-      ret void
-    }
-    define internal void @sollang_runtime_print(ptr %data, i64 %len, i1 %newline) {
-    entry:
-      %written = call i64 @write(i32 1, ptr %data, i64 %len)
-      br i1 %newline, label %write_newline, label %done
-    write_newline:
-      %newline_written = call i64 @write(i32 1, ptr @sollang_runtime_newline, i64 1)
-      br label %done
-    done:
-      ret void
-    }
-    """ -> println
-    }
-}
-
-emitProcessRuntimeCommon: -> Unit uses Console {
-    """
-    define internal ptr @sollang_process_copy_text(ptr %data, i64 %length) {
-    entry:
-      %capacity = add i64 %length, 1
-      %copy = call ptr @malloc(i64 %capacity)
-      %allocated = icmp ne ptr %copy, null
-      br i1 %allocated, label %loop, label %fail
-    loop:
-      %index = phi i64 [ 0, %entry ], [ %next, %body ]
-      %done = icmp eq i64 %index, %length
-      br i1 %done, label %terminate, label %body
-    body:
-      %source = getelementptr i8, ptr %data, i64 %index
-      %byte = load i8, ptr %source, align 1
-      %destination = getelementptr i8, ptr %copy, i64 %index
-      store i8 %byte, ptr %destination, align 1
-      %next = add i64 %index, 1
-      br label %loop
-    terminate:
-      %null_slot = getelementptr i8, ptr %copy, i64 %length
-      store i8 0, ptr %null_slot, align 1
-      ret ptr %copy
-    fail:
-      ret ptr null
-    }
-    define internal void @sollang_process_dispose_argv(ptr %argv, i64 %count) {
-    entry:
-      br label %loop
-    loop:
-      %index = phi i64 [ 0, %entry ], [ %next, %body ]
-      %done = icmp eq i64 %index, %count
-      br i1 %done, label %finish, label %body
-    body:
-      %slot = getelementptr ptr, ptr %argv, i64 %index
-      %value = load ptr, ptr %slot, align 8
-      call void @free(ptr %value)
-      %next = add i64 %index, 1
-      br label %loop
-    finish:
-      call void @free(ptr %argv)
-      ret void
-    }
-    define internal ptr @sollang_process_build_argv(ptr %records, i64 %count) {
-    entry:
-      %slots = add i64 %count, 1
-      %bytes = mul i64 %slots, 8
-      %argv = call ptr @malloc(i64 %bytes)
-      %allocated = icmp ne ptr %argv, null
-      br i1 %allocated, label %loop, label %fail
-    loop:
-      %index = phi i64 [ 0, %entry ], [ %next, %stored ]
-      %done = icmp eq i64 %index, %count
-      br i1 %done, label %terminate, label %copy
-    copy:
-      %record = getelementptr %sollang.text, ptr %records, i64 %index
-      %data_slot = getelementptr inbounds %sollang.text, ptr %record, i32 0, i32 0
-      %data = load ptr, ptr %data_slot, align 8
-      %length_slot = getelementptr inbounds %sollang.text, ptr %record, i32 0, i32 1
-      %length = load i64, ptr %length_slot, align 8
-      %value = call ptr @sollang_process_copy_text(ptr %data, i64 %length)
-      %copied = icmp ne ptr %value, null
-      br i1 %copied, label %stored, label %cleanup
-    stored:
-      %slot = getelementptr ptr, ptr %argv, i64 %index
-      store ptr %value, ptr %slot, align 8
-      %next = add i64 %index, 1
-      br label %loop
-    cleanup:
-      call void @sollang_process_dispose_argv(ptr %argv, i64 %index)
-      ret ptr null
-    terminate:
-      %null_slot = getelementptr ptr, ptr %argv, i64 %count
-      store ptr null, ptr %null_slot, align 8
-      ret ptr %argv
-    fail:
-      ret ptr null
-    }
-    """ -> println
-}
-
-emitProcessTypeRuntime: -> Unit uses Console {
-    """
-    %sollang.process_result = type { i32, i32 }
-    @sollang_process_error_spawn = private constant [5 x i8] c"spawn"
-    @sollang_process_error_wait = private constant [4 x i8] c"wait"
-    @sollang_process_error_signal = private constant [6 x i8] c"signal"
-    """ -> println
-}
-
-emitWindowsProcessRuntime: -> Unit uses Console {
-    true -> if { emitProcessRuntimeCommon }
-    """
-    declare i64 @_spawnvp(i32, ptr, ptr)
-    declare i32 @_open(ptr, i32, i32)
-    declare i32 @_dup(i32)
-    declare i32 @_dup2(i32, i32)
-    declare i32 @_close(i32)
-    define internal %sollang.process_result @sollang_run_process(ptr %records, i64 %count) {
-    entry:
-      %has_program = icmp ugt i64 %count, 0
-      br i1 %has_program, label %build, label %error
-    build:
-      %argv = call ptr @sollang_process_build_argv(ptr %records, i64 %count)
-      %built = icmp ne ptr %argv, null
-      br i1 %built, label %spawn, label %error
-    spawn:
-      %program_slot = getelementptr ptr, ptr %argv, i64 0
-      %program = load ptr, ptr %program_slot, align 8
-      %raw = call i64 @_spawnvp(i32 0, ptr %program, ptr %argv)
-      call void @sollang_process_dispose_argv(ptr %argv, i64 %count)
-      %spawned = icmp ne i64 %raw, -1
-      br i1 %spawned, label %success, label %error
-    success:
-      %exit_code = trunc i64 %raw to i32
-      %ok0 = insertvalue %sollang.process_result poison, i32 %exit_code, 0
-      %ok1 = insertvalue %sollang.process_result %ok0, i32 0, 1
-      ret %sollang.process_result %ok1
-    error:
-      %error0 = insertvalue %sollang.process_result poison, i32 0, 0
-      %error1 = insertvalue %sollang.process_result %error0, i32 1, 1
-      ret %sollang.process_result %error1
-    }
-    define internal %sollang.process_result @sollang_run_process_to_file(ptr %records, i64 %count, ptr %path, i64 %path_length) {
-    entry:
-      %path_copy = call ptr @sollang_process_copy_text(ptr %path, i64 %path_length)
-      %path_ok = icmp ne ptr %path_copy, null
-      br i1 %path_ok, label %open, label %error
-    open:
-      %output = call i32 @_open(ptr %path_copy, i32 33537, i32 384)
-      call void @free(ptr %path_copy)
-      %opened = icmp sge i32 %output, 0
-      br i1 %opened, label %save, label %error
-    save:
-      %saved = call i32 @_dup(i32 1)
-      %saved_ok = icmp sge i32 %saved, 0
-      br i1 %saved_ok, label %redirect, label %close_error
-    redirect:
-      %redirected = call i32 @_dup2(i32 %output, i32 1)
-      %redirect_ok = icmp eq i32 %redirected, 0
-      br i1 %redirect_ok, label %run, label %restore_error
-    run:
-      %result = call %sollang.process_result @sollang_run_process(ptr %records, i64 %count)
-      %restored = call i32 @_dup2(i32 %saved, i32 1)
-      %closed_saved = call i32 @_close(i32 %saved)
-      %closed_output = call i32 @_close(i32 %output)
-      ret %sollang.process_result %result
-    restore_error:
-      %restore_failed = call i32 @_dup2(i32 %saved, i32 1)
-      %close_saved_failed = call i32 @_close(i32 %saved)
-      br label %close_error
-    close_error:
-      %close_output_failed = call i32 @_close(i32 %output)
-      br label %error
-    error:
-      %error0 = insertvalue %sollang.process_result poison, i32 0, 0
-      %error1 = insertvalue %sollang.process_result %error0, i32 1, 1
-      ret %sollang.process_result %error1
-    }
-    """ -> println
-}
-
-emitLinuxProcessRuntime hasComputeRuntime: Bool -> Unit uses Console {
-    true -> if { emitProcessRuntimeCommon }
-    not hasComputeRuntime -> if { "declare i32 @close(i32)" -> println }
-    """
-    declare i32 @fork()
-    declare i32 @execvp(ptr, ptr)
-    declare i32 @waitpid(i32, ptr, i32)
-    declare void @_exit(i32)
-    declare i32 @open(ptr, i32, i32)
-    declare i32 @dup2(i32, i32)
-    define internal %sollang.process_result @sollang_run_process_with_output(ptr %records, i64 %count, i32 %output) {
-    entry:
-      %has_program = icmp ugt i64 %count, 0
-      br i1 %has_program, label %build, label %spawn_error
-    build:
-      %argv = call ptr @sollang_process_build_argv(ptr %records, i64 %count)
-      %built = icmp ne ptr %argv, null
-      br i1 %built, label %fork, label %spawn_error
-    fork:
-      %pid = call i32 @fork()
-      %fork_failed = icmp slt i32 %pid, 0
-      br i1 %fork_failed, label %cleanup_spawn_error, label %forked
-    forked:
-      %child = icmp eq i32 %pid, 0
-      br i1 %child, label %child_process, label %parent
-    child_process:
-      %redirect = icmp sge i32 %output, 0
-      br i1 %redirect, label %child_redirect, label %child_exec
-    child_redirect:
-      %redirected = call i32 @dup2(i32 %output, i32 1)
-      br label %child_exec
-    child_exec:
-      %program_slot = getelementptr ptr, ptr %argv, i64 0
-      %program = load ptr, ptr %program_slot, align 8
-      %exec_result = call i32 @execvp(ptr %program, ptr %argv)
-      call void @_exit(i32 127)
-      unreachable
-    parent:
-      %status_slot = alloca i32, align 4
-      %waited = call i32 @waitpid(i32 %pid, ptr %status_slot, i32 0)
-      call void @sollang_process_dispose_argv(ptr %argv, i64 %count)
-      %wait_ok = icmp eq i32 %waited, %pid
-      br i1 %wait_ok, label %decode, label %wait_error
-    decode:
-      %status = load i32, ptr %status_slot, align 4
-      %signal_bits = and i32 %status, 127
-      %exited = icmp eq i32 %signal_bits, 0
-      br i1 %exited, label %success, label %signal_error
-    success:
-      %shifted = ashr i32 %status, 8
-      %exit_code = and i32 %shifted, 255
-      %ok0 = insertvalue %sollang.process_result poison, i32 %exit_code, 0
-      %ok1 = insertvalue %sollang.process_result %ok0, i32 0, 1
-      ret %sollang.process_result %ok1
-    cleanup_spawn_error:
-      call void @sollang_process_dispose_argv(ptr %argv, i64 %count)
-      br label %spawn_error
-    spawn_error:
-      %spawn0 = insertvalue %sollang.process_result poison, i32 0, 0
-      %spawn1 = insertvalue %sollang.process_result %spawn0, i32 1, 1
-      ret %sollang.process_result %spawn1
-    wait_error:
-      %wait0 = insertvalue %sollang.process_result poison, i32 0, 0
-      %wait1 = insertvalue %sollang.process_result %wait0, i32 2, 1
-      ret %sollang.process_result %wait1
-    signal_error:
-      %signal0 = insertvalue %sollang.process_result poison, i32 0, 0
-      %signal1 = insertvalue %sollang.process_result %signal0, i32 3, 1
-      ret %sollang.process_result %signal1
-    }
-    define internal %sollang.process_result @sollang_run_process(ptr %records, i64 %count) {
-    entry:
-      %result = call %sollang.process_result @sollang_run_process_with_output(ptr %records, i64 %count, i32 -1)
-      ret %sollang.process_result %result
-    }
-    define internal %sollang.process_result @sollang_run_process_to_file(ptr %records, i64 %count, ptr %path, i64 %path_length) {
-    entry:
-      %path_copy = call ptr @sollang_process_copy_text(ptr %path, i64 %path_length)
-      %path_ok = icmp ne ptr %path_copy, null
-      br i1 %path_ok, label %open_output, label %error
-    open_output:
-      %output = call i32 @open(ptr %path_copy, i32 577, i32 438)
-      call void @free(ptr %path_copy)
-      %opened = icmp sge i32 %output, 0
-      br i1 %opened, label %run, label %error
-    run:
-      %result = call %sollang.process_result @sollang_run_process_with_output(ptr %records, i64 %count, i32 %output)
-      %closed = call i32 @close(i32 %output)
-      ret %sollang.process_result %result
-    error:
-      %error0 = insertvalue %sollang.process_result poison, i32 0, 0
-      %error1 = insertvalue %sollang.process_result %error0, i32 1, 1
-      ret %sollang.process_result %error1
-    }
-    """ -> println
-}
-
-emitWasmTextRuntime: -> Unit uses Console {
-    """
-    @sollang_runtime_newline = private constant [1 x i8] c"\0A"
-    declare i32 @sollang_browser_write(ptr, i32)
-    declare i32 @sollang_browser_read(ptr, i32)
-    declare i64 @sollang_browser_now_millis()
-    define internal i64 @sollang_now_millis() {
-    entry:
-      %value = call i64 @sollang_browser_now_millis()
-      ret i64 %value
-    }
-    define internal void @sollang_runtime_flush_stdout() {
-    entry:
-      ret void
-    }
-    define internal void @sollang_runtime_print(ptr %data, i64 %len, i1 %newline) {
-    entry:
-      %len32 = trunc i64 %len to i32
-      %written = call i32 @sollang_browser_write(ptr %data, i32 %len32)
-      br i1 %newline, label %write_newline, label %done
-    write_newline:
-      %newline_written = call i32 @sollang_browser_write(ptr @sollang_runtime_newline, i32 1)
-      br label %done
-    done:
-      ret void
-    }
-    define internal i32 @sollang_runtime_read_int(ptr %prompt, i64 %prompt_len) {
-    entry:
-      call void @sollang_runtime_print(ptr %prompt, i64 %prompt_len, i1 false)
-      %buf = alloca [64 x i8], align 1
-      %count = call i32 @sollang_browser_read(ptr %buf, i32 64)
-      %has_input = icmp sgt i32 %count, 0
-      br i1 %has_input, label %skip_header, label %empty
-    skip_header:
-      br label %skip
-    skip:
-      %skip_index = phi i32 [ 0, %skip_header ], [ %skip_next, %skip_space ]
-      %skip_in_bounds = icmp slt i32 %skip_index, %count
-      br i1 %skip_in_bounds, label %skip_check, label %empty
-    skip_check:
-      %skip_ptr = getelementptr i8, ptr %buf, i32 %skip_index
-      %skip_byte = load i8, ptr %skip_ptr, align 1
-      %is_space = icmp eq i8 %skip_byte, 32
-      %is_tab = icmp eq i8 %skip_byte, 9
-      %is_newline = icmp eq i8 %skip_byte, 10
-      %space_or_tab = or i1 %is_space, %is_tab
-      %is_whitespace = or i1 %space_or_tab, %is_newline
-      br i1 %is_whitespace, label %skip_space, label %sign
-    skip_space:
-      %skip_next = add i32 %skip_index, 1
-      br label %skip
-    sign:
-      %is_minus = icmp eq i8 %skip_byte, 45
-      %digit_start_delta = zext i1 %is_minus to i32
-      %digit_start = add i32 %skip_index, %digit_start_delta
-      br label %digits
-    digits:
-      %digit_index = phi i32 [ %digit_start, %sign ], [ %digit_next, %accumulate ]
-      %value = phi i32 [ 0, %sign ], [ %next_value, %accumulate ]
-      %digit_in_bounds = icmp slt i32 %digit_index, %count
-      br i1 %digit_in_bounds, label %digit_check, label %finish
-    digit_check:
-      %digit_ptr = getelementptr i8, ptr %buf, i32 %digit_index
-      %digit_byte = load i8, ptr %digit_ptr, align 1
-      %at_least_zero = icmp uge i8 %digit_byte, 48
-      %at_most_nine = icmp ule i8 %digit_byte, 57
-      %is_digit = and i1 %at_least_zero, %at_most_nine
-      br i1 %is_digit, label %accumulate, label %finish
-    accumulate:
-      %digit_i32 = zext i8 %digit_byte to i32
-      %digit = sub i32 %digit_i32, 48
-      %times_ten = mul i32 %value, 10
-      %next_value = add i32 %times_ten, %digit
-      %digit_next = add i32 %digit_index, 1
-      br label %digits
-    finish:
-      %negative_value = sub i32 0, %value
-      %result = select i1 %is_minus, i32 %negative_value, i32 %value
-      ret i32 %result
-    empty:
-      ret i32 0
-    }
-    """ -> println
-}
-
 emitOwnershipDiagnostics context: EmitContext -> Unit uses Console {
     0 => diagnosticIndex!
     diagnosticIndex! < (context.ownershipDiagnostics -> len) -> while {
@@ -16764,20 +15879,96 @@ emitCallDiagnostics context: EmitContext -> Unit uses Console {
     }
 }
 
-nativeAbiTypeSafe node: typedIr.TypedIrNode -> Bool {
+nativeAbiFixedScalarSymbol symbol: Int, allowUnit: Bool -> Bool {
     false => safe!
-    node.typeOrigin == 1 -> if {
-        node.typeSymbol == 0 -> if { true => safe! }
-        node.typeSymbol == 3 -> if { true => safe! }
-        node.typeSymbol == 4 -> if { true => safe! }
-        node.typeSymbol == 5 -> if { true => safe! }
-        node.typeSymbol == 6 -> if { true => safe! }
-        node.typeSymbol == 8 -> if { true => safe! }
-        node.typeSymbol == 9 -> if { true => safe! }
-        node.typeSymbol == 10 -> if { true => safe! }
-        node.typeSymbol == 11 -> if { true => safe! }
-        node.typeSymbol == 20 -> if { true => safe! }
-        node.typeSymbol == 21 -> if { true => safe! }
+    (allowUnit and symbol == 0) -> if { true => safe! }
+    symbol == 3 -> if { true => safe! }
+    symbol == 4 -> if { true => safe! }
+    symbol == 5 -> if { true => safe! }
+    symbol == 6 -> if { true => safe! }
+    symbol == 8 -> if { true => safe! }
+    symbol == 9 -> if { true => safe! }
+    symbol == 10 -> if { true => safe! }
+    symbol == 11 -> if { true => safe! }
+    symbol == 20 -> if { true => safe! }
+    symbol == 21 -> if { true => safe! }
+    safe!
+}
+
+nativeAbiStructTypeSafe context: EmitContext, typeId: Int, depth: Int -> Bool {
+    false => safe!
+    (depth < 32 and typeId >= 0 and typeId < (context.types -> len)) -> if {
+        context.types[typeId] => structureType
+        (structureType.kind == 1 and (structureType.origin == 0 or structureType.origin == 2) and structureType.module >= 0 and structureType.module < (context.ranges -> len)) -> if {
+            context.ranges[structureType.module] => structureRange
+            (structureType.symbol >= 0 and structureType.symbol < structureRange.symbolCount) -> if {
+                context.symbols[structureRange.symbolStart + structureType.symbol] => structureSymbol
+                (structureSymbol.kind == 3 and structureSymbol.flags / 256 % 2 == 1 and context.typeLayoutStatuses[typeId] == 0) -> if {
+                    true => safe!
+                    0 => fieldCount!
+                    0 => fieldIndex!
+                    fieldIndex! < (context.fields -> len) -> while {
+                        context.fields[fieldIndex!] => field
+                        (field.status == 0 and field.ownerType == typeId) -> if {
+                            fieldCount! + 1 => fieldCount!
+                            false => fieldSafe!
+                            (field.fieldType >= 0 and field.fieldType < (context.types -> len)) -> if {
+                                context.types[field.fieldType] => fieldType
+                                (fieldType.kind == 1 and fieldType.origin == 1) -> if {
+                                    fieldType.symbol -> nativeAbiFixedScalarSymbol(false) => fieldSafe!
+                                } else {
+                                    context -> nativeAbiStructTypeSafe(field.fieldType, depth + 1) => fieldSafe!
+                                }
+                            }
+                            not fieldSafe! -> if { false => safe! }
+                        }
+                        fieldIndex! + 1 => fieldIndex!
+                    }
+                    fieldCount! == 0 -> if { false => safe! }
+                }
+            }
+        }
+    }
+    safe!
+}
+
+nativeAbiValueTypeSafe context: EmitContext, node: typedIr.TypedIrNode, allowUnit: Bool -> Bool {
+    false => safe!
+    (node.typeId >= 0 and node.typeId < (context.types -> len)) -> if {
+        context.types[node.typeId] => nativeType
+        (nativeType.kind == 1 and nativeType.origin == 1) -> if {
+            nativeType.symbol -> nativeAbiFixedScalarSymbol(allowUnit) => safe!
+        } else {
+            context -> nativeAbiStructTypeSafe(node.typeId, 0) => safe!
+        }
+    } else {
+        node.typeOrigin == 1 -> if {
+            node.typeSymbol -> nativeAbiFixedScalarSymbol(allowUnit) => safe!
+        }
+    }
+    safe!
+}
+
+nativeAbiParameterSafe context: EmitContext, node: typedIr.TypedIrNode -> Bool {
+    false => safe!
+    node.flags % 2 == 0 -> if {
+        node.flags / 2 % 2 == 1 -> if {
+            context -> nativeAbiStructTypeSafe(node.typeId, 0) => safe!
+        } else {
+            (node.typeId >= 0 and node.typeId < (context.types -> len) and context.types[node.typeId].kind == 8) -> if {
+                context -> nativeAbiStructTypeSafe(context.types[node.typeId].first, 0) => safe!
+            } else {
+                context -> nativeAbiValueTypeSafe(node, false) => safe!
+            }
+        }
+    }
+    safe!
+}
+
+nativeAbiResultSafe context: EmitContext, node: typedIr.TypedIrNode -> Bool {
+    false => safe!
+    (node.typeId < 0 or node.typeId >= (context.types -> len) or context.types[node.typeId].kind != 8) -> if {
+        context -> nativeAbiValueTypeSafe(node, true) => safe!
     }
     safe!
 }
@@ -16788,14 +15979,14 @@ nativeAbiUnsafeTypeCount context: EmitContext -> Int {
     functionIndex! < (context.ir -> len) -> while {
         context.ir[functionIndex!] => function
         (function.kind == 0 and function.flags / 128 % 2 == 1) -> if {
-            not (function -> nativeAbiTypeSafe) -> if { count! + 1 => count! }
+            not (context -> nativeAbiResultSafe(function)) -> if { count! + 1 => count! }
             function.operand1 >= 0 -> if {
-                not (context.ir[function.operand1] -> nativeAbiTypeSafe) -> if { count! + 1 => count! }
+                not (context -> nativeAbiParameterSafe(context.ir[function.operand1])) -> if { count! + 1 => count! }
             }
             function.nextOperand => parameterIndex!
             parameterIndex! >= 0 -> while {
                 context.ir[parameterIndex!] => parameter
-                not (parameter -> nativeAbiTypeSafe) -> if { count! + 1 => count! }
+                not (context -> nativeAbiParameterSafe(parameter)) -> if { count! + 1 => count! }
                 parameter.nextOperand => parameterIndex!
             }
         }
@@ -16841,15 +16032,15 @@ emitNativeAbiDiagnostics context: EmitContext -> Unit uses Console {
     functionIndex! < (context.ir -> len) -> while {
         context.ir[functionIndex!] => function
         (function.kind == 0 and function.flags / 128 % 2 == 1) -> if {
-            not (function -> nativeAbiTypeSafe) -> if { function -> emitNativeAbiTypeDiagnostic("result") }
+            not (context -> nativeAbiResultSafe(function)) -> if { function -> emitNativeAbiTypeDiagnostic("result") }
             function.operand1 >= 0 -> if {
                 context.ir[function.operand1] => primaryParameter
-                not (primaryParameter -> nativeAbiTypeSafe) -> if { primaryParameter -> emitNativeAbiTypeDiagnostic("input") }
+                not (context -> nativeAbiParameterSafe(primaryParameter)) -> if { primaryParameter -> emitNativeAbiTypeDiagnostic("input") }
             }
             function.nextOperand => parameterIndex!
             parameterIndex! >= 0 -> while {
                 context.ir[parameterIndex!] => parameter
-                not (parameter -> nativeAbiTypeSafe) -> if { parameter -> emitNativeAbiTypeDiagnostic("parameter") }
+                not (context -> nativeAbiParameterSafe(parameter)) -> if { parameter -> emitNativeAbiTypeDiagnostic("parameter") }
                 parameter.nextOperand => parameterIndex!
             }
         }
@@ -16973,770 +16164,6 @@ emitBlockingDiagnostics context: EmitContext -> Unit uses Console {
     context -> emitNativeAbiDiagnostics
 }
 
-emitWindowsMouseEventRuntime context: EmitContext -> Unit uses Console {
-    """
-    declare dllimport i32 @SetConsoleMode(ptr, i32)
-    declare dllimport i32 @ReadConsoleInputW(ptr, ptr, i32, ptr)
-    declare dllimport ptr @CreateThread(ptr, i64, ptr, ptr, i32, ptr)
-    declare dllimport ptr @CreateEventA(ptr, i32, i32, ptr)
-    declare dllimport i32 @SetEvent(ptr)
-    declare dllimport i32 @WaitForSingleObject(ptr, i32)
-    declare dllimport i32 @CloseHandle(ptr)
-    declare dllimport i32 @CancelSynchronousIo(ptr)
-    define internal i32 @sollang_mouse_event_worker(ptr %context) {
-    entry:
-      %input = load ptr, ptr %context, align 8
-      %record = alloca [20 x i8], align 4
-      %read = alloca i32, align 4
-      br label %wait
-    wait:
-      %cancel_address = getelementptr i8, ptr %context, i64 32
-      %cancelled = load atomic i32, ptr %cancel_address acquire, align 4
-      %active = icmp eq i32 %cancelled, 0
-      br i1 %active, label %read_input, label %done
-    read_input:
-      %ok = call i32 @ReadConsoleInputW(ptr %input, ptr %record, i32 1, ptr %read)
-      %read_ok = icmp ne i32 %ok, 0
-      br i1 %read_ok, label %inspect, label %closed
-    inspect:
-      %event_type = load i16, ptr %record, align 2
-      %is_mouse = icmp eq i16 %event_type, 2
-      br i1 %is_mouse, label %mouse, label %wait
-    mouse:
-      %x_slot = getelementptr i8, ptr %record, i64 4
-      %x16 = load i16, ptr %x_slot, align 2
-      %x = sext i16 %x16 to i32
-      %y_slot = getelementptr i8, ptr %record, i64 6
-      %y16 = load i16, ptr %y_slot, align 2
-      %y = sext i16 %y16 to i32
-      %buttons_address = getelementptr i8, ptr %record, i64 8
-      %buttons = load i32, ptr %buttons_address, align 4
-      %flags_address = getelementptr i8, ptr %record, i64 16
-      %flags = load i32, ptr %flags_address, align 4
-      %wheel_bits = and i32 %flags, 12
-      %is_wheel = icmp ne i32 %wheel_bits, 0
-      br i1 %is_wheel, label %wheel, label %non_wheel
-    wheel:
-      %wheel_delta = ashr i32 %buttons, 16
-      br label %enqueue
-    non_wheel:
-      %previous_address = getelementptr i8, ptr %context, i64 64
-      %previous = load i32, ptr %previous_address, align 4
-      %changed = xor i32 %previous, %buttons
-      store i32 %buttons, ptr %previous_address, align 4
-      %has_change = icmp ne i32 %changed, 0
-      br i1 %has_change, label %button_change, label %move
-    button_change:
-      %changed0 = and i32 %changed, 1
-      %is0 = icmp ne i32 %changed0, 0
-      %changed1 = and i32 %changed, 4
-      %is1 = icmp ne i32 %changed1, 0
-      %changed2 = and i32 %changed, 2
-      %is2 = icmp ne i32 %changed2, 0
-      %button12 = select i1 %is2, i32 2, i32 3
-      %button1 = select i1 %is1, i32 1, i32 %button12
-      %button_index = select i1 %is0, i32 0, i32 %button1
-      %pressed_bits = and i32 %buttons, %changed
-      %pressed = icmp ne i32 %pressed_bits, 0
-      %button_kind = select i1 %pressed, i32 1, i32 2
-      br label %enqueue
-    move:
-      br label %enqueue
-    enqueue:
-      %delta = phi i32 [ %wheel_delta, %wheel ], [ 0, %button_change ], [ 0, %move ]
-      %button = phi i32 [ -1, %wheel ], [ %button_index, %button_change ], [ -1, %move ]
-      %kind = phi i32 [ 3, %wheel ], [ %button_kind, %button_change ], [ 0, %move ]
-      br label %queue_lock
-    queue_lock:
-      %lock_address = getelementptr i8, ptr %context, i64 68
-      %lock_result = cmpxchg ptr %lock_address, i32 0, i32 1 acquire monotonic, align 4
-      %lock_acquired = extractvalue { i32, i1 } %lock_result, 1
-      br i1 %lock_acquired, label %queue_state, label %queue_lock
-    queue_state:
-      %capacity_address = getelementptr i8, ptr %context, i64 12
-      %capacity = load i32, ptr %capacity_address, align 4
-      %head_address = getelementptr i8, ptr %context, i64 20
-      %head = load i32, ptr %head_address, align 4
-      %tail_address = getelementptr i8, ptr %context, i64 24
-      %tail = load i32, ptr %tail_address, align 4
-      %count_address = getelementptr i8, ptr %context, i64 28
-      %count = load i32, ptr %count_address, align 4
-      %full = icmp uge i32 %count, %capacity
-      br i1 %full, label %overflow, label %write
-    overflow:
-      %policy_address = getelementptr i8, ptr %context, i64 16
-      %policy = load i32, ptr %policy_address, align 4
-      %drop_newest = icmp eq i32 %policy, 0
-      br i1 %drop_newest, label %unlock_drop, label %not_drop_newest
-    not_drop_newest:
-      %coalesce = icmp eq i32 %policy, 2
-      %is_move = icmp eq i32 %kind, 0
-      %coalesce_move = and i1 %coalesce, %is_move
-      br i1 %coalesce_move, label %replace_move_check, label %drop_oldest
-    replace_move_check:
-      %last_tail_unwrapped = add i32 %tail, %capacity
-      %last_tail = sub i32 %last_tail_unwrapped, 1
-      %last_index = urem i32 %last_tail, %capacity
-      %last_index64 = zext i32 %last_index to i64
-      %last_offset = mul i64 %last_index64, 20
-      %buffer_address0 = getelementptr i8, ptr %context, i64 56
-      %buffer0 = load ptr, ptr %buffer_address0, align 8
-      %last_record = getelementptr i8, ptr %buffer0, i64 %last_offset
-      %last_kind_address = getelementptr i8, ptr %last_record, i64 16
-      %last_kind = load i32, ptr %last_kind_address, align 4
-      %last_is_move = icmp eq i32 %last_kind, 0
-      br i1 %last_is_move, label %replace_move, label %unlock_drop
-    replace_move:
-      store i32 %x, ptr %last_record, align 4
-      %last_y = getelementptr i8, ptr %last_record, i64 4
-      store i32 %y, ptr %last_y, align 4
-      br label %signal
-    drop_oldest:
-      %next_head_unwrapped = add i32 %head, 1
-      %next_head = urem i32 %next_head_unwrapped, %capacity
-      store i32 %next_head, ptr %head_address, align 4
-      %reduced_count = sub i32 %count, 1
-      store i32 %reduced_count, ptr %count_address, align 4
-      br label %write
-    write:
-      %index64 = zext i32 %tail to i64
-      %offset = mul i64 %index64, 20
-      %buffer_address = getelementptr i8, ptr %context, i64 56
-      %buffer = load ptr, ptr %buffer_address, align 8
-      %slot = getelementptr i8, ptr %buffer, i64 %offset
-      store i32 %x, ptr %slot, align 4
-      %slot_y = getelementptr i8, ptr %slot, i64 4
-      store i32 %y, ptr %slot_y, align 4
-      %slot_delta = getelementptr i8, ptr %slot, i64 8
-      store i32 %delta, ptr %slot_delta, align 4
-      %slot_button = getelementptr i8, ptr %slot, i64 12
-      store i32 %button, ptr %slot_button, align 4
-      %slot_kind = getelementptr i8, ptr %slot, i64 16
-      store i32 %kind, ptr %slot_kind, align 4
-      %next_tail_unwrapped = add i32 %tail, 1
-      %next_tail = urem i32 %next_tail_unwrapped, %capacity
-      store i32 %next_tail, ptr %tail_address, align 4
-      %current_count = load i32, ptr %count_address, align 4
-      %next_count = add i32 %current_count, 1
-      store i32 %next_count, ptr %count_address, align 4
-      br label %signal
-    unlock_drop:
-      store atomic i32 0, ptr %lock_address release, align 4
-      br label %wait
-    signal:
-      store atomic i32 0, ptr %lock_address release, align 4
-      %event_address = getelementptr i8, ptr %context, i64 48
-      %event = load ptr, ptr %event_address, align 8
-      %signalled = call i32 @SetEvent(ptr %event)
-      br label %wait
-    closed:
-      store atomic i32 1, ptr %cancel_address release, align 4
-      %closed_event_address = getelementptr i8, ptr %context, i64 48
-      %closed_event = load ptr, ptr %closed_event_address, align 8
-      %closed_signalled = call i32 @SetEvent(ptr %closed_event)
-      br label %done
-    done:
-      ret i32 0
-    }
-    define internal ptr @sollang_mouse_event_stream_create(i32 %requested_capacity, i32 %overflow) {
-    entry:
-      %capacity_low = icmp slt i32 %requested_capacity, 2
-      %capacity_high = icmp sgt i32 %requested_capacity, 65536
-      %capacity_invalid = or i1 %capacity_low, %capacity_high
-      %overflow_invalid = icmp ugt i32 %overflow, 2
-      %invalid = or i1 %capacity_invalid, %overflow_invalid
-      br i1 %invalid, label %fail, label %input_handle
-    input_handle:
-      %input = call ptr @GetStdHandle(i32 -10)
-      %valid = icmp ne ptr %input, inttoptr (i64 -1 to ptr)
-      br i1 %valid, label %mode, label %fail
-    mode:
-      %original_address = alloca i32, align 4
-      %got_mode = call i32 @GetConsoleMode(ptr %input, ptr %original_address)
-      %mode_ok = icmp ne i32 %got_mode, 0
-      br i1 %mode_ok, label %allocate_context, label %fail
-    allocate_context:
-      %context = call ptr @malloc(i64 72)
-      %allocated = icmp ne ptr %context, null
-      br i1 %allocated, label %allocate_buffer, label %fail
-    allocate_buffer:
-      %capacity64 = zext i32 %requested_capacity to i64
-      %buffer_bytes = mul i64 %capacity64, 20
-      %buffer = call ptr @malloc(i64 %buffer_bytes)
-      %buffer_allocated = icmp ne ptr %buffer, null
-      br i1 %buffer_allocated, label %create_event, label %free_context
-    create_event:
-      %event = call ptr @CreateEventA(ptr null, i32 0, i32 0, ptr null)
-      %event_ok = icmp ne ptr %event, null
-      br i1 %event_ok, label %initialize, label %free_buffer
-    initialize:
-      %original = load i32, ptr %original_address, align 4
-      %with_mouse = or i32 %original, 144
-      %interactive = and i32 %with_mouse, -65
-      %enabled = call i32 @SetConsoleMode(ptr %input, i32 %interactive)
-      %enabled_ok = icmp ne i32 %enabled, 0
-      br i1 %enabled_ok, label %initialize_context, label %close_event
-    initialize_context:
-      store ptr %input, ptr %context, align 8
-      %mode_slot = getelementptr i8, ptr %context, i64 8
-      store i32 %original, ptr %mode_slot, align 4
-      %capacity_slot = getelementptr i8, ptr %context, i64 12
-      store i32 %requested_capacity, ptr %capacity_slot, align 4
-      %overflow_slot = getelementptr i8, ptr %context, i64 16
-      store i32 %overflow, ptr %overflow_slot, align 4
-      %head_slot = getelementptr i8, ptr %context, i64 20
-      store i32 0, ptr %head_slot, align 4
-      %tail_slot = getelementptr i8, ptr %context, i64 24
-      store i32 0, ptr %tail_slot, align 4
-      %count_slot = getelementptr i8, ptr %context, i64 28
-      store i32 0, ptr %count_slot, align 4
-      %cancel_slot = getelementptr i8, ptr %context, i64 32
-      store atomic i32 0, ptr %cancel_slot release, align 4
-      %event_slot = getelementptr i8, ptr %context, i64 48
-      store ptr %event, ptr %event_slot, align 8
-      %buffer_slot = getelementptr i8, ptr %context, i64 56
-      store ptr %buffer, ptr %buffer_slot, align 8
-      %buttons_slot = getelementptr i8, ptr %context, i64 64
-      store i32 0, ptr %buttons_slot, align 4
-      %lock_slot = getelementptr i8, ptr %context, i64 68
-      store atomic i32 0, ptr %lock_slot release, align 4
-      %thread = call ptr @CreateThread(ptr null, i64 0, ptr @sollang_mouse_event_worker, ptr %context, i32 0, ptr null)
-      %thread_ok = icmp ne ptr %thread, null
-      br i1 %thread_ok, label %ready, label %restore
-    ready:
-      %thread_slot = getelementptr i8, ptr %context, i64 40
-      store ptr %thread, ptr %thread_slot, align 8
-      ret ptr %context
-    restore:
-      %restored_after_thread = call i32 @SetConsoleMode(ptr %input, i32 %original)
-      br label %close_event
-    close_event:
-      %event_closed = call i32 @CloseHandle(ptr %event)
-      br label %free_buffer
-    free_buffer:
-      call void @free(ptr %buffer)
-      br label %free_context
-    free_context:
-      call void @free(ptr %context)
-      br label %fail
-    fail:
-      ret ptr null
-    }
-    define internal i1 @sollang_mouse_event_next_raw(ptr %context, ptr %x, ptr %y, ptr %delta, ptr %button, ptr %kind) {
-    entry:
-      br label %queue_lock
-    queue_lock:
-      %lock_address = getelementptr i8, ptr %context, i64 68
-      %lock_result = cmpxchg ptr %lock_address, i32 0, i32 1 acquire monotonic, align 4
-      %lock_acquired = extractvalue { i32, i1 } %lock_result, 1
-      br i1 %lock_acquired, label %poll, label %queue_lock
-    poll:
-      %count_address = getelementptr i8, ptr %context, i64 28
-      %count = load i32, ptr %count_address, align 4
-      %available = icmp ugt i32 %count, 0
-      br i1 %available, label %read, label %unlock_empty
-    unlock_empty:
-      store atomic i32 0, ptr %lock_address release, align 4
-      br label %empty
-    empty:
-      %cancel_address = getelementptr i8, ptr %context, i64 32
-      %cancelled = load atomic i32, ptr %cancel_address acquire, align 4
-      %active = icmp eq i32 %cancelled, 0
-      br i1 %active, label %wait, label %closed
-    wait:
-      %event_address = getelementptr i8, ptr %context, i64 48
-      %event = load ptr, ptr %event_address, align 8
-      %waited = call i32 @WaitForSingleObject(ptr %event, i32 -1)
-      br label %queue_lock
-    read:
-      %capacity_address = getelementptr i8, ptr %context, i64 12
-      %capacity = load i32, ptr %capacity_address, align 4
-      %head_address = getelementptr i8, ptr %context, i64 20
-      %head = load i32, ptr %head_address, align 4
-      %index64 = zext i32 %head to i64
-      %offset = mul i64 %index64, 20
-      %buffer_address = getelementptr i8, ptr %context, i64 56
-      %buffer = load ptr, ptr %buffer_address, align 8
-      %slot = getelementptr i8, ptr %buffer, i64 %offset
-      %x_value = load i32, ptr %slot, align 4
-      store i32 %x_value, ptr %x, align 4
-      %slot_y = getelementptr i8, ptr %slot, i64 4
-      %y_value = load i32, ptr %slot_y, align 4
-      store i32 %y_value, ptr %y, align 4
-      %slot_delta = getelementptr i8, ptr %slot, i64 8
-      %delta_value = load i32, ptr %slot_delta, align 4
-      store i32 %delta_value, ptr %delta, align 4
-      %slot_button = getelementptr i8, ptr %slot, i64 12
-      %button_value = load i32, ptr %slot_button, align 4
-      store i32 %button_value, ptr %button, align 4
-      %slot_kind = getelementptr i8, ptr %slot, i64 16
-      %kind_value = load i32, ptr %slot_kind, align 4
-      store i32 %kind_value, ptr %kind, align 4
-      %next_head_unwrapped = add i32 %head, 1
-      %next_head = urem i32 %next_head_unwrapped, %capacity
-      store i32 %next_head, ptr %head_address, align 4
-      %next_count = sub i32 %count, 1
-      store i32 %next_count, ptr %count_address, align 4
-      store atomic i32 0, ptr %lock_address release, align 4
-      ret i1 true
-    closed:
-      ret i1 false
-    }
-    define internal void @sollang_mouse_event_stream_drop(ptr %context) {
-    entry:
-      %cancel_address = getelementptr i8, ptr %context, i64 32
-      store atomic i32 1, ptr %cancel_address release, align 4
-      %thread_address = getelementptr i8, ptr %context, i64 40
-      %thread = load ptr, ptr %thread_address, align 8
-      %cancelled = call i32 @CancelSynchronousIo(ptr %thread)
-      %event_address = getelementptr i8, ptr %context, i64 48
-      %event = load ptr, ptr %event_address, align 8
-      %signalled = call i32 @SetEvent(ptr %event)
-      %joined = call i32 @WaitForSingleObject(ptr %thread, i32 -1)
-      %thread_closed = call i32 @CloseHandle(ptr %thread)
-      %event_closed = call i32 @CloseHandle(ptr %event)
-      %input = load ptr, ptr %context, align 8
-      %mode_slot = getelementptr i8, ptr %context, i64 8
-      %original = load i32, ptr %mode_slot, align 4
-      %restored = call i32 @SetConsoleMode(ptr %input, i32 %original)
-      %buffer_address = getelementptr i8, ptr %context, i64 56
-      %buffer = load ptr, ptr %buffer_address, align 8
-      call void @free(ptr %buffer)
-      call void @free(ptr %context)
-      ret void
-    }
-    """ -> println
-}
-
-emitLinuxMouseEventRuntime context: EmitContext -> Unit uses Console {
-    context -> usesTextRuntime -> if {
-    } else {
-        "declare i64 @write(i32, ptr, i64)" -> println
-    }
-    """
-    declare i32 @isatty(i32)
-    declare i64 @read(i32, ptr, i64)
-    declare i32 @close(i32)
-    declare i32 @poll(ptr, i64, i32)
-    declare i32 @eventfd(i32, i32)
-    declare i32 @pthread_create(ptr, ptr, ptr, ptr)
-    declare i32 @pthread_join(i64, ptr)
-    declare i32 @tcgetattr(i32, ptr)
-    declare i32 @tcsetattr(i32, i32, ptr)
-    declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1 immarg)
-    @sollang_mouse_enable = private constant [16 x i8] c"\1B[?1003h\1B[?1006h"
-    @sollang_mouse_disable = private constant [16 x i8] c"\1B[?1003l\1B[?1006l"
-    define internal i32 @sollang_linux_mouse_read_byte(ptr %context) {
-    entry:
-      %poll_record = alloca [8 x i8], align 4
-      %byte = alloca i8, align 1
-      store i32 0, ptr %poll_record, align 4
-      %events = getelementptr i8, ptr %poll_record, i64 4
-      store i16 1, ptr %events, align 2
-      br label %wait
-    wait:
-      %cancel_address = getelementptr i8, ptr %context, i64 20
-      %cancelled = load atomic i32, ptr %cancel_address acquire, align 4
-      %active = icmp eq i32 %cancelled, 0
-      br i1 %active, label %poll, label %closed
-    poll:
-      %ready = call i32 @poll(ptr %poll_record, i64 1, i32 50)
-      %has_input = icmp sgt i32 %ready, 0
-      br i1 %has_input, label %read_byte, label %wait
-    read_byte:
-      %read_count = call i64 @read(i32 0, ptr %byte, i64 1)
-      %read_ok = icmp eq i64 %read_count, 1
-      br i1 %read_ok, label %got_value, label %wait
-    got_value:
-      %raw = load i8, ptr %byte, align 1
-      %byte_value = zext i8 %raw to i32
-      ret i32 %byte_value
-    closed:
-      ret i32 -1
-    }
-    define internal void @sollang_linux_mouse_signal(ptr %context) {
-    entry:
-      %one = alloca i64, align 8
-      store i64 1, ptr %one, align 8
-      %fd_address = getelementptr i8, ptr %context, i64 28
-      %fd = load i32, ptr %fd_address, align 4
-      %written = call i64 @write(i32 %fd, ptr %one, i64 8)
-      ret void
-    }
-    define internal void @sollang_linux_mouse_enqueue(ptr %context, i32 %x, i32 %y, i32 %delta, i32 %button, i32 %kind) {
-    entry:
-      br label %queue_lock
-    queue_lock:
-      %lock_address = getelementptr i8, ptr %context, i64 24
-      %lock_result = cmpxchg ptr %lock_address, i32 0, i32 1 acquire monotonic, align 4
-      %lock_acquired = extractvalue { i32, i1 } %lock_result, 1
-      br i1 %lock_acquired, label %queue_state, label %queue_lock
-    queue_state:
-      %capacity = load i32, ptr %context, align 4
-      %policy_address = getelementptr i8, ptr %context, i64 4
-      %policy = load i32, ptr %policy_address, align 4
-      %count_address = getelementptr i8, ptr %context, i64 16
-      %count = load i32, ptr %count_address, align 4
-      %full = icmp uge i32 %count, %capacity
-      br i1 %full, label %overflow, label %write
-    overflow:
-      %drop_newest = icmp eq i32 %policy, 0
-      br i1 %drop_newest, label %unlock_drop, label %not_drop_newest
-    not_drop_newest:
-      %coalesce = icmp eq i32 %policy, 2
-      %is_move = icmp eq i32 %kind, 0
-      %coalesce_move = and i1 %coalesce, %is_move
-      br i1 %coalesce_move, label %replace_move_check, label %drop_oldest
-    replace_move_check:
-      %tail_address0 = getelementptr i8, ptr %context, i64 12
-      %tail0 = load i32, ptr %tail_address0, align 4
-      %tail_plus_capacity = add i32 %tail0, %capacity
-      %last_unwrapped = sub i32 %tail_plus_capacity, 1
-      %last_index = urem i32 %last_unwrapped, %capacity
-      %last_index64 = zext i32 %last_index to i64
-      %last_offset = mul i64 %last_index64, 20
-      %buffer_address0 = getelementptr i8, ptr %context, i64 40
-      %buffer0 = load ptr, ptr %buffer_address0, align 8
-      %last_record = getelementptr i8, ptr %buffer0, i64 %last_offset
-      %last_kind_address = getelementptr i8, ptr %last_record, i64 16
-      %last_kind = load i32, ptr %last_kind_address, align 4
-      %last_is_move = icmp eq i32 %last_kind, 0
-      br i1 %last_is_move, label %replace_move, label %unlock_drop
-    replace_move:
-      store i32 %x, ptr %last_record, align 4
-      %last_y = getelementptr i8, ptr %last_record, i64 4
-      store i32 %y, ptr %last_y, align 4
-      br label %unlock_signal
-    drop_oldest:
-      %head_address = getelementptr i8, ptr %context, i64 8
-      %head = load i32, ptr %head_address, align 4
-      %next_head_unwrapped = add i32 %head, 1
-      %next_head = urem i32 %next_head_unwrapped, %capacity
-      store i32 %next_head, ptr %head_address, align 4
-      %reduced_count = sub i32 %count, 1
-      store i32 %reduced_count, ptr %count_address, align 4
-      br label %write
-    write:
-      %tail_address = getelementptr i8, ptr %context, i64 12
-      %tail = load i32, ptr %tail_address, align 4
-      %tail64 = zext i32 %tail to i64
-      %offset = mul i64 %tail64, 20
-      %buffer_address = getelementptr i8, ptr %context, i64 40
-      %buffer = load ptr, ptr %buffer_address, align 8
-      %slot = getelementptr i8, ptr %buffer, i64 %offset
-      store i32 %x, ptr %slot, align 4
-      %slot_y = getelementptr i8, ptr %slot, i64 4
-      store i32 %y, ptr %slot_y, align 4
-      %slot_delta = getelementptr i8, ptr %slot, i64 8
-      store i32 %delta, ptr %slot_delta, align 4
-      %slot_button = getelementptr i8, ptr %slot, i64 12
-      store i32 %button, ptr %slot_button, align 4
-      %slot_kind = getelementptr i8, ptr %slot, i64 16
-      store i32 %kind, ptr %slot_kind, align 4
-      %next_tail_unwrapped = add i32 %tail, 1
-      %next_tail = urem i32 %next_tail_unwrapped, %capacity
-      store i32 %next_tail, ptr %tail_address, align 4
-      %current_count = load i32, ptr %count_address, align 4
-      %next_count = add i32 %current_count, 1
-      store i32 %next_count, ptr %count_address, align 4
-      br label %unlock_signal
-    unlock_drop:
-      store atomic i32 0, ptr %lock_address release, align 4
-      ret void
-    unlock_signal:
-      store atomic i32 0, ptr %lock_address release, align 4
-      call void @sollang_linux_mouse_signal(ptr %context)
-      ret void
-    }
-    define internal ptr @sollang_linux_mouse_worker(ptr %context) {
-    entry:
-      %button_value = alloca i32, align 4
-      %x_value = alloca i32, align 4
-      %y_value = alloca i32, align 4
-      br label %seek_escape
-    seek_escape:
-      %escape = call i32 @sollang_linux_mouse_read_byte(ptr %context)
-      %escape_closed = icmp slt i32 %escape, 0
-      br i1 %escape_closed, label %done, label %check_escape
-    check_escape:
-      %is_escape = icmp eq i32 %escape, 27
-      br i1 %is_escape, label %expect_bracket, label %seek_escape
-    expect_bracket:
-      %bracket = call i32 @sollang_linux_mouse_read_byte(ptr %context)
-      %is_bracket = icmp eq i32 %bracket, 91
-      br i1 %is_bracket, label %expect_less, label %seek_escape
-    expect_less:
-      %less = call i32 @sollang_linux_mouse_read_byte(ptr %context)
-      %is_less = icmp eq i32 %less, 60
-      br i1 %is_less, label %button_start, label %seek_escape
-    button_start:
-      store i32 0, ptr %button_value, align 4
-      br label %button_digit
-    button_digit:
-      %button_char = call i32 @sollang_linux_mouse_read_byte(ptr %context)
-      %button_is_digit_low = icmp sge i32 %button_char, 48
-      %button_is_digit_high = icmp sle i32 %button_char, 57
-      %button_is_digit = and i1 %button_is_digit_low, %button_is_digit_high
-      br i1 %button_is_digit, label %button_accumulate, label %button_separator
-    button_accumulate:
-      %button_old = load i32, ptr %button_value, align 4
-      %button_times_ten = mul i32 %button_old, 10
-      %button_digit_value = sub i32 %button_char, 48
-      %button_next = add i32 %button_times_ten, %button_digit_value
-      store i32 %button_next, ptr %button_value, align 4
-      br label %button_digit
-    button_separator:
-      %button_has_separator = icmp eq i32 %button_char, 59
-      br i1 %button_has_separator, label %x_start, label %seek_escape
-    x_start:
-      store i32 0, ptr %x_value, align 4
-      br label %x_digit
-    x_digit:
-      %x_char = call i32 @sollang_linux_mouse_read_byte(ptr %context)
-      %x_is_digit_low = icmp sge i32 %x_char, 48
-      %x_is_digit_high = icmp sle i32 %x_char, 57
-      %x_is_digit = and i1 %x_is_digit_low, %x_is_digit_high
-      br i1 %x_is_digit, label %x_accumulate, label %x_separator
-    x_accumulate:
-      %x_old = load i32, ptr %x_value, align 4
-      %x_times_ten = mul i32 %x_old, 10
-      %x_digit_value = sub i32 %x_char, 48
-      %x_next = add i32 %x_times_ten, %x_digit_value
-      store i32 %x_next, ptr %x_value, align 4
-      br label %x_digit
-    x_separator:
-      %x_has_separator = icmp eq i32 %x_char, 59
-      br i1 %x_has_separator, label %y_start, label %seek_escape
-    y_start:
-      store i32 0, ptr %y_value, align 4
-      br label %y_digit
-    y_digit:
-      %y_char = call i32 @sollang_linux_mouse_read_byte(ptr %context)
-      %y_is_digit_low = icmp sge i32 %y_char, 48
-      %y_is_digit_high = icmp sle i32 %y_char, 57
-      %y_is_digit = and i1 %y_is_digit_low, %y_is_digit_high
-      br i1 %y_is_digit, label %y_accumulate, label %finish_event
-    y_accumulate:
-      %y_old = load i32, ptr %y_value, align 4
-      %y_times_ten = mul i32 %y_old, 10
-      %y_digit_value = sub i32 %y_char, 48
-      %y_next = add i32 %y_times_ten, %y_digit_value
-      store i32 %y_next, ptr %y_value, align 4
-      br label %y_digit
-    finish_event:
-      %is_press = icmp eq i32 %y_char, 77
-      %is_release = icmp eq i32 %y_char, 109
-      %valid_final = or i1 %is_press, %is_release
-      br i1 %valid_final, label %classify, label %seek_escape
-    classify:
-      %raw_button = load i32, ptr %button_value, align 4
-      %raw_x = load i32, ptr %x_value, align 4
-      %raw_y = load i32, ptr %y_value, align 4
-      %x = sub i32 %raw_x, 1
-      %y = sub i32 %raw_y, 1
-      %wheel_bit = and i32 %raw_button, 64
-      %is_wheel = icmp ne i32 %wheel_bit, 0
-      br i1 %is_wheel, label %wheel, label %non_wheel
-    wheel:
-      %wheel_direction = and i32 %raw_button, 1
-      %wheel_down = icmp ne i32 %wheel_direction, 0
-      %delta = select i1 %wheel_down, i32 -120, i32 120
-      call void @sollang_linux_mouse_enqueue(ptr %context, i32 %x, i32 %y, i32 %delta, i32 -1, i32 3)
-      br label %seek_escape
-    non_wheel:
-      %motion_bit = and i32 %raw_button, 32
-      %is_motion = icmp ne i32 %motion_bit, 0
-      br i1 %is_motion, label %move, label %button
-    move:
-      call void @sollang_linux_mouse_enqueue(ptr %context, i32 %x, i32 %y, i32 0, i32 -1, i32 0)
-      br label %seek_escape
-    button:
-      %button_index = and i32 %raw_button, 3
-      %kind = select i1 %is_release, i32 2, i32 1
-      call void @sollang_linux_mouse_enqueue(ptr %context, i32 %x, i32 %y, i32 0, i32 %button_index, i32 %kind)
-      br label %seek_escape
-    done:
-      call void @sollang_linux_mouse_signal(ptr %context)
-      ret ptr null
-    }
-    define internal ptr @sollang_mouse_event_stream_create(i32 %requested_capacity, i32 %overflow) {
-    entry:
-      %capacity_low = icmp slt i32 %requested_capacity, 2
-      %capacity_high = icmp sgt i32 %requested_capacity, 65536
-      %capacity_invalid = or i1 %capacity_low, %capacity_high
-      %overflow_invalid = icmp ugt i32 %overflow, 2
-      %invalid = or i1 %capacity_invalid, %overflow_invalid
-      br i1 %invalid, label %fail, label %tty
-    tty:
-      %interactive = call i32 @isatty(i32 0)
-      %is_tty = icmp ne i32 %interactive, 0
-      br i1 %is_tty, label %allocate_context, label %fail
-    allocate_context:
-      %context = call ptr @malloc(i64 64)
-      %context_ok = icmp ne ptr %context, null
-      br i1 %context_ok, label %allocate_buffer, label %fail
-    allocate_buffer:
-      %capacity64 = zext i32 %requested_capacity to i64
-      %buffer_bytes = mul i64 %capacity64, 20
-      %buffer = call ptr @malloc(i64 %buffer_bytes)
-      %buffer_ok = icmp ne ptr %buffer, null
-      br i1 %buffer_ok, label %allocate_termios, label %free_context
-    allocate_termios:
-      %original = call ptr @malloc(i64 64)
-      %original_ok = icmp ne ptr %original, null
-      br i1 %original_ok, label %read_termios, label %free_buffer
-    read_termios:
-      %got_termios = call i32 @tcgetattr(i32 0, ptr %original)
-      %termios_ok = icmp eq i32 %got_termios, 0
-      br i1 %termios_ok, label %configure_termios, label %free_termios
-    configure_termios:
-      %current = alloca [64 x i8], align 8
-      call void @llvm.memcpy.p0.p0.i64(ptr %current, ptr %original, i64 64, i1 false)
-      %lflag_address = getelementptr i8, ptr %current, i64 12
-      %lflag = load i32, ptr %lflag_address, align 4
-      %raw_lflag = and i32 %lflag, -11
-      store i32 %raw_lflag, ptr %lflag_address, align 4
-      %vtime = getelementptr i8, ptr %current, i64 22
-      store i8 0, ptr %vtime, align 1
-      %vmin = getelementptr i8, ptr %current, i64 23
-      store i8 1, ptr %vmin, align 1
-      %set_termios = call i32 @tcsetattr(i32 0, i32 0, ptr %current)
-      %termios_set = icmp eq i32 %set_termios, 0
-      br i1 %termios_set, label %create_event, label %free_termios
-    create_event:
-      %event_fd = call i32 @eventfd(i32 0, i32 0)
-      %event_ok = icmp sge i32 %event_fd, 0
-      br i1 %event_ok, label %initialize, label %restore
-    initialize:
-      store i32 %requested_capacity, ptr %context, align 4
-      %policy_address = getelementptr i8, ptr %context, i64 4
-      store i32 %overflow, ptr %policy_address, align 4
-      %head_address = getelementptr i8, ptr %context, i64 8
-      store i32 0, ptr %head_address, align 4
-      %tail_address = getelementptr i8, ptr %context, i64 12
-      store i32 0, ptr %tail_address, align 4
-      %count_address = getelementptr i8, ptr %context, i64 16
-      store i32 0, ptr %count_address, align 4
-      %cancel_address = getelementptr i8, ptr %context, i64 20
-      store atomic i32 0, ptr %cancel_address release, align 4
-      %lock_address = getelementptr i8, ptr %context, i64 24
-      store atomic i32 0, ptr %lock_address release, align 4
-      %event_address = getelementptr i8, ptr %context, i64 28
-      store i32 %event_fd, ptr %event_address, align 4
-      %buffer_address = getelementptr i8, ptr %context, i64 40
-      store ptr %buffer, ptr %buffer_address, align 8
-      %termios_address = getelementptr i8, ptr %context, i64 48
-      store ptr %original, ptr %termios_address, align 8
-      %enabled = call i64 @write(i32 1, ptr @sollang_mouse_enable, i64 16)
-      %thread_slot = alloca i64, align 8
-      %created = call i32 @pthread_create(ptr %thread_slot, ptr null, ptr @sollang_linux_mouse_worker, ptr %context)
-      %thread_ok = icmp eq i32 %created, 0
-      br i1 %thread_ok, label %ready, label %close_event
-    ready:
-      %thread = load i64, ptr %thread_slot, align 8
-      %thread_address = getelementptr i8, ptr %context, i64 32
-      store i64 %thread, ptr %thread_address, align 8
-      ret ptr %context
-    close_event:
-      %closed_event = call i32 @close(i32 %event_fd)
-      br label %restore
-    restore:
-      %restored = call i32 @tcsetattr(i32 0, i32 0, ptr %original)
-      br label %free_termios
-    free_termios:
-      call void @free(ptr %original)
-      br label %free_buffer
-    free_buffer:
-      call void @free(ptr %buffer)
-      br label %free_context
-    free_context:
-      call void @free(ptr %context)
-      br label %fail
-    fail:
-      ret ptr null
-    }
-    define internal i1 @sollang_mouse_event_next_raw(ptr %context, ptr %x, ptr %y, ptr %delta, ptr %button, ptr %kind) {
-    entry:
-      br label %queue_lock
-    queue_lock:
-      %lock_address = getelementptr i8, ptr %context, i64 24
-      %lock_result = cmpxchg ptr %lock_address, i32 0, i32 1 acquire monotonic, align 4
-      %lock_acquired = extractvalue { i32, i1 } %lock_result, 1
-      br i1 %lock_acquired, label %queue_state, label %queue_lock
-    queue_state:
-      %count_address = getelementptr i8, ptr %context, i64 16
-      %count = load i32, ptr %count_address, align 4
-      %available = icmp ugt i32 %count, 0
-      br i1 %available, label %read, label %unlock_empty
-    unlock_empty:
-      store atomic i32 0, ptr %lock_address release, align 4
-      %cancel_address = getelementptr i8, ptr %context, i64 20
-      %cancelled = load atomic i32, ptr %cancel_address acquire, align 4
-      %active = icmp eq i32 %cancelled, 0
-      br i1 %active, label %wait, label %closed
-    wait:
-      %counter = alloca i64, align 8
-      %event_address = getelementptr i8, ptr %context, i64 28
-      %event_fd = load i32, ptr %event_address, align 4
-      %read_signal = call i64 @read(i32 %event_fd, ptr %counter, i64 8)
-      br label %queue_lock
-    read:
-      %capacity = load i32, ptr %context, align 4
-      %head_address = getelementptr i8, ptr %context, i64 8
-      %head = load i32, ptr %head_address, align 4
-      %head64 = zext i32 %head to i64
-      %offset = mul i64 %head64, 20
-      %buffer_address = getelementptr i8, ptr %context, i64 40
-      %buffer = load ptr, ptr %buffer_address, align 8
-      %slot = getelementptr i8, ptr %buffer, i64 %offset
-      %x_value = load i32, ptr %slot, align 4
-      store i32 %x_value, ptr %x, align 4
-      %slot_y = getelementptr i8, ptr %slot, i64 4
-      %y_value = load i32, ptr %slot_y, align 4
-      store i32 %y_value, ptr %y, align 4
-      %slot_delta = getelementptr i8, ptr %slot, i64 8
-      %delta_value = load i32, ptr %slot_delta, align 4
-      store i32 %delta_value, ptr %delta, align 4
-      %slot_button = getelementptr i8, ptr %slot, i64 12
-      %button_value = load i32, ptr %slot_button, align 4
-      store i32 %button_value, ptr %button, align 4
-      %slot_kind = getelementptr i8, ptr %slot, i64 16
-      %kind_value = load i32, ptr %slot_kind, align 4
-      store i32 %kind_value, ptr %kind, align 4
-      %next_head_unwrapped = add i32 %head, 1
-      %next_head = urem i32 %next_head_unwrapped, %capacity
-      store i32 %next_head, ptr %head_address, align 4
-      %next_count = sub i32 %count, 1
-      store i32 %next_count, ptr %count_address, align 4
-      store atomic i32 0, ptr %lock_address release, align 4
-      ret i1 true
-    closed:
-      ret i1 false
-    }
-    define internal void @sollang_mouse_event_stream_drop(ptr %context) {
-    entry:
-      %cancel_address = getelementptr i8, ptr %context, i64 20
-      store atomic i32 1, ptr %cancel_address release, align 4
-      %thread_address = getelementptr i8, ptr %context, i64 32
-      %thread = load i64, ptr %thread_address, align 8
-      %joined = call i32 @pthread_join(i64 %thread, ptr null)
-      %disabled = call i64 @write(i32 1, ptr @sollang_mouse_disable, i64 16)
-      %termios_address = getelementptr i8, ptr %context, i64 48
-      %original = load ptr, ptr %termios_address, align 8
-      %restored = call i32 @tcsetattr(i32 0, i32 0, ptr %original)
-      %event_address = getelementptr i8, ptr %context, i64 28
-      %event_fd = load i32, ptr %event_address, align 4
-      %closed_event = call i32 @close(i32 %event_fd)
-      %buffer_address = getelementptr i8, ptr %context, i64 40
-      %buffer = load ptr, ptr %buffer_address, align 8
-      call void @free(ptr %original)
-      call void @free(ptr %buffer)
-      call void @free(ptr %context)
-      ret void
-    }
-    """ -> println
-}
-
 usesMouseEventsRuntime context: EmitContext -> Bool {
     false => usesMouse!
     0 => callIndex!
@@ -17770,11 +16197,11 @@ emitWindowsContext context: EmitContext -> Unit uses Console {
     context -> usesDirectoryRuntime => needsDirectoryRuntime
     context -> usesOwnedFileRuntime => needsOwnedFileRuntime
     context -> usesMouseEventsRuntime => needsMouseEventsRuntime
-    capturesParallelOutput -> if { emitMemoryOutputSinkRuntime }
-    (usesTextOutput or capturesParallelOutput) -> if { capturesParallelOutput -> emitWindowsTextRuntime }
-    capturesParallelOutput -> if { emitWindowsComputeRuntime }
-    context -> usesIntInterpolation -> if { emitIntTextRuntime }
-    context -> usesBoolInterpolation -> if { emitBoolTextRuntime }
+    capturesParallelOutput -> if { computeRuntime.emitMemoryOutputSinkRuntime }
+    (usesTextOutput or capturesParallelOutput) -> if { capturesParallelOutput -> textOutputRuntime.emitWindowsTextRuntime }
+    capturesParallelOutput -> if { computeRuntime.emitWindowsComputeRuntime }
+    context -> usesIntInterpolation -> if { numberFormat.emitIntTextRuntime }
+    context -> usesBoolInterpolation -> if { numberFormat.emitBoolTextRuntime }
     context -> usesSourceTextRuntime => needsSourceTextRuntime
     -1 => runtimeModule!
     0 => runtimeModuleSearch!
@@ -17808,10 +16235,10 @@ emitWindowsContext context: EmitContext -> Unit uses Console {
             "declare dllimport i32 @WriteFile(ptr, ptr, i32, ptr, ptr)" -> println
         }
     }
-    needsProcessRuntime -> if { emitProcessTypeRuntime }
+    needsProcessRuntime -> if { processRuntime.emitProcessTypeRuntime }
     context -> emitCore
-    needsMouseEventsRuntime -> if { context -> emitWindowsMouseEventRuntime }
-    needsProcessRuntime -> if { emitWindowsProcessRuntime }
+    needsMouseEventsRuntime -> if { mouseEventRuntime.emitWindowsMouseEventRuntime }
+    needsProcessRuntime -> if { processRuntime.emitWindowsProcessRuntime }
     needsDirectoryRuntime -> if { llvmRuntime.emitWindowsDirectory }
     needsOwnedFileRuntime -> if { llvmRuntime.emitWindowsOwnedFile }
     runtimeModule! >= 0 -> if {
@@ -17831,15 +16258,15 @@ emitLinuxContext context: EmitContext -> Unit uses Console {
     context -> usesDirectoryRuntime => needsDirectoryRuntime
     context -> usesOwnedFileRuntime => needsOwnedFileRuntime
     context -> usesMouseEventsRuntime => needsMouseEventsRuntime
-    capturesParallelOutput -> if { emitMemoryOutputSinkRuntime }
-    (usesTextOutput or capturesParallelOutput) -> if { capturesParallelOutput -> emitLinuxTextRuntime }
-    capturesParallelOutput -> if { emitLinuxComputeRuntime }
-    context -> usesIntInterpolation -> if { emitIntTextRuntime }
-    context -> usesBoolInterpolation -> if { emitBoolTextRuntime }
-    needsProcessRuntime -> if { emitProcessTypeRuntime }
+    capturesParallelOutput -> if { computeRuntime.emitMemoryOutputSinkRuntime }
+    (usesTextOutput or capturesParallelOutput) -> if { capturesParallelOutput -> textOutputRuntime.emitLinuxTextRuntime }
+    capturesParallelOutput -> if { computeRuntime.emitLinuxComputeRuntime }
+    context -> usesIntInterpolation -> if { numberFormat.emitIntTextRuntime }
+    context -> usesBoolInterpolation -> if { numberFormat.emitBoolTextRuntime }
+    needsProcessRuntime -> if { processRuntime.emitProcessTypeRuntime }
     context -> emitCore
-    needsMouseEventsRuntime -> if { context -> emitLinuxMouseEventRuntime }
-    needsProcessRuntime -> if { capturesParallelOutput -> emitLinuxProcessRuntime }
+    needsMouseEventsRuntime -> if { usesTextOutput -> mouseEventRuntime.emitLinuxMouseEventRuntime }
+    needsProcessRuntime -> if { capturesParallelOutput -> processRuntime.emitLinuxProcessRuntime }
     needsDirectoryRuntime -> if { llvmRuntime.emitLinuxDirectory }
     needsOwnedFileRuntime -> if { not needsProcessRuntime -> llvmRuntime.emitLinuxOwnedFile }
     needsSourceTextRuntime -> if {
@@ -17851,9 +16278,9 @@ emitLinuxContext context: EmitContext -> Unit uses Console {
 }
 
 emitWasmContext context: EmitContext -> Unit uses Console {
-    context -> usesTextRuntime -> if { emitWasmTextRuntime }
-    context -> usesIntInterpolation -> if { emitIntTextRuntime }
-    context -> usesBoolInterpolation -> if { emitBoolTextRuntime }
+    context -> usesTextRuntime -> if { textOutputRuntime.emitWasmTextRuntime }
+    context -> usesIntInterpolation -> if { numberFormat.emitIntTextRuntime }
+    context -> usesBoolInterpolation -> if { numberFormat.emitBoolTextRuntime }
     context -> emitCore
 }
 

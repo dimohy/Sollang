@@ -10690,3 +10690,46 @@ tests.
 The syntax itself has no runtime representation. By-value aggregates follow
 the target C ABI, `ref` and `mut` lower to borrowed pointers, and no wrapper
 object or hidden heap allocation is introduced.
+
+## D278 — The LLVM Text Backend Uses Explicit Feature Submodules
+
+Status: implemented
+Date: 2026-07-26
+
+`sollang.compiler.llvm.text` remains the stable backend module, while independent
+LLVM runtime generators live under `sollang.compiler.llvm.emitter.*`.
+The first split extracts number formatting, compute-pool support, text-output
+support, process support, and mouse-event support into five cohesive files.
+`text.slg` falls from 18,579 to 16,494 lines, a reduction of 2,085 lines
+(11.2%). Each extracted function accepts only the minimum scalar configuration
+it needs and prints LLVM directly, so the split adds no container, heap
+allocation, copied emitter state, or generated-program runtime cost.
+
+Sollang currently defines one namespace module per source file and deliberately
+reports duplicate modules. The backend therefore follows a Rust-style explicit
+submodule tree with a stable parent entry point instead of C#-style partial
+declarations. Feature grouping also follows Swift's extension-oriented
+organization principle: a file owns one coherent capability rather than an
+arbitrary range of line numbers.
+
+An attempted extraction of the shared `EmitContext`, and a second attempt using
+mutable output arrays, were rejected by native self-host verification. The
+current compiler assigned incorrect imported field types across those module
+boundaries and produced invalid LLVM `insertvalue`/`extractvalue` operations.
+The safe rule is therefore explicit: only state-independent emission is split
+today. Stateful lowering remains in `text.slg` until imported aggregate type
+identity is corrected and covered by a focused regression. This keeps the
+refactor honest and prevents a cosmetic split from introducing copies or
+miscompilation.
+
+`scripts/verify-llvm-emitter-modules.ps1` checks the module namespaces, imports,
+all self-host source manifests, and a 17,000-line growth ceiling for
+`text.slg`. Exact self-host cases 185 and 292 rebuild the reusable native
+compiler and verify both ordinary LLVM emission and canonical type layout after
+the split.
+
+Research basis:
+
+- [Rust modules in separate files](https://doc.rust-lang.org/stable/book/ch07-05-separating-modules-into-different-files.html)
+- [Swift extensions](https://docs.swift.org/swift-book/documentation/the-swift-programming-language/extensions/)
+- [Swift modules and source-file access](https://docs.swift.org/swift-book/documentation/the-swift-programming-language/accesscontrol/)
