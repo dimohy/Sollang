@@ -41,6 +41,39 @@ try {
     "dynamic-trait", "effects", "readonly-references", "ownership",
     "raw-strings", "sensor-stream", "nested-stream", "risk-stream"
   ];
+  const expectedSampleOutputs = {
+    hello: "Hello from Sollang!\nValues flow from left to right.",
+    "main-block": "Sollang says square = 49",
+    arithmetic: "Arithmetic is correct.",
+    input: "First number: Second number: Sum = 42",
+    flow: "Result = 158",
+    "local-functions": "Local function result = 21",
+    loop: "fib = 0\nfib = 1\nfib = 1\nfib = 2\nfib = 3\nfib = 5\nfib = 8\nfib = 13",
+    when: "Grade B\nwhen completed",
+    "each-repeat": "Range item\nRange item\nRange item",
+    "custom-block": "notify invoked its user block",
+    fold: "Sum from 1 to 100 = 5050",
+    containers: "count = 3, sum = 6",
+    "immutable-containers": "immutable values count = 3, sum = 14",
+    "compile-time-collections": "collection count = 5, sum = 15",
+    struct: "Distance squared = 25",
+    "mutable-method": "counter = 42",
+    enum: "value = 42, number\nmissing = missing\nlabel = sensor",
+    "traits-generics": "trait-ready point measure = 42",
+    "numeric-widths": "Int8 = 42, UInt16 = 42",
+    "associated-types": "Associated-type source = 42",
+    "value-generics": "value-generic input = 7",
+    "result-propagation": "matched result value = 42",
+    "async-await": "Async values = 36, 42",
+    "dynamic-trait": "dynamic sounds = 11, 22",
+    effects: "Effect sets are checked transitively.",
+    "readonly-references": "Readonly-reference value = 41",
+    ownership: "moved owned point total = 42",
+    "raw-strings": "first \"quoted\" line\nC:\\raw\\path\ninline \"quotes\" and C:\\raw",
+    "sensor-stream": "Alert 1: sensor 7 = 59 C\nAlert 2: sensor 14 = 58 C\nAlert 3: sensor 21 = 57 C\nAlert 4: sensor 47 = 59 C\nAlert 5: sensor 54 = 58 C\nStopped after scanning 54 of 1 billion values",
+    "nested-stream": "14\n15\n16\n17\nScanned = 7",
+    "risk-stream": "Warning: transaction 5, total 1250\nWarning: transaction 6, total 1650\nWarning: transaction 7, total 1750\nWarning: transaction 8, total 1900\nWarning: transaction 9, total 2100\nScanned = 9"
+  };
   if (JSON.stringify(sampleIds) !== JSON.stringify(expectedSampleIds)) {
     throw new Error(
       `syntax catalog mismatch\nexpected ${JSON.stringify(expectedSampleIds)}\nactual   ${JSON.stringify(sampleIds)}`
@@ -59,6 +92,7 @@ try {
   });
 
   const sampleFailures = [];
+  const sampleOutputs = {};
   let previousSource = await page.locator(".monaco-editor").evaluate(() =>
     window.monaco.editor.getModels()[0]?.getValue() ?? ""
   );
@@ -83,9 +117,20 @@ try {
       sampleFailures.push(
         `${sampleId}: ${(await page.locator(".terminal").innerText()).replace(/\s+/g, " ").trim()}`
       );
-    } else if (!(await page.locator(".terminal pre").innerText()).trim()) {
-      sampleFailures.push(`${sampleId}: execution succeeded without observable output`);
+    } else {
+      const output = (await page.locator(".terminal pre").innerText()).replace(/\r\n?/g, "\n").trimEnd();
+      sampleOutputs[sampleId] = output;
+      if (!output.trim()) {
+        sampleFailures.push(`${sampleId}: execution succeeded without observable output`);
+      } else if (output !== expectedSampleOutputs[sampleId]) {
+        sampleFailures.push(
+          `${sampleId}: stdout mismatch\nexpected ${JSON.stringify(expectedSampleOutputs[sampleId])}\nactual   ${JSON.stringify(output)}`
+        );
+      }
     }
+  }
+  if (process.env.SOLLANG_DUMP_SAMPLE_OUTPUTS === "1") {
+    console.log(JSON.stringify(sampleOutputs, null, 2));
   }
   if (sampleFailures.length > 0) {
     throw new Error(`browser sample failures:\n${sampleFailures.join("\n")}`);
@@ -151,6 +196,22 @@ try {
   await mkdir("artifacts/browser", { recursive: true });
   await page.screenshot({ path: "artifacts/browser/playground-desktop.png", fullPage: true });
   await page.setViewportSize({ width: 390, height: 844 });
+  const mobileLayout = await page.locator(".site-shell").evaluate(shell => {
+    const intro = shell.querySelector(".intro")?.getBoundingClientRect();
+    const workbench = shell.querySelector(".workbench")?.getBoundingClientRect();
+    const footer = shell.querySelector("footer")?.getBoundingClientRect();
+    return {
+      introTop: intro?.top ?? -1,
+      workbenchBottom: workbench?.bottom ?? -1,
+      footerBottom: footer?.bottom ?? -1
+    };
+  });
+  if (
+    mobileLayout.introTop < mobileLayout.workbenchBottom
+    || mobileLayout.introTop < mobileLayout.footerBottom
+  ) {
+    throw new Error(`mobile intro was not placed at the page bottom: ${JSON.stringify(mobileLayout)}`);
+  }
   await page.screenshot({ path: "artifacts/browser/playground-mobile.png", fullPage: true });
   await englishContext.close();
 

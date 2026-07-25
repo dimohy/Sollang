@@ -177,7 +177,9 @@ main {
 }
 
 main {
-    "notify accepts a user block and calls it with yield." -> println
+    42 -> notify item {
+        "notify invoked its user block" -> println
+    }
 }`
   },
   {
@@ -204,21 +206,24 @@ main {
     numbers! -> fold 0 total, value {
         total + value
     } => sum
-    "Dynamic array operations completed." -> println
+    (count == 3 and sum == 6) -> if {
+        "count = 3, sum = 6" -> println
+    }
 }`
   },
   {
     id: "immutable-containers",
-    title: "Immutable container transforms",
+    title: "Immutable values and fold",
     category: "containers",
     input: "",
     code: `main {
-    [1, 2, ~] => values
-    values -> append(3) => values
-    values -> updated(0, 9) => values
-
+    [1, 2, ~] => initial
+    [9, 2, 3, ~] => values
     values -> len => count
-    "Immutable array transforms completed." -> println
+    values -> fold 0 sum, item {
+        sum + item
+    } => total
+    "immutable values count = $count, sum = $total" -> println
 }`
   },
   {
@@ -242,7 +247,7 @@ main {
   },
   {
     id: "mutable-method",
-    title: "mut self and move self",
+    title: "Mutable struct fields",
     category: "types",
     input: "",
     code: `struct Counter {
@@ -261,8 +266,10 @@ impl Counter {
 
 main {
     Counter { value: 40 } => counter!
-    counter!.value => result
-    "Counter starts at $result" -> println
+    counter!.value + 1 => counter!.value
+    counter!.value + 1 => counter!.value
+    counter!.value => current
+    "counter = $current" -> println
 }`
   },
   {
@@ -276,8 +283,33 @@ main {
     Label(Text)
 }
 
+number reading: Reading -> Int {
+    reading -> when {
+        Value(value) => value
+        Missing => 0
+        Label(label) => 0
+    }
+}
+
+kind reading: Reading -> Text {
+    reading -> when {
+        Value(value) => "number"
+        Missing => "missing"
+        Label(label) => label
+    }
+}
+
 main {
-    "Reading supports Value(Int), Missing, and Label(Text)." -> println
+    Reading.Value(42) => valueReading
+    Reading.Missing => missingReading
+    Reading.Label("sensor") => labelReading
+    valueReading -> number => value
+    valueReading -> kind => valueKind
+    missingReading -> kind => missingKind
+    labelReading -> kind => labelKind
+    "value = $value, $valueKind" -> println
+    "missing = $missingKind" -> println
+    "label = $labelKind" -> println
 }`
   },
   {
@@ -307,7 +339,9 @@ measureOf<T: Measure> value: T -> Int {
 }
 
 main {
-    "Measure is implemented for Point and identity<T> is checked." -> println
+    Point { x: 19, y: 23 } => point
+    point.x + point.y => measured
+    "trait-ready point measure = $measured" -> println
 }`
   },
   {
@@ -347,26 +381,28 @@ main {
     title: "Compile-time value generics",
     category: "advanced",
     input: "",
-    code: `keep<N: Int> value: Int -> Int {
-    value
-}
+    code: `keep<N: Int> value: Int -> Int => value
 
 main {
-    "N: Int declares a compile-time value generic." -> println
+    7 => kept
+    "value-generic input = $kept" -> println
 }`
   },
   {
     id: "result-propagation",
-    title: "Option, Result, and ?",
+    title: "Result payload matching",
     category: "advanced",
     input: "",
-    code: `propagate value: Int -> Int {
-    # Result-returning form: validate(value)? => checked
-    value
+code: `resultValue result: Result<Int, Text> -> Int {
+    result -> when {
+        Result<Int, Text>.Ok(value) => value
+        Result<Int, Text>.Err(message) => -1
+    }
 }
 
 main {
-    "Result<T, E> and ? provide checked error propagation." -> println
+    Result<Int, Text>.Ok(42) -> resultValue => success
+    "matched result value = $success" -> println
 }`
   },
   {
@@ -414,7 +450,11 @@ impl Speak for Dog {
 }
 
 main {
-    "dyn<Speak> stores an owned value with a trait vtable." -> println
+    Cat { value: 1 } -> dyn<Speak> => cat!
+    Dog { value: 2 } -> dyn<Speak> => dog!
+    cat! -> Speak.sound => catSound
+    dog! -> Speak.sound => dogSound
+    "dynamic sounds = $catSound, $dogSound" -> println
 }`
   },
   {
@@ -436,15 +476,15 @@ main {
   },
   {
     id: "compile-time-collections",
-    title: "Compile-time collections",
+    title: "Collection fold",
     category: "containers",
     input: "",
     code: `main {
-    # Compile-time forms: [1..5] and [1..5 -> each { it + 1 }]
-    1..5 -> fold 0 total, item {
-        total + item
-    } => sum
-    "Compile-time collection syntax is shown above." -> println
+    [1, 2, 3, 4, 5, ~] => numbers
+    numbers -> fold 0 sum, item {
+        sum + item
+    } => total
+    "collection count = 5, sum = $total" -> println
 }`
   },
   {
@@ -463,8 +503,9 @@ first pair: ref Pair -> ref Int {
 
 main {
     Pair { first: 41, second: 1 } => pair
+    pair -> first => borrowed
     pair.first => value
-    "Readonly-reference source = $value" -> println
+    "Readonly-reference value = $value" -> println
 }`
   },
   {
@@ -478,12 +519,14 @@ main {
     Int8(40) -> addSmall => small
     UInt16(37) + UInt16(5) => unsigned
 
-    "Fixed-width integer operations completed." -> println
+    Int(small) => smallInt
+    Int(unsigned) => unsignedInt
+    "Int8 = $smallInt, UInt16 = $unsignedInt" -> println
 }`
   },
   {
     id: "ownership",
-    title: "box and move ownership",
+    title: "Move ownership",
     category: "advanced",
     input: "",
     code: `struct Point {
@@ -491,10 +534,14 @@ main {
     y: Int
 }
 
+consume point: move Point -> Int {
+    point.x + point.y
+}
+
 main {
-    # Ownership signatures use: consume point: move box Point -> Unit
-    # Owned heap form: box Point { x: 20, y: 22 }
-    "box creates ownership; move transfers it exactly once." -> println
+    Point { x: 20, y: 22 } => ownedPoint!
+    ownedPoint! -> consume => total
+    "moved owned point total = $total" -> println
 }`
   },
   {
@@ -682,21 +729,21 @@ const descriptions: Record<Locale, Record<string, string>> = {
     "custom-block": "Declare a user block parameter and invoke it with yield.",
     fold: "Reduce a range directly without allocating an intermediate collection.",
     containers: "Create a growable array and combine len with fold.",
-    "immutable-containers": "Owner-returning append and updated preserve immutable array bindings.",
+    "immutable-containers": "Build immutable array values and reduce the selected value with fold.",
     struct: "Nominal structs, Self returns, member access, and impl methods.",
-    "mutable-method": "Declare mut self and move self methods on one owner type.",
+    "mutable-method": "Update a mutable struct field and print the value produced by two updates.",
     enum: "Declare payload and payload-free enum variants.",
     "traits-generics": "Declare an implementation, an unconstrained generic, and a trait-bounded generic.",
     "associated-types": "Constrain a trait associated type and infer the concrete result.",
     "value-generics": "Declare an Int-valued compile-time generic parameter.",
-    "result-propagation": "Show the checked postfix ? propagation form used by Result-returning functions.",
+    "result-propagation": "Match a Result payload and print the value selected by the matching arm.",
     "async-await": "Suspend and resume checked async functions with structured await.",
     "dynamic-trait": "Declare the types and implementations used by an owned dyn trait value.",
     effects: "Declare transitive Console capabilities with a checked uses clause.",
-    "compile-time-collections": "Show compile-time range and transform forms beside an executable range fold.",
+    "compile-time-collections": "Create a collection and print its actual fold result.",
     "readonly-references": "Declare a readonly projected reference without transferring ownership.",
     "numeric-widths": "Use signed and unsigned integer types with explicit widths.",
-    ownership: "Show box construction and move-input syntax while keeping the runnable entry portable.",
+    ownership: "Move a named owner into a consuming function and print the consumed value.",
     "raw-strings": "Triple-quoted strings preserve quotes, backslashes, and interpolation markers.",
     "sensor-stream": "Fuse map, tap, filter, take, and each; only 54 of one billion values are pulled.",
     "nested-stream": "Cancel nested flatMap sources as soon as the downstream take limit is met.",
@@ -715,21 +762,21 @@ const descriptions: Record<Locale, Record<string, string>> = {
     "custom-block": "사용자 블록 매개변수를 선언하고 yield로 호출합니다.",
     fold: "중간 컬렉션 없이 범위를 직접 축약합니다.",
     containers: "가변 배열을 만들고 len과 fold를 조합합니다.",
-    "immutable-containers": "append와 updated가 불변 배열 바인딩을 유지합니다.",
+    "immutable-containers": "불변 배열 값을 만들고 선택한 값을 fold로 축약합니다.",
     struct: "명목 구조체, Self 반환, 멤버 접근, impl 메서드를 보여줍니다.",
-    "mutable-method": "한 소유자 타입에 mut self와 move self 메서드를 선언합니다.",
+    "mutable-method": "가변 구조체 필드를 두 번 갱신하고 실제 결과를 출력합니다.",
     enum: "페이로드가 있는 variant와 없는 variant를 선언합니다.",
     "traits-generics": "구현, 일반 제네릭, trait 제약 제네릭을 선언합니다.",
     "associated-types": "trait 연관 타입을 제한하고 구체 결과 타입을 추론합니다.",
     "value-generics": "Int 값을 받는 컴파일타임 제네릭 매개변수를 선언합니다.",
-    "result-propagation": "Result 반환 함수에서 사용하는 후위 ? 전파 형태를 보여줍니다.",
+    "result-propagation": "Result 페이로드를 패턴 매칭하고 선택된 실제 값을 출력합니다.",
     "async-await": "구조화된 await로 검사된 비동기 함수를 중단하고 재개합니다.",
     "dynamic-trait": "소유 dyn trait에 필요한 타입과 구현을 선언합니다.",
     effects: "uses 절로 전이되는 Console 능력을 선언합니다.",
-    "compile-time-collections": "컴파일타임 범위·변환 형태와 실행 가능한 범위 fold를 함께 보여줍니다.",
+    "compile-time-collections": "컬렉션을 만들고 실제 fold 결과를 출력합니다.",
     "readonly-references": "소유권을 옮기지 않는 읽기 전용 투영 참조를 선언합니다.",
     "numeric-widths": "명시적 폭의 부호·무부호 정수 타입을 사용합니다.",
-    ownership: "box 생성과 move 입력 문법을 실행 가능한 진입점과 함께 보여줍니다.",
+    ownership: "이름 있는 소유자를 소비 함수로 이동하고 소비한 값을 출력합니다.",
     "raw-strings": "삼중 따옴표 문자열은 따옴표, 역슬래시, 보간 표식을 그대로 보존합니다.",
     "sensor-stream": "map·tap·filter·take·each를 융합해 10억 개 중 54개만 당겨옵니다.",
     "nested-stream": "downstream take 한도에 도달하면 중첩 flatMap upstream 전체를 취소합니다.",
@@ -748,21 +795,21 @@ const descriptions: Record<Locale, Record<string, string>> = {
     "custom-block": "ユーザーブロック引数を宣言し、yield で呼び出します。",
     fold: "中間コレクションを作らず範囲を畳み込みます。",
     containers: "可変配列を作り、len と fold を組み合わせます。",
-    "immutable-containers": "append と updated が不変配列バインドを保ちます。",
+    "immutable-containers": "不変配列を作成し、fold の実際の結果を出力します。",
     struct: "構造体、Self、メンバーアクセス、impl メソッドの例です。",
-    "mutable-method": "同じ所有型に mut self と move self メソッドを宣言します。",
+    "mutable-method": "可変構造体フィールドを2回更新し、実際の値を出力します。",
     enum: "ペイロード有無の enum バリアントを宣言します。",
     "traits-generics": "実装、通常ジェネリック、trait 制約ジェネリックを宣言します。",
     "associated-types": "関連型を制約し、具体的な結果を推論します。",
     "value-generics": "Int 値のコンパイル時ジェネリック引数を宣言します。",
-    "result-propagation": "Result 戻り関数で使う後置 ? 伝播形式を示します。",
+    "result-propagation": "Result のペイロードを照合し、選択された値を出力します。",
     "async-await": "構造化 await で検査済み async 関数を中断・再開します。",
     "dynamic-trait": "所有 dyn trait に必要な型と実装を宣言します。",
     effects: "uses 句で推移的な Console 能力を宣言します。",
-    "compile-time-collections": "コンパイル時の範囲・変換形式と実行可能な fold を示します。",
+    "compile-time-collections": "コレクションを作成し、実際の fold 結果を出力します。",
     "readonly-references": "所有権を移さない読み取り専用投影参照を宣言します。",
     "numeric-widths": "幅を明示した符号付き・符号なし整数型を使います。",
-    ownership: "box 構築と move 入力構文を実行可能な入口と共に示します。",
+    ownership: "名前付き所有者を消費関数へ移動し、消費した値を出力します。",
     "raw-strings": "三重引用符は引用符、バックスラッシュ、補間記号を保持します。",
     "sensor-stream": "10億件を生成せず必要な54件だけを上流から取得します。",
     "nested-stream": "take の上限で入れ子の flatMap 全体を停止します。",
@@ -781,21 +828,21 @@ const descriptions: Record<Locale, Record<string, string>> = {
     "custom-block": "声明用户代码块参数，并用 yield 调用它。",
     fold: "不创建中间集合，直接归约一个范围。",
     containers: "创建动态数组，并组合使用 len 与 fold。",
-    "immutable-containers": "append 和 updated 保持不可变数组绑定。",
+    "immutable-containers": "创建不可变数组，并输出实际的 fold 结果。",
     struct: "名义结构体、Self 返回、成员访问与 impl 方法。",
-    "mutable-method": "在同一所有者类型上声明 mut self 与 move self 方法。",
+    "mutable-method": "两次更新可变结构体字段并输出实际值。",
     enum: "声明带载荷和不带载荷的 enum 变体。",
     "traits-generics": "声明实现、普通泛型和带 trait 约束的泛型。",
     "associated-types": "约束 trait 关联类型并推断具体结果。",
     "value-generics": "声明接收 Int 值的编译期泛型参数。",
-    "result-propagation": "展示 Result 返回函数使用的后缀 ? 传播形式。",
+    "result-propagation": "匹配 Result 载荷并输出所选分支的实际值。",
     "async-await": "通过结构化 await 暂停并恢复经过检查的异步函数。",
     "dynamic-trait": "声明拥有的 dyn trait 所需的类型与实现。",
     effects: "通过 uses 子句声明可传递的 Console 能力。",
-    "compile-time-collections": "展示编译期区间、变换形式和可执行的区间 fold。",
+    "compile-time-collections": "创建集合并输出实际的 fold 结果。",
     "readonly-references": "声明不转移所有权的只读投影引用。",
     "numeric-widths": "使用显式宽度的有符号和无符号整数类型。",
-    ownership: "结合可执行入口展示 box 构造与 move 输入语法。",
+    ownership: "将命名所有者移动到消费函数并输出消费后的值。",
     "raw-strings": "三引号字符串保留引号、反斜杠和插值标记。",
     "sensor-stream": "融合多个操作，只从十亿个值中拉取所需的54个。",
     "nested-stream": "达到 take 上限后立即取消整个嵌套 flatMap。",
@@ -817,21 +864,21 @@ const localizedTitles: Record<Exclude<Locale, "en">, Record<string, string>> = {
     "custom-block": "사용자 블록과 yield",
     fold: "범위 fold",
     containers: "동적 배열",
-    "immutable-containers": "불변 컨테이너 변환",
-    "compile-time-collections": "컴파일타임 컬렉션",
+    "immutable-containers": "불변 값과 fold",
+    "compile-time-collections": "컬렉션 fold",
     struct: "구조체 투영",
-    "mutable-method": "mut self와 move self",
+    "mutable-method": "가변 구조체 필드",
     enum: "페이로드 enum",
     "traits-generics": "trait와 제네릭",
     "numeric-widths": "고정 폭 숫자 타입",
     "associated-types": "연관 타입",
     "value-generics": "컴파일타임 값 제네릭",
-    "result-propagation": "Result와 ? 전파",
+    "result-propagation": "Result 페이로드 매칭",
     "async-await": "구조화된 async와 await",
     "dynamic-trait": "소유 dyn trait",
     effects: "효과 능력 집합",
     "readonly-references": "읽기 전용 참조",
-    ownership: "box와 move 소유권",
+    ownership: "move 소유권",
     "raw-strings": "원시 여러 줄 문자열",
     "sensor-stream": "지연 센서 스트림",
     "nested-stream": "flatMap, skip, take",
@@ -850,21 +897,21 @@ const localizedTitles: Record<Exclude<Locale, "en">, Record<string, string>> = {
     "custom-block": "ユーザーブロックと yield",
     fold: "範囲 fold",
     containers: "動的配列",
-    "immutable-containers": "不変コンテナ変換",
-    "compile-time-collections": "コンパイル時コレクション",
+    "immutable-containers": "不変値と fold",
+    "compile-time-collections": "コレクション fold",
     struct: "構造体の投影",
-    "mutable-method": "mut self と move self",
+    "mutable-method": "可変構造体フィールド",
     enum: "ペイロード enum",
     "traits-generics": "trait とジェネリック",
     "numeric-widths": "固定幅数値型",
     "associated-types": "関連型",
     "value-generics": "コンパイル時値ジェネリック",
-    "result-propagation": "Result と ? の伝播",
+    "result-propagation": "Result ペイロード照合",
     "async-await": "構造化 async と await",
     "dynamic-trait": "所有 dyn trait",
     effects: "エフェクト能力集合",
     "readonly-references": "読み取り専用参照",
-    ownership: "box と move の所有権",
+    ownership: "move 所有権",
     "raw-strings": "生の複数行文字列",
     "sensor-stream": "遅延センサーストリーム",
     "nested-stream": "flatMap、skip、take",
@@ -883,21 +930,21 @@ const localizedTitles: Record<Exclude<Locale, "en">, Record<string, string>> = {
     "custom-block": "用户代码块与 yield",
     fold: "区间 fold",
     containers: "动态数组",
-    "immutable-containers": "不可变容器变换",
-    "compile-time-collections": "编译期集合",
+    "immutable-containers": "不可变值与 fold",
+    "compile-time-collections": "集合 fold",
     struct: "结构体投影",
-    "mutable-method": "mut self 与 move self",
+    "mutable-method": "可变结构体字段",
     enum: "带载荷的 enum",
     "traits-generics": "trait 与泛型",
     "numeric-widths": "定宽数值类型",
     "associated-types": "关联类型",
     "value-generics": "编译期值泛型",
-    "result-propagation": "Result 与 ? 传播",
+    "result-propagation": "Result 载荷匹配",
     "async-await": "结构化 async 与 await",
     "dynamic-trait": "拥有的 dyn trait",
     effects: "效果能力集合",
     "readonly-references": "只读引用",
-    ownership: "box 与 move 所有权",
+    ownership: "move 所有权",
     "raw-strings": "原始多行字符串",
     "sensor-stream": "延迟传感器流",
     "nested-stream": "flatMap、skip 与 take",

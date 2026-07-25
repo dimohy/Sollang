@@ -240,6 +240,12 @@ public build prepared: semanticContext.SemanticSnapshot, ir: [typed.TypedIrNode;
                 prepared -> stageParts(ir, callIndex) => parts
                 ir[callIndex] => call
                 call -> streamSliceKind(prepared) => sliceKind
+                parts.argument0 => stageArgument0!
+                parts.argument1 => stageArgument1!
+                (sliceKind == 3 and stageArgument0! >= 0 and ir[stageArgument0!].kind == 31) -> if {
+                    ir[stageArgument0!].operand1 => stageArgument1!
+                    ir[stageArgument0!].operand0 => stageArgument0!
+                }
                 stages! -> push(StreamStage {
                     callIr: callIndex
                     callAst: call.astNode
@@ -247,8 +253,8 @@ public build prepared: semanticContext.SemanticSnapshot, ir: [typed.TypedIrNode;
                     targetSymbol: call.symbol
                     source0: parts.source0
                     source1: parts.source1
-                    argument0: parts.argument0
-                    argument1: parts.argument1
+                    argument0: stageArgument0!
+                    argument1: stageArgument1!
                     callbackStart: parts.callbackStart
                     callbackEnd: parts.callbackEnd
                     callbackRoot: parts.callbackRoot
@@ -266,6 +272,13 @@ public build prepared: semanticContext.SemanticSnapshot, ir: [typed.TypedIrNode;
                 firstStage.source1 => pipelineSource1!
             } else {
                 terminal.operand0 => pipelineSource0!
+            }
+            # A first-class range node owns its inclusive bounds directly.
+            # Stream planning consumes those bounds as the producer source
+            # instead of treating the range aggregate as one scalar value.
+            (pipelineSource0! >= 0 and ir[pipelineSource0!].kind == 31) -> if {
+                ir[pipelineSource0!].operand1 => pipelineSource1!
+                ir[pipelineSource0!].operand0 => pipelineSource0!
             }
             0 => pipelineStatus!
             (pipelineSource0! >= 0 and pipelineSource0! < (ir -> len) and ir[pipelineSource0!].typeId >= 0 and ir[pipelineSource0!].typeId < (prepared.semantic.types -> len)) -> if {

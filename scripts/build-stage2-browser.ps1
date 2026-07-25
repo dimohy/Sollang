@@ -68,6 +68,11 @@ if ($ReuseCompilerArtifact) {
 
 Write-Host "[browser 3/4] Execute browser compiler regressions."
 foreach ($case in @(
+    @("tests\Sollang.ExampleTests\Fixtures\browser-stage2-range-each.slg", "browser-stage2-range-each.ll", "tests\Sollang.ExampleTests\Fixtures\browser-stage2-range-each.stdout.txt"),
+    @("tests\Sollang.ExampleTests\Fixtures\browser-stage2-range-fold.slg", "browser-stage2-range-fold.ll", "tests\Sollang.ExampleTests\Fixtures\browser-stage2-range-fold.stdout.txt"),
+    @("tests\Sollang.ExampleTests\Fixtures\browser-stage2-when.slg", "browser-stage2-when.ll", "tests\Sollang.ExampleTests\Fixtures\browser-stage2-when.stdout.txt"),
+    @("tests\Sollang.ExampleTests\Fixtures\browser-stage2-raw-strings.slg", "browser-stage2-raw-strings.ll", "tests\Sollang.ExampleTests\Fixtures\browser-stage2-raw-strings.stdout.txt"),
+    @("tests\Sollang.ExampleTests\Fixtures\browser-stage2-containers.slg", "browser-stage2-containers.ll", "tests\Sollang.ExampleTests\Fixtures\browser-stage2-containers.stdout.txt"),
     @("examples\576-linq-multiplication-table.slg", "browser-stage2-table.ll", "examples\expected\576-linq-multiplication-table.stdout.txt"),
     @("examples\580-deferred-text-evaluation.slg", "browser-stage2-deferred-text.ll", "examples\expected\580-deferred-text-evaluation.stdout.txt"),
     @("examples\582-billion-sensor-alerts.slg", "browser-stage2-sensor.ll", "examples\expected\582-billion-sensor-alerts.stdout.txt"),

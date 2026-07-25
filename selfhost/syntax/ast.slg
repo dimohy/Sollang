@@ -246,7 +246,8 @@ expandStreamPipelines tokens: [syntax.SyntaxToken; ~], nodes: move [AstNode; ~] 
 # 53 index assignment, 54 mutable struct member assignment.
 # 55 generic enum constructor, 56 subject when target, 57 standalone when,
 # 58 when arm, 59 enum pattern, 60 additional function input,
-# 61 stream state binding, 62 stream stop statement.
+# 61 stream state binding, 62 stream stop statement, 63 range expression,
+# 64 fold flow target.
 # Function flags: 1 move input, 2 mutable input, 4 public, 8 async, 64 stream.
 # Keyword operator codes use the same
 # -(keywordIndex + 1) representation as syntax diagnostics.
@@ -317,6 +318,8 @@ classifyRule rule: Int -> Int {
     rule == grammar.ruleIdStreamFunctionSignature -> if { 17 => kind! }
     rule == grammar.ruleIdStreamStateBindingStatement -> if { 61 => kind! }
     rule == grammar.ruleIdStreamStopStatement -> if { 62 => kind! }
+    rule == grammar.ruleIdRangeExpression -> if { 63 => kind! }
+    rule == grammar.ruleIdFoldFlowTarget -> if { 64 => kind! }
     kind! => selected
     selected
 }
@@ -1143,6 +1146,27 @@ lowerFrom request: LowerRequest -> [AstNode; ~] {
                 (roleSuffixToken! < roleEnd! and tokens![roleSuffixToken!].kind == grammar.tokenIdBang) -> if {
                     1 => declaration!.flags
                 }
+            }
+        }
+        declaration!.kind == 64 -> if {
+            declaration!.firstToken => foldToken!
+            declaration!.firstToken + declaration!.tokenCount => foldEnd!
+            -1 => foldCommaToken!
+            foldToken! < foldEnd! -> while {
+                tokens![foldToken!].kind == grammar.tokenIdComma -> if { foldToken! => foldCommaToken! }
+                foldToken! + 1 => foldToken!
+            }
+            foldCommaToken! >= 0 -> if {
+                foldCommaToken! - 1 => foldAccumulatorToken!
+                (foldAccumulatorToken! >= declaration!.firstToken and (tokens![foldAccumulatorToken!].kind == grammar.triviaIdWhitespace or tokens![foldAccumulatorToken!].kind == grammar.triviaIdComment)) -> while {
+                    foldAccumulatorToken! - 1 => foldAccumulatorToken!
+                }
+                tokens![foldAccumulatorToken!].kind == grammar.tokenIdIdentifier -> if { foldAccumulatorToken! => declaration!.secondaryToken }
+                foldCommaToken! + 1 => foldItemToken!
+                (foldItemToken! < foldEnd! and (tokens![foldItemToken!].kind == grammar.triviaIdWhitespace or tokens![foldItemToken!].kind == grammar.triviaIdComment)) -> while {
+                    foldItemToken! + 1 => foldItemToken!
+                }
+                (foldItemToken! < foldEnd! and tokens![foldItemToken!].kind == grammar.tokenIdIdentifier) -> if { foldItemToken! => declaration!.tertiaryToken }
             }
         }
         declaration!.kind == 53 -> if {

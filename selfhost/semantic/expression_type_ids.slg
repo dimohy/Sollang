@@ -212,6 +212,9 @@ public resolveContext prepared: semanticContext.SemanticSnapshot -> ExpressionTy
             -1 => builtinTypeId!
             node.kind == 13 -> if { 1 => builtinTypeId! }
             node.kind == 14 -> if { 2 => builtinTypeId! }
+            node.kind == 63 -> if { 25 => builtinTypeId! }
+            node.kind == 64 -> if { 2 => builtinTypeId! }
+            node.kind == 57 -> if { 0 => builtinTypeId! }
             (node.kind >= 44 and node.kind <= 47) -> if { 0 => builtinTypeId! }
             (node.kind == 53 or node.kind == 54) -> if { 0 => builtinTypeId! }
             node.kind == 55 -> if {
@@ -657,6 +660,17 @@ public resolveContext prepared: semanticContext.SemanticSnapshot -> ExpressionTy
         resolvedNameIndex! < (resolvedNames! -> len) -> while {
             resolvedNames![resolvedNameIndex!] => resolvedName
             prepared.package.symbols[sourceRange.symbolStart + resolvedName.symbol] => valueSymbol
+            (valueSymbol.kind == 35 and valueSymbol.astNode >= 0 and prepared.package.nodes[sourceRange.astStart + valueSymbol.astNode].kind == 64) -> if {
+                expressionIndexByAst![sourceRange.astStart + resolvedName.astNode] => foldRoleExisting!
+                ExpressionTypeId { sourceModule: sourceIndex!, astNode: resolvedName.astNode, typeId: 2, status: 0 } => foldRoleType
+                foldRoleExisting! >= 0 -> if {
+                    foldRoleType => expressions![foldRoleExisting!]
+                } else {
+                    expressions! -> len => foldRoleExpression
+                    expressions! -> push(foldRoleType)
+                    foldRoleExpression => expressionIndexByAst![sourceRange.astStart + resolvedName.astNode]
+                }
+            }
             valueSymbol.typeNode >= 0 -> if {
                 referenceIndexByTypeAst![sourceRange.astStart + valueSymbol.typeNode] => referenceIndex!
                 referenceIndex! >= 0 -> if {
@@ -1637,6 +1651,10 @@ public resolveContext prepared: semanticContext.SemanticSnapshot -> ExpressionTy
                     (streamRoleSymbol.kind == 35 and streamRoleSymbol.parent == streamRoleCallScopeSymbol!) -> if {
                         streamRoleElementType! => streamRoleType!
                         (streamRoleCount! > 1 and streamRoleSymbol.astNode == streamRoleCall.callAst and streamRoleOutputType! >= 0) -> if { streamRoleOutputType! => streamRoleType! }
+                        streamRoleType! >= 0 -> if {
+                            types![streamRoleType!] => streamRoleSelectedType
+                            (streamRoleSelectedType.kind == 1 and streamRoleSelectedType.origin == 1 and streamRoleSelectedType.symbol == 25) -> if { 2 => streamRoleType! }
+                        }
                         streamRoleCallRange.astStart + streamRoleName.astNode => streamRoleGlobalAst
                         (streamRoleType! >= 0 and expressionIndexByAst![streamRoleGlobalAst] < 0) -> if {
                             expressions! -> len => streamRoleExpressionIndex

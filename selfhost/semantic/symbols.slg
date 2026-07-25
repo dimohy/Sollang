@@ -38,6 +38,7 @@ public collectPrepared nodes: [ast.AstNode; ~] -> [Symbol; ~] {
         node.kind == 9 -> if { true => isSymbol! }
         node.kind == 61 -> if { true => isSymbol! }
         node.kind == 48 -> if { true => isSymbol! }
+        node.kind == 64 -> if { true => isSymbol! }
         (node.kind == 50 or node.kind == 51) -> if { true => isSymbol! }
         node.kind == 58 -> if { true => isSymbol! }
         node.kind == 60 -> if { true => isSymbol! }
@@ -319,6 +320,45 @@ public collectPrepared nodes: [ast.AstNode; ~] -> [Symbol; ~] {
             }
         }
         roleScopeIndex! + 1 => roleScopeIndex!
+    }
+
+    # Fold owns two Int roles: the running accumulator and current item.
+    symbols! -> len => foldScopeCount
+    0 => foldScopeIndex!
+    foldScopeIndex! < foldScopeCount -> while {
+        symbols![foldScopeIndex!] => foldScope
+        foldScope.kind == 64 -> if {
+            nodes[foldScope.astNode] => foldAst
+            foldAst.secondaryToken >= 0 -> if {
+                symbols! -> push(Symbol {
+                    kind: 35
+                    parent: foldScopeIndex!
+                    astNode: foldScope.astNode
+                    nameToken: foldAst.secondaryToken
+                    typeNode: -1
+                    secondaryTypeNode: -1
+                    blockNameToken: -1
+                    blockTypeNode: -1
+                    blockResultTypeNode: -1
+                    flags: 0
+                })
+            }
+            foldAst.tertiaryToken >= 0 -> if {
+                symbols! -> push(Symbol {
+                    kind: 35
+                    parent: foldScopeIndex!
+                    astNode: foldScope.astNode
+                    nameToken: foldAst.tertiaryToken
+                    typeNode: -1
+                    secondaryTypeNode: -1
+                    blockNameToken: -1
+                    blockTypeNode: -1
+                    blockResultTypeNode: -1
+                    flags: 0
+                })
+            }
+        }
+        foldScopeIndex! + 1 => foldScopeIndex!
     }
 
     symbols!
