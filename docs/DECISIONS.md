@@ -10818,3 +10818,26 @@ Research basis:
 - [COM interfaces](https://learn.microsoft.com/windows/win32/com/interfaces)
 - [VariantClear](https://learn.microsoft.com/windows/win32/api/oleauto/nf-oleauto-variantclear)
 - [Allocating and releasing BSTR memory](https://learn.microsoft.com/cpp/atl-mfc-shared/allocating-and-releasing-memory-for-a-bstr)
+
+## D281 — Self-Host COM Metadata Starts as Flat Stable AST and Symbols
+
+Status: parser and symbol checkpoint implemented
+Date: 2026-07-26
+
+The self-host AST reserves kind 66 for a COM class and kind 67 for a COM
+interface. The class stores alias, CLSID, optional direct-server path, and
+STA/MTA flags in the existing flat node fields. The interface stores its name
+and IID. A COM method remains function kind 7 with native and COM flags and
+stores the explicit vtable slot token. No object graph, metadata dictionary, or
+per-node heap allocation is introduced.
+
+Symbol collection projects each interface into an ordinary nominal type symbol
+and each method into its child function symbol. This lets the existing type and
+name infrastructure be extended instead of adding a parallel COM semantic
+system. Activation, clone, implicit receiver parameters, affine type
+classification, and LLVM lowering remain the next checkpoint; this decision
+does not claim executable Stage2 COM parity yet.
+
+Examples 605 and 606 lock parser acceptance, class/interface/method metadata,
+MTA, slot 3, nominal interface symbols, and parented method symbols on Windows
+and Linux. The complete suites pass Windows **811/811** and Linux **810/810**.

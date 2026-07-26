@@ -1,0 +1,49 @@
+import sollang.compiler.ast as ast
+import sollang.compiler.lexer as lexer
+import sollang.compiler.parser as parser
+
+main {
+    """
+    com fixture class "11111111-2222-3333-4444-555555555555" from "artifacts/com_fixture" in mta {
+        interface Calculator "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee" {
+            add left: Int32, right: Int32 -> Result<Int32, Int32> at 3
+        }
+    }
+
+    main {
+    }
+    """ => source
+    source -> ast.lower => nodes!
+    source -> lexer.lex => tokens!
+    source -> parser.parseEvents => events!
+    events! -> len => eventCount
+    events![eventCount - 1] => outcome
+    "accepted = $(outcome.value)" -> println
+    nodes! -> len => nodeCount
+    "nodes = $nodeCount" -> println
+    nodes! -> each node {
+        node.kind == 66 -> if {
+            tokens![node.payloadToken] => aliasToken
+            tokens![node.secondaryToken] => classToken
+            tokens![node.tertiaryToken] => serverToken
+            source -> slice(aliasToken.span.start, aliasToken.span.length) => alias
+            source -> slice(classToken.span.start, classToken.span.length) => classId
+            source -> slice(serverToken.span.start, serverToken.span.length) => server
+            "class = $alias,$classId,$server,$(node.flags)" -> println
+        }
+        node.kind == 67 -> if {
+            tokens![node.payloadToken] => interfaceToken
+            tokens![node.secondaryToken] => iidToken
+            source -> slice(interfaceToken.span.start, interfaceToken.span.length) => interfaceName
+            source -> slice(iidToken.span.start, iidToken.span.length) => iid
+            "interface = $interfaceName,$iid" -> println
+        }
+        (node.kind == 7 and node.flags / 512 % 2 == 1) -> if {
+            tokens![node.payloadToken] => methodToken
+            tokens![node.tertiaryToken] => slotToken
+            source -> slice(methodToken.span.start, methodToken.span.length) => methodName
+            source -> slice(slotToken.span.start, slotToken.span.length) => slot
+            "method = $methodName,$slot,$(node.flags)" -> println
+        }
+    }
+}

@@ -247,9 +247,11 @@ expandStreamPipelines tokens: [syntax.SyntaxToken; ~], nodes: move [AstNode; ~] 
 # 55 generic enum constructor, 56 subject when target, 57 standalone when,
 # 58 when arm, 59 enum pattern, 60 additional function input,
 # 61 stream state binding, 62 stream stop statement, 63 range expression,
-# 64 fold flow target, 65 native library declaration.
+# 64 fold flow target, 65 native library declaration, 66 COM class declaration,
+# 67 COM interface declaration.
 # Function flags: 1 move input, 2 mutable input, 4 public, 8 async, 64 stream,
-# 128 native ABI declaration. Struct flag 256 marks an explicit `abi struct`.
+# 128 native ABI declaration, 512 COM method. Struct flag 256 marks an explicit
+# `abi struct`. COM class flags: 1024 STA, 2048 MTA.
 # Keyword operator codes use the same
 # -(keywordIndex + 1) representation as syntax diagnostics.
 classifyRule rule: Int -> Int {
@@ -262,6 +264,9 @@ classifyRule rule: Int -> Int {
     rule == grammar.ruleIdTraitDeclaration -> if { 5 => kind! }
     rule == grammar.ruleIdImplDeclaration -> if { 6 => kind! }
     rule == grammar.ruleIdFunctionDeclaration -> if { 7 => kind! }
+    rule == grammar.ruleIdComLibraryDeclaration -> if { 66 => kind! }
+    rule == grammar.ruleIdComInterfaceDeclaration -> if { 67 => kind! }
+    rule == grammar.ruleIdComMethodDeclaration -> if { 7 => kind! }
     rule == grammar.ruleIdNativeLibraryDeclaration -> if { 65 => kind! }
     rule == grammar.ruleIdNativeFunctionDeclaration -> if { 7 => kind! }
     rule == grammar.ruleIdMainBlock -> if { 8 => kind! }
@@ -840,6 +845,83 @@ lowerFrom request: LowerRequest -> [AstNode; ~] {
             }
             nativeAliasToken! => declaration!.payloadToken
             nativeLibraryToken! => declaration!.secondaryToken
+        }
+        declaration!.kind == 66 -> if {
+            -1 => comAliasToken!
+            -1 => comClassToken!
+            -1 => comServerToken!
+            0 => comIdentifierOrdinal!
+            declaration!.firstToken => comHeaderToken!
+            declaration!.firstToken + declaration!.tokenCount => comHeaderEnd
+            comHeaderToken! < comHeaderEnd -> while {
+                tokens![comHeaderToken!].kind == grammar.tokenIdLeftBrace -> if {
+                    comHeaderEnd => comHeaderToken!
+                } else {
+                    tokens![comHeaderToken!].kind == grammar.tokenIdIdentifier -> if {
+                        comIdentifierOrdinal! == 1 -> if { comHeaderToken! => comAliasToken! }
+                        tokens![comHeaderToken!] => comHeaderIdentifier
+                        comHeaderIdentifier.span.length == UIntSize(3) -> if {
+                            source -> byte(comHeaderIdentifier.span.start) => comMode0
+                            source -> byte(comHeaderIdentifier.span.start + UIntSize(1)) => comMode1
+                            source -> byte(comHeaderIdentifier.span.start + UIntSize(2)) => comMode2
+                            (comMode0 == UInt8(115) and comMode1 == UInt8(116) and comMode2 == UInt8(97)) -> if {
+                                declaration!.flags + 1024 => declaration!.flags
+                            }
+                            (comMode0 == UInt8(109) and comMode1 == UInt8(116) and comMode2 == UInt8(97)) -> if {
+                                declaration!.flags + 2048 => declaration!.flags
+                            }
+                        }
+                        comIdentifierOrdinal! + 1 => comIdentifierOrdinal!
+                    }
+                    tokens![comHeaderToken!].kind == grammar.tokenIdString -> if {
+                        comClassToken! < 0 -> if {
+                            comHeaderToken! => comClassToken!
+                        } else {
+                            comServerToken! < 0 -> if { comHeaderToken! => comServerToken! }
+                        }
+                    }
+                    comHeaderToken! + 1 => comHeaderToken!
+                }
+            }
+            comAliasToken! => declaration!.payloadToken
+            comClassToken! => declaration!.secondaryToken
+            comServerToken! => declaration!.tertiaryToken
+        }
+        declaration!.kind == 67 -> if {
+            declaration!.flags + 512 => declaration!.flags
+            0 => comInterfaceIdentifierOrdinal!
+            declaration!.firstToken => comInterfaceToken!
+            declaration!.firstToken + declaration!.tokenCount => comInterfaceEnd
+            comInterfaceToken! < comInterfaceEnd -> while {
+                tokens![comInterfaceToken!].kind == grammar.tokenIdLeftBrace -> if {
+                    comInterfaceEnd => comInterfaceToken!
+                } else {
+                    tokens![comInterfaceToken!].kind == grammar.tokenIdIdentifier -> if {
+                        comInterfaceIdentifierOrdinal! == 1 -> if { comInterfaceToken! => declaration!.payloadToken }
+                        comInterfaceIdentifierOrdinal! + 1 => comInterfaceIdentifierOrdinal!
+                    }
+                    (tokens![comInterfaceToken!].kind == grammar.tokenIdString and declaration!.secondaryToken < 0) -> if {
+                        comInterfaceToken! => declaration!.secondaryToken
+                    }
+                    comInterfaceToken! + 1 => comInterfaceToken!
+                }
+            }
+        }
+        declaration!.cstRuleId == grammar.ruleIdComMethodDeclaration -> if {
+            declaration!.flags + 128 + 512 => declaration!.flags
+            declaration!.firstToken => comMethodToken!
+            declaration!.firstToken + declaration!.tokenCount => comMethodEnd
+            false => comMethodNameFound!
+            comMethodToken! < comMethodEnd -> while {
+                (not comMethodNameFound! and tokens![comMethodToken!].kind == grammar.tokenIdIdentifier) -> if {
+                    comMethodToken! => declaration!.payloadToken
+                    true => comMethodNameFound!
+                }
+                tokens![comMethodToken!].kind == grammar.tokenIdNumber -> if {
+                    comMethodToken! => declaration!.tertiaryToken
+                }
+                comMethodToken! + 1 => comMethodToken!
+            }
         }
         declaration!.cstRuleId == grammar.ruleIdNativeFunctionDeclaration -> if {
             declaration!.flags + 128 => declaration!.flags

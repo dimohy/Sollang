@@ -1,0 +1,26 @@
+import sollang.compiler.ast as ast
+import sollang.compiler.lexer as lexer
+import sollang.compiler.semantic.symbols as symbols
+
+main {
+    """
+    com fixture class "11111111-2222-3333-4444-555555555555" in mta {
+        interface Calculator "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee" {
+            add left: Int32, right: Int32 -> Result<Int32, Int32> at 3
+        }
+    }
+
+    main {
+    }
+    """ => source
+    source -> ast.lower => nodes!
+    source -> lexer.lex => tokens!
+    nodes! -> symbols.collectPrepared => table!
+    table! -> each symbol {
+        ((symbol.kind == 3 or symbol.kind == 7) and symbol.flags / 512 % 2 == 1 and symbol.nameToken >= 0) -> if {
+            tokens![symbol.nameToken] => nameToken
+            source -> slice(nameToken.span.start, nameToken.span.length) => name
+            "symbol = $(symbol.kind),$(symbol.parent),$name,$(symbol.flags)" -> println
+        }
+    }
+}

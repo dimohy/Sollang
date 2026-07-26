@@ -3459,3 +3459,18 @@ hidden-handle rules, then lower the runtime through
 `selfhost/llvm/emitter/com_runtime.slg`. It must not move that independent
 runtime into the already bounded `text.slg`. Checked `QueryInterface`, `BSTR`,
 and `VARIANT` follow after activation/method/drop parity is established.
+
+### Self-host COM AST and symbol checkpoint (D281)
+
+The generated grammar is now consumed by the self-host parser for COM
+declarations. Flat AST kinds 66 and 67 carry class and interface metadata;
+methods reuse function kind 7 with native+COM flags and their explicit vtable
+slot. Symbol collection projects an interface as a nominal type and its methods
+as child function symbols, preserving one semantic graph rather than creating a
+second COM-only resolver.
+
+Examples 605 and 606 pass on Windows and Linux, and the full suites pass
+Windows **811/811** and Linux **810/810**. This checkpoint deliberately stops
+before synthetic activation/clone functions, implicit receiver typing, affine
+classification, and LLVM lowering; those form the next executable Stage2
+slice.
