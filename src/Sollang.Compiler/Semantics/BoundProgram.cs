@@ -87,7 +87,8 @@ internal sealed record BoundFunction(
     BoundType? StreamElementType = null,
     string? StreamElementTypeTemplate = null,
     string? NativeLibrary = null,
-    string? NativeSymbol = null);
+    string? NativeSymbol = null,
+    ComFunctionMetadata? Com = null);
 
 internal sealed record BoundFunctionParameter(
     string Name,
@@ -239,7 +240,8 @@ internal sealed record BoundStructDefinition(
     string ModuleName = "",
     bool IsPublic = false,
     string? DeclaringTypeName = null,
-    bool IsAbi = false)
+    bool IsAbi = false,
+    ComInterfaceMetadata? ComInterface = null)
 {
     public BoundStructField GetField(string name)
     {
@@ -624,7 +626,8 @@ internal sealed class TypeDefinitionTable
         {
             if (_structs.TryGetValue(type, out var structure))
             {
-                return structure.Fields.Any(field => ContainsOwnedStorage(field.Type, visiting));
+                return structure.ComInterface is not null
+                    || structure.Fields.Any(field => ContainsOwnedStorage(field.Type, visiting));
             }
             if (_enums.TryGetValue(type, out var enumeration))
             {

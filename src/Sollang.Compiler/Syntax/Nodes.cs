@@ -32,7 +32,8 @@ internal sealed record StructDeclaration(
     string ModuleName = "",
     bool IsPublic = false,
     string? DeclaringTypeName = null,
-    bool IsAbi = false);
+    bool IsAbi = false,
+    ComInterfaceMetadata? ComInterface = null);
 
 internal sealed record StructFieldDeclaration(string Name, string TypeName, int Line, int Column);
 
@@ -98,7 +99,37 @@ internal sealed record FunctionDeclaration(
     IReadOnlyList<FunctionParameterDeclaration>? AdditionalBlockParameters = null,
     string? StreamElementType = null,
     string? NativeLibrary = null,
-    string? NativeSymbol = null);
+    string? NativeSymbol = null,
+    ComFunctionMetadata? Com = null);
+
+internal enum ComApartment
+{
+    Sta,
+    Mta
+}
+
+internal enum ComFunctionOperation
+{
+    Activate,
+    Clone,
+    Method
+}
+
+internal sealed record ComInterfaceMetadata(
+    string Alias,
+    string ClassId,
+    string InterfaceId,
+    string? Server,
+    ComApartment Apartment);
+
+internal sealed record ComFunctionMetadata(
+    ComFunctionOperation Operation,
+    string InterfaceType,
+    string ClassId,
+    string InterfaceId,
+    string? Server,
+    ComApartment Apartment,
+    int VtableSlot = -1);
 
 internal static class InferredFunctionType
 {

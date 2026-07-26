@@ -7,7 +7,7 @@ namespace Sollang.Compiler.CodeGen;
 internal sealed partial class LlvmEmitter
 {
     private IReadOnlyList<BoundFunction> NativeFunctions() => _program.Functions.Values
-        .Where(static function => function.Kind == BoundFunctionKind.Native)
+        .Where(static function => function.Kind == BoundFunctionKind.Native && function.Com is null)
         .GroupBy(static function => function.Name, StringComparer.Ordinal)
         .Select(static group => group.First())
         .OrderBy(static function => function.Name, StringComparer.Ordinal)
@@ -20,7 +20,7 @@ internal sealed partial class LlvmEmitter
         .ToArray();
 
     private bool UsesNativeInterop => _program.Functions.Values.Any(
-        static function => function.Kind == BoundFunctionKind.Native);
+        static function => function.Kind == BoundFunctionKind.Native && function.Com is null);
 
     private void EmitNativeGlobals()
     {
@@ -158,6 +158,10 @@ internal sealed partial class LlvmEmitter
         RuntimeValue? argument,
         IReadOnlyList<RuntimeValue>? additionalArguments)
     {
+        if (function.Com is not null)
+        {
+            return EmitComFunctionCall(function, argument, additionalArguments);
+        }
         var address = NextTemp("native_target");
         EmitLoad(address, "ptr", NativeFunctionPointerGlobal(function), 8);
         if (UsesNativeAggregateAbi(function))

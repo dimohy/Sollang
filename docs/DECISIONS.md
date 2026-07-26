@@ -10771,3 +10771,50 @@ The native fixture gate passes Stage1/Stage2 on both operating systems, and the
 combined lexer/emitter affected suite passes 314/314. Compiler warm medians are
 66.505 ms and 68.131 ms on Windows, and 68.419 ms and 68.546 ms on Linux, all
 inside the retained 5% performance gate.
+
+## D280 — COM Is an Explicit Affine Projection of the Common Native ABI
+
+Status: reference-compiler vertical slice implemented
+Date: 2026-07-26
+
+Sollang groups each COM class, activation source, apartment, interface IID, and
+vtable method in one `com ... class` declaration. Registered activation omits
+`from` and uses `CoCreateInstance`; direct in-process servers name `from` and
+use `DllGetClassObject` plus a cached `IClassFactory`. `in sta` or `in mta`
+makes the thread apartment part of source rather than an invisible runtime
+choice.
+
+An interface is an affine nominal value whose hidden pointer cannot be read,
+written, or constructed with a struct literal. Scope cleanup calls `Release`.
+An explicit generated `clone` calls `AddRef`; activation and failing methods
+surface `HRESULT` as `Result<..., Int32>`. The ordinary call remains
+flow-oriented, so an owned receiver can be written
+`calculator -> fixture.add(20, 22)`.
+
+The generated Windows LLVM initializes COM once, resolves direct servers and
+class factories once, and lowers scalar calls to the declared vtable slot.
+There is no wrapper object, reflection, heap allocation, symbol lookup, or
+aggregate copy in the steady-state call path. Example 604 executes activation,
+slot-3 calls, cloning, two deterministic releases, and a final zero live-
+reference probe against a real COM DLL. Linux and browser-WASM targets reject
+the declaration with an exact capability diagnostic.
+
+The checkpoint passes the Windows full suite **809/809** and the Linux full
+suite **808/808** (the Windows-only executable is excluded). The emitter facade
+remains below its enforced ceiling at **16,578 lines**. Windows compiler warm
+medians are **67.525 ms** for example 577 and **66.674 ms** for example 582,
+respectively 1.5% slower and 2.1% faster than the retained pre-COM measurements;
+both remain inside the 5% gate.
+
+This checkpoint does not claim the full projection. Stage2 parity,
+`QueryInterface`, `BSTR`, and `VARIANT` remain. The self-host implementation
+must be extracted into a cohesive emitter module so the 17,000-line
+`text.slg` ceiling remains enforced.
+
+Research basis:
+
+- [CoCreateInstance](https://learn.microsoft.com/windows/win32/api/combaseapi/nf-combaseapi-cocreateinstance)
+- [CoInitializeEx](https://learn.microsoft.com/windows/win32/api/combaseapi/nf-combaseapi-coinitializeex)
+- [COM interfaces](https://learn.microsoft.com/windows/win32/com/interfaces)
+- [VariantClear](https://learn.microsoft.com/windows/win32/api/oleauto/nf-oleauto-variantclear)
+- [Allocating and releasing BSTR memory](https://learn.microsoft.com/cpp/atl-mfc-shared/allocating-and-releasing-memory-for-a-bstr)

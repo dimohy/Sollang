@@ -1,0 +1,28 @@
+com fixture class "8A90E2A5-7A2D-4E2A-98A0-6B5C2A12C501" from "artifacts/com-interop/com_fixture" in mta {
+    interface Calculator "4C10A47B-725D-41D3-B5A6-70D67D3BEB11" {
+        add left: Int32, right: Int32 -> Result<Int32, Int32> at 3
+    }
+}
+
+native probe from "artifacts/com-interop/com_fixture" {
+    references: -> Int32 as "com_fixture_live_references"
+}
+
+main {
+    fixture.create -> when {
+        Ok(calculator) {
+            calculator -> fixture.add(20, 22) -> when {
+                Ok(value) => "COM result = $value" -> println
+                Err(status) => "COM method failed = $status" -> println
+            }
+            calculator -> fixture.clone => cloned
+            cloned -> fixture.add(19, 23) -> when {
+                Ok(value) => "COM clone result = $value" -> println
+                Err(status) => "COM clone method failed = $status" -> println
+            }
+        }
+        Err(status) => "COM activation failed = $status" -> println
+    }
+    probe.references => references
+    "COM references after scope = $references" -> println
+}

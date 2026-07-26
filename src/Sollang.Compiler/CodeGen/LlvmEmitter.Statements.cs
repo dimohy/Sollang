@@ -24,6 +24,7 @@ internal sealed partial class LlvmEmitter
         EmitStore("i1", "true", "%ok_state", 1);
         EmitPlatformFunctionBlock(_platform.EmitEntryHandles);
         EmitNativeBinding();
+        EmitComBinding();
         if (_usesProcessArguments)
         {
             EmitPlatformFunctionBlock(_platform.EmitProcessEntry);
@@ -49,6 +50,7 @@ internal sealed partial class LlvmEmitter
             EmitPlatformFunctionBlock(_platform.EmitExitCleanup);
         }
         EmitNativeCleanup();
+        EmitComCleanup();
         EmitPlatformFunctionBlock(_platform.EmitExitHandles);
 
         var finalOk = NextTemp("final_ok");

@@ -937,7 +937,7 @@ internal sealed partial class SemanticCompiler
                 "async functions require a transferable result, a sendable input, and a non-local user declaration; owned inputs must use move");
         }
         var kind = BindFunctionKind(function, inputType, returnType, isLocal);
-        if (kind == BoundFunctionKind.Native)
+        if (kind == BoundFunctionKind.Native && function.Com is null)
         {
             if (inputType is { } nativeInputType)
             {
@@ -958,6 +958,15 @@ internal sealed partial class SemanticCompiler
                     parameter.Column);
             }
             ValidateNativeAbiResult(returnType, function.Line, function.Column);
+        }
+        if (function.Com is not null)
+        {
+            ValidateComFunction(
+                function,
+                inputType,
+                inputOwnership,
+                returnType,
+                additionalParameters);
         }
         if (kind == BoundFunctionKind.RuntimeMouseEvents)
         {
@@ -1015,7 +1024,8 @@ internal sealed partial class SemanticCompiler
             StreamElementTypeTemplate: streamElementTypeTemplate,
             NativeLibrary: function.NativeLibrary,
             NativeSymbol: function.NativeSymbol
-                ?? function.Name[(function.Name.LastIndexOf('.') + 1)..]);
+                ?? function.Name[(function.Name.LastIndexOf('.') + 1)..],
+            Com: function.Com);
     }
 
     private IReadOnlySet<string> BindFunctionEffects(FunctionDeclaration function)
@@ -1228,6 +1238,26 @@ internal sealed partial class SemanticCompiler
             }
             ValidateNativeAbiType(function.ReturnType, "result", function.Line, function.Column);
         }
+        if (function.Com is not null)
+        {
+            if (isLocal)
+            {
+                throw Error(function.Line, function.Column, "COM functions cannot be local");
+            }
+            if (function.IsIntrinsic
+                || function.Body is not null
+                || function.BlockBody.Count > 0
+                || function.BlockInputName is not null
+                || function.GenericParameterName is not null
+                || function.IsAsync
+                || function.StreamElementType is not null)
+            {
+                throw Error(
+                    function.Line,
+                    function.Column,
+                    "COM functions must be non-generic synchronous declarations without a body or block");
+            }
+        }
 
     }
 
@@ -1308,6 +1338,98 @@ internal sealed partial class SemanticCompiler
         if (!IsNativeAbiValueType(type))
         {
             throw Error(line, column, $"native function result type '{FormatType(type)}' is not ABI-safe");
+        }
+    }
+
+    private void ValidateComFunction(
+        FunctionDeclaration function,
+        BoundType? inputType,
+        BoundFunctionInputOwnership inputOwnership,
+        BoundType returnType,
+        IReadOnlyList<BoundFunctionParameter> additionalParameters)
+    {
+        var metadata = function.Com
+            ?? throw new InvalidOperationException("COM metadata is required");
+        if (!Guid.TryParse(metadata.ClassId, out _))
+        {
+            throw Error(function.Line, function.Column, $"invalid COM CLSID '{metadata.ClassId}'");
+        }
+        if (!Guid.TryParse(metadata.InterfaceId, out _))
+        {
+            throw Error(function.Line, function.Column, $"invalid COM IID '{metadata.InterfaceId}'");
+        }
+        if (!_types.TryResolve(metadata.InterfaceType, out var interfaceType)
+            || !_types.IsStruct(interfaceType)
+            || _types.GetStruct(interfaceType).ComInterface is null)
+        {
+            throw Error(
+                function.Line,
+                function.Column,
+                $"unknown COM interface type '{metadata.InterfaceType}'");
+        }
+
+        if (metadata.Operation == ComFunctionOperation.Activate)
+        {
+            if (inputType is not null
+                || additionalParameters.Count != 0
+                || !_types.TryGetResultTypes(returnType, out var activationResult)
+                || activationResult.Ok != interfaceType
+                || activationResult.Error != BoundType.Int)
+            {
+                throw Error(
+                    function.Line,
+                    function.Column,
+                    "COM activation must return Result<Interface, Int32> without inputs");
+            }
+            return;
+        }
+
+        var expectedReference = _types.GetOrAddReference(interfaceType);
+        if (inputType != expectedReference || inputOwnership != BoundFunctionInputOwnership.Default)
+        {
+            throw Error(
+                function.Line,
+                function.Column,
+                "COM clone and method receivers must be readonly interface references");
+        }
+
+        if (metadata.Operation == ComFunctionOperation.Clone)
+        {
+            if (additionalParameters.Count != 0 || returnType != interfaceType)
+            {
+                throw Error(
+                    function.Line,
+                    function.Column,
+                    "COM clone must return the same interface type without additional inputs");
+            }
+            return;
+        }
+
+        if (metadata.VtableSlot < 3)
+        {
+            throw Error(function.Line, function.Column, "COM method vtable slots begin at 3");
+        }
+        foreach (var parameter in additionalParameters)
+        {
+            if (parameter.Ownership != BoundFunctionInputOwnership.Default
+                || !IsNativeAbiValueType(parameter.Type)
+                || _types.IsStruct(parameter.Type))
+            {
+                throw Error(
+                    parameter.Line,
+                    parameter.Column,
+                    $"COM method parameter '{parameter.Name}' must be a fixed-width scalar in this slice");
+            }
+        }
+        if (!_types.TryGetResultTypes(returnType, out var methodResult)
+            || methodResult.Error != BoundType.Int
+            || !(methodResult.Ok == BoundType.Unit
+                || (IsNativeAbiValueType(methodResult.Ok) && !_types.IsStruct(methodResult.Ok))))
+        {
+            throw Error(
+                function.Line,
+                function.Column,
+                "COM methods must return Result<Unit, Int32> or Result<fixed-width scalar, Int32>");
         }
     }
 
@@ -2191,7 +2313,7 @@ internal sealed partial class SemanticCompiler
         BoundType returnType,
         bool isLocal)
     {
-        if (function.NativeLibrary is not null)
+        if (function.NativeLibrary is not null || function.Com is not null)
         {
             return BoundFunctionKind.Native;
         }
@@ -3244,6 +3366,13 @@ internal sealed partial class SemanticCompiler
         }
 
         var definition = _types.GetStruct(targetType);
+        if (definition.ComInterface is not null)
+        {
+            throw Error(
+                assignment.Line,
+                assignment.Column,
+                $"COM interface '{definition.Name}' cannot be mutated directly");
+        }
         var field = definition.Fields.FirstOrDefault(candidate => candidate.Name == assignment.FieldName)
             ?? throw Error(
                 assignment.Line,
@@ -5338,6 +5467,13 @@ internal sealed partial class SemanticCompiler
         bool allowReadIntCall)
     {
         var definition = _types.GetStruct(expectedType);
+        if (definition.ComInterface is not null)
+        {
+            throw Error(
+                expression.Line,
+                expression.Column,
+                $"COM interface '{definition.Name}' can only be created by its COM activation function");
+        }
         var initializers = new Dictionary<string, DictionaryEntryExpression>(StringComparer.Ordinal);
         foreach (var entry in expression.Entries)
         {
@@ -5393,6 +5529,13 @@ internal sealed partial class SemanticCompiler
         EnsureTypeVisible(type, expression.Line, expression.Column);
 
         var definition = _types.GetStruct(type);
+        if (definition.ComInterface is not null)
+        {
+            throw Error(
+                expression.Line,
+                expression.Column,
+                $"COM interface '{definition.Name}' can only be created by its COM activation function");
+        }
         var initializers = new Dictionary<string, StructFieldInitializer>(StringComparer.Ordinal);
         foreach (var initializer in expression.Fields)
         {
@@ -5569,6 +5712,13 @@ internal sealed partial class SemanticCompiler
         }
 
         var definition = _types.GetStruct(sourceType);
+        if (definition.ComInterface is not null)
+        {
+            throw Error(
+                expression.Line,
+                expression.Column,
+                $"COM interface '{definition.Name}' does not expose its raw handle");
+        }
         var field = definition.Fields.FirstOrDefault(candidate => candidate.Name == expression.FieldName);
         if (field is not null)
         {
@@ -6743,7 +6893,10 @@ internal sealed partial class SemanticCompiler
             {
                 EnsureFunctionVisible(function, target.Line, target.Column);
                 EnsureAsyncRuntimeCallable(function, target.Line, target.Column, path);
-                if (function.Kind is not (BoundFunctionKind.User or BoundFunctionKind.RuntimeMouseEvents)
+                if (function.Kind is not (
+                        BoundFunctionKind.User
+                        or BoundFunctionKind.Native
+                        or BoundFunctionKind.RuntimeMouseEvents)
                     && target.Arguments.Count != 0)
                 {
                     throw Error(
@@ -9330,6 +9483,11 @@ internal sealed partial class SemanticCompiler
             or "enum"
             or "trait"
             or "impl"
+            or "com"
+            or "class"
+            or "interface"
+            or "sta"
+            or "mta"
             or "for"
             or "self"
             or "as"
@@ -9574,7 +9732,8 @@ internal sealed partial class SemanticCompiler
                 declaration.ModuleName,
                 declaration.IsPublic,
                 declaration.DeclaringTypeName,
-                declaration.IsAbi));
+                declaration.IsAbi,
+                declaration.ComInterface));
         }
 
         var enums = new Dictionary<TypeId, BoundEnumDefinition>();
@@ -9890,7 +10049,9 @@ internal sealed partial class SemanticCompiler
             {
                 throw Error(line, column, "ref requires a non-reference value type");
             }
-            if (_types.ContainsOwnedStorage(elementType))
+            if (_types.ContainsOwnedStorage(elementType)
+                && !(_types.IsStruct(elementType)
+                    && _types.GetStruct(elementType).ComInterface is not null))
             {
                 throw Error(
                     line,

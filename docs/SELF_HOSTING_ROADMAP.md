@@ -3439,3 +3439,23 @@ fractional-number parsing.
 The common ABI structure/pointer slice is complete. The next interoperation
 slice is Sollang shared-library export and reuse, followed by COM projection
 and the Clang-generated C++ shim.
+
+### Reference-compiler COM vertical slice (D280)
+
+The C# reference compiler now parses and validates grouped COM class/interface
+declarations, supports registered and direct-DLL activation, makes STA/MTA
+selection explicit, and emits affine interface ownership. The Windows fixture
+proves `CoInitializeEx`, cached `IClassFactory` activation, direct vtable calls,
+explicit `AddRef`, automatic `Release`, and zero live references after scope.
+Linux and browser-WASM reject COM with target-specific diagnostics.
+
+The checkpoint passes Windows **809/809** and Linux **808/808** full tests.
+`text.slg` is **16,578 lines**, below the enforced 17,000-line ceiling. Compiler
+warm medians are **67.525 ms** and **66.674 ms**, both inside the 5% gate.
+
+This is intentionally a reference-compiler checkpoint, not Stage2 completion.
+The next self-host slice must add COM AST and typed-IR metadata, ownership and
+hidden-handle rules, then lower the runtime through
+`selfhost/llvm/emitter/com_runtime.slg`. It must not move that independent
+runtime into the already bounded `text.slg`. Checked `QueryInterface`, `BSTR`,
+and `VARIANT` follow after activation/method/drop parity is established.

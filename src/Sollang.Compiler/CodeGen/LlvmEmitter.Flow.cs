@@ -116,7 +116,10 @@ internal sealed partial class LlvmEmitter
                 || TryResolveFunction(target.Path, out function)
                 || TryResolveInstanceMethod(current.Type, path, out function))
             {
-                if (function.Kind is not (BoundFunctionKind.User or BoundFunctionKind.RuntimeMouseEvents)
+                if (function.Kind is not (
+                        BoundFunctionKind.User
+                        or BoundFunctionKind.Native
+                        or BoundFunctionKind.RuntimeMouseEvents)
                     && target.Arguments.Count != 0)
                 {
                     throw new SollangException($"function value-flow target '{path}' does not accept additional arguments in this slice");

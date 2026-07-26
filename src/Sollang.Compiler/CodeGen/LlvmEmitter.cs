@@ -626,6 +626,7 @@ internal sealed partial class LlvmEmitter
         EmitGlobalLine("@sollang_writer_buffer = internal global [8192 x i64] zeroinitializer, align 8");
         EmitGlobalLine("@sollang_writer_buffer_count = internal global i64 0");
         EmitNativeGlobals();
+        EmitComGlobals();
         if (_usesAsync)
         {
             EmitGlobalLine("@sollang_task_ready_head = internal global ptr null");
@@ -651,6 +652,7 @@ internal sealed partial class LlvmEmitter
 
         EmitPlatformFunctionBlock(_platform.EmitExternalDeclarations);
         EmitNativeDeclarations();
+        EmitComDeclarations();
         EmitPlatformFunctionBlock(_platform.EmitMemoryDeclarations);
         if (_usesAsync)
         {

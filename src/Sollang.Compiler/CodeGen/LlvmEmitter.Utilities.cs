@@ -777,11 +777,14 @@ internal sealed partial class LlvmEmitter
         return name.Name;
     }
 
-    private static bool IsAnonymousOwnedExpression(Expression expression)
+    private bool IsAnonymousOwnedExpression(Expression expression)
     {
         return expression switch
         {
             NameExpression => false,
+            FieldAccessExpression { Source: NameExpression owner }
+                => !_locals.ContainsKey(owner.Name)
+                    && !_mutableLocals.Contains(owner.Name),
             FieldAccessExpression field => IsAnonymousOwnedExpression(field.Source),
             _ => true
         };

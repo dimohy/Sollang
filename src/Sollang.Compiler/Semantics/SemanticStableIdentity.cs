@@ -22,6 +22,14 @@ internal static class SemanticStableIdentity
             fields.Add(structure.DeclaringTypeName ?? "");
             fields.Add(structure.IsPublic ? "public" : "private");
             fields.Add(structure.IsAbi ? "abi" : "sollang");
+            fields.Add(structure.ComInterface is null ? "value" : "com");
+            if (structure.ComInterface is { } comInterface)
+            {
+                fields.Add(comInterface.ClassId);
+                fields.Add(comInterface.InterfaceId);
+                fields.Add(comInterface.Server ?? "");
+                fields.Add(((int)comInterface.Apartment).ToString(CultureInfo.InvariantCulture));
+            }
             foreach (var field in structure.Fields)
             {
                 fields.Add(field.Name);
@@ -158,6 +166,18 @@ internal static class SemanticStableIdentity
         Append(builder, function.BlockInputTypeTemplate ?? "");
         Append(builder, function.BlockResultTypeTemplate ?? "");
         Append(builder, function.StreamElementTypeTemplate ?? "");
+        Append(builder, function.NativeLibrary ?? "");
+        Append(builder, function.NativeSymbol ?? "");
+        if (function.Com is { } com)
+        {
+            Append(builder, ((int)com.Operation).ToString(CultureInfo.InvariantCulture));
+            Append(builder, com.InterfaceType);
+            Append(builder, com.ClassId);
+            Append(builder, com.InterfaceId);
+            Append(builder, com.Server ?? "");
+            Append(builder, ((int)com.Apartment).ToString(CultureInfo.InvariantCulture));
+            Append(builder, com.VtableSlot.ToString(CultureInfo.InvariantCulture));
+        }
         foreach (var parameter in function.AdditionalParameters ?? [])
         {
             Append(builder, parameter.Name);

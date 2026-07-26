@@ -236,6 +236,10 @@ var allDiagnosticFiles = Directory.Exists(diagnosticDir)
 var expectedFiles = allExpectedFiles
     .Where(file => MatchesFilters(Path.GetFileName(file)[..^".stdout.txt".Length], filters, exactFilters))
     .Where(file => MatchesSuite(file, suite))
+    .Where(file => testTarget == TestTarget.WindowsX64
+        || !File.Exists(Path.Combine(
+            expectedDir,
+            Path.GetFileName(file)[..^".stdout.txt".Length] + ".windows-only.txt")))
     .Where(file => MatchesAffectedExpected(file, repoRoot, expectedDir, affectedPaths))
     .OrderByDescending(IsExpensiveSelfHostLlvmTest)
     .ThenBy(file => file, StringComparer.Ordinal)
@@ -373,6 +377,29 @@ if (expectedFiles.Any(file => Path.GetFileName(file) is
         "443-registry-dependency.stdout.txt" or "444-registry-lock-pin.stdout.txt"))
 {
     PrepareRegistryDependencyFixture(baseArtifactsDir, compilerDll, repoRoot);
+}
+if (testTarget == TestTarget.WindowsX64
+    && expectedFiles.Any(file => string.Equals(
+        Path.GetFileName(file),
+        "604-com-interface.stdout.txt",
+        StringComparison.Ordinal)))
+{
+    var fixtureBuild = Run(
+        "powershell.exe",
+        [
+            "-NoProfile",
+            "-ExecutionPolicy", "Bypass",
+            "-File", Path.Combine(repoRoot, "scripts", "build-com-interop-fixture.ps1")
+        ],
+        input: null,
+        repoRoot);
+    if (fixtureBuild.ExitCode != 0)
+    {
+        Console.Error.WriteLine("FAIL COM fixture build");
+        Console.Error.WriteLine(fixtureBuild.Stdout);
+        Console.Error.WriteLine(fixtureBuild.Stderr);
+        return 1;
+    }
 }
 
 var failures = 0;
@@ -811,11 +838,18 @@ Parallel.ForEach(diagnosticFiles, new ParallelOptions { MaxDegreeOfParallelism =
     {
         testLockTaken = true;
     }
-    var expectedPath = Path.Combine(diagnosticDir, name + ".stderr.contains.txt");
+    var targetExpectedPath = Path.Combine(
+        diagnosticDir,
+        name + "." + TestTargetName(testTarget) + ".stderr.contains.txt");
+    var expectedPath = File.Exists(targetExpectedPath)
+        ? targetExpectedPath
+        : Path.Combine(diagnosticDir, name + ".stderr.contains.txt");
     var sourcesPath = Path.Combine(diagnosticDir, name + ".sources.txt");
     var diagnosticTarget = name.Contains("-wasm32-", StringComparison.Ordinal)
         ? "wasm32-browser"
-        : TestTargetName(testTarget);
+        : name.Contains("-linux-x64-", StringComparison.Ordinal)
+            ? "linux-x64"
+            : TestTargetName(testTarget);
     if (!File.Exists(expectedPath))
     {
         Console.Error.WriteLine($"FAIL diagnostic/{name}: expected diagnostic file not found");
@@ -984,7 +1018,9 @@ static bool MatchesAffectedDiagnostic(
 
     var name = Path.GetFileNameWithoutExtension(sourceFile);
     if (affectedPaths.Contains(Path.GetFullPath(sourceFile))
-        || affectedPaths.Contains(Path.Combine(diagnosticDir, name + ".stderr.contains.txt")))
+        || affectedPaths.Contains(Path.Combine(diagnosticDir, name + ".stderr.contains.txt"))
+        || affectedPaths.Contains(Path.Combine(diagnosticDir, name + ".windows-x64.stderr.contains.txt"))
+        || affectedPaths.Contains(Path.Combine(diagnosticDir, name + ".linux-x64.stderr.contains.txt")))
     {
         return true;
     }

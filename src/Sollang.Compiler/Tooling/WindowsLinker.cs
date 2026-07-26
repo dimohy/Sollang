@@ -19,6 +19,7 @@ internal sealed class WindowsLinker(LlvmToolchain toolchain)
         var objectPath = Path.Combine(workDir, outputName + ".obj");
         var importLib = CreateKernel32ImportLibrary(workDir);
         var shellImportLib = CreateShell32ImportLibrary(workDir);
+        var oleImportLib = UsesComInterop(llPath) ? CreateOle32ImportLibrary(workDir) : null;
         var ucrtImportLib = CreateUcrtBaseImportLibrary(workDir);
 
         var objects = optimizationLevel == "-O0"
@@ -49,7 +50,12 @@ internal sealed class WindowsLinker(LlvmToolchain toolchain)
             linkArguments.Add("/entry:sollang_start");
         }
         linkArguments.AddRange(objects);
-        linkArguments.AddRange([importLib, shellImportLib, ucrtImportLib, "/out:" + outputPath]);
+        linkArguments.AddRange([importLib, shellImportLib]);
+        if (oleImportLib is not null)
+        {
+            linkArguments.Add(oleImportLib);
+        }
+        linkArguments.AddRange([ucrtImportLib, "/out:" + outputPath]);
         Run(toolchain.LldLink, linkArguments);
     }
 
@@ -257,6 +263,59 @@ internal sealed class WindowsLinker(LlvmToolchain toolchain)
         ]);
 
         return libPath;
+    }
+
+    private string CreateOle32ImportLibrary(string workDir)
+    {
+        var defPath = Path.Combine(workDir, "ole32.def");
+        var libPath = Path.Combine(workDir, "ole32.lib");
+        File.WriteAllText(defPath, """
+            LIBRARY ole32.dll
+            EXPORTS
+            CoInitializeEx
+            CoUninitialize
+            CoCreateInstance
+            """, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+
+        Run(toolchain.LlvmLib,
+        [
+            "/nologo",
+            "/machine:x64",
+            "/def:" + defPath,
+            "/out:" + libPath
+        ]);
+
+        return libPath;
+    }
+
+    private static bool UsesComInterop(string llPath)
+    {
+        const int PrefixLimit = 1024 * 1024;
+        ReadOnlySpan<byte> marker = "declare dllimport i32 @CoInitializeEx"u8;
+        using var stream = File.OpenRead(llPath);
+        Span<byte> buffer = stackalloc byte[4096];
+        var remaining = Math.Min(stream.Length, PrefixLimit);
+        var matched = 0;
+        while (remaining > 0)
+        {
+            var read = stream.Read(buffer[..(int)Math.Min(buffer.Length, remaining)]);
+            if (read == 0)
+            {
+                break;
+            }
+            remaining -= read;
+            foreach (var value in buffer[..read])
+            {
+                matched = value == marker[matched]
+                    ? matched + 1
+                    : value == marker[0] ? 1 : 0;
+                if (matched == marker.Length)
+                {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     private static void Run(string fileName, IReadOnlyList<string> arguments)

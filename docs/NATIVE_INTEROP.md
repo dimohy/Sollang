@@ -5,9 +5,10 @@ Status: implementation contract for Sollang 0.3
 Current vertical slices: grouped C ABI declarations, contextual numeric
 literals, bind-once dynamic loading, cached indirect calls, and deterministic
 cleanup are implemented in both compilers. The C# reference compiler also
-supports explicitly stable C aggregate values and builds and consumes
-scalar-only Sollang shared libraries on Windows x64 and Linux x64; self-hosted
-parity for those newer slices remains in progress.
+supports explicitly stable C aggregate values, builds and consumes Sollang
+shared libraries on Windows x64 and Linux x64, and has a verified Windows COM
+vertical slice. Self-hosted parity for the newer library and COM slices remains
+in progress.
 
 Sollang native interoperability is one feature with four projections:
 
@@ -250,6 +251,46 @@ COM is a Windows-only projection of the same ABI model. Generated bindings map:
 
 COM apartment initialization and thread affinity remain explicit effects. No COM
 surface is synthesized for Linux.
+
+The implemented reference-compiler syntax groups a class and its interfaces:
+
+```slg
+com fixture class "00000000-0000-0000-C000-000000000046"
+    from "artifacts/com-interop/com_fixture" in mta {
+    interface Calculator "11111111-2222-3333-4444-555555555555" {
+        add left: Int32, right: Int32 -> Result<Int32, Int32> at 3
+    }
+}
+```
+
+`from` selects direct in-process activation through the DLL's
+`DllGetClassObject`; omitting it uses registered activation through
+`CoCreateInstance`. `in sta` and `in mta` make the apartment contract visible.
+The first interface receives `fixture.create`, every interface receives an
+explicit `fixture.clone`, and methods retain normal flow syntax:
+
+```slg
+fixture.create -> match {
+    Ok calculator {
+        calculator -> fixture.add(20, 22)
+    }
+    Error hresult { hresult -> println }
+}
+```
+
+The interface value is affine. Dropping it invokes vtable slot 2 (`Release`);
+`clone` invokes slot 1 (`AddRef`), and declared methods use their explicit
+vtable slot. Apartment initialization, direct-server loading, class-factory
+lookup, and symbol lookup are cached at program entry. Steady-state scalar
+method calls use one indirect LLVM call and introduce no heap allocation,
+reflection, wrapper object, or per-call lookup.
+
+The current slice covers activation, scalar methods returning `Unit` or
+`Result<scalar, Int32>`, explicit cloning, and deterministic release. Checked
+`QueryInterface` conversions plus owning `BSTR` and `VARIANT` wrappers remain
+required before the COM projection is complete. The self-hosted compiler must
+implement the same semantics in a dedicated emitter submodule rather than
+growing `selfhost/llvm/text.slg`.
 
 ## C++
 

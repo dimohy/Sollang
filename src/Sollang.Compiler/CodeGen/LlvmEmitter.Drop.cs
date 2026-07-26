@@ -252,6 +252,18 @@ internal sealed partial class LlvmEmitter
         EmitFunctionLine($"define internal void {DropSymbol(structure.Id)}({llvmType} %value) #0 {{");
         EmitFunctionLine("entry:");
         _currentBlockLabel = "entry";
+        if (structure.ComInterface is not null)
+        {
+            var handleValue = NextTemp("drop_com_handle_value");
+            EmitAssign(handleValue, $"extractvalue {llvmType} %value, 0");
+            var handle = NextTemp("drop_com_handle");
+            EmitAssign(handle, $"inttoptr i64 {handleValue} to ptr");
+            EmitComReleasePointer(handle);
+            EmitInstruction("ret void");
+            EmitFunctionLine("}");
+            EmitFunctionLine();
+            return;
+        }
         if (structure.Name is "sys.file.File" or "sys.file.FileWriter")
         {
             var handle = NextTemp("drop_file_handle");
