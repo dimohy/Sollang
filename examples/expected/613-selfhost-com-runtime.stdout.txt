@@ -1,0 +1,489 @@
+target datalayout = "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-pc-windows-msvc"
+@sollang_runtime_stdout_written = private global i32 0
+declare ptr @GetStdHandle(i32)
+declare i32 @GetConsoleMode(ptr, ptr)
+declare i32 @WriteConsoleW(ptr, ptr, i32, ptr, ptr)
+declare i32 @WriteFile(ptr, ptr, i32, ptr, ptr)
+declare i32 @MultiByteToWideChar(i32, i32, ptr, i32, ptr, i32)
+declare ptr @GetProcessHeap()
+declare ptr @HeapAlloc(ptr, i32, i64)
+declare i32 @HeapFree(ptr, i32, ptr)
+define internal i32 @sollang_runtime_write_stdout_bytes(ptr %handle, ptr %data, i32 %len) {
+entry:
+  %mode = alloca i32, align 4
+  %console_status = call i32 @GetConsoleMode(ptr %handle, ptr %mode)
+  %is_console = icmp ne i32 %console_status, 0
+  br i1 %is_console, label %console_prepare, label %redirected
+redirected:
+  %redirected_ok = call i32 @WriteFile(ptr %handle, ptr %data, i32 %len, ptr @sollang_runtime_stdout_written, ptr null)
+  ret i32 %redirected_ok
+console_prepare:
+  %wide_chars = call i32 @MultiByteToWideChar(i32 65001, i32 8, ptr %data, i32 %len, ptr null, i32 0)
+  %valid_utf8 = icmp sgt i32 %wide_chars, 0
+  br i1 %valid_utf8, label %allocate, label %conversion_failed
+allocate:
+  %wide_bytes32 = shl i32 %wide_chars, 1
+  %wide_bytes = zext i32 %wide_bytes32 to i64
+  %heap = call ptr @GetProcessHeap()
+  %wide = call ptr @HeapAlloc(ptr %heap, i32 0, i64 %wide_bytes)
+  %allocated = icmp ne ptr %wide, null
+  br i1 %allocated, label %convert, label %conversion_failed
+convert:
+  %converted = call i32 @MultiByteToWideChar(i32 65001, i32 8, ptr %data, i32 %len, ptr %wide, i32 %wide_chars)
+  %converted_all = icmp eq i32 %converted, %wide_chars
+  br i1 %converted_all, label %console_write, label %conversion_free
+console_write:
+  %console_ok = call i32 @WriteConsoleW(ptr %handle, ptr %wide, i32 %wide_chars, ptr @sollang_runtime_stdout_written, ptr null)
+  %freed = call i32 @HeapFree(ptr %heap, i32 0, ptr %wide)
+  ret i32 %console_ok
+conversion_free:
+  %freed_after_failure = call i32 @HeapFree(ptr %heap, i32 0, ptr %wide)
+  br label %conversion_failed
+conversion_failed:
+  store i32 0, ptr @sollang_runtime_stdout_written, align 4
+  ret i32 0
+}
+@sollang_runtime_newline = private constant [1 x i8] c"\0A"
+@sollang_runtime_stdout_buffer = private global [1048576 x i8] zeroinitializer
+@sollang_runtime_stdout_count = private global i64 0
+declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1 immarg)
+define internal void @sollang_runtime_flush_stdout() {
+entry:
+  %count = load i64, ptr @sollang_runtime_stdout_count, align 8
+  %has_data = icmp ugt i64 %count, 0
+  br i1 %has_data, label %write, label %done
+write:
+  %handle = call ptr @GetStdHandle(i32 -11)
+  %count32 = trunc i64 %count to i32
+  %ok = call i32 @sollang_runtime_write_stdout_bytes(ptr %handle, ptr @sollang_runtime_stdout_buffer, i32 %count32)
+  store i64 0, ptr @sollang_runtime_stdout_count, align 8
+  br label %done
+done:
+  ret void
+}
+define internal void @sollang_runtime_append_stdout(ptr %data, i64 %len) {
+entry:
+  %count = load i64, ptr @sollang_runtime_stdout_count, align 8
+  %total = add i64 %count, %len
+  %fits = icmp ule i64 %total, 1048576
+  br i1 %fits, label %append, label %flush
+flush:
+  call void @sollang_runtime_flush_stdout()
+  %large = icmp ugt i64 %len, 1048576
+  br i1 %large, label %direct, label %append_empty
+direct:
+  %handle = call ptr @GetStdHandle(i32 -11)
+  %len32 = trunc i64 %len to i32
+  %ok = call i32 @sollang_runtime_write_stdout_bytes(ptr %handle, ptr %data, i32 %len32)
+  ret void
+append_empty:
+  call void @llvm.memcpy.p0.p0.i64(ptr @sollang_runtime_stdout_buffer, ptr %data, i64 %len, i1 false)
+  store i64 %len, ptr @sollang_runtime_stdout_count, align 8
+  ret void
+append:
+  %slot = getelementptr i8, ptr @sollang_runtime_stdout_buffer, i64 %count
+  call void @llvm.memcpy.p0.p0.i64(ptr %slot, ptr %data, i64 %len, i1 false)
+  store i64 %total, ptr @sollang_runtime_stdout_count, align 8
+  ret void
+}
+define internal void @sollang_runtime_print(ptr %data, i64 %len, i1 %newline) {
+entry:
+  call void @sollang_runtime_append_stdout(ptr %data, i64 %len)
+  br i1 %newline, label %write_newline, label %done
+write_newline:
+  call void @sollang_runtime_append_stdout(ptr @sollang_runtime_newline, i64 1)
+  br label %done
+done:
+  ret void
+}
+define internal void @sollang_runtime_print_i32(i32 %value, i1 %newline) {
+entry:
+  %buffer = alloca [12 x i8], align 1
+  %end = getelementptr [12 x i8], ptr %buffer, i64 0, i64 12
+  %wide = sext i32 %value to i64
+  %negative = icmp slt i64 %wide, 0
+  %negated = sub i64 0, %wide
+  %magnitude = select i1 %negative, i64 %negated, i64 %wide
+  br label %digits
+digits:
+  %current = phi i64 [ %magnitude, %entry ], [ %quotient, %digits ]
+  %cursor = phi ptr [ %end, %entry ], [ %digit_slot, %digits ]
+  %digit = urem i64 %current, 10
+  %quotient = udiv i64 %current, 10
+  %digit_slot = getelementptr i8, ptr %cursor, i64 -1
+  %digit8 = trunc i64 %digit to i8
+  %ascii = add i8 %digit8, 48
+  store i8 %ascii, ptr %digit_slot, align 1
+  %more = icmp ne i64 %quotient, 0
+  br i1 %more, label %digits, label %digits_done
+digits_done:
+  br i1 %negative, label %write_sign, label %emit
+write_sign:
+  %sign_slot = getelementptr i8, ptr %digit_slot, i64 -1
+  store i8 45, ptr %sign_slot, align 1
+  br label %emit
+emit:
+  %start = phi ptr [ %digit_slot, %digits_done ], [ %sign_slot, %write_sign ]
+  %end_address = ptrtoint ptr %end to i64
+  %start_address = ptrtoint ptr %start to i64
+  %length = sub i64 %end_address, %start_address
+  call void @sollang_runtime_print(ptr %start, i64 %length, i1 %newline)
+  ret void
+}
+define internal void @sollang_runtime_print_i64(i64 %value, i1 %signed, i1 %newline) {
+entry:
+  %buffer = alloca [21 x i8], align 1
+  %end = getelementptr [21 x i8], ptr %buffer, i64 0, i64 21
+  %negative_value = icmp slt i64 %value, 0
+  %negative = and i1 %signed, %negative_value
+  %negated = sub i64 0, %value
+  %magnitude = select i1 %negative, i64 %negated, i64 %value
+  br label %digits
+digits:
+  %current = phi i64 [ %magnitude, %entry ], [ %quotient, %digits ]
+  %cursor = phi ptr [ %end, %entry ], [ %digit_slot, %digits ]
+  %digit = urem i64 %current, 10
+  %quotient = udiv i64 %current, 10
+  %digit_slot = getelementptr i8, ptr %cursor, i64 -1
+  %digit8 = trunc i64 %digit to i8
+  %ascii = add i8 %digit8, 48
+  store i8 %ascii, ptr %digit_slot, align 1
+  %more = icmp ne i64 %quotient, 0
+  br i1 %more, label %digits, label %digits_done
+digits_done:
+  br i1 %negative, label %write_sign, label %emit
+write_sign:
+  %sign_slot = getelementptr i8, ptr %digit_slot, i64 -1
+  store i8 45, ptr %sign_slot, align 1
+  br label %emit
+emit:
+  %start = phi ptr [ %digit_slot, %digits_done ], [ %sign_slot, %write_sign ]
+  %end_address = ptrtoint ptr %end to i64
+  %start_address = ptrtoint ptr %start to i64
+  %length = sub i64 %end_address, %start_address
+  call void @sollang_runtime_print(ptr %start, i64 %length, i1 %newline)
+  ret void
+}
+declare dllimport i32 @CoInitializeEx(ptr, i32)
+declare dllimport void @CoUninitialize()
+declare dllimport i32 @CoCreateInstance(ptr, ptr, i32, ptr, ptr)
+@sollang_com_dll_get_class_object_name = private unnamed_addr constant [18 x i8] c"DllGetClassObject\00"
+@sollang_com_iid_class_factory = private constant { i32, i16, i16, [8 x i8] } { i32 1, i16 0, i16 0, [8 x i8] [i8 192, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 70] }
+define internal ptr @sollang_com_vtable_target(ptr %instance, i64 %slot) {
+entry:
+  %vtable = load ptr, ptr %instance, align 8
+  %slot_address = getelementptr ptr, ptr %vtable, i64 %slot
+  %target = load ptr, ptr %slot_address, align 8
+  ret ptr %target
+}
+define internal void @sollang_com_require_status(i32 %status) {
+entry:
+  %ok = icmp sge i32 %status, 0
+  br i1 %ok, label %done, label %fail
+fail:
+  call void @llvm.trap()
+  unreachable
+done:
+  ret void
+}
+define internal void @sollang_com_require_pointer(ptr %value) {
+entry:
+  %ok = icmp ne ptr %value, null
+  br i1 %ok, label %done, label %fail
+fail:
+  call void @llvm.trap()
+  unreachable
+done:
+  ret void
+}
+define internal ptr @sollang_com_clone(ptr %instance) {
+entry:
+  %add_ref = call ptr @sollang_com_vtable_target(ptr %instance, i64 1)
+  %references = call i32 %add_ref(ptr %instance)
+  ret ptr %instance
+}
+define internal void @sollang_com_release(ptr %instance) {
+entry:
+  %present = icmp ne ptr %instance, null
+  br i1 %present, label %release, label %done
+release:
+  %target = call ptr @sollang_com_vtable_target(ptr %instance, i64 2)
+  %references = call i32 %target(ptr %instance)
+  br label %done
+done:
+  ret void
+}
+define internal { ptr, i32 } @sollang_com_activate_registered(ptr %clsid, ptr %iid) {
+entry:
+  %output = alloca ptr, align 8
+  store ptr null, ptr %output, align 8
+  %status = call i32 @CoCreateInstance(ptr %clsid, ptr null, i32 1, ptr %iid, ptr %output)
+  %instance = load ptr, ptr %output, align 8
+  %with_instance = insertvalue { ptr, i32 } poison, ptr %instance, 0
+  %result = insertvalue { ptr, i32 } %with_instance, i32 %status, 1
+  ret { ptr, i32 } %result
+}
+define internal { ptr, i32 } @sollang_com_activate_factory(ptr %factory, ptr %iid) {
+entry:
+  %output = alloca ptr, align 8
+  store ptr null, ptr %output, align 8
+  %create = call ptr @sollang_com_vtable_target(ptr %factory, i64 3)
+  %status = call i32 %create(ptr %factory, ptr null, ptr %iid, ptr %output)
+  %instance = load ptr, ptr %output, align 8
+  %with_instance = insertvalue { ptr, i32 } poison, ptr %instance, 0
+  %result = insertvalue { ptr, i32 } %with_instance, i32 %status, 1
+  ret { ptr, i32 } %result
+}
+define internal { ptr, ptr, i32 } @sollang_com_bind_factory(ptr %server_name, ptr %clsid) {
+entry:
+  %server = call ptr @LoadLibraryA(ptr %server_name)
+  %server_ok = icmp ne ptr %server, null
+  br i1 %server_ok, label %symbol, label %server_failed
+symbol:
+  %get_class_object = call ptr @GetProcAddress(ptr %server, ptr @sollang_com_dll_get_class_object_name)
+  %symbol_ok = icmp ne ptr %get_class_object, null
+  br i1 %symbol_ok, label %factory, label %symbol_failed
+factory:
+  %output = alloca ptr, align 8
+  store ptr null, ptr %output, align 8
+  %status = call i32 %get_class_object(ptr %clsid, ptr @sollang_com_iid_class_factory, ptr %output)
+  %value = load ptr, ptr %output, align 8
+  %status_ok = icmp sge i32 %status, 0
+  %value_ok = icmp ne ptr %value, null
+  %ready = and i1 %status_ok, %value_ok
+  br i1 %ready, label %done, label %factory_failed
+server_failed:
+  %server_failure0 = insertvalue { ptr, ptr, i32 } zeroinitializer, i32 -2147467259, 2
+  ret { ptr, ptr, i32 } %server_failure0
+symbol_failed:
+  %closed_symbol = call i32 @FreeLibrary(ptr %server)
+  %symbol_failure0 = insertvalue { ptr, ptr, i32 } zeroinitializer, i32 -2147467259, 2
+  ret { ptr, ptr, i32 } %symbol_failure0
+factory_failed:
+  %closed_factory = call i32 @FreeLibrary(ptr %server)
+  %factory_failure0 = insertvalue { ptr, ptr, i32 } zeroinitializer, i32 %status, 2
+  ret { ptr, ptr, i32 } %factory_failure0
+done:
+  %with_server = insertvalue { ptr, ptr, i32 } poison, ptr %server, 0
+  %with_factory = insertvalue { ptr, ptr, i32 } %with_server, ptr %value, 1
+  %result = insertvalue { ptr, ptr, i32 } %with_factory, i32 %status, 2
+  ret { ptr, ptr, i32 } %result
+}
+%sollang.enum.t27 = type { i32, [1 x i64] }
+%sollang.enum.t28 = type { i32, [1 x i64] }
+@sollang_com_server_name_m0_a1 = private unnamed_addr constant [38 x i8] c"artifacts/com-interop/com_fixture.dll\00"
+@sollang_com_server_m0_a1 = internal global ptr null, align 8
+@sollang_com_factory_m0_a1 = internal global ptr null, align 8
+@sollang_com_clsid_m0_a1 = private constant { i32, i16, i16, [8 x i8] } { i32 2324751013, i16 31277, i16 20010, [8 x i8] [i8 152, i8 160, i8 107, i8 92, i8 42, i8 18, i8 197, i8 1] }
+@sollang_com_iid_m0_s0 = private constant { i32, i16, i16, [8 x i8] } { i32 1276159099, i16 29277, i16 16851, [8 x i8] [i8 181, i8 166, i8 112, i8 214, i8 125, i8 59, i8 235, i8 17] }
+define internal %sollang.enum.t27 @sollang_m0_s9() {
+entry:
+  %factory = load ptr, ptr @sollang_com_factory_m0_a1, align 8
+  %raw = call { ptr, i32 } @sollang_com_activate_factory(ptr %factory, ptr @sollang_com_iid_m0_s0)
+  %instance = extractvalue { ptr, i32 } %raw, 0
+  %status = extractvalue { ptr, i32 } %raw, 1
+  %status_ok = icmp sge i32 %status, 0
+  %pointer_ok = icmp ne ptr %instance, null
+  %ok = and i1 %status_ok, %pointer_ok
+  %result_slot = alloca %sollang.enum.t27, align 8
+  store %sollang.enum.t27 zeroinitializer, ptr %result_slot, align 8
+  br i1 %ok, label %success, label %failure
+success:
+  %success_tag = getelementptr %sollang.enum.t27, ptr %result_slot, i32 0, i32 0
+  store i32 0, ptr %success_tag, align 4
+  %success_payload = getelementptr %sollang.enum.t27, ptr %result_slot, i32 0, i32 1
+  store ptr %instance, ptr %success_payload, align 8
+  br label %done
+failure:
+  %failure_tag = getelementptr %sollang.enum.t27, ptr %result_slot, i32 0, i32 0
+  store i32 1, ptr %failure_tag, align 4
+  %failure_payload = getelementptr %sollang.enum.t27, ptr %result_slot, i32 0, i32 1
+  store i32 %status, ptr %failure_payload, align 4
+  br label %done
+done:
+  %result = load %sollang.enum.t27, ptr %result_slot, align 8
+  ret %sollang.enum.t27 %result
+}
+define internal ptr @sollang_m0_s10(ptr %arg) {
+entry:
+  %result = call ptr @sollang_com_clone(ptr %arg)
+  ret ptr %result
+}
+define internal %sollang.enum.t28 @sollang_m0_s1(ptr %arg, i32 %arg1, i32 %arg2) {
+entry:
+  %target = call ptr @sollang_com_vtable_target(ptr %arg, i64 3)
+  %output = alloca i32, align 4
+  store i32 zeroinitializer, ptr %output, align 4
+  %status = call i32 %target(ptr %arg, i32 %arg1, i32 %arg2, ptr %output)
+  %ok = icmp sge i32 %status, 0
+  %result_slot = alloca %sollang.enum.t28, align 8
+  store %sollang.enum.t28 zeroinitializer, ptr %result_slot, align 8
+  br i1 %ok, label %success, label %failure
+success:
+  %success_tag = getelementptr %sollang.enum.t28, ptr %result_slot, i32 0, i32 0
+  store i32 0, ptr %success_tag, align 4
+  %value = load i32, ptr %output, align 4
+  %success_payload = getelementptr %sollang.enum.t28, ptr %result_slot, i32 0, i32 1
+  store i32 %value, ptr %success_payload, align 4
+  br label %done
+failure:
+  %failure_tag = getelementptr %sollang.enum.t28, ptr %result_slot, i32 0, i32 0
+  store i32 1, ptr %failure_tag, align 4
+  %failure_payload = getelementptr %sollang.enum.t28, ptr %result_slot, i32 0, i32 1
+  store i32 %status, ptr %failure_payload, align 4
+  br label %done
+done:
+  %result = load %sollang.enum.t28, ptr %result_slot, align 8
+  ret %sollang.enum.t28 %result
+}
+define internal void @sollang_com_init() {
+entry:
+  %apartment_status = call i32 @CoInitializeEx(ptr null, i32 4)
+  call void @sollang_com_require_status(i32 %apartment_status)
+  %binding8 = call { ptr, ptr, i32 } @sollang_com_bind_factory(ptr @sollang_com_server_name_m0_a1, ptr @sollang_com_clsid_m0_a1)
+  %server8 = extractvalue { ptr, ptr, i32 } %binding8, 0
+  %factory8 = extractvalue { ptr, ptr, i32 } %binding8, 1
+  %status8 = extractvalue { ptr, ptr, i32 } %binding8, 2
+  call void @sollang_com_require_status(i32 %status8)
+  call void @sollang_com_require_pointer(ptr %server8)
+  call void @sollang_com_require_pointer(ptr %factory8)
+  store ptr %server8, ptr @sollang_com_server_m0_a1, align 8
+  store ptr %factory8, ptr @sollang_com_factory_m0_a1, align 8
+  ret void
+}
+define internal void @sollang_com_cleanup() {
+entry:
+  %factory8 = load ptr, ptr @sollang_com_factory_m0_a1, align 8
+  call void @sollang_com_release(ptr %factory8)
+  %server8 = load ptr, ptr @sollang_com_server_m0_a1, align 8
+  %closed8 = call i32 @FreeLibrary(ptr %server8)
+  call void @CoUninitialize()
+  ret void
+}
+define internal void @sollang_drop_t26(ptr %value) {
+entry:
+  call void @sollang_com_release(ptr %value)
+  ret void
+}
+define internal void @sollang_drop_t27(%sollang.enum.t27 %value) {
+entry:
+  %slot = alloca %sollang.enum.t27, align 8
+  store %sollang.enum.t27 %value, ptr %slot, align 8
+  %tag = extractvalue %sollang.enum.t27 %value, 0
+  %payload = getelementptr inbounds %sollang.enum.t27, ptr %slot, i32 0, i32 1
+  %is0 = icmp eq i32 %tag, 0
+  br i1 %is0, label %tag0, label %tag1
+tag0:
+  %first = load ptr, ptr %payload, align 8
+  call void @sollang_drop_t26(ptr %first)
+  br label %done
+tag1:
+  br label %done
+done:
+  ret void
+}
+declare void @llvm.trap()
+declare dllimport ptr @LoadLibraryA(ptr)
+declare dllimport ptr @GetProcAddress(ptr, ptr)
+declare dllimport i32 @FreeLibrary(ptr)
+@sollang_native_library_name_m0_a16 = private unnamed_addr constant [38 x i8] c"artifacts/com-interop/com_fixture.dll\00"
+@sollang_native_library_m0_a16 = internal global ptr null, align 8
+@sollang_native_symbol_name_m0_s3 = private unnamed_addr constant [34 x i8] c"com_fixture_live_references_after\00"
+@sollang_native_function_m0_s3 = internal global ptr null, align 8
+define internal ptr @sollang_native_require(ptr %value) {
+entry:
+  %found = icmp ne ptr %value, null
+  br i1 %found, label %done, label %fail
+fail:
+  call void @llvm.trap()
+  unreachable
+done:
+  ret ptr %value
+}
+define internal void @sollang_native_init() {
+entry:
+  %native_library_raw_m0_a16 = call ptr @LoadLibraryA(ptr @sollang_native_library_name_m0_a16)
+  %native_library_checked_m0_a16 = call ptr @sollang_native_require(ptr %native_library_raw_m0_a16)
+  store ptr %native_library_checked_m0_a16, ptr @sollang_native_library_m0_a16, align 8
+  %native_library_m0_s3 = load ptr, ptr @sollang_native_library_m0_a16, align 8
+  %native_symbol_raw_m0_s3 = call ptr @GetProcAddress(ptr %native_library_m0_s3, ptr @sollang_native_symbol_name_m0_s3)
+  %native_symbol_checked_m0_s3 = call ptr @sollang_native_require(ptr %native_symbol_raw_m0_s3)
+  store ptr %native_symbol_checked_m0_s3, ptr @sollang_native_function_m0_s3, align 8
+  ret void
+}
+define internal void @sollang_native_cleanup() {
+entry:
+  %native_close_handle_m0_a16 = load ptr, ptr @sollang_native_library_m0_a16, align 8
+  %native_closed_m0_a16 = call i32 @FreeLibrary(ptr %native_close_handle_m0_a16)
+  ret void
+}
+%sollang.text = type { ptr, i64 }
+define i32 @main() {
+entry:
+  call void @sollang_native_init()
+  call void @sollang_com_init()
+  %v15 = call %sollang.enum.t27 @sollang_m0_s9()
+  %v16_tag = extractvalue %sollang.enum.t27 %v15, 0
+  %v16_subject_slot = alloca %sollang.enum.t27, align 8
+  store %sollang.enum.t27 %v15, ptr %v16_subject_slot, align 8
+  %v16_result = alloca i32, align 4
+  %v16_is_arm0 = icmp eq i32 %v16_tag, 0
+  br i1 %v16_is_arm0, label %match16_arm0, label %match16_next0
+match16_arm0:
+  %v16_arm0_payload = getelementptr inbounds %sollang.enum.t27, ptr %v16_subject_slot, i32 0, i32 1
+  %v18 = load ptr, ptr %v16_arm0_payload, align 8
+  %v19 = freeze ptr %v18
+  %v35 = call %sollang.enum.t28 @sollang_m0_s1(ptr %v19, i32 20, i32 22)
+  %v22_tag = extractvalue %sollang.enum.t28 %v35, 0
+  %v22_subject_slot = alloca %sollang.enum.t28, align 8
+  store %sollang.enum.t28 %v35, ptr %v22_subject_slot, align 8
+  %v22_result = alloca i32, align 4
+  %v22_is_arm0 = icmp eq i32 %v22_tag, 0
+  br i1 %v22_is_arm0, label %match22_arm0, label %match22_next0
+match22_arm0:
+  %v22_arm0_payload = getelementptr inbounds %sollang.enum.t28, ptr %v22_subject_slot, i32 0, i32 1
+  %v24 = load i32, ptr %v22_arm0_payload, align 4
+  %v25 = freeze i32 %v24
+  store i32 %v25, ptr %v22_result, align 4
+  br label %match22_merge
+match22_next0:
+  %v22_is_arm1 = icmp eq i32 %v22_tag, 1
+  br i1 %v22_is_arm1, label %match22_arm1, label %match22_next1
+match22_arm1:
+  %v22_arm1_payload = getelementptr inbounds %sollang.enum.t28, ptr %v22_subject_slot, i32 0, i32 1
+  %v27 = load i32, ptr %v22_arm1_payload, align 4
+  %v28 = freeze i32 %v27
+  store i32 %v28, ptr %v22_result, align 4
+  br label %match22_merge
+match22_next1:
+  call void @llvm.trap()
+  unreachable
+match22_merge:
+  %v22 = load i32, ptr %v22_result, align 4
+  store i32 %v22, ptr %v16_result, align 4
+  call void @sollang_drop_t26(ptr %v18)
+  br label %match16_merge
+match16_next0:
+  %v16_is_arm1 = icmp eq i32 %v16_tag, 1
+  br i1 %v16_is_arm1, label %match16_arm1, label %match16_next1
+match16_arm1:
+  %v16_arm1_payload = getelementptr inbounds %sollang.enum.t27, ptr %v16_subject_slot, i32 0, i32 1
+  %v30 = load i32, ptr %v16_arm1_payload, align 4
+  %v31 = freeze i32 %v30
+  store i32 %v31, ptr %v16_result, align 4
+  br label %match16_merge
+match16_next1:
+  call void @llvm.trap()
+  unreachable
+match16_merge:
+  %v16 = load i32, ptr %v16_result, align 4
+  %native_target_34 = load ptr, ptr @sollang_native_function_m0_s3, align 8
+  %v34 = call i32 %native_target_34(i32 %v16)
+  call void @sollang_runtime_print_i32(i32 %v16, i1 true)
+  call void @sollang_runtime_print_i32(i32 %v34, i1 true)
+  call void @sollang_com_cleanup()
+  call void @sollang_native_cleanup()
+  call void @sollang_runtime_flush_stdout()
+  ret i32 0
+}

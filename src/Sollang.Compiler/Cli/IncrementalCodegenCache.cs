@@ -72,6 +72,7 @@ internal sealed class IncrementalCodegenCache
                 module.Identity,
                 Hex(module.InterfaceHash)
             }));
+        var typeUniverseHash = BuildTypeUniverseHash(boundProgram.Types);
         var emissionHashes = BuildEmissionHashes(boundProgram);
         var moduleKeys = new Dictionary<string, LlvmCodegenKey>(StringComparer.Ordinal);
         foreach (var module in modules)
@@ -82,6 +83,7 @@ internal sealed class IncrementalCodegenCache
                 module.Identity,
                 Hex(module.ImplementationHash),
                 Hex(ambientStandardLibrary),
+                Hex(typeUniverseHash),
                 Hex(emissionHashes.GetValueOrDefault(module.Identity, HashFields([]))),
                 .. dependencyInterfaces
             ]);
@@ -97,6 +99,7 @@ internal sealed class IncrementalCodegenCache
                         "synthetic-implementation",
                         emission.Key,
                         Hex(ambientStandardLibrary),
+                        Hex(typeUniverseHash),
                         Hex(emission.Value)
                     ])));
         }
@@ -704,6 +707,59 @@ internal sealed class IncrementalCodegenCache
             hash = FingerprintMix(hash, byte.MaxValue);
         }
         return hash;
+    }
+
+    private static ulong BuildTypeUniverseHash(TypeDefinitionTable types)
+    {
+        var fields = new List<string> { "type-universe-1" };
+        foreach (var definition in types.Structs.OrderBy(static value => (int)value.Id))
+        {
+            fields.Add($"struct:{(int)definition.Id}:{definition.Name}:{definition.ModuleName}");
+            foreach (var field in definition.Fields.OrderBy(static value => value.Index))
+            {
+                fields.Add($"field:{field.Index}:{field.Name}:{(int)field.Type}");
+            }
+        }
+        foreach (var definition in types.Enums.OrderBy(static value => (int)value.Id))
+        {
+            fields.Add($"enum:{(int)definition.Id}:{definition.Name}:{definition.ModuleName}:{definition.PayloadWords}");
+            foreach (var variant in definition.Variants.OrderBy(static value => value.Tag))
+            {
+                fields.Add($"variant:{variant.Tag}:{variant.Name}:{(int?)variant.PayloadType ?? -1}");
+            }
+        }
+        foreach (var definition in types.Boxes.OrderBy(static value => (int)value.Id))
+        {
+            fields.Add($"box:{(int)definition.Id}:{(int)definition.ElementType}:{definition.Size}:{definition.Alignment}");
+        }
+        foreach (var definition in types.References.OrderBy(static value => (int)value.Id))
+        {
+            fields.Add($"reference:{(int)definition.Id}:{(int)definition.ElementType}");
+        }
+        foreach (var definition in types.DynTraits.OrderBy(static value => (int)value.Id))
+        {
+            fields.Add($"dyn:{(int)definition.Id}:{definition.TraitName}");
+        }
+        foreach (var definition in types.StaticArrays.OrderBy(static value => (int)value.Id))
+        {
+            fields.Add(
+                $"static-array:{(int)definition.Id}:{(int)definition.ElementType}:"
+                + $"{definition.ElementSize}:{definition.ElementAlignment}");
+        }
+        foreach (var definition in types.DynamicArrays.OrderBy(static value => (int)value.Id))
+        {
+            fields.Add(
+                $"dynamic-array:{(int)definition.Id}:{(int)definition.ElementType}:"
+                + $"{definition.ElementSize}:{definition.ElementAlignment}");
+        }
+        foreach (var definition in types.Dictionaries.OrderBy(static value => (int)value.Id))
+        {
+            fields.Add(
+                $"dictionary:{(int)definition.Id}:{(int)definition.KeyType}:{(int)definition.ValueType}:"
+                + $"{definition.KeySize}:{definition.KeyAlignment}:{definition.ValueOffset}:"
+                + $"{definition.ValueSize}:{definition.ValueAlignment}:{definition.EntryStride}");
+        }
+        return HashFields(fields);
     }
 
     private static int CheckedLength(ulong value, long maximum, string description)

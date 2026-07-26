@@ -182,4 +182,10 @@ EXPORT int32_t com_fixture_live_references(void)
     return (int32_t)calculator.references;
 }
 
+EXPORT int32_t com_fixture_live_references_after(int32_t dependency)
+{
+    (void)dependency;
+    return (int32_t)calculator.references;
+}
+
 int _fltused = 0;

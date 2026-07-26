@@ -210,6 +210,7 @@ internal sealed class WindowsLinker(LlvmToolchain toolchain)
             ReleaseSemaphore
             GetActiveProcessorCount
             WaitForSingleObject
+            __chkstk
             """, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
 
         Run(toolchain.LlvmLib,
@@ -252,6 +253,7 @@ internal sealed class WindowsLinker(LlvmToolchain toolchain)
             LIBRARY ucrtbase.dll
             EXPORTS
             _wspawnvp
+            memcpy
             """, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
 
         Run(toolchain.LlvmLib,

@@ -1,0 +1,91 @@
+namespace sollang.compiler.llvm.emitter.type_queries
+
+import sollang.compiler.ir.typed as typedIr
+
+public isSourceText node: typedIr.TypedIrNode -> Bool {
+    node.typeId >= 0 -> if {
+        node.typeKind == 1 and node.typeOrigin == 1 and node.typeSymbol == 24
+    } else {
+        node.typeOrigin == 1 and node.typeSymbol == 24
+    }
+}
+
+public isDynamicArray node: typedIr.TypedIrNode -> Bool {
+    (node.typeOrigin == 13 or node.typeOrigin == 14) -> if { true } else {
+        node.typeId >= 0 -> if { node.typeKind == 3 } else { false }
+    }
+}
+
+public isDictionary node: typedIr.TypedIrNode -> Bool {
+    node.typeId >= 0 -> if { node.typeKind == 5 } else { node.typeOrigin == 15 }
+}
+
+public isGenericEnum node: typedIr.TypedIrNode -> Bool {
+    node.typeId >= 0 -> if {
+        node.typeKind == 7 and (node.typeSymbol == 0 or node.typeSymbol == 1)
+    } else { false }
+}
+
+public isNominalStruct node: typedIr.TypedIrNode -> Bool {
+    node.typeId >= 0 -> if {
+        node.typeKind == 1 and node.typeModule >= 0
+    } else {
+        node.typeOrigin == 0 or node.typeOrigin == 2
+    }
+}
+
+public isText node: typedIr.TypedIrNode -> Bool {
+    node.typeKind == 1 and node.typeOrigin == 1 and node.typeSymbol == 1
+}
+
+public isArguments node: typedIr.TypedIrNode -> Bool {
+    (node.typeOrigin == 1 and node.typeSymbol == 16) or ((node.kind == 6 or node.kind == 9) and node.opcode == -212)
+}
+
+public writeTextLike node: typedIr.TypedIrNode -> Unit uses Console {
+    node -> isSourceText -> if { "%sollang.source_text" -> print } else { "%sollang.text" -> print }
+}
+
+public owns node: typedIr.TypedIrNode -> Bool {
+    (node.typeOrigin == 13 or node.typeOrigin == 14 or node.typeOrigin == 15 or node.typeOrigin == 16) -> if { true } else {
+        node.typeId >= 0 -> if {
+            node.typeFlags % 2 == 1
+        } else {
+            node.typeOrigin == 13 or node.typeOrigin == 15 or node.typeOrigin == 0 or node.typeOrigin == 2
+        }
+    }
+}
+
+public write node: typedIr.TypedIrNode -> Unit uses Console {
+    node -> isDynamicArray -> if {
+        "%sollang.array.i32" -> print
+    } else {
+    node -> isDictionary -> if {
+        "%sollang.dict" -> print
+    } else {
+    node -> isNominalStruct -> if {
+        "%sollang.struct.m$(node.typeModule)_s$(node.typeSymbol)" -> print
+    } else {
+        node.typeSymbol == 1 -> if { "%sollang.text" -> print } else {
+            (node.typeSymbol == 2 or node.typeSymbol == 5 or node.typeSymbol == 10 or node.typeSymbol == 14) -> if { "i32" -> print } else {
+                (node.typeSymbol == 3 or node.typeSymbol == 8) -> if { "i8" -> print } else {
+                    (node.typeSymbol == 4 or node.typeSymbol == 9) -> if { "i16" -> print } else {
+                        (node.typeSymbol == 6 or node.typeSymbol == 7 or node.typeSymbol == 11 or node.typeSymbol == 12 or node.typeSymbol == 13) -> if { "i64" -> print } else {
+                            (node.typeSymbol == 19 or node.typeSymbol == 20) -> if { "float" -> print } else {
+                            (node.typeSymbol == 21 or node.typeSymbol == 22) -> if { "double" -> print } else {
+                                    node.typeSymbol == 23 -> if { "i1" -> print } else {
+                                        node.typeSymbol == 24 -> if { "%sollang.source_text" -> print } else {
+                                            node.typeSymbol == 25 -> if { "{ i32, i32 }" -> print } else { "void" -> print }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    }
+    }
+}

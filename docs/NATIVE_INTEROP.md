@@ -7,8 +7,10 @@ literals, bind-once dynamic loading, cached indirect calls, and deterministic
 cleanup are implemented in both compilers. The C# reference compiler also
 supports explicitly stable C aggregate values, builds and consumes Sollang
 shared libraries on Windows x64 and Linux x64, and has a verified Windows COM
-vertical slice. Self-hosted parity for the newer library and COM slices remains
-in progress.
+vertical slice. The Clang-based binding tool also generates and executes
+scalar `noexcept` free-function shims on Windows x64 and Linux x64.
+Self-hosted parity for the newer library, COM, and binding-generator slices
+remains in progress.
 
 Sollang native interoperability is one feature with four projections:
 
@@ -308,6 +310,45 @@ Templates are supported only after concrete instantiation. STL types never cross
 the boundary by value unless a generated adapter defines an explicit stable
 representation.
 
+The implemented first C++ slice is:
+
+```text
+sollang bind-cpp math.hpp --module math --output generated/math --build
+```
+
+It loads the pinned toolchain's `libclang`, parses the real C++ AST, preserves
+namespaces, gives overloads deterministic type-qualified Sollang names, and
+emits `math.slg`, `math_shim.cpp`, and a deterministic target manifest.
+`--compile-commands <directory-or-file>` reuses the selected compilation
+database entry, while `--compile-entry <source.cpp>` disambiguates multiple
+entries. The lossless `arguments` form is required instead of a shell-quoted
+`command`.
+
+This slice accepts fixed-width-compatible scalar parameters and results on
+non-variadic `noexcept` free functions and public class members. Potentially
+throwing functions are rejected during generation. A generated class projection
+uses an affine Native ABI handle:
+
+```slg
+native geometry from "geometry_shim" {
+    handle Counter drop "sollang_cpp_Counter_drop_..."
+    createCounter initial: Int32 -> geometry.Counter as "..."
+    counterAdd self: ref geometry.Counter, amount: Int32 -> Int32 as "..."
+}
+```
+
+The handle occupies one pointer-sized ABI word, cannot be constructed,
+inspected, copied, or mutated as an ordinary struct, and invokes its generated
+destructor export exactly once when ownership leaves scope. Calls borrow the
+handle by readonly reference, so no wrapper object, heap allocation, or handle
+copy is introduced on the steady-state method path. The C++ object allocation
+itself remains the constructor's explicit cost.
+
+Explicit `Result<handle, error>` allocation/constructor failure and exception
+translation, selected template instantiations, and callback lifetimes remain
+subsequent slices. Raw pointers are never exposed or temporarily disguised as
+user-visible integers.
+
 ## Verification gates
 
 Each implementation slice must pass:
@@ -341,3 +382,8 @@ Linux `.so`, consume both through a one-line `library` declaration, verify
 their exported hash-qualified symbols and exact output, inspect LLVM for
 directly typed numeric literals, and assert diagnostics for unsafe or empty
 public surfaces.
+
+Run `scripts/verify-cpp-interop.ps1` to generate the same C++ binding for
+Windows x64 and Linux x64, build the DLL and `.so`, execute a Sollang consumer,
+exercise deterministic overload naming, and verify byte-identical manifest
+regeneration.

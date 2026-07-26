@@ -1,0 +1,136 @@
+namespace sollang.compiler.llvm.emitter.com_runtime
+
+guidHexNibble value: UInt8 -> UInt64 {
+    value >= UInt8(48) and value <= UInt8(57) -> if { UInt64(value - UInt8(48)) } else {
+        value >= UInt8(65) and value <= UInt8(70) -> if { UInt64(value - UInt8(65)) + UInt64(10) } else { UInt64(value - UInt8(97)) + UInt64(10) }
+    }
+}
+
+public guidPart source: Text, start: UIntSize, offset: UIntSize, digits: UIntSize -> UInt64 {
+    UInt64(0) => value!
+    UIntSize(0) => digit!
+    digit! < digits -> while {
+        value! * UInt64(16) + (source -> byte(start + offset + digit!) -> guidHexNibble) => value!
+        digit! + UIntSize(1) => digit!
+    }
+    value!
+}
+
+public emitWindowsComRuntime includeLoaderDeclarations: Bool -> Unit uses Console {
+    """
+    declare dllimport i32 @CoInitializeEx(ptr, i32)
+    declare dllimport void @CoUninitialize()
+    declare dllimport i32 @CoCreateInstance(ptr, ptr, i32, ptr, ptr)
+    """ -> println
+    includeLoaderDeclarations -> if {
+        """
+        declare dllimport ptr @LoadLibraryA(ptr)
+        declare dllimport ptr @GetProcAddress(ptr, ptr)
+        declare dllimport i32 @FreeLibrary(ptr)
+        """ -> println
+    }
+    """
+    @sollang_com_dll_get_class_object_name = private unnamed_addr constant [18 x i8] c"DllGetClassObject\00"
+    @sollang_com_iid_class_factory = private constant { i32, i16, i16, [8 x i8] } { i32 1, i16 0, i16 0, [8 x i8] [i8 192, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 70] }
+    define internal ptr @sollang_com_vtable_target(ptr %instance, i64 %slot) {
+    entry:
+      %vtable = load ptr, ptr %instance, align 8
+      %slot_address = getelementptr ptr, ptr %vtable, i64 %slot
+      %target = load ptr, ptr %slot_address, align 8
+      ret ptr %target
+    }
+    define internal void @sollang_com_require_status(i32 %status) {
+    entry:
+      %ok = icmp sge i32 %status, 0
+      br i1 %ok, label %done, label %fail
+    fail:
+      call void @llvm.trap()
+      unreachable
+    done:
+      ret void
+    }
+    define internal void @sollang_com_require_pointer(ptr %value) {
+    entry:
+      %ok = icmp ne ptr %value, null
+      br i1 %ok, label %done, label %fail
+    fail:
+      call void @llvm.trap()
+      unreachable
+    done:
+      ret void
+    }
+    define internal ptr @sollang_com_clone(ptr %instance) {
+    entry:
+      %add_ref = call ptr @sollang_com_vtable_target(ptr %instance, i64 1)
+      %references = call i32 %add_ref(ptr %instance)
+      ret ptr %instance
+    }
+    define internal void @sollang_com_release(ptr %instance) {
+    entry:
+      %present = icmp ne ptr %instance, null
+      br i1 %present, label %release, label %done
+    release:
+      %target = call ptr @sollang_com_vtable_target(ptr %instance, i64 2)
+      %references = call i32 %target(ptr %instance)
+      br label %done
+    done:
+      ret void
+    }
+    define internal { ptr, i32 } @sollang_com_activate_registered(ptr %clsid, ptr %iid) {
+    entry:
+      %output = alloca ptr, align 8
+      store ptr null, ptr %output, align 8
+      %status = call i32 @CoCreateInstance(ptr %clsid, ptr null, i32 1, ptr %iid, ptr %output)
+      %instance = load ptr, ptr %output, align 8
+      %with_instance = insertvalue { ptr, i32 } poison, ptr %instance, 0
+      %result = insertvalue { ptr, i32 } %with_instance, i32 %status, 1
+      ret { ptr, i32 } %result
+    }
+    define internal { ptr, i32 } @sollang_com_activate_factory(ptr %factory, ptr %iid) {
+    entry:
+      %output = alloca ptr, align 8
+      store ptr null, ptr %output, align 8
+      %create = call ptr @sollang_com_vtable_target(ptr %factory, i64 3)
+      %status = call i32 %create(ptr %factory, ptr null, ptr %iid, ptr %output)
+      %instance = load ptr, ptr %output, align 8
+      %with_instance = insertvalue { ptr, i32 } poison, ptr %instance, 0
+      %result = insertvalue { ptr, i32 } %with_instance, i32 %status, 1
+      ret { ptr, i32 } %result
+    }
+    define internal { ptr, ptr, i32 } @sollang_com_bind_factory(ptr %server_name, ptr %clsid) {
+    entry:
+      %server = call ptr @LoadLibraryA(ptr %server_name)
+      %server_ok = icmp ne ptr %server, null
+      br i1 %server_ok, label %symbol, label %server_failed
+    symbol:
+      %get_class_object = call ptr @GetProcAddress(ptr %server, ptr @sollang_com_dll_get_class_object_name)
+      %symbol_ok = icmp ne ptr %get_class_object, null
+      br i1 %symbol_ok, label %factory, label %symbol_failed
+    factory:
+      %output = alloca ptr, align 8
+      store ptr null, ptr %output, align 8
+      %status = call i32 %get_class_object(ptr %clsid, ptr @sollang_com_iid_class_factory, ptr %output)
+      %value = load ptr, ptr %output, align 8
+      %status_ok = icmp sge i32 %status, 0
+      %value_ok = icmp ne ptr %value, null
+      %ready = and i1 %status_ok, %value_ok
+      br i1 %ready, label %done, label %factory_failed
+    server_failed:
+      %server_failure0 = insertvalue { ptr, ptr, i32 } zeroinitializer, i32 -2147467259, 2
+      ret { ptr, ptr, i32 } %server_failure0
+    symbol_failed:
+      %closed_symbol = call i32 @FreeLibrary(ptr %server)
+      %symbol_failure0 = insertvalue { ptr, ptr, i32 } zeroinitializer, i32 -2147467259, 2
+      ret { ptr, ptr, i32 } %symbol_failure0
+    factory_failed:
+      %closed_factory = call i32 @FreeLibrary(ptr %server)
+      %factory_failure0 = insertvalue { ptr, ptr, i32 } zeroinitializer, i32 %status, 2
+      ret { ptr, ptr, i32 } %factory_failure0
+    done:
+      %with_server = insertvalue { ptr, ptr, i32 } poison, ptr %server, 0
+      %with_factory = insertvalue { ptr, ptr, i32 } %with_server, ptr %value, 1
+      %result = insertvalue { ptr, ptr, i32 } %with_factory, i32 %status, 2
+      ret { ptr, ptr, i32 } %result
+    }
+    """ -> println
+}

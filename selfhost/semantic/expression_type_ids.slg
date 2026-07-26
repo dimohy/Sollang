@@ -1674,9 +1674,154 @@ public resolveContext prepared: semanticContext.SemanticSnapshot -> ExpressionTy
         streamRoleCallIndex! + 1 => streamRoleCallIndex!
     }
 
+    [Int; ~] => controlThenBranchByAst!
+    [Int; ~] => controlElseBranchByAst!
+    [Int; ~] => controlBranchTypeByAst!
+    [UIntSize; ~] => controlBranchRootStartByAst!
+    [Int; ~] => controlBranchDistanceByAst!
+    0 => controlResultSeed!
+    controlResultSeed! < (prepared.package.nodes -> len) -> while {
+        controlThenBranchByAst! -> push(-1)
+        controlElseBranchByAst! -> push(-1)
+        controlBranchTypeByAst! -> push(-1)
+        controlBranchRootStartByAst! -> push(UIntSize(0))
+        controlBranchDistanceByAst! -> push(1000000)
+        controlResultSeed! + 1 => controlResultSeed!
+    }
+    0 => controlBranchSource!
+    controlBranchSource! < (prepared.package.ranges -> len) -> while {
+        prepared.package.ranges[controlBranchSource!] => controlBranchRange
+        0 => controlBranchAst!
+        controlBranchAst! < controlBranchRange.astCount -> while {
+            prepared.package.nodes[controlBranchRange.astStart + controlBranchAst!] => controlBranchNode
+            (controlBranchNode.kind == 43 and controlBranchNode.parent >= 0) -> if {
+                controlBranchRange.astStart + controlBranchNode.parent => controlOwnerGlobalAst
+                controlThenBranchByAst![controlOwnerGlobalAst] < 0 -> if {
+                    controlBranchRange.astStart + controlBranchAst! => controlThenBranchByAst![controlOwnerGlobalAst]
+                } else {
+                    controlBranchRange.astStart + controlBranchAst! => controlElseBranchByAst![controlOwnerGlobalAst]
+                }
+            }
+            controlBranchAst! + 1 => controlBranchAst!
+        }
+        controlBranchSource! + 1 => controlBranchSource!
+    }
+
     true => pathChanged!
     pathChanged! -> while {
         false => pathChanged!
+        # Aggregate each branch in one expression sweep, then seed a
+        # value-producing if and its enclosing flow from the common result.
+        0 => controlBranchReset!
+        controlBranchReset! < (controlBranchTypeByAst! -> len) -> while {
+            -1 => controlBranchTypeByAst![controlBranchReset!]
+            UIntSize(0) => controlBranchRootStartByAst![controlBranchReset!]
+            1000000 => controlBranchDistanceByAst![controlBranchReset!]
+            controlBranchReset! + 1 => controlBranchReset!
+        }
+        0 => controlExpressionSearch!
+        controlExpressionSearch! < (expressions! -> len) -> while {
+            expressions![controlExpressionSearch!] => controlExpression
+            (controlExpression.status == 0 and controlExpression.sourceModule >= 0 and controlExpression.sourceModule < (prepared.package.ranges -> len)) -> if {
+                prepared.package.ranges[controlExpression.sourceModule] => controlExpressionRange
+                controlExpression.astNode => controlExpressionRoot!
+                prepared.package.nodes[controlExpressionRange.astStart + controlExpressionRoot!].parent => controlExpressionAncestor!
+                1 => controlExpressionDistance!
+                -1 => controlExpressionBranch!
+                false => controlExpressionNested!
+                (controlExpressionAncestor! >= 0 and controlExpressionBranch! < 0 and not controlExpressionNested!) -> while {
+                    prepared.package.nodes[controlExpressionRange.astStart + controlExpressionAncestor!] => controlExpressionAncestorNode
+                    (controlExpressionAncestorNode.kind == 43 and controlExpressionAncestorNode.parent >= 0) -> if {
+                        controlExpressionRange.astStart + controlExpressionAncestor! => controlExpressionBranch!
+                    } else {
+                        (controlExpressionAncestorNode.kind == 7 or controlExpressionAncestorNode.kind == 29 or controlExpressionAncestorNode.kind == 31) -> if {
+                            true => controlExpressionNested!
+                        } else {
+                            controlExpressionAncestor! => controlExpressionRoot!
+                            controlExpressionAncestorNode.parent => controlExpressionAncestor!
+                            controlExpressionDistance! + 1 => controlExpressionDistance!
+                        }
+                    }
+                }
+                controlExpressionBranch! >= 0 -> if {
+                    prepared.package.nodes[controlExpressionRange.astStart + controlExpression.astNode] => controlExpressionNode
+                    prepared.package.nodes[controlExpressionRange.astStart + controlExpressionRoot!] => controlExpressionRootNode
+                    controlExpression.typeId => controlExpressionResultType!
+                    controlExpressionRootNode.start => controlExpressionResultStart!
+                    controlExpressionRootNode.kind == 10 -> if {
+                        controlExpressionNode.start => controlExpressionResultStart!
+                    } else {
+                        expressionIndexByAst![controlExpressionRange.astStart + controlExpressionRoot!] => controlExpressionRootTypeIndex!
+                        controlExpressionRootTypeIndex! >= 0 -> if {
+                            expressions![controlExpressionRootTypeIndex!] => controlExpressionRootType
+                            controlExpressionRootType.status == 0 -> if {
+                                controlExpressionRootType.typeId => controlExpressionResultType!
+                                0 => controlExpressionDistance!
+                            }
+                        }
+                    }
+                    (controlBranchTypeByAst![controlExpressionBranch!] < 0
+                        or controlExpressionResultStart! > controlBranchRootStartByAst![controlExpressionBranch!]
+                        or (controlExpressionResultStart! == controlBranchRootStartByAst![controlExpressionBranch!] and controlExpressionDistance! < controlBranchDistanceByAst![controlExpressionBranch!])) -> if {
+                        controlExpressionResultType! => controlBranchTypeByAst![controlExpressionBranch!]
+                        controlExpressionResultStart! => controlBranchRootStartByAst![controlExpressionBranch!]
+                        controlExpressionDistance! => controlBranchDistanceByAst![controlExpressionBranch!]
+                    }
+                }
+            }
+            controlExpressionSearch! + 1 => controlExpressionSearch!
+        }
+        0 => controlResultSource!
+        controlResultSource! < (prepared.package.ranges -> len) -> while {
+            prepared.package.ranges[controlResultSource!] => controlResultRange
+            0 => controlResultAst!
+            controlResultAst! < controlResultRange.astCount -> while {
+                controlResultRange.astStart + controlResultAst! => controlResultGlobalAst
+                prepared.package.nodes[controlResultGlobalAst] => controlResultNode
+                controlThenBranchByAst![controlResultGlobalAst] => controlThenBranch
+                controlElseBranchByAst![controlResultGlobalAst] => controlElseBranch
+                (controlResultNode.kind == 42 and controlThenBranch >= 0 and controlElseBranch >= 0
+                    and controlBranchTypeByAst![controlThenBranch] >= 0
+                    and controlBranchTypeByAst![controlThenBranch] == controlBranchTypeByAst![controlElseBranch]) -> if {
+                    controlBranchTypeByAst![controlThenBranch] => controlResultType
+                    expressionIndexByAst![controlResultGlobalAst] => controlResultExpressionIndex!
+                    controlResultExpressionIndex! < 0 -> if {
+                        expressions! -> len => controlResultExpressionIndex!
+                        expressions! -> push(ExpressionTypeId { sourceModule: controlResultSource!, astNode: controlResultAst!, typeId: controlResultType, status: 0 })
+                        controlResultExpressionIndex! => expressionIndexByAst![controlResultGlobalAst]
+                        true => pathChanged!
+                    } else {
+                        expressions![controlResultExpressionIndex!] => existingControlResult!
+                        existingControlResult!.typeId != controlResultType -> if {
+                            controlResultType => existingControlResult!.typeId
+                            0 => existingControlResult!.status
+                            existingControlResult! => expressions![controlResultExpressionIndex!]
+                            true => pathChanged!
+                        }
+                    }
+                    controlResultNode.parent >= 0 -> if {
+                        controlResultRange.astStart + controlResultNode.parent => controlFlowGlobalAst
+                        expressionIndexByAst![controlFlowGlobalAst] => controlFlowExpressionIndex!
+                        controlFlowExpressionIndex! < 0 -> if {
+                            expressions! -> len => controlFlowExpressionIndex!
+                            expressions! -> push(ExpressionTypeId { sourceModule: controlResultSource!, astNode: controlResultNode.parent, typeId: controlResultType, status: 0 })
+                            controlFlowExpressionIndex! => expressionIndexByAst![controlFlowGlobalAst]
+                            true => pathChanged!
+                        } else {
+                            expressions![controlFlowExpressionIndex!] => existingControlFlow!
+                            existingControlFlow!.typeId != controlResultType -> if {
+                                controlResultType => existingControlFlow!.typeId
+                                0 => existingControlFlow!.status
+                                existingControlFlow! => expressions![controlFlowExpressionIndex!]
+                                true => pathChanged!
+                            }
+                        }
+                    }
+                }
+                controlResultAst! + 1 => controlResultAst!
+            }
+            controlResultSource! + 1 => controlResultSource!
+        }
         # A private function whose primary input type is omitted receives its
         # type from the nearest typed argument at each call site. The parser
         # records the omission in flag 16 and symbols.collectPrepared creates
@@ -1976,6 +2121,7 @@ public resolveContext prepared: semanticContext.SemanticSnapshot -> ExpressionTy
             expressions![pathCandidateIndex!] => pathCandidate
             (pathCandidate.status == 0 and pathCandidate.typeId >= 0 and pathCandidate.typeId < (types! -> len)) -> if {
                 prepared.package.ranges[pathCandidate.sourceModule] => pathCandidateRange
+                prepared.package.nodes[pathCandidateRange.astStart + pathCandidate.astNode] => pathCandidateNode
                 prepared.package.nodes[pathCandidateRange.astStart + pathCandidate.astNode].parent => pathAncestor!
                 1 => pathDistance!
                 pathAncestor! >= 0 -> while {
@@ -1986,10 +2132,10 @@ public resolveContext prepared: semanticContext.SemanticSnapshot -> ExpressionTy
                     # initially inherit the aggregate base type; skipping an
                     # existing entry permanently preserves that stale type.
                     false => usablePathBase!
-                    pathAncestorNode.kind == 36 -> if { true => usablePathBase! }
+                    (pathAncestorNode.kind == 36 and pathCandidateNode.start == pathAncestorNode.start) -> if { true => usablePathBase! }
                     pathAncestorNode.kind == 41 -> if {
                         types![pathCandidate.typeId] => indexedCandidateType
-                        ((indexedCandidateType.kind >= 2 and indexedCandidateType.kind <= 5) or (indexedCandidateType.kind == 1 and indexedCandidateType.origin == 1 and (indexedCandidateType.symbol == 16 or indexedCandidateType.symbol == 24))) -> if { true => usablePathBase! }
+                        (pathCandidateNode.start == pathAncestorNode.start and ((indexedCandidateType.kind >= 2 and indexedCandidateType.kind <= 5) or (indexedCandidateType.kind == 1 and indexedCandidateType.origin == 1 and (indexedCandidateType.symbol == 16 or indexedCandidateType.symbol == 24)))) -> if { true => usablePathBase! }
                     }
                     # A mutating take flow derives its result from the owned
                     # array element or dictionary value. The source expression

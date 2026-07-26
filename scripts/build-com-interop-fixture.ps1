@@ -36,6 +36,7 @@ if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     /opt:icf `
     /export:DllGetClassObject `
     /export:com_fixture_live_references `
+    /export:com_fixture_live_references_after `
     $object `
     /out:$output
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

@@ -1,0 +1,801 @@
+namespace sollang.compiler.llvm.emitter.diagnostics
+
+import sollang.compiler.ir.typed as typedIr
+import sollang.compiler.llvm.emitter.context as emitterContext
+import sollang.compiler.llvm.emitter.type_queries as typeQueries
+import syntax.generated.slg as grammar
+public usesTextRuntime context: emitterContext.EmitContext -> Bool {
+    false => usesRuntime!
+    0 => nodeIndex!
+    nodeIndex! < (context.ir -> len) -> while {
+        (context.ir[nodeIndex!].symbol == -101 or context.ir[nodeIndex!].symbol == -102 or context.ir[nodeIndex!].symbol == -103) -> if { true => usesRuntime! }
+        nodeIndex! + 1 => nodeIndex!
+    }
+    usesRuntime!
+}
+
+public usesParallelRuntime context: emitterContext.EmitContext -> Bool {
+    false => usesRuntime!
+    0 => nodeIndex!
+    nodeIndex! < (context.ir -> len) -> while {
+        (context.ir[nodeIndex!].opcode == -207 or context.ir[nodeIndex!].opcode == -209 or context.ir[nodeIndex!].symbol == -115) -> if { true => usesRuntime! }
+        nodeIndex! + 1 => nodeIndex!
+    }
+    usesRuntime!
+}
+
+public usesProcessRuntime context: emitterContext.EmitContext -> Bool {
+    false => usesRuntime!
+    0 => nodeIndex!
+    nodeIndex! < (context.ir -> len) -> while {
+        (context.ir[nodeIndex!].opcode == -210 or context.ir[nodeIndex!].opcode == -211) -> if { true => usesRuntime! }
+        nodeIndex! + 1 => nodeIndex!
+    }
+    usesRuntime!
+}
+
+public usesProcessExit context: emitterContext.EmitContext -> Bool {
+    false => usesExit!
+    0 => nodeIndex!
+    nodeIndex! < (context.ir -> len) -> while {
+        context.ir[nodeIndex!].opcode == -222 -> if { true => usesExit! }
+        nodeIndex! + 1 => nodeIndex!
+    }
+    usesExit!
+}
+
+public usesSourceTextRuntime context: emitterContext.EmitContext -> Bool {
+    false => usesRuntime!
+    0 => nodeIndex!
+    nodeIndex! < (context.ir -> len) -> while {
+        context.ir[nodeIndex!] -> typeQueries.isSourceText -> if { true => usesRuntime! }
+        nodeIndex! + 1 => nodeIndex!
+    }
+    usesRuntime!
+}
+
+public usesDirectoryRuntime context: emitterContext.EmitContext -> Bool {
+    false => usesRuntime!
+    0 => nodeIndex!
+    nodeIndex! < (context.ir -> len) -> while {
+        context.ir[nodeIndex!].opcode == -215 -> if { true => usesRuntime! }
+        nodeIndex! + 1 => nodeIndex!
+    }
+    usesRuntime!
+}
+
+public usesOwnedFileRuntime context: emitterContext.EmitContext -> Bool {
+    false => usesRuntime!
+    0 => nodeIndex!
+    nodeIndex! < (context.ir -> len) -> while {
+        context.ir[nodeIndex!] => node
+        (node.opcode <= -216 and node.opcode >= -221) -> if { true => usesRuntime! }
+        nodeIndex! + 1 => nodeIndex!
+    }
+    usesRuntime!
+}
+
+public usesIntInterpolation context: emitterContext.EmitContext -> Bool {
+    false => usesInterpolation!
+    0 => nodeIndex!
+    nodeIndex! < (context.ir -> len) -> while {
+        context.ir[nodeIndex!] => node
+        (node.kind == 6 and (node.symbol == -101 or node.symbol == -102) and node.operand0 >= 0) -> if {
+            context.ir[node.operand0] => outputArgument
+            (outputArgument.typeOrigin == 1 and outputArgument.typeSymbol >= 2 and outputArgument.typeSymbol <= 14) => outputArgumentIsInt!
+            (not outputArgumentIsInt! and outputArgument.typeId >= 0 and outputArgument.typeId < (context.types -> len)) -> if {
+                context.types[outputArgument.typeId] => outputArgumentType
+                (outputArgumentType.origin == 1 and outputArgumentType.symbol >= 2 and outputArgumentType.symbol <= 14) -> if { true => outputArgumentIsInt! }
+            }
+            (not outputArgumentIsInt! and node.operand1 >= 0 and node.operand1 < (context.ir -> len)) -> if {
+                context.ir[node.operand1] => outputFlowResult
+                (outputFlowResult.typeOrigin == 1 and outputFlowResult.typeSymbol >= 2 and outputFlowResult.typeSymbol <= 14) -> if { true => outputArgumentIsInt! }
+                (not outputArgumentIsInt! and outputFlowResult.typeId >= 0 and outputFlowResult.typeId < (context.types -> len)) -> if {
+                    context.types[outputFlowResult.typeId] => outputFlowResultType
+                    (outputFlowResultType.origin == 1 and outputFlowResultType.symbol >= 2 and outputFlowResultType.symbol <= 14) -> if { true => outputArgumentIsInt! }
+                }
+            }
+            outputArgumentIsInt! -> if { true => usesInterpolation! }
+        }
+        (node.kind == 6 and (node.symbol == -101 or node.symbol == -102) and node.operand0 >= 0 and context.ir[node.operand0].kind == 2) -> if {
+            context.ir[node.operand0] => argument
+            context.tokens[context.ranges[argument.sourceModule].tokenStart + argument.payloadToken] => token
+            token.span.start + UIntSize(1) => byteIndex!
+            token.span.start + token.span.length - UIntSize(1) => byteEnd
+            byteIndex! < byteEnd -> while {
+                ((context.sources[argument.sourceModule] -> byte(byteIndex!)) == UInt8(36) and byteIndex! + UIntSize(1) < byteEnd) -> if {
+                    context.sources[argument.sourceModule] -> byte(byteIndex! + UIntSize(1)) => interpolationNextByte
+                    (interpolationNextByte != UInt8(40) and ((interpolationNextByte >= UInt8(65) and interpolationNextByte <= UInt8(90)) or (interpolationNextByte >= UInt8(97) and interpolationNextByte <= UInt8(122)) or interpolationNextByte == UInt8(95) or interpolationNextByte >= UInt8(128))) -> if { true => usesInterpolation! }
+                }
+                byteIndex! + UIntSize(1) => byteIndex!
+            }
+            context.interpolationRanges[argument.sourceModule] => interpolationRange
+            0 => interpolationIndex!
+            interpolationIndex! < interpolationRange.nodeCount -> while {
+                context.interpolations[interpolationRange.nodeStart + interpolationIndex!] => interpolationNode
+                (interpolationNode.sourceToken == argument.payloadToken and interpolationNode.parent < 0) -> if {
+                    (interpolationNode.typeSymbol >= 2 and interpolationNode.typeSymbol <= 14) -> if { true => usesInterpolation! }
+                    # Member result types are resolved against the typed base during
+                    # emission, after interpolation lowering. Keep the integer
+                    # formatter available for either direct or nested members.
+                    interpolationNode.kind == 5 -> if { true => usesInterpolation! }
+                    interpolationNode.kind == 1 -> if {
+                        0 => valueSearch!
+                        valueSearch! < (context.ir -> len) -> while {
+                            context.ir[valueSearch!] => valueNode
+                            ((valueNode.kind == 10 or valueNode.kind == 17) and valueNode.sourceModule == argument.sourceModule and valueNode.symbol == interpolationNode.symbol and valueNode.typeSymbol >= 2 and valueNode.typeSymbol <= 14) -> if { true => usesInterpolation! }
+                            valueSearch! + 1 => valueSearch!
+                        }
+                    }
+                }
+                interpolationIndex! + 1 => interpolationIndex!
+            }
+        }
+        nodeIndex! + 1 => nodeIndex!
+    }
+    usesInterpolation!
+}
+
+public usesBoolInterpolation context: emitterContext.EmitContext -> Bool {
+    false => usesInterpolation!
+    0 => nodeIndex!
+    nodeIndex! < (context.ir -> len) -> while {
+        context.ir[nodeIndex!] => node
+        (node.kind == 6 and (node.symbol == -101 or node.symbol == -102) and node.operand0 >= 0) -> if {
+            context.ir[node.operand0] => outputArgument
+            (outputArgument.typeOrigin == 1 and outputArgument.typeSymbol == 23) => outputArgumentIsBool!
+            (not outputArgumentIsBool! and outputArgument.typeId >= 0 and outputArgument.typeId < (context.types -> len)) -> if {
+                context.types[outputArgument.typeId] => outputArgumentType
+                (outputArgumentType.origin == 1 and outputArgumentType.symbol == 23) -> if { true => outputArgumentIsBool! }
+            }
+            (not outputArgumentIsBool! and node.operand1 >= 0 and node.operand1 < (context.ir -> len)) -> if {
+                context.ir[node.operand1] => outputFlowResult
+                (outputFlowResult.typeOrigin == 1 and outputFlowResult.typeSymbol == 23) -> if { true => outputArgumentIsBool! }
+                (not outputArgumentIsBool! and outputFlowResult.typeId >= 0 and outputFlowResult.typeId < (context.types -> len)) -> if {
+                    context.types[outputFlowResult.typeId] => outputFlowResultType
+                    (outputFlowResultType.origin == 1 and outputFlowResultType.symbol == 23) -> if { true => outputArgumentIsBool! }
+                }
+            }
+            outputArgumentIsBool! -> if { true => usesInterpolation! }
+        }
+        (node.kind == 6 and (node.symbol == -101 or node.symbol == -102) and node.operand0 >= 0 and context.ir[node.operand0].kind == 2) -> if {
+            context.ir[node.operand0] => argument
+            context.interpolationRanges[argument.sourceModule] => interpolationRange
+            0 => interpolationIndex!
+            interpolationIndex! < interpolationRange.nodeCount -> while {
+                context.interpolations[interpolationRange.nodeStart + interpolationIndex!] => interpolationNode
+                (interpolationNode.sourceToken == argument.payloadToken and interpolationNode.parent < 0) -> if {
+                    interpolationNode.typeSymbol == 23 -> if { true => usesInterpolation! }
+                    # See usesIntInterpolation: the concrete member field type is
+                    # known only when the surrounding typed function is emitted.
+                    interpolationNode.kind == 5 -> if { true => usesInterpolation! }
+                    interpolationNode.kind == 1 -> if {
+                        0 => valueSearch!
+                        valueSearch! < (context.ir -> len) -> while {
+                            context.ir[valueSearch!] => valueNode
+                            ((valueNode.kind == 10 or valueNode.kind == 17) and valueNode.sourceModule == argument.sourceModule and valueNode.symbol == interpolationNode.symbol and valueNode.typeSymbol == 23) -> if { true => usesInterpolation! }
+                            valueSearch! + 1 => valueSearch!
+                        }
+                    }
+                }
+                interpolationIndex! + 1 => interpolationIndex!
+            }
+        }
+        nodeIndex! + 1 => nodeIndex!
+    }
+    usesInterpolation!
+}
+
+public emitOwnershipDiagnostics context: emitterContext.EmitContext -> Unit uses Console {
+    0 => diagnosticIndex!
+    diagnosticIndex! < (context.ownershipDiagnostics -> len) -> while {
+        context.ownershipDiagnostics[diagnosticIndex!] => diagnostic
+        diagnostic.code == 17 -> if {
+            diagnostic.span => diagnosticSpan
+            diagnosticSpan.start => diagnosticStart
+            diagnosticSpan.length => diagnosticLength
+            diagnostic.expectedSymbol >= 0 -> if {
+                context.ir[diagnostic.expectedSymbol] => moveSite
+                context.ranges[moveSite.sourceModule] => moveRange
+                context.nodes[moveRange.astStart + moveSite.astNode].start => moveStart
+                "; sollang error[E17]: use of a partially moved value (source $(diagnostic.sourceModule), move byte $moveStart, use byte $diagnosticStart, length $diagnosticLength)" -> println
+            } else {
+                "; sollang error[E17]: use of a partially moved value (source $(diagnostic.sourceModule), use byte $diagnosticStart, length $diagnosticLength)" -> println
+            }
+        } else {
+            diagnostic.code == 18 -> if {
+                diagnostic.span => diagnosticSpan
+                diagnosticSpan.start => diagnosticStart
+                diagnosticSpan.length => diagnosticLength
+                "; sollang error[E18]: mutable binding captured by a parallel callback (source $(diagnostic.sourceModule), byte $diagnosticStart, length $diagnosticLength)" -> println
+            } else {
+                diagnostic.code == 19 -> if {
+                    diagnostic.span => diagnosticSpan
+                    diagnosticSpan.start => diagnosticStart
+                    diagnosticSpan.length => diagnosticLength
+                    "; sollang error[E19]: non-sendable binding captured by a parallel callback (source $(diagnostic.sourceModule), byte $diagnosticStart, length $diagnosticLength)" -> println
+                } else {
+                    diagnostic.code == 20 -> if {
+                        diagnostic.span => diagnosticSpan
+                        diagnosticSpan.start => diagnosticStart
+                        diagnostic.span.length => diagnosticLength
+                        "; sollang error[E20]: partial move exits a branch or loop without reinitialization (source $(diagnostic.sourceModule), byte $diagnosticStart, length $diagnosticLength)" -> println
+                    } else {
+                        diagnostic.code == 21 -> if {
+                            diagnostic.span => diagnosticSpan
+                            diagnosticSpan.start => diagnosticStart
+                            diagnosticSpan.length => diagnosticLength
+                            "; sollang error[E21]: origin moved while a borrowed Text view is still live (source $(diagnostic.sourceModule), byte $diagnosticStart, length $diagnosticLength)" -> println
+                        } else {
+                            diagnostic.code == 22 -> if {
+                                diagnostic.span => diagnosticSpan
+                                diagnosticSpan.start => diagnosticStart
+                                diagnosticSpan.length => diagnosticLength
+                                "; sollang error[E22]: readonly reference argument requires stable immutable storage (source $(diagnostic.sourceModule), byte $diagnosticStart, length $diagnosticLength)" -> println
+                            } else {
+                                diagnostic.code == 23 -> if {
+                                    diagnostic.span => diagnosticSpan
+                                    diagnosticSpan.start => diagnosticStart
+                                    diagnostic.span.length => diagnosticLength
+                                    "; sollang error[E23]: owner mutation conflicts with a live readonly reference (source $(diagnostic.sourceModule), byte $diagnosticStart, length $diagnosticLength)" -> println
+                                } else {
+                                    diagnostic.code == 24 -> if {
+                                        context.ir[diagnostic.actualSymbol] => affineReuse
+                                        context.ranges[affineReuse.sourceModule] => affineReuseRange
+                                        affineReuse.payloadToken >= 0 -> if {
+                                            context.tokens[affineReuseRange.tokenStart + affineReuse.payloadToken] => affineReuseName
+                                            context.sources[affineReuse.sourceModule] -> slice(affineReuseName.span.start, affineReuseName.span.length) => affineName
+                                            "; sollang semantic error: unknown binding '$affineName'" -> println
+                                        } else {
+                                            "; sollang semantic error: affine producer was already consumed" -> println
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        diagnosticIndex! + 1 => diagnosticIndex!
+    }
+}
+
+public interpolationSourceModule context: emitterContext.EmitContext, nodeIndex: Int -> Int {
+    -1 => sourceModule!
+    0 => rangeIndex!
+    rangeIndex! < (context.interpolationRanges -> len) -> while {
+        context.interpolationRanges[rangeIndex!] => interpolationRange
+        (nodeIndex >= interpolationRange.nodeStart and nodeIndex < interpolationRange.nodeStart + interpolationRange.nodeCount) -> if {
+            interpolationRange.sourceModule => sourceModule!
+        }
+        rangeIndex! + 1 => rangeIndex!
+    }
+    sourceModule!
+}
+
+public emitInterpolationDiagnostics context: emitterContext.EmitContext -> Unit uses Console {
+    0 => nodeIndex!
+    nodeIndex! < (context.interpolations -> len) -> while {
+        context.interpolations[nodeIndex!] => interpolationNode
+        context -> isBlockingUnknownInterpolation(nodeIndex!) -> if {
+            context -> interpolationSourceModule(nodeIndex!) => sourceModule
+            sourceModule >= 0 -> if {
+                context.sources[sourceModule] -> slice(interpolationNode.payloadStart, interpolationNode.payloadLength) => name
+                "; sollang semantic error: unknown interpolation binding '$name' (source $sourceModule, byte $(interpolationNode.payloadStart), length $(interpolationNode.payloadLength))" -> println
+                "; hint: if text follows the name, use the parenthesized interpolation form to mark its boundary." -> println
+            } else {
+                "; sollang semantic error: unknown interpolation binding" -> println
+            }
+        }
+        nodeIndex! + 1 => nodeIndex!
+    }
+}
+
+public isBlockingUnknownInterpolation context: emitterContext.EmitContext, nodeIndex: Int -> Bool {
+    false => blocking!
+    (nodeIndex >= 0 and nodeIndex < (context.interpolations -> len)) -> if {
+        context.interpolations[nodeIndex] => candidate
+        (candidate.kind == 1 and candidate.symbol < 0) -> if {
+            context -> interpolationSourceModule(nodeIndex) => sourceModule
+            sourceModule >= 0 -> if {
+                true => blocking!
+                context.ranges[sourceModule] => sourceRange
+                0 => symbolIndex!
+                (symbolIndex! < sourceRange.symbolCount and blocking!) -> while {
+                    context.symbols[sourceRange.symbolStart + symbolIndex!] => knownSymbol
+                    knownSymbol.nameToken >= 0 -> if {
+                        context.tokens[sourceRange.tokenStart + knownSymbol.nameToken] => knownName
+                        knownName.span.length == candidate.payloadLength => sameName!
+                        UIntSize(0) => nameByte!
+                        (sameName! and nameByte! < knownName.span.length) -> while {
+                            (context.sources[sourceModule] -> byte(knownName.span.start + nameByte!)) != (context.sources[sourceModule] -> byte(candidate.payloadStart + nameByte!)) -> if {
+                                false => sameName!
+                            }
+                            nameByte! + UIntSize(1) => nameByte!
+                        }
+                        sameName! -> if { false => blocking! }
+                    }
+                    symbolIndex! + 1 => symbolIndex!
+                }
+                0 => patternIndex!
+                (patternIndex! < sourceRange.astCount and blocking!) -> while {
+                    context.nodes[sourceRange.astStart + patternIndex!] => patternNode
+                    (patternNode.kind == 59 and patternNode.secondaryToken >= 0) -> if {
+                        context.tokens[sourceRange.tokenStart + patternNode.secondaryToken] => patternName
+                        patternName.span.length == candidate.payloadLength => samePatternName!
+                        UIntSize(0) => patternNameByte!
+                        (samePatternName! and patternNameByte! < patternName.span.length) -> while {
+                            (context.sources[sourceModule] -> byte(patternName.span.start + patternNameByte!)) != (context.sources[sourceModule] -> byte(candidate.payloadStart + patternNameByte!)) -> if {
+                                false => samePatternName!
+                            }
+                            patternNameByte! + UIntSize(1) => patternNameByte!
+                        }
+                        samePatternName! -> if { false => blocking! }
+                    }
+                    patternIndex! + 1 => patternIndex!
+                }
+                0 => tokenIndex!
+                (tokenIndex! < sourceRange.tokenCount and blocking!) -> while {
+                    context.tokens[sourceRange.tokenStart + tokenIndex!] => knownToken
+                    knownToken.kind == grammar.tokenIdIdentifier -> if {
+                        knownToken.span.length == candidate.payloadLength => sameTokenName!
+                        UIntSize(0) => tokenNameByte!
+                        (sameTokenName! and tokenNameByte! < knownToken.span.length) -> while {
+                            (context.sources[sourceModule] -> byte(knownToken.span.start + tokenNameByte!)) != (context.sources[sourceModule] -> byte(candidate.payloadStart + tokenNameByte!)) -> if {
+                                false => sameTokenName!
+                            }
+                            tokenNameByte! + UIntSize(1) => tokenNameByte!
+                        }
+                        sameTokenName! -> if { false => blocking! }
+                    }
+                    tokenIndex! + 1 => tokenIndex!
+                }
+            }
+        }
+    }
+    blocking!
+}
+
+public unresolvedCallNameToken context: emitterContext.EmitContext, callIndex: Int -> Int {
+    -1 => nameToken!
+    (callIndex >= 0 and callIndex < (context.calls -> len)) -> if {
+        context.calls[callIndex] => call
+        context.ranges[call.sourceModule] => sourceRange
+        context.nodes[sourceRange.astStart + call.callAst] => callNode
+        callNode.kind == 48 -> if { callNode.payloadToken => nameToken! }
+        callNode.kind == 10 -> if {
+            false => afterArrow!
+            false => insideArguments!
+            callNode.firstToken => tokenIndex!
+            tokenIndex! < callNode.firstToken + callNode.tokenCount -> while {
+                context.tokens[sourceRange.tokenStart + tokenIndex!] => token
+                token.kind == grammar.tokenIdArrow -> if {
+                    true => afterArrow!
+                    false => insideArguments!
+                    -1 => nameToken!
+                }
+                (afterArrow! and token.kind == grammar.tokenIdLeftParen) -> if { true => insideArguments! }
+                (afterArrow! and token.kind == grammar.tokenIdRightParen) -> if { false => insideArguments! }
+                (afterArrow! and not insideArguments! and token.kind == grammar.tokenIdIdentifier) -> if { tokenIndex! => nameToken! }
+                tokenIndex! + 1 => tokenIndex!
+            }
+        }
+    }
+    nameToken!
+}
+
+public isBlockingUnresolvedCall context: emitterContext.EmitContext, callIndex: Int -> Bool {
+    false => blocking!
+    (callIndex >= 0 and callIndex < (context.calls -> len)) -> if {
+        context.calls[callIndex] => candidate
+        (candidate.status == 2 or candidate.status == 3) -> if {
+            context.ranges[candidate.sourceModule] => candidateRange
+            context.nodes[candidateRange.astStart + candidate.callAst] => candidateNode
+            # Type conversions and nominal/enum constructors share the direct
+            # call CST shape but are resolved by type analysis rather than the
+            # function-call table. Only flow and block-call targets are
+            # authoritative unresolved function diagnostics here.
+            false => qualifiedTarget!
+            false => dynConversionTarget!
+            context -> unresolvedCallNameToken(callIndex) => candidateNameToken!
+            candidateNode.firstToken => qualifiedTokenSearch!
+            qualifiedTokenSearch! < candidateNode.firstToken + candidateNode.tokenCount -> while {
+                context.tokens[candidateRange.tokenStart + qualifiedTokenSearch!] => qualifiedToken
+                qualifiedToken.kind == grammar.tokenIdDot -> if { true => qualifiedTarget! }
+                (qualifiedToken.kind == grammar.tokenIdLess and qualifiedTokenSearch! > candidateNode.firstToken) -> if {
+                    context.tokens[candidateRange.tokenStart + qualifiedTokenSearch! - 1] => conversionToken
+                    conversionToken.span.length == UIntSize(3) -> if {
+                        context.sources[candidate.sourceModule] -> byte(conversionToken.span.start) => conversionByte0
+                        context.sources[candidate.sourceModule] -> byte(conversionToken.span.start + UIntSize(1)) => conversionByte1
+                        context.sources[candidate.sourceModule] -> byte(conversionToken.span.start + UIntSize(2)) => conversionByte2
+                        (conversionByte0 == UInt8(100) and conversionByte1 == UInt8(121) and conversionByte2 == UInt8(110)) -> if { true => dynConversionTarget! }
+                    }
+                }
+                qualifiedTokenSearch! + 1 => qualifiedTokenSearch!
+            }
+            candidateNameToken! > 0 -> if {
+                context.tokens[candidateRange.tokenStart + candidateNameToken! - 1] => previousToken
+                previousToken.kind == grammar.tokenIdDot -> if { true => qualifiedTarget! }
+            }
+            false => resultBindingTarget!
+            (candidateNode.kind == 10 and not qualifiedTarget!) -> if {
+                0 => sourceCallIndex!
+                sourceCallIndex! < (context.calls -> len) -> while {
+                    context.calls[sourceCallIndex!] => sourceCall
+                    (sourceCall.status == 0 and sourceCall.sourceModule == candidate.sourceModule and sourceCall.callAst != candidate.callAst) -> if {
+                        context.nodes[candidateRange.astStart + sourceCall.callAst] => sourceCallNode
+                        sourceCallNode.parent => sourceCallAncestor!
+                        false => sourceBelongsToCandidate!
+                        (sourceCallAncestor! >= 0 and not sourceBelongsToCandidate!) -> while {
+                            sourceCallAncestor! == candidate.callAst -> if {
+                                true => sourceBelongsToCandidate!
+                            } else {
+                                context.nodes[candidateRange.astStart + sourceCallAncestor!].parent => sourceCallAncestor!
+                            }
+                        }
+                        false => sourceCallHasArguments!
+                        sourceCallNode.firstToken => sourceCallToken!
+                        sourceCallToken! < sourceCallNode.firstToken + sourceCallNode.tokenCount -> while {
+                            context.tokens[candidateRange.tokenStart + sourceCallToken!].kind == grammar.tokenIdLeftParen -> if { true => sourceCallHasArguments! }
+                            sourceCallToken! + 1 => sourceCallToken!
+                        }
+                        (sourceBelongsToCandidate! and not sourceCallHasArguments! and sourceCallNode.start < candidateNode.start + candidateNode.length) -> if {
+                            true => resultBindingTarget!
+                        }
+                    }
+                    sourceCallIndex! + 1 => sourceCallIndex!
+                }
+            }
+            ((candidateNode.kind == 10 or candidateNode.kind == 48) and not qualifiedTarget! and not dynConversionTarget! and not resultBindingTarget!) -> if {
+                true => blocking!
+            }
+        }
+    }
+    blocking!
+}
+
+public emitCallDiagnostics context: emitterContext.EmitContext -> Unit uses Console {
+    0 => callIndex!
+    callIndex! < (context.calls -> len) -> while {
+        context.calls[callIndex!] => call
+        context -> isBlockingUnresolvedCall(callIndex!) -> if {
+            context.ranges[call.sourceModule] => sourceRange
+            context -> unresolvedCallNameToken(callIndex!) => callNameToken!
+            context.tokens[sourceRange.tokenStart + callNameToken!] => nameToken
+            nameToken.span.start => nameStart
+            nameToken.span.length => nameLength
+            context.sources[call.sourceModule] -> slice(nameStart, nameLength) => name
+            "; sollang semantic error: unresolved call target '$name' (source $(call.sourceModule), byte $nameStart, length $nameLength)" -> println
+        }
+        callIndex! + 1 => callIndex!
+    }
+}
+
+public nativeAbiFixedScalarSymbol symbol: Int, allowUnit: Bool -> Bool {
+    false => safe!
+    (allowUnit and symbol == 0) -> if { true => safe! }
+    symbol == 3 -> if { true => safe! }
+    symbol == 4 -> if { true => safe! }
+    symbol == 5 -> if { true => safe! }
+    symbol == 6 -> if { true => safe! }
+    symbol == 8 -> if { true => safe! }
+    symbol == 9 -> if { true => safe! }
+    symbol == 10 -> if { true => safe! }
+    symbol == 11 -> if { true => safe! }
+    symbol == 20 -> if { true => safe! }
+    symbol == 21 -> if { true => safe! }
+    safe!
+}
+
+public nativeAbiStructTypeSafe context: emitterContext.EmitContext, typeId: Int, depth: Int -> Bool {
+    false => safe!
+    (depth < 32 and typeId >= 0 and typeId < (context.types -> len)) -> if {
+        context.types[typeId] => structureType
+        (structureType.kind == 1 and (structureType.origin == 0 or structureType.origin == 2) and structureType.module >= 0 and structureType.module < (context.ranges -> len)) -> if {
+            context.ranges[structureType.module] => structureRange
+            (structureType.symbol >= 0 and structureType.symbol < structureRange.symbolCount) -> if {
+                context.symbols[structureRange.symbolStart + structureType.symbol] => structureSymbol
+                (structureSymbol.kind == 3 and structureSymbol.flags / 256 % 2 == 1 and context.typeLayoutStatuses[typeId] == 0) -> if {
+                    true => safe!
+                    0 => fieldCount!
+                    0 => fieldIndex!
+                    fieldIndex! < (context.fields -> len) -> while {
+                        context.fields[fieldIndex!] => field
+                        (field.status == 0 and field.ownerType == typeId) -> if {
+                            fieldCount! + 1 => fieldCount!
+                            false => fieldSafe!
+                            (field.fieldType >= 0 and field.fieldType < (context.types -> len)) -> if {
+                                context.types[field.fieldType] => fieldType
+                                (fieldType.kind == 1 and fieldType.origin == 1) -> if {
+                                    fieldType.symbol -> nativeAbiFixedScalarSymbol(false) => fieldSafe!
+                                } else {
+                                    context -> nativeAbiStructTypeSafe(field.fieldType, depth + 1) => fieldSafe!
+                                }
+                            }
+                            not fieldSafe! -> if { false => safe! }
+                        }
+                        fieldIndex! + 1 => fieldIndex!
+                    }
+                    fieldCount! == 0 -> if { false => safe! }
+                }
+            }
+        }
+    }
+    safe!
+}
+
+public nativeAbiValueTypeSafe context: emitterContext.EmitContext, node: typedIr.TypedIrNode, allowUnit: Bool -> Bool {
+    false => safe!
+    (node.typeId >= 0 and node.typeId < (context.types -> len)) -> if {
+        context.types[node.typeId] => nativeType
+        (nativeType.kind == 1 and nativeType.origin == 1) -> if {
+            nativeType.symbol -> nativeAbiFixedScalarSymbol(allowUnit) => safe!
+        } else {
+            context -> nativeAbiStructTypeSafe(node.typeId, 0) => safe!
+        }
+    } else {
+        node.typeOrigin == 1 -> if {
+            node.typeSymbol -> nativeAbiFixedScalarSymbol(allowUnit) => safe!
+        }
+    }
+    safe!
+}
+
+public nativeAbiParameterSafe context: emitterContext.EmitContext, node: typedIr.TypedIrNode -> Bool {
+    false => safe!
+    node.flags % 2 == 0 -> if {
+        node.flags / 2 % 2 == 1 -> if {
+            context -> nativeAbiStructTypeSafe(node.typeId, 0) => safe!
+        } else {
+            (node.typeId >= 0 and node.typeId < (context.types -> len) and context.types[node.typeId].kind == 8) -> if {
+                context -> nativeAbiStructTypeSafe(context.types[node.typeId].first, 0) => safe!
+            } else {
+                context -> nativeAbiValueTypeSafe(node, false) => safe!
+            }
+        }
+    }
+    safe!
+}
+
+public nativeAbiResultSafe context: emitterContext.EmitContext, node: typedIr.TypedIrNode -> Bool {
+    false => safe!
+    (node.typeId < 0 or node.typeId >= (context.types -> len) or context.types[node.typeId].kind != 8) -> if {
+        context -> nativeAbiValueTypeSafe(node, true) => safe!
+    }
+    safe!
+}
+
+public nativeAbiUnsafeTypeCount context: emitterContext.EmitContext -> Int {
+    0 => count!
+    0 => functionIndex!
+    functionIndex! < (context.ir -> len) -> while {
+        context.ir[functionIndex!] => function
+        (function.kind == 0 and function.flags / 128 % 2 == 1 and function.flags / 512 % 2 == 0) -> if {
+            not (context -> nativeAbiResultSafe(function)) -> if { count! + 1 => count! }
+            function.operand1 >= 0 -> if {
+                not (context -> nativeAbiParameterSafe(context.ir[function.operand1])) -> if { count! + 1 => count! }
+            }
+            function.nextOperand => parameterIndex!
+            parameterIndex! >= 0 -> while {
+                context.ir[parameterIndex!] => parameter
+                not (context -> nativeAbiParameterSafe(parameter)) -> if { count! + 1 => count! }
+                parameter.nextOperand => parameterIndex!
+            }
+        }
+        functionIndex! + 1 => functionIndex!
+    }
+    count!
+}
+
+public writeNativeAbiTypeName typeSymbol: Int -> Unit uses Console {
+    typeSymbol == 0 -> if { "Unit" -> print }
+    typeSymbol == 1 -> if { "Text" -> print }
+    typeSymbol == 2 -> if { "Int" -> print }
+    typeSymbol == 3 -> if { "Int8" -> print }
+    typeSymbol == 4 -> if { "Int16" -> print }
+    typeSymbol == 5 -> if { "Int32" -> print }
+    typeSymbol == 6 -> if { "Int64" -> print }
+    typeSymbol == 7 -> if { "Long" -> print }
+    typeSymbol == 8 -> if { "UInt8" -> print }
+    typeSymbol == 9 -> if { "UInt16" -> print }
+    typeSymbol == 10 -> if { "UInt32" -> print }
+    typeSymbol == 11 -> if { "UInt64" -> print }
+    typeSymbol == 12 -> if { "Size" -> print }
+    typeSymbol == 13 -> if { "UIntSize" -> print }
+    typeSymbol == 14 -> if { "CodePoint" -> print }
+    typeSymbol == 19 -> if { "Float" -> print }
+    typeSymbol == 20 -> if { "Float32" -> print }
+    typeSymbol == 21 -> if { "Float64" -> print }
+    typeSymbol == 22 -> if { "Double" -> print }
+    typeSymbol == 23 -> if { "Bool" -> print }
+    (typeSymbol < 0 or typeSymbol > 23) -> if { "type#$typeSymbol" -> print }
+}
+
+public emitNativeAbiTypeDiagnostic node: typedIr.TypedIrNode, role: Text -> Unit uses Console {
+    "; sollang semantic error: native function " -> print
+    role -> print
+    " type '" -> print
+    node.typeSymbol -> writeNativeAbiTypeName
+    "' is not ABI-safe; use a fixed-width scalar type in the first native ABI slice" -> println
+}
+
+public emitNativeAbiDiagnostics context: emitterContext.EmitContext -> Unit uses Console {
+    0 => functionIndex!
+    functionIndex! < (context.ir -> len) -> while {
+        context.ir[functionIndex!] => function
+        (function.kind == 0 and function.flags / 128 % 2 == 1 and function.flags / 512 % 2 == 0) -> if {
+            not (context -> nativeAbiResultSafe(function)) -> if { function -> emitNativeAbiTypeDiagnostic("result") }
+            function.operand1 >= 0 -> if {
+                context.ir[function.operand1] => primaryParameter
+                not (context -> nativeAbiParameterSafe(primaryParameter)) -> if { primaryParameter -> emitNativeAbiTypeDiagnostic("input") }
+            }
+            function.nextOperand => parameterIndex!
+            parameterIndex! >= 0 -> while {
+                context.ir[parameterIndex!] => parameter
+                not (context -> nativeAbiParameterSafe(parameter)) -> if { parameter -> emitNativeAbiTypeDiagnostic("parameter") }
+                parameter.nextOperand => parameterIndex!
+            }
+        }
+        functionIndex! + 1 => functionIndex!
+    }
+}
+
+public nativeInteropFunctionCount context: emitterContext.EmitContext -> Int {
+    0 => count!
+    0 => nativeIndex!
+    nativeIndex! < (context.symbols -> len) -> while {
+        context.symbols[nativeIndex!] => nativeSymbol
+        (nativeSymbol.kind == 7 and nativeSymbol.flags / 128 % 2 == 1 and nativeSymbol.flags / 512 % 2 == 0) -> if {
+            count! + 1 => count!
+        }
+        nativeIndex! + 1 => nativeIndex!
+    }
+    count!
+}
+
+public comInteropFunctionCount context: emitterContext.EmitContext -> Int {
+    0 => count!
+    0 => symbolIndex!
+    symbolIndex! < (context.symbols -> len) -> while {
+        context.symbols[symbolIndex!] => symbol
+        ((symbol.kind == 7 or symbol.kind == 36) and symbol.flags / 512 % 2 == 1) -> if {
+            count! + 1 => count!
+        }
+        symbolIndex! + 1 => symbolIndex!
+    }
+    count!
+}
+
+public emitWasmNativeInteropDiagnostic: -> Unit uses Console {
+    "; sollang semantic error: native libraries are unavailable on wasm32-browser" -> println
+}
+
+public emitComTargetDiagnostic target: Text -> Unit uses Console {
+    "; sollang semantic error: COM declarations require target windows-x64; $target does not provide COM" -> println
+}
+
+public mouseEventLiteralCapacity context: emitterContext.EmitContext, callIndex: Int -> Int {
+    -1 => capacity!
+    (callIndex >= 0 and callIndex < (context.ir -> len)) -> if {
+        context.ir[callIndex] => call
+        (call.kind == 6 and call.typeId >= 0 and call.typeId < (context.types -> len) and call.targetModule >= 0 and call.targetModule < (context.ranges -> len) and call.symbol >= 0 and call.operand0 >= 0) -> if {
+            context.types[call.typeId] => callType
+            context.ranges[call.targetModule] => targetRange
+            call.symbol < targetRange.symbolCount -> if {
+                context.symbols[targetRange.symbolStart + call.symbol] => targetSymbol
+                context.tokens[targetRange.tokenStart + targetSymbol.nameToken] => targetName
+                targetName.span.length == UIntSize(11) => nameEqual!
+                "mouseEvents" => expectedName
+                UIntSize(0) => nameByte!
+                (nameEqual! and nameByte! < targetName.span.length) -> while {
+                    (context.sources[call.targetModule] -> byte(targetName.span.start + nameByte!)) != (expectedName -> byte(nameByte!)) -> if { false => nameEqual! }
+                    nameByte! + UIntSize(1) => nameByte!
+                }
+                (nameEqual! and callType.kind == 7 and callType.origin == 4 and callType.symbol == 4) -> if {
+                    context.ir[call.operand0] => capacityNode
+                    (capacityNode.kind == 3 and capacityNode.payloadToken >= 0) -> if {
+                        context.ranges[capacityNode.sourceModule] => capacityRange
+                        context.tokens[capacityRange.tokenStart + capacityNode.payloadToken] => capacityToken
+                        0 => capacity!
+                        UIntSize(0) => capacityByte!
+                        capacityByte! < capacityToken.span.length -> while {
+                            context.sources[capacityNode.sourceModule] -> byte(capacityToken.span.start + capacityByte!) => digit
+                            capacity! * 10 + Int(digit - UInt8(48)) => capacity!
+                            capacityByte! + UIntSize(1) => capacityByte!
+                        }
+                    }
+                }
+            }
+        }
+    }
+    capacity!
+}
+
+public invalidMouseEventCapacityCount context: emitterContext.EmitContext -> Int {
+    0 => count!
+    0 => callIndex!
+    callIndex! < (context.ir -> len) -> while {
+        context -> mouseEventLiteralCapacity(callIndex!) => capacity
+        (capacity >= 0 and (capacity < 2 or capacity > 65536)) -> if { count! + 1 => count! }
+        callIndex! + 1 => callIndex!
+    }
+    count!
+}
+
+public emitMouseEventDiagnostics context: emitterContext.EmitContext -> Unit uses Console {
+    0 => callIndex!
+    callIndex! < (context.ir -> len) -> while {
+        context -> mouseEventLiteralCapacity(callIndex!) => capacity
+        (capacity >= 0 and (capacity < 2 or capacity > 65536)) -> if {
+            "; sollang semantic error: mouse event capacity must be between 2 and 65536 but received $capacity" -> println
+        }
+        callIndex! + 1 => callIndex!
+    }
+}
+
+public blockingDiagnosticCount context: emitterContext.EmitContext -> Int {
+    0 => count!
+    0 => diagnosticIndex!
+    diagnosticIndex! < (context.ownershipDiagnostics -> len) -> while {
+        context.ownershipDiagnostics[diagnosticIndex!].code => diagnosticCode
+        diagnosticCode == 17 -> if { count! + 1 => count! }
+        diagnosticCode == 18 -> if { count! + 1 => count! }
+        diagnosticCode == 19 -> if { count! + 1 => count! }
+        diagnosticCode == 20 -> if { count! + 1 => count! }
+        diagnosticCode == 21 -> if { count! + 1 => count! }
+        diagnosticCode == 22 -> if { count! + 1 => count! }
+        diagnosticCode == 23 -> if { count! + 1 => count! }
+        diagnosticCode == 24 -> if { count! + 1 => count! }
+        diagnosticIndex! + 1 => diagnosticIndex!
+    }
+    0 => interpolationIndex!
+    interpolationIndex! < (context.interpolations -> len) -> while {
+        context -> isBlockingUnknownInterpolation(interpolationIndex!) -> if { count! + 1 => count! }
+        interpolationIndex! + 1 => interpolationIndex!
+    }
+    0 => callIndex!
+    callIndex! < (context.calls -> len) -> while {
+        context -> isBlockingUnresolvedCall(callIndex!) -> if { count! + 1 => count! }
+        callIndex! + 1 => callIndex!
+    }
+    context -> invalidMouseEventCapacityCount => invalidMouseCapacities
+    count! + invalidMouseCapacities => count!
+    context -> nativeAbiUnsafeTypeCount => invalidNativeAbiTypes
+    count! + invalidNativeAbiTypes => count!
+    count!
+}
+
+public emitBlockingDiagnostics context: emitterContext.EmitContext -> Unit uses Console {
+    context -> emitOwnershipDiagnostics
+    context -> emitInterpolationDiagnostics
+    context -> emitCallDiagnostics
+    context -> emitMouseEventDiagnostics
+    context -> emitNativeAbiDiagnostics
+}
+
+public usesMouseEventsRuntime context: emitterContext.EmitContext -> Bool {
+    false => usesMouse!
+    0 => callIndex!
+    (callIndex! < (context.ir -> len) and not usesMouse!) -> while {
+        context.ir[callIndex!] => call
+        (call.kind == 6 and call.typeId >= 0 and call.typeId < (context.types -> len) and call.targetModule >= 0 and call.targetModule < (context.ranges -> len) and call.symbol >= 0) -> if {
+            context.types[call.typeId] => callType
+            context.ranges[call.targetModule] => targetRange
+            call.symbol < targetRange.symbolCount -> if {
+                context.symbols[targetRange.symbolStart + call.symbol] => targetSymbol
+                context.tokens[targetRange.tokenStart + targetSymbol.nameToken] => targetName
+                targetName.span.length == UIntSize(11) => nameEqual!
+                "mouseEvents" => expectedName
+                UIntSize(0) => nameByte!
+                (nameEqual! and nameByte! < targetName.span.length) -> while {
+                    (context.sources[call.targetModule] -> byte(targetName.span.start + nameByte!)) != (expectedName -> byte(nameByte!)) -> if { false => nameEqual! }
+                    nameByte! + UIntSize(1) => nameByte!
+                }
+                (nameEqual! and callType.kind == 7 and callType.origin == 4 and callType.symbol == 4) -> if { true => usesMouse! }
+            }
+        }
+        callIndex! + 1 => callIndex!
+    }
+    usesMouse!
+}

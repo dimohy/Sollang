@@ -359,20 +359,20 @@ function Verify-Target {
         throw "$Target body-only clean and cached LLVM differed"
     }
 
-    Write-Host "[$Target 4/10] Semantic corruption is rejected during a private declaration edit."
+    Write-Host "[$Target 4/10] A private type-universe edit invalidates numeric LLVM type identities."
     Corrupt-SemanticCache $Target
     Write-Provider $BodyFactor $InitialInterfaceRevision 1
     $private = Invoke-Build $Target
-    Assert-Reused $private 2 "$Target private-declaration build"
+    Assert-Reused $private 0 "$Target private-declaration build"
     Assert-FrontendStatus $private "miss: source changed:" "$Target private-declaration build"
     Assert-ProductStatus $private "rebuilt" "$Target private-declaration build"
     Assert-SemanticStatus $private "rejected:" "$Target private-declaration build"
     Assert-Product $Target ([string](21 * $BodyFactor))
 
-    Write-Host "[$Target 5/10] Removing a private declaration reuses unchanged semantic bodies."
+    Write-Host "[$Target 5/10] Removing a private type also invalidates numeric LLVM type identities."
     Write-Provider $BodyFactor $InitialInterfaceRevision
     $privateRemoval = Invoke-Build $Target
-    Assert-Reused $privateRemoval 2 "$Target private-removal build"
+    Assert-Reused $privateRemoval 0 "$Target private-removal build"
     Assert-FrontendStatus $privateRemoval "miss: source changed:" "$Target private-removal build"
     Assert-ProductStatus $privateRemoval "rebuilt" "$Target private-removal build"
     Assert-SemanticStatus $privateRemoval "loaded" "$Target private-removal build"

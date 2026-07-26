@@ -13,14 +13,21 @@ internal sealed partial class LlvmEmitter
         .OrderBy(static function => function.Name, StringComparer.Ordinal)
         .ToArray();
 
+    private IReadOnlyList<BoundStructDefinition> NativeHandleTypes() => _program.Types.Structs
+        .Where(static structure => structure.NativeHandle is not null)
+        .OrderBy(static structure => structure.Name, StringComparer.Ordinal)
+        .ToArray();
+
     private IReadOnlyList<string> NativeLibraries() => NativeFunctions()
         .Select(static function => function.NativeLibrary!)
+        .Concat(NativeHandleTypes().Select(static structure => structure.NativeHandle!.Library))
         .Distinct(StringComparer.Ordinal)
         .Order(StringComparer.Ordinal)
         .ToArray();
 
     private bool UsesNativeInterop => _program.Functions.Values.Any(
-        static function => function.Kind == BoundFunctionKind.Native && function.Com is null);
+        static function => function.Kind == BoundFunctionKind.Native && function.Com is null)
+        || NativeHandleTypes().Count > 0;
 
     private void EmitNativeGlobals()
     {
@@ -54,6 +61,17 @@ internal sealed partial class LlvmEmitter
                 + $"[{bytes.Length.ToString(CultureInfo.InvariantCulture)} x i8] "
                 + $"c\"{EscapeLlvmBytes(bytes)}\", align 1");
             EmitGlobalLine($"{NativeFunctionPointerGlobal(function)} = internal global ptr null, align 8");
+        }
+        foreach (var structure in NativeHandleTypes())
+        {
+            var symbol = structure.NativeHandle!.DropSymbol;
+            var bytes = System.Text.Encoding.UTF8.GetBytes(symbol + "\0");
+            EmitGlobalLine(
+                $"{NativeHandleDropSymbolNameGlobal(structure)} = private unnamed_addr constant "
+                + $"[{bytes.Length.ToString(CultureInfo.InvariantCulture)} x i8] "
+                + $"c\"{EscapeLlvmBytes(bytes)}\", align 1");
+            EmitGlobalLine(
+                $"{NativeHandleDropPointerGlobal(structure)} = internal global ptr null, align 8");
         }
     }
 
@@ -128,6 +146,31 @@ internal sealed partial class LlvmEmitter
             }
             EmitTrapIfNull(address, "native_symbol_load");
             EmitStore("ptr", address, NativeFunctionPointerGlobal(function), 8);
+        }
+        foreach (var structure in NativeHandleTypes())
+        {
+            var library = structure.NativeHandle!.Library;
+            var handle = NextTemp("native_handle_library");
+            EmitLoad(handle, "ptr", NativeLibraryHandleGlobal(library), 8);
+            var address = NextTemp("native_handle_drop_symbol");
+            if (_platform is WindowsLlvmRuntimePlatform)
+            {
+                EmitCall(
+                    address,
+                    "ptr",
+                    "GetProcAddress",
+                    $"ptr {handle}, ptr {NativeHandleDropSymbolNameGlobal(structure)}");
+            }
+            else
+            {
+                EmitCall(
+                    address,
+                    "ptr",
+                    "dlsym",
+                    $"ptr {handle}, ptr {NativeHandleDropSymbolNameGlobal(structure)}");
+            }
+            EmitTrapIfNull(address, "native_handle_drop_symbol_load");
+            EmitStore("ptr", address, NativeHandleDropPointerGlobal(structure), 8);
         }
     }
 
@@ -248,13 +291,30 @@ internal sealed partial class LlvmEmitter
             EmitIndirectCall(target: null, "void", address, string.Join(", ", arguments));
             var loaded = NextTemp("native_result");
             EmitLoad(loaded, structType, resultPointer, alignment);
-            return new RuntimeStruct(function.ReturnType, loaded);
+            return ValidateNativeHandleResult(
+                new RuntimeStruct(function.ReturnType, loaded));
         }
 
         var coercionType = AggregateCoercionReturnType(resultPlan);
         var coercedResult = NextTemp("native_result");
         EmitIndirectCall(coercedResult, coercionType, address, string.Join(", ", arguments));
-        return UnpackNativeAggregateResult(function.ReturnType, resultPlan, coercedResult);
+        return ValidateNativeHandleResult(
+            UnpackNativeAggregateResult(function.ReturnType, resultPlan, coercedResult));
+    }
+
+    private RuntimeStruct ValidateNativeHandleResult(RuntimeStruct result)
+    {
+        var structure = _program.Types.GetStruct(result.Type);
+        if (structure.NativeHandle is null)
+        {
+            return result;
+        }
+        var handle = NextTemp("native_handle_result");
+        EmitAssign(handle, $"extractvalue {LlvmStructType(result.Type)} {result.ValueName}, 0");
+        var valid = NextTemp("native_handle_result_valid");
+        EmitCompare(valid, "ne", "i64", handle, "0");
+        EmitTrapUnless(valid, "native_handle_constructor");
+        return result;
     }
 
     private List<string> NativeAggregateCallArguments(
@@ -643,6 +703,12 @@ internal sealed partial class LlvmEmitter
 
     private static string NativeFunctionPointerGlobal(BoundFunction function) =>
         $"@sollang_native_function_{NativeStableId(function.Name)}";
+
+    private static string NativeHandleDropSymbolNameGlobal(BoundStructDefinition structure) =>
+        $"@.slg.native.handle.drop.name.{NativeStableId(structure.Name)}";
+
+    private static string NativeHandleDropPointerGlobal(BoundStructDefinition structure) =>
+        $"@sollang_native_handle_drop_{NativeStableId(structure.Name)}";
 
     private static string NativeStableId(string value) =>
         LlvmCodegenUnit.StableIdentity(value).ToString("x16", CultureInfo.InvariantCulture);

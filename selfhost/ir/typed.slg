@@ -151,6 +151,11 @@ struct FlowIntrinsicRequest {
     node: ast.AstNode
 }
 
+sourceTypedIr nodes: move [TypedIrNode; ~] -> SourceTypedIr {
+    SourceTypedIr { nodes: nodes } => result
+    result
+}
+
 intrinsicOpcode request: IntrinsicNameRequest -> Int {
     -1 => opcode!
     request.token.span.length == UIntSize(3) -> if {
@@ -416,6 +421,28 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                     activationResultSearch! => resultTypeId!
                 }
                 activationResultSearch! + 1 => activationResultSearch!
+            }
+        }
+        resultTypeId!
+    }
+    functionResultTypeId sourceIndex: Int, functionSymbol: Int -> Int {
+        prepared.package.ranges[sourceIndex] => functionRange
+        prepared.package.symbols[functionRange.symbolStart + functionSymbol] => function
+        -1 => resultTypeId!
+        function.kind == 36 -> if {
+            sourceIndex -> comGeneratedResultTypeId(function.parent, function.flags) => resultTypeId!
+        } else {
+            function.typeNode => resultAst!
+            function.secondaryTypeNode >= 0 -> if { function.secondaryTypeNode => resultAst! }
+            0 => resultReferenceSearch!
+            resultReferenceSearch! < (recursiveTypes.references -> len) -> while {
+                recursiveTypes.references[resultReferenceSearch!] => resultReference
+                (resultReference.status == 0
+                    and resultReference.sourceModule == sourceIndex
+                    and resultReference.typeAst == resultAst!) -> if {
+                    resultReference.typeId => resultTypeId!
+                }
+                resultReferenceSearch! + 1 => resultReferenceSearch!
             }
         }
         resultTypeId!
@@ -1049,10 +1076,28 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                         0 => patternSubjectSearch!
                         patternSubjectSearch! < sourceRange.astCount -> while {
                             prepared.package.nodes[sourceRange.astStart + patternSubjectSearch!] => patternSubjectAst
-                            frozenRecursiveTypeByAst[sourceRange.astStart + patternSubjectSearch!] => patternSubjectCandidateType
-                            (patternSubjectAst.parent == patternFlowAst and patternSubjectAst.start < prepared.package.nodes[sourceRange.astStart + patternMatchAst].start and patternSubjectCandidateType >= 0 and (frozenRecursiveSemanticTypes[patternSubjectCandidateType].kind == 7 or frozenRecursiveSemanticTypes[patternSubjectCandidateType].kind == 1)) -> if {
+                            frozenRecursiveTypeByAst[sourceRange.astStart + patternSubjectSearch!] => patternSubjectCandidateType!
+                            patternSubjectCandidateType! < 0 -> if {
+                                0 => generatedPatternCallSearch!
+                                generatedPatternCallSearch! < (prepared.calls -> len) -> while {
+                                    prepared.calls[generatedPatternCallSearch!] => generatedPatternCall
+                                    (generatedPatternCall.status == 0
+                                        and generatedPatternCall.sourceModule == sourceIndex!
+                                        and generatedPatternCall.callAst == patternSubjectSearch!
+                                        and generatedPatternCall.targetSourceModule >= 0
+                                        and generatedPatternCall.functionSymbol >= 0) -> if {
+                                        prepared.package.ranges[generatedPatternCall.targetSourceModule] => generatedPatternTargetRange
+                                        prepared.package.symbols[generatedPatternTargetRange.symbolStart + generatedPatternCall.functionSymbol] => generatedPatternTarget
+                                        generatedPatternTarget.flags / 512 % 2 == 1 -> if {
+                                            generatedPatternCall.targetSourceModule -> functionResultTypeId(generatedPatternCall.functionSymbol) => patternSubjectCandidateType!
+                                        }
+                                    }
+                                    generatedPatternCallSearch! + 1 => generatedPatternCallSearch!
+                                }
+                            }
+                            (patternSubjectAst.parent == patternFlowAst and patternSubjectAst.start < prepared.package.nodes[sourceRange.astStart + patternMatchAst].start and patternSubjectCandidateType! >= 0 and (frozenRecursiveSemanticTypes[patternSubjectCandidateType!].kind == 7 or frozenRecursiveSemanticTypes[patternSubjectCandidateType!].kind == 1)) -> if {
                                 (patternSubjectTypeId! < 0 or patternSubjectAst.start > patternSubjectStart!) -> if {
-                                    patternSubjectCandidateType => patternSubjectTypeId!
+                                    patternSubjectCandidateType! => patternSubjectTypeId!
                                     patternSubjectAst.start => patternSubjectStart!
                                 }
                             }
@@ -1105,8 +1150,8 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                             (knownCall.targetSourceModule >= 0 and knownCall.functionSymbol >= 0) -> if {
                                 prepared.package.ranges[knownCall.targetSourceModule] => knownCallTargetRange
                                 prepared.package.symbols[knownCallTargetRange.symbolStart + knownCall.functionSymbol] => knownCallFunction
-                                knownCallFunction.kind == 36 -> if {
-                                    knownCall.targetSourceModule -> comGeneratedResultTypeId(knownCallFunction.parent, knownCallFunction.flags) => recursiveExpressionTypeId!
+                                knownCallFunction.flags / 512 % 2 == 1 -> if {
+                                    knownCall.targetSourceModule -> functionResultTypeId(knownCall.functionSymbol) => recursiveExpressionTypeId!
                                     recursiveExpressionTypeId! >= 0 -> if {
                                         frozenRecursiveSemanticTypes[recursiveExpressionTypeId!] => knownComCallType
                                         knownComCallType.origin => expressionTypeOrigin!
@@ -2137,6 +2182,20 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                 expressionIrStart => bindingControlResultIndex!
                 bindingControlResultIndex! < expressionIrEnd -> while {
                     results![bindingControlResultIndex!] => bindingControlResult!
+                    (bindingControlResult!.kind == 17
+                        and bindingControlResult!.operand0 >= expressionIrStart
+                        and bindingControlResult!.operand0 < expressionIrEnd
+                        and results![bindingControlResult!.operand0].nextOperand >= expressionIrStart
+                        and results![bindingControlResult!.operand0].nextOperand < expressionIrEnd
+                        and results![results![bindingControlResult!.operand0].nextOperand].kind == 27) -> if {
+                        results![bindingControlResult!.operand0].nextOperand => bindingControlResult!.operand0
+                        bindingControlResult! => results![bindingControlResultIndex!]
+                    }
+                    (bindingControlResult!.kind == 17 and bindingControlResult!.operand0 >= expressionIrStart and bindingControlResult!.operand0 < expressionIrEnd and bindingControlResult!.nextOperand >= expressionIrStart and bindingControlResult!.nextOperand < expressionIrEnd and results![bindingControlResult!.nextOperand].kind == 6 and results![bindingControlResult!.nextOperand].operand0 < 0) -> if {
+                        results![bindingControlResult!.nextOperand] => bindingFlowCall!
+                        bindingControlResult!.operand0 => bindingFlowCall!.operand0
+                        bindingFlowCall! => results![bindingControlResult!.nextOperand]
+                    }
                     (bindingControlResult!.kind == 17 and bindingControlResult!.operand0 >= expressionIrStart and results![bindingControlResult!.operand0].kind == 9 and results![bindingControlResult!.operand0].opcode == -1) -> if {
                         bindingControlResult!.operand0 => bindingControlWrapper
                         -1 => bindingWrapperResult!
@@ -2402,12 +2461,39 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                     }
                     matchingReturnOperand! >= 0 -> if { matchingReturnOperand! => returnOperandIr! }
                 }
+                # A mutable binding declaration is storage, not an SSA return
+                # value. The final bare `value!` expression lowers to a direct
+                # name read whose operand0 points at that storage root. Resolve
+                # this after type-based fallback selection, which can otherwise
+                # prefer the declaration because its canonical type is newer.
+                (returnOperandIr! >= 0 and results![returnOperandIr!].kind == 17 and results![returnOperandIr!].flags == 1) -> if {
+                    results![returnOperandIr!] => mutableReturnBinding
+                    -1 => mutableReturnRead!
+                    UIntSize(0) => mutableReturnReadStart!
+                    expressionIrStart => mutableReturnSearch!
+                    mutableReturnSearch! < (results! -> len) -> while {
+                        results![mutableReturnSearch!] => mutableReturnCandidate
+                        (mutableReturnCandidate.kind == 5
+                            and mutableReturnCandidate.parent == returnIr
+                            and mutableReturnCandidate.symbol == mutableReturnBinding.symbol
+                            and mutableReturnCandidate.astNode >= 0) -> if {
+                            prepared.package.nodes[sourceRange.astStart + mutableReturnCandidate.astNode] => mutableReturnAst
+                            (mutableReturnRead! < 0 or mutableReturnAst.start >= mutableReturnReadStart!) -> if {
+                                mutableReturnSearch! => mutableReturnRead!
+                                mutableReturnAst.start => mutableReturnReadStart!
+                            }
+                        }
+                        mutableReturnSearch! + 1 => mutableReturnSearch!
+                    }
+                    mutableReturnRead! >= 0 -> if {
+                        mutableReturnRead! => returnOperandIr!
+                    }
+                }
                 returnOperandIr! => returnNode!.operand0
                 returnNode! => results![returnIr]
             }
         }
-        SourceTypedIr { nodes: results! } => functionResult!
-        functionResult!
+        results! -> sourceTypedIr
     }
 
     lowerComGeneratedFunction request: FunctionLowerRequest -> SourceTypedIr {
@@ -2829,10 +2915,28 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                             0 => entryPatternSubjectSearch!
                             entryPatternSubjectSearch! < sourceRange.astCount -> while {
                                 prepared.package.nodes[sourceRange.astStart + entryPatternSubjectSearch!] => entryPatternSubjectAst
-                                frozenRecursiveTypeByAst[sourceRange.astStart + entryPatternSubjectSearch!] => entryPatternSubjectCandidateType
-                                (entryPatternSubjectAst.parent == entryPatternFlowAst and entryPatternSubjectAst.start < prepared.package.nodes[sourceRange.astStart + entryPatternMatchAst].start and entryPatternSubjectCandidateType >= 0 and (frozenRecursiveSemanticTypes[entryPatternSubjectCandidateType].kind == 7 or frozenRecursiveSemanticTypes[entryPatternSubjectCandidateType].kind == 1)) -> if {
+                                frozenRecursiveTypeByAst[sourceRange.astStart + entryPatternSubjectSearch!] => entryPatternSubjectCandidateType!
+                                entryPatternSubjectCandidateType! < 0 -> if {
+                                    0 => generatedEntryPatternCallSearch!
+                                    generatedEntryPatternCallSearch! < (prepared.calls -> len) -> while {
+                                        prepared.calls[generatedEntryPatternCallSearch!] => generatedEntryPatternCall
+                                        (generatedEntryPatternCall.status == 0
+                                            and generatedEntryPatternCall.sourceModule == sourceIndex!
+                                            and generatedEntryPatternCall.callAst == entryPatternSubjectSearch!
+                                            and generatedEntryPatternCall.targetSourceModule >= 0
+                                            and generatedEntryPatternCall.functionSymbol >= 0) -> if {
+                                            prepared.package.ranges[generatedEntryPatternCall.targetSourceModule] => generatedEntryPatternTargetRange
+                                            prepared.package.symbols[generatedEntryPatternTargetRange.symbolStart + generatedEntryPatternCall.functionSymbol] => generatedEntryPatternTarget
+                                            generatedEntryPatternTarget.flags / 512 % 2 == 1 -> if {
+                                                generatedEntryPatternCall.targetSourceModule -> functionResultTypeId(generatedEntryPatternCall.functionSymbol) => entryPatternSubjectCandidateType!
+                                            }
+                                        }
+                                        generatedEntryPatternCallSearch! + 1 => generatedEntryPatternCallSearch!
+                                    }
+                                }
+                                (entryPatternSubjectAst.parent == entryPatternFlowAst and entryPatternSubjectAst.start < prepared.package.nodes[sourceRange.astStart + entryPatternMatchAst].start and entryPatternSubjectCandidateType! >= 0 and (frozenRecursiveSemanticTypes[entryPatternSubjectCandidateType!].kind == 7 or frozenRecursiveSemanticTypes[entryPatternSubjectCandidateType!].kind == 1)) -> if {
                                     (entryPatternSubjectTypeId! < 0 or entryPatternSubjectAst.start > entryPatternSubjectStart!) -> if {
-                                        entryPatternSubjectCandidateType => entryPatternSubjectTypeId!
+                                        entryPatternSubjectCandidateType! => entryPatternSubjectTypeId!
                                         entryPatternSubjectAst.start => entryPatternSubjectStart!
                                     }
                                 }
@@ -2903,8 +3007,8 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                                 (knownEntryCall.targetSourceModule >= 0 and knownEntryCall.functionSymbol >= 0) -> if {
                                     prepared.package.ranges[knownEntryCall.targetSourceModule] => knownEntryCallTargetRange
                                     prepared.package.symbols[knownEntryCallTargetRange.symbolStart + knownEntryCall.functionSymbol] => knownEntryCallFunction
-                                    knownEntryCallFunction.kind == 36 -> if {
-                                        knownEntryCall.targetSourceModule -> comGeneratedResultTypeId(knownEntryCallFunction.parent, knownEntryCallFunction.flags) => recursiveEntryExpressionTypeId!
+                                    knownEntryCallFunction.flags / 512 % 2 == 1 -> if {
+                                        knownEntryCall.targetSourceModule -> functionResultTypeId(knownEntryCall.functionSymbol) => recursiveEntryExpressionTypeId!
                                         recursiveEntryExpressionTypeId! >= 0 -> if {
                                             frozenRecursiveSemanticTypes[recursiveEntryExpressionTypeId!] => knownEntryComCallType
                                             knownEntryComCallType.origin => entryExpressionTypeOrigin!
@@ -3923,6 +4027,20 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                     entryExpressionStart => entryBindingControlResultIndex!
                     entryBindingControlResultIndex! < entryExpressionEnd -> while {
                         results![entryBindingControlResultIndex!] => entryBindingControlResult!
+                        (entryBindingControlResult!.kind == 17
+                            and entryBindingControlResult!.operand0 >= entryExpressionStart
+                            and entryBindingControlResult!.operand0 < entryExpressionEnd
+                            and results![entryBindingControlResult!.operand0].nextOperand >= entryExpressionStart
+                            and results![entryBindingControlResult!.operand0].nextOperand < entryExpressionEnd
+                            and results![results![entryBindingControlResult!.operand0].nextOperand].kind == 27) -> if {
+                            results![entryBindingControlResult!.operand0].nextOperand => entryBindingControlResult!.operand0
+                            entryBindingControlResult! => results![entryBindingControlResultIndex!]
+                        }
+                        (entryBindingControlResult!.kind == 17 and entryBindingControlResult!.operand0 >= entryExpressionStart and entryBindingControlResult!.operand0 < entryExpressionEnd and entryBindingControlResult!.nextOperand >= entryExpressionStart and entryBindingControlResult!.nextOperand < entryExpressionEnd and results![entryBindingControlResult!.nextOperand].kind == 6 and results![entryBindingControlResult!.nextOperand].operand0 < 0) -> if {
+                            results![entryBindingControlResult!.nextOperand] => entryBindingFlowCall!
+                            entryBindingControlResult!.operand0 => entryBindingFlowCall!.operand0
+                            entryBindingFlowCall! => results![entryBindingControlResult!.nextOperand]
+                        }
                         (entryBindingControlResult!.kind == 17 and entryBindingControlResult!.operand0 >= entryExpressionStart and results![entryBindingControlResult!.operand0].kind == 9) -> if {
                             entryBindingControlResult!.operand0 => entryBindingControlWrapper
                             entryExpressionStart => entryBindingControlSearch!
@@ -4726,6 +4844,39 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
     canonicalReferenceIndex! < (results! -> len) -> while {
         results![canonicalReferenceIndex!] => canonicalReference!
         false => canonicalDirectBindingResolved!
+        -1 => canonicalPatternBinding!
+        UIntSize(0) => canonicalPatternStart!
+        0 => canonicalPatternSearch!
+        canonicalPatternSearch! < canonicalReferenceIndex! -> while {
+            results![canonicalPatternSearch!] => canonicalPatternCandidate
+            (canonicalReference!.kind == 5
+                and canonicalPatternCandidate.kind == 29
+                and canonicalPatternCandidate.sourceModule == canonicalReference!.sourceModule
+                and canonicalPatternCandidate.symbol == canonicalReference!.symbol
+                and canonicalPatternCandidate.astNode >= 0
+                and canonicalReference!.astNode >= 0) -> if {
+                prepared.package.ranges[canonicalReference!.sourceModule] => canonicalPatternRange
+                prepared.package.nodes[canonicalPatternRange.astStart + canonicalPatternCandidate.astNode].start => canonicalPatternCandidateStart
+                (canonicalPatternCandidateStart <= prepared.package.nodes[canonicalPatternRange.astStart + canonicalReference!.astNode].start
+                    and (canonicalPatternBinding! < 0 or canonicalPatternCandidateStart >= canonicalPatternStart!)) -> if {
+                    canonicalPatternSearch! => canonicalPatternBinding!
+                    canonicalPatternCandidateStart => canonicalPatternStart!
+                }
+            }
+            canonicalPatternSearch! + 1 => canonicalPatternSearch!
+        }
+        canonicalPatternBinding! >= 0 -> if {
+            results![canonicalPatternBinding!] => canonicalPattern
+            canonicalPatternBinding! => canonicalReference!.operand0
+            canonicalPattern.typeId => canonicalReference!.typeId
+            canonicalPattern.typeKind => canonicalReference!.typeKind
+            canonicalPattern.typeOrigin => canonicalReference!.typeOrigin
+            canonicalPattern.typeModule => canonicalReference!.typeModule
+            canonicalPattern.typeSymbol => canonicalReference!.typeSymbol
+            canonicalPattern.typeFlags => canonicalReference!.typeFlags
+            canonicalReference! => results![canonicalReferenceIndex!]
+            true => canonicalDirectBindingResolved!
+        }
         (canonicalReference!.kind == 5 and canonicalReference!.operand0 >= 0 and results![canonicalReference!.operand0].kind == 17 and canonicalReference!.operand0 != canonicalReference!.parent and results![canonicalReference!.operand0].operand0 != canonicalReferenceIndex!) -> if {
             results![canonicalReference!.operand0] => canonicalReferenceBinding
             canonicalReference!.parent => canonicalDirectScope!
@@ -5465,6 +5616,34 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
             }
             contextualNativeFunctionIndex! >= 0 -> if {
                 results![contextualNativeFunctionIndex!] => contextualNativeFunction
+                (contextualNativeCall.operand0 < 0 and contextualNativeFunction.operand1 >= 0 and contextualNativeCall.sourceModule >= 0 and contextualNativeCall.astNode >= 0) -> if {
+                    prepared.package.ranges[contextualNativeCall.sourceModule] => contextualNativeCallRange
+                    prepared.package.nodes[contextualNativeCallRange.astStart + contextualNativeCall.astNode] => contextualNativeCallAst
+                    results![contextualNativeFunction.operand1] => contextualNativePrimaryType
+                    -1 => contextualNativeRecoveredBinding!
+                    UIntSize(0) => contextualNativeRecoveredStart!
+                    0 => contextualNativeBindingSearch!
+                    contextualNativeBindingSearch! < contextualNativeCallIndex! -> while {
+                        results![contextualNativeBindingSearch!] => contextualNativeBinding
+                        (contextualNativeBinding.kind == 17
+                            and contextualNativeBinding.sourceModule == contextualNativeCall.sourceModule
+                            and contextualNativeBinding.operand0 >= 0
+                            and contextualNativeBinding.astNode >= 0
+                            and contextualNativeBinding.typeId == contextualNativePrimaryType.typeId) -> if {
+                            prepared.package.nodes[contextualNativeCallRange.astStart + contextualNativeBinding.astNode].start => contextualNativeBindingStart
+                            (contextualNativeBindingStart <= contextualNativeCallAst.start and (contextualNativeRecoveredBinding! < 0 or contextualNativeBindingStart >= contextualNativeRecoveredStart!)) -> if {
+                                contextualNativeBindingSearch! => contextualNativeRecoveredBinding!
+                                contextualNativeBindingStart => contextualNativeRecoveredStart!
+                            }
+                        }
+                        contextualNativeBindingSearch! + 1 => contextualNativeBindingSearch!
+                    }
+                    contextualNativeRecoveredBinding! >= 0 -> if {
+                        contextualNativeCall => contextualNativeRecoveredCall!
+                        results![contextualNativeRecoveredBinding!].operand0 => contextualNativeRecoveredCall!.operand0
+                        contextualNativeRecoveredCall! => results![contextualNativeCallIndex!]
+                    }
+                }
                 contextualNativeCall.operand0 => contextualNativeArgumentIndex!
                 contextualNativeFunction.operand1 => contextualNativeParameterIndex!
                 true => contextualNativePrimaryParameter!
@@ -5503,6 +5682,169 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
             }
         }
         contextualNativeCallIndex! + 1 => contextualNativeCallIndex!
+    }
+    # Canonicalize value-producing control results from the completed regions.
+    # Earlier semantic inference can observe a nested literal before a terminal
+    # flow call. At this boundary the region operands are final, so a reverse
+    # linear pass settles nested controls first without runtime work.
+    [Int; ~] => finalWrappedValueByNode!
+    0 => finalWrappedSeed!
+    finalWrappedSeed! < (results! -> len) -> while {
+        finalWrappedValueByNode! -> push(-1)
+        finalWrappedSeed! + 1 => finalWrappedSeed!
+    }
+    0 => finalWrappedSearch!
+    finalWrappedSearch! < (results! -> len) -> while {
+        results![finalWrappedSearch!] => finalWrappedCandidate
+        (finalWrappedCandidate.parent >= 0
+            and finalWrappedCandidate.parent < (results! -> len)
+            and results![finalWrappedCandidate.parent].kind == 9
+            and results![finalWrappedCandidate.parent].opcode == -1
+            and (finalWrappedCandidate.kind == 2
+                or finalWrappedCandidate.kind == 3
+                or finalWrappedCandidate.kind == 4
+                or finalWrappedCandidate.kind == 6
+                or finalWrappedCandidate.kind == 12
+                or finalWrappedCandidate.kind == 14
+                or finalWrappedCandidate.kind == 16
+                or finalWrappedCandidate.kind == 18
+                or finalWrappedCandidate.kind == 26
+                or finalWrappedCandidate.kind == 27)) -> if {
+            finalWrappedSearch! => finalWrappedValueByNode![finalWrappedCandidate.parent]
+        }
+        finalWrappedSearch! + 1 => finalWrappedSearch!
+    }
+    results! -> len => finalControlTypeIndex!
+    finalControlTypeIndex! > 0 -> while {
+        finalControlTypeIndex! - 1 => finalControlTypeIndex!
+        results![finalControlTypeIndex!] => finalControlType!
+        (finalControlType!.kind == 18
+            and finalControlType!.operand1 >= 0
+            and finalControlType!.operand1 < (results! -> len)
+            and finalControlType!.nextOperand >= 0
+            and finalControlType!.nextOperand < (results! -> len)) -> if {
+            results![finalControlType!.operand1] => finalThenRegion!
+            results![finalControlType!.nextOperand] => finalElseRegion!
+            (finalThenRegion!.kind == 19
+                and finalThenRegion!.operand1 >= 0
+                and finalThenRegion!.operand1 < (results! -> len)
+                and finalElseRegion!.kind == 19
+                and finalElseRegion!.operand1 >= 0
+                and finalElseRegion!.operand1 < (results! -> len)) -> if {
+                finalThenRegion!.operand1 => finalThenValueIndex!
+                finalElseRegion!.operand1 => finalElseValueIndex!
+                true => finalThenResolving!
+                finalThenResolving! -> while {
+                    false => finalThenResolving!
+                    (results![finalThenValueIndex!].kind == 17 and results![finalThenValueIndex!].operand0 >= 0) -> if {
+                        results![finalThenValueIndex!].operand0 => finalThenValueIndex!
+                        true => finalThenResolving!
+                    }
+                    (results![finalThenValueIndex!].kind == 9 and results![finalThenValueIndex!].opcode == -1) -> if {
+                        finalWrappedValueByNode![finalThenValueIndex!] >= 0 -> if {
+                            finalWrappedValueByNode![finalThenValueIndex!] => finalThenValueIndex!
+                            true => finalThenResolving!
+                        }
+                    }
+                }
+                true => finalElseResolving!
+                finalElseResolving! -> while {
+                    false => finalElseResolving!
+                    (results![finalElseValueIndex!].kind == 17 and results![finalElseValueIndex!].operand0 >= 0) -> if {
+                        results![finalElseValueIndex!].operand0 => finalElseValueIndex!
+                        true => finalElseResolving!
+                    }
+                    (results![finalElseValueIndex!].kind == 9 and results![finalElseValueIndex!].opcode == -1) -> if {
+                        finalWrappedValueByNode![finalElseValueIndex!] >= 0 -> if {
+                            finalWrappedValueByNode![finalElseValueIndex!] => finalElseValueIndex!
+                            true => finalElseResolving!
+                        }
+                    }
+                }
+                results![finalThenValueIndex!] => finalThenValue
+                results![finalElseValueIndex!] => finalElseValue
+                (finalThenValue.typeOrigin == finalElseValue.typeOrigin
+                    and finalThenValue.typeModule == finalElseValue.typeModule
+                    and finalThenValue.typeSymbol == finalElseValue.typeSymbol) -> if {
+                    finalThenValue.typeOrigin => finalThenRegion!.typeOrigin
+                    finalThenValue.typeModule => finalThenRegion!.typeModule
+                    finalThenValue.typeSymbol => finalThenRegion!.typeSymbol
+                    finalThenValue.typeId => finalThenRegion!.typeId
+                    finalThenValue.typeKind => finalThenRegion!.typeKind
+                    finalThenValue.typeFlags => finalThenRegion!.typeFlags
+                    finalElseValue.typeOrigin => finalElseRegion!.typeOrigin
+                    finalElseValue.typeModule => finalElseRegion!.typeModule
+                    finalElseValue.typeSymbol => finalElseRegion!.typeSymbol
+                    finalElseValue.typeId => finalElseRegion!.typeId
+                    finalElseValue.typeKind => finalElseRegion!.typeKind
+                    finalElseValue.typeFlags => finalElseRegion!.typeFlags
+                    finalThenValue.typeOrigin => finalControlType!.typeOrigin
+                    finalThenValue.typeModule => finalControlType!.typeModule
+                    finalThenValue.typeSymbol => finalControlType!.typeSymbol
+                    finalThenValue.typeId => finalControlType!.typeId
+                    finalThenValue.typeKind => finalControlType!.typeKind
+                    finalThenValue.typeFlags => finalControlType!.typeFlags
+                    finalThenRegion! => results![finalControlType!.operand1]
+                    finalElseRegion! => results![finalControlType!.nextOperand]
+                    finalControlType! => results![finalControlTypeIndex!]
+                } else {
+                    1 => finalControlType!.typeOrigin
+                    -1 => finalControlType!.typeModule
+                    0 => finalControlType!.typeSymbol
+                    -1 => finalControlType!.typeId
+                    1 => finalControlType!.typeKind
+                    0 => finalControlType!.typeFlags
+                    finalControlType! => results![finalControlTypeIndex!]
+                }
+            }
+        }
+    }
+    # Function result edges are initially selected while each expression is
+    # still being lowered. A value-producing control node can be appended after
+    # that local boundary, so settle wrapper and condition edges once the full
+    # IR graph and control result types are complete.
+    0 => finalReturnFunctionIndex!
+    finalReturnFunctionIndex! < (results! -> len) -> while {
+        results![finalReturnFunctionIndex!] => finalReturnFunction
+        (finalReturnFunction.kind == 0 or finalReturnFunction.kind == 11) -> if {
+            finalReturnFunctionIndex! + 1 => finalReturnFunctionEnd!
+            (finalReturnFunctionEnd! < (results! -> len)
+                and results![finalReturnFunctionEnd!].kind != 0
+                and results![finalReturnFunctionEnd!].kind != 11) -> while {
+                finalReturnFunctionEnd! + 1 => finalReturnFunctionEnd!
+            }
+            (finalReturnFunction.kind == 0
+            and finalReturnFunction.operand0 >= 0
+            and finalReturnFunction.operand0 < (results! -> len)
+            and results![finalReturnFunction.operand0].kind == 1) -> if {
+            results![finalReturnFunction.operand0] => finalReturnNode!
+            finalReturnNode!.operand0 => finalReturnValue!
+            (finalReturnValue! >= 0
+                and finalReturnValue! < (results! -> len)
+                and results![finalReturnValue!].kind == 9
+                and results![finalReturnValue!].opcode == -1
+                and finalWrappedValueByNode![finalReturnValue!] >= 0) -> if {
+                finalWrappedValueByNode![finalReturnValue!] => finalReturnValue!
+            }
+            finalReturnFunctionIndex! + 1 => finalReturnControlSearch!
+            finalReturnControlSearch! < finalReturnFunctionEnd! -> while {
+                results![finalReturnControlSearch!] => finalReturnControl
+                (finalReturnControl.kind == 18
+                    and finalReturnControl.operand0 == finalReturnValue!
+                    and finalReturnControl.typeOrigin == finalReturnFunction.typeOrigin
+                    and finalReturnControl.typeModule == finalReturnFunction.typeModule
+                    and finalReturnControl.typeSymbol == finalReturnFunction.typeSymbol) -> if {
+                    finalReturnControlSearch! => finalReturnValue!
+                }
+                finalReturnControlSearch! + 1 => finalReturnControlSearch!
+            }
+            finalReturnValue! => finalReturnNode!.operand0
+            finalReturnNode! => results![finalReturnFunction.operand0]
+            }
+            finalReturnFunctionEnd! => finalReturnFunctionIndex!
+        } else {
+            finalReturnFunctionIndex! + 1 => finalReturnFunctionIndex!
+        }
     }
     results!
 }

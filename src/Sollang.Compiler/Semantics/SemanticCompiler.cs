@@ -3366,12 +3366,12 @@ internal sealed partial class SemanticCompiler
         }
 
         var definition = _types.GetStruct(targetType);
-        if (definition.ComInterface is not null)
+        if (definition.ComInterface is not null || definition.NativeHandle is not null)
         {
             throw Error(
                 assignment.Line,
                 assignment.Column,
-                $"COM interface '{definition.Name}' cannot be mutated directly");
+                $"opaque handle '{definition.Name}' cannot be mutated directly");
         }
         var field = definition.Fields.FirstOrDefault(candidate => candidate.Name == assignment.FieldName)
             ?? throw Error(
@@ -5467,12 +5467,12 @@ internal sealed partial class SemanticCompiler
         bool allowReadIntCall)
     {
         var definition = _types.GetStruct(expectedType);
-        if (definition.ComInterface is not null)
+        if (definition.ComInterface is not null || definition.NativeHandle is not null)
         {
             throw Error(
                 expression.Line,
                 expression.Column,
-                $"COM interface '{definition.Name}' can only be created by its COM activation function");
+                $"opaque handle '{definition.Name}' can only be created by its native constructor");
         }
         var initializers = new Dictionary<string, DictionaryEntryExpression>(StringComparer.Ordinal);
         foreach (var entry in expression.Entries)
@@ -5529,12 +5529,12 @@ internal sealed partial class SemanticCompiler
         EnsureTypeVisible(type, expression.Line, expression.Column);
 
         var definition = _types.GetStruct(type);
-        if (definition.ComInterface is not null)
+        if (definition.ComInterface is not null || definition.NativeHandle is not null)
         {
             throw Error(
                 expression.Line,
                 expression.Column,
-                $"COM interface '{definition.Name}' can only be created by its COM activation function");
+                $"opaque handle '{definition.Name}' can only be created by its native constructor");
         }
         var initializers = new Dictionary<string, StructFieldInitializer>(StringComparer.Ordinal);
         foreach (var initializer in expression.Fields)
@@ -5712,12 +5712,12 @@ internal sealed partial class SemanticCompiler
         }
 
         var definition = _types.GetStruct(sourceType);
-        if (definition.ComInterface is not null)
+        if (definition.ComInterface is not null || definition.NativeHandle is not null)
         {
             throw Error(
                 expression.Line,
                 expression.Column,
-                $"COM interface '{definition.Name}' does not expose its raw handle");
+                $"opaque handle '{definition.Name}' does not expose its raw value");
         }
         var field = definition.Fields.FirstOrDefault(candidate => candidate.Name == expression.FieldName);
         if (field is not null)
@@ -9733,7 +9733,8 @@ internal sealed partial class SemanticCompiler
                 declaration.IsPublic,
                 declaration.DeclaringTypeName,
                 declaration.IsAbi,
-                declaration.ComInterface));
+                declaration.ComInterface,
+                declaration.NativeHandle));
         }
 
         var enums = new Dictionary<TypeId, BoundEnumDefinition>();
@@ -10051,7 +10052,8 @@ internal sealed partial class SemanticCompiler
             }
             if (_types.ContainsOwnedStorage(elementType)
                 && !(_types.IsStruct(elementType)
-                    && _types.GetStruct(elementType).ComInterface is not null))
+                    && (_types.GetStruct(elementType).ComInterface is not null
+                        || _types.GetStruct(elementType).NativeHandle is not null)))
             {
                 throw Error(
                     line,

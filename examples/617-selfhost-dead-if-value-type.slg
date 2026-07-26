@@ -1,0 +1,45 @@
+import sollang.compiler.ir.typed as typedIr
+
+main {
+    [
+        """
+        digit value: UInt8 -> Bool {
+            value >= UInt8(48) and value <= UInt8(57)
+        }
+
+        identifierByte value: UInt8 -> Bool {
+            (value -> digit) or value == UInt8(45)
+        }
+
+        validIdentifiers source: Text, start: UIntSize, end: UIntSize, prerelease: Bool -> Bool {
+            start < end => valid!
+            start => index!
+            start => identifierStart!
+            true => numeric!
+            (valid! and index! < end) -> while {
+                source -> byte(index!) => current
+                current == UInt8(46) -> if {
+                    index! == identifierStart! -> if { false => valid! }
+                    (valid! and prerelease and numeric! and index! - identifierStart! > UIntSize(1) and (source -> byte(identifierStart!)) == UInt8(48)) -> if { false => valid! }
+                    index! + UIntSize(1) => identifierStart!
+                    true => numeric!
+                } else {
+                    not (current -> identifierByte) -> if { false => valid! }
+                    not (current -> digit) -> if { false => numeric! }
+                }
+                index! + UIntSize(1) => index!
+            }
+            valid!
+        }
+
+        main { }
+        """,
+        ~
+    ] => sources!
+    sources! -> typedIr.lower => ir!
+    ir! -> each node {
+        (node.sourceModule == 0 and node.kind == 18 and node.parent >= 0 and ir![node.parent].kind == 9 and node.nextOperand >= 0) -> if {
+            "mixed branch if = $(node.typeOrigin),$(node.typeSymbol)" -> println
+        }
+    }
+}

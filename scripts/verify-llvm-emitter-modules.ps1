@@ -10,10 +10,15 @@ $modulePaths = @(
     "selfhost/llvm/emitter/text_output_runtime.slg"
     "selfhost/llvm/emitter/process_runtime.slg"
     "selfhost/llvm/emitter/mouse_event_runtime.slg"
+    "selfhost/llvm/emitter/com_runtime.slg"
+    "selfhost/llvm/emitter/ownership.slg"
+    "selfhost/llvm/emitter/context.slg"
+    "selfhost/llvm/emitter/type_queries.slg"
+    "selfhost/llvm/emitter/diagnostics.slg"
 )
 
 $facadeLines = [IO.File]::ReadAllLines($facadePath)
-if ($facadeLines.Count -gt 17000) {
+if ($facadeLines.Count -gt 16500) {
     throw "selfhost/llvm/text.slg grew to $($facadeLines.Count) lines; extract a cohesive emitter module before adding more."
 }
 

@@ -17,6 +17,9 @@ $llvmRoot = if ([string]::IsNullOrWhiteSpace($env:SOLLANG_LLVM_HOME)) {
     $env:SOLLANG_LLVM_HOME
 }
 $llvmReadObj = Join-Path $llvmRoot "bin\llvm-readobj.exe"
+$llvmAs = Join-Path $llvmRoot "bin\llvm-as.exe"
+$clang = Join-Path $llvmRoot "bin\clang.exe"
+$lldLink = Join-Path $llvmRoot "bin\lld-link.exe"
 
 dotnet build $compilerProject -c Release --nologo --no-restore
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -42,7 +45,8 @@ $fixture = Join-Path $outputRoot "com_fixture.dll"
 $exports = (& $llvmReadObj --coff-exports $fixture | Out-String)
 $missingExports = $LASTEXITCODE -ne 0 `
     -or $exports -notmatch "Name: DllGetClassObject" `
-    -or $exports -notmatch "Name: com_fixture_live_references"
+    -or $exports -notmatch "Name: com_fixture_live_references" `
+    -or $exports -notmatch "Name: com_fixture_live_references_after"
 if ($missingExports) {
     throw "COM fixture exports are incomplete"
 }
@@ -74,6 +78,41 @@ if ($llvm -notmatch "call void @sollang_drop_[0-9]+\(%sollang\.enum\.[0-9]+ %com
     throw "COM activation result does not deterministically release its owned interface"
 }
 
+$selfHostIr = Join-Path $repoRoot "examples\expected\613-selfhost-com-runtime.stdout.txt"
+$selfHostBitcode = Join-Path $outputRoot "selfhost-com-runtime.bc"
+$selfHostObject = Join-Path $outputRoot "selfhost-com-runtime.obj"
+$selfHostOutput = Join-Path $outputRoot "selfhost-com-runtime.exe"
+$stage1Work = [System.IO.Path]::ChangeExtension($output, ".slg-tmp")
+& $llvmAs $selfHostIr -o $selfHostBitcode
+if ($LASTEXITCODE -ne 0) { throw "self-host COM LLVM is invalid" }
+& $clang `
+    -target x86_64-pc-windows-msvc `
+    -O2 `
+    -fno-addrsig `
+    -mno-stack-arg-probe `
+    -Werror `
+    -Wno-override-module `
+    -x ir `
+    -c $selfHostIr `
+    -o $selfHostObject
+if ($LASTEXITCODE -ne 0) { throw "self-host COM LLVM compilation failed" }
+& $lldLink `
+    /nologo `
+    /machine:x64 `
+    /nodefaultlib `
+    /subsystem:console `
+    /entry:main `
+    $selfHostObject `
+    (Join-Path $stage1Work "kernel32.lib") `
+    (Join-Path $stage1Work "ole32.lib") `
+    (Join-Path $stage1Work "ucrtbase.lib") `
+    /out:$selfHostOutput
+if ($LASTEXITCODE -ne 0) { throw "self-host COM link failed" }
+$selfHostActual = (& $selfHostOutput | Out-String).Replace("`r`n", "`n").TrimEnd("`n")
+if ($LASTEXITCODE -ne 0 -or $selfHostActual -ne "42`n0") {
+    throw "self-host COM execution mismatch: expected '42,0', actual '$selfHostActual'"
+}
+
 $unavailableTargets = @("linux-x64", "wasm32-browser")
 foreach ($target in $unavailableTargets) {
     $diagnosticOutput = Join-Path $outputRoot ("invalid-com-" + $target)
@@ -87,4 +126,4 @@ foreach ($target in $unavailableTargets) {
     }
 }
 
-Write-Host "PASS COM interop: activation, vtable call, clone/AddRef, deterministic Release, and target diagnostics"
+Write-Host "PASS COM interop: Stage 1 and Stage 2 activation, vtable call, clone/AddRef, deterministic Release, and target diagnostics"

@@ -43,6 +43,10 @@ internal static class CompilerApp
             {
                 return NativeTestRunner.Run(args);
             }
+            if (args is ["bind-cpp", ..])
+            {
+                return CppBindingTool.Run(args[1..]);
+            }
             if (args is ["run", ..])
             {
                 return RunProgram(args);

@@ -264,6 +264,18 @@ internal sealed partial class LlvmEmitter
             EmitFunctionLine();
             return;
         }
+        if (structure.NativeHandle is not null)
+        {
+            var handleValue = NextTemp("drop_native_handle_value");
+            EmitAssign(handleValue, $"extractvalue {llvmType} %value, 0");
+            var dropTarget = NextTemp("drop_native_handle_target");
+            EmitLoad(dropTarget, "ptr", NativeHandleDropPointerGlobal(structure), 8);
+            EmitIndirectCall(target: null, "void", dropTarget, $"i64 {handleValue}");
+            EmitInstruction("ret void");
+            EmitFunctionLine("}");
+            EmitFunctionLine();
+            return;
+        }
         if (structure.Name is "sys.file.File" or "sys.file.FileWriter")
         {
             var handle = NextTemp("drop_file_handle");

@@ -241,7 +241,8 @@ internal sealed record BoundStructDefinition(
     bool IsPublic = false,
     string? DeclaringTypeName = null,
     bool IsAbi = false,
-    ComInterfaceMetadata? ComInterface = null)
+    ComInterfaceMetadata? ComInterface = null,
+    NativeHandleMetadata? NativeHandle = null)
 {
     public BoundStructField GetField(string name)
     {
@@ -627,6 +628,7 @@ internal sealed class TypeDefinitionTable
             if (_structs.TryGetValue(type, out var structure))
             {
                 return structure.ComInterface is not null
+                    || structure.NativeHandle is not null
                     || structure.Fields.Any(field => ContainsOwnedStorage(field.Type, visiting));
             }
             if (_enums.TryGetValue(type, out var enumeration))

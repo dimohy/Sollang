@@ -22,13 +22,21 @@ internal static class SemanticStableIdentity
             fields.Add(structure.DeclaringTypeName ?? "");
             fields.Add(structure.IsPublic ? "public" : "private");
             fields.Add(structure.IsAbi ? "abi" : "sollang");
-            fields.Add(structure.ComInterface is null ? "value" : "com");
+            fields.Add(structure.ComInterface is not null
+                ? "com"
+                : structure.NativeHandle is not null ? "native-handle" : "value");
             if (structure.ComInterface is { } comInterface)
             {
                 fields.Add(comInterface.ClassId);
                 fields.Add(comInterface.InterfaceId);
                 fields.Add(comInterface.Server ?? "");
                 fields.Add(((int)comInterface.Apartment).ToString(CultureInfo.InvariantCulture));
+            }
+            if (structure.NativeHandle is { } nativeHandle)
+            {
+                fields.Add(nativeHandle.Alias);
+                fields.Add(nativeHandle.Library);
+                fields.Add(nativeHandle.DropSymbol);
             }
             foreach (var field in structure.Fields)
             {

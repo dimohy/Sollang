@@ -33,7 +33,8 @@ internal sealed record StructDeclaration(
     bool IsPublic = false,
     string? DeclaringTypeName = null,
     bool IsAbi = false,
-    ComInterfaceMetadata? ComInterface = null);
+    ComInterfaceMetadata? ComInterface = null,
+    NativeHandleMetadata? NativeHandle = null);
 
 internal sealed record StructFieldDeclaration(string Name, string TypeName, int Line, int Column);
 
@@ -121,6 +122,11 @@ internal sealed record ComInterfaceMetadata(
     string InterfaceId,
     string? Server,
     ComApartment Apartment);
+
+internal sealed record NativeHandleMetadata(
+    string Alias,
+    string Library,
+    string DropSymbol);
 
 internal sealed record ComFunctionMetadata(
     ComFunctionOperation Operation,
