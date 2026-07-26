@@ -10733,3 +10733,41 @@ Research basis:
 - [Rust modules in separate files](https://doc.rust-lang.org/stable/book/ch07-05-separating-modules-into-different-files.html)
 - [Swift extensions](https://docs.swift.org/swift-book/documentation/the-swift-programming-language/extensions/)
 - [Swift modules and source-file access](https://docs.swift.org/swift-book/documentation/the-swift-programming-language/accesscontrol/)
+
+## D279 — Native Aggregate Calls Follow Each Target ABI Without Wrappers
+
+Status: implemented
+Date: 2026-07-26
+
+`abi struct` values now cross grouped native calls with matching Stage1 and
+Stage2 lowering on Windows x64 and Linux x64. Windows passes 1-, 2-, 4-, and
+8-byte aggregates through integer coercions and larger values indirectly,
+including `sret` results. Linux classifies both SysV eightbytes as INTEGER, SSE,
+or MEMORY, returns direct aggregates in the classified registers, and uses
+aligned `byval` storage for memory-class values.
+
+SysV register pressure is part of the plan, not an afterthought. A direct
+aggregate is rolled back entirely to memory when its INTEGER or SSE classes no
+longer fit after preceding arguments. Example 602 exhausts all six integer and
+all eight SSE argument registers before passing `Pair32` and `Point`; the
+generated Stage2 LLVM contains two `byval` arguments and executes the real C
+fixture as `36,55,-123,60000`.
+
+Native `Int8` and `Int16` parameters and results carry `signext`; `UInt8` and
+`UInt16` carry `zeroext`. `ref T` and `mut T` remain borrowed pointers, and all
+by-value scratch storage uses fixed stack `alloca`. No wrapper object, heap
+allocation, reflection, or intermediate container is introduced.
+
+The full example 597 ABI matrix now executes identically through Stage1 and
+Stage2 on Windows and Linux, covering direct and indirect values, returned
+aggregates, readonly and mutable borrows, mixed INTEGER/SSE fields, pressured
+arguments, narrow scalars, size, alignment, and field offsets. Its previously
+missing Stage2 `main` was traced to the self-host lexer reading only integer
+digits. The lexer now matches the canonical number rule for fractional,
+exponent, and underscore-separated forms; example 603 preserves the entry and
+Float64 struct literal in typed IR.
+
+The native fixture gate passes Stage1/Stage2 on both operating systems, and the
+combined lexer/emitter affected suite passes 314/314. Compiler warm medians are
+66.505 ms and 68.131 ms on Windows, and 68.419 ms and 68.546 ms on Linux, all
+inside the retained 5% performance gate.

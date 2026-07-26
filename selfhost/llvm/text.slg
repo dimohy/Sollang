@@ -2161,6 +2161,14 @@ emitCore context: EmitContext -> Unit uses Console {
         } else {
         argument -> writeIrType
         " " -> print
+        ((context.ir[callIndex] -> targetsNativeFunction) and argumentParameterIndex >= 0) -> if {
+            context.ir[argumentParameterIndex] => nativeScalarParameter
+            nativeScalarParameter.typeId >= 0 -> if {
+                context.types[nativeScalarParameter.typeId] => nativeScalarParameterType
+                (nativeScalarParameterType.kind == 1 and nativeScalarParameterType.origin == 1 and (nativeScalarParameterType.symbol == 3 or nativeScalarParameterType.symbol == 4)) -> if { "signext " -> print }
+                (nativeScalarParameterType.kind == 1 and nativeScalarParameterType.origin == 1 and (nativeScalarParameterType.symbol == 8 or nativeScalarParameterType.symbol == 9)) -> if { "zeroext " -> print }
+            }
+        }
         argument.kind == 2 -> if {
             (callOwnerIndex >= 0 and context.ir[callOwnerIndex].kind == 0) -> if {
                 "%v$(argumentIndex)" -> print
@@ -2359,6 +2367,75 @@ emitCore context: EmitContext -> Unit uses Console {
         }
         indirect!
     }
+    nativeSysVRegistersUsed callIndex: Int, beforeOrdinal: Int, requestedClass: Int -> Int {
+        context.ir[callIndex] => call
+        0 => integerUsed!
+        0 => sseUsed!
+        (call.typeId >= 0 and (context -> nativeAbiStructTypeSafe(call.typeId, 0)) and (call.typeId -> nativeSysVAggregateIndirect)) -> if {
+            1 => integerUsed!
+        }
+        0 => parameterOrdinal!
+        parameterOrdinal! < beforeOrdinal -> while {
+            callIndex -> callTargetParameter(parameterOrdinal!) => parameterIndex
+            parameterIndex >= 0 -> if {
+                context.ir[parameterIndex] => parameter
+                false => byValueAbiStruct!
+                (parameter.typeId >= 0 and parameter.typeId < (context.types -> len) and context.types[parameter.typeId].kind != 8 and parameter.flags / 2 % 2 == 0) -> if {
+                    context -> nativeAbiStructTypeSafe(parameter.typeId, 0) => byValueAbiStruct!
+                }
+                byValueAbiStruct! -> if {
+                    not (parameter.typeId -> nativeSysVAggregateIndirect) -> if {
+                        0 => aggregateInteger!
+                        0 => aggregateSse!
+                        parameter.typeId -> nativeSysVEightbyteClass(0, 0, 0) => firstClass
+                        firstClass == 1 -> if { 1 => aggregateInteger! }
+                        firstClass == 2 -> if { 1 => aggregateSse! }
+                        context.typeSizes[parameter.typeId] > 8 -> if {
+                            parameter.typeId -> nativeSysVEightbyteClass(1, 0, 0) => secondClass
+                            secondClass == 1 -> if { aggregateInteger! + 1 => aggregateInteger! }
+                            secondClass == 2 -> if { aggregateSse! + 1 => aggregateSse! }
+                        }
+                        (integerUsed! + aggregateInteger! <= 6 and sseUsed! + aggregateSse! <= 8) -> if {
+                            integerUsed! + aggregateInteger! => integerUsed!
+                            sseUsed! + aggregateSse! => sseUsed!
+                        }
+                    }
+                } else {
+                    false => isSse!
+                    parameter.typeId >= 0 -> if {
+                        context.types[parameter.typeId] => parameterType
+                        (parameterType.kind == 1 and parameterType.origin == 1 and parameterType.symbol >= 19 and parameterType.symbol <= 22) -> if { true => isSse! }
+                    }
+                    isSse! -> if {
+                        sseUsed! < 8 -> if { sseUsed! + 1 => sseUsed! }
+                    } else {
+                        integerUsed! < 6 -> if { integerUsed! + 1 => integerUsed! }
+                    }
+                }
+            }
+            parameterOrdinal! + 1 => parameterOrdinal!
+        }
+        requestedClass == 1 -> if { integerUsed! } else { sseUsed! }
+    }
+    nativeSysVArgumentIndirect callIndex: Int, ordinal: Int, typeId: Int -> Bool {
+        typeId -> nativeSysVAggregateIndirect => indirect!
+        not indirect! -> if {
+            0 => integerNeeded!
+            0 => sseNeeded!
+            typeId -> nativeSysVEightbyteClass(0, 0, 0) => firstClass
+            firstClass == 1 -> if { 1 => integerNeeded! }
+            firstClass == 2 -> if { 1 => sseNeeded! }
+            context.typeSizes[typeId] > 8 -> if {
+                typeId -> nativeSysVEightbyteClass(1, 0, 0) => secondClass
+                secondClass == 1 -> if { integerNeeded! + 1 => integerNeeded! }
+                secondClass == 2 -> if { sseNeeded! + 1 => sseNeeded! }
+            }
+            callIndex -> nativeSysVRegistersUsed(ordinal, 1) => integerUsed
+            callIndex -> nativeSysVRegistersUsed(ordinal, 2) => sseUsed
+            (integerUsed + integerNeeded! > 6 or sseUsed + sseNeeded! > 8) -> if { true => indirect! }
+        }
+        indirect!
+    }
     nativeAggregateIndirect typeId: Int -> Bool {
         context.expectedPathStyle == 1 -> if {
             context.typeSizes[typeId] > 8
@@ -2441,7 +2518,7 @@ emitCore context: EmitContext -> Unit uses Console {
                 context -> nativeAbiStructTypeSafe(parameter.typeId, 0) => byValueAbiStruct!
             }
             byValueAbiStruct! -> if {
-                parameter.typeId -> nativeSysVAggregateIndirect => indirect
+                callIndex -> nativeSysVArgumentIndirect(ordinal, parameter.typeId) => indirect
                 indirect -> if {
                     "  %native_arg_$(callIndex)_$(ordinal) = alloca " -> print
                     parameter -> writeIrType
@@ -2537,7 +2614,7 @@ emitCore context: EmitContext -> Unit uses Console {
                     context -> nativeAbiStructTypeSafe(parameter.typeId, 0) => byValueAbiStruct!
                 }
                 byValueAbiStruct! -> if {
-                    parameter.typeId -> nativeSysVAggregateIndirect => indirect
+                    callIndex -> nativeSysVArgumentIndirect(ordinal, parameter.typeId) => indirect
                     indirect -> if {
                         "ptr byval(" -> print
                         parameter -> writeIrType
@@ -2592,6 +2669,13 @@ emitCore context: EmitContext -> Unit uses Console {
             }
         } else {
             (call.typeOrigin == 1 and call.typeSymbol == 0) -> if { "  call " -> print } else { "  %v$(callIndex) = call " -> print }
+            (call -> targetsNativeFunction) -> if {
+                call.typeId >= 0 -> if {
+                    context.types[call.typeId] => nativeScalarResultType
+                    (nativeScalarResultType.kind == 1 and nativeScalarResultType.origin == 1 and (nativeScalarResultType.symbol == 3 or nativeScalarResultType.symbol == 4)) -> if { "signext " -> print }
+                    (nativeScalarResultType.kind == 1 and nativeScalarResultType.origin == 1 and (nativeScalarResultType.symbol == 8 or nativeScalarResultType.symbol == 9)) -> if { "zeroext " -> print }
+                }
+            }
             call -> writeIrType
         }
     }

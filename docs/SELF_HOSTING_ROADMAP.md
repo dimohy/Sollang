@@ -3425,3 +3425,17 @@ proved that moving shared aggregate context today can map fields to the wrong
 LLVM type. Until that compiler defect is fixed, stateful code stays in the
 original namespace while only scalar/state-independent emitters cross module
 boundaries.
+
+### Native aggregate ABI parity checkpoint
+
+Windows x64 and Linux SysV aggregate calls now have complete Stage1/Stage2
+parity for the 0.3 common C ABI slice. This includes direct and indirect
+arguments, aggregate results, `ref`/`mut`, mixed INTEGER/SSE classification,
+SysV register-exhaustion rollback, and narrow signed/unsigned extension
+attributes. The full 597 matrix executes against the real DLL and `.so` on both
+targets; focused examples 602 and 603 lock register pressure and self-host
+fractional-number parsing.
+
+The common ABI structure/pointer slice is complete. The next interoperation
+slice is Sollang shared-library export and reuse, followed by COM projection
+and the Clang-generated C++ shim.

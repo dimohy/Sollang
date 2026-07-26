@@ -110,8 +110,23 @@ lexText source: Text -> [syntax.SyntaxToken; ~] {
                         current -> isDigit -> if {
                             position! => numberStart
                             position! + UIntSize(1) => position!
-                            (position! < sourceLength and ((source -> byte(position!)) -> isDigit)) -> while {
+                            (position! < sourceLength and (((source -> byte(position!)) -> isDigit) or ((source -> byte(position!)) == UInt8(95) and position! + UIntSize(1) < sourceLength and ((source -> byte(position! + UIntSize(1))) -> isDigit)))) -> while {
                                 position! + UIntSize(1) => position!
+                            }
+                            (position! + UIntSize(1) < sourceLength and (source -> byte(position!)) == UInt8(46) and ((source -> byte(position! + UIntSize(1))) -> isDigit)) -> if {
+                                position! + UIntSize(1) => position!
+                                (position! < sourceLength and (((source -> byte(position!)) -> isDigit) or ((source -> byte(position!)) == UInt8(95) and position! + UIntSize(1) < sourceLength and ((source -> byte(position! + UIntSize(1))) -> isDigit)))) -> while {
+                                    position! + UIntSize(1) => position!
+                                }
+                            }
+                            (position! < sourceLength and ((source -> byte(position!)) == UInt8(101) or (source -> byte(position!)) == UInt8(69))) -> if {
+                                position! + UIntSize(1) => position!
+                                (position! < sourceLength and ((source -> byte(position!)) == UInt8(43) or (source -> byte(position!)) == UInt8(45))) -> if {
+                                    position! + UIntSize(1) => position!
+                                }
+                                (position! < sourceLength and (((source -> byte(position!)) -> isDigit) or ((source -> byte(position!)) == UInt8(95) and position! + UIntSize(1) < sourceLength and ((source -> byte(position! + UIntSize(1))) -> isDigit)))) -> while {
+                                    position! + UIntSize(1) => position!
+                                }
                             }
                             syntax.SyntaxToken {
                                 kind: grammar.tokenIdNumber

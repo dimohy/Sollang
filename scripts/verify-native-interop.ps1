@@ -19,6 +19,8 @@ $minimalAggregateSource = Join-Path $repoRoot "examples\599-native-abi-struct-mi
 $minimalAggregateExpectedPath = Join-Path $repoRoot "examples\expected\599-native-abi-struct-minimal.stdout.txt"
 $pointAggregateSource = Join-Path $repoRoot "examples\600-native-abi-point-return.slg"
 $pointAggregateExpectedPath = Join-Path $repoRoot "examples\expected\600-native-abi-point-return.stdout.txt"
+$pressureSource = Join-Path $repoRoot "examples\602-native-abi-sysv-pressure.slg"
+$pressureExpectedPath = Join-Path $repoRoot "examples\expected\602-native-abi-sysv-pressure.stdout.txt"
 $outputRoot = Join-Path $repoRoot "artifacts\native-interop"
 $clang = Join-Path $repoRoot ".tools\llvm-22.1.8\bin\clang.exe"
 $expected = ([System.IO.File]::ReadAllText($expectedPath)).Replace("`r`n", "`n").TrimEnd("`n")
@@ -26,6 +28,7 @@ $contextExpected = ([System.IO.File]::ReadAllText($contextExpectedPath)).Replace
 $aggregateExpected = ([System.IO.File]::ReadAllText($aggregateExpectedPath)).Replace("`r`n", "`n").TrimEnd("`n")
 $minimalAggregateExpected = ([System.IO.File]::ReadAllText($minimalAggregateExpectedPath)).Replace("`r`n", "`n").TrimEnd("`n")
 $pointAggregateExpected = ([System.IO.File]::ReadAllText($pointAggregateExpectedPath)).Replace("`r`n", "`n").TrimEnd("`n")
+$pressureExpected = ([System.IO.File]::ReadAllText($pressureExpectedPath)).Replace("`r`n", "`n").TrimEnd("`n")
 
 New-Item -ItemType Directory -Force -Path $outputRoot | Out-Null
 
@@ -260,6 +263,29 @@ if (-not $SkipStage2) {
         throw "Stage2 Windows by-reference aggregate ABI lowering regressed"
     }
 
+    $stage2AggregateWindowsLlvm = Join-Path $outputRoot "stage2-native-aggregate-windows.ll"
+    $stage2AggregateWindowsError = Join-Path $outputRoot "stage2-native-aggregate-windows.stderr.txt"
+    $stage2AggregateWindowsExecutable = Join-Path $outputRoot "stage2-native-aggregate-windows.exe"
+    $aggregateWindowsProcess = Start-Process `
+        -FilePath $selfhostCompiler `
+        -ArgumentList @("windows", $aggregateSource) `
+        -RedirectStandardOutput $stage2AggregateWindowsLlvm `
+        -RedirectStandardError $stage2AggregateWindowsError `
+        -PassThru `
+        -WindowStyle Hidden
+    $aggregateWindowsProcess.WaitForExit()
+    if ($aggregateWindowsProcess.ExitCode -ne 0) {
+        throw "Stage2 Windows aggregate matrix emission failed: $([System.IO.File]::ReadAllText($stage2AggregateWindowsError))"
+    }
+    & $clang -target x86_64-pc-windows-msvc -Wno-override-module -O2 $stage2AggregateWindowsLlvm -o $stage2AggregateWindowsExecutable -Xlinker /subsystem:console
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    Assert-Output -Executable $stage2AggregateWindowsExecutable -ExpectedText $aggregateExpected
+    $aggregateWindowsLlvm = [System.IO.File]::ReadAllText($stage2AggregateWindowsLlvm)
+    if ($aggregateWindowsLlvm -notmatch "call signext i16 %native_target_\d+\(i16 signext 123\)" -or
+        $aggregateWindowsLlvm -notmatch "call zeroext i16 %native_target_\d+\(i16 zeroext 40000, i16 zeroext 20000\)") {
+        throw "Stage2 Windows aggregate matrix or narrow scalar lowering regressed"
+    }
+
     $stage2ContextLinuxLlvm = Join-Path $outputRoot "stage2-native-contexts-linux.ll"
     $stage2ContextLinuxError = Join-Path $outputRoot "stage2-native-contexts-linux.stderr.txt"
     $stage2ContextLinuxObject = Join-Path $outputRoot "stage2-native-contexts-linux.o"
@@ -285,6 +311,64 @@ if (-not $SkipStage2) {
     $contextLinuxLlvm = [System.IO.File]::ReadAllText($stage2ContextLinuxLlvm)
     if (([regex]::Matches($contextLinuxLlvm, "load ptr, ptr @sollang_native_function_")).Count -ne 3) {
         throw "Stage2 Linux nested native call lowering regressed"
+    }
+
+    $stage2PressureLinuxLlvm = Join-Path $outputRoot "stage2-native-pressure-linux.ll"
+    $stage2PressureLinuxError = Join-Path $outputRoot "stage2-native-pressure-linux.stderr.txt"
+    $stage2PressureLinuxObject = Join-Path $outputRoot "stage2-native-pressure-linux.o"
+    $stage2PressureLinuxExecutable = Join-Path $outputRoot "stage2-native-pressure-linux"
+    $pressureLinuxProcess = Start-Process `
+        -FilePath $selfhostCompiler `
+        -ArgumentList @("linux", $pressureSource) `
+        -RedirectStandardOutput $stage2PressureLinuxLlvm `
+        -RedirectStandardError $stage2PressureLinuxError `
+        -PassThru `
+        -WindowStyle Hidden
+    $pressureLinuxProcess.WaitForExit()
+    if ($pressureLinuxProcess.ExitCode -ne 0) {
+        throw "Stage2 Linux pressure emission failed: $([System.IO.File]::ReadAllText($stage2PressureLinuxError))"
+    }
+    & $clang -target x86_64-unknown-linux-gnu -O2 -c $stage2PressureLinuxLlvm -o $stage2PressureLinuxObject
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    $pressureLinuxObject = Convert-ToWslPath $stage2PressureLinuxObject
+    $pressureLinuxExecutable = Convert-ToWslPath $stage2PressureLinuxExecutable
+    & wsl.exe --exec cc $pressureLinuxObject -o $pressureLinuxExecutable -ldl
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    Assert-Output -Executable $stage2PressureLinuxExecutable -ExpectedText $pressureExpected -Linux
+    $pressureLinuxLlvm = [System.IO.File]::ReadAllText($stage2PressureLinuxLlvm)
+    if (([regex]::Matches($pressureLinuxLlvm, "ptr byval\(%sollang\.struct\.")).Count -lt 2 -or
+        $pressureLinuxLlvm -notmatch "call signext i16 %native_target_\d+\(i16 signext 123\)" -or
+        $pressureLinuxLlvm -notmatch "call zeroext i16 %native_target_\d+\(i16 zeroext 40000, i16 zeroext 20000\)") {
+        throw "Stage2 Linux SysV register rollback or narrow scalar lowering regressed"
+    }
+
+    $stage2AggregateLinuxLlvm = Join-Path $outputRoot "stage2-native-aggregate-linux.ll"
+    $stage2AggregateLinuxError = Join-Path $outputRoot "stage2-native-aggregate-linux.stderr.txt"
+    $stage2AggregateLinuxObject = Join-Path $outputRoot "stage2-native-aggregate-linux.o"
+    $stage2AggregateLinuxExecutable = Join-Path $outputRoot "stage2-native-aggregate-linux"
+    $aggregateLinuxProcess = Start-Process `
+        -FilePath $selfhostCompiler `
+        -ArgumentList @("linux", $aggregateSource) `
+        -RedirectStandardOutput $stage2AggregateLinuxLlvm `
+        -RedirectStandardError $stage2AggregateLinuxError `
+        -PassThru `
+        -WindowStyle Hidden
+    $aggregateLinuxProcess.WaitForExit()
+    if ($aggregateLinuxProcess.ExitCode -ne 0) {
+        throw "Stage2 Linux aggregate matrix emission failed: $([System.IO.File]::ReadAllText($stage2AggregateLinuxError))"
+    }
+    & $clang -target x86_64-unknown-linux-gnu -O2 -c $stage2AggregateLinuxLlvm -o $stage2AggregateLinuxObject
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    $aggregateLinuxObject = Convert-ToWslPath $stage2AggregateLinuxObject
+    $aggregateLinuxExecutable = Convert-ToWslPath $stage2AggregateLinuxExecutable
+    & wsl.exe --exec cc $aggregateLinuxObject -o $aggregateLinuxExecutable -ldl
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    Assert-Output -Executable $stage2AggregateLinuxExecutable -ExpectedText $aggregateExpected -Linux
+    $aggregateLinuxLlvm = [System.IO.File]::ReadAllText($stage2AggregateLinuxLlvm)
+    if (([regex]::Matches($aggregateLinuxLlvm, "ptr byval\(%sollang\.struct\.")).Count -lt 4 -or
+        $aggregateLinuxLlvm -notmatch "call signext i16 %native_target_\d+\(i16 signext 123\)" -or
+        $aggregateLinuxLlvm -notmatch "call zeroext i16 %native_target_\d+\(i16 zeroext 40000, i16 zeroext 20000\)") {
+        throw "Stage2 Linux aggregate matrix lowering regressed"
     }
 }
 
