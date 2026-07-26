@@ -1,0 +1,35 @@
+import sollang.compiler.semantic.analysis as analysis
+import sollang.compiler.semantic.calls as calls
+import sollang.compiler.semantic.modules as modules
+import sollang.compiler.semantic.qualified as qualified
+
+main {
+    """
+    com fixture class "11111111-2222-3333-4444-555555555555" in mta {
+        interface Calculator "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee" {
+            add left: Int32, right: Int32 -> Result<Int32, Int32> at 3
+        }
+    }
+
+    main {
+        fixture.create
+        fixture.clone
+        fixture.add(20, 22)
+    }
+    """ => source
+    [source, ~] => sources!
+    sources! -> analysis.analyze => package
+    package -> modules.identitiesAnalyzed => identities!
+    package -> qualified.resolveAnalyzed => qualifiedCalls!
+    calls.ModuleCallRequest {
+        sources: sources!
+        modules: identities!
+        qualified: qualifiedCalls!
+    } => request!
+    request! -> calls.resolveModulesPrepared => resolved!
+    resolved! -> each call {
+        package.ranges[call.targetSourceModule] => targetRange
+        package.symbols[targetRange.symbolStart + call.functionSymbol] => target
+        "resolved = $(call.status),$(call.origin),$(target.kind),$(target.flags)" -> println
+    }
+}

@@ -1,0 +1,28 @@
+import sollang.compiler.ir.typed as typedIr
+
+main {
+    [
+        """
+        com fixture class "11111111-2222-3333-4444-555555555555" in mta {
+            interface Calculator "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee" {
+                add left: Int32, right: Int32 -> Result<Int32, Int32> at 3
+            }
+        }
+
+        main {
+            fixture.create
+        }
+        """,
+        ~
+    ] => sources!
+    sources! -> typedIr.lower => ir!
+    ir! -> each node {
+        ((node.kind == 0 and node.flags / 512 % 2 == 1)
+            or (node.kind == 10 and node.parent >= 0 and ir![node.parent].flags / 512 % 2 == 1)) -> if {
+            "COM IR = $(node.kind),$(node.symbol),$(node.typeOrigin),$(node.typeModule),$(node.typeSymbol),$(node.typeId),$(node.typeFlags),$(node.flags),$(node.operand1),$(node.nextOperand)" -> println
+        }
+        (node.kind == 6 and node.symbol >= 0) -> if {
+            "COM call IR = $(node.symbol),$(node.typeOrigin),$(node.typeModule),$(node.typeSymbol),$(node.typeId),$(node.typeFlags)" -> println
+        }
+    }
+}

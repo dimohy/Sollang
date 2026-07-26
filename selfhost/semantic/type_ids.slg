@@ -10,7 +10,8 @@ import sollang.compiler.semantic.symbols
 import syntax.generated.slg as grammar
 
 # Kinds match type_terms: 1 nominal, 2 slice, 3 dynamic array, 4 fixed
-# array, 5 dictionary, 6 box, 7 nominal application, 8 readonly reference.
+# array, 5 dictionary, 6 box, 7 nominal application, 8 readonly reference,
+# 9 affine external handle (currently COM interface).
 # Nominal origins: 0 local declaration, 1 builtin, 2 imported declaration,
 # 3 generic parameter, 4 intrinsic type constructor.
 public struct SemanticType {
@@ -128,6 +129,7 @@ public classify request: TypeClassificationRequest -> [Int; ~] {
         types![seedTypeIndex!] => current
         false => owns!
         false => reachesHeap!
+        current.kind == 9 -> if { true => owns! }
         (current.kind == 3 or current.kind == 5 or current.kind == 6) -> if {
             true => owns!
             true => reachesHeap!
@@ -236,6 +238,47 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> SemanticTypeSet {
             status: 0
         })
         builtinSeed! + 1 => builtinSeed!
+    }
+
+    # Seed every COM interface even when user source never spells its generated
+    # type. Activation, clone, and implicit receivers can then reference the
+    # same nominal identity without synthesizing a TypeAnnotation or text.
+    0 => comTypeSourceIndex!
+    comTypeSourceIndex! < (package.sources -> len) -> while {
+        package.ranges[comTypeSourceIndex!] => comTypeRange
+        0 => comTypeSymbolIndex!
+        comTypeSymbolIndex! < comTypeRange.symbolCount -> while {
+            package.symbols[comTypeRange.symbolStart + comTypeSymbolIndex!] => comTypeSymbol
+            (comTypeSymbol.kind == 3 and comTypeSymbol.flags / 512 % 2 == 1) -> if {
+                semanticTypes! -> len => comInterfaceTypeId
+                semanticTypes! -> push(SemanticType {
+                    kind: 9
+                    origin: 0
+                    module: comTypeSourceIndex!
+                    symbol: comTypeSymbolIndex!
+                    first: -1
+                    second: -1
+                    length: -1
+                    lengthHash: UInt64(0)
+                    containsParameter: false
+                    status: 0
+                })
+                semanticTypes! -> push(SemanticType {
+                    kind: 7
+                    origin: 4
+                    module: -1
+                    symbol: 1
+                    first: comInterfaceTypeId
+                    second: 5
+                    length: -1
+                    lengthHash: UInt64(0)
+                    containsParameter: false
+                    status: 0
+                })
+            }
+            comTypeSymbolIndex! + 1 => comTypeSymbolIndex!
+        }
+        comTypeSourceIndex! + 1 => comTypeSourceIndex!
     }
 
     0 => sourceIndex!

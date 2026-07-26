@@ -255,9 +255,25 @@ public resolveModulesPrepared request: move ModuleCallRequest -> [ModuleCallReso
                 tokens![moduleFlowTokenIndex!].kind == grammar.tokenIdDot -> if { true => moduleHasQualifiedFlowTarget! }
                 moduleFlowTokenIndex! + 1 => moduleFlowTokenIndex!
             }
-            ((callNode.kind == 10 and moduleHasFlowCallTarget!) or (callNode.kind == 11 and (callNode.cstRuleId == grammar.ruleIdCallExpression or callNode.cstRuleId == grammar.ruleIdTypeApplicationExpression)) or callNode.kind == 15 or callNode.kind == 48) -> if {
+            false => moduleHasGeneratedComTarget!
+            0 => moduleComQualifiedSearch!
+            moduleComQualifiedSearch! < (qualifiedResults! -> len) -> while {
+                qualifiedResults![moduleComQualifiedSearch!] => moduleComQualified
+                (moduleComQualified.sourceModule == sourceIndex! and moduleComQualified.pathAst == callAstIndex! and moduleComQualified.targetSymbol >= 0 and moduleComQualified.targetSymbol < (table! -> len)) -> if {
+                    table![moduleComQualified.targetSymbol].kind == 36 -> if { true => moduleHasGeneratedComTarget! }
+                }
+                moduleComQualifiedSearch! + 1 => moduleComQualifiedSearch!
+            }
+            ((callNode.kind == 10 and moduleHasFlowCallTarget!) or (callNode.kind == 11 and (callNode.cstRuleId == grammar.ruleIdCallExpression or callNode.cstRuleId == grammar.ruleIdTypeApplicationExpression)) or callNode.kind == 15 or callNode.kind == 48 or (callNode.kind == 36 and moduleHasGeneratedComTarget!)) -> if {
                 -1 => callNameToken!
                 callNode.kind == 48 -> if { callNode.payloadToken => callNameToken! }
+                callNode.kind == 36 -> if {
+                    callNode.firstToken => comCallNameSearch!
+                    comCallNameSearch! < callNode.firstToken + callNode.tokenCount -> while {
+                        tokens![comCallNameSearch!].kind == grammar.tokenIdIdentifier -> if { comCallNameSearch! => callNameToken! }
+                        comCallNameSearch! + 1 => comCallNameSearch!
+                    }
+                }
                 callNode.kind == 10 -> if {
                     0 => moduleFlowNameSearch!
                     moduleFlowNameSearch! < (nodes! -> len) -> while {
@@ -324,7 +340,7 @@ public resolveModulesPrepared request: move ModuleCallRequest -> [ModuleCallReso
                 }
                 RuntimeNameRequest { source: source, token: tokens![callNameToken!] } -> intrinsicFlowTarget => intrinsicFlow!
                 (callNameToken! > callNode.firstToken and tokens![callNameToken! - 1].kind == grammar.tokenIdDot) -> if { false => intrinsicFlow! }
-                (localFunctionSymbol! != -1 or (not intrinsicFlow! and (callNode.kind == 10 or callNode.kind == 11 or callNode.kind == 48))) -> if {
+                (localFunctionSymbol! != -1 or (not intrinsicFlow! and (callNode.kind == 10 or callNode.kind == 11 or callNode.kind == 48 or (callNode.kind == 36 and moduleHasGeneratedComTarget!)))) -> if {
                     2 => localCallStatus!
                     localFunctionSymbol! != -1 -> if { 0 => localCallStatus! }
                     localCalls! -> push(CallResolution {
@@ -384,7 +400,7 @@ public resolveModulesPrepared request: move ModuleCallRequest -> [ModuleCallReso
                 imported.status => importedStatus!
                 imported.status == 0 -> if {
                     request.sources[targetSourceModule] -> symbols.collect => targetSymbols!
-                    targetSymbols![imported.targetSymbol].kind != 7 -> if { 2 => importedStatus! }
+                    (targetSymbols![imported.targetSymbol].kind != 7 and targetSymbols![imported.targetSymbol].kind != 36) -> if { 2 => importedStatus! }
                 }
                 1 => resolvedOrigin!
                 imported.targetModule => resolvedTargetModule!
@@ -465,9 +481,25 @@ public resolveModulesAnalyzed package: analysis.PackageAnalysis -> [ModuleCallRe
                 package.tokens[sourceRange.tokenStart + moduleFlowTokenIndex!].kind == grammar.tokenIdDot -> if { true => moduleHasQualifiedFlowTarget! }
                 moduleFlowTokenIndex! + 1 => moduleFlowTokenIndex!
             }
-            ((callNode.kind == 10 and moduleHasFlowCallTarget!) or (callNode.kind == 11 and (callNode.cstRuleId == grammar.ruleIdCallExpression or callNode.cstRuleId == grammar.ruleIdTypeApplicationExpression)) or callNode.kind == 15 or callNode.kind == 48) -> if {
+            false => moduleHasGeneratedComTarget!
+            0 => moduleComQualifiedSearch!
+            moduleComQualifiedSearch! < (qualifiedResults! -> len) -> while {
+                qualifiedResults![moduleComQualifiedSearch!] => moduleComQualified
+                (moduleComQualified.sourceModule == sourceIndex! and moduleComQualified.pathAst == callAstIndex! and moduleComQualified.targetSymbol >= 0 and moduleComQualified.targetSymbol < sourceRange.symbolCount) -> if {
+                    package.symbols[sourceRange.symbolStart + moduleComQualified.targetSymbol].kind == 36 -> if { true => moduleHasGeneratedComTarget! }
+                }
+                moduleComQualifiedSearch! + 1 => moduleComQualifiedSearch!
+            }
+            ((callNode.kind == 10 and moduleHasFlowCallTarget!) or (callNode.kind == 11 and (callNode.cstRuleId == grammar.ruleIdCallExpression or callNode.cstRuleId == grammar.ruleIdTypeApplicationExpression)) or callNode.kind == 15 or callNode.kind == 48 or (callNode.kind == 36 and moduleHasGeneratedComTarget!)) -> if {
                 -1 => callNameToken!
                 callNode.kind == 48 -> if { callNode.payloadToken => callNameToken! }
+                callNode.kind == 36 -> if {
+                    callNode.firstToken => comCallNameSearch!
+                    comCallNameSearch! < callNode.firstToken + callNode.tokenCount -> while {
+                        package.tokens[sourceRange.tokenStart + comCallNameSearch!].kind == grammar.tokenIdIdentifier -> if { comCallNameSearch! => callNameToken! }
+                        comCallNameSearch! + 1 => comCallNameSearch!
+                    }
+                }
                 callNode.kind == 10 -> if {
                     0 => moduleFlowNameSearch!
                     moduleFlowNameSearch! < sourceRange.astCount -> while {
@@ -545,7 +577,7 @@ public resolveModulesAnalyzed package: analysis.PackageAnalysis -> [ModuleCallRe
                 }
                 RuntimeNameRequest { source: source, token: package.tokens[sourceRange.tokenStart + callNameToken!] } -> intrinsicFlowTarget => intrinsicFlow!
                 (callNameToken! > callNode.firstToken and package.tokens[sourceRange.tokenStart + callNameToken! - 1].kind == grammar.tokenIdDot) -> if { false => intrinsicFlow! }
-                (localFunctionSymbol! != -1 or (not intrinsicFlow! and (callNode.kind == 10 or callNode.kind == 11 or callNode.kind == 48))) -> if {
+                (localFunctionSymbol! != -1 or (not intrinsicFlow! and (callNode.kind == 10 or callNode.kind == 11 or callNode.kind == 48 or (callNode.kind == 36 and moduleHasGeneratedComTarget!)))) -> if {
                     2 => localCallStatus!
                     localFunctionSymbol! != -1 -> if { 0 => localCallStatus! }
                     localCalls! -> push(CallResolution {
@@ -605,7 +637,8 @@ public resolveModulesAnalyzed package: analysis.PackageAnalysis -> [ModuleCallRe
                 imported.status => importedStatus!
                 imported.status == 0 -> if {
                     package.ranges[targetSourceModule] => targetRange
-                    package.symbols[targetRange.symbolStart + imported.targetSymbol].kind != 7 -> if { 2 => importedStatus! }
+                    package.symbols[targetRange.symbolStart + imported.targetSymbol] => importedTargetSymbol
+                    (importedTargetSymbol.kind != 7 and importedTargetSymbol.kind != 36) -> if { 2 => importedStatus! }
                 }
                 imported.targetSymbol => importedFunctionSymbol!
                 importedStatus! != 0 -> if {

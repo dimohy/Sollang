@@ -3474,3 +3474,31 @@ Windows **811/811** and Linux **810/810**. This checkpoint deliberately stops
 before synthetic activation/clone functions, implicit receiver typing, affine
 classification, and LLVM lowering; those form the next executable Stage2
 slice.
+
+### Self-host COM ownership and call-IR checkpoint (D282)
+
+Stage2 now synthesizes `create` and explicit `clone` functions in the ordinary
+symbol graph, adds each COM method's implicit interface receiver, and resolves
+all three through the normal qualified-call pipeline. COM interface values use
+semantic type kind 9: an affine external handle that owns a resource without
+claiming a Sollang heap allocation. Activation returns
+`Result<Interface, Int32>`, clone returns the interface handle, and source
+methods retain their declared result.
+
+Typed IR now preserves those canonical result and receiver types and emits a
+real call node for generated activation. The entry lowering path no longer
+silently skips a successfully resolved call merely because legacy expression
+inference did not produce an entry-result candidate. Examples 607-611 lock the
+synthetic symbols, ownership classification, qualified resolution, generated
+functions, implicit receiver, and call IR.
+
+The complete suites pass Windows **816/816** and Linux **815/815**. A repeated
+five-sample compiler benchmark records warm medians of **69.896 ms** and
+**70.669 ms**, within the 5% gate; the initial three-sample run exceeded one
+fixture's threshold by 0.098 ms and was treated as measurement variance only
+after the larger repeat passed.
+
+The next slice maps semantic type kind 9 to LLVM `ptr`, emits COM activation,
+vtable method calls, explicit clone, and deterministic release through
+`selfhost/llvm/emitter/com_runtime.slg`, then executes the real Windows COM
+fixture with both Stage1 and Stage2 products.

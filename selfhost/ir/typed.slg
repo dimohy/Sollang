@@ -390,6 +390,36 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
         }
         payloadTypeId!
     }
+    comGeneratedResultTypeId sourceIndex: Int, interfaceSymbol: Int, flags: Int -> Int {
+        -1 => interfaceTypeId!
+        0 => interfaceTypeSearch!
+        interfaceTypeSearch! < (frozenRecursiveSemanticTypes -> len) -> while {
+            frozenRecursiveSemanticTypes[interfaceTypeSearch!] => candidate
+            (candidate.kind == 9
+                and candidate.origin == 0
+                and candidate.module == sourceIndex
+                and candidate.symbol == interfaceSymbol) -> if {
+                interfaceTypeSearch! => interfaceTypeId!
+            }
+            interfaceTypeSearch! + 1 => interfaceTypeSearch!
+        }
+        interfaceTypeId! => resultTypeId!
+        flags / 4096 % 2 == 1 -> if {
+            0 => activationResultSearch!
+            activationResultSearch! < (frozenRecursiveSemanticTypes -> len) -> while {
+                frozenRecursiveSemanticTypes[activationResultSearch!] => candidate
+                (candidate.kind == 7
+                    and candidate.origin == 4
+                    and candidate.symbol == 1
+                    and candidate.first == interfaceTypeId!
+                    and candidate.second == 5) -> if {
+                    activationResultSearch! => resultTypeId!
+                }
+                activationResultSearch! + 1 => activationResultSearch!
+            }
+        }
+        resultTypeId!
+    }
     lowerFunction request: FunctionLowerRequest -> SourceTypedIr {
         [TypedIrNode; ~] => results!
         request.sourceIndex => sourceIndex!
@@ -469,6 +499,56 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                     }
                     declaredResultCompositeSearch! + 1 => declaredResultCompositeSearch!
                 }
+                (function.flags / 512 % 2 == 1
+                    and function.parent >= 0
+                    and (function.flags / 4096 % 2 == 1 or function.flags / 8192 % 2 == 1)) -> if {
+                    -1 => comInterfaceTypeId!
+                    0 => comInterfaceTypeSearch!
+                    comInterfaceTypeSearch! < (frozenRecursiveSemanticTypes -> len) -> while {
+                        frozenRecursiveSemanticTypes[comInterfaceTypeSearch!] => comInterfaceType
+                        (comInterfaceType.kind == 9
+                            and comInterfaceType.origin == 0
+                            and comInterfaceType.module == sourceIndex!
+                            and comInterfaceType.symbol == function.parent) -> if {
+                            comInterfaceTypeSearch! => comInterfaceTypeId!
+                        }
+                        comInterfaceTypeSearch! + 1 => comInterfaceTypeSearch!
+                    }
+                    -1 => comGeneratedResultTypeId!
+                    function.flags / 4096 % 2 == 1 -> if {
+                        0 => comActivationResultSearch!
+                        comActivationResultSearch! < (frozenRecursiveSemanticTypes -> len) -> while {
+                            frozenRecursiveSemanticTypes[comActivationResultSearch!] => comActivationResultType
+                            (comActivationResultType.kind == 7
+                                and comActivationResultType.origin == 4
+                                and comActivationResultType.symbol == 1
+                                and comActivationResultType.first == comInterfaceTypeId!
+                                and comActivationResultType.second == 5) -> if {
+                                comActivationResultSearch! => comGeneratedResultTypeId!
+                            }
+                            comActivationResultSearch! + 1 => comActivationResultSearch!
+                        }
+                    } else {
+                        comInterfaceTypeId! => comGeneratedResultTypeId!
+                    }
+                    comGeneratedResultTypeId! >= 0 -> if {
+                        frozenRecursiveSemanticTypes[comGeneratedResultTypeId!] => comGeneratedResultType
+                        comGeneratedResultTypeId! => functionResultTypeId!
+                        comGeneratedResultType.kind => functionResultTypeKind!
+                        recursiveTypeFlags[comGeneratedResultTypeId!] => functionResultTypeFlags!
+                        comGeneratedResultType.origin => functionResultOrigin!
+                        comGeneratedResultType.module => functionResultModule!
+                        comGeneratedResultType.symbol => functionResultSymbol!
+                        comGeneratedResultType.kind != 1 -> if {
+                            10 + comGeneratedResultType.kind => functionResultOrigin!
+                            comGeneratedResultType.first >= 0 -> if {
+                                frozenRecursiveSemanticTypes[comGeneratedResultType.first] => comGeneratedResultElement
+                                comGeneratedResultElement.module => functionResultModule!
+                                comGeneratedResultElement.symbol => functionResultSymbol!
+                            }
+                        }
+                    }
+                }
                 -1 => parameterSymbol!
                 -1 => parameterTypeIndex!
                 -1 => parameterReferenceAst!
@@ -517,8 +597,24 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                 }
                 (parameterSymbol! >= 0 and parameterOrigin! < 0) -> if {
                     prepared.package.symbols[sourceRange.symbolStart + parameterSymbol!] => declaredParameter
+                    (declaredParameter.flags / 16384 % 2 == 1 and function.parent >= 0) -> if {
+                        0 => comReceiverTypeSearch!
+                        comReceiverTypeSearch! < (frozenRecursiveSemanticTypes -> len) -> while {
+                            frozenRecursiveSemanticTypes[comReceiverTypeSearch!] => comReceiverType
+                            (comReceiverType.kind == 9
+                                and comReceiverType.origin == 0
+                                and comReceiverType.module == sourceIndex!
+                                and comReceiverType.symbol == function.parent) -> if {
+                                comReceiverTypeSearch! => parameterTypeId!
+                                comReceiverType.origin => parameterOrigin!
+                                comReceiverType.module => parameterModule!
+                                comReceiverType.symbol => parameterTypeSymbol!
+                            }
+                            comReceiverTypeSearch! + 1 => comReceiverTypeSearch!
+                        }
+                    }
                     0 => declaredNominalSearch!
-                    declaredNominalSearch! < (prepared.nominal -> len) -> while {
+                    (parameterOrigin! < 0 and declaredNominalSearch! < (prepared.nominal -> len)) -> while {
                         prepared.nominal[declaredNominalSearch!] => declaredNominal
                         (declaredNominal.sourceModule == sourceIndex! and declaredNominal.typeAst == declaredParameter.typeNode) -> if {
                             declaredNominal.origin => parameterOrigin!
@@ -1009,17 +1105,34 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                             (knownCall.targetSourceModule >= 0 and knownCall.functionSymbol >= 0) -> if {
                                 prepared.package.ranges[knownCall.targetSourceModule] => knownCallTargetRange
                                 prepared.package.symbols[knownCallTargetRange.symbolStart + knownCall.functionSymbol] => knownCallFunction
-                                knownCallFunction.typeNode => knownCallResultAst!
-                                knownCallFunction.secondaryTypeNode >= 0 -> if { knownCallFunction.secondaryTypeNode => knownCallResultAst! }
-                                0 => knownCallTypeSearch!
-                                knownCallTypeSearch! < (prepared.nominal -> len) -> while {
-                                    prepared.nominal[knownCallTypeSearch!] => knownCallType
-                                    (knownCallType.sourceModule == knownCall.targetSourceModule and knownCallType.typeAst == knownCallResultAst! and knownCallType.status == 0) -> if {
-                                        knownCallType.origin => expressionTypeOrigin!
-                                        knownCallType.targetModule => expressionTypeModule!
-                                        knownCallType.targetSymbol => expressionTypeSymbol!
+                                knownCallFunction.kind == 36 -> if {
+                                    knownCall.targetSourceModule -> comGeneratedResultTypeId(knownCallFunction.parent, knownCallFunction.flags) => recursiveExpressionTypeId!
+                                    recursiveExpressionTypeId! >= 0 -> if {
+                                        frozenRecursiveSemanticTypes[recursiveExpressionTypeId!] => knownComCallType
+                                        knownComCallType.origin => expressionTypeOrigin!
+                                        knownComCallType.module => expressionTypeModule!
+                                        knownComCallType.symbol => expressionTypeSymbol!
+                                        knownComCallType.kind == 7 -> if {
+                                            17 => expressionTypeOrigin!
+                                            knownComCallType.first >= 0 -> if {
+                                                frozenRecursiveSemanticTypes[knownComCallType.first].module => expressionTypeModule!
+                                                frozenRecursiveSemanticTypes[knownComCallType.first].symbol => expressionTypeSymbol!
+                                            }
+                                        }
                                     }
-                                    knownCallTypeSearch! + 1 => knownCallTypeSearch!
+                                } else {
+                                    knownCallFunction.typeNode => knownCallResultAst!
+                                    knownCallFunction.secondaryTypeNode >= 0 -> if { knownCallFunction.secondaryTypeNode => knownCallResultAst! }
+                                    0 => knownCallTypeSearch!
+                                    knownCallTypeSearch! < (prepared.nominal -> len) -> while {
+                                        prepared.nominal[knownCallTypeSearch!] => knownCallType
+                                        (knownCallType.sourceModule == knownCall.targetSourceModule and knownCallType.typeAst == knownCallResultAst! and knownCallType.status == 0) -> if {
+                                            knownCallType.origin => expressionTypeOrigin!
+                                            knownCallType.targetModule => expressionTypeModule!
+                                            knownCallType.targetSymbol => expressionTypeSymbol!
+                                        }
+                                        knownCallTypeSearch! + 1 => knownCallTypeSearch!
+                                    }
                                 }
                             } else {
                                 knownCall.functionSymbol == -103 -> if {
@@ -2297,6 +2410,108 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
         functionResult!
     }
 
+    lowerComGeneratedFunction request: FunctionLowerRequest -> SourceTypedIr {
+        [TypedIrNode; ~] => results!
+        prepared.package.ranges[request.sourceIndex] => sourceRange
+        prepared.package.symbols[sourceRange.symbolStart + request.symbolIndex] => function
+        -1 => interfaceTypeId!
+        0 => interfaceTypeSearch!
+        interfaceTypeSearch! < (frozenRecursiveSemanticTypes -> len) -> while {
+            frozenRecursiveSemanticTypes[interfaceTypeSearch!] => candidate
+            (candidate.kind == 9
+                and candidate.origin == 0
+                and candidate.module == request.sourceIndex
+                and candidate.symbol == function.parent) -> if {
+                interfaceTypeSearch! => interfaceTypeId!
+            }
+            interfaceTypeSearch! + 1 => interfaceTypeSearch!
+        }
+        interfaceTypeId! => resultTypeId!
+        function.flags / 4096 % 2 == 1 -> if {
+            0 => activationResultSearch!
+            activationResultSearch! < (frozenRecursiveSemanticTypes -> len) -> while {
+                frozenRecursiveSemanticTypes[activationResultSearch!] => candidate
+                (candidate.kind == 7
+                    and candidate.origin == 4
+                    and candidate.symbol == 1
+                    and candidate.first == interfaceTypeId!
+                    and candidate.second == 5) -> if {
+                    activationResultSearch! => resultTypeId!
+                }
+                activationResultSearch! + 1 => activationResultSearch!
+            }
+        }
+        frozenRecursiveSemanticTypes[resultTypeId!] => resultType
+        10 + resultType.kind => resultOrigin!
+        request.sourceIndex => resultModule!
+        function.parent => resultSymbol!
+        results! -> push(TypedIrNode {
+            kind: 0
+            parent: -1
+            sourceModule: request.sourceIndex
+            astNode: function.astNode
+            symbol: request.symbolIndex
+            targetModule: request.sourceIndex
+            typeOrigin: resultOrigin!
+            typeModule: resultModule!
+            typeSymbol: resultSymbol!
+            typeId: resultTypeId!
+            typeKind: resultType.kind
+            typeFlags: recursiveTypeFlags[resultTypeId!]
+            payloadToken: function.nameToken
+            opcode: -1
+            operand0: 1
+            operand1: function.flags / 8192 % 2 == 1 -> if { 2 } else { -1 }
+            nextOperand: -1
+            flags: function.flags
+        })
+        results! -> push(TypedIrNode {
+            kind: 1
+            parent: 0
+            sourceModule: request.sourceIndex
+            astNode: function.astNode
+            symbol: request.symbolIndex
+            targetModule: -1
+            typeOrigin: resultOrigin!
+            typeModule: resultModule!
+            typeSymbol: resultSymbol!
+            typeId: resultTypeId!
+            typeKind: resultType.kind
+            typeFlags: recursiveTypeFlags[resultTypeId!]
+            payloadToken: -1
+            opcode: -1
+            operand0: -1
+            operand1: -1
+            nextOperand: -1
+            flags: 0
+        })
+        function.flags / 8192 % 2 == 1 -> if {
+            prepared.package.symbols[sourceRange.symbolStart + function.parent] => interfaceSymbol
+            results! -> push(TypedIrNode {
+                kind: 10
+                parent: 0
+                sourceModule: request.sourceIndex
+                astNode: function.astNode
+                symbol: -1
+                targetModule: request.sourceIndex
+                typeOrigin: 19
+                typeModule: request.sourceIndex
+                typeSymbol: function.parent
+                typeId: interfaceTypeId!
+                typeKind: 9
+                typeFlags: recursiveTypeFlags[interfaceTypeId!]
+                payloadToken: interfaceSymbol.nameToken
+                opcode: -1
+                operand0: -1
+                operand1: -1
+                nextOperand: -1
+                flags: 512 + 16384
+            })
+        }
+        SourceTypedIr { nodes: results! } => generated!
+        generated!
+    }
+
     lowerSource requestedSourceIndex: Int -> SourceTypedIr {
         [TypedIrNode; ~] => results!
         requestedSourceIndex => sourceIndex!
@@ -2313,7 +2528,7 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
         0 => symbolIndex!
         symbolIndex! < sourceRange.symbolCount -> while {
             prepared.package.symbols[sourceRange.symbolStart + symbolIndex!] => symbol
-            (symbol.kind == 7 or symbol.kind == 31) -> if {
+            (symbol.kind == 7 or symbol.kind == 31 or symbol.kind == 36) -> if {
                 functionRequests! -> push(FunctionLowerRequest {
                     sourceIndex: sourceIndex!
                     symbolIndex: symbolIndex!
@@ -2323,7 +2538,13 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
         }
         0 => functionRequestIndex!
         functionRequestIndex! < (functionRequests! -> len) -> while {
-            functionRequests![functionRequestIndex!] -> lowerFunction => functionResult
+            functionRequests![functionRequestIndex!] => functionRequest
+            prepared.package.symbols[sourceRange.symbolStart + functionRequest.symbolIndex] => requestedFunction
+            requestedFunction.kind == 36 -> if {
+                functionRequest -> lowerComGeneratedFunction
+            } else {
+                functionRequest -> lowerFunction
+            } => functionResult
             results! -> len => functionIrOffset
             0 => functionNodeIndex!
             functionNodeIndex! < (functionResult.nodes -> len) -> while {
@@ -2387,7 +2608,29 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                     nextOperand: -1
                     flags: 0
                 })
-                entryResultTypeIndex! >= 0 -> if {
+                false => entryHasResolvedCall!
+                0 => entryResolvedCallSearch!
+                entryResolvedCallSearch! < (prepared.calls -> len) -> while {
+                    prepared.calls[entryResolvedCallSearch!] => entryResolvedCallCandidate
+                    (entryResolvedCallCandidate.sourceModule == sourceIndex! and entryResolvedCallCandidate.status == 0) -> if {
+                        prepared.package.nodes[sourceRange.astStart + entryResolvedCallCandidate.callAst].parent => entryResolvedCallAncestor!
+                        (entryResolvedCallAncestor! >= 0 and not entryHasResolvedCall!) -> while {
+                            entryResolvedCallAncestor! == entryAstIndex! -> if {
+                                true => entryHasResolvedCall!
+                            } else {
+                                (prepared.package.nodes[sourceRange.astStart + entryResolvedCallAncestor!].kind == 7
+                                    or prepared.package.nodes[sourceRange.astStart + entryResolvedCallAncestor!].kind == 29
+                                    or prepared.package.nodes[sourceRange.astStart + entryResolvedCallAncestor!].kind == 31) -> if {
+                                    -1 => entryResolvedCallAncestor!
+                                } else {
+                                    prepared.package.nodes[sourceRange.astStart + entryResolvedCallAncestor!].parent => entryResolvedCallAncestor!
+                                }
+                            }
+                        }
+                    }
+                    entryResolvedCallSearch! + 1 => entryResolvedCallSearch!
+                }
+                (entryResultTypeIndex! >= 0 or entryHasResolvedCall!) -> if {
                     [Int; ~] => entryAstToIr!
                     0 => entryMapIndex!
                     entryMapIndex! < sourceRange.astCount -> while {
@@ -2660,17 +2903,34 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                                 (knownEntryCall.targetSourceModule >= 0 and knownEntryCall.functionSymbol >= 0) -> if {
                                     prepared.package.ranges[knownEntryCall.targetSourceModule] => knownEntryCallTargetRange
                                     prepared.package.symbols[knownEntryCallTargetRange.symbolStart + knownEntryCall.functionSymbol] => knownEntryCallFunction
-                                    knownEntryCallFunction.typeNode => knownEntryCallResultAst!
-                                    knownEntryCallFunction.secondaryTypeNode >= 0 -> if { knownEntryCallFunction.secondaryTypeNode => knownEntryCallResultAst! }
-                                    0 => knownEntryCallTypeSearch!
-                                    knownEntryCallTypeSearch! < (prepared.nominal -> len) -> while {
-                                        prepared.nominal[knownEntryCallTypeSearch!] => knownEntryCallType
-                                        (knownEntryCallType.sourceModule == knownEntryCall.targetSourceModule and knownEntryCallType.typeAst == knownEntryCallResultAst! and knownEntryCallType.status == 0) -> if {
-                                            knownEntryCallType.origin => entryExpressionTypeOrigin!
-                                            knownEntryCallType.targetModule => entryExpressionTypeModule!
-                                            knownEntryCallType.targetSymbol => entryExpressionTypeSymbol!
+                                    knownEntryCallFunction.kind == 36 -> if {
+                                        knownEntryCall.targetSourceModule -> comGeneratedResultTypeId(knownEntryCallFunction.parent, knownEntryCallFunction.flags) => recursiveEntryExpressionTypeId!
+                                        recursiveEntryExpressionTypeId! >= 0 -> if {
+                                            frozenRecursiveSemanticTypes[recursiveEntryExpressionTypeId!] => knownEntryComCallType
+                                            knownEntryComCallType.origin => entryExpressionTypeOrigin!
+                                            knownEntryComCallType.module => entryExpressionTypeModule!
+                                            knownEntryComCallType.symbol => entryExpressionTypeSymbol!
+                                            knownEntryComCallType.kind == 7 -> if {
+                                                17 => entryExpressionTypeOrigin!
+                                                knownEntryComCallType.first >= 0 -> if {
+                                                    frozenRecursiveSemanticTypes[knownEntryComCallType.first].module => entryExpressionTypeModule!
+                                                    frozenRecursiveSemanticTypes[knownEntryComCallType.first].symbol => entryExpressionTypeSymbol!
+                                                }
+                                            }
                                         }
-                                        knownEntryCallTypeSearch! + 1 => knownEntryCallTypeSearch!
+                                    } else {
+                                        knownEntryCallFunction.typeNode => knownEntryCallResultAst!
+                                        knownEntryCallFunction.secondaryTypeNode >= 0 -> if { knownEntryCallFunction.secondaryTypeNode => knownEntryCallResultAst! }
+                                        0 => knownEntryCallTypeSearch!
+                                        knownEntryCallTypeSearch! < (prepared.nominal -> len) -> while {
+                                            prepared.nominal[knownEntryCallTypeSearch!] => knownEntryCallType
+                                            (knownEntryCallType.sourceModule == knownEntryCall.targetSourceModule and knownEntryCallType.typeAst == knownEntryCallResultAst! and knownEntryCallType.status == 0) -> if {
+                                                knownEntryCallType.origin => entryExpressionTypeOrigin!
+                                                knownEntryCallType.targetModule => entryExpressionTypeModule!
+                                                knownEntryCallType.targetSymbol => entryExpressionTypeSymbol!
+                                            }
+                                            knownEntryCallTypeSearch! + 1 => knownEntryCallTypeSearch!
+                                        }
                                     }
                                 } else {
                                     knownEntryCall.functionSymbol == -103 -> if {
@@ -3805,25 +4065,43 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                         entryAggregateIrIndex! + 1 => entryAggregateIrIndex!
                     }
                     results![entryIr!] => entryNode!
-                    entryAstToIr![inferred[entryResultTypeIndex!].astNode] => entryResultIr!
-                    entryResultIr! < 0 -> if {
-                        1000000 => entryResultOperandDistance!
-                        entryExpressionStart => entryResultOperandSearch!
-                        entryResultOperandSearch! < entryExpressionEnd -> while {
-                            prepared.package.nodes[sourceRange.astStart + results![entryResultOperandSearch!].astNode].parent => entryResultOperandAncestor!
-                            1 => entryResultCandidateDistance!
-                            false => entryResultCandidateBelongs!
-                            (entryResultOperandAncestor! >= 0 and not entryResultCandidateBelongs!) -> while {
-                                entryResultOperandAncestor! == inferred[entryResultTypeIndex!].astNode -> if { true => entryResultCandidateBelongs! } else {
-                                    prepared.package.nodes[sourceRange.astStart + entryResultOperandAncestor!].parent => entryResultOperandAncestor!
-                                    entryResultCandidateDistance! + 1 => entryResultCandidateDistance!
+                    -1 => entryResultIr!
+                    entryResultTypeIndex! >= 0 -> if {
+                        entryAstToIr![inferred[entryResultTypeIndex!].astNode] => entryResultIr!
+                        entryResultIr! < 0 -> if {
+                            1000000 => entryResultOperandDistance!
+                            entryExpressionStart => entryResultOperandSearch!
+                            entryResultOperandSearch! < entryExpressionEnd -> while {
+                                prepared.package.nodes[sourceRange.astStart + results![entryResultOperandSearch!].astNode].parent => entryResultOperandAncestor!
+                                1 => entryResultCandidateDistance!
+                                false => entryResultCandidateBelongs!
+                                (entryResultOperandAncestor! >= 0 and not entryResultCandidateBelongs!) -> while {
+                                    entryResultOperandAncestor! == inferred[entryResultTypeIndex!].astNode -> if { true => entryResultCandidateBelongs! } else {
+                                        prepared.package.nodes[sourceRange.astStart + entryResultOperandAncestor!].parent => entryResultOperandAncestor!
+                                        entryResultCandidateDistance! + 1 => entryResultCandidateDistance!
+                                    }
+                                }
+                                (entryResultCandidateBelongs! and entryResultCandidateDistance! < entryResultOperandDistance!) -> if {
+                                    entryResultOperandSearch! => entryResultIr!
+                                    entryResultCandidateDistance! => entryResultOperandDistance!
+                                }
+                                entryResultOperandSearch! + 1 => entryResultOperandSearch!
+                            }
+                        }
+                    }
+                    (entryResultIr! < 0 and entryHasResolvedCall!) -> if {
+                        UIntSize(0) => entryLatestCallStart!
+                        entryExpressionStart => entryLatestCallSearch!
+                        entryLatestCallSearch! < entryExpressionEnd -> while {
+                            results![entryLatestCallSearch!] => entryLatestCall
+                            (entryLatestCall.kind == 6 and entryLatestCall.parent == entryIr!) -> if {
+                                prepared.package.nodes[sourceRange.astStart + entryLatestCall.astNode].start => entryLatestCallStart
+                                (entryResultIr! < 0 or entryLatestCallStart >= entryLatestCallStart!) -> if {
+                                    entryLatestCallSearch! => entryResultIr!
+                                    entryLatestCallStart => entryLatestCallStart!
                                 }
                             }
-                            (entryResultCandidateBelongs! and entryResultCandidateDistance! < entryResultOperandDistance!) -> if {
-                                entryResultOperandSearch! => entryResultIr!
-                                entryResultCandidateDistance! => entryResultOperandDistance!
-                            }
-                            entryResultOperandSearch! + 1 => entryResultOperandSearch!
+                            entryLatestCallSearch! + 1 => entryLatestCallSearch!
                         }
                     }
                     (entryResultIr! >= 0 and results![entryResultIr!].kind == 9) -> if {

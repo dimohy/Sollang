@@ -100,6 +100,77 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> [QualifiedResolution
                             }
                             nativeFunctionSearch! + 1 => nativeFunctionSearch!
                         }
+                        0 => comFunctionSearch!
+                        localVariantResolved! -> if { sourceRange.symbolCount => comFunctionSearch! }
+                        comFunctionSearch! < sourceRange.symbolCount -> while {
+                            package.symbols[sourceRange.symbolStart + comFunctionSearch!] => comFunction
+                            ((comFunction.kind == 7 or comFunction.kind == 36)
+                                and comFunction.flags / 512 % 2 == 1
+                                and comFunction.parent >= 0) -> if {
+                                package.symbols[sourceRange.symbolStart + comFunction.parent] => comInterfaceSymbol
+                                package.nodes[sourceRange.astStart + comInterfaceSymbol.astNode] => comInterfaceAst
+                                comInterfaceAst.parent >= 0 -> if {
+                                    package.nodes[sourceRange.astStart + comInterfaceAst.parent] => comClassAst
+                                    package.tokens[sourceRange.tokenStart + comClassAst.payloadToken] => comAliasName
+                                    package.tokens[sourceRange.tokenStart + firstIdentifier!] => comAliasReference
+                                    comAliasName.span.length == comAliasReference.span.length => comAliasEqual!
+                                    UIntSize(0) => comAliasByte!
+                                    (comAliasEqual! and comAliasByte! < comAliasName.span.length) -> while {
+                                        (source -> byte(comAliasName.span.start + comAliasByte!)) != (source -> byte(comAliasReference.span.start + comAliasByte!)) -> if { false => comAliasEqual! }
+                                        comAliasByte! + UIntSize(1) => comAliasByte!
+                                    }
+                                    false => comFunctionEqual!
+                                    package.tokens[sourceRange.tokenStart + lastIdentifier!] => comFunctionReference
+                                    comFunction.flags / 4096 % 2 == 1 -> if {
+                                        comFunctionReference.span.length == UIntSize(6) -> if {
+                                            "create" => comCreateName
+                                            true => comFunctionEqual!
+                                            UIntSize(0) => comCreateByte!
+                                            (comFunctionEqual! and comCreateByte! < comFunctionReference.span.length) -> while {
+                                                (source -> byte(comFunctionReference.span.start + comCreateByte!)) != (comCreateName -> byte(comCreateByte!)) -> if { false => comFunctionEqual! }
+                                                comCreateByte! + UIntSize(1) => comCreateByte!
+                                            }
+                                        }
+                                    } else {
+                                        comFunction.flags / 8192 % 2 == 1 -> if {
+                                            comFunctionReference.span.length == UIntSize(5) -> if {
+                                                "clone" => comCloneName
+                                                true => comFunctionEqual!
+                                                UIntSize(0) => comCloneByte!
+                                                (comFunctionEqual! and comCloneByte! < comFunctionReference.span.length) -> while {
+                                                    (source -> byte(comFunctionReference.span.start + comCloneByte!)) != (comCloneName -> byte(comCloneByte!)) -> if { false => comFunctionEqual! }
+                                                    comCloneByte! + UIntSize(1) => comCloneByte!
+                                                }
+                                            }
+                                        } else {
+                                            package.tokens[sourceRange.tokenStart + comFunction.nameToken] => comMethodName
+                                            comMethodName.span.length == comFunctionReference.span.length => comFunctionEqual!
+                                            UIntSize(0) => comMethodByte!
+                                            (comFunctionEqual! and comMethodByte! < comMethodName.span.length) -> while {
+                                                (source -> byte(comMethodName.span.start + comMethodByte!)) != (source -> byte(comFunctionReference.span.start + comMethodByte!)) -> if { false => comFunctionEqual! }
+                                                comMethodByte! + UIntSize(1) => comMethodByte!
+                                            }
+                                        }
+                                    }
+                                    (comAliasEqual!
+                                        and comFunctionEqual!
+                                        and (comFunction.flags / 4096 % 2 == 1
+                                            or comFunction.flags / 8192 % 2 == 1
+                                            or pathAst.kind == 16)) -> if {
+                                        results! -> push(QualifiedResolution {
+                                            sourceModule: sourceIndex!
+                                            pathAst: pathAstIndex!
+                                            targetModule: currentModule!
+                                            targetSymbol: comFunctionSearch!
+                                            status: 0
+                                        })
+                                        true => localVariantResolved!
+                                        sourceRange.symbolCount => comFunctionSearch!
+                                    }
+                                }
+                            }
+                            comFunctionSearch! + 1 => comFunctionSearch!
+                        }
                         0 => localEnumSearch!
                         localVariantResolved! -> if { sourceRange.symbolCount => localEnumSearch! }
                         localEnumSearch! < sourceRange.symbolCount -> while {

@@ -208,6 +208,55 @@ public collectPrepared nodes: [ast.AstNode; ~] -> [Symbol; ~] {
         genericSymbolIndex! + 1 => genericSymbolIndex!
     }
 
+    # COM activation and cloning are source-level generated functions, but the
+    # self-host compiler keeps them as flat symbols. No wrapper object or
+    # metadata dictionary is allocated. The class AST uniquely identifies its
+    # activation function and the interface AST uniquely identifies clone.
+    symbols! -> len => beforeComFunctions
+    0 => comInterfaceSymbolIndex!
+    comInterfaceSymbolIndex! < beforeComFunctions -> while {
+        symbols![comInterfaceSymbolIndex!] => comInterfaceSymbol
+        (comInterfaceSymbol.kind == 3 and comInterfaceSymbol.flags / 512 % 2 == 1) -> if {
+            nodes[comInterfaceSymbol.astNode] => comInterfaceAst
+            false => earlierComInterface!
+            0 => comEarlierSearch!
+            comEarlierSearch! < comInterfaceSymbolIndex! -> while {
+                symbols![comEarlierSearch!] => comEarlierSymbol
+                (comEarlierSymbol.kind == 3 and comEarlierSymbol.flags / 512 % 2 == 1) -> if {
+                    nodes[comEarlierSymbol.astNode].parent == comInterfaceAst.parent -> if { true => earlierComInterface! }
+                }
+                comEarlierSearch! + 1 => comEarlierSearch!
+            }
+            not earlierComInterface! -> if {
+                symbols! -> push(Symbol {
+                    kind: 36
+                    parent: comInterfaceSymbolIndex!
+                    astNode: comInterfaceAst.parent
+                    nameToken: nodes[comInterfaceAst.parent].payloadToken
+                    typeNode: -1
+                    secondaryTypeNode: -1
+                    blockNameToken: -1
+                    blockTypeNode: -1
+                    blockResultTypeNode: -1
+                    flags: 512 + 4096
+                })
+            }
+            symbols! -> push(Symbol {
+                kind: 36
+                parent: comInterfaceSymbolIndex!
+                astNode: comInterfaceSymbol.astNode
+                nameToken: comInterfaceSymbol.nameToken
+                typeNode: -1
+                secondaryTypeNode: -1
+                blockNameToken: -1
+                blockTypeNode: -1
+                blockResultTypeNode: -1
+                flags: 512 + 8192
+            })
+        }
+        comInterfaceSymbolIndex! + 1 => comInterfaceSymbolIndex!
+    }
+
     # Parameters and method self values are synthetic lexical symbols owned by
     # their declaration symbol; they reuse the declaration AST index.
     symbols! -> len => declaredSymbolCount
@@ -224,7 +273,7 @@ public collectPrepared nodes: [ast.AstNode; ~] -> [Symbol; ~] {
                 Symbol {
                     kind: 35
                     parent: declarationSymbolIndex!
-                    astNode: declarationSymbol.astNode
+                    astNode: declarationSymbol.flags / 512 % 2 == 1 -> if { parameterTypeNode! } else { declarationSymbol.astNode }
                     nameToken: declarationAst.secondaryToken
                     typeNode: parameterTypeNode!
                     secondaryTypeNode: -1
@@ -251,6 +300,79 @@ public collectPrepared nodes: [ast.AstNode; ~] -> [Symbol; ~] {
             })
         }
         declarationSymbolIndex! + 1 => declarationSymbolIndex!
+    }
+
+    # Source syntax places the first declared input on the method node and
+    # later inputs on AdditionalFunctionInput nodes. A COM receiver becomes the
+    # primary parameter, so rotate the declared inputs into their source order
+    # before appending that receiver: first input, then later inputs.
+    0 => comParameterFunctionIndex!
+    comParameterFunctionIndex! < declaredSymbolCount -> while {
+        symbols![comParameterFunctionIndex!] => comParameterFunction
+        (comParameterFunction.kind == 7
+            and comParameterFunction.flags / 512 % 2 == 1
+            and comParameterFunction.flags / 4096 % 2 == 0
+            and comParameterFunction.flags / 8192 % 2 == 0) -> if {
+            [Int; ~] => comParameterIndexes!
+            -1 => comFirstInputIndex!
+            0 => comParameterSearch!
+            comParameterSearch! < (symbols! -> len) -> while {
+                symbols![comParameterSearch!] => comParameterCandidate
+                (comParameterCandidate.kind == 35 and comParameterCandidate.parent == comParameterFunctionIndex!) -> if {
+                    comParameterIndexes! -> push(comParameterSearch!)
+                    comParameterCandidate.flags / 512 % 2 == 1 -> if { comParameterSearch! => comFirstInputIndex! }
+                }
+                comParameterSearch! + 1 => comParameterSearch!
+            }
+            ((comParameterIndexes! -> len) > 1 and comFirstInputIndex! >= 0 and comParameterIndexes![0] != comFirstInputIndex!) -> if {
+                symbols![comFirstInputIndex!] => comFirstInput
+                (comParameterIndexes! -> len) - 1 => comShiftIndex!
+                comShiftIndex! > 0 -> while {
+                    comParameterIndexes![comShiftIndex!] => comShiftTarget
+                    comParameterIndexes![comShiftIndex! - 1] => comShiftSource
+                    symbols![comShiftSource] => comShiftedParameter
+                    comShiftedParameter => symbols![comShiftTarget]
+                    (comShiftedParameter.astNode >= 0 and comShiftedParameter.astNode < astCount) -> if {
+                        comShiftTarget => astToSymbol![comShiftedParameter.astNode]
+                    }
+                    comShiftIndex! - 1 => comShiftIndex!
+                }
+                comParameterIndexes![0] => comFirstTarget
+                comFirstInput => symbols![comFirstTarget]
+                (comFirstInput.astNode >= 0 and comFirstInput.astNode < astCount) -> if {
+                    comFirstTarget => astToSymbol![comFirstInput.astNode]
+                }
+            }
+        }
+        comParameterFunctionIndex! + 1 => comParameterFunctionIndex!
+    }
+
+    # Every COM method and clone has one implicit readonly interface receiver.
+    # Its type is derived from the parent nominal interface symbol in the type
+    # arena, so no source TypeAnnotation node or hidden source text is needed.
+    symbols! -> len => beforeComReceivers
+    0 => comReceiverFunctionIndex!
+    comReceiverFunctionIndex! < beforeComReceivers -> while {
+        symbols![comReceiverFunctionIndex!] => comReceiverFunction
+        (comReceiverFunction.kind == 7
+            and comReceiverFunction.flags / 512 % 2 == 1
+            and comReceiverFunction.flags / 4096 % 2 == 0
+            and comReceiverFunction.parent >= 0) -> if {
+            symbols![comReceiverFunction.parent] => comReceiverInterface
+            symbols! -> push(Symbol {
+                kind: 35
+                parent: comReceiverFunctionIndex!
+                astNode: comReceiverFunction.astNode
+                nameToken: comReceiverInterface.nameToken
+                typeNode: -1
+                secondaryTypeNode: -1
+                blockNameToken: -1
+                blockTypeNode: -1
+                blockResultTypeNode: -1
+                flags: 512 + 16384
+            })
+        }
+        comReceiverFunctionIndex! + 1 => comReceiverFunctionIndex!
     }
 
     # Each enum arm is a lexical scope. A payload name belongs only to that
