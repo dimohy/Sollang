@@ -1,6 +1,6 @@
 "use client";
 
-import Editor, { BeforeMount } from "@monaco-editor/react";
+import Editor, { BeforeMount, OnMount } from "@monaco-editor/react";
 import {
   Check,
   ChevronDown,
@@ -216,6 +216,52 @@ export default function PlaygroundPage() {
     });
   };
 
+  const onEditorMount: OnMount = editor => {
+    const node = editor.getDomNode();
+    if (!node) return;
+
+    let lastX = 0;
+    let lastY = 0;
+    let isVerticalGesture = false;
+
+    const onTouchStart = (event: TouchEvent) => {
+      if (event.touches.length !== 1) return;
+      lastX = event.touches[0].clientX;
+      lastY = event.touches[0].clientY;
+      isVerticalGesture = false;
+    };
+
+    const onTouchMove = (event: TouchEvent) => {
+      if (event.touches.length !== 1) return;
+      const touch = event.touches[0];
+      const deltaX = lastX - touch.clientX;
+      const deltaY = lastY - touch.clientY;
+      if (!isVerticalGesture && Math.abs(deltaY) <= Math.abs(deltaX)) return;
+
+      isVerticalGesture = true;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+
+      const current = editor.getScrollTop();
+      const maximum = Math.max(0, editor.getScrollHeight() - editor.getLayoutInfo().height);
+      const next = Math.min(maximum, Math.max(0, current + deltaY));
+      editor.setScrollTop(next);
+
+      const pageDelta = deltaY - (next - current);
+      if (pageDelta !== 0) window.scrollBy(0, pageDelta);
+
+      lastX = touch.clientX;
+      lastY = touch.clientY;
+    };
+
+    node.addEventListener("touchstart", onTouchStart, { passive: true, capture: true });
+    node.addEventListener("touchmove", onTouchMove, { passive: false, capture: true });
+    editor.onDidDispose(() => {
+      node.removeEventListener("touchstart", onTouchStart, true);
+      node.removeEventListener("touchmove", onTouchMove, true);
+    });
+  };
+
   const totalTime = result
     ? result.compileMilliseconds + result.executeMilliseconds
     : 0;
@@ -330,6 +376,7 @@ export default function PlaygroundPage() {
                 theme="sollang-night"
                 value={code}
                 beforeMount={beforeMount}
+                onMount={onEditorMount}
                 onChange={value => setCode(value ?? "")}
                 loading={<div className="editor-loading"><LoaderCircle className="spin" /> {text.editorLoading}</div>}
                 options={{
@@ -341,6 +388,7 @@ export default function PlaygroundPage() {
                   padding: { top: 18, bottom: 18 },
                   scrollBeyondLastLine: false,
                   smoothScrolling: true,
+                  scrollbar: { alwaysConsumeMouseWheel: false },
                   automaticLayout: true,
                   tabSize: 4,
                   insertSpaces: true,
