@@ -45,3 +45,4 @@ Invoke-Case 3 "native failure status" @("test", $failureSource, "--target", $Tar
 Invoke-Case 4 "signature validation" @("test", $invalidSource, "--target", $Target, "--llvm", $llvm, "-O1") 1 "must be a non-generic, zero-input, non-intrinsic function returning Bool"
 
 Write-Host "[4/4] 100% native test framework verified for $Target (elapsed $([math]::Round($started.Elapsed.TotalSeconds, 1))s)"
+exit 0

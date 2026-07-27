@@ -366,7 +366,9 @@ internal sealed partial class LlvmEmitter
         {
             return EmitFunctionCall(function, argument: null);
         }
-        throw new SollangException($"unknown runtime binding or zero-argument function '{expression.Name}'");
+        throw new SollangException(
+            $"unknown runtime binding or zero-argument function '{expression.Name}' "
+            + $"while emitting '{_currentFunction?.Name ?? "main"}'");
     }
 
     private RuntimeValue EmitTypeApplicationExpression(TypeApplicationExpression expression)

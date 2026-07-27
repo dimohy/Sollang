@@ -1,0 +1,61 @@
+import sollang.compiler.ir.typed as typedIr
+import sollang.compiler.semantic.calls as calls
+
+# Verifies that a qualified move call is the enum subject of a following when.
+main {
+    [
+        """
+        namespace consumer
+        import sys.path as path
+
+        inspect: -> Int {
+            path.Path { bytes: [UInt8(1), ~], style: path.Style.Posix } => unresolved!
+            0 => status!
+            status! == 0 -> if {
+                unresolved! -> path.normalizeConfined -> when {
+                    Ok(normalized) { Int(normalized.bytes -> len) }
+                    Err(error) { 0 }
+                }
+            }
+            0
+        }
+        """,
+        """
+        namespace sys.path
+
+        public enum Style {
+            Posix
+            Windows
+        }
+
+        public struct Path {
+            bytes: [UInt8; ~]
+            style: Style
+        }
+        """,
+        """
+        namespace sys.path
+
+        public normalizeConfined path: move Path -> Result<Path, Text> {
+            Result<Path, Text>.Ok(path)
+        }
+        """,
+        ~
+    ] => sources!
+    sources! -> calls.resolveModules => resolvedCalls!
+    resolvedCalls! -> each call {
+        (call.sourceModule == 0 and call.targetSourceModule == 2) -> if {
+            "resolved = $(call.status),$(call.functionSymbol)" -> println
+        }
+    }
+    sources! -> typedIr.lower => ir!
+    0 => index!
+    index! < (ir! -> len) -> while {
+        ir![index!] => node
+        (node.sourceModule == 0 and node.kind == 27) -> if {
+            ir![node.operand0] => subject
+            "match = $(subject.kind),$(subject.typeKind),$(subject.targetModule),$(subject.symbol)" -> println
+        }
+        index! + 1 => index!
+    }
+}

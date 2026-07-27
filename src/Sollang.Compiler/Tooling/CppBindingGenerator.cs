@@ -167,12 +167,7 @@ internal static class CppBindingGenerator
             throw Unsupported(qualifiedName, "variadic functions are not ABI-safe");
         }
         var exceptionKind = ClangNative.clang_getCursorExceptionSpecificationType(cursor);
-        if (exceptionKind is not (1 or 4 or 9))
-        {
-            throw Unsupported(
-                qualifiedName,
-                "functions must be declared noexcept so no C++ exception can cross the C ABI");
-        }
+        var isNoexcept = exceptionKind is 1 or 4 or 9;
 
         var result = MapType(
             ClangNative.clang_getCursorResultType(cursor),
@@ -218,7 +213,8 @@ internal static class CppBindingGenerator
             symbol,
             signature,
             result,
-            parameters);
+            parameters,
+            isNoexcept);
     }
 
     private static CppType MapType(
@@ -291,11 +287,20 @@ internal static class CppBindingGenerator
         }
         foreach (var function in resolved)
         {
-            sollang.Append("    ").Append(function.MemberName);
+            sollang.Append("    ");
+            if (!function.IsNoexcept)
+            {
+                sollang.Append("try ");
+            }
+            sollang.Append(function.MemberName);
             if (function.Parameters.Count > 0)
             {
                 sollang.Append(' ').Append(string.Join(", ", function.Parameters.Select(
                     parameter => parameter.Name + ": " + parameter.Type.SollangName)));
+            }
+            else
+            {
+                sollang.Append(':');
             }
             sollang.Append(" -> ").Append(function.Result.SollangName)
                 .Append(" as \"").Append(function.Symbol).AppendLine("\"");
@@ -305,7 +310,7 @@ internal static class CppBindingGenerator
             for (var index = 0; index < cppClass.Constructors.Count; index++)
             {
                 var constructor = cppClass.Constructors[index];
-                sollang.Append("    create").Append(cppClass.Name);
+                sollang.Append("    try create").Append(cppClass.Name);
                 if (index > 0)
                 {
                     sollang.Append(index + 1);
@@ -316,7 +321,12 @@ internal static class CppBindingGenerator
             }
             foreach (var method in cppClass.Methods)
             {
-                sollang.Append("    ").Append(LowerFirst(cppClass.Name))
+                sollang.Append("    ");
+                if (!method.IsNoexcept)
+                {
+                    sollang.Append("try ");
+                }
+                sollang.Append(LowerFirst(cppClass.Name))
                     .Append(UpperFirst(method.Name))
                     .Append(" self: ref ").Append(options.ModuleName).Append('.').Append(cppClass.Name);
                 if (method.Parameters.Count > 0)
@@ -356,19 +366,48 @@ internal static class CppBindingGenerator
         }
         foreach (var function in resolved)
         {
-            shim.Append("SOLLANG_CPP_EXPORT ").Append(function.Result.CppName)
+            shim.Append("SOLLANG_CPP_EXPORT ")
+                .Append(function.IsNoexcept ? function.Result.CppName : "int")
                 .Append(' ').Append(function.Symbol).Append('(')
                 .Append(string.Join(", ", function.Parameters.Select(
-                    parameter => parameter.Type.CppName + " " + parameter.Name)))
-                .AppendLine(") noexcept {");
-            shim.Append("    ");
-            if (function.Result.SollangName != "Unit")
+                    parameter => parameter.Type.CppName + " " + parameter.Name)));
+            if (!function.IsNoexcept && function.Result.SollangName != "Unit")
             {
-                shim.Append("return ");
+                if (function.Parameters.Count > 0)
+                {
+                    shim.Append(", ");
+                }
+                shim.Append(function.Result.CppName).Append("* out");
             }
-            shim.Append("::").Append(function.QualifiedName).Append('(')
-                .Append(string.Join(", ", function.Parameters.Select(parameter => parameter.Name)))
-                .AppendLine(");");
+            shim
+                .AppendLine(") noexcept {");
+            if (!function.IsNoexcept)
+            {
+                shim.AppendLine("    try {");
+                shim.Append("        ");
+                if (function.Result.SollangName != "Unit")
+                {
+                    shim.Append("*out = ");
+                }
+                shim.Append("::").Append(function.QualifiedName).Append('(')
+                    .Append(string.Join(", ", function.Parameters.Select(parameter => parameter.Name)))
+                    .AppendLine(");");
+                shim.AppendLine("        return 0;");
+                shim.AppendLine("    } catch (...) {");
+                shim.AppendLine("        return 1;");
+                shim.AppendLine("    }");
+            }
+            else
+            {
+                shim.Append("    ");
+                if (function.Result.SollangName != "Unit")
+                {
+                    shim.Append("return ");
+                }
+                shim.Append("::").Append(function.QualifiedName).Append('(')
+                    .Append(string.Join(", ", function.Parameters.Select(parameter => parameter.Name)))
+                    .AppendLine(");");
+            }
             shim.AppendLine("}");
             shim.AppendLine();
         }
@@ -376,20 +415,31 @@ internal static class CppBindingGenerator
         {
             foreach (var constructor in cppClass.Constructors)
             {
-                shim.Append("SOLLANG_CPP_EXPORT sollang_handle_").Append(cppClass.Name)
+                shim.Append("SOLLANG_CPP_EXPORT int")
                     .Append(' ').Append(constructor.Symbol).Append('(')
                     .Append(string.Join(", ", constructor.Parameters.Select(
-                        parameter => parameter.Type.CppName + " " + parameter.Name)))
+                        parameter => parameter.Type.CppName + " " + parameter.Name)));
+                if (constructor.Parameters.Count > 0)
+                {
+                    shim.Append(", ");
+                }
+                shim.Append("sollang_handle_").Append(cppClass.Name).Append("* out")
                     .AppendLine(") noexcept {");
-                shim.Append("    return { reinterpret_cast<unsigned long long>(new (std::nothrow) ::")
+                shim.AppendLine("    try {");
+                shim.Append("        out->handle = reinterpret_cast<unsigned long long>(new ::")
                     .Append(cppClass.QualifiedName).Append('(')
                     .Append(string.Join(", ", constructor.Parameters.Select(value => value.Name)))
-                    .AppendLine(")) };");
+                    .AppendLine("));");
+                shim.AppendLine("        return 0;");
+                shim.AppendLine("    } catch (...) {");
+                shim.AppendLine("        return 1;");
+                shim.AppendLine("    }");
                 shim.AppendLine("}");
             }
             foreach (var method in cppClass.Methods)
             {
-                shim.Append("SOLLANG_CPP_EXPORT ").Append(method.Result.CppName)
+                shim.Append("SOLLANG_CPP_EXPORT ")
+                    .Append(method.IsNoexcept ? method.Result.CppName : "int")
                     .Append(' ').Append(method.Symbol)
                     .Append("(const sollang_handle_").Append(cppClass.Name).Append("* self");
                 if (method.Parameters.Count > 0)
@@ -397,11 +447,27 @@ internal static class CppBindingGenerator
                     shim.Append(", ").Append(string.Join(", ", method.Parameters.Select(
                         parameter => parameter.Type.CppName + " " + parameter.Name)));
                 }
-                shim.AppendLine(") noexcept {");
-                shim.Append("    ");
-                if (method.Result.SollangName != "Unit")
+                if (!method.IsNoexcept && method.Result.SollangName != "Unit")
                 {
-                    shim.Append("return ");
+                    shim.Append(", ").Append(method.Result.CppName).Append("* out");
+                }
+                shim.AppendLine(") noexcept {");
+                if (!method.IsNoexcept)
+                {
+                    shim.AppendLine("    try {");
+                    shim.Append("        ");
+                    if (method.Result.SollangName != "Unit")
+                    {
+                        shim.Append("*out = ");
+                    }
+                }
+                else
+                {
+                    shim.Append("    ");
+                    if (method.Result.SollangName != "Unit")
+                    {
+                        shim.Append("return ");
+                    }
                 }
                 shim.Append("reinterpret_cast<");
                 if (method.IsConst)
@@ -412,6 +478,13 @@ internal static class CppBindingGenerator
                     .Append(method.CppName).Append('(')
                     .Append(string.Join(", ", method.Parameters.Select(value => value.Name)))
                     .AppendLine(");");
+                if (!method.IsNoexcept)
+                {
+                    shim.AppendLine("        return 0;");
+                    shim.AppendLine("    } catch (...) {");
+                    shim.AppendLine("        return 1;");
+                    shim.AppendLine("    }");
+                }
                 shim.AppendLine("}");
             }
             shim.Append("SOLLANG_CPP_EXPORT void ").Append(cppClass.DropSymbol)
@@ -434,7 +507,7 @@ internal static class CppBindingGenerator
                 : "lib" + options.ModuleName + "_shim.so");
         var manifest = JsonSerializer.SerializeToUtf8Bytes(
             new CppBindingManifest(
-                2,
+                3,
                 options.ModuleName,
                 options.TargetName,
                 Path.GetFullPath(options.HeaderPath).Replace('\\', '/'),
@@ -446,7 +519,8 @@ internal static class CppBindingGenerator
                     function.MemberName,
                     function.QualifiedName,
                     function.Symbol,
-                    function.Signature))
+                    function.Signature,
+                    function.IsNoexcept ? null : "status-out"))
                     .Concat(classes.SelectMany(cppClass =>
                         cppClass.Constructors.Select((constructor, index) =>
                                 new CppBindingManifestFunction(
@@ -454,7 +528,8 @@ internal static class CppBindingGenerator
                                     cppClass.QualifiedName + "::" + cppClass.Name,
                                     constructor.Symbol,
                                     "owner(" + string.Join(",", constructor.Parameters.Select(
-                                        parameter => parameter.Type.SollangName)) + ")"))
+                                        parameter => parameter.Type.SollangName)) + ")",
+                                    "status-out"))
                             .Concat(cppClass.Methods.Select(method =>
                                 new CppBindingManifestFunction(
                                     LowerFirst(cppClass.Name) + UpperFirst(method.Name),
@@ -463,12 +538,14 @@ internal static class CppBindingGenerator
                                     method.Result.SollangName + "(" + string.Join(
                                         ",",
                                         method.Parameters.Select(parameter =>
-                                            parameter.Type.SollangName)) + ")")))
+                                            parameter.Type.SollangName)) + ")",
+                                    method.IsNoexcept ? null : "status-out")))
                             .Append(new CppBindingManifestFunction(
                                 "__drop" + cppClass.Name,
                                 cppClass.QualifiedName + "::~" + cppClass.Name,
                                 cppClass.DropSymbol,
-                                "drop(owner)"))))
+                                "drop(owner)",
+                                null))))
                     .ToArray()),
             new JsonSerializerOptions
             {
@@ -647,7 +724,8 @@ internal sealed record CppFunction(
     string Symbol,
     string Signature,
     CppType Result,
-    IReadOnlyList<CppParameter> Parameters);
+    IReadOnlyList<CppParameter> Parameters,
+    bool IsNoexcept);
 internal sealed record CppBindingManifest(
     int SchemaVersion,
     string Module,
@@ -661,7 +739,8 @@ internal sealed record CppBindingManifestFunction(
     string Name,
     string CppName,
     string Symbol,
-    string Signature);
+    string Signature,
+    string? ErrorConvention);
 
 internal sealed class NativeUtf8Arguments : IDisposable
 {

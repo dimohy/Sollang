@@ -75,7 +75,6 @@ internal static class CppClassBindingReader
             }
             if (member.Kind == CursorConstructor)
             {
-                EnsureNoexcept(member, qualifiedName + "::" + name);
                 var parameters = ReadParameters(member, options, qualifiedName);
                 constructors.Add(new CppConstructor(
                     parameters,
@@ -87,7 +86,7 @@ internal static class CppClassBindingReader
                 var methodName = ClangNative.ToManagedString(
                     ClangNative.clang_getCursorSpelling(member));
                 var methodQualifiedName = qualifiedName + "::" + methodName;
-                EnsureNoexcept(member, methodQualifiedName);
+                var isNoexcept = IsNoexcept(member);
                 var parameters = ReadParameters(member, options, methodQualifiedName);
                 var result = MapType(
                     ClangNative.clang_getCursorResultType(member),
@@ -100,7 +99,8 @@ internal static class CppClassBindingReader
                     Symbol(qualifiedName, methodName, Signature(result.SollangName, parameters)),
                     result,
                     parameters,
-                    ClangNative.clang_CXXMethod_isConst(member) != 0));
+                    ClangNative.clang_CXXMethod_isConst(member) != 0,
+                    isNoexcept));
             }
             return 1;
         };
@@ -110,7 +110,7 @@ internal static class CppClassBindingReader
         {
             throw Error(
                 qualifiedName,
-                "classes require at least one explicit public noexcept constructor");
+                "classes require at least one explicit public constructor");
         }
         return new CppClass(
             Identifier(name),
@@ -138,15 +138,8 @@ internal static class CppClassBindingReader
         return result;
     }
 
-    private static void EnsureNoexcept(ClangNative.Cursor cursor, string name)
-    {
-        if (ClangNative.clang_getCursorExceptionSpecificationType(cursor) is not (1 or 4 or 9))
-        {
-            throw Error(
-                name,
-                "functions must be declared noexcept so no C++ exception can cross the C ABI");
-        }
-    }
+    private static bool IsNoexcept(ClangNative.Cursor cursor) =>
+        ClangNative.clang_getCursorExceptionSpecificationType(cursor) is 1 or 4 or 9;
 
     private static CppType MapType(
         ClangNative.Type type,
@@ -221,4 +214,5 @@ internal sealed record CppMethod(
     string Symbol,
     CppType Result,
     IReadOnlyList<CppParameter> Parameters,
-    bool IsConst);
+    bool IsConst,
+    bool IsNoexcept);

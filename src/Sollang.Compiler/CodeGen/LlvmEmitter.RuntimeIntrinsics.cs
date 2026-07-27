@@ -623,6 +623,12 @@ internal sealed partial class LlvmEmitter
         }
         var rawBytesField = rawDefinition.Fields.First(field => field.Name == "bytes");
         var rawCountField = rawDefinition.Fields.First(field => field.Name == "count");
+        var entryCountValue = entryCount;
+        if (_platform.PointerBitWidth == 32 && rawCountField.Type == BoundType.UIntSize)
+        {
+            entryCountValue = NextTemp("directory_entry_count_size");
+            EmitAssign(entryCountValue, $"trunc i64 {entryCount} to i32");
+        }
         var rawArray = new RuntimeDynamicInlineArray(
             rawBytesField.Type,
             BoundType.UInt8,
@@ -651,7 +657,7 @@ internal sealed partial class LlvmEmitter
         var rawValue = NextTemp("directory_raw_value");
         EmitAssign(
             rawValue,
-            $"insertvalue {LlvmStructType(resultTypes.Ok)} {rawWithBytes}, {LlvmType(rawCountField.Type)} {entryCount}, {rawCountField.Index.ToString(CultureInfo.InvariantCulture)}");
+            $"insertvalue {LlvmStructType(resultTypes.Ok)} {rawWithBytes}, {LlvmType(rawCountField.Type)} {entryCountValue}, {rawCountField.Index.ToString(CultureInfo.InvariantCulture)}");
         var success = EmitEnumValue(
             function.ReturnType,
             okVariant,

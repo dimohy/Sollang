@@ -53,6 +53,8 @@ static const Guid clsid_calculator =
     {0x8A90E2A5u, 0x7A2Du, 0x4E2Au, {0x98u, 0xA0u, 0x6Bu, 0x5Cu, 0x2Au, 0x12u, 0xC5u, 0x01u}};
 static const Guid iid_calculator =
     {0x4C10A47Bu, 0x725Du, 0x41D3u, {0xB5u, 0xA6u, 0x70u, 0xD6u, 0x7Du, 0x3Bu, 0xEBu, 0x11u}};
+static const Guid iid_arithmetic =
+    {0xB214A96Du, 0x58CFu, 0x4311u, {0xA2u, 0x9Bu, 0x6Du, 0xF8u, 0x50u, 0x80u, 0x1Cu, 0x74u}};
 static const Guid iid_unknown =
     {0x00000000u, 0x0000u, 0x0000u, {0xC0u, 0x00u, 0x00u, 0x00u, 0x00u, 0x00u, 0x00u, 0x46u}};
 static const Guid iid_class_factory =
@@ -89,7 +91,9 @@ static int32_t calculator_query_interface(Calculator *self, const Guid *iid, voi
         return E_POINTER;
     }
     *result = 0;
-    if (!guid_equal(iid, &iid_unknown) && !guid_equal(iid, &iid_calculator))
+    if (!guid_equal(iid, &iid_unknown)
+        && !guid_equal(iid, &iid_calculator)
+        && !guid_equal(iid, &iid_arithmetic))
     {
         return E_NOINTERFACE;
     }

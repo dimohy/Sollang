@@ -65,6 +65,32 @@ public emitWindowsComRuntime includeLoaderDeclarations: Bool -> Unit uses Consol
       %references = call i32 %add_ref(ptr %instance)
       ret ptr %instance
     }
+    define internal { ptr, i32 } @sollang_com_query(ptr %instance, ptr %iid) {
+    entry:
+      %output = alloca ptr, align 8
+      store ptr null, ptr %output, align 8
+      %query = call ptr @sollang_com_vtable_target(ptr %instance, i64 0)
+      %status = call i32 %query(ptr %instance, ptr %iid, ptr %output)
+      %value = load ptr, ptr %output, align 8
+      %status_ok = icmp sge i32 %status, 0
+      %value_ok = icmp ne ptr %value, null
+      %ok = and i1 %status_ok, %value_ok
+      br i1 %ok, label %done, label %failure
+    failure:
+      br i1 %value_ok, label %release_failure, label %failed
+    release_failure:
+      call void @sollang_com_release(ptr %value)
+      br label %failed
+    failed:
+      %effective_status = select i1 %status_ok, i32 -2147467261, i32 %status
+      br label %done
+    done:
+      %result_pointer = phi ptr [ %value, %entry ], [ null, %failed ]
+      %result_status = phi i32 [ %status, %entry ], [ %effective_status, %failed ]
+      %with_instance = insertvalue { ptr, i32 } poison, ptr %result_pointer, 0
+      %result = insertvalue { ptr, i32 } %with_instance, i32 %result_status, 1
+      ret { ptr, i32 } %result
+    }
     define internal void @sollang_com_release(ptr %instance) {
     entry:
       %present = icmp ne ptr %instance, null

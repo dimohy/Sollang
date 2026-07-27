@@ -394,7 +394,7 @@ export default function PlaygroundPage() {
       </section>
 
       <footer>
-        <span>Sollang 0.2.260725 · Apache-2.0</span>
+        <span>Sollang 0.3.260727 · Apache-2.0</span>
         <span>{text.footer}</span>
       </footer>
     </main>

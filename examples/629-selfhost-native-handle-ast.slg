@@ -1,0 +1,30 @@
+import sollang.compiler.ast as ast
+import sollang.compiler.lexer as lexer
+import sollang.compiler.parser as parser
+
+main {
+    """
+    native handleFixture from "handle_fixture" {
+        handle Counter drop "counter_drop"
+        create initial: Int32 -> handleFixture.Counter as "counter_create"
+    }
+
+    main {
+    }
+    """ => source
+    source -> ast.lower => nodes!
+    source -> lexer.lex => tokens!
+    source -> parser.parseEvents => events!
+    events! -> len => eventCount
+    events![eventCount - 1] => outcome
+    "accepted = $(outcome.value)" -> println
+    nodes! -> each node {
+        node.kind == 68 -> if {
+            tokens![node.payloadToken] => nameToken
+            tokens![node.secondaryToken] => dropToken
+            source -> slice(nameToken.span.start, nameToken.span.length) => name
+            source -> slice(dropToken.span.start, dropToken.span.length) => drop
+            "handle = $name,$drop,$(node.flags),$(nodes![node.parent].kind)" -> println
+        }
+    }
+}

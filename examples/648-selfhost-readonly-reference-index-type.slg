@@ -1,0 +1,39 @@
+import sollang.compiler.ir.typed as typedIr
+import sollang.compiler.semantic.context as semanticContext
+
+main {
+    [
+        """
+        struct Node {
+            value: Int
+        }
+
+        struct NodeContext {
+            nodes: [Node; ~]
+        }
+
+        readAt context: ref NodeContext, index: Int -> Int {
+            context.nodes[index] => node
+            node.value
+        }
+
+        main {
+        }
+        """,
+        ~
+    ] => sources!
+
+    sources! -> semanticContext.prepare => prepared
+    prepared -> typedIr.lowerContext => ir!
+    false => indexTyped!
+    0 => irIndex!
+    irIndex! < (ir! -> len) -> while {
+        ir![irIndex!] => node
+        (node.kind == 15 and node.typeOrigin == 0 and node.typeModule == 0 and node.typeId >= 0) -> if {
+            true => indexTyped!
+        }
+        irIndex! + 1 => irIndex!
+    }
+    "readonly ref index typed = " -> print
+    indexTyped! -> if { "true" -> println } else { "false" -> println }
+}

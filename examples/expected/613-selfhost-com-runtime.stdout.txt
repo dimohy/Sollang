@@ -203,6 +203,32 @@ entry:
   %references = call i32 %add_ref(ptr %instance)
   ret ptr %instance
 }
+define internal { ptr, i32 } @sollang_com_query(ptr %instance, ptr %iid) {
+entry:
+  %output = alloca ptr, align 8
+  store ptr null, ptr %output, align 8
+  %query = call ptr @sollang_com_vtable_target(ptr %instance, i64 0)
+  %status = call i32 %query(ptr %instance, ptr %iid, ptr %output)
+  %value = load ptr, ptr %output, align 8
+  %status_ok = icmp sge i32 %status, 0
+  %value_ok = icmp ne ptr %value, null
+  %ok = and i1 %status_ok, %value_ok
+  br i1 %ok, label %done, label %failure
+failure:
+  br i1 %value_ok, label %release_failure, label %failed
+release_failure:
+  call void @sollang_com_release(ptr %value)
+  br label %failed
+failed:
+  %effective_status = select i1 %status_ok, i32 -2147467261, i32 %status
+  br label %done
+done:
+  %result_pointer = phi ptr [ %value, %entry ], [ null, %failed ]
+  %result_status = phi i32 [ %status, %entry ], [ %effective_status, %failed ]
+  %with_instance = insertvalue { ptr, i32 } poison, ptr %result_pointer, 0
+  %result = insertvalue { ptr, i32 } %with_instance, i32 %result_status, 1
+  ret { ptr, i32 } %result
+}
 define internal void @sollang_com_release(ptr %instance) {
 entry:
   %present = icmp ne ptr %instance, null
@@ -271,13 +297,17 @@ done:
   ret { ptr, ptr, i32 } %result
 }
 %sollang.enum.t27 = type { i32, [1 x i64] }
-%sollang.enum.t28 = type { i32, [1 x i64] }
+%sollang.enum.t29 = type { i32, [1 x i64] }
+%sollang.enum.t31 = type { i32, [1 x i64] }
+%sollang.enum.t32 = type { i32, [1 x i64] }
+@sollang_com_iid_m0_s0 = private constant { i32, i16, i16, [8 x i8] } { i32 1276159099, i16 29277, i16 16851, [8 x i8] [i8 181, i8 166, i8 112, i8 214, i8 125, i8 59, i8 235, i8 17] }
+@sollang_com_iid_m0_s3 = private constant { i32, i16, i16, [8 x i8] } { i32 2987698541, i16 22735, i16 17169, [8 x i8] [i8 162, i8 155, i8 109, i8 248, i8 80, i8 128, i8 28, i8 116] }
+@sollang_com_iid_m0_s6 = private constant { i32, i16, i16, [8 x i8] } { i32 1282334799, i16 47818, i16 19943, [8 x i8] [i8 145, i8 238, i8 234, i8 86, i8 204, i8 151, i8 209, i8 10] }
 @sollang_com_server_name_m0_a1 = private unnamed_addr constant [38 x i8] c"artifacts/com-interop/com_fixture.dll\00"
 @sollang_com_server_m0_a1 = internal global ptr null, align 8
 @sollang_com_factory_m0_a1 = internal global ptr null, align 8
 @sollang_com_clsid_m0_a1 = private constant { i32, i16, i16, [8 x i8] } { i32 2324751013, i16 31277, i16 20010, [8 x i8] [i8 152, i8 160, i8 107, i8 92, i8 42, i8 18, i8 197, i8 1] }
-@sollang_com_iid_m0_s0 = private constant { i32, i16, i16, [8 x i8] } { i32 1276159099, i16 29277, i16 16851, [8 x i8] [i8 181, i8 166, i8 112, i8 214, i8 125, i8 59, i8 235, i8 17] }
-define internal %sollang.enum.t27 @sollang_m0_s9() {
+define internal %sollang.enum.t27 @sollang_m0_s19() {
 entry:
   %factory = load ptr, ptr @sollang_com_factory_m0_a1, align 8
   %raw = call { ptr, i32 } @sollang_com_activate_factory(ptr %factory, ptr @sollang_com_iid_m0_s0)
@@ -305,59 +335,258 @@ done:
   %result = load %sollang.enum.t27, ptr %result_slot, align 8
   ret %sollang.enum.t27 %result
 }
-define internal ptr @sollang_m0_s10(ptr %arg) {
+define internal ptr @sollang_m0_s20(ptr %arg) {
 entry:
   %result = call ptr @sollang_com_clone(ptr %arg)
   ret ptr %result
 }
-define internal %sollang.enum.t28 @sollang_m0_s1(ptr %arg, i32 %arg1, i32 %arg2) {
+define internal ptr @sollang_m0_s23(ptr %arg) {
+entry:
+  %result = call ptr @sollang_com_clone(ptr %arg)
+  ret ptr %result
+}
+define internal ptr @sollang_m0_s26(ptr %arg) {
+entry:
+  %result = call ptr @sollang_com_clone(ptr %arg)
+  ret ptr %result
+}
+define internal %sollang.enum.t29 @sollang_m0_s21(ptr %arg) {
+entry:
+  %raw = call { ptr, i32 } @sollang_com_query(ptr %arg, ptr @sollang_com_iid_m0_s3)
+  %instance = extractvalue { ptr, i32 } %raw, 0
+  %status = extractvalue { ptr, i32 } %raw, 1
+  %status_ok = icmp sge i32 %status, 0
+  %pointer_ok = icmp ne ptr %instance, null
+  %ok = and i1 %status_ok, %pointer_ok
+  %result_slot = alloca %sollang.enum.t29, align 8
+  store %sollang.enum.t29 zeroinitializer, ptr %result_slot, align 8
+  br i1 %ok, label %success, label %failure
+success:
+  %success_tag = getelementptr %sollang.enum.t29, ptr %result_slot, i32 0, i32 0
+  store i32 0, ptr %success_tag, align 4
+  %success_payload = getelementptr %sollang.enum.t29, ptr %result_slot, i32 0, i32 1
+  store ptr %instance, ptr %success_payload, align 8
+  br label %done
+failure:
+  %failure_tag = getelementptr %sollang.enum.t29, ptr %result_slot, i32 0, i32 0
+  store i32 1, ptr %failure_tag, align 4
+  %failure_payload = getelementptr %sollang.enum.t29, ptr %result_slot, i32 0, i32 1
+  store i32 %status, ptr %failure_payload, align 4
+  br label %done
+done:
+  %result = load %sollang.enum.t29, ptr %result_slot, align 8
+  ret %sollang.enum.t29 %result
+}
+define internal %sollang.enum.t31 @sollang_m0_s22(ptr %arg) {
+entry:
+  %raw = call { ptr, i32 } @sollang_com_query(ptr %arg, ptr @sollang_com_iid_m0_s6)
+  %instance = extractvalue { ptr, i32 } %raw, 0
+  %status = extractvalue { ptr, i32 } %raw, 1
+  %status_ok = icmp sge i32 %status, 0
+  %pointer_ok = icmp ne ptr %instance, null
+  %ok = and i1 %status_ok, %pointer_ok
+  %result_slot = alloca %sollang.enum.t31, align 8
+  store %sollang.enum.t31 zeroinitializer, ptr %result_slot, align 8
+  br i1 %ok, label %success, label %failure
+success:
+  %success_tag = getelementptr %sollang.enum.t31, ptr %result_slot, i32 0, i32 0
+  store i32 0, ptr %success_tag, align 4
+  %success_payload = getelementptr %sollang.enum.t31, ptr %result_slot, i32 0, i32 1
+  store ptr %instance, ptr %success_payload, align 8
+  br label %done
+failure:
+  %failure_tag = getelementptr %sollang.enum.t31, ptr %result_slot, i32 0, i32 0
+  store i32 1, ptr %failure_tag, align 4
+  %failure_payload = getelementptr %sollang.enum.t31, ptr %result_slot, i32 0, i32 1
+  store i32 %status, ptr %failure_payload, align 4
+  br label %done
+done:
+  %result = load %sollang.enum.t31, ptr %result_slot, align 8
+  ret %sollang.enum.t31 %result
+}
+define internal %sollang.enum.t27 @sollang_m0_s24(ptr %arg) {
+entry:
+  %raw = call { ptr, i32 } @sollang_com_query(ptr %arg, ptr @sollang_com_iid_m0_s0)
+  %instance = extractvalue { ptr, i32 } %raw, 0
+  %status = extractvalue { ptr, i32 } %raw, 1
+  %status_ok = icmp sge i32 %status, 0
+  %pointer_ok = icmp ne ptr %instance, null
+  %ok = and i1 %status_ok, %pointer_ok
+  %result_slot = alloca %sollang.enum.t27, align 8
+  store %sollang.enum.t27 zeroinitializer, ptr %result_slot, align 8
+  br i1 %ok, label %success, label %failure
+success:
+  %success_tag = getelementptr %sollang.enum.t27, ptr %result_slot, i32 0, i32 0
+  store i32 0, ptr %success_tag, align 4
+  %success_payload = getelementptr %sollang.enum.t27, ptr %result_slot, i32 0, i32 1
+  store ptr %instance, ptr %success_payload, align 8
+  br label %done
+failure:
+  %failure_tag = getelementptr %sollang.enum.t27, ptr %result_slot, i32 0, i32 0
+  store i32 1, ptr %failure_tag, align 4
+  %failure_payload = getelementptr %sollang.enum.t27, ptr %result_slot, i32 0, i32 1
+  store i32 %status, ptr %failure_payload, align 4
+  br label %done
+done:
+  %result = load %sollang.enum.t27, ptr %result_slot, align 8
+  ret %sollang.enum.t27 %result
+}
+define internal %sollang.enum.t31 @sollang_m0_s25(ptr %arg) {
+entry:
+  %raw = call { ptr, i32 } @sollang_com_query(ptr %arg, ptr @sollang_com_iid_m0_s6)
+  %instance = extractvalue { ptr, i32 } %raw, 0
+  %status = extractvalue { ptr, i32 } %raw, 1
+  %status_ok = icmp sge i32 %status, 0
+  %pointer_ok = icmp ne ptr %instance, null
+  %ok = and i1 %status_ok, %pointer_ok
+  %result_slot = alloca %sollang.enum.t31, align 8
+  store %sollang.enum.t31 zeroinitializer, ptr %result_slot, align 8
+  br i1 %ok, label %success, label %failure
+success:
+  %success_tag = getelementptr %sollang.enum.t31, ptr %result_slot, i32 0, i32 0
+  store i32 0, ptr %success_tag, align 4
+  %success_payload = getelementptr %sollang.enum.t31, ptr %result_slot, i32 0, i32 1
+  store ptr %instance, ptr %success_payload, align 8
+  br label %done
+failure:
+  %failure_tag = getelementptr %sollang.enum.t31, ptr %result_slot, i32 0, i32 0
+  store i32 1, ptr %failure_tag, align 4
+  %failure_payload = getelementptr %sollang.enum.t31, ptr %result_slot, i32 0, i32 1
+  store i32 %status, ptr %failure_payload, align 4
+  br label %done
+done:
+  %result = load %sollang.enum.t31, ptr %result_slot, align 8
+  ret %sollang.enum.t31 %result
+}
+define internal %sollang.enum.t27 @sollang_m0_s27(ptr %arg) {
+entry:
+  %raw = call { ptr, i32 } @sollang_com_query(ptr %arg, ptr @sollang_com_iid_m0_s0)
+  %instance = extractvalue { ptr, i32 } %raw, 0
+  %status = extractvalue { ptr, i32 } %raw, 1
+  %status_ok = icmp sge i32 %status, 0
+  %pointer_ok = icmp ne ptr %instance, null
+  %ok = and i1 %status_ok, %pointer_ok
+  %result_slot = alloca %sollang.enum.t27, align 8
+  store %sollang.enum.t27 zeroinitializer, ptr %result_slot, align 8
+  br i1 %ok, label %success, label %failure
+success:
+  %success_tag = getelementptr %sollang.enum.t27, ptr %result_slot, i32 0, i32 0
+  store i32 0, ptr %success_tag, align 4
+  %success_payload = getelementptr %sollang.enum.t27, ptr %result_slot, i32 0, i32 1
+  store ptr %instance, ptr %success_payload, align 8
+  br label %done
+failure:
+  %failure_tag = getelementptr %sollang.enum.t27, ptr %result_slot, i32 0, i32 0
+  store i32 1, ptr %failure_tag, align 4
+  %failure_payload = getelementptr %sollang.enum.t27, ptr %result_slot, i32 0, i32 1
+  store i32 %status, ptr %failure_payload, align 4
+  br label %done
+done:
+  %result = load %sollang.enum.t27, ptr %result_slot, align 8
+  ret %sollang.enum.t27 %result
+}
+define internal %sollang.enum.t29 @sollang_m0_s28(ptr %arg) {
+entry:
+  %raw = call { ptr, i32 } @sollang_com_query(ptr %arg, ptr @sollang_com_iid_m0_s3)
+  %instance = extractvalue { ptr, i32 } %raw, 0
+  %status = extractvalue { ptr, i32 } %raw, 1
+  %status_ok = icmp sge i32 %status, 0
+  %pointer_ok = icmp ne ptr %instance, null
+  %ok = and i1 %status_ok, %pointer_ok
+  %result_slot = alloca %sollang.enum.t29, align 8
+  store %sollang.enum.t29 zeroinitializer, ptr %result_slot, align 8
+  br i1 %ok, label %success, label %failure
+success:
+  %success_tag = getelementptr %sollang.enum.t29, ptr %result_slot, i32 0, i32 0
+  store i32 0, ptr %success_tag, align 4
+  %success_payload = getelementptr %sollang.enum.t29, ptr %result_slot, i32 0, i32 1
+  store ptr %instance, ptr %success_payload, align 8
+  br label %done
+failure:
+  %failure_tag = getelementptr %sollang.enum.t29, ptr %result_slot, i32 0, i32 0
+  store i32 1, ptr %failure_tag, align 4
+  %failure_payload = getelementptr %sollang.enum.t29, ptr %result_slot, i32 0, i32 1
+  store i32 %status, ptr %failure_payload, align 4
+  br label %done
+done:
+  %result = load %sollang.enum.t29, ptr %result_slot, align 8
+  ret %sollang.enum.t29 %result
+}
+define internal %sollang.enum.t32 @sollang_m0_s1(ptr %arg, i32 %arg1, i32 %arg2) {
 entry:
   %target = call ptr @sollang_com_vtable_target(ptr %arg, i64 3)
   %output = alloca i32, align 4
   store i32 zeroinitializer, ptr %output, align 4
   %status = call i32 %target(ptr %arg, i32 %arg1, i32 %arg2, ptr %output)
   %ok = icmp sge i32 %status, 0
-  %result_slot = alloca %sollang.enum.t28, align 8
-  store %sollang.enum.t28 zeroinitializer, ptr %result_slot, align 8
+  %result_slot = alloca %sollang.enum.t32, align 8
+  store %sollang.enum.t32 zeroinitializer, ptr %result_slot, align 8
   br i1 %ok, label %success, label %failure
 success:
-  %success_tag = getelementptr %sollang.enum.t28, ptr %result_slot, i32 0, i32 0
+  %success_tag = getelementptr %sollang.enum.t32, ptr %result_slot, i32 0, i32 0
   store i32 0, ptr %success_tag, align 4
   %value = load i32, ptr %output, align 4
-  %success_payload = getelementptr %sollang.enum.t28, ptr %result_slot, i32 0, i32 1
+  %success_payload = getelementptr %sollang.enum.t32, ptr %result_slot, i32 0, i32 1
   store i32 %value, ptr %success_payload, align 4
   br label %done
 failure:
-  %failure_tag = getelementptr %sollang.enum.t28, ptr %result_slot, i32 0, i32 0
+  %failure_tag = getelementptr %sollang.enum.t32, ptr %result_slot, i32 0, i32 0
   store i32 1, ptr %failure_tag, align 4
-  %failure_payload = getelementptr %sollang.enum.t28, ptr %result_slot, i32 0, i32 1
+  %failure_payload = getelementptr %sollang.enum.t32, ptr %result_slot, i32 0, i32 1
   store i32 %status, ptr %failure_payload, align 4
   br label %done
 done:
-  %result = load %sollang.enum.t28, ptr %result_slot, align 8
-  ret %sollang.enum.t28 %result
+  %result = load %sollang.enum.t32, ptr %result_slot, align 8
+  ret %sollang.enum.t32 %result
+}
+define internal %sollang.enum.t32 @sollang_m0_s4(ptr %arg, i32 %arg1, i32 %arg2) {
+entry:
+  %target = call ptr @sollang_com_vtable_target(ptr %arg, i64 3)
+  %output = alloca i32, align 4
+  store i32 zeroinitializer, ptr %output, align 4
+  %status = call i32 %target(ptr %arg, i32 %arg1, i32 %arg2, ptr %output)
+  %ok = icmp sge i32 %status, 0
+  %result_slot = alloca %sollang.enum.t32, align 8
+  store %sollang.enum.t32 zeroinitializer, ptr %result_slot, align 8
+  br i1 %ok, label %success, label %failure
+success:
+  %success_tag = getelementptr %sollang.enum.t32, ptr %result_slot, i32 0, i32 0
+  store i32 0, ptr %success_tag, align 4
+  %value = load i32, ptr %output, align 4
+  %success_payload = getelementptr %sollang.enum.t32, ptr %result_slot, i32 0, i32 1
+  store i32 %value, ptr %success_payload, align 4
+  br label %done
+failure:
+  %failure_tag = getelementptr %sollang.enum.t32, ptr %result_slot, i32 0, i32 0
+  store i32 1, ptr %failure_tag, align 4
+  %failure_payload = getelementptr %sollang.enum.t32, ptr %result_slot, i32 0, i32 1
+  store i32 %status, ptr %failure_payload, align 4
+  br label %done
+done:
+  %result = load %sollang.enum.t32, ptr %result_slot, align 8
+  ret %sollang.enum.t32 %result
 }
 define internal void @sollang_com_init() {
 entry:
   %apartment_status = call i32 @CoInitializeEx(ptr null, i32 4)
   call void @sollang_com_require_status(i32 %apartment_status)
-  %binding8 = call { ptr, ptr, i32 } @sollang_com_bind_factory(ptr @sollang_com_server_name_m0_a1, ptr @sollang_com_clsid_m0_a1)
-  %server8 = extractvalue { ptr, ptr, i32 } %binding8, 0
-  %factory8 = extractvalue { ptr, ptr, i32 } %binding8, 1
-  %status8 = extractvalue { ptr, ptr, i32 } %binding8, 2
-  call void @sollang_com_require_status(i32 %status8)
-  call void @sollang_com_require_pointer(ptr %server8)
-  call void @sollang_com_require_pointer(ptr %factory8)
-  store ptr %server8, ptr @sollang_com_server_m0_a1, align 8
-  store ptr %factory8, ptr @sollang_com_factory_m0_a1, align 8
+  %binding13 = call { ptr, ptr, i32 } @sollang_com_bind_factory(ptr @sollang_com_server_name_m0_a1, ptr @sollang_com_clsid_m0_a1)
+  %server13 = extractvalue { ptr, ptr, i32 } %binding13, 0
+  %factory13 = extractvalue { ptr, ptr, i32 } %binding13, 1
+  %status13 = extractvalue { ptr, ptr, i32 } %binding13, 2
+  call void @sollang_com_require_status(i32 %status13)
+  call void @sollang_com_require_pointer(ptr %server13)
+  call void @sollang_com_require_pointer(ptr %factory13)
+  store ptr %server13, ptr @sollang_com_server_m0_a1, align 8
+  store ptr %factory13, ptr @sollang_com_factory_m0_a1, align 8
   ret void
 }
 define internal void @sollang_com_cleanup() {
 entry:
-  %factory8 = load ptr, ptr @sollang_com_factory_m0_a1, align 8
-  call void @sollang_com_release(ptr %factory8)
-  %server8 = load ptr, ptr @sollang_com_server_m0_a1, align 8
-  %closed8 = call i32 @FreeLibrary(ptr %server8)
+  %factory13 = load ptr, ptr @sollang_com_factory_m0_a1, align 8
+  call void @sollang_com_release(ptr %factory13)
+  %server13 = load ptr, ptr @sollang_com_server_m0_a1, align 8
+  %closed13 = call i32 @FreeLibrary(ptr %server13)
   call void @CoUninitialize()
   ret void
 }
@@ -383,14 +612,58 @@ tag1:
 done:
   ret void
 }
+define internal void @sollang_drop_t28(ptr %value) {
+entry:
+  call void @sollang_com_release(ptr %value)
+  ret void
+}
+define internal void @sollang_drop_t29(%sollang.enum.t29 %value) {
+entry:
+  %slot = alloca %sollang.enum.t29, align 8
+  store %sollang.enum.t29 %value, ptr %slot, align 8
+  %tag = extractvalue %sollang.enum.t29 %value, 0
+  %payload = getelementptr inbounds %sollang.enum.t29, ptr %slot, i32 0, i32 1
+  %is0 = icmp eq i32 %tag, 0
+  br i1 %is0, label %tag0, label %tag1
+tag0:
+  %first = load ptr, ptr %payload, align 8
+  call void @sollang_drop_t28(ptr %first)
+  br label %done
+tag1:
+  br label %done
+done:
+  ret void
+}
+define internal void @sollang_drop_t30(ptr %value) {
+entry:
+  call void @sollang_com_release(ptr %value)
+  ret void
+}
+define internal void @sollang_drop_t31(%sollang.enum.t31 %value) {
+entry:
+  %slot = alloca %sollang.enum.t31, align 8
+  store %sollang.enum.t31 %value, ptr %slot, align 8
+  %tag = extractvalue %sollang.enum.t31 %value, 0
+  %payload = getelementptr inbounds %sollang.enum.t31, ptr %slot, i32 0, i32 1
+  %is0 = icmp eq i32 %tag, 0
+  br i1 %is0, label %tag0, label %tag1
+tag0:
+  %first = load ptr, ptr %payload, align 8
+  call void @sollang_drop_t30(ptr %first)
+  br label %done
+tag1:
+  br label %done
+done:
+  ret void
+}
 declare void @llvm.trap()
 declare dllimport ptr @LoadLibraryA(ptr)
 declare dllimport ptr @GetProcAddress(ptr, ptr)
 declare dllimport i32 @FreeLibrary(ptr)
-@sollang_native_library_name_m0_a16 = private unnamed_addr constant [38 x i8] c"artifacts/com-interop/com_fixture.dll\00"
-@sollang_native_library_m0_a16 = internal global ptr null, align 8
-@sollang_native_symbol_name_m0_s3 = private unnamed_addr constant [34 x i8] c"com_fixture_live_references_after\00"
-@sollang_native_function_m0_s3 = internal global ptr null, align 8
+@sollang_native_library_name_m0_a31 = private unnamed_addr constant [38 x i8] c"artifacts/com-interop/com_fixture.dll\00"
+@sollang_native_library_m0_a31 = internal global ptr null, align 8
+@sollang_native_symbol_name_m0_s7 = private unnamed_addr constant [34 x i8] c"com_fixture_live_references_after\00"
+@sollang_native_function_m0_s7 = internal global ptr null, align 8
 define internal ptr @sollang_native_require(ptr %value) {
 entry:
   %found = icmp ne ptr %value, null
@@ -403,19 +676,19 @@ done:
 }
 define internal void @sollang_native_init() {
 entry:
-  %native_library_raw_m0_a16 = call ptr @LoadLibraryA(ptr @sollang_native_library_name_m0_a16)
-  %native_library_checked_m0_a16 = call ptr @sollang_native_require(ptr %native_library_raw_m0_a16)
-  store ptr %native_library_checked_m0_a16, ptr @sollang_native_library_m0_a16, align 8
-  %native_library_m0_s3 = load ptr, ptr @sollang_native_library_m0_a16, align 8
-  %native_symbol_raw_m0_s3 = call ptr @GetProcAddress(ptr %native_library_m0_s3, ptr @sollang_native_symbol_name_m0_s3)
-  %native_symbol_checked_m0_s3 = call ptr @sollang_native_require(ptr %native_symbol_raw_m0_s3)
-  store ptr %native_symbol_checked_m0_s3, ptr @sollang_native_function_m0_s3, align 8
+  %native_library_raw_m0_a31 = call ptr @LoadLibraryA(ptr @sollang_native_library_name_m0_a31)
+  %native_library_checked_m0_a31 = call ptr @sollang_native_require(ptr %native_library_raw_m0_a31)
+  store ptr %native_library_checked_m0_a31, ptr @sollang_native_library_m0_a31, align 8
+  %native_library_m0_s7 = load ptr, ptr @sollang_native_library_m0_a31, align 8
+  %native_symbol_raw_m0_s7 = call ptr @GetProcAddress(ptr %native_library_m0_s7, ptr @sollang_native_symbol_name_m0_s7)
+  %native_symbol_checked_m0_s7 = call ptr @sollang_native_require(ptr %native_symbol_raw_m0_s7)
+  store ptr %native_symbol_checked_m0_s7, ptr @sollang_native_function_m0_s7, align 8
   ret void
 }
 define internal void @sollang_native_cleanup() {
 entry:
-  %native_close_handle_m0_a16 = load ptr, ptr @sollang_native_library_m0_a16, align 8
-  %native_closed_m0_a16 = call i32 @FreeLibrary(ptr %native_close_handle_m0_a16)
+  %native_close_handle_m0_a31 = load ptr, ptr @sollang_native_library_m0_a31, align 8
+  %native_closed_m0_a31 = call i32 @FreeLibrary(ptr %native_close_handle_m0_a31)
   ret void
 }
 %sollang.text = type { ptr, i64 }
@@ -423,65 +696,126 @@ define i32 @main() {
 entry:
   call void @sollang_native_init()
   call void @sollang_com_init()
-  %v15 = call %sollang.enum.t27 @sollang_m0_s9()
-  %v16_tag = extractvalue %sollang.enum.t27 %v15, 0
-  %v16_subject_slot = alloca %sollang.enum.t27, align 8
-  store %sollang.enum.t27 %v15, ptr %v16_subject_slot, align 8
-  %v16_result = alloca i32, align 4
-  %v16_is_arm0 = icmp eq i32 %v16_tag, 0
-  br i1 %v16_is_arm0, label %match16_arm0, label %match16_next0
-match16_arm0:
-  %v16_arm0_payload = getelementptr inbounds %sollang.enum.t27, ptr %v16_subject_slot, i32 0, i32 1
-  %v18 = load ptr, ptr %v16_arm0_payload, align 8
-  %v19 = freeze ptr %v18
-  %v35 = call %sollang.enum.t28 @sollang_m0_s1(ptr %v19, i32 20, i32 22)
-  %v22_tag = extractvalue %sollang.enum.t28 %v35, 0
-  %v22_subject_slot = alloca %sollang.enum.t28, align 8
-  store %sollang.enum.t28 %v35, ptr %v22_subject_slot, align 8
-  %v22_result = alloca i32, align 4
-  %v22_is_arm0 = icmp eq i32 %v22_tag, 0
-  br i1 %v22_is_arm0, label %match22_arm0, label %match22_next0
-match22_arm0:
-  %v22_arm0_payload = getelementptr inbounds %sollang.enum.t28, ptr %v22_subject_slot, i32 0, i32 1
-  %v24 = load i32, ptr %v22_arm0_payload, align 4
-  %v25 = freeze i32 %v24
-  store i32 %v25, ptr %v22_result, align 4
-  br label %match22_merge
-match22_next0:
-  %v22_is_arm1 = icmp eq i32 %v22_tag, 1
-  br i1 %v22_is_arm1, label %match22_arm1, label %match22_next1
-match22_arm1:
-  %v22_arm1_payload = getelementptr inbounds %sollang.enum.t28, ptr %v22_subject_slot, i32 0, i32 1
-  %v27 = load i32, ptr %v22_arm1_payload, align 4
-  %v28 = freeze i32 %v27
-  store i32 %v28, ptr %v22_result, align 4
-  br label %match22_merge
-match22_next1:
+  %v46 = call %sollang.enum.t27 @sollang_m0_s19()
+  %v47_tag = extractvalue %sollang.enum.t27 %v46, 0
+  %v47_subject_slot = alloca %sollang.enum.t27, align 8
+  store %sollang.enum.t27 %v46, ptr %v47_subject_slot, align 8
+  %v47_result = alloca i32, align 4
+  %v47_is_arm0 = icmp eq i32 %v47_tag, 0
+  br i1 %v47_is_arm0, label %match47_arm0, label %match47_next0
+match47_arm0:
+  %v47_arm0_payload = getelementptr inbounds %sollang.enum.t27, ptr %v47_subject_slot, i32 0, i32 1
+  %v49 = load ptr, ptr %v47_arm0_payload, align 8
+  %v51 = freeze ptr %v49
+  %v87 = call %sollang.enum.t29 @sollang_m0_s21(ptr %v51)
+  %v52_tag = extractvalue %sollang.enum.t29 %v87, 0
+  %v52_subject_slot = alloca %sollang.enum.t29, align 8
+  store %sollang.enum.t29 %v87, ptr %v52_subject_slot, align 8
+  %v52_result = alloca i32, align 4
+  %v52_is_arm0 = icmp eq i32 %v52_tag, 0
+  br i1 %v52_is_arm0, label %match52_arm0, label %match52_next0
+match52_arm0:
+  %v52_arm0_payload = getelementptr inbounds %sollang.enum.t29, ptr %v52_subject_slot, i32 0, i32 1
+  %v54 = load ptr, ptr %v52_arm0_payload, align 8
+  %v55 = freeze ptr %v54
+  %v88 = call %sollang.enum.t32 @sollang_m0_s4(ptr %v55, i32 20, i32 22)
+  %v58_tag = extractvalue %sollang.enum.t32 %v88, 0
+  %v58_subject_slot = alloca %sollang.enum.t32, align 8
+  store %sollang.enum.t32 %v88, ptr %v58_subject_slot, align 8
+  %v58_result = alloca i32, align 4
+  %v58_is_arm0 = icmp eq i32 %v58_tag, 0
+  br i1 %v58_is_arm0, label %match58_arm0, label %match58_next0
+match58_arm0:
+  %v58_arm0_payload = getelementptr inbounds %sollang.enum.t32, ptr %v58_subject_slot, i32 0, i32 1
+  %v60 = load i32, ptr %v58_arm0_payload, align 4
+  %v61 = freeze i32 %v60
+  store i32 %v61, ptr %v58_result, align 4
+  br label %match58_merge
+match58_next0:
+  %v58_is_arm1 = icmp eq i32 %v58_tag, 1
+  br i1 %v58_is_arm1, label %match58_arm1, label %match58_next1
+match58_arm1:
+  %v58_arm1_payload = getelementptr inbounds %sollang.enum.t32, ptr %v58_subject_slot, i32 0, i32 1
+  %v63 = load i32, ptr %v58_arm1_payload, align 4
+  %v64 = freeze i32 %v63
+  store i32 %v64, ptr %v58_result, align 4
+  br label %match58_merge
+match58_next1:
   call void @llvm.trap()
   unreachable
-match22_merge:
-  %v22 = load i32, ptr %v22_result, align 4
-  store i32 %v22, ptr %v16_result, align 4
-  call void @sollang_drop_t26(ptr %v18)
-  br label %match16_merge
-match16_next0:
-  %v16_is_arm1 = icmp eq i32 %v16_tag, 1
-  br i1 %v16_is_arm1, label %match16_arm1, label %match16_next1
-match16_arm1:
-  %v16_arm1_payload = getelementptr inbounds %sollang.enum.t27, ptr %v16_subject_slot, i32 0, i32 1
-  %v30 = load i32, ptr %v16_arm1_payload, align 4
-  %v31 = freeze i32 %v30
-  store i32 %v31, ptr %v16_result, align 4
-  br label %match16_merge
-match16_next1:
+match58_merge:
+  %v58 = load i32, ptr %v58_result, align 4
+  store i32 %v58, ptr %v52_result, align 4
+  call void @sollang_drop_t28(ptr %v54)
+  br label %match52_merge
+match52_next0:
+  %v52_is_arm1 = icmp eq i32 %v52_tag, 1
+  br i1 %v52_is_arm1, label %match52_arm1, label %match52_next1
+match52_arm1:
+  %v52_arm1_payload = getelementptr inbounds %sollang.enum.t29, ptr %v52_subject_slot, i32 0, i32 1
+  %v66 = load i32, ptr %v52_arm1_payload, align 4
+  %v67 = freeze i32 %v66
+  store i32 %v67, ptr %v52_result, align 4
+  br label %match52_merge
+match52_next1:
   call void @llvm.trap()
   unreachable
-match16_merge:
-  %v16 = load i32, ptr %v16_result, align 4
-  %native_target_34 = load ptr, ptr @sollang_native_function_m0_s3, align 8
-  %v34 = call i32 %native_target_34(i32 %v16)
-  call void @sollang_runtime_print_i32(i32 %v16, i1 true)
-  call void @sollang_runtime_print_i32(i32 %v34, i1 true)
+match52_merge:
+  %v52 = load i32, ptr %v52_result, align 4
+  %v68 = freeze ptr %v49
+  %v89 = call %sollang.enum.t31 @sollang_m0_s22(ptr %v68)
+  %v69_tag = extractvalue %sollang.enum.t31 %v89, 0
+  %v69_subject_slot = alloca %sollang.enum.t31, align 8
+  store %sollang.enum.t31 %v89, ptr %v69_subject_slot, align 8
+  %v69_result = alloca i32, align 4
+  %v69_is_arm0 = icmp eq i32 %v69_tag, 0
+  br i1 %v69_is_arm0, label %match69_arm0, label %match69_next0
+match69_arm0:
+  %v69_arm0_payload = getelementptr inbounds %sollang.enum.t31, ptr %v69_subject_slot, i32 0, i32 1
+  %v71 = load ptr, ptr %v69_arm0_payload, align 8
+  store i32 0, ptr %v69_result, align 4
+  call void @sollang_drop_t30(ptr %v71)
+  br label %match69_merge
+match69_next0:
+  %v69_is_arm1 = icmp eq i32 %v69_tag, 1
+  br i1 %v69_is_arm1, label %match69_arm1, label %match69_next1
+match69_arm1:
+  %v69_arm1_payload = getelementptr inbounds %sollang.enum.t31, ptr %v69_subject_slot, i32 0, i32 1
+  %v74 = load i32, ptr %v69_arm1_payload, align 4
+  %v75 = freeze i32 %v74
+  store i32 %v75, ptr %v69_result, align 4
+  br label %match69_merge
+match69_next1:
+  call void @llvm.trap()
+  unreachable
+match69_merge:
+  %v69 = load i32, ptr %v69_result, align 4
+  %v77 = freeze i32 %v52
+  call void @sollang_runtime_print_i32(i32 %v77, i1 true)
+  %v79 = freeze i32 %v69
+  call void @sollang_runtime_print_i32(i32 %v79, i1 true)
+  %v80 = freeze i32 %v52
+  store i32 %v80, ptr %v47_result, align 4
+  call void @sollang_drop_t26(ptr %v49)
+  br label %match47_merge
+match47_next0:
+  %v47_is_arm1 = icmp eq i32 %v47_tag, 1
+  br i1 %v47_is_arm1, label %match47_arm1, label %match47_next1
+match47_arm1:
+  %v47_arm1_payload = getelementptr inbounds %sollang.enum.t27, ptr %v47_subject_slot, i32 0, i32 1
+  %v82 = load i32, ptr %v47_arm1_payload, align 4
+  %v83 = freeze i32 %v82
+  store i32 %v83, ptr %v47_result, align 4
+  br label %match47_merge
+match47_next1:
+  call void @llvm.trap()
+  unreachable
+match47_merge:
+  %v47 = load i32, ptr %v47_result, align 4
+  %v86 = freeze i32 %v47
+  %native_target_85 = load ptr, ptr @sollang_native_function_m0_s7, align 8
+  %v85 = call i32 %native_target_85(i32 %v86)
+  call void @sollang_runtime_print_i32(i32 %v85, i1 true)
   call void @sollang_com_cleanup()
   call void @sollang_native_cleanup()
   call void @sollang_runtime_flush_stdout()

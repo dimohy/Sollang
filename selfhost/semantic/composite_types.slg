@@ -132,13 +132,49 @@ public resolveAnalyzed package: analysis.PackageAnalysis, semanticTypeSet: typeI
                                 }
                                 symbolIndex! + 1 => symbolIndex!
                             }
+                            sourceIndex! => componentSourceModule!
+                            componentSymbol! < 0 -> if {
+                                identities![sourceIndex!] => currentIdentity
+                                0 => siblingModuleIndex!
+                                siblingModuleIndex! < (identities! -> len) -> while {
+                                    identities![siblingModuleIndex!] => siblingIdentity
+                                    (siblingIdentity.sourceIndex != sourceIndex! and siblingIdentity.pathHash == currentIdentity.pathHash) -> if {
+                                        siblingIdentity.sourceIndex => siblingSourceIndex
+                                        package.sources[siblingSourceIndex] -> len => siblingSourceLength
+                                        package.sources[siblingSourceIndex] -> slice(UIntSize(0), siblingSourceLength) => siblingSource
+                                        package.ranges[siblingSourceIndex] => siblingRange
+                                        0 => siblingSymbolIndex!
+                                        (siblingSymbolIndex! < siblingRange.symbolCount and componentSymbol! < 0) -> while {
+                                            package.symbols[siblingRange.symbolStart + siblingSymbolIndex!] => siblingCandidate
+                                            (siblingCandidate.parent < 0 and (siblingCandidate.kind == 3 or siblingCandidate.kind == 4)) -> if {
+                                                package.tokens[siblingRange.tokenStart + siblingCandidate.nameToken] => siblingName
+                                                componentName.span.length == siblingName.span.length => siblingEqual!
+                                                UIntSize(0) => siblingNameByte!
+                                                (siblingEqual! and siblingNameByte! < componentName.span.length) -> while {
+                                                    (source -> byte(componentName.span.start + siblingNameByte!)) != (siblingSource -> byte(siblingName.span.start + siblingNameByte!)) -> if {
+                                                        false => siblingEqual!
+                                                    }
+                                                    siblingNameByte! + UIntSize(1) => siblingNameByte!
+                                                }
+                                                siblingEqual! -> if {
+                                                    siblingSymbolIndex! => componentSymbol!
+                                                    siblingSourceIndex => componentSourceModule!
+                                                }
+                                            }
+                                            siblingSymbolIndex! + 1 => siblingSymbolIndex!
+                                        }
+                                    }
+                                    siblingModuleIndex! + 1 => siblingModuleIndex!
+                                }
+                            }
                             componentSymbol! >= 0 -> if {
                                 0 => componentOrigin!
-                                package.symbols[sourceRange.symbolStart + componentSymbol!].kind == 32 -> if {
+                                package.ranges[componentSourceModule!] => componentSourceRange
+                                package.symbols[componentSourceRange.symbolStart + componentSymbol!].kind == 32 -> if {
                                     3 => componentOrigin!
                                 }
                                 componentOrigin! => componentOrigins![componentSlot!]
-                                sourceIndex! => componentModules![componentSlot!]
+                                componentSourceModule! => componentModules![componentSlot!]
                                 componentSymbol! => componentSymbols![componentSlot!]
                             } else {
                                 2 => status!

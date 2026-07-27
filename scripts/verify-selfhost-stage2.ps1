@@ -57,7 +57,7 @@ $semanticContextSource = Join-Path $repoRoot "selfhost\semantic\context.slg"
 $compilerRuntimeSources = Get-Content $runtimeManifestPath |
     Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
     ForEach-Object { Join-Path $repoRoot $_.Trim() }
-$expectedStage2Bytes = 14282000L
+$expectedStage2Bytes = 17430000L
 
 New-Item -ItemType Directory -Force -Path $artifactsDir | Out-Null
 
@@ -294,11 +294,21 @@ for ($streamExecutionIndex = 0; $streamExecutionIndex -lt $streamStage2LlvmPaths
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     & $clangPath -Wno-override-module $streamStage2LlvmPaths[$streamExecutionIndex] -o $streamExecutablePath
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-    $streamActual = (& $streamExecutablePath | Out-String).Replace("`r`n", "`n").TrimEnd("`n")
+    $streamStdoutPath = Join-Path $artifactsDir "stage2-check-stream-$streamName.stdout.txt"
+    $streamStderrPath = Join-Path $artifactsDir "stage2-check-stream-$streamName.stderr.txt"
+    $streamProcess = Invoke-ProcessToFile `
+        -FilePath $streamExecutablePath `
+        -ArgumentList @() `
+        -OutputPath $streamStdoutPath `
+        -ErrorPath $streamStderrPath
+    $streamProcess.WaitForExit()
+    $streamProcess.Refresh()
+    $streamExitCode = $streamProcess.ExitCode
+    $streamActual = [System.IO.File]::ReadAllText($streamStdoutPath).Replace("`r`n", "`n").TrimEnd("`r", "`n")
     $streamExpectedPath = Join-Path $repoRoot "examples\expected\$($streamParityCases[$streamExecutionIndex][2])"
-    $streamExpected = [System.IO.File]::ReadAllText($streamExpectedPath).Replace("`r`n", "`n").TrimEnd("`n")
-    if ($LASTEXITCODE -ne 0 -or $streamActual -ne $streamExpected) {
-        throw "stage-2 $streamName stream execution differs from the checked expectation"
+    $streamExpected = [System.IO.File]::ReadAllText($streamExpectedPath).Replace("`r`n", "`n").TrimEnd("`r", "`n")
+    if ($streamExitCode -ne 0 -or -not [string]::Equals($streamActual, $streamExpected, [System.StringComparison]::Ordinal)) {
+        throw "stage-2 $streamName stream execution differs from the checked expectation (exit=$streamExitCode, actualLength=$($streamActual.Length), expectedLength=$($streamExpected.Length))"
     }
 }
 

@@ -160,12 +160,12 @@ public resolve source: Text -> [CallResolution; ~] {
             -1 => callerFunctionAst!
             (callerAst! >= 0 and callerFunctionAst! < 0) -> while {
                 nodes![callerAst!] => callerNode
-                callerNode.kind == 7 -> if { callerAst! => callerFunctionAst! } else { callerNode.parent => callerAst! }
+                (callerNode.kind == 7 or callerNode.kind == 31) -> if { callerAst! => callerFunctionAst! } else { callerNode.parent => callerAst! }
             }
             -1 => callerFunctionSymbol!
             0 => callerSymbolSearch!
             (callerSymbolSearch! < (table! -> len) and callerFunctionSymbol! < 0) -> while {
-                (table![callerSymbolSearch!].kind == 7 and table![callerSymbolSearch!].astNode == callerFunctionAst!) -> if { callerSymbolSearch! => callerFunctionSymbol! }
+                ((table![callerSymbolSearch!].kind == 7 or table![callerSymbolSearch!].kind == 31) and table![callerSymbolSearch!].astNode == callerFunctionAst!) -> if { callerSymbolSearch! => callerFunctionSymbol! }
                 callerSymbolSearch! + 1 => callerSymbolSearch!
             }
             -1 => localOwnerSymbol!
@@ -175,7 +175,7 @@ public resolve source: Text -> [CallResolution; ~] {
             0 => symbolIndex!
             (symbolIndex! < (table! -> len) and functionSymbol! < 0) -> while {
                 table![symbolIndex!] => candidate
-                (candidate.kind == 7 and (candidate.parent < 0 or candidate.parent == localOwnerSymbol!)) -> if {
+                ((candidate.kind == 7 or candidate.kind == 31) and (candidate.parent < 0 or candidate.parent == localOwnerSymbol!)) -> if {
                     tokens![callNameToken!] => callName
                     tokens![candidate.nameToken] => functionName
                     callName.span.length == functionName.span.length => equal!
@@ -298,12 +298,12 @@ public resolveModulesPrepared request: move ModuleCallRequest -> [ModuleCallReso
                 -1 => callerFunctionAst!
                 (callerAst! >= 0 and callerFunctionAst! < 0) -> while {
                     nodes![callerAst!] => callerNode
-                    callerNode.kind == 7 -> if { callerAst! => callerFunctionAst! } else { callerNode.parent => callerAst! }
+                    (callerNode.kind == 7 or callerNode.kind == 31) -> if { callerAst! => callerFunctionAst! } else { callerNode.parent => callerAst! }
                 }
                 -1 => callerFunctionSymbol!
                 0 => callerSymbolSearch!
                 (callerSymbolSearch! < (table! -> len) and callerFunctionSymbol! < 0) -> while {
-                    (table![callerSymbolSearch!].kind == 7 and table![callerSymbolSearch!].astNode == callerFunctionAst!) -> if { callerSymbolSearch! => callerFunctionSymbol! }
+                    ((table![callerSymbolSearch!].kind == 7 or table![callerSymbolSearch!].kind == 31) and table![callerSymbolSearch!].astNode == callerFunctionAst!) -> if { callerSymbolSearch! => callerFunctionSymbol! }
                     callerSymbolSearch! + 1 => callerSymbolSearch!
                 }
                 -1 => localOwnerSymbol!
@@ -313,7 +313,7 @@ public resolveModulesPrepared request: move ModuleCallRequest -> [ModuleCallReso
                 0 => localSymbolIndex!
                 (localSymbolIndex! < (table! -> len) and localFunctionSymbol! < 0) -> while {
                     table![localSymbolIndex!] => localCandidate
-                    (localCandidate.kind == 7 and (localCandidate.parent < 0 or localCandidate.parent == localOwnerSymbol!)) -> if {
+                    ((localCandidate.kind == 7 or localCandidate.kind == 31) and (localCandidate.parent < 0 or localCandidate.parent == localOwnerSymbol!)) -> if {
                         tokens![callNameToken!] => callName
                         tokens![localCandidate.nameToken] => functionName
                         callName.span.length == functionName.span.length => localEqual!
@@ -397,10 +397,12 @@ public resolveModulesPrepared request: move ModuleCallRequest -> [ModuleCallReso
             importedIndex! >= 0 -> if {
                 qualifiedResults![importedIndex!] => imported
                 identities![imported.targetModule].sourceIndex => targetSourceModule
+                imported.targetModule => importedResolvedModule!
+                targetSourceModule => importedResolvedSource!
                 imported.status => importedStatus!
                 imported.status == 0 -> if {
                     request.sources[targetSourceModule] -> symbols.collect => targetSymbols!
-                    (targetSymbols![imported.targetSymbol].kind != 7 and targetSymbols![imported.targetSymbol].kind != 36) -> if { 2 => importedStatus! }
+                    (targetSymbols![imported.targetSymbol].kind != 7 and targetSymbols![imported.targetSymbol].kind != 31 and targetSymbols![imported.targetSymbol].kind != 36) -> if { 2 => importedStatus! }
                 }
                 1 => resolvedOrigin!
                 imported.targetModule => resolvedTargetModule!
@@ -408,10 +410,62 @@ public resolveModulesPrepared request: move ModuleCallRequest -> [ModuleCallReso
                 imported.targetSymbol => resolvedFunctionSymbol!
                 importedStatus! => resolvedStatus!
             } else {
-                local.functionSymbol < -1 => runtimeCall
-                runtimeCall -> if {
-                    2 => resolvedOrigin!
-                    -1 => resolvedTargetSource!
+                false => siblingFound!
+                false => siblingAmbiguous!
+                (local.functionSymbol == -1 and (localCallNode.kind == 10 or localCallNode.kind == 11 or localCallNode.kind == 48)) -> if {
+                    identities![sourceIndex!] => currentIdentity
+                    0 => siblingModuleIndex!
+                    siblingModuleIndex! < (identities! -> len) -> while {
+                        identities![siblingModuleIndex!] => siblingIdentity
+                        (siblingIdentity.sourceIndex != sourceIndex! and siblingIdentity.pathHash == currentIdentity.pathHash) -> if {
+                            siblingIdentity.sourceIndex => siblingSource
+                            request.sources[siblingSource] => siblingText
+                            siblingText -> lexer.lex => siblingTokens!
+                            siblingText -> symbols.collect => siblingSymbols!
+                            0 => siblingSymbolIndex!
+                            siblingSymbolIndex! < (siblingSymbols! -> len) -> while {
+                                siblingSymbols![siblingSymbolIndex!] => siblingCandidate
+                                (siblingCandidate.kind == 7 or siblingCandidate.kind == 31) -> if {
+                                    tokens![local.nameToken] => siblingCallName
+                                    siblingTokens![siblingCandidate.nameToken] => siblingFunctionName
+                                    siblingCallName.span.length == siblingFunctionName.span.length => siblingNameEqual!
+                                    UIntSize(0) => siblingNameByte!
+                                    (siblingNameEqual! and siblingNameByte! < siblingCallName.span.length) -> while {
+                                        (source -> byte(siblingCallName.span.start + siblingNameByte!)) != (siblingText -> byte(siblingFunctionName.span.start + siblingNameByte!)) -> if {
+                                            false => siblingNameEqual!
+                                        }
+                                        siblingNameByte! + UIntSize(1) => siblingNameByte!
+                                    }
+                                    siblingNameEqual! -> if {
+                                        siblingFound! -> if {
+                                            true => siblingAmbiguous!
+                                        } else {
+                                            true => siblingFound!
+                                            siblingModuleIndex! => resolvedTargetModule!
+                                            siblingSource => resolvedTargetSource!
+                                            siblingSymbolIndex! => resolvedFunctionSymbol!
+                                            0 => resolvedStatus!
+                                        }
+                                    }
+                                }
+                                siblingSymbolIndex! + 1 => siblingSymbolIndex!
+                            }
+                        }
+                        siblingModuleIndex! + 1 => siblingModuleIndex!
+                    }
+                    siblingAmbiguous! -> if {
+                        sourceIndex! => resolvedTargetModule!
+                        sourceIndex! => resolvedTargetSource!
+                        -1 => resolvedFunctionSymbol!
+                        2 => resolvedStatus!
+                    }
+                }
+                not siblingFound! -> if {
+                    local.functionSymbol < -1 => runtimeCall
+                    runtimeCall -> if {
+                        2 => resolvedOrigin!
+                        -1 => resolvedTargetSource!
+                    }
                 }
             }
             results! -> push(ModuleCallResolution {
@@ -534,13 +588,13 @@ public resolveModulesAnalyzed package: analysis.PackageAnalysis -> [ModuleCallRe
                 -1 => callerFunctionAst!
                 (callerAst! >= 0 and callerFunctionAst! < 0) -> while {
                     package.nodes[sourceRange.astStart + callerAst!] => callerNode
-                    callerNode.kind == 7 -> if { callerAst! => callerFunctionAst! } else { callerNode.parent => callerAst! }
+                    (callerNode.kind == 7 or callerNode.kind == 31) -> if { callerAst! => callerFunctionAst! } else { callerNode.parent => callerAst! }
                 }
                 -1 => callerFunctionSymbol!
                 0 => callerSymbolSearch!
                 (callerSymbolSearch! < sourceRange.symbolCount and callerFunctionSymbol! < 0) -> while {
                     package.symbols[sourceRange.symbolStart + callerSymbolSearch!] => callerCandidate
-                    (callerCandidate.kind == 7 and callerCandidate.astNode == callerFunctionAst!) -> if { callerSymbolSearch! => callerFunctionSymbol! }
+                    ((callerCandidate.kind == 7 or callerCandidate.kind == 31) and callerCandidate.astNode == callerFunctionAst!) -> if { callerSymbolSearch! => callerFunctionSymbol! }
                     callerSymbolSearch! + 1 => callerSymbolSearch!
                 }
                 -1 => localOwnerSymbol!
@@ -551,7 +605,7 @@ public resolveModulesAnalyzed package: analysis.PackageAnalysis -> [ModuleCallRe
                 0 => localSymbolIndex!
                 (localSymbolIndex! < sourceRange.symbolCount and localFunctionSymbol! < 0) -> while {
                     package.symbols[sourceRange.symbolStart + localSymbolIndex!] => localCandidate
-                    (localCandidate.kind == 7 and (localCandidate.parent < 0 or localCandidate.parent == localOwnerSymbol!)) -> if {
+                    ((localCandidate.kind == 7 or localCandidate.kind == 31) and (localCandidate.parent < 0 or localCandidate.parent == localOwnerSymbol!)) -> if {
                         package.tokens[sourceRange.tokenStart + callNameToken!] => callName
                         package.tokens[sourceRange.tokenStart + localCandidate.nameToken] => functionName
                         callName.span.length == functionName.span.length => localEqual!
@@ -634,11 +688,13 @@ public resolveModulesAnalyzed package: analysis.PackageAnalysis -> [ModuleCallRe
             importedIndex! >= 0 -> if {
                 qualifiedResults![importedIndex!] => imported
                 identities![imported.targetModule].sourceIndex => targetSourceModule
+                imported.targetModule => importedResolvedModule!
+                targetSourceModule => importedResolvedSource!
                 imported.status => importedStatus!
                 imported.status == 0 -> if {
                     package.ranges[targetSourceModule] => targetRange
                     package.symbols[targetRange.symbolStart + imported.targetSymbol] => importedTargetSymbol
-                    (importedTargetSymbol.kind != 7 and importedTargetSymbol.kind != 36) -> if { 2 => importedStatus! }
+                    (importedTargetSymbol.kind != 7 and importedTargetSymbol.kind != 31 and importedTargetSymbol.kind != 36) -> if { 2 => importedStatus! }
                 }
                 imported.targetSymbol => importedFunctionSymbol!
                 importedStatus! != 0 -> if {
@@ -649,7 +705,7 @@ public resolveModulesAnalyzed package: analysis.PackageAnalysis -> [ModuleCallRe
                     0 => importedFunctionSearch!
                     importedFunctionSearch! < importedTargetRange.symbolCount -> while {
                         package.symbols[importedTargetRange.symbolStart + importedFunctionSearch!] => importedFunction
-                        (importedFunction.kind == 7 and importedFunction.flags / 4 % 2 == 1) -> if {
+                        ((importedFunction.kind == 7 or importedFunction.kind == 31) and importedFunction.flags / 4 % 2 == 1) -> if {
                             package.tokens[importedTargetRange.tokenStart + importedFunction.nameToken] => importedFunctionName
                             importedCallName.span.length == importedFunctionName.span.length => importedFunctionEqual!
                             UIntSize(0) => importedFunctionByte!
@@ -667,19 +723,238 @@ public resolveModulesAnalyzed package: analysis.PackageAnalysis -> [ModuleCallRe
                         importedFunctionSearch! + 1 => importedFunctionSearch!
                     }
                 }
+                importedStatus! != 0 -> if {
+                    identities![imported.targetModule] => importedIdentity
+                    false => importedSiblingFound!
+                    false => importedSiblingAmbiguous!
+                    0 => importedSiblingModuleIndex!
+                    importedSiblingModuleIndex! < (identities! -> len) -> while {
+                        identities![importedSiblingModuleIndex!] => importedSiblingIdentity
+                        (importedSiblingIdentity.sourceIndex != targetSourceModule and importedSiblingIdentity.pathHash == importedIdentity.pathHash) -> if {
+                            importedSiblingIdentity.sourceIndex => importedSiblingSource
+                            package.ranges[importedSiblingSource] => importedSiblingRange
+                            package.sources[importedSiblingSource] -> len => importedSiblingLength
+                            package.sources[importedSiblingSource] -> slice(UIntSize(0), importedSiblingLength) => importedSiblingText
+                            package.tokens[sourceRange.tokenStart + local.nameToken] => importedSiblingCallName
+                            0 => importedSiblingSymbolIndex!
+                            importedSiblingSymbolIndex! < importedSiblingRange.symbolCount -> while {
+                                package.symbols[importedSiblingRange.symbolStart + importedSiblingSymbolIndex!] => importedSiblingFunction
+                                ((importedSiblingFunction.kind == 7 or importedSiblingFunction.kind == 31) and importedSiblingFunction.flags / 4 % 2 == 1) -> if {
+                                    package.tokens[importedSiblingRange.tokenStart + importedSiblingFunction.nameToken] => importedSiblingFunctionName
+                                    importedSiblingCallName.span.length == importedSiblingFunctionName.span.length => importedSiblingFunctionEqual!
+                                    UIntSize(0) => importedSiblingFunctionByte!
+                                    (importedSiblingFunctionEqual! and importedSiblingFunctionByte! < importedSiblingCallName.span.length) -> while {
+                                        (source -> byte(importedSiblingCallName.span.start + importedSiblingFunctionByte!)) != (importedSiblingText -> byte(importedSiblingFunctionName.span.start + importedSiblingFunctionByte!)) -> if {
+                                            false => importedSiblingFunctionEqual!
+                                        }
+                                        importedSiblingFunctionByte! + UIntSize(1) => importedSiblingFunctionByte!
+                                    }
+                                    importedSiblingFunctionEqual! -> if {
+                                        importedSiblingFound! -> if {
+                                            true => importedSiblingAmbiguous!
+                                        } else {
+                                            true => importedSiblingFound!
+                                            importedSiblingModuleIndex! => importedResolvedModule!
+                                            importedSiblingSource => importedResolvedSource!
+                                            importedSiblingSymbolIndex! => importedFunctionSymbol!
+                                        }
+                                    }
+                                }
+                                importedSiblingSymbolIndex! + 1 => importedSiblingSymbolIndex!
+                            }
+                        }
+                        importedSiblingModuleIndex! + 1 => importedSiblingModuleIndex!
+                    }
+                    (importedSiblingFound! and not importedSiblingAmbiguous!) -> if { 0 => importedStatus! }
+                    importedSiblingAmbiguous! -> if { 2 => importedStatus! }
+                }
                 1 => resolvedOrigin!
-                imported.targetModule => resolvedTargetModule!
-                targetSourceModule => resolvedTargetSource!
+                importedResolvedModule! => resolvedTargetModule!
+                importedResolvedSource! => resolvedTargetSource!
                 importedFunctionSymbol! => resolvedFunctionSymbol!
                 importedStatus! => resolvedStatus!
             } else {
+                # Source files with the same namespace form one logical module.
+                # Search sibling fragments before open imports so private helpers
+                # remain module-local without wrappers or runtime indirection.
+                false => siblingFound!
+                false => siblingAmbiguous!
+                (local.functionSymbol == -1 and (localCallNode.kind == 10 or localCallNode.kind == 11 or localCallNode.kind == 48)) -> if {
+                    identities![sourceIndex!] => currentIdentity
+                    0 => siblingModuleIndex!
+                    siblingModuleIndex! < (identities! -> len) -> while {
+                        identities![siblingModuleIndex!] => siblingIdentity
+                        (siblingIdentity.sourceIndex != sourceIndex! and siblingIdentity.pathHash == currentIdentity.pathHash) -> if {
+                            siblingIdentity.sourceIndex => siblingSource
+                            package.ranges[siblingSource] => siblingRange
+                            package.sources[siblingSource] -> len => siblingLength
+                            package.sources[siblingSource] -> slice(UIntSize(0), siblingLength) => siblingText
+                            0 => siblingSymbolIndex!
+                            siblingSymbolIndex! < siblingRange.symbolCount -> while {
+                                package.symbols[siblingRange.symbolStart + siblingSymbolIndex!] => siblingCandidate
+                                (siblingCandidate.kind == 7 or siblingCandidate.kind == 31) -> if {
+                                    package.tokens[sourceRange.tokenStart + local.nameToken] => siblingCallName
+                                    package.tokens[siblingRange.tokenStart + siblingCandidate.nameToken] => siblingFunctionName
+                                    siblingCallName.span.length == siblingFunctionName.span.length => siblingNameEqual!
+                                    UIntSize(0) => siblingNameByte!
+                                    (siblingNameEqual! and siblingNameByte! < siblingCallName.span.length) -> while {
+                                        (source -> byte(siblingCallName.span.start + siblingNameByte!)) != (siblingText -> byte(siblingFunctionName.span.start + siblingNameByte!)) -> if {
+                                            false => siblingNameEqual!
+                                        }
+                                        siblingNameByte! + UIntSize(1) => siblingNameByte!
+                                    }
+                                    siblingNameEqual! -> if {
+                                        siblingFound! -> if {
+                                            true => siblingAmbiguous!
+                                        } else {
+                                            true => siblingFound!
+                                            0 => resolvedOrigin!
+                                            siblingModuleIndex! => resolvedTargetModule!
+                                            siblingSource => resolvedTargetSource!
+                                            siblingSymbolIndex! => resolvedFunctionSymbol!
+                                            0 => resolvedStatus!
+                                        }
+                                    }
+                                }
+                                siblingSymbolIndex! + 1 => siblingSymbolIndex!
+                            }
+                        }
+                        siblingModuleIndex! + 1 => siblingModuleIndex!
+                    }
+                    siblingAmbiguous! -> if {
+                        sourceIndex! => resolvedTargetModule!
+                        sourceIndex! => resolvedTargetSource!
+                        -1 => resolvedFunctionSymbol!
+                        2 => resolvedStatus!
+                    }
+                }
+                # A flow receiver may be a local binding whose nominal type was
+                # declared in one fragment while its impl lives in another.
+                # Recover that binding's qualified initializer type, then search
+                # only impls for the same owner inside the logical module.
+                (not siblingFound! and local.functionSymbol == -1 and localCallNode.kind == 10) -> if {
+                    package.tokens[sourceRange.tokenStart + local.nameToken] => receiverCallName
+                    -1 => receiverSymbol!
+                    UIntSize(0) => receiverStart!
+                    0 => receiverNameIndex!
+                    receiverNameIndex! < sourceRange.nameCount -> while {
+                        package.names[sourceRange.nameStart + receiverNameIndex!] => receiverName
+                        package.nodes[sourceRange.astStart + receiverName.astNode] => receiverNameAst
+                        receiverName.astNode => receiverAncestor!
+                        false => receiverBelongs!
+                        (receiverAncestor! >= 0 and not receiverBelongs!) -> while {
+                            receiverAncestor! == local.callAst -> if { true => receiverBelongs! } else {
+                                package.nodes[sourceRange.astStart + receiverAncestor!].parent => receiverAncestor!
+                            }
+                        }
+                        package.tokens[sourceRange.tokenStart + receiverName.nameToken] => receiverToken
+                        (receiverBelongs! and receiverToken.span.start < receiverCallName.span.start and (receiverSymbol! < 0 or receiverToken.span.start >= receiverStart!)) -> if {
+                            receiverName.symbol => receiverSymbol!
+                            receiverToken.span.start => receiverStart!
+                        }
+                        receiverNameIndex! + 1 => receiverNameIndex!
+                    }
+                    -1 => receiverTypeModule!
+                    -1 => receiverTypeSymbol!
+                    receiverSymbol! >= 0 -> if {
+                        package.symbols[sourceRange.symbolStart + receiverSymbol!] => receiverBinding
+                        0 => receiverQualifiedIndex!
+                        receiverQualifiedIndex! < (qualifiedResults! -> len) -> while {
+                            qualifiedResults![receiverQualifiedIndex!] => receiverQualified
+                            (receiverQualified.sourceModule == sourceIndex! and receiverQualified.status == 0) -> if {
+                                receiverQualified.pathAst => receiverQualifiedAncestor!
+                                false => receiverQualifiedBelongs!
+                                (receiverQualifiedAncestor! >= 0 and not receiverQualifiedBelongs!) -> while {
+                                    receiverQualifiedAncestor! == receiverBinding.astNode -> if {
+                                        true => receiverQualifiedBelongs!
+                                    } else {
+                                        package.nodes[sourceRange.astStart + receiverQualifiedAncestor!].parent => receiverQualifiedAncestor!
+                                    }
+                                }
+                                receiverQualifiedBelongs! -> if {
+                                    receiverQualified.targetModule => receiverTypeModule!
+                                    receiverQualified.targetSymbol => receiverTypeSymbol!
+                                }
+                            }
+                            receiverQualifiedIndex! + 1 => receiverQualifiedIndex!
+                        }
+                    }
+                    (receiverTypeModule! >= 0 and receiverTypeSymbol! >= 0) -> if {
+                        identities![receiverTypeModule!] => receiverTypeIdentity
+                        identities![receiverTypeModule!].sourceIndex => receiverTypeSource
+                        package.ranges[receiverTypeSource] => receiverTypeRange
+                        package.symbols[receiverTypeRange.symbolStart + receiverTypeSymbol!] => receiverType
+                        package.tokens[receiverTypeRange.tokenStart + receiverType.nameToken] => receiverTypeName
+                        package.sources[receiverTypeSource] -> len => receiverTypeLength
+                        package.sources[receiverTypeSource] -> slice(UIntSize(0), receiverTypeLength) => receiverTypeText
+                        false => receiverMethodFound!
+                        false => receiverMethodAmbiguous!
+                        0 => receiverMethodModule!
+                        receiverMethodModule! < (identities! -> len) -> while {
+                            identities![receiverMethodModule!] => receiverMethodIdentity
+                            receiverMethodIdentity.pathHash == receiverTypeIdentity.pathHash -> if {
+                                receiverMethodIdentity.sourceIndex => receiverMethodSource
+                                package.ranges[receiverMethodSource] => receiverMethodRange
+                                package.sources[receiverMethodSource] -> len => receiverMethodLength
+                                package.sources[receiverMethodSource] -> slice(UIntSize(0), receiverMethodLength) => receiverMethodText
+                                0 => receiverMethodSymbol!
+                                receiverMethodSymbol! < receiverMethodRange.symbolCount -> while {
+                                    package.symbols[receiverMethodRange.symbolStart + receiverMethodSymbol!] => receiverMethod
+                                    (receiverMethod.kind == 31 and receiverMethod.parent >= 0 and receiverMethod.flags / 4 % 2 == 1) -> if {
+                                        package.symbols[receiverMethodRange.symbolStart + receiverMethod.parent] => receiverImpl
+                                        package.tokens[receiverMethodRange.tokenStart + receiverImpl.nameToken] => receiverImplName
+                                        package.tokens[receiverMethodRange.tokenStart + receiverMethod.nameToken] => receiverMethodName
+                                        receiverImplName.span.length == receiverTypeName.span.length => receiverOwnerEqual!
+                                        UIntSize(0) => receiverOwnerByte!
+                                        (receiverOwnerEqual! and receiverOwnerByte! < receiverTypeName.span.length) -> while {
+                                            (receiverMethodText -> byte(receiverImplName.span.start + receiverOwnerByte!)) != (receiverTypeText -> byte(receiverTypeName.span.start + receiverOwnerByte!)) -> if {
+                                                false => receiverOwnerEqual!
+                                            }
+                                            receiverOwnerByte! + UIntSize(1) => receiverOwnerByte!
+                                        }
+                                        receiverMethodName.span.length == receiverCallName.span.length => receiverMethodEqual!
+                                        UIntSize(0) => receiverMethodByte!
+                                        (receiverMethodEqual! and receiverMethodByte! < receiverCallName.span.length) -> while {
+                                            (receiverMethodText -> byte(receiverMethodName.span.start + receiverMethodByte!)) != (source -> byte(receiverCallName.span.start + receiverMethodByte!)) -> if {
+                                                false => receiverMethodEqual!
+                                            }
+                                            receiverMethodByte! + UIntSize(1) => receiverMethodByte!
+                                        }
+                                        (receiverOwnerEqual! and receiverMethodEqual!) -> if {
+                                            receiverMethodFound! -> if {
+                                                true => receiverMethodAmbiguous!
+                                            } else {
+                                                true => receiverMethodFound!
+                                                0 => resolvedOrigin!
+                                                receiverMethodModule! => resolvedTargetModule!
+                                                receiverMethodSource => resolvedTargetSource!
+                                                receiverMethodSymbol! => resolvedFunctionSymbol!
+                                                0 => resolvedStatus!
+                                            }
+                                        }
+                                    }
+                                    receiverMethodSymbol! + 1 => receiverMethodSymbol!
+                                }
+                            }
+                            receiverMethodModule! + 1 => receiverMethodModule!
+                        }
+                        (receiverMethodFound! and not receiverMethodAmbiguous!) -> if { true => siblingFound! }
+                        receiverMethodAmbiguous! -> if {
+                            true => siblingAmbiguous!
+                            sourceIndex! => resolvedTargetModule!
+                            sourceIndex! => resolvedTargetSource!
+                            -1 => resolvedFunctionSymbol!
+                            2 => resolvedStatus!
+                        }
+                    }
+                }
                 # An unqualified name is also looked up in every directly
                 # imported module. This is the Stage1 open-import behavior used
                 # by `import std.sequence` followed by ordinary flow, direct,
                 # or block-function calls such as `defer`, `map`, and `filter`.
                 false => openImportFound!
                 false => openImportAmbiguous!
-                (local.functionSymbol == -1 and (localCallNode.kind == 10 or localCallNode.kind == 11 or localCallNode.kind == 48)) -> if {
+                (not siblingFound! and local.functionSymbol == -1 and (localCallNode.kind == 10 or localCallNode.kind == 11 or localCallNode.kind == 48)) -> if {
                     0 => openImportIndex!
                     openImportIndex! < (resolvedImports! -> len) -> while {
                         resolvedImports![openImportIndex!] => openImport
@@ -691,7 +966,7 @@ public resolveModulesAnalyzed package: analysis.PackageAnalysis -> [ModuleCallRe
                             0 => openSymbolIndex!
                             openSymbolIndex! < openTargetRange.symbolCount -> while {
                                 package.symbols[openTargetRange.symbolStart + openSymbolIndex!] => openCandidate
-                                (openCandidate.kind == 7 and openCandidate.flags / 4 % 2 == 1) -> if {
+                                ((openCandidate.kind == 7 or openCandidate.kind == 31) and openCandidate.flags / 4 % 2 == 1) -> if {
                                     package.tokens[sourceRange.tokenStart + local.nameToken] => openCallName
                                     package.tokens[openTargetRange.tokenStart + openCandidate.nameToken] => openFunctionName
                                     openCallName.span.length == openFunctionName.span.length => openNameEqual!
@@ -727,7 +1002,7 @@ public resolveModulesAnalyzed package: analysis.PackageAnalysis -> [ModuleCallRe
                         2 => resolvedStatus!
                     }
                 }
-                not openImportFound! -> if {
+                (not siblingFound! and not openImportFound!) -> if {
                     local.functionSymbol < -1 => runtimeCall
                     runtimeCall -> if {
                         2 => resolvedOrigin!

@@ -65,7 +65,56 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> [QualifiedResolution
                         currentModuleSearch! + 1 => currentModuleSearch!
                     }
                     (currentModule! >= 0 and previousIdentifier! >= 0) -> if {
+                        0 => nativeHandleSearch!
+                        nativeHandleSearch! < sourceRange.symbolCount -> while {
+                            package.symbols[sourceRange.symbolStart + nativeHandleSearch!] => nativeHandle
+                            (nativeHandle.kind == 3
+                                and nativeHandle.flags / 65536 % 2 == 1
+                                and nativeHandle.astNode >= 0) -> if {
+                                package.nodes[sourceRange.astStart + nativeHandle.astNode] => nativeHandleAst
+                                nativeHandleAst.parent >= 0 -> if {
+                                    package.nodes[sourceRange.astStart + nativeHandleAst.parent] => nativeHandleLibraryAst
+                                    (nativeHandleLibraryAst.kind == 65
+                                        and nativeHandleLibraryAst.payloadToken >= 0
+                                        and nativeHandle.nameToken >= 0) -> if {
+                                        package.tokens[sourceRange.tokenStart + nativeHandleLibraryAst.payloadToken] => nativeHandleAliasName
+                                        package.tokens[sourceRange.tokenStart + firstIdentifier!] => nativeHandleAliasReference
+                                        nativeHandleAliasName.span.length == nativeHandleAliasReference.span.length => nativeHandleAliasEqual!
+                                        UIntSize(0) => nativeHandleAliasByte!
+                                        (nativeHandleAliasEqual! and nativeHandleAliasByte! < nativeHandleAliasName.span.length) -> while {
+                                            (source -> byte(nativeHandleAliasName.span.start + nativeHandleAliasByte!)) != (source -> byte(nativeHandleAliasReference.span.start + nativeHandleAliasByte!)) -> if {
+                                                false => nativeHandleAliasEqual!
+                                            }
+                                            nativeHandleAliasByte! + UIntSize(1) => nativeHandleAliasByte!
+                                        }
+                                        package.tokens[sourceRange.tokenStart + nativeHandle.nameToken] => nativeHandleName
+                                        package.tokens[sourceRange.tokenStart + lastIdentifier!] => nativeHandleReference
+                                        nativeHandleName.span.length == nativeHandleReference.span.length => nativeHandleEqual!
+                                        UIntSize(0) => nativeHandleByte!
+                                        (nativeHandleEqual! and nativeHandleByte! < nativeHandleName.span.length) -> while {
+                                            (source -> byte(nativeHandleName.span.start + nativeHandleByte!)) != (source -> byte(nativeHandleReference.span.start + nativeHandleByte!)) -> if {
+                                                false => nativeHandleEqual!
+                                            }
+                                            nativeHandleByte! + UIntSize(1) => nativeHandleByte!
+                                        }
+                                        (nativeHandleAliasEqual! and nativeHandleEqual!) -> if {
+                                            results! -> push(QualifiedResolution {
+                                                sourceModule: sourceIndex!
+                                                pathAst: pathAstIndex!
+                                                targetModule: currentModule!
+                                                targetSymbol: nativeHandleSearch!
+                                                status: 0
+                                            })
+                                            true => localVariantResolved!
+                                            sourceRange.symbolCount => nativeHandleSearch!
+                                        }
+                                    }
+                                }
+                            }
+                            nativeHandleSearch! + 1 => nativeHandleSearch!
+                        }
                         0 => nativeFunctionSearch!
+                        localVariantResolved! -> if { sourceRange.symbolCount => nativeFunctionSearch! }
                         nativeFunctionSearch! < sourceRange.symbolCount -> while {
                             package.symbols[sourceRange.symbolStart + nativeFunctionSearch!] => nativeFunction
                             (nativeFunction.kind == 7 and nativeFunction.flags / 128 % 2 == 1 and nativeFunction.astNode >= 0) -> if {
@@ -121,6 +170,38 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> [QualifiedResolution
                                     }
                                     false => comFunctionEqual!
                                     package.tokens[sourceRange.tokenStart + lastIdentifier!] => comFunctionReference
+                                    comFunction.flags / 131072 % 2 == 1 -> if {
+                                        package.symbols[sourceRange.symbolStart + comFunction.parent] => comQuerySource
+                                        package.symbols[sourceRange.symbolStart + comFunction.secondaryTypeNode] => comQueryTarget
+                                        package.tokens[sourceRange.tokenStart + comQuerySource.nameToken] => comQuerySourceName
+                                        package.tokens[sourceRange.tokenStart + comQueryTarget.nameToken] => comQueryTargetName
+                                        UIntSize(9) + comQuerySourceName.span.length + comQueryTargetName.span.length => comQueryLength
+                                        comFunctionReference.span.length == comQueryLength -> if {
+                                            true => comFunctionEqual!
+                                            UIntSize(0) => comQueryByte!
+                                            "query" => comQueryPrefix
+                                            (comFunctionEqual! and comQueryByte! < UIntSize(5)) -> while {
+                                                (source -> byte(comFunctionReference.span.start + comQueryByte!)) != (comQueryPrefix -> byte(comQueryByte!)) -> if { false => comFunctionEqual! }
+                                                comQueryByte! + UIntSize(1) => comQueryByte!
+                                            }
+                                            UIntSize(0) => comQueryTargetByte!
+                                            (comFunctionEqual! and comQueryTargetByte! < comQueryTargetName.span.length) -> while {
+                                                (source -> byte(comFunctionReference.span.start + UIntSize(5) + comQueryTargetByte!)) != (source -> byte(comQueryTargetName.span.start + comQueryTargetByte!)) -> if { false => comFunctionEqual! }
+                                                comQueryTargetByte! + UIntSize(1) => comQueryTargetByte!
+                                            }
+                                            "From" => comQueryFrom
+                                            UIntSize(0) => comQueryFromByte!
+                                            (comFunctionEqual! and comQueryFromByte! < UIntSize(4)) -> while {
+                                                (source -> byte(comFunctionReference.span.start + UIntSize(5) + comQueryTargetName.span.length + comQueryFromByte!)) != (comQueryFrom -> byte(comQueryFromByte!)) -> if { false => comFunctionEqual! }
+                                                comQueryFromByte! + UIntSize(1) => comQueryFromByte!
+                                            }
+                                            UIntSize(0) => comQuerySourceByte!
+                                            (comFunctionEqual! and comQuerySourceByte! < comQuerySourceName.span.length) -> while {
+                                                (source -> byte(comFunctionReference.span.start + UIntSize(9) + comQueryTargetName.span.length + comQuerySourceByte!)) != (source -> byte(comQuerySourceName.span.start + comQuerySourceByte!)) -> if { false => comFunctionEqual! }
+                                                comQuerySourceByte! + UIntSize(1) => comQuerySourceByte!
+                                            }
+                                        }
+                                    } else {
                                     comFunction.flags / 4096 % 2 == 1 -> if {
                                         comFunctionReference.span.length == UIntSize(6) -> if {
                                             "create" => comCreateName
@@ -152,10 +233,12 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> [QualifiedResolution
                                             }
                                         }
                                     }
+                                    }
                                     (comAliasEqual!
                                         and comFunctionEqual!
                                         and (comFunction.flags / 4096 % 2 == 1
                                             or comFunction.flags / 8192 % 2 == 1
+                                            or comFunction.flags / 131072 % 2 == 1
                                             or pathAst.kind == 16)) -> if {
                                         results! -> push(QualifiedResolution {
                                             sourceModule: sourceIndex!
@@ -211,6 +294,73 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> [QualifiedResolution
                             localEnumSearch! + 1 => localEnumSearch!
                         }
                     }
+                    # Native library aliases are declarations rather than
+                    # imported module aliases. A logical module may span
+                    # several source fragments, so resolve a qualified native
+                    # function or handle against sibling fragments before
+                    # consulting explicit imports.
+                    (not localVariantResolved! and currentModule! >= 0) -> if {
+                        identities![currentModule!].pathHash => currentPathHash
+                        0 => siblingModuleIndex!
+                        siblingModuleIndex! < (identities! -> len) -> while {
+                            identities![siblingModuleIndex!] => siblingIdentity
+                            (siblingIdentity.sourceIndex != sourceIndex! and siblingIdentity.pathHash == currentPathHash) -> if {
+                                siblingIdentity.sourceIndex => siblingSourceIndex
+                                package.sources[siblingSourceIndex] -> len => siblingSourceLength
+                                package.sources[siblingSourceIndex] -> slice(UIntSize(0), siblingSourceLength) => siblingSource
+                                package.ranges[siblingSourceIndex] => siblingRange
+                                0 => siblingSymbolIndex!
+                                siblingSymbolIndex! < siblingRange.symbolCount -> while {
+                                    package.symbols[siblingRange.symbolStart + siblingSymbolIndex!] => siblingSymbol
+                                    ((siblingSymbol.kind == 3 and siblingSymbol.flags / 65536 % 2 == 1)
+                                        or (siblingSymbol.kind == 7 and siblingSymbol.flags / 128 % 2 == 1)) -> if {
+                                        package.nodes[siblingRange.astStart + siblingSymbol.astNode] => siblingDeclaration
+                                        siblingDeclaration.parent >= 0 -> if {
+                                            package.nodes[siblingRange.astStart + siblingDeclaration.parent] => siblingLibrary
+                                            (siblingLibrary.kind == 65
+                                                and siblingLibrary.payloadToken >= 0
+                                                and siblingSymbol.nameToken >= 0) -> if {
+                                                package.tokens[siblingRange.tokenStart + siblingLibrary.payloadToken] => siblingAliasName
+                                                package.tokens[sourceRange.tokenStart + firstIdentifier!] => siblingAliasReference
+                                                siblingAliasName.span.length == siblingAliasReference.span.length => siblingAliasEqual!
+                                                UIntSize(0) => siblingAliasByte!
+                                                (siblingAliasEqual! and siblingAliasByte! < siblingAliasName.span.length) -> while {
+                                                    (siblingSource -> byte(siblingAliasName.span.start + siblingAliasByte!)) != (source -> byte(siblingAliasReference.span.start + siblingAliasByte!)) -> if {
+                                                        false => siblingAliasEqual!
+                                                    }
+                                                    siblingAliasByte! + UIntSize(1) => siblingAliasByte!
+                                                }
+                                                package.tokens[siblingRange.tokenStart + siblingSymbol.nameToken] => siblingMemberName
+                                                package.tokens[sourceRange.tokenStart + lastIdentifier!] => siblingMemberReference
+                                                siblingMemberName.span.length == siblingMemberReference.span.length => siblingMemberEqual!
+                                                UIntSize(0) => siblingMemberByte!
+                                                (siblingMemberEqual! and siblingMemberByte! < siblingMemberName.span.length) -> while {
+                                                    (siblingSource -> byte(siblingMemberName.span.start + siblingMemberByte!)) != (source -> byte(siblingMemberReference.span.start + siblingMemberByte!)) -> if {
+                                                        false => siblingMemberEqual!
+                                                    }
+                                                    siblingMemberByte! + UIntSize(1) => siblingMemberByte!
+                                                }
+                                                (siblingAliasEqual! and siblingMemberEqual!) -> if {
+                                                    results! -> push(QualifiedResolution {
+                                                        sourceModule: sourceIndex!
+                                                        pathAst: pathAstIndex!
+                                                        targetModule: siblingModuleIndex!
+                                                        targetSymbol: siblingSymbolIndex!
+                                                        status: 0
+                                                    })
+                                                    true => localVariantResolved!
+                                                    siblingRange.symbolCount => siblingSymbolIndex!
+                                                    identities! -> len => siblingModuleIndex!
+                                                }
+                                            }
+                                        }
+                                    }
+                                    siblingSymbolIndex! + 1 => siblingSymbolIndex!
+                                }
+                            }
+                            siblingModuleIndex! + 1 => siblingModuleIndex!
+                        }
+                    }
                     0 => edgeIndex!
                     localVariantResolved! -> if { importCount => edgeIndex! }
                     edgeIndex! < importCount -> while {
@@ -229,6 +379,7 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> [QualifiedResolution
                             }
                             aliasEqual! -> if {
                                 resolvedImport.targetModule => targetModule
+                                targetModule => selectedTargetModule!
                                 identities![targetModule].sourceIndex => targetSourceIndex
                                 package.sources[targetSourceIndex] -> len => targetSourceLength
                                 package.sources[targetSourceIndex] -> slice(UIntSize(0), targetSourceLength) => targetSource
@@ -288,6 +439,46 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> [QualifiedResolution
                                     }
                                     symbolIndex! + 1 => symbolIndex!
                                 }
+                                # The import facade is the first source of a
+                                # logical module. If a top-level member lives
+                                # in another source fragment, continue the
+                                # lookup across identities with the same path.
+                                (targetSymbol! < 0 and identifierCount! < 3) -> if {
+                                    identities![targetModule].pathHash => targetPathHash
+                                    0 => fragmentModuleIndex!
+                                    fragmentModuleIndex! < (identities! -> len) -> while {
+                                        identities![fragmentModuleIndex!] => fragmentIdentity
+                                        (fragmentIdentity.pathHash == targetPathHash and fragmentModuleIndex! != targetModule) -> if {
+                                            fragmentIdentity.sourceIndex => fragmentSourceIndex
+                                            package.sources[fragmentSourceIndex] -> len => fragmentSourceLength
+                                            package.sources[fragmentSourceIndex] -> slice(UIntSize(0), fragmentSourceLength) => fragmentSource
+                                            package.ranges[fragmentSourceIndex] => fragmentRange
+                                            0 => fragmentSymbolIndex!
+                                            fragmentSymbolIndex! < fragmentRange.symbolCount -> while {
+                                                package.symbols[fragmentRange.symbolStart + fragmentSymbolIndex!] => fragmentCandidate
+                                                (fragmentCandidate.parent < 0 and fragmentCandidate.kind != 6) -> if {
+                                                    package.tokens[fragmentRange.tokenStart + fragmentCandidate.nameToken] => fragmentCandidateName
+                                                    package.tokens[sourceRange.tokenStart + lastIdentifier!] => fragmentMemberName
+                                                    fragmentCandidateName.span.length == fragmentMemberName.span.length => fragmentMemberEqual!
+                                                    UIntSize(0) => fragmentMemberByte!
+                                                    (fragmentMemberEqual! and fragmentMemberByte! < fragmentCandidateName.span.length) -> while {
+                                                        (fragmentSource -> byte(fragmentCandidateName.span.start + fragmentMemberByte!)) != (source -> byte(fragmentMemberName.span.start + fragmentMemberByte!)) -> if {
+                                                            false => fragmentMemberEqual!
+                                                        }
+                                                        fragmentMemberByte! + UIntSize(1) => fragmentMemberByte!
+                                                    }
+                                                    fragmentMemberEqual! -> if {
+                                                        fragmentSymbolIndex! => targetSymbol!
+                                                        fragmentCandidate.flags >= 4 -> if { true => targetPublic! }
+                                                        fragmentModuleIndex! => selectedTargetModule!
+                                                    }
+                                                }
+                                                fragmentSymbolIndex! + 1 => fragmentSymbolIndex!
+                                            }
+                                        }
+                                        fragmentModuleIndex! + 1 => fragmentModuleIndex!
+                                    }
+                                }
                                 2 => status!
                                 targetSymbol! >= 0 -> if {
                                     targetPublic! -> if { 0 => status! } else { 3 => status! }
@@ -295,7 +486,7 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> [QualifiedResolution
                                 QualifiedResolution {
                                     sourceModule: sourceIndex!
                                     pathAst: pathAstIndex!
-                                    targetModule: targetModule
+                                    targetModule: selectedTargetModule!
                                     targetSymbol: targetSymbol!
                                     status: status!
                                 } => result

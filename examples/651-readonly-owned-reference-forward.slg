@@ -1,0 +1,28 @@
+# Forwarding a readonly reference to an owning aggregate preserves the borrow;
+# the reference itself is non-owning and must not be treated as a moved array.
+struct Values {
+    items: [Int; ~]
+}
+
+same values: ref Values -> ref Values {
+    values
+}
+
+sameEarly condition: Bool, values: ref Values -> ref Values {
+    condition -> if {
+        values -> return
+    }
+    values
+}
+
+count values: ref Values -> Int {
+    values.items -> len
+}
+
+main {
+    [1, 2, 3, ~] => items!
+    Values { items: items! } => values
+    true -> sameEarly(values) -> same -> count => total
+    same(sameEarly(true, values)) -> count => nestedTotal
+    "$total,$nestedTotal" -> println
+}

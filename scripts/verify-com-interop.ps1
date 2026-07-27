@@ -57,6 +57,8 @@ $required = @(
     "DllGetClassObject",
     "getelementptr ptr, ptr %com_add_ref_vtable",
     "i64 1",
+    "getelementptr ptr, ptr %com_query_interface_vtable",
+    "i64 0",
     "getelementptr ptr, ptr %com_release_vtable",
     "i64 2",
     "getelementptr ptr, ptr %com_method_vtable",
@@ -109,8 +111,8 @@ if ($LASTEXITCODE -ne 0) { throw "self-host COM LLVM compilation failed" }
     /out:$selfHostOutput
 if ($LASTEXITCODE -ne 0) { throw "self-host COM link failed" }
 $selfHostActual = (& $selfHostOutput | Out-String).Replace("`r`n", "`n").TrimEnd("`n")
-if ($LASTEXITCODE -ne 0 -or $selfHostActual -ne "42`n0") {
-    throw "self-host COM execution mismatch: expected '42,0', actual '$selfHostActual'"
+if ($LASTEXITCODE -ne 0 -or $selfHostActual -ne "42`n-2147467262`n0") {
+    throw "self-host COM execution mismatch: expected '42,-2147467262,0', actual '$selfHostActual'"
 }
 
 $unavailableTargets = @("linux-x64", "wasm32-browser")
@@ -126,4 +128,4 @@ foreach ($target in $unavailableTargets) {
     }
 }
 
-Write-Host "PASS COM interop: Stage 1 and Stage 2 activation, vtable call, clone/AddRef, deterministic Release, and target diagnostics"
+Write-Host "PASS COM interop: Stage 1 checked QueryInterface, activation, vtable call, clone/AddRef, deterministic Release; Stage 2 runtime and target diagnostics"

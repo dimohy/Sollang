@@ -266,10 +266,7 @@ internal sealed partial class LlvmEmitter
                 return new RuntimeReference(captureReferenceType, local.Type, capturePointer);
             }
 
-            var materialized = MaterializeAggregateValue(local);
-            var pointer = NextTemp("ref_place");
-            EmitAlloca(pointer, materialized.TypeName, RuntimeAlignment(local.Type));
-            EmitStore(materialized.TypeName, materialized.ValueName, pointer, RuntimeAlignment(local.Type));
+            var pointer = GetOrCreateReadonlyValuePointer(local, "ref_place");
             var referenceType = _program.Types.GetOrAddReference(local.Type);
             return new RuntimeReference(referenceType, local.Type, pointer);
         }
@@ -307,8 +304,14 @@ internal sealed partial class LlvmEmitter
             return EmitReferenceIndexPlace(index);
         }
 
+        var value = EmitExpression(expression);
+        if (value is RuntimeReference producedReference)
+        {
+            return producedReference;
+        }
+
         throw new SollangException(
-            "reference returns currently require a named reference input, field, or array element");
+            "reference returns require a named place, projection, or reference-producing expression");
     }
 
     private RuntimeReference EmitReferenceIndexPlace(IndexExpression expression)

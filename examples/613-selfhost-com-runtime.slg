@@ -1,4 +1,5 @@
-# Stage 2 emits executable COM activation, vtable dispatch, and deterministic Release.
+# Stage 2 emits executable COM activation, checked QueryInterface, vtable dispatch,
+# and deterministic Release.
 import sollang.compiler.llvm.text as llvm
 
 main {
@@ -8,6 +9,11 @@ main {
             interface Calculator "4C10A47B-725D-41D3-B5A6-70D67D3BEB11" {
                 add left: Int32, right: Int32 -> Result<Int32, Int32> at 3
             }
+            interface Arithmetic "B214A96D-58CF-4311-A29B-6DF850801C74" {
+                sum left: Int32, right: Int32 -> Result<Int32, Int32> at 3
+            }
+            interface Missing "4C6EE04F-BACA-4DE7-91EE-EA56CC97D10A" {
+            }
         }
 
         native probe from "artifacts/com-interop/com_fixture" {
@@ -16,13 +22,24 @@ main {
 
         main {
             fixture.create -> when {
-                Ok(calculator) => calculator -> fixture.add(20, 22) -> when {
-                    Ok(value) => value
-                    Err(status) => status
+                Ok(calculator) {
+                    calculator -> fixture.queryArithmeticFromCalculator -> when {
+                        Ok(arithmetic) => arithmetic -> fixture.sum(20, 22) -> when {
+                            Ok(value) => value
+                            Err(status) => status
+                        }
+                        Err(status) => status
+                    } => value
+                    calculator -> fixture.queryMissingFromCalculator -> when {
+                        Ok(missing) => 0
+                        Err(status) => status
+                    } => missingStatus
+                    value -> println
+                    missingStatus -> println
+                    value
                 }
                 Err(status) => status
             } => value
-            value -> println
             probe.referencesAfter(value) -> println
         }
         """,

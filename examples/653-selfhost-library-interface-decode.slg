@@ -1,0 +1,52 @@
+import sollang.compiler.semantic.library_interfaces as interfaces
+import sys.file as file
+
+# Verifies one-pass, span-backed decoding of the canonical .slglib interface.
+main {
+    """{
+          "schema": 1,
+          "abi": "sollang-c-v1",
+          "target": "windows-x64",
+          "libraryFile": "fixture.dll",
+          "abiHash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "exports": [
+            {
+              "name": "add",
+              "qualifiedName": "math.add",
+              "symbol": "sollang_export_add_0123456789abcdef",
+              "parameters": [
+                {
+                  "name": "left",
+                  "type": "Int32"
+                },
+                {
+                  "name": "right",
+                  "type": "Int32"
+                }
+              ],
+              "result": "Int32",
+              "signatureHash": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+            }
+          ]
+        }
+        """ => source
+    source -> file.borrowText => owner!
+    owner! -> interfaces.parseSource => document!
+    document!.exports[0] => exported
+    document!.parameters[exported.parameterStart] => first
+    document!.parameters[exported.parameterStart + 1] => second
+
+    "status = $(document!.status)" -> println
+    source -> slice(document!.target.start, document!.target.length) -> println
+    source -> slice(exported.name.start, exported.name.length) -> println
+    source -> slice(first.name.start, first.name.length) -> print
+    ":" -> print
+    source -> slice(first.typeName.start, first.typeName.length) -> print
+    "," -> print
+    source -> slice(second.name.start, second.name.length) -> print
+    ":" -> print
+    source -> slice(second.typeName.start, second.typeName.length) -> println
+
+    """{"schema":1,"abi":"wrong","target":"windows-x64","libraryFile":"x.dll","abiHash":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","exports":[]}""" -> interfaces.parse => invalidAbi!
+    "invalid abi = $(invalidAbi!.status)" -> println
+}

@@ -1,0 +1,37 @@
+scalarResult result: Result<Int32, Int32> -> Int32 {
+    result -> when {
+        Result<Int32, Int32>.Ok(value) => value
+        Result<Int32, Int32>.Err(error) => -error
+    }
+}
+
+counterResult result: Result<cppFixture.Counter, Int32> -> Int32 {
+    result -> when {
+        Result<cppFixture.Counter, Int32>.Ok(counter) {
+            cppFixture.counterAdd(counter, 2)
+        }
+        Result<cppFixture.Counter, Int32>.Err(error) => -error
+    }
+}
+
+riskyCounterResult result: Result<cppFixture.RiskyCounter, Int32>, amount: Int32 -> Int32 {
+    result -> when {
+        Result<cppFixture.RiskyCounter, Int32>.Ok(counter) {
+            cppFixture.riskyCounterAdd(counter, amount) -> scalarResult
+        }
+        Result<cppFixture.RiskyCounter, Int32>.Err(error) => -error
+    }
+}
+
+main {
+    cppFixture.add(20, 22) => sum
+    cppFixture.scaleFloat64Float64(1.5, 4) => scaled
+    cppFixture.createCounter(40) -> counterResult => counter
+    cppFixture.createRiskyCounter(10) -> riskyCounterResult(5) => riskySuccess
+    cppFixture.createRiskyCounter(-1) -> riskyCounterResult(5) => constructorFailure
+    cppFixture.createRiskyCounter(10) -> riskyCounterResult(13) => methodFailure
+    cppFixture.risky_destructions => destructions
+
+    Int32(scaled) => scaledInteger
+    "$sum,$scaledInteger,$counter,$riskySuccess,$constructorFailure,$methodFailure,$destructions" -> println
+}

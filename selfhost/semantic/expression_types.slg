@@ -621,12 +621,46 @@ public inferContext prepared: semanticContext.SemanticSnapshot -> [ExpressionTyp
                     }
                     structSearch! + 1 => structSearch!
                 }
+                sourceIndex! => structSourceModule!
+                structSymbol! < 0 -> if {
+                    prepared.modules[sourceIndex!] => currentModuleIdentity
+                    0 => siblingModuleIndex!
+                    siblingModuleIndex! < (prepared.modules -> len) -> while {
+                        prepared.modules[siblingModuleIndex!] => siblingIdentity
+                        (siblingIdentity.sourceIndex != sourceIndex! and siblingIdentity.pathHash == currentModuleIdentity.pathHash) -> if {
+                            siblingIdentity.sourceIndex => siblingSourceModule
+                            prepared.package.ranges[siblingSourceModule] => siblingRange
+                            0 => siblingStructSearch!
+                            (siblingStructSearch! < siblingRange.symbolCount and structSymbol! < 0) -> while {
+                                prepared.package.symbols[siblingRange.symbolStart + siblingStructSearch!] => siblingStruct
+                                (siblingStruct.kind == 3 and siblingStruct.parent < 0) -> if {
+                                    prepared.package.tokens[sourceRange.tokenStart + typeNameToken!] => literalName
+                                    prepared.package.tokens[siblingRange.tokenStart + siblingStruct.nameToken] => declarationName
+                                    literalName.span.length == declarationName.span.length => siblingEqual!
+                                    UIntSize(0) => siblingNameByte!
+                                    (siblingEqual! and siblingNameByte! < literalName.span.length) -> while {
+                                        (source -> byte(literalName.span.start + siblingNameByte!)) != (prepared.package.sources[siblingSourceModule] -> byte(declarationName.span.start + siblingNameByte!)) -> if {
+                                            false => siblingEqual!
+                                        }
+                                        siblingNameByte! + UIntSize(1) => siblingNameByte!
+                                    }
+                                    siblingEqual! -> if {
+                                        siblingStructSearch! => structSymbol!
+                                        siblingSourceModule => structSourceModule!
+                                    }
+                                }
+                                siblingStructSearch! + 1 => siblingStructSearch!
+                            }
+                        }
+                        siblingModuleIndex! + 1 => siblingModuleIndex!
+                    }
+                }
                 structSymbol! >= 0 -> if {
                     inferred! -> push(ExpressionType {
                         sourceModule: sourceIndex!
                         astNode: astIndex!
                         origin: 0
-                        targetModule: sourceIndex!
+                        targetModule: structSourceModule!
                         targetSymbol: structSymbol!
                         keyOrigin: -1
                         keyModule: -1

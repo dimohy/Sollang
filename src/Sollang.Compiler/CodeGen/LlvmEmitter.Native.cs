@@ -1,6 +1,7 @@
 using System.Globalization;
 using Sollang.Compiler.Diagnostics;
 using Sollang.Compiler.Semantics;
+using Sollang.Compiler.Syntax;
 
 namespace Sollang.Compiler.CodeGen;
 
@@ -207,6 +208,14 @@ internal sealed partial class LlvmEmitter
         }
         var address = NextTemp("native_target");
         EmitLoad(address, "ptr", NativeFunctionPointerGlobal(function), 8);
+        if (function.NativeError == NativeErrorConvention.StatusOut)
+        {
+            return EmitNativeStatusOutFunctionCall(
+                function,
+                argument,
+                additionalArguments,
+                address);
+        }
         if (UsesNativeAggregateAbi(function))
         {
             return EmitNativeAggregateFunctionCall(function, argument, additionalArguments, address);
@@ -231,6 +240,96 @@ internal sealed partial class LlvmEmitter
                     ? new RuntimeStruct(function.ReturnType, result)
                 : throw new SollangException(
                     $"native result type '{function.ReturnType}' is not implemented");
+    }
+
+    private RuntimeEnum EmitNativeStatusOutFunctionCall(
+        BoundFunction function,
+        RuntimeValue? argument,
+        IReadOnlyList<RuntimeValue>? additionalArguments,
+        string address)
+    {
+        var successType = function.NativeSuccessType
+            ?? throw new SollangException(
+                $"try native function '{function.Name}' has no success type");
+        if (!_program.Types.TryGetResultTypes(function.ReturnType, out var resultTypes)
+            || resultTypes.Ok != successType
+            || resultTypes.Error != BoundType.Int)
+        {
+            throw new SollangException(
+                $"try native function '{function.Name}' must return "
+                + $"Result<{successType}, Int32>");
+        }
+
+        string? output = null;
+        string? outputType = null;
+        var outputAlignment = 1;
+        if (successType != BoundType.Unit)
+        {
+            output = NextTemp("native_try_out");
+            outputType = LlvmType(successType);
+            outputAlignment = RuntimeAlignment(successType);
+            EmitAlloca(output, outputType, outputAlignment);
+            EmitStore(outputType, "zeroinitializer", output, outputAlignment);
+        }
+
+        var arguments = NativeAggregateCallArguments(
+            function,
+            argument,
+            additionalArguments,
+            hasIndirectResult: false);
+        if (output is not null)
+        {
+            arguments.Add($"ptr {output}");
+        }
+
+        var status = NextTemp("native_try_status");
+        EmitIndirectCall(status, "i32", address, string.Join(", ", arguments));
+        var succeeded = NextTemp("native_try_ok");
+        EmitCompare(succeeded, "eq", "i32", status, "0");
+
+        var definition = _program.Types.GetEnum(function.ReturnType);
+        var okVariant = definition.Variants.First(static variant => variant.Name == "Ok");
+        var errorVariant = definition.Variants.First(static variant => variant.Name == "Err");
+        var successLabel = NextLabel("native_try_success");
+        var errorLabel = NextLabel("native_try_error");
+        var endLabel = NextLabel("native_try_end");
+        EmitConditionalBranch(succeeded, successLabel, errorLabel);
+
+        EmitLabel(successLabel);
+        _currentBlockLabel = successLabel;
+        RuntimeValue? successPayload = null;
+        if (successType != BoundType.Unit)
+        {
+            var loaded = NextTemp("native_try_value");
+            EmitLoad(loaded, outputType!, output!, outputAlignment);
+            successPayload = IsIntegerType(successType)
+                ? new RuntimeInt(successType, loaded)
+                : IsFloatType(successType)
+                    ? new RuntimeFloat(successType, loaded)
+                    : _program.Types.IsStruct(successType)
+                        ? ValidateNativeHandleResult(new RuntimeStruct(successType, loaded))
+                        : throw new SollangException(
+                            $"try native success type '{successType}' is not implemented");
+        }
+        var success = EmitEnumValue(function.ReturnType, okVariant, successPayload);
+        var successIncoming = _currentBlockLabel;
+        EmitBranch(endLabel);
+
+        EmitLabel(errorLabel);
+        _currentBlockLabel = errorLabel;
+        var failure = EmitEnumValue(
+            function.ReturnType,
+            errorVariant,
+            new RuntimeInt(BoundType.Int, status));
+        var errorIncoming = _currentBlockLabel;
+        EmitBranch(endLabel);
+
+        EmitLabel(endLabel);
+        _currentBlockLabel = endLabel;
+        return EmitEnumPhi(
+            "native_try_result",
+            function.ReturnType,
+            [(success, successIncoming), (failure, errorIncoming)]);
     }
 
     private bool UsesNativeAggregateAbi(BoundFunction function)

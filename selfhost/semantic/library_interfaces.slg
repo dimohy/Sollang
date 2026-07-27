@@ -1,0 +1,434 @@
+namespace sollang.compiler.semantic.library_interfaces
+
+import sys.file as file
+
+# The self-host compiler decodes the canonical .slglib.json interface directly
+# from its mapped bytes. Text fields remain offsets into the SourceText owner;
+# no generated Sollang source and no copied strings are created.
+public struct MetadataSpan {
+    start: UIntSize
+    length: UIntSize
+}
+
+public struct LibraryParameter {
+    name: MetadataSpan
+    typeName: MetadataSpan
+}
+
+public struct LibraryExport {
+    name: MetadataSpan
+    qualifiedName: MetadataSpan
+    symbol: MetadataSpan
+    parameterStart: Int
+    parameterCount: Int
+    resultType: MetadataSpan
+    signatureHash: MetadataSpan
+}
+
+public struct LibraryInterface {
+    status: Int
+    errorOffset: UIntSize
+    target: MetadataSpan
+    libraryFile: MetadataSpan
+    abiHash: MetadataSpan
+    exports: [LibraryExport; ~]
+    parameters: [LibraryParameter; ~]
+}
+
+struct Cursor {
+    index: UIntSize
+    status: Int
+}
+
+struct StringRead {
+    cursor: Cursor
+    value: MetadataSpan
+}
+
+isWhitespace value: UInt8 -> Bool {
+    value == UInt8(32) or value == UInt8(9) or value == UInt8(10) or value == UInt8(13)
+}
+
+isHex value: UInt8 -> Bool {
+    (value >= UInt8(48) and value <= UInt8(57))
+        or (value >= UInt8(65) and value <= UInt8(70))
+        or (value >= UInt8(97) and value <= UInt8(102))
+}
+
+skipWhitespace source: Text, cursor: Cursor -> Cursor {
+    cursor => result!
+    source -> len => sourceLength
+    (result!.status == 0
+        and result!.index < sourceLength
+        and ((source -> byte(result!.index)) -> isWhitespace)) -> while {
+        result!.index + UIntSize(1) => result!.index
+    }
+    result!
+}
+
+expectByte source: Text, cursor: Cursor, expected: UInt8, code: Int -> Cursor {
+    source -> skipWhitespace(cursor) => result!
+    source -> len => sourceLength
+    result!.status == 0 -> if {
+        (result!.index < sourceLength and (source -> byte(result!.index)) == expected) -> if {
+            result!.index + UIntSize(1) => result!.index
+        } else {
+            code => result!.status
+        }
+    }
+    result!
+}
+
+readString source: Text, cursor: Cursor, code: Int -> StringRead {
+    source -> skipWhitespace(cursor) => next!
+    MetadataSpan { start: next!.index, length: UIntSize(0) } => value!
+    source -> len => sourceLength
+    next!.status == 0 -> if {
+        (next!.index < sourceLength and (source -> byte(next!.index)) == UInt8(34)) -> if {
+            next!.index + UIntSize(1) => next!.index
+            next!.index => value!.start
+            false => closed!
+            (next!.status == 0 and next!.index < sourceLength and not closed!) -> while {
+                source -> byte(next!.index) => current
+                current == UInt8(34) -> if {
+                    next!.index - value!.start => value!.length
+                    next!.index + UIntSize(1) => next!.index
+                    true => closed!
+                } else {
+                    current < UInt8(32) -> if {
+                        code => next!.status
+                    } else {
+                        current == UInt8(92) -> if {
+                            next!.index + UIntSize(1) => next!.index
+                            next!.index < sourceLength -> if {
+                                source -> byte(next!.index) => escaped
+                                escaped == UInt8(117) -> if {
+                                    UIntSize(0) => hexIndex!
+                                    (next!.status == 0 and hexIndex! < UIntSize(4)) -> while {
+                                        next!.index + UIntSize(1) => next!.index
+                                        (next!.index < sourceLength
+                                            and ((source -> byte(next!.index)) -> isHex)) -> if {
+                                            hexIndex! + UIntSize(1) => hexIndex!
+                                        } else {
+                                            code => next!.status
+                                        }
+                                    }
+                                } else {
+                                    (escaped == UInt8(34)
+                                        or escaped == UInt8(92)
+                                        or escaped == UInt8(47)
+                                        or escaped == UInt8(98)
+                                        or escaped == UInt8(102)
+                                        or escaped == UInt8(110)
+                                        or escaped == UInt8(114)
+                                        or escaped == UInt8(116)) -> if {
+                                    } else {
+                                        code => next!.status
+                                    }
+                                }
+                            } else {
+                                code => next!.status
+                            }
+                        }
+                        next!.status == 0 -> if {
+                            next!.index + UIntSize(1) => next!.index
+                        }
+                    }
+                }
+            }
+            (next!.status == 0 and not closed!) -> if { code => next!.status }
+        } else {
+            code => next!.status
+        }
+    }
+    StringRead { cursor: next!, value: value! }
+}
+
+spanIs source: Text, span: MetadataSpan, expected: Text -> Bool {
+    span.length == (expected -> len) => matches!
+    UIntSize(0) => index!
+    (matches! and index! < span.length) -> while {
+        (source -> byte(span.start + index!)) != (expected -> byte(index!)) -> if {
+            false => matches!
+        }
+        index! + UIntSize(1) => index!
+    }
+    matches!
+}
+
+public spanEquals source: Text, span: MetadataSpan, expected: Text -> Bool {
+    source -> spanIs(span, expected)
+}
+
+public exportCount document: ref LibraryInterface -> Int {
+    Int(document.exports -> len)
+}
+
+public exportName document: ref LibraryInterface, exportIndex: Int -> MetadataSpan {
+    document.exports[exportIndex].name
+}
+
+public exportResultType document: ref LibraryInterface, exportIndex: Int -> MetadataSpan {
+    document.exports[exportIndex].resultType
+}
+
+public exportParameterCount document: ref LibraryInterface, exportIndex: Int -> Int {
+    document.exports[exportIndex].parameterCount
+}
+
+public exportParameterType document: ref LibraryInterface, exportIndex: Int, parameterOrdinal: Int -> MetadataSpan {
+    document.exports[exportIndex].parameterStart + parameterOrdinal => parameterIndex
+    document.parameters[parameterIndex].typeName
+}
+
+sameSpan source: Text, left: MetadataSpan, right: MetadataSpan -> Bool {
+    left.length == right.length => matches!
+    UIntSize(0) => index!
+    (matches! and index! < left.length) -> while {
+        (source -> byte(left.start + index!)) != (source -> byte(right.start + index!)) -> if {
+            false => matches!
+        }
+        index! + UIntSize(1) => index!
+    }
+    matches!
+}
+
+spanIsHex source: Text, span: MetadataSpan, length: UIntSize -> Bool {
+    span.length == length => valid!
+    UIntSize(0) => index!
+    (valid! and index! < span.length) -> while {
+        (source -> byte(span.start + index!)) -> isHex -> if {
+        } else {
+            false => valid!
+        }
+        index! + UIntSize(1) => index!
+    }
+    valid!
+}
+
+expectKey source: Text, cursor: Cursor, expected: Text, code: Int -> Cursor {
+    source -> readString(cursor, code) => key
+    key.cursor => result!
+    result!.status == 0 -> if {
+        source -> spanIs(key.value, expected) -> if {
+            source -> expectByte(result!, UInt8(58), code) => result!
+        } else {
+            code => result!.status
+        }
+    }
+    result!
+}
+
+readParameter source: Text, cursor: Cursor, parameters: mut [LibraryParameter; ~] -> Cursor {
+    source -> expectByte(cursor, UInt8(123), 31) => next!
+    source -> expectKey(next!, "name", 32) => next!
+    source -> readString(next!, 33) => nameRead
+    nameRead.cursor => next!
+    source -> expectByte(next!, UInt8(44), 34) => next!
+    source -> expectKey(next!, "type", 35) => next!
+    source -> readString(next!, 36) => typeRead
+    typeRead.cursor => next!
+    source -> expectByte(next!, UInt8(125), 37) => next!
+    next!.status == 0 -> if {
+        parameters -> push(LibraryParameter {
+            name: nameRead.value
+            typeName: typeRead.value
+        })
+    }
+    next!
+}
+
+readParameters source: Text, cursor: Cursor, parameters: mut [LibraryParameter; ~] -> Cursor {
+    source -> expectByte(cursor, UInt8(91), 38) => next!
+    source -> skipWhitespace(next!) => next!
+    source -> len => sourceLength
+    (next!.status == 0
+        and next!.index < sourceLength
+        and (source -> byte(next!.index)) != UInt8(93)) -> while {
+        source -> readParameter(next!, parameters) => next!
+        source -> skipWhitespace(next!) => next!
+        (next!.status == 0
+            and next!.index < sourceLength
+            and (source -> byte(next!.index)) != UInt8(93)) -> if {
+            source -> expectByte(next!, UInt8(44), 39) => next!
+        }
+    }
+    source -> expectByte(next!, UInt8(93), 40)
+}
+
+readExport source: Text, cursor: Cursor, exports: mut [LibraryExport; ~], parameters: mut [LibraryParameter; ~] -> Cursor {
+    source -> expectByte(cursor, UInt8(123), 41) => next!
+    source -> expectKey(next!, "name", 42) => next!
+    source -> readString(next!, 43) => nameRead
+    nameRead.cursor => next!
+    source -> expectByte(next!, UInt8(44), 44) => next!
+    source -> expectKey(next!, "qualifiedName", 45) => next!
+    source -> readString(next!, 46) => qualifiedRead
+    qualifiedRead.cursor => next!
+    source -> expectByte(next!, UInt8(44), 47) => next!
+    source -> expectKey(next!, "symbol", 48) => next!
+    source -> readString(next!, 49) => symbolRead
+    symbolRead.cursor => next!
+    source -> expectByte(next!, UInt8(44), 50) => next!
+    source -> expectKey(next!, "parameters", 51) => next!
+    parameters -> len => parameterStart
+    source -> readParameters(next!, parameters) => next!
+    Int(parameters -> len) - parameterStart => parameterCount
+    next!.status == 0 -> if {
+        parameterStart => leftParameter!
+        leftParameter! < Int(parameters -> len) -> while {
+            parameters[leftParameter!].name.length == UIntSize(0) -> if { 63 => next!.status }
+            parameters[leftParameter!].typeName.length == UIntSize(0) -> if { 63 => next!.status }
+            leftParameter! + 1 => rightParameter!
+            (next!.status == 0 and rightParameter! < Int(parameters -> len)) -> while {
+                source -> sameSpan(parameters[leftParameter!].name, parameters[rightParameter!].name) -> if {
+                    63 => next!.status
+                }
+                rightParameter! + 1 => rightParameter!
+            }
+            leftParameter! + 1 => leftParameter!
+        }
+    }
+    source -> expectByte(next!, UInt8(44), 52) => next!
+    source -> expectKey(next!, "result", 53) => next!
+    source -> readString(next!, 54) => resultRead
+    resultRead.cursor => next!
+    source -> expectByte(next!, UInt8(44), 55) => next!
+    source -> expectKey(next!, "signatureHash", 56) => next!
+    source -> readString(next!, 57) => signatureRead
+    signatureRead.cursor => next!
+    source -> expectByte(next!, UInt8(125), 58) => next!
+
+    next!.status == 0 -> if {
+        (nameRead.value.length == UIntSize(0)
+            or qualifiedRead.value.length == UIntSize(0)
+            or symbolRead.value.length == UIntSize(0)
+            or resultRead.value.length == UIntSize(0)) -> if {
+            64 => next!.status
+        }
+        (next!.status == 0
+            and not (source -> spanIsHex(signatureRead.value, UIntSize(64)))) -> if {
+            65 => next!.status
+        }
+    }
+    next!.status == 0 -> if {
+        false => duplicate!
+        0 => exportIndex!
+        (not duplicate! and exportIndex! < (exports -> len)) -> while {
+            source -> sameSpan(exports[exportIndex!].name, nameRead.value) -> if {
+                true => duplicate!
+            }
+            exportIndex! + 1 => exportIndex!
+        }
+        duplicate! -> if {
+            59 => next!.status
+        } else {
+            exports -> push(LibraryExport {
+                name: nameRead.value
+                qualifiedName: qualifiedRead.value
+                symbol: symbolRead.value
+                parameterStart: parameterStart
+                parameterCount: parameterCount
+                resultType: resultRead.value
+                signatureHash: signatureRead.value
+            })
+        }
+    }
+    next!
+}
+
+readExports source: Text, cursor: Cursor, exports: mut [LibraryExport; ~], parameters: mut [LibraryParameter; ~] -> Cursor {
+    source -> expectByte(cursor, UInt8(91), 60) => next!
+    source -> skipWhitespace(next!) => next!
+    source -> len => sourceLength
+    (next!.status == 0
+        and next!.index < sourceLength
+        and (source -> byte(next!.index)) != UInt8(93)) -> while {
+        source -> readExport(next!, exports, parameters) => next!
+        source -> skipWhitespace(next!) => next!
+        (next!.status == 0
+            and next!.index < sourceLength
+            and (source -> byte(next!.index)) != UInt8(93)) -> if {
+            source -> expectByte(next!, UInt8(44), 61) => next!
+        }
+    }
+    source -> expectByte(next!, UInt8(93), 62)
+}
+
+# Status 0 is valid. 11-17 cover the document header, 21-24 ABI validation,
+# 31-40 parameters, 41-62 exports, and 70 trailing input. The interface format
+# is canonical and ordered so decode is one forward pass with no key table.
+public parse source: Text -> LibraryInterface {
+    Cursor { index: UIntSize(0), status: 0 } => cursor!
+    [LibraryExport; ~] => exports!
+    [LibraryParameter; ~] => parameters!
+    MetadataSpan { start: UIntSize(0), length: UIntSize(0) } => target!
+    MetadataSpan { start: UIntSize(0), length: UIntSize(0) } => libraryFile!
+    MetadataSpan { start: UIntSize(0), length: UIntSize(0) } => abiHash!
+
+    source -> expectByte(cursor!, UInt8(123), 11) => cursor!
+    source -> expectKey(cursor!, "schema", 12) => cursor!
+    source -> skipWhitespace(cursor!) => cursor!
+    source -> len => sourceLength
+    cursor!.status == 0 -> if {
+        (cursor!.index < sourceLength and (source -> byte(cursor!.index)) == UInt8(49)) -> if {
+            cursor!.index + UIntSize(1) => cursor!.index
+        } else {
+            21 => cursor!.status
+        }
+    }
+    source -> expectByte(cursor!, UInt8(44), 13) => cursor!
+    source -> expectKey(cursor!, "abi", 14) => cursor!
+    source -> readString(cursor!, 15) => abiRead
+    abiRead.cursor => cursor!
+    (cursor!.status == 0 and not (source -> spanIs(abiRead.value, "sollang-c-v1"))) -> if {
+        22 => cursor!.status
+    }
+    source -> expectByte(cursor!, UInt8(44), 16) => cursor!
+    source -> expectKey(cursor!, "target", 17) => cursor!
+    source -> readString(cursor!, 18) => targetRead
+    targetRead.cursor => cursor!
+    targetRead.value => target!
+    (cursor!.status == 0
+        and not (source -> spanIs(target!, "windows-x64"))
+        and not (source -> spanIs(target!, "linux-x64"))) -> if {
+        23 => cursor!.status
+    }
+    source -> expectByte(cursor!, UInt8(44), 19) => cursor!
+    source -> expectKey(cursor!, "libraryFile", 20) => cursor!
+    source -> readString(cursor!, 24) => libraryRead
+    libraryRead.cursor => cursor!
+    libraryRead.value => libraryFile!
+    source -> expectByte(cursor!, UInt8(44), 25) => cursor!
+    source -> expectKey(cursor!, "abiHash", 26) => cursor!
+    source -> readString(cursor!, 27) => hashRead
+    hashRead.cursor => cursor!
+    hashRead.value => abiHash!
+    (cursor!.status == 0
+        and not (source -> spanIsHex(abiHash!, UIntSize(64)))) -> if {
+        24 => cursor!.status
+    }
+    source -> expectByte(cursor!, UInt8(44), 28) => cursor!
+    source -> expectKey(cursor!, "exports", 29) => cursor!
+    source -> readExports(cursor!, exports!, parameters!) => cursor!
+    source -> expectByte(cursor!, UInt8(125), 30) => cursor!
+    source -> skipWhitespace(cursor!) => cursor!
+    (cursor!.status == 0 and cursor!.index != sourceLength) -> if { 70 => cursor!.status }
+
+    LibraryInterface {
+        status: cursor!.status
+        errorOffset: cursor!.index
+        target: target!
+        libraryFile: libraryFile!
+        abiHash: abiHash!
+        exports: exports!
+        parameters: parameters!
+    } => result!
+    result!
+}
+
+public parseSource source: file.SourceText -> LibraryInterface {
+    source -> len => length
+    source -> slice(UIntSize(0), length) => view
+    view -> parse
+}

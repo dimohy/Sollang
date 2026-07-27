@@ -101,7 +101,15 @@ internal sealed record FunctionDeclaration(
     string? StreamElementType = null,
     string? NativeLibrary = null,
     string? NativeSymbol = null,
-    ComFunctionMetadata? Com = null);
+    ComFunctionMetadata? Com = null,
+    NativeErrorConvention NativeError = NativeErrorConvention.Direct,
+    string? NativeSuccessType = null);
+
+internal enum NativeErrorConvention
+{
+    Direct,
+    StatusOut
+}
 
 internal enum ComApartment
 {
@@ -113,6 +121,7 @@ internal enum ComFunctionOperation
 {
     Activate,
     Clone,
+    Query,
     Method
 }
 
@@ -135,7 +144,8 @@ internal sealed record ComFunctionMetadata(
     string InterfaceId,
     string? Server,
     ComApartment Apartment,
-    int VtableSlot = -1);
+    int VtableSlot = -1,
+    string? ReceiverInterfaceType = null);
 
 internal static class InferredFunctionType
 {

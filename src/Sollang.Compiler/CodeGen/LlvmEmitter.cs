@@ -24,7 +24,12 @@ internal sealed partial class LlvmEmitter
     private sealed record ParallelCallbackInfo(
         string Name,
         BoundFunction Target,
-        IReadOnlyList<KeyValuePair<string, BoundType>> Captures);
+        IReadOnlyList<KeyValuePair<string, BoundType>> Captures,
+        IReadOnlyList<ParallelCallbackArgument> AdditionalArguments);
+    private sealed record ParallelCallbackArgument(
+        Expression Expression,
+        BoundType Type,
+        BoundFunctionInputOwnership Ownership);
 
     private readonly Dictionary<BlockFunctionCallStatement, ParallelCallbackInfo> _parallelCallbacks =
         new(ReferenceEqualityComparer.Instance);
@@ -39,6 +44,8 @@ internal sealed partial class LlvmEmitter
     private readonly Dictionary<string, string> _mutableStructSlots = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> _mutableScalarSlots = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> _readonlyCaptureBorrowPointers = new(StringComparer.Ordinal);
+    private readonly Dictionary<RuntimeValue, string> _readonlyValueSlots =
+        new(ReferenceEqualityComparer.Instance);
     private readonly Dictionary<BoundFunction, IReadOnlyDictionary<string, BoundFunction>> _functionScopes =
         new(ReferenceEqualityComparer.Instance);
     private readonly HashSet<BoundFunction> _standaloneStandardLibraryFunctions =

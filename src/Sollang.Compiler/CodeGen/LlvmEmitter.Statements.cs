@@ -1132,27 +1132,7 @@ internal sealed partial class LlvmEmitter
             var countSlot = NextTemp("parallel_count_slot");
             EmitInstruction($"{countSlot} = getelementptr %sollang.compute_group, ptr {group}, i32 0, i32 3");
             EmitStore("i64", length, countSlot, 8);
-            var captureEnvironment = "null";
-            if (callback.Captures.Count > 0)
-            {
-                var captureType = ParallelCaptureType(callback.Captures);
-                captureEnvironment = NextTemp("parallel_capture_environment");
-                EmitAlloca(captureEnvironment, captureType, 8);
-                for (var captureIndex = 0; captureIndex < callback.Captures.Count; captureIndex++)
-                {
-                    var capture = callback.Captures[captureIndex];
-                    var captureValue = ResolveLocal(capture.Key);
-                    EnsureRuntimeType(captureValue, capture.Value, callback.Target.Name);
-                    var materialized = MaterializeAggregateValue(captureValue);
-                    var captureAddress = NextTemp("parallel_capture_address");
-                    EmitInstruction($"{captureAddress} = getelementptr {captureType}, ptr {captureEnvironment}, i32 0, i32 {captureIndex.ToString(CultureInfo.InvariantCulture)}");
-                    EmitStore(
-                        materialized.TypeName,
-                        materialized.ValueName,
-                        captureAddress,
-                        RuntimeAlignment(capture.Value));
-                }
-            }
+            var captureEnvironment = EmitParallelCaptureEnvironment(callback, "parallel");
             var captureSlot = NextTemp("parallel_capture_slot");
             EmitInstruction($"{captureSlot} = getelementptr %sollang.compute_group, ptr {group}, i32 0, i32 4");
             EmitStore("ptr", captureEnvironment, captureSlot, 8);
@@ -1248,6 +1228,75 @@ internal sealed partial class LlvmEmitter
         BindParallelResult(statement, resultArray);
     }
 
+    private string EmitParallelCaptureEnvironment(ParallelCallbackInfo callback, string prefix)
+    {
+        var environmentValueCount = callback.Captures.Count + callback.AdditionalArguments.Count;
+        if (environmentValueCount == 0)
+        {
+            return "null";
+        }
+
+        var captureType = ParallelCaptureType(callback.Captures, callback.AdditionalArguments);
+        var captureEnvironment = NextTemp(prefix + "_capture_environment");
+        EmitAlloca(captureEnvironment, captureType, 8);
+        var environmentIndex = 0;
+        foreach (var capture in callback.Captures)
+        {
+            var captureValue = ResolveLocal(capture.Key);
+            EnsureFunctionArgumentRuntimeType(captureValue, capture.Value, callback.Target.Name);
+            StoreParallelEnvironmentValue(
+                prefix,
+                captureType,
+                captureEnvironment,
+                environmentIndex++,
+                capture.Value,
+                captureValue);
+        }
+        foreach (var argument in callback.AdditionalArguments)
+        {
+            var argumentValue = argument.Ownership == BoundFunctionInputOwnership.MutableBorrow
+                ? CreateMutableBorrowArgument(
+                    argument.Expression,
+                    argument.Type,
+                    callback.Target.Name,
+                    "parallel argument")
+                : _program.Types.IsReference(argument.Type)
+                    ? CreateReadonlyReferenceArgument(
+                        argument.Expression,
+                        argument.Type,
+                        callback.Target.Name)
+                    : EmitFunctionArgumentExpression(argument.Expression, argument.Type);
+            EnsureFunctionArgumentRuntimeType(argumentValue, argument.Type, callback.Target.Name);
+            StoreParallelEnvironmentValue(
+                prefix,
+                captureType,
+                captureEnvironment,
+                environmentIndex++,
+                argument.Type,
+                argumentValue);
+        }
+        return captureEnvironment;
+    }
+
+    private void StoreParallelEnvironmentValue(
+        string prefix,
+        string captureType,
+        string captureEnvironment,
+        int environmentIndex,
+        BoundType type,
+        RuntimeValue value)
+    {
+        var materialized = MaterializeAggregateValue(value);
+        var captureAddress = NextTemp(prefix + "_capture_address");
+        EmitInstruction(
+            $"{captureAddress} = getelementptr {captureType}, ptr {captureEnvironment}, i32 0, i32 {environmentIndex.ToString(CultureInfo.InvariantCulture)}");
+        EmitStore(
+            materialized.TypeName,
+            materialized.ValueName,
+            captureAddress,
+            RuntimeAlignment(type));
+    }
+
     private void BindParallelResult(BlockFunctionCallStatement statement, RuntimeValue resultArray)
     {
         if (statement.ResultName is not null)
@@ -1339,23 +1388,7 @@ internal sealed partial class LlvmEmitter
             EmitComputeGroupField(group, 2, "ptr", callbackResults);
             EmitComputeGroupField(group, 3, "i64", length);
 
-            var captureEnvironment = "null";
-            if (callback.Captures.Count > 0)
-            {
-                var captureType = ParallelCaptureType(callback.Captures);
-                captureEnvironment = NextTemp("try_parallel_capture_environment");
-                EmitAlloca(captureEnvironment, captureType, 8);
-                for (var captureIndex = 0; captureIndex < callback.Captures.Count; captureIndex++)
-                {
-                    var capture = callback.Captures[captureIndex];
-                    var captureValue = ResolveLocal(capture.Key);
-                    EnsureRuntimeType(captureValue, capture.Value, callback.Target.Name);
-                    var materialized = MaterializeAggregateValue(captureValue);
-                    var captureAddress = NextTemp("try_parallel_capture_address");
-                    EmitInstruction($"{captureAddress} = getelementptr {captureType}, ptr {captureEnvironment}, i32 0, i32 {captureIndex.ToString(CultureInfo.InvariantCulture)}");
-                    EmitStore(materialized.TypeName, materialized.ValueName, captureAddress, RuntimeAlignment(capture.Value));
-                }
-            }
+            var captureEnvironment = EmitParallelCaptureEnvironment(callback, "try_parallel");
             EmitComputeGroupField(group, 4, "ptr", captureEnvironment);
             EmitComputeGroupField(group, 5, "ptr", sinks);
             var runtimeValues = new[] { "%stdin", "%stdout", "%written", "%read", "%ok_state" };

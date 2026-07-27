@@ -1,0 +1,29 @@
+import sollang.compiler.semantic.library_imports as libraryImports
+import sys.path as path
+
+# Verifies path-relative manifest mapping and direct catalog construction.
+main {
+    path.nativeStyle => nativeStyle
+    nativeStyle -> when {
+        Windows { "windows-x64" }
+        Posix { "linux-x64" }
+    } => target
+    ["tests/library-interop/catalog_consumer.slg", ~] => sourcePaths!
+    sourcePaths! -> libraryImports.analyzeFiles(target, nativeStyle) => compilation!
+    compilation!.catalog.bindings[0] => binding
+    compilation!.package.ranges[0] => sourceRange
+    compilation!.package.tokens[sourceRange.tokenStart + binding.aliasToken] => aliasToken
+    compilation!.package.sources[0] -> len => sourceLength
+    compilation!.package.sources[0] -> slice(UIntSize(0), sourceLength) => source
+    compilation!.catalog -> libraryImports.exportNameEquals(binding.interfaceIndex, 0, "add") => hasAdd
+    compilation!.resolutions[0] => resolved
+    compilation!.catalog -> libraryImports.exportParameterTypeCode(binding.interfaceIndex, 0, 0) => leftType
+    compilation!.catalog -> libraryImports.exportParameterTypeCode(binding.interfaceIndex, 0, 1) => rightType
+    compilation!.catalog -> libraryImports.exportResultTypeCode(binding.interfaceIndex, 0) => resultType
+
+    "catalog = $(compilation!.catalog.diagnosticCount),$(compilation!.catalog.bindings -> len),$(binding.status)" -> println
+    source -> slice(aliasToken.span.start, aliasToken.span.length) -> println
+    hasAdd -> if { "export add = true" -> println } else { "export add = false" -> println }
+    "resolution = $(compilation!.resolutions -> len),$(resolved.status),$(resolved.exportIndex)" -> println
+    "types = $leftType,$rightType,$resultType" -> println
+}

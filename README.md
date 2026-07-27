@@ -98,6 +98,9 @@ call.
 - one compact lexer/grammar source set consumed by the C# bootstrap and the
   Sollang lexer/parser/CST/AST pipeline
 - LLVM-backed Windows x64, Linux x64, and browser WebAssembly output
+- one target-aware Native ABI shared by grouped C DLL/`.so` imports, stable
+  Sollang libraries, Windows COM, and Clang-generated C++ shims; steady-state
+  scalar calls use cached symbols without wrapper allocation
 - content-validated incremental builds whose exact-input warm path skips parsing,
   semantic analysis, LLVM emission, and linking, with byte-identical artifacts,
   transitive interface invalidation, stable cross-session semantic identities,
@@ -300,7 +303,7 @@ public answer: -> Int => 42
 
 ## Install A Release
 
-Sollang 0.2 provides self-contained compiler packages for Windows x64 and Linux
+Sollang 0.3 provides self-contained compiler packages for Windows x64 and Linux
 x64. Extract the archive for your operating system, keep the bundled `stdlib`
 next to the compiler, and set `SOLLANG_LLVM_HOME` to an LLVM installation.
 Linux uses `/usr` automatically when no explicit LLVM home is supplied.
@@ -325,7 +328,7 @@ sollang run hello.slg
 sollang run hello.slg -- first second
 ```
 
-The 0.2 archives also include `sollangc-stage3`, the native compiler reproduced
+The 0.3 archives also include `sollangc-stage3`, the native compiler reproduced
 by the Sollang-written compiler at its verified Stage 3 fixed point. The
 supported `sollang` CLI remains alongside it during the transition. See
 [`STAGE3_COMPILER.md`](docs/STAGE3_COMPILER.md) for the Stage 3 driver's direct
@@ -386,6 +389,7 @@ returns a nonzero native process status when any test fails.
 - [Array, dictionary, and ownership design](docs/ARRAYS.md)
 - [Grammar bootstrap and self-host frontend](docs/GRAMMAR_BOOTSTRAP.md)
 - [Deterministic parallel compilation](docs/PARALLEL_COMPILATION.md)
+- [Native interoperability](docs/NATIVE_INTEROP.md)
 - [Typed role blocks](docs/ROLE_BLOCKS.md)
 - [Package registry protocol](docs/PACKAGE_REGISTRY.md)
 - [Benchmarks](benchmarks/README.md)

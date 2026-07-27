@@ -93,6 +93,24 @@ internal sealed class WasmBrowserLlvmRuntimePlatform : LlvmRuntimePlatform
 
     public override void EmitDirectoryPrimitives(StringBuilder functions)
     {
+        functions.AppendLine("""
+            define internal %sollang.directory_result @sollang_platform_read_directory(ptr %path, i64 %len, i32 %style) #0 {
+            entry:
+              ret %sollang.directory_result zeroinitializer
+            }
+
+            define internal %sollang.path_query_result @sollang_platform_query_path(ptr %path, i64 %len, i32 %style) #0 {
+            entry:
+              %failure0 = insertvalue %sollang.path_query_result poison, ptr null, 0
+              %failure1 = insertvalue %sollang.path_query_result %failure0, i64 0, 1
+              %failure2 = insertvalue %sollang.path_query_result %failure1, i8 3, 2
+              %failure3 = insertvalue %sollang.path_query_result %failure2, i64 0, 3
+              %failure4 = insertvalue %sollang.path_query_result %failure3, i64 0, 4
+              %failure5 = insertvalue %sollang.path_query_result %failure4, i32 0, 5
+              ret %sollang.path_query_result %failure5
+            }
+
+            """);
     }
 
     public override void EmitExternalDeclarations(StringBuilder functions)

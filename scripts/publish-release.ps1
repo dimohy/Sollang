@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [ValidatePattern('^\d+\.\d+\.\d{6}$')]
-    [string]$Version = "0.2.260725",
+    [string]$Version = "0.3.260727",
     [string]$OutputRoot,
     [string]$WindowsStage3Path,
     [string]$LinuxStage3Path

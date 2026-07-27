@@ -3,14 +3,22 @@
 Status: implementation contract for Sollang 0.3
 
 Current vertical slices: grouped C ABI declarations, contextual numeric
-literals, bind-once dynamic loading, cached indirect calls, and deterministic
-cleanup are implemented in both compilers. The C# reference compiler also
-supports explicitly stable C aggregate values, builds and consumes Sollang
-shared libraries on Windows x64 and Linux x64, and has a verified Windows COM
-vertical slice. The Clang-based binding tool also generates and executes
-scalar `noexcept` free-function shims on Windows x64 and Linux x64.
-Self-hosted parity for the newer library, COM, and binding-generator slices
-remains in progress.
+literals, explicitly stable C aggregate values, bind-once dynamic loading,
+cached indirect calls, affine native handles, and deterministic cleanup are
+implemented in both compilers on Windows x64 and Linux x64. The C# reference
+compiler builds and consumes Sollang shared libraries on both targets. The
+self-hosted compiler preserves `library ... from ...` declarations, resolves
+their source-relative target manifests, maps each canonical interface once,
+and decodes schema, ABI, hashes, exports, and scalar signatures into flat
+span-backed catalog tables without manufacturing or reparsing Sollang source.
+Qualified catalog lookup, contextual argument typing, ordinary call/Typed IR
+projection, cached symbol initialization, and direct Windows/Linux execution
+are implemented in the self-hosted compiler. Windows COM activation, checked
+`QueryInterface`, scalar calls, explicit cloning, and deterministic release
+have reference-compiler and self-hosted lowering plus actual COM-server
+execution coverage. The
+Clang-based binding tool generates and executes direct and checked C++ shims,
+including affine class handles, through both compilers on Windows and Linux.
 
 Sollang native interoperability is one feature with four projections:
 
@@ -287,12 +295,13 @@ lookup, and symbol lookup are cached at program entry. Steady-state scalar
 method calls use one indirect LLVM call and introduce no heap allocation,
 reflection, wrapper object, or per-call lookup.
 
-The current slice covers activation, scalar methods returning `Unit` or
-`Result<scalar, Int32>`, explicit cloning, and deterministic release. Checked
-`QueryInterface` conversions plus owning `BSTR` and `VARIANT` wrappers remain
-required before the COM projection is complete. The self-hosted compiler must
-implement the same semantics in a dedicated emitter submodule rather than
-growing `selfhost/llvm/text.slg`.
+The supported 0.3 COM surface covers activation, scalar methods returning `Unit` or
+`Result<scalar, Int32>`, checked `QueryInterface` conversions, explicit
+cloning, and deterministic release. Owning `BSTR` and `VARIANT` wrappers are
+outside the 0.3 surface and will be added only with explicit encoding,
+ownership, and cross-apartment tests. Self-hosted COM runtime
+lowering lives in a dedicated emitter submodule rather than growing
+`selfhost/llvm/text.slg`.
 
 ## C++
 
@@ -325,17 +334,27 @@ entries. The lossless `arguments` form is required instead of a shell-quoted
 `command`.
 
 This slice accepts fixed-width-compatible scalar parameters and results on
-non-variadic `noexcept` free functions and public class members. Potentially
-throwing functions are rejected during generation. A generated class projection
-uses an affine Native ABI handle:
+non-variadic free functions and public class members. `noexcept` functions and
+methods keep the direct ABI. Potentially throwing functions and methods use a
+generated exception barrier, while every constructor uses the checked path so
+allocation failure cannot become a hidden null handle. A generated class
+projection uses an affine Native ABI handle:
 
 ```slg
 native geometry from "geometry_shim" {
     handle Counter drop "sollang_cpp_Counter_drop_..."
-    createCounter initial: Int32 -> geometry.Counter as "..."
+    try createCounter initial: Int32 -> geometry.Counter as "..."
     counterAdd self: ref geometry.Counter, amount: Int32 -> Int32 as "..."
 }
 ```
+
+`try ... -> T` has source type `Result<T, Int32>`. Its physical C ABI is
+`int32_t(args..., T* out) noexcept`: status zero constructs `Ok`, and a nonzero
+status constructs `Err`. Generated C++ barriers currently use stable error code
+`1` for any caught exception, including allocation failure. The output slot and
+the Result value are stack aggregates; no Sollang heap allocation, reflection,
+or wrapper object is introduced. `noexcept` calls do not pay for this branch or
+out pointer.
 
 The handle occupies one pointer-sized ABI word, cannot be constructed,
 inspected, copied, or mutated as an ordinary struct, and invokes its generated
@@ -344,10 +363,18 @@ handle by readonly reference, so no wrapper object, heap allocation, or handle
 copy is introduced on the steady-state method path. The C++ object allocation
 itself remains the constructor's explicit cost.
 
-Explicit `Result<handle, error>` allocation/constructor failure and exception
-translation, selected template instantiations, and callback lifetimes remain
-subsequent slices. Raw pointers are never exposed or temporarily disguised as
-user-visible integers.
+The supported 0.3 C++ projection is complete for fixed-width scalar functions,
+checked exception barriers, and affine class handles. Both the reference
+compiler and the self-host compiler execute checked scalar
+and affine handle results on Windows and Linux. The self-host path parses
+generated Native Handle declarations, resolves their nominal pointer type,
+rejects struct-literal forgery, traps null constructor results, resolves and
+caches the declared drop symbol at startup, and invokes it exactly once at
+scope exit. Its steady-state handle path has no wrapper heap allocation or
+per-call symbol lookup. Selected template instantiations and callback lifetimes
+are outside the 0.3 surface and require explicit generated lifetime contracts.
+Raw pointers are never exposed or temporarily
+disguised as user-visible integers.
 
 ## Verification gates
 
@@ -365,17 +392,17 @@ Version 0.3 is released only after all four projections and these gates are
 complete.
 
 Run `scripts/verify-native-interop.ps1` to build the C fixture and execute the
-native examples through Stage1 and Stage2 on Windows and Linux. The aggregate
-part currently runs through Stage1 while self-host parity is being implemented.
-The gate covers calls in `main`, user functions, and conditional regions, plus
-scalar, readonly-reference, mutable-reference, register aggregate, memory
-aggregate, and aggregate-return paths. It compares C `sizeof`, `_Alignof`, and
-`offsetof` results and inspects the emitted Windows/SysV LLVM signatures. It
-also checks that symbol lookup occurs only in initialization and that each
-steady-state call loads the cached function pointer exactly once. The
-self-hosted WebAssembly backend rejects native declarations before emitting
-invalid host-loader IR. Both compilers reject non-ABI-safe signatures such as
-`Text` before code generation.
+native examples through Stage1 and Stage2 on Windows and Linux. The gate covers
+calls in `main`, user functions, and conditional regions, plus scalar,
+readonly-reference, mutable-reference, register aggregate, memory aggregate,
+aggregate-return, narrow signed/unsigned scalar, and register-pressure paths
+in both compilers. It compares C `sizeof`, `_Alignof`, and `offsetof` results
+and inspects the emitted Windows/SysV LLVM signatures. It also checks that
+symbol lookup occurs only in initialization and that each steady-state call
+loads the cached function pointer exactly once. The self-hosted WebAssembly
+backend rejects native declarations before emitting invalid host-loader IR.
+Both compilers reject non-ABI-safe signatures such as `Text` before code
+generation.
 
 Run `scripts/verify-sollang-library-export.ps1` to build a Sollang DLL and
 Linux `.so`, consume both through a one-line `library` declaration, verify
@@ -384,6 +411,9 @@ directly typed numeric literals, and assert diagnostics for unsafe or empty
 public surfaces.
 
 Run `scripts/verify-cpp-interop.ps1` to generate the same C++ binding for
-Windows x64 and Linux x64, build the DLL and `.so`, execute a Sollang consumer,
-exercise deterministic overload naming, and verify byte-identical manifest
-regeneration.
+Windows x64 and Linux x64, build the DLL and `.so`, and execute consumers
+through both Stage1 and self-hosted Stage2. The gate exercises direct and
+throwing functions, checked construction, Native Handle forgery rejection,
+null-result validation, exact destruction counts, cached drop lookup,
+zero-wrapper-heap lowering, stack-only Result lowering, deterministic overload
+naming, and byte-identical manifest regeneration.

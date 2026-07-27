@@ -248,11 +248,15 @@ expandStreamPipelines tokens: [syntax.SyntaxToken; ~], nodes: move [AstNode; ~] 
 # 58 when arm, 59 enum pattern, 60 additional function input,
 # 61 stream state binding, 62 stream stop statement, 63 range expression,
 # 64 fold flow target, 65 native library declaration, 66 COM class declaration,
-# 67 COM interface declaration.
+# 67 COM interface declaration, 68 native affine handle declaration,
+# 69 Sollang library interface import.
 # Function flags: 1 move input, 2 mutable input, 4 public, 8 async, 64 stream,
-# 128 native ABI declaration, 512 COM declaration. Struct flag 256 marks an
-# explicit `abi struct`. COM class flags: 1024 STA, 2048 MTA. Synthetic
-# self-host function flags: 4096 activation, 8192 clone, 16384 receiver.
+# 128 native ABI declaration, 512 COM declaration, 32768 status/out native
+# Result declaration. Struct flag 256 marks an
+# explicit `abi struct`; 65536 marks a native affine handle. COM class flags:
+# 1024 STA, 2048 MTA. Synthetic
+# self-host function flags: 4096 activation, 8192 clone, 16384 receiver,
+# 131072 checked QueryInterface.
 # Keyword operator codes use the same
 # -(keywordIndex + 1) representation as syntax diagnostics.
 classifyRule rule: Int -> Int {
@@ -269,7 +273,9 @@ classifyRule rule: Int -> Int {
     rule == grammar.ruleIdComInterfaceDeclaration -> if { 67 => kind! }
     rule == grammar.ruleIdComMethodDeclaration -> if { 7 => kind! }
     rule == grammar.ruleIdNativeLibraryDeclaration -> if { 65 => kind! }
+    rule == grammar.ruleIdNativeHandleDeclaration -> if { 68 => kind! }
     rule == grammar.ruleIdNativeFunctionDeclaration -> if { 7 => kind! }
+    rule == grammar.ruleIdLibraryImportDeclaration -> if { 69 => kind! }
     rule == grammar.ruleIdMainBlock -> if { 8 => kind! }
     rule == grammar.ruleIdBindingStatement -> if { 9 => kind! }
     rule == grammar.ruleIdFlowExpression -> if { 10 => kind! }
@@ -847,6 +853,50 @@ lowerFrom request: LowerRequest -> [AstNode; ~] {
             nativeAliasToken! => declaration!.payloadToken
             nativeLibraryToken! => declaration!.secondaryToken
         }
+        declaration!.kind == 69 -> if {
+            -1 => libraryAliasToken!
+            -1 => libraryPathToken!
+            false => libraryKeywordSeen!
+            declaration!.firstToken => libraryImportToken!
+            declaration!.firstToken + declaration!.tokenCount => libraryImportEnd
+            libraryImportToken! < libraryImportEnd -> while {
+                (tokens![libraryImportToken!].kind == grammar.tokenIdIdentifier and libraryAliasToken! < 0) -> if {
+                    libraryKeywordSeen! -> if {
+                        libraryImportToken! => libraryAliasToken!
+                    } else {
+                        true => libraryKeywordSeen!
+                    }
+                }
+                (tokens![libraryImportToken!].kind == grammar.tokenIdString and libraryPathToken! < 0) -> if {
+                    libraryImportToken! => libraryPathToken!
+                }
+                libraryImportToken! + 1 => libraryImportToken!
+            }
+            libraryAliasToken! => declaration!.payloadToken
+            libraryPathToken! => declaration!.secondaryToken
+        }
+        declaration!.kind == 68 -> if {
+            -1 => nativeHandleNameToken!
+            -1 => nativeHandleDropToken!
+            0 => nativeHandleIdentifierOrdinal!
+            declaration!.firstToken => nativeHandleToken!
+            declaration!.firstToken + declaration!.tokenCount => nativeHandleTokenEnd
+            nativeHandleToken! < nativeHandleTokenEnd -> while {
+                tokens![nativeHandleToken!].kind == grammar.tokenIdIdentifier -> if {
+                    nativeHandleIdentifierOrdinal! == 1 -> if {
+                        nativeHandleToken! => nativeHandleNameToken!
+                    }
+                    nativeHandleIdentifierOrdinal! + 1 => nativeHandleIdentifierOrdinal!
+                }
+                tokens![nativeHandleToken!].kind == grammar.tokenIdString -> if {
+                    nativeHandleToken! => nativeHandleDropToken!
+                }
+                nativeHandleToken! + 1 => nativeHandleToken!
+            }
+            nativeHandleNameToken! => declaration!.payloadToken
+            nativeHandleDropToken! => declaration!.secondaryToken
+            65536 => declaration!.flags
+        }
         declaration!.kind == 66 -> if {
             -1 => comAliasToken!
             -1 => comClassToken!
@@ -926,6 +976,23 @@ lowerFrom request: LowerRequest -> [AstNode; ~] {
         }
         declaration!.cstRuleId == grammar.ruleIdNativeFunctionDeclaration -> if {
             declaration!.flags + 128 => declaration!.flags
+            tokens![declaration!.firstToken] => nativeFirstToken
+            (nativeFirstToken.kind == grammar.tokenIdIdentifier
+                and nativeFirstToken.span.length == UIntSize(3)
+                and (source -> byte(nativeFirstToken.span.start)) == UInt8(116)
+                and (source -> byte(nativeFirstToken.span.start + UIntSize(1))) == UInt8(114)
+                and (source -> byte(nativeFirstToken.span.start + UIntSize(2))) == UInt8(121)) -> if {
+                declaration!.flags + 32768 => declaration!.flags
+                declaration!.firstToken + 1 => nativeTryNameToken!
+                nativeTryNameToken! < declaration!.firstToken + declaration!.tokenCount -> while {
+                    tokens![nativeTryNameToken!].kind == grammar.tokenIdIdentifier -> if {
+                        nativeTryNameToken! => declaration!.payloadToken
+                        declaration!.firstToken + declaration!.tokenCount => nativeTryNameToken!
+                    } else {
+                        nativeTryNameToken! + 1 => nativeTryNameToken!
+                    }
+                }
+            }
         }
         (declaration!.kind == 1 or declaration!.kind == 2 or declaration!.kind == 6 or declaration!.kind == 7) -> if {
             false => pathPayloadFound!
@@ -1003,11 +1070,29 @@ lowerFrom request: LowerRequest -> [AstNode; ~] {
             }
         }
         (declaration!.kind == 7 or declaration!.kind == 29 or declaration!.kind == 31) -> if {
+            declaration!.kind == 31 -> if {
+                declaration!.firstToken => methodNameToken!
+                declaration!.firstToken + declaration!.tokenCount => methodNameEnd
+                methodNameToken! < methodNameEnd -> while {
+                    tokens![methodNameToken!].kind == grammar.tokenIdColon -> if {
+                        methodNameEnd => methodNameToken!
+                    } else {
+                        tokens![methodNameToken!].kind == grammar.tokenIdIdentifier -> if {
+                            methodNameToken! => declaration!.payloadToken
+                        }
+                        methodNameToken! + 1 => methodNameToken!
+                    }
+                }
+            }
             -1 => signatureArrowToken!
             declaration!.firstToken => signatureToken!
             declaration!.firstToken + declaration!.tokenCount => signatureEnd
             false => afterColon!
+            true => firstParameterHeader!
             signatureToken! < signatureEnd -> while {
+                tokens![signatureToken!].kind == grammar.tokenIdComma -> if {
+                    false => firstParameterHeader!
+                }
                 tokens![signatureToken!].kind == grammar.tokenIdColon -> if {
                     true => afterColon!
                     signatureToken! + 1 => signatureToken!
@@ -1046,34 +1131,36 @@ lowerFrom request: LowerRequest -> [AstNode; ~] {
                     } else {
                         tokens![signatureToken!].kind == grammar.tokenIdIdentifier -> if {
                             afterColon! -> if {
-                                tokens![signatureToken!] => modifierToken
-                                false => ownershipKeyword!
-                                modifierToken.span.length == UIntSize(4) -> if {
-                                    source -> byte(modifierToken.span.start) => moveByte0
-                                    source -> byte(modifierToken.span.start + UIntSize(1)) => moveByte1
-                                    source -> byte(modifierToken.span.start + UIntSize(2)) => moveByte2
-                                    source -> byte(modifierToken.span.start + UIntSize(3)) => moveByte3
-                                    (moveByte0 == UInt8(109) and moveByte1 == UInt8(111) and moveByte2 == UInt8(118) and moveByte3 == UInt8(101)) -> if {
-                                        declaration!.flags / 4 * 4 + 1 => declaration!.flags
-                                        true => ownershipKeyword!
+                                firstParameterHeader! -> if {
+                                    tokens![signatureToken!] => modifierToken
+                                    false => ownershipKeyword!
+                                    modifierToken.span.length == UIntSize(4) -> if {
+                                        source -> byte(modifierToken.span.start) => moveByte0
+                                        source -> byte(modifierToken.span.start + UIntSize(1)) => moveByte1
+                                        source -> byte(modifierToken.span.start + UIntSize(2)) => moveByte2
+                                        source -> byte(modifierToken.span.start + UIntSize(3)) => moveByte3
+                                        (moveByte0 == UInt8(109) and moveByte1 == UInt8(111) and moveByte2 == UInt8(118) and moveByte3 == UInt8(101)) -> if {
+                                            declaration!.flags / 4 * 4 + 1 => declaration!.flags
+                                            true => ownershipKeyword!
+                                        }
                                     }
-                                }
-                                modifierToken.span.length == UIntSize(3) -> if {
-                                    source -> byte(modifierToken.span.start) => mutByte0
-                                    source -> byte(modifierToken.span.start + UIntSize(1)) => mutByte1
-                                    source -> byte(modifierToken.span.start + UIntSize(2)) => mutByte2
-                                    (mutByte0 == UInt8(109) and mutByte1 == UInt8(117) and mutByte2 == UInt8(116)) -> if {
-                                        declaration!.flags / 4 * 4 + 2 => declaration!.flags
-                                        true => ownershipKeyword!
+                                    modifierToken.span.length == UIntSize(3) -> if {
+                                        source -> byte(modifierToken.span.start) => mutByte0
+                                        source -> byte(modifierToken.span.start + UIntSize(1)) => mutByte1
+                                        source -> byte(modifierToken.span.start + UIntSize(2)) => mutByte2
+                                        (mutByte0 == UInt8(109) and mutByte1 == UInt8(117) and mutByte2 == UInt8(116)) -> if {
+                                            declaration!.flags / 4 * 4 + 2 => declaration!.flags
+                                            true => ownershipKeyword!
+                                        }
                                     }
-                                }
-                                (not ownershipKeyword! and modifierToken.span.length == UIntSize(4)) -> if {
-                                    source -> byte(modifierToken.span.start) => selfByte0
-                                    source -> byte(modifierToken.span.start + UIntSize(1)) => selfByte1
-                                    source -> byte(modifierToken.span.start + UIntSize(2)) => selfByte2
-                                    source -> byte(modifierToken.span.start + UIntSize(3)) => selfByte3
-                                    (selfByte0 == UInt8(115) and selfByte1 == UInt8(101) and selfByte2 == UInt8(108) and selfByte3 == UInt8(102)) -> if {
-                                        signatureToken! => declaration!.secondaryToken
+                                    (not ownershipKeyword! and modifierToken.span.length == UIntSize(4)) -> if {
+                                        source -> byte(modifierToken.span.start) => selfByte0
+                                        source -> byte(modifierToken.span.start + UIntSize(1)) => selfByte1
+                                        source -> byte(modifierToken.span.start + UIntSize(2)) => selfByte2
+                                        source -> byte(modifierToken.span.start + UIntSize(3)) => selfByte3
+                                        (selfByte0 == UInt8(115) and selfByte1 == UInt8(101) and selfByte2 == UInt8(108) and selfByte3 == UInt8(102)) -> if {
+                                            signatureToken! => declaration!.secondaryToken
+                                        }
                                     }
                                 }
                             } else {
@@ -1176,19 +1263,27 @@ lowerFrom request: LowerRequest -> [AstNode; ~] {
             declaration!.firstToken => bindingToken!
             declaration!.firstToken + declaration!.tokenCount => bindingEnd!
             false => afterFatArrow!
+            0 => bindingGroupDepth!
             bindingToken! < bindingEnd! -> while {
-                tokens![bindingToken!].kind == grammar.tokenIdFatArrow -> if {
+                tokens![bindingToken!] => bindingCandidate
+                (bindingCandidate.kind == grammar.tokenIdFatArrow and bindingGroupDepth! == 0) -> if {
                     true => afterFatArrow!
                     bindingToken! + 1 => bindingToken!
                 } else {
-                    afterFatArrow! -> if {
-                        tokens![bindingToken!].kind == grammar.tokenIdIdentifier -> if {
+                    (afterFatArrow! and bindingGroupDepth! == 0) -> if {
+                        bindingCandidate.kind == grammar.tokenIdIdentifier -> if {
                             bindingToken! => declaration!.payloadToken
                             bindingEnd! => bindingToken!
                         } else {
                             bindingToken! + 1 => bindingToken!
                         }
                     } else {
+                        (bindingCandidate.kind == grammar.tokenIdLeftParen or bindingCandidate.kind == grammar.tokenIdLeftBracket or bindingCandidate.kind == grammar.tokenIdLeftBrace) -> if {
+                            bindingGroupDepth! + 1 => bindingGroupDepth!
+                        }
+                        (bindingCandidate.kind == grammar.tokenIdRightParen or bindingCandidate.kind == grammar.tokenIdRightBracket or bindingCandidate.kind == grammar.tokenIdRightBrace) -> if {
+                            bindingGroupDepth! - 1 => bindingGroupDepth!
+                        }
                         bindingToken! + 1 => bindingToken!
                     }
                 }
@@ -1366,7 +1461,7 @@ lowerFrom request: LowerRequest -> [AstNode; ~] {
             secondGenericToken! => declaration!.secondaryToken
             thirdGenericToken! => declaration!.tertiaryToken
         }
-        ((declaration!.kind >= 3 and declaration!.kind <= 7) or declaration!.kind == 50) -> if {
+        ((declaration!.kind >= 3 and declaration!.kind <= 7) or declaration!.kind == 31 or declaration!.kind == 50) -> if {
             declaration!.firstToken => visibilityToken!
             true => findingVisibility!
             (visibilityToken! < declaration!.firstToken + declaration!.tokenCount and findingVisibility!) -> while {

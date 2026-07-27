@@ -10,7 +10,7 @@ internal sealed partial class LlvmEmitter
     {
         EnsureRuntimeType(value, BoundType.Int, path);
         var code = (RuntimeInt)value;
-        if (_platform is WindowsLlvmRuntimePlatform)
+        if (_platform is WindowsLlvmRuntimePlatform or LinuxLlvmRuntimePlatform)
         {
             EmitCall(NextTemp("exit_flush"), "i32", "sollang_flush_stdout", "ptr %stdout, ptr %written");
         }

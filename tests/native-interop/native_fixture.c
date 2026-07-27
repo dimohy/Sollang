@@ -13,6 +13,16 @@ SOLLANG_EXPORT int native_add(int left, int right)
     return left + right;
 }
 
+SOLLANG_EXPORT int native_checked_double(int value, int* out)
+{
+    if (value < 0)
+    {
+        return 7;
+    }
+    *out = value * 2;
+    return 0;
+}
+
 SOLLANG_EXPORT long long native_mul_i64(long long left, long long right)
 {
     return left * right;

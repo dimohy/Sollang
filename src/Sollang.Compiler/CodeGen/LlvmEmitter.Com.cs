@@ -208,6 +208,7 @@ internal sealed partial class LlvmEmitter
         {
             ComFunctionOperation.Activate => EmitComActivation(function, metadata, argument, additionalArguments),
             ComFunctionOperation.Clone => EmitComClone(function, argument, additionalArguments),
+            ComFunctionOperation.Query => EmitComQuery(function, metadata, argument, additionalArguments),
             ComFunctionOperation.Method => EmitComMethod(function, metadata, argument, additionalArguments),
             _ => throw new SollangException($"unsupported COM operation '{metadata.Operation}'")
         };
@@ -277,6 +278,43 @@ internal sealed partial class LlvmEmitter
         var addRef = EmitComVtableMethod(handle, 1, "com_add_ref");
         EmitIndirectCall(NextTemp("com_reference_count"), "i32", addRef, $"ptr {handle}");
         return EmitComInterfaceValue(function.ReturnType, handle);
+    }
+
+    private RuntimeValue EmitComQuery(
+        BoundFunction function,
+        ComFunctionMetadata metadata,
+        RuntimeValue? argument,
+        IReadOnlyList<RuntimeValue>? additionalArguments)
+    {
+        if ((additionalArguments?.Count ?? 0) != 0)
+        {
+            throw new SollangException($"COM query '{function.Name}' does not accept additional arguments");
+        }
+        var handle = EmitComHandle(argument, function.Name);
+        var output = NextTemp("com_query_out");
+        EmitAlloca(output, "ptr", 8);
+        EmitStore("ptr", "null", output, 8);
+        var query = EmitComVtableMethod(handle, 0, "com_query_interface");
+        var status = NextTemp("com_query_status");
+        EmitIndirectCall(
+            status,
+            "i32",
+            query,
+            $"ptr {handle}, ptr {ComInterfaceGuidGlobal(metadata)}, ptr {output}");
+        var queried = NextTemp("com_query_object");
+        EmitLoad(queried, "ptr", output, 8);
+        var statusOk = NextTemp("com_query_status_ok");
+        EmitCompare(statusOk, "sge", "i32", status, "0");
+        var pointerOk = NextTemp("com_query_pointer_ok");
+        EmitCompare(pointerOk, "ne", "ptr", queried, "null");
+        var succeeded = NextTemp("com_query_ok");
+        EmitBinary(succeeded, "and", "i1", statusOk, pointerOk);
+        if (!_program.Types.TryGetResultTypes(function.ReturnType, out var resultTypes))
+        {
+            throw new SollangException($"COM query '{function.Name}' must return Result");
+        }
+        var payload = EmitComInterfaceValue(resultTypes.Ok, queried);
+        return EmitComResult(function.ReturnType, succeeded, payload, status, "com_query_result");
     }
 
     private RuntimeValue EmitComMethod(

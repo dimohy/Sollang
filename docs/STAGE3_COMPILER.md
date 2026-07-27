@@ -1,6 +1,6 @@
 # Sollang Stage 3 Compiler
 
-Sollang 0.2 ships two compiler executables during the transition to a fully
+Sollang 0.3 ships two compiler executables during the transition to a fully
 self-hosted distribution:
 
 - `sollang` is the supported command-line interface. It provides project and
@@ -26,6 +26,6 @@ used for direct source compilation are `windows`, `linux`, and `wasm`.
 
 Stage 3 does not yet implement the supported CLI commands such as `build`,
 `test`, `format`, `language-server`, `resolve`, `--help`, or `--version`.
-Those commands remain on `sollang` in 0.2. The next transition step is to move
+Those commands remain on `sollang` in 0.3. The next transition step is to move
 that complete CLI contract into Sollang and remove the C# executable only after
 cross-platform behavior is verified.

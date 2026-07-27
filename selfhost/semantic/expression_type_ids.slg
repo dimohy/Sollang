@@ -314,10 +314,11 @@ public resolveContext prepared: semanticContext.SemanticSnapshot -> ExpressionTy
                     (typedArrayElementType! < 0 and typedArrayNameToken! >= 0) -> if {
                         prepared.package.tokens[sourceRange.tokenStart + typedArrayNameToken!] => localArrayElementName
                         -1 => localArrayElementSymbol!
+                        sourceIndex! => localArrayElementModule!
                         0 => localArrayElementSymbolSearch!
                         localArrayElementSymbolSearch! < sourceRange.symbolCount -> while {
                             prepared.package.symbols[sourceRange.symbolStart + localArrayElementSymbolSearch!] => localArrayElementCandidate
-                            (localArrayElementCandidate.kind == 3 and localArrayElementCandidate.parent < 0) -> if {
+                            ((localArrayElementCandidate.kind == 3 or localArrayElementCandidate.kind == 4) and localArrayElementCandidate.parent < 0) -> if {
                                 prepared.package.tokens[sourceRange.tokenStart + localArrayElementCandidate.nameToken] => localArrayElementDeclarationName
                                 localArrayElementName.span.length == localArrayElementDeclarationName.span.length => localArrayElementEqual!
                                 UIntSize(0) => localArrayElementByte!
@@ -329,11 +330,45 @@ public resolveContext prepared: semanticContext.SemanticSnapshot -> ExpressionTy
                             }
                             localArrayElementSymbolSearch! + 1 => localArrayElementSymbolSearch!
                         }
+                        localArrayElementSymbol! < 0 -> if {
+                            prepared.modules[sourceIndex!] => localArrayCurrentIdentity
+                            0 => localArraySiblingModuleSearch!
+                            localArraySiblingModuleSearch! < (prepared.modules -> len) -> while {
+                                prepared.modules[localArraySiblingModuleSearch!] => localArraySiblingIdentity
+                                (localArraySiblingIdentity.sourceIndex != sourceIndex! and localArraySiblingIdentity.pathHash == localArrayCurrentIdentity.pathHash) -> if {
+                                    localArraySiblingIdentity.sourceIndex => localArraySiblingSourceIndex
+                                    prepared.package.sources[localArraySiblingSourceIndex] -> len => localArraySiblingSourceLength
+                                    prepared.package.sources[localArraySiblingSourceIndex] -> slice(UIntSize(0), localArraySiblingSourceLength) => localArraySiblingSource
+                                    prepared.package.ranges[localArraySiblingSourceIndex] => localArraySiblingRange
+                                    0 => localArraySiblingSymbolSearch!
+                                    (localArraySiblingSymbolSearch! < localArraySiblingRange.symbolCount and localArrayElementSymbol! < 0) -> while {
+                                        prepared.package.symbols[localArraySiblingRange.symbolStart + localArraySiblingSymbolSearch!] => localArraySiblingCandidate
+                                        ((localArraySiblingCandidate.kind == 3 or localArraySiblingCandidate.kind == 4) and localArraySiblingCandidate.parent < 0) -> if {
+                                            prepared.package.tokens[localArraySiblingRange.tokenStart + localArraySiblingCandidate.nameToken] => localArraySiblingName
+                                            localArrayElementName.span.length == localArraySiblingName.span.length => localArraySiblingEqual!
+                                            UIntSize(0) => localArraySiblingByte!
+                                            (localArraySiblingEqual! and localArraySiblingByte! < localArrayElementName.span.length) -> while {
+                                                (source -> byte(localArrayElementName.span.start + localArraySiblingByte!)) != (localArraySiblingSource -> byte(localArraySiblingName.span.start + localArraySiblingByte!)) -> if {
+                                                    false => localArraySiblingEqual!
+                                                }
+                                                localArraySiblingByte! + UIntSize(1) => localArraySiblingByte!
+                                            }
+                                            localArraySiblingEqual! -> if {
+                                                localArraySiblingSymbolSearch! => localArrayElementSymbol!
+                                                localArraySiblingSourceIndex => localArrayElementModule!
+                                            }
+                                        }
+                                        localArraySiblingSymbolSearch! + 1 => localArraySiblingSymbolSearch!
+                                    }
+                                }
+                                localArraySiblingModuleSearch! + 1 => localArraySiblingModuleSearch!
+                            }
+                        }
                         localArrayElementSymbol! >= 0 -> if {
                             0 => localArrayElementTypeSearch!
                             localArrayElementTypeSearch! < (types! -> len) -> while {
                                 types![localArrayElementTypeSearch!] => localArrayElementTypeCandidate
-                                (localArrayElementTypeCandidate.kind == 1 and localArrayElementTypeCandidate.module == sourceIndex! and localArrayElementTypeCandidate.symbol == localArrayElementSymbol! and localArrayElementTypeCandidate.status == 0) -> if {
+                                (localArrayElementTypeCandidate.kind == 1 and localArrayElementTypeCandidate.module == localArrayElementModule! and localArrayElementTypeCandidate.symbol == localArrayElementSymbol! and localArrayElementTypeCandidate.status == 0) -> if {
                                     localArrayElementTypeSearch! => typedArrayElementType!
                                 }
                                 localArrayElementTypeSearch! + 1 => localArrayElementTypeSearch!
@@ -600,6 +635,39 @@ public resolveContext prepared: semanticContext.SemanticSnapshot -> ExpressionTy
                     localStructSearch! + 1 => localStructSearch!
                 }
                 literalTargetSymbol! < 0 -> if {
+                    prepared.modules[sourceIndex!] => currentModuleIdentity
+                    0 => siblingModuleIndex!
+                    siblingModuleIndex! < (prepared.modules -> len) -> while {
+                        prepared.modules[siblingModuleIndex!] => siblingIdentity
+                        (siblingIdentity.sourceIndex != sourceIndex! and siblingIdentity.pathHash == currentModuleIdentity.pathHash) -> if {
+                            siblingIdentity.sourceIndex => siblingSourceModule
+                            prepared.package.ranges[siblingSourceModule] => siblingRange
+                            0 => siblingStructSearch!
+                            (siblingStructSearch! < siblingRange.symbolCount and literalTargetSymbol! < 0) -> while {
+                                prepared.package.symbols[siblingRange.symbolStart + siblingStructSearch!] => siblingStruct
+                                (siblingStruct.kind == 3 and siblingStruct.parent < 0) -> if {
+                                    prepared.package.tokens[sourceRange.tokenStart + typeNameToken!] => literalName
+                                    prepared.package.tokens[siblingRange.tokenStart + siblingStruct.nameToken] => declarationName
+                                    literalName.span.length == declarationName.span.length => siblingEqual!
+                                    UIntSize(0) => siblingNameByte!
+                                    (siblingEqual! and siblingNameByte! < literalName.span.length) -> while {
+                                        (source -> byte(literalName.span.start + siblingNameByte!)) != (prepared.package.sources[siblingSourceModule] -> byte(declarationName.span.start + siblingNameByte!)) -> if {
+                                            false => siblingEqual!
+                                        }
+                                        siblingNameByte! + UIntSize(1) => siblingNameByte!
+                                    }
+                                    siblingEqual! -> if {
+                                        siblingSourceModule => literalTargetModule!
+                                        siblingStructSearch! => literalTargetSymbol!
+                                    }
+                                }
+                                siblingStructSearch! + 1 => siblingStructSearch!
+                            }
+                        }
+                        siblingModuleIndex! + 1 => siblingModuleIndex!
+                    }
+                }
+                literalTargetSymbol! < 0 -> if {
                     0 => qualifiedSearch!
                     qualifiedSearch! < (prepared.qualified -> len) -> while {
                         prepared.qualified[qualifiedSearch!] => importedCandidate
@@ -757,6 +825,7 @@ public resolveContext prepared: semanticContext.SemanticSnapshot -> ExpressionTy
                                 selfTargetTokenSearch! + 1 => selfTargetTokenSearch!
                             }
                             -1 => selfTargetSymbol!
+                            sourceIndex! => selfTargetModule!
                             selfTargetToken! >= 0 -> if {
                                 prepared.package.tokens[sourceRange.tokenStart + selfTargetToken!] => selfTargetName
                                 0 => selfTargetSymbolSearch!
@@ -774,13 +843,56 @@ public resolveContext prepared: semanticContext.SemanticSnapshot -> ExpressionTy
                                     }
                                     selfTargetSymbolSearch! + 1 => selfTargetSymbolSearch!
                                 }
+                                # A namespace may span source fragments. The
+                                # impl header stays in this file while the
+                                # nominal declaration can live in a sibling.
+                                selfTargetSymbol! < 0 -> if {
+                                    prepared.modules[sourceIndex!] => selfModuleIdentity
+                                    false => selfSiblingAmbiguous!
+                                    0 => selfSiblingModuleSearch!
+                                    selfSiblingModuleSearch! < (prepared.modules -> len) -> while {
+                                        prepared.modules[selfSiblingModuleSearch!] => selfSiblingIdentity
+                                        (selfSiblingIdentity.sourceIndex != sourceIndex! and selfSiblingIdentity.pathHash == selfModuleIdentity.pathHash) -> if {
+                                            selfSiblingIdentity.sourceIndex => selfSiblingSource
+                                            prepared.package.ranges[selfSiblingSource] => selfSiblingRange
+                                            prepared.package.sources[selfSiblingSource] -> len => selfSiblingLength
+                                            prepared.package.sources[selfSiblingSource] -> slice(UIntSize(0), selfSiblingLength) => selfSiblingText
+                                            0 => selfSiblingSymbolSearch!
+                                            selfSiblingSymbolSearch! < selfSiblingRange.symbolCount -> while {
+                                                prepared.package.symbols[selfSiblingRange.symbolStart + selfSiblingSymbolSearch!] => selfSiblingCandidate
+                                                ((selfSiblingCandidate.kind == 3 or selfSiblingCandidate.kind == 4) and selfSiblingCandidate.parent < 0) -> if {
+                                                    prepared.package.tokens[selfSiblingRange.tokenStart + selfSiblingCandidate.nameToken] => selfSiblingName
+                                                    selfSiblingName.span.length == selfTargetName.span.length => selfSiblingEqual!
+                                                    UIntSize(0) => selfSiblingByte!
+                                                    (selfSiblingEqual! and selfSiblingByte! < selfTargetName.span.length) -> while {
+                                                        (selfSiblingText -> byte(selfSiblingName.span.start + selfSiblingByte!)) != (source -> byte(selfTargetName.span.start + selfSiblingByte!)) -> if {
+                                                            false => selfSiblingEqual!
+                                                        }
+                                                        selfSiblingByte! + UIntSize(1) => selfSiblingByte!
+                                                    }
+                                                    selfSiblingEqual! -> if {
+                                                        selfTargetSymbol! >= 0 -> if {
+                                                            true => selfSiblingAmbiguous!
+                                                        } else {
+                                                            selfSiblingSource => selfTargetModule!
+                                                            selfSiblingSymbolSearch! => selfTargetSymbol!
+                                                        }
+                                                    }
+                                                }
+                                                selfSiblingSymbolSearch! + 1 => selfSiblingSymbolSearch!
+                                            }
+                                        }
+                                        selfSiblingModuleSearch! + 1 => selfSiblingModuleSearch!
+                                    }
+                                    selfSiblingAmbiguous! -> if { -1 => selfTargetSymbol! }
+                                }
                             }
                             selfTargetSymbol! >= 0 -> if {
                                 -1 => selfTypeId!
                                 0 => selfTypeSearch!
                                 selfTypeSearch! < (types! -> len) -> while {
                                     types![selfTypeSearch!] => selfTypeCandidate
-                                    (selfTypeCandidate.kind == 1 and selfTypeCandidate.module == sourceIndex! and selfTypeCandidate.symbol == selfTargetSymbol!) -> if { selfTypeSearch! => selfTypeId! }
+                                    (selfTypeCandidate.kind == 1 and selfTypeCandidate.module == selfTargetModule! and selfTypeCandidate.symbol == selfTargetSymbol!) -> if { selfTypeSearch! => selfTypeId! }
                                     selfTypeSearch! + 1 => selfTypeSearch!
                                 }
                                 selfTypeId! < 0 -> if {
@@ -788,7 +900,7 @@ public resolveContext prepared: semanticContext.SemanticSnapshot -> ExpressionTy
                                     types! -> push(typeIds.SemanticType {
                                         kind: 1
                                         origin: 0
-                                        module: sourceIndex!
+                                        module: selfTargetModule!
                                         symbol: selfTargetSymbol!
                                         first: -1
                                         second: -1
@@ -1072,7 +1184,22 @@ public resolveContext prepared: semanticContext.SemanticSnapshot -> ExpressionTy
                     references![returnReference!] => reference
                     reference.typeId => resultTypeId!
                     reference.status => resultStatus!
-                    types![reference.typeId] => returnTemplateType
+                    function.flags / 32768 % 2 == 1 -> if {
+                        0 => nativeTryCallResultSearch!
+                        nativeTryCallResultSearch! < (types! -> len) -> while {
+                            types![nativeTryCallResultSearch!] => nativeTryCallResultCandidate
+                            (nativeTryCallResultCandidate.kind == 7
+                                and nativeTryCallResultCandidate.origin == 4
+                                and nativeTryCallResultCandidate.symbol == 1
+                                and nativeTryCallResultCandidate.first == reference.typeId
+                                and nativeTryCallResultCandidate.second == 5
+                                and nativeTryCallResultCandidate.status == 0) -> if {
+                                nativeTryCallResultSearch! => resultTypeId!
+                            }
+                            nativeTryCallResultSearch! + 1 => nativeTryCallResultSearch!
+                        }
+                    }
+                    types![resultTypeId!] => returnTemplateType
                     returnTemplateType.containsParameter => resultContainsParameter
                     resultContainsParameter -> if {
                         -1 => inputReference!
@@ -2201,20 +2328,10 @@ public resolveContext prepared: semanticContext.SemanticSnapshot -> ExpressionTy
                                     memberFieldIndex! + 1 => memberFieldIndex!
                                 }
                                 matchedFieldType! >= 0 -> if {
-                                    memberReadonlyProjection! -> if {
-                                        -1 => projectedReferenceType!
-                                        0 => projectedReferenceSearch!
-                                        (projectedReferenceSearch! < (types! -> len) and projectedReferenceType! < 0) -> while {
-                                            types![projectedReferenceSearch!] => projectedReferenceCandidate
-                                            (projectedReferenceCandidate.kind == 8 and projectedReferenceCandidate.first == matchedFieldType! and projectedReferenceCandidate.status == 0) -> if { projectedReferenceSearch! => projectedReferenceType! }
-                                            projectedReferenceSearch! + 1 => projectedReferenceSearch!
-                                        }
-                                        projectedReferenceType! < 0 -> if {
-                                            types! -> len => projectedReferenceType!
-                                            types! -> push(typeIds.SemanticType { kind: 8, origin: -1, module: -1, symbol: -1, first: matchedFieldType!, second: -1, length: -1, lengthHash: UInt64(0), containsParameter: types![matchedFieldType!].containsParameter, status: 0 })
-                                        }
-                                        projectedReferenceType! => memberCurrentType!
-                                    } else { matchedFieldType! => memberCurrentType! }
+                                    # A field read through a readonly reference is still a value
+                                    # expression. Reference-place lowering decides separately
+                                    # whether a call needs the field's address.
+                                    matchedFieldType! => memberCurrentType!
                                     true => memberResolvedField!
                                 } else {
                                     false => memberPathValid!

@@ -43,6 +43,7 @@ public collectPrepared nodes: [ast.AstNode; ~] -> [Symbol; ~] {
         node.kind == 58 -> if { true => isSymbol! }
         node.kind == 60 -> if { true => isSymbol! }
         node.kind == 67 -> if { true => isSymbol! }
+        node.kind == 68 -> if { true => isSymbol! }
         node.kind >= 26 -> if {
             node.kind <= 34 -> if { true => isSymbol! }
         }
@@ -58,7 +59,7 @@ public collectPrepared nodes: [ast.AstNode; ~] -> [Symbol; ~] {
                 }
             }
             Symbol {
-                kind: node.kind == 67 -> if { 3 } else { node.kind == 60 -> if { 35 } else { node.kind } }
+                kind: (node.kind == 67 or node.kind == 68) -> if { 3 } else { node.kind == 60 -> if { 35 } else { node.kind } }
                 parent: parentSymbol!
                 astNode: astIndex!
                 nameToken: node.payloadToken
@@ -208,7 +209,7 @@ public collectPrepared nodes: [ast.AstNode; ~] -> [Symbol; ~] {
         genericSymbolIndex! + 1 => genericSymbolIndex!
     }
 
-    # COM activation and cloning are source-level generated functions, but the
+    # COM activation, cloning, and checked interface queries are source-level generated functions, but the
     # self-host compiler keeps them as flat symbols. No wrapper object or
     # metadata dictionary is allocated. The class AST uniquely identifies its
     # activation function and the interface AST uniquely identifies clone.
@@ -253,6 +254,28 @@ public collectPrepared nodes: [ast.AstNode; ~] -> [Symbol; ~] {
                 blockResultTypeNode: -1
                 flags: 512 + 8192
             })
+            0 => comQueryTargetIndex!
+            comQueryTargetIndex! < beforeComFunctions -> while {
+                symbols![comQueryTargetIndex!] => comQueryTarget
+                (comQueryTargetIndex! != comInterfaceSymbolIndex!
+                    and comQueryTarget.kind == 3
+                    and comQueryTarget.flags / 512 % 2 == 1
+                    and nodes[comQueryTarget.astNode].parent == comInterfaceAst.parent) -> if {
+                    symbols! -> push(Symbol {
+                        kind: 36
+                        parent: comInterfaceSymbolIndex!
+                        astNode: comQueryTarget.astNode
+                        nameToken: comQueryTarget.nameToken
+                        typeNode: -1
+                        secondaryTypeNode: comQueryTargetIndex!
+                        blockNameToken: -1
+                        blockTypeNode: -1
+                        blockResultTypeNode: -1
+                        flags: 512 + 131072
+                    })
+                }
+                comQueryTargetIndex! + 1 => comQueryTargetIndex!
+            }
         }
         comInterfaceSymbolIndex! + 1 => comInterfaceSymbolIndex!
     }
@@ -269,6 +292,9 @@ public collectPrepared nodes: [ast.AstNode; ~] -> [Symbol; ~] {
                 -1 => parameterTypeNode!
                 declarationSymbol.kind == 7 -> if {
                     declarationSymbol.flags / 16 % 2 == 0 -> if { declarationSymbol.typeNode => parameterTypeNode! }
+                }
+                (declarationSymbol.kind == 31 and declarationSymbol.parent >= 0) -> if {
+                    symbols![declarationSymbol.parent].typeNode => parameterTypeNode!
                 }
                 Symbol {
                     kind: 35

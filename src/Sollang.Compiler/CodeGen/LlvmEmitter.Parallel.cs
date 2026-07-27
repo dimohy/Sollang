@@ -62,24 +62,26 @@ internal sealed partial class LlvmEmitter
     {
         if (_program.ResolvedGenericCalls.TryGetValue(block, out var specialization)
             && specialization.Kind == BoundFunctionKind.RuntimeParallel
-            && TryResolveDirectParallelTarget(block, out var target))
+            && TryResolveDirectParallelTarget(block, out var target, out var additionalArguments))
         {
-            EmitDirectParallelCallback(block, specialization, target, isFallible: false);
+            EmitDirectParallelCallback(block, specialization, target, additionalArguments, isFallible: false);
         }
         else if (_program.ResolvedGenericCalls.TryGetValue(block, out specialization)
             && specialization.Kind == BoundFunctionKind.RuntimeTryParallel
-            && TryResolveDirectParallelTarget(block, out target))
+            && TryResolveDirectParallelTarget(block, out target, out additionalArguments))
         {
-            EmitDirectParallelCallback(block, specialization, target, isFallible: true);
+            EmitDirectParallelCallback(block, specialization, target, additionalArguments, isFallible: true);
         }
         CollectParallelCallbacks(block.Body);
     }
 
     private bool TryResolveDirectParallelTarget(
         BlockFunctionCallStatement block,
-        out BoundFunction target)
+        out BoundFunction target,
+        out IReadOnlyList<Expression> additionalArguments)
     {
         target = null!;
+        additionalArguments = [];
         if (block.Body.Count != 1
             || block.Body[0] is not ExpressionStatement
             {
@@ -90,14 +92,27 @@ internal sealed partial class LlvmEmitter
                 } flow
             }
             || source.Name != block.ItemName
-            || flow.Targets[0].Arguments.Count != 0
-            || !TryResolveFunction(flow.Targets[0].Path, out target)
-            || target.Kind != BoundFunctionKind.User
-            || target.IsAsync)
+            || flow.Targets[0].Arguments.Any(argument =>
+                argument is not NameExpression name || name.Name == block.ItemName))
         {
-            target = null!;
             return false;
         }
+
+        if (!_program.ResolvedGenericCalls.TryGetValue(flow.Targets[0], out var resolvedTarget)
+            && !TryResolveFunction(flow.Targets[0].Path, out resolvedTarget))
+        {
+            return false;
+        }
+
+        if (resolvedTarget.Kind != BoundFunctionKind.User
+            || resolvedTarget.IsAsync
+            || flow.Targets[0].Arguments.Count != (resolvedTarget.AdditionalParameters?.Count ?? 0))
+        {
+            return false;
+        }
+
+        target = resolvedTarget;
+        additionalArguments = flow.Targets[0].Arguments;
         return true;
     }
 
@@ -105,6 +120,7 @@ internal sealed partial class LlvmEmitter
         BlockFunctionCallStatement block,
         BoundFunction specialization,
         BoundFunction target,
+        IReadOnlyList<Expression> additionalArgumentExpressions,
         bool isFallible)
     {
         var inputType = specialization.BlockInputType
@@ -136,7 +152,19 @@ internal sealed partial class LlvmEmitter
         var callbackName = "sollang_parallel_callback_"
             + _parallelCallbacks.Count.ToString(CultureInfo.InvariantCulture);
         var captures = CapturedBindingsForFunction(target);
-        _parallelCallbacks.Add(block, new ParallelCallbackInfo(callbackName, target, captures));
+        var additionalArguments = additionalArgumentExpressions
+            .Zip(
+                target.AdditionalParameters ?? [],
+                static (expression, parameter) => new ParallelCallbackArgument(
+                    expression,
+                    parameter.Type,
+                    parameter.Ownership))
+            .ToArray();
+        _parallelCallbacks.Add(block, new ParallelCallbackInfo(
+            callbackName,
+            target,
+            captures,
+            additionalArguments));
 
         EmitFunctionLine($"define internal void @{callbackName}(ptr %group, i64 %index) #0 {{");
         EmitFunctionLine("entry:");
@@ -146,9 +174,9 @@ internal sealed partial class LlvmEmitter
         EmitFunctionLine("  %input_address = getelementptr i8, ptr %input, i64 %input_offset");
         EmitFunctionLine($"  %item = load {LlvmType(inputType)}, ptr %input_address, align {inputAlignment.ToString(CultureInfo.InvariantCulture)}");
         var captureArguments = new List<string>();
-        if (captures.Count > 0)
+        if (captures.Count + additionalArguments.Length > 0)
         {
-            var captureType = ParallelCaptureType(captures);
+            var captureType = ParallelCaptureType(captures, additionalArguments);
             EmitFunctionLine("  %capture_environment_slot = getelementptr %sollang.compute_group, ptr %group, i32 0, i32 4");
             EmitFunctionLine("  %capture_environment = load ptr, ptr %capture_environment_slot, align 8");
             for (var captureIndex = 0; captureIndex < captures.Count; captureIndex++)
@@ -168,6 +196,21 @@ internal sealed partial class LlvmEmitter
             }
         }
         captureArguments.Add($"{LlvmType(inputType)} %item");
+        if (additionalArguments.Length > 0)
+        {
+            var captureType = ParallelCaptureType(captures, additionalArguments);
+            for (var argumentIndex = 0; argumentIndex < additionalArguments.Length; argumentIndex++)
+            {
+                var argument = additionalArguments[argumentIndex];
+                var environmentIndex = captures.Count + argumentIndex;
+                var argumentTypeName = LlvmType(argument.Type);
+                var argumentAddress = $"%capture_address_{environmentIndex.ToString(CultureInfo.InvariantCulture)}";
+                var argumentValue = $"%capture_value_{environmentIndex.ToString(CultureInfo.InvariantCulture)}";
+                EmitFunctionLine($"  {argumentAddress} = getelementptr {captureType}, ptr %capture_environment, i32 0, i32 {environmentIndex.ToString(CultureInfo.InvariantCulture)}");
+                EmitFunctionLine($"  {argumentValue} = load {argumentTypeName}, ptr {argumentAddress}, align {RuntimeAlignment(argument.Type).ToString(CultureInfo.InvariantCulture)}");
+                captureArguments.Add($"{argumentTypeName} {argumentValue}");
+            }
+        }
         EmitFunctionLine("  %stdin_slot = getelementptr %sollang.compute_group, ptr %group, i32 0, i32 6");
         EmitFunctionLine("  %stdin = load ptr, ptr %stdin_slot, align 8");
         EmitFunctionLine("  %stdout_slot = getelementptr %sollang.compute_group, ptr %group, i32 0, i32 7");
@@ -210,8 +253,13 @@ internal sealed partial class LlvmEmitter
         EmitFunctionLine();
     }
 
-    private string ParallelCaptureType(IReadOnlyList<KeyValuePair<string, BoundType>> captures)
+    private string ParallelCaptureType(
+        IReadOnlyList<KeyValuePair<string, BoundType>> captures,
+        IReadOnlyList<ParallelCallbackArgument> additionalArguments)
     {
-        return "{ " + string.Join(", ", captures.Select(capture => LlvmType(capture.Value))) + " }";
+        return "{ " + string.Join(
+            ", ",
+            captures.Select(capture => LlvmType(capture.Value))
+                .Concat(additionalArguments.Select(argument => LlvmType(argument.Type)))) + " }";
     }
 }

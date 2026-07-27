@@ -176,6 +176,14 @@ internal static class SemanticStableIdentity
         Append(builder, function.StreamElementTypeTemplate ?? "");
         Append(builder, function.NativeLibrary ?? "");
         Append(builder, function.NativeSymbol ?? "");
+        Append(
+            builder,
+            ((int)function.NativeError).ToString(CultureInfo.InvariantCulture));
+        Append(
+            builder,
+            function.NativeSuccessType is { } nativeSuccess
+                ? Type(types, nativeSuccess)
+                : "-");
         if (function.Com is { } com)
         {
             Append(builder, ((int)com.Operation).ToString(CultureInfo.InvariantCulture));
@@ -185,6 +193,7 @@ internal static class SemanticStableIdentity
             Append(builder, com.Server ?? "");
             Append(builder, ((int)com.Apartment).ToString(CultureInfo.InvariantCulture));
             Append(builder, com.VtableSlot.ToString(CultureInfo.InvariantCulture));
+            Append(builder, com.ReceiverInterfaceType ?? "");
         }
         foreach (var parameter in function.AdditionalParameters ?? [])
         {

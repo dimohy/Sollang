@@ -2,6 +2,7 @@ using System.Buffers.Binary;
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
+using Sollang.Compiler.Diagnostics;
 using Sollang.Compiler.Semantics;
 
 namespace Sollang.Compiler.Cli;
@@ -343,6 +344,17 @@ internal sealed class IncrementalSemanticCache
                     target.IsLocal,
                     target.IsPublic,
                     target.IsAsync);
+            })
+            .GroupBy(static specialization => specialization.Identity, StringComparer.Ordinal)
+            .Select(static group =>
+            {
+                var canonical = group.First();
+                if (group.Skip(1).Any(candidate => candidate != canonical))
+                {
+                    throw new SollangException(
+                        $"semantic specialization identity collision for '{group.Key}'");
+                }
+                return canonical;
             })
             .OrderBy(static specialization => specialization.Identity, StringComparer.Ordinal)
             .ToArray();

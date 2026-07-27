@@ -1,0 +1,1158 @@
+namespace sollang.compiler.llvm.text
+
+import sollang.compiler.ast as ast
+import sollang.compiler.ir.interpolation as interpolation
+import sollang.compiler.ir.stream as streamIr
+import sollang.compiler.ir.typed as typedIr
+import sollang.compiler.llvm.target as llvmTarget
+import sollang.compiler.llvm.runtime as llvmRuntime
+import sollang.compiler.llvm.emitter.number_format as numberFormat
+import sollang.compiler.llvm.emitter.compute_runtime as computeRuntime
+import sollang.compiler.llvm.emitter.text_output_runtime as textOutputRuntime
+import sollang.compiler.llvm.emitter.process_runtime as processRuntime
+import sollang.compiler.llvm.emitter.mouse_event_runtime as mouseEventRuntime
+import sollang.compiler.llvm.emitter.com_runtime as comRuntime
+import sollang.compiler.llvm.emitter.ownership as ownershipEmitter
+import sollang.compiler.llvm.emitter.context as emitterContext
+import sollang.compiler.llvm.emitter.diagnostics as diagnostics
+import sollang.compiler.llvm.emitter.type_queries as typeQueries
+import sollang.compiler.semantic.analysis as analysis
+import sollang.compiler.semantic.calls as calls
+import sollang.compiler.semantic.composite_types as compositeTypes
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.expression_type_ids as expressionTypeIds
+import sollang.compiler.semantic.modules as modules
+import sollang.compiler.semantic.nominal_types as nominalTypes
+import sollang.compiler.semantic.ownership_check as ownershipCheck
+import sollang.compiler.semantic.symbols as symbols
+import sollang.compiler.semantic.type_ids as typeIds
+import sollang.compiler.syntax as syntax
+import syntax.generated.slg as grammar
+import sys.file as file
+
+# Responsibility fragment extracted from emitCore. State is passed by readonly
+# reference, preserving the original direct-call and allocation behavior.
+sourceStart node: typedIr.TypedIrNode, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> UIntSize {
+    context.nodes[context.ranges[node.sourceModule].astStart + node.astNode].start
+}
+moveRegionFor nodeIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
+    context.ir[nodeIndex].parent => region!
+    (region! >= 0 and context.ir[region!].kind != 1 and context.ir[region!].kind != 11 and context.ir[region!].kind != 19 and context.ir[region!].kind != 20) -> while {
+        context.ir[region!].parent => region!
+    }
+    region!
+}
+memberMoveMatchesAssignment moveIndex: Int, assignmentIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
+    context.moves[moveIndex] => candidateMove
+    context.ir[assignmentIndex] => candidateAssignment
+    false => matches!
+    (candidateMove.memberIr >= 0 and candidateAssignment.kind == 25 and candidateAssignment.sourceModule == candidateMove.sourceModule and candidateAssignment.symbol == candidateMove.symbol) -> if {
+        context.ir[candidateMove.memberIr] => candidateMember
+        candidateMember -> sourceNode(context, state) => candidateMemberAst
+        candidateAssignment -> sourceNode(context, state) => candidateAssignmentAst
+        -1 => movedFieldToken!
+        0 => movedIdentifierCount!
+        candidateMemberAst.firstToken => movedTokenIndex!
+        movedTokenIndex! < candidateMemberAst.firstToken + candidateMemberAst.tokenCount -> while {
+            context.tokens[context.ranges[candidateMember.sourceModule].tokenStart + movedTokenIndex!].kind == grammar.tokenIdIdentifier -> if {
+                movedTokenIndex! => movedFieldToken!
+                movedIdentifierCount! + 1 => movedIdentifierCount!
+            }
+            movedTokenIndex! + 1 => movedTokenIndex!
+        }
+        (movedIdentifierCount! == 2 and movedFieldToken! >= 0 and candidateAssignmentAst.secondaryToken >= 0) -> if {
+            context.tokens[context.ranges[candidateMember.sourceModule].tokenStart + movedFieldToken!] => movedField
+            context.tokens[context.ranges[candidateAssignment.sourceModule].tokenStart + candidateAssignmentAst.secondaryToken] => assignedField
+            movedField.span.length == assignedField.span.length => matches!
+            UIntSize(0) => fieldByte!
+            (matches! and fieldByte! < movedField.span.length) -> while {
+                (context.sources[candidateMember.sourceModule] -> byte(movedField.span.start + fieldByte!)) != (context.sources[candidateAssignment.sourceModule] -> byte(assignedField.span.start + fieldByte!)) -> if { false => matches! }
+                fieldByte! + UIntSize(1) => fieldByte!
+            }
+        }
+    }
+    matches!
+}
+partialMoveActiveBefore moveIndex: Int, regionIndex: Int, beforeAst: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
+    context.moves[moveIndex] => candidateMove
+    false => active!
+    beforeAst >= 0 => boundedEdge
+    candidateMove.memberIr >= 0 -> if {
+        candidateMove.regionIr == regionIndex => active!
+        context.ir[candidateMove.siteIr] => moveSite
+        UIntSize(0) => edgeStart!
+        beforeAst >= 0 -> if { context.nodes[context.ranges[moveSite.sourceModule].astStart + beforeAst].start => edgeStart! }
+        (active! and boundedEdge and (moveSite -> sourceStart(context, state)) >= edgeStart!) -> if { false => active! }
+        candidateMove.regionIr => assignmentOwner!
+        (assignmentOwner! >= 0 and context.ir[assignmentOwner!].kind != 0 and context.ir[assignmentOwner!].kind != 11) -> while {
+            context.ir[assignmentOwner!].parent => assignmentOwner!
+        }
+        0 => assignmentSearch!
+        0 => assignmentEnd!
+        assignmentOwner! >= 0 -> if {
+            assignmentOwner! + 1 => assignmentSearch!
+            assignmentOwner! -> functionEnd(context, state) => assignmentEnd!
+        }
+        assignmentSearch! < assignmentEnd! -> while {
+            active! -> if {
+                context.ir[assignmentSearch!] => reinitialization
+                assignmentSearch! -> moveRegionFor(context, state) => reinitializationRegion
+                moveSite -> sourceStart(context, state) => moveSiteStart
+                reinitialization -> sourceStart(context, state) => reinitializationStart
+                true => reinitializationBeforeEdge!
+                boundedEdge -> if { reinitializationStart < edgeStart! => reinitializationBeforeEdge! }
+                (reinitialization.kind == 25 and reinitializationRegion == candidateMove.regionIr and moveSiteStart < reinitializationStart and reinitializationBeforeEdge!) -> if {
+                    moveIndex -> memberMoveMatchesAssignment(assignmentSearch!, context, state) -> if { false => active! }
+                }
+            }
+            assignmentSearch! + 1 => assignmentSearch!
+        }
+    }
+    active!
+}
+sourceInterpolations node: typedIr.TypedIrNode, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> [interpolation.InterpolationNode; ~] {
+    context.interpolationRanges[node.sourceModule] => interpolationRange
+    [interpolation.InterpolationNode; ~] => sourceNodes!
+    0 => interpolationIndex!
+    interpolationIndex! < interpolationRange.nodeCount -> while {
+        context.interpolations[interpolationRange.nodeStart + interpolationIndex!] => interpolationNode!
+        interpolationNode!.parent >= 0 -> if { interpolationNode!.parent - interpolationRange.nodeStart => interpolationNode!.parent }
+        interpolationNode!.operand0 >= 0 -> if { interpolationNode!.operand0 - interpolationRange.nodeStart => interpolationNode!.operand0 }
+        interpolationNode!.operand1 >= 0 -> if { interpolationNode!.operand1 - interpolationRange.nodeStart => interpolationNode!.operand1 }
+        sourceNodes! -> push(interpolationNode!)
+        interpolationIndex! + 1 => interpolationIndex!
+    }
+    sourceNodes!
+}
+emitDropValueName request: DropGlueRequest, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    request.valueKind == 0 -> if { "%v$(request.valueIndex)" -> print } else {
+        request.valueKind == 1 -> if {
+            context.ir[request.regionIndex].parent => dropParameterOwner!
+            (dropParameterOwner! >= 0 and context.ir[dropParameterOwner!].kind != 0 and context.ir[dropParameterOwner!].kind != 11) -> while {
+                context.ir[dropParameterOwner!].parent => dropParameterOwner!
+            }
+            context -> writeParameterReference(dropParameterOwner!, context.ir[request.bindingIndex].symbol) => dropParameterWritten
+        } else { "%dropg$(request.nameRoot)_p$(request.pathCode)" -> print }
+    }
+}
+emitDropPathName request: DropGlueRequest, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    "%dropg$(request.nameRoot)_p$(request.pathCode)" -> print
+}
+emitDropGlue request: DropGlueRequest, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    [request, ~] => dropTasks!
+    0 => dropTaskIndex!
+    dropTaskIndex! < (dropTasks! -> len) -> while {
+    dropTasks![dropTaskIndex!] => dropTask
+    false => dropTaskMoved!
+    (dropTask.bindingIndex >= 0 and dropTask.hasPartialMoves) -> if {
+        context.ir[dropTask.bindingIndex] => dropGlueBinding
+        context.ranges[dropGlueBinding.sourceModule] => dropGlueRange
+        UIntSize(0) => dropGlueBeforeStart!
+        dropTask.beforeAst >= 0 -> if { context.nodes[dropGlueRange.astStart + dropTask.beforeAst].start => dropGlueBeforeStart! }
+        0 => dropGlueMoveIndex!
+        (dropGlueMoveIndex! < (context.moves -> len) and not dropTaskMoved!) -> while {
+            context.moves[dropGlueMoveIndex!] => dropGlueMove
+            (dropGlueMove.memberIr >= 0 and dropGlueMove.sourceModule == dropGlueBinding.sourceModule and dropGlueMove.symbol == dropGlueBinding.symbol and (dropGlueMoveIndex! -> partialMoveActiveBefore(dropTask.regionIndex, dropTask.beforeAst, context, state))) -> if {
+                context.ir[dropGlueMove.siteIr] => dropGlueSite
+                true => dropGlueMoveBeforeEdge!
+                dropTask.beforeAst >= 0 -> if {
+                    context.nodes[dropGlueRange.astStart + dropGlueSite.astNode].start >= dropGlueBeforeStart! -> if { false => dropGlueMoveBeforeEdge! }
+                }
+                context.nodes[dropGlueRange.astStart + dropGlueSite.astNode].start <= context.nodes[dropGlueRange.astStart + dropGlueBinding.astNode].start -> if { false => dropGlueMoveBeforeEdge! }
+                0 => dropTaskDepth!
+                dropTaskIndex! => dropTaskCursor!
+                (dropTaskCursor! >= 0 and dropTasks![dropTaskCursor!].fieldOrdinal >= 0) -> while {
+                    dropTaskDepth! + 1 => dropTaskDepth!
+                    dropTasks![dropTaskCursor!].parentTask => dropTaskCursor!
+                }
+                context.ir[dropGlueMove.memberIr] => dropMoveMember
+                context.ranges[dropMoveMember.sourceModule] => dropMoveRange
+                context.nodes[dropMoveRange.astStart + dropMoveMember.astNode] => dropMoveAst
+                -1 => dropMoveDepth!
+                dropMoveAst.firstToken => dropMoveTokenIndex!
+                dropMoveTokenIndex! < dropMoveAst.firstToken + dropMoveAst.tokenCount -> while {
+                    context.tokens[dropMoveRange.tokenStart + dropMoveTokenIndex!].kind == grammar.tokenIdIdentifier -> if { dropMoveDepth! + 1 => dropMoveDepth! }
+                    dropMoveTokenIndex! + 1 => dropMoveTokenIndex!
+                }
+                dropTaskDepth! == dropMoveDepth! => sameDropPath!
+                dropGlueBinding.typeOrigin => dropMoveCurrentOrigin!
+                dropGlueBinding.typeModule => dropMoveCurrentModule!
+                dropGlueBinding.typeSymbol => dropMoveCurrentSymbol!
+                0 => dropMoveIdentifierOrdinal!
+                dropMoveAst.firstToken => dropMoveTokenIndex!
+                (sameDropPath! and dropMoveTokenIndex! < dropMoveAst.firstToken + dropMoveAst.tokenCount) -> while {
+                    context.tokens[dropMoveRange.tokenStart + dropMoveTokenIndex!].kind == grammar.tokenIdIdentifier -> if {
+                        dropMoveIdentifierOrdinal! > 0 -> if {
+                            dropMoveCurrentModule! => dropMoveOwnerSource!
+                            dropMoveCurrentOrigin! == 2 -> if { context.modules[dropMoveCurrentModule!].sourceIndex => dropMoveOwnerSource! }
+                            context.ranges[dropMoveOwnerSource!] => dropMoveOwnerRange
+                            -1 => dropMoveFieldOrdinal!
+                            -1 => dropMoveFieldTypeNode!
+                            0 => dropMoveCandidateOrdinal!
+                            0 => dropMoveFieldIndex!
+                            dropMoveFieldIndex! < dropMoveOwnerRange.symbolCount -> while {
+                                context.symbols[dropMoveOwnerRange.symbolStart + dropMoveFieldIndex!] => dropMoveField
+                                (dropMoveField.kind == 26 and dropMoveField.parent == dropMoveCurrentSymbol!) -> if {
+                                    context.tokens[dropMoveRange.tokenStart + dropMoveTokenIndex!] => dropMoveName
+                                    context.tokens[dropMoveOwnerRange.tokenStart + dropMoveField.nameToken] => dropMoveFieldName
+                                    dropMoveName.span.length == dropMoveFieldName.span.length => dropMoveEqual!
+                                    UIntSize(0) => dropMoveNameByte!
+                                    (dropMoveEqual! and dropMoveNameByte! < dropMoveName.span.length) -> while {
+                                        context.sources[dropMoveMember.sourceModule] -> byte(dropMoveName.span.start + dropMoveNameByte!) => dropMoveByte
+                                        context.sources[dropMoveOwnerSource!] -> byte(dropMoveFieldName.span.start + dropMoveNameByte!) => dropMoveFieldByte
+                                        dropMoveByte != dropMoveFieldByte -> if { false => dropMoveEqual! }
+                                        dropMoveNameByte! + UIntSize(1) => dropMoveNameByte!
+                                    }
+                                    dropMoveEqual! -> if {
+                                        dropMoveCandidateOrdinal! => dropMoveFieldOrdinal!
+                                        dropMoveField.typeNode => dropMoveFieldTypeNode!
+                                    }
+                                    dropMoveCandidateOrdinal! + 1 => dropMoveCandidateOrdinal!
+                                }
+                                dropMoveFieldIndex! + 1 => dropMoveFieldIndex!
+                            }
+                            dropTaskIndex! => dropTaskCursor!
+                            dropTaskDepth! - dropMoveIdentifierOrdinal! => dropTaskParentSteps!
+                            dropTaskParentSteps! > 0 -> while {
+                                dropTasks![dropTaskCursor!].parentTask => dropTaskCursor!
+                                dropTaskParentSteps! - 1 => dropTaskParentSteps!
+                            }
+                            (dropMoveFieldOrdinal! < 0 or dropTasks![dropTaskCursor!].fieldOrdinal != dropMoveFieldOrdinal!) -> if { false => sameDropPath! }
+                            0 => dropMoveNominalIndex!
+                            dropMoveNominalIndex! < (context.nominal -> len) -> while {
+                                context.nominal[dropMoveNominalIndex!] => dropMoveNominalType
+                                (dropMoveNominalType.sourceModule == dropMoveOwnerSource! and dropMoveNominalType.typeAst == dropMoveFieldTypeNode!) -> if {
+                                    dropMoveNominalType.origin => dropMoveCurrentOrigin!
+                                    dropMoveNominalType.targetModule => dropMoveCurrentModule!
+                                    dropMoveNominalType.targetSymbol => dropMoveCurrentSymbol!
+                                }
+                                dropMoveNominalIndex! + 1 => dropMoveNominalIndex!
+                            }
+                        }
+                        dropMoveIdentifierOrdinal! + 1 => dropMoveIdentifierOrdinal!
+                    }
+                    dropMoveTokenIndex! + 1 => dropMoveTokenIndex!
+                }
+                (dropGlueMoveBeforeEdge! and sameDropPath!) -> if { true => dropTaskMoved! }
+            }
+            dropGlueMoveIndex! + 1 => dropGlueMoveIndex!
+        }
+    }
+    (not dropTaskMoved! and dropTask.typeId >= 0 and (not dropTask.hasPartialMoves or (dropTask.fieldOrdinal >= 0 and context.types[dropTask.typeId].kind != 1)) and (dropTask.typeId -> semanticTypeOwns(context, state))) -> if {
+        "  call void @sollang_drop_t$(dropTask.typeId)(" -> print
+        dropTask.typeId -> writeSemanticTypeId(context, state)
+        " " -> print
+        dropTask -> emitDropValueName(context, state)
+        ")" -> println
+    } else {
+    (not dropTaskMoved! and (dropTask.typeOrigin == 13 or dropTask.typeOrigin == 14)) -> if {
+        "  " -> print
+        dropTask -> emitDropPathName(context, state)
+        "_data = extractvalue %sollang.array.i32 " -> print
+        dropTask -> emitDropValueName(context, state)
+        ", 0" -> println
+        "  call void @free(ptr " -> print
+        dropTask -> emitDropPathName(context, state)
+        "_data)" -> println
+    } else {
+    (not dropTaskMoved! and dropTask.typeOrigin == 15) -> if {
+        "  " -> print
+        dropTask -> emitDropPathName(context, state)
+        "_keys = extractvalue %sollang.dict " -> print
+        dropTask -> emitDropValueName(context, state)
+        ", 0" -> println
+        "  call void @free(ptr " -> print
+        dropTask -> emitDropPathName(context, state)
+        "_keys)" -> println
+        "  " -> print
+        dropTask -> emitDropPathName(context, state)
+        "_values = extractvalue %sollang.dict " -> print
+        dropTask -> emitDropValueName(context, state)
+        ", 1" -> println
+        "  call void @free(ptr " -> print
+        dropTask -> emitDropPathName(context, state)
+        "_values)" -> println
+    } else {
+    (not dropTaskMoved! and (dropTask.typeOrigin == 0 or dropTask.typeOrigin == 2)) -> if {
+        context.ranges[dropTask.typeModule] => dropStructRange
+        0 => dropFieldOrdinal!
+        0 => dropFieldIndex!
+        dropFieldIndex! < dropStructRange.symbolCount -> while {
+            context.symbols[dropStructRange.symbolStart + dropFieldIndex!] => dropField
+            (dropField.kind == 26 and dropField.parent == dropTask.typeSymbol) -> if {
+                -1 => dropFieldTypeId!
+                0 => canonicalDropFieldIndex!
+                canonicalDropFieldIndex! < (context.fields -> len) -> while {
+                    context.fields[canonicalDropFieldIndex!] => canonicalDropField
+                    (canonicalDropField.status == 0 and canonicalDropField.ownerType == dropTask.typeId and canonicalDropField.ordinal == dropFieldOrdinal!) -> if {
+                        canonicalDropField.fieldType => dropFieldTypeId!
+                    }
+                    canonicalDropFieldIndex! + 1 => canonicalDropFieldIndex!
+                }
+                -1 => dropFieldOrigin!
+                -1 => dropFieldModule!
+                -1 => dropFieldSymbol!
+                dropFieldTypeId! >= 0 -> if {
+                    context.types[dropFieldTypeId!] => canonicalDropFieldType
+                    canonicalDropFieldType.kind == 3 -> if { 13 => dropFieldOrigin! }
+                    canonicalDropFieldType.kind == 4 -> if { 14 => dropFieldOrigin! }
+                    canonicalDropFieldType.kind == 5 -> if { 15 => dropFieldOrigin! }
+                    canonicalDropFieldType.kind == 1 -> if {
+                        canonicalDropFieldType.origin => dropFieldOrigin!
+                        canonicalDropFieldType.module => dropFieldModule!
+                        canonicalDropFieldType.symbol => dropFieldSymbol!
+                    }
+                }
+                0 => dropCompositeIndex!
+                dropCompositeIndex! < (context.composite -> len) -> while {
+                    context.composite[dropCompositeIndex!] => dropCompositeType
+                    (dropCompositeType.sourceModule == dropTask.typeModule and dropCompositeType.typeAst == dropField.typeNode) -> if {
+                        dropCompositeType.kind == 3 -> if { 13 => dropFieldOrigin! }
+                        dropCompositeType.kind == 5 -> if { 15 => dropFieldOrigin! }
+                    }
+                    dropCompositeIndex! + 1 => dropCompositeIndex!
+                }
+                0 => dropNominalIndex!
+                dropNominalIndex! < (context.nominal -> len) -> while {
+                    context.nominal[dropNominalIndex!] => dropNominalType
+                    (dropNominalType.sourceModule == dropTask.typeModule and dropNominalType.typeAst == dropField.typeNode and (dropNominalType.origin == 0 or dropNominalType.origin == 2)) -> if {
+                        dropNominalType.origin => dropFieldOrigin!
+                        dropNominalType.targetModule => dropFieldModule!
+                        dropNominalType.targetSymbol => dropFieldSymbol!
+                    }
+                    dropNominalIndex! + 1 => dropNominalIndex!
+                }
+                (dropFieldOrigin! >= 0 or (dropFieldTypeId! >= 0 and (dropFieldTypeId! -> semanticTypeOwns(context, state)))) -> if {
+                    dropTasks! -> len => dropFieldPath
+                    "  %dropg$(dropTask.nameRoot)_p$dropFieldPath = extractvalue %sollang.struct.m$(dropTask.typeModule)_s$(dropTask.typeSymbol) " -> print
+                    dropTask -> emitDropValueName(context, state)
+                    ", $(dropFieldOrdinal!)" -> println
+                    dropTasks! -> push(DropGlueRequest {
+                        typeId: dropFieldTypeId!
+                        typeOrigin: dropFieldOrigin!
+                        typeModule: dropFieldModule!
+                        typeSymbol: dropFieldSymbol!
+                        valueKind: 2
+                        valueIndex: -1
+                        nameRoot: dropTask.nameRoot
+                        pathCode: dropFieldPath
+                        bindingIndex: dropTask.bindingIndex
+                        regionIndex: dropTask.regionIndex
+                        beforeAst: dropTask.beforeAst
+                        parentTask: dropTaskIndex!
+                        fieldOrdinal: dropFieldOrdinal!
+                        hasPartialMoves: dropTask.hasPartialMoves
+                    })
+                }
+                dropFieldOrdinal! + 1 => dropFieldOrdinal!
+            }
+            dropFieldIndex! + 1 => dropFieldIndex!
+        }
+    }
+    }
+    }
+    }
+    dropTaskIndex! + 1 => dropTaskIndex!
+    }
+}
+semanticTypeOwns typeId: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
+    (typeId >= 0 and typeId < (context.typeTraits -> len)) -> if {
+        context.typeTraits[typeId] % 2 == 1
+    } else { false }
+}
+emitSemanticDropHelpers active: [Int; ~], context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    0 => dropTypeIndex!
+    dropTypeIndex! < (context.types -> len) -> while {
+        context.types[dropTypeIndex!] => dropType
+        false => supported!
+        (dropType.kind == 3 or dropType.kind == 4 or dropType.kind == 5 or dropType.kind == 6) -> if { true => supported! }
+        dropType.kind == 9 -> if { true => supported! }
+        (dropType.kind == 1 and dropType.origin == 1 and dropType.symbol == 24) -> if { true => supported! }
+        (dropType.kind == 1 and (dropType.origin == 0 or dropType.origin == 2)) -> if { true => supported! }
+        (dropType.kind == 7 and dropType.origin == 4 and (dropType.symbol == 0 or dropType.symbol == 1)) -> if { true => supported! }
+        (dropType.kind == 7 and dropType.origin == 4 and (dropType.symbol == 3 or dropType.symbol == 4)) -> if { true => supported! }
+        (active[dropTypeIndex!] == 1 and context.typeTraits[dropTypeIndex!] % 2 == 1 and supported!) -> if {
+            "define internal void @sollang_drop_t$(dropTypeIndex!)(" -> print
+            dropTypeIndex! -> writeSemanticTypeId(context, state)
+            " %value) {" -> println
+            "entry:" -> println
+            dropType.kind == 3 -> if {
+                "  %data = extractvalue %sollang.array.i32 %value, 0" -> println
+                "  %length = extractvalue %sollang.array.i32 %value, 1" -> println
+                (dropType.first >= 0 and context.typeTraits[dropType.first] % 2 == 1) -> if {
+                    "  br label %loop" -> println
+                    "loop:" -> println
+                    "  %index = phi i64 [ 0, %entry ], [ %next, %continue ]" -> println
+                    "  %in_range = icmp ult i64 %index, %length" -> println
+                    "  br i1 %in_range, label %item, label %done" -> println
+                    "item:" -> println
+                    "  %slot = getelementptr " -> print
+                    dropType.first -> writeSemanticTypeId(context, state)
+                    ", ptr %data, i64 %index" -> println
+                    "  %element = load " -> print
+                    dropType.first -> writeSemanticTypeId(context, state)
+                    ", ptr %slot, align " -> print
+                    context.typeAligns[dropType.first] -> writeDecimalLine
+                    "  call void @sollang_drop_t$(dropType.first)(" -> print
+                    dropType.first -> writeSemanticTypeId(context, state)
+                    " %element)" -> println
+                    "  br label %continue" -> println
+                    "continue:" -> println
+                    "  %next = add i64 %index, 1" -> println
+                    "  br label %loop" -> println
+                    "done:" -> println
+                }
+                "  call void @free(ptr %data)" -> println
+                "  ret void" -> println
+            }
+            dropType.kind == 4 -> if {
+                "  %storage = alloca " -> print
+                dropTypeIndex! -> writeSemanticTypeId(context, state)
+                ", align " -> print
+                context.typeAligns[dropTypeIndex!] -> writeDecimalLine
+                "  store " -> print
+                dropTypeIndex! -> writeSemanticTypeId(context, state)
+                " %value, ptr %storage, align " -> print
+                context.typeAligns[dropTypeIndex!] -> writeDecimalLine
+                "  br label %loop" -> println
+                "loop:" -> println
+                "  %index = phi i64 [ 0, %entry ], [ %next, %continue ]" -> println
+                "  %in_range = icmp ult i64 %index, " -> print
+                dropType.length -> writeDecimalLine
+                "  br i1 %in_range, label %item, label %done" -> println
+                "item:" -> println
+                "  %slot = getelementptr " -> print
+                dropTypeIndex! -> writeSemanticTypeId(context, state)
+                ", ptr %storage, i64 0, i64 %index" -> println
+                "  %element = load " -> print
+                dropType.first -> writeSemanticTypeId(context, state)
+                ", ptr %slot, align " -> print
+                context.typeAligns[dropType.first] -> writeDecimalLine
+                "  call void @sollang_drop_t$(dropType.first)(" -> print
+                dropType.first -> writeSemanticTypeId(context, state)
+                " %element)" -> println
+                "  br label %continue" -> println
+                "continue:" -> println
+                "  %next = add i64 %index, 1" -> println
+                "  br label %loop" -> println
+                "done:" -> println
+                "  ret void" -> println
+            }
+            dropType.kind == 5 -> if {
+                "  %keys = extractvalue %sollang.dict %value, 0" -> println
+                "  %values = extractvalue %sollang.dict %value, 1" -> println
+                "  %length = extractvalue %sollang.dict %value, 2" -> println
+                "  %capacity = extractvalue %sollang.dict %value, 3" -> println
+                ((dropType.first >= 0 and context.typeTraits[dropType.first] % 2 == 1) or (dropType.second >= 0 and context.typeTraits[dropType.second] % 2 == 1)) -> if {
+                    "  %control_offset = mul i64 %capacity, " -> print
+                    context.typeSizes[dropType.first] -> writeDecimalLine
+                    "  %controls = getelementptr i8, ptr %keys, i64 %control_offset" -> println
+                    "  br label %loop" -> println
+                    "loop:" -> println
+                    "  %index = phi i64 [ 0, %entry ], [ %next, %continue ]" -> println
+                    "  %in_range = icmp ult i64 %index, %capacity" -> println
+                    "  br i1 %in_range, label %check, label %done" -> println
+                    "check:" -> println
+                    "  %control_slot = getelementptr i8, ptr %controls, i64 %index" -> println
+                    "  %control = load i8, ptr %control_slot, align 1" -> println
+                    "  %occupied = icmp sgt i8 %control, 0" -> println
+                    "  br i1 %occupied, label %item, label %continue" -> println
+                    "item:" -> println
+                    (dropType.first >= 0 and context.typeTraits[dropType.first] % 2 == 1) -> if {
+                        "  %key_slot = getelementptr " -> print
+                        dropType.first -> writeSemanticTypeId(context, state)
+                        ", ptr %keys, i64 %index" -> println
+                        "  %key = load " -> print
+                        dropType.first -> writeSemanticTypeId(context, state)
+                        ", ptr %key_slot, align " -> print
+                        context.typeAligns[dropType.first] -> writeDecimalLine
+                        "  call void @sollang_drop_t$(dropType.first)(" -> print
+                        dropType.first -> writeSemanticTypeId(context, state)
+                        " %key)" -> println
+                    }
+                    (dropType.second >= 0 and context.typeTraits[dropType.second] % 2 == 1) -> if {
+                        "  %value_slot = getelementptr " -> print
+                        dropType.second -> writeSemanticTypeId(context, state)
+                        ", ptr %values, i64 %index" -> println
+                        "  %item_value = load " -> print
+                        dropType.second -> writeSemanticTypeId(context, state)
+                        ", ptr %value_slot, align " -> print
+                        context.typeAligns[dropType.second] -> writeDecimalLine
+                        "  call void @sollang_drop_t$(dropType.second)(" -> print
+                        dropType.second -> writeSemanticTypeId(context, state)
+                        " %item_value)" -> println
+                    }
+                    "  br label %continue" -> println
+                    "continue:" -> println
+                    "  %next = add i64 %index, 1" -> println
+                    "  br label %loop" -> println
+                    "done:" -> println
+                }
+                "  call void @free(ptr %keys)" -> println
+                "  call void @free(ptr %values)" -> println
+                "  ret void" -> println
+            }
+            dropType.kind == 6 -> if {
+                "  %present = icmp ne ptr %value, null" -> println
+                "  br i1 %present, label %drop, label %done" -> println
+                "drop:" -> println
+                (dropType.first >= 0 and context.typeTraits[dropType.first] % 2 == 1) -> if {
+                    "  %element = load " -> print
+                    dropType.first -> writeSemanticTypeId(context, state)
+                    ", ptr %value, align " -> print
+                    context.typeAligns[dropType.first] -> writeDecimalLine
+                    "  call void @sollang_drop_t$(dropType.first)(" -> print
+                    dropType.first -> writeSemanticTypeId(context, state)
+                    " %element)" -> println
+                }
+                "  call void @free(ptr %value)" -> println
+                "  br label %done" -> println
+                "done:" -> println
+                "  ret void" -> println
+            }
+            dropType.kind == 9 -> if {
+                context -> nativeHandleType(dropTypeIndex!) -> if {
+                    context -> emitNativeHandleDrop(dropTypeIndex!)
+                } else {
+                    "  call void @sollang_com_release(ptr %value)" -> println
+                    "  ret void" -> println
+                }
+            }
+            (dropType.kind == 1 and dropType.origin == 1 and dropType.symbol == 24) -> if {
+                "  call void @sollang_runtime_unmap_text(%sollang.source_text %value)" -> println
+                "  ret void" -> println
+            }
+            (dropType.kind == 1 and (dropType.origin == 0 or dropType.origin == 2) and not (dropTypeIndex! -> isNominalEnumType(context, state))) -> if {
+                dropTypeIndex! -> isOwnedFileType(context, state) -> if {
+                    "  %handle = extractvalue %sollang.struct.m$(dropType.module)_s$(dropType.symbol) %value, 0" -> println
+                    "  call void @sollang_platform_close_owned_file(i64 %handle)" -> println
+                } else {
+                    0 => dropFieldIndex!
+                    dropFieldIndex! < (context.fields -> len) -> while {
+                        context.fields[dropFieldIndex!] => dropField
+                        (dropField.status == 0 and dropField.ownerType == dropTypeIndex! and dropField.fieldType >= 0 and context.typeTraits[dropField.fieldType] % 2 == 1) -> if {
+                            "  %field$(dropField.ordinal) = extractvalue %sollang.struct.m$(dropType.module)_s$(dropType.symbol) %value, $(dropField.ordinal)" -> println
+                            "  call void @sollang_drop_t$(dropField.fieldType)(" -> print
+                            dropField.fieldType -> writeSemanticTypeId(context, state)
+                            " %field$(dropField.ordinal))" -> println
+                        }
+                        dropFieldIndex! + 1 => dropFieldIndex!
+                    }
+                }
+                "  ret void" -> println
+            }
+            (dropType.kind == 7 and dropType.origin == 4 and (dropType.symbol == 3 or dropType.symbol == 4)) -> if {
+                "%sollang.stream" => producerDropType!
+                dropType.symbol == 4 -> if { "%sollang.event_stream" => producerDropType! }
+                "  %context = extractvalue $(producerDropType!) %value, 0" -> println
+                "  %drop = extractvalue $(producerDropType!) %value, 2" -> println
+                "  %has_drop = icmp ne ptr %drop, null" -> println
+                "  br i1 %has_drop, label %drop_state, label %done" -> println
+                "drop_state:" -> println
+                "  call void %drop(ptr %context)" -> println
+                "  br label %done" -> println
+                "done:" -> println
+                "  ret void" -> println
+            }
+            (dropType.kind == 7 and dropType.origin == 4 and (dropType.symbol == 0 or dropType.symbol == 1)) -> if {
+                "  %slot = alloca %sollang.enum.t$(dropTypeIndex!), align 8" -> println
+                "  store %sollang.enum.t$(dropTypeIndex!) %value, ptr %slot, align 8" -> println
+                "  %tag = extractvalue %sollang.enum.t$(dropTypeIndex!) %value, 0" -> println
+                "  %payload = getelementptr inbounds %sollang.enum.t$(dropTypeIndex!), ptr %slot, i32 0, i32 1" -> println
+                "  %is0 = icmp eq i32 %tag, 0" -> println
+                "  br i1 %is0, label %tag0, label %tag1" -> println
+                "tag0:" -> println
+                (dropType.symbol == 1 and dropType.first >= 0 and context.typeTraits[dropType.first] % 2 == 1) -> if {
+                    "  %first = load " -> print
+                    dropType.first -> writeSemanticTypeId(context, state)
+                    ", ptr %payload, align " -> print
+                    context.typeAligns[dropType.first] -> writeDecimalLine
+                    "  call void @sollang_drop_t$(dropType.first)(" -> print
+                    dropType.first -> writeSemanticTypeId(context, state)
+                    " %first)" -> println
+                }
+                "  br label %done" -> println
+                "tag1:" -> println
+                dropType.symbol == 0 -> if {
+                    (dropType.first >= 0 and context.typeTraits[dropType.first] % 2 == 1) -> if {
+                        "  %some = load " -> print
+                        dropType.first -> writeSemanticTypeId(context, state)
+                        ", ptr %payload, align " -> print
+                        context.typeAligns[dropType.first] -> writeDecimalLine
+                        "  call void @sollang_drop_t$(dropType.first)(" -> print
+                        dropType.first -> writeSemanticTypeId(context, state)
+                        " %some)" -> println
+                    }
+                } else {
+                    (dropType.second >= 0 and context.typeTraits[dropType.second] % 2 == 1) -> if {
+                        "  %second = load " -> print
+                        dropType.second -> writeSemanticTypeId(context, state)
+                        ", ptr %payload, align " -> print
+                        context.typeAligns[dropType.second] -> writeDecimalLine
+                        "  call void @sollang_drop_t$(dropType.second)(" -> print
+                        dropType.second -> writeSemanticTypeId(context, state)
+                        " %second)" -> println
+                    }
+                }
+                "  br label %done" -> println
+                "done:" -> println
+                "  ret void" -> println
+            }
+            (dropTypeIndex! -> isNominalEnumType(context, state)) -> if {
+                dropTypeIndex! -> enumPayloadTypes(context, state) => nominalDropPayloads!
+                "  %slot = alloca %sollang.enum.t$(dropTypeIndex!), align 8" -> println
+                "  store %sollang.enum.t$(dropTypeIndex!) %value, ptr %slot, align 8" -> println
+                "  %tag = extractvalue %sollang.enum.t$(dropTypeIndex!) %value, 0" -> println
+                "  %payload = getelementptr inbounds %sollang.enum.t$(dropTypeIndex!), ptr %slot, i32 0, i32 1" -> println
+                "  %is0 = icmp eq i32 %tag, 0" -> println
+                "  br i1 %is0, label %tag0, label %tag1" -> println
+                "tag0:" -> println
+                (nominalDropPayloads! -> len) > 0 -> if {
+                    nominalDropPayloads![0] => nominalDropFirst
+                    (nominalDropFirst >= 0 and context.typeTraits[nominalDropFirst] % 2 == 1) -> if {
+                        "  %first = load " -> print
+                        nominalDropFirst -> writeSemanticTypeId(context, state)
+                        ", ptr %payload, align " -> print
+                        context.typeAligns[nominalDropFirst] -> writeDecimalLine
+                        "  call void @sollang_drop_t$(nominalDropFirst)(" -> print
+                        nominalDropFirst -> writeSemanticTypeId(context, state)
+                        " %first)" -> println
+                    }
+                }
+                "  br label %done" -> println
+                "tag1:" -> println
+                (nominalDropPayloads! -> len) > 1 -> if {
+                    nominalDropPayloads![1] => nominalDropSecond
+                    (nominalDropSecond >= 0 and context.typeTraits[nominalDropSecond] % 2 == 1) -> if {
+                        "  %second = load " -> print
+                        nominalDropSecond -> writeSemanticTypeId(context, state)
+                        ", ptr %payload, align " -> print
+                        context.typeAligns[nominalDropSecond] -> writeDecimalLine
+                        "  call void @sollang_drop_t$(nominalDropSecond)(" -> print
+                        nominalDropSecond -> writeSemanticTypeId(context, state)
+                        " %second)" -> println
+                    }
+                }
+                "  br label %done" -> println
+                "done:" -> println
+                "  ret void" -> println
+            }
+            "}" -> println
+        }
+        dropTypeIndex! + 1 => dropTypeIndex!
+    }
+}
+emitEnumPayloadDrop request: EnumPayloadDropRequest, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    context.types[request.payloadTypeId] => payloadType
+    payloadType.kind == 3 -> if {
+        "  %enumdrop$(request.nameRoot)_payload = load %sollang.array.i32, ptr %enumdrop$(request.pointerRoot)_payload_ptr, align " -> print
+        context.typeAligns[request.payloadTypeId] -> writeDecimalLine
+        "  %enumdrop$(request.nameRoot)_data = extractvalue %sollang.array.i32 %enumdrop$(request.nameRoot)_payload, 0" -> println
+        "  call void @free(ptr %enumdrop$(request.nameRoot)_data)" -> println
+    }
+    payloadType.kind == 5 -> if {
+        "  %enumdrop$(request.nameRoot)_payload = load %sollang.dict, ptr %enumdrop$(request.pointerRoot)_payload_ptr, align " -> print
+        context.typeAligns[request.payloadTypeId] -> writeDecimalLine
+        "  %enumdrop$(request.nameRoot)_keys = extractvalue %sollang.dict %enumdrop$(request.nameRoot)_payload, 0" -> println
+        "  call void @free(ptr %enumdrop$(request.nameRoot)_keys)" -> println
+        "  %enumdrop$(request.nameRoot)_values = extractvalue %sollang.dict %enumdrop$(request.nameRoot)_payload, 1" -> println
+        "  call void @free(ptr %enumdrop$(request.nameRoot)_values)" -> println
+    }
+    payloadType.kind == 6 -> if {
+        "  %enumdrop$(request.nameRoot)_payload = load ptr, ptr %enumdrop$(request.pointerRoot)_payload_ptr, align " -> print
+        context.typeAligns[request.payloadTypeId] -> writeDecimalLine
+        "  call void @free(ptr %enumdrop$(request.nameRoot)_payload)" -> println
+    }
+    (payloadType.kind == 1 and payloadType.origin == 1 and payloadType.symbol == 24) -> if {
+        "  %enumdrop$(request.nameRoot)_payload = load %sollang.source_text, ptr %enumdrop$(request.pointerRoot)_payload_ptr, align " -> print
+        context.typeAligns[request.payloadTypeId] -> writeDecimalLine
+        "  %enumdrop$(request.nameRoot)_owner = extractvalue %sollang.source_text %enumdrop$(request.nameRoot)_payload, 2" -> println
+        "  call void @free(ptr %enumdrop$(request.nameRoot)_owner)" -> println
+    }
+    (payloadType.kind == 1 and (payloadType.origin == 0 or payloadType.origin == 2)) -> if {
+        "  %dropg$(request.nameRoot)_p0 = load %sollang.struct.m$(payloadType.module)_s$(payloadType.symbol), ptr %enumdrop$(request.pointerRoot)_payload_ptr, align " -> print
+        context.typeAligns[request.payloadTypeId] -> writeDecimalLine
+        DropGlueRequest {
+            typeId: request.payloadTypeId
+            typeOrigin: payloadType.origin
+            typeModule: payloadType.module
+            typeSymbol: payloadType.symbol
+            valueKind: 2
+            valueIndex: -1
+            nameRoot: request.nameRoot
+            pathCode: 0
+            bindingIndex: request.bindingIndex
+            regionIndex: request.regionIndex
+            beforeAst: -1
+            parentTask: -1
+            fieldOrdinal: -1
+            hasPartialMoves: false
+        } -> emitDropGlue(context, state)
+    }
+}
+emitEnumDrop request: EnumDropRequest, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    request.valueKind == 2 -> if {
+        "  %enumdrop$(request.nameRoot)_value = load %sollang.enum.t$(request.typeId), ptr %slot$(request.valueIndex), align " -> print
+        context.typeAligns[request.typeId] -> writeDecimalLine
+    }
+    "  call void @sollang_drop_t$(request.typeId)(%sollang.enum.t$(request.typeId) " -> print
+    request.valueKind == 0 -> if { "%v$(request.valueIndex)" -> print }
+    request.valueKind == 1 -> if {
+        context.ir[request.regionIndex].parent => enumParameterOwner!
+        (enumParameterOwner! >= 0 and context.ir[enumParameterOwner!].kind != 0 and context.ir[enumParameterOwner!].kind != 11) -> while {
+            context.ir[enumParameterOwner!].parent => enumParameterOwner!
+        }
+        context -> writeParameterReference(enumParameterOwner!, context.ir[request.bindingIndex].symbol) => enumParameterWritten
+    }
+    request.valueKind == 2 -> if { "%enumdrop$(request.nameRoot)_value" -> print }
+    ")" -> println
+}
+nominalDeclarationAst typeId: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
+    -1 => declarationAst!
+    (typeId >= 0 and typeId < (context.types -> len)) -> if {
+        context.types[typeId] => nominalType
+        (nominalType.kind == 1 and (nominalType.origin == 0 or nominalType.origin == 2) and nominalType.module >= 0 and nominalType.module < (context.ranges -> len)) -> if {
+            context.ranges[nominalType.module] => nominalRange
+            (nominalType.symbol >= 0 and nominalType.symbol < nominalRange.symbolCount) -> if {
+                context.symbols[nominalRange.symbolStart + nominalType.symbol] => nominalSymbol
+                nominalSymbol.astNode >= 0 -> if { nominalSymbol.astNode => declarationAst! }
+            }
+        }
+    }
+    declarationAst!
+}
+isNominalEnumType typeId: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
+    typeId -> nominalDeclarationAst(context, state) => declarationAst
+    false => result!
+    declarationAst >= 0 -> if {
+        context.types[typeId] => nominalType
+        context.ranges[nominalType.module] => nominalRange
+        context.nodes[nominalRange.astStart + declarationAst].kind == 4 -> if { true => result! }
+    }
+    result!
+}
+enumPayloadTypes typeId: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> [Int; ~] {
+    [Int; ~] => payloads!
+    typeId -> isNominalEnumType(context, state) -> if {
+        context.types[typeId] => enumType
+        enumType.module => enumModule
+        typeId -> nominalDeclarationAst(context, state) => enumAst
+        0 => nominalPayloadIndex!
+        nominalPayloadIndex! < (context.nominal -> len) -> while {
+            context.nominal[nominalPayloadIndex!] => nominalPayload
+            (nominalPayload.status == 0 and nominalPayload.sourceModule == enumModule and nominalPayload.typeAst >= 0) -> if {
+                nominalPayload.typeAst => payloadAncestor!
+                false => payloadBelongs!
+                (payloadAncestor! >= 0 and payloadAncestor! < context.ranges[enumModule].astCount and not payloadBelongs!) -> while {
+                    context.ranges[enumModule] => payloadRange
+                    context.nodes[payloadRange.astStart + payloadAncestor!] => payloadNode
+                    (payloadNode.kind == 27 and payloadNode.parent == enumAst) -> if { true => payloadBelongs! } else { payloadNode.parent => payloadAncestor! }
+                }
+                payloadBelongs! -> if {
+                    -1 => resolvedPayloadType!
+                    0 => resolvedPayloadSearch!
+                    resolvedPayloadSearch! < (context.types -> len) -> while {
+                        context.types[resolvedPayloadSearch!] => payloadTypeCandidate
+                        (payloadTypeCandidate.status == 0 and payloadTypeCandidate.kind == 1 and payloadTypeCandidate.origin == nominalPayload.origin and payloadTypeCandidate.module == nominalPayload.targetModule and payloadTypeCandidate.symbol == nominalPayload.targetSymbol) -> if { resolvedPayloadSearch! => resolvedPayloadType! }
+                        resolvedPayloadSearch! + 1 => resolvedPayloadSearch!
+                    }
+                    resolvedPayloadType! >= 0 -> if {
+                        false => alreadyPayload!
+                        0 => existingPayloadIndex!
+                        existingPayloadIndex! < (payloads! -> len) -> while {
+                            payloads![existingPayloadIndex!] == resolvedPayloadType! -> if { true => alreadyPayload! }
+                            existingPayloadIndex! + 1 => existingPayloadIndex!
+                        }
+                        not alreadyPayload! -> if { payloads! -> push(resolvedPayloadType!) }
+                    }
+                }
+            }
+            nominalPayloadIndex! + 1 => nominalPayloadIndex!
+        }
+        0 => compositePayloadIndex!
+        compositePayloadIndex! < (context.composite -> len) -> while {
+            context.composite[compositePayloadIndex!] => compositePayload
+            (compositePayload.status == 0 and compositePayload.sourceModule == enumModule and compositePayload.typeAst >= 0) -> if {
+                compositePayload.typeAst => payloadAncestor!
+                false => payloadBelongs!
+                (payloadAncestor! >= 0 and payloadAncestor! < context.ranges[enumModule].astCount and not payloadBelongs!) -> while {
+                    context.ranges[enumModule] => payloadRange
+                    context.nodes[payloadRange.astStart + payloadAncestor!] => payloadNode
+                    (payloadNode.kind == 27 and payloadNode.parent == enumAst) -> if { true => payloadBelongs! } else { payloadNode.parent => payloadAncestor! }
+                }
+                payloadBelongs! -> if {
+                    -1 => compositeElementType!
+                    0 => compositeElementSearch!
+                    compositeElementSearch! < (context.types -> len) -> while {
+                        context.types[compositeElementSearch!] => compositeElementCandidate
+                        (compositeElementCandidate.status == 0 and compositeElementCandidate.kind == 1 and compositeElementCandidate.origin == compositePayload.elementOrigin and compositeElementCandidate.module == compositePayload.elementModule and compositeElementCandidate.symbol == compositePayload.elementSymbol) -> if { compositeElementSearch! => compositeElementType! }
+                        compositeElementSearch! + 1 => compositeElementSearch!
+                    }
+                    -1 => resolvedPayloadType!
+                    0 => resolvedPayloadSearch!
+                    resolvedPayloadSearch! < (context.types -> len) -> while {
+                        context.types[resolvedPayloadSearch!] => payloadTypeCandidate
+                        (payloadTypeCandidate.status == 0 and payloadTypeCandidate.kind == compositePayload.kind and payloadTypeCandidate.first == compositeElementType!) -> if { resolvedPayloadSearch! => resolvedPayloadType! }
+                        resolvedPayloadSearch! + 1 => resolvedPayloadSearch!
+                    }
+                    resolvedPayloadType! >= 0 -> if {
+                        false => alreadyPayload!
+                        0 => existingPayloadIndex!
+                        existingPayloadIndex! < (payloads! -> len) -> while {
+                            payloads![existingPayloadIndex!] == resolvedPayloadType! -> if { true => alreadyPayload! }
+                            existingPayloadIndex! + 1 => existingPayloadIndex!
+                        }
+                        not alreadyPayload! -> if { payloads! -> push(resolvedPayloadType!) }
+                    }
+                }
+            }
+            compositePayloadIndex! + 1 => compositePayloadIndex!
+        }
+    } else {
+        context.types[typeId] => enumType
+        (enumType.kind == 7 and enumType.origin == 4 and (enumType.symbol == 0 or enumType.symbol == 1)) -> if {
+            enumType.first >= 0 -> if { payloads! -> push(enumType.first) }
+            enumType.second >= 0 -> if { payloads! -> push(enumType.second) }
+        }
+    }
+    payloads!
+}
+writeSemanticTypeId typeId: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    [typeId, ~] => typeTasks!
+    typeTasks! -> len => typeTaskSize!
+    typeTaskSize! > 0 -> while {
+        typeTaskSize! - 1 => typeTaskSize!
+        typeTasks![typeTaskSize!] => typeTask
+        typeTask < 0 -> if { "]" -> print } else {
+            context.types[typeTask] => current
+            current.kind == 2 -> if { "{ ptr, i64 }" -> print }
+            current.kind == 3 -> if { "%sollang.array.i32" -> print }
+            current.kind == 5 -> if { "%sollang.dict" -> print }
+            current.kind == 6 -> if { "ptr" -> print }
+            current.kind == 8 -> if { "ptr" -> print }
+            current.kind == 9 -> if { "ptr" -> print }
+            current.kind == 7 -> if {
+                (current.origin == 4 and (current.symbol == 0 or current.symbol == 1)) -> if { "%sollang.enum.t$(typeTask)" -> print }
+                (current.origin == 4 and current.symbol == 2) -> if { "%sollang.task" -> print }
+                (current.origin == 4 and current.symbol == 3) -> if { "%sollang.stream" -> print }
+                (current.origin == 4 and current.symbol == 4) -> if { "%sollang.event_stream" -> print }
+            }
+            current.kind == 4 -> if {
+                "[$(current.length) x " -> print
+                typeTaskSize! == (typeTasks! -> len) -> if { typeTasks! -> push(-1) } else { -1 => typeTasks![typeTaskSize!] }
+                typeTaskSize! + 1 => typeTaskSize!
+                typeTaskSize! == (typeTasks! -> len) -> if { typeTasks! -> push(current.first) } else { current.first => typeTasks![typeTaskSize!] }
+                typeTaskSize! + 1 => typeTaskSize!
+            }
+            current.kind == 1 -> if {
+                (current.origin == 0 or current.origin == 2) -> if {
+                    typeTask -> isNominalEnumType(context, state) -> if { "%sollang.enum.t$(typeTask)" -> print } else { "%sollang.struct.m$(current.module)_s$(current.symbol)" -> print }
+                } else {
+                    current.symbol == 0 -> if { "void" -> print }
+                    current.symbol == 1 -> if { "%sollang.text" -> print }
+                    (current.symbol == 2 or current.symbol == 5 or current.symbol == 10 or current.symbol == 14) -> if { "i32" -> print }
+                    (current.symbol == 3 or current.symbol == 8) -> if { "i8" -> print }
+                    (current.symbol == 4 or current.symbol == 9) -> if { "i16" -> print }
+                    (current.symbol == 6 or current.symbol == 7 or current.symbol == 11) -> if { "i64" -> print }
+                    (current.symbol == 12 or current.symbol == 13) -> if {
+                        context.pointerBitWidth == 32 -> if { "i32" -> print } else { "i64" -> print }
+                    }
+                    (current.symbol == 19 or current.symbol == 20) -> if { "float" -> print }
+                    (current.symbol == 21 or current.symbol == 22) -> if { "double" -> print }
+                    current.symbol == 23 -> if { "i1" -> print }
+                    current.symbol == 24 -> if { "%sollang.source_text" -> print }
+                    current.symbol == 25 -> if { "{ i32, i32 }" -> print }
+                }
+            }
+        }
+    }
+}
+effectiveTypeId node: typedIr.TypedIrNode, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
+    node.typeId => effective!
+    (node.kind == 5 and node.operand0 >= 0 and context.ir[node.operand0].kind == 17 and context.ir[node.operand0].flags == 1) -> if {
+        node.operand0 -> mutableBindingRoot(context, state) => effectiveBindingRoot
+        context.ir[effectiveBindingRoot].typeId >= 0 -> if { context.ir[effectiveBindingRoot].typeId => effective! }
+    }
+    effective!
+}
+writeIrType node: typedIr.TypedIrNode, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    # Recursive semantic identity is authoritative. The legacy projection
+    # can still carry a stale imported nominal module on region nodes, so
+    # consulting it first reintroduces sys.file.SourceText as an unrelated
+    # user struct even when typeId already names the canonical builtin.
+    node.typeOrigin == 16 -> if {
+        "%sollang.dyn" -> print
+    } else {
+    node -> integerNodeWidth(context, state) => effectiveIntegerWidth
+    effectiveIntegerWidth > 0 -> if {
+        "i$(effectiveIntegerWidth)" -> print
+    } else {
+        node -> effectiveTypeId(context, state) => typeId
+        typeId >= 0 -> if { typeId -> writeSemanticTypeId(context, state) } else { node -> writeType }
+    }
+    }
+}
+llvmType symbol: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Text {
+    "void" => result!
+    symbol == 1 -> if { "%sollang.text" => result! }
+    (symbol == 2 or symbol == 5 or symbol == 10 or symbol == 14) -> if { "i32" => result! }
+    (symbol == 3 or symbol == 8) -> if { "i8" => result! }
+    (symbol == 4 or symbol == 9) -> if { "i16" => result! }
+    (symbol == 6 or symbol == 7 or symbol == 11 or symbol == 12 or symbol == 13) -> if { "i64" => result! }
+    (symbol == 19 or symbol == 20) -> if { "float" => result! }
+    (symbol == 21 or symbol == 22) -> if { "double" => result! }
+    symbol == 23 -> if { "i1" => result! }
+    symbol == 24 -> if { "%sollang.source_text" => result! }
+    symbol == 25 -> if { "{ i32, i32 }" => result! }
+    result! => selected
+    selected
+}
+storageSize symbol: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
+    4 => result!
+    symbol == 1 -> if { 16 => result! }
+    (symbol == 3 or symbol == 8 or symbol == 23) -> if { 1 => result! }
+    symbol == 24 -> if { context.pointerBitWidth / 8 * 4 => result! }
+    symbol == 25 -> if { 8 => result! }
+    (symbol == 4 or symbol == 9) -> if { 2 => result! }
+    (symbol == 6 or symbol == 7 or symbol == 11 or symbol == 12 or symbol == 13 or symbol == 21 or symbol == 22) -> if { 8 => result! }
+    result! => selected
+    selected
+}
+integerWidth symbol: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
+    0 => result!
+    (symbol == 3 or symbol == 8) -> if { 8 => result! }
+    (symbol == 4 or symbol == 9) -> if { 16 => result! }
+    (symbol == 2 or symbol == 5 or symbol == 10 or symbol == 14) -> if { 32 => result! }
+    (symbol == 6 or symbol == 7 or symbol == 11 or symbol == 12 or symbol == 13) -> if { 64 => result! }
+    result! => selected
+    selected
+}
+integerSigned symbol: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
+    symbol == 2 or symbol == 3 or symbol == 4 or symbol == 5 or symbol == 6 or symbol == 7
+}
+integerNodeSigned node: typedIr.TypedIrNode, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
+    node.typeSymbol => symbol!
+    node -> effectiveTypeId(context, state) => typeId
+    (typeId >= 0 and typeId < (context.types -> len)) -> if {
+        context.types[typeId] => canonicalType
+        (canonicalType.kind == 1 and canonicalType.origin == 1) -> if {
+            canonicalType.symbol => symbol!
+        }
+    }
+    symbol! => canonicalSymbol
+    canonicalSymbol -> integerSigned(context, state)
+}
+memberNodeIntegerWidth node: typedIr.TypedIrNode, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
+    0 => width!
+    (node.kind == 13 and node.operand0 >= 0) -> if {
+        context.ir[node.operand0] => memberBase
+        memberBase.typeOrigin => currentOrigin!
+        memberBase.typeModule => currentModule!
+        memberBase.typeSymbol => currentSymbol!
+        node -> sourceNode(context, state) => memberAst
+        memberBase -> sourceNode(context, state) => memberBaseAst
+        memberBaseAst.start + memberBaseAst.length => memberBaseEnd
+        memberAst.firstToken => memberTokenIndex!
+        true => beforeMemberBaseEnd!
+        (beforeMemberBaseEnd! and memberTokenIndex! < memberAst.firstToken + memberAst.tokenCount) -> while {
+            context.tokens[context.ranges[node.sourceModule].tokenStart + memberTokenIndex!].span.start < memberBaseEnd -> if {
+                memberTokenIndex! + 1 => memberTokenIndex!
+            } else { false => beforeMemberBaseEnd! }
+        }
+        memberTokenIndex! < memberAst.firstToken + memberAst.tokenCount -> while {
+            context.tokens[context.ranges[node.sourceModule].tokenStart + memberTokenIndex!].kind == grammar.tokenIdIdentifier -> if {
+                currentModule! => ownerSourceModule!
+                currentOrigin! == 2 -> if { context.modules[currentModule!].sourceIndex => ownerSourceModule! }
+                context.ranges[ownerSourceModule!] => ownerRange
+                0 => memberFieldSearch!
+                false => memberFieldFound!
+                (not memberFieldFound! and memberFieldSearch! < ownerRange.symbolCount) -> while {
+                    context.symbols[ownerRange.symbolStart + memberFieldSearch!] => memberField
+                    (memberField.kind == 26 and memberField.parent == currentSymbol!) -> if {
+                        context.tokens[context.ranges[node.sourceModule].tokenStart + memberTokenIndex!] => memberName
+                        context.tokens[ownerRange.tokenStart + memberField.nameToken] => fieldName
+                        memberName.span.length == fieldName.span.length => fieldEqual!
+                        UIntSize(0) => fieldNameByte!
+                        (fieldEqual! and fieldNameByte! < memberName.span.length) -> while {
+                            context.sources[node.sourceModule] -> byte(memberName.span.start + fieldNameByte!) => memberByte
+                            context.sources[ownerSourceModule!] -> byte(fieldName.span.start + fieldNameByte!) => fieldByte
+                            memberByte != fieldByte -> if { false => fieldEqual! }
+                            fieldNameByte! + UIntSize(1) => fieldNameByte!
+                        }
+                        fieldEqual! -> if {
+                            true => memberFieldFound!
+                            -1 => memberFieldTypeIndex!
+                            0 => memberFieldTypeSearch!
+                            memberFieldTypeSearch! < (context.nominal -> len) -> while {
+                                (context.nominal[memberFieldTypeSearch!].sourceModule == ownerSourceModule! and context.nominal[memberFieldTypeSearch!].typeAst == memberField.typeNode) -> if {
+                                    memberFieldTypeSearch! => memberFieldTypeIndex!
+                                }
+                                memberFieldTypeSearch! + 1 => memberFieldTypeSearch!
+                            }
+                            memberFieldTypeIndex! >= 0 -> if {
+                                context.nominal[memberFieldTypeIndex!] => memberFieldType
+                                memberFieldType.origin => currentOrigin!
+                                memberFieldType.targetModule => currentModule!
+                                memberFieldType.targetSymbol => currentSymbol!
+                            } else {
+                                -1 => currentOrigin!
+                                0 => memberCompositeSearch!
+                                memberCompositeSearch! < (context.composite -> len) -> while {
+                                    context.composite[memberCompositeSearch!] => memberCompositeType
+                                    (memberCompositeType.sourceModule == ownerSourceModule! and memberCompositeType.typeAst == memberField.typeNode) -> if {
+                                        10 + memberCompositeType.kind => currentOrigin!
+                                        memberCompositeType.elementModule => currentModule!
+                                        memberCompositeType.elementSymbol => currentSymbol!
+                                    }
+                                    memberCompositeSearch! + 1 => memberCompositeSearch!
+                                }
+                            }
+                        }
+                    }
+                    memberFieldSearch! + 1 => memberFieldSearch!
+                }
+            }
+            memberTokenIndex! + 1 => memberTokenIndex!
+        }
+        currentOrigin! == 1 -> if {
+            currentSymbol! -> integerWidth(context, state) => width!
+            (currentSymbol! == 12 or currentSymbol! == 13) -> if { context.pointerBitWidth => width! }
+        }
+    }
+    width!
+}
+integerNodeWidth node: typedIr.TypedIrNode, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
+    -1 => symbol!
+    false => canonicalReference!
+    node.typeOrigin == 1 -> if { node.typeSymbol => symbol! }
+    node -> effectiveTypeId(context, state) => typeId
+    (typeId >= 0 and typeId < (context.types -> len)) -> if {
+        context.types[typeId] => canonicalType
+        (canonicalType.kind == 1 and canonicalType.origin == 1) -> if {
+            canonicalType.symbol => symbol!
+        }
+        canonicalType.kind == 8 -> if { true => canonicalReference! }
+    }
+    symbol! -> integerWidth(context, state) => width!
+    symbol! == 23 -> if { 1 => width! }
+    (symbol! == 12 or symbol! == 13) -> if { context.pointerBitWidth => width! }
+    (width! == 0 and node.kind == 13 and not canonicalReference!) -> if { node -> memberNodeIntegerWidth(context, state) => width! }
+    (node.kind == 5 and node.operand0 >= 0 and node.operand0 < (context.ir -> len) and context.ir[node.operand0].kind == 17 and context.ir[node.operand0].flags != 1 and context.ir[node.operand0].operand0 >= 0 and context.ir[node.operand0].operand0 < (context.ir -> len)) -> if {
+        context.ir[context.ir[node.operand0].operand0] -> integerNodeWidth(context, state) => width!
+    }
+    (node.kind == 7 and node.operand0 >= 0 and node.operand0 < (context.ir -> len)) -> if {
+        node.opcode == -26 -> if { 1 => width! } else { context.ir[node.operand0] -> integerNodeWidth(context, state) => width! }
+    }
+    (node.kind == 8 and node.operand0 >= 0 and node.operand0 < (context.ir -> len) and node.operand1 >= 0 and node.operand1 < (context.ir -> len)) -> if {
+        (node.opcode == grammar.tokenIdEqualEqual or node.opcode == grammar.tokenIdBangEqual or node.opcode == grammar.tokenIdLess or node.opcode == grammar.tokenIdLessEqual or node.opcode == grammar.tokenIdGreater or node.opcode == grammar.tokenIdGreaterEqual or node.opcode == -24 or node.opcode == -25) -> if {
+            1 => width!
+        } else {
+            context.ir[node.operand0] -> integerNodeWidth(context, state) => leftWidth
+            context.ir[node.operand1] -> integerNodeWidth(context, state) => rightWidth
+            leftWidth > rightWidth -> if { leftWidth => width! } else { rightWidth => width! }
+        }
+    }
+    ((node.kind == 9 or node.kind == 6) and node.opcode == -201 and node.operand0 >= 0) -> if {
+        64 => width!
+    }
+    width!
+}
+nodeContainsReadIntAt nodeIndex: Int, depth: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
+    false => contains!
+    (depth < 32 and nodeIndex >= 0 and nodeIndex < (context.ir -> len)) -> if {
+        context.ir[nodeIndex] => candidate
+        (candidate.kind == 6 and candidate.symbol == -103) -> if {
+            true => contains!
+        } else {
+            candidate.operand0 != nodeIndex -> if {
+                candidate.operand0 -> nodeContainsReadIntAt(depth + 1, context, state) => contains!
+            }
+            (not contains! and candidate.operand1 != nodeIndex) -> if {
+                candidate.operand1 -> nodeContainsReadIntAt(depth + 1, context, state) => contains!
+            }
+        }
+    }
+    contains!
+}
+nodeContainsReadInt rootIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
+    rootIndex -> nodeContainsReadIntAt(0, context, state)
+}
+integerComparisonOperation expression: typedIr.TypedIrNode, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Text {
+    context.ir[expression.operand0] => operand
+    operand -> integerNodeSigned(context, state) => signed
+    expression.opcode == grammar.tokenIdLess -> if {
+        signed -> if { "icmp slt" } else { "icmp ult" }
+    } else {
+        expression.opcode == grammar.tokenIdLessEqual -> if {
+            signed -> if { "icmp sle" } else { "icmp ule" }
+        } else {
+            expression.opcode == grammar.tokenIdGreater -> if {
+                signed -> if { "icmp sgt" } else { "icmp ugt" }
+            } else {
+                signed -> if { "icmp sge" } else { "icmp uge" }
+            }
+        }
+    }
+}
+legacyStorageAlign symbol: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
+    4 => result!
+    symbol == 1 -> if { 8 => result! }
+    (symbol == 3 or symbol == 8 or symbol == 23) -> if { 1 => result! }
+    symbol == 24 -> if { context.pointerBitWidth / 8 => result! }
+    (symbol == 4 or symbol == 9) -> if { 2 => result! }
+    (symbol == 6 or symbol == 7 or symbol == 11 or symbol == 12 or symbol == 13 or symbol == 21 or symbol == 22) -> if { 8 => result! }
+    result! => selected
+    selected
+}
+storageAlign node: typedIr.TypedIrNode, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
+    node.typeOrigin == 16 -> if { context.pointerBitWidth / 8 } else {
+    node -> effectiveTypeId(context, state) => typeId
+    typeId >= 0 -> if {
+        typeId -> isNominalEnumType(context, state) -> if { 8 } else {
+            context.typeLayoutStatuses[typeId] == 0 -> if { context.typeAligns[typeId] } else { 1 }
+        }
+    } else {
+        node.typeSymbol -> legacyStorageAlign(context, state)
+    }
+    }
+}
+enumVariantTag node: typedIr.TypedIrNode, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
+    node -> sourceToken(context, state) => variantToken
+    -1 => tag!
+    variantToken.span.length == UIntSize(2) -> if {
+        context.sources[node.sourceModule] -> byte(variantToken.span.start) => first
+        context.sources[node.sourceModule] -> byte(variantToken.span.start + UIntSize(1)) => second
+        (first == UInt8(79) and second == UInt8(107)) -> if { 0 => tag! }
+    }
+    variantToken.span.length == UIntSize(3) -> if {
+        context.sources[node.sourceModule] -> byte(variantToken.span.start) => first
+        context.sources[node.sourceModule] -> byte(variantToken.span.start + UIntSize(1)) => second
+        context.sources[node.sourceModule] -> byte(variantToken.span.start + UIntSize(2)) => third
+        (first == UInt8(69) and second == UInt8(114) and third == UInt8(114)) -> if { 1 => tag! }
+    }
+    variantToken.span.length == UIntSize(4) -> if {
+        context.sources[node.sourceModule] -> byte(variantToken.span.start) => first
+        context.sources[node.sourceModule] -> byte(variantToken.span.start + UIntSize(1)) => second
+        context.sources[node.sourceModule] -> byte(variantToken.span.start + UIntSize(2)) => third
+        context.sources[node.sourceModule] -> byte(variantToken.span.start + UIntSize(3)) => fourth
+        (first == UInt8(78) and second == UInt8(111) and third == UInt8(110) and fourth == UInt8(101)) -> if { 0 => tag! }
+        (first == UInt8(83) and second == UInt8(111) and third == UInt8(109) and fourth == UInt8(101)) -> if { 1 => tag! }
+    }
+    (tag! < 0 and node.targetModule >= 0 and node.targetModule < (context.ranges -> len)) -> if {
+        context.ranges[node.targetModule] => variantRange
+        (node.symbol >= 0 and node.symbol < variantRange.symbolCount) -> if {
+            context.symbols[variantRange.symbolStart + node.symbol] => variantSymbol
+            (variantSymbol.kind == 27 and variantSymbol.parent >= 0) -> if {
+                0 => variantOrdinal!
+                0 => variantSymbolIndex!
+                variantSymbolIndex! < node.symbol -> while {
+                    context.symbols[variantRange.symbolStart + variantSymbolIndex!] => siblingVariant
+                    (siblingVariant.kind == 27 and siblingVariant.parent == variantSymbol.parent) -> if { variantOrdinal! + 1 => variantOrdinal! }
+                    variantSymbolIndex! + 1 => variantSymbolIndex!
+                }
+                variantOrdinal! => tag!
+            }
+        }
+    }
+    tag!
+}

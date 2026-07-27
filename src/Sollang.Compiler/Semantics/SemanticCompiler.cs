@@ -789,6 +789,15 @@ internal sealed partial class SemanticCompiler
                 function.Line,
                 function.Column)
             : BoundType.Unit;
+        var nativeSuccessType = function.NativeSuccessType is null
+            ? (BoundType?)null
+            : ParseFunctionType(
+                function.NativeSuccessType,
+                function.GenericParameterName,
+                function.SecondaryGenericParameterName,
+                function.TertiaryGenericParameterName,
+                function.Line,
+                function.Column);
         if (returnType == BoundType.IntSlice)
         {
             throw Error(function.Line, function.Column, "readonly Int view returns are not implemented yet");
@@ -957,7 +966,10 @@ internal sealed partial class SemanticCompiler
                     parameter.Line,
                     parameter.Column);
             }
-            ValidateNativeAbiResult(returnType, function.Line, function.Column);
+            ValidateNativeAbiResult(
+                nativeSuccessType ?? returnType,
+                function.Line,
+                function.Column);
         }
         if (function.Com is not null)
         {
@@ -1025,7 +1037,9 @@ internal sealed partial class SemanticCompiler
             NativeLibrary: function.NativeLibrary,
             NativeSymbol: function.NativeSymbol
                 ?? function.Name[(function.Name.LastIndexOf('.') + 1)..],
-            Com: function.Com);
+            Com: function.Com,
+            NativeError: function.NativeError,
+            NativeSuccessType: nativeSuccessType);
     }
 
     private IReadOnlySet<string> BindFunctionEffects(FunctionDeclaration function)
@@ -1236,7 +1250,11 @@ internal sealed partial class SemanticCompiler
                     parameter.Line,
                     parameter.Column);
             }
-            ValidateNativeAbiType(function.ReturnType, "result", function.Line, function.Column);
+            ValidateNativeAbiType(
+                function.NativeSuccessType ?? function.ReturnType,
+                "result",
+                function.Line,
+                function.Column);
         }
         if (function.Com is not null)
         {
@@ -1384,13 +1402,28 @@ internal sealed partial class SemanticCompiler
             return;
         }
 
-        var expectedReference = _types.GetOrAddReference(interfaceType);
+        var receiverInterfaceType = interfaceType;
+        if (metadata.Operation == ComFunctionOperation.Query)
+        {
+            if (metadata.ReceiverInterfaceType is null
+                || !_types.TryResolve(metadata.ReceiverInterfaceType, out receiverInterfaceType)
+                || !_types.IsStruct(receiverInterfaceType)
+                || _types.GetStruct(receiverInterfaceType).ComInterface is null)
+            {
+                throw Error(
+                    function.Line,
+                    function.Column,
+                    $"unknown COM receiver interface type '{metadata.ReceiverInterfaceType}'");
+            }
+        }
+
+        var expectedReference = _types.GetOrAddReference(receiverInterfaceType);
         if (inputType != expectedReference || inputOwnership != BoundFunctionInputOwnership.Default)
         {
             throw Error(
                 function.Line,
                 function.Column,
-                "COM clone and method receivers must be readonly interface references");
+                "COM clone, query, and method receivers must be readonly interface references");
         }
 
         if (metadata.Operation == ComFunctionOperation.Clone)
@@ -1401,6 +1434,21 @@ internal sealed partial class SemanticCompiler
                     function.Line,
                     function.Column,
                     "COM clone must return the same interface type without additional inputs");
+            }
+            return;
+        }
+
+        if (metadata.Operation == ComFunctionOperation.Query)
+        {
+            if (additionalParameters.Count != 0
+                || !_types.TryGetResultTypes(returnType, out var queryResult)
+                || queryResult.Ok != interfaceType
+                || queryResult.Error != BoundType.Int)
+            {
+                throw Error(
+                    function.Line,
+                    function.Column,
+                    "COM query must return Result<TargetInterface, Int32> without additional inputs");
             }
             return;
         }
@@ -1913,6 +1961,8 @@ internal sealed partial class SemanticCompiler
         IReadOnlyDictionary<string, BoundFunction> parentFunctions,
         IReadOnlyDictionary<string, BoundType> capturedBindings)
     {
+        _currentModuleName = function.ModuleName;
+        _currentTypeScopeName = ResolveFunctionTypeScope(function.Name);
         var parentBorrowedTextOrigins = new Dictionary<string, IReadOnlySet<string>>(
             _activeBorrowedTextOrigins,
             StringComparer.Ordinal);
@@ -2105,7 +2155,9 @@ internal sealed partial class SemanticCompiler
             }
         }
 
-        if (function.Body is not null && IsContainerType(bodyType))
+        if (function.Body is not null
+            && !_types.IsReference(function.ReturnType)
+            && IsContainerType(bodyType))
         {
             EnsureOwnedContainerCanLeaveBlock(
                 function.Body,
@@ -2274,7 +2326,9 @@ internal sealed partial class SemanticCompiler
                 $"block function '{function.Name}' returns {FormatType(bodyType)} but declares {FormatType(function.ReturnType)}");
         }
 
-        if (function.Body is not null && IsContainerType(bodyType))
+        if (function.Body is not null
+            && !_types.IsReference(function.ReturnType)
+            && IsContainerType(bodyType))
         {
             EnsureOwnedContainerCanLeaveBlock(
                 function.Body,
@@ -3249,7 +3303,8 @@ internal sealed partial class SemanticCompiler
                     if (returnStatement.Value is not null)
                     {
                         ValidateOwnedParameterConsumptionExpression(returnStatement.Value, functions, bindings);
-                        if (IsContainerType(returnType))
+                        if (!_types.IsReference(_currentFunctionReturnType.Value)
+                            && IsContainerType(returnType))
                         {
                             EnsureOwnedContainerCanLeaveBlock(
                                 returnStatement.Value,
@@ -7091,7 +7146,8 @@ internal sealed partial class SemanticCompiler
                             }
                         }
 
-                        if (_types.IsReference(function.InputType.Value))
+                        if (_types.IsReference(function.InputType.Value)
+                            && !_types.IsReference(currentType))
                         {
                             EnsureReferenceArgumentPlace(expression.Source, bindings, mutableBindings, path);
                         }
@@ -9152,7 +9208,8 @@ internal sealed partial class SemanticCompiler
                 expression.Column,
                 $"function '{path}' expects {FormatType(function.InputType.Value)} but received {FormatType(argumentType)}");
         }
-        if (_types.IsReference(function.InputType.Value))
+        if (_types.IsReference(function.InputType.Value)
+            && !_types.IsReference(argumentType))
         {
             EnsureReferenceArgumentPlace(expression.Arguments[0], bindings, mutableBindings, path);
         }
@@ -9219,7 +9276,8 @@ internal sealed partial class SemanticCompiler
                     $"function '{path}' parameter '{parameter.Name}' expects {FormatType(parameter.Type)} "
                     + $"but received {FormatType(actualType)}");
             }
-            if (_types.IsReference(parameter.Type))
+            if (_types.IsReference(parameter.Type)
+                && !_types.IsReference(actualType))
             {
                 EnsureReferenceArgumentPlace(argument, bindings, mutableBindings, path);
             }
@@ -9831,10 +9889,7 @@ internal sealed partial class SemanticCompiler
             boxes,
             references,
             _pointerBitWidth / 8);
-        foreach (var (id, elementType) in predeclaredDynamicArrays)
-        {
-            result.RegisterDynamicArray(id, elementType);
-        }
+        result.RegisterDynamicArrays(predeclaredDynamicArrays);
         return result;
 
         bool TryResolveDefinitionDynamicArray(string typeName, out TypeId type)
@@ -10049,16 +10104,6 @@ internal sealed partial class SemanticCompiler
             if (elementType == BoundType.Unit || _types.IsReference(elementType))
             {
                 throw Error(line, column, "ref requires a non-reference value type");
-            }
-            if (_types.ContainsOwnedStorage(elementType)
-                && !(_types.IsStruct(elementType)
-                    && (_types.GetStruct(elementType).ComInterface is not null
-                        || _types.GetStruct(elementType).NativeHandle is not null)))
-            {
-                throw Error(
-                    line,
-                    column,
-                    "ref to an owned-storage type requires the pending origin/liveness checker");
             }
             var reference = _types.GetOrAddReference(elementType);
             _types.AddAlias(typeName, reference);
@@ -10450,6 +10495,11 @@ internal sealed partial class SemanticCompiler
 
     private bool IsContainerType(BoundType type)
     {
+        if (_types.IsReference(type))
+        {
+            return false;
+        }
+
         return type is BoundType.StaticIntArray or BoundType.StaticTextArray or BoundType.DynamicIntArray or BoundType.IntDictionary
             || _types.IsStaticArray(type)
             || _types.IsDynamicArray(type)
@@ -10691,6 +10741,14 @@ internal sealed partial class SemanticCompiler
             if (_types.IsBox(type))
             {
                 return IsValueTypeSupported(_types.GetBox(type).ElementType, allowSharedSourceText, visiting);
+            }
+            if (_types.IsReference(type))
+            {
+                return allowSharedSourceText
+                    && IsValueTypeSupported(
+                        _types.GetReference(type).ElementType,
+                        allowSharedSourceText,
+                        visiting);
             }
             if (_types.IsStaticArray(type))
             {
@@ -11877,14 +11935,14 @@ internal sealed partial class SemanticCompiler
         IReadOnlyDictionary<string, BoundFunction> functions,
         out BoundFunction function)
     {
-        if (functions.TryGetValue(path, out function!))
+        if (!path.Contains('.', StringComparison.Ordinal)
+            && _currentModuleName.Length > 0
+            && functions.TryGetValue(_currentModuleName + "." + path, out function!))
         {
             return true;
         }
 
-        return !path.Contains('.', StringComparison.Ordinal)
-            && _currentModuleName.Length > 0
-            && functions.TryGetValue(_currentModuleName + "." + path, out function!);
+        return functions.TryGetValue(path, out function!);
     }
 
     private void EnsureFunctionVisible(BoundFunction function, int line, int column)

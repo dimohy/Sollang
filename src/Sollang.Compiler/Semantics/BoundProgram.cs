@@ -88,7 +88,9 @@ internal sealed record BoundFunction(
     string? StreamElementTypeTemplate = null,
     string? NativeLibrary = null,
     string? NativeSymbol = null,
-    ComFunctionMetadata? Com = null);
+    ComFunctionMetadata? Com = null,
+    NativeErrorConvention NativeError = NativeErrorConvention.Direct,
+    BoundType? NativeSuccessType = null);
 
 internal sealed record BoundFunctionParameter(
     string Name,
@@ -475,6 +477,38 @@ internal sealed class TypeDefinitionTable
         _nextParametricTypeId = Math.Max(_nextParametricTypeId, (int)id + 1);
     }
 
+    public void RegisterDynamicArrays(IReadOnlyDictionary<TypeId, TypeId> definitions)
+    {
+        // Declare every recursive container identity before measuring element
+        // layouts. An element struct may itself contain another predeclared
+        // dynamic array, so sizing while registering one-by-one makes layout
+        // depend on dictionary iteration order.
+        foreach (var (id, elementType) in definitions)
+        {
+            if (_dynamicArraysByElement.TryGetValue(elementType, out var existing))
+            {
+                if (existing != id)
+                {
+                    throw new InvalidOperationException(
+                        $"dynamic array element type '{(int)elementType}' already has type id '{(int)existing}'");
+                }
+                continue;
+            }
+
+            _dynamicArrays.Add(id, new BoundDynamicArrayDefinition(id, elementType, 0, 1));
+            _dynamicArraysByElement.Add(elementType, id);
+            _nextParametricTypeId = Math.Max(_nextParametricTypeId, (int)id + 1);
+        }
+
+        foreach (var (id, elementType) in definitions)
+        {
+            var size = InlineSizeOf(elementType);
+            var alignment = Math.Min(Math.Max(size, 1), 8);
+            _dynamicArrays[id] = new BoundDynamicArrayDefinition(
+                id, elementType, size, alignment);
+        }
+    }
+
     public bool TryGetDynamicArrayForElement(TypeId elementType, out TypeId arrayType) =>
         _dynamicArraysByElement.TryGetValue(elementType, out arrayType);
 
@@ -512,6 +546,7 @@ internal sealed class TypeDefinitionTable
     {
         if (_optionsByValue.TryGetValue(valueType, out var existing))
         {
+            _names.TryAdd(displayName, existing);
             return existing;
         }
         var id = (TypeId)_nextParametricTypeId++;
@@ -522,6 +557,7 @@ internal sealed class TypeDefinitionTable
         ], payloadWords, 0, 0, ModuleName: "", IsPublic: true));
         _optionsByValue.Add(valueType, id);
         _optionValues.Add(id, valueType);
+        _names.TryAdd(displayName, id);
         return id;
     }
 
@@ -529,6 +565,7 @@ internal sealed class TypeDefinitionTable
     {
         if (_resultsByTypes.TryGetValue((okType, errorType), out var existing))
         {
+            _names.TryAdd(displayName, existing);
             return existing;
         }
         var id = (TypeId)_nextParametricTypeId++;
@@ -539,6 +576,7 @@ internal sealed class TypeDefinitionTable
         ], payloadWords, 0, 0, ModuleName: "", IsPublic: true));
         _resultsByTypes.Add((okType, errorType), id);
         _resultTypes.Add(id, (okType, errorType));
+        _names.TryAdd(displayName, id);
         return id;
     }
 

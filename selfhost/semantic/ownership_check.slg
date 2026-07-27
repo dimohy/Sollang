@@ -391,6 +391,60 @@ public analyzeLoweredContext prepared: semanticContext.SemanticSnapshot, typed: 
     # resumes. SourceText is an immutable shared view here (Sync-like), not an
     # async ownership transfer (Send-like). Other affine runtime owners remain
     # rejected, including Arena, Arguments, and mapped byte views.
+    parallelTypeIsSourceText typeId: Int -> Bool {
+        false => sourceText!
+        (typeId >= 0 and typeId < (prepared.semantic.types -> len)) -> if {
+            prepared.semantic.types[typeId] => candidate
+            (candidate.kind == 1 and candidate.origin == 1 and candidate.symbol == 24) -> if {
+                true => sourceText!
+            } else {
+                (candidate.kind == 1 and (candidate.origin == 0 or candidate.origin == 2)) -> if {
+                    candidate.module => sourceModule!
+                    (candidate.origin == 2 and candidate.module >= 0 and candidate.module < (prepared.modules -> len)) -> if {
+                        prepared.modules[candidate.module].sourceIndex => sourceModule!
+                    }
+                    false => fileNamespace!
+                    0 => moduleIndex!
+                    moduleIndex! < (prepared.modules -> len) -> while {
+                        prepared.modules[moduleIndex!] => identity
+                        identity.sourceIndex == sourceModule! -> if {
+                            identity.pathLength == UIntSize(8) => sameNamespace!
+                            "sys.file" => expectedNamespace
+                            UIntSize(0) => namespaceByte!
+                            (sameNamespace! and namespaceByte! < identity.pathLength) -> while {
+                                (prepared.package.sources[identity.sourceIndex] -> byte(identity.pathStart + namespaceByte!)) != (expectedNamespace -> byte(namespaceByte!)) -> if {
+                                    false => sameNamespace!
+                                }
+                                namespaceByte! + UIntSize(1) => namespaceByte!
+                            }
+                            sameNamespace! -> if { true => fileNamespace! }
+                        }
+                        moduleIndex! + 1 => moduleIndex!
+                    }
+                    (fileNamespace! and sourceModule! >= 0 and sourceModule! < (prepared.package.ranges -> len)) -> if {
+                        prepared.package.ranges[sourceModule!] => sourceRange
+                        (candidate.symbol >= 0 and candidate.symbol < sourceRange.symbolCount) -> if {
+                            prepared.package.symbols[sourceRange.symbolStart + candidate.symbol] => declaration
+                            (declaration.kind == 3 and declaration.parent < 0 and declaration.nameToken >= 0) -> if {
+                                prepared.package.tokens[sourceRange.tokenStart + declaration.nameToken] => name
+                                name.span.length == UIntSize(10) => sameName!
+                                "SourceText" => expectedName
+                                UIntSize(0) => nameByte!
+                                (sameName! and nameByte! < name.span.length) -> while {
+                                    (prepared.package.sources[sourceModule!] -> byte(name.span.start + nameByte!)) != (expectedName -> byte(nameByte!)) -> if {
+                                        false => sameName!
+                                    }
+                                    nameByte! + UIntSize(1) => nameByte!
+                                }
+                                sameName! -> if { true => sourceText! }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        sourceText!
+    }
     captureBindingIsParallelShareable bindingIndex: Int -> Bool {
         typed[bindingIndex] => binding
         [Int; ~] => pendingTypes!
@@ -417,6 +471,11 @@ public analyzeLoweredContext prepared: semanticContext.SemanticSnapshot, typed: 
                 } else {
                     prepared.semantic.types[pendingTypeId] => pendingType
                     pendingType.status != 0 -> if { false => shareable! } else {
+                        pendingTypeId -> parallelTypeIsSourceText -> if {
+                            # SourceText owns its mapping but exposes only an
+                            # immutable view. Structured parallel joins before
+                            # the owner can be moved or destroyed.
+                        } else {
                         pendingType.kind == 1 -> if {
                             pendingType.origin == 1 -> if {
                                 (pendingType.symbol == 15 or pendingType.symbol == 16 or pendingType.symbol == 17 or pendingType.symbol == 18) -> if { false => shareable! }
@@ -444,6 +503,7 @@ public analyzeLoweredContext prepared: semanticContext.SemanticSnapshot, typed: 
                                     } else { false => shareable! }
                                 }
                             }
+                        }
                         }
                     }
                 }
@@ -965,9 +1025,19 @@ public analyzeLoweredContext prepared: semanticContext.SemanticSnapshot, typed: 
                     (parameterIsReadonlyReference! and not argumentIsReadonlyReference!) -> if {
                         referenceArgumentIr! -> placeRootBinding => referenceRootBinding
                         false => referenceAddressable!
+                        # A resolved name read, including the base of a member
+                        # or index projection, is itself a stable place even
+                        # when a same-module fragment omits its direct
+                        # definition edge. Literals, constructors, and calls
+                        # use distinct IR kinds and remain rejected.
+                        referenceArgumentIr! + 0 => referencePlaceRoot!
+                        (referencePlaceRoot! >= 0 and (typed[referencePlaceRoot!].kind == 13 or typed[referencePlaceRoot!].kind == 15)) -> while {
+                            typed[referencePlaceRoot!].operand0 => referencePlaceRoot!
+                        }
+                        (referencePlaceRoot! >= 0 and typed[referencePlaceRoot!].kind == 5) -> if { true => referenceAddressable! }
                         referenceRootBinding >= 0 -> if {
                             typed[referenceRootBinding] => referenceRoot
-                            (referenceRoot.kind == 10 or referenceRoot.kind == 17) -> if { true => referenceAddressable! }
+                            (referenceRoot.kind == 10 or referenceRoot.kind == 17 or referenceRoot.kind == 29) -> if { true => referenceAddressable! }
                         }
                         not referenceAddressable! -> if {
                             prepared.package.ranges[referenceArgument.sourceModule] => referenceArgumentRange

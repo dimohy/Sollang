@@ -11,7 +11,7 @@ import syntax.generated.slg as grammar
 
 # Kinds match type_terms: 1 nominal, 2 slice, 3 dynamic array, 4 fixed
 # array, 5 dictionary, 6 box, 7 nominal application, 8 readonly reference,
-# 9 affine external handle (currently COM interface).
+# 9 affine external handle (COM interface or native opaque handle).
 # Nominal origins: 0 local declaration, 1 builtin, 2 imported declaration,
 # 3 generic parameter, 4 intrinsic type constructor.
 public struct SemanticType {
@@ -240,16 +240,16 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> SemanticTypeSet {
         builtinSeed! + 1 => builtinSeed!
     }
 
-    # Seed every COM interface even when user source never spells its generated
-    # type. Activation, clone, and implicit receivers can then reference the
-    # same nominal identity without synthesizing a TypeAnnotation or text.
+    # Seed every generated affine external type even when user source never
+    # spells it. COM activation/clone/receivers and native opaque handles then
+    # share the same pointer-sized canonical identity without wrapper storage.
     0 => comTypeSourceIndex!
     comTypeSourceIndex! < (package.sources -> len) -> while {
         package.ranges[comTypeSourceIndex!] => comTypeRange
         0 => comTypeSymbolIndex!
         comTypeSymbolIndex! < comTypeRange.symbolCount -> while {
             package.symbols[comTypeRange.symbolStart + comTypeSymbolIndex!] => comTypeSymbol
-            (comTypeSymbol.kind == 3 and comTypeSymbol.flags / 512 % 2 == 1) -> if {
+            (comTypeSymbol.kind == 3 and (comTypeSymbol.flags / 512 % 2 == 1 or comTypeSymbol.flags / 65536 % 2 == 1)) -> if {
                 semanticTypes! -> len => comInterfaceTypeId
                 semanticTypes! -> push(SemanticType {
                     kind: 9
@@ -263,18 +263,20 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> SemanticTypeSet {
                     containsParameter: false
                     status: 0
                 })
-                semanticTypes! -> push(SemanticType {
-                    kind: 7
-                    origin: 4
-                    module: -1
-                    symbol: 1
-                    first: comInterfaceTypeId
-                    second: 5
-                    length: -1
-                    lengthHash: UInt64(0)
-                    containsParameter: false
-                    status: 0
-                })
+                comTypeSymbol.flags / 512 % 2 == 1 -> if {
+                    semanticTypes! -> push(SemanticType {
+                        kind: 7
+                        origin: 4
+                        module: -1
+                        symbol: 1
+                        first: comInterfaceTypeId
+                        second: 5
+                        length: -1
+                        lengthHash: UInt64(0)
+                        containsParameter: false
+                        status: 0
+                    })
+                }
             }
             comTypeSymbolIndex! + 1 => comTypeSymbolIndex!
         }
@@ -388,9 +390,50 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> SemanticTypeSet {
                                         }
                                         symbolIndex! + 1 => symbolIndex!
                                     }
-                                    localSymbol! >= 0 -> if {
-                                        package.symbols[sourceRange.symbolStart + localSymbol!].kind == 32 -> if { 3 => origin! } else { 0 => origin! }
-                                        sourceIndex! => targetModule!
+                                    sourceIndex! => localTypeSource!
+                                    false => siblingTypeAmbiguous!
+                                    localSymbol! < 0 -> if {
+                                        identities![sourceIndex!] => currentIdentity
+                                        0 => siblingModuleIndex!
+                                        siblingModuleIndex! < (identities! -> len) -> while {
+                                            identities![siblingModuleIndex!] => siblingIdentity
+                                            (siblingIdentity.sourceIndex != sourceIndex! and siblingIdentity.pathHash == currentIdentity.pathHash) -> if {
+                                                siblingIdentity.sourceIndex => siblingSourceIndex
+                                                package.sources[siblingSourceIndex] -> len => siblingSourceLength
+                                                package.sources[siblingSourceIndex] -> slice(UIntSize(0), siblingSourceLength) => siblingSource
+                                                package.ranges[siblingSourceIndex] => siblingRange
+                                                0 => siblingSymbolIndex!
+                                                siblingSymbolIndex! < siblingRange.symbolCount -> while {
+                                                    package.symbols[siblingRange.symbolStart + siblingSymbolIndex!] => siblingCandidate
+                                                    (siblingCandidate.parent < 0 and (siblingCandidate.kind == 3 or siblingCandidate.kind == 4)) -> if {
+                                                        package.tokens[siblingRange.tokenStart + siblingCandidate.nameToken] => siblingName
+                                                        name.span.length == siblingName.span.length => siblingEqual!
+                                                        UIntSize(0) => siblingByte!
+                                                        (siblingEqual! and siblingByte! < name.span.length) -> while {
+                                                            (source -> byte(name.span.start + siblingByte!)) != (siblingSource -> byte(siblingName.span.start + siblingByte!)) -> if {
+                                                                false => siblingEqual!
+                                                            }
+                                                            siblingByte! + UIntSize(1) => siblingByte!
+                                                        }
+                                                        siblingEqual! -> if {
+                                                            localSymbol! >= 0 -> if {
+                                                                true => siblingTypeAmbiguous!
+                                                            } else {
+                                                                siblingSymbolIndex! => localSymbol!
+                                                                siblingSourceIndex => localTypeSource!
+                                                            }
+                                                        }
+                                                    }
+                                                    siblingSymbolIndex! + 1 => siblingSymbolIndex!
+                                                }
+                                            }
+                                            siblingModuleIndex! + 1 => siblingModuleIndex!
+                                        }
+                                    }
+                                    (localSymbol! >= 0 and not siblingTypeAmbiguous!) -> if {
+                                        package.ranges[localTypeSource!] => localTypeRange
+                                        package.symbols[localTypeRange.symbolStart + localSymbol!].kind == 32 -> if { 3 => origin! } else { 0 => origin! }
+                                        localTypeSource! => targetModule!
                                         localSymbol! => targetSymbol!
                                     } else {
                                         -1 => importedTypeModule!
@@ -519,13 +562,21 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> SemanticTypeSet {
                                 lengthByte! + UIntSize(1) => lengthByte!
                             }
                         }
+                        term.kind => resolvedKind!
+                        (term.kind == 1 and targetModule! >= 0 and targetSymbol! >= 0 and status! == 0) -> if {
+                            package.ranges[targetModule!] => resolvedNominalRange
+                            package.symbols[resolvedNominalRange.symbolStart + targetSymbol!] => resolvedNominalSymbol
+                            (resolvedNominalSymbol.flags / 512 % 2 == 1 or resolvedNominalSymbol.flags / 65536 % 2 == 1) -> if {
+                                9 => resolvedKind!
+                            }
+                        }
                         -1 => existing!
                         0 => semanticIndex!
                         (semanticIndex! < (semanticTypes! -> len) and existing! < 0) -> while {
                             semanticTypes![semanticIndex!] => known
                             known.origin == origin! => sameOrigin!
                             (term.kind == 1 and ((known.origin == 0 and origin! == 2) or (known.origin == 2 and origin! == 0))) -> if { true => sameOrigin! }
-                            (known.kind == term.kind and sameOrigin! and known.module == targetModule! and known.symbol == targetSymbol! and known.first == firstType! and known.second == secondType! and known.lengthHash == lengthHash! and known.status == status!) -> if {
+                            (known.kind == resolvedKind! and sameOrigin! and known.module == targetModule! and known.symbol == targetSymbol! and known.first == firstType! and known.second == secondType! and known.lengthHash == lengthHash! and known.status == status!) -> if {
                                 semanticIndex! => existing!
                             }
                             semanticIndex! + 1 => semanticIndex!
@@ -533,7 +584,7 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> SemanticTypeSet {
                         existing! < 0 -> if {
                             semanticTypes! -> len => existing!
                             semanticTypes! -> push(SemanticType {
-                                kind: term.kind
+                                kind: resolvedKind!
                                 origin: origin!
                                 module: targetModule!
                                 symbol: targetSymbol!
@@ -617,6 +668,68 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> SemanticTypeSet {
             fieldSymbolIndex! + 1 => fieldSymbolIndex!
         }
         sourceIndex! + 1 => sourceIndex!
+    }
+
+    # `try native ... -> T` exposes Result<T, Int32> to Sollang while keeping
+    # the C shim's physical ABI as i32 status plus an out T pointer. Intern
+    # that synthetic Result application once so call inference, typed IR, and
+    # LLVM lowering share one canonical type without source rewriting.
+    0 => nativeTrySource!
+    nativeTrySource! < (package.sources -> len) -> while {
+        package.ranges[nativeTrySource!] => nativeTryRange
+        0 => nativeTrySymbolIndex!
+        nativeTrySymbolIndex! < nativeTryRange.symbolCount -> while {
+            package.symbols[nativeTryRange.symbolStart + nativeTrySymbolIndex!] => nativeTrySymbol
+            (nativeTrySymbol.kind == 7 and nativeTrySymbol.flags / 32768 % 2 == 1) -> if {
+                nativeTrySymbol.typeNode => nativeTrySuccessAst!
+                nativeTrySymbol.secondaryTypeNode >= 0 -> if {
+                    nativeTrySymbol.secondaryTypeNode => nativeTrySuccessAst!
+                }
+                -1 => nativeTrySuccessType!
+                0 => nativeTryReferenceIndex!
+                nativeTryReferenceIndex! < (references! -> len) -> while {
+                    references![nativeTryReferenceIndex!] => nativeTryReference
+                    (nativeTryReference.status == 0
+                        and nativeTryReference.sourceModule == nativeTrySource!
+                        and nativeTryReference.typeAst == nativeTrySuccessAst!) -> if {
+                        nativeTryReference.typeId => nativeTrySuccessType!
+                    }
+                    nativeTryReferenceIndex! + 1 => nativeTryReferenceIndex!
+                }
+                (nativeTrySuccessType! >= 0 and nativeTrySuccessType! < (semanticTypes! -> len)) -> if {
+                    -1 => nativeTryResultType!
+                    0 => nativeTryResultSearch!
+                    nativeTryResultSearch! < (semanticTypes! -> len) -> while {
+                        semanticTypes![nativeTryResultSearch!] => nativeTryResultCandidate
+                        (nativeTryResultCandidate.kind == 7
+                            and nativeTryResultCandidate.origin == 4
+                            and nativeTryResultCandidate.symbol == 1
+                            and nativeTryResultCandidate.first == nativeTrySuccessType!
+                            and nativeTryResultCandidate.second == 5
+                            and nativeTryResultCandidate.status == 0) -> if {
+                            nativeTryResultSearch! => nativeTryResultType!
+                        }
+                        nativeTryResultSearch! + 1 => nativeTryResultSearch!
+                    }
+                    nativeTryResultType! < 0 -> if {
+                        semanticTypes! -> push(SemanticType {
+                            kind: 7
+                            origin: 4
+                            module: -1
+                            symbol: 1
+                            first: nativeTrySuccessType!
+                            second: 5
+                            length: -1
+                            lengthHash: UInt64(0)
+                            containsParameter: false
+                            status: 0
+                        })
+                    }
+                }
+            }
+            nativeTrySymbolIndex! + 1 => nativeTrySymbolIndex!
+        }
+        nativeTrySource! + 1 => nativeTrySource!
     }
     SemanticTypeSet { types: semanticTypes!, references: references!, fields: fields! } => result!
     result!

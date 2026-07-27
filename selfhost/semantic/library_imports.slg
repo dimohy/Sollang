@@ -1,0 +1,525 @@
+namespace sollang.compiler.semantic.library_imports
+
+import sollang.compiler.semantic.analysis as analysis
+import sollang.compiler.semantic.library_interfaces as interfaces
+import sollang.compiler.syntax as syntax
+import syntax.generated.slg as grammar
+import sys.file as file
+import sys.path as path
+
+# One binding connects a source-level alias to one mapped, validated interface.
+# Interface strings remain spans into sources[interfaceIndex]; only the path
+# required by the operating system is materialized.
+public struct LibraryBinding {
+    sourceModule: Int
+    astNode: Int
+    aliasToken: Int
+    interfaceIndex: Int
+    status: Int
+    errorOffset: UIntSize
+}
+
+public struct LibraryCatalog {
+    diagnosticCount: Int
+    bindings: [LibraryBinding; ~]
+    sources: [file.SourceText; ~]
+    interfaces: [interfaces.LibraryInterface; ~]
+    runtimeLibraries: [path.Path; ~]
+}
+
+public struct LibraryFunctionResolution {
+    sourceModule: Int
+    pathAst: Int
+    bindingIndex: Int
+    exportIndex: Int
+    status: Int
+}
+
+public struct LibraryCallDiagnostic {
+    sourceModule: Int
+    pathAst: Int
+    # 1 projection missing, 2 argument count, 3 argument type.
+    code: Int
+    expected: Int
+    actual: Int
+}
+
+public struct LibraryAnalysis {
+    package: analysis.PackageAnalysis
+    catalog: LibraryCatalog
+    resolutions: [LibraryFunctionResolution; ~]
+}
+
+struct ManifestPath {
+    status: Int
+    value: path.Path
+}
+
+isSeparator value: UInt8, style: path.Style -> Bool {
+    style -> when {
+        Posix { value == UInt8(47) }
+        Windows { value == UInt8(47) or value == UInt8(92) }
+    }
+}
+
+appendText bytes: mut [UInt8; ~], value: Text -> Unit {
+    UIntSize(0) => index!
+    index! < (value -> len) -> while {
+        bytes -> push(value -> byte(index!))
+        index! + UIntSize(1) => index!
+    }
+}
+
+hexValue value: UInt8 -> UInt8 {
+    value >= UInt8(48) and value <= UInt8(57) -> if {
+        value - UInt8(48)
+    } else {
+        value >= UInt8(65) and value <= UInt8(70) -> if {
+            value - UInt8(65) + UInt8(10)
+        } else {
+            value - UInt8(97) + UInt8(10)
+        }
+    }
+}
+
+# Paths are decoded directly from the import token. This supports the ordinary
+# JSON-style escapes accepted by Sollang strings while rejecting raw/multiline
+# paths and control escapes that cannot denote a portable library filename.
+manifestPath sourcePath: Text, source: Text, token: syntax.SyntaxToken, target: Text, style: path.Style -> ManifestPath {
+    [UInt8; ~] => bytes!
+    0 => status!
+    token.span.length >= UIntSize(2) => valid!
+    token.span.start + UIntSize(1) => literalStart
+    token.span.start + token.span.length - UIntSize(1) => literalEnd
+    valid! -> if {
+        (source -> byte(token.span.start)) != UInt8(34) -> if { false => valid! }
+        (source -> byte(literalEnd)) != UInt8(34) -> if { false => valid! }
+        (token.span.length >= UIntSize(6)
+            and (source -> byte(token.span.start + UIntSize(1))) == UInt8(34)
+            and (source -> byte(token.span.start + UIntSize(2))) == UInt8(34)) -> if {
+            false => valid!
+        }
+    }
+    not valid! -> if { 1 => status! }
+
+    false => absolute!
+    status! == 0 -> if {
+        literalStart < literalEnd -> if {
+            source -> byte(literalStart) => first
+            first -> isSeparator(style) => absolute!
+            style -> when {
+                Posix { false }
+                Windows {
+                    (literalStart + UIntSize(2) < literalEnd
+                        and (source -> byte(literalStart + UIntSize(1))) == UInt8(58)) => hasDrivePrefix
+                    hasDrivePrefix -> if {
+                        (source -> byte(literalStart + UIntSize(2))) == UInt8(47)
+                            or (source -> byte(literalStart + UIntSize(2))) == UInt8(92)
+                    } else {
+                        false
+                    } => hasDriveSeparator
+                    hasDrivePrefix and hasDriveSeparator
+                }
+            } => driveAbsolute
+            driveAbsolute -> if { true => absolute! }
+        }
+        not absolute! -> if {
+            UIntSize(0) => sourceIndex!
+            UIntSize(0) => directoryEnd!
+            sourceIndex! < (sourcePath -> len) -> while {
+                (sourcePath -> byte(sourceIndex!)) -> isSeparator(style) -> if {
+                    sourceIndex! + UIntSize(1) => directoryEnd!
+                }
+                sourceIndex! + UIntSize(1) => sourceIndex!
+            }
+            UIntSize(0) => directoryIndex!
+            directoryIndex! < directoryEnd! -> while {
+                bytes! -> push(sourcePath -> byte(directoryIndex!))
+                directoryIndex! + UIntSize(1) => directoryIndex!
+            }
+        }
+
+        literalStart => literalIndex!
+        (status! == 0 and literalIndex! < literalEnd) -> while {
+            source -> byte(literalIndex!) => current
+            current == UInt8(92) -> if {
+                literalIndex! + UIntSize(1) => literalIndex!
+                literalIndex! < literalEnd -> if {
+                    source -> byte(literalIndex!) => escaped
+                    escaped == UInt8(92) -> if {
+                        bytes! -> push(UInt8(92))
+                    } else {
+                        escaped == UInt8(34) -> if {
+                            bytes! -> push(UInt8(34))
+                        } else {
+                            escaped == UInt8(47) -> if {
+                                bytes! -> push(UInt8(47))
+                            } else {
+                                escaped == UInt8(117) -> if {
+                                    (literalIndex! + UIntSize(4) < literalEnd) -> if {
+                                        UInt8(0) => decoded!
+                                        UIntSize(0) => hexIndex!
+                                        (status! == 0 and hexIndex! < UIntSize(4)) -> while {
+                                            source -> byte(literalIndex! + UIntSize(1) + hexIndex!) => digit
+                                            ((digit >= UInt8(48) and digit <= UInt8(57))
+                                                or (digit >= UInt8(65) and digit <= UInt8(70))
+                                                or (digit >= UInt8(97) and digit <= UInt8(102))) -> if {
+                                                decoded! * UInt8(16) + (digit -> hexValue) => decoded!
+                                            } else {
+                                                2 => status!
+                                            }
+                                            hexIndex! + UIntSize(1) => hexIndex!
+                                        }
+                                        status! == 0 -> if {
+                                            decoded! >= UInt8(32) -> if {
+                                                bytes! -> push(decoded!)
+                                                literalIndex! + UIntSize(4) => literalIndex!
+                                            } else {
+                                                2 => status!
+                                            }
+                                        }
+                                    } else {
+                                        2 => status!
+                                    }
+                                } else {
+                                    2 => status!
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    2 => status!
+                }
+            } else {
+                current < UInt8(32) -> if { 2 => status! } else { bytes! -> push(current) }
+            }
+            literalIndex! + UIntSize(1) => literalIndex!
+        }
+    }
+
+    status! == 0 -> if {
+        bytes! -> appendText(".")
+        bytes! -> appendText(target)
+        bytes! -> appendText(".slglib.json")
+    }
+    path.Path { bytes: bytes!, style: style } => unresolved!
+    status! == 0 -> if {
+        unresolved! -> path.normalizeConfined -> when {
+            Ok(normalized) {
+                ManifestPath { status: 0, value: normalized } => success!
+                success! -> return
+            }
+            Err(error) {
+                ManifestPath {
+                    status: 3
+                    value: path.Path { bytes: [UInt8; ~], style: style }
+                } => failure!
+                failure! -> return
+            }
+        }
+    }
+    ManifestPath { status: status!, value: unresolved! } => result!
+    result!
+}
+
+public empty: -> LibraryCatalog {
+    LibraryCatalog {
+        diagnosticCount: 0
+        bindings: [LibraryBinding; ~]
+        sources: [file.SourceText; ~]
+        interfaces: [interfaces.LibraryInterface; ~]
+        runtimeLibraries: [path.Path; ~]
+    } => catalog!
+    catalog!
+}
+
+public exportNameEquals catalog: ref LibraryCatalog, interfaceIndex: Int, exportIndex: Int, expected: Text -> Bool {
+    catalog.sources[interfaceIndex] -> len => sourceLength
+    catalog.sources[interfaceIndex] -> slice(UIntSize(0), sourceLength) => source
+    catalog.interfaces[interfaceIndex].exports[exportIndex].name => name
+    source -> interfaces.spanEquals(name, expected)
+}
+
+abiTypeCode source: Text, span: interfaces.MetadataSpan -> Int {
+    -1 => code!
+    source -> interfaces.spanEquals(span, "Unit") -> if { 0 => code! }
+    source -> interfaces.spanEquals(span, "Int8") -> if { 1 => code! }
+    source -> interfaces.spanEquals(span, "Int16") -> if { 2 => code! }
+    source -> interfaces.spanEquals(span, "Int32") -> if { 3 => code! }
+    source -> interfaces.spanEquals(span, "Int64") -> if { 4 => code! }
+    source -> interfaces.spanEquals(span, "UInt8") -> if { 5 => code! }
+    source -> interfaces.spanEquals(span, "UInt16") -> if { 6 => code! }
+    source -> interfaces.spanEquals(span, "UInt32") -> if { 7 => code! }
+    source -> interfaces.spanEquals(span, "UInt64") -> if { 8 => code! }
+    source -> interfaces.spanEquals(span, "Float32") -> if { 9 => code! }
+    source -> interfaces.spanEquals(span, "Float64") -> if { 10 => code! }
+    code!
+}
+
+public exportResultTypeCode catalog: ref LibraryCatalog, interfaceIndex: Int, exportIndex: Int -> Int {
+    catalog.sources[interfaceIndex] -> len => sourceLength
+    catalog.sources[interfaceIndex] -> slice(UIntSize(0), sourceLength) => source
+    catalog.interfaces[interfaceIndex].exports[exportIndex].resultType => resultType
+    source -> abiTypeCode(resultType)
+}
+
+public exportParameterTypeCode catalog: ref LibraryCatalog, interfaceIndex: Int, exportIndex: Int, parameterOrdinal: Int -> Int {
+    catalog.sources[interfaceIndex] -> len => sourceLength
+    catalog.sources[interfaceIndex] -> slice(UIntSize(0), sourceLength) => source
+    catalog.interfaces[interfaceIndex].exports[exportIndex].parameterStart + parameterOrdinal => parameterIndex
+    catalog.interfaces[interfaceIndex].parameters[parameterIndex].typeName => parameterType
+    source -> abiTypeCode(parameterType)
+}
+
+public exportParameterCount catalog: ref LibraryCatalog, interfaceIndex: Int, exportIndex: Int -> Int {
+    catalog.interfaces[interfaceIndex].exports[exportIndex].parameterCount
+}
+
+public interfaceExportCount catalog: ref LibraryCatalog, interfaceIndex: Int -> Int {
+    Int(catalog.interfaces[interfaceIndex].exports -> len)
+}
+
+public interfaceLibraryFile catalog: ref LibraryCatalog, interfaceIndex: Int -> interfaces.MetadataSpan {
+    catalog.interfaces[interfaceIndex].libraryFile
+}
+
+public exportSymbol catalog: ref LibraryCatalog, interfaceIndex: Int, exportIndex: Int -> interfaces.MetadataSpan {
+    catalog.interfaces[interfaceIndex].exports[exportIndex].symbol
+}
+
+public runtimeLibraryLength catalog: ref LibraryCatalog, interfaceIndex: Int -> Int {
+    Int(catalog.runtimeLibraries[interfaceIndex].bytes -> len)
+}
+
+public runtimeLibraryStyle catalog: ref LibraryCatalog, interfaceIndex: Int -> Int {
+    catalog.runtimeLibraries[interfaceIndex].style -> when {
+        Posix { 0 }
+        Windows { 1 }
+    }
+}
+
+runtimePathByte value: path.Path, byteIndex: Int -> UInt8 {
+    value.bytes[byteIndex]
+}
+
+public runtimeLibraryByte catalog: ref LibraryCatalog, interfaceIndex: Int, byteIndex: Int -> UInt8 {
+    catalog.runtimeLibraries[interfaceIndex] -> runtimePathByte(byteIndex)
+}
+
+runtimeLibraryPath manifestPath: path.Path, manifest: Text, libraryFile: interfaces.MetadataSpan -> path.Path {
+    [UInt8; ~] => bytes!
+    0 => directoryLength!
+    UIntSize(0) => pathIndex!
+    pathIndex! < UIntSize(manifestPath.bytes -> len) -> while {
+        manifestPath.bytes[Int(pathIndex!)] => current
+        (current == UInt8(47) or current == UInt8(92)) -> if { Int(pathIndex! + UIntSize(1)) => directoryLength! }
+        pathIndex! + UIntSize(1) => pathIndex!
+    }
+    0 => directoryIndex!
+    directoryIndex! < directoryLength! -> while {
+        bytes! -> push(manifestPath.bytes[directoryIndex!])
+        directoryIndex! + 1 => directoryIndex!
+    }
+    UIntSize(0) => libraryIndex!
+    libraryIndex! < libraryFile.length -> while {
+        bytes! -> push(manifest -> byte(libraryFile.start + libraryIndex!))
+        libraryIndex! + UIntSize(1) => libraryIndex!
+    }
+    path.Path { bytes: bytes!, style: manifestPath.style } => runtimePath!
+    runtimePath!
+}
+
+sameTokenText source: Text, left: syntax.SyntaxToken, right: syntax.SyntaxToken -> Bool {
+    left.span.length == right.span.length => same!
+    UIntSize(0) => index!
+    (same! and index! < left.span.length) -> while {
+        (source -> byte(left.span.start + index!)) != (source -> byte(right.span.start + index!)) -> if {
+            false => same!
+        }
+        index! + UIntSize(1) => index!
+    }
+    same!
+}
+
+tokenEqualsInterfaceSpan source: Text, token: syntax.SyntaxToken, interfaceSource: Text, span: interfaces.MetadataSpan -> Bool {
+    token.span.length == span.length => same!
+    UIntSize(0) => index!
+    (same! and index! < span.length) -> while {
+        (source -> byte(token.span.start + index!)) != (interfaceSource -> byte(span.start + index!)) -> if {
+            false => same!
+        }
+        index! + UIntSize(1) => index!
+    }
+    same!
+}
+
+public resolveQualified package: ref analysis.PackageAnalysis, catalog: ref LibraryCatalog -> [LibraryFunctionResolution; ~] {
+    [LibraryFunctionResolution; ~] => results!
+    0 => sourceIndex!
+    sourceIndex! < (package.sources -> len) -> while {
+        package.ranges[sourceIndex!] => range
+        package.sources[sourceIndex!] -> len => sourceLength
+        package.sources[sourceIndex!] -> slice(UIntSize(0), sourceLength) => source
+        0 => astIndex!
+        astIndex! < range.astCount -> while {
+            package.nodes[range.astStart + astIndex!] => node
+            # Only the member-access node owns the qualified alias/export
+            # pair. Scanning its enclosing identifier path also captures later
+            # flow targets (for example `fixture.add(...) -> println`) and can
+            # incorrectly project the outer call as the library function.
+            node.kind == 36 -> if {
+                -1 => firstIdentifier!
+                -1 => lastIdentifier!
+                node.firstToken => tokenIndex!
+                node.firstToken + node.tokenCount => tokenEnd!
+                tokenIndex! < tokenEnd! -> while {
+                    package.tokens[range.tokenStart + tokenIndex!].kind == grammar.tokenIdIdentifier -> if {
+                        firstIdentifier! < 0 -> if { tokenIndex! => firstIdentifier! }
+                        tokenIndex! => lastIdentifier!
+                    }
+                    tokenIndex! + 1 => tokenIndex!
+                }
+                (firstIdentifier! >= 0 and lastIdentifier! != firstIdentifier!) -> if {
+                    package.tokens[range.tokenStart + firstIdentifier!] => aliasReference
+                    package.tokens[range.tokenStart + lastIdentifier!] => memberReference
+                    0 => bindingIndex!
+                    bindingIndex! < (catalog.bindings -> len) -> while {
+                        catalog.bindings[bindingIndex!] => binding
+                        (binding.status == 0 and binding.sourceModule == sourceIndex!) -> if {
+                            package.tokens[range.tokenStart + binding.aliasToken] => aliasDeclaration
+                            source -> sameTokenText(aliasReference, aliasDeclaration) -> if {
+                                catalog.sources[binding.interfaceIndex] -> len => interfaceLength
+                                catalog.sources[binding.interfaceIndex] -> slice(UIntSize(0), interfaceLength) => interfaceSource
+                                -1 => matchedExport!
+                                catalog.interfaces[binding.interfaceIndex].exports -> len => exportCount
+                                0 => exportIndex!
+                                exportIndex! < exportCount -> while {
+                                    catalog.interfaces[binding.interfaceIndex].exports[exportIndex!].name => exportName
+                                    source -> tokenEqualsInterfaceSpan(memberReference, interfaceSource, exportName) -> if {
+                                        exportIndex! => matchedExport!
+                                    }
+                                    exportIndex! + 1 => exportIndex!
+                                }
+                                results! -> push(LibraryFunctionResolution {
+                                    sourceModule: sourceIndex!
+                                    pathAst: astIndex!
+                                    bindingIndex: bindingIndex!
+                                    exportIndex: matchedExport!
+                                    status: matchedExport! >= 0 -> if { 0 } else { 2 }
+                                })
+                            }
+                        }
+                        bindingIndex! + 1 => bindingIndex!
+                    }
+                }
+            }
+            astIndex! + 1 => astIndex!
+        }
+        sourceIndex! + 1 => sourceIndex!
+    }
+    results!
+}
+
+public load package: ref analysis.PackageAnalysis, sourcePaths: [Text; ~], target: Text, style: path.Style -> LibraryCatalog uses File {
+    [LibraryBinding; ~] => bindings!
+    [file.SourceText; ~] => manifestSources!
+    [interfaces.LibraryInterface; ~] => documents!
+    [path.Path; ~] => runtimeLibraries!
+    0 => diagnosticCount!
+
+    0 => sourceIndex!
+    sourceIndex! < (package.sources -> len) -> while {
+        package.ranges[sourceIndex!] => range
+        package.sources[sourceIndex!] -> len => sourceLength
+        package.sources[sourceIndex!] -> slice(UIntSize(0), sourceLength) => source
+        0 => astIndex!
+        astIndex! < range.astCount -> while {
+            package.nodes[range.astStart + astIndex!] => node
+            node.kind == 69 -> if {
+                LibraryBinding {
+                    sourceModule: sourceIndex!
+                    astNode: astIndex!
+                    aliasToken: node.payloadToken
+                    interfaceIndex: -1
+                    status: 0
+                    errorOffset: UIntSize(0)
+                } => binding!
+                sourceIndex! < (sourcePaths -> len) -> if {
+                    (node.secondaryToken >= 0 and node.secondaryToken < range.tokenCount) -> if {
+                        package.tokens[range.tokenStart + node.secondaryToken] => libraryToken
+                        sourcePaths[sourceIndex!] -> manifestPath(source, libraryToken, target, style) => resolved!
+                        resolved!.status == 0 -> if {
+                            resolved!.value -> file.mapPath => manifestSource!
+                            manifestSource! -> interfaces.parseSource => document!
+                            documents! -> len => interfaceIndex
+                            interfaceIndex => binding!.interfaceIndex
+                            manifestSource! -> len => manifestLength
+                            manifestSource! -> slice(UIntSize(0), manifestLength) => manifestText
+                            resolved!.value -> runtimeLibraryPath(manifestText, document!.libraryFile) => runtimeLibrary!
+                            document!.status == 0 -> if {
+                                manifestText -> interfaces.spanEquals(document!.target, target) -> if {
+                                    0 => exportIndex!
+                                    (binding!.status == 0 and exportIndex! < (document!.exports -> len)) -> while {
+                                        document!.exports[exportIndex!] => exported
+                                        manifestText -> abiTypeCode(exported.resultType) => resultTypeCode
+                                        resultTypeCode < 0 -> if { 7 => binding!.status }
+                                        0 => parameterOrdinal!
+                                        (binding!.status == 0 and parameterOrdinal! < exported.parameterCount) -> while {
+                                            document!.parameters[exported.parameterStart + parameterOrdinal!].typeName => parameterType
+                                            manifestText -> abiTypeCode(parameterType) => parameterTypeCode
+                                            parameterTypeCode < 0 -> if { 7 => binding!.status }
+                                            parameterOrdinal! + 1 => parameterOrdinal!
+                                        }
+                                        exportIndex! + 1 => exportIndex!
+                                    }
+                                } else {
+                                    4 => binding!.status
+                                }
+                            } else {
+                                document!.status + 100 => binding!.status
+                                document!.errorOffset => binding!.errorOffset
+                            }
+                            manifestSources! -> push(manifestSource!)
+                            documents! -> push(document!)
+                            runtimeLibraries! -> push(runtimeLibrary!)
+                        } else {
+                            resolved!.status => binding!.status
+                        }
+                    } else {
+                        5 => binding!.status
+                    }
+                } else {
+                    6 => binding!.status
+                }
+                binding!.status != 0 -> if { diagnosticCount! + 1 => diagnosticCount! }
+                bindings! -> push(binding!)
+            }
+            astIndex! + 1 => astIndex!
+        }
+        sourceIndex! + 1 => sourceIndex!
+    }
+
+    LibraryCatalog {
+        diagnosticCount: diagnosticCount!
+        bindings: bindings!
+        sources: manifestSources!
+        interfaces: documents!
+        runtimeLibraries: runtimeLibraries!
+    } => catalog!
+    catalog!
+}
+
+public analyzeFiles sourcePaths: [Text; ~], target: Text, style: path.Style -> LibraryAnalysis uses File {
+    [file.SourceText; ~] => sourceOwners!
+    0 => pathIndex!
+    pathIndex! < (sourcePaths -> len) -> while {
+        sourcePaths[pathIndex!] -> file.mapText => sourceOwner!
+        sourceOwners! -> push(sourceOwner!)
+        pathIndex! + 1 => pathIndex!
+    }
+    sourceOwners! -> analysis.analyzeSources => package!
+    package! -> load(sourcePaths, target, style) => catalog!
+    package! -> resolveQualified(catalog!) => resolutions!
+    LibraryAnalysis { package: package!, catalog: catalog!, resolutions: resolutions! } => result!
+    result!
+}

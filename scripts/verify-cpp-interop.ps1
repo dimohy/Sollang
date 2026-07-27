@@ -6,6 +6,7 @@ $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $compilerProject = Join-Path $repoRoot "src\Sollang.Compiler\Sollang.Compiler.csproj"
 $compiler = Join-Path $repoRoot "src\Sollang.Compiler\bin\Release\net11.0\Sollang.Compiler.dll"
+$selfhostCompiler = Join-Path $repoRoot "artifacts\example-tests\selfhost-sollangc-driver.exe"
 $llvmHome = Join-Path $repoRoot ".tools\llvm-22.1.8"
 $header = Join-Path $repoRoot "tests\cpp-interop\cpp_fixture.hpp"
 $throwingHeader = Join-Path $repoRoot "tests\cpp-interop\throwing_fixture.hpp"
@@ -13,6 +14,9 @@ $consumer = Join-Path $repoRoot "tests\cpp-interop\consumer.slg"
 $handleFixture = Join-Path $repoRoot "tests\cpp-interop\handle_fixture.cpp"
 $handleConsumer = Join-Path $repoRoot "tests\cpp-interop\handle_consumer.slg"
 $handleForgery = Join-Path $repoRoot "tests\cpp-interop\handle_forgery.slg"
+$stage2GeneratedConsumer = Join-Path $repoRoot "tests\cpp-interop\stage2_generated_consumer.slg"
+$stage2GeneratedExpected = ([IO.File]::ReadAllText(
+    (Join-Path $repoRoot "tests\cpp-interop\stage2_generated_consumer.expected.stdout.txt"))).Trim()
 $expected = ([System.IO.File]::ReadAllText(
     (Join-Path $repoRoot "tests\cpp-interop\expected.stdout.txt"))).Replace("`r`n", "`n").TrimEnd("`n")
 $outputDirectory = Join-Path $repoRoot "artifacts\cpp-interop\windows-x64"
@@ -44,7 +48,8 @@ dotnet $compiler build $generatedSource $consumer `
     -o $executable `
     --target windows-x64 `
     --llvm $llvmHome `
-    -O2
+    -O2 `
+    --keep-temps
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 $actual = (& $executable | Out-String).Replace("`r`n", "`n").TrimEnd("`n")
@@ -53,6 +58,31 @@ if ($LASTEXITCODE -ne 0) {
 }
 if ($actual -ne $expected) {
     throw "generated C++ binding output mismatch: expected '$expected', actual '$actual'"
+}
+$consumerLlvmPath = Get-ChildItem `
+    ([System.IO.Path]::ChangeExtension($executable, ".slg-tmp")) `
+    -Filter "*.ll" | Select-Object -ExpandProperty FullName -First 1
+$consumerLlvm = [System.IO.File]::ReadAllText($consumerLlvmPath)
+foreach ($functionName in @("riskySuccess", "riskyConstructorFailure", "riskyMethodFailure")) {
+    $functionNameOffset = $consumerLlvm.IndexOf(
+        " @sollang_fn_$functionName(",
+        [StringComparison]::Ordinal)
+    if ($functionNameOffset -lt 0) {
+        throw "missing LLVM body for status-out test function '$functionName'"
+    }
+    $functionStart = $consumerLlvm.LastIndexOf(
+        "define internal ",
+        $functionNameOffset,
+        [StringComparison]::Ordinal)
+    $functionEnd = $consumerLlvm.IndexOf(
+        "`n}",
+        $functionStart,
+        [StringComparison]::Ordinal)
+    $functionLlvm = $consumerLlvm.Substring($functionStart, $functionEnd - $functionStart)
+    if ($functionLlvm.Contains("@sollang_alloc", [StringComparison]::Ordinal) -or
+        -not $functionLlvm.Contains("alloca", [StringComparison]::Ordinal)) {
+        throw "status-out Result ABI allocation contract regressed in '$functionName'"
+    }
 }
 
 $handleOutputDirectory = Join-Path $repoRoot "artifacts\cpp-interop\handle-windows-x64"
@@ -91,6 +121,66 @@ if ($exerciseLlvm.Contains("@sollang_alloc", [StringComparison]::Ordinal) -or
     ([regex]::Matches($exerciseLlvm, "call void @sollang_drop_")).Count -ne 1) {
     throw "affine handle steady-state allocation/drop contract regressed"
 }
+
+if (-not (Test-Path -LiteralPath $selfhostCompiler)) {
+    throw "self-host compiler is missing; run example 365 before C++ interop verification"
+}
+$stage2GeneratedWindowsLlvm = Join-Path $outputDirectory "stage2-generated-consumer.ll"
+$stage2GeneratedWindowsError = Join-Path $outputDirectory "stage2-generated-consumer.stderr.txt"
+$stage2GeneratedWindowsExecutable = Join-Path $outputDirectory "stage2-generated-consumer.exe"
+$stage2GeneratedWindowsProcess = Start-Process `
+    -FilePath $selfhostCompiler `
+    -ArgumentList @("windows", "--jobs", "1", $generatedSource, $stage2GeneratedConsumer) `
+    -RedirectStandardOutput $stage2GeneratedWindowsLlvm `
+    -RedirectStandardError $stage2GeneratedWindowsError `
+    -PassThru `
+    -WindowStyle Hidden
+$stage2GeneratedWindowsProcess.WaitForExit()
+if ($stage2GeneratedWindowsProcess.ExitCode -ne 0) {
+    throw "Stage2 generated Windows binding emission failed: $([IO.File]::ReadAllText($stage2GeneratedWindowsError))"
+}
+& (Join-Path $llvmHome "bin\clang.exe") -target x86_64-pc-windows-msvc `
+    -Wno-override-module -O2 $stage2GeneratedWindowsLlvm `
+    -o $stage2GeneratedWindowsExecutable -Xlinker /subsystem:console
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+$stage2GeneratedActual = (& $stage2GeneratedWindowsExecutable | Out-String).Trim()
+if ($LASTEXITCODE -ne 0 -or $stage2GeneratedActual -ne $stage2GeneratedExpected) {
+    throw "Stage2 generated Windows binding output mismatch: expected '$stage2GeneratedExpected', actual '$stage2GeneratedActual'"
+}
+$stage2GeneratedWindowsText = [IO.File]::ReadAllText($stage2GeneratedWindowsLlvm)
+if ($stage2GeneratedWindowsText.Contains("@sollang_alloc", [StringComparison]::Ordinal) -or
+    ([regex]::Matches($stage2GeneratedWindowsText, "call void %drop_target\(ptr %value\)")).Count -ne 2) {
+    throw "Stage2 generated Windows binding allocation/drop contract regressed"
+}
+$stage2HandleWindowsLlvm = Join-Path $handleOutputDirectory "stage2-handle-consumer.ll"
+$stage2HandleWindowsError = Join-Path $handleOutputDirectory "stage2-handle-consumer.stderr.txt"
+$stage2HandleWindowsExecutable = Join-Path $handleOutputDirectory "stage2-handle-consumer.exe"
+$stage2HandleWindowsProcess = Start-Process `
+    -FilePath $selfhostCompiler `
+    -ArgumentList @("windows", "--jobs", "1", $handleWindowsSource) `
+    -RedirectStandardOutput $stage2HandleWindowsLlvm `
+    -RedirectStandardError $stage2HandleWindowsError `
+    -PassThru `
+    -WindowStyle Hidden
+$stage2HandleWindowsProcess.WaitForExit()
+if ($stage2HandleWindowsProcess.ExitCode -ne 0) {
+    throw "Stage2 Windows affine handle emission failed: $([IO.File]::ReadAllText($stage2HandleWindowsError))"
+}
+& (Join-Path $llvmHome "bin\clang.exe") -target x86_64-pc-windows-msvc `
+    -Wno-override-module -O2 $stage2HandleWindowsLlvm `
+    -o $stage2HandleWindowsExecutable -Xlinker /subsystem:console
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+$stage2HandleActual = (& $stage2HandleWindowsExecutable | Out-String).Replace("`r`n", "`n").TrimEnd("`n")
+if ($LASTEXITCODE -ne 0 -or $stage2HandleActual -ne "50,1") {
+    throw "Stage2 Windows affine C++ handle failed: '$stage2HandleActual'"
+}
+$stage2HandleWindowsText = [IO.File]::ReadAllText($stage2HandleWindowsLlvm)
+if (([regex]::Matches($stage2HandleWindowsText, "call void %drop_target\(ptr %value\)")).Count -ne 1 -or
+    ([regex]::Matches($stage2HandleWindowsText, "call ptr @GetProcAddress")).Count -ne 4 -or
+    ([regex]::Matches($stage2HandleWindowsText, "icmp ne ptr %v\d+, null")).Count -ne 1 -or
+    $stage2HandleWindowsText.Contains("@sollang_alloc", [StringComparison]::Ordinal)) {
+    throw "Stage2 Windows affine handle validation, drop cache, or zero-heap contract regressed"
+}
 $handleForgeryError = Join-Path $handleOutputDirectory "forgery.stderr.txt"
 dotnet $compiler build $handleForgery `
     -o (Join-Path $handleOutputDirectory "forgery.exe") `
@@ -104,6 +194,25 @@ if (-not $handleForgeryDiagnostic.Contains(
         "can only be created by its native constructor",
         [StringComparison]::Ordinal)) {
     throw "opaque native handle forgery produced the wrong diagnostic: $handleForgeryDiagnostic"
+}
+$stage2HandleForgeryOutput = Join-Path $handleOutputDirectory "stage2-forgery.stdout.txt"
+$stage2HandleForgeryError = Join-Path $handleOutputDirectory "stage2-forgery.stderr.txt"
+$stage2HandleForgeryProcess = Start-Process `
+    -FilePath $selfhostCompiler `
+    -ArgumentList @("windows", "--jobs", "1", $handleForgery) `
+    -RedirectStandardOutput $stage2HandleForgeryOutput `
+    -RedirectStandardError $stage2HandleForgeryError `
+    -PassThru `
+    -WindowStyle Hidden
+$stage2HandleForgeryProcess.WaitForExit()
+if ($stage2HandleForgeryProcess.ExitCode -eq 0) {
+    throw "Stage2 allowed an opaque native handle to be forged with a struct literal"
+}
+$stage2HandleForgeryDiagnostic = [IO.File]::ReadAllText($stage2HandleForgeryOutput)
+if (-not $stage2HandleForgeryDiagnostic.Contains(
+        "can only be created by its native constructor",
+        [StringComparison]::Ordinal)) {
+    throw "Stage2 opaque handle forgery produced the wrong diagnostic: $stage2HandleForgeryDiagnostic"
 }
 
 $manifestPath = Join-Path $outputDirectory "cppFixture.windows-x64.cppbind.json"
@@ -146,21 +255,23 @@ if (-not $databaseManifest.Contains("-DSOLLANG_CPP_BIND_TEST=1", [StringComparis
     throw "compile_commands.json arguments were not preserved"
 }
 
-$diagnosticOutput = Join-Path $repoRoot "artifacts\cpp-interop\diagnostic-test"
-$diagnosticError = Join-Path $repoRoot "artifacts\cpp-interop\diagnostic.stderr.txt"
+$diagnosticOutput = Join-Path $repoRoot "artifacts\cpp-interop\throwing-test"
 dotnet $compiler bind-cpp $throwingHeader `
     --module throwingFixture `
+    --library throwingFixture_shim `
     --output $diagnosticOutput `
     --target windows-x64 `
-    --llvm $llvmHome 2> $diagnosticError
-if ($LASTEXITCODE -eq 0) {
-    throw "potentially throwing C++ function unexpectedly generated a binding"
-}
-$diagnostic = [System.IO.File]::ReadAllText($diagnosticError)
-if (-not $diagnostic.Contains(
-        "functions must be declared noexcept so no C++ exception can cross the C ABI",
-        [StringComparison]::Ordinal)) {
-    throw "potentially throwing C++ function produced the wrong diagnostic: $diagnostic"
+    --llvm $llvmHome `
+    --build
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+$throwingSource = [System.IO.File]::ReadAllText(
+    (Join-Path $diagnosticOutput "throwingFixture.slg"))
+$throwingShim = [System.IO.File]::ReadAllText(
+    (Join-Path $diagnosticOutput "throwingFixture_shim.cpp"))
+if (-not $throwingSource.Contains("try may_throw", [StringComparison]::Ordinal) -or
+    -not $throwingShim.Contains("catch (...)", [StringComparison]::Ordinal) -or
+    -not $throwingShim.Contains("return 1;", [StringComparison]::Ordinal)) {
+    throw "potentially throwing C++ function was not translated to status-out Result ABI"
 }
 
 dotnet $compiler bind-cpp $header `
@@ -198,6 +309,40 @@ if ($actual -ne $expected) {
     throw "generated Linux C++ binding output mismatch: expected '$expected', actual '$actual'"
 }
 
+$stage2GeneratedLinuxLlvm = Join-Path $linuxOutputDirectory "stage2-generated-consumer.ll"
+$stage2GeneratedLinuxError = Join-Path $linuxOutputDirectory "stage2-generated-consumer.stderr.txt"
+$stage2GeneratedLinuxObject = Join-Path $linuxOutputDirectory "stage2-generated-consumer.o"
+$stage2GeneratedLinuxExecutable = Join-Path $linuxOutputDirectory "stage2-generated-consumer"
+$stage2GeneratedLinuxProcess = Start-Process `
+    -FilePath $selfhostCompiler `
+    -ArgumentList @("linux", "--jobs", "1", $linuxGeneratedSource, $stage2GeneratedConsumer) `
+    -RedirectStandardOutput $stage2GeneratedLinuxLlvm `
+    -RedirectStandardError $stage2GeneratedLinuxError `
+    -PassThru `
+    -WindowStyle Hidden
+$stage2GeneratedLinuxProcess.WaitForExit()
+if ($stage2GeneratedLinuxProcess.ExitCode -ne 0) {
+    throw "Stage2 generated Linux binding emission failed: $([IO.File]::ReadAllText($stage2GeneratedLinuxError))"
+}
+& (Join-Path $llvmHome "bin\clang.exe") -target x86_64-unknown-linux-gnu `
+    -O2 -c $stage2GeneratedLinuxLlvm -o $stage2GeneratedLinuxObject
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+$wslStage2GeneratedLinuxObject = Convert-ToWslPath $stage2GeneratedLinuxObject
+$wslStage2GeneratedLinuxExecutable = Convert-ToWslPath $stage2GeneratedLinuxExecutable
+& wsl.exe --exec cc $wslStage2GeneratedLinuxObject -o $wslStage2GeneratedLinuxExecutable -ldl
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+$stage2GeneratedActual = (& wsl.exe --exec env `
+    "LD_LIBRARY_PATH=$wslOutputDirectory" $wslStage2GeneratedLinuxExecutable |
+    Out-String).Trim()
+if ($LASTEXITCODE -ne 0 -or $stage2GeneratedActual -ne $stage2GeneratedExpected) {
+    throw "Stage2 generated Linux binding output mismatch: expected '$stage2GeneratedExpected', actual '$stage2GeneratedActual'"
+}
+$stage2GeneratedLinuxText = [IO.File]::ReadAllText($stage2GeneratedLinuxLlvm)
+if ($stage2GeneratedLinuxText.Contains("@sollang_alloc", [StringComparison]::Ordinal) -or
+    ([regex]::Matches($stage2GeneratedLinuxText, "call void %drop_target\(ptr %value\)")).Count -ne 2) {
+    throw "Stage2 generated Linux binding allocation/drop contract regressed"
+}
+
 $handleLinuxOutputDirectory = Join-Path $repoRoot "artifacts\cpp-interop\handle-linux-x64"
 New-Item -ItemType Directory -Force -Path $handleLinuxOutputDirectory | Out-Null
 $handleLinuxLibrary = Join-Path $handleLinuxOutputDirectory "libhandle_fixture.so"
@@ -224,4 +369,40 @@ if ($LASTEXITCODE -ne 0 -or $handleActual -ne "50,1") {
     throw "affine Linux C++ handle failed: '$handleActual'"
 }
 
-Write-Host "PASS C++ interop: Windows/Linux, affine handle RAII, zero wrapper allocation, libclang AST, compile database, exception rejection, C shim, overloads, deterministic manifest"
+$stage2HandleLinuxLlvm = Join-Path $handleLinuxOutputDirectory "stage2-handle-consumer.ll"
+$stage2HandleLinuxError = Join-Path $handleLinuxOutputDirectory "stage2-handle-consumer.stderr.txt"
+$stage2HandleLinuxObject = Join-Path $handleLinuxOutputDirectory "stage2-handle-consumer.o"
+$stage2HandleLinuxExecutable = Join-Path $handleLinuxOutputDirectory "stage2-handle-consumer"
+$stage2HandleLinuxProcess = Start-Process `
+    -FilePath $selfhostCompiler `
+    -ArgumentList @("linux", "--jobs", "1", $handleLinuxSource) `
+    -RedirectStandardOutput $stage2HandleLinuxLlvm `
+    -RedirectStandardError $stage2HandleLinuxError `
+    -PassThru `
+    -WindowStyle Hidden
+$stage2HandleLinuxProcess.WaitForExit()
+if ($stage2HandleLinuxProcess.ExitCode -ne 0) {
+    throw "Stage2 Linux affine handle emission failed: $([IO.File]::ReadAllText($stage2HandleLinuxError))"
+}
+& (Join-Path $llvmHome "bin\clang.exe") -target x86_64-unknown-linux-gnu `
+    -O2 -c $stage2HandleLinuxLlvm -o $stage2HandleLinuxObject
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+$wslStage2HandleLinuxObject = Convert-ToWslPath $stage2HandleLinuxObject
+$wslStage2HandleLinuxExecutable = Convert-ToWslPath $stage2HandleLinuxExecutable
+& wsl.exe --exec cc $wslStage2HandleLinuxObject -o $wslStage2HandleLinuxExecutable -ldl
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+$stage2HandleActual = (& wsl.exe --exec env `
+    "LD_LIBRARY_PATH=$wslHandleLinuxDirectory" $wslStage2HandleLinuxExecutable |
+    Out-String).Replace("`r`n", "`n").TrimEnd("`n")
+if ($LASTEXITCODE -ne 0 -or $stage2HandleActual -ne "50,1") {
+    throw "Stage2 Linux affine C++ handle failed: '$stage2HandleActual'"
+}
+$stage2HandleLinuxText = [IO.File]::ReadAllText($stage2HandleLinuxLlvm)
+if (([regex]::Matches($stage2HandleLinuxText, "call void %drop_target\(ptr %value\)")).Count -ne 1 -or
+    ([regex]::Matches($stage2HandleLinuxText, "call ptr @dlsym")).Count -ne 4 -or
+    ([regex]::Matches($stage2HandleLinuxText, "icmp ne ptr %v\d+, null")).Count -ne 1 -or
+    $stage2HandleLinuxText.Contains("@sollang_alloc", [StringComparison]::Ordinal)) {
+    throw "Stage2 Linux affine handle validation, drop cache, or zero-heap contract regressed"
+}
+
+Write-Host "PASS C++ interop: generated Stage1/Stage2 Windows/Linux bindings, affine handle RAII, zero wrapper allocation, libclang AST, compile database, exception-to-Result ABI, C shim, overloads, deterministic manifest"

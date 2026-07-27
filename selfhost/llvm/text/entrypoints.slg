@@ -1,0 +1,688 @@
+namespace sollang.compiler.llvm.text
+
+import sollang.compiler.ast as ast
+import sollang.compiler.ir.interpolation as interpolation
+import sollang.compiler.ir.stream as streamIr
+import sollang.compiler.ir.typed as typedIr
+import sollang.compiler.ir.typed_library_imports as typedLibraryImports
+import sollang.compiler.llvm.target as llvmTarget
+import sollang.compiler.llvm.runtime as llvmRuntime
+import sollang.compiler.llvm.emitter.number_format as numberFormat
+import sollang.compiler.llvm.emitter.compute_runtime as computeRuntime
+import sollang.compiler.llvm.emitter.text_output_runtime as textOutputRuntime
+import sollang.compiler.llvm.emitter.process_runtime as processRuntime
+import sollang.compiler.llvm.emitter.mouse_event_runtime as mouseEventRuntime
+import sollang.compiler.llvm.emitter.com_runtime as comRuntime
+import sollang.compiler.llvm.emitter.ownership as ownershipEmitter
+import sollang.compiler.llvm.emitter.context as emitterContext
+import sollang.compiler.llvm.emitter.diagnostics as diagnostics
+import sollang.compiler.llvm.emitter.type_queries as typeQueries
+import sollang.compiler.semantic.analysis as analysis
+import sollang.compiler.semantic.calls as calls
+import sollang.compiler.semantic.composite_types as compositeTypes
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.expression_type_ids as expressionTypeIds
+import sollang.compiler.semantic.library_imports as libraryImports
+import sollang.compiler.semantic.modules as modules
+import sollang.compiler.semantic.nominal_types as nominalTypes
+import sollang.compiler.semantic.ownership_check as ownershipCheck
+import sollang.compiler.semantic.symbols as symbols
+import sollang.compiler.semantic.type_ids as typeIds
+import sollang.compiler.syntax as syntax
+import syntax.generated.slg as grammar
+import sys.file as file
+import sys.path as path
+
+
+prepareSnapshot request: ref PrepareRequest, prepared: move semanticContext.SemanticSnapshot, libraries: move libraryImports.LibraryCatalog, libraryCalls: move [libraryImports.LibraryFunctionResolution; ~] -> emitterContext.EmitContext {
+    request.pointerBitWidth => pointerBitWidth
+    request.supportsComputePool => supportsComputePool
+    request.expectedPathStyle => expectedPathStyle
+    prepared -> typedIr.lowerContext => ir!
+    ir! -> typedLibraryImports.projectLibraries(prepared, libraries, libraryCalls) => libraryCallDiagnostics!
+    prepared -> streamIr.build(ir!) => streamPlan!
+    prepared -> ownershipCheck.analyzeLoweredContext(ir!) => ownershipDiagnostics!
+    prepared -> expressionTypeIds.resolveContext => recursiveTypes
+    [typeIds.SemanticType; ~] => semanticTypes!
+    0 => semanticTypeCopyIndex351!
+    semanticTypeCopyIndex351! < (recursiveTypes.types -> len) -> while {
+        recursiveTypes.types[semanticTypeCopyIndex351!] => semanticType
+        semanticTypes! -> push(semanticType)
+        semanticTypeCopyIndex351! + 1 => semanticTypeCopyIndex351!
+    }
+    [typeIds.NominalField; ~] => semanticFields!
+    0 => semanticFieldCopyIndex353!
+    semanticFieldCopyIndex353! < (recursiveTypes.fields -> len) -> while {
+        recursiveTypes.fields[semanticFieldCopyIndex353!] => semanticField
+        semanticFields! -> push(semanticField)
+        semanticFieldCopyIndex353! + 1 => semanticFieldCopyIndex353!
+    }
+    [nominalTypes.NominalType; ~] => nominal!
+    0 => nominalTypeCopyIndex355!
+    nominalTypeCopyIndex355! < (prepared.nominal -> len) -> while {
+        prepared.nominal[nominalTypeCopyIndex355!] => nominalType
+        nominal! -> push(nominalType)
+        nominalTypeCopyIndex355! + 1 => nominalTypeCopyIndex355!
+    }
+    [compositeTypes.CompositeType; ~] => composite!
+    0 => compositeTypeCopyIndex357!
+    compositeTypeCopyIndex357! < (prepared.composite -> len) -> while {
+        prepared.composite[compositeTypeCopyIndex357!] => compositeType
+        composite! -> push(compositeType)
+        compositeTypeCopyIndex357! + 1 => compositeTypeCopyIndex357!
+    }
+    [modules.ModuleIdentity; ~] => moduleIdentities!
+    0 => moduleIdentityCopyIndex359!
+    moduleIdentityCopyIndex359! < (prepared.modules -> len) -> while {
+        prepared.modules[moduleIdentityCopyIndex359!] => moduleIdentity
+        moduleIdentities! -> push(moduleIdentity)
+        moduleIdentityCopyIndex359! + 1 => moduleIdentityCopyIndex359!
+    }
+    [analysis.SourceAnalysisRange; ~] => analysisRanges!
+    0 => sourceRangeCopyIndex361!
+    sourceRangeCopyIndex361! < (prepared.package.ranges -> len) -> while {
+        prepared.package.ranges[sourceRangeCopyIndex361!] => sourceRange
+        analysisRanges! -> push(sourceRange)
+        sourceRangeCopyIndex361! + 1 => sourceRangeCopyIndex361!
+    }
+    [ast.AstNode; ~] => analysisNodes!
+    0 => nodeCopyIndex363!
+    nodeCopyIndex363! < (prepared.package.nodes -> len) -> while {
+        prepared.package.nodes[nodeCopyIndex363!] => node
+        analysisNodes! -> push(node)
+        nodeCopyIndex363! + 1 => nodeCopyIndex363!
+    }
+    [syntax.SyntaxToken; ~] => analysisTokens!
+    0 => tokenCopyIndex365!
+    tokenCopyIndex365! < (prepared.package.tokens -> len) -> while {
+        prepared.package.tokens[tokenCopyIndex365!] => token
+        analysisTokens! -> push(token)
+        tokenCopyIndex365! + 1 => tokenCopyIndex365!
+    }
+    [symbols.Symbol; ~] => analysisSymbols!
+    0 => symbolCopyIndex367!
+    symbolCopyIndex367! < (prepared.package.symbols -> len) -> while {
+        prepared.package.symbols[symbolCopyIndex367!] => symbol
+        analysisSymbols! -> push(symbol)
+        symbolCopyIndex367! + 1 => symbolCopyIndex367!
+    }
+    [calls.ModuleCallResolution; ~] => analysisCalls!
+    0 => callCopyIndex368!
+    callCopyIndex368! < (prepared.calls -> len) -> while {
+        analysisCalls! -> push(prepared.calls[callCopyIndex368!])
+        callCopyIndex368! + 1 => callCopyIndex368!
+    }
+    [interpolation.InterpolationSourceRange; ~] => analysisInterpolationRanges!
+    [interpolation.InterpolationNode; ~] => analysisInterpolations!
+    0 => interpolationSourceIndex!
+    interpolationSourceIndex! < (prepared.package.sources -> len) -> while {
+        prepared.package.ranges[interpolationSourceIndex!] => interpolationSourceRange
+        [ast.AstNode; ~] => interpolationNodes!
+        0 => interpolationAstIndex!
+        interpolationAstIndex! < interpolationSourceRange.astCount -> while {
+            interpolationNodes! -> push(prepared.package.nodes[interpolationSourceRange.astStart + interpolationAstIndex!])
+            interpolationAstIndex! + 1 => interpolationAstIndex!
+        }
+        [syntax.SyntaxToken; ~] => interpolationTokens!
+        0 => interpolationTokenIndex!
+        interpolationTokenIndex! < interpolationSourceRange.tokenCount -> while {
+            interpolationTokens! -> push(prepared.package.tokens[interpolationSourceRange.tokenStart + interpolationTokenIndex!])
+            interpolationTokenIndex! + 1 => interpolationTokenIndex!
+        }
+        [symbols.Symbol; ~] => interpolationSymbols!
+        0 => interpolationSymbolIndex!
+        interpolationSymbolIndex! < interpolationSourceRange.symbolCount -> while {
+            interpolationSymbols! -> push(prepared.package.symbols[interpolationSourceRange.symbolStart + interpolationSymbolIndex!])
+            interpolationSymbolIndex! + 1 => interpolationSymbolIndex!
+        }
+        prepared.package.sources[interpolationSourceIndex!] -> len => interpolationSourceLength
+        prepared.package.sources[interpolationSourceIndex!] -> slice(UIntSize(0), interpolationSourceLength) => interpolationSource
+        interpolation.PreparedInterpolationRequest {
+            source: interpolationSource
+            nodes: interpolationNodes!
+            tokens: interpolationTokens!
+            symbols: interpolationSymbols!
+        } => interpolationRequest!
+        interpolationRequest! -> interpolation.lowerPrepared => sourceInterpolations!
+        analysisInterpolations! -> len => interpolationStart
+        analysisInterpolationRanges! -> push(interpolation.InterpolationSourceRange {
+            sourceModule: interpolationSourceIndex!
+            nodeStart: interpolationStart
+            nodeCount: sourceInterpolations! -> len
+        })
+        0 => sourceInterpolationIndex!
+        sourceInterpolationIndex! < (sourceInterpolations! -> len) -> while {
+            sourceInterpolations![sourceInterpolationIndex!] => globalInterpolation!
+            globalInterpolation!.parent >= 0 -> if { globalInterpolation!.parent + interpolationStart => globalInterpolation!.parent }
+            globalInterpolation!.operand0 >= 0 -> if { globalInterpolation!.operand0 + interpolationStart => globalInterpolation!.operand0 }
+            globalInterpolation!.operand1 >= 0 -> if { globalInterpolation!.operand1 + interpolationStart => globalInterpolation!.operand1 }
+            analysisInterpolations! -> push(globalInterpolation!)
+            sourceInterpolationIndex! + 1 => sourceInterpolationIndex!
+        }
+        interpolationSourceIndex! + 1 => interpolationSourceIndex!
+    }
+    [typeIds.SemanticType; ~] => layoutTypes!
+    0 => layoutTypeCopyIndex418!
+    layoutTypeCopyIndex418! < (semanticTypes! -> len) -> while {
+        semanticTypes![layoutTypeCopyIndex418!] => layoutType
+        layoutTypes! -> push(layoutType)
+        layoutTypeCopyIndex418! + 1 => layoutTypeCopyIndex418!
+    }
+    [typeIds.NominalField; ~] => layoutFields!
+    0 => layoutFieldCopyIndex420!
+    layoutFieldCopyIndex420! < (semanticFields! -> len) -> while {
+        semanticFields![layoutFieldCopyIndex420!] => layoutField
+        layoutFields! -> push(layoutField)
+        layoutFieldCopyIndex420! + 1 => layoutFieldCopyIndex420!
+    }
+    [typeIds.SemanticType; ~] => classificationTypes!
+    0 => classificationTypeCopyIndex421!
+    classificationTypeCopyIndex421! < (semanticTypes! -> len) -> while {
+        semanticTypes![classificationTypeCopyIndex421!] => classificationType
+        classificationTypes! -> push(classificationType)
+        classificationTypeCopyIndex421! + 1 => classificationTypeCopyIndex421!
+    }
+    [typeIds.NominalField; ~] => classificationFields!
+    0 => classificationFieldCopyIndex422!
+    classificationFieldCopyIndex422! < (semanticFields! -> len) -> while {
+        semanticFields![classificationFieldCopyIndex422!] => classificationField
+        classificationFields! -> push(classificationField)
+        classificationFieldCopyIndex422! + 1 => classificationFieldCopyIndex422!
+    }
+    TypeLayoutRequest { types: layoutTypes!, fields: layoutFields!, typeId: -1, pointerBitWidth: pointerBitWidth } => layoutRequest!
+    layoutRequest! -> layoutsFor => layouts
+    typeIds.TypeClassificationRequest { types: classificationTypes!, fields: classificationFields! } => classificationRequest!
+    classificationRequest! -> typeIds.classify => typeTraits!
+    [Int; ~] => typeSizes!
+    0 => typeSizeCopyIndex424!
+    typeSizeCopyIndex424! < (layouts.sizes -> len) -> while {
+        layouts.sizes[typeSizeCopyIndex424!] => typeSize
+        typeSizes! -> push(typeSize)
+        typeSizeCopyIndex424! + 1 => typeSizeCopyIndex424!
+    }
+    [Int; ~] => typeAligns!
+    0 => typeAlignCopyIndex426!
+    typeAlignCopyIndex426! < (layouts.aligns -> len) -> while {
+        layouts.aligns[typeAlignCopyIndex426!] => typeAlign
+        typeAligns! -> push(typeAlign)
+        typeAlignCopyIndex426! + 1 => typeAlignCopyIndex426!
+    }
+    [Int; ~] => typeLayoutStatuses!
+    0 => layoutStatusCopyIndex428!
+    layoutStatusCopyIndex428! < (layouts.statuses -> len) -> while {
+        layouts.statuses[layoutStatusCopyIndex428!] => layoutStatus
+        typeLayoutStatuses! -> push(layoutStatus)
+        layoutStatusCopyIndex428! + 1 => layoutStatusCopyIndex428!
+    }
+    # Nominal enums share the same tagged payload ABI as Result/Option. The
+    # recursive type arena represents their declaration identity as a nominal
+    # type, so recover variant payload type uses from the flat AST before the
+    # emitter freezes layout and ownership tables.
+    0 => nominalEnumLayoutIndex!
+    nominalEnumLayoutIndex! < (semanticTypes! -> len) -> while {
+        semanticTypes![nominalEnumLayoutIndex!] => nominalEnumType
+        -1 => nominalEnumAst!
+        (nominalEnumType.kind == 1 and (nominalEnumType.origin == 0 or nominalEnumType.origin == 2) and nominalEnumType.module >= 0 and nominalEnumType.module < (analysisRanges! -> len)) -> if {
+            analysisRanges![nominalEnumType.module] => nominalEnumRange
+            (nominalEnumType.symbol >= 0 and nominalEnumType.symbol < nominalEnumRange.symbolCount) -> if {
+                analysisSymbols![nominalEnumRange.symbolStart + nominalEnumType.symbol] => nominalEnumSymbol
+                nominalEnumSymbol.astNode >= 0 -> if {
+                    analysisNodes![nominalEnumRange.astStart + nominalEnumSymbol.astNode].kind == 4 -> if { nominalEnumSymbol.astNode => nominalEnumAst! }
+                }
+            }
+        }
+        nominalEnumAst! >= 0 -> if {
+            0 => nominalEnumPayloadSize!
+            false => nominalEnumOwns!
+            false => nominalEnumReachesHeap!
+            0 => nominalEnumNominalPayloadIndex!
+            nominalEnumNominalPayloadIndex! < (nominal! -> len) -> while {
+                nominal![nominalEnumNominalPayloadIndex!] => nominalPayload
+                (nominalPayload.status == 0 and nominalPayload.sourceModule == nominalEnumType.module and nominalPayload.typeAst >= 0 and nominalPayload.canonical >= 0) -> if {
+                    nominalPayload.typeAst => nominalPayloadAncestor!
+                    false => nominalPayloadBelongs!
+                    (nominalPayloadAncestor! >= 0 and nominalPayloadAncestor! < analysisRanges![nominalEnumType.module].astCount and not nominalPayloadBelongs!) -> while {
+                        analysisRanges![nominalEnumType.module] => nominalPayloadRange
+                        analysisNodes![nominalPayloadRange.astStart + nominalPayloadAncestor!] => nominalPayloadNode
+                        (nominalPayloadNode.kind == 27 and nominalPayloadNode.parent == nominalEnumAst!) -> if { true => nominalPayloadBelongs! } else { nominalPayloadNode.parent => nominalPayloadAncestor! }
+                    }
+                    (nominalPayloadBelongs! and nominalPayload.canonical < (typeSizes! -> len) and nominalPayload.canonical < (typeTraits! -> len)) -> if {
+                        typeSizes![nominalPayload.canonical] > nominalEnumPayloadSize! -> if { typeSizes![nominalPayload.canonical] => nominalEnumPayloadSize! }
+                        typeTraits![nominalPayload.canonical] % 2 == 1 -> if { true => nominalEnumOwns! }
+                        (typeTraits![nominalPayload.canonical] / 2) % 2 == 1 -> if { true => nominalEnumReachesHeap! }
+                    }
+                }
+                nominalEnumNominalPayloadIndex! + 1 => nominalEnumNominalPayloadIndex!
+            }
+            0 => nominalEnumCompositePayloadIndex!
+            nominalEnumCompositePayloadIndex! < (composite! -> len) -> while {
+                composite![nominalEnumCompositePayloadIndex!] => compositePayload
+                (compositePayload.status == 0 and compositePayload.sourceModule == nominalEnumType.module and compositePayload.typeAst >= 0 and compositePayload.canonical >= 0) -> if {
+                    compositePayload.typeAst => compositePayloadAncestor!
+                    false => compositePayloadBelongs!
+                    (compositePayloadAncestor! >= 0 and compositePayloadAncestor! < analysisRanges![nominalEnumType.module].astCount and not compositePayloadBelongs!) -> while {
+                        analysisRanges![nominalEnumType.module] => compositePayloadRange
+                        analysisNodes![compositePayloadRange.astStart + compositePayloadAncestor!] => compositePayloadNode
+                        (compositePayloadNode.kind == 27 and compositePayloadNode.parent == nominalEnumAst!) -> if { true => compositePayloadBelongs! } else { compositePayloadNode.parent => compositePayloadAncestor! }
+                    }
+                    (compositePayloadBelongs! and compositePayload.canonical < (typeSizes! -> len) and compositePayload.canonical < (typeTraits! -> len)) -> if {
+                        typeSizes![compositePayload.canonical] > nominalEnumPayloadSize! -> if { typeSizes![compositePayload.canonical] => nominalEnumPayloadSize! }
+                        typeTraits![compositePayload.canonical] % 2 == 1 -> if { true => nominalEnumOwns! }
+                        (typeTraits![compositePayload.canonical] / 2) % 2 == 1 -> if { true => nominalEnumReachesHeap! }
+                    }
+                }
+                nominalEnumCompositePayloadIndex! + 1 => nominalEnumCompositePayloadIndex!
+            }
+            (nominalEnumPayloadSize! + 7) / 8 => nominalEnumPayloadWords
+            8 + nominalEnumPayloadWords * 8 => typeSizes![nominalEnumLayoutIndex!]
+            8 => typeAligns![nominalEnumLayoutIndex!]
+            0 => typeLayoutStatuses![nominalEnumLayoutIndex!]
+            0 => nominalEnumTraits!
+            nominalEnumOwns! -> if { nominalEnumTraits! + 1 => nominalEnumTraits! }
+            nominalEnumReachesHeap! -> if { nominalEnumTraits! + 2 => nominalEnumTraits! }
+            nominalEnumTraits! => typeTraits![nominalEnumLayoutIndex!]
+        }
+        nominalEnumLayoutIndex! + 1 => nominalEnumLayoutIndex!
+    }
+    ir! -> typedIr.movesFrom => moves!
+    [Text; ~] => contextSources!
+    0 => contextSourceIndex!
+    contextSourceIndex! < (request.sources -> len) -> while {
+        contextSources! -> push(request.sources[contextSourceIndex!])
+        contextSourceIndex! + 1 => contextSourceIndex!
+    }
+    emitterContext.EmitContext {
+        sources: contextSources!
+        ranges: analysisRanges!
+        nodes: analysisNodes!
+        tokens: analysisTokens!
+        symbols: analysisSymbols!
+        calls: analysisCalls!
+        libraries: libraries
+        libraryCalls: libraryCalls
+        libraryCallDiagnostics: libraryCallDiagnostics!
+        interpolationRanges: analysisInterpolationRanges!
+        interpolations: analysisInterpolations!
+        ir: ir!
+        streamPlan: streamPlan!
+        moves: moves!
+        nominal: nominal!
+        composite: composite!
+        modules: moduleIdentities!
+        types: semanticTypes!
+        fields: semanticFields!
+        typeSizes: typeSizes!
+        typeAligns: typeAligns!
+        typeLayoutStatuses: typeLayoutStatuses!
+        typeTraits: typeTraits!
+        pointerBitWidth: pointerBitWidth
+        supportsComputePool: supportsComputePool
+        expectedPathStyle: expectedPathStyle
+        ownershipDiagnostics: ownershipDiagnostics!
+    } => context!
+    context!
+}
+
+prepare request: ref PrepareRequest -> emitterContext.EmitContext {
+    request.sources -> semanticContext.prepare => prepared!
+    request -> prepareSnapshot(prepared!, libraryImports.empty, [libraryImports.LibraryFunctionResolution; ~])
+}
+
+
+emitWindowsContext context: emitterContext.EmitContext -> Unit uses Console {
+    context -> diagnostics.usesParallelRuntime => capturesParallelOutput
+    context -> diagnostics.usesTextRuntime => usesTextOutput
+    context -> diagnostics.usesProcessRuntime => needsProcessRuntime
+    context -> diagnostics.usesDirectoryRuntime => needsDirectoryRuntime
+    context -> diagnostics.usesOwnedFileRuntime => needsOwnedFileRuntime
+    context -> diagnostics.usesMouseEventsRuntime => needsMouseEventsRuntime
+    context -> diagnostics.comInteropFunctionCount => comInteropCount
+    context -> diagnostics.nativeInteropFunctionCount => nativeInteropCount
+    capturesParallelOutput -> if { computeRuntime.emitMemoryOutputSinkRuntime }
+    (usesTextOutput or capturesParallelOutput) -> if { capturesParallelOutput -> textOutputRuntime.emitWindowsTextRuntime }
+    capturesParallelOutput -> if { computeRuntime.emitWindowsComputeRuntime }
+    context -> diagnostics.usesIntInterpolation -> if { numberFormat.emitIntTextRuntime }
+    context -> diagnostics.usesBoolInterpolation -> if { numberFormat.emitBoolTextRuntime }
+    context -> diagnostics.usesSourceTextRuntime => needsSourceTextRuntime
+    -1 => runtimeModule!
+    0 => runtimeModuleSearch!
+    runtimeModuleSearch! < (context.modules -> len) -> while {
+        context.modules[runtimeModuleSearch!] => moduleIdentity
+        moduleIdentity.pathHash == UInt64(12254170256457402476) -> if { moduleIdentity.sourceIndex => runtimeModule! }
+        runtimeModuleSearch! + 1 => runtimeModuleSearch!
+    }
+    (needsOwnedFileRuntime or needsSourceTextRuntime or runtimeModule! >= 0) -> if {
+        "declare dllimport ptr @CreateFileA(ptr, i32, i32, ptr, i32, i32, ptr)" -> println
+    }
+    (needsOwnedFileRuntime or needsDirectoryRuntime or needsSourceTextRuntime or runtimeModule! >= 0) -> if {
+        "declare dllimport i32 @CloseHandle(ptr)" -> println
+    }
+    needsDirectoryRuntime -> if {
+        "declare dllimport ptr @FindFirstFileA(ptr, ptr)" -> println
+        "declare dllimport i32 @FindNextFileA(ptr, ptr)" -> println
+        "declare dllimport i32 @FindClose(ptr)" -> println
+        "declare dllimport void @SetLastError(i32)" -> println
+        "declare dllimport i32 @GetLastError()" -> println
+        "declare dllimport ptr @CreateFileW(ptr, i32, i32, ptr, i32, i32, ptr)" -> println
+        "declare dllimport i32 @GetFinalPathNameByHandleW(ptr, ptr, i32, i32)" -> println
+        "declare dllimport i32 @GetFileInformationByHandle(ptr, ptr)" -> println
+        not capturesParallelOutput -> if {
+            "declare dllimport i32 @MultiByteToWideChar(i32, i32, ptr, i32, ptr, i32)" -> println
+        }
+        "declare dllimport i32 @WideCharToMultiByte(i32, i32, ptr, i32, ptr, i32, ptr, ptr)" -> println
+    }
+    (needsOwnedFileRuntime and runtimeModule! < 0) -> if {
+        (not usesTextOutput and not capturesParallelOutput) -> if {
+            "declare dllimport i32 @WriteFile(ptr, ptr, i32, ptr, ptr)" -> println
+        }
+    }
+    needsProcessRuntime -> if { processRuntime.emitProcessTypeRuntime }
+    comInteropCount > 0 -> if { nativeInteropCount == 0 -> comRuntime.emitWindowsComRuntime }
+    context -> emitCore
+    needsMouseEventsRuntime -> if { mouseEventRuntime.emitWindowsMouseEventRuntime }
+    needsProcessRuntime -> if { processRuntime.emitWindowsProcessRuntime }
+    needsDirectoryRuntime -> if { llvmRuntime.emitWindowsDirectory }
+    needsOwnedFileRuntime -> if { llvmRuntime.emitWindowsOwnedFile }
+    runtimeModule! >= 0 -> if {
+        runtimeModule! -> llvmRuntime.emitWindows
+    }
+    needsSourceTextRuntime -> if {
+        runtimeModule! < 0 -> if { llvmRuntime.emitWindowsSourceTextDeclarations }
+        llvmRuntime.emitWindowsSourceText
+    }
+}
+
+emitLinuxContext context: emitterContext.EmitContext -> Unit uses Console {
+    context -> diagnostics.usesParallelRuntime => capturesParallelOutput
+    context -> diagnostics.usesTextRuntime => usesTextOutput
+    context -> diagnostics.usesProcessRuntime => needsProcessRuntime
+    context -> diagnostics.usesSourceTextRuntime => needsSourceTextRuntime
+    context -> diagnostics.usesDirectoryRuntime => needsDirectoryRuntime
+    context -> diagnostics.usesOwnedFileRuntime => needsOwnedFileRuntime
+    context -> diagnostics.usesMouseEventsRuntime => needsMouseEventsRuntime
+    capturesParallelOutput -> if { computeRuntime.emitMemoryOutputSinkRuntime }
+    (usesTextOutput or capturesParallelOutput) -> if { capturesParallelOutput -> textOutputRuntime.emitLinuxTextRuntime }
+    capturesParallelOutput -> if { computeRuntime.emitLinuxComputeRuntime }
+    context -> diagnostics.usesIntInterpolation -> if { numberFormat.emitIntTextRuntime }
+    context -> diagnostics.usesBoolInterpolation -> if { numberFormat.emitBoolTextRuntime }
+    needsProcessRuntime -> if { processRuntime.emitProcessTypeRuntime }
+    context -> emitCore
+    needsMouseEventsRuntime -> if { usesTextOutput -> mouseEventRuntime.emitLinuxMouseEventRuntime }
+    needsProcessRuntime -> if { capturesParallelOutput -> processRuntime.emitLinuxProcessRuntime }
+    needsDirectoryRuntime -> if { llvmRuntime.emitLinuxDirectory }
+    needsOwnedFileRuntime -> if { not needsProcessRuntime -> llvmRuntime.emitLinuxOwnedFile }
+    needsSourceTextRuntime -> if {
+        (not needsProcessRuntime and not needsOwnedFileRuntime) -> if { "declare i32 @open(ptr, i32, i32)" -> println }
+        (not capturesParallelOutput and not needsProcessRuntime and not needsOwnedFileRuntime) -> if { "declare i32 @close(i32)" -> println }
+        llvmRuntime.emitLinuxSourceTextDeclarations
+        llvmRuntime.emitLinuxSourceText
+    }
+}
+
+emitWasmContext context: emitterContext.EmitContext -> Unit uses Console {
+    context -> diagnostics.usesTextRuntime -> if { textOutputRuntime.emitWasmTextRuntime }
+    context -> diagnostics.usesIntInterpolation -> if { numberFormat.emitIntTextRuntime }
+    context -> diagnostics.usesBoolInterpolation -> if { numberFormat.emitBoolTextRuntime }
+    context -> emitCore
+}
+
+public emit sources: move [Text; ~] -> Unit uses Console {
+    llvmTarget.windowsX64 => target
+    target.dataLayoutLine -> println
+    target.tripleLine -> println
+    PrepareRequest { sources: sources, pointerBitWidth: target.pointerBitWidth, supportsComputePool: true, expectedPathStyle: 1 } => prepareRequest!
+    prepareRequest! -> prepare => context!
+    context! -> emitWindowsContext
+}
+
+public emitLinux sources: move [Text; ~] -> Unit uses Console {
+    llvmTarget.linuxX64 => target
+    target.dataLayoutLine -> println
+    target.tripleLine -> println
+    PrepareRequest { sources: sources, pointerBitWidth: target.pointerBitWidth, supportsComputePool: true, expectedPathStyle: 0 } => prepareRequest!
+    prepareRequest! -> prepare => context!
+    context! -> diagnostics.comInteropFunctionCount => comInteropCount
+    comInteropCount == 0 -> if { context! -> emitLinuxContext } else { "Linux" -> diagnostics.emitComTargetDiagnostic }
+}
+
+public emitWasm sources: move [Text; ~] -> Unit uses Console {
+    llvmTarget.wasm32Browser => target
+    PrepareRequest { sources: sources, pointerBitWidth: target.pointerBitWidth, supportsComputePool: false, expectedPathStyle: 0 } => prepareRequest!
+    prepareRequest! -> prepare => context!
+    context! -> diagnostics.nativeInteropFunctionCount => nativeInteropCount
+    context! -> diagnostics.comInteropFunctionCount => comInteropCount
+    (nativeInteropCount == 0 and comInteropCount == 0) -> if {
+        target.dataLayoutLine -> println
+        target.tripleLine -> println
+        context! -> emitWasmContext
+    } else {
+        nativeInteropCount > 0 -> if { diagnostics.emitWasmNativeInteropDiagnostic }
+        comInteropCount > 0 -> if { "wasm32-browser" -> diagnostics.emitComTargetDiagnostic }
+    }
+}
+
+public emitChecked sources: move [Text; ~] -> Int uses Console {
+    llvmTarget.windowsX64 => target
+    PrepareRequest { sources: sources, pointerBitWidth: target.pointerBitWidth, supportsComputePool: true, expectedPathStyle: 1 } => prepareRequest!
+    prepareRequest! -> prepare => context!
+    context! -> diagnostics.blockingDiagnosticCount => diagnosticCount
+    diagnosticCount == 0 -> if {
+        target.dataLayoutLine -> println
+        target.tripleLine -> println
+        context! -> emitWindowsContext
+    } else { context! -> diagnostics.emitBlockingDiagnostics }
+    diagnosticCount
+}
+
+public emitLinuxChecked sources: move [Text; ~] -> Int uses Console {
+    llvmTarget.linuxX64 => target
+    PrepareRequest { sources: sources, pointerBitWidth: target.pointerBitWidth, supportsComputePool: true, expectedPathStyle: 0 } => prepareRequest!
+    prepareRequest! -> prepare => context!
+    context! -> diagnostics.blockingDiagnosticCount => diagnosticCount!
+    context! -> diagnostics.comInteropFunctionCount => comInteropCount
+    comInteropCount > 0 -> if { diagnosticCount! + 1 => diagnosticCount! }
+    diagnosticCount! == 0 -> if {
+        target.dataLayoutLine -> println
+        target.tripleLine -> println
+        context! -> emitLinuxContext
+    } else {
+        context! -> diagnostics.emitBlockingDiagnostics
+        comInteropCount > 0 -> if { "Linux" -> diagnostics.emitComTargetDiagnostic }
+    }
+    diagnosticCount!
+}
+
+public emitWasmChecked sources: move [Text; ~] -> Int uses Console {
+    llvmTarget.wasm32Browser => target
+    PrepareRequest { sources: sources, pointerBitWidth: target.pointerBitWidth, supportsComputePool: false, expectedPathStyle: 0 } => prepareRequest!
+    prepareRequest! -> prepare => context!
+    context! -> diagnostics.blockingDiagnosticCount => diagnosticCount!
+    context! -> diagnostics.usesMouseEventsRuntime => usesUnsupportedMouseEvents
+    usesUnsupportedMouseEvents -> if { diagnosticCount! + 1 => diagnosticCount! }
+    context! -> diagnostics.nativeInteropFunctionCount => unsupportedNativeInteropCount
+    unsupportedNativeInteropCount > 0 -> if { diagnosticCount! + 1 => diagnosticCount! }
+    context! -> diagnostics.comInteropFunctionCount => unsupportedComInteropCount
+    unsupportedComInteropCount > 0 -> if { diagnosticCount! + 1 => diagnosticCount! }
+    diagnosticCount! == 0 -> if {
+        target.dataLayoutLine -> println
+        target.tripleLine -> println
+        context! -> emitWasmContext
+    } else {
+        context! -> diagnostics.emitBlockingDiagnostics
+        usesUnsupportedMouseEvents -> if {
+            "; sollang semantic error: mouse event streams are unavailable on wasm32-browser; browser events require host-driven callback lowering" -> println
+        }
+        unsupportedNativeInteropCount > 0 -> if {
+            diagnostics.emitWasmNativeInteropDiagnostic
+        }
+        unsupportedComInteropCount > 0 -> if {
+            "wasm32-browser" -> diagnostics.emitComTargetDiagnostic
+        }
+    }
+    diagnosticCount!
+}
+
+prepareLibraryFiles request: ref PrepareRequest, paths: [Text; ~], targetName: Text, style: path.Style -> emitterContext.EmitContext uses File {
+    request.sources -> semanticContext.prepare => basePrepared!
+    basePrepared!.package -> libraryImports.load(paths, targetName, style) => libraries!
+    basePrepared!.package -> libraryImports.resolveQualified(libraries!) => libraryCalls!
+    request -> prepareSnapshot(basePrepared!, libraries!, libraryCalls!)
+}
+
+public emitFiles paths: [Text; ~] -> Unit uses Console, File {
+    [file.SourceText; ~] => owners!
+    0 => pathIndex!
+    pathIndex! < (paths -> len) -> while {
+        paths[pathIndex!] => path
+        path -> file.mapText => owner!
+        owners! -> push(owner!)
+        pathIndex! + 1 => pathIndex!
+    }
+    [Text; ~] => sources!
+    0 => sourceIndex!
+    sourceIndex! < (owners! -> len) -> while {
+        owners![sourceIndex!] -> len => sourceLength
+        owners![sourceIndex!] -> slice(UIntSize(0), sourceLength) => source
+        sources! -> push(source)
+        sourceIndex! + 1 => sourceIndex!
+    }
+    llvmTarget.windowsX64 => target
+    target.dataLayoutLine -> println
+    target.tripleLine -> println
+    PrepareRequest { sources: sources!, pointerBitWidth: target.pointerBitWidth, supportsComputePool: true, expectedPathStyle: 1 } => prepareRequest!
+    prepareRequest! -> prepareLibraryFiles(paths, "windows-x64", path.nativeStyle) => context!
+    context! -> emitWindowsContext
+    owners! -> len => ownerCount
+}
+
+public emitLinuxFiles paths: [Text; ~] -> Unit uses Console, File {
+    [file.SourceText; ~] => owners!
+    0 => pathIndex!
+    pathIndex! < (paths -> len) -> while {
+        paths[pathIndex!] => path
+        path -> file.mapText => owner!
+        owners! -> push(owner!)
+        pathIndex! + 1 => pathIndex!
+    }
+    [Text; ~] => sources!
+    0 => sourceIndex!
+    sourceIndex! < (owners! -> len) -> while {
+        owners![sourceIndex!] -> len => sourceLength
+        owners![sourceIndex!] -> slice(UIntSize(0), sourceLength) => source
+        sources! -> push(source)
+        sourceIndex! + 1 => sourceIndex!
+    }
+    llvmTarget.linuxX64 => target
+    target.dataLayoutLine -> println
+    target.tripleLine -> println
+    PrepareRequest { sources: sources!, pointerBitWidth: target.pointerBitWidth, supportsComputePool: true, expectedPathStyle: 0 } => prepareRequest!
+    prepareRequest! -> prepareLibraryFiles(paths, "linux-x64", path.nativeStyle) => context!
+    context! -> diagnostics.comInteropFunctionCount => comInteropCount
+    comInteropCount == 0 -> if { context! -> emitLinuxContext } else { "Linux" -> diagnostics.emitComTargetDiagnostic }
+    owners! -> len => ownerCount
+}
+
+public emitWasmFiles paths: [Text; ~] -> Unit uses Console, File {
+    [file.SourceText; ~] => owners!
+    0 => pathIndex!
+    pathIndex! < (paths -> len) -> while {
+        paths[pathIndex!] => path
+        path -> file.mapText => owner!
+        owners! -> push(owner!)
+        pathIndex! + 1 => pathIndex!
+    }
+    [Text; ~] => sources!
+    0 => sourceIndex!
+    sourceIndex! < (owners! -> len) -> while {
+        owners![sourceIndex!] -> len => sourceLength
+        owners![sourceIndex!] -> slice(UIntSize(0), sourceLength) => source
+        sources! -> push(source)
+        sourceIndex! + 1 => sourceIndex!
+    }
+    sources! -> emitWasm
+    owners! -> len => ownerCount
+}
+
+public emitCheckedFiles paths: [Text; ~] -> Int uses Console, File {
+    [file.SourceText; ~] => owners!
+    0 => pathIndex!
+    pathIndex! < (paths -> len) -> while {
+        paths[pathIndex!] -> file.mapText => owner!
+        owners! -> push(owner!)
+        pathIndex! + 1 => pathIndex!
+    }
+    [Text; ~] => sources!
+    0 => sourceIndex!
+    sourceIndex! < (owners! -> len) -> while {
+        owners![sourceIndex!] -> len => sourceLength
+        owners![sourceIndex!] -> slice(UIntSize(0), sourceLength) => source
+        sources! -> push(source)
+        sourceIndex! + 1 => sourceIndex!
+    }
+    llvmTarget.windowsX64 => target
+    PrepareRequest { sources: sources!, pointerBitWidth: target.pointerBitWidth, supportsComputePool: true, expectedPathStyle: 1 } => prepareRequest!
+    prepareRequest! -> prepareLibraryFiles(paths, "windows-x64", path.nativeStyle) => context!
+    context! -> diagnostics.blockingDiagnosticCount => diagnosticCount
+    diagnosticCount == 0 -> if {
+        target.dataLayoutLine -> println
+        target.tripleLine -> println
+        context! -> emitWindowsContext
+    } else { context! -> diagnostics.emitBlockingDiagnostics }
+    owners! -> len => ownerCount
+    diagnosticCount
+}
+
+public emitLinuxCheckedFiles paths: [Text; ~] -> Int uses Console, File {
+    [file.SourceText; ~] => owners!
+    0 => pathIndex!
+    pathIndex! < (paths -> len) -> while {
+        paths[pathIndex!] -> file.mapText => owner!
+        owners! -> push(owner!)
+        pathIndex! + 1 => pathIndex!
+    }
+    [Text; ~] => sources!
+    0 => sourceIndex!
+    sourceIndex! < (owners! -> len) -> while {
+        owners![sourceIndex!] -> len => sourceLength
+        owners![sourceIndex!] -> slice(UIntSize(0), sourceLength) => source
+        sources! -> push(source)
+        sourceIndex! + 1 => sourceIndex!
+    }
+    llvmTarget.linuxX64 => target
+    PrepareRequest { sources: sources!, pointerBitWidth: target.pointerBitWidth, supportsComputePool: true, expectedPathStyle: 0 } => prepareRequest!
+    prepareRequest! -> prepareLibraryFiles(paths, "linux-x64", path.nativeStyle) => context!
+    context! -> diagnostics.blockingDiagnosticCount => diagnosticCount!
+    context! -> diagnostics.comInteropFunctionCount => comInteropCount
+    comInteropCount > 0 -> if { diagnosticCount! + 1 => diagnosticCount! }
+    diagnosticCount! == 0 -> if {
+        target.dataLayoutLine -> println
+        target.tripleLine -> println
+        context! -> emitLinuxContext
+    } else {
+        context! -> diagnostics.emitBlockingDiagnostics
+        comInteropCount > 0 -> if { "Linux" -> diagnostics.emitComTargetDiagnostic }
+    }
+    owners! -> len => ownerCount
+    diagnosticCount!
+}
+
+public emitWasmCheckedFiles paths: [Text; ~] -> Int uses Console, File {
+    [file.SourceText; ~] => owners!
+    0 => pathIndex!
+    pathIndex! < (paths -> len) -> while {
+        paths[pathIndex!] -> file.mapText => owner!
+        owners! -> push(owner!)
+        pathIndex! + 1 => pathIndex!
+    }
+    [Text; ~] => sources!
+    0 => sourceIndex!
+    sourceIndex! < (owners! -> len) -> while {
+        owners![sourceIndex!] -> len => sourceLength
+        owners![sourceIndex!] -> slice(UIntSize(0), sourceLength) => source
+        sources! -> push(source)
+        sourceIndex! + 1 => sourceIndex!
+    }
+    sources! -> emitWasmChecked => diagnosticCount
+    owners! -> len => ownerCount
+    diagnosticCount
+}

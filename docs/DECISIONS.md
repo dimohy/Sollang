@@ -10705,12 +10705,15 @@ support, process support, and mouse-event support into five cohesive files.
 it needs and prints LLVM directly, so the split adds no container, heap
 allocation, copied emitter state, or generated-program runtime cost.
 
-Sollang currently defines one namespace module per source file and deliberately
-reports duplicate modules. The backend therefore follows a Rust-style explicit
+At this checkpoint Sollang defined one namespace module per source file and
+reported duplicate modules. The backend therefore followed a Rust-style explicit
 submodule tree with a stable parent entry point instead of C#-style partial
 declarations. Feature grouping also follows Swift's extension-oriented
 organization principle: a file owns one coherent capability rather than an
 arbitrary range of line numbers.
+
+D283 supersedes that source-file restriction while retaining explicit
+submodules for independently versioned capabilities.
 
 An attempted extraction of the shared `EmitContext`, and a second attempt using
 mutable output arrays, were rejected by native self-host verification. The
@@ -10841,3 +10844,161 @@ does not claim executable Stage2 COM parity yet.
 Examples 605 and 606 lock parser acceptance, class/interface/method metadata,
 MTA, slot 3, nominal interface symbols, and parented method symbols on Windows
 and Linux. The complete suites pass Windows **811/811** and Linux **810/810**.
+
+## D282 — C++ Exceptions Become Stack-Only Native Results
+
+Status: reference compiler and scalar self-host parity implemented
+Date: 2026-07-26
+
+Sollang writes a checked native declaration as `try function ... -> T`, while
+its language-visible type is `Result<T, Int32>`. The physical C ABI is
+`i32(args..., ptr out)`: zero writes and returns `Ok(T)`; a nonzero status
+returns `Err(Int32)`. Both compilers construct the Result in fixed stack slots.
+There is no Sollang heap allocation, wrapper object, reflection, or per-call
+symbol lookup.
+
+`bind-cpp` preserves the faster direct ABI for `noexcept` free functions and
+methods. It emits a `try` declaration and an `extern "C" noexcept` try/catch
+barrier for potentially throwing functions and methods. Every constructor uses
+the checked path because ordinary C++ allocation can fail even when the
+constructor body is `noexcept`. A caught exception, including allocation
+failure, currently maps to stable status `1`; no exception crosses the C ABI.
+
+The Windows/Linux C++ fixture proves free-function, constructor, and method
+success and failure, and observes exactly two destructors for the two
+successfully created objects. Failed construction owns nothing, while
+propagating a method error drops the already-created affine object exactly once.
+LLVM inspection requires output `alloca`, rejects `sollang_alloc` in each
+checked function, and keeps ordinary `noexcept` calls direct. Manifest schema 3
+records `status-out` explicitly and remains byte-deterministic.
+
+Example 624 proves that self-host AST, canonical types, and typed IR expose the
+same Result type. Example 625 executes the real status/out C fixture through
+Stage1 and Stage2 on Windows and Linux. Generated Native Handle declarations
+still require the next self-host parser, ownership, binding, and drop-symbol
+slice before the complete generated C++ class consumer can run under Stage2.
+
+## D283 — One Logical Module May Span Deterministic Source Fragments
+
+Status: implemented
+Date: 2026-07-26
+
+Several explicitly supplied `.slg` files may declare the same namespace. They
+contribute to one logical module: private functions and nominal types are
+visible across fragments, imports remain file-local, and duplicate declarations
+remain errors. Source paths are normalized and ordered deterministically before
+open-import construction, hashing, semantic analysis, and code generation.
+
+This follows the package/module model used by Go, Kotlin, and Swift: a package
+or module is a semantic boundary that may contain several source files. Sollang
+retains Rust-style explicit submodules for independently owned capabilities and
+uses same-module fragments only where an artificial public adapter would expose
+internals or copy state.
+
+The implementation merges declarations and open-import visibility at compile
+time only. Generated symbol names and direct calls are unchanged; it introduces
+no runtime container, heap allocation, dispatch, wrapper, or state copy.
+Self-host resolution covers unqualified and qualified functions, nominal type
+IDs, struct literals, member access, and imported facade lookup across sibling
+fragments. Inherent `impl` blocks may also live apart from their nominal type:
+the parser preserves public methods, call resolution matches the receiver's
+canonical nominal owner, and typed IR supplies `self` as an ordinary direct
+argument without a wrapper ABI. Examples 626–628 lock scalar calls, shared
+aggregate types, and containers whose element type is declared in a sibling
+fragment. Example 637 executes a split `Counter`/`impl Counter` through both
+method calls and field access, example 642 locks its semantic and typed-IR
+resolution, and the duplicate-declaration diagnostic proves that fragments do
+not weaken name uniqueness.
+
+The LLVM text backend now consists of a 15,183-line core plus same-namespace
+`foundation.slg`, `text_literals.slg`, `native_handles.slg`, and
+`entrypoints.slg` fragments. `foundation.slg` owns shared request/layout
+definitions, literal decoding owns one source-only concern, native handles own
+their ABI/drop helpers, and entry points own context preparation and target
+orchestration. The enforced core ceiling is 15,200 lines. This reduces
+`text.slg` by 1,168 lines (7.1%) from the immediate pre-refactor 16,351-line
+state and by 3,396 lines (18.3%) from the 18,579-line pre-D278 monolith.
+
+Regression evidence: examples 624–642 pass 19/19 on Windows and Linux, the LLVM
+emitter module verifier covers all 372 manifests, the complete Stage2
+differential gate passes 7/7, and Stage3 reproduces the 17,035,493-byte compiler
+LLVM at fixed-point hash
+`1F1010A9FAA0D9CDB82146260FE9D331C11B9FF9A06F170A18262628A4522750`.
+Linux Stage2 passes 6/6 and Linux Stage3 reproduces its 17,027,086-byte LLVM at
+fixed-point hash
+`0EE516C3CCD168EFC1DB2BDF457E031DC8E2E038254C5A1A750EDC0AD9693AB9`.
+
+Research basis:
+
+- [Go packages and source files](https://go.dev/ref/spec)
+- [Go code organization](https://go.dev/doc/code)
+- [Kotlin packages](https://kotlinlang.org/docs/packages.html)
+- [Swift modules and source-file access](https://docs.swift.org/swift-book/documentation/the-swift-programming-language/accesscontrol/)
+- [Rust modules in separate files](https://doc.rust-lang.org/stable/book/ch07-05-separating-modules-into-different-files.html)
+- [C# partial type declarations](https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/keywords/partial-type)
+
+## D284 — Readonly Compiler Contexts Cross the Self-Host ABI by Pointer
+
+Status: implemented and fixed-point verified
+Date: 2026-07-27
+
+Large immutable compiler contexts are borrowed, not copied. `emitCore` accepts
+`ref EmitContext`, materializes one `CoreEmitterState` owner, and forwards the
+same two pointers through the split LLVM emitter. The 34 diagnostics helpers
+also accept `ref EmitContext`; mixing their former by-value ABI with the new
+pointer caller produced invalid LLVM calls and is now structurally rejected.
+
+Readonly references are non-owning even when their element contains owned
+storage. Returning `ref Values` therefore does not run the owned-container
+escape rule for `Values`, and a reference-producing call may flow directly or
+nest into another readonly-reference call without materializing its pointee.
+Example 651 locks final-expression return, early return, flowed forwarding, and
+nested-call forwarding for a struct containing a growable array.
+
+The split-ABI gate covers 168 stateful helpers and 48 readonly-context helpers.
+It requires three entry-point-owned context slots, exactly one core-state
+materialization, pointer forwarding between helpers, and zero per-call
+aggregate rematerializations. The complete Stage2 differential gate passes all
+seven phases, including native execution and five stream programs. After
+self-host library-import AST classification was added, Stage3 reproduces the
+17,437,356-byte compiler LLVM at fixed-point hash
+`588B336A53C368321C3E245BF3F10A0345CA43E10CFDCAB6977955833B461762`.
+
+## D285 — Self-Host Library Interfaces Are Decoded, Not Reparsed
+
+Status: interface/catalog slice implemented; call lowering in progress
+Date: 2026-07-27
+
+The self-host compiler treats a `.slglib.json` file as a versioned compiler
+interface artifact. It does not synthesize a temporary `native` declaration
+file and run the Sollang lexer, parser, AST, and symbol builder a second time.
+`library_interfaces.slg` performs one ordered forward scan over mapped
+`SourceText`; names, types, symbols, target, and hashes remain byte spans into
+that owner. Only flat export and parameter tables grow. The decoder rejects an
+unknown schema/ABI/target, malformed strings, non-hex hashes, duplicate members
+or parameters, empty ABI names, and types outside the stable scalar library
+ABI.
+
+`library_imports.slg` resolves the manifest relative to each importing source,
+maps it once, validates the host target, and connects the alias and exported
+member to flat qualified-resolution records. It retains the mapping but drops
+the temporary operating-system path after opening, avoiding both copied
+metadata strings and unnecessary long-lived path storage. Examples 653 and 654
+verify direct decode, relative Windows/Linux loading, alias/member resolution,
+and parameter/result type codes on both targets.
+
+This slice exposed an iteration-order bug in recursive container layout:
+registering `[LibraryInterface; ~]` could size `LibraryInterface` before its
+nested dynamic-array types were known. The reference compiler now declares all
+precomputed dynamic-array identities first and computes their element layouts
+in a second pass, making layout independent of dictionary order.
+
+The remaining boundary is explicit: library qualified resolutions are not yet
+ordinary call resolutions or Typed IR native calls, so self-host consumption
+is not declared complete.
+
+Research basis:
+
+- [Rust serialized crate metadata](https://doc.rust-lang.org/stable/nightly-rustc/rustc_metadata/rmeta/index.html)
+- [Rust metadata locator](https://doc.rust-lang.org/stable/nightly-rustc/rustc_metadata/locator/index.html)
+- [Cargo compiler metadata hashes](https://doc.rust-lang.org/stable/nightly-rustc/cargo/core/compiler/struct.Metadata.html)

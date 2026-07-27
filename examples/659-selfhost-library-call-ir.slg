@@ -1,0 +1,38 @@
+import sollang.compiler.ir.typed as typedIr
+import sollang.compiler.ir.typed_library_imports as typedLibraryImports
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.library_imports as libraryImports
+import sys.path as path
+
+main {
+    path.nativeStyle => nativeStyle
+    nativeStyle -> when {
+        Windows { "windows-x64" }
+        Posix { "linux-x64" }
+    } => target
+    ["tests/library-interop/catalog_consumer.slg", ~] => sourcePaths!
+    sourcePaths! -> semanticContext.prepareFiles => prepared!
+    prepared!.package -> libraryImports.load(sourcePaths!, target, nativeStyle) => catalog!
+    prepared!.package -> libraryImports.resolveQualified(catalog!) => libraryCalls!
+    prepared!.calls -> each resolvedCall {
+        "call = $(resolvedCall.callAst),$(resolvedCall.functionSymbol),$(resolvedCall.targetSourceModule),$(resolvedCall.status)" -> println
+    }
+    prepared!.package.ranges[0] => sourceRange
+    0 => astIndex!
+    astIndex! < sourceRange.astCount -> while {
+        prepared!.package.nodes[sourceRange.astStart + astIndex!] => astNode
+        "ast = $(astIndex!),$(astNode.kind),$(astNode.parent),$(astNode.start),$(astNode.length)" -> println
+        astIndex! + 1 => astIndex!
+    }
+    prepared! -> typedIr.lowerContext => ir!
+    ir! -> typedLibraryImports.projectLibraries(prepared!, catalog!, libraryCalls!) => projectionDiagnostics!
+    "projection diagnostics = $(projectionDiagnostics! -> len)" -> println
+    0 => nodeIndex!
+    nodeIndex! < (ir! -> len) -> while {
+        ir![nodeIndex!] => node
+        (node.kind == 0 or node.kind == 6 or node.kind == 10 or node.kind == 11 or node.kind == 17) -> if {
+            "$(nodeIndex!): $(node.kind),$(node.parent),$(node.sourceModule),$(node.astNode),$(node.symbol),$(node.targetModule),$(node.typeId),$(node.operand0),$(node.operand1),$(node.nextOperand),$(node.flags)" -> println
+        }
+        nodeIndex! + 1 => nodeIndex!
+    }
+}

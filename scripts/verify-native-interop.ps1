@@ -21,6 +21,8 @@ $pointAggregateSource = Join-Path $repoRoot "examples\600-native-abi-point-retur
 $pointAggregateExpectedPath = Join-Path $repoRoot "examples\expected\600-native-abi-point-return.stdout.txt"
 $pressureSource = Join-Path $repoRoot "examples\602-native-abi-sysv-pressure.slg"
 $pressureExpectedPath = Join-Path $repoRoot "examples\expected\602-native-abi-sysv-pressure.stdout.txt"
+$trySource = Join-Path $repoRoot "examples\625-native-try-result.slg"
+$tryExpectedPath = Join-Path $repoRoot "examples\expected\625-native-try-result.stdout.txt"
 $outputRoot = Join-Path $repoRoot "artifacts\native-interop"
 $clang = Join-Path $repoRoot ".tools\llvm-22.1.8\bin\clang.exe"
 $expected = ([System.IO.File]::ReadAllText($expectedPath)).Replace("`r`n", "`n").TrimEnd("`n")
@@ -29,6 +31,7 @@ $aggregateExpected = ([System.IO.File]::ReadAllText($aggregateExpectedPath)).Rep
 $minimalAggregateExpected = ([System.IO.File]::ReadAllText($minimalAggregateExpectedPath)).Replace("`r`n", "`n").TrimEnd("`n")
 $pointAggregateExpected = ([System.IO.File]::ReadAllText($pointAggregateExpectedPath)).Replace("`r`n", "`n").TrimEnd("`n")
 $pressureExpected = ([System.IO.File]::ReadAllText($pressureExpectedPath)).Replace("`r`n", "`n").TrimEnd("`n")
+$tryExpected = ([System.IO.File]::ReadAllText($tryExpectedPath)).Replace("`r`n", "`n").TrimEnd("`n")
 
 New-Item -ItemType Directory -Force -Path $outputRoot | Out-Null
 
@@ -84,6 +87,16 @@ if (-not $SkipStage1) {
     dotnet $compiler build $source -o $stage1Linux --target linux-x64 --llvm (Split-Path -Parent (Split-Path -Parent $clang)) -O2
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     Assert-Output -Executable $stage1Linux -Linux
+
+    $stage1TryWindows = Join-Path $outputRoot "stage1-native-try-windows.exe"
+    dotnet $compiler build $trySource -o $stage1TryWindows --target windows-x64 --llvm (Split-Path -Parent (Split-Path -Parent $clang)) -O2
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    Assert-Output -Executable $stage1TryWindows -ExpectedText $tryExpected
+
+    $stage1TryLinux = Join-Path $outputRoot "stage1-native-try-linux"
+    dotnet $compiler build $trySource -o $stage1TryLinux --target linux-x64 --llvm (Split-Path -Parent (Split-Path -Parent $clang)) -O2
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    Assert-Output -Executable $stage1TryLinux -ExpectedText $tryExpected -Linux
 
     $stage1ContextWindows = Join-Path $outputRoot "stage1-native-contexts-windows.exe"
     dotnet $compiler build $contextSource -o $stage1ContextWindows --target windows-x64 --llvm (Split-Path -Parent (Split-Path -Parent $clang)) -O2
@@ -193,6 +206,59 @@ if (-not $SkipStage2) {
         ([regex]::Matches($linuxLlvm, "call ptr @dlsym")).Count -ne 3 -or
         ([regex]::Matches($linuxMain, "load ptr, ptr @sollang_native_function_")).Count -ne 3) {
         throw "Stage2 Linux steady-state native call contract regressed"
+    }
+
+    $stage2TryWindowsLlvm = Join-Path $outputRoot "stage2-native-try-windows.ll"
+    $stage2TryWindowsError = Join-Path $outputRoot "stage2-native-try-windows.stderr.txt"
+    $stage2TryWindowsExecutable = Join-Path $outputRoot "stage2-native-try-windows.exe"
+    $tryWindowsProcess = Start-Process `
+        -FilePath $selfhostCompiler `
+        -ArgumentList @("windows", $trySource) `
+        -RedirectStandardOutput $stage2TryWindowsLlvm `
+        -RedirectStandardError $stage2TryWindowsError `
+        -PassThru `
+        -WindowStyle Hidden
+    $tryWindowsProcess.WaitForExit()
+    if ($tryWindowsProcess.ExitCode -ne 0) {
+        throw "Stage2 Windows try-native emission failed: $([System.IO.File]::ReadAllText($stage2TryWindowsError))"
+    }
+    & $clang -target x86_64-pc-windows-msvc -Wno-override-module -O2 $stage2TryWindowsLlvm -o $stage2TryWindowsExecutable -Xlinker /subsystem:console
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    Assert-Output -Executable $stage2TryWindowsExecutable -ExpectedText $tryExpected
+    $tryWindowsLlvm = [System.IO.File]::ReadAllText($stage2TryWindowsLlvm)
+    if ($tryWindowsLlvm -notmatch "call i32 %native_target_\d+\(i32 21, ptr %native_try_out_" -or
+        $tryWindowsLlvm -notmatch "native_try_error_" -or
+        $tryWindowsLlvm -notmatch "native_try_result_slot_") {
+        throw "Stage2 Windows status-out Result lowering regressed"
+    }
+
+    $stage2TryLinuxLlvm = Join-Path $outputRoot "stage2-native-try-linux.ll"
+    $stage2TryLinuxError = Join-Path $outputRoot "stage2-native-try-linux.stderr.txt"
+    $stage2TryLinuxObject = Join-Path $outputRoot "stage2-native-try-linux.o"
+    $stage2TryLinuxExecutable = Join-Path $outputRoot "stage2-native-try-linux"
+    $tryLinuxProcess = Start-Process `
+        -FilePath $selfhostCompiler `
+        -ArgumentList @("linux", $trySource) `
+        -RedirectStandardOutput $stage2TryLinuxLlvm `
+        -RedirectStandardError $stage2TryLinuxError `
+        -PassThru `
+        -WindowStyle Hidden
+    $tryLinuxProcess.WaitForExit()
+    if ($tryLinuxProcess.ExitCode -ne 0) {
+        throw "Stage2 Linux try-native emission failed: $([System.IO.File]::ReadAllText($stage2TryLinuxError))"
+    }
+    & $clang -target x86_64-unknown-linux-gnu -O2 -c $stage2TryLinuxLlvm -o $stage2TryLinuxObject
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    $tryLinuxObject = Convert-ToWslPath $stage2TryLinuxObject
+    $tryLinuxExecutable = Convert-ToWslPath $stage2TryLinuxExecutable
+    & wsl.exe --exec cc $tryLinuxObject -o $tryLinuxExecutable -ldl
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    Assert-Output -Executable $stage2TryLinuxExecutable -ExpectedText $tryExpected -Linux
+    $tryLinuxLlvm = [System.IO.File]::ReadAllText($stage2TryLinuxLlvm)
+    if ($tryLinuxLlvm -notmatch "call i32 %native_target_\d+\(i32 21, ptr %native_try_out_" -or
+        $tryLinuxLlvm -notmatch "native_try_error_" -or
+        $tryLinuxLlvm -notmatch "native_try_result_slot_") {
+        throw "Stage2 Linux status-out Result lowering regressed"
     }
 
     $stage2ContextWindowsLlvm = Join-Path $outputRoot "stage2-native-contexts-windows.ll"

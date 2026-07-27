@@ -62,7 +62,10 @@ internal static class CompilerApp
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"sollang: unexpected failure: {ex.Message}");
+            Console.Error.WriteLine(
+                Environment.GetEnvironmentVariable("SOLLANG_DEBUG_STACK") == "1"
+                    ? $"sollang: unexpected failure: {ex}"
+                    : $"sollang: unexpected failure: {ex.Message}");
             return 1;
         }
     }
@@ -438,7 +441,13 @@ internal static class CompilerApp
         var modules = standardLibrary
             .Concat(sourcePrograms)
             .Where(static source => source.ModuleName.Length > 0)
-            .ToDictionary(static source => source.ModuleName, StringComparer.Ordinal);
+            .GroupBy(static source => source.ModuleName, StringComparer.Ordinal)
+            .ToDictionary(
+                static group => group.Key,
+                static group => (IReadOnlyList<CompilationSource>)group.OrderBy(
+                    static source => source.Path,
+                    StringComparer.OrdinalIgnoreCase).ToArray(),
+                StringComparer.Ordinal);
         standardLibrary = ReparseOpenImports(standardLibrary, modules, target);
         sourcePrograms = ReparseOpenImports(sourcePrograms, modules, target);
         var executableFiles = sourcePrograms.Where(static source => source.Program.Statements.Count > 0).ToArray();
@@ -468,7 +477,7 @@ internal static class CompilerApp
 
     private static IReadOnlyList<CompilationSource> ReparseOpenImports(
         IReadOnlyList<CompilationSource> sources,
-        IReadOnlyDictionary<string, CompilationSource> modules,
+        IReadOnlyDictionary<string, IReadOnlyList<CompilationSource>> modules,
         CompilationTarget target)
     {
         return sources.Select(source =>
@@ -495,9 +504,12 @@ internal static class CompilerApp
 
     private static IReadOnlyDictionary<string, IReadOnlyList<OpenImportCandidate>> BuildOpenImports(
         CompilationSource source,
-        IReadOnlyDictionary<string, CompilationSource> modules)
+        IReadOnlyDictionary<string, IReadOnlyList<CompilationSource>> modules)
     {
-        var localNames = DirectDeclarationNames(source.Program).ToHashSet(StringComparer.Ordinal);
+        var localNames = (modules.TryGetValue(source.ModuleName, out var localFragments)
+                ? localFragments.SelectMany(static fragment => DirectDeclarationNames(fragment.Program))
+                : DirectDeclarationNames(source.Program))
+            .ToHashSet(StringComparer.Ordinal);
         var explicitAliases = source.Program.Imports
             .Select(static import => import.Alias)
             .ToHashSet(StringComparer.Ordinal);
@@ -506,27 +518,30 @@ internal static class CompilerApp
         foreach (var import in source.Program.Imports)
         {
             var moduleName = string.Join('.', import.Path);
-            if (!modules.TryGetValue(moduleName, out var importedModule))
+            if (!modules.TryGetValue(moduleName, out var importedModules))
             {
                 continue;
             }
 
-            foreach (var (name, path) in PublicModuleSymbols(importedModule))
+            foreach (var importedModule in importedModules)
             {
-                if (localNames.Contains(name) || explicitAliases.Contains(name))
+                foreach (var (name, path) in PublicModuleSymbols(importedModule))
                 {
-                    continue;
-                }
+                    if (localNames.Contains(name) || explicitAliases.Contains(name))
+                    {
+                        continue;
+                    }
 
-                if (!candidates.TryGetValue(name, out var namedCandidates))
-                {
-                    namedCandidates = [];
-                    candidates.Add(name, namedCandidates);
-                }
+                    if (!candidates.TryGetValue(name, out var namedCandidates))
+                    {
+                        namedCandidates = [];
+                        candidates.Add(name, namedCandidates);
+                    }
 
-                if (!namedCandidates.Any(candidate => candidate.Path.SequenceEqual(path)))
-                {
-                    namedCandidates.Add(new OpenImportCandidate(path, import.Alias));
+                    if (!namedCandidates.Any(candidate => candidate.Path.SequenceEqual(path)))
+                    {
+                        namedCandidates.Add(new OpenImportCandidate(path, import.Alias));
+                    }
                 }
             }
         }
@@ -711,14 +726,6 @@ internal static class CompilerApp
             throw new SollangException(
                 $"dependency product '{package!.Product.Name}' contains executable top-level statements: {path}");
         }
-        if (moduleName.Length > 0
-            && modules.TryGetValue(moduleName, out var duplicate)
-            && !StringComparer.OrdinalIgnoreCase.Equals(duplicate.Path, path))
-        {
-            throw new SollangException(
-                $"module '{moduleName}' is declared by both '{duplicate.Path}' and '{path}'");
-        }
-
         var loaded = new CompilationSource(
             path,
             program,
@@ -727,9 +734,9 @@ internal static class CompilerApp
             parsed.SourceBytes,
             parsed.AdditionalInputs);
         loadedByPath.Add(path, loaded);
-        if (moduleName.Length > 0)
+        if (moduleName.Length > 0 && !modules.ContainsKey(moduleName))
         {
-            modules[moduleName] = loaded;
+            modules.Add(moduleName, loaded);
         }
         return loaded;
     }

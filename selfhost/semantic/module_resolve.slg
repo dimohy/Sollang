@@ -11,8 +11,9 @@ public struct ResolvedImport {
     status: Int
 }
 
-# Status: 0 resolved, 1 missing target, 2 duplicate target identity,
-# 3 duplicate import alias in one source module.
+# Status: 0 resolved, 1 missing target, 3 duplicate import alias in one source
+# module. Multiple identities with one path hash are source fragments of the
+# same logical module; the first source is its deterministic import facade.
 public resolve sources: [Text; ~] -> [ResolvedImport; ~] {
     sources -> analysis.analyze => package
     package -> resolveAnalyzed
@@ -53,14 +54,13 @@ public resolveAnalyzed package: analysis.PackageAnalysis -> [ResolvedImport; ~] 
         0 => moduleIndex!
         moduleIndex! < moduleCount -> while {
             identities![moduleIndex!].pathHash == edge.targetHash -> if {
-                moduleIndex! => targetModule!
+                targetModule! < 0 -> if { moduleIndex! => targetModule! }
                 matches! + 1 => matches!
             }
             moduleIndex! + 1 => moduleIndex!
         }
         1 => status!
-        matches! == 1 -> if { 0 => status! }
-        matches! > 1 -> if { 2 => status! }
+        matches! >= 1 -> if { 0 => status! }
         duplicateAlias! -> if { 3 => status! }
         ResolvedImport {
             edge: edgeIndex!

@@ -1,0 +1,113 @@
+namespace sollang.compiler.llvm.text
+
+import sollang.compiler.llvm.emitter.context as emitterContext
+# Native handles are affine pointer values. Their destructor address is
+# resolved once with the owning native library and cached in a global; normal
+# scope exit is therefore one load plus one indirect call with no allocation.
+nativeHandleType context: ref emitterContext.EmitContext, typeId: Int -> Bool {
+    false => native!
+    (typeId >= 0 and typeId < (context.types -> len)) -> if {
+        context.types[typeId] => candidate
+        (candidate.kind == 9
+            and candidate.module >= 0
+            and candidate.module < (context.ranges -> len)
+            and candidate.symbol >= 0) -> if {
+            context.ranges[candidate.module] => sourceRange
+            candidate.symbol < sourceRange.symbolCount -> if {
+                context.symbols[sourceRange.symbolStart + candidate.symbol] => typeSymbol
+                typeSymbol.flags / 65536 % 2 == 1 -> if { true => native! }
+            }
+        }
+    }
+    native!
+}
+
+emitNativeHandleGlobals context: ref emitterContext.EmitContext -> Unit uses Console {
+    0 => sourceModule!
+    sourceModule! < (context.ranges -> len) -> while {
+        context.ranges[sourceModule!] => sourceRange
+        0 => symbolIndex!
+        symbolIndex! < sourceRange.symbolCount -> while {
+            context.symbols[sourceRange.symbolStart + symbolIndex!] => typeSymbol
+            (typeSymbol.kind == 3
+                and typeSymbol.flags / 65536 % 2 == 1
+                and typeSymbol.astNode >= 0) -> if {
+                context.nodes[sourceRange.astStart + typeSymbol.astNode] => handleAst
+                context.tokens[sourceRange.tokenStart + handleAst.secondaryToken] => dropToken
+                context -> literalLength(sourceModule!, dropToken) => dropContentLength
+                dropContentLength + UIntSize(1) => dropLength
+                "@sollang_native_handle_drop_name_m$(sourceModule!)_s$(symbolIndex!) = private unnamed_addr constant [$dropLength x i8] c" -> print
+                context.sources[sourceModule!] -> slice(dropToken.span.start, UIntSize(1)) -> print
+                context -> literalStart(sourceModule!, dropToken) => dropByte!
+                context -> literalEnd(sourceModule!, dropToken) => dropEnd
+                dropByte! < dropEnd -> while {
+                    context -> literalEmitSourceByte(sourceModule!, dropByte!)
+                    dropByte! + UIntSize(1) => dropByte!
+                }
+                "\" -> print
+                "00" -> print
+                context.sources[sourceModule!] -> slice(dropToken.span.start, UIntSize(1)) -> println
+                "@sollang_native_handle_drop_m$(sourceModule!)_s$(symbolIndex!) = internal global ptr null, align 8" -> println
+            }
+            symbolIndex! + 1 => symbolIndex!
+        }
+        sourceModule! + 1 => sourceModule!
+    }
+}
+
+emitNativeHandleInitializers context: ref emitterContext.EmitContext -> Unit uses Console {
+    0 => sourceModule!
+    sourceModule! < (context.ranges -> len) -> while {
+        context.ranges[sourceModule!] => sourceRange
+        0 => symbolIndex!
+        symbolIndex! < sourceRange.symbolCount -> while {
+            context.symbols[sourceRange.symbolStart + symbolIndex!] => typeSymbol
+            (typeSymbol.kind == 3
+                and typeSymbol.flags / 65536 % 2 == 1
+                and typeSymbol.astNode >= 0) -> if {
+                context.nodes[sourceRange.astStart + typeSymbol.astNode] => handleAst
+                handleAst.parent => libraryAst
+                "  %native_handle_library_m$(sourceModule!)_s$(symbolIndex!) = load ptr, ptr @sollang_native_library_m$(sourceModule!)_a$(libraryAst), align 8" -> println
+                context.expectedPathStyle == 1 -> if {
+                    "  %native_handle_drop_raw_m$(sourceModule!)_s$(symbolIndex!) = call ptr @GetProcAddress(ptr %native_handle_library_m$(sourceModule!)_s$(symbolIndex!), ptr @sollang_native_handle_drop_name_m$(sourceModule!)_s$(symbolIndex!))" -> println
+                }
+                context.expectedPathStyle != 1 -> if {
+                    "  %native_handle_drop_raw_m$(sourceModule!)_s$(symbolIndex!) = call ptr @dlsym(ptr %native_handle_library_m$(sourceModule!)_s$(symbolIndex!), ptr @sollang_native_handle_drop_name_m$(sourceModule!)_s$(symbolIndex!))" -> println
+                }
+                "  %native_handle_drop_checked_m$(sourceModule!)_s$(symbolIndex!) = call ptr @sollang_native_require(ptr %native_handle_drop_raw_m$(sourceModule!)_s$(symbolIndex!))" -> println
+                "  store ptr %native_handle_drop_checked_m$(sourceModule!)_s$(symbolIndex!), ptr @sollang_native_handle_drop_m$(sourceModule!)_s$(symbolIndex!), align 8" -> println
+            }
+            symbolIndex! + 1 => symbolIndex!
+        }
+        sourceModule! + 1 => sourceModule!
+    }
+}
+
+emitNativeHandleDrop context: ref emitterContext.EmitContext, typeId: Int -> Unit uses Console {
+    context.types[typeId] => handleType
+    "  %drop_target = load ptr, ptr @sollang_native_handle_drop_m$(handleType.module)_s$(handleType.symbol), align 8" -> println
+    "  call void %drop_target(ptr %value)" -> println
+    "  ret void" -> println
+}
+
+emitNativeHandleValidation callIndex: Int, tryResult: Bool -> Unit uses Console {
+    "  %native_handle_" -> print
+    tryResult -> if { "try" -> print } else { "call" -> print }
+    "_$(callIndex)_present = icmp ne ptr " -> print
+    tryResult -> if { "%native_try_value_$(callIndex), null" -> println } else { "%v$(callIndex), null" -> println }
+    "  br i1 %native_handle_" -> print
+    tryResult -> if { "try" -> print } else { "call" -> print }
+    "_$(callIndex)_present, label %native_handle_" -> print
+    tryResult -> if { "try" -> print } else { "call" -> print }
+    "_$(callIndex)_valid, label %native_handle_" -> print
+    tryResult -> if { "try" -> print } else { "call" -> print }
+    "_$(callIndex)_invalid" -> println
+    "native_handle_" -> print
+    tryResult -> if { "try" -> print } else { "call" -> print }
+    "_$(callIndex)_invalid:" -> println
+    "  call void @llvm.trap()" -> println
+    "  unreachable" -> println
+    "native_handle_" -> print
+    tryResult -> if { "try" -> print } else { "call" -> print }
+    "_$(callIndex)_valid:" -> println
+}

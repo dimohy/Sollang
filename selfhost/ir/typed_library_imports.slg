@@ -1,0 +1,264 @@
+namespace sollang.compiler.ir.typed_library_imports
+
+import sollang.compiler.ir.typed as typedIr
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.semantic.library_imports as libraryImports
+
+# Project validated library exports directly into flat Typed IR. This is a
+# metadata projection, not generated Sollang source: source spans stay owned by
+# LibraryCatalog, calls target one synthetic native function node, and steady
+# state lowering remains one cached indirect ABI call.
+public projectLibraries ir: mut [typedIr.TypedIrNode; ~], prepared: ref semanticContext.SemanticSnapshot, catalog: ref libraryImports.LibraryCatalog, resolutions: [libraryImports.LibraryFunctionResolution; ~] -> [libraryImports.LibraryCallDiagnostic; ~] {
+    abiBuiltinSymbol code: Int -> Int {
+        -1 => symbol!
+        code == 0 -> if { 0 => symbol! }
+        code == 1 -> if { 3 => symbol! }
+        code == 2 -> if { 4 => symbol! }
+        code == 3 -> if { 5 => symbol! }
+        code == 4 -> if { 6 => symbol! }
+        code == 5 -> if { 8 => symbol! }
+        code == 6 -> if { 9 => symbol! }
+        code == 7 -> if { 10 => symbol! }
+        code == 8 -> if { 11 => symbol! }
+        code == 9 -> if { 20 => symbol! }
+        code == 10 -> if { 21 => symbol! }
+        symbol!
+    }
+    abiTypeId code: Int -> Int {
+        code -> abiBuiltinSymbol => requestedSymbol
+        -1 => found!
+        0 => typeSearch!
+        typeSearch! < (prepared.semantic.types -> len) -> while {
+            prepared.semantic.types[typeSearch!] => candidate
+            (candidate.status == 0
+                and candidate.kind == 1
+                and candidate.origin == 1
+                and candidate.symbol == requestedSymbol) -> if {
+                typeSearch! => found!
+            }
+            typeSearch! + 1 => typeSearch!
+        }
+        found!
+    }
+    applyType node: move typedIr.TypedIrNode, typeId: Int -> typedIr.TypedIrNode {
+        node => result!
+        typeId >= 0 -> if {
+            prepared.semantic.types[typeId] => semanticType
+            typeId => result!.typeId
+            semanticType.origin => result!.typeOrigin
+            semanticType.module => result!.typeModule
+            semanticType.symbol => result!.typeSymbol
+            semanticType.kind => result!.typeKind
+            0 => result!.typeFlags
+        }
+        result!
+    }
+
+    [libraryImports.LibraryCallDiagnostic; ~] => diagnostics!
+    prepared.package.ranges -> len => libraryModuleBase
+    0 => resolutionIndex!
+    resolutionIndex! < (resolutions -> len) -> while {
+        resolutions[resolutionIndex!] => resolved
+        (resolved.status == 0
+            and resolved.sourceModule >= 0
+            and resolved.sourceModule < libraryModuleBase
+            and resolved.bindingIndex >= 0
+            and resolved.bindingIndex < (catalog.bindings -> len)) -> if {
+            catalog.bindings[resolved.bindingIndex] => binding
+            (binding.status == 0
+                and binding.interfaceIndex >= 0
+                and binding.interfaceIndex < (catalog.interfaces -> len)) -> if {
+                prepared.package.ranges[resolved.sourceModule] => callRange
+                resolved.pathAst => callAst!
+                0 => invocationSearch!
+                invocationSearch! < callRange.astCount -> while {
+                    prepared.package.nodes[callRange.astStart + invocationSearch!] => invocationCandidate
+                    (invocationCandidate.parent == resolved.pathAst and invocationCandidate.kind == 11) -> if {
+                        invocationSearch! => callAst!
+                    }
+                    invocationSearch! + 1 => invocationSearch!
+                }
+                prepared.package.nodes[callRange.astStart + callAst!].kind != 11 -> if {
+                    (callAst! >= 0 and callAst! < callRange.astCount
+                        and prepared.package.nodes[callRange.astStart + callAst!].kind != 10
+                        and prepared.package.nodes[callRange.astStart + callAst!].kind != 48) -> while {
+                        prepared.package.nodes[callRange.astStart + callAst!].parent => callAst!
+                    }
+                }
+                catalog -> libraryImports.exportResultTypeCode(binding.interfaceIndex, resolved.exportIndex) => abiResultCode
+                abiResultCode -> abiTypeId => resultTypeId
+                false => projectedCall!
+                0 => callIrSearch!
+                callIrSearch! < (ir -> len) -> while {
+                    ir[callIrSearch!] => call!
+                    (call!.kind == 6
+                        and call!.sourceModule == resolved.sourceModule
+                        and call!.astNode == callAst!) -> if {
+                        true => projectedCall!
+                        libraryModuleBase + binding.interfaceIndex => call!.targetModule
+                        resolved.exportIndex => call!.symbol
+                        call! -> applyType(resultTypeId) => typedCall!
+                        ir -> typedIr.replaceNode(callIrSearch!, typedCall!)
+                        catalog -> libraryImports.exportParameterCount(binding.interfaceIndex, resolved.exportIndex) => callParameterCount
+                        typedCall!.operand0 => callArgumentIr!
+                        0 => callParameterOrdinal!
+                        callArgumentIr! >= 0 -> while {
+                            ir[callArgumentIr!] => argument!
+                            callParameterOrdinal! < callParameterCount -> if {
+                                catalog -> libraryImports.exportParameterTypeCode(binding.interfaceIndex, resolved.exportIndex, callParameterOrdinal!) => argumentTypeCode
+                                argumentTypeCode -> abiTypeId => argumentTypeId
+                                argument!.kind == 3 -> if {
+                                    argument! -> applyType(argumentTypeId) => typedArgument!
+                                    ir -> typedIr.replaceNode(callArgumentIr!, typedArgument!)
+                                } else {
+                                    (argument!.typeId >= 0 and argument!.typeId != argumentTypeId) -> if {
+                                        diagnostics! -> push(libraryImports.LibraryCallDiagnostic {
+                                            sourceModule: resolved.sourceModule
+                                            pathAst: resolved.pathAst
+                                            code: 3
+                                            expected: argumentTypeId
+                                            actual: argument!.typeId
+                                        })
+                                    }
+                                }
+                            }
+                            ir[callArgumentIr!].nextOperand => callArgumentIr!
+                            callParameterOrdinal! + 1 => callParameterOrdinal!
+                        }
+                        callParameterOrdinal! != callParameterCount -> if {
+                            diagnostics! -> push(libraryImports.LibraryCallDiagnostic {
+                                sourceModule: resolved.sourceModule
+                                pathAst: resolved.pathAst
+                                code: 2
+                                expected: callParameterCount
+                                actual: callParameterOrdinal!
+                            })
+                        }
+                        0 => resultBindingSearch!
+                        resultBindingSearch! < (ir -> len) -> while {
+                            ir[resultBindingSearch!] => resultBinding!
+                            (resultBinding!.kind == 17 and resultBinding!.operand0 == callIrSearch!) -> if {
+                                resultBinding!.symbol => resultBindingSymbol
+                                resultBinding! -> applyType(resultTypeId) => typedResultBinding!
+                                ir -> typedIr.replaceNode(resultBindingSearch!, typedResultBinding!)
+                                0 => resultNameSearch!
+                                resultNameSearch! < (ir -> len) -> while {
+                                    ir[resultNameSearch!] => resultName!
+                                    (resultName!.kind == 5
+                                        and resultName!.sourceModule == resolved.sourceModule
+                                        and resultName!.symbol == resultBindingSymbol) -> if {
+                                        resultName! -> applyType(resultTypeId) => typedResultName!
+                                        ir -> typedIr.replaceNode(resultNameSearch!, typedResultName!)
+                                    }
+                                    resultNameSearch! + 1 => resultNameSearch!
+                                }
+                            }
+                            resultBindingSearch! + 1 => resultBindingSearch!
+                        }
+                    }
+                    callIrSearch! + 1 => callIrSearch!
+                }
+                not projectedCall! -> if {
+                    diagnostics! -> push(libraryImports.LibraryCallDiagnostic {
+                        sourceModule: resolved.sourceModule
+                        pathAst: resolved.pathAst
+                        code: 1
+                        expected: 1
+                        actual: 0
+                    })
+                }
+            }
+        }
+        resolutionIndex! + 1 => resolutionIndex!
+    }
+
+    # Materialize one declaration-shaped IR record per interface export. The
+    # nodes carry only canonical scalar type ids and indexes into the catalog;
+    # they allocate no runtime wrapper and are excluded from function bodies.
+    0 => interfaceIndex!
+    interfaceIndex! < (catalog.interfaces -> len) -> while {
+        0 => exportIndex!
+        exportIndex! < (catalog.interfaces[interfaceIndex!].exports -> len) -> while {
+            catalog -> libraryImports.exportResultTypeCode(interfaceIndex!, exportIndex!) => resultCode
+            catalog -> libraryImports.exportParameterCount(interfaceIndex!, exportIndex!) => parameterCount
+            resultCode -> abiTypeId => resultType
+            resultCode -> abiBuiltinSymbol => resultSymbol
+            ir -> len => functionIr
+            functionIr + 1 => returnIr
+            parameterCount > 0 -> if { functionIr + 2 } else { -1 } => firstParameterIr
+            parameterCount > 1 -> if { functionIr + 3 } else { -1 } => additionalParameterIr
+            ir -> push(typedIr.TypedIrNode {
+                kind: 0
+                parent: -1
+                sourceModule: libraryModuleBase + interfaceIndex!
+                astNode: -1
+                symbol: exportIndex!
+                targetModule: libraryModuleBase + interfaceIndex!
+                typeOrigin: 1
+                typeModule: -1
+                typeSymbol: resultSymbol
+                typeId: resultType
+                typeKind: 1
+                typeFlags: 0
+                payloadToken: -1
+                opcode: -1
+                operand0: returnIr
+                operand1: firstParameterIr
+                nextOperand: additionalParameterIr
+                flags: 128 + 262144
+            })
+            ir -> push(typedIr.TypedIrNode {
+                kind: 1
+                parent: functionIr
+                sourceModule: libraryModuleBase + interfaceIndex!
+                astNode: -1
+                symbol: exportIndex!
+                targetModule: -1
+                typeOrigin: 1
+                typeModule: -1
+                typeSymbol: resultSymbol
+                typeId: resultType
+                typeKind: 1
+                typeFlags: 0
+                payloadToken: -1
+                opcode: -1
+                operand0: -1
+                operand1: -1
+                nextOperand: -1
+                flags: 0
+            })
+            0 => parameterOrdinal!
+            parameterOrdinal! < parameterCount -> while {
+                catalog -> libraryImports.exportParameterTypeCode(interfaceIndex!, exportIndex!, parameterOrdinal!) => parameterCode
+                parameterCode -> abiTypeId => parameterType
+                parameterCode -> abiBuiltinSymbol => parameterSymbol
+                ir -> len => parameterIr
+                parameterOrdinal! + 1 < parameterCount -> if { parameterIr + 1 } else { -1 } => nextParameter
+                ir -> push(typedIr.TypedIrNode {
+                    kind: 10
+                    parent: functionIr
+                    sourceModule: libraryModuleBase + interfaceIndex!
+                    astNode: -1
+                    symbol: parameterOrdinal!
+                    targetModule: libraryModuleBase + interfaceIndex!
+                    typeOrigin: 1
+                    typeModule: -1
+                    typeSymbol: parameterSymbol
+                    typeId: parameterType
+                    typeKind: 1
+                    typeFlags: 0
+                    payloadToken: -1
+                    opcode: -1
+                    operand0: -1
+                    operand1: -1
+                    nextOperand: nextParameter
+                    flags: 0
+                })
+                parameterOrdinal! + 1 => parameterOrdinal!
+            }
+            exportIndex! + 1 => exportIndex!
+        }
+        interfaceIndex! + 1 => interfaceIndex!
+    }
+    diagnostics!
+}

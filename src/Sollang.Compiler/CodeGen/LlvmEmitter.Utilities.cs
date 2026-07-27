@@ -56,14 +56,14 @@ internal sealed partial class LlvmEmitter
     private bool TryResolveFunction(IReadOnlyList<string> path, out BoundFunction function)
     {
         var name = string.Join('.', path);
-        if (_currentFunctions.TryGetValue(name, out function!))
+        if (!name.Contains('.', StringComparison.Ordinal)
+            && _currentFunction is { ModuleName.Length: > 0 } currentFunction
+            && _currentFunctions.TryGetValue(currentFunction.ModuleName + "." + name, out function!))
         {
             return true;
         }
 
-        return !name.Contains('.', StringComparison.Ordinal)
-            && _currentFunction is { ModuleName.Length: > 0 } currentFunction
-            && _currentFunctions.TryGetValue(currentFunction.ModuleName + "." + name, out function!);
+        return _currentFunctions.TryGetValue(name, out function!);
     }
 
     private static IReadOnlyDictionary<string, BoundFunction> CreateFunctionScope(
@@ -298,6 +298,7 @@ internal sealed partial class LlvmEmitter
         _mutableStructSlots.Clear();
         _mutableScalarSlots.Clear();
         _readonlyCaptureBorrowPointers.Clear();
+        _readonlyValueSlots.Clear();
     }
 
     private void SelectStackFrame(BoundFunction function)
@@ -400,6 +401,7 @@ internal sealed partial class LlvmEmitter
         {
             _readonlyCaptureBorrowPointers.Add(name, pointer);
         }
+
     }
 
     private void DropOwnedLocals(string? transferredOwnerName = null)

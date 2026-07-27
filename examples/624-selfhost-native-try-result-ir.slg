@@ -1,0 +1,23 @@
+import sollang.compiler.ir.typed as typedIr
+
+main {
+    [
+        """
+        native fixture from "artifacts/native-interop/native_fixture" {
+            try checked value: Int32 -> Int32 as "native_checked"
+        }
+
+        main {
+            fixture.checked(21)
+        }
+        """,
+        ~
+    ] => sources!
+    sources! -> typedIr.lower => ir!
+    ir! -> each node {
+        ((node.kind == 0 and node.flags / 32768 % 2 == 1)
+            or (node.kind == 6 and node.targetModule == 0)) -> if {
+            "try native = $(node.kind),$(node.typeKind),$(node.typeSymbol),$(node.typeId),$(node.flags)" -> println
+        }
+    }
+}
