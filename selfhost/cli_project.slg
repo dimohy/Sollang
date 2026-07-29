@@ -8,6 +8,7 @@ public struct ProjectInput {
     status: Int
     source: Text
     sourceDirectory: Text
+    multiProduct: Bool
 }
 
 textEndsWith value: Text, suffix: Text -> Bool {
@@ -31,23 +32,6 @@ textEquals left: Text, right: Text -> Bool {
         index! + UIntSize(1) => index!
     }
     matches!
-}
-
-textContains value: Text, fragment: Text -> Bool {
-    (fragment -> len) == UIntSize(0) -> if { true -> return }
-    (fragment -> len) > (value -> len) -> if { false -> return }
-    UIntSize(0) => start!
-    start! + (fragment -> len) <= (value -> len) -> while {
-        true => matches!
-        UIntSize(0) => index!
-        (matches! and index! < (fragment -> len)) -> while {
-            (value -> byte(start! + index!)) != (fragment -> byte(index!)) -> if { false => matches! }
-            index! + UIntSize(1) => index!
-        }
-        matches! -> if { true -> return }
-        start! + UIntSize(1) => start!
-    }
-    false
 }
 
 directoryOf value: Text -> Text {
@@ -85,6 +69,7 @@ emptyInput status: Int -> ProjectInput {
         status: status
         source: ""
         sourceDirectory: ""
+        multiProduct: false
     } => result!
     result!
 }
@@ -98,10 +83,6 @@ public load option: Text, requestedProduct: Text, manifestStorage: mut Arena, ro
     manifestFile! -> file.mapPath => source!
     source! -> len => sourceLength
     source! -> slice(UIntSize(0), sourceLength) => sourceView
-    sourceView -> textContains("products") -> if {
-        4 -> emptyInput => failure!
-        failure! -> return
-    }
     sourceView -> project.parse => parsed!
     parsed!.status != 0 -> if {
         parsed!.status + 100 => parseStatus
@@ -137,6 +118,7 @@ public load option: Text, requestedProduct: Text, manifestStorage: mut Arena, ro
         status: 0
         source: rootSource
         sourceDirectory: sourceDirectory
+        multiProduct: (parsed!.products -> len) > 1
     } => result!
     result!
 }

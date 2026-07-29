@@ -113,8 +113,8 @@ the compiler.
 
 Current verified implementation slices:
 
-- [x] Native `--version`, help, explicit-source, project-directory, and
-  workspace-package `build`, plus `run`.
+- [x] Native `--version`, help, explicit-source, project-directory with
+  `--product`, and workspace-package `build`, plus `run`.
 - [x] Full bundled-standard-library compilation for explicit-source builds.
 - [x] Literal program-argument forwarding after `run ... --`.
 - [ ] Complete project/workspace dependency, lock, default-output, diagnostic,

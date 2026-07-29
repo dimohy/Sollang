@@ -103,10 +103,13 @@ $projectRun = (& wsl.exe -d $Distribution -- $projectOutputWsl | Out-String)
 Assert-ExitCode 0 "project executable"
 Assert-Output $projectRun "42" "project executable"
 $multiProductProjectWsl = Convert-ToWslPath (Join-Path $repoRoot "examples\regression\projects\273-package-graph\app")
+$productOutputWsl = Convert-ToWslPath (Join-Path $artifacts "alternate-product")
 & wsl.exe -d $Distribution -- $compilerWsl build --project $multiProductProjectWsl --product alternate `
-    -o (Convert-ToWslPath (Join-Path $artifacts "unsupported-product")) --target linux-x64 `
-    --stdlib $stdlibWsl --llvm $llvmHomeWsl -O1 *> $null
-Assert-ExitCode 1 "multi-product compatibility gate"
+    -o $productOutputWsl --target linux-x64 --stdlib $stdlibWsl --llvm $llvmHomeWsl -O1
+Assert-ExitCode 0 "multi-product build"
+$productRun = (& wsl.exe -d $Distribution -- $productOutputWsl | Out-String)
+Assert-ExitCode 0 "multi-product executable"
+Assert-Output $productRun "alternate" "multi-product executable"
 
 Write-Host "[linux native CLI 6/8] Workspace package build."
 $workspaceRootWsl = Convert-ToWslPath (Join-Path $repoRoot "examples\regression\projects\437-workspace")

@@ -206,11 +206,35 @@ public parse source: Text -> ProjectManifest {
                                     tokens![index!] -> stringSpan => root!
                                     index! + 1 => index!
                                 } else { 2 => status! }
-                            } else {
-                                (source -> textIs(field, "products")) -> if {
-                                    source -> parseProducts(index!, tokens!, products!) => index!
-                                    index! < 0 -> if { 5 => status! }
                                 } else {
+                                    (source -> textIs(field, "products")) -> if {
+                                    tokens![index!].kind == grammar.tokenIdLeftBrace() -> if {
+                                        index! + 1 => index!
+                                        index! -> skipSeparators(tokens!) => index!
+                                        (status! == 0 and tokens![index!].kind != grammar.tokenIdRightBrace()) -> while {
+                                            tokens![index!].kind == grammar.tokenIdIdentifier() -> if {
+                                                tokens![index!] -> tokenSpan => productName
+                                                index! + 1 => index!
+                                                index! -> skipSeparators(tokens!) => index!
+                                                tokens![index!].kind == grammar.tokenIdColon() -> if {
+                                                    index! + 1 => index!
+                                                    index! -> skipSeparators(tokens!) => index!
+                                                    tokens![index!].kind == grammar.tokenIdString() -> if {
+                                                        tokens![index!] -> stringSpan => productRoot
+                                                        products! -> push(Product { name: productName, root: productRoot })
+                                                        index! + 1 => index!
+                                                        index! -> skipSeparators(tokens!) => index!
+                                                    } else { 5 => status! }
+                                                } else { 5 => status! }
+                                            } else { 5 => status! }
+                                        }
+                                        status! == 0 -> if {
+                                            tokens![index!].kind == grammar.tokenIdRightBrace() -> if {
+                                                index! + 1 => index!
+                                            } else { 5 => status! }
+                                        }
+                                    } else { 5 => status! }
+                                    } else {
                                     (source -> textIs(field, "dependencies")) -> if {
                                         source -> parseDependencies(index!, tokens!, dependencies!) => index!
                                         index! < 0 -> if { 6 => status! }

@@ -83,10 +83,13 @@ $projectRun = (& $projectOutput | Out-String)
 Assert-ExitCode 0 "project executable"
 Assert-Output $projectRun "42" "project executable"
 $multiProductProject = Join-Path $repoRoot "examples\regression\projects\273-package-graph\app"
+$productOutput = Join-Path $artifacts "alternate-product.exe"
 & $Compiler build --project $multiProductProject --product alternate `
-    -o (Join-Path $artifacts "unsupported-product.exe") --target windows-x64 `
-    --llvm $LlvmHome --stdlib $StdlibRoot -O1 *> $null
-Assert-ExitCode 1 "multi-product compatibility gate"
+    -o $productOutput --target windows-x64 --llvm $LlvmHome --stdlib $StdlibRoot -O1
+Assert-ExitCode 0 "multi-product build"
+$productRun = (& $productOutput | Out-String)
+Assert-ExitCode 0 "multi-product executable"
+Assert-Output $productRun "alternate" "multi-product executable"
 
 Write-Host "[native CLI 6/8] Workspace package build."
 $workspaceOutput = Join-Path $artifacts "workspace.exe"

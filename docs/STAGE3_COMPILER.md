@@ -25,14 +25,15 @@ It also accepts `--jobs N` immediately after the target mode. The target modes
 used for direct source compilation are `windows`, `linux`, and `wasm`.
 
 The native driver now implements `--version`, help, explicit-source,
-single-product project-directory, and workspace-package `build`, plus `run`
-and literal program-argument forwarding. Project and workspace inputs retain
-the public `--project`, `--workspace`, and `--package` spellings. These are
+project-directory (including explicit `--product` selection), and
+workspace-package `build`, plus `run` and literal program-argument forwarding.
+Project and workspace inputs retain the public `--project`, `--product`,
+`--workspace`, and `--package` spellings. These are
 verified implementation slices, not the complete replacement contract:
-multi-product `--product`, dependency locking and remote package resolution,
-library and Wasm output, default project output placement, `test`, `format`,
-`language-server`, `resolve`, `bind-cpp`, and exact diagnostic-stream
-compatibility remain gated.
+multi-product dependency import closure, dependency locking and remote package
+resolution, library and Wasm output, default project output placement, `test`,
+`format`, `language-server`, `resolve`, `bind-cpp`, and exact
+diagnostic-stream compatibility remain gated.
 Those commands remain on `sollang` in 0.3. The C# executable can be removed
 only after the complete cross-platform compatibility matrix passes.
 
