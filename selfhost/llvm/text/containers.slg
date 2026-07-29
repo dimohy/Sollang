@@ -147,6 +147,227 @@ bindingBelongsToOwner request: BindingOwnerRequest, context: ref emitterContext.
     }
     bindingOwner! == request.ownerIndex
 }
+
+emitArenaConstructor request: WhileValueRequest, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    request.whileIndex => arenaIndex
+    context.ir[arenaIndex] => arenaNode
+    context.ir[arenaNode.operand0] => arenaCapacity
+    arenaCapacity -> integerNodeWidth(context, state) => arenaCapacityWidth
+    "  %v$(arenaIndex)_capacity_i64 = " -> print
+    arenaCapacity.kind == 3 -> if {
+        "add i64 0, " -> print
+        arenaCapacity -> sourceToken(context, state) => arenaCapacityToken
+        context.sources[arenaCapacity.sourceModule] -> slice(arenaCapacityToken.span.start, arenaCapacityToken.span.length) -> println
+    } else {
+        arenaCapacityWidth < 64 -> if {
+            arenaCapacity -> integerNodeSigned(context, state) -> if { "sext" -> print } else { "zext" -> print }
+            " i$(arenaCapacityWidth) %v$(arenaNode.operand0) to i64" -> println
+        } else {
+            "add i64 %v$(arenaNode.operand0), 0" -> println
+        }
+    }
+    "  %v$(arenaIndex)_capacity_positive = icmp ugt i64 %v$(arenaIndex)_capacity_i64, 0" -> println
+    "  %v$(arenaIndex)_allocation = select i1 %v$(arenaIndex)_capacity_positive, i64 %v$(arenaIndex)_capacity_i64, i64 1" -> println
+    "  %v$(arenaIndex)_data = call ptr @malloc(i64 %v$(arenaIndex)_allocation)" -> println
+    "  %v$(arenaIndex)_0 = insertvalue %sollang.array.i32 poison, ptr %v$(arenaIndex)_data, 0" -> println
+    "  %v$(arenaIndex)_1 = insertvalue %sollang.array.i32 %v$(arenaIndex)_0, i64 0, 1" -> println
+    "  %v$(arenaIndex) = insertvalue %sollang.array.i32 %v$(arenaIndex)_1, i64 %v$(arenaIndex)_allocation, 2" -> println
+}
+
+writeMaterializeTextReference symbol: Int, ownerIndex: Int, beforeIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    false => materializeReferenceWritten!
+    ownerIndex >= 0 -> if {
+        context.ir[ownerIndex] => materializeOwner
+        materializeOwner.kind == 0 -> if {
+            materializeOwner.operand1 >= 0 -> if {
+                context.ir[materializeOwner.operand1].symbol == symbol -> if {
+                    "%arg" -> print
+                    true => materializeReferenceWritten!
+                }
+            }
+            1 => materializeParameterOrdinal!
+            materializeOwner.nextOperand => materializeParameterIndex!
+            (materializeParameterIndex! >= 0 and not materializeReferenceWritten!) -> while {
+                context.ir[materializeParameterIndex!] => materializeParameter
+                materializeParameter.symbol == symbol -> if {
+                    "%arg$(materializeParameterOrdinal!)" -> print
+                    true => materializeReferenceWritten!
+                }
+                materializeParameter.nextOperand => materializeParameterIndex!
+                materializeParameterOrdinal! + 1 => materializeParameterOrdinal!
+            }
+        }
+    }
+    not materializeReferenceWritten! -> if {
+        -1 => materializeBindingIndex!
+        0 => materializeBindingSearch!
+        materializeBindingSearch! < beforeIndex -> while {
+            context.ir[materializeBindingSearch!] => materializeBinding
+            (materializeBinding.kind == 17 and materializeBinding.symbol == symbol and materializeBinding.operand0 >= 0) -> if {
+                BindingOwnerRequest { bindingIndex: materializeBindingSearch!, ownerIndex: ownerIndex } -> bindingBelongsToOwner(context, state) -> if {
+                    materializeBindingSearch! => materializeBindingIndex!
+                }
+            }
+            materializeBindingSearch! + 1 => materializeBindingSearch!
+        }
+        materializeBindingIndex! >= 0 -> if {
+            "%v" -> print
+            context.ir[materializeBindingIndex!].operand0 -> writeDecimal
+        }
+    }
+}
+
+emitTextMaterialize request: WhileValueRequest, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    request.whileIndex => materializeIndex
+    context.ir[materializeIndex] => materializeNode
+    context.ir[materializeNode.operand0] => materializeText
+    materializeNode.operand1 -> mutableBorrowParameterOrdinal(request.ownerIndex, context, state) => materializeBorrowOrdinal
+    materializeNode.operand1 -> mutableBindingRoot(context, state) => materializeRoot
+    materializeText -> sourceInterpolations(context, state) => materializeInterpolations!
+    [Int; ~] => materializeRoots!
+    0 => materializeInterpolationSearch!
+    materializeInterpolationSearch! < (materializeInterpolations! -> len) -> while {
+        materializeInterpolations![materializeInterpolationSearch!] => materializeInterpolation
+        (materializeInterpolation.sourceToken == materializeText.payloadToken and materializeInterpolation.parent < 0) -> if {
+            materializeRoots! -> push(materializeInterpolationSearch!)
+        }
+        materializeInterpolationSearch! + 1 => materializeInterpolationSearch!
+    }
+    Int(materializeRoots! -> len) => materializeRootCount
+    UIntSize(0) => materializeStaticLength!
+    UIntSize(0) => materializeSuffixStart!
+    materializeRootCount > 0 -> if {
+        0 => materializeRootOrdinal!
+        materializeRootOrdinal! < materializeRootCount -> while {
+            materializeRoots![materializeRootOrdinal!] => materializeInterpolationIndex
+            materializeInterpolations![materializeInterpolationIndex] => materializeInterpolationRoot
+            "  %materialize$(materializeIndex)_root$(materializeRootOrdinal!)_ptr = extractvalue %sollang.text " -> print
+            materializeInterpolationRoot.symbol -> writeMaterializeTextReference(request.ownerIndex, materializeIndex, context, state)
+            ", 0" -> println
+            "  %materialize$(materializeIndex)_root$(materializeRootOrdinal!)_length = extractvalue %sollang.text " -> print
+            materializeInterpolationRoot.symbol -> writeMaterializeTextReference(request.ownerIndex, materializeIndex, context, state)
+            ", 1" -> println
+            materializeStaticLength! + materializeInterpolationRoot.literalLength => materializeStaticLength!
+            materializeInterpolationRoot.expressionStart + materializeInterpolationRoot.expressionLength + UIntSize(1) => materializeSuffixStart!
+            materializeRootOrdinal! + 1 => materializeRootOrdinal!
+        }
+        materializeText -> sourceToken(context, state) => materializeTextToken
+        TextLiteralRequest { sourceModule: materializeText.sourceModule, token: materializeTextToken } -> textLiteralLength(context, state) => materializeRawLength
+        materializeStaticLength! + materializeRawLength - materializeSuffixStart! => materializeStaticLength!
+        "  %materialize$(materializeIndex)_source_length0 = add i64 0, " -> print
+        Int(materializeStaticLength!) -> writeDecimalLine
+        0 => materializeLengthOrdinal!
+        materializeLengthOrdinal! < materializeRootCount -> while {
+            "  %materialize$(materializeIndex)_source_length" -> print
+            materializeLengthOrdinal! + 1 -> writeDecimal
+            " = add i64 %materialize$(materializeIndex)_source_length" -> print
+            materializeLengthOrdinal! -> writeDecimal
+            ", %materialize$(materializeIndex)_root" -> print
+            materializeLengthOrdinal! -> writeDecimal
+            "_length" -> println
+            materializeLengthOrdinal! + 1 => materializeLengthOrdinal!
+        }
+    } else {
+        "  %materialize$(materializeIndex)_source_ptr = extractvalue %sollang.text " -> print
+        (request.ownerIndex >= 0 and context.ir[request.ownerIndex].kind == 0 and context.ir[request.ownerIndex].operand1 >= 0 and materializeText.kind == 5 and materializeText.symbol == context.ir[context.ir[request.ownerIndex].operand1].symbol) -> if { "%arg" -> print } else { "%v$(materializeNode.operand0)" -> print }
+        ", 0" -> println
+        "  %materialize$(materializeIndex)_source_length = extractvalue %sollang.text " -> print
+        (request.ownerIndex >= 0 and context.ir[request.ownerIndex].kind == 0 and context.ir[request.ownerIndex].operand1 >= 0 and materializeText.kind == 5 and materializeText.symbol == context.ir[context.ir[request.ownerIndex].operand1].symbol) -> if { "%arg" -> print } else { "%v$(materializeNode.operand0)" -> print }
+        ", 1" -> println
+    }
+    materializeBorrowOrdinal < 0 -> if {
+        "  %materialize$(materializeIndex)_ptr_addr = getelementptr inbounds %sollang.array.i32, ptr %slot$(materializeRoot), i32 0, i32 0" -> println
+        "  %materialize$(materializeIndex)_length_addr = getelementptr inbounds %sollang.array.i32, ptr %slot$(materializeRoot), i32 0, i32 1" -> println
+        "  %materialize$(materializeIndex)_capacity_addr = getelementptr inbounds %sollang.array.i32, ptr %slot$(materializeRoot), i32 0, i32 2" -> println
+    }
+    "  %materialize$(materializeIndex)_data = load ptr, ptr " -> print
+    materializeBorrowOrdinal == 0 -> if { "%arg_mut_ptr_addr" -> print } else {
+        materializeBorrowOrdinal > 0 -> if { "%arg$(materializeBorrowOrdinal)_mut_ptr_addr" -> print } else { "%materialize$(materializeIndex)_ptr_addr" -> print }
+    }
+    ", align 8" -> println
+    "  %materialize$(materializeIndex)_used = load i64, ptr " -> print
+    materializeBorrowOrdinal == 0 -> if { "%arg_mut_len_addr" -> print } else {
+        materializeBorrowOrdinal > 0 -> if { "%arg$(materializeBorrowOrdinal)_mut_len_addr" -> print } else { "%materialize$(materializeIndex)_length_addr" -> print }
+    }
+    ", align 8" -> println
+    "  %materialize$(materializeIndex)_capacity = load i64, ptr " -> print
+    materializeBorrowOrdinal == 0 -> if { "%arg_mut_capacity_addr" -> print } else {
+        materializeBorrowOrdinal > 0 -> if { "%arg$(materializeBorrowOrdinal)_mut_capacity_addr" -> print } else { "%materialize$(materializeIndex)_capacity_addr" -> print }
+    }
+    ", align 8" -> println
+    "  %materialize$(materializeIndex)_end = add i64 %materialize$(materializeIndex)_used, %materialize$(materializeIndex)_source_length" -> print
+    materializeRootCount > 0 -> if { materializeRootCount -> writeDecimal }
+    "" -> println
+    "  %materialize$(materializeIndex)_fits = icmp ule i64 %materialize$(materializeIndex)_end, %materialize$(materializeIndex)_capacity" -> println
+    "  br i1 %materialize$(materializeIndex)_fits, label %materialize$(materializeIndex)_keep, label %materialize$(materializeIndex)_grow" -> println
+    "materialize$(materializeIndex)_keep:" -> println
+    "  br label %materialize$(materializeIndex)_ready" -> println
+    "materialize$(materializeIndex)_grow:" -> println
+    "  %materialize$(materializeIndex)_doubled = shl i64 %materialize$(materializeIndex)_capacity, 1" -> println
+    "  %materialize$(materializeIndex)_doubled_enough = icmp uge i64 %materialize$(materializeIndex)_doubled, %materialize$(materializeIndex)_end" -> println
+    "  %materialize$(materializeIndex)_new_capacity = select i1 %materialize$(materializeIndex)_doubled_enough, i64 %materialize$(materializeIndex)_doubled, i64 %materialize$(materializeIndex)_end" -> println
+    "  %materialize$(materializeIndex)_grown = call ptr @realloc(ptr %materialize$(materializeIndex)_data, i64 %materialize$(materializeIndex)_new_capacity)" -> println
+    "  br label %materialize$(materializeIndex)_ready" -> println
+    "materialize$(materializeIndex)_ready:" -> println
+    "  %materialize$(materializeIndex)_pointer = phi ptr [ %materialize$(materializeIndex)_data, %materialize$(materializeIndex)_keep ], [ %materialize$(materializeIndex)_grown, %materialize$(materializeIndex)_grow ]" -> println
+    "  %materialize$(materializeIndex)_final_capacity = phi i64 [ %materialize$(materializeIndex)_capacity, %materialize$(materializeIndex)_keep ], [ %materialize$(materializeIndex)_new_capacity, %materialize$(materializeIndex)_grow ]" -> println
+    "  %materialize$(materializeIndex)_target = getelementptr i8, ptr %materialize$(materializeIndex)_pointer, i64 %materialize$(materializeIndex)_used" -> println
+    materializeRootCount > 0 -> if {
+        "  %materialize$(materializeIndex)_copy_offset0 = add i64 0, 0" -> println
+        0 => materializeCopyOrdinal!
+        materializeCopyOrdinal! < materializeRootCount -> while {
+            materializeRoots![materializeCopyOrdinal!] => materializeCopyIndex
+            materializeInterpolations![materializeCopyIndex] => materializeCopyRoot
+            "  %materialize$(materializeIndex)_literal$(materializeCopyOrdinal!)_target = getelementptr i8, ptr %materialize$(materializeIndex)_target, i64 %materialize$(materializeIndex)_copy_offset" -> print
+            materializeCopyOrdinal! * 2 -> writeDecimalLine
+            "  %materialize$(materializeIndex)_literal$(materializeCopyOrdinal!)_source = getelementptr i8, ptr @sollang_str_$(materializeNode.operand0), i64 $(materializeCopyRoot.literalStart)" -> println
+            "  call void @llvm.memcpy.p0.p0.i64(ptr %materialize$(materializeIndex)_literal$(materializeCopyOrdinal!)_target, ptr %materialize$(materializeIndex)_literal$(materializeCopyOrdinal!)_source, i64 $(materializeCopyRoot.literalLength), i1 false)" -> println
+            "  %materialize$(materializeIndex)_copy_offset" -> print
+            materializeCopyOrdinal! * 2 + 1 -> writeDecimal
+            " = add i64 %materialize$(materializeIndex)_copy_offset" -> print
+            materializeCopyOrdinal! * 2 -> writeDecimal
+            ", $(materializeCopyRoot.literalLength)" -> println
+            "  %materialize$(materializeIndex)_root$(materializeCopyOrdinal!)_target = getelementptr i8, ptr %materialize$(materializeIndex)_target, i64 %materialize$(materializeIndex)_copy_offset" -> print
+            materializeCopyOrdinal! * 2 + 1 -> writeDecimalLine
+            "  call void @llvm.memcpy.p0.p0.i64(ptr %materialize$(materializeIndex)_root$(materializeCopyOrdinal!)_target, ptr %materialize$(materializeIndex)_root$(materializeCopyOrdinal!)_ptr, i64 %materialize$(materializeIndex)_root$(materializeCopyOrdinal!)_length, i1 false)" -> println
+            "  %materialize$(materializeIndex)_copy_offset" -> print
+            materializeCopyOrdinal! * 2 + 2 -> writeDecimal
+            " = add i64 %materialize$(materializeIndex)_copy_offset" -> print
+            materializeCopyOrdinal! * 2 + 1 -> writeDecimal
+            ", %materialize$(materializeIndex)_root$(materializeCopyOrdinal!)_length" -> println
+            materializeCopyOrdinal! + 1 => materializeCopyOrdinal!
+        }
+        materializeText -> sourceToken(context, state) => materializeSuffixToken
+        TextLiteralRequest { sourceModule: materializeText.sourceModule, token: materializeSuffixToken } -> textLiteralLength(context, state) => materializeSuffixRawLength
+        materializeSuffixRawLength - materializeSuffixStart! => materializeSuffixLength
+        "  %materialize$(materializeIndex)_suffix_target = getelementptr i8, ptr %materialize$(materializeIndex)_target, i64 %materialize$(materializeIndex)_copy_offset" -> print
+        materializeRootCount * 2 -> writeDecimalLine
+        "  %materialize$(materializeIndex)_suffix_source = getelementptr i8, ptr @sollang_str_$(materializeNode.operand0), i64 $(materializeSuffixStart!)" -> println
+        "  call void @llvm.memcpy.p0.p0.i64(ptr %materialize$(materializeIndex)_suffix_target, ptr %materialize$(materializeIndex)_suffix_source, i64 $(materializeSuffixLength), i1 false)" -> println
+    } else {
+        "  call void @llvm.memcpy.p0.p0.i64(ptr %materialize$(materializeIndex)_target, ptr %materialize$(materializeIndex)_source_ptr, i64 %materialize$(materializeIndex)_source_length, i1 false)" -> println
+    }
+    "  store ptr %materialize$(materializeIndex)_pointer, ptr " -> print
+    materializeBorrowOrdinal == 0 -> if { "%arg_mut_ptr_addr" -> print } else {
+        materializeBorrowOrdinal > 0 -> if { "%arg$(materializeBorrowOrdinal)_mut_ptr_addr" -> print } else { "%materialize$(materializeIndex)_ptr_addr" -> print }
+    }
+    ", align 8" -> println
+    "  store i64 %materialize$(materializeIndex)_end, ptr " -> print
+    materializeBorrowOrdinal == 0 -> if { "%arg_mut_len_addr" -> print } else {
+        materializeBorrowOrdinal > 0 -> if { "%arg$(materializeBorrowOrdinal)_mut_len_addr" -> print } else { "%materialize$(materializeIndex)_length_addr" -> print }
+    }
+    ", align 8" -> println
+    "  store i64 %materialize$(materializeIndex)_final_capacity, ptr " -> print
+    materializeBorrowOrdinal == 0 -> if { "%arg_mut_capacity_addr" -> print } else {
+        materializeBorrowOrdinal > 0 -> if { "%arg$(materializeBorrowOrdinal)_mut_capacity_addr" -> print } else { "%materialize$(materializeIndex)_capacity_addr" -> print }
+    }
+    ", align 8" -> println
+    "  %v$(materializeIndex)_0 = insertvalue %sollang.text poison, ptr %materialize$(materializeIndex)_target, 0" -> println
+    "  %v$(materializeIndex) = insertvalue %sollang.text %v$(materializeIndex)_0, i64 %materialize$(materializeIndex)_source_length" -> print
+    materializeRootCount > 0 -> if { materializeRootCount -> writeDecimal }
+    ", 1" -> println
+}
+
 emitArrayPush request: WhileValueRequest, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
     request.whileIndex => pushIndex
     context.ir[pushIndex] => pushNode
@@ -1593,14 +1814,16 @@ emitWhileBranch request: WhileBranchRequest, context: ref emitterContext.EmitCon
                                         valueNode -> storageAlign(context, state) -> writeDecimalLine
                                     } else {
                                         context.ir[valueBinding.operand0] => bindingOperand
-                                        "  %while$(whileIndex)_v$(valueNodeIndex) = freeze " -> print
-                                        valueNode -> writeIrType(context, state)
-                                        " " -> print
-                                        (bindingOperand.kind == 3 or bindingOperand.kind == 4) -> if {
-                                            bindingOperand -> sourceToken(context, state) => bindingToken
-                                            bindingOperand.kind == 3 -> if { context.sources[bindingOperand.sourceModule] -> slice(bindingToken.span.start, bindingToken.span.length) -> print } else { ((context.sources[bindingOperand.sourceModule] -> byte(bindingToken.span.start)) == UInt8(116)) -> if { "1" -> print } else { "0" -> print } }
-                                        } else { "%v$(valueBinding.operand0)" -> print }
-                                        "" -> println
+                                        not (bindingOperand -> isArgumentsType) -> if {
+                                            "  %while$(whileIndex)_v$(valueNodeIndex) = freeze " -> print
+                                            valueNode -> writeIrType(context, state)
+                                            " " -> print
+                                            (bindingOperand.kind == 3 or bindingOperand.kind == 4) -> if {
+                                                bindingOperand -> sourceToken(context, state) => bindingToken
+                                                bindingOperand.kind == 3 -> if { context.sources[bindingOperand.sourceModule] -> slice(bindingToken.span.start, bindingToken.span.length) -> print } else { ((context.sources[bindingOperand.sourceModule] -> byte(bindingToken.span.start)) == UInt8(116)) -> if { "1" -> print } else { "0" -> print } }
+                                            } else { "%v$(valueBinding.operand0)" -> print }
+                                            "" -> println
+                                        }
                                     }
                                 }
                             }
@@ -1731,6 +1954,28 @@ emitWhileBranch request: WhileBranchRequest, context: ref emitterContext.EmitCon
                             context.ir[valueNode.operand0] => whileIndexedArray
                             context.ir[valueNode.operand1] => whileIndexValue
                             whileIndexValue -> integerNodeWidth(context, state) => whileIndexWidth
+                            whileIndexedArray -> isArgumentsType -> if {
+                                (whileIndexValue.kind != 3 and whileIndexWidth > 0 and whileIndexWidth < 64) -> if {
+                                    "  %while$(whileIndex)_v$(valueNodeIndex)_argument_index = " -> print
+                                    whileIndexValue -> integerNodeSigned(context, state) -> if { "sext " -> print } else { "zext " -> print }
+                                    whileIndexValue -> writeIrType(context, state)
+                                    " " -> print
+                                    WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: valueNode.operand1 } -> writeWhileValue(context, state)
+                                    " to i64" -> println
+                                }
+                                "  %while$(whileIndex)_v$(valueNodeIndex) = call %sollang.text @sollang_argument(i64 " -> print
+                                whileIndexValue.kind == 3 -> if {
+                                    whileIndexValue -> sourceToken(context, state) => whileArgumentIndexToken
+                                    context.sources[whileIndexValue.sourceModule] -> slice(whileArgumentIndexToken.span.start, whileArgumentIndexToken.span.length) -> print
+                                } else {
+                                    (whileIndexWidth > 0 and whileIndexWidth < 64) -> if {
+                                        "%while$(whileIndex)_v$(valueNodeIndex)_argument_index" -> print
+                                    } else {
+                                        WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: valueNode.operand1 } -> writeWhileValue(context, state)
+                                    }
+                                }
+                                ")" -> println
+                            } else {
                             "  %while$(whileIndex)_v$(valueNodeIndex)_data = extractvalue " -> print
                             whileIndexedArray -> writeIrType(context, state)
                             " " -> print
@@ -1753,6 +1998,7 @@ emitWhileBranch request: WhileBranchRequest, context: ref emitterContext.EmitCon
                             valueNode -> writeIrType(context, state)
                             ", ptr %while$(whileIndex)_v$(valueNodeIndex)_ptr, align " -> print
                             valueNode -> storageAlign(context, state) -> writeDecimalLine
+                            }
                         }
                         (valueNode.kind == 18 and valueNode.operand0 >= 0 and valueNode.operand1 >= 0 and valueNode.nextOperand >= 0) -> if {
                             "  %if$(valueNodeIndex)_result = alloca " -> print

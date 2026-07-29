@@ -830,21 +830,25 @@ emitRegion regionIndex: Int, context: ref emitterContext.EmitContext, state: ref
         }
         ((regionNode.kind == 9 or regionNode.kind == 6) and regionNode.opcode == -201 and regionNode.operand0 >= 0) -> if {
             context.ir[regionNode.operand0] => regionLengthBase
+            regionNode -> integerNodeWidth(context, state) => regionLengthResultWidth
             regionLengthBase -> isArgumentsType -> if {
-                "  %v$(regionNodeIndex!) = call i64 @sollang_argument_count()" -> println
+                "  %v$(regionNodeIndex!)" -> print
+                regionLengthResultWidth == 32 -> if { "_raw" -> print }
+                " = call i64 @sollang_argument_count()" -> println
+                regionLengthResultWidth == 32 -> if { "  %v$(regionNodeIndex!) = trunc i64 %v$(regionNodeIndex!)_raw to i32" -> println }
             } else {
                 -1 => regionLengthMutableRoot!
                 regionLengthBase.typeOrigin == 15 -> if { regionNode.operand0 -> mutableStorageRoot(context, state) => regionLengthMutableRoot! }
                 regionLengthMutableRoot! >= 0 -> if { "  %v$(regionNodeIndex!)_length_source = load %sollang.dict, ptr %slot$(regionLengthMutableRoot!), align 8" -> println }
                 "  %v$(regionNodeIndex!)" -> print
-                regionNode.typeSymbol == 2 -> if { "_raw" -> print }
+                regionLengthResultWidth == 32 -> if { "_raw" -> print }
                 " = extractvalue " -> print
                 regionLengthBase -> writeIrType(context, state)
                 " " -> print
                 regionLengthMutableRoot! >= 0 -> if { "%v$(regionNodeIndex!)_length_source" -> print } else { (regionLengthBase.kind == 5 and ownerIndex! >= 0 and context.ir[ownerIndex!].operand1 >= 0 and regionLengthBase.symbol == context.ir[context.ir[ownerIndex!].operand1].symbol) -> if { "%arg" -> print } else { "%v$(regionNode.operand0)" -> print } }
                 ", " -> print
                 regionLengthBase.typeOrigin == 15 -> if { "2" -> println } else { "1" -> println }
-                regionNode.typeSymbol == 2 -> if { "  %v$(regionNodeIndex!) = trunc i64 %v$(regionNodeIndex!)_raw to i32" -> println }
+                regionLengthResultWidth == 32 -> if { "  %v$(regionNodeIndex!) = trunc i64 %v$(regionNodeIndex!)_raw to i32" -> println }
             }
         }
         ((regionNode.kind == 9 or regionNode.kind == 6) and regionNode.opcode == -202 and regionNode.operand0 >= 0 and regionNode.operand1 >= 0) -> if {
@@ -911,23 +915,42 @@ emitRegion regionIndex: Int, context: ref emitterContext.EmitContext, state: ref
             (regionMapPath.kind == 5 and ownerIndex! >= 0 and context.ir[ownerIndex!].operand1 >= 0 and regionMapPath.symbol == context.ir[context.ir[ownerIndex!].operand1].symbol) -> if { "%arg" -> print } else { "%v$(regionNode.operand0)" -> print }
             ")" -> println
         }
-        ((regionNode.kind == 9 or regionNode.kind == 6) and regionNode.opcode == -214 and regionNode.operand0 >= 0) -> if {
+        ((regionNode.kind == 9 or regionNode.kind == 6) and (regionNode.opcode == -214 or regionNode.opcode == -230) and regionNode.operand0 >= 0) -> if {
             context.ir[regionNode.operand0] => regionSourcePath
             context.expectedPathStyle => regionSourcePathExpectedStyle
+            regionSourcePath.typeId => regionSourcePathValueType!
+            false => regionSourcePathIsReference!
+            (regionSourcePathValueType! >= 0 and context.types[regionSourcePathValueType!].kind == 8) -> if {
+                context.types[regionSourcePathValueType!].first => regionSourcePathValueType!
+                true => regionSourcePathIsReference!
+            }
             -1 => regionSourcePathBytesType!
             -1 => regionSourcePathStyleType!
             0 => regionSourcePathFieldIndex!
             regionSourcePathFieldIndex! < (context.fields -> len) -> while {
                 context.fields[regionSourcePathFieldIndex!] => regionSourcePathField
-                regionSourcePathField.ownerType == regionSourcePath.typeId -> if {
+                regionSourcePathField.ownerType == regionSourcePathValueType! -> if {
                     regionSourcePathField.ordinal == 0 -> if { regionSourcePathField.fieldType => regionSourcePathBytesType! }
                     regionSourcePathField.ordinal == 1 -> if { regionSourcePathField.fieldType => regionSourcePathStyleType! }
                 }
                 regionSourcePathFieldIndex! + 1 => regionSourcePathFieldIndex!
             }
+            regionSourcePathIsReference! -> if {
+                "  %v$(regionNodeIndex!)_path_value = load " -> print
+                regionSourcePathValueType! -> writeSemanticTypeId(context, state)
+                ", ptr " -> print
+                (regionSourcePath.kind == 5 and ownerIndex! >= 0 and context.ir[ownerIndex!].operand1 >= 0 and regionSourcePath.symbol == context.ir[context.ir[ownerIndex!].operand1].symbol) -> if { "%arg" -> print } else { "%v$(regionNode.operand0)" -> print }
+                ", align 8" -> println
+            }
             "  %v$(regionNodeIndex!)_path_bytes = extractvalue " -> print
-            regionSourcePath -> writeIrType(context, state)
-            " %v$(regionNode.operand0), 0" -> println
+            regionSourcePathValueType! -> writeSemanticTypeId(context, state)
+            " " -> print
+            regionSourcePathIsReference! -> if {
+                "%v$(regionNodeIndex!)_path_value" -> print
+            } else {
+                (regionSourcePath.kind == 5 and ownerIndex! >= 0 and context.ir[ownerIndex!].operand1 >= 0 and regionSourcePath.symbol == context.ir[context.ir[ownerIndex!].operand1].symbol) -> if { "%arg" -> print } else { "%v$(regionNode.operand0)" -> print }
+            }
+            ", 0" -> println
             "  %v$(regionNodeIndex!)_path_data = extractvalue " -> print
             regionSourcePathBytesType! -> writeSemanticTypeId(context, state)
             " %v$(regionNodeIndex!)_path_bytes, 0" -> println
@@ -935,8 +958,14 @@ emitRegion regionIndex: Int, context: ref emitterContext.EmitContext, state: ref
             regionSourcePathBytesType! -> writeSemanticTypeId(context, state)
             " %v$(regionNodeIndex!)_path_bytes, 1" -> println
             "  %v$(regionNodeIndex!)_path_style_value = extractvalue " -> print
-            regionSourcePath -> writeIrType(context, state)
-            " %v$(regionNode.operand0), 1" -> println
+            regionSourcePathValueType! -> writeSemanticTypeId(context, state)
+            " " -> print
+            regionSourcePathIsReference! -> if {
+                "%v$(regionNodeIndex!)_path_value" -> print
+            } else {
+                (regionSourcePath.kind == 5 and ownerIndex! >= 0 and context.ir[ownerIndex!].operand1 >= 0 and regionSourcePath.symbol == context.ir[context.ir[ownerIndex!].operand1].symbol) -> if { "%arg" -> print } else { "%v$(regionNode.operand0)" -> print }
+            }
+            ", 1" -> println
             "  %v$(regionNodeIndex!)_path_style = extractvalue " -> print
             regionSourcePathStyleType! -> writeSemanticTypeId(context, state)
             " %v$(regionNodeIndex!)_path_style_value, 0" -> println
@@ -948,7 +977,11 @@ emitRegion regionIndex: Int, context: ref emitterContext.EmitContext, state: ref
             "map_path$(regionNodeIndex!)_open:" -> println
             "  %v$(regionNodeIndex!)_path_text0 = insertvalue %sollang.text poison, ptr %v$(regionNodeIndex!)_path_data, 0" -> println
             "  %v$(regionNodeIndex!)_path_text = insertvalue %sollang.text %v$(regionNodeIndex!)_path_text0, i64 %v$(regionNodeIndex!)_path_length, 1" -> println
-            "  %v$(regionNodeIndex!) = call %sollang.source_text @sollang_runtime_map_text(%sollang.text %v$(regionNodeIndex!)_path_text)" -> println
+            regionNode.opcode == -230 -> if {
+                "  %v$(regionNodeIndex!) = freeze %sollang.text %v$(regionNodeIndex!)_path_text" -> println
+            } else {
+                "  %v$(regionNodeIndex!) = call %sollang.source_text @sollang_runtime_map_text(%sollang.text %v$(regionNodeIndex!)_path_text)" -> println
+            }
         }
         ((regionNode.kind == 9 or regionNode.kind == 6) and regionNode.opcode == -206 and regionNode.operand0 >= 0) -> if {
             context.ir[regionNode.operand0] => regionBorrowText
@@ -1711,7 +1744,7 @@ emitRegion regionIndex: Int, context: ref emitterContext.EmitContext, state: ref
                 "  %v$(regionNodeIndex!) = call i32 @sollang_runtime_read_int(ptr null, i64 0)" -> println
             }
         }
-        (regionNode.kind == 6 and regionNode.symbol != -103 and regionNode.symbol != -115 and not (regionNode.symbol == -102 and regionNode.operand0 < 0) and regionNode.opcode != -205 and regionNode.opcode != -206 and regionNode.opcode != -207 and regionNode.opcode != -208 and regionNode.opcode != -209 and regionNode.opcode != -210 and regionNode.opcode != -211 and regionNode.opcode != -212 and regionNode.opcode != -214 and regionNode.opcode != -215 and regionNode.opcode != -222 and (regionNode.opcode > -216 or regionNode.opcode < -221) and not (regionNode.parent >= 0 and context.ir[regionNode.parent].kind == 6 and (context.ir[regionNode.parent].opcode == -207 or context.ir[regionNode.parent].opcode == -209) and context.ir[regionNode.parent].operand1 == regionNodeIndex!)) -> if {
+        (regionNode.kind == 6 and regionNode.symbol != -103 and regionNode.symbol != -115 and not (regionNode.symbol == -102 and regionNode.operand0 < 0) and regionNode.opcode != -205 and regionNode.opcode != -206 and regionNode.opcode != -207 and regionNode.opcode != -208 and regionNode.opcode != -209 and regionNode.opcode != -210 and regionNode.opcode != -211 and regionNode.opcode != -212 and regionNode.opcode != -214 and regionNode.opcode != -215 and regionNode.opcode != -222 and regionNode.opcode != -230 and (regionNode.opcode > -216 or regionNode.opcode < -221) and not (regionNode.parent >= 0 and context.ir[regionNode.parent].kind == 6 and (context.ir[regionNode.parent].opcode == -207 or context.ir[regionNode.parent].opcode == -209) and context.ir[regionNode.parent].operand1 == regionNodeIndex!)) -> if {
             (regionNode.symbol == -101 or regionNode.symbol == -102) -> if {
                 regionNodeIndex! -> callArgumentIndex(context, state) => regionArgumentIndex
                 context.ir[regionArgumentIndex] => regionArgument

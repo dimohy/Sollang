@@ -191,7 +191,7 @@ if ($BootstrapStage2) {
     Invoke-ToFile $stage1Compiler (@($Target) + $compilerSources + $runtimeSources) $stage2Llvm $stage2Error
     & $llvmAs $stage2Llvm -o ([System.IO.Path]::ChangeExtension($stage2Llvm, ".bc"))
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-    & $clang -Wno-override-module $stage2Llvm -O1 -o $stage2Compiler
+    & $clang -Wno-override-module $stage2Llvm -O1 -o $stage2Compiler -lshell32
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     [System.IO.File]::WriteAllText($stage2Fingerprint, $compilerHash)
 }

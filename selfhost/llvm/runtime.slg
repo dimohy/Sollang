@@ -355,6 +355,126 @@ public emitWindows runtimeModule: Int -> Unit uses Console {
     """ -> println
 }
 
+public emitLinux runtimeModule: Int -> Unit uses Console {
+    """
+    declare i32 @getchar()
+    declare i32 @clock_gettime(i32, ptr)
+    @sollang_stage2_random_state = internal global i64 88172645463325252
+    """ -> println
+    "define void @sollang_m$(runtimeModule)_s0(%sollang.text %arg) {" -> println
+    """
+    entry:
+      %data = extractvalue %sollang.text %arg, 0
+      %length = extractvalue %sollang.text %arg, 1
+      call void @sollang_runtime_print(ptr %data, i64 %length, i1 false)
+      ret void
+    }
+    """ -> println
+    "define void @sollang_m$(runtimeModule)_s1(%sollang.text %arg) {" -> println
+    """
+    entry:
+      %data = extractvalue %sollang.text %arg, 0
+      %length = extractvalue %sollang.text %arg, 1
+      call void @sollang_runtime_print(ptr %data, i64 %length, i1 true)
+      ret void
+    }
+    """ -> println
+    "define i32 @sollang_m$(runtimeModule)_s2(%sollang.text %arg) {" -> println
+    """
+    entry:
+      %data = extractvalue %sollang.text %arg, 0
+      %length = extractvalue %sollang.text %arg, 1
+      call void @sollang_runtime_print(ptr %data, i64 %length, i1 false)
+      %value_slot = alloca i32, align 4
+      %started_slot = alloca i1, align 1
+      %negative_slot = alloca i1, align 1
+      store i32 0, ptr %value_slot, align 4
+      store i1 false, ptr %started_slot, align 1
+      store i1 false, ptr %negative_slot, align 1
+      br label %read
+    read:
+      %character = call i32 @getchar()
+      %eof = icmp eq i32 %character, -1
+      br i1 %eof, label %done, label %classify
+    classify:
+      %digit_low = icmp sge i32 %character, 48
+      %digit_high = icmp sle i32 %character, 57
+      %digit = and i1 %digit_low, %digit_high
+      br i1 %digit, label %append, label %non_digit
+    append:
+      %previous = load i32, ptr %value_slot, align 4
+      %scaled = mul i32 %previous, 10
+      %digit_value = sub i32 %character, 48
+      %updated = add i32 %scaled, %digit_value
+      store i32 %updated, ptr %value_slot, align 4
+      store i1 true, ptr %started_slot, align 1
+      br label %read
+    non_digit:
+      %started = load i1, ptr %started_slot, align 1
+      br i1 %started, label %done, label %prefix
+    prefix:
+      %minus = icmp eq i32 %character, 45
+      br i1 %minus, label %mark_negative, label %read
+    mark_negative:
+      store i1 true, ptr %negative_slot, align 1
+      br label %read
+    done:
+      %magnitude = load i32, ptr %value_slot, align 4
+      %negative = load i1, ptr %negative_slot, align 1
+      %negated = sub i32 0, %magnitude
+      %result = select i1 %negative, i32 %negated, i32 %magnitude
+      ret i32 %result
+    }
+    """ -> println
+    "define void @sollang_m$(runtimeModule)_s3(i32 %arg) {" -> println
+    """
+    entry:
+      %seed = sext i32 %arg to i64
+      store i64 %seed, ptr @sollang_stage2_random_state, align 8
+      ret void
+    }
+    """ -> println
+    "define i32 @sollang_m$(runtimeModule)_s4(i32 %arg) {" -> println
+    """
+    entry:
+      %valid = icmp sgt i32 %arg, 0
+      br i1 %valid, label %next, label %failure
+    next:
+      %state = load i64, ptr @sollang_stage2_random_state, align 8
+      %product = mul i64 %state, 6364136223846793005
+      %updated = add i64 %product, 1442695040888963407
+      store i64 %updated, ptr @sollang_stage2_random_state, align 8
+      %bound = zext i32 %arg to i64
+      %value = urem i64 %updated, %bound
+      %result = trunc i64 %value to i32
+      ret i32 %result
+    failure:
+      ret i32 0
+    }
+    """ -> println
+    "define void @sollang_m$(runtimeModule)_s5(%sollang.text %arg) { ret void }" -> println
+    "define void @sollang_m$(runtimeModule)_s6(i32 %arg) { ret void }" -> println
+    "define void @sollang_m$(runtimeModule)_s7() { ret void }" -> println
+    "define void @sollang_m$(runtimeModule)_s8(%sollang.text %arg) { ret void }" -> println
+    "define i32 @sollang_m$(runtimeModule)_s9(i32 %arg) { ret i32 %arg }" -> println
+    "define void @sollang_m$(runtimeModule)_s10() { ret void }" -> println
+    "define i64 @sollang_m$(runtimeModule)_s11() {" -> println
+    """
+    entry:
+      %time = alloca [2 x i64], align 8
+      %ignored = call i32 @clock_gettime(i32 1, ptr %time)
+      %seconds_ptr = getelementptr inbounds [2 x i64], ptr %time, i64 0, i64 0
+      %nanoseconds_ptr = getelementptr inbounds [2 x i64], ptr %time, i64 0, i64 1
+      %seconds = load i64, ptr %seconds_ptr, align 8
+      %nanoseconds = load i64, ptr %nanoseconds_ptr, align 8
+      %seconds_millis = mul i64 %seconds, 1000
+      %nanoseconds_millis = udiv i64 %nanoseconds, 1000000
+      %value = add i64 %seconds_millis, %nanoseconds_millis
+      ret i64 %value
+    }
+    """ -> println
+}
+
 public emitWindowsDirectory: -> Unit uses Console {
     0 -> emitDirectoryNodes
     """

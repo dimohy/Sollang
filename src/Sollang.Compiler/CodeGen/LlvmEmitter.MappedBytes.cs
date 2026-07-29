@@ -73,6 +73,43 @@ internal sealed partial class LlvmEmitter
         return EmitMapSourceText(new RuntimeText(bytes.PointerName, bytes.LengthName));
     }
 
+    private RuntimeText EmitRuntimePathText(RuntimeValue value)
+    {
+        if (value is RuntimeReference reference)
+        {
+            value = LoadReference(reference);
+        }
+        else if (value is RuntimeMutableStructReference mutableReference)
+        {
+            var loaded = NextTemp("path_text_value");
+            EmitLoad(
+                loaded,
+                LlvmType(mutableReference.TargetType),
+                mutableReference.PointerAddress,
+                RuntimeAlignment(mutableReference.TargetType));
+            value = DematerializeAggregateValue(mutableReference.TargetType, loaded);
+        }
+
+        if (value is not RuntimeStruct path
+            || !_program.Types.IsStruct(path.Type)
+            || _program.Types.GetStruct(path.Type) is not { Name: "sys.path.Path" } definition)
+        {
+            throw new SollangException("pathText expects sys.path.Path");
+        }
+
+        var bytesField = definition.Fields.First(field => field.Name == "bytes");
+        var bytesAggregate = NextTemp("path_text_bytes");
+        EmitAssign(bytesAggregate,
+            $"extractvalue {LlvmStructType(path.Type)} {path.ValueName}, {bytesField.Index.ToString(CultureInfo.InvariantCulture)}");
+        if (DematerializeAggregateValue(bytesField.Type, bytesAggregate) is not RuntimeDynamicInlineArray bytes
+            || bytes.ElementType != BoundType.UInt8)
+        {
+            throw new SollangException("sys.path.Path.bytes must be [UInt8; ~]");
+        }
+
+        return new RuntimeText(bytes.PointerName, bytes.LengthName);
+    }
+
     private RuntimeEnum EmitRuntimePathStyle(BoundFunction function)
     {
         if (!_program.Types.IsEnum(function.ReturnType)

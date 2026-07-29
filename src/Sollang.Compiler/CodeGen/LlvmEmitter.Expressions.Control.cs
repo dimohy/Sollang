@@ -19,12 +19,15 @@ internal sealed partial class LlvmEmitter
     {
         var okLabel = NextLabel(prefix + "_ok");
         var failLabel = NextLabel(prefix + "_fail");
+        var trapMessage = _currentFunction is null
+            ? $"main:{failLabel}"
+            : $"{_currentFunction.ModuleName}.{_currentFunction.Name}:{failLabel}";
         EmitConditionalBranch(condition, okLabel, failLabel);
         EmitFunctionLine();
         EmitLabel(failLabel);
         if (_platform is WasmBrowserLlvmRuntimePlatform)
         {
-            var message = AddGlobalString(failLabel);
+            var message = AddGlobalString(trapMessage);
             EmitCall(
                 target: null,
                 "void",
@@ -33,7 +36,7 @@ internal sealed partial class LlvmEmitter
         }
         else if (_platform is WindowsLlvmRuntimePlatform)
         {
-            var message = AddGlobalString(failLabel);
+            var message = AddGlobalString(trapMessage);
             var stderr = NextTemp("trap_stderr");
             var written = NextTemp("trap_written");
             EmitAlloca(written, "i32", 4);

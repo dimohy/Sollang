@@ -230,6 +230,9 @@ internal sealed partial class LlvmEmitter
                     case BoundFunctionKind.RuntimeMapSourcePath:
                         current = EmitMapSourcePath(current);
                         continue;
+                    case BoundFunctionKind.RuntimePathText:
+                        current = EmitRuntimePathText(current);
+                        continue;
                     case BoundFunctionKind.RuntimeOpenFile:
                     case BoundFunctionKind.RuntimeOpenWriteFile:
                         current = EmitRuntimeOpenFile(function, current);

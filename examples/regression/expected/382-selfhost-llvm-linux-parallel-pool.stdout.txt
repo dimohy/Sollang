@@ -91,6 +91,7 @@ finish:
 }
 @sollang_runtime_newline = private constant [1 x i8] c"\0A"
 @sollang_output_sink_tls = internal global i32 0
+@sollang_output_sink_tls_ready = internal global i1 false
 declare i64 @write(i32, ptr, i64)
 declare i32 @pthread_key_create(ptr, ptr)
 declare i32 @pthread_key_delete(i32)
@@ -114,6 +115,9 @@ entry:
 }
 define internal void @sollang_runtime_append_stdout(ptr %data, i64 %len) {
 entry:
+  %tls_ready = load i1, ptr @sollang_output_sink_tls_ready, align 1
+  br i1 %tls_ready, label %read_sink, label %direct
+read_sink:
   %tls_index = load i32, ptr @sollang_output_sink_tls, align 4
   %sink = call ptr @pthread_getspecific(i32 %tls_index)
   %capturing = icmp ne ptr %sink, null
@@ -225,6 +229,7 @@ create_tls:
   %tls_ok = icmp eq i32 %tls_status, 0
   br i1 %tls_ok, label %create_work_event, label %fail
 create_work_event:
+  store i1 true, ptr @sollang_output_sink_tls_ready, align 1
   %work_fd = call i32 @eventfd(i32 0, i32 1)
   %work_ok = icmp sge i32 %work_fd, 0
   br i1 %work_ok, label %create_completion_event, label %delete_tls
@@ -276,6 +281,7 @@ close_both:
 delete_tls:
   %tls_index_failed = load i32, ptr @sollang_output_sink_tls, align 4
   %tls_deleted_failed = call i32 @pthread_key_delete(i32 %tls_index_failed)
+  store i1 false, ptr @sollang_output_sink_tls_ready, align 1
   br label %fail
 ready:
   ret i1 true
@@ -403,6 +409,7 @@ cleanup:
   %closed_work = call i32 @close(i32 %work_fd)
   %tls_index = load i32, ptr @sollang_output_sink_tls, align 4
   %tls_deleted = call i32 @pthread_key_delete(i32 %tls_index)
+  store i1 false, ptr @sollang_output_sink_tls_ready, align 1
   store i32 -1, ptr @sollang_compute_completion_event_fd, align 4
   store i32 -1, ptr @sollang_compute_work_event_fd, align 4
   store i32 0, ptr @sollang_compute_worker_count, align 4

@@ -111,6 +111,20 @@ the compiler.
 - [ ] Verify the packaged executable hash equals the fixed-point native
   compiler hash and run package-level build/run smoke tests.
 
+Current verified implementation slices:
+
+- [x] Native `--version`, help, explicit-source `build`, and `run`.
+- [x] Full bundled-standard-library compilation for explicit-source builds.
+- [x] Literal program-argument forwarding after `run ... --`.
+- [ ] Project/workspace/library/Wasm build parity and the remaining public
+  commands listed above.
+
+The current Windows and Linux native compilers pass their 7/7 and 6/6 Stage 2
+gates, reproduce at Stage 3, and pass 892/892 and 891/891 platform suites.
+The explicit-source CLI slice passes 6/6 on each platform. These partial
+results deliberately do not create the `native-cli-full-parity` proof required
+by `publish-release.ps1`, so a 0.4 archive cannot be produced prematurely.
+
 The C# compiler remains a development bootstrap and reference oracle. It is not
 a 0.4 release asset. An internal Stage driver cannot satisfy this milestone by
 being renamed: the native executable must preserve the existing public CLI.

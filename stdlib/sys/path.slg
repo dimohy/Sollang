@@ -83,6 +83,8 @@ public query target: Path -> Result<Info, Text> uses File {
 # The compiled target decides this value; it never reflects the build host.
 public nativeStyle: -> Style = intrinsic
 
+public pathText value: ref Path -> Text = intrinsic
+
 sameStyle left: Style, right: Style -> Bool {
     left -> when {
         Posix {
@@ -139,7 +141,7 @@ public equalsText path: Path, value: Text -> Bool {
     matches!
 }
 
-public endsWithText path: Path, value: Text -> Bool {
+public endsWithText path: ref Path, value: Text -> Bool {
     UIntSize(path.bytes -> len) => pathLength
     value -> len => valueLength
     valueLength <= pathLength => matches!
@@ -211,10 +213,8 @@ public join base: move Path, child: Text -> Result<Path, Text> {
     Result<Path, Text>.Ok(joined!)
 }
 
-# Joins two owned path values without borrowing either result from the inputs.
-# The returned Path owns a fresh byte buffer, so directory Entry values can be
-# dropped immediately after source-root discovery advances.
-public joinDiscovered base: Path, child: Path -> Path {
+# Joins two borrowed path values into a fresh owned result.
+public joinDiscovered base: ref Path, child: ref Path -> Path {
     [UInt8; ~] => bytes!
     UIntSize(0) => baseIndex!
     baseIndex! < UIntSize(base.bytes -> len) -> while {

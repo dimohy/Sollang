@@ -194,6 +194,7 @@ public emitLinuxTextRuntime capturesParallelOutput: Bool -> Unit uses Console {
     """
     @sollang_runtime_newline = private constant [1 x i8] c"\0A"
     @sollang_output_sink_tls = internal global i32 0
+    @sollang_output_sink_tls_ready = internal global i1 false
     declare i64 @write(i32, ptr, i64)
     declare i32 @pthread_key_create(ptr, ptr)
     declare i32 @pthread_key_delete(i32)
@@ -217,6 +218,9 @@ public emitLinuxTextRuntime capturesParallelOutput: Bool -> Unit uses Console {
     }
     define internal void @sollang_runtime_append_stdout(ptr %data, i64 %len) {
     entry:
+      %tls_ready = load i1, ptr @sollang_output_sink_tls_ready, align 1
+      br i1 %tls_ready, label %read_sink, label %direct
+    read_sink:
       %tls_index = load i32, ptr @sollang_output_sink_tls, align 4
       %sink = call ptr @pthread_getspecific(i32 %tls_index)
       %capturing = icmp ne ptr %sink, null

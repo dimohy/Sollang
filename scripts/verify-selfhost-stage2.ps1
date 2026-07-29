@@ -14,6 +14,7 @@ $stage1Path = Join-Path $artifactsDir "selfhost-sollangc-driver.exe"
 $stage2LlvmPath = Join-Path $artifactsDir "selfhost-stage2.ll"
 $stage2BitcodePath = Join-Path $artifactsDir "selfhost-stage2.bc"
 $stage2Path = Join-Path $artifactsDir "selfhost-stage2.exe"
+$stdlibRoot = Join-Path $repoRoot "stdlib"
 $llvmDir = Join-Path $repoRoot ".tools\llvm-22.1.8"
 $llvmAsPath = Join-Path $llvmDir "bin\llvm-as.exe"
 $clangPath = Join-Path $llvmDir "bin\clang.exe"
@@ -57,7 +58,7 @@ $semanticContextSource = Join-Path $repoRoot "selfhost\semantic\context.slg"
 $compilerRuntimeSources = Get-Content $runtimeManifestPath |
     Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
     ForEach-Object { Join-Path $repoRoot $_.Trim() }
-$expectedStage2Bytes = 17430000L
+$expectedStage2Bytes = 18911249L
 
 New-Item -ItemType Directory -Force -Path $artifactsDir | Out-Null
 
@@ -175,7 +176,7 @@ if (Test-Stage2IsCurrent) {
 
     & $llvmAsPath $stage2LlvmPath -o $stage2BitcodePath
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-    & $clangPath -Wno-override-module $stage2LlvmPath -O1 -o $stage2Path
+    & $clangPath -Wno-override-module $stage2LlvmPath -O1 -o $stage2Path -lshell32
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }
 
@@ -414,7 +415,30 @@ if ($stage1CodegenText -ne "codegen units = 0,2,6") {
 if ($stage2CodegenText -ne $stage1CodegenText) {
     throw "stage-2 canonical codegen units differed: $stage2CodegenText"
 }
-Write-Host "[stage2 5/7] PASS execution, native build, fingerprints, module cache, typed-IR artifacts, and codegen-unit parity."
+$publicStage1Llvm = Join-Path $artifactsDir "stage2-check-public-stdlib-stage1.ll"
+$publicStage2Llvm = Join-Path $artifactsDir "stage2-check-public-stdlib-stage2.ll"
+$publicStage1Error = Join-Path $artifactsDir "stage2-check-public-stdlib-stage1.err"
+$publicStage2Error = Join-Path $artifactsDir "stage2-check-public-stdlib-stage2.err"
+$publicArguments = @("windows-stdlib", $stdlibRoot, $singleSource)
+$publicStage1Process = Invoke-ProcessToFile $stage1Path $publicArguments $publicStage1Llvm $publicStage1Error
+$publicStage2Process = Invoke-ProcessToFile $stage2Path $publicArguments $publicStage2Llvm $publicStage2Error
+Assert-ProcessSucceeded $publicStage1Process $publicStage1Error "stage-1 public stdlib source-root emission"
+Assert-ProcessSucceeded $publicStage2Process $publicStage2Error "stage-2 public stdlib source-root emission"
+$publicStage1Hash = Get-NormalizedHash $publicStage1Llvm
+$publicStage2Hash = Get-NormalizedHash $publicStage2Llvm
+if ($publicStage1Hash -ne $publicStage2Hash) {
+    throw "public stdlib source-root LLVM differs: stage1=$publicStage1Hash stage2=$publicStage2Hash"
+}
+$publicExecutable = Join-Path $artifactsDir "stage2-check-public-stdlib.exe"
+& $llvmAsPath $publicStage2Llvm -o ([System.IO.Path]::ChangeExtension($publicExecutable, ".bc"))
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+& $clangPath -Wno-override-module $publicStage2Llvm -O1 -o $publicExecutable
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+$publicActual = (& $publicExecutable | Out-String).TrimEnd("`r", "`n")
+if ($LASTEXITCODE -ne 0 -or $publicActual -ne "stage2-single-ok") {
+    throw "public stdlib source-root execution failed: expected 'stage2-single-ok', actual '$publicActual'"
+}
+Write-Host "[stage2 5/7] PASS execution, public stdlib source root, native build, fingerprints, module cache, typed-IR artifacts, and codegen-unit parity."
 
 Write-Host "[stage2 6/7] Enforce production ownership diagnostics E17 through E23."
 foreach ($conflict in @(

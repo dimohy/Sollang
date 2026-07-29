@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
-    [ValidatePattern('^\d+\.\d+\.\d{6}$')]
-    [string]$Version = "0.3.260727",
+    [ValidatePattern('^\d+\.\d+\.\d+$')]
+    [string]$Version = "0.4.0",
     [string]$OutputRoot,
     [string]$WindowsStage3Path,
     [string]$LinuxStage3Path
@@ -26,6 +26,15 @@ if ([string]::IsNullOrWhiteSpace($LinuxStage3Path)) {
 }
 $WindowsStage3Path = [System.IO.Path]::GetFullPath($WindowsStage3Path)
 $LinuxStage3Path = [System.IO.Path]::GetFullPath($LinuxStage3Path)
+
+function Convert-ToWslPath {
+    param([Parameter(Mandatory)] [string]$Path)
+
+    $absolute = [System.IO.Path]::GetFullPath($Path)
+    $drive = $absolute.Substring(0, 1).ToLowerInvariant()
+    $tail = $absolute.Substring(3).Replace('\', '/')
+    "/mnt/$drive/$tail"
+}
 
 function New-ReleasePackage {
     param(
@@ -106,12 +115,20 @@ function New-ReleasePackage {
             throw "packaged compiler hash differs from the verified native compiler"
         }
 
+        $parityProof = Join-Path $repoRoot "artifacts\native-cli-full-parity\$Runtime-$sourceHash.verified"
+        if (-not (Test-Path -LiteralPath $parityProof -PathType Leaf)) {
+            throw "0.4 release is blocked: full native CLI parity proof is missing for $Runtime compiler hash $sourceHash"
+        }
+        $parityVersion = [IO.File]::ReadAllText($parityProof).Trim()
+        if ($parityVersion -ne "Sollang $Version") {
+            throw "native CLI parity proof targets '$parityVersion', expected 'Sollang $Version'"
+        }
+
         Write-Host "[release $PlatformName 3/4] Verify native CLI version contract."
         if ($Runtime -eq "win-x64") {
             $versionOutput = & (Join-Path $packageRoot $executableName) --version
         } else {
-            $wslExecutable = (& wsl.exe wslpath -a (Join-Path $packageRoot $executableName)).Trim()
-            if ($LASTEXITCODE -ne 0) { throw "could not map the Linux compiler path through WSL" }
+            $wslExecutable = Convert-ToWslPath (Join-Path $packageRoot $executableName)
             $versionOutput = & wsl.exe -- $wslExecutable --version
         }
         if ($LASTEXITCODE -ne 0 -or ($versionOutput -join "`n").Trim() -ne "Sollang $Version") {

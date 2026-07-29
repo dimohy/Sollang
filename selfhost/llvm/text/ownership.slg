@@ -850,6 +850,7 @@ writeSemanticTypeId typeId: Int, context: ref emitterContext.EmitContext, state:
                 } else {
                     current.symbol == 0 -> if { "void" -> print }
                     current.symbol == 1 -> if { "%sollang.text" -> print }
+                    current.symbol == 15 -> if { "%sollang.array.i32" -> print }
                     (current.symbol == 2 or current.symbol == 5 or current.symbol == 10 or current.symbol == 14) -> if { "i32" -> print }
                     (current.symbol == 3 or current.symbol == 8) -> if { "i8" -> print }
                     (current.symbol == 4 or current.symbol == 9) -> if { "i16" -> print }
@@ -895,6 +896,7 @@ writeIrType node: typedIr.TypedIrNode, context: ref emitterContext.EmitContext, 
 llvmType symbol: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Text {
     "void" => result!
     symbol == 1 -> if { "%sollang.text" => result! }
+    symbol == 15 -> if { "%sollang.array.i32" => result! }
     (symbol == 2 or symbol == 5 or symbol == 10 or symbol == 14) -> if { "i32" => result! }
     (symbol == 3 or symbol == 8) -> if { "i8" => result! }
     (symbol == 4 or symbol == 9) -> if { "i16" => result! }
@@ -910,6 +912,7 @@ llvmType symbol: Int, context: ref emitterContext.EmitContext, state: ref CoreEm
 storageSize symbol: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
     4 => result!
     symbol == 1 -> if { 16 => result! }
+    symbol == 15 -> if { 24 => result! }
     (symbol == 3 or symbol == 8 or symbol == 23) -> if { 1 => result! }
     symbol == 24 -> if { context.pointerBitWidth / 8 * 4 => result! }
     symbol == 25 -> if { 8 => result! }
@@ -1053,7 +1056,7 @@ integerNodeWidth node: typedIr.TypedIrNode, context: ref emitterContext.EmitCont
         }
     }
     ((node.kind == 9 or node.kind == 6) and node.opcode == -201 and node.operand0 >= 0) -> if {
-        64 => width!
+        node.typeSymbol == 2 -> if { 32 => width! } else { context.pointerBitWidth => width! }
     }
     width!
 }

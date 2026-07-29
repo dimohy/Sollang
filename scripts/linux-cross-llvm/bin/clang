@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+windows_clang="$repo_root/.tools/llvm-22.1.8/bin/clang.exe"
+input=""
+output=""
+optimization="-O0"
+linker_options=()
+
+while (($# > 0)); do
+    case "$1" in
+        -o)
+            output="$2"
+            shift 2
+            ;;
+        -O*)
+            optimization="$1"
+            shift
+            ;;
+        -Wl,*)
+            linker_options+=("$1")
+            shift
+            ;;
+        -Wno-override-module)
+            shift
+            ;;
+        *.ll)
+            input="$1"
+            shift
+            ;;
+        *)
+            shift
+            ;;
+    esac
+done
+
+if [[ -z "$input" || -z "$output" ]]; then
+    echo "linux-cross clang adapter requires one LLVM input and -o output" >&2
+    exit 2
+fi
+
+to_windows_path() {
+    local path="$1"
+    if [[ "$path" =~ ^/mnt/([a-zA-Z])/(.*)$ ]]; then
+        printf '%s:/%s' "${BASH_REMATCH[1]^^}" "${BASH_REMATCH[2]}"
+        return
+    fi
+    echo "path is not on a WSL mounted drive: $path" >&2
+    exit 2
+}
+
+object="$output.sollang-link.o"
+trap 'rm -f -- "$object"' EXIT
+"$windows_clang" \
+    --target=x86_64-unknown-linux-gnu \
+    -c "$(to_windows_path "$input")" \
+    "$optimization" \
+    -o "$(to_windows_path "$object")"
+gcc "$object" -pthread "${linker_options[@]}" -o "$output"

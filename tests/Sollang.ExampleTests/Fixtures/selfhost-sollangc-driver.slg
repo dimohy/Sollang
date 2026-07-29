@@ -17,6 +17,41 @@ processCode result: Result<Int, Text> -> Int => result -> when {
     Err(error) => -1
 }
 
+textEquals left: Text, right: Text -> Bool {
+    (left -> len) == (right -> len) => matches!
+    UIntSize(0) => index!
+    (matches! and index! < (left -> len)) -> while {
+        (left -> byte(index!)) != (right -> byte(index!)) -> if {
+            false => matches!
+        }
+        index! + UIntSize(1) => index!
+    }
+    matches!
+}
+
+printVersion: -> Unit uses Console {
+    "Sollang 0.4.0" -> println
+}
+
+printHelp: -> Unit uses Console {
+    "Sollang 0.4.0" -> println
+    "usage: sollang <command> [options]" -> println
+    "" -> println
+    "commands:" -> println
+    "  build            compile source, project, or workspace products" -> println
+    "  run              build and run a native program" -> println
+    "  test             discover, build, and run Sollang tests" -> println
+    "  format           format Sollang source" -> println
+    "  resolve          resolve and lock package dependencies" -> println
+    "  language-server  run the Language Server Protocol endpoint" -> println
+    "  bind-cpp         generate a checked C++ binding package" -> println
+    "  grammar build    regenerate the canonical parser table" -> println
+    "" -> println
+    "global options:" -> println
+    "  -h, --help       show this help" -> println
+    "  -v, --version    show the compiler version" -> println
+}
+
 exitFailure: -> Unit uses Process {
     process.exit(1)
 }
@@ -131,7 +166,23 @@ emitWasmRoot pathStart: UIntSize -> Unit uses Console, File, Process {
 emitWindowsRoot pathStart: UIntSize -> Unit uses Console, File, Process {
     sys.process.arguments() => arguments
     arguments[pathStart] -> path.fromText(path.Style.Windows) => root!
-    root! -> llvmRoot.emitCheckedRoot
+    arguments -> len => explicitStart
+    llvmRoot.emitCheckedRoot(root!, explicitStart, 0) => diagnosticCount
+    diagnosticCount > 0 -> if { exitFailure() }
+}
+
+emitRootAndFiles pathStart: UIntSize, target: Int -> Unit uses Console, File, Process {
+    sys.process.arguments() => arguments
+    arguments[pathStart] -> path.fromText(path.nativeStyle()) => root!
+    pathStart + UIntSize(1) -> configureWorkerLimit => workers
+    workers < 0 -> if {
+        "; sollang error: --jobs expects a positive integer" -> println
+        exitFailure()
+    }
+    workers > 0 -> if { "; sollang workers = $workers" -> println }
+    pathStart + UIntSize(1) -> sourceStart => fileStart
+    llvmRoot.emitCheckedRoot(root!, fileStart, target) => diagnosticCount
+    diagnosticCount > 0 -> if { exitFailure() }
 }
 
 emitFingerprints pathStart: UIntSize -> Unit uses Console, File, Process {
@@ -230,8 +281,337 @@ buildWindows pathStart: UIntSize -> Unit uses Console, File, Process {
     }
 }
 
-main {
+nativeTargetMode target: Int -> Text {
+    target == 0 -> if {
+        "windows"
+    } else {
+        target == 1 -> if { "linux" } else { "wasm" }
+    }
+}
+
+nativeCliTargetMode target: Int -> Text {
+    target == 0 -> if {
+        "windows-stdlib"
+    } else {
+        target == 1 -> if { "linux-stdlib" } else { "wasm-stdlib" }
+    }
+}
+
+nativeTargetName target: Int -> Text {
+    target == 0 -> if {
+        "windows-x64"
+    } else {
+        target == 1 -> if { "linux-x64" } else { "wasm32-browser" }
+    }
+}
+
+parseNativeTarget value: Text -> Int {
+    value -> textEquals("windows-x64") -> if {
+        0
+    } else {
+        value -> textEquals("linux-x64") -> if {
+            1
+        } else {
+            value -> textEquals("wasm32-browser") -> if { 2 } else { -1 }
+        }
+    }
+}
+
+windowsNativeOutput stem: Text, storage: mut Arena -> Text {
+    "$stem.exe" -> materialize(storage)
+}
+
+wasmNativeOutput stem: Text, storage: mut Arena -> Text {
+    "$stem.wasm" -> materialize(storage)
+}
+
+portableNativeOutput stem: Text, storage: mut Arena -> Text {
+    stem -> materialize(storage)
+}
+
+defaultNativeOutput source: Text, target: Int, storage: mut Arena -> Text {
+    source -> len => sourceLength
+    sourceLength >= UIntSize(4) => validSuffix!
+    validSuffix! -> if {
+        (validSuffix! and (source -> byte(sourceLength - UIntSize(4))) == UInt8(46)) => validSuffix!
+        (validSuffix! and (source -> byte(sourceLength - UIntSize(3))) == UInt8(115)) => validSuffix!
+        (validSuffix! and (source -> byte(sourceLength - UIntSize(2))) == UInt8(108)) => validSuffix!
+        (validSuffix! and (source -> byte(sourceLength - UIntSize(1))) == UInt8(103)) => validSuffix!
+    }
+    UIntSize(0) => stemLength!
+    validSuffix! -> if { sourceLength - UIntSize(4) => stemLength! } else { sourceLength => stemLength! }
+    source -> slice(UIntSize(0), stemLength!) => stem
+    target == 0 -> if {
+        stem -> windowsNativeOutput(storage)
+    } else {
+        target == 2 -> if {
+            stem -> wasmNativeOutput(storage)
+        } else {
+            stem -> portableNativeOutput(storage)
+        }
+    }
+}
+
+nativeClangPath llvmHome: Text, hostTarget: Int, storage: mut Arena -> Text {
+    (llvmHome -> len) == UIntSize(0) -> if {
+        "clang"
+    } else {
+        hostTarget == 0 -> if {
+            llvmHome -> windowsClangPath(storage)
+        } else {
+            llvmHome -> posixClangPath(storage)
+        }
+    }
+}
+
+windowsClangPath llvmHome: Text, storage: mut Arena -> Text {
+    "$llvmHome\\bin\\clang.exe" -> materialize(storage)
+}
+
+posixClangPath llvmHome: Text, storage: mut Arena -> Text {
+    "$llvmHome/bin/clang" -> materialize(storage)
+}
+
+stdlibNativePath compilerDirectory: Text, storage: mut Arena -> Text {
+    "$compilerDirectory/stdlib" -> materialize(storage)
+}
+
+executableDirectory executable: Text -> Text {
+    UIntSize(0) => lastSeparator!
+    false => found!
+    UIntSize(0) => index!
+    index! < (executable -> len) -> while {
+        executable -> byte(index!) => current
+        (current == UInt8(47) or current == UInt8(92)) -> if {
+            index! => lastSeparator!
+            true => found!
+        }
+        index! + UIntSize(1) => index!
+    }
+    found! -> if {
+        executable -> slice(UIntSize(0), lastSeparator!) => directory
+        directory -> return
+    }
+    "."
+}
+
+executeNativeBuild sources: [Text; ~], output: Text, llvmHome: Text, stdlibOption: Text, optimization: Text, target: Int, hostTarget: Int, jobs: Text, keepTemps: Bool, quiet: Bool -> Int uses Console, File, Process {
+    target == 2 -> if {
+        "sollang: native CLI wasm linking is not implemented yet" -> println
+        -1 -> return
+    }
+    target != hostTarget -> if {
+        "sollang: native CLI cross-target linking is not implemented yet; requested $(target -> nativeTargetName)" -> println
+        -1 -> return
+    }
+
+    Arena(0) => llvmPathStorage!
+    "$output.ll" -> materialize(llvmPathStorage!) => llvmPath
+    process.arguments() => arguments
+    arguments[0] -> executableDirectory => compilerDirectory
+    Arena(0) => stdlibRootStorage!
+    "" => stdlibRoot!
+    (stdlibOption -> len) > UIntSize(0) -> if {
+        stdlibOption -> portableNativeOutput(stdlibRootStorage!) => stdlibRoot!
+    } else {
+        compilerDirectory -> stdlibNativePath(stdlibRootStorage!) => stdlibRoot!
+    }
+    [arguments[0], target -> nativeCliTargetMode, stdlibRoot!; ~] => emitArgv!
+    (jobs -> len) > UIntSize(0) -> if {
+        emitArgv! -> push("--jobs")
+        emitArgv! -> push(jobs)
+    }
+    sources -> each source { emitArgv! -> push(source) }
+    process.RunToFileRequest {
+        argv: emitArgv!
+        output: llvmPath
+    } -> process.runToFile -> processCode => emitCode
+    emitCode != 0 -> if {
+        "sollang: compiler emission failed" -> println
+        emitCode -> return
+    }
+
+    Arena(0) => clangPathStorage!
+    llvmHome -> nativeClangPath(hostTarget, clangPathStorage!) => clangPath
+    [clangPath, llvmPath, optimization, "-Wno-override-module", "-o", output; ~] => clangArgv!
+    target == 0 -> if {
+        clangArgv! -> push("-Xlinker")
+        clangArgv! -> push("/subsystem:console")
+        clangArgv! -> push("-lshell32")
+    }
+    target == 1 -> if { clangArgv! -> push("-Wl,-z,stack-size=67108864") }
+    clangArgv! -> process.run -> processCode => clangCode
+    clangCode != 0 -> if {
+        "sollang: native linker failed with exit code $clangCode" -> println
+        clangCode -> return
+    }
+    (keepTemps and not quiet) -> if {
+        "Kept $llvmPath" -> println
+    }
+    not quiet -> if { "Wrote $output" -> println }
+    0
+}
+
+executeNativeProgram output: Text, programArguments: [Text; ~] -> Int uses Process {
+    [Text; ~] => runArgv!
+    runArgv! -> push(output)
+    programArguments -> each programArgument { runArgv! -> push(programArgument) }
+    runArgv! -> process.run -> processCode
+}
+
+runNativeCli runAfterBuild: Bool, hostTarget: Int -> Int uses Console, File, Process {
+    process.arguments() => arguments
+    arguments -> len => argumentCount
+    [Text; ~] => sources!
+    [Text; ~] => programArguments!
+    "" => outputOption!
+    "" => llvmHome!
+    "" => stdlibRoot!
+    "" => jobs!
+    "-O1" => optimization!
+    hostTarget => target!
+    false => keepTemps!
+    false => parsingProgramArguments!
+    0 => status!
+    UIntSize(2) => index!
+
+    index! < argumentCount -> while {
+        arguments[index!] => argument
+        parsingProgramArguments! -> if {
+            programArguments! -> push(argument)
+        } else {
+            argument -> textEquals("--") -> if {
+                true => parsingProgramArguments!
+            } else {
+                ((argument -> textEquals("-o")) or (argument -> textEquals("--output"))) -> if {
+                    index! + UIntSize(1) < argumentCount -> if {
+                        index! + UIntSize(1) => index!
+                        arguments[index!] => outputOption!
+                    } else { 1 => status! }
+                } else {
+                    argument -> textEquals("--llvm") -> if {
+                        index! + UIntSize(1) < argumentCount -> if {
+                            index! + UIntSize(1) => index!
+                            arguments[index!] => llvmHome!
+                        } else { 2 => status! }
+                    } else {
+                        argument -> textEquals("--stdlib") -> if {
+                            index! + UIntSize(1) < argumentCount -> if {
+                                index! + UIntSize(1) => index!
+                                arguments[index!] => stdlibRoot!
+                            } else { 3 => status! }
+                        } else {
+                            argument -> textEquals("--target") -> if {
+                                index! + UIntSize(1) < argumentCount -> if {
+                                    index! + UIntSize(1) => index!
+                                    arguments[index!] -> parseNativeTarget => target!
+                                    target! < 0 -> if { 4 => status! }
+                                } else { 5 => status! }
+                            } else {
+                                argument -> textEquals("--jobs") -> if {
+                                    index! + UIntSize(1) < argumentCount -> if {
+                                        index! + UIntSize(1) => index!
+                                        (arguments[index!] -> parsePositiveInt) > 0 -> if {
+                                            arguments[index!] => jobs!
+                                        } else { 6 => status! }
+                                    } else { 6 => status! }
+                                } else {
+                                    argument -> textEquals("--keep-temps") -> if {
+                                        true => keepTemps!
+                                    } else {
+                                        ((argument -> textEquals("-O0")) or (argument -> textEquals("-O1")) or (argument -> textEquals("-O2")) or (argument -> textEquals("-O3"))) -> if {
+                                            argument => optimization!
+                                        } else {
+                                            ((argument -> textEquals("--project")) or (argument -> textEquals("--workspace")) or (argument -> textEquals("--package")) or (argument -> textEquals("--product")) or (argument -> textEquals("--locked")) or (argument -> textEquals("--library"))) -> if {
+                                                7 => status!
+                                            } else {
+                                                (argument -> len) > UIntSize(0) and (argument -> byte(UIntSize(0))) == UInt8(45) -> if {
+                                                    8 => status!
+                                                } else {
+                                                    sources! -> push(argument)
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        index! + UIntSize(1) => index!
+    }
+
+    status! != 0 -> if {
+        "sollang: invalid or not-yet-native build option (status $(status!))" -> println
+        1 -> return
+    }
+    (sources! -> len) == 0 -> if {
+        "sollang: native CLI currently requires explicit source files" -> println
+        1 -> return
+    }
+    (not runAfterBuild and parsingProgramArguments!) -> if {
+        "sollang: build does not accept program arguments after --" -> println
+        1 -> return
+    }
+
+    Arena(0) => outputStorage!
+    (outputOption! -> len) > UIntSize(0) -> if {
+        outputOption! => output
+        sources! -> executeNativeBuild(output, llvmHome!, stdlibRoot!, optimization!, target!, hostTarget, jobs!, keepTemps!, runAfterBuild) => buildCode
+        buildCode != 0 -> if { buildCode -> return }
+        runAfterBuild -> if {
+            output -> executeNativeProgram(programArguments!)
+        } else { 0 }
+    } else {
+        sources![0] -> defaultNativeOutput(target!, outputStorage!) => output
+        sources! -> executeNativeBuild(output, llvmHome!, stdlibRoot!, optimization!, target!, hostTarget, jobs!, keepTemps!, runAfterBuild) => buildCode
+        buildCode != 0 -> if { buildCode -> return }
+        runAfterBuild -> if {
+            output -> executeNativeProgram(programArguments!)
+        } else { 0 }
+    }
+}
+
+dispatchArguments: -> Unit uses Console, File, Process {
     sys.process.arguments() => arguments
+    (arguments -> len) == UIntSize(2) -> if {
+        ((arguments[1] -> textEquals("--version")) or (arguments[1] -> textEquals("-v"))) -> if {
+            printVersion()
+            process.exit(0)
+        }
+        ((arguments[1] -> textEquals("--help")) or (arguments[1] -> textEquals("-h")) or (arguments[1] -> textEquals("help"))) -> if {
+            printHelp()
+            process.exit(0)
+        }
+    }
+    path.nativeStyle() -> when {
+        Windows { 0 }
+        Posix { 1 }
+    } => hostTarget
+    arguments[1] -> textEquals("build") -> if {
+        false -> runNativeCli(hostTarget) => exitCode!
+        exitCode! < 0 -> if { 1 => exitCode! }
+        process.exit(exitCode!)
+    }
+    arguments[1] -> textEquals("run") -> if {
+        true -> runNativeCli(hostTarget) => exitCode!
+        exitCode! < 0 -> if { 1 => exitCode! }
+        process.exit(exitCode!)
+    }
+    arguments[1] -> textEquals("windows-stdlib") -> if {
+        UIntSize(2) -> emitRootAndFiles(0)
+        process.exit(0)
+    }
+    arguments[1] -> textEquals("linux-stdlib") -> if {
+        UIntSize(2) -> emitRootAndFiles(1)
+        process.exit(0)
+    }
+    arguments[1] -> textEquals("wasm-stdlib") -> if {
+        UIntSize(2) -> emitRootAndFiles(2)
+        process.exit(0)
+    }
     arguments[1] -> len => targetLength
     UIntSize(2) => optionStart!
     targetLength == UIntSize(13) -> if { UIntSize(5) => optionStart! }
@@ -283,4 +663,13 @@ main {
     }
     }
     }
+}
+
+main {
+    sys.process.arguments() => arguments
+    (arguments -> len) == UIntSize(1) -> if {
+        printHelp()
+        process.exit(1)
+    }
+    dispatchArguments()
 }

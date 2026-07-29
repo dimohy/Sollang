@@ -1,0 +1,46 @@
+import sollang.compiler.ir.typed as typedIr
+
+# Imported enum patterns must use the declaring enum's real variant ordinals.
+# Name-initial heuristics cannot distinguish Windows from Posix.
+main {
+    [
+        """
+        namespace fixture.style
+
+        public enum Style {
+            Posix
+            Windows
+        }
+
+        public nativeStyle: -> Style {
+            Style.Posix
+        }
+        """,
+        """
+        import fixture.style as style
+
+        main {
+            style.nativeStyle() -> when {
+                Windows { 0 }
+                Posix { 1 }
+            } => hostTarget
+            hostTarget -> println
+        }
+        """; ~
+    ] => sources!
+    sources! -> typedIr.lower => ir!
+    0 => index!
+    index! < (ir! -> len) -> while {
+        ir![index!] => node
+        node.kind == 27 -> if {
+            node.operand1 => armIndex!
+            "arm tags =" -> print
+            (armIndex! >= 0 and ir![armIndex!].parent == index!) -> while {
+                " $(ir![armIndex!].opcode)" -> print
+                ir![armIndex!].nextOperand => armIndex!
+            }
+            "" -> println
+        }
+        index! + 1 => index!
+    }
+}

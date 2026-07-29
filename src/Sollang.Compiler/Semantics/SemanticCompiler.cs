@@ -2561,6 +2561,9 @@ internal sealed partial class SemanticCompiler
             "sys.file.mapPath" => RequireIntrinsicSignature(
                 function, inputType, returnType, TypeId.Path, BoundType.SourceText,
                 BoundFunctionKind.RuntimeMapSourcePath),
+            "sys.path.pathText" => RequireIntrinsicSignature(
+                function, inputType, returnType, _types.GetOrAddReference(TypeId.Path), BoundType.Text,
+                BoundFunctionKind.RuntimePathText),
             "sys.path.nativeStyle" => RequireIntrinsicSignature(
                 function, inputType, returnType, expectedInputType: null, TypeId.PathStyle,
                 BoundFunctionKind.RuntimePathStyle),
@@ -7125,6 +7128,7 @@ internal sealed partial class SemanticCompiler
                         currentType = function.ReturnType;
                         continue;
                     case BoundFunctionKind.RuntimeMapSourcePath:
+                    case BoundFunctionKind.RuntimePathText:
                         EnsureRuntimeInput(currentType, function, expression.Line, expression.Column, path);
                         currentType = function.ReturnType;
                         continue;
@@ -8232,14 +8236,25 @@ internal sealed partial class SemanticCompiler
                 }
                 return function.ReturnType;
             case BoundFunctionKind.RuntimeMapSourcePath:
+            case BoundFunctionKind.RuntimePathText:
                 if (expression.Arguments.Count != 1)
                 {
                     throw Error(expression.Line, expression.Column, $"{path} expects exactly one Path argument");
                 }
                 var sourcePathType = InferExpression(
                     expression.Arguments[0], functions, bindings,
-                    allowPrintCall: false, allowReadIntCall, allowFlowBindingTarget: false);
-                EnsureRuntimeInput(sourcePathType, function, expression.Arguments[0].Line, expression.Arguments[0].Column, path);
+                    allowPrintCall: false, allowReadIntCall, allowFlowBindingTarget: false,
+                    allowOwnedElementBorrow: function.Kind == BoundFunctionKind.RuntimePathText);
+                if (function.Kind == BoundFunctionKind.RuntimePathText
+                    && _types.IsReference(function.InputType!.Value)
+                    && sourcePathType == _types.GetReference(function.InputType.Value).ElementType)
+                {
+                    EnsureReferenceArgumentPlace(expression.Arguments[0], bindings, mutableBindings, path);
+                }
+                else
+                {
+                    EnsureRuntimeInput(sourcePathType, function, expression.Arguments[0].Line, expression.Arguments[0].Column, path);
+                }
                 return function.ReturnType;
             case BoundFunctionKind.RuntimeOpenFileAsync:
             case BoundFunctionKind.RuntimeOpenWriteFileAsync:
@@ -8327,8 +8342,14 @@ internal sealed partial class SemanticCompiler
             case BoundFunctionKind.RuntimePathStyle:
             case BoundFunctionKind.RuntimeParallelWorkers:
             case BoundFunctionKind.RuntimeParallelPeakWorkers:
-            case BoundFunctionKind.RuntimeArguments:
                 EnsureRuntimeIntrinsicAllowed(function, allowReadIntCall, expression.Line, expression.Column, path);
+                if (expression.Arguments.Count != 0)
+                {
+                    throw Error(expression.Line, expression.Column, $"{path} does not accept arguments");
+                }
+
+                return function.ReturnType;
+            case BoundFunctionKind.RuntimeArguments:
                 if (expression.Arguments.Count != 0)
                 {
                     throw Error(expression.Line, expression.Column, $"{path} does not accept arguments");
@@ -9571,8 +9592,7 @@ internal sealed partial class SemanticCompiler
             or "sys.file.openIntReader"
             or "sys.file.closestInt"
             or "sys.file.closeIntReader"
-            or "sys.time.nowMillis"
-            or "sys.process.arguments";
+            or "sys.time.nowMillis";
     }
 
     private void EnsureRuntimeIntrinsicAllowed(

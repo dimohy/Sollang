@@ -47,7 +47,7 @@ $referenceStoredArraySource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fi
 $referenceEnumEscapeSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-reference-enum-escape.slg"
 $referenceArrayEscapeSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-reference-array-escape.slg"
 $borrowSourceRuntime = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-borrow-source.slg"
-$expectedStage2Bytes = 11987197L
+$expectedStage2Bytes = 18895039L
 
 New-Item -ItemType Directory -Force -Path $artifactsDir | Out-Null
 

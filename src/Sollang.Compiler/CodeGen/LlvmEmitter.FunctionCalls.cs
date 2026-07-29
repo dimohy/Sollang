@@ -212,6 +212,18 @@ internal sealed partial class LlvmEmitter
             return EmitMapSourcePath(EmitExpression(expression.Arguments[0]));
         }
 
+        if (function.Kind == BoundFunctionKind.RuntimePathText)
+        {
+            if (expression.Arguments.Count != 1)
+            {
+                throw new SollangException($"{path} expects exactly one Path value");
+            }
+            var pathArgument = _program.Types.IsReference(function.InputType!.Value)
+                ? EmitReferencePlace(expression.Arguments[0], function.InputType.Value)
+                : EmitExpression(expression.Arguments[0]);
+            return EmitRuntimePathText(pathArgument);
+        }
+
         if (function.Kind is BoundFunctionKind.RuntimeOpenFile
             or BoundFunctionKind.RuntimeOpenWriteFile)
         {
@@ -1017,6 +1029,15 @@ internal sealed partial class LlvmEmitter
                 throw new SollangException($"{function.Name} expects exactly one Path value");
             }
             return EmitMapSourcePath(argument);
+        }
+
+        if (function.Kind == BoundFunctionKind.RuntimePathText)
+        {
+            if (argument is null)
+            {
+                throw new SollangException($"{function.Name} expects exactly one Path value");
+            }
+            return EmitRuntimePathText(argument);
         }
 
         if (function.Kind is BoundFunctionKind.RuntimeOpenFile

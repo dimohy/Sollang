@@ -158,6 +158,7 @@ internal enum BoundFunctionKind
     RuntimeBorrowSourceText,
     RuntimeMapSourceText,
     RuntimeMapSourcePath,
+    RuntimePathText,
     RuntimePathStyle,
     RuntimePathQuery,
     RuntimeWriteScalar,

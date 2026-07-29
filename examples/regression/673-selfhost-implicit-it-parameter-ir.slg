@@ -1,0 +1,26 @@
+import sollang.compiler.ir.typed as typedIr
+
+# Verifies that an unnamed primary input is resolved as the contextual `it`
+# parameter and that the function remains present in typed IR.
+main {
+    [
+        """
+        square: Int -> Int {
+            it * it
+        }
+        main {
+            7 -> square => result
+            result -> println
+        }
+        """; ~
+    ] => sources!
+    sources! -> typedIr.lower => ir!
+    0 => index!
+    index! < (ir! -> len) -> while {
+        ir![index!] => node
+        (node.kind == 0 or node.kind == 10) -> if {
+            "node = $(node.kind),$(node.symbol),$(node.typeOrigin),$(node.typeModule),$(node.typeSymbol)" -> println
+        }
+        index! + 1 => index!
+    }
+}

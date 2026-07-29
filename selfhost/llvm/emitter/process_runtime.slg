@@ -93,23 +93,181 @@ public emitProcessTypeRuntime: -> Unit uses Console {
 public emitWindowsProcessRuntime: -> Unit uses Console {
     true -> if { emitProcessRuntimeCommon() }
     """
-    declare i64 @_spawnvp(i32, ptr, ptr)
+    declare i64 @_wspawnvp(i32, ptr, ptr)
     declare i32 @_open(ptr, i32, i32)
     declare i32 @_dup(i32)
     declare i32 @_dup2(i32, i32)
     declare i32 @_close(i32)
+    define internal ptr @sollang_process_quote_windows_arg(ptr %source, i32 %chars) {
+    entry:
+      %chars64 = zext i32 %chars to i64
+      %double = mul i64 %chars64, 2
+      %capacity = add i64 %double, 3
+      %bytes = mul i64 %capacity, 2
+      %output = call ptr @malloc(i64 %bytes)
+      %allocated = icmp ne ptr %output, null
+      br i1 %allocated, label %initialize, label %fail
+    initialize:
+      store i16 34, ptr %output, align 2
+      %index_slot = alloca i32, align 4
+      %output_slot = alloca i64, align 8
+      %slashes_slot = alloca i64, align 8
+      store i32 0, ptr %index_slot, align 4
+      store i64 1, ptr %output_slot, align 8
+      store i64 0, ptr %slashes_slot, align 8
+      br label %loop
+    loop:
+      %index = load i32, ptr %index_slot, align 4
+      %done = icmp eq i32 %index, %chars
+      br i1 %done, label %finish_prepare, label %read
+    read:
+      %character_ptr = getelementptr i16, ptr %source, i32 %index
+      %character = load i16, ptr %character_ptr, align 2
+      %is_slash = icmp eq i16 %character, 92
+      br i1 %is_slash, label %remember_slash, label %flush_prepare
+    remember_slash:
+      %slashes = load i64, ptr %slashes_slot, align 8
+      %more_slashes = add i64 %slashes, 1
+      store i64 %more_slashes, ptr %slashes_slot, align 8
+      %slash_next = add i32 %index, 1
+      store i32 %slash_next, ptr %index_slot, align 4
+      br label %loop
+    flush_prepare:
+      %pending = load i64, ptr %slashes_slot, align 8
+      %is_quote = icmp eq i16 %character, 34
+      %doubled = mul i64 %pending, 2
+      %escaped = add i64 %doubled, 1
+      %flush_count = select i1 %is_quote, i64 %escaped, i64 %pending
+      br label %flush_loop
+    flush_loop:
+      %flush_index = phi i64 [ 0, %flush_prepare ], [ %flush_next, %flush_body ]
+      %flush_done = icmp eq i64 %flush_index, %flush_count
+      br i1 %flush_done, label %write_character, label %flush_body
+    flush_body:
+      %flush_output = load i64, ptr %output_slot, align 8
+      %flush_ptr = getelementptr i16, ptr %output, i64 %flush_output
+      store i16 92, ptr %flush_ptr, align 2
+      %flush_output_next = add i64 %flush_output, 1
+      store i64 %flush_output_next, ptr %output_slot, align 8
+      %flush_next = add i64 %flush_index, 1
+      br label %flush_loop
+    write_character:
+      %output_index = load i64, ptr %output_slot, align 8
+      %output_ptr = getelementptr i16, ptr %output, i64 %output_index
+      store i16 %character, ptr %output_ptr, align 2
+      %output_next = add i64 %output_index, 1
+      store i64 %output_next, ptr %output_slot, align 8
+      store i64 0, ptr %slashes_slot, align 8
+      %index_next = add i32 %index, 1
+      store i32 %index_next, ptr %index_slot, align 4
+      br label %loop
+    finish_prepare:
+      %trailing = load i64, ptr %slashes_slot, align 8
+      %finish_count = mul i64 %trailing, 2
+      br label %finish_loop
+    finish_loop:
+      %finish_index = phi i64 [ 0, %finish_prepare ], [ %finish_next, %finish_body ]
+      %finish_done = icmp eq i64 %finish_index, %finish_count
+      br i1 %finish_done, label %close_quote, label %finish_body
+    finish_body:
+      %finish_output = load i64, ptr %output_slot, align 8
+      %finish_ptr = getelementptr i16, ptr %output, i64 %finish_output
+      store i16 92, ptr %finish_ptr, align 2
+      %finish_output_next = add i64 %finish_output, 1
+      store i64 %finish_output_next, ptr %output_slot, align 8
+      %finish_next = add i64 %finish_index, 1
+      br label %finish_loop
+    close_quote:
+      %close_index = load i64, ptr %output_slot, align 8
+      %quote_ptr = getelementptr i16, ptr %output, i64 %close_index
+      store i16 34, ptr %quote_ptr, align 2
+      %null_index = add i64 %close_index, 1
+      %null_ptr = getelementptr i16, ptr %output, i64 %null_index
+      store i16 0, ptr %null_ptr, align 2
+      ret ptr %output
+    fail:
+      ret ptr null
+    }
+    define internal ptr @sollang_process_build_windows_argv(ptr %records, i64 %count) {
+    entry:
+      %slots = add i64 %count, 1
+      %argv_bytes = mul i64 %slots, 8
+      %argv = call ptr @malloc(i64 %argv_bytes)
+      %allocated = icmp ne ptr %argv, null
+      br i1 %allocated, label %loop, label %fail
+    loop:
+      %index = phi i64 [ 0, %entry ], [ %next, %store ]
+      %done = icmp eq i64 %index, %count
+      br i1 %done, label %terminate, label %measure
+    measure:
+      %record = getelementptr %sollang.text, ptr %records, i64 %index
+      %data_slot = getelementptr inbounds %sollang.text, ptr %record, i32 0, i32 0
+      %data = load ptr, ptr %data_slot, align 8
+      %length_slot = getelementptr inbounds %sollang.text, ptr %record, i32 0, i32 1
+      %length64 = load i64, ptr %length_slot, align 8
+      %length_fits = icmp ule i64 %length64, 2147483647
+      br i1 %length_fits, label %convert_size, label %cleanup
+    convert_size:
+      %length = trunc i64 %length64 to i32
+      %chars = call i32 @MultiByteToWideChar(i32 65001, i32 8, ptr %data, i32 %length, ptr null, i32 0)
+      %chars_valid = icmp sgt i32 %chars, 0
+      %empty = icmp eq i32 %length, 0
+      %valid = or i1 %chars_valid, %empty
+      br i1 %valid, label %allocate_wide, label %cleanup
+    allocate_wide:
+      %chars_with_null = add i32 %chars, 1
+      %wide_bytes32 = mul i32 %chars_with_null, 2
+      %wide_bytes = zext i32 %wide_bytes32 to i64
+      %wide = call ptr @malloc(i64 %wide_bytes)
+      %wide_ok = icmp ne ptr %wide, null
+      br i1 %wide_ok, label %convert, label %cleanup
+    convert:
+      %written = call i32 @MultiByteToWideChar(i32 65001, i32 8, ptr %data, i32 %length, ptr %wide, i32 %chars)
+      %converted = icmp eq i32 %written, %chars
+      br i1 %converted, label %terminate_wide, label %free_wide_error
+    terminate_wide:
+      %wide_end = getelementptr i16, ptr %wide, i32 %chars
+      store i16 0, ptr %wide_end, align 2
+      %is_program = icmp eq i64 %index, 0
+      br i1 %is_program, label %store, label %quote
+    quote:
+      %quoted = call ptr @sollang_process_quote_windows_arg(ptr %wide, i32 %chars)
+      call void @free(ptr %wide)
+      %quoted_ok = icmp ne ptr %quoted, null
+      br i1 %quoted_ok, label %store_quoted, label %cleanup
+    store_quoted:
+      br label %store
+    store:
+      %value = phi ptr [ %wide, %terminate_wide ], [ %quoted, %store_quoted ]
+      %slot = getelementptr ptr, ptr %argv, i64 %index
+      store ptr %value, ptr %slot, align 8
+      %next = add i64 %index, 1
+      br label %loop
+    free_wide_error:
+      call void @free(ptr %wide)
+      br label %cleanup
+    cleanup:
+      call void @sollang_process_dispose_argv(ptr %argv, i64 %index)
+      ret ptr null
+    terminate:
+      %null_slot = getelementptr ptr, ptr %argv, i64 %count
+      store ptr null, ptr %null_slot, align 8
+      ret ptr %argv
+    fail:
+      ret ptr null
+    }
     define internal %sollang.process_result @sollang_run_process(ptr %records, i64 %count) {
     entry:
       %has_program = icmp ugt i64 %count, 0
       br i1 %has_program, label %build, label %error
     build:
-      %argv = call ptr @sollang_process_build_argv(ptr %records, i64 %count)
+      %argv = call ptr @sollang_process_build_windows_argv(ptr %records, i64 %count)
       %built = icmp ne ptr %argv, null
       br i1 %built, label %spawn, label %error
     spawn:
       %program_slot = getelementptr ptr, ptr %argv, i64 0
       %program = load ptr, ptr %program_slot, align 8
-      %raw = call i64 @_spawnvp(i32 0, ptr %program, ptr %argv)
+      %raw = call i64 @_wspawnvp(i32 0, ptr %program, ptr %argv)
       call void @sollang_process_dispose_argv(ptr %argv, i64 %count)
       %spawned = icmp ne i64 %raw, -1
       br i1 %spawned, label %success, label %error

@@ -1,0 +1,42 @@
+import sollang.compiler.parser as parser
+
+accepted source: Text -> Bool {
+    source -> parser.parseEvents => events!
+    false => result!
+    events! -> each event {
+        event.kind == 3 -> if { event.value == 1 => result! }
+    }
+    result!
+}
+
+flag value: Bool -> Int {
+    value -> if { 1 } else { 0 }
+}
+
+main {
+    """
+    emit paths: move [Int; ~] -> Unit { }
+    """ -> accepted => primitive
+    """
+    emit value: move path.Path -> Unit { }
+    """ -> accepted => qualified
+    """
+    emit paths: move [path.Path; ~] -> Unit { }
+    """ -> accepted => qualifiedGrowable
+    """
+    emit paths: move [path.Path; ~] -> Unit uses Console, File { }
+    """ -> accepted => qualifiedGrowableEffects
+    """
+    emit paths: move [path.Path; ~] -> Unit uses Console, File {
+        mapSource sourcePath: path.Path -> uses File {
+            sourcePath -> file.mapPath
+        }
+    }
+    """ -> accepted => nestedEffectOnlyResult
+    primitive -> flag => primitiveFlag
+    qualified -> flag => qualifiedFlag
+    qualifiedGrowable -> flag => qualifiedGrowableFlag
+    qualifiedGrowableEffects -> flag => qualifiedGrowableEffectsFlag
+    nestedEffectOnlyResult -> flag => nestedEffectOnlyResultFlag
+    "parser cases = $primitiveFlag,$qualifiedFlag,$qualifiedGrowableFlag,$qualifiedGrowableEffectsFlag,$nestedEffectOnlyResultFlag" -> println
+}

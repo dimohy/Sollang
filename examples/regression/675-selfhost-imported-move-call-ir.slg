@@ -1,0 +1,38 @@
+import sollang.compiler.ir.typed as typedIr
+
+# A qualified imported call with a moved primary input must remain a call and
+# its value binding must use the imported function's declared result type.
+main {
+    [
+        """
+        namespace fixture.move_call
+
+        public struct Box {
+            value: Int
+        }
+
+        public take box: move Box, values: move [Text; ~], increment: Int -> Int {
+            box.value + increment
+        }
+        """,
+        """
+        import fixture.move_call as moveCall
+
+        main {
+            moveCall.Box { value: 41 } => box!
+            [Text; ~] => values!
+            moveCall.take(box!, values!, 1) => answer
+            answer -> println
+        }
+        """; ~
+    ] => sources!
+    sources! -> typedIr.lower => ir!
+    0 => index!
+    index! < (ir! -> len) -> while {
+        ir![index!] => node
+        (node.kind == 6 or node.kind == 17) -> if {
+            "node $(index!) = $(node.kind),$(node.typeOrigin),$(node.typeModule),$(node.typeSymbol),$(node.operand0)" -> println
+        }
+        index! + 1 => index!
+    }
+}

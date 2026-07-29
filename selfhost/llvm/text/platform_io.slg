@@ -87,16 +87,30 @@ emitProcessCall request: ProcessCallRequest, context: ref emitterContext.EmitCon
     }
     argumentIndex! => resolvedArgumentIndex
     context.ir[argumentIndex!] => argument
+    -1 => processArgumentMutableRoot!
+    (argument.kind == 17 and argument.flags == 1) -> if {
+        argumentIndex! -> mutableBindingRoot(context, state) => processArgumentMutableRoot!
+        "  %v$(request.callIndex)_process_argument = load " -> print
+        argument -> writeIrType(context, state)
+        ", ptr %slot" -> print
+        processArgumentMutableRoot! -> writeDecimal
+        ", align " -> print
+        argument -> storageAlign(context, state) -> writeDecimalLine
+    }
     call.opcode == -210 -> if {
         "  %v$(request.callIndex)_process_records = extractvalue " -> print
         argument -> writeIrType(context, state)
         " " -> print
-        (argument.kind == 5 and request.ownerIndex >= 0 and context.ir[request.ownerIndex].kind == 0 and context.ir[request.ownerIndex].operand1 >= 0 and argument.symbol == context.ir[context.ir[request.ownerIndex].operand1].symbol) -> if { "%arg" -> print } else { "%v$(resolvedArgumentIndex)" -> print }
+        processArgumentMutableRoot! >= 0 -> if { "%v$(request.callIndex)_process_argument" -> print } else {
+            (argument.kind == 5 and request.ownerIndex >= 0 and context.ir[request.ownerIndex].kind == 0 and context.ir[request.ownerIndex].operand1 >= 0 and argument.symbol == context.ir[context.ir[request.ownerIndex].operand1].symbol) -> if { "%arg" -> print } else { "%v$(resolvedArgumentIndex)" -> print }
+        }
         ", 0" -> println
         "  %v$(request.callIndex)_process_count = extractvalue " -> print
         argument -> writeIrType(context, state)
         " " -> print
-        (argument.kind == 5 and request.ownerIndex >= 0 and context.ir[request.ownerIndex].kind == 0 and context.ir[request.ownerIndex].operand1 >= 0 and argument.symbol == context.ir[context.ir[request.ownerIndex].operand1].symbol) -> if { "%arg" -> print } else { "%v$(resolvedArgumentIndex)" -> print }
+        processArgumentMutableRoot! >= 0 -> if { "%v$(request.callIndex)_process_argument" -> print } else {
+            (argument.kind == 5 and request.ownerIndex >= 0 and context.ir[request.ownerIndex].kind == 0 and context.ir[request.ownerIndex].operand1 >= 0 and argument.symbol == context.ir[context.ir[request.ownerIndex].operand1].symbol) -> if { "%arg" -> print } else { "%v$(resolvedArgumentIndex)" -> print }
+        }
         ", 1" -> println
         "  %v$(request.callIndex)_process_raw = call %sollang.process_result @sollang_run_process(ptr %v$(request.callIndex)_process_records, i64 %v$(request.callIndex)_process_count)" -> println
     } else {
@@ -112,12 +126,16 @@ emitProcessCall request: ProcessCallRequest, context: ref emitterContext.EmitCon
         "  %v$(request.callIndex)_process_argv = extractvalue " -> print
         argument -> writeIrType(context, state)
         " " -> print
-        (argument.kind == 5 and request.ownerIndex >= 0 and context.ir[request.ownerIndex].kind == 0 and context.ir[request.ownerIndex].operand1 >= 0 and argument.symbol == context.ir[context.ir[request.ownerIndex].operand1].symbol) -> if { "%arg" -> print } else { "%v$(resolvedArgumentIndex)" -> print }
+        processArgumentMutableRoot! >= 0 -> if { "%v$(request.callIndex)_process_argument" -> print } else {
+            (argument.kind == 5 and request.ownerIndex >= 0 and context.ir[request.ownerIndex].kind == 0 and context.ir[request.ownerIndex].operand1 >= 0 and argument.symbol == context.ir[context.ir[request.ownerIndex].operand1].symbol) -> if { "%arg" -> print } else { "%v$(resolvedArgumentIndex)" -> print }
+        }
         ", 0" -> println
         "  %v$(request.callIndex)_process_output = extractvalue " -> print
         argument -> writeIrType(context, state)
         " " -> print
-        (argument.kind == 5 and request.ownerIndex >= 0 and context.ir[request.ownerIndex].kind == 0 and context.ir[request.ownerIndex].operand1 >= 0 and argument.symbol == context.ir[context.ir[request.ownerIndex].operand1].symbol) -> if { "%arg" -> print } else { "%v$(resolvedArgumentIndex)" -> print }
+        processArgumentMutableRoot! >= 0 -> if { "%v$(request.callIndex)_process_argument" -> print } else {
+            (argument.kind == 5 and request.ownerIndex >= 0 and context.ir[request.ownerIndex].kind == 0 and context.ir[request.ownerIndex].operand1 >= 0 and argument.symbol == context.ir[context.ir[request.ownerIndex].operand1].symbol) -> if { "%arg" -> print } else { "%v$(resolvedArgumentIndex)" -> print }
+        }
         ", 1" -> println
         "  %v$(request.callIndex)_process_records = extractvalue " -> print
         argvFieldType! -> writeSemanticTypeId(context, state)
@@ -963,10 +981,33 @@ arrayElementTypeId node: typedIr.TypedIrNode, context: ref emitterContext.EmitCo
     node.typeId >= 0 -> if {
         context.types[node.typeId].kind == 3 -> if { context.types[node.typeId].first => elementTypeId! }
     } else {
+        # A freshly lowered non-empty array literal can temporarily retain the
+        # legacy dynamic-array projection while its canonical container type is
+        # unresolved. Its first operand still has the authoritative element
+        # type, so recover that before consulting the legacy symbol fields.
+        node.operand0 >= 0 -> if {
+            context.ir[node.operand0] => firstElement
+            firstElement.typeId >= 0 -> if { firstElement.typeId => elementTypeId! } else {
+                0 => builtinElementSearch!
+                (builtinElementSearch! < (context.types -> len) and elementTypeId! < 0) -> while {
+                    context.types[builtinElementSearch!] => builtinElementCandidate
+                    ((firstElement.typeOrigin == 1
+                            and builtinElementCandidate.origin == 1
+                            and builtinElementCandidate.symbol == firstElement.typeSymbol)
+                        or (builtinElementCandidate.kind == firstElement.typeKind
+                            and builtinElementCandidate.origin == firstElement.typeOrigin
+                            and builtinElementCandidate.module == firstElement.typeModule
+                            and builtinElementCandidate.symbol == firstElement.typeSymbol)) -> if {
+                        builtinElementSearch! => elementTypeId!
+                    }
+                    builtinElementSearch! + 1 => builtinElementSearch!
+                }
+            }
+        }
         # The legacy array projection stores a nominal element as
         # typeModule/typeSymbol. Recover its canonical ID so arrays of
         # user structs do not fall through to builtin symbol 0 (Unit).
-        node.typeModule >= 0 -> if {
+        (elementTypeId! < 0 and node.typeModule >= 0) -> if {
             0 => legacyElementSearch!
             legacyElementSearch! < (context.types -> len) -> while {
                 context.types[legacyElementSearch!] => legacyElementCandidate

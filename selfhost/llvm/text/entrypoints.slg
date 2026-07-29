@@ -218,6 +218,12 @@ prepareSnapshot request: ref PrepareRequest, prepared: move semanticContext.Sema
     # recursive type arena represents their declaration identity as a nominal
     # type, so recover variant payload type uses from the flat AST before the
     # emitter freezes layout and ownership tables.
+    [Bool; ~] => nominalEnumFlags!
+    0 => nominalEnumFlagIndex!
+    nominalEnumFlagIndex! < (semanticTypes! -> len) -> while {
+        nominalEnumFlags! -> push(false)
+        nominalEnumFlagIndex! + 1 => nominalEnumFlagIndex!
+    }
     0 => nominalEnumLayoutIndex!
     nominalEnumLayoutIndex! < (semanticTypes! -> len) -> while {
         semanticTypes![nominalEnumLayoutIndex!] => nominalEnumType
@@ -232,6 +238,7 @@ prepareSnapshot request: ref PrepareRequest, prepared: move semanticContext.Sema
             }
         }
         nominalEnumAst! >= 0 -> if {
+            true => nominalEnumFlags![nominalEnumLayoutIndex!]
             0 => nominalEnumPayloadSize!
             false => nominalEnumOwns!
             false => nominalEnumReachesHeap!
@@ -284,6 +291,64 @@ prepareSnapshot request: ref PrepareRequest, prepared: move semanticContext.Sema
         }
         nominalEnumLayoutIndex! + 1 => nominalEnumLayoutIndex!
     }
+    # Enum declarations are recovered after the first recursive layout pass.
+    # Reflow nominal structs and fixed arrays that contain those enums so their
+    # stored size matches LLVM's padded aggregate stride (for example Path is
+    # 32 bytes, not the unpadded 24-byte field sum).
+    true => nominalDependentLayoutChanged!
+    nominalDependentLayoutChanged! -> while {
+        false => nominalDependentLayoutChanged!
+        0 => nominalDependentLayoutIndex!
+        nominalDependentLayoutIndex! < (semanticTypes! -> len) -> while {
+            semanticTypes![nominalDependentLayoutIndex!] => nominalDependentType
+            (nominalDependentType.kind == 1
+                and (nominalDependentType.origin == 0 or nominalDependentType.origin == 2)
+                and not nominalEnumFlags![nominalDependentLayoutIndex!]) -> if {
+                0 => nominalDependentSize!
+                1 => nominalDependentAlign!
+                true => nominalDependentReady!
+                0 => nominalDependentFieldIndex!
+                nominalDependentFieldIndex! < (semanticFields! -> len) -> while {
+                    semanticFields![nominalDependentFieldIndex!] => nominalDependentField
+                    (nominalDependentField.status == 0 and nominalDependentField.ownerType == nominalDependentLayoutIndex!) -> if {
+                        (nominalDependentField.fieldType < 0 or typeLayoutStatuses![nominalDependentField.fieldType] != 0) -> if {
+                            false => nominalDependentReady!
+                        } else {
+                            typeAligns![nominalDependentField.fieldType] > nominalDependentAlign! -> if {
+                                typeAligns![nominalDependentField.fieldType] => nominalDependentAlign!
+                            }
+                            ((nominalDependentSize! + typeAligns![nominalDependentField.fieldType] - 1) / typeAligns![nominalDependentField.fieldType]) * typeAligns![nominalDependentField.fieldType] => nominalDependentSize!
+                            nominalDependentSize! + typeSizes![nominalDependentField.fieldType] => nominalDependentSize!
+                        }
+                    }
+                    nominalDependentFieldIndex! + 1 => nominalDependentFieldIndex!
+                }
+                nominalDependentReady! -> if {
+                    ((nominalDependentSize! + nominalDependentAlign! - 1) / nominalDependentAlign!) * nominalDependentAlign! => nominalDependentSize!
+                    (typeSizes![nominalDependentLayoutIndex!] != nominalDependentSize! or typeAligns![nominalDependentLayoutIndex!] != nominalDependentAlign!) -> if {
+                        nominalDependentSize! => typeSizes![nominalDependentLayoutIndex!]
+                        nominalDependentAlign! => typeAligns![nominalDependentLayoutIndex!]
+                        0 => typeLayoutStatuses![nominalDependentLayoutIndex!]
+                        true => nominalDependentLayoutChanged!
+                    }
+                }
+            }
+            (nominalDependentType.kind == 4
+                and nominalDependentType.first >= 0
+                and nominalDependentType.length >= 0
+                and typeLayoutStatuses![nominalDependentType.first] == 0) -> if {
+                typeSizes![nominalDependentType.first] * nominalDependentType.length => nominalDependentArraySize
+                typeAligns![nominalDependentType.first] => nominalDependentArrayAlign
+                (typeSizes![nominalDependentLayoutIndex!] != nominalDependentArraySize or typeAligns![nominalDependentLayoutIndex!] != nominalDependentArrayAlign) -> if {
+                    nominalDependentArraySize => typeSizes![nominalDependentLayoutIndex!]
+                    nominalDependentArrayAlign => typeAligns![nominalDependentLayoutIndex!]
+                    0 => typeLayoutStatuses![nominalDependentLayoutIndex!]
+                    true => nominalDependentLayoutChanged!
+                }
+            }
+            nominalDependentLayoutIndex! + 1 => nominalDependentLayoutIndex!
+        }
+    }
     ir! -> typedIr.movesFrom => moves!
     [Text; ~] => contextSources!
     0 => contextSourceIndex!
@@ -333,6 +398,7 @@ emitWindowsContext context: emitterContext.EmitContext -> Unit uses Console {
     context -> diagnostics.usesParallelRuntime => capturesParallelOutput
     context -> diagnostics.usesTextRuntime => usesTextOutput
     context -> diagnostics.usesProcessRuntime => needsProcessRuntime
+    context -> diagnostics.usesArgumentsRuntime => needsArgumentsRuntime
     context -> diagnostics.usesDirectoryRuntime => needsDirectoryRuntime
     context -> diagnostics.usesOwnedFileRuntime => needsOwnedFileRuntime
     context -> diagnostics.usesMouseEventsRuntime => needsMouseEventsRuntime
@@ -366,10 +432,18 @@ emitWindowsContext context: emitterContext.EmitContext -> Unit uses Console {
         "declare dllimport ptr @CreateFileW(ptr, i32, i32, ptr, i32, i32, ptr)" -> println
         "declare dllimport i32 @GetFinalPathNameByHandleW(ptr, ptr, i32, i32)" -> println
         "declare dllimport i32 @GetFileInformationByHandle(ptr, ptr)" -> println
-        not capturesParallelOutput -> if {
+        (not usesTextOutput and not capturesParallelOutput) -> if {
             "declare dllimport i32 @MultiByteToWideChar(i32, i32, ptr, i32, ptr, i32)" -> println
         }
         "declare dllimport i32 @WideCharToMultiByte(i32, i32, ptr, i32, ptr, i32, ptr, ptr)" -> println
+    }
+    needsArgumentsRuntime -> if {
+        "declare dllimport ptr @GetCommandLineW()" -> println
+        "declare dllimport ptr @CommandLineToArgvW(ptr, ptr)" -> println
+        "declare dllimport ptr @LocalFree(ptr)" -> println
+        not needsDirectoryRuntime -> if {
+            "declare dllimport i32 @WideCharToMultiByte(i32, i32, ptr, i32, ptr, i32, ptr, ptr)" -> println
+        }
     }
     (needsOwnedFileRuntime and runtimeModule! < 0) -> if {
         (not usesTextOutput and not capturesParallelOutput) -> if {
@@ -400,6 +474,13 @@ emitLinuxContext context: emitterContext.EmitContext -> Unit uses Console {
     context -> diagnostics.usesDirectoryRuntime => needsDirectoryRuntime
     context -> diagnostics.usesOwnedFileRuntime => needsOwnedFileRuntime
     context -> diagnostics.usesMouseEventsRuntime => needsMouseEventsRuntime
+    -1 => runtimeModule!
+    0 => runtimeModuleSearch!
+    runtimeModuleSearch! < (context.modules -> len) -> while {
+        context.modules[runtimeModuleSearch!] => moduleIdentity
+        moduleIdentity.pathHash == UInt64(12254170256457402476) -> if { moduleIdentity.sourceIndex => runtimeModule! }
+        runtimeModuleSearch! + 1 => runtimeModuleSearch!
+    }
     capturesParallelOutput -> if { computeRuntime.emitMemoryOutputSinkRuntime() }
     (usesTextOutput or capturesParallelOutput) -> if { capturesParallelOutput -> textOutputRuntime.emitLinuxTextRuntime }
     capturesParallelOutput -> if { computeRuntime.emitLinuxComputeRuntime() }
@@ -411,6 +492,9 @@ emitLinuxContext context: emitterContext.EmitContext -> Unit uses Console {
     needsProcessRuntime -> if { capturesParallelOutput -> processRuntime.emitLinuxProcessRuntime }
     needsDirectoryRuntime -> if { llvmRuntime.emitLinuxDirectory() }
     needsOwnedFileRuntime -> if { not needsProcessRuntime -> llvmRuntime.emitLinuxOwnedFile }
+    runtimeModule! >= 0 -> if {
+        runtimeModule! -> llvmRuntime.emitLinux
+    }
     needsSourceTextRuntime -> if {
         (not needsProcessRuntime and not needsOwnedFileRuntime) -> if { "declare i32 @open(ptr, i32, i32)" -> println }
         (not capturesParallelOutput and not needsProcessRuntime and not needsOwnedFileRuntime) -> if { "declare i32 @close(i32)" -> println }
@@ -522,6 +606,7 @@ public emitWasmChecked sources: move [Text; ~] -> Int uses Console {
     diagnosticCount!
 }
 
+
 prepareLibraryFiles request: ref PrepareRequest, paths: [Text; ~], targetName: Text, style: path.Style -> emitterContext.EmitContext uses File {
     request.sources -> semanticContext.prepare => basePrepared!
     basePrepared!.package -> libraryImports.load(paths, targetName, style) => libraries!
@@ -603,7 +688,7 @@ public emitWasmFiles paths: [Text; ~] -> Unit uses Console, File {
     owners! -> len => ownerCount
 }
 
-public emitCheckedFiles paths: [Text; ~] -> Int uses Console, File {
+public emitCheckedFiles paths: move [Text; ~] -> Int uses Console, File {
     [file.SourceText; ~] => owners!
     0 => pathIndex!
     pathIndex! < (paths -> len) -> while {
@@ -632,7 +717,7 @@ public emitCheckedFiles paths: [Text; ~] -> Int uses Console, File {
     diagnosticCount
 }
 
-public emitLinuxCheckedFiles paths: [Text; ~] -> Int uses Console, File {
+public emitLinuxCheckedFiles paths: move [Text; ~] -> Int uses Console, File {
     [file.SourceText; ~] => owners!
     0 => pathIndex!
     pathIndex! < (paths -> len) -> while {
@@ -666,7 +751,7 @@ public emitLinuxCheckedFiles paths: [Text; ~] -> Int uses Console, File {
     diagnosticCount!
 }
 
-public emitWasmCheckedFiles paths: [Text; ~] -> Int uses Console, File {
+public emitWasmCheckedFiles paths: move [Text; ~] -> Int uses Console, File {
     [file.SourceText; ~] => owners!
     0 => pathIndex!
     pathIndex! < (paths -> len) -> while {

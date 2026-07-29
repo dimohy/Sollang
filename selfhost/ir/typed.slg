@@ -204,12 +204,14 @@ intrinsicOpcode request: IntrinsicNameRequest -> Int {
     }
     request.token.span.length == UIntSize(8) -> if {
         ((request.source -> byte(request.token.span.start)) == UInt8(112) and (request.source -> byte(request.token.span.start + UIntSize(1))) == UInt8(97) and (request.source -> byte(request.token.span.start + UIntSize(2))) == UInt8(114) and (request.source -> byte(request.token.span.start + UIntSize(3))) == UInt8(97) and (request.source -> byte(request.token.span.start + UIntSize(4))) == UInt8(108) and (request.source -> byte(request.token.span.start + UIntSize(5))) == UInt8(108) and (request.source -> byte(request.token.span.start + UIntSize(6))) == UInt8(101) and (request.source -> byte(request.token.span.start + UIntSize(7))) == UInt8(108)) -> if { -207 => opcode! }
+        ((request.source -> byte(request.token.span.start)) == UInt8(112) and (request.source -> byte(request.token.span.start + UIntSize(1))) == UInt8(97) and (request.source -> byte(request.token.span.start + UIntSize(2))) == UInt8(116) and (request.source -> byte(request.token.span.start + UIntSize(3))) == UInt8(104) and (request.source -> byte(request.token.span.start + UIntSize(4))) == UInt8(84) and (request.source -> byte(request.token.span.start + UIntSize(5))) == UInt8(101) and (request.source -> byte(request.token.span.start + UIntSize(6))) == UInt8(120) and (request.source -> byte(request.token.span.start + UIntSize(7))) == UInt8(116)) -> if { -230 => opcode! }
     }
     request.token.span.length == UIntSize(10) -> if {
         ((request.source -> byte(request.token.span.start)) == UInt8(98) and (request.source -> byte(request.token.span.start + UIntSize(1))) == UInt8(111) and (request.source -> byte(request.token.span.start + UIntSize(2))) == UInt8(114) and (request.source -> byte(request.token.span.start + UIntSize(3))) == UInt8(114) and (request.source -> byte(request.token.span.start + UIntSize(4))) == UInt8(111) and (request.source -> byte(request.token.span.start + UIntSize(5))) == UInt8(119) and (request.source -> byte(request.token.span.start + UIntSize(6))) == UInt8(84) and (request.source -> byte(request.token.span.start + UIntSize(7))) == UInt8(101) and (request.source -> byte(request.token.span.start + UIntSize(8))) == UInt8(120) and (request.source -> byte(request.token.span.start + UIntSize(9))) == UInt8(116)) -> if { -206 => opcode! }
     }
     request.token.span.length == UIntSize(11) -> if {
         ((request.source -> byte(request.token.span.start)) == UInt8(116) and (request.source -> byte(request.token.span.start + UIntSize(1))) == UInt8(114) and (request.source -> byte(request.token.span.start + UIntSize(2))) == UInt8(121) and (request.source -> byte(request.token.span.start + UIntSize(3))) == UInt8(80) and (request.source -> byte(request.token.span.start + UIntSize(4))) == UInt8(97) and (request.source -> byte(request.token.span.start + UIntSize(5))) == UInt8(114) and (request.source -> byte(request.token.span.start + UIntSize(6))) == UInt8(97) and (request.source -> byte(request.token.span.start + UIntSize(7))) == UInt8(108) and (request.source -> byte(request.token.span.start + UIntSize(8))) == UInt8(108) and (request.source -> byte(request.token.span.start + UIntSize(9))) == UInt8(101) and (request.source -> byte(request.token.span.start + UIntSize(10))) == UInt8(108)) -> if { -209 => opcode! }
+        ((request.source -> byte(request.token.span.start)) == UInt8(109) and (request.source -> byte(request.token.span.start + UIntSize(1))) == UInt8(97) and (request.source -> byte(request.token.span.start + UIntSize(2))) == UInt8(116) and (request.source -> byte(request.token.span.start + UIntSize(3))) == UInt8(101) and (request.source -> byte(request.token.span.start + UIntSize(4))) == UInt8(114) and (request.source -> byte(request.token.span.start + UIntSize(5))) == UInt8(105) and (request.source -> byte(request.token.span.start + UIntSize(6))) == UInt8(97) and (request.source -> byte(request.token.span.start + UIntSize(7))) == UInt8(108) and (request.source -> byte(request.token.span.start + UIntSize(8))) == UInt8(105) and (request.source -> byte(request.token.span.start + UIntSize(9))) == UInt8(122) and (request.source -> byte(request.token.span.start + UIntSize(10))) == UInt8(101)) -> if { -229 => opcode! }
     }
     opcode!
 }
@@ -368,6 +370,83 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                 }
             }
             candidateIndex! + 1 => candidateIndex!
+        }
+        tag! < 0 -> if {
+            false => ambiguousImportedTag!
+            0 => importedSourceIndex!
+            (importedSourceIndex! < (prepared.package.ranges -> len) and not ambiguousImportedTag!) -> while {
+                prepared.package.ranges[importedSourceIndex!] => importedRange
+                0 => importedCandidateIndex!
+                importedCandidateIndex! < importedRange.astCount -> while {
+                    prepared.package.nodes[importedRange.astStart + importedCandidateIndex!] => importedCandidate
+                    (importedCandidate.kind == 27 and importedCandidate.parent >= 0 and prepared.package.nodes[importedRange.astStart + importedCandidate.parent].kind == 4 and importedCandidate.payloadToken >= 0) -> if {
+                        prepared.package.tokens[importedRange.tokenStart + importedCandidate.payloadToken] => importedCandidateToken
+                        importedCandidateToken.span.length == variantToken.span.length => importedSameName!
+                        UIntSize(0) => importedByteIndex!
+                        (importedSameName! and importedByteIndex! < variantToken.span.length) -> while {
+                            (prepared.package.sources[importedSourceIndex!] -> byte(importedCandidateToken.span.start + importedByteIndex!)) != (variantSource -> byte(variantToken.span.start + importedByteIndex!)) -> if { false => importedSameName! }
+                            importedByteIndex! + UIntSize(1) => importedByteIndex!
+                        }
+                        importedSameName! -> if {
+                            0 => importedOrdinal!
+                            0 => importedOrdinalSearch!
+                            importedOrdinalSearch! < importedRange.astCount -> while {
+                                prepared.package.nodes[importedRange.astStart + importedOrdinalSearch!] => importedSibling
+                                (importedSibling.kind == 27 and importedSibling.parent == importedCandidate.parent and importedSibling.start < importedCandidate.start) -> if { importedOrdinal! + 1 => importedOrdinal! }
+                                importedOrdinalSearch! + 1 => importedOrdinalSearch!
+                            }
+                            tag! < 0 -> if { importedOrdinal! => tag! } else {
+                                tag! != importedOrdinal! -> if { true => ambiguousImportedTag! }
+                            }
+                        }
+                    }
+                    importedCandidateIndex! + 1 => importedCandidateIndex!
+                }
+                importedSourceIndex! + 1 => importedSourceIndex!
+            }
+            ambiguousImportedTag! -> if { -1 => tag! }
+        }
+        tag!
+    }
+    nominalVariantTagForType variantSourceModule: Int, subjectType: typeIds.SemanticType, variantToken: syntax.SyntaxToken -> Int {
+        subjectType.module => ownerSourceModule!
+        subjectType.origin == 2 -> if {
+            (subjectType.module >= 0 and subjectType.module < (prepared.modules -> len)) -> if {
+                prepared.modules[subjectType.module].sourceIndex => ownerSourceModule!
+            }
+        }
+        -1 => ownerDeclarationAst!
+        -1 => tag!
+        (ownerSourceModule! >= 0 and ownerSourceModule! < (prepared.package.ranges -> len)) -> if {
+            prepared.package.ranges[ownerSourceModule!] => ownerRange
+            (subjectType.symbol >= 0 and subjectType.symbol < ownerRange.symbolCount) -> if {
+                prepared.package.symbols[ownerRange.symbolStart + subjectType.symbol] => ownerSymbol
+                ownerSymbol.astNode >= 0 -> if { ownerSymbol.astNode => ownerDeclarationAst! }
+            }
+            0 => candidateIndex!
+            (ownerDeclarationAst! >= 0 and candidateIndex! < ownerRange.astCount and tag! < 0) -> while {
+                prepared.package.nodes[ownerRange.astStart + candidateIndex!] => candidate
+                (candidate.kind == 27 and candidate.parent == ownerDeclarationAst! and candidate.payloadToken >= 0) -> if {
+                    prepared.package.tokens[ownerRange.tokenStart + candidate.payloadToken] => candidateToken
+                    candidateToken.span.length == variantToken.span.length => sameName!
+                    UIntSize(0) => byteIndex!
+                    (sameName! and byteIndex! < variantToken.span.length) -> while {
+                        (prepared.package.sources[ownerSourceModule!] -> byte(candidateToken.span.start + byteIndex!)) != (prepared.package.sources[variantSourceModule] -> byte(variantToken.span.start + byteIndex!)) -> if { false => sameName! }
+                        byteIndex! + UIntSize(1) => byteIndex!
+                    }
+                    sameName! -> if {
+                        0 => ordinal!
+                        0 => ordinalSearch!
+                        ordinalSearch! < ownerRange.astCount -> while {
+                            prepared.package.nodes[ownerRange.astStart + ordinalSearch!] => sibling
+                            (sibling.kind == 27 and sibling.parent == ownerDeclarationAst! and sibling.start < candidate.start) -> if { ordinal! + 1 => ordinal! }
+                            ordinalSearch! + 1 => ordinalSearch!
+                        }
+                        ordinal! => tag!
+                    }
+                }
+                candidateIndex! + 1 => candidateIndex!
+            }
         }
         tag!
     }
@@ -1020,6 +1099,18 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                             -1 => bindingTypeIndex!
                             frozenNearestLegacyIndexByAst[sourceRange.astStart + bindingAstIndex!] => bindingTypeIndex!
                             frozenNearestCanonicalTypeByAst[sourceRange.astStart + bindingAstIndex!] => bindingCanonicalTypeId!
+                            bindingCanonicalTypeId! < 0 -> if {
+                                0 => bindingValueTypeSearch!
+                                (bindingValueTypeSearch! < sourceRange.astCount and bindingCanonicalTypeId! < 0) -> while {
+                                    prepared.package.nodes[sourceRange.astStart + bindingValueTypeSearch!] => bindingValueTypeAst
+                                    (bindingValueTypeAst.parent == bindingAstIndex!
+                                        and bindingValueTypeAst.start == bindingAst.start) -> if {
+                                        frozenRecursiveTypeByAst[sourceRange.astStart + bindingValueTypeSearch!] => bindingValueTypeId
+                                        bindingValueTypeId >= 0 -> if { bindingValueTypeId => bindingCanonicalTypeId! }
+                                    }
+                                    bindingValueTypeSearch! + 1 => bindingValueTypeSearch!
+                                }
+                            }
                             -1 => bindingSymbol!
                             0 => bindingSymbolSearch!
                             bindingSymbolSearch! < sourceRange.symbolCount -> while {
@@ -1064,7 +1155,7 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                                     bindingDeclaredReferenceSearch! + 1 => bindingDeclaredReferenceSearch!
                                 }
                             }
-                            (bindingTypeIndex! >= 0 or bindingCanonicalTypeId! >= 0) -> if {
+                            bindingSymbol! >= 0 -> if {
                                 -1 => bindingOrigin!
                                 -1 => bindingModule!
                                 -1 => bindingSymbolType!
@@ -1250,6 +1341,12 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                             (source -> byte(functionParameterName.span.start + parameterNameByte!)) != (source -> byte(expressionParameterName.span.start + parameterNameByte!)) -> if { false => sameParameterName! }
                             parameterNameByte! + UIntSize(1) => parameterNameByte!
                         }
+                        functionParameterSymbol.flags / 262144 % 2 == 1 -> if {
+                            expressionParameterName.span.length == UIntSize(2) => sameParameterName!
+                            (sameParameterName!
+                                and (source -> byte(expressionParameterName.span.start)) == UInt8(105)
+                                and (source -> byte(expressionParameterName.span.start + UIntSize(1))) == UInt8(116)) => sameParameterName!
+                        }
                         sameParameterName! -> if {
                             true => knownParameterReference!
                             parameterTypeId! => recursiveExpressionTypeId!
@@ -1296,15 +1393,18 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                                     }
                                 }
                             } else {
-                                knownCall.functionSymbol == -103 -> if {
+                                (knownCall.functionSymbol == -103
+                                    or knownCall.functionSymbol == -105
+                                    or knownCall.functionSymbol == -110
+                                    or knownCall.functionSymbol == -115) -> if {
                                     1 => expressionTypeOrigin!
                                     -1 => expressionTypeModule!
                                     2 => expressionTypeSymbol!
                                 }
-                                knownCall.functionSymbol == -115 -> if {
+                                knownCall.functionSymbol == -112 -> if {
                                     1 => expressionTypeOrigin!
                                     -1 => expressionTypeModule!
-                                    2 => expressionTypeSymbol!
+                                    9 => expressionTypeSymbol!
                                 }
                             }
                         }
@@ -1357,6 +1457,7 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                     false => knownMapTextExpression!
                     false => knownMapPathExpression!
                     false => knownBorrowTextExpression!
+                    false => knownMaterializeExpression!
                     false => knownDynExpression!
                     false => knownDynDispatchExpression!
                     false => knownStreamFlowExpression!
@@ -1369,6 +1470,7 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                         flowOpcode == -205 -> if { true => knownMapTextExpression! }
                         flowOpcode == -214 -> if { true => knownMapPathExpression! }
                         flowOpcode == -206 -> if { true => knownBorrowTextExpression! }
+                        flowOpcode == -229 -> if { true => knownMaterializeExpression! }
                         flowOpcode == -224 -> if { true => knownDynExpression! }
                         (flowOpcode == -227 or flowOpcode == -228) -> if { true => knownStreamFlowExpression! }
                         expression.firstToken => knownDynTokenSearch!
@@ -1520,6 +1622,11 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                         -1 => expressionTypeModule!
                         24 => expressionTypeSymbol!
                     }
+                    knownMaterializeExpression! -> if {
+                        1 => expressionTypeOrigin!
+                        -1 => expressionTypeModule!
+                        1 => expressionTypeSymbol!
+                    }
                     expressionBelongsToFunction! -> if {
                     (expression.kind == 42 or expression.kind == 43 or expression.kind == 44 or expression.kind == 45 or expression.kind == 46 or expression.kind == 47 or expression.kind == 58 or expression.kind == 62) -> if {
                             results! -> len => controlIr
@@ -1669,7 +1776,7 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                                     }
                                 }
                             }
-                            (not resolvedQualifiedLeaf! and (contextualNullaryOption! or expressionTypeIndex! >= 0 or recursiveExpressionTypeId! >= 0 or knownParameterReference! or knownPatternReference! or unresolvedLibraryInvocation! or expression.kind == 22 or expression.kind == 37 or expression.kind == 41 or expression.kind == 56 or expression.kind == 57 or (expression.kind == 15 and expression.parent >= 0 and prepared.package.nodes[sourceRange.astStart + expression.parent].kind == 41) or knownBooleanExpression! or knownCallExpression! or knownNumericExpression! or knownPushExpression! or knownPutExpression! or knownMapTextExpression! or knownMapPathExpression! or knownBorrowTextExpression! or knownDynExpression! or knownDynDispatchExpression! or knownStreamFlowExpression! or knownIndexAssignment! or knownMemberAssignment!)) -> if {
+                            (not resolvedQualifiedLeaf! and (contextualNullaryOption! or expressionTypeIndex! >= 0 or recursiveExpressionTypeId! >= 0 or knownParameterReference! or knownPatternReference! or unresolvedLibraryInvocation! or expression.kind == 22 or expression.kind == 37 or expression.kind == 41 or expression.kind == 56 or expression.kind == 57 or (expression.kind == 15 and expression.parent >= 0 and prepared.package.nodes[sourceRange.astStart + expression.parent].kind == 41) or knownBooleanExpression! or knownCallExpression! or knownNumericExpression! or knownPushExpression! or knownPutExpression! or knownMapTextExpression! or knownMapPathExpression! or knownBorrowTextExpression! or knownMaterializeExpression! or knownDynExpression! or knownDynDispatchExpression! or knownStreamFlowExpression! or knownIndexAssignment! or knownMemberAssignment!)) -> if {
                             9 => expressionKind!
                             expression.kind == 13 -> if { 2 => expressionKind! }
                             expression.kind == 14 -> if { 3 => expressionKind! }
@@ -1888,6 +1995,7 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                                 knownMapTextExpression! -> if { -205 => expressionOpcode! }
                                 knownMapPathExpression! -> if { -214 => expressionOpcode! }
                                 knownBorrowTextExpression! -> if { -206 => expressionOpcode! }
+                                knownMaterializeExpression! -> if { -229 => expressionOpcode! }
                             }
                             expression.kind == 48 -> if {
                                 expression.firstToken => roleTokenIndex!
@@ -2003,7 +2111,7 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                 expressionIrStart => operandIrIndex!
                 operandIrIndex! < expressionIrEnd -> while {
                     results![operandIrIndex!] => operatorIr!
-                    (operatorIr!.kind == 6 or operatorIr!.kind == 7 or operatorIr!.kind == 8 or (operatorIr!.kind == 9 and ((operatorIr!.opcode <= -201 and (operatorIr!.opcode >= -206 or operatorIr!.opcode == -213 or operatorIr!.opcode == -223 or operatorIr!.opcode == -224 or operatorIr!.opcode == -225 or operatorIr!.opcode == -226 or operatorIr!.opcode == -227 or operatorIr!.opcode == -228)) or operatorIr!.opcode == -220 or operatorIr!.opcode == -221)) or operatorIr!.kind == 13 or operatorIr!.kind == 15 or operatorIr!.kind == 17 or operatorIr!.kind == 22 or operatorIr!.kind == 23 or operatorIr!.kind == 24 or operatorIr!.kind == 25 or operatorIr!.kind == 26 or operatorIr!.kind == 31 or operatorIr!.kind == 32) -> if {
+                    (operatorIr!.kind == 6 or operatorIr!.kind == 7 or operatorIr!.kind == 8 or (operatorIr!.kind == 9 and ((operatorIr!.opcode <= -201 and (operatorIr!.opcode >= -206 or operatorIr!.opcode == -213 or operatorIr!.opcode == -223 or operatorIr!.opcode == -224 or operatorIr!.opcode == -225 or operatorIr!.opcode == -226 or operatorIr!.opcode == -227 or operatorIr!.opcode == -228 or operatorIr!.opcode == -229)) or operatorIr!.opcode == -220 or operatorIr!.opcode == -221)) or operatorIr!.kind == 13 or operatorIr!.kind == 15 or operatorIr!.kind == 17 or operatorIr!.kind == 22 or operatorIr!.kind == 23 or operatorIr!.kind == 24 or operatorIr!.kind == 25 or operatorIr!.kind == 26 or operatorIr!.kind == 31 or operatorIr!.kind == 32) -> if {
                         -1 => firstOperand!
                         -1 => secondOperand!
                         UIntSize(0) => firstStart!
@@ -2037,7 +2145,7 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                             unaryOperand.typeKind => operatorIr!.typeKind
                             unaryOperand.typeFlags => operatorIr!.typeFlags
                         }
-                        (operatorIr!.kind == 6 or operatorIr!.kind == 8 or (operatorIr!.kind == 9 and ((operatorIr!.opcode <= -201 and (operatorIr!.opcode >= -206 or operatorIr!.opcode == -213 or operatorIr!.opcode == -223 or operatorIr!.opcode == -224 or operatorIr!.opcode == -225 or operatorIr!.opcode == -226 or operatorIr!.opcode == -227)) or operatorIr!.opcode == -220 or operatorIr!.opcode == -221)) or operatorIr!.kind == 15 or operatorIr!.kind == 24 or operatorIr!.kind == 31 or operatorIr!.kind == 32) -> if { secondOperand! => operatorIr!.operand1 }
+                        (operatorIr!.kind == 6 or operatorIr!.kind == 8 or (operatorIr!.kind == 9 and ((operatorIr!.opcode <= -201 and (operatorIr!.opcode >= -206 or operatorIr!.opcode == -213 or operatorIr!.opcode == -223 or operatorIr!.opcode == -224 or operatorIr!.opcode == -225 or operatorIr!.opcode == -226 or operatorIr!.opcode == -227 or operatorIr!.opcode == -229)) or operatorIr!.opcode == -220 or operatorIr!.opcode == -221)) or operatorIr!.kind == 15 or operatorIr!.kind == 24 or operatorIr!.kind == 31 or operatorIr!.kind == 32) -> if { secondOperand! => operatorIr!.operand1 }
                         operatorIr!.kind == 22 -> if {
                             -1 => operatorIr!.operand0
                             firstOperand! => operatorIr!.operand1
@@ -2257,6 +2365,32 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                         matchSubject! => control!.operand0
                         matchFirstArm! => control!.operand1
                         control! => results![controlIrIndex!]
+                        (matchSubject! >= 0 and results![matchSubject!].typeId >= 0 and matchFirstArm! >= 0) -> if {
+                            frozenRecursiveSemanticTypes[results![matchSubject!].typeId] => matchSubjectType
+                            matchFirstArm! => matchArmTagIndex!
+                            (matchArmTagIndex! >= 0 and matchArmTagIndex! < expressionIrEnd and results![matchArmTagIndex!].parent == controlIrIndex!) -> while {
+                                results![matchArmTagIndex!] => matchArmTag!
+                                -1 => matchArmPatternAst!
+                                0 => matchArmPatternSearch!
+                                matchArmPatternSearch! < sourceRange.astCount -> while {
+                                    prepared.package.nodes[sourceRange.astStart + matchArmPatternSearch!] => matchArmPatternCandidate
+                                    (matchArmPatternCandidate.kind == 59 and matchArmPatternCandidate.parent == matchArmTag!.astNode) -> if {
+                                        matchArmPatternSearch! => matchArmPatternAst!
+                                    }
+                                    matchArmPatternSearch! + 1 => matchArmPatternSearch!
+                                }
+                                matchArmPatternAst! >= 0 -> if {
+                                    prepared.package.nodes[sourceRange.astStart + matchArmPatternAst!] => matchArmPattern
+                                    prepared.package.tokens[sourceRange.tokenStart + matchArmPattern.payloadToken] => matchArmVariantToken
+                                    sourceIndex! -> nominalVariantTagForType(matchSubjectType, matchArmVariantToken) => matchArmNominalTag
+                                    matchArmNominalTag >= 0 -> if {
+                                        matchArmNominalTag => matchArmTag!.opcode
+                                        matchArmTag! => results![matchArmTagIndex!]
+                                    }
+                                }
+                                matchArmTag!.nextOperand => matchArmTagIndex!
+                            }
+                        }
                     }
                     control!.kind == 33 -> if {
                         -1 => firstWhenArm!
@@ -2696,14 +2830,14 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                     results![returnOperandIr!] => selectedReturnOperand
                     (selectedReturnOperand.typeOrigin == functionResultOrigin! and selectedReturnOperand.typeModule == functionResultModule! and selectedReturnOperand.typeSymbol == functionResultSymbol!) -> if { true => returnOperandMatches! }
                 }
-                not returnOperandMatches! -> if {
+                true -> if {
                     -1 => matchingReturnOperand!
                     UIntSize(0) => matchingReturnStart!
                     UIntSize(0) => matchingReturnLength!
                     expressionIrStart => matchingReturnSearch!
                     matchingReturnSearch! < expressionIrEnd -> while {
                         results![matchingReturnSearch!] => matchingReturnCandidate
-                        (matchingReturnCandidate.parent == returnIr and matchingReturnCandidate.typeOrigin == functionResultOrigin! and matchingReturnCandidate.typeModule == functionResultModule! and matchingReturnCandidate.typeSymbol == functionResultSymbol!) -> if {
+                        (matchingReturnCandidate.parent == returnIr and matchingReturnCandidate.kind != 17 and matchingReturnCandidate.typeOrigin == functionResultOrigin! and matchingReturnCandidate.typeModule == functionResultModule! and matchingReturnCandidate.typeSymbol == functionResultSymbol!) -> if {
                             prepared.package.nodes[sourceRange.astStart + matchingReturnCandidate.astNode] => matchingReturnAst
                             (matchingReturnOperand! < 0 or matchingReturnAst.start > matchingReturnStart! or (matchingReturnAst.start == matchingReturnStart! and matchingReturnAst.length > matchingReturnLength!)) -> if {
                                 matchingReturnSearch! => matchingReturnOperand!
@@ -3025,6 +3159,18 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                                 -1 => entryBindingTypeIndex!
                                 frozenNearestLegacyIndexByAst[sourceRange.astStart + entryBindingAstIndex!] => entryBindingTypeIndex!
                                 frozenNearestCanonicalTypeByAst[sourceRange.astStart + entryBindingAstIndex!] => entryBindingCanonicalTypeId!
+                                entryBindingCanonicalTypeId! < 0 -> if {
+                                    0 => entryBindingValueTypeSearch!
+                                    (entryBindingValueTypeSearch! < sourceRange.astCount and entryBindingCanonicalTypeId! < 0) -> while {
+                                        prepared.package.nodes[sourceRange.astStart + entryBindingValueTypeSearch!] => entryBindingValueTypeAst
+                                        (entryBindingValueTypeAst.parent == entryBindingAstIndex!
+                                            and entryBindingValueTypeAst.start == entryBindingAst.start) -> if {
+                                            frozenRecursiveTypeByAst[sourceRange.astStart + entryBindingValueTypeSearch!] => entryBindingValueTypeId
+                                            entryBindingValueTypeId >= 0 -> if { entryBindingValueTypeId => entryBindingCanonicalTypeId! }
+                                        }
+                                        entryBindingValueTypeSearch! + 1 => entryBindingValueTypeSearch!
+                                    }
+                                }
                                 -1 => entryBindingSymbol!
                                 0 => entryBindingSymbolSearch!
                                 entryBindingSymbolSearch! < sourceRange.symbolCount -> while {
@@ -3064,7 +3210,7 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                                         entryBindingDeclaredReferenceSearch! + 1 => entryBindingDeclaredReferenceSearch!
                                     }
                                 }
-                                (entryBindingTypeIndex! >= 0 or entryBindingCanonicalTypeId! >= 0) -> if {
+                                entryBindingSymbol! >= 0 -> if {
                                     -1 => entryBindingOrigin!
                                     -1 => entryBindingModule!
                                     -1 => entryBindingSymbolType!
@@ -3320,15 +3466,18 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                                         }
                                     }
                                 } else {
-                                    knownEntryCall.functionSymbol == -103 -> if {
+                                    (knownEntryCall.functionSymbol == -103
+                                        or knownEntryCall.functionSymbol == -105
+                                        or knownEntryCall.functionSymbol == -110
+                                        or knownEntryCall.functionSymbol == -115) -> if {
                                         1 => entryExpressionTypeOrigin!
                                         -1 => entryExpressionTypeModule!
                                         2 => entryExpressionTypeSymbol!
                                     }
-                                    knownEntryCall.functionSymbol == -115 -> if {
+                                    knownEntryCall.functionSymbol == -112 -> if {
                                         1 => entryExpressionTypeOrigin!
                                         -1 => entryExpressionTypeModule!
-                                        2 => entryExpressionTypeSymbol!
+                                        9 => entryExpressionTypeSymbol!
                                     }
                                 }
                             }
@@ -3381,6 +3530,7 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                         false => knownEntryMapTextExpression!
                         false => knownEntryMapPathExpression!
                         false => knownEntryBorrowTextExpression!
+                        false => knownEntryMaterializeExpression!
                         false => knownEntryDynExpression!
                         false => knownEntryDynDispatchExpression!
                         false => knownEntryStreamFlowExpression!
@@ -3393,6 +3543,7 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                             entryFlowOpcode == -205 -> if { true => knownEntryMapTextExpression! }
                             entryFlowOpcode == -214 -> if { true => knownEntryMapPathExpression! }
                             entryFlowOpcode == -206 -> if { true => knownEntryBorrowTextExpression! }
+                            entryFlowOpcode == -229 -> if { true => knownEntryMaterializeExpression! }
                             entryFlowOpcode == -224 -> if { true => knownEntryDynExpression! }
                             (entryFlowOpcode == -227 or entryFlowOpcode == -228) -> if { true => knownEntryStreamFlowExpression! }
                             entryExpression.firstToken => knownEntryDynTokenSearch!
@@ -3544,6 +3695,11 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                             -1 => entryExpressionTypeModule!
                             24 => entryExpressionTypeSymbol!
                         }
+                        knownEntryMaterializeExpression! -> if {
+                            1 => entryExpressionTypeOrigin!
+                            -1 => entryExpressionTypeModule!
+                            1 => entryExpressionTypeSymbol!
+                        }
                         entryExpressionBelongs! -> if {
                             (entryExpression.kind == 42 or entryExpression.kind == 43 or entryExpression.kind == 44 or entryExpression.kind == 45 or entryExpression.kind == 46 or entryExpression.kind == 47 or entryExpression.kind == 58 or entryExpression.kind == 62) -> if {
                                 results! -> len => entryControlIr
@@ -3686,7 +3842,7 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                                         }
                                     }
                                 }
-                                (not resolvedEntryQualifiedLeaf! and (contextualEntryNullaryOption! or entryExpressionTypeIndex! >= 0 or recursiveEntryExpressionTypeId! >= 0 or knownEntryPatternReference! or unresolvedEntryLibraryInvocation! or entryExpression.kind == 22 or entryExpression.kind == 37 or entryExpression.kind == 41 or entryExpression.kind == 56 or entryExpression.kind == 57 or (entryExpression.kind == 15 and entryExpression.parent >= 0 and prepared.package.nodes[sourceRange.astStart + entryExpression.parent].kind == 41) or knownEntryBooleanExpression! or knownEntryCallExpression! or knownEntryNumericExpression! or knownEntryPushExpression! or knownEntryPutExpression! or knownEntryMapTextExpression! or knownEntryMapPathExpression! or knownEntryBorrowTextExpression! or knownEntryDynExpression! or knownEntryDynDispatchExpression! or knownEntryStreamFlowExpression! or knownEntryIndexAssignment! or knownEntryMemberAssignment!)) -> if {
+                                (not resolvedEntryQualifiedLeaf! and (contextualEntryNullaryOption! or entryExpressionTypeIndex! >= 0 or recursiveEntryExpressionTypeId! >= 0 or knownEntryPatternReference! or unresolvedEntryLibraryInvocation! or entryExpression.kind == 22 or entryExpression.kind == 37 or entryExpression.kind == 41 or entryExpression.kind == 56 or entryExpression.kind == 57 or (entryExpression.kind == 15 and entryExpression.parent >= 0 and prepared.package.nodes[sourceRange.astStart + entryExpression.parent].kind == 41) or knownEntryBooleanExpression! or knownEntryCallExpression! or knownEntryNumericExpression! or knownEntryPushExpression! or knownEntryPutExpression! or knownEntryMapTextExpression! or knownEntryMapPathExpression! or knownEntryBorrowTextExpression! or knownEntryMaterializeExpression! or knownEntryDynExpression! or knownEntryDynDispatchExpression! or knownEntryStreamFlowExpression! or knownEntryIndexAssignment! or knownEntryMemberAssignment!)) -> if {
                                 9 => entryExpressionKind!
                                 entryExpression.kind == 13 -> if { 2 => entryExpressionKind! }
                                 entryExpression.kind == 14 -> if { 3 => entryExpressionKind! }
@@ -3900,6 +4056,7 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                                     knownEntryMapTextExpression! -> if { -205 => entryExpressionOpcode! }
                                     knownEntryMapPathExpression! -> if { -214 => entryExpressionOpcode! }
                                     knownEntryBorrowTextExpression! -> if { -206 => entryExpressionOpcode! }
+                                    knownEntryMaterializeExpression! -> if { -229 => entryExpressionOpcode! }
                                 }
                                 entryExpression.kind == 48 -> if {
                                     entryExpression.firstToken => entryRoleTokenIndex!
@@ -4013,7 +4170,7 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                     entryExpressionStart => entryOperandIr!
                     entryOperandIr! < entryExpressionEnd -> while {
                         results![entryOperandIr!] => entryOperator!
-                        (entryOperator!.kind == 6 or entryOperator!.kind == 7 or entryOperator!.kind == 8 or (entryOperator!.kind == 9 and ((entryOperator!.opcode <= -201 and (entryOperator!.opcode >= -206 or entryOperator!.opcode == -213 or entryOperator!.opcode == -223 or entryOperator!.opcode == -224 or entryOperator!.opcode == -225 or entryOperator!.opcode == -226 or entryOperator!.opcode == -227 or entryOperator!.opcode == -228)) or entryOperator!.opcode == -220 or entryOperator!.opcode == -221)) or entryOperator!.kind == 13 or entryOperator!.kind == 15 or entryOperator!.kind == 17 or entryOperator!.kind == 22 or entryOperator!.kind == 23 or entryOperator!.kind == 24 or entryOperator!.kind == 25 or entryOperator!.kind == 26 or entryOperator!.kind == 31 or entryOperator!.kind == 32) -> if {
+                        (entryOperator!.kind == 6 or entryOperator!.kind == 7 or entryOperator!.kind == 8 or (entryOperator!.kind == 9 and ((entryOperator!.opcode <= -201 and (entryOperator!.opcode >= -206 or entryOperator!.opcode == -213 or entryOperator!.opcode == -223 or entryOperator!.opcode == -224 or entryOperator!.opcode == -225 or entryOperator!.opcode == -226 or entryOperator!.opcode == -227 or entryOperator!.opcode == -228 or entryOperator!.opcode == -229)) or entryOperator!.opcode == -220 or entryOperator!.opcode == -221)) or entryOperator!.kind == 13 or entryOperator!.kind == 15 or entryOperator!.kind == 17 or entryOperator!.kind == 22 or entryOperator!.kind == 23 or entryOperator!.kind == 24 or entryOperator!.kind == 25 or entryOperator!.kind == 26 or entryOperator!.kind == 31 or entryOperator!.kind == 32) -> if {
                             -1 => entryFirstOperand!
                             -1 => entrySecondOperand!
                             UIntSize(0) => entryFirstStart!
@@ -4045,7 +4202,7 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                                 entryUnaryOperand.typeKind => entryOperator!.typeKind
                                 entryUnaryOperand.typeFlags => entryOperator!.typeFlags
                             }
-                            (entryOperator!.kind == 6 or entryOperator!.kind == 8 or (entryOperator!.kind == 9 and ((entryOperator!.opcode <= -201 and (entryOperator!.opcode >= -206 or entryOperator!.opcode == -213 or entryOperator!.opcode == -223 or entryOperator!.opcode == -224 or entryOperator!.opcode == -225 or entryOperator!.opcode == -226 or entryOperator!.opcode == -227)) or entryOperator!.opcode == -220 or entryOperator!.opcode == -221)) or entryOperator!.kind == 15 or entryOperator!.kind == 24 or entryOperator!.kind == 31 or entryOperator!.kind == 32) -> if { entrySecondOperand! => entryOperator!.operand1 }
+                            (entryOperator!.kind == 6 or entryOperator!.kind == 8 or (entryOperator!.kind == 9 and ((entryOperator!.opcode <= -201 and (entryOperator!.opcode >= -206 or entryOperator!.opcode == -213 or entryOperator!.opcode == -223 or entryOperator!.opcode == -224 or entryOperator!.opcode == -225 or entryOperator!.opcode == -226 or entryOperator!.opcode == -227 or entryOperator!.opcode == -229)) or entryOperator!.opcode == -220 or entryOperator!.opcode == -221)) or entryOperator!.kind == 15 or entryOperator!.kind == 24 or entryOperator!.kind == 31 or entryOperator!.kind == 32) -> if { entrySecondOperand! => entryOperator!.operand1 }
                             entryOperator!.kind == 22 -> if {
                                 -1 => entryOperator!.operand0
                                 entryFirstOperand! => entryOperator!.operand1
@@ -5650,6 +5807,66 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                 processCall!.symbol == processRunSymbol! -> if { -210 => processCall!.opcode }
                 processCall!.symbol == processRunToFileSymbol! -> if { -211 => processCall!.opcode }
                 processCall!.symbol == processExitSymbol! -> if { -222 => processCall!.opcode }
+                ((processCall!.opcode == -210 or processCall!.opcode == -211)
+                    and processCall!.operand0 < 0
+                    and processCall!.sourceModule >= 0
+                    and processCall!.astNode >= 0) -> if {
+                    prepared.package.ranges[processCall!.sourceModule] => processCallRange
+                    prepared.package.nodes[processCallRange.astStart + processCall!.astNode] => processCallAst
+                    -1 => processInputSymbol!
+                    -1 => processInputToken!
+                    0 => processInputAstSearch!
+                    processInputAstSearch! < processCallRange.astCount -> while {
+                        prepared.package.nodes[processCallRange.astStart + processInputAstSearch!] => processInputAst
+                        (processInputAst.parent == processCall!.astNode
+                            and processInputAst.kind == 15
+                            and processInputAst.start == processCallAst.start) -> if {
+                            processInputAst.payloadToken => processInputToken!
+                            0 => processInputNameSearch!
+                            processInputNameSearch! < processCallRange.nameCount -> while {
+                                prepared.package.names[processCallRange.nameStart + processInputNameSearch!] => processInputName
+                                processInputName.astNode == processInputAstSearch! -> if {
+                                    processInputName.symbol => processInputSymbol!
+                                }
+                                processInputNameSearch! + 1 => processInputNameSearch!
+                            }
+                        }
+                        processInputAstSearch! + 1 => processInputAstSearch!
+                    }
+                    processCallIndex! => processInputBindingSearch!
+                    (processInputBindingSearch! > 0 and processCall!.operand0 < 0) -> while {
+                        processInputBindingSearch! - 1 => processInputBindingSearch!
+                        results![processInputBindingSearch!] => processInputBinding
+                        false => processInputBindingMatches!
+                        (processInputBinding.kind == 17
+                            and processInputBinding.sourceModule == processCall!.sourceModule
+                            and processInputSymbol! >= 0
+                            and processInputBinding.symbol == processInputSymbol!) -> if {
+                            true => processInputBindingMatches!
+                        }
+                        (processInputBinding.kind == 17
+                            and processInputBinding.sourceModule == processCall!.sourceModule
+                            and processInputToken! >= 0
+                            and processInputBinding.payloadToken >= 0) -> if {
+                            prepared.package.tokens[processCallRange.tokenStart + processInputToken!] => processInputReferenceName
+                            prepared.package.tokens[processCallRange.tokenStart + processInputBinding.payloadToken] => processInputBindingName
+                            processInputReferenceName.span.length == processInputBindingName.span.length => processInputNameEqual!
+                            UIntSize(0) => processInputNameByte!
+                            (processInputNameEqual! and processInputNameByte! < processInputReferenceName.span.length) -> while {
+                                (prepared.package.sources[processCall!.sourceModule] -> byte(processInputReferenceName.span.start + processInputNameByte!)) != (prepared.package.sources[processCall!.sourceModule] -> byte(processInputBindingName.span.start + processInputNameByte!)) -> if {
+                                    false => processInputNameEqual!
+                                }
+                                processInputNameByte! + UIntSize(1) => processInputNameByte!
+                            }
+                            processInputNameEqual! -> if { true => processInputBindingMatches! }
+                        }
+                        (processInputBindingMatches!
+                            and processInputBinding.astNode >= 0
+                            and prepared.package.nodes[processCallRange.astStart + processInputBinding.astNode].start <= processCallAst.start) -> if {
+                            processInputBindingSearch! => processCall!.operand0
+                        }
+                    }
+                }
                 processCall! => results![processCallIndex!]
             }
             processCallIndex! + 1 => processCallIndex!
@@ -5702,6 +5919,7 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
         pathModuleSearch! + 1 => pathModuleSearch!
     }
     -1 => pathQueryRawSymbol!
+    -1 => pathTextSymbol!
     pathModuleSource! >= 0 -> if {
         prepared.package.ranges[pathModuleSource!] => pathSourceRange
         prepared.package.sources[pathModuleSource!] -> len => pathSourceLength
@@ -5713,6 +5931,7 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                 prepared.package.tokens[pathSourceRange.tokenStart + pathSymbol.nameToken] => pathNameToken
                 pathNameToken.span.length == UIntSize(8) -> if {
                     ((pathSource -> byte(pathNameToken.span.start)) == UInt8(113) and (pathSource -> byte(pathNameToken.span.start + UIntSize(1))) == UInt8(117) and (pathSource -> byte(pathNameToken.span.start + UIntSize(2))) == UInt8(101) and (pathSource -> byte(pathNameToken.span.start + UIntSize(3))) == UInt8(114) and (pathSource -> byte(pathNameToken.span.start + UIntSize(4))) == UInt8(121) and (pathSource -> byte(pathNameToken.span.start + UIntSize(5))) == UInt8(82) and (pathSource -> byte(pathNameToken.span.start + UIntSize(6))) == UInt8(97) and (pathSource -> byte(pathNameToken.span.start + UIntSize(7))) == UInt8(119)) -> if { pathSymbolSearch! => pathQueryRawSymbol! }
+                    ((pathSource -> byte(pathNameToken.span.start)) == UInt8(112) and (pathSource -> byte(pathNameToken.span.start + UIntSize(1))) == UInt8(97) and (pathSource -> byte(pathNameToken.span.start + UIntSize(2))) == UInt8(116) and (pathSource -> byte(pathNameToken.span.start + UIntSize(3))) == UInt8(104) and (pathSource -> byte(pathNameToken.span.start + UIntSize(4))) == UInt8(84) and (pathSource -> byte(pathNameToken.span.start + UIntSize(5))) == UInt8(101) and (pathSource -> byte(pathNameToken.span.start + UIntSize(6))) == UInt8(120) and (pathSource -> byte(pathNameToken.span.start + UIntSize(7))) == UInt8(116)) -> if { pathSymbolSearch! => pathTextSymbol! }
                 }
             }
             pathSymbolSearch! + 1 => pathSymbolSearch!
@@ -5722,6 +5941,10 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
             results![pathCallIndex!] => pathCall!
             (pathCall!.kind == 6 and pathCall!.targetModule == pathModuleSource! and pathCall!.symbol == pathQueryRawSymbol!) -> if {
                 -215 => pathCall!.opcode
+                pathCall! => results![pathCallIndex!]
+            }
+            (pathCall!.kind == 6 and pathCall!.targetModule == pathModuleSource! and pathCall!.symbol == pathTextSymbol!) -> if {
+                -230 => pathCall!.opcode
                 pathCall! => results![pathCallIndex!]
             }
             pathCallIndex! + 1 => pathCallIndex!
@@ -5882,7 +6105,7 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
     0 => contextualDynamicArrayIndex!
     contextualDynamicArrayIndex! < (results! -> len) -> while {
         results![contextualDynamicArrayIndex!] => contextualDynamicArray!
-        (contextualDynamicArray!.kind == 14 and contextualDynamicArray!.typeId < 0 and contextualDynamicArray!.operand0 >= 0) -> if {
+        (contextualDynamicArray!.kind == 14 and contextualDynamicArray!.operand0 >= 0) -> if {
             prepared.package.ranges[contextualDynamicArray!.sourceModule] => contextualDynamicArrayRange
             prepared.package.nodes[contextualDynamicArrayRange.astStart + contextualDynamicArray!.astNode] => contextualDynamicArrayAst
             false => contextualDynamicArrayHasTilde!
@@ -5894,12 +6117,31 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                 contextualDynamicArrayTokenIndex! + 1 => contextualDynamicArrayTokenIndex!
             }
             contextualDynamicArrayHasTilde! -> if {
-                results![contextualDynamicArray!.operand0] => contextualDynamicArrayElement
-                contextualDynamicArrayElement.typeId >= 0 -> if {
+                results![contextualDynamicArray!.operand0] => contextualDynamicArrayElement!
+                contextualDynamicArrayElement!.typeId < 0 -> if {
+                    0 => contextualDynamicArrayElementTypeSearch!
+                    (contextualDynamicArrayElementTypeSearch! < (frozenRecursiveSemanticTypes -> len)
+                        and contextualDynamicArrayElement!.typeId < 0) -> while {
+                        frozenRecursiveSemanticTypes[contextualDynamicArrayElementTypeSearch!] => contextualDynamicArrayElementType
+                        ((contextualDynamicArrayElement!.typeOrigin == 1
+                                and contextualDynamicArrayElementType.origin == 1
+                                and contextualDynamicArrayElementType.symbol == contextualDynamicArrayElement!.typeSymbol)
+                            or (contextualDynamicArrayElementType.kind == contextualDynamicArrayElement!.typeKind
+                                and contextualDynamicArrayElementType.origin == contextualDynamicArrayElement!.typeOrigin
+                                and contextualDynamicArrayElementType.module == contextualDynamicArrayElement!.typeModule
+                                and contextualDynamicArrayElementType.symbol == contextualDynamicArrayElement!.typeSymbol)) -> if {
+                            contextualDynamicArrayElementTypeSearch! => contextualDynamicArrayElement!.typeId
+                            recursiveTypeFlags[contextualDynamicArrayElementTypeSearch!] => contextualDynamicArrayElement!.typeFlags
+                        }
+                        contextualDynamicArrayElementTypeSearch! + 1 => contextualDynamicArrayElementTypeSearch!
+                    }
+                    contextualDynamicArrayElement! => results![contextualDynamicArray!.operand0]
+                }
+                contextualDynamicArrayElement!.typeId >= 0 -> if {
                     0 => contextualDynamicArrayTypeSearch!
                     contextualDynamicArrayTypeSearch! < (frozenRecursiveSemanticTypes -> len) -> while {
                         frozenRecursiveSemanticTypes[contextualDynamicArrayTypeSearch!] => contextualDynamicArrayType
-                        (contextualDynamicArrayType.kind == 3 and contextualDynamicArrayType.first == contextualDynamicArrayElement.typeId) -> if {
+                        (contextualDynamicArrayType.kind == 3 and contextualDynamicArrayType.first == contextualDynamicArrayElement!.typeId) -> if {
                             contextualDynamicArrayTypeSearch! => contextualDynamicArray!.typeId
                             contextualDynamicArrayType.kind => contextualDynamicArray!.typeKind
                             contextualDynamicArrayType.origin => contextualDynamicArray!.typeOrigin

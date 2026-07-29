@@ -244,6 +244,7 @@ emitCore context: ref emitterContext.EmitContext -> Unit uses Console {
         frozenFunctionCaptureCounts: frozenFunctionCaptureCounts
         frozenFunctionCaptureValues: frozenFunctionCaptureValues
         frozenEnumMatchConsumed: frozenEnumMatchConsumed
+        intrinsicRuntimeModule: intrinsicRuntimeModule!
     } => stateOwner
     stateOwner -> borrowCoreState => state
     [Int; ~] => dropTypeActive!
@@ -973,6 +974,8 @@ emitCore context: ref emitterContext.EmitContext -> Unit uses Console {
     arrayTypeSearch! < (context.ir -> len) -> while {
         context.ir[arrayTypeSearch!] -> isDynamicArrayType -> if { true => usesDynamicArray! }
         context.ir[arrayTypeSearch!].opcode == -204 -> if { true => usesArrayPush! }
+        (context.ir[arrayTypeSearch!].typeOrigin == 1 and context.ir[arrayTypeSearch!].typeSymbol == 15) -> if { true => usesDynamicArray! }
+        context.ir[arrayTypeSearch!].opcode == -229 -> if { true => usesArrayPush! }
         arrayTypeSearch! + 1 => arrayTypeSearch!
     }
     0 => arrayCompositeSearch!
@@ -1184,6 +1187,58 @@ emitCore context: ref emitterContext.EmitContext -> Unit uses Console {
             "  %text = insertvalue %sollang.text %text_ptr, i64 %length, 1" -> println
             "  ret %sollang.text %text" -> println
             "}" -> println
+            context.expectedPathStyle == 1 -> if {
+                """
+                define internal void @sollang_init_utf8_arguments() {
+                entry:
+                  %argc_slot = alloca i32, align 4
+                  %command = call ptr @GetCommandLineW()
+                  %wide_argv = call ptr @CommandLineToArgvW(ptr %command, ptr %argc_slot)
+                  %wide_ok = icmp ne ptr %wide_argv, null
+                  br i1 %wide_ok, label %allocate, label %done
+                allocate:
+                  %argc32 = load i32, ptr %argc_slot, align 4
+                  %argc = zext i32 %argc32 to i64
+                  %argv_bytes = mul i64 %argc, 8
+                  %utf8_argv = call ptr @malloc(i64 %argv_bytes)
+                  %argv_ok = icmp ne ptr %utf8_argv, null
+                  br i1 %argv_ok, label %loop, label %free_wide
+                loop:
+                  %index = phi i64 [ 0, %allocate ], [ %next, %stored ]
+                  %complete = icmp eq i64 %index, %argc
+                  br i1 %complete, label %success, label %size
+                size:
+                  %wide_slot = getelementptr ptr, ptr %wide_argv, i64 %index
+                  %wide = load ptr, ptr %wide_slot, align 8
+                  %byte_count32 = call i32 @WideCharToMultiByte(i32 65001, i32 128, ptr %wide, i32 -1, ptr null, i32 0, ptr null, ptr null)
+                  %byte_count_valid = icmp sgt i32 %byte_count32, 0
+                  br i1 %byte_count_valid, label %allocate_text, label %free_wide
+                allocate_text:
+                  %byte_count = zext i32 %byte_count32 to i64
+                  %utf8 = call ptr @malloc(i64 %byte_count)
+                  %utf8_ok = icmp ne ptr %utf8, null
+                  br i1 %utf8_ok, label %convert, label %free_wide
+                convert:
+                  %written = call i32 @WideCharToMultiByte(i32 65001, i32 128, ptr %wide, i32 -1, ptr %utf8, i32 %byte_count32, ptr null, ptr null)
+                  %converted = icmp eq i32 %written, %byte_count32
+                  br i1 %converted, label %stored, label %free_wide
+                stored:
+                  %utf8_slot = getelementptr ptr, ptr %utf8_argv, i64 %index
+                  store ptr %utf8, ptr %utf8_slot, align 8
+                  %next = add i64 %index, 1
+                  br label %loop
+                success:
+                  store i64 %argc, ptr @sollang_argc, align 8
+                  store ptr %utf8_argv, ptr @sollang_argv, align 8
+                  br label %free_wide
+                free_wide:
+                  %ignored = call ptr @LocalFree(ptr %wide_argv)
+                  br label %done
+                done:
+                  ret void
+                }
+                """ -> println
+            }
         }
     }
     [Int; ~] => declaredExternalModules!
@@ -1355,15 +1410,19 @@ emitCore context: ref emitterContext.EmitContext -> Unit uses Console {
                 context.pointerBitWidth == 32 -> if {
                     "define i32 @sollang_start() {" -> println
                 } else {
-                    usesArguments! -> if { "define i32 @main(i32 %argc, ptr %argv) {" -> println } else { "define i32 @main() {" -> println }
+                    (usesArguments! and context.expectedPathStyle != 1) -> if { "define i32 @main(i32 %argc, ptr %argv) {" -> println } else { "define i32 @main() {" -> println }
                 }
                 "entry:" -> println
                 usesNativeInterop! -> if { "  call void @sollang_native_init()" -> println }
                 usesComInterop! -> if { "  call void @sollang_com_init()" -> println }
                 (usesArguments! and context.pointerBitWidth != 32) -> if {
-                    "  %argc64 = zext i32 %argc to i64" -> println
-                    "  store i64 %argc64, ptr @sollang_argc, align 8" -> println
-                    "  store ptr %argv, ptr @sollang_argv, align 8" -> println
+                    context.expectedPathStyle == 1 -> if {
+                        "  call void @sollang_init_utf8_arguments()" -> println
+                    } else {
+                        "  %argc64 = zext i32 %argc to i64" -> println
+                        "  store i64 %argc64, ptr @sollang_argc, align 8" -> println
+                        "  store ptr %argv, ptr @sollang_argv, align 8" -> println
+                    }
                 }
                 functionIndex! + 1 => entryMutableSlotIndex!
                 entryMutableSlotIndex! < entryEnd! -> while {
@@ -1578,23 +1637,23 @@ emitCore context: ref emitterContext.EmitContext -> Unit uses Console {
                                     }
                                 }
                             }
-                            (entryScheduleReady! and (entryScheduleNode.kind == 6 or entryScheduleNode.kind == 18 or entryScheduleNode.kind == 20 or entryScheduleNode.kind == 33 or entryScheduleNode.kind == 24 or entryScheduleNode.kind == 25 or (entryScheduleNode.kind == 17 and entryScheduleNode.flags == 1) or (entryScheduleNode.kind == 9 and (entryScheduleNode.opcode == -204 or entryScheduleNode.opcode == -205 or entryScheduleNode.opcode == -213 or entryScheduleNode.opcode == -220 or entryScheduleNode.opcode == -221)))) -> if {
+                            (entryScheduleReady! and (entryScheduleNode.kind == 6 or entryScheduleNode.kind == 18 or entryScheduleNode.kind == 20 or entryScheduleNode.kind == 33 or entryScheduleNode.kind == 24 or entryScheduleNode.kind == 25 or (entryScheduleNode.kind == 17 and entryScheduleNode.flags == 1) or (entryScheduleNode.kind == 9 and (entryScheduleNode.opcode == -204 or entryScheduleNode.opcode == -205 or entryScheduleNode.opcode == -213 or entryScheduleNode.opcode == -220 or entryScheduleNode.opcode == -221 or entryScheduleNode.opcode == -229)))) -> if {
                                 true => entryRootEffect!
                                 entryScheduleNode.parent => entryEffectAncestor!
                                 (entryEffectAncestor! > functionIndex! and entryRootEffect!) -> while {
-                                        (context.ir[entryEffectAncestor!].kind == 6 or context.ir[entryEffectAncestor!].kind == 18 or context.ir[entryEffectAncestor!].kind == 20 or context.ir[entryEffectAncestor!].kind == 24 or context.ir[entryEffectAncestor!].kind == 25 or (context.ir[entryEffectAncestor!].kind == 17 and context.ir[entryEffectAncestor!].flags == 1) or (context.ir[entryEffectAncestor!].kind == 9 and (context.ir[entryEffectAncestor!].opcode == -204 or context.ir[entryEffectAncestor!].opcode == -205 or context.ir[entryEffectAncestor!].opcode == -213))) -> if { false => entryRootEffect! } else { context.ir[entryEffectAncestor!].parent => entryEffectAncestor! }
+                                        (context.ir[entryEffectAncestor!].kind == 6 or context.ir[entryEffectAncestor!].kind == 18 or context.ir[entryEffectAncestor!].kind == 20 or context.ir[entryEffectAncestor!].kind == 24 or context.ir[entryEffectAncestor!].kind == 25 or (context.ir[entryEffectAncestor!].kind == 17 and context.ir[entryEffectAncestor!].flags == 1) or (context.ir[entryEffectAncestor!].kind == 9 and (context.ir[entryEffectAncestor!].opcode == -204 or context.ir[entryEffectAncestor!].opcode == -205 or context.ir[entryEffectAncestor!].opcode == -213 or context.ir[entryEffectAncestor!].opcode == -229))) -> if { false => entryRootEffect! } else { context.ir[entryEffectAncestor!].parent => entryEffectAncestor! }
                                 }
                                 entryRootEffect! -> if {
                                     functionIndex! + 1 => entryEarlierEffectSearch!
                                     entryEarlierEffectSearch! < entryEnd! -> while {
                                         context.ir[entryEarlierEffectSearch!] => entryEarlierEffect
-                                        (not entryScheduled![entryEarlierEffectSearch! - functionIndex! - 1] and (entryEarlierEffect.kind == 6 or entryEarlierEffect.kind == 18 or entryEarlierEffect.kind == 20 or entryEarlierEffect.kind == 24 or entryEarlierEffect.kind == 25 or (entryEarlierEffect.kind == 17 and entryEarlierEffect.flags == 1) or (entryEarlierEffect.kind == 9 and (entryEarlierEffect.opcode == -204 or entryEarlierEffect.opcode == -213))) and (entryEarlierEffect -> sourceStart(context, state)) < (entryScheduleNode -> sourceStart(context, state))) -> if {
+                                        (not entryScheduled![entryEarlierEffectSearch! - functionIndex! - 1] and (entryEarlierEffect.kind == 6 or entryEarlierEffect.kind == 18 or entryEarlierEffect.kind == 20 or entryEarlierEffect.kind == 24 or entryEarlierEffect.kind == 25 or (entryEarlierEffect.kind == 17 and entryEarlierEffect.flags == 1) or (entryEarlierEffect.kind == 9 and (entryEarlierEffect.opcode == -204 or entryEarlierEffect.opcode == -213 or entryEarlierEffect.opcode == -229))) and (entryEarlierEffect -> sourceStart(context, state)) < (entryScheduleNode -> sourceStart(context, state))) -> if {
                                             entryEarlierEffect.parent => entryEarlierEffectAncestor!
                                             true => entryEarlierRootEffect!
                                             false => entryEarlierInsideRegion!
                                             (entryEarlierEffectAncestor! > functionIndex! and entryEarlierRootEffect! and not entryEarlierInsideRegion!) -> while {
                                                 (context.ir[entryEarlierEffectAncestor!].kind == 19 or context.ir[entryEarlierEffectAncestor!].kind == 20) -> if { true => entryEarlierInsideRegion! } else {
-                                                    (context.ir[entryEarlierEffectAncestor!].kind == 6 or context.ir[entryEarlierEffectAncestor!].kind == 18 or context.ir[entryEarlierEffectAncestor!].kind == 20 or context.ir[entryEarlierEffectAncestor!].kind == 24 or context.ir[entryEarlierEffectAncestor!].kind == 25 or (context.ir[entryEarlierEffectAncestor!].kind == 17 and context.ir[entryEarlierEffectAncestor!].flags == 1) or (context.ir[entryEarlierEffectAncestor!].kind == 9 and (context.ir[entryEarlierEffectAncestor!].opcode == -204 or context.ir[entryEarlierEffectAncestor!].opcode == -213))) -> if { false => entryEarlierRootEffect! } else { context.ir[entryEarlierEffectAncestor!].parent => entryEarlierEffectAncestor! }
+                                                    (context.ir[entryEarlierEffectAncestor!].kind == 6 or context.ir[entryEarlierEffectAncestor!].kind == 18 or context.ir[entryEarlierEffectAncestor!].kind == 20 or context.ir[entryEarlierEffectAncestor!].kind == 24 or context.ir[entryEarlierEffectAncestor!].kind == 25 or (context.ir[entryEarlierEffectAncestor!].kind == 17 and context.ir[entryEarlierEffectAncestor!].flags == 1) or (context.ir[entryEarlierEffectAncestor!].kind == 9 and (context.ir[entryEarlierEffectAncestor!].opcode == -204 or context.ir[entryEarlierEffectAncestor!].opcode == -213 or context.ir[entryEarlierEffectAncestor!].opcode == -229))) -> if { false => entryEarlierRootEffect! } else { context.ir[entryEarlierEffectAncestor!].parent => entryEarlierEffectAncestor! }
                                                 }
                                             }
                                             (entryEarlierRootEffect! and not entryEarlierInsideRegion!) -> if { false => entryScheduleReady! }
@@ -2119,21 +2178,25 @@ emitCore context: ref emitterContext.EmitContext -> Unit uses Console {
                     }
                     ((entryExpression.kind == 9 or entryExpression.kind == 6) and entryExpression.opcode == -201 and entryExpression.operand0 >= 0) -> if {
                         context.ir[entryExpression.operand0] => entryLengthBase
+                        entryExpression -> integerNodeWidth(context, state) => entryLengthResultWidth
                         entryLengthBase -> isArgumentsType -> if {
-                            "  %v$(entryExpressionIndex!) = call i64 @sollang_argument_count()" -> println
+                            "  %v$(entryExpressionIndex!)" -> print
+                            entryLengthResultWidth == 32 -> if { "_raw" -> print }
+                            " = call i64 @sollang_argument_count()" -> println
+                            entryLengthResultWidth == 32 -> if { "  %v$(entryExpressionIndex!) = trunc i64 %v$(entryExpressionIndex!)_raw to i32" -> println }
                         } else {
                             -1 => entryLengthMutableRoot!
                             entryLengthBase.typeOrigin == 15 -> if { entryExpression.operand0 -> mutableStorageRoot(context, state) => entryLengthMutableRoot! }
                             entryLengthMutableRoot! >= 0 -> if { "  %v$(entryExpressionIndex!)_length_source = load %sollang.dict, ptr %slot$(entryLengthMutableRoot!), align 8" -> println }
                             "  %v$(entryExpressionIndex!)" -> print
-                            entryExpression.typeSymbol == 2 -> if { "_raw" -> print }
+                            entryLengthResultWidth == 32 -> if { "_raw" -> print }
                             " = extractvalue " -> print
                             entryLengthBase -> writeIrType(context, state)
                             " " -> print
                             entryLengthMutableRoot! >= 0 -> if { "%v$(entryExpressionIndex!)_length_source" -> print } else { "%v$(entryExpression.operand0)" -> print }
                             ", " -> print
                             entryLengthBase.typeOrigin == 15 -> if { "2" -> println } else { "1" -> println }
-                            entryExpression.typeSymbol == 2 -> if { "  %v$(entryExpressionIndex!) = trunc i64 %v$(entryExpressionIndex!)_raw to i32" -> println }
+                            entryLengthResultWidth == 32 -> if { "  %v$(entryExpressionIndex!) = trunc i64 %v$(entryExpressionIndex!)_raw to i32" -> println }
                         }
                     }
                     ((entryExpression.kind == 9 or entryExpression.kind == 6) and entryExpression.opcode == -202 and entryExpression.operand0 >= 0 and entryExpression.operand1 >= 0) -> if {
@@ -3084,7 +3147,13 @@ emitCore context: ref emitterContext.EmitContext -> Unit uses Console {
                             "  %v$(entryExpressionIndex!) = call i32 @sollang_runtime_read_int(ptr null, i64 0)" -> println
                         }
                     }
-                    (entryExpression.kind == 6 and (entryExpressionIndex! -> plannedStreamStage(context, state)) < 0 and entryExpression.symbol != -103 and entryExpression.symbol != -115 and not (entryExpression.symbol == -102 and entryExpression.operand0 < 0) and entryExpression.opcode != -205 and entryExpression.opcode != -207 and entryExpression.opcode != -208 and entryExpression.opcode != -209 and entryExpression.opcode != -210 and entryExpression.opcode != -211 and entryExpression.opcode != -212 and entryExpression.opcode != -215 and entryExpression.opcode != -222 and (entryExpression.opcode > -216 or entryExpression.opcode < -221) and not (entryExpression.parent >= 0 and context.ir[entryExpression.parent].kind == 6 and (context.ir[entryExpression.parent].opcode == -207 or context.ir[entryExpression.parent].opcode == -209) and context.ir[entryExpression.parent].operand1 == entryExpressionIndex!)) -> if {
+                    (entryExpression.kind == 6 and entryExpression.symbol < 0 and entryExpression.opcode == -1 and entryExpression.typeOrigin == 1 and entryExpression.typeSymbol == 15 and entryExpression.operand0 >= 0) -> if {
+                        WhileValueRequest { whileIndex: entryExpressionIndex!, ownerIndex: functionIndex!, nodeIndex: 0 } -> emitArenaConstructor(context, state)
+                    }
+                    ((entryExpression.kind == 9 or entryExpression.kind == 6) and entryExpression.opcode == -229 and entryExpression.operand0 >= 0 and entryExpression.operand1 >= 0) -> if {
+                        WhileValueRequest { whileIndex: entryExpressionIndex!, ownerIndex: functionIndex!, nodeIndex: 0 } -> emitTextMaterialize(context, state)
+                    }
+                    (entryExpression.kind == 6 and (entryExpressionIndex! -> plannedStreamStage(context, state)) < 0 and entryExpression.symbol != -103 and entryExpression.symbol != -115 and not (entryExpression.symbol == -102 and entryExpression.operand0 < 0) and not (entryExpression.symbol < 0 and entryExpression.opcode == -1 and entryExpression.typeOrigin == 1 and entryExpression.typeSymbol == 15) and entryExpression.opcode != -205 and entryExpression.opcode != -207 and entryExpression.opcode != -208 and entryExpression.opcode != -209 and entryExpression.opcode != -210 and entryExpression.opcode != -211 and entryExpression.opcode != -212 and entryExpression.opcode != -215 and entryExpression.opcode != -222 and entryExpression.opcode != -229 and (entryExpression.opcode > -216 or entryExpression.opcode < -221) and not (entryExpression.parent >= 0 and context.ir[entryExpression.parent].kind == 6 and (context.ir[entryExpression.parent].opcode == -207 or context.ir[entryExpression.parent].opcode == -209) and context.ir[entryExpression.parent].operand1 == entryExpressionIndex!)) -> if {
                         (entryExpression.symbol == -101 or entryExpression.symbol == -102) -> if {
                             entryExpressionIndex! -> callArgumentIndex(context, state) => entryRuntimeArgumentIndex!
                             false => entryRuntimeStreamDirect!

@@ -1,0 +1,44 @@
+import sollang.compiler.ir.typed as typedIr
+
+# A borrowed Path-to-Text projection has a distinct opcode from file mapping.
+# The operand must remain the concrete Path place so Stage2 emits Text, not
+# SourceText, and never falls back to an argument-less external call.
+main {
+    [
+        """
+        namespace sys.path
+
+        public struct Path {
+            bytes: [UInt8; ~]
+            style: Int
+        }
+
+        public pathText value: ref Path -> Text = intrinsic
+        """,
+        """
+        import sys.path as path
+
+        inspect value: ref path.Path -> Text {
+            path.pathText(value)
+        }
+
+        main { }
+        """; ~
+    ] => sources!
+    sources! -> typedIr.lower => ir!
+    false => found!
+    0 => index!
+    index! < (ir! -> len) -> while {
+        ir![index!] => node
+        (node.kind == 6 and node.opcode == -230) -> if {
+            node.operand0 >= 0 -> if {
+                "pathText intrinsic = -230,operand"
+            } else {
+                "pathText intrinsic = -230,missing"
+            } -> println
+            true => found!
+        }
+        index! + 1 => index!
+    }
+    not found! -> if { "pathText intrinsic = missing" -> println }
+}

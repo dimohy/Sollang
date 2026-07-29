@@ -80,7 +80,12 @@ internal sealed partial class LlvmEmitter
         _currentFunctions = program.Functions;
         RecordFunctionScopes(program.Functions.Values, program.Functions);
         CollectStandaloneStandardLibraryFunctions();
-        _usesProcessArguments = program.MainStatements.Any(UsesProcessArguments);
+        _usesProcessArguments = program.MainStatements.Any(UsesProcessArguments)
+            || EnumerateEmittableFunctions(program.Functions.Values)
+                .Where(function => !function.IsStandardLibrary)
+                .Any(function =>
+                    (function.Body is not null && UsesProcessArguments(function.Body))
+                    || function.BlockBody.Any(UsesProcessArguments));
         _usesProcessEnvironment = program.MainStatements.Any(UsesProcessEnvironment)
             || program.Functions.Values.Where(function => !function.IsStandardLibrary).Any(function =>
                 (function.Body is not null && UsesProcessEnvironment(function.Body))

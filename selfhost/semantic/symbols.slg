@@ -311,6 +311,26 @@ public collectPrepared nodes: [ast.AstNode; ~] -> [Symbol; ~] {
                 symbols! -> push(parameterSymbol)
             }
         }
+        (declarationSymbol.kind == 7
+            and declarationAst.secondaryToken < 0
+            and declarationSymbol.typeNode >= 0
+            and declarationSymbol.secondaryTypeNode >= 0) -> if {
+            # An unnamed primary input is referenced as `it`. The synthetic
+            # flag lets typed IR compare that contextual name without
+            # manufacturing a source token.
+            symbols! -> push(Symbol {
+                kind: 35
+                parent: declarationSymbolIndex!
+                astNode: declarationSymbol.astNode
+                nameToken: declarationSymbol.nameToken
+                typeNode: declarationSymbol.typeNode
+                secondaryTypeNode: -1
+                blockNameToken: -1
+                blockTypeNode: -1
+                blockResultTypeNode: -1
+                flags: declarationSymbol.flags + 262144
+            })
+        }
         ((declarationSymbol.kind == 7 or declarationSymbol.kind == 31) and declarationSymbol.blockNameToken >= 0 and declarationSymbol.blockTypeNode >= 0) -> if {
             symbols! -> push(Symbol {
                 kind: 35

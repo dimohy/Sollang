@@ -7,13 +7,13 @@ import sys.path as path
 import sys.process as process
 
 emitDiscovered paths: move [path.Path; ~] -> Unit uses Console, File {
-    mapSource sourcePath: path.Path -> uses File {
-        sourcePath -> file.mapPath
-    }
     [file.SourceText; ~] => owners!
-    paths -> each sourcePath {
-        sourcePath -> mapSource => owner!
+    0 => pathIndex!
+    pathIndex! < (paths -> len) -> while {
+        path.pathText(paths[pathIndex!]) => sourcePath
+        sourcePath -> file.mapText => owner!
         owners! -> push(owner!)
+        pathIndex! + 1 => pathIndex!
     }
     [Text; ~] => sources!
     0 => sourceIndex!
@@ -28,13 +28,13 @@ emitDiscovered paths: move [path.Path; ~] -> Unit uses Console, File {
 }
 
 emitDiscoveredLinux paths: move [path.Path; ~] -> Unit uses Console, File {
-    mapSource sourcePath: path.Path -> uses File {
-        sourcePath -> file.mapPath
-    }
     [file.SourceText; ~] => owners!
-    paths -> each sourcePath {
-        sourcePath -> mapSource => owner!
+    0 => pathIndex!
+    pathIndex! < (paths -> len) -> while {
+        path.pathText(paths[pathIndex!]) => sourcePath
+        sourcePath -> file.mapText => owner!
         owners! -> push(owner!)
+        pathIndex! + 1 => pathIndex!
     }
     [Text; ~] => sources!
     0 => sourceIndex!
@@ -49,13 +49,13 @@ emitDiscoveredLinux paths: move [path.Path; ~] -> Unit uses Console, File {
 }
 
 emitDiscoveredWasm paths: move [path.Path; ~] -> Unit uses Console, File {
-    mapSource sourcePath: path.Path -> uses File {
-        sourcePath -> file.mapPath
-    }
     [file.SourceText; ~] => owners!
-    paths -> each sourcePath {
-        sourcePath -> mapSource => owner!
+    0 => pathIndex!
+    pathIndex! < (paths -> len) -> while {
+        path.pathText(paths[pathIndex!]) => sourcePath
+        sourcePath -> file.mapText => owner!
         owners! -> push(owner!)
+        pathIndex! + 1 => pathIndex!
     }
     [Text; ~] => sources!
     0 => sourceIndex!
@@ -72,32 +72,41 @@ emitDiscoveredWasm paths: move [path.Path; ~] -> Unit uses Console, File {
 public emitRoot root: move path.Path -> Unit uses Console, File {
     root -> sourceRoot.discover -> when {
         Ok(paths) { paths -> emitDiscovered }
-        Err(error) { "; sollang source root error: $error" -> println }
+        Err(error) {
+            "; sollang source root error: " -> print
+            error -> println
+        }
     }
 }
 
 public emitLinuxRoot root: move path.Path -> Unit uses Console, File {
     root -> sourceRoot.discover -> when {
         Ok(paths) { paths -> emitDiscoveredLinux }
-        Err(error) { "; sollang source root error: $error" -> println }
+        Err(error) {
+            "; sollang source root error: " -> print
+            error -> println
+        }
     }
 }
 
 public emitWasmRoot root: move path.Path -> Unit uses Console, File {
     root -> sourceRoot.discover -> when {
         Ok(paths) { paths -> emitDiscoveredWasm }
-        Err(error) { "; sollang source root error: $error" -> println }
+        Err(error) {
+            "; sollang source root error: " -> print
+            error -> println
+        }
     }
 }
 
 emitDiscoveredChecked paths: move [path.Path; ~] -> Int uses Console, File {
-    mapSource sourcePath: path.Path -> uses File {
-        sourcePath -> file.mapPath
-    }
     [file.SourceText; ~] => owners!
-    paths -> each sourcePath {
-        sourcePath -> mapSource => owner!
+    0 => pathIndex!
+    pathIndex! < (paths -> len) -> while {
+        path.pathText(paths[pathIndex!]) => sourcePath
+        sourcePath -> file.mapText => owner!
         owners! -> push(owner!)
+        pathIndex! + 1 => pathIndex!
     }
     [Text; ~] => sources!
     0 => sourceIndex!
@@ -113,11 +122,13 @@ emitDiscoveredChecked paths: move [path.Path; ~] -> Int uses Console, File {
 }
 
 emitDiscoveredLinuxChecked paths: move [path.Path; ~] -> Int uses Console, File {
-    mapSource sourcePath: path.Path -> uses File { sourcePath -> file.mapPath }
     [file.SourceText; ~] => owners!
-    paths -> each sourcePath {
-        sourcePath -> mapSource => owner!
+    0 => pathIndex!
+    pathIndex! < (paths -> len) -> while {
+        path.pathText(paths[pathIndex!]) => sourcePath
+        sourcePath -> file.mapText => owner!
         owners! -> push(owner!)
+        pathIndex! + 1 => pathIndex!
     }
     [Text; ~] => sources!
     0 => sourceIndex!
@@ -133,11 +144,13 @@ emitDiscoveredLinuxChecked paths: move [path.Path; ~] -> Int uses Console, File 
 }
 
 emitDiscoveredWasmChecked paths: move [path.Path; ~] -> Int uses Console, File {
-    mapSource sourcePath: path.Path -> uses File { sourcePath -> file.mapPath }
     [file.SourceText; ~] => owners!
-    paths -> each sourcePath {
-        sourcePath -> mapSource => owner!
+    0 => pathIndex!
+    pathIndex! < (paths -> len) -> while {
+        path.pathText(paths[pathIndex!]) => sourcePath
+        sourcePath -> file.mapText => owner!
         owners! -> push(owner!)
+        pathIndex! + 1 => pathIndex!
     }
     [Text; ~] => sources!
     0 => sourceIndex!
@@ -152,42 +165,121 @@ emitDiscoveredWasmChecked paths: move [path.Path; ~] -> Int uses Console, File {
     diagnosticCount
 }
 
+emitDiscoveredAndExplicitChecked paths: move [path.Path; ~], explicitPaths: [Text; ~] -> Int uses Console, File {
+    (paths -> len) == 0 -> if {
+        "; sollang source root error: source root contains no readable .slg files" -> println
+        1
+    } else {
+        [Text; ~] => allPaths!
+        0 => sourcePathIndex!
+        sourcePathIndex! < (paths -> len) -> while {
+            path.pathText(paths[sourcePathIndex!]) => sourcePathText
+            allPaths! -> push(sourcePathText)
+            sourcePathIndex! + 1 => sourcePathIndex!
+        }
+        0 => explicitPathIndex!
+        explicitPathIndex! < (explicitPaths -> len) -> while {
+            allPaths! -> push(explicitPaths[explicitPathIndex!])
+            explicitPathIndex! + 1 => explicitPathIndex!
+        }
+        allPaths! -> llvm.emitCheckedFiles
+    }
+}
+
+emitDiscoveredAndExplicitLinuxChecked paths: move [path.Path; ~], explicitPaths: [Text; ~] -> Int uses Console, File {
+    (paths -> len) == 0 -> if {
+        "; sollang source root error: source root contains no readable .slg files" -> println
+        1
+    } else {
+        [Text; ~] => allPaths!
+        0 => sourcePathIndex!
+        sourcePathIndex! < (paths -> len) -> while {
+            path.pathText(paths[sourcePathIndex!]) => sourcePathText
+            allPaths! -> push(sourcePathText)
+            sourcePathIndex! + 1 => sourcePathIndex!
+        }
+        0 => explicitPathIndex!
+        explicitPathIndex! < (explicitPaths -> len) -> while {
+            allPaths! -> push(explicitPaths[explicitPathIndex!])
+            explicitPathIndex! + 1 => explicitPathIndex!
+        }
+        allPaths! -> llvm.emitLinuxCheckedFiles
+    }
+}
+
+emitDiscoveredAndExplicitWasmChecked paths: move [path.Path; ~], explicitPaths: [Text; ~] -> Int uses Console, File {
+    (paths -> len) == 0 -> if {
+        "; sollang source root error: source root contains no readable .slg files" -> println
+        1
+    } else {
+        [Text; ~] => allPaths!
+        0 => sourcePathIndex!
+        sourcePathIndex! < (paths -> len) -> while {
+            path.pathText(paths[sourcePathIndex!]) => sourcePathText
+            allPaths! -> push(sourcePathText)
+            sourcePathIndex! + 1 => sourcePathIndex!
+        }
+        0 => explicitPathIndex!
+        explicitPathIndex! < (explicitPaths -> len) -> while {
+            allPaths! -> push(explicitPaths[explicitPathIndex!])
+            explicitPathIndex! + 1 => explicitPathIndex!
+        }
+        allPaths! -> llvm.emitWasmCheckedFiles
+    }
+}
+
 sourceRootExitFailure: -> Unit uses Process {
     process.exit(1)
 }
 
-public emitCheckedRoot root: move path.Path -> Unit uses Console, File, Process {
-    0 => diagnosticCount!
-    root -> sourceRoot.discover -> when {
-        Ok(paths) { paths -> emitDiscoveredChecked => diagnosticCount! }
-        Err(error) {
-            "; sollang source root error: $error" -> println
-            1 => diagnosticCount!
+collectExplicitPaths explicitStart: UIntSize -> [Text; ~] uses Process {
+    process.arguments() => arguments
+    [Text; ~] => explicitPaths!
+    explicitStart => explicitIndex!
+    explicitIndex! < (arguments -> len) -> while {
+        explicitPaths! -> push(arguments[explicitIndex!])
+        explicitIndex! + UIntSize(1) => explicitIndex!
+    }
+    explicitPaths!
+}
+
+# Public CLI builds compile the same complete standard-library source root as
+# the reference compiler, followed by the explicitly selected product sources.
+public emitCheckedRoot root: move path.Path, explicitStart: UIntSize, target: Int -> Int uses Console, File, Process {
+    target == 0 -> if {
+        explicitStart -> collectExplicitPaths => explicitPaths!
+        root -> sourceRoot.discoverDirect -> emitDiscoveredAndExplicitChecked(explicitPaths!)
+    } else {
+        target == 1 -> if {
+            explicitStart -> collectExplicitPaths => explicitPaths!
+            root -> sourceRoot.discoverDirect -> emitDiscoveredAndExplicitLinuxChecked(explicitPaths!)
+        } else {
+            explicitStart -> collectExplicitPaths => explicitPaths!
+            root -> sourceRoot.discoverDirect -> emitDiscoveredAndExplicitWasmChecked(explicitPaths!)
         }
     }
-    diagnosticCount! > 0 -> if { sourceRootExitFailure() }
 }
 
 public emitLinuxCheckedRoot root: move path.Path -> Unit uses Console, File, Process {
-    0 => diagnosticCount!
     root -> sourceRoot.discover -> when {
-        Ok(paths) { paths -> emitDiscoveredLinuxChecked => diagnosticCount! }
+        Ok(paths) { paths -> emitDiscoveredLinuxChecked }
         Err(error) {
-            "; sollang source root error: $error" -> println
-            1 => diagnosticCount!
+            "; sollang source root error: " -> print
+            error -> println
+            1
         }
-    }
-    diagnosticCount! > 0 -> if { sourceRootExitFailure() }
+    } => diagnosticCount
+    diagnosticCount > 0 -> if { sourceRootExitFailure() }
 }
 
 public emitWasmCheckedRoot root: move path.Path -> Unit uses Console, File, Process {
-    0 => diagnosticCount!
     root -> sourceRoot.discover -> when {
-        Ok(paths) { paths -> emitDiscoveredWasmChecked => diagnosticCount! }
+        Ok(paths) { paths -> emitDiscoveredWasmChecked }
         Err(error) {
-            "; sollang source root error: $error" -> println
-            1 => diagnosticCount!
+            "; sollang source root error: " -> print
+            error -> println
+            1
         }
-    }
-    diagnosticCount! > 0 -> if { sourceRootExitFailure() }
+    } => diagnosticCount
+    diagnosticCount > 0 -> if { sourceRootExitFailure() }
 }
