@@ -5,9 +5,11 @@ compiler="$1"
 source="$2"
 stdlib="$3"
 llvm_home="$4"
+output="$5"
 
 actual="$(
     "$compiler" run "$source" \
+        -o "$output" \
         --target linux-x64 \
         --stdlib "$stdlib" \
         --llvm "$llvm_home" \

@@ -113,17 +113,19 @@ the compiler.
 
 Current verified implementation slices:
 
-- [x] Native `--version`, help, explicit-source `build`, and `run`.
+- [x] Native `--version`, help, explicit-source, project-directory, and
+  workspace-package `build`, plus `run`.
 - [x] Full bundled-standard-library compilation for explicit-source builds.
 - [x] Literal program-argument forwarding after `run ... --`.
-- [ ] Project/workspace/library/Wasm build parity and the remaining public
-  commands listed above.
+- [ ] Complete project/workspace dependency, lock, default-output, diagnostic,
+  library, and Wasm parity plus the remaining public commands listed above.
 
 The current Windows and Linux native compilers pass their 7/7 and 6/6 Stage 2
-gates, reproduce at Stage 3, and pass 892/892 and 891/891 platform suites.
-The explicit-source CLI slice passes 6/6 on each platform. These partial
-results deliberately do not create the `native-cli-full-parity` proof required
-by `publish-release.ps1`, so a 0.4 archive cannot be produced prematurely.
+gates and reproduce at Stage 3. The source/project/workspace CLI matrix passes
+8/8 on both fixed-point compilers. The full platform suites now contain 895
+Windows cases and 894 Linux-applicable cases. These partial results deliberately
+do not create the `native-cli-full-parity` proof required by
+`publish-release.ps1`, so a 0.4 archive cannot be produced prematurely.
 
 The C# compiler remains a development bootstrap and reference oracle. It is not
 a 0.4 release asset. An internal Stage driver cannot satisfy this milestone by

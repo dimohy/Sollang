@@ -24,11 +24,17 @@ LLVM IR to standard output:
 It also accepts `--jobs N` immediately after the target mode. The target modes
 used for direct source compilation are `windows`, `linux`, and `wasm`.
 
-Stage 3 does not yet implement the supported CLI commands such as `build`,
-`test`, `format`, `language-server`, `resolve`, `--help`, or `--version`.
-Those commands remain on `sollang` in 0.3. The next transition step is to move
-that complete CLI contract into Sollang and remove the C# executable only after
-cross-platform behavior is verified.
+The native driver now implements `--version`, help, explicit-source,
+single-product project-directory, and workspace-package `build`, plus `run`
+and literal program-argument forwarding. Project and workspace inputs retain
+the public `--project`, `--workspace`, and `--package` spellings. These are
+verified implementation slices, not the complete replacement contract:
+multi-product `--product`, dependency locking and remote package resolution,
+library and Wasm output, default project output placement, `test`, `format`,
+`language-server`, `resolve`, `bind-cpp`, and exact diagnostic-stream
+compatibility remain gated.
+Those commands remain on `sollang` in 0.3. The C# executable can be removed
+only after the complete cross-platform compatibility matrix passes.
 
 ## 0.4 Release Boundary
 

@@ -1,0 +1,142 @@
+namespace sollang.compiler.cli_project
+
+import sollang.compiler.project
+import sys.file as file
+import sys.path as path
+
+public struct ProjectInput {
+    status: Int
+    source: Text
+    sourceDirectory: Text
+}
+
+textEndsWith value: Text, suffix: Text -> Bool {
+    value -> len => valueLength
+    suffix -> len => suffixLength
+    suffixLength <= valueLength => matches!
+    valueLength - suffixLength => start
+    UIntSize(0) => index!
+    (matches! and index! < suffixLength) -> while {
+        (value -> byte(start + index!)) != (suffix -> byte(index!)) -> if { false => matches! }
+        index! + UIntSize(1) => index!
+    }
+    matches!
+}
+
+textEquals left: Text, right: Text -> Bool {
+    (left -> len) == (right -> len) => matches!
+    UIntSize(0) => index!
+    (matches! and index! < (left -> len)) -> while {
+        (left -> byte(index!)) != (right -> byte(index!)) -> if { false => matches! }
+        index! + UIntSize(1) => index!
+    }
+    matches!
+}
+
+textContains value: Text, fragment: Text -> Bool {
+    (fragment -> len) == UIntSize(0) -> if { true -> return }
+    (fragment -> len) > (value -> len) -> if { false -> return }
+    UIntSize(0) => start!
+    start! + (fragment -> len) <= (value -> len) -> while {
+        true => matches!
+        UIntSize(0) => index!
+        (matches! and index! < (fragment -> len)) -> while {
+            (value -> byte(start! + index!)) != (fragment -> byte(index!)) -> if { false => matches! }
+            index! + UIntSize(1) => index!
+        }
+        matches! -> if { true -> return }
+        start! + UIntSize(1) => start!
+    }
+    false
+}
+
+directoryOf value: Text -> Text {
+    UIntSize(0) => lastSeparator!
+    false => found!
+    UIntSize(0) => index!
+    index! < (value -> len) -> while {
+        value -> byte(index!) => current
+        (current == UInt8(47) or current == UInt8(92)) -> if {
+            index! => lastSeparator!
+            true => found!
+        }
+        index! + UIntSize(1) => index!
+    }
+    found! -> if {
+        value -> slice(UIntSize(0), lastSeparator!) => directory
+        directory -> return
+    }
+    "."
+}
+
+manifestPath option: Text, storage: mut Arena -> Text {
+    option -> textEndsWith(".project") -> if {
+        option -> return
+    }
+    "$option/sollang.project" -> materialize(storage)
+}
+
+spanText source: file.SourceText, span: project.TextSpan -> Text {
+    source -> slice(span.start, span.length)
+}
+
+emptyInput status: Int -> ProjectInput {
+    ProjectInput {
+        status: status
+        source: ""
+        sourceDirectory: ""
+    } => result!
+    result!
+}
+
+# Status: 0 valid, 1 invalid manifest, 2 requested product missing,
+# 3 product selection required.
+public load option: Text, requestedProduct: Text, manifestStorage: mut Arena, rootStorage: mut Arena -> ProjectInput uses File {
+    option -> manifestPath(manifestStorage) => manifest
+    manifest -> directoryOf => directory
+    manifest -> path.fromText(path.nativeStyle()) => manifestFile!
+    manifestFile! -> file.mapPath => source!
+    source! -> len => sourceLength
+    source! -> slice(UIntSize(0), sourceLength) => sourceView
+    sourceView -> textContains("products") -> if {
+        4 -> emptyInput => failure!
+        failure! -> return
+    }
+    sourceView -> project.parse => parsed!
+    parsed!.status != 0 -> if {
+        parsed!.status + 100 => parseStatus
+        parseStatus -> emptyInput => failure!
+        failure! -> return
+    }
+
+    -1 => selectedIndex!
+    (requestedProduct -> len) > UIntSize(0) -> if {
+        0 => index!
+        index! < (parsed!.products -> len) -> while {
+            source! -> spanText(parsed!.products[index!].name) => candidate
+            candidate -> textEquals(requestedProduct) -> if { index! => selectedIndex! }
+            index! + 1 => index!
+        }
+        selectedIndex! < 0 -> if {
+            2 -> emptyInput => failure!
+            failure! -> return
+        }
+    } else {
+        (parsed!.products -> len) == 1 -> if {
+            0 => selectedIndex!
+        } else {
+            3 -> emptyInput => failure!
+            failure! -> return
+        }
+    }
+
+    source! -> spanText(parsed!.products[selectedIndex!].root) => relativeRoot
+    "$directory/$relativeRoot" -> materialize(rootStorage) => rootSource
+    rootSource -> directoryOf => sourceDirectory
+    ProjectInput {
+        status: 0
+        source: rootSource
+        sourceDirectory: sourceDirectory
+    } => result!
+    result!
+}

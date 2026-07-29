@@ -26,10 +26,10 @@ Each user example has a byte-identical regression counterpart.
 | Kind | Location | Count |
 | --- | --- | ---: |
 | User examples | `examples/user/` | 10 |
-| Expected-output regression cases | `examples/regression/expected/*.stdout.txt` | 661 |
+| Expected-output regression cases | `examples/regression/expected/*.stdout.txt` | 664 |
 | Diagnostic input cases | `examples/regression/diagnostics/` | 231 |
-| Cataloged regression cases | test runner | 892 |
-| Fast executable regression suite | test runner | 726 |
+| Cataloged regression cases | test runner | 895 |
+| Fast executable regression suite | test runner | 733 |
 | Browser playground catalog | `app/samples.ts` | 31 |
 
 The catalog counts logical test cases, not every supporting file. Source lists,

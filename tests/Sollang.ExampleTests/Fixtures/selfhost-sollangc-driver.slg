@@ -9,6 +9,9 @@ import sollang.compiler.semantic.module_cache as moduleCache
 import sollang.compiler.semantic.module_cache_io as moduleCacheIo
 import sollang.compiler.semantic.modules as modules
 import sollang.compiler.semantic.type_ids as typeIds
+import sollang.compiler.cli_project as cliProject
+import sollang.compiler.cli_workspace as cliWorkspace
+import sollang.compiler.source_root as sourceRoot
 import sys.path as path
 import sys.process as process
 
@@ -27,6 +30,10 @@ textEquals left: Text, right: Text -> Bool {
         index! + UIntSize(1) => index!
     }
     matches!
+}
+
+pathTextAt paths: [path.Path; ~], index: Int -> Text {
+    path.pathText(paths[index])
 }
 
 printVersion: -> Unit uses Console {
@@ -452,6 +459,66 @@ executeNativeBuild sources: [Text; ~], output: Text, llvmHome: Text, stdlibOptio
     0
 }
 
+executeNativePathBuild sources: [path.Path; ~], output: Text, llvmHome: Text, stdlibOption: Text, optimization: Text, target: Int, hostTarget: Int, jobs: Text, keepTemps: Bool, quiet: Bool -> Int uses Console, File, Process {
+    target == 2 -> if {
+        "sollang: native CLI wasm linking is not implemented yet" -> println
+        -1 -> return
+    }
+    target != hostTarget -> if {
+        "sollang: native CLI cross-target linking is not implemented yet; requested $(target -> nativeTargetName)" -> println
+        -1 -> return
+    }
+
+    Arena(0) => llvmPathStorage!
+    "$output.ll" -> materialize(llvmPathStorage!) => llvmPath
+    process.arguments() => arguments
+    arguments[0] -> executableDirectory => compilerDirectory
+    Arena(0) => stdlibRootStorage!
+    "" => stdlibRoot!
+    (stdlibOption -> len) > UIntSize(0) -> if {
+        stdlibOption -> portableNativeOutput(stdlibRootStorage!) => stdlibRoot!
+    } else {
+        compilerDirectory -> stdlibNativePath(stdlibRootStorage!) => stdlibRoot!
+    }
+    [arguments[0], target -> nativeCliTargetMode, stdlibRoot!; ~] => emitArgv!
+    (jobs -> len) > UIntSize(0) -> if {
+        emitArgv! -> push("--jobs")
+        emitArgv! -> push(jobs)
+    }
+    0 => sourceIndex!
+    sourceIndex! < (sources -> len) -> while {
+        sources -> pathTextAt(sourceIndex!) => source
+        emitArgv! -> push(source)
+        sourceIndex! + 1 => sourceIndex!
+    }
+    process.RunToFileRequest {
+        argv: emitArgv!
+        output: llvmPath
+    } -> process.runToFile -> processCode => emitCode
+    emitCode != 0 -> if {
+        "sollang: compiler emission failed" -> println
+        emitCode -> return
+    }
+
+    Arena(0) => clangPathStorage!
+    llvmHome -> nativeClangPath(hostTarget, clangPathStorage!) => clangPath
+    [clangPath, llvmPath, optimization, "-Wno-override-module", "-o", output; ~] => clangArgv!
+    target == 0 -> if {
+        clangArgv! -> push("-Xlinker")
+        clangArgv! -> push("/subsystem:console")
+        clangArgv! -> push("-lshell32")
+    }
+    target == 1 -> if { clangArgv! -> push("-Wl,-z,stack-size=67108864") }
+    clangArgv! -> process.run -> processCode => clangCode
+    clangCode != 0 -> if {
+        "sollang: native linker failed with exit code $clangCode" -> println
+        clangCode -> return
+    }
+    (keepTemps and not quiet) -> if { "Kept $llvmPath" -> println }
+    not quiet -> if { "Wrote $output" -> println }
+    0
+}
+
 executeNativeProgram output: Text, programArguments: [Text; ~] -> Int uses Process {
     [Text; ~] => runArgv!
     runArgv! -> push(output)
@@ -459,18 +526,53 @@ executeNativeProgram output: Text, programArguments: [Text; ~] -> Int uses Proce
     runArgv! -> process.run -> processCode
 }
 
+runNativePathCli sources: [path.Path; ~], defaultSource: Text, outputOption: Text, llvmHome: Text, stdlibRoot: Text, optimization: Text, target: Int, hostTarget: Int, jobs: Text, keepTemps: Bool, runAfterBuild: Bool, programArguments: [Text; ~] -> Int uses Console, File, Process {
+    Arena(0) => outputStorage!
+    (outputOption -> len) > UIntSize(0) -> if {
+        sources -> executeNativePathBuild(outputOption, llvmHome, stdlibRoot, optimization, target, hostTarget, jobs, keepTemps, runAfterBuild) => buildCode
+        buildCode != 0 -> if {
+            buildCode
+        } else {
+            runAfterBuild -> if {
+                outputOption -> executeNativeProgram(programArguments)
+            } else { 0 }
+        }
+    } else {
+        defaultSource -> defaultNativeOutput(target, outputStorage!) => output
+        sources -> executeNativePathBuild(output, llvmHome, stdlibRoot, optimization, target, hostTarget, jobs, keepTemps, runAfterBuild) => buildCode
+        buildCode != 0 -> if {
+            buildCode
+        } else {
+            runAfterBuild -> if {
+                output -> executeNativeProgram(programArguments)
+            } else { 0 }
+        }
+    }
+}
+
 runNativeCli runAfterBuild: Bool, hostTarget: Int -> Int uses Console, File, Process {
     process.arguments() => arguments
     arguments -> len => argumentCount
     [Text; ~] => sources!
     [Text; ~] => programArguments!
+    Arena(0) => projectManifestStorage!
+    Arena(0) => projectRootStorage!
+    Arena(0) => workspaceManifestStorage!
+    Arena(0) => workspaceProjectStorage!
     "" => outputOption!
     "" => llvmHome!
     "" => stdlibRoot!
     "" => jobs!
+    "" => projectOption!
+    "" => workspaceOption!
+    "" => packageOption!
+    "" => productOption!
+    "" => workspaceSourceDirectory!
     "-O1" => optimization!
     hostTarget => target!
     false => keepTemps!
+    false => locked!
+    false => library!
     false => parsingProgramArguments!
     0 => status!
     UIntSize(2) => index!
@@ -522,13 +624,45 @@ runNativeCli runAfterBuild: Bool, hostTarget: Int -> Int uses Console, File, Pro
                                         ((argument -> textEquals("-O0")) or (argument -> textEquals("-O1")) or (argument -> textEquals("-O2")) or (argument -> textEquals("-O3"))) -> if {
                                             argument => optimization!
                                         } else {
-                                            ((argument -> textEquals("--project")) or (argument -> textEquals("--workspace")) or (argument -> textEquals("--package")) or (argument -> textEquals("--product")) or (argument -> textEquals("--locked")) or (argument -> textEquals("--library"))) -> if {
-                                                7 => status!
+                                            argument -> textEquals("--project") -> if {
+                                                index! + UIntSize(1) < argumentCount -> if {
+                                                    index! + UIntSize(1) => index!
+                                                    arguments[index!] => projectOption!
+                                                } else { 7 => status! }
                                             } else {
-                                                (argument -> len) > UIntSize(0) and (argument -> byte(UIntSize(0))) == UInt8(45) -> if {
-                                                    8 => status!
+                                                argument -> textEquals("--workspace") -> if {
+                                                    index! + UIntSize(1) < argumentCount -> if {
+                                                        index! + UIntSize(1) => index!
+                                                        arguments[index!] => workspaceOption!
+                                                    } else { 7 => status! }
                                                 } else {
-                                                    sources! -> push(argument)
+                                                    argument -> textEquals("--package") -> if {
+                                                        index! + UIntSize(1) < argumentCount -> if {
+                                                            index! + UIntSize(1) => index!
+                                                            arguments[index!] => packageOption!
+                                                        } else { 7 => status! }
+                                                    } else {
+                                                        argument -> textEquals("--product") -> if {
+                                                            index! + UIntSize(1) < argumentCount -> if {
+                                                                index! + UIntSize(1) => index!
+                                                                arguments[index!] => productOption!
+                                                            } else { 7 => status! }
+                                                        } else {
+                                                            argument -> textEquals("--locked") -> if {
+                                                                true => locked!
+                                                            } else {
+                                                                argument -> textEquals("--library") -> if {
+                                                                    true => library!
+                                                                } else {
+                                                                    (argument -> len) > UIntSize(0) and (argument -> byte(UIntSize(0))) == UInt8(45) -> if {
+                                                                        8 => status!
+                                                                    } else {
+                                                                        sources! -> push(argument)
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                    }
                                                 }
                                             }
                                         }
@@ -547,15 +681,70 @@ runNativeCli runAfterBuild: Bool, hostTarget: Int -> Int uses Console, File, Pro
         "sollang: invalid or not-yet-native build option (status $(status!))" -> println
         1 -> return
     }
-    (sources! -> len) == 0 -> if {
-        "sollang: native CLI currently requires explicit source files" -> println
+    ((projectOption! -> len) > UIntSize(0) and (workspaceOption! -> len) > UIntSize(0)) -> if {
+        "sollang: --project cannot be combined with --workspace" -> println
+        1 -> return
+    }
+    ((sources! -> len) > 0 and ((projectOption! -> len) > UIntSize(0) or (workspaceOption! -> len) > UIntSize(0))) -> if {
+        "sollang: --project/--workspace cannot be combined with explicit source files" -> println
+        1 -> return
+    }
+    ((sources! -> len) > 0 and (productOption! -> len) > UIntSize(0)) -> if {
+        "sollang: --product requires a project build" -> println
+        1 -> return
+    }
+    ((sources! -> len) > 0 and (packageOption! -> len) > UIntSize(0)) -> if {
+        "sollang: --package requires a workspace build" -> println
+        1 -> return
+    }
+    ((packageOption! -> len) > UIntSize(0) and (projectOption! -> len) > UIntSize(0)) -> if {
+        "sollang: --package cannot be combined with --project" -> println
+        1 -> return
+    }
+    (locked! and (sources! -> len) > 0) -> if {
+        "sollang: --locked requires a project or workspace build" -> println
+        1 -> return
+    }
+    (library! and target! == 2) -> if {
+        "sollang: --library currently supports windows-x64 and linux-x64" -> println
         1 -> return
     }
     (not runAfterBuild and parsingProgramArguments!) -> if {
         "sollang: build does not accept program arguments after --" -> println
         1 -> return
     }
-
+    (workspaceOption! -> len) > UIntSize(0) -> if {
+        workspaceOption! -> cliWorkspace.load(packageOption!, workspaceManifestStorage!, workspaceProjectStorage!) => workspaceInput!
+        workspaceInput!.status != 0 -> if {
+            "sollang: invalid workspace manifest or package selection (status $(workspaceInput!.status))" -> println
+            1 -> return
+        }
+        workspaceInput!.projectOption => projectOption!
+        workspaceInput!.sourceDirectory => workspaceSourceDirectory!
+    }
+    (projectOption! -> len) > UIntSize(0) -> if {
+        projectOption! -> cliProject.load(productOption!, projectManifestStorage!, projectRootStorage!) => projectInput!
+        projectInput!.status != 0 -> if {
+            "sollang: invalid project manifest or product selection (status $(projectInput!.status))" -> println
+            1 -> return
+        }
+        (workspaceSourceDirectory! -> len) > UIntSize(0) -> if {
+            workspaceSourceDirectory! -> path.fromText(path.nativeStyle())
+        } else {
+            projectInput!.sourceDirectory -> path.fromText(path.nativeStyle())
+        } => projectSourceRoot!
+        projectSourceRoot! -> sourceRoot.discoverDirect => projectSourcePaths!
+        (projectSourcePaths! -> len) == 0 -> if {
+            "sollang: project source root contains no .slg files" -> println
+            1 -> return
+        }
+        projectSourcePaths! -> runNativePathCli(projectInput!.source, outputOption!, llvmHome!, stdlibRoot!, optimization!, target!, hostTarget, jobs!, keepTemps!, runAfterBuild, programArguments!) => projectCode
+        projectCode -> return
+    }
+    (sources! -> len) == 0 -> if {
+        "sollang: no source file, sollang.project, or sollang.workspace was found" -> println
+        1 -> return
+    }
     Arena(0) => outputStorage!
     (outputOption! -> len) > UIntSize(0) -> if {
         outputOption! => output
