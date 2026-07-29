@@ -359,7 +359,7 @@ type_annotation := type_name | "[" type_name ";" "~" "]" | "{" type_name ":" typ
 primary      := atom postfix_suffix*
 postfix_suffix := ("!"? "[" expression "]") | ("." identifier) | "?"
 atom         := when_expression | call | array_literal | dictionary_literal | "(" expression ")" | bool_literal | string_literal | number_literal | identifier
-array_literal := "[" type_name ";" ("~" | number_literal "~") "]" | "[" expression ("," expression)* ("," "~")? "]" | "[" expression ";" number_literal "]"
+array_literal := "[" type_name ";" ("~" | number_literal "~") "]" | "[" expression ("," expression)* ","? ";" "~" "]" | "[" expression ("," expression)* "]" | "[" expression ";" number_literal "]"
 dictionary_literal := "{" type_name ":" type_name (";" number_literal "~")? "}" | "{" dictionary_entry ("," dictionary_entry)* ","? "}"
 dictionary_entry := expression ":" expression
 bool_literal := "true" | "false"
@@ -372,11 +372,16 @@ interpolation := "$" identifier | "$(" expression ")"
 Notes:
 
 - Newline is a statement separator, not an indentation rule.
-- Array literals may place their opening item, comma-separated items, trailing
-  `~`, and closing bracket on separate lines. This keeps raw multiline strings
-  and other structured values readable without changing their element order.
-- Semicolons are not statement separators. The current surface uses `;` only in
-  repeated fixed-array literals such as `[0; 8]`.
+- Array literals may place their opening item, comma-separated items, `; ~`,
+  and closing bracket on separate lines. This keeps raw multiline strings and
+  other structured values readable without changing their element order.
+- A one-element growable value array requires the explicit trailing comma
+  `[value,; ~]`; `[T; ~]` remains the typed-empty form. The comma removes the
+  value/type ambiguity in the same way a trailing comma distinguishes a
+  one-element tuple in languages that provide tuple literals.
+- Semicolons are not statement separators. The array surface uses `;` for
+  repeated fixed arrays such as `[0; 8]`, growable seeds such as `[1, 2; ~]`,
+  and typed-empty growable arrays such as `[Int; ~]`.
 - Braces are the only block delimiters.
 - Field, index, mutable-index-view, and propagation suffixes form one repeated
   postfix chain and associate from left to right. Dot and index suffixes may be
@@ -389,9 +394,8 @@ Notes:
   dominate every use without changing source evaluation order.
 - If `main { ... }` is omitted, remaining top-level statements after function
   declarations are treated as the executable main body.
-- A function whose body is a single expression should use `=> expression`
-  instead of an outer body block. `-> expression` remains accepted as
-  compatibility syntax.
+- A function whose body is a single expression uses `=> expression` instead of
+  an outer body block. `->` is reserved for value flow.
 - A statement-level expression followed by `=> name` introduces a local binding
   in the current block.
 - `source -> path item? { ... }` introduces a block-function call. Built-in
@@ -515,8 +519,8 @@ Initial binding rules:
 - `expression => name!` introduces a mutable owner binding. The `!` suffix is
   part of the local name, so later reads and mutating calls also show mutation
   capability at the use site.
-- The older `name = expression` form remains accepted as a compatibility syntax,
-  but new samples should prefer `expression => name`.
+- Name-first `name = expression` is not part of Sollang; every binding uses
+  `expression => name`.
 - A binding is visible after its declaration statement.
 - Referencing a binding before declaration is a compile-time error.
 - Reusing the same name in the same scope is a compile-time error for now.
@@ -882,7 +886,7 @@ Generic parameters may also be inferred from additional arguments, allowing
 `scan<T, S>` to derive `S` directly from its initial accumulator.
 
 A stream function can declare pipeline-lifetime mutable state with
-`state name! = value`. The initializer runs once when that stage is created;
+`value => state name!`. The initializer runs once when that stage is created;
 ordinary statements run once per incoming item. `stop` requests upstream
 cancellation after the current item finishes downstream processing. Every
 enclosing source loop observes the same signal, including loops nested by
@@ -890,7 +894,7 @@ enclosing source loop observes the same signal, including loops nested by
 
 ```sollang
 public take<T> value: T, count: Int -> stream T {
-    state taken! = 0
+    0 => state taken!
     taken! < count -> if {
         taken! + 1 => taken!
         taken! >= count -> if { stop }
@@ -907,7 +911,7 @@ becomes both the next state and the emitted value:
 
 ```sollang
 public scan<T, S> value: T, initial: S -> stream S block accumulated: S, item: T -> S {
-    state current! = initial
+    initial => state current!
     current! -> yield(value) => current!
     current! -> emit
 }
@@ -1197,14 +1201,14 @@ numbers -> len => count
 Dynamic arrays:
 
 ```sollang
-[10, 20, ~] => values!
+[10, 20; ~] => values!
 values! -> push(30)
 values![2] => third
 values! -> capacity => capacity
 
 99 => values![1]
 
-[10, 20, ~] => values
+[10, 20; ~] => values
 values -> append(30) => values
 values -> updated(0, 99) => values
 ```
@@ -1567,7 +1571,7 @@ environment lookup until a host capability is explicitly supplied.
 ```sollang
 import sys.process as process
 
-["clang", "module.ll", "-o", "module.exe", ~] => argv
+["clang", "module.ll", "-o", "module.exe"; ~] => argv
 argv -> process.run => status
 ```
 
@@ -1693,20 +1697,20 @@ generic write flushes the legacy Int64 record buffer first so mixing old and new
 calls cannot reorder bytes. I/O failure follows the existing fail-fast runtime
 status path.
 
-The reader uses explicit zero-input type application and property-call syntax:
+The reader uses explicit zero-input type application and call syntax:
 
 ```sollang
 "values.bin" -> file.openReader
-file.read<UInt16> => value
-file.closeReader
+file.read<UInt16>() => value
+file.closeReader()
 ```
 
 Its type is `read<T>: -> Result<Option<T>, Text>`. `Ok(Some(value))` is a full
 scalar, `Ok(None)` is clean EOF, and `Err("truncated")`, `Err("invalid")`, or
 `Err("io")` distinguish partial data, invalid `Bool`/`CodePoint` encodings, and
 host failures. The supported specializations and exact native byte layouts are
-the same as `write<T>`. Empty parentheses remain invalid for zero-input calls,
-so `read<UInt16>()` is rejected. Arbitrary structs still require an explicit
+the same as `write<T>`. Empty parentheses are required for zero-input calls.
+Arbitrary structs still require an explicit
 serialization contract rather than implicit ABI dumping.
 
 ## Explicit User-Value Serialization
@@ -2074,7 +2078,7 @@ When the item name is omitted, Sollang provides the default binding `it`:
 The older compatibility spelling remains accepted:
 
 ```sollang
-each i in 1..9 {
+1..9 -> each i {
     n * i => value
     "$n x $i = $value" -> println
 }
@@ -2254,13 +2258,13 @@ print("Hello, $name. square = $num")
 
 This makes argument flow and return flow visible without discarding normal
 parenthesized calls where they supply arguments. Zero-input functions use
-property syntax such as `getName`; the value-flow form is the preferred
+explicit call syntax such as `getName()`; the value-flow form is the preferred
 Sollang style for single-primary-input operations.
 
 Return values are bound with `=>`:
 
 ```sollang
-getName => name
+getName() => name
 7 -> square => num
 name -> greeting => message
 ```
@@ -2272,17 +2276,16 @@ Function targets in a value-flow statement should omit empty parentheses:
 "Hello, $name. square = $num" -> print
 ```
 
-The compatibility spelling `value -> function()` is still accepted in this
-slice because the flowed value is the function input. A truly zero-input
-function uses property syntax (`nowMillis`, not `nowMillis()`). Flow targets
+One-input flow targets omit empty parentheses because the flowed value is the
+function input. A truly zero-input function uses call syntax (`nowMillis()`).
+Flow targets
 with additional arguments are supported for receiver-style
 operations such as `values! -> push(10)` and `scores! -> put(3, 300)`. When a
 function-like target receives a brace code block argument, the block argument is
 the call marker: `1..9 -> each { ... }` and `1..9 -> each i { ... }` remain
 valid without `each()`.
 
-The assignment form remains valid as a compatibility syntax, but the preferred
-Sollang style is still expression-first:
+Sollang has only expression-first binding and assignment:
 
 ```sollang
 num = square(7)
@@ -2525,7 +2528,7 @@ Current backend:
   monomorphization, compile-time
   `Int` value generics with explicit fluent specialization such as
   `value -> fill[4]`, trait associated types with static `impl` bindings and
-  equality constraints such as `<T: Source<Item = Int>>`, receiver-argument
+  trailing constraints such as `where T: Source, T.Item == Item`, receiver-argument
   flow targets, explicit `box T` owners, recursively sized user types through
   boxed fields or enum payloads, readonly owned-value borrows, static recursive
   drop glue, and expression-first bindings are type-checked

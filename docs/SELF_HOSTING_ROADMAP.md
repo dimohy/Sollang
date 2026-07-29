@@ -941,8 +941,9 @@ input type validates the caller argument, and non-public imported calls produce
 structured code 9 over the complete qualified call.
 
 Resolved calls now enforce the current zero-or-one-input arity surface. A
-missing required argument and any parenthesized zero-input invocation produce
-code 10; zero-input functions remain property calls such as `now`, not `now()`.
+missing required argument and any bare zero-input function reference produce
+code 10; zero-input functions use explicit calls such as `now()`. One-input
+computed and `self` members remain property-like and reject empty `()`.
 
 ## Native Stage-1 Build and Stage-2 Checklist
 
@@ -2403,7 +2404,7 @@ Research basis:
 
 ## Collection-Argument ABI Integrity at the Stage3 Fixed Point (D213H)
 
-The voluntary Stage3 probe after D213G found that `[first, second, ~]` could
+The voluntary Stage3 probe after D213G found that `[first, second; ~]` could
 lose its array-literal typed-IR node when both elements were binding reads. The
 LLVM call then exposed the two Text elements as separate parameters to a
 function declared with one array parameter. Typed lowering now retains array

@@ -400,6 +400,12 @@ internal sealed partial class LlvmEmitter
 
     private bool UsesProcessArguments(Expression expression)
     {
+        if (expression is CallExpression call
+            && _program.Functions.TryGetValue(string.Join('.', call.Path), out var calledFunction)
+            && calledFunction.Kind == BoundFunctionKind.RuntimeArguments)
+        {
+            return true;
+        }
         if (expression is FieldAccessExpression { Source: NameExpression owner } field
             && _program.Functions.TryGetValue(owner.Name + "." + field.FieldName, out var function)
             && function.Kind == BoundFunctionKind.RuntimeArguments)

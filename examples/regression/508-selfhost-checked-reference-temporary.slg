@@ -1,0 +1,23 @@
+import sollang.compiler.llvm.text as llvm
+
+# Verifies that a temporary cannot back a readonly reference which may escape.
+main {
+    [
+        """
+        struct Pair {
+            first: Int
+            second: Int
+        }
+
+        second pair: ref Pair -> ref Int {
+            pair.second
+        }
+
+        main {
+            Pair { first: 7, second: 42 } -> second -> println
+        }
+        """; ~
+    ] => sources!
+    sources! -> llvm.emitLinuxChecked => diagnosticCount
+    "blocked=$diagnosticCount" -> println
+}

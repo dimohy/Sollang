@@ -311,7 +311,7 @@ Status: implemented, loop spelling superseded by D019
 Date: 2026-07-08
 
 Sollang samples are cumulative. New samples should be added alongside earlier
-samples instead of replacing `examples/01-function-basic-hello.slg`.
+samples instead of replacing `examples/regression/01-function-basic-hello.slg`.
 
 The next implemented sample reads an integer and prints that multiplication
 table:
@@ -353,8 +353,8 @@ the loop variable. Descending ranges are not specified yet; a range whose start
 is greater than its end executes zero times.
 
 After adding the input and loop runtime, the verified executable sizes are 1,104
-bytes for `examples/01-function-basic-hello.slg` and 1,584 bytes for
-`examples/07-block-each-explicit-item.slg`.
+bytes for `examples/regression/01-function-basic-hello.slg` and 1,584 bytes for
+`examples/regression/07-block-each-explicit-item.slg`.
 
 ## D018 - Arrow Binding As Preferred Assignment Direction
 
@@ -641,7 +641,7 @@ Sollang now supports a `linux-x64` compiler target in addition to the default
 `windows-x64` target:
 
 ```powershell
-.\scripts\sollang.ps1 -Source examples\01-function-basic-hello.slg -Output artifacts\01-function-basic-hello-linux -Target linux-x64 -KeepTemps
+.\scripts\sollang.ps1 -Source examples\regression\01-function-basic-hello.slg -Output artifacts\01-function-basic-hello-linux -Target linux-x64 -KeepTemps
 ```
 
 The compiler selects the LLVM target triple from the requested target. Windows
@@ -787,7 +787,7 @@ multiplicative operators, additive operators, comparison, logical `and`, and
 logical `or`. The current arithmetic slice is integer-only. LLVM lowering emits
 `add`, `sub`, `mul`, `sdiv`, and `srem` for the new operations.
 
-`examples/06-expression-arithmetic-comments.slg` verifies parentheses, comments, division,
+`examples/regression/06-expression-arithmetic-comments.slg` verifies parentheses, comments, division,
 modulo, and `not (...)` grouping.
 
 ## D030 - Integer Fold Block Function
@@ -813,7 +813,7 @@ closure, function pointer, or dynamic block-call dispatch. If the range is empty
 because the start is greater than the end, the fold expression returns the
 initial accumulator value.
 
-`examples/13-block-fold-sum.slg` verifies `1..100 -> fold 0 sum, i { sum + i }` and prints
+`examples/regression/13-block-fold-sum.slg` verifies `1..100 -> fold 0 sum, i { sum + i }` and prints
 `sum = 5050`.
 
 ## D031 - Subject When Range Arms
@@ -837,7 +837,7 @@ single-sided comparison. The subject expression is still evaluated once. Each
 range arm lowers to two integer comparisons and an `and i1`, followed by the
 same `br i1` and phi-based value join used by existing `when`.
 
-`examples/17-condition-when-range.slg` verifies this form.
+`examples/regression/17-condition-when-range.slg` verifies this form.
 
 ## D032 - Expected Stdout Example Tests
 
@@ -845,7 +845,7 @@ Status: implemented
 Date: 2026-07-08
 
 Executable samples now have a lightweight expected-output test runner. Expected
-fixtures live under `examples/expected` as:
+fixtures live under `examples/regression/expected` as:
 
 - `{sample}.stdout.txt`
 - optional `{sample}.stdin.txt`
@@ -912,7 +912,7 @@ compact form beautiful for default-input functions while making named-input
 data flow explicit. Code generation still lowers `when` to direct comparisons,
 branches, and phi joins.
 
-`examples/18-condition-when-compact.slg` verifies both compact forms.
+`examples/regression/18-condition-when-compact.slg` verifies both compact forms.
 
 ## D034 - Purpose-Oriented Sorted Int File Workflow
 
@@ -971,14 +971,14 @@ runtime slice because generated stack frames remain intentionally small.
 
 Verification:
 
-- `examples/19-stdlib-random-file-demo-generate.slg` produced
+- `examples/regression/19-stdlib-random-file-demo-generate.slg` produced
   `artifacts/random-sorted-demo.i64` with 1,000 records / 8,000 bytes.
-- `examples/20-stdlib-file-demo-query.slg` printed `closest = 4995`; independent
+- `examples/regression/20-stdlib-file-demo-query.slg` printed `closest = 4995`; independent
   PowerShell binary-search verification matched.
-- `examples/21-stdlib-random-file-100m-generate.slg` produced
+- `examples/regression/21-stdlib-random-file-100m-generate.slg` produced
   `artifacts/random-sorted-100m.i64` with 100,000,000 records / 800,000,000
   bytes.
-- `examples/22-stdlib-file-100m-query.slg` printed `closest = 500000006`;
+- `examples/regression/22-stdlib-file-100m-query.slg` printed `closest = 500000006`;
   independent verification found candidates `499999991` and `500000006`, so
   the closest difference is `6`.
 - The demo generator/query pair also compiled and ran on `linux-x64` through WSL,
@@ -1011,7 +1011,7 @@ generation treated `-> square()` as the same function call as `-> square`, while
 a target with `UsesCallSyntax=true` could not become a final flow binding. D036
 later changed this so function targets must use `func()`.
 
-`examples/03-flow-call-parens.slg` verifies the accepted syntax. Verification:
+`examples/regression/03-flow-call-parens.slg` verifies the accepted syntax. Verification:
 `dotnet build Sollang.slnx` passed, `tests/Sollang.ExampleTests` passed all
 8 expected-stdout samples, `7 -> square(7)` failed in parsing with an empty
 parentheses-only diagnostic, and `7 -> value()` failed semantically as an
@@ -1113,9 +1113,9 @@ ordinary filename sorting shows the intended learning/progression order:
 22-stdlib-file-100m-query.slg
 ```
 
-Expected stdout/stdin fixtures under `examples/expected` use the same basename as
+Expected stdout/stdin fixtures under `examples/regression/expected` use the same basename as
 their source example. `scripts/sollang.ps1` defaults to
-`examples/01-function-basic-hello.slg`. New cumulative examples should continue
+`examples/regression/01-function-basic-hello.slg`. New cumulative examples should continue
 this naming style instead of appending unnumbered names.
 
 ## D041 - User-Defined Block Functions
@@ -1175,7 +1175,7 @@ Sollang now supports a browser WebAssembly target in addition to the native
 Windows and Linux targets:
 
 ```powershell
-.\scripts\sollang.ps1 -Source examples\23-webassembly-browser.slg -Output artifacts\23-webassembly-browser.wasm -Target wasm32-browser -KeepTemps
+.\scripts\sollang.ps1 -Source examples\regression\23-webassembly-browser.slg -Output artifacts\23-webassembly-browser.wasm -Target wasm32-browser -KeepTemps
 python -m http.server 5080
 ```
 
@@ -1191,14 +1191,14 @@ browser-hosted output boundary:
 env.slg_browser_write(ptr, len) -> i32
 ```
 
-The static runner under `examples/browser` implements this import by reading
+The static runner under `examples/regression/browser` implements this import by reading
 UTF-8 bytes from exported linear memory and appending them to the page output.
 The current browser target intentionally supports stdout-style text output
 first. `readInt` and sorted-int file runtime primitives are present as explicit
 failure stubs for this target rather than silently mapping to browser prompts or
 storage.
 
-`examples/23-webassembly-browser.slg` is cumulative and also runs as a native
+`examples/regression/23-webassembly-browser.slg` is cumulative and also runs as a native
 example. Its expected output fixture verifies:
 
 ```text
@@ -1242,7 +1242,7 @@ array is not implicitly copied, reference-counted, or garbage-collected.
 Dynamic array literals use an open tail marker:
 
 ```sollang
-[1, 2, 3, ~] => values!
+[1, 2, 3; ~] => values!
 ```
 
 Sollang should not use `{ ... }` for dynamic arrays. Braces already delimit
@@ -1449,7 +1449,7 @@ Sollang now has the first `Int` container slice:
 
 ```sollang
 [1, 2, 3] => numbers
-[10, 20, ~] => values!
+[10, 20; ~] => values!
 { 1: 100, 2: 200 } => scores!
 ```
 
@@ -1479,7 +1479,7 @@ not mean Sollang objects are mutable by default. Immutable bindings remain the
 default:
 
 ```sollang
-[1, 2, ~] => values
+[1, 2; ~] => values
 values -> append(3) => values
 values -> updated(0, 9) => values
 ```
@@ -1659,7 +1659,7 @@ Indexed assignment is now implemented for current `Int` containers:
 [1, 2, 3] => fixed!
 99 => fixed![1]
 
-[10, 20, ~] => values!
+[10, 20; ~] => values!
 77 => values![1]
 
 { 1: 100, 2: 200 } => scores!
@@ -1705,7 +1705,7 @@ Growable arrays now use `~` instead of the earlier array-specific `..` marker:
 ```sollang
 [Int; ~] => values!
 [Int; 1024~] => buffered!
-[1, 2, ~] => seeded!
+[1, 2; ~] => seeded!
 {Int: Int; 1024~} => scores!
 ```
 
@@ -1796,7 +1796,7 @@ sumValues values: move [Int; ~] -> Int {
 }
 
 main {
-    [1, 2, 3, ~] => values!
+    [1, 2, 3; ~] => values!
     values! -> sumValues => total
 }
 ```
@@ -1925,7 +1925,7 @@ appendTail values: move [Int; ~] -> [Int; ~] {
 }
 
 main {
-    [1, 2, ~] => values
+    [1, 2; ~] => values
     values -> appendTail => values
 }
 ```
@@ -2003,7 +2003,7 @@ sumValues values: [Int] -> Int {
 }
 
 main {
-    [10, 20, 30, ~] => values
+    [10, 20, 30; ~] => values
     values -> sumValues => total
     values[1] => middle
 }
@@ -3086,7 +3086,7 @@ success and failure paths. Browser wasm has a targeted capability diagnostic.
 Example 87 launches its own executable and verifies an argument containing a
 space, Hangul, exit code zero, and a missing-program spawn error on Windows and
 Linux. Two diagnostics cover the wasm boundary and non-Text argv. The complete
-suite has 151 passing examples/diagnostics with zero build warnings/errors.
+suite has 151 passing examples/regression/diagnostics with zero build warnings/errors.
 
 ## D103 - Grammar Generation Produces Data, Not Parser Source Logic
 
@@ -4329,7 +4329,7 @@ checking the caller block. The block body cannot retroactively select a type:
 ```sollang
 visit<T> values: [T; ~] -> Int block item: T { ... }
 
-[1, 2, ~] -> visit item {
+[1, 2; ~] -> visit item {
     item + 1
 }
 ```
@@ -11002,3 +11002,20 @@ Research basis:
 - [Rust serialized crate metadata](https://doc.rust-lang.org/stable/nightly-rustc/rustc_metadata/rmeta/index.html)
 - [Rust metadata locator](https://doc.rust-lang.org/stable/nightly-rustc/rustc_metadata/locator/index.html)
 - [Cargo compiler metadata hashes](https://doc.rust-lang.org/stable/nightly-rustc/cargo/core/compiler/struct.Metadata.html)
+# 2026-07-27: unified value-first syntax
+
+This decision supersedes earlier compatibility notes in this chronological
+record. The canonical forms are documented in `SYNTAX_DIRECTION.md`: `->` is
+flow-only; `=>` defines and binds; zero-input functions require `()`; generic
+constraints trail the signature; growable seeds use `; ~`; and legacy
+name-first binding, place-first indexed assignment, `each ... in`, prefix
+`where`, inline constraints, and comma-tilde arrays are rejected.
+
+A one-element growable value array is written `[value,; ~]`, while `[T; ~]`
+remains the typed-empty form. Requiring the trailing comma makes the parse
+independent of capitalization, symbol lookup, and later type resolution. The
+same distinction is implemented in the generated grammar, the C# bootstrap
+parser, the Sollang self-host parser, user examples, and regression fixtures.
+Rust applies the same punctuation principle by requiring a comma for a
+[one-element tuple expression](https://doc.rust-lang.org/stable/reference/expressions/tuple-expr.html)
+so it cannot be confused with grouping.

@@ -434,8 +434,8 @@ parameter, or SSA argument. A two-source snapshot is assembled by `llvm-as`,
 proving that file-module identities survive through executable LLVM linkage.
 
 An AST main block now lowers to a distinct typed-IR entry node plus its inferred
-expression graph. The first executable slice resolves a zero-input property
-call such as `ping` with the same rule as the bootstrap compiler, emits the
+expression graph. The first executable slice resolves an explicit zero-input
+call such as `ping()` with the same rule as the bootstrap compiler, emits the
 call in Windows x64 `i32 @main()`, and then returns process exit code zero. The
 multi-module backend test is no longer assembly-only: the runner assembles the
 stdout IR, links it with pinned Clang, executes the resulting `.exe`, and
@@ -494,7 +494,7 @@ all three and complete modules produced by the current shared emitter assemble
 with `llvm-as`.
 
 Namespaced functions are stored under canonical qualified names. Call, flow,
-zero-input property, generic, and LLVM emission lookup now fall back from an
+explicit zero-input call, generic, and LLVM emission lookup now fall back from an
 unqualified name to the caller's current module, while local functions and
 explicitly qualified/imported names retain precedence. This lets public target
 entry points call the private shared emitter without duplicating it.
@@ -605,5 +605,6 @@ from the target source module. Call checking loads its input annotation from the
 same target symbol, emits code 6 for cross-module argument mismatch, and code 9
 for a non-public imported function.
 Call checking also compares the signature's zero-or-one-input shape with call
-syntax. Missing required arguments and parenthesized zero-input calls emit code
-10 over the complete call, preserving Sollang's property-call rule.
+syntax. Missing required arguments and a bare reference to a zero-input
+function emit code 10 over the complete expression. Computed members with one
+input remain property-like and reject empty `()`.

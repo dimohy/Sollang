@@ -29,3 +29,15 @@ Stage 3 does not yet implement the supported CLI commands such as `build`,
 Those commands remain on `sollang` in 0.3. The next transition step is to move
 that complete CLI contract into Sollang and remove the C# executable only after
 cross-platform behavior is verified.
+
+## 0.4 Release Boundary
+
+Version 0.4 is the hard transition boundary. Its public archives contain only
+the fixed-point native compiler built from `.slg` compiler sources; the C#
+bootstrap executable and its `.NET` support artifacts are not published.
+
+The native executable keeps the final name `sollang` and must preserve the 0.3
+CLI contract. Release packaging is blocked until command, diagnostic, output,
+and exit-code compatibility is verified on Windows x64 and Linux x64. The C#
+compiler may still build and differentially verify the native compiler inside
+the development pipeline, but it is never copied into a 0.4 archive.

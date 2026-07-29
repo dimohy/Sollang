@@ -46,7 +46,7 @@ parsePositiveInt value: Text -> Int {
 }
 
 configureWorkerLimit optionStart: UIntSize -> Int uses Process {
-    process.arguments => arguments
+    sys.process.arguments() => arguments
     0 => workers!
     optionStart < (arguments -> len) -> if {
         arguments[optionStart] -> isJobsOption -> if {
@@ -62,7 +62,7 @@ configureWorkerLimit optionStart: UIntSize -> Int uses Process {
 }
 
 sourceStart optionStart: UIntSize -> UIntSize uses Process {
-    process.arguments => arguments
+    sys.process.arguments() => arguments
     optionStart => start!
     optionStart < (arguments -> len) -> if {
         arguments[optionStart] -> isJobsOption -> if { optionStart + UIntSize(2) => start! }
@@ -71,7 +71,7 @@ sourceStart optionStart: UIntSize -> UIntSize uses Process {
 }
 
 collectPaths start: UIntSize -> [Text; ~] uses Process {
-    process.arguments => arguments
+    sys.process.arguments() => arguments
     arguments -> len => argumentCount
     [Text; ~] => paths!
     start => index!
@@ -84,7 +84,7 @@ collectPaths start: UIntSize -> [Text; ~] uses Process {
 }
 
 collectBuildPaths start: UIntSize -> [Text; ~] uses Process {
-    process.arguments => arguments
+    sys.process.arguments() => arguments
     arguments -> len => argumentCount
     [Text; ~] => paths!
     start => index!
@@ -99,23 +99,23 @@ collectBuildPaths start: UIntSize -> [Text; ~] uses Process {
 emitLinuxFiles pathStart: UIntSize -> Unit uses Console, File, Process {
     pathStart -> collectPaths => paths!
     paths! -> llvm.emitLinuxCheckedFiles => diagnosticCount
-    diagnosticCount > 0 -> if { exitFailure }
+    diagnosticCount > 0 -> if { exitFailure() }
 }
 
 emitWasmFiles pathStart: UIntSize -> Unit uses Console, File, Process {
     pathStart -> collectPaths => paths!
     paths! -> llvm.emitWasmCheckedFiles => diagnosticCount
-    diagnosticCount > 0 -> if { exitFailure }
+    diagnosticCount > 0 -> if { exitFailure() }
 }
 
 emitWindowsFiles pathStart: UIntSize -> Unit uses Console, File, Process {
     pathStart -> collectPaths => paths!
     paths! -> llvm.emitCheckedFiles => diagnosticCount
-    diagnosticCount > 0 -> if { exitFailure }
+    diagnosticCount > 0 -> if { exitFailure() }
 }
 
 emitLinuxRoot pathStart: UIntSize -> Unit uses Console, File, Process {
-    process.arguments => arguments
+    sys.process.arguments() => arguments
     # Root discovery and source mapping run in this native Windows driver even
     # when the emitted program targets Linux.
     arguments[pathStart] -> path.fromText(path.Style.Windows) => root!
@@ -123,13 +123,13 @@ emitLinuxRoot pathStart: UIntSize -> Unit uses Console, File, Process {
 }
 
 emitWasmRoot pathStart: UIntSize -> Unit uses Console, File, Process {
-    process.arguments => arguments
+    sys.process.arguments() => arguments
     arguments[pathStart] -> path.fromText(path.Style.Windows) => root!
     root! -> llvmRoot.emitWasmCheckedRoot
 }
 
 emitWindowsRoot pathStart: UIntSize -> Unit uses Console, File, Process {
-    process.arguments => arguments
+    sys.process.arguments() => arguments
     arguments[pathStart] -> path.fromText(path.Style.Windows) => root!
     root! -> llvmRoot.emitCheckedRoot
 }
@@ -147,7 +147,7 @@ emitFingerprints pathStart: UIntSize -> Unit uses Console, File, Process {
 }
 
 runInterfaceCache: -> Unit uses Console, File, Process {
-    process.arguments => arguments
+    sys.process.arguments() => arguments
     UIntSize(4) -> collectPaths => paths!
     paths! -> semanticContext.prepareFiles => snapshot!
     snapshot!.package -> moduleCache.encodeAnalyzed(UInt64(1)) => current!
@@ -178,17 +178,17 @@ runModuleArtifacts: -> Unit uses Console, File, Process {
 
 runCodegenUnits: -> Unit uses Console {
     codegenUnits.CodegenUnits {
-        kinds: [1, 2, 1, 0, ~]
-        moduleHashes: [UInt64(6012471128798655323), UInt64(0), UInt64(13501036247553511367), UInt64(0), ~]
-        interfaceHashes: [UInt64(220), UInt64(0), UInt64(210), UInt64(0), ~]
-        implementationHashes: [UInt64(320), UInt64(402), UInt64(310), UInt64(401), ~]
-        identityStarts: [0, 4, 4, 9, ~]
-        identityLengths: [4, 0, 5, 0, ~]
-        identityWords: [UInt64(122), UInt64(101), UInt64(116), UInt64(97), UInt64(97), UInt64(108), UInt64(112), UInt64(104), UInt64(97), ~]
-        fragmentStarts: [0, 1, 2, 3, ~]
-        fragmentWordLengths: [1, 1, 1, 1, ~]
-        fragmentByteLengths: [2, 1, 2, 1, ~]
-        fragmentWords: [UInt64(14682), UInt64(84), UInt64(12609), UInt64(72), ~]
+        kinds: [1, 2, 1, 0; ~]
+        moduleHashes: [UInt64(6012471128798655323), UInt64(0), UInt64(13501036247553511367), UInt64(0); ~]
+        interfaceHashes: [UInt64(220), UInt64(0), UInt64(210), UInt64(0); ~]
+        implementationHashes: [UInt64(320), UInt64(402), UInt64(310), UInt64(401); ~]
+        identityStarts: [0, 4, 4, 9; ~]
+        identityLengths: [4, 0, 5, 0; ~]
+        identityWords: [UInt64(122), UInt64(101), UInt64(116), UInt64(97), UInt64(97), UInt64(108), UInt64(112), UInt64(104), UInt64(97); ~]
+        fragmentStarts: [0, 1, 2, 3; ~]
+        fragmentWordLengths: [1, 1, 1, 1; ~]
+        fragmentByteLengths: [2, 1, 2, 1; ~]
+        fragmentWords: [UInt64(14682), UInt64(84), UInt64(12609), UInt64(72); ~]
     } => units!
     UInt64(101) => compilerHash
     UInt64(202) => targetHash
@@ -204,9 +204,9 @@ runCodegenUnits: -> Unit uses Console {
 }
 
 buildWindows pathStart: UIntSize -> Unit uses Console, File, Process {
-    process.arguments => arguments
+    sys.process.arguments() => arguments
     pathStart -> collectBuildPaths => sourcePaths!
-    [arguments[0], "windows", ~] => emitArgv!
+    [arguments[0], "windows"; ~] => emitArgv!
     pathStart > UIntSize(5) -> if {
         emitArgv! -> push(arguments[5])
         emitArgv! -> push(arguments[6])
@@ -218,7 +218,7 @@ buildWindows pathStart: UIntSize -> Unit uses Console, File, Process {
     } -> process.runToFile -> processCode => emitCode
 
     emitCode == 0 -> if {
-        [arguments[4], arguments[2], "-O1", "-Wno-override-module", "-o", arguments[3], ~] => clangArgv!
+        [arguments[4], arguments[2], "-O1", "-Wno-override-module", "-o", arguments[3]; ~] => clangArgv!
         clangArgv! -> process.run -> processCode => clangCode
         clangCode >= 0 -> if {
             "native build = $(clangCode)" -> println
@@ -231,7 +231,7 @@ buildWindows pathStart: UIntSize -> Unit uses Console, File, Process {
 }
 
 main {
-    process.arguments => arguments
+    sys.process.arguments() => arguments
     arguments[1] -> len => targetLength
     UIntSize(2) => optionStart!
     targetLength == UIntSize(13) -> if { UIntSize(5) => optionStart! }
@@ -242,13 +242,13 @@ main {
     } else {
     workers > 0 -> if { "; sollang workers = $workers" -> println }
     targetLength == UIntSize(18) -> if {
-        runCodegenUnits
+        runCodegenUnits()
     } else {
     targetLength == UIntSize(16) -> if {
-        runModuleArtifacts
+        runModuleArtifacts()
     } else {
     targetLength == UIntSize(15) -> if {
-        runInterfaceCache
+        runInterfaceCache()
     } else {
     targetLength == UIntSize(11) -> if {
         pathStart -> emitFingerprints

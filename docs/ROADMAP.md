@@ -1,7 +1,7 @@
 # Sollang Implementation Roadmap
 
-Status: core implementation roadmap complete
-Updated: 2026-07-22
+Status: core implementation complete; 0.4 native distribution in progress
+Updated: 2026-07-28
 
 Every completed slice must add cumulative `.slg` examples, keep safe-code leak
 freedom statically provable, build with zero warnings, and pass the complete
@@ -92,6 +92,28 @@ The auditable self-hosting roadmap is **60/60 (100%)**. Publishing, registry
 authentication, signing, broader codecs, and richer editor features are
 follow-on product work rather than incomplete self-hosting gates. See
 [`SELF_HOSTING_ROADMAP.md`](SELF_HOSTING_ROADMAP.md) for gate evidence.
+
+## 0.4 Native Distribution
+
+Sollang 0.4 completes the bootstrap transition without changing how users invoke
+the compiler.
+
+- [ ] Implement the complete supported `sollang` CLI contract in `.slg`.
+- [ ] Verify `--version`, help, `build`, `run`, `test`, `format`, `resolve`,
+  `language-server`, and `bind-cpp` argument, diagnostic, output, and exit-code
+  compatibility on Windows x64 and Linux x64.
+- [ ] Build the release compiler from `.slg` sources with the C# bootstrap
+  compiler, then prove the Stage 2/Stage 3 fixed point.
+- [ ] Package that native result as the only `sollang` compiler executable.
+- [ ] Reject `.NET` bootstrap artifacts such as `.dll`, `.deps.json`,
+  `.runtimeconfig.json`, and the C#-published `sollang` executable from every
+  0.4 archive.
+- [ ] Verify the packaged executable hash equals the fixed-point native
+  compiler hash and run package-level build/run smoke tests.
+
+The C# compiler remains a development bootstrap and reference oracle. It is not
+a 0.4 release asset. An internal Stage driver cannot satisfy this milestone by
+being renamed: the native executable must preserve the existing public CLI.
 
 ## Design Direction
 

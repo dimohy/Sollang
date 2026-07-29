@@ -53,7 +53,7 @@ Write-Host "[owned-take 2/4] Emit the C# reference LLVM for the combined owned c
 $referenceName = "401-owned-indexed-take"
 $referenceOutput = Join-Path $artifactsDir "$referenceName-asan"
 & dotnet run --project $compilerProject -c Release --no-build -- build `
-    (Join-Path $repoRoot "examples\$referenceName.slg") `
+    (Join-Path $repoRoot "examples\regression\$referenceName.slg") `
     -o $referenceOutput `
     --target linux-x64 `
     --llvm $llvmDir `
@@ -104,7 +104,7 @@ foreach ($name in $names) {
         "ASAN_OPTIONS=detect_leaks=1:halt_on_error=1:exitcode=97",
         "/tmp/$name-asan"
     )
-    $expectedPath = Join-Path $repoRoot "examples\expected\$name.stdout.llvm.linux.execute.txt"
+    $expectedPath = Join-Path $repoRoot "examples\regression\expected\$name.stdout.llvm.linux.execute.txt"
     $expected = ([System.IO.File]::ReadAllText($expectedPath)).TrimEnd("`r", "`n")
     if ($actual -ne $expected) {
         throw "Owned indexed extraction mismatch for $name.`nEXPECTED:`n$expected`nACTUAL:`n$actual"
@@ -115,7 +115,7 @@ $referenceActual = Invoke-Wsl @(
     "ASAN_OPTIONS=detect_leaks=1:halt_on_error=1:exitcode=97",
     "/tmp/$referenceName-asan"
 )
-$referenceExpectedPath = Join-Path $repoRoot "examples\expected\$referenceName.stdout.txt"
+$referenceExpectedPath = Join-Path $repoRoot "examples\regression\expected\$referenceName.stdout.txt"
 $referenceExpected = ([System.IO.File]::ReadAllText($referenceExpectedPath)).TrimEnd("`r", "`n")
 if ($referenceActual -ne $referenceExpected) {
     throw "Reference owned indexed extraction mismatch.`nEXPECTED:`n$referenceExpected`nACTUAL:`n$referenceActual"

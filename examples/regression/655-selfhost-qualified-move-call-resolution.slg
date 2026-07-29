@@ -1,0 +1,30 @@
+import sollang.compiler.semantic.calls as calls
+
+# Verifies that an imported move-input function remains in the ordinary call table.
+main {
+    [
+        """
+        namespace consumer
+        import sys.path as path
+
+        inspect value: path.Path -> Result<path.Path, Text> {
+            value! -> path.normalizeConfined
+        }
+        """,
+        """
+        namespace sys.path
+
+        public struct Path {
+            value: Int
+        }
+
+        public normalizeConfined path: move Path -> Result<Path, Text> {
+            Result<Path, Text>.Ok(path)
+        }
+        """; ~
+    ] => sources!
+    sources! -> calls.resolveModules => resolved!
+    resolved! -> each call {
+        "$(call.sourceModule),$(call.origin),$(call.targetSourceModule),$(call.functionSymbol),$(call.status)" -> println
+    }
+}

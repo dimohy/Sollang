@@ -99,7 +99,7 @@ if (testTarget == TestTarget.LinuxX64 && updateExpected)
 }
 
 var repoRoot = FindRepositoryRoot(AppContext.BaseDirectory);
-var expectedDir = Path.Combine(repoRoot, "examples", "expected");
+var expectedDir = Path.Combine(repoRoot, "examples", "regression", "expected");
 var baseArtifactsDir = Path.Combine(repoRoot, "artifacts", "example-tests");
 var artifactsDir = testTarget == TestTarget.WindowsX64
     ? baseArtifactsDir
@@ -191,7 +191,7 @@ if (!skipBootstrap)
             [
                 compilerDll,
                 "run",
-                Path.Combine(repoRoot, "examples", "03-flow-call-parens.slg"),
+                Path.Combine(repoRoot, "examples", "regression", "03-flow-call-parens.slg"),
                 "-o", cliRunOutput,
                 "--llvm", llvmDir
             ],
@@ -222,7 +222,26 @@ var allExpectedFiles = Directory
     .EnumerateFiles(expectedDir, "*.stdout.txt")
     .Order(StringComparer.Ordinal)
     .ToArray();
-var diagnosticDir = Path.Combine(repoRoot, "examples", "diagnostics");
+var userExampleDir = Path.Combine(repoRoot, "examples", "user");
+var userExampleFiles = Directory.Exists(userExampleDir)
+    ? Directory.EnumerateFiles(userExampleDir, "*.slg").Order(StringComparer.Ordinal).ToArray()
+    : [];
+foreach (var userExample in userExampleFiles)
+{
+    var regressionExample = Path.Combine(
+        repoRoot,
+        "examples",
+        "regression",
+        Path.GetFileName(userExample));
+    if (!File.Exists(regressionExample)
+        || !File.ReadAllBytes(userExample).SequenceEqual(File.ReadAllBytes(regressionExample)))
+    {
+        Console.Error.WriteLine(
+            $"User example must match its fully tested regression counterpart: {Path.GetFileName(userExample)}");
+        return 1;
+    }
+}
+var diagnosticDir = Path.Combine(repoRoot, "examples", "regression", "diagnostics");
 var affectedPaths = affectedFiles
     .Select(path => Path.GetFullPath(path, repoRoot))
     .ToHashSet(StringComparer.OrdinalIgnoreCase);
@@ -233,6 +252,9 @@ var allDiagnosticFiles = Directory.Exists(diagnosticDir)
         .Order(StringComparer.Ordinal)
         .ToArray()
     : [];
+Console.WriteLine(
+    $"[catalog] user={userExampleFiles.Length}, regression={allExpectedFiles.Length}, "
+    + $"diagnostics={allDiagnosticFiles.Length}, total-fixtures={allExpectedFiles.Length + allDiagnosticFiles.Length}");
 var expectedFiles = allExpectedFiles
     .Where(file => MatchesFilters(Path.GetFileName(file)[..^".stdout.txt".Length], filters, exactFilters))
     .Where(file => MatchesSuite(file, suite))
@@ -453,8 +475,8 @@ Parallel.ForEach(
     {
         testLockTaken = true;
     }
-    var defaultSourcePath = Path.Combine(repoRoot, "examples", name + ".slg");
-    var targetSourcePath = Path.Combine(repoRoot, "examples", name + "." + TestTargetName(testTarget) + ".slg");
+    var defaultSourcePath = Path.Combine(repoRoot, "examples", "regression", name + ".slg");
+    var targetSourcePath = Path.Combine(repoRoot, "examples", "regression", name + "." + TestTargetName(testTarget) + ".slg");
     var sourcePath = File.Exists(targetSourcePath) ? targetSourcePath : defaultSourcePath;
     var projectPath = Path.Combine(expectedDir, name + ".project.txt");
     var stdinPath = Path.Combine(expectedDir, name + ".stdin.txt");
@@ -488,7 +510,7 @@ Parallel.ForEach(
         return;
     }
 
-    ProcessResult run;
+    ProcessResult run = new(-1, string.Empty, "test did not run");
     string[]? selfHostSourcePaths = null;
     var reusableSelfHostTest = IsReusableSelfHostCompilerTest(expectedFile);
     var selfHostMode = "";
@@ -635,14 +657,17 @@ Parallel.ForEach(
             .Select(line => line.Split('=', 2))
             .ToDictionary(parts => parts[0], parts => parts.Length == 2 ? parts[1] : "", StringComparer.Ordinal)
         : null;
-    run = RunTargetExecutable(
-        testTarget,
-        outputPath,
-        runArguments,
-        stdin,
-        repoRoot,
-        runEnvironment,
-        wslDistribution);
+    if (!reusableSelfHostTest)
+    {
+        run = RunTargetExecutable(
+            testTarget,
+            outputPath,
+            runArguments,
+            stdin,
+            repoRoot,
+            runEnvironment,
+            wslDistribution);
+    }
     }
     var actual = Normalize(run.Stdout);
     var compareRawStdout = testTarget == TestTarget.WindowsX64
@@ -975,7 +1000,7 @@ static bool MatchesAffectedExpected(
 
     var name = Path.GetFileName(expectedFile)[..^".stdout.txt".Length];
     if (affectedPaths.Contains(Path.GetFullPath(expectedFile))
-        || affectedPaths.Contains(Path.Combine(repoRoot, "examples", name + ".slg"))
+        || affectedPaths.Contains(Path.Combine(repoRoot, "examples", "regression", name + ".slg"))
         || affectedPaths.Contains(Path.Combine(expectedDir, name + ".project.txt")))
     {
         return true;
@@ -1470,7 +1495,7 @@ static void PrepareRegistryDependencyFixture(
             new UTF8Encoding(false));
         File.WriteAllText(
             Path.Combine(app, "src", "main.slg"),
-            "import remote\n\nmain { remote.answer => value\n    \"$value\" -> println }\n",
+            "import remote\n\nmain { remote.answer() => value\n    \"$value\" -> println }\n",
             new UTF8Encoding(false));
     }
 

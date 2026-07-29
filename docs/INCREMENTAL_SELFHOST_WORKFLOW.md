@@ -21,14 +21,14 @@ Run the short loop with:
 
 ```powershell
 pwsh -NoProfile -File scripts/verify-selfhost-incremental.ps1 `
-  -Fixture examples/582-billion-sensor-alerts.slg
+  -Fixture examples/regression/582-billion-sensor-alerts.slg
 ```
 
 Run the expensive bootstrap gate explicitly:
 
 ```powershell
 pwsh -NoProfile -File scripts/verify-selfhost-incremental.ps1 `
-  -Fixture examples/582-billion-sensor-alerts.slg `
+  -Fixture examples/regression/582-billion-sensor-alerts.slg `
   -BootstrapStage2
 ```
 

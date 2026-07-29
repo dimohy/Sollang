@@ -81,8 +81,9 @@ public inferContext prepared: semanticContext.SemanticSnapshot -> [ExpressionTyp
         inferredSeed! + 1 => inferredSeed!
     }
     0 => inferredMappedCount!
-    ["Unit", "Text", "Int", "Int8", "Int16", "Int32", "Int64", "Long", "UInt8", "UInt16", "UInt32", "UInt64", "Size", "UIntSize", "CodePoint", "Arena", "Arguments", "MappedBytes", "MutableMappedBytes", "Float", "Float32", "Float64", "Double", "Bool", "SourceText", "Range", ~] => builtinNames!
+    ["Unit", "Text", "Int", "Int8", "Int16", "Int32", "Int64", "Long", "UInt8", "UInt16", "UInt32", "UInt64", "Size", "UIntSize", "CodePoint", "Arena", "Arguments", "MappedBytes", "MutableMappedBytes", "Float", "Float32", "Float64", "Double", "Bool", "SourceText", "Range"; ~] => builtinNames!
     "process.arguments" => processArgumentsName
+    "sys.process.arguments" => qualifiedProcessArgumentsName
     requestedSourceIndex => sourceIndex!
         prepared.package.sources[sourceIndex!] -> len => sourceLength
         prepared.package.sources[sourceIndex!] -> slice(UIntSize(0), sourceLength) => source
@@ -124,8 +125,13 @@ public inferContext prepared: semanticContext.SemanticSnapshot -> [ExpressionTyp
                 inferred! -> push(ExpressionType { sourceModule: sourceIndex!, astNode: astIndex!, origin: 1, targetModule: -1, targetSymbol: 0, keyOrigin: -1, keyModule: -1, valueOrigin: -1, valueModule: -1 })
             }
             node.kind == 36 -> if {
-                node.length == UIntSize(17) -> if {
-                    TextMatchRequest { source: source, start: node.start, length: node.length, expected: processArgumentsName } -> textMatches -> if {
+                node.length >= UIntSize(17) -> if {
+                    TextMatchRequest { source: source, start: node.start, length: UIntSize(17), expected: processArgumentsName } -> textMatches -> if {
+                        inferred! -> push(ExpressionType { sourceModule: sourceIndex!, astNode: astIndex!, origin: 1, targetModule: -1, targetSymbol: 16, keyOrigin: -1, keyModule: -1, valueOrigin: -1, valueModule: -1 })
+                    }
+                }
+                node.length >= UIntSize(21) -> if {
+                    TextMatchRequest { source: source, start: node.start, length: UIntSize(21), expected: qualifiedProcessArgumentsName } -> textMatches -> if {
                         inferred! -> push(ExpressionType { sourceModule: sourceIndex!, astNode: astIndex!, origin: 1, targetModule: -1, targetSymbol: 16, keyOrigin: -1, keyModule: -1, valueOrigin: -1, valueModule: -1 })
                     }
                 }
@@ -238,8 +244,8 @@ public inferContext prepared: semanticContext.SemanticSnapshot -> [ExpressionTyp
                 node.firstToken => typedArrayTokenIndex!
                 typedArrayTokenIndex! < node.firstToken + node.tokenCount -> while {
                     prepared.package.tokens[sourceRange.tokenStart + typedArrayTokenIndex!] => typedArrayToken
-                    (typedArrayNameToken! < 0 and typedArrayToken.kind == grammar.tokenIdIdentifier) -> if { typedArrayTokenIndex! => typedArrayNameToken! }
-                    typedArrayToken.kind == grammar.tokenIdSemicolon -> if { true => typedArrayMarker! }
+                    (typedArrayNameToken! < 0 and typedArrayToken.kind == grammar.tokenIdIdentifier()) -> if { typedArrayTokenIndex! => typedArrayNameToken! }
+                    typedArrayToken.kind == grammar.tokenIdSemicolon() -> if { true => typedArrayMarker! }
                     typedArrayTokenIndex! + 1 => typedArrayTokenIndex!
                 }
                 (typedArrayMarker! and typedArrayNameToken! >= 0) -> if {
@@ -599,7 +605,7 @@ public inferContext prepared: semanticContext.SemanticSnapshot -> [ExpressionTyp
                 -1 => typeNameToken!
                 node.firstToken => structTokenIndex!
                 (structTokenIndex! < node.firstToken + node.tokenCount and typeNameToken! < 0) -> while {
-                    prepared.package.tokens[sourceRange.tokenStart + structTokenIndex!].kind == grammar.tokenIdIdentifier -> if { structTokenIndex! => typeNameToken! }
+                    prepared.package.tokens[sourceRange.tokenStart + structTokenIndex!].kind == grammar.tokenIdIdentifier() -> if { structTokenIndex! => typeNameToken! }
                     structTokenIndex! + 1 => structTokenIndex!
                 }
                 -1 => structSymbol!
@@ -1519,7 +1525,7 @@ public inferContext prepared: semanticContext.SemanticSnapshot -> [ExpressionTyp
                                     }
                                 }
                                 (memberPathValid! and memberTokenIndex! < member.firstToken + member.tokenCount) -> while {
-                                    prepared.package.tokens[sourceRange.tokenStart + memberTokenIndex!].kind == grammar.tokenIdIdentifier -> if {
+                                    prepared.package.tokens[sourceRange.tokenStart + memberTokenIndex!].kind == grammar.tokenIdIdentifier() -> if {
                                         memberIdentifierOrdinal! > 0 -> if {
                                             memberCurrentModule! => targetSourceModule!
                                             memberCurrentOrigin! == 2 -> if {
@@ -1814,7 +1820,7 @@ public inferContext prepared: semanticContext.SemanticSnapshot -> [ExpressionTyp
                                     true => canInfer!
                                     23 => resultSymbol!
                                 }
-                                (operator.operatorKind == grammar.tokenIdMinus and operand.origin == 1 and operand.targetSymbol == 2) -> if {
+                                (operator.operatorKind == grammar.tokenIdMinus() and operand.origin == 1 and operand.targetSymbol == 2) -> if {
                                     true => canInfer!
                                     2 => resultSymbol!
                                 }
@@ -1901,7 +1907,7 @@ public inferContext prepared: semanticContext.SemanticSnapshot -> [ExpressionTyp
                             false => dynamicArray!
                             arrayNode.firstToken => arrayTokenIndex!
                             arrayTokenIndex! < arrayNode.firstToken + arrayNode.tokenCount -> while {
-                                prepared.package.tokens[sourceRange.tokenStart + arrayTokenIndex!].kind == grammar.tokenIdTilde -> if { true => dynamicArray! }
+                                prepared.package.tokens[sourceRange.tokenStart + arrayTokenIndex!].kind == grammar.tokenIdTilde() -> if { true => dynamicArray! }
                                 arrayTokenIndex! + 1 => arrayTokenIndex!
                             }
                             14 => arrayOrigin!

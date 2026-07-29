@@ -12,7 +12,7 @@ $clangPath = Join-Path $llvmDir "bin\clang.exe"
 $name = "400-selfhost-llvm-recursive-container-drop"
 $llvmPath = Join-Path $artifactsDir "$name.stdout.ll"
 $objectPath = Join-Path $artifactsDir "$name.asan.o"
-$expectedPath = Join-Path $repoRoot "examples\expected\$name.stdout.llvm.linux.execute.txt"
+$expectedPath = Join-Path $repoRoot "examples\regression\expected\$name.stdout.llvm.linux.execute.txt"
 
 function Convert-ToWslPath {
     param([string]$Path)

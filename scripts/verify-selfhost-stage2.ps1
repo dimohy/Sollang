@@ -22,11 +22,11 @@ $multiLibrarySource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\s
 $multiMainSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-main-smoke.slg"
 $groupedNotSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-grouped-not-smoke.slg"
 $sequenceSource = Join-Path $repoRoot "stdlib\std\sequence.slg"
-$streamTableSource = Join-Path $repoRoot "examples\576-linq-multiplication-table.slg"
-$streamDeferredTextSource = Join-Path $repoRoot "examples\580-deferred-text-evaluation.slg"
-$streamSensorSource = Join-Path $repoRoot "examples\582-billion-sensor-alerts.slg"
-$streamStateSource = Join-Path $repoRoot "examples\583-stream-state-take-skip.slg"
-$streamRiskSource = Join-Path $repoRoot "examples\585-stream-transaction-risk-scan.slg"
+$streamTableSource = Join-Path $repoRoot "examples\regression\576-linq-multiplication-table.slg"
+$streamDeferredTextSource = Join-Path $repoRoot "examples\regression\580-deferred-text-evaluation.slg"
+$streamSensorSource = Join-Path $repoRoot "examples\regression\582-billion-sensor-alerts.slg"
+$streamStateSource = Join-Path $repoRoot "examples\regression\583-stream-state-take-skip.slg"
+$streamRiskSource = Join-Path $repoRoot "examples\regression\585-stream-transaction-risk-scan.slg"
 $borrowConflictSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-borrow-conflict.slg"
 $borrowUnionConflictSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-borrow-union-conflict.slg"
 $borrowAliasConflictSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-borrow-alias-conflict.slg"
@@ -49,9 +49,9 @@ $referenceArrayEscapeSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fi
 $borrowSourceRuntime = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-borrow-source.slg"
 $runtimeManifestPath = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-compiler-runtime.sources.txt"
 $fingerprintSources = @(
-    (Join-Path $repoRoot "examples\fixtures\429-selfhost-root\Alpha.slg")
-    (Join-Path $repoRoot "examples\fixtures\429-selfhost-root\Zeta.slg")
-    (Join-Path $repoRoot "examples\fixtures\429-selfhost-root\nested\Beta.slg")
+    (Join-Path $repoRoot "examples\regression\fixtures\429-selfhost-root\Alpha.slg")
+    (Join-Path $repoRoot "examples\regression\fixtures\429-selfhost-root\Zeta.slg")
+    (Join-Path $repoRoot "examples\regression\fixtures\429-selfhost-root\nested\Beta.slg")
 )
 $semanticContextSource = Join-Path $repoRoot "selfhost\semantic\context.slg"
 $compilerRuntimeSources = Get-Content $runtimeManifestPath |
@@ -180,7 +180,7 @@ if (Test-Stage2IsCurrent) {
 }
 
 $stage2Llvm = [System.IO.File]::ReadAllText($stage2LlvmPath)
-if ($stage2Llvm -notmatch '(?s)define internal void @sollang_parallel_callback_\d+\(ptr %group, i64 %index\) \{.*?call %sollang\.struct\.m(?<typedIrModule>\d+)_s19 @sollang_m\k<typedIrModule>_s\d+\(.*?\r?\n\}') {
+if ($stage2Llvm -notmatch '(?s)define internal void @sollang_parallel_callback_\d+\(ptr %group, i64 %index\) \{.*?%capture_environment = load ptr,.*?%mapped = call [^\r\n]*@sollang_m\d+_s\d+\([^\r\n]*\).*?store [^\r\n]* %mapped,.*?\r?\n\}') {
     throw "stage-2 LLVM does not contain the function-local typed IR worker callback"
 }
 
@@ -305,7 +305,7 @@ for ($streamExecutionIndex = 0; $streamExecutionIndex -lt $streamStage2LlvmPaths
     $streamProcess.Refresh()
     $streamExitCode = $streamProcess.ExitCode
     $streamActual = [System.IO.File]::ReadAllText($streamStdoutPath).Replace("`r`n", "`n").TrimEnd("`r", "`n")
-    $streamExpectedPath = Join-Path $repoRoot "examples\expected\$($streamParityCases[$streamExecutionIndex][2])"
+    $streamExpectedPath = Join-Path $repoRoot "examples\regression\expected\$($streamParityCases[$streamExecutionIndex][2])"
     $streamExpected = [System.IO.File]::ReadAllText($streamExpectedPath).Replace("`r`n", "`n").TrimEnd("`r", "`n")
     if ($streamExitCode -ne 0 -or -not [string]::Equals($streamActual, $streamExpected, [System.StringComparison]::Ordinal)) {
         throw "stage-2 $streamName stream execution differs from the checked expectation (exit=$streamExitCode, actualLength=$($streamActual.Length), expectedLength=$($streamExpected.Length))"
@@ -363,6 +363,10 @@ $stage1CachePath = Join-Path $artifactsDir "stage2-check-module-cache-stage1.bin
 $stage1CacheTemporary = Join-Path $artifactsDir "stage2-check-module-cache-stage1.tmp"
 $stage2CachePath = Join-Path $artifactsDir "stage2-check-module-cache-stage2.bin"
 $stage2CacheTemporary = Join-Path $artifactsDir "stage2-check-module-cache-stage2.tmp"
+# A warm destination can hide effect reordering by letting load observe the
+# previous process's cache before the current publish. Always exercise the
+# cold create -> publish -> load sequence.
+Remove-Item -LiteralPath $stage1CachePath, $stage1CacheTemporary, $stage2CachePath, $stage2CacheTemporary -ErrorAction SilentlyContinue
 $stage1CacheArguments = @("interface-cache", $stage1CachePath, $stage1CacheTemporary) + $fingerprintSources
 $stage2CacheArguments = @("interface-cache", $stage2CachePath, $stage2CacheTemporary) + $fingerprintSources
 $stage1CacheProcess = Invoke-ProcessToFile $stage1Path $stage1CacheArguments $stage1CacheOutput $stage1CacheError

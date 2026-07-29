@@ -1,0 +1,37 @@
+import sollang.compiler.llvm.text as llvm
+
+main {
+    [
+        """
+        import sys.file as file
+
+        struct Snapshot {
+            sources: [file.SourceText; ~]
+        }
+
+        firstByte index: Int, snapshot: ref Snapshot -> Int {
+            Int(snapshot.sources[index] -> byte(UIntSize(0)))
+        }
+
+        scan snapshot: ref Snapshot -> Unit uses Console {
+            [0, 1; ~] -> parallel index {
+                index -> firstByte(snapshot)
+            } => values!
+            values! -> each value {
+                value -> println
+            }
+        }
+
+        main {
+            [file.SourceText; ~] => sources!
+            "A" -> file.borrowText => first!
+            "B" -> file.borrowText => second!
+            sources! -> push(first!)
+            sources! -> push(second!)
+            Snapshot { sources: sources! } => snapshot
+            snapshot -> scan
+        }
+        """; ~
+    ] => sources!
+    sources! -> llvm.emit
+}

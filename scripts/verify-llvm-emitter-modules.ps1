@@ -87,7 +87,7 @@ foreach ($relativePath in $statefulFragments) {
 }
 
 $manifestPaths = @(
-    Get-ChildItem (Join-Path $repoRoot "examples/expected") -Filter "*.sources.txt"
+    Get-ChildItem (Join-Path $repoRoot "examples/regression/expected") -Filter "*.sources.txt"
     Get-Item (Join-Path $repoRoot "selfhost/browser_driver.sources.txt")
     Get-Item (Join-Path $repoRoot "tests/Sollang.ExampleTests/Fixtures/selfhost-sollangc-driver.sources.txt")
     Get-Item (Join-Path $repoRoot "tests/Sollang.ExampleTests/Fixtures/selfhost-stage2-driver.sources.txt")

@@ -131,16 +131,16 @@ separate accepted design and are not implied by the word `handle`.
 
 Evidence:
 
-- [`274-result-role-block.slg`](../examples/274-result-role-block.slg) covers a
+- [`274-result-role-block.slg`](../examples/regression/274-result-role-block.slg) covers a
   struct literal and a user-defined `build` block in one source file.
-- [`275-owned-result-role-block.slg`](../examples/275-owned-result-role-block.slg)
+- [`275-owned-result-role-block.slg`](../examples/regression/275-owned-result-role-block.slg)
   covers mutable owned-result transfer and subsequent use.
-- [`573-result-block-pipeline.slg`](../examples/573-result-block-pipeline.slg)
+- [`573-result-block-pipeline.slg`](../examples/regression/573-result-block-pipeline.slg)
   proves that ordinary `map`, `tap`, and `filter` block functions compose and
   that `tap` can occupy a true middle stage.
-- `examples/diagnostics/block-*.slg` covers Unit binding, missing result, result
+- `examples/regression/diagnostics/block-*.slg` covers Unit binding, missing result, result
   type mismatch, and discarded owned result.
-- [`12-block-function-user-defined-yield.slg`](../examples/12-block-function-user-defined-yield.slg)
+- [`12-block-function-user-defined-yield.slg`](../examples/regression/12-block-function-user-defined-yield.slg)
   preserves the original Unit block behavior.
 
 ### B. Builder role
@@ -152,7 +152,7 @@ Evidence:
 - [ ] Builder-only capabilities cannot escape their scope.
 - [ ] A native Windows and Linux example returns the expected built value.
 
-Current evidence: [`277-typed-role-block-forms.slg`](../examples/277-typed-role-block-forms.slg)
+Current evidence: [`277-typed-role-block-forms.slg`](../examples/regression/277-typed-role-block-forms.slg)
 proves that `build` is an ordinary user-defined result block and that its
 before/body/after phases are ordered. Builder-specific mutation and escape
 rules remain unchecked.
@@ -203,30 +203,30 @@ are not yet matched, discharged, resumed, or lowered by a lexical handler.
 - [x] The roadmap records exact completed, partial, and missing gate counts.
 - [x] The implementation is committed as a reproducible baseline.
 
-Parser evidence: [`276-selfhost-result-role-block-parser.slg`](../examples/276-selfhost-result-role-block-parser.slg)
+Parser evidence: [`276-selfhost-result-role-block-parser.slg`](../examples/regression/276-selfhost-result-role-block-parser.slg)
 executes the generated grammar through the Sollang lexer/parser VM. The grammar
 places block-function statements before general expression statements, matching
 the bootstrap parser's deterministic dispatch order.
 
 Partial semantic/IR evidence:
-[`279-selfhost-result-role-block-semantics.slg`](../examples/279-selfhost-result-role-block-semantics.slg)
+[`279-selfhost-result-role-block-semantics.slg`](../examples/regression/279-selfhost-result-role-block-semantics.slg)
 proves that the Sollang compiler's own AST records the role target and result name,
 its symbol/call/type passes resolve and propagate the result and typed block
 item, its type checker accepts the declared source/item contract, and flat
 typed IR retains the call, result binding, and nested body operation.
-[`280-selfhost-role-block-contract-check.slg`](../examples/280-selfhost-role-block-contract-check.slg)
+[`280-selfhost-role-block-contract-check.slg`](../examples/regression/280-selfhost-role-block-contract-check.slg)
 proves that the source expression is selected only from the region before the
 role target, a mismatched source emits code 6, and role syntax targeting an
 ordinary function without a block input emits code 17. Runtime calls nested in
 the caller block are excluded from source-module lookup.
-[`281-selfhost-generic-role-specialization.slg`](../examples/281-selfhost-generic-role-specialization.slg)
+[`281-selfhost-generic-role-specialization.slg`](../examples/regression/281-selfhost-generic-role-specialization.slg)
 proves outside-in generic specialization for scalar `T`, `[T; ~] -> item: T`,
 `T -> items: [T; ~]`, an imported role reached through a default import alias,
 caller-body operators, and typed IR.
-[`283-selfhost-recursive-type-terms.slg`](../examples/283-selfhost-recursive-type-terms.slg)
+[`283-selfhost-recursive-type-terms.slg`](../examples/regression/283-selfhost-recursive-type-terms.slg)
 proves recursive canonical type terms and full-depth substitution independent
 of the former shallow component slots.
-[`284-generic-composite-role-block.slg`](../examples/284-generic-composite-role-block.slg)
+[`284-generic-composite-role-block.slg`](../examples/regression/284-generic-composite-role-block.slg)
 proves reference semantic specialization, `yield`, caller binding, LLVM
 execution, and owned cleanup for a composite generic item; the matching
 diagnostic rejects a specialized `yield` mismatch. At that checkpoint the

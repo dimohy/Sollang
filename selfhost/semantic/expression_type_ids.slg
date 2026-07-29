@@ -238,10 +238,13 @@ public resolveContext prepared: semanticContext.SemanticSnapshot -> ExpressionTy
             # shallow element module/symbol projection.
             false => typedArrayTypeSyntax!
             node.kind == 37 -> if {
-                node.firstToken => typedArraySyntaxToken!
-                typedArraySyntaxToken! < node.firstToken + node.tokenCount -> while {
-                    prepared.package.tokens[sourceRange.tokenStart + typedArraySyntaxToken!].kind == grammar.tokenIdSemicolon -> if { true => typedArrayTypeSyntax! }
-                    typedArraySyntaxToken! + 1 => typedArraySyntaxToken!
+                0 => typedArraySyntaxChildSearch!
+                typedArraySyntaxChildSearch! < sourceRange.astCount -> while {
+                    prepared.package.nodes[sourceRange.astStart + typedArraySyntaxChildSearch!] => typedArraySyntaxChild
+                    (typedArraySyntaxChild.kind == 16 and typedArraySyntaxChild.parent == astIndex!) -> if {
+                        true => typedArrayTypeSyntax!
+                    }
+                    typedArraySyntaxChildSearch! + 1 => typedArraySyntaxChildSearch!
                 }
             }
             (node.kind == 37 and typedArrayTypeSyntax!) -> if {
@@ -276,7 +279,7 @@ public resolveContext prepared: semanticContext.SemanticSnapshot -> ExpressionTy
                         prepared.package.tokens[sourceRange.tokenStart + typedArrayTokenIndex!] => typedArrayToken
                         # The element name of a qualified type is its final
                         # identifier (`SourceText` in `file.SourceText`).
-                        typedArrayToken.kind == grammar.tokenIdIdentifier -> if { typedArrayTokenIndex! => typedArrayNameToken! }
+                        typedArrayToken.kind == grammar.tokenIdIdentifier() -> if { typedArrayTokenIndex! => typedArrayNameToken! }
                         typedArrayTokenIndex! + 1 => typedArrayTokenIndex!
                     }
                     typedArrayNameToken! >= 0 -> if {
@@ -496,7 +499,7 @@ public resolveContext prepared: semanticContext.SemanticSnapshot -> ExpressionTy
                 node.firstToken => flowTokenIndex!
                 flowTokenIndex! < node.firstToken + node.tokenCount -> while {
                     prepared.package.tokens[sourceRange.tokenStart + flowTokenIndex!] => flowToken
-                    flowToken.kind == grammar.tokenIdIdentifier -> if {
+                    flowToken.kind == grammar.tokenIdIdentifier() -> if {
                         flowToken.span.length == UIntSize(3) -> if {
                             source -> byte(flowToken.span.start) => flowByte0
                             source -> byte(flowToken.span.start + UIntSize(1)) => flowByte1
@@ -542,13 +545,16 @@ public resolveContext prepared: semanticContext.SemanticSnapshot -> ExpressionTy
                 # the builtin affine owner, not the capacity argument type.
                 TextMatchRequest { source: source, start: conversionName.span.start, length: conversionName.span.length, expected: "Arena" } -> textMatches -> if { 15 => builtinTypeId! }
             }
-            # A qualified path may denote an argument-free module function,
-            # which Sollang exposes as a property value. Resolve its return
-            # type directly so constants such as grammar.tokenIdIdentifier do
-            # not disappear from binary-expression operands.
+            # A qualified path may be the transparent parent of an explicit
+            # argument-free module call. Resolve its return type directly so
+            # process.arguments() and generated grammar calls retain their
+            # concrete values through the call wrapper.
             node.kind == 36 -> if {
-                node.length == UIntSize(17) -> if {
-                    TextMatchRequest { source: source, start: node.start, length: node.length, expected: "process.arguments" } -> textMatches -> if { 16 => builtinTypeId! }
+                node.length >= UIntSize(17) -> if {
+                    TextMatchRequest { source: source, start: node.start, length: UIntSize(17), expected: "process.arguments" } -> textMatches -> if { 16 => builtinTypeId! }
+                }
+                node.length >= UIntSize(21) -> if {
+                    TextMatchRequest { source: source, start: node.start, length: UIntSize(21), expected: "sys.process.arguments" } -> textMatches -> if { 16 => builtinTypeId! }
                 }
                 builtinTypeId! < 0 -> if {
                     -1 => qualifiedValueIndex!
@@ -608,7 +614,7 @@ public resolveContext prepared: semanticContext.SemanticSnapshot -> ExpressionTy
                 -1 => typeNameToken!
                 node.firstToken => literalTokenIndex!
                 (literalTokenIndex! < node.firstToken + node.tokenCount and typeNameToken! < 0) -> while {
-                    prepared.package.tokens[sourceRange.tokenStart + literalTokenIndex!].kind == grammar.tokenIdIdentifier -> if { literalTokenIndex! => typeNameToken! }
+                    prepared.package.tokens[sourceRange.tokenStart + literalTokenIndex!].kind == grammar.tokenIdIdentifier() -> if { literalTokenIndex! => typeNameToken! }
                     literalTokenIndex! + 1 => literalTokenIndex!
                 }
                 -1 => literalTargetModule!
@@ -764,7 +770,7 @@ public resolveContext prepared: semanticContext.SemanticSnapshot -> ExpressionTy
                     unresolvedValueType.firstToken => unresolvedValueTypeTokenIndex!
                     unresolvedValueTypeTokenIndex! < unresolvedValueType.firstToken + unresolvedValueType.tokenCount -> while {
                         prepared.package.tokens[sourceRange.tokenStart + unresolvedValueTypeTokenIndex!] => unresolvedValueTypeToken
-                        unresolvedValueTypeToken.kind == grammar.tokenIdIdentifier -> if { unresolvedValueTypeTokenIndex! => unresolvedValueTypeNameToken! }
+                        unresolvedValueTypeToken.kind == grammar.tokenIdIdentifier() -> if { unresolvedValueTypeTokenIndex! => unresolvedValueTypeNameToken! }
                         unresolvedValueTypeTokenIndex! + 1 => unresolvedValueTypeTokenIndex!
                     }
                     unresolvedValueTypeNameToken! >= 0 -> if {
@@ -821,7 +827,7 @@ public resolveContext prepared: semanticContext.SemanticSnapshot -> ExpressionTy
                             -1 => selfTargetToken!
                             selfTargetNode.firstToken => selfTargetTokenSearch!
                             selfTargetTokenSearch! < selfTargetNode.firstToken + selfTargetNode.tokenCount -> while {
-                                prepared.package.tokens[sourceRange.tokenStart + selfTargetTokenSearch!].kind == grammar.tokenIdIdentifier -> if { selfTargetTokenSearch! => selfTargetToken! }
+                                prepared.package.tokens[sourceRange.tokenStart + selfTargetTokenSearch!].kind == grammar.tokenIdIdentifier() -> if { selfTargetTokenSearch! => selfTargetToken! }
                                 selfTargetTokenSearch! + 1 => selfTargetTokenSearch!
                             }
                             -1 => selfTargetSymbol!
@@ -1007,7 +1013,7 @@ public resolveContext prepared: semanticContext.SemanticSnapshot -> ExpressionTy
                     compositeNode.kind == 37 -> if {
                         compositeNode.firstToken => compositeTokenIndex!
                         compositeTokenIndex! < compositeNode.firstToken + compositeNode.tokenCount -> while {
-                            prepared.package.tokens[compositeRange.tokenStart + compositeTokenIndex!].kind == grammar.tokenIdTilde -> if { true => dynamicArray! }
+                            prepared.package.tokens[compositeRange.tokenStart + compositeTokenIndex!].kind == grammar.tokenIdTilde() -> if { true => dynamicArray! }
                             compositeTokenIndex! + 1 => compositeTokenIndex!
                         }
                     }
@@ -1380,15 +1386,15 @@ public resolveContext prepared: semanticContext.SemanticSnapshot -> ExpressionTy
                 fileMemberNode.firstToken => fileMemberTokenIndex!
                 fileMemberTokenIndex! < fileMemberNode.firstToken + fileMemberNode.tokenCount -> while {
                     prepared.package.tokens[fileMemberRange.tokenStart + fileMemberTokenIndex!] => fileMemberToken
-                    fileMemberToken.kind == grammar.tokenIdLess -> if { true => fileMemberInTypeArguments! }
-                    fileMemberToken.kind == grammar.tokenIdGreater -> if { false => fileMemberInTypeArguments! }
-                    fileMemberToken.kind == grammar.tokenIdLeftParen -> if { true => fileMemberInCallArguments! }
-                    fileMemberToken.kind == grammar.tokenIdRightParen -> if {
+                    fileMemberToken.kind == grammar.tokenIdLess() -> if { true => fileMemberInTypeArguments! }
+                    fileMemberToken.kind == grammar.tokenIdGreater() -> if { false => fileMemberInTypeArguments! }
+                    fileMemberToken.kind == grammar.tokenIdLeftParen() -> if { true => fileMemberInCallArguments! }
+                    fileMemberToken.kind == grammar.tokenIdRightParen() -> if {
                         false => fileMemberInCallArguments!
                         true => fileMemberCompletedCallArguments!
                     }
-                    (fileMemberToken.kind == grammar.tokenIdIdentifier and fileMemberInTypeArguments! and fileMemberTypeToken! < 0) -> if { fileMemberTokenIndex! => fileMemberTypeToken! }
-                    (fileMemberToken.kind == grammar.tokenIdIdentifier and not fileMemberInTypeArguments! and not fileMemberInCallArguments! and not fileMemberCompletedCallArguments!) -> if { fileMemberTokenIndex! => fileMemberTargetToken! }
+                    (fileMemberToken.kind == grammar.tokenIdIdentifier() and fileMemberInTypeArguments! and fileMemberTypeToken! < 0) -> if { fileMemberTokenIndex! => fileMemberTypeToken! }
+                    (fileMemberToken.kind == grammar.tokenIdIdentifier() and not fileMemberInTypeArguments! and not fileMemberInCallArguments! and not fileMemberCompletedCallArguments!) -> if { fileMemberTokenIndex! => fileMemberTargetToken! }
                     fileMemberTokenIndex! + 1 => fileMemberTokenIndex!
                 }
                 false => fileMemberReadAt!
@@ -2302,7 +2308,7 @@ public resolveContext prepared: semanticContext.SemanticSnapshot -> ExpressionTy
                         pathNode.firstToken => memberTokenIndex!
                         memberTokenIndex! < pathNode.firstToken + pathNode.tokenCount -> while {
                             prepared.package.tokens[pathRange.tokenStart + memberTokenIndex!] => memberToken
-                            (memberPathValid! and memberToken.kind == grammar.tokenIdIdentifier and memberToken.span.start >= memberBaseEnd) -> if {
+                            (memberPathValid! and memberToken.kind == grammar.tokenIdIdentifier() and memberToken.span.start >= memberBaseEnd) -> if {
                                 memberCurrentType! => memberOwnerType!
                                 (memberReadonlyProjection! and types![memberOwnerType!].kind == 8) -> if { types![memberOwnerType!].first => memberOwnerType! }
                                 -1 => matchedFieldType!
@@ -2387,7 +2393,7 @@ public resolveContext prepared: semanticContext.SemanticSnapshot -> ExpressionTy
                         pathNode.firstToken => takeTokenIndex!
                         takeTokenIndex! < pathNode.firstToken + pathNode.tokenCount -> while {
                             prepared.package.tokens[pathRange.tokenStart + takeTokenIndex!] => takeToken
-                            takeToken.kind == grammar.tokenIdIdentifier -> if {
+                            takeToken.kind == grammar.tokenIdIdentifier() -> if {
                                 takeToken.span.length == UIntSize(4) -> if {
                                     ((pathSource -> byte(takeToken.span.start)) == UInt8(116) and (pathSource -> byte(takeToken.span.start + UIntSize(1))) == UInt8(97) and (pathSource -> byte(takeToken.span.start + UIntSize(2))) == UInt8(107) and (pathSource -> byte(takeToken.span.start + UIntSize(3))) == UInt8(101)) -> if { true => takeFlow! }
                                 }

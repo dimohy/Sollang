@@ -55,7 +55,7 @@ remain authoritative for syntax and compatibility.
 - default loop item binding with `1..9 -> each { ... }`, exposed as `it`
 - integer folds with `range -> fold initial acc, item { nextAcc }`
 - fixed `Int` arrays with `[1, 2, 3]` and `[0; 8]`
-- growable `Int` arrays with `[1, 2, ~]`, typed empty `[Int; ~]`, and
+- growable `Int` arrays with `[1, 2; ~]`, typed empty `[Int; ~]`, and
   capacity hint `[Int; 1024~]`
 - `{Int: Int}` dictionaries with `{ 1: 100, 2: 200 }` and typed empty
   `{Int: Int}` or capacity hint `{Int: Int; 1024~}`
@@ -109,44 +109,44 @@ The examples are named so a normal filename sort follows the grammar
 progression. Start with the basic function/value-flow sample:
 
 ```powershell
-.\scripts\sollang.ps1 -Source examples\01-function-basic-hello.slg -Output artifacts\01-function-basic-hello.exe -KeepTemps
-.\scripts\sollang.ps1 -Source examples\02-function-named-input.slg -Output artifacts\02-function-named-input.exe -KeepTemps
-.\scripts\sollang.ps1 -Source examples\03-flow-call-parens.slg -Output artifacts\03-flow-call-parens.exe -KeepTemps
+.\scripts\sollang.ps1 -Source examples\regression\01-function-basic-hello.slg -Output artifacts\01-function-basic-hello.exe -KeepTemps
+.\scripts\sollang.ps1 -Source examples\regression\02-function-named-input.slg -Output artifacts\02-function-named-input.exe -KeepTemps
+.\scripts\sollang.ps1 -Source examples\regression\03-flow-call-parens.slg -Output artifacts\03-flow-call-parens.exe -KeepTemps
 ```
 
 Top-level statements, local functions, arithmetic, comments, and block functions
 are cumulative:
 
 ```powershell
-.\scripts\sollang.ps1 -Source examples\04-main-omitted-top-level.slg -Output artifacts\04-main-omitted-top-level.exe -KeepTemps
-.\scripts\sollang.ps1 -Source examples\05-function-local.slg -Output artifacts\05-function-local.exe -KeepTemps
-.\scripts\sollang.ps1 -Source examples\06-expression-arithmetic-comments.slg -Output artifacts\06-expression-arithmetic-comments.exe -KeepTemps
-.\scripts\sollang.ps1 -Source examples\07-block-each-explicit-item.slg -Output artifacts\07-block-each-explicit-item.exe -KeepTemps
-.\scripts\sollang.ps1 -Source examples\08-block-each-default-it.slg -Output artifacts\08-block-each-default-it.exe -KeepTemps
-.\scripts\sollang.ps1 -Source examples\09-namespace-sys-io.slg -Output artifacts\09-namespace-sys-io.exe -KeepTemps
-.\scripts\sollang.ps1 -Source examples\10-block-argument-omits-parens.slg -Output artifacts\10-block-argument-omits-parens.exe -KeepTemps
-.\scripts\sollang.ps1 -Source examples\11-block-function-exec-block-repeat.slg -Output artifacts\11-block-function-exec-block-repeat.exe -KeepTemps
-.\scripts\sollang.ps1 -Source examples\12-block-function-user-defined-yield.slg -Output artifacts\12-block-function-user-defined-yield.exe -KeepTemps
-.\scripts\sollang.ps1 -Source examples\13-block-fold-sum.slg -Output artifacts\13-block-fold-sum.exe -KeepTemps
+.\scripts\sollang.ps1 -Source examples\regression\04-main-omitted-top-level.slg -Output artifacts\04-main-omitted-top-level.exe -KeepTemps
+.\scripts\sollang.ps1 -Source examples\regression\05-function-local.slg -Output artifacts\05-function-local.exe -KeepTemps
+.\scripts\sollang.ps1 -Source examples\regression\06-expression-arithmetic-comments.slg -Output artifacts\06-expression-arithmetic-comments.exe -KeepTemps
+.\scripts\sollang.ps1 -Source examples\regression\07-block-each-explicit-item.slg -Output artifacts\07-block-each-explicit-item.exe -KeepTemps
+.\scripts\sollang.ps1 -Source examples\regression\08-block-each-default-it.slg -Output artifacts\08-block-each-default-it.exe -KeepTemps
+.\scripts\sollang.ps1 -Source examples\regression\09-namespace-sys-io.slg -Output artifacts\09-namespace-sys-io.exe -KeepTemps
+.\scripts\sollang.ps1 -Source examples\regression\10-block-argument-omits-parens.slg -Output artifacts\10-block-argument-omits-parens.exe -KeepTemps
+.\scripts\sollang.ps1 -Source examples\regression\11-block-function-exec-block-repeat.slg -Output artifacts\11-block-function-exec-block-repeat.exe -KeepTemps
+.\scripts\sollang.ps1 -Source examples\regression\12-block-function-user-defined-yield.slg -Output artifacts\12-block-function-user-defined-yield.exe -KeepTemps
+.\scripts\sollang.ps1 -Source examples\regression\13-block-fold-sum.slg -Output artifacts\13-block-fold-sum.exe -KeepTemps
 ```
 
 Conditionals are cumulative:
 
 ```powershell
-.\scripts\sollang.ps1 -Source examples\14-condition-if.slg -Output artifacts\14-condition-if.exe -KeepTemps
-.\scripts\sollang.ps1 -Source examples\15-condition-when.slg -Output artifacts\15-condition-when.exe -KeepTemps
-.\scripts\sollang.ps1 -Source examples\16-condition-when-subject.slg -Output artifacts\16-condition-when-subject.exe -KeepTemps
-.\scripts\sollang.ps1 -Source examples\17-condition-when-range.slg -Output artifacts\17-condition-when-range.exe -KeepTemps
-.\scripts\sollang.ps1 -Source examples\18-condition-when-compact.slg -Output artifacts\18-condition-when-compact.exe -KeepTemps
+.\scripts\sollang.ps1 -Source examples\regression\14-condition-if.slg -Output artifacts\14-condition-if.exe -KeepTemps
+.\scripts\sollang.ps1 -Source examples\regression\15-condition-when.slg -Output artifacts\15-condition-when.exe -KeepTemps
+.\scripts\sollang.ps1 -Source examples\regression\16-condition-when-subject.slg -Output artifacts\16-condition-when-subject.exe -KeepTemps
+.\scripts\sollang.ps1 -Source examples\regression\17-condition-when-range.slg -Output artifacts\17-condition-when-range.exe -KeepTemps
+.\scripts\sollang.ps1 -Source examples\regression\18-condition-when-compact.slg -Output artifacts\18-condition-when-compact.exe -KeepTemps
 ```
 
 The sorted-number workflow is also written in Sollang. For quick verification,
 the demo pair uses the same algorithm at 1,000 records:
 
 ```powershell
-.\scripts\sollang.ps1 -Source examples\19-stdlib-random-file-demo-generate.slg -Output artifacts\19-stdlib-random-file-demo-generate.exe -KeepTemps
+.\scripts\sollang.ps1 -Source examples\regression\19-stdlib-random-file-demo-generate.slg -Output artifacts\19-stdlib-random-file-demo-generate.exe -KeepTemps
 .\artifacts\19-stdlib-random-file-demo-generate.exe
-.\scripts\sollang.ps1 -Source examples\20-stdlib-file-demo-query.slg -Output artifacts\20-stdlib-file-demo-query.exe -KeepTemps
+.\scripts\sollang.ps1 -Source examples\regression\20-stdlib-file-demo-query.slg -Output artifacts\20-stdlib-file-demo-query.exe -KeepTemps
 .\artifacts\20-stdlib-file-demo-query.exe
 ```
 
@@ -155,17 +155,17 @@ The full generator creates 100,000,000 sorted 64-bit integer records in
 10-wide bucket in `1..1,000,000,000`:
 
 ```powershell
-.\scripts\sollang.ps1 -Source examples\21-stdlib-random-file-100m-generate.slg -Output artifacts\21-stdlib-random-file-100m-generate.exe -KeepTemps
+.\scripts\sollang.ps1 -Source examples\regression\21-stdlib-random-file-100m-generate.slg -Output artifacts\21-stdlib-random-file-100m-generate.exe -KeepTemps
 .\artifacts\21-stdlib-random-file-100m-generate.exe
 
-.\scripts\sollang.ps1 -Source examples\22-stdlib-file-100m-query.slg -Output artifacts\22-stdlib-file-100m-query.exe -KeepTemps
+.\scripts\sollang.ps1 -Source examples\regression\22-stdlib-file-100m-query.slg -Output artifacts\22-stdlib-file-100m-query.exe -KeepTemps
 .\artifacts\22-stdlib-file-100m-query.exe
 ```
 
 Linux x64 output is available through WSL:
 
 ```powershell
-.\scripts\sollang.ps1 -Source examples\01-function-basic-hello.slg -Output artifacts\01-function-basic-hello-linux -Target linux-x64 -KeepTemps
+.\scripts\sollang.ps1 -Source examples\regression\01-function-basic-hello.slg -Output artifacts\01-function-basic-hello-linux -Target linux-x64 -KeepTemps
 wsl --exec /mnt/p/MyWorks/Sollang/artifacts/01-function-basic-hello-linux
 ```
 
@@ -174,7 +174,7 @@ the generic sendable-input coverage can be built and executed through WSL with:
 
 ```powershell
 .\scripts\sollang.ps1 `
-  -Source examples\238-sendable-async-inputs.slg `
+  -Source examples\regression\238-sendable-async-inputs.slg `
   -Output artifacts\238-sendable-async-inputs-linux `
   -Target linux-x64
 wsl --exec /mnt/p/MyWorks/Sollang/artifacts/238-sendable-async-inputs-linux
@@ -354,18 +354,18 @@ generated module exports `sollang_start` and `memory`, and imports
 `env.slg_browser_write(ptr, len)` so the page can render stdout text:
 
 ```powershell
-.\scripts\sollang.ps1 -Source examples\23-webassembly-browser.slg -Output artifacts\23-webassembly-browser.wasm -Target wasm32-browser -KeepTemps
+.\scripts\sollang.ps1 -Source examples\regression\23-webassembly-browser.slg -Output artifacts\23-webassembly-browser.wasm -Target wasm32-browser -KeepTemps
 python -m http.server 5080
 ```
 
-Open `http://localhost:5080/examples/browser/`.
+Open `http://localhost:5080/examples/regression/browser/`.
 
 The first container sample shows static arrays, dynamic arrays, checked
 indexing, `fold`, `push`, dictionary `put`, `len`, `capacity`, and deterministic
 native cleanup:
 
 ```powershell
-.\scripts\sollang.ps1 -Source examples\25-arrays-dictionaries.slg -Output artifacts\25-arrays-dictionaries.exe -KeepTemps
+.\scripts\sollang.ps1 -Source examples\regression\25-arrays-dictionaries.slg -Output artifacts\25-arrays-dictionaries.exe -KeepTemps
 .\artifacts\25-arrays-dictionaries.exe
 ```
 
@@ -373,7 +373,7 @@ Move-consuming container transforms return a new owner while consuming the
 source owner. The sample shows the short same-name form:
 
 ```powershell
-.\scripts\sollang.ps1 -Source examples\26-immutable-containers.slg -Output artifacts\26-immutable-containers.exe -KeepTemps
+.\scripts\sollang.ps1 -Source examples\regression\26-immutable-containers.slg -Output artifacts\26-immutable-containers.exe -KeepTemps
 .\artifacts\26-immutable-containers.exe
 ```
 
@@ -381,7 +381,7 @@ The dictionary hash-table sample exercises update, growth, rehashing, lookup,
 and capacity reporting:
 
 ```powershell
-.\scripts\sollang.ps1 -Source examples\27-dictionary-hash-table.slg -Output artifacts\27-dictionary-hash-table.exe -KeepTemps
+.\scripts\sollang.ps1 -Source examples\regression\27-dictionary-hash-table.slg -Output artifacts\27-dictionary-hash-table.exe -KeepTemps
 .\artifacts\27-dictionary-hash-table.exe
 ```
 
@@ -393,7 +393,7 @@ count. Set `SOLLANG_NATIVE_JOBS` to a positive integer to apply a lower cap when
 measuring constrained or highly concurrent build environments.
 
 Example stdout tests compile and run the samples listed under
-`examples/expected`:
+`examples/regression/expected`:
 
 Each new `.slg` example begins with a short English `#` comment explaining the
 language behavior or compiler invariant it verifies. Multi-scenario examples
@@ -476,7 +476,7 @@ aliases. Exactly one file may contain executable top-level statements:
 
 ```powershell
 .\scripts\sollang.ps1 `
-  -SourcesFile examples\expected\52-multi-file-modules.sources.txt `
+  -SourcesFile examples\regression\expected\52-multi-file-modules.sources.txt `
   -Output artifacts\52-multi-file-modules.exe
 ```
 
@@ -877,7 +877,7 @@ main {
 }
 ```
 
-The library-defined `take` stage keeps its counter with `state name! = value` and uses
+The library-defined `take` stage keeps its counter with `value => state name!` and uses
 language-level `stop` to cancel the original Range loop. In this example, the
 billion-element upper bound is never materialized or fully scanned.
 
@@ -964,147 +964,147 @@ approved syntax.
 
 ## Repository Layout
 
-- `examples/01-function-basic-hello.slg`: first runtime function and value-flow
+- `examples/regression/01-function-basic-hello.slg`: first runtime function and value-flow
   sample
-- `examples/02-function-named-input.slg`: cumulative explicit function
+- `examples/regression/02-function-named-input.slg`: cumulative explicit function
   input-name sample
-- `examples/03-flow-call-parens.slg`: cumulative value-flow target `func()`
+- `examples/regression/03-flow-call-parens.slg`: cumulative value-flow target `func()`
   sample
-- `examples/04-main-omitted-top-level.slg`: cumulative omitted-main and
+- `examples/regression/04-main-omitted-top-level.slg`: cumulative omitted-main and
   `sys.io.print` sample
-- `examples/05-function-local.slg`: cumulative local function sample
-- `examples/06-expression-arithmetic-comments.slg`: cumulative parentheses,
+- `examples/regression/05-function-local.slg`: cumulative local function sample
+- `examples/regression/06-expression-arithmetic-comments.slg`: cumulative parentheses,
   arithmetic, and comment sample
-- `examples/07-block-each-explicit-item.slg`: cumulative input plus range loop
+- `examples/regression/07-block-each-explicit-item.slg`: cumulative input plus range loop
   sample
-- `examples/08-block-each-default-it.slg`: cumulative range loop sample with
+- `examples/regression/08-block-each-default-it.slg`: cumulative range loop sample with
   default `it`
-- `examples/09-namespace-sys-io.slg`: cumulative `sys.io.readInt` and
+- `examples/regression/09-namespace-sys-io.slg`: cumulative `sys.io.readInt` and
   `sys.io.println` sample
-- `examples/10-block-argument-omits-parens.slg`: block-function call sample where
+- `examples/regression/10-block-argument-omits-parens.slg`: block-function call sample where
   the brace body is the argument and `()` is omitted
-- `examples/11-block-function-exec-block-repeat.slg`: executable block argument
+- `examples/regression/11-block-function-exec-block-repeat.slg`: executable block argument
   sample using `count -> repeat item { ... }`
-- `examples/12-block-function-user-defined-yield.slg`: user-defined
+- `examples/regression/12-block-function-user-defined-yield.slg`: user-defined
   block-function sample using `block item: Type` and `yield()`
-- `examples/13-block-fold-sum.slg`: cumulative integer `fold` sample
-- `examples/14-condition-if.slg`: cumulative flow-oriented `if` conditional
+- `examples/regression/13-block-fold-sum.slg`: cumulative integer `fold` sample
+- `examples/regression/14-condition-if.slg`: cumulative flow-oriented `if` conditional
   sample
-- `examples/15-condition-when.slg`: cumulative `when` expression sample
-- `examples/16-condition-when-subject.slg`: cumulative subject-value `when`
+- `examples/regression/15-condition-when.slg`: cumulative `when` expression sample
+- `examples/regression/16-condition-when-subject.slg`: cumulative subject-value `when`
   sample
-- `examples/17-condition-when-range.slg`: cumulative subject-value range-arm
+- `examples/regression/17-condition-when-range.slg`: cumulative subject-value range-arm
   `when` sample
-- `examples/18-condition-when-compact.slg`: cumulative expression-body and
+- `examples/regression/18-condition-when-compact.slg`: cumulative expression-body and
   compact `when` sample
-- `examples/19-stdlib-random-file-demo-generate.slg`: small verification
+- `examples/regression/19-stdlib-random-file-demo-generate.slg`: small verification
   generator using the sorted bucket algorithm
-- `examples/20-stdlib-file-demo-query.slg`: small nearest-value query sample
-- `examples/21-stdlib-random-file-100m-generate.slg`: full sorted 100,000,000
+- `examples/regression/20-stdlib-file-demo-query.slg`: small nearest-value query sample
+- `examples/regression/21-stdlib-random-file-100m-generate.slg`: full sorted 100,000,000
   integer binary-file generator
-- `examples/22-stdlib-file-100m-query.slg`: nearest-value query over the full
+- `examples/regression/22-stdlib-file-100m-query.slg`: nearest-value query over the full
   generated integer file
-- `examples/23-webassembly-browser.slg`: browser WebAssembly stdout sample
-- `examples/24-string-interpolation-dollar.slg`: `$name` and `$(expr)` string
+- `examples/regression/23-webassembly-browser.slg`: browser WebAssembly stdout sample
+- `examples/regression/24-string-interpolation-dollar.slg`: `$name` and `$(expr)` string
   interpolation sample
-- `examples/172-raw-multiline-strings.slg`: triple-quoted raw strings with
+- `examples/regression/172-raw-multiline-strings.slg`: triple-quoted raw strings with
   indentation trimming and literal quotes, backslashes, and `$()` text
-- `examples/25-arrays-dictionaries.slg`: static array, dynamic array,
+- `examples/regression/25-arrays-dictionaries.slg`: static array, dynamic array,
   dictionary, and deterministic cleanup sample
-- `examples/26-immutable-containers.slg`: immutable dynamic-array and dictionary
+- `examples/regression/26-immutable-containers.slg`: immutable dynamic-array and dictionary
   transforms that return new owners
-- `examples/28-mutable-indexing.slg`: mutable owner suffixes and checked indexed
+- `examples/regression/28-mutable-indexing.slg`: mutable owner suffixes and checked indexed
   assignment for fixed arrays, growable arrays, and dictionaries
-- `examples/29-typed-empty-containers.slg`: typed empty growable array and
+- `examples/regression/29-typed-empty-containers.slg`: typed empty growable array and
   dictionary literals
-- `examples/35-mutable-int-dictionary-parameters.slg`: non-owning mutable
+- `examples/regression/35-mutable-int-dictionary-parameters.slg`: non-owning mutable
   dictionary parameters through flow and direct calls
-- `examples/36-return-moved-container-parameters.slg`: returning consumed array
+- `examples/regression/36-return-moved-container-parameters.slg`: returning consumed array
   and dictionary parameters with direct, transformed, `if`, and `when` paths
-- `examples/37-readonly-int-dictionary-parameters.slg`: non-owning readonly
+- `examples/regression/37-readonly-int-dictionary-parameters.slg`: non-owning readonly
   dictionary parameters through nested, flow, and direct calls
-- `examples/38-stack-promoted-dynamic-array.slg`: automatic stack placement for
+- `examples/regression/38-stack-promoted-dynamic-array.slg`: automatic stack placement for
   a small, non-escaping, readonly growable-array literal
-- `examples/39-stack-promoted-int-dictionary.slg`: automatic stack placement for
+- `examples/regression/39-stack-promoted-int-dictionary.slg`: automatic stack placement for
   small, non-escaping, readonly Swiss-table dictionary literals
-- `examples/40-nested-stack-slot-reuse.slg`: one function-entry stack slot reused
+- `examples/regression/40-nested-stack-slot-reuse.slg`: one function-entry stack slot reused
   by nested branch and loop-local array/dictionary payloads
-- `examples/41-inline-function-stack-frame.slg`: a local inline function reusing
+- `examples/regression/41-inline-function-stack-frame.slg`: a local inline function reusing
   its containing function's entry slot across loop iterations
-- `examples/42-fixed-array-placement.slg`: small fixed-array entry placement and
+- `examples/regression/42-fixed-array-placement.slg`: small fixed-array entry placement and
   oversized fixed-array heap placement with deterministic cleanup
-- `examples/54-associated-types.slg`: static trait associated-type binding and
+- `examples/regression/54-associated-types.slg`: static trait associated-type binding and
   a generic equality constraint specialized to `Item = Int`
-- `examples/55-multi-parameter-generics.slg`: two inferred type parameters with
+- `examples/regression/55-multi-parameter-generics.slg`: two inferred type parameters with
   separate `Int` and `Text` LLVM monomorphizations
-- `examples/56-generic-fixed-text-array.slg`: homogeneous fixed `Text` arrays
+- `examples/regression/56-generic-fixed-text-array.slg`: homogeneous fixed `Text` arrays
   with typed indexing and deterministic backing-storage cleanup
-- `examples/57-user-value-fixed-arrays.slg`: parametric fixed arrays of copyable
+- `examples/regression/57-user-value-fixed-arrays.slg`: parametric fixed arrays of copyable
   user structs and payload enums with exact LLVM aggregate layouts
-- `examples/58-owned-element-fixed-arrays.slg`: owned struct elements with one
+- `examples/regression/58-owned-element-fixed-arrays.slg`: owned struct elements with one
   recursive drop per initialized slot followed by backing-buffer cleanup
-- `examples/59-generic-dynamic-text-array.slg`: typed empty `Text` array,
+- `examples/regression/59-generic-dynamic-text-array.slg`: typed empty `Text` array,
   aggregate-aware growth, indexing, length, and capacity
-- `examples/60-generic-dynamic-user-array.slg`: copyable user-struct dynamic
+- `examples/regression/60-generic-dynamic-user-array.slg`: copyable user-struct dynamic
   array with typed push and growth copying
-- `examples/61-owned-generic-dynamic-array.slg`: move-only owned elements with
+- `examples/regression/61-owned-generic-dynamic-array.slg`: move-only owned elements with
   runtime-length recursive drop
-- `examples/62-generic-text-int-dictionary.slg`: `Text` hashing/equality, typed
+- `examples/regression/62-generic-text-int-dictionary.slg`: `Text` hashing/equality, typed
   lookup/update, capacity growth, and Swiss-table rehash
-- `examples/63-generic-int-text-dictionary.slg`: aggregate `Text` values in a
+- `examples/regression/63-generic-int-text-dictionary.slg`: aggregate `Text` values in a
   typed `Int`-keyed dictionary
-- `examples/64-owned-generic-dictionary-values.slg`: recursive destruction of
+- `examples/regression/64-owned-generic-dictionary-values.slg`: recursive destruction of
   owned user values stored in dictionary entries
-- `examples/65-typed-empty-text-dictionary.slg`: capacity-hinted typed-empty
+- `examples/regression/65-typed-empty-text-dictionary.slg`: capacity-hinted typed-empty
   `{Text: Text}` construction and mutation
-- `examples/66-generic-dictionary-function-contracts.slg`: readonly, `mut`, and
+- `examples/regression/66-generic-dictionary-function-contracts.slg`: readonly, `mut`, and
   `move` function contracts for a concrete `{Text: Int}` specialization
-- `examples/67-generic-dynamic-array-function-contracts.slg`: readonly, `mut`,
+- `examples/regression/67-generic-dynamic-array-function-contracts.slg`: readonly, `mut`,
   and `move` function contracts for `[Text; ~]`, including callee-side growth
-- `examples/68-owned-array-function-transfer.slg`: move-return of an owned
+- `examples/regression/68-owned-array-function-transfer.slg`: move-return of an owned
   user-element array with final recursive drop coverage
-- `examples/69-generic-array-each.slg`: type-preserving `each` over fixed Text,
+- `examples/regression/69-generic-array-each.slg`: type-preserving `each` over fixed Text,
   dynamic user-value, and readonly-borrowed owned-element arrays
-- `examples/70-generic-dictionary-iteration.slg`: Swiss live-slot `eachKey` and
+- `examples/regression/70-generic-dictionary-iteration.slg`: Swiss live-slot `eachKey` and
   `eachValue` with Text keys, typed user values, and borrowed owned values
-- `examples/71-user-defined-dictionary-keys.slg`: copyable nominal keys with
+- `examples/regression/71-user-defined-dictionary-keys.slg`: copyable nominal keys with
   statically dispatched `Hash.hash` and canonical `Eq.eq` implementations,
   plus contextual lookup syntax such as `map[{ scope: 1, id: 10 }]`
-- `examples/454-selfhost-llvm-imported-owned-dictionary-key.slg` and
-  `examples/455-imported-owned-dictionary-key.slg`: module-qualified owned key
+- `examples/regression/454-selfhost-llvm-imported-owned-dictionary-key.slg` and
+  `examples/regression/455-imported-owned-dictionary-key.slg`: module-qualified owned key
   types in typed dictionary literals and function signatures, with static
   cross-module `Hash`/`Eq`, replacement, extraction, and recursive drop
-- `examples/456-owned-dictionary-value-call-borrow.slg` and
-  `examples/457-selfhost-llvm-owned-dictionary-value-call-borrow.slg`:
+- `examples/regression/456-owned-dictionary-value-call-borrow.slg` and
+  `examples/regression/457-selfhost-llvm-owned-dictionary-value-call-borrow.slg`:
   call-scoped readonly borrowing of an indexed recursively owned dictionary
   value, followed by safe replacement, extraction, and deterministic cleanup
-- `examples/458-owned-index-projected-call-borrow.slg` and
-  `examples/459-selfhost-llvm-owned-index-projected-call-borrow.slg`:
+- `examples/regression/458-owned-index-projected-call-borrow.slg` and
+  `examples/regression/459-selfhost-llvm-owned-index-projected-call-borrow.slg`:
   call-scoped readonly borrowing through field and nested-index projections,
   with the container retaining sole ownership
-- `examples/460-mixed-postfix-chain.slg` and
-  `examples/461-selfhost-llvm-mixed-postfix-chain.slg`: left-associated mixed
+- `examples/regression/460-mixed-postfix-chain.slg` and
+  `examples/regression/461-selfhost-llvm-mixed-postfix-chain.slg`: left-associated mixed
   index/field chains such as `symbols![1].payload![0]` in the reference and
   self-host LLVM paths
-- `examples/462-nested-index-call-evaluation.slg`,
-  `examples/463-selfhost-llvm-nested-index-call-evaluation.slg`, and
-  `examples/464-selfhost-typed-ir-nested-index-dependencies.slg`: recursive
+- `examples/regression/462-nested-index-call-evaluation.slg`,
+  `examples/regression/463-selfhost-llvm-nested-index-call-evaluation.slg`, and
+  `examples/regression/464-selfhost-typed-ir-nested-index-dependencies.slg`: recursive
   evaluation of a computed index before its consuming call, including the
   self-host typed-IR dependency and LLVM dominance contracts
-- `examples/465-borrowed-text-return-origin.slg`,
-  `examples/466-selfhost-llvm-borrowed-text-return-origin.slg`, and
-  `examples/468-selfhost-borrowed-return-origin-analysis.slg`: a sliced Text
+- `examples/regression/465-borrowed-text-return-origin.slg`,
+  `examples/regression/466-selfhost-llvm-borrowed-text-return-origin.slg`, and
+  `examples/regression/468-selfhost-borrowed-return-origin-analysis.slg`: a sliced Text
   return inherits its single SourceText input origin, executes through both
   compiler paths, and rejects moving the owner while the stored view is live
-- `examples/469-borrowed-text-last-use-region.slg`,
-  `examples/470-selfhost-borrowed-text-last-use-analysis.slg`, and
-  `examples/471-selfhost-llvm-borrowed-text-last-use.slg`: the inferred borrow
+- `examples/regression/469-borrowed-text-last-use-region.slg`,
+  `examples/regression/470-selfhost-borrowed-text-last-use-analysis.slg`, and
+  `examples/regression/471-selfhost-llvm-borrowed-text-last-use.slg`: the inferred borrow
   ends after the view's final straight-line use, permitting a later owner move
   in the reference compiler, self-host analyzer, and self-host LLVM path
-- `examples/88-grammar-table-module.slg`: compiles the generated grammar-table
+- `examples/regression/88-grammar-table-module.slg`: compiles the generated grammar-table
   module as a separate source file and reads its public metadata
-- `examples/browser`: static HTML/JS runner for the WebAssembly sample
-- `examples/expected`: expected stdout/stdin fixtures for executable samples
+- `examples/regression/browser`: static HTML/JS runner for the WebAssembly sample
+- `examples/regression/expected`: expected stdout/stdin fixtures for executable samples
 - `stdlib/sys/runtime.slg`: standard library intrinsic boundary declarations
 - `stdlib/sys/io.slg`: Sollang implementation of `sys.io` wrappers
 - `stdlib/sys/random.slg`: Sollang wrappers for pseudo-random runtime

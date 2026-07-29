@@ -49,7 +49,7 @@ Write-Host "[owned-replace 1/4] PASS Linux reference and self-host execution"
 Write-Host "[owned-replace 2/4] Emit the reference LLVM module."
 $referenceOutput = Join-Path $artifactsDir "$referenceName-asan"
 & dotnet run --project $compilerProject -c Release --no-build -- build `
-    (Join-Path $repoRoot "examples\$referenceName.slg") `
+    (Join-Path $repoRoot "examples\regression\$referenceName.slg") `
     -o $referenceOutput `
     --target linux-x64 `
     --llvm $llvmDir `
@@ -96,9 +96,9 @@ foreach ($module in $modules) {
         "/tmp/$name-asan"
     )
     $expectedPath = if ($name -eq $referenceName) {
-        Join-Path $repoRoot "examples\expected\$name.stdout.txt"
+        Join-Path $repoRoot "examples\regression\expected\$name.stdout.txt"
     } else {
-        Join-Path $repoRoot "examples\expected\$name.stdout.llvm.linux.execute.txt"
+        Join-Path $repoRoot "examples\regression\expected\$name.stdout.llvm.linux.execute.txt"
     }
     $expected = ([System.IO.File]::ReadAllText($expectedPath)).TrimEnd("`r", "`n")
     if ($actual -ne $expected) {

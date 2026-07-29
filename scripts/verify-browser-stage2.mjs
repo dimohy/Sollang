@@ -4,7 +4,12 @@ import { fileURLToPath } from "node:url";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const wasmPath = process.argv[2] ?? path.join(repoRoot, "artifacts", "sollangc-browser.wasm");
-const sourcePath = process.argv[3] ?? path.join(repoRoot, "examples", "23-webassembly-browser.slg");
+const sourcePath = process.argv[3] ?? path.join(
+  repoRoot,
+  "examples",
+  "regression",
+  "23-webassembly-browser.slg"
+);
 const outputPath = process.argv[4] ?? path.join(repoRoot, "artifacts", "browser-stage2-output.ll");
 const expectedDiagnostic = process.argv[5];
 const wasmBytes = fs.readFileSync(wasmPath);

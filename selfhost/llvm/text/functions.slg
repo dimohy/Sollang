@@ -32,6 +32,32 @@ import sys.file as file
 
 # Responsibility fragment extracted from emitCore. State is passed by readonly
 # reference, preserving the original direct-call and allocation behavior.
+callHasDeclaredEffects node: typedIr.TypedIrNode, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Bool {
+    false => hasEffects!
+    (node.kind == 6 and node.targetModule >= 0 and node.targetModule < (context.ranges -> len) and node.symbol >= 0) -> if {
+        context.ranges[node.targetModule] => targetRange
+        node.symbol < targetRange.symbolCount -> if {
+            context.symbols[targetRange.symbolStart + node.symbol] => targetSymbol
+            targetSymbol.astNode >= 0 -> if {
+                context.nodes[targetRange.astStart + targetSymbol.astNode] => targetDeclaration
+                targetDeclaration.firstToken => tokenIndex!
+                tokenIndex! < targetDeclaration.firstToken + targetDeclaration.tokenCount -> while {
+                    context.tokens[targetRange.tokenStart + tokenIndex!] => token
+                    (token.span.length == UIntSize(4)
+                        and (context.sources[node.targetModule] -> byte(token.span.start)) == UInt8(117)
+                        and (context.sources[node.targetModule] -> byte(token.span.start + UIntSize(1))) == UInt8(115)
+                        and (context.sources[node.targetModule] -> byte(token.span.start + UIntSize(2))) == UInt8(101)
+                        and (context.sources[node.targetModule] -> byte(token.span.start + UIntSize(3))) == UInt8(115)) -> if {
+                        true => hasEffects!
+                    }
+                    tokenIndex! + 1 => tokenIndex!
+                }
+            }
+        }
+    }
+    hasEffects!
+}
+
 emitFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int uses Console {
     requestedFunctionIndex => functionIndex!
     context.ir[functionIndex!] => function
@@ -314,12 +340,20 @@ emitFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitContex
                             context.ir[scheduleCallArgument!].nextOperand => scheduleCallArgument!
                         }
                     }
-                    (scheduleReady! and scheduleNode.kind == 6 and (scheduleNode.symbol == -101 or scheduleNode.symbol == -102)) -> if {
-                        expressionStart => schedulePrintBindingSearch!
-                        schedulePrintBindingSearch! < functionEnd! -> while {
-                            context.ir[schedulePrintBindingSearch!] => schedulePrintBinding
-                            (schedulePrintBinding.kind == 17 and schedulePrintBinding.operand0 >= expressionStart and schedulePrintBinding.operand0 < functionEnd! and (schedulePrintBinding -> sourceStart(context, state)) < (scheduleNode -> sourceStart(context, state)) and not expressionScheduled![schedulePrintBindingSearch! - expressionStart]) -> if { false => scheduleReady! }
-                            schedulePrintBindingSearch! + 1 => schedulePrintBindingSearch!
+                    # A call with declared external effects may be bound and
+                    # consumed only later. Keep it behind earlier source
+                    # bindings so a ready read cannot leap over a still-
+                    # computing publish/write binding. Console intrinsics keep
+                    # the same source-order barrier.
+                    scheduleNode -> callHasDeclaredEffects(context, state) => scheduleCallHasEffects
+                    (scheduleReady! and scheduleNode.kind == 6 and (scheduleNode.symbol == -101 or scheduleNode.symbol == -102 or scheduleCallHasEffects)) -> if {
+                        expressionStart => scheduleCallBindingSearch!
+                        scheduleCallBindingSearch! < functionEnd! -> while {
+                            context.ir[scheduleCallBindingSearch!] => scheduleCallBinding
+                            NodeAncestorRequest { nodeIndex: scheduleCandidate!, ownerIndex: scheduleCallBindingSearch! } => scheduleCallBindingOwnerRequest
+                            scheduleCallBindingOwnerRequest -> irDescendsFrom(context, state) => scheduleCallInsideBinding
+                            (scheduleCallBinding.kind == 17 and scheduleCallBinding.operand0 >= expressionStart and scheduleCallBinding.operand0 < functionEnd! and not scheduleCallInsideBinding and (scheduleCallBinding -> sourceStart(context, state)) < (scheduleNode -> sourceStart(context, state)) and not expressionScheduled![scheduleCallBindingSearch! - expressionStart]) -> if { false => scheduleReady! }
+                            scheduleCallBindingSearch! + 1 => scheduleCallBindingSearch!
                         }
                     }
                     (scheduleReady! and (scheduleNode.kind == 9 or scheduleNode.kind == 6) and scheduleNode.opcode == -203 and scheduleNode.operand1 >= 0 and context.ir[scheduleNode.operand1].nextOperand >= expressionStart and context.ir[scheduleNode.operand1].nextOperand < functionEnd! and not expressionScheduled![context.ir[scheduleNode.operand1].nextOperand - expressionStart]) -> if { false => scheduleReady! }
@@ -993,14 +1027,14 @@ emitFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitContex
                 }
                 memberTokenIndex! => memberPathTokenStart
                 memberTokenIndex! < memberAst.firstToken + memberAst.tokenCount -> while {
-                    context.tokens[context.ranges[expression.sourceModule].tokenStart + memberTokenIndex!].kind == grammar.tokenIdIdentifier -> if { memberIdentifierCount! + 1 => memberIdentifierCount! }
+                    context.tokens[context.ranges[expression.sourceModule].tokenStart + memberTokenIndex!].kind == grammar.tokenIdIdentifier() -> if { memberIdentifierCount! + 1 => memberIdentifierCount! }
                     memberTokenIndex! + 1 => memberTokenIndex!
                 }
                 1 => memberIdentifierOrdinal!
                 0 => memberProjectionOrdinal!
                 memberPathTokenStart => memberTokenIndex!
                 memberTokenIndex! < memberAst.firstToken + memberAst.tokenCount -> while {
-                    context.tokens[context.ranges[expression.sourceModule].tokenStart + memberTokenIndex!].kind == grammar.tokenIdIdentifier -> if {
+                    context.tokens[context.ranges[expression.sourceModule].tokenStart + memberTokenIndex!].kind == grammar.tokenIdIdentifier() -> if {
                         memberIdentifierOrdinal! > 0 -> if {
                             memberCurrentModule! => ownerSourceModule!
                             memberCurrentOrigin! == 2 -> if { context.modules[memberCurrentModule!].sourceIndex => ownerSourceModule! }
@@ -1571,14 +1605,14 @@ emitFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitContex
                     }
                 } else {
                     context.ir[expression.operand1] => rightOperand
-                    expression.opcode == grammar.tokenIdPlus -> if { "add" => operation! }
-                    expression.opcode == grammar.tokenIdMinus -> if { "sub" => operation! }
-                    expression.opcode == grammar.tokenIdStar -> if { "mul" => operation! }
-                    expression.opcode == grammar.tokenIdSlash -> if { "sdiv" => operation! }
-                    expression.opcode == grammar.tokenIdPercent -> if { "srem" => operation! }
-                    expression.opcode == grammar.tokenIdEqualEqual -> if { "icmp eq" => operation! }
-                    expression.opcode == grammar.tokenIdBangEqual -> if { "icmp ne" => operation! }
-                    (expression.opcode == grammar.tokenIdLess or expression.opcode == grammar.tokenIdLessEqual or expression.opcode == grammar.tokenIdGreater or expression.opcode == grammar.tokenIdGreaterEqual) -> if {
+                    expression.opcode == grammar.tokenIdPlus() -> if { "add" => operation! }
+                    expression.opcode == grammar.tokenIdMinus() -> if { "sub" => operation! }
+                    expression.opcode == grammar.tokenIdStar() -> if { "mul" => operation! }
+                    expression.opcode == grammar.tokenIdSlash() -> if { "sdiv" => operation! }
+                    expression.opcode == grammar.tokenIdPercent() -> if { "srem" => operation! }
+                    expression.opcode == grammar.tokenIdEqualEqual() -> if { "icmp eq" => operation! }
+                    expression.opcode == grammar.tokenIdBangEqual() -> if { "icmp ne" => operation! }
+                    (expression.opcode == grammar.tokenIdLess() or expression.opcode == grammar.tokenIdLessEqual() or expression.opcode == grammar.tokenIdGreater() or expression.opcode == grammar.tokenIdGreaterEqual()) -> if {
                         expression -> integerComparisonOperation(context, state) => operation!
                     }
                     expression.opcode == -24 -> if { "or" => operation! }
@@ -1846,21 +1880,21 @@ emitFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitContex
                                             "" => functionExpressionOperation!
                                             functionExpressionNode.kind == 2 -> if { "sub" => functionExpressionOperation! }
                                             (functionExpressionNode.kind == 2 and functionExpressionNode.opcode == -26) -> if { "xor" => functionExpressionOperation! }
-                                            functionExpressionNode.opcode == grammar.tokenIdPlus -> if { "add" => functionExpressionOperation! }
-                                            functionExpressionNode.opcode == grammar.tokenIdMinus -> if { "sub" => functionExpressionOperation! }
-                                            functionExpressionNode.opcode == grammar.tokenIdStar -> if { "mul" => functionExpressionOperation! }
-                                            functionExpressionNode.opcode == grammar.tokenIdSlash -> if { "sdiv" => functionExpressionOperation! }
-                                            functionExpressionNode.opcode == grammar.tokenIdPercent -> if { "srem" => functionExpressionOperation! }
-                                            functionExpressionNode.opcode == grammar.tokenIdEqualEqual -> if { "icmp eq" => functionExpressionOperation! }
-                                            functionExpressionNode.opcode == grammar.tokenIdBangEqual -> if { "icmp ne" => functionExpressionOperation! }
-                                            functionExpressionNode.opcode == grammar.tokenIdLess -> if { "icmp slt" => functionExpressionOperation! }
-                                            functionExpressionNode.opcode == grammar.tokenIdLessEqual -> if { "icmp sle" => functionExpressionOperation! }
-                                            functionExpressionNode.opcode == grammar.tokenIdGreater -> if { "icmp sgt" => functionExpressionOperation! }
-                                            functionExpressionNode.opcode == grammar.tokenIdGreaterEqual -> if { "icmp sge" => functionExpressionOperation! }
+                                            functionExpressionNode.opcode == grammar.tokenIdPlus() -> if { "add" => functionExpressionOperation! }
+                                            functionExpressionNode.opcode == grammar.tokenIdMinus() -> if { "sub" => functionExpressionOperation! }
+                                            functionExpressionNode.opcode == grammar.tokenIdStar() -> if { "mul" => functionExpressionOperation! }
+                                            functionExpressionNode.opcode == grammar.tokenIdSlash() -> if { "sdiv" => functionExpressionOperation! }
+                                            functionExpressionNode.opcode == grammar.tokenIdPercent() -> if { "srem" => functionExpressionOperation! }
+                                            functionExpressionNode.opcode == grammar.tokenIdEqualEqual() -> if { "icmp eq" => functionExpressionOperation! }
+                                            functionExpressionNode.opcode == grammar.tokenIdBangEqual() -> if { "icmp ne" => functionExpressionOperation! }
+                                            functionExpressionNode.opcode == grammar.tokenIdLess() -> if { "icmp slt" => functionExpressionOperation! }
+                                            functionExpressionNode.opcode == grammar.tokenIdLessEqual() -> if { "icmp sle" => functionExpressionOperation! }
+                                            functionExpressionNode.opcode == grammar.tokenIdGreater() -> if { "icmp sgt" => functionExpressionOperation! }
+                                            functionExpressionNode.opcode == grammar.tokenIdGreaterEqual() -> if { "icmp sge" => functionExpressionOperation! }
                                             functionExpressionNode.opcode == -24 -> if { "or" => functionExpressionOperation! }
                                             functionExpressionNode.opcode == -25 -> if { "and" => functionExpressionOperation! }
                                             (functionExpressionNode.opcode == -24 or functionExpressionNode.opcode == -25 or (functionExpressionNode.kind == 2 and functionExpressionNode.opcode == -26)) => functionExpressionBoolOperands!
-                                            (functionExpressionNode.opcode == grammar.tokenIdEqualEqual or functionExpressionNode.opcode == grammar.tokenIdBangEqual) -> if {
+                                            (functionExpressionNode.opcode == grammar.tokenIdEqualEqual() or functionExpressionNode.opcode == grammar.tokenIdBangEqual()) -> if {
                                                 functionExpressionInterpolation![functionExpressionNode.operand0] => functionExpressionTypeOperand
                                                 functionExpressionTypeOperand.typeSymbol == 23 -> if { true => functionExpressionBoolOperands! }
                                                 functionExpressionTypeOperand.kind == 1 -> if {
@@ -2483,7 +2517,12 @@ emitFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitContex
         (returnNode.kind == 1 and returnNode.operand0 >= 0) -> if {
             returnNode.operand0 => returnValueIndex!
         }
-        (returnNode.kind == 1 and returnNode.operand0 < 0) -> if {
+        (returnNode.kind == 1
+            and (returnNode.operand0 < 0
+                or (returnNode.operand0 >= expressionStart
+                    and returnNode.operand0 < functionEnd!
+                    and context.ir[returnNode.operand0].kind == 17
+                    and context.ir[returnNode.operand0].flags == 1))) -> if {
             function.operand0 + 1 => returnChildSearch!
             returnChildSearch! < functionEnd! -> while {
                 context.ir[returnChildSearch!].parent == function.operand0 -> if {
@@ -2492,7 +2531,7 @@ emitFunction requestedFunctionIndex: Int, context: ref emitterContext.EmitContex
                 returnChildSearch! + 1 => returnChildSearch!
             }
         }
-        returnNode.kind == 1 -> if {
+        (returnNode.kind == 1 and returnNode.operand0 < 0) -> if {
             false => scheduledReturnFound!
             Int(expressionOrder! -> len) - 1 => scheduledReturnOrder!
             (scheduledReturnOrder! >= 0 and not scheduledReturnFound!) -> while {

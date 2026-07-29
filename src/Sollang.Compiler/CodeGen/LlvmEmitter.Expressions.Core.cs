@@ -345,7 +345,14 @@ internal sealed partial class LlvmEmitter
     private RuntimeStruct EmitRangeExpression(RangeExpression expression)
     {
         var start = EmitIntExpression(expression.Start);
-        var endInclusive = EmitIntExpression(expression.End);
+        var end = EmitIntExpression(expression.End);
+        var endInclusive = end;
+        if (expression.IsEndExclusive)
+        {
+            var adjustedEnd = NextTemp("range_end_inclusive");
+            EmitBinary(adjustedEnd, "sub", "i32", end.ValueName, "1");
+            endInclusive = new RuntimeInt(adjustedEnd);
+        }
         var llvmType = LlvmStructType(BoundType.Range);
         var withStart = NextTemp("range");
         EmitAssign(withStart, $"insertvalue {llvmType} poison, i32 {start.ValueName}, 0");
@@ -361,13 +368,8 @@ internal sealed partial class LlvmEmitter
             var value = ResolveLocal(expression.Name);
             return value is RuntimeReference reference ? LoadReference(reference) : value;
         }
-        if (TryResolveFunction([expression.Name], out var function)
-            && function.InputType is null)
-        {
-            return EmitFunctionCall(function, argument: null);
-        }
         throw new SollangException(
-            $"unknown runtime binding or zero-argument function '{expression.Name}' "
+            $"unknown runtime binding '{expression.Name}' "
             + $"while emitting '{_currentFunction?.Name ?? "main"}'");
     }
 

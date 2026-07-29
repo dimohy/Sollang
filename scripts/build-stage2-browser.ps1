@@ -73,11 +73,11 @@ foreach ($case in @(
     @("tests\Sollang.ExampleTests\Fixtures\browser-stage2-when.slg", "browser-stage2-when.ll", "tests\Sollang.ExampleTests\Fixtures\browser-stage2-when.stdout.txt"),
     @("tests\Sollang.ExampleTests\Fixtures\browser-stage2-raw-strings.slg", "browser-stage2-raw-strings.ll", "tests\Sollang.ExampleTests\Fixtures\browser-stage2-raw-strings.stdout.txt"),
     @("tests\Sollang.ExampleTests\Fixtures\browser-stage2-containers.slg", "browser-stage2-containers.ll", "tests\Sollang.ExampleTests\Fixtures\browser-stage2-containers.stdout.txt"),
-    @("examples\576-linq-multiplication-table.slg", "browser-stage2-table.ll", "examples\expected\576-linq-multiplication-table.stdout.txt"),
-    @("examples\580-deferred-text-evaluation.slg", "browser-stage2-deferred-text.ll", "examples\expected\580-deferred-text-evaluation.stdout.txt"),
-    @("examples\582-billion-sensor-alerts.slg", "browser-stage2-sensor.ll", "examples\expected\582-billion-sensor-alerts.stdout.txt"),
-    @("examples\583-stream-state-take-skip.slg", "browser-stage2-state.ll", "examples\expected\583-stream-state-take-skip.stdout.txt"),
-    @("examples\585-stream-transaction-risk-scan.slg", "browser-stage2-risk.ll", "examples\expected\585-stream-transaction-risk-scan.stdout.txt"),
+    @("examples\regression\576-linq-multiplication-table.slg", "browser-stage2-table.ll", "examples\regression\expected\576-linq-multiplication-table.stdout.txt"),
+    @("examples\regression\580-deferred-text-evaluation.slg", "browser-stage2-deferred-text.ll", "examples\regression\expected\580-deferred-text-evaluation.stdout.txt"),
+    @("examples\regression\582-billion-sensor-alerts.slg", "browser-stage2-sensor.ll", "examples\regression\expected\582-billion-sensor-alerts.stdout.txt"),
+    @("examples\regression\583-stream-state-take-skip.slg", "browser-stage2-state.ll", "examples\regression\expected\583-stream-state-take-skip.stdout.txt"),
+    @("examples\regression\585-stream-transaction-risk-scan.slg", "browser-stage2-risk.ll", "examples\regression\expected\585-stream-transaction-risk-scan.stdout.txt"),
     @(
         "tests\Sollang.ExampleTests\Fixtures\browser-stage2-read-int.slg",
         "browser-stage2-read-int.ll",
@@ -121,7 +121,7 @@ foreach ($case in @(
 
 & node (Join-Path $PSScriptRoot "verify-browser-stage2.mjs") `
     $compilerArtifact `
-    (Join-Path $repoRoot "examples\diagnostics\browser-interpolation-boundary.slg") `
+    (Join-Path $repoRoot "examples\regression\diagnostics\browser-interpolation-boundary.slg") `
     (Join-Path $repoRoot "artifacts\browser-stage2-interpolation-diagnostic.txt") `
     "unknown interpolation binding 'dimohy는'"
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -135,7 +135,7 @@ if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 & node (Join-Path $PSScriptRoot "verify-browser-stage2.mjs") `
     $compilerArtifact `
-    (Join-Path $repoRoot "examples\588-mouse-event-stream.slg") `
+    (Join-Path $repoRoot "examples\regression\588-mouse-event-stream.slg") `
     (Join-Path $repoRoot "artifacts\browser-stage2-mouse-event-diagnostic.txt") `
     "mouse event streams are unavailable on wasm32-browser; browser events require host-driven callback lowering"
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

@@ -352,7 +352,7 @@ internal static class GrammarCompiler
     {
         builder.Append($"public {name}: -> [Text; ~] => [");
         builder.Append(string.Join(", ", values.Select(value => $"\"{value}\"")));
-        builder.AppendLine(", ~]");
+        builder.AppendLine("; ~]");
         builder.AppendLine();
     }
 
@@ -360,7 +360,7 @@ internal static class GrammarCompiler
     {
         builder.Append($"public {name}: -> [Int; ~] => [");
         builder.Append(string.Join(", ", values.Select(value => value.ToString(CultureInfo.InvariantCulture))));
-        builder.AppendLine(", ~]");
+        builder.AppendLine("; ~]");
         builder.AppendLine();
     }
 

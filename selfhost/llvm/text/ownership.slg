@@ -54,7 +54,7 @@ memberMoveMatchesAssignment moveIndex: Int, assignmentIndex: Int, context: ref e
         0 => movedIdentifierCount!
         candidateMemberAst.firstToken => movedTokenIndex!
         movedTokenIndex! < candidateMemberAst.firstToken + candidateMemberAst.tokenCount -> while {
-            context.tokens[context.ranges[candidateMember.sourceModule].tokenStart + movedTokenIndex!].kind == grammar.tokenIdIdentifier -> if {
+            context.tokens[context.ranges[candidateMember.sourceModule].tokenStart + movedTokenIndex!].kind == grammar.tokenIdIdentifier() -> if {
                 movedTokenIndex! => movedFieldToken!
                 movedIdentifierCount! + 1 => movedIdentifierCount!
             }
@@ -139,7 +139,7 @@ emitDropPathName request: DropGlueRequest, context: ref emitterContext.EmitConte
     "%dropg$(request.nameRoot)_p$(request.pathCode)" -> print
 }
 emitDropGlue request: DropGlueRequest, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
-    [request, ~] => dropTasks!
+    [request,; ~] => dropTasks!
     0 => dropTaskIndex!
     dropTaskIndex! < (dropTasks! -> len) -> while {
     dropTasks![dropTaskIndex!] => dropTask
@@ -171,7 +171,7 @@ emitDropGlue request: DropGlueRequest, context: ref emitterContext.EmitContext, 
                 -1 => dropMoveDepth!
                 dropMoveAst.firstToken => dropMoveTokenIndex!
                 dropMoveTokenIndex! < dropMoveAst.firstToken + dropMoveAst.tokenCount -> while {
-                    context.tokens[dropMoveRange.tokenStart + dropMoveTokenIndex!].kind == grammar.tokenIdIdentifier -> if { dropMoveDepth! + 1 => dropMoveDepth! }
+                    context.tokens[dropMoveRange.tokenStart + dropMoveTokenIndex!].kind == grammar.tokenIdIdentifier() -> if { dropMoveDepth! + 1 => dropMoveDepth! }
                     dropMoveTokenIndex! + 1 => dropMoveTokenIndex!
                 }
                 dropTaskDepth! == dropMoveDepth! => sameDropPath!
@@ -181,7 +181,7 @@ emitDropGlue request: DropGlueRequest, context: ref emitterContext.EmitContext, 
                 0 => dropMoveIdentifierOrdinal!
                 dropMoveAst.firstToken => dropMoveTokenIndex!
                 (sameDropPath! and dropMoveTokenIndex! < dropMoveAst.firstToken + dropMoveAst.tokenCount) -> while {
-                    context.tokens[dropMoveRange.tokenStart + dropMoveTokenIndex!].kind == grammar.tokenIdIdentifier -> if {
+                    context.tokens[dropMoveRange.tokenStart + dropMoveTokenIndex!].kind == grammar.tokenIdIdentifier() -> if {
                         dropMoveIdentifierOrdinal! > 0 -> if {
                             dropMoveCurrentModule! => dropMoveOwnerSource!
                             dropMoveCurrentOrigin! == 2 -> if { context.modules[dropMoveCurrentModule!].sourceIndex => dropMoveOwnerSource! }
@@ -818,7 +818,7 @@ enumPayloadTypes typeId: Int, context: ref emitterContext.EmitContext, state: re
     payloads!
 }
 writeSemanticTypeId typeId: Int, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
-    [typeId, ~] => typeTasks!
+    [typeId,; ~] => typeTasks!
     typeTasks! -> len => typeTaskSize!
     typeTaskSize! > 0 -> while {
         typeTaskSize! - 1 => typeTaskSize!
@@ -960,7 +960,7 @@ memberNodeIntegerWidth node: typedIr.TypedIrNode, context: ref emitterContext.Em
             } else { false => beforeMemberBaseEnd! }
         }
         memberTokenIndex! < memberAst.firstToken + memberAst.tokenCount -> while {
-            context.tokens[context.ranges[node.sourceModule].tokenStart + memberTokenIndex!].kind == grammar.tokenIdIdentifier -> if {
+            context.tokens[context.ranges[node.sourceModule].tokenStart + memberTokenIndex!].kind == grammar.tokenIdIdentifier() -> if {
                 currentModule! => ownerSourceModule!
                 currentOrigin! == 2 -> if { context.modules[currentModule!].sourceIndex => ownerSourceModule! }
                 context.ranges[ownerSourceModule!] => ownerRange
@@ -1044,7 +1044,7 @@ integerNodeWidth node: typedIr.TypedIrNode, context: ref emitterContext.EmitCont
         node.opcode == -26 -> if { 1 => width! } else { context.ir[node.operand0] -> integerNodeWidth(context, state) => width! }
     }
     (node.kind == 8 and node.operand0 >= 0 and node.operand0 < (context.ir -> len) and node.operand1 >= 0 and node.operand1 < (context.ir -> len)) -> if {
-        (node.opcode == grammar.tokenIdEqualEqual or node.opcode == grammar.tokenIdBangEqual or node.opcode == grammar.tokenIdLess or node.opcode == grammar.tokenIdLessEqual or node.opcode == grammar.tokenIdGreater or node.opcode == grammar.tokenIdGreaterEqual or node.opcode == -24 or node.opcode == -25) -> if {
+        (node.opcode == grammar.tokenIdEqualEqual() or node.opcode == grammar.tokenIdBangEqual() or node.opcode == grammar.tokenIdLess() or node.opcode == grammar.tokenIdLessEqual() or node.opcode == grammar.tokenIdGreater() or node.opcode == grammar.tokenIdGreaterEqual() or node.opcode == -24 or node.opcode == -25) -> if {
             1 => width!
         } else {
             context.ir[node.operand0] -> integerNodeWidth(context, state) => leftWidth
@@ -1080,13 +1080,13 @@ nodeContainsReadInt rootIndex: Int, context: ref emitterContext.EmitContext, sta
 integerComparisonOperation expression: typedIr.TypedIrNode, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Text {
     context.ir[expression.operand0] => operand
     operand -> integerNodeSigned(context, state) => signed
-    expression.opcode == grammar.tokenIdLess -> if {
+    expression.opcode == grammar.tokenIdLess() -> if {
         signed -> if { "icmp slt" } else { "icmp ult" }
     } else {
-        expression.opcode == grammar.tokenIdLessEqual -> if {
+        expression.opcode == grammar.tokenIdLessEqual() -> if {
             signed -> if { "icmp sle" } else { "icmp ule" }
         } else {
-            expression.opcode == grammar.tokenIdGreater -> if {
+            expression.opcode == grammar.tokenIdGreater() -> if {
                 signed -> if { "icmp sgt" } else { "icmp ugt" }
             } else {
                 signed -> if { "icmp sge" } else { "icmp uge" }

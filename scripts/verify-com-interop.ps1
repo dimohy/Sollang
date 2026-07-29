@@ -5,9 +5,9 @@ $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $compilerProject = Join-Path $repoRoot "src\Sollang.Compiler\Sollang.Compiler.csproj"
 $compiler = Join-Path $repoRoot "src\Sollang.Compiler\bin\Release\net11.0\Sollang.Compiler.dll"
-$source = Join-Path $repoRoot "examples\604-com-interface.slg"
-$capabilitySource = Join-Path $repoRoot "examples\diagnostics\com-wasm32-unavailable.slg"
-$expectedPath = Join-Path $repoRoot "examples\expected\604-com-interface.stdout.txt"
+$source = Join-Path $repoRoot "examples\regression\604-com-interface.slg"
+$capabilitySource = Join-Path $repoRoot "examples\regression\diagnostics\com-wasm32-unavailable.slg"
+$expectedPath = Join-Path $repoRoot "examples\regression\expected\604-com-interface.stdout.txt"
 $outputRoot = Join-Path $repoRoot "artifacts\com-interop"
 $output = Join-Path $outputRoot "stage1-com-windows.exe"
 $ir = [System.IO.Path]::ChangeExtension($output, ".ll")
@@ -80,7 +80,7 @@ if ($llvm -notmatch "call void @sollang_drop_[0-9]+\(%sollang\.enum\.[0-9]+ %com
     throw "COM activation result does not deterministically release its owned interface"
 }
 
-$selfHostIr = Join-Path $repoRoot "examples\expected\613-selfhost-com-runtime.stdout.txt"
+$selfHostIr = Join-Path $repoRoot "examples\regression\expected\613-selfhost-com-runtime.stdout.txt"
 $selfHostBitcode = Join-Path $outputRoot "selfhost-com-runtime.bc"
 $selfHostObject = Join-Path $outputRoot "selfhost-com-runtime.obj"
 $selfHostOutput = Join-Path $outputRoot "selfhost-com-runtime.exe"

@@ -426,7 +426,10 @@ internal sealed partial class LlvmEmitter
         }
 
         var lower = EmitIntegerComparison(subject, ComparisonOperator.GreaterOrEqual, EmitIntExpression(range.Start));
-        var upper = EmitIntegerComparison(subject, ComparisonOperator.LessOrEqual, EmitIntExpression(range.End));
+        var upper = EmitIntegerComparison(
+            subject,
+            range.IsEndExclusive ? ComparisonOperator.Less : ComparisonOperator.LessOrEqual,
+            EmitIntExpression(range.End));
         var result = NextTemp("range");
         EmitBinary(result, "and", "i1", lower.ValueName, upper.ValueName);
         return new RuntimeBool(result);
@@ -451,7 +454,7 @@ internal sealed partial class LlvmEmitter
         var nextItem = NextTemp("fold_next");
         var initialDone = NextTemp("fold_done");
 
-        EmitCompare(initialDone, "sgt", "i32", start.ValueName, end.ValueName);
+        EmitCompare(initialDone, range.IsEndExclusive ? "sge" : "sgt", "i32", start.ValueName, end.ValueName);
         EmitConditionalBranch(initialDone, endLabel, bodyLabel);
 
         EmitLabel(bodyLabel);
@@ -480,7 +483,7 @@ internal sealed partial class LlvmEmitter
         _currentBlockLabel = continueLabel;
         EmitBinary(nextItem, "add", "i32", item, "1");
         var done = NextTemp("fold_done");
-        EmitCompare(done, "sgt", "i32", nextItem, end.ValueName);
+        EmitCompare(done, range.IsEndExclusive ? "sge" : "sgt", "i32", nextItem, end.ValueName);
         EmitConditionalBranch(done, endLabel, bodyLabel);
 
         EmitLabel(endLabel);

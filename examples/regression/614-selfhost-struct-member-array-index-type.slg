@@ -1,0 +1,30 @@
+import sollang.compiler.semantic.expression_types as expressionTypes
+import sollang.compiler.ast as ast
+
+main {
+    [
+        """
+        struct Item { value: Int }
+        struct Store { items: [Item; ~] }
+        make: -> Store => Store { items: [Item { value: 1 }; ~] }
+        first: -> Item {
+            true -> if {
+                make()
+            } else {
+                make()
+            } => store!
+            store!.items[0] => item!
+            item!.value + 1 => item!.value
+            item!
+        }
+        main { }
+        """; ~
+    ] => sources!
+    sources! -> expressionTypes.infer => inferred!
+    sources![0] -> ast.lower => nodes!
+    inferred! -> each item {
+        nodes![item.astNode].kind == 41 -> if {
+            "member array index = $(item.origin),$(item.targetModule),$(item.targetSymbol)" -> println
+        }
+    }
+}

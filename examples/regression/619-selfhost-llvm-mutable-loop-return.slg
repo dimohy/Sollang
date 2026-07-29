@@ -1,0 +1,41 @@
+import sollang.compiler.llvm.text as llvm
+
+main {
+    [
+        """
+        nibble value: UInt8 -> UInt64 {
+            value >= UInt8(48) and value <= UInt8(57) -> if {
+                UInt64(value - UInt8(48))
+            } else {
+                UInt64(value - UInt8(97)) + UInt64(10)
+            }
+        }
+
+        accumulate source: Text, start: UIntSize, offset: UIntSize, digits: UIntSize -> UInt64 {
+            UInt64(0) => value!
+            UIntSize(0) => digit!
+            digit! < digits -> while {
+                value! * UInt64(16) + (source -> byte(start + offset + digit!) -> nibble) => value!
+                digit! + UIntSize(1) => digit!
+            }
+            value!
+        }
+
+        scan source: [UInt8; ~], windows: Bool -> UIntSize {
+            UIntSize(0) => index!
+            (index! < UIntSize(source -> len)
+                and (windows -> if {
+                    source[Int(index!)] != UInt8(47) and source[Int(index!)] != UInt8(92)
+                } else {
+                    source[Int(index!)] != UInt8(47)
+                })) -> while {
+                index! + UIntSize(1) => index!
+            }
+            index!
+        }
+
+        main { }
+        """; ~
+    ] => sources!
+    sources! -> llvm.emit
+}

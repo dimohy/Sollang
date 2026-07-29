@@ -325,7 +325,7 @@ prepareSnapshot request: ref PrepareRequest, prepared: move semanticContext.Sema
 
 prepare request: ref PrepareRequest -> emitterContext.EmitContext {
     request.sources -> semanticContext.prepare => prepared!
-    request -> prepareSnapshot(prepared!, libraryImports.empty, [libraryImports.LibraryFunctionResolution; ~])
+    request -> prepareSnapshot(prepared!, libraryImports.empty(), [libraryImports.LibraryFunctionResolution; ~])
 }
 
 
@@ -338,11 +338,11 @@ emitWindowsContext context: emitterContext.EmitContext -> Unit uses Console {
     context -> diagnostics.usesMouseEventsRuntime => needsMouseEventsRuntime
     context -> diagnostics.comInteropFunctionCount => comInteropCount
     context -> diagnostics.nativeInteropFunctionCount => nativeInteropCount
-    capturesParallelOutput -> if { computeRuntime.emitMemoryOutputSinkRuntime }
+    capturesParallelOutput -> if { computeRuntime.emitMemoryOutputSinkRuntime() }
     (usesTextOutput or capturesParallelOutput) -> if { capturesParallelOutput -> textOutputRuntime.emitWindowsTextRuntime }
-    capturesParallelOutput -> if { computeRuntime.emitWindowsComputeRuntime }
-    context -> diagnostics.usesIntInterpolation -> if { numberFormat.emitIntTextRuntime }
-    context -> diagnostics.usesBoolInterpolation -> if { numberFormat.emitBoolTextRuntime }
+    capturesParallelOutput -> if { computeRuntime.emitWindowsComputeRuntime() }
+    context -> diagnostics.usesIntInterpolation -> if { numberFormat.emitIntTextRuntime() }
+    context -> diagnostics.usesBoolInterpolation -> if { numberFormat.emitBoolTextRuntime() }
     context -> diagnostics.usesSourceTextRuntime => needsSourceTextRuntime
     -1 => runtimeModule!
     0 => runtimeModuleSearch!
@@ -376,19 +376,19 @@ emitWindowsContext context: emitterContext.EmitContext -> Unit uses Console {
             "declare dllimport i32 @WriteFile(ptr, ptr, i32, ptr, ptr)" -> println
         }
     }
-    needsProcessRuntime -> if { processRuntime.emitProcessTypeRuntime }
+    needsProcessRuntime -> if { processRuntime.emitProcessTypeRuntime() }
     comInteropCount > 0 -> if { nativeInteropCount == 0 -> comRuntime.emitWindowsComRuntime }
     context -> emitCore
-    needsMouseEventsRuntime -> if { mouseEventRuntime.emitWindowsMouseEventRuntime }
-    needsProcessRuntime -> if { processRuntime.emitWindowsProcessRuntime }
-    needsDirectoryRuntime -> if { llvmRuntime.emitWindowsDirectory }
-    needsOwnedFileRuntime -> if { llvmRuntime.emitWindowsOwnedFile }
+    needsMouseEventsRuntime -> if { mouseEventRuntime.emitWindowsMouseEventRuntime() }
+    needsProcessRuntime -> if { processRuntime.emitWindowsProcessRuntime() }
+    needsDirectoryRuntime -> if { llvmRuntime.emitWindowsDirectory() }
+    needsOwnedFileRuntime -> if { llvmRuntime.emitWindowsOwnedFile() }
     runtimeModule! >= 0 -> if {
         runtimeModule! -> llvmRuntime.emitWindows
     }
     needsSourceTextRuntime -> if {
-        runtimeModule! < 0 -> if { llvmRuntime.emitWindowsSourceTextDeclarations }
-        llvmRuntime.emitWindowsSourceText
+        runtimeModule! < 0 -> if { llvmRuntime.emitWindowsSourceTextDeclarations() }
+        llvmRuntime.emitWindowsSourceText()
     }
 }
 
@@ -400,34 +400,34 @@ emitLinuxContext context: emitterContext.EmitContext -> Unit uses Console {
     context -> diagnostics.usesDirectoryRuntime => needsDirectoryRuntime
     context -> diagnostics.usesOwnedFileRuntime => needsOwnedFileRuntime
     context -> diagnostics.usesMouseEventsRuntime => needsMouseEventsRuntime
-    capturesParallelOutput -> if { computeRuntime.emitMemoryOutputSinkRuntime }
+    capturesParallelOutput -> if { computeRuntime.emitMemoryOutputSinkRuntime() }
     (usesTextOutput or capturesParallelOutput) -> if { capturesParallelOutput -> textOutputRuntime.emitLinuxTextRuntime }
-    capturesParallelOutput -> if { computeRuntime.emitLinuxComputeRuntime }
-    context -> diagnostics.usesIntInterpolation -> if { numberFormat.emitIntTextRuntime }
-    context -> diagnostics.usesBoolInterpolation -> if { numberFormat.emitBoolTextRuntime }
-    needsProcessRuntime -> if { processRuntime.emitProcessTypeRuntime }
+    capturesParallelOutput -> if { computeRuntime.emitLinuxComputeRuntime() }
+    context -> diagnostics.usesIntInterpolation -> if { numberFormat.emitIntTextRuntime() }
+    context -> diagnostics.usesBoolInterpolation -> if { numberFormat.emitBoolTextRuntime() }
+    needsProcessRuntime -> if { processRuntime.emitProcessTypeRuntime() }
     context -> emitCore
     needsMouseEventsRuntime -> if { usesTextOutput -> mouseEventRuntime.emitLinuxMouseEventRuntime }
     needsProcessRuntime -> if { capturesParallelOutput -> processRuntime.emitLinuxProcessRuntime }
-    needsDirectoryRuntime -> if { llvmRuntime.emitLinuxDirectory }
+    needsDirectoryRuntime -> if { llvmRuntime.emitLinuxDirectory() }
     needsOwnedFileRuntime -> if { not needsProcessRuntime -> llvmRuntime.emitLinuxOwnedFile }
     needsSourceTextRuntime -> if {
         (not needsProcessRuntime and not needsOwnedFileRuntime) -> if { "declare i32 @open(ptr, i32, i32)" -> println }
         (not capturesParallelOutput and not needsProcessRuntime and not needsOwnedFileRuntime) -> if { "declare i32 @close(i32)" -> println }
-        llvmRuntime.emitLinuxSourceTextDeclarations
-        llvmRuntime.emitLinuxSourceText
+        llvmRuntime.emitLinuxSourceTextDeclarations()
+        llvmRuntime.emitLinuxSourceText()
     }
 }
 
 emitWasmContext context: emitterContext.EmitContext -> Unit uses Console {
-    context -> diagnostics.usesTextRuntime -> if { textOutputRuntime.emitWasmTextRuntime }
-    context -> diagnostics.usesIntInterpolation -> if { numberFormat.emitIntTextRuntime }
-    context -> diagnostics.usesBoolInterpolation -> if { numberFormat.emitBoolTextRuntime }
+    context -> diagnostics.usesTextRuntime -> if { textOutputRuntime.emitWasmTextRuntime() }
+    context -> diagnostics.usesIntInterpolation -> if { numberFormat.emitIntTextRuntime() }
+    context -> diagnostics.usesBoolInterpolation -> if { numberFormat.emitBoolTextRuntime() }
     context -> emitCore
 }
 
 public emit sources: move [Text; ~] -> Unit uses Console {
-    llvmTarget.windowsX64 => target
+    llvmTarget.windowsX64() => target
     target.dataLayoutLine -> println
     target.tripleLine -> println
     PrepareRequest { sources: sources, pointerBitWidth: target.pointerBitWidth, supportsComputePool: true, expectedPathStyle: 1 } => prepareRequest!
@@ -436,7 +436,7 @@ public emit sources: move [Text; ~] -> Unit uses Console {
 }
 
 public emitLinux sources: move [Text; ~] -> Unit uses Console {
-    llvmTarget.linuxX64 => target
+    llvmTarget.linuxX64() => target
     target.dataLayoutLine -> println
     target.tripleLine -> println
     PrepareRequest { sources: sources, pointerBitWidth: target.pointerBitWidth, supportsComputePool: true, expectedPathStyle: 0 } => prepareRequest!
@@ -446,7 +446,7 @@ public emitLinux sources: move [Text; ~] -> Unit uses Console {
 }
 
 public emitWasm sources: move [Text; ~] -> Unit uses Console {
-    llvmTarget.wasm32Browser => target
+    llvmTarget.wasm32Browser() => target
     PrepareRequest { sources: sources, pointerBitWidth: target.pointerBitWidth, supportsComputePool: false, expectedPathStyle: 0 } => prepareRequest!
     prepareRequest! -> prepare => context!
     context! -> diagnostics.nativeInteropFunctionCount => nativeInteropCount
@@ -456,13 +456,13 @@ public emitWasm sources: move [Text; ~] -> Unit uses Console {
         target.tripleLine -> println
         context! -> emitWasmContext
     } else {
-        nativeInteropCount > 0 -> if { diagnostics.emitWasmNativeInteropDiagnostic }
+        nativeInteropCount > 0 -> if { diagnostics.emitWasmNativeInteropDiagnostic() }
         comInteropCount > 0 -> if { "wasm32-browser" -> diagnostics.emitComTargetDiagnostic }
     }
 }
 
 public emitChecked sources: move [Text; ~] -> Int uses Console {
-    llvmTarget.windowsX64 => target
+    llvmTarget.windowsX64() => target
     PrepareRequest { sources: sources, pointerBitWidth: target.pointerBitWidth, supportsComputePool: true, expectedPathStyle: 1 } => prepareRequest!
     prepareRequest! -> prepare => context!
     context! -> diagnostics.blockingDiagnosticCount => diagnosticCount
@@ -475,7 +475,7 @@ public emitChecked sources: move [Text; ~] -> Int uses Console {
 }
 
 public emitLinuxChecked sources: move [Text; ~] -> Int uses Console {
-    llvmTarget.linuxX64 => target
+    llvmTarget.linuxX64() => target
     PrepareRequest { sources: sources, pointerBitWidth: target.pointerBitWidth, supportsComputePool: true, expectedPathStyle: 0 } => prepareRequest!
     prepareRequest! -> prepare => context!
     context! -> diagnostics.blockingDiagnosticCount => diagnosticCount!
@@ -493,7 +493,7 @@ public emitLinuxChecked sources: move [Text; ~] -> Int uses Console {
 }
 
 public emitWasmChecked sources: move [Text; ~] -> Int uses Console {
-    llvmTarget.wasm32Browser => target
+    llvmTarget.wasm32Browser() => target
     PrepareRequest { sources: sources, pointerBitWidth: target.pointerBitWidth, supportsComputePool: false, expectedPathStyle: 0 } => prepareRequest!
     prepareRequest! -> prepare => context!
     context! -> diagnostics.blockingDiagnosticCount => diagnosticCount!
@@ -513,7 +513,7 @@ public emitWasmChecked sources: move [Text; ~] -> Int uses Console {
             "; sollang semantic error: mouse event streams are unavailable on wasm32-browser; browser events require host-driven callback lowering" -> println
         }
         unsupportedNativeInteropCount > 0 -> if {
-            diagnostics.emitWasmNativeInteropDiagnostic
+            diagnostics.emitWasmNativeInteropDiagnostic()
         }
         unsupportedComInteropCount > 0 -> if {
             "wasm32-browser" -> diagnostics.emitComTargetDiagnostic
@@ -546,11 +546,11 @@ public emitFiles paths: [Text; ~] -> Unit uses Console, File {
         sources! -> push(source)
         sourceIndex! + 1 => sourceIndex!
     }
-    llvmTarget.windowsX64 => target
+    llvmTarget.windowsX64() => target
     target.dataLayoutLine -> println
     target.tripleLine -> println
     PrepareRequest { sources: sources!, pointerBitWidth: target.pointerBitWidth, supportsComputePool: true, expectedPathStyle: 1 } => prepareRequest!
-    prepareRequest! -> prepareLibraryFiles(paths, "windows-x64", path.nativeStyle) => context!
+    prepareRequest! -> prepareLibraryFiles(paths, "windows-x64", path.nativeStyle()) => context!
     context! -> emitWindowsContext
     owners! -> len => ownerCount
 }
@@ -572,11 +572,11 @@ public emitLinuxFiles paths: [Text; ~] -> Unit uses Console, File {
         sources! -> push(source)
         sourceIndex! + 1 => sourceIndex!
     }
-    llvmTarget.linuxX64 => target
+    llvmTarget.linuxX64() => target
     target.dataLayoutLine -> println
     target.tripleLine -> println
     PrepareRequest { sources: sources!, pointerBitWidth: target.pointerBitWidth, supportsComputePool: true, expectedPathStyle: 0 } => prepareRequest!
-    prepareRequest! -> prepareLibraryFiles(paths, "linux-x64", path.nativeStyle) => context!
+    prepareRequest! -> prepareLibraryFiles(paths, "linux-x64", path.nativeStyle()) => context!
     context! -> diagnostics.comInteropFunctionCount => comInteropCount
     comInteropCount == 0 -> if { context! -> emitLinuxContext } else { "Linux" -> diagnostics.emitComTargetDiagnostic }
     owners! -> len => ownerCount
@@ -619,9 +619,9 @@ public emitCheckedFiles paths: [Text; ~] -> Int uses Console, File {
         sources! -> push(source)
         sourceIndex! + 1 => sourceIndex!
     }
-    llvmTarget.windowsX64 => target
+    llvmTarget.windowsX64() => target
     PrepareRequest { sources: sources!, pointerBitWidth: target.pointerBitWidth, supportsComputePool: true, expectedPathStyle: 1 } => prepareRequest!
-    prepareRequest! -> prepareLibraryFiles(paths, "windows-x64", path.nativeStyle) => context!
+    prepareRequest! -> prepareLibraryFiles(paths, "windows-x64", path.nativeStyle()) => context!
     context! -> diagnostics.blockingDiagnosticCount => diagnosticCount
     diagnosticCount == 0 -> if {
         target.dataLayoutLine -> println
@@ -648,9 +648,9 @@ public emitLinuxCheckedFiles paths: [Text; ~] -> Int uses Console, File {
         sources! -> push(source)
         sourceIndex! + 1 => sourceIndex!
     }
-    llvmTarget.linuxX64 => target
+    llvmTarget.linuxX64() => target
     PrepareRequest { sources: sources!, pointerBitWidth: target.pointerBitWidth, supportsComputePool: true, expectedPathStyle: 0 } => prepareRequest!
-    prepareRequest! -> prepareLibraryFiles(paths, "linux-x64", path.nativeStyle) => context!
+    prepareRequest! -> prepareLibraryFiles(paths, "linux-x64", path.nativeStyle()) => context!
     context! -> diagnostics.blockingDiagnosticCount => diagnosticCount!
     context! -> diagnostics.comInteropFunctionCount => comInteropCount
     comInteropCount > 0 -> if { diagnosticCount! + 1 => diagnosticCount! }

@@ -24,9 +24,9 @@ public struct ParseRequest {
 public parseRuleEvents request: ParseRequest -> [ParseEvent; ~] {
     request.source => source
     source -> lexer.lex => tokens!
-    grammar.parserProgram => program!
-    grammar.ruleOffsets => ruleOffsets!
-    grammar.keywordTexts => keywords!
+    grammar.parserProgram() => program!
+    grammar.ruleOffsets() => ruleOffsets!
+    grammar.keywordTexts() => keywords!
 
     [Int; ~] => returnPcs!
     [Int; ~] => choicePcs!
@@ -70,9 +70,9 @@ public parseRuleEvents request: ParseRequest -> [ParseEvent; ~] {
     1 => eventDepth!
 
     running! -> while {
-        (tokenIndex! < (tokens! -> len) and tokens![tokenIndex!].kind >= grammar.triviaIdWhitespace) -> while {
+        (tokenIndex! < (tokens! -> len) and tokens![tokenIndex!].kind >= grammar.triviaIdWhitespace()) -> while {
             tokens![tokenIndex!].kind => triviaKind
-            triviaKind == grammar.tokenIdInvalid -> if {
+            triviaKind == grammar.tokenIdInvalid() -> if {
                 true => invalidSeen!
                 firstInvalidToken! < 0 -> if {
                     tokenIndex! => firstInvalidToken!
@@ -107,7 +107,7 @@ public parseRuleEvents request: ParseRequest -> [ParseEvent; ~] {
             eventDepth! + 1 => eventDepth!
             callDepth! == 0 -> if {
                 tokens! -> len => tokenCount
-                (tokenIndex! == tokenCount or (tokenIndex! + 1 == tokenCount and tokens![tokenIndex!].kind == grammar.tokenIdEnd)) and not invalidSeen! => accepted!
+                (tokenIndex! == tokenCount or (tokenIndex! + 1 == tokenCount and tokens![tokenIndex!].kind == grammar.tokenIdEnd())) and not invalidSeen! => accepted!
                 false => running!
             } else {
                 callDepth! - 1 => callDepth!
@@ -446,7 +446,7 @@ public parseRuleEvents request: ParseRequest -> [ParseEvent; ~] {
         furthestToken! => recoveryStart!
         firstInvalidToken! >= 0 -> if { firstInvalidToken! => recoveryStart! }
         recoveryStart! => recoveryEnd!
-        (recoveryEnd! < (tokens! -> len) and tokens![recoveryEnd!].kind != grammar.tokenIdNewLine and tokens![recoveryEnd!].kind != grammar.tokenIdRightBrace and tokens![recoveryEnd!].kind != grammar.tokenIdEnd) -> while {
+        (recoveryEnd! < (tokens! -> len) and tokens![recoveryEnd!].kind != grammar.tokenIdNewLine() and tokens![recoveryEnd!].kind != grammar.tokenIdRightBrace() and tokens![recoveryEnd!].kind != grammar.tokenIdEnd()) -> while {
             recoveryEnd! + 1 => recoveryEnd!
         }
         ParseEvent { kind: 5, value: recoveryEnd!, tokenIndex: recoveryStart! } => errorRangeEvent
@@ -510,7 +510,7 @@ public parseRuleEvents request: ParseRequest -> [ParseEvent; ~] {
 public parseSourceEvents source: file.SourceText -> [ParseEvent; ~] {
     source -> len => sourceLength
     source -> slice(UIntSize(0), sourceLength) => view
-    grammar.startRule => sourceStartRule
+    grammar.startRule() => sourceStartRule
     ParseRequest {
         source: view
         startRule: sourceStartRule
@@ -520,7 +520,7 @@ public parseSourceEvents source: file.SourceText -> [ParseEvent; ~] {
 public parseSourceExpressionEvents source: file.SourceText -> [ParseEvent; ~] {
     source -> len => sourceLength
     source -> slice(UIntSize(0), sourceLength) => view
-    grammar.ruleIdExpression => expressionStartRule
+    grammar.ruleIdExpression() => expressionStartRule
     ParseRequest {
         source: view
         startRule: expressionStartRule
@@ -528,7 +528,7 @@ public parseSourceExpressionEvents source: file.SourceText -> [ParseEvent; ~] {
 }
 
 public parseEvents source: Text -> [ParseEvent; ~] {
-    grammar.startRule => sourceStartRule
+    grammar.startRule() => sourceStartRule
     ParseRequest {
         source: source
         startRule: sourceStartRule
@@ -536,7 +536,7 @@ public parseEvents source: Text -> [ParseEvent; ~] {
 }
 
 public parseExpressionEvents source: Text -> [ParseEvent; ~] {
-    grammar.ruleIdExpression => expressionStartRule
+    grammar.ruleIdExpression() => expressionStartRule
     ParseRequest {
         source: source
         startRule: expressionStartRule

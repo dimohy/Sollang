@@ -90,7 +90,9 @@ internal sealed record BoundFunction(
     string? NativeSymbol = null,
     ComFunctionMetadata? Com = null,
     NativeErrorConvention NativeError = NativeErrorConvention.Direct,
-    BoundType? NativeSuccessType = null);
+    BoundType? NativeSuccessType = null,
+    IReadOnlyList<GenericParameterDeclaration>? GenericParameters = null,
+    IReadOnlyDictionary<string, BoundType>? SpecializedGenericTypes = null);
 
 internal sealed record BoundFunctionParameter(
     string Name,

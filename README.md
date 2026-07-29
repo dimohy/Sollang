@@ -52,9 +52,12 @@ call.
 ## Quick Look
 
 - `.slg` source files
+- a compact learning path in `examples/user/` and exhaustive fixtures in
+  `examples/regression/`
 - value-flow calls and bindings, such as `"text" -> println` and
   `7 -> square => num`
-- zero-input calls without ceremony: `nowMillis`, never `nowMillis()`
+- explicit zero-input calls: `nowMillis()`; enum members and one-input computed
+  members remain parenthesis-free
 - `main { ... }` or omitted `main` with top-level executable statements
 - block-function calls such as `1..9 -> each i { ... }` and compact guards such
   as `condition -> if continue`
@@ -70,8 +73,9 @@ call.
 - nested structs, traits with associated types, explicit owned `dyn<Trait>`
   objects with vtable dispatch, `<T, R, E>` type generics, and
   compile-time value generics such as `<N: Int>`
-- fixed and growable generic arrays (`[T; N]`, `[T; ~]`) and Swiss-table
-  dictionaries (`{K: V}`), including contextual struct keys and elements
+- fixed and growable generic arrays (`[T; N]`, `[value,; ~]`, `[a, b; ~]`,
+  `[T; ~]`) and Swiss-table dictionaries (`{K: V}`), including contextual
+  struct keys and elements
 - compile-time collection expansion such as `[1..10]`,
   `[1..10 -> each { it + 1 }]`, and `{1..3 -> each { it: it * 10 }}`
 - readonly views, mutable borrows, explicit ownership transfer, `box`, and
@@ -85,7 +89,7 @@ call.
 - lifetime-based function-entry stack slots reused across nested branches and
   loop iterations
 - mutable owner names with `!` and checked indexed assignment
-- both `data![index] = value` and `value => data![index]` assignment flow
+- value-first indexed assignment with `value => data![index]`
 - structured `async`/`await`, cancellation, deterministic parallel transforms,
   and explicit `uses Console, File, Clock, ...` effect capabilities
 - language-level memory-mapped byte regions for data larger than ordinary heap
@@ -334,10 +338,16 @@ supported `sollang` CLI remains alongside it during the transition. See
 [`STAGE3_COMPILER.md`](docs/STAGE3_COMPILER.md) for the Stage 3 driver's direct
 LLVM-emission contract and current CLI limits.
 
+The next 0.4 release completes that transition: only the fixed-point compiler
+built from `.slg` sources is published as `sollang`. The C# bootstrap remains a
+development tool and is excluded from release archives. The command-line usage
+shown above remains unchanged; 0.4 packaging is blocked until the native
+compiler passes the complete CLI compatibility gate.
+
 ## Run A Sample
 
 ```powershell
-.\scripts\sollang.ps1 -Source examples\01-function-basic-hello.slg -Output artifacts\01-function-basic-hello.exe -KeepTemps
+.\scripts\sollang.ps1 -Source examples\regression\01-function-basic-hello.slg -Output artifacts\01-function-basic-hello.exe -KeepTemps
 .\artifacts\01-function-basic-hello.exe
 ```
 
@@ -351,11 +361,11 @@ Build the browser WebAssembly sample and serve the repository root with any
 static file server:
 
 ```powershell
-.\scripts\sollang.ps1 -Source examples\23-webassembly-browser.slg -Output artifacts\23-webassembly-browser.wasm -Target wasm32-browser -KeepTemps
+.\scripts\sollang.ps1 -Source examples\regression\23-webassembly-browser.slg -Output artifacts\23-webassembly-browser.wasm -Target wasm32-browser -KeepTemps
 python -m http.server 5080
 ```
 
-Then open `http://localhost:5080/examples/browser/`.
+Then open `http://localhost:5080/examples/regression/browser/`.
 
 ## Native Unit Tests
 
@@ -399,7 +409,7 @@ returns a nonzero native process status when any test fails.
 ## Repository Map
 
 - `examples`: cumulative `.slg` programs that track the grammar progression
-- `examples/browser`: static browser runner for the WebAssembly sample
+- `examples/regression/browser`: static browser runner for the WebAssembly sample
 - `stdlib/sys`: runtime-facing standard library modules written in Sollang
 - `stdlib/std`: general-purpose standard library modules written in Sollang
 - `syntax`: lexer and grammar rule sources
@@ -415,7 +425,7 @@ top-level statements:
 
 ```powershell
 dotnet run --project src/Sollang.Compiler -- build `
-  examples/modules/52-math.slg examples/52-multi-file-modules.slg `
+  examples/regression/modules/52-math.slg examples/regression/52-multi-file-modules.slg `
   -o artifacts/52-multi-file-modules.exe
 ```
 

@@ -55,7 +55,7 @@ $modules = @()
 foreach ($name in $referenceNames) {
     $output = Join-Path $artifactsDir "$name-asan"
     & dotnet run --project $compilerProject -c Release --no-build -- build `
-        (Join-Path $repoRoot "examples\$name.slg") `
+        (Join-Path $repoRoot "examples\regression\$name.slg") `
         -o $output `
         --target linux-x64 `
         --llvm $llvmDir `
@@ -67,13 +67,13 @@ foreach ($name in $referenceNames) {
     $modules += [pscustomobject]@{
         Name = $name
         Llvm = [System.IO.Path]::ChangeExtension($output, ".ll")
-        Expected = Join-Path $repoRoot "examples\expected\$name.stdout.txt"
+        Expected = Join-Path $repoRoot "examples\regression\expected\$name.stdout.txt"
     }
 }
 $modules += [pscustomobject]@{
     Name = $selfHostName
     Llvm = Join-Path $linuxArtifactsDir "$selfHostName.stdout.ll"
-    Expected = Join-Path $repoRoot "examples\expected\$selfHostName.stdout.llvm.linux.execute.txt"
+    Expected = Join-Path $repoRoot "examples\regression\expected\$selfHostName.stdout.llvm.linux.execute.txt"
 }
 Write-Host "[owned-dictionary 2/4] PASS reference LLVM emission"
 

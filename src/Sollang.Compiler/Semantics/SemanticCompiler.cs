@@ -712,6 +712,18 @@ internal sealed partial class SemanticCompiler
         _currentModuleName = function.ModuleName;
         _currentTypeScopeName = ResolveFunctionTypeScope(function.Name);
         ValidateFunctionDeclaration(function, isLocal);
+        var genericParameterNames = (function.GenericParameters ?? [])
+            .Select(parameter => parameter.Name)
+            .ToArray();
+        if (genericParameterNames.Length == 0 && function.GenericParameterName is not null)
+        {
+            genericParameterNames =
+            [
+                function.GenericParameterName,
+                .. new[] { function.SecondaryGenericParameterName, function.TertiaryGenericParameterName }
+                    .OfType<string>()
+            ];
+        }
 
         if (function.GenericTraitBound is not null
             && !function.IsValueGeneric
@@ -741,17 +753,13 @@ internal sealed partial class SemanticCompiler
         var isParallelRole = function.Name is "sys.runtime.parallel" or "sys.runtime.tryParallel";
         var hasCompositeGenericInput = function.GenericParameterName is not null
             && function.InputType is not null
-            && function.InputType != function.GenericParameterName
-            && (TypeSyntaxReferencesParameter(function.InputType, function.GenericParameterName)
-                || TypeSyntaxReferencesParameter(function.InputType, function.SecondaryGenericParameterName)
-                || TypeSyntaxReferencesParameter(function.InputType, function.TertiaryGenericParameterName));
+            && !genericParameterNames.Contains(function.InputType, StringComparer.Ordinal)
+            && TypeSyntaxReferencesAnyParameter(function.InputType, genericParameterNames);
         var inputTypeTemplate = (isParallelRole || function.HasValueGenericFixedArrayInput || hasCompositeGenericInput)
             && function.InputType is not null
             && (function.HasValueGenericFixedArrayInput
-                || (function.InputType != function.GenericParameterName
-                    && (TypeSyntaxReferencesParameter(function.InputType, function.GenericParameterName)
-                        || TypeSyntaxReferencesParameter(function.InputType, function.SecondaryGenericParameterName)
-                        || TypeSyntaxReferencesParameter(function.InputType, function.TertiaryGenericParameterName))))
+                || (!genericParameterNames.Contains(function.InputType, StringComparer.Ordinal)
+                    && TypeSyntaxReferencesAnyParameter(function.InputType, genericParameterNames)))
                 ? function.InputType
                 : null;
         var inputType = function.InputType is null || inputTypeTemplate is not null
@@ -762,7 +770,8 @@ internal sealed partial class SemanticCompiler
                 function.SecondaryGenericParameterName,
                 function.TertiaryGenericParameterName,
                 function.Line,
-                function.Column);
+                function.Column,
+                genericParameterNames);
         if (function.InputOwnership == FunctionInputOwnership.Default
             && inputType == BoundType.IntDictionary)
         {
@@ -772,12 +781,8 @@ internal sealed partial class SemanticCompiler
         var returnTypeTemplate = (isParallelRole
                 || function.ReturnType.StartsWith('[', StringComparison.Ordinal))
             && function.GenericParameterName is not null
-            && function.ReturnType != function.GenericParameterName
-            && function.ReturnType != function.SecondaryGenericParameterName
-            && function.ReturnType != function.TertiaryGenericParameterName
-            && (TypeSyntaxReferencesParameter(function.ReturnType, function.GenericParameterName)
-                || TypeSyntaxReferencesParameter(function.ReturnType, function.SecondaryGenericParameterName)
-                || TypeSyntaxReferencesParameter(function.ReturnType, function.TertiaryGenericParameterName))
+            && !genericParameterNames.Contains(function.ReturnType, StringComparer.Ordinal)
+            && TypeSyntaxReferencesAnyParameter(function.ReturnType, genericParameterNames)
                 ? function.ReturnType
                 : null;
         var returnType = returnTypeTemplate is null
@@ -787,7 +792,8 @@ internal sealed partial class SemanticCompiler
                 function.SecondaryGenericParameterName,
                 function.TertiaryGenericParameterName,
                 function.Line,
-                function.Column)
+                function.Column,
+                genericParameterNames)
             : BoundType.Unit;
         var nativeSuccessType = function.NativeSuccessType is null
             ? (BoundType?)null
@@ -804,18 +810,14 @@ internal sealed partial class SemanticCompiler
         }
 
         var blockInputTypeTemplate = function.BlockInputType is not null
-            && (TypeSyntaxReferencesParameter(function.BlockInputType, function.GenericParameterName)
-                || TypeSyntaxReferencesParameter(function.BlockInputType, function.SecondaryGenericParameterName)
-                || TypeSyntaxReferencesParameter(function.BlockInputType, function.TertiaryGenericParameterName))
+            && TypeSyntaxReferencesAnyParameter(function.BlockInputType, genericParameterNames)
                 ? function.BlockInputType
                 : null;
         var blockInputType = function.BlockInputType is null || blockInputTypeTemplate is not null
             ? (BoundType?)null
             : ParseType(function.BlockInputType, function.Line, function.Column);
         var blockResultTypeTemplate = function.BlockResultType is not null
-            && (TypeSyntaxReferencesParameter(function.BlockResultType, function.GenericParameterName)
-                || TypeSyntaxReferencesParameter(function.BlockResultType, function.SecondaryGenericParameterName)
-                || TypeSyntaxReferencesParameter(function.BlockResultType, function.TertiaryGenericParameterName))
+            && TypeSyntaxReferencesAnyParameter(function.BlockResultType, genericParameterNames)
                 ? function.BlockResultType
                 : null;
         var blockResultType = function.BlockInputType is null
@@ -828,11 +830,10 @@ internal sealed partial class SemanticCompiler
                     function.SecondaryGenericParameterName,
                     function.TertiaryGenericParameterName,
                     function.Line,
-                    function.Column);
+                    function.Column,
+                    genericParameterNames);
         var streamElementTypeTemplate = function.StreamElementType is not null
-            && (TypeSyntaxReferencesParameter(function.StreamElementType, function.GenericParameterName)
-                || TypeSyntaxReferencesParameter(function.StreamElementType, function.SecondaryGenericParameterName)
-                || TypeSyntaxReferencesParameter(function.StreamElementType, function.TertiaryGenericParameterName))
+            && TypeSyntaxReferencesAnyParameter(function.StreamElementType, genericParameterNames)
                 ? function.StreamElementType
                 : null;
         var streamElementType = function.StreamElementType is null
@@ -843,7 +844,8 @@ internal sealed partial class SemanticCompiler
                 function.SecondaryGenericParameterName,
                 function.TertiaryGenericParameterName,
                 function.Line,
-                function.Column);
+                function.Column,
+                genericParameterNames);
         var genericAssociatedTypeConstraint = function.GenericAssociatedTypeConstraint is null
             ? (TypeId?)null
             : ParseFunctionType(
@@ -852,7 +854,8 @@ internal sealed partial class SemanticCompiler
                 function.SecondaryGenericParameterName,
                 function.TertiaryGenericParameterName,
                 function.Line,
-                function.Column);
+                function.Column,
+                genericParameterNames);
         IReadOnlyDictionary<string, TypeId>? implAssociatedTypes = function.ImplAssociatedTypes is null
             ? null
             : function.ImplAssociatedTypes.ToDictionary(
@@ -868,12 +871,8 @@ internal sealed partial class SemanticCompiler
             .Select(parameter =>
             {
                 var parameterTypeTemplate = function.GenericParameterName is not null
-                    && (TypeSyntaxReferencesParameter(parameter.TypeName, function.GenericParameterName)
-                        || TypeSyntaxReferencesParameter(parameter.TypeName, function.SecondaryGenericParameterName)
-                        || TypeSyntaxReferencesParameter(parameter.TypeName, function.TertiaryGenericParameterName))
-                    && parameter.TypeName != function.GenericParameterName
-                    && parameter.TypeName != function.SecondaryGenericParameterName
-                    && parameter.TypeName != function.TertiaryGenericParameterName
+                    && TypeSyntaxReferencesAnyParameter(parameter.TypeName, genericParameterNames)
+                    && !genericParameterNames.Contains(parameter.TypeName, StringComparer.Ordinal)
                         ? parameter.TypeName
                         : null;
                 var parameterType = parameterTypeTemplate is null
@@ -883,7 +882,8 @@ internal sealed partial class SemanticCompiler
                         function.SecondaryGenericParameterName,
                         function.TertiaryGenericParameterName,
                         parameter.Line,
-                        parameter.Column)
+                        parameter.Column,
+                        genericParameterNames)
                     : BoundType.Unit;
                 if (parameter.Ownership == FunctionInputOwnership.Default
                     && parameterType == BoundType.IntDictionary)
@@ -919,7 +919,8 @@ internal sealed partial class SemanticCompiler
                     function.SecondaryGenericParameterName,
                     function.TertiaryGenericParameterName,
                     parameter.Line,
-                    parameter.Column),
+                    parameter.Column,
+                    genericParameterNames),
                 BoundFunctionInputOwnership.Default,
                 parameter.Line,
                 parameter.Column))
@@ -1039,7 +1040,8 @@ internal sealed partial class SemanticCompiler
                 ?? function.Name[(function.Name.LastIndexOf('.') + 1)..],
             Com: function.Com,
             NativeError: function.NativeError,
-            NativeSuccessType: nativeSuccessType);
+            NativeSuccessType: nativeSuccessType,
+            GenericParameters: function.GenericParameters);
     }
 
     private IReadOnlySet<string> BindFunctionEffects(FunctionDeclaration function)
@@ -4748,6 +4750,77 @@ internal sealed partial class SemanticCompiler
         string typeTemplate,
         BoundType actualType,
         BoundFunction function,
+        Dictionary<string, BoundType> inferredTypes,
+        int line,
+        int column)
+    {
+        typeTemplate = typeTemplate.Trim();
+        if (GenericParameterNames(function).Contains(typeTemplate, StringComparer.Ordinal))
+        {
+            AssignInferredGenericType(typeTemplate, actualType, inferredTypes, line, column);
+            return;
+        }
+        if (typeTemplate.StartsWith('[', StringComparison.Ordinal)
+            && typeTemplate.EndsWith("; ~]", StringComparison.Ordinal))
+        {
+            var elementType = actualType == BoundType.DynamicIntArray
+                ? BoundType.Int
+                : _types.IsDynamicArray(actualType)
+                    ? _types.GetDynamicArray(actualType).ElementType
+                    : throw Error(line, column, $"expected a growable array but received {FormatType(actualType)}");
+            InferGenericArgumentsFromTypeTemplate(
+                typeTemplate[1..^4], elementType, function, inferredTypes, line, column);
+            return;
+        }
+        if (typeTemplate.StartsWith("Option<", StringComparison.Ordinal)
+            && typeTemplate.EndsWith('>')
+            && _types.TryGetOptionValue(actualType, out var optionValue))
+        {
+            InferGenericArgumentsFromTypeTemplate(
+                typeTemplate[7..^1], optionValue, function, inferredTypes, line, column);
+            return;
+        }
+        if (typeTemplate.StartsWith("Result<", StringComparison.Ordinal)
+            && typeTemplate.EndsWith('>')
+            && _types.TryGetResultTypes(actualType, out var resultTypes))
+        {
+            var arguments = typeTemplate[7..^1];
+            var separator = FindTopLevelTypeComma(arguments);
+            if (separator < 0) throw Error(line, column, "Result requires success and error types");
+            InferGenericArgumentsFromTypeTemplate(
+                arguments[..separator], resultTypes.Ok, function, inferredTypes, line, column);
+            InferGenericArgumentsFromTypeTemplate(
+                arguments[(separator + 1)..], resultTypes.Error, function, inferredTypes, line, column);
+            return;
+        }
+
+        var expectedType = ParseType(typeTemplate, line, column);
+        if (expectedType != actualType)
+        {
+            throw Error(line, column,
+                $"generic type pattern {typeTemplate} expects {FormatType(expectedType)} but received {FormatType(actualType)}");
+        }
+    }
+
+    private void AssignInferredGenericType(
+        string parameterName,
+        BoundType inferredType,
+        Dictionary<string, BoundType> inferredTypes,
+        int line,
+        int column)
+    {
+        if (inferredTypes.TryGetValue(parameterName, out var existing) && existing != inferredType)
+        {
+            throw Error(line, column,
+                $"type parameter '{parameterName}' was inferred as both {FormatType(existing)} and {FormatType(inferredType)}");
+        }
+        inferredTypes[parameterName] = inferredType;
+    }
+
+    private void InferGenericArgumentsFromTypeTemplate(
+        string typeTemplate,
+        BoundType actualType,
+        BoundFunction function,
         ref BoundType? primaryType,
         ref BoundType? secondaryType,
         ref BoundType? tertiaryType,
@@ -5682,7 +5755,11 @@ internal sealed partial class SemanticCompiler
                 throw Error(expression.Line, expression.Column,
                     $"{zeroArgumentFunction.Name} is only valid in main for the current runtime slice");
             }
-            return zeroArgumentFunction.ReturnType;
+            throw Error(
+                expression.Line,
+                expression.Column,
+                $"zero-input function '{functionOwner.Name}.{expression.FieldName}' must be called with parentheses: "
+                + $"'{functionOwner.Name}.{expression.FieldName}()'");
         }
 
         if (expression.Source is NameExpression genericTypeName
@@ -5734,7 +5811,10 @@ internal sealed partial class SemanticCompiler
             var memberPath = staticTypeName.Name + "." + expression.FieldName;
             if (functions.TryGetValue(memberPath, out var associated) && associated.InputType is null)
             {
-                return associated.ReturnType;
+                throw Error(
+                    expression.Line,
+                    expression.Column,
+                    $"zero-input associated function '{memberPath}' must be called with parentheses: '{memberPath}()'");
             }
 
             throw Error(
@@ -8083,29 +8163,6 @@ internal sealed partial class SemanticCompiler
             return BoundType.Unit;
         }
 
-        if (function.InputType is null
-            && expression.Arguments.Count == 0
-            && !(expression.Path.Count == 2
-                && _types.TryResolve(expression.Path[0], out var zeroArgumentOwnerType)
-                && _types.IsStruct(zeroArgumentOwnerType)))
-        {
-            throw Error(
-                expression.Line,
-                expression.Column,
-                $"zero-argument function '{path}' uses property syntax without parentheses: '{path}'");
-        }
-
-        if (expression.Path.Count == 2
-            && function.InputType is null
-            && _types.TryResolve(expression.Path[0], out var associatedType)
-            && _types.IsStruct(associatedType))
-        {
-            throw Error(
-                expression.Line,
-                expression.Column,
-                $"zero-argument associated member '{path}' uses property syntax without parentheses: '{path}'");
-        }
-
         switch (function.Kind)
         {
             case BoundFunctionKind.RuntimePrint:
@@ -8355,19 +8412,17 @@ internal sealed partial class SemanticCompiler
                         allowReadIntCall);
                 }
 
-                if (receiverName is not null
-                    && receiverType is not null
-                    && (function.AdditionalParameters?.Count ?? 0) == 0)
-                {
-                    throw Error(
-                        expression.Line,
-                        expression.Column,
-                        $"zero-argument method '{path}' uses property syntax without parentheses: '{path}'");
-                }
-
                 if (receiverName is not null && receiverType is not null)
                 {
                     var additionalParameters = function.AdditionalParameters ?? [];
+                    if (additionalParameters.Count == 0 && expression.Arguments.Count == 0)
+                    {
+                        throw Error(
+                            expression.Line,
+                            expression.Column,
+                            $"zero-argument method '{receiverName}.{expression.Path[^1]}' uses property syntax "
+                            + $"without parentheses: '{receiverName}.{expression.Path[^1]}'");
+                    }
                     if (expression.Arguments.Count != additionalParameters.Count)
                     {
                         throw Error(expression.Line, expression.Column,
@@ -8410,6 +8465,8 @@ internal sealed partial class SemanticCompiler
                 $"generic function '{template.Name}' expects {expectedArgumentCount} argument(s)");
         }
 
+        var inferredTypes = new Dictionary<string, BoundType>(StringComparer.Ordinal);
+        var parameterNames = GenericParameterNames(template);
         var actualType = InferExpression(
             expression.Arguments[0],
             functions,
@@ -8417,7 +8474,46 @@ internal sealed partial class SemanticCompiler
             allowPrintCall: false,
             allowReadIntCall,
             allowFlowBindingTarget: false);
-        var specialization = ResolveGenericSpecialization(template, actualType, functions, expression);
+        InferGenericArgument(
+            template.InputTypeTemplate,
+            template.InputType,
+            actualType,
+            template,
+            inferredTypes,
+            expression.Arguments[0].Line,
+            expression.Arguments[0].Column);
+        var additionalParameters = template.AdditionalParameters ?? [];
+        for (var index = 0; index < additionalParameters.Count; index++)
+        {
+            var argument = expression.Arguments[index + 1];
+            var argumentType = InferExpression(
+                argument,
+                functions,
+                bindings,
+                allowPrintCall: false,
+                allowReadIntCall,
+                allowFlowBindingTarget: false);
+            InferGenericArgument(
+                additionalParameters[index].TypeTemplate,
+                additionalParameters[index].Type,
+                argumentType,
+                template,
+                inferredTypes,
+                argument.Line,
+                argument.Column);
+        }
+        var missing = parameterNames.FirstOrDefault(parameter => !inferredTypes.ContainsKey(parameter));
+        if (missing is not null)
+        {
+            throw Error(expression.Line, expression.Column,
+                $"generic function '{template.Name}' cannot infer type parameter '{missing}'");
+        }
+        var specialization = ResolveGenericSpecialization(
+            template,
+            inferredTypes[parameterNames[0]],
+            functions,
+            expression,
+            explicitGenericTypes: inferredTypes);
         return InferUserCallExpression(
             expression,
             specialization,
@@ -8428,6 +8524,38 @@ internal sealed partial class SemanticCompiler
             template.Name);
     }
 
+    private void InferGenericArgument(
+        string? typeTemplate,
+        BoundType? parameterType,
+        BoundType actualType,
+        BoundFunction function,
+        Dictionary<string, BoundType> inferredTypes,
+        int line,
+        int column)
+    {
+        if (typeTemplate is not null)
+        {
+            InferGenericArgumentsFromTypeTemplate(
+                typeTemplate, actualType, function, inferredTypes, line, column);
+            return;
+        }
+        if (parameterType is null) return;
+        var names = GenericParameterNames(function);
+        for (var index = 0; index < names.Count; index++)
+        {
+            if ((int)parameterType.Value == (int)BoundType.GenericParameter + index)
+            {
+                AssignInferredGenericType(names[index], actualType, inferredTypes, line, column);
+                return;
+            }
+        }
+        if (!CanPassFunctionArgument(actualType, parameterType.Value))
+        {
+            throw Error(line, column,
+                $"generic argument expects {FormatType(parameterType.Value)} but received {FormatType(actualType)}");
+        }
+    }
+
     private BoundFunction ResolveGenericSpecialization(
         BoundFunction template,
         BoundType actualType,
@@ -8436,8 +8564,27 @@ internal sealed partial class SemanticCompiler
         BoundType? specializedInputType = null,
         BoundType? explicitSecondaryType = null,
         BoundType? explicitTertiaryType = null,
+        IReadOnlyDictionary<string, BoundType>? explicitGenericTypes = null,
         bool validateSpecialization = true)
     {
+        var genericParameterNames = GenericParameterNames(template);
+        var specializedGenericTypes = new Dictionary<string, BoundType>(StringComparer.Ordinal);
+        if (genericParameterNames.Count > 0)
+        {
+            specializedGenericTypes[genericParameterNames[0]] = actualType;
+        }
+        if (genericParameterNames.Count > 1 && explicitSecondaryType is { } secondaryExplicit)
+        {
+            specializedGenericTypes[genericParameterNames[1]] = secondaryExplicit;
+        }
+        if (genericParameterNames.Count > 2 && explicitTertiaryType is { } tertiaryExplicit)
+        {
+            specializedGenericTypes[genericParameterNames[2]] = tertiaryExplicit;
+        }
+        foreach (var pair in explicitGenericTypes ?? new Dictionary<string, BoundType>())
+        {
+            specializedGenericTypes[pair.Key] = pair.Value;
+        }
         if (template.Kind is BoundFunctionKind.RuntimeWriteScalar
                 or BoundFunctionKind.RuntimeReadScalar
                 or BoundFunctionKind.RuntimeReadScalarAsync
@@ -8468,6 +8615,65 @@ internal sealed partial class SemanticCompiler
             throw new SollangException(
                 $"type {FormatType(actualType)} does not implement trait '{traitBound}' required by '{template.Name}'");
         }
+        foreach (var parameter in template.GenericParameters ?? [])
+        {
+            if (!specializedGenericTypes.TryGetValue(parameter.Name, out var parameterType))
+            {
+                continue;
+            }
+            BoundFunction? parameterTraitImplementation = null;
+            string? parameterTraitName = null;
+            foreach (var constraint in parameter.Constraints)
+            {
+                if (constraint.TraitName is { } requiredTrait && requiredTrait != "Int")
+                {
+                    parameterTraitName = requiredTrait;
+                    if (!TryFindTraitImplementation(functions, requiredTrait, parameterType, out parameterTraitImplementation))
+                    {
+                        throw new SollangException(
+                            $"type {FormatType(parameterType)} does not implement trait '{requiredTrait}' required by '{template.Name}'");
+                    }
+                }
+            }
+            foreach (var constraint in parameter.Constraints)
+            {
+                if (constraint.AssociatedTypeName is not { } associatedName
+                    || constraint.EqualTypeName is not { } equalTypeName)
+                {
+                    continue;
+                }
+                if (parameterTraitName is null || parameterTraitImplementation is null)
+                {
+                    throw new SollangException(
+                        $"associated type equality '{parameter.Name}.{associatedName}' requires a trait bound");
+                }
+                if (parameterTraitImplementation.ImplAssociatedTypes is not { } associatedTypes
+                    || !associatedTypes.TryGetValue(associatedName, out var actualAssociatedType))
+                {
+                    throw new SollangException(
+                        $"trait '{parameterTraitName}' has no associated type binding '{associatedName}' for {FormatType(parameterType)}");
+                }
+                BoundType expectedAssociatedType;
+                if (genericParameterNames.Contains(equalTypeName, StringComparer.Ordinal))
+                {
+                    if (!specializedGenericTypes.TryGetValue(equalTypeName, out expectedAssociatedType))
+                    {
+                        expectedAssociatedType = actualAssociatedType;
+                        specializedGenericTypes[equalTypeName] = actualAssociatedType;
+                    }
+                }
+                else
+                {
+                    expectedAssociatedType = ParseType(equalTypeName, template.Line, template.Column);
+                }
+                if (actualAssociatedType != expectedAssociatedType)
+                {
+                    throw new SollangException(
+                        $"type {FormatType(parameterType)} does not satisfy associated type constraint "
+                        + $"'{parameter.Name}.{associatedName} == {equalTypeName}' required by '{template.Name}'");
+                }
+            }
+        }
         BoundType? inferredSecondaryType = explicitSecondaryType;
         BoundType? inferredTertiaryType = explicitTertiaryType;
         if (template.GenericTraitBound is { } constrainedTrait
@@ -8492,10 +8698,20 @@ internal sealed partial class SemanticCompiler
                 inferredSecondaryType = actualAssociatedType;
             }
         }
+        if (template.SecondaryGenericParameterName is not null && inferredSecondaryType is null
+            && specializedGenericTypes.TryGetValue(template.SecondaryGenericParameterName, out var inferredSecondaryFromMap))
+        {
+            inferredSecondaryType = inferredSecondaryFromMap;
+        }
         if (template.SecondaryGenericParameterName is not null && inferredSecondaryType is null)
         {
             throw new SollangException(
                 $"generic function '{template.Name}' cannot infer type parameter '{template.SecondaryGenericParameterName}'");
+        }
+        if (template.TertiaryGenericParameterName is not null && inferredTertiaryType is null
+            && specializedGenericTypes.TryGetValue(template.TertiaryGenericParameterName, out var inferredTertiaryFromMap))
+        {
+            inferredTertiaryType = inferredTertiaryFromMap;
         }
         if (template.TertiaryGenericParameterName is not null && inferredTertiaryType is null)
         {
@@ -8503,15 +8719,22 @@ internal sealed partial class SemanticCompiler
                 $"generic function '{template.Name}' cannot infer type parameter '{template.TertiaryGenericParameterName}'");
         }
 
-        var specializedName = template.Name + "$" + ((int)actualType).ToString(System.Globalization.CultureInfo.InvariantCulture);
-        if (inferredSecondaryType is { } secondaryType)
+        if (template.SecondaryGenericParameterName is not null && inferredSecondaryType is { } inferredSecondary)
+            specializedGenericTypes[template.SecondaryGenericParameterName] = inferredSecondary;
+        if (template.TertiaryGenericParameterName is not null && inferredTertiaryType is { } inferredTertiary)
+            specializedGenericTypes[template.TertiaryGenericParameterName] = inferredTertiary;
+        var missingGenericParameter = genericParameterNames
+            .FirstOrDefault(parameter => !specializedGenericTypes.ContainsKey(parameter));
+        if (missingGenericParameter is not null)
         {
-            specializedName += "_" + ((int)secondaryType).ToString(System.Globalization.CultureInfo.InvariantCulture);
+            throw new SollangException(
+                $"generic function '{template.Name}' cannot infer type parameter '{missingGenericParameter}'");
         }
-        if (inferredTertiaryType is { } tertiaryType)
-        {
-            specializedName += "_" + ((int)tertiaryType).ToString(System.Globalization.CultureInfo.InvariantCulture);
-        }
+
+        var specializedName = template.Name + "$" + string.Join(
+            "_",
+            genericParameterNames.Select(parameter =>
+                ((int)specializedGenericTypes[parameter]).ToString(System.Globalization.CultureInfo.InvariantCulture)));
         if (_boundFunctions is null)
         {
             throw new InvalidOperationException("generic specialization requires bound functions");
@@ -8525,99 +8748,44 @@ internal sealed partial class SemanticCompiler
                 InputType = template.InputTypeTemplate is null
                     ? template.InputType is null ? null : specializedInputType ?? actualType
                     : ParseSpecializedFunctionType(
-                        template.InputTypeTemplate,
-                        template.GenericParameterName,
-                        actualType,
-                        template.SecondaryGenericParameterName,
-                        inferredSecondaryType,
-                        template.TertiaryGenericParameterName,
-                        inferredTertiaryType,
-                        template.Line,
-                        template.Column),
+                        template.InputTypeTemplate, specializedGenericTypes, template.Line, template.Column),
                 ReturnType = template.ReturnTypeTemplate is null
-                    ? SubstituteGenericType(template.ReturnType, actualType, inferredSecondaryType, inferredTertiaryType)
+                    ? SubstituteGenericType(template.ReturnType, template, specializedGenericTypes)
                     : ParseSpecializedFunctionType(
-                        template.ReturnTypeTemplate,
-                        template.GenericParameterName,
-                        actualType,
-                        template.SecondaryGenericParameterName,
-                        inferredSecondaryType,
-                        template.TertiaryGenericParameterName,
-                        inferredTertiaryType,
-                        template.Line,
-                        template.Column),
+                        template.ReturnTypeTemplate, specializedGenericTypes, template.Line, template.Column),
                 AdditionalParameters = (template.AdditionalParameters ?? [])
                     .Select(parameter => parameter with
                     {
                         Type = parameter.TypeTemplate is null
-                            ? SubstituteGenericType(
-                                parameter.Type,
-                                actualType,
-                                inferredSecondaryType,
-                                inferredTertiaryType)
+                            ? SubstituteGenericType(parameter.Type, template, specializedGenericTypes)
                             : ParseSpecializedFunctionType(
-                                parameter.TypeTemplate,
-                                template.GenericParameterName,
-                                actualType,
-                                template.SecondaryGenericParameterName,
-                                inferredSecondaryType,
-                                template.TertiaryGenericParameterName,
-                                inferredTertiaryType,
-                                parameter.Line,
-                                parameter.Column)
+                                parameter.TypeTemplate, specializedGenericTypes, parameter.Line, parameter.Column)
                     })
                     .ToArray(),
                 AdditionalBlockParameters = (template.AdditionalBlockParameters ?? [])
                     .Select(parameter => parameter with
                     {
-                        Type = SubstituteGenericType(
-                            parameter.Type,
-                            actualType,
-                            inferredSecondaryType,
-                            inferredTertiaryType)
+                        Type = SubstituteGenericType(parameter.Type, template, specializedGenericTypes)
                     })
                     .ToArray(),
                 BlockInputType = template.BlockInputTypeTemplate is null
                     ? template.BlockInputType is null
                         ? null
-                        : SubstituteGenericType(template.BlockInputType.Value, actualType, inferredSecondaryType, inferredTertiaryType)
+                        : SubstituteGenericType(template.BlockInputType.Value, template, specializedGenericTypes)
                     : ParseSpecializedFunctionType(
-                        template.BlockInputTypeTemplate,
-                        template.GenericParameterName,
-                        actualType,
-                        template.SecondaryGenericParameterName,
-                        inferredSecondaryType,
-                        template.TertiaryGenericParameterName,
-                        inferredTertiaryType,
-                        template.Line,
-                        template.Column),
+                        template.BlockInputTypeTemplate, specializedGenericTypes, template.Line, template.Column),
                 BlockResultType = template.BlockResultTypeTemplate is null
                     ? template.BlockResultType
                     : ParseSpecializedFunctionType(
-                        template.BlockResultTypeTemplate,
-                        template.GenericParameterName,
-                        actualType,
-                        template.SecondaryGenericParameterName,
-                        inferredSecondaryType,
-                        template.TertiaryGenericParameterName,
-                        inferredTertiaryType,
-                        template.Line,
-                        template.Column),
+                        template.BlockResultTypeTemplate, specializedGenericTypes, template.Line, template.Column),
                 StreamElementType = template.StreamElementTypeTemplate is null
                     ? template.StreamElementType
                     : ParseSpecializedFunctionType(
-                        template.StreamElementTypeTemplate,
-                        template.GenericParameterName,
-                        actualType,
-                        template.SecondaryGenericParameterName,
-                        inferredSecondaryType,
-                        template.TertiaryGenericParameterName,
-                        inferredTertiaryType,
-                        template.Line,
-                        template.Column),
+                        template.StreamElementTypeTemplate, specializedGenericTypes, template.Line, template.Column),
                 SpecializedType = actualType,
                 SpecializedSecondaryType = inferredSecondaryType,
-                SpecializedTertiaryType = inferredTertiaryType
+                SpecializedTertiaryType = inferredTertiaryType,
+                SpecializedGenericTypes = specializedGenericTypes
             };
             _boundFunctions.Add(specializedName, specialization);
             if (validateSpecialization
@@ -8679,6 +8847,65 @@ internal sealed partial class SemanticCompiler
         return type;
     }
 
+    private static IReadOnlyList<string> GenericParameterNames(BoundFunction function)
+    {
+        if (function.GenericParameters is { Count: > 0 } parameters)
+        {
+            return parameters.Select(parameter => parameter.Name).ToArray();
+        }
+        return new[] {
+            function.GenericParameterName,
+            function.SecondaryGenericParameterName,
+            function.TertiaryGenericParameterName
+        }.OfType<string>().ToArray();
+    }
+
+    private BoundType SubstituteGenericType(
+        BoundType type,
+        BoundFunction template,
+        IReadOnlyDictionary<string, BoundType> specializedTypes)
+    {
+        var parameterNames = GenericParameterNames(template);
+        for (var index = 0; index < parameterNames.Count; index++)
+        {
+            if ((int)type == (int)BoundType.GenericParameter + index)
+            {
+                return specializedTypes[parameterNames[index]];
+            }
+        }
+        if (_types.TryGetOptionValue(type, out var optionValue))
+        {
+            var value = SubstituteGenericType(optionValue, template, specializedTypes);
+            return _types.GetOrAddOption(value, $"Option<{FormatType(value)}>");
+        }
+        if (_types.TryGetResultTypes(type, out var resultTypes))
+        {
+            var ok = SubstituteGenericType(resultTypes.Ok, template, specializedTypes);
+            var error = SubstituteGenericType(resultTypes.Error, template, specializedTypes);
+            return _types.GetOrAddResult(ok, error, $"Result<{FormatType(ok)}, {FormatType(error)}>");
+        }
+        if (_types.TryGetTaskValue(type, out var taskValue))
+        {
+            return _types.GetOrAddTask(SubstituteGenericType(taskValue, template, specializedTypes));
+        }
+        if (_types.TryGetStreamValue(type, out var streamValue))
+        {
+            return _types.GetOrAddStream(SubstituteGenericType(streamValue, template, specializedTypes));
+        }
+        if (_types.TryGetEventStreamValue(type, out var eventStreamValue))
+        {
+            return _types.GetOrAddEventStream(SubstituteGenericType(eventStreamValue, template, specializedTypes));
+        }
+        if (_types.IsReference(type))
+        {
+            return _types.GetOrAddReference(SubstituteGenericType(
+                _types.GetReference(type).ElementType,
+                template,
+                specializedTypes));
+        }
+        return type;
+    }
+
     private BoundType InferTypeApplicationExpression(
         TypeApplicationExpression expression,
         IReadOnlyDictionary<string, BoundFunction> functions,
@@ -8700,13 +8927,39 @@ internal sealed partial class SemanticCompiler
             throw Error(expression.Line, expression.Column,
                 $"generic function '{path}' expects an argument and must use call or flow syntax");
         }
+        if ((expression.Arguments?.Count ?? 0) != 0)
+        {
+            throw Error(expression.Line, expression.Column,
+                $"generic function '{path}' does not accept direct arguments in this syntax slice");
+        }
         if (IsMainOnlyRuntimeWrapper(template) && !allowRuntimeCall)
         {
             throw Error(expression.Line, expression.Column,
                 $"{path} is only valid in main for the current runtime slice");
         }
-        var actualType = ParseType(expression.TypeArgument, expression.Line, expression.Column);
-        return AsyncCallType(ResolveGenericSpecialization(template, actualType, functions, expression));
+        var parameterNames = GenericParameterNames(template);
+        var typeArgumentSyntaxes = new[] { expression.TypeArgument }
+            .Concat(expression.AdditionalTypeArguments ?? [])
+            .ToArray();
+        if (typeArgumentSyntaxes.Length != parameterNames.Count)
+        {
+            throw Error(expression.Line, expression.Column,
+                $"generic function '{path}' expects {parameterNames.Count} type argument(s)");
+        }
+        var specializedTypes = parameterNames
+            .Select((parameter, index) => new
+            {
+                Parameter = parameter,
+                Type = ParseType(typeArgumentSyntaxes[index], expression.Line, expression.Column)
+            })
+            .ToDictionary(item => item.Parameter, item => item.Type, StringComparer.Ordinal);
+        var actualType = specializedTypes[parameterNames[0]];
+        return AsyncCallType(ResolveGenericSpecialization(
+            template,
+            actualType,
+            functions,
+            expression,
+            explicitGenericTypes: specializedTypes));
     }
 
     private BoundFunction ResolveValueGenericSpecialization(
@@ -9391,12 +9644,10 @@ internal sealed partial class SemanticCompiler
                     expression.Column,
                     $"function '{expression.Name}' expects an argument and must use call or flow syntax");
             }
-            if (IsMainOnlyRuntimeWrapper(function) && !allowRuntimeCall)
-            {
-                throw Error(expression.Line, expression.Column,
-                    $"{expression.Name} is only valid in main for the current runtime slice");
-            }
-            return AsyncCallType(function);
+            throw Error(
+                expression.Line,
+                expression.Column,
+                $"zero-input function '{expression.Name}' must be called with parentheses: '{expression.Name}()'");
         }
 
         throw Error(expression.Line, expression.Column, $"unknown binding '{expression.Name}'");
@@ -10197,8 +10448,25 @@ internal sealed partial class SemanticCompiler
         string? secondaryGenericParameterName,
         string? tertiaryGenericParameterName,
         int line,
-        int column)
+        int column,
+        IReadOnlyList<string>? genericParameterNames = null)
     {
+        if (genericParameterNames is not null)
+        {
+            var genericIndex = -1;
+            for (var index = 0; index < genericParameterNames.Count; index++)
+            {
+                if (typeName == genericParameterNames[index])
+                {
+                    genericIndex = index;
+                    break;
+                }
+            }
+            if (genericIndex >= 0)
+            {
+                return (BoundType)((int)BoundType.GenericParameter + genericIndex);
+            }
+        }
         if (genericParameterName is not null && typeName == genericParameterName)
         {
             return BoundType.GenericParameter;
@@ -10218,7 +10486,7 @@ internal sealed partial class SemanticCompiler
         if (typeName.StartsWith("Option<", StringComparison.Ordinal) && typeName.EndsWith('>'))
         {
             var value = ParseFunctionType(typeName[7..^1].Trim(), genericParameterName,
-                secondaryGenericParameterName, tertiaryGenericParameterName, line, column);
+                secondaryGenericParameterName, tertiaryGenericParameterName, line, column, genericParameterNames);
             return _types.GetOrAddOption(value, $"Option<{FormatType(value)}>");
         }
         if (typeName.StartsWith("Result<", StringComparison.Ordinal) && typeName.EndsWith('>'))
@@ -10230,12 +10498,66 @@ internal sealed partial class SemanticCompiler
                 throw Error(line, column, "Result requires success and error types");
             }
             var ok = ParseFunctionType(arguments[..separator].Trim(), genericParameterName,
-                secondaryGenericParameterName, tertiaryGenericParameterName, line, column);
+                secondaryGenericParameterName, tertiaryGenericParameterName, line, column, genericParameterNames);
             var error = ParseFunctionType(arguments[(separator + 1)..].Trim(), genericParameterName,
-                secondaryGenericParameterName, tertiaryGenericParameterName, line, column);
+                secondaryGenericParameterName, tertiaryGenericParameterName, line, column, genericParameterNames);
             return _types.GetOrAddResult(ok, error, $"Result<{FormatType(ok)}, {FormatType(error)}>");
         }
 
+        return ParseType(typeName, line, column);
+    }
+
+    private BoundType ParseSpecializedFunctionType(
+        string typeName,
+        IReadOnlyDictionary<string, BoundType> specializedTypes,
+        int line,
+        int column)
+    {
+        typeName = typeName.Trim();
+        if (specializedTypes.TryGetValue(typeName, out var specialized))
+        {
+            return specialized;
+        }
+        if (typeName.StartsWith("Option<", StringComparison.Ordinal) && typeName.EndsWith('>'))
+        {
+            var value = ParseSpecializedFunctionType(typeName[7..^1], specializedTypes, line, column);
+            return _types.GetOrAddOption(value, $"Option<{FormatType(value)}>");
+        }
+        if (typeName.StartsWith("Result<", StringComparison.Ordinal) && typeName.EndsWith('>'))
+        {
+            var arguments = typeName[7..^1];
+            var separator = FindTopLevelTypeComma(arguments);
+            if (separator < 0) throw Error(line, column, "Result requires success and error types");
+            var ok = ParseSpecializedFunctionType(arguments[..separator], specializedTypes, line, column);
+            var error = ParseSpecializedFunctionType(arguments[(separator + 1)..], specializedTypes, line, column);
+            return _types.GetOrAddResult(ok, error, $"Result<{FormatType(ok)}, {FormatType(error)}>");
+        }
+        if (typeName.StartsWith('[', StringComparison.Ordinal)
+            && typeName.EndsWith("; ~]", StringComparison.Ordinal))
+        {
+            var element = ParseSpecializedFunctionType(typeName[1..^4], specializedTypes, line, column);
+            if (element == BoundType.Unit || IsNestedContainerElementType(element))
+                throw Error(line, column, "growable array elements must be inline scalar or user values");
+            return element == BoundType.Int
+                ? BoundType.DynamicIntArray
+                : _types.GetOrAddDynamicArray(element);
+        }
+        if (typeName.Length >= 5 && typeName[0] == '{' && typeName[^1] == '}')
+        {
+            var contents = typeName[1..^1];
+            var separator = FindTopLevelTypeColon(contents);
+            if (separator >= 0)
+            {
+                var key = ParseSpecializedFunctionType(contents[..separator], specializedTypes, line, column);
+                var value = ParseSpecializedFunctionType(contents[(separator + 1)..], specializedTypes, line, column);
+                if (!IsSupportedDictionaryKeyType(key))
+                    throw Error(line, column,
+                        $"dictionary key type {FormatType(key)} must implement Hash.hash: self -> Int and Eq.eq: self -> Int");
+                return key == BoundType.Int && value == BoundType.Int
+                    ? BoundType.IntDictionary
+                    : _types.GetOrAddDictionary(key, value);
+            }
+        }
         return ParseType(typeName, line, column);
     }
 
@@ -10380,6 +10702,11 @@ internal sealed partial class SemanticCompiler
         }
         return false;
     }
+
+    private static bool TypeSyntaxReferencesAnyParameter(
+        string typeName,
+        IReadOnlyList<string> parameterNames)
+        => parameterNames.Any(parameter => TypeSyntaxReferencesParameter(typeName, parameter));
 
     private static int FindTopLevelTypeComma(string text)
     {

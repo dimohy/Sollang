@@ -66,6 +66,21 @@ internal sealed record TraitMethodDeclaration(
     int Line,
     int Column);
 
+internal sealed record GenericParameterDeclaration(
+    string Name,
+    IReadOnlyList<GenericConstraintDeclaration> Constraints,
+    int Line,
+    int Column,
+    bool IsValue = false);
+
+internal sealed record GenericConstraintDeclaration(
+    string ParameterName,
+    string? TraitName,
+    string? AssociatedTypeName,
+    string? EqualTypeName,
+    int Line,
+    int Column);
+
 internal sealed record FunctionDeclaration(
     string Name,
     string? InputName,
@@ -103,7 +118,8 @@ internal sealed record FunctionDeclaration(
     string? NativeSymbol = null,
     ComFunctionMetadata? Com = null,
     NativeErrorConvention NativeError = NativeErrorConvention.Direct,
-    string? NativeSuccessType = null);
+    string? NativeSuccessType = null,
+    IReadOnlyList<GenericParameterDeclaration>? GenericParameters = null);
 
 internal enum NativeErrorConvention
 {
@@ -274,7 +290,12 @@ internal sealed record OrExpression(Expression Left, Expression Right, int Line,
 internal sealed record NotExpression(Expression Value, int Line, int Column)
     : Expression(Line, Column);
 
-internal sealed record RangeExpression(Expression Start, Expression End, int Line, int Column)
+internal sealed record RangeExpression(
+    Expression Start,
+    Expression End,
+    int Line,
+    int Column,
+    bool IsEndExclusive = false)
     : Expression(Line, Column);
 
 internal sealed record CompileTimeEachExpression(
@@ -347,7 +368,9 @@ internal sealed record TypeApplicationExpression(
     IReadOnlyList<string> Path,
     string TypeArgument,
     int Line,
-    int Column)
+    int Column,
+    IReadOnlyList<Expression>? Arguments = null,
+    IReadOnlyList<string>? AdditionalTypeArguments = null)
     : Expression(Line, Column);
 
 internal sealed record ArrayRepeatExpression(
@@ -442,7 +465,8 @@ internal sealed record SubjectRangeExpression(
     Expression Start,
     Expression End,
     int Line,
-    int Column)
+    int Column,
+    bool IsEndExclusive = false)
     : Expression(Line, Column);
 
 internal enum ComparisonOperator

@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [string[]]$Fixture = @("examples/582-billion-sensor-alerts.slg"),
+    [string[]]$Fixture = @("examples/regression/582-billion-sensor-alerts.slg"),
     [ValidateSet("windows", "linux")]
     [string]$Target = "windows",
     [bool]$CompareStage2 = $true,
@@ -167,7 +167,7 @@ Write-Host "[fast 3/5] Focused LLVM verifier PASS."
 
 if (-not $NoExecute) {
     $fixtureName = [System.IO.Path]::GetFileNameWithoutExtension($fixturePaths[0])
-    $expectedPath = Join-Path $repoRoot "examples\expected\$fixtureName.stdout.txt"
+    $expectedPath = Join-Path $repoRoot "examples\regression\expected\$fixtureName.stdout.txt"
     if (Test-Path -LiteralPath $expectedPath) {
         $executable = Join-Path $cacheRoot "$actionHash-stage1.exe"
         & $clang -Wno-override-module $stage1Llvm -O1 -o $executable

@@ -2,8 +2,8 @@
 param(
     [string]$Compiler = "",
     [string[]]$Fixture = @(
-        "examples/577-lazy-range-each.slg",
-        "examples/582-billion-sensor-alerts.slg"
+        "examples/regression/577-lazy-range-each.slg",
+        "examples/regression/582-billion-sensor-alerts.slg"
     ),
     [ValidateSet("windows-x64", "linux-x64")]
     [string]$Target = "windows-x64",

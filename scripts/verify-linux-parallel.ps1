@@ -36,7 +36,7 @@ function Build-And-RunReferenceExample {
         [string]$Expected
     )
 
-    $sourcePath = Join-Path $repoRoot "examples\$Name.slg"
+    $sourcePath = Join-Path $repoRoot "examples\regression\$Name.slg"
     $outputPath = Join-Path $artifactsDir "$Name.linux"
     & dotnet run --project $compilerProject -c Release --no-build -- build `
         $sourcePath -o $outputPath --target linux-x64 --llvm $llvmDir -O0
@@ -96,7 +96,7 @@ $wslExecutable = "/tmp/sollang-selfhost-linux-parallel"
 Invoke-Wsl @("gcc", $wslObject, "-pthread", "-o", $wslExecutable) | Out-Null
 $selfHostActual = Invoke-Wsl @($wslExecutable)
 $selfHostExpectedPath = Join-Path $repoRoot `
-    "examples\expected\382-selfhost-llvm-linux-parallel-pool.stdout.llvm.linux.execute.txt"
+    "examples\regression\expected\382-selfhost-llvm-linux-parallel-pool.stdout.llvm.linux.execute.txt"
 $selfHostExpected = ([System.IO.File]::ReadAllText($selfHostExpectedPath)).TrimEnd("`r", "`n")
 if ($selfHostActual -ne $selfHostExpected) {
     throw "Self-host Linux execution mismatch.`nEXPECTED:`n$selfHostExpected`nACTUAL:`n$selfHostActual"
@@ -128,7 +128,7 @@ $ownedActual = Invoke-Wsl @(
     $wslOwnedExecutable
 )
 $ownedExpectedPath = Join-Path $repoRoot `
-    "examples\expected\396-selfhost-llvm-owned-try-parallel-cleanup.stdout.llvm.linux.execute.txt"
+    "examples\regression\expected\396-selfhost-llvm-owned-try-parallel-cleanup.stdout.llvm.linux.execute.txt"
 $ownedExpected = ([System.IO.File]::ReadAllText($ownedExpectedPath)).TrimEnd("`r", "`n")
 if ($ownedActual -ne $ownedExpected) {
     throw "Owned tryParallel execution mismatch.`nEXPECTED:`n$ownedExpected`nACTUAL:`n$ownedActual"

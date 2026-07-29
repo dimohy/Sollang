@@ -86,13 +86,13 @@ main {
     numbers[0] => first
     numbers -> len => count
 
-    [10, 20, ~] => values!
+    [10, 20; ~] => values!
     values! -> push(30)
     values![2] => third
     99 => values![1]
     values! -> capacity => capacity
 
-    [10, 20, ~] => values
+    [10, 20; ~] => values
     values -> append(30) => values
     values -> updated(0, 99) => values
 
@@ -111,8 +111,10 @@ Supported now:
 - `[1, 2, 3]` creates an owned fixed-size `Int` array stored inline in the
   owner.
 - `[0; 8]` creates a repeated fixed-size `Int` array.
-- `[1, 2, ~]`, `[Int; ~]`, and `[Int; 1024~]` create owned growable `Int`
-  arrays.
+- `[value,; ~]`, `[1, 2; ~]`, `[Int; ~]`, and `[Int; 1024~]` create owned
+  growable arrays. The trailing comma in `[value,; ~]` is required so a
+  one-element value array cannot be confused with the typed-empty `[T; ~]`
+  form.
 - `{ 1: 100, 2: 200 }` and `{Int: Int}` create owned `{Int: Int}`
   dictionaries.
 - `value => name!` creates a mutable owner binding needed by mutating container
@@ -263,7 +265,7 @@ Rust `Vec<T>`-like, but the Sollang source surface uses array syntax:
 
 ```sollang
 [Int; ~] => values!
-[10, 20, ~] => seeded!
+[10, 20; ~] => seeded!
 values! -> push(10)
 values! -> push(20)
 values! -> len => count
@@ -355,7 +357,7 @@ The type form is:
 The literal form uses an open tail marker:
 
 ```sollang
-[1, 2, 3, ~] => values!
+[1, 2, 3; ~] => values!
 ```
 
 The `~` marker means the sequence is not a closed fixed-size value anymore; it
@@ -460,7 +462,7 @@ Immutable bindings can still produce changed values by moving the owner into a
 new owner:
 
 ```sollang
-[1, 2, ~] => values
+[1, 2; ~] => values
 values -> append(3) => values
 values -> updated(0, 9) => values
 
@@ -660,7 +662,7 @@ Drop rules:
 Moving an owned array transfers the obligation to drop it:
 
 ```sollang
-[1, 2, 3, ~] => values!
+[1, 2, 3; ~] => values!
 values! -> takeArray => result
 
 # values! is moved and cannot be used or dropped here
@@ -729,7 +731,7 @@ makeView: -> [Int] {
 Mutating a dynamic array while a slice borrow is live is rejected:
 
 ```sollang
-[1, 2, 3, ~] => values!
+[1, 2, 3; ~] => values!
 values! -> slice => view
 values! -> push(4)
 ```
@@ -740,7 +742,7 @@ The `push` can reallocate the heap buffer, so the compiler must reject it while
 Moving and then using the moved binding is rejected:
 
 ```sollang
-[1, 2, 3, ~] => values!
+[1, 2, 3; ~] => values!
 values! -> consume
 values! -> len => count
 ```

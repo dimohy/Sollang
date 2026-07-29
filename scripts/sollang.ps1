@@ -1,5 +1,5 @@
 param(
-    [string]$Source = "examples/01-function-basic-hello.slg",
+    [string]$Source = "examples/regression/01-function-basic-hello.slg",
     [string]$SourcesFile,
     [string]$Output,
     [ValidateSet("windows-x64", "linux-x64", "wasm32-browser")]

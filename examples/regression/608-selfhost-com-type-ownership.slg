@@ -1,0 +1,30 @@
+import sollang.compiler.semantic.analysis as analysis
+import sollang.compiler.semantic.type_ids as typeIds
+
+main {
+    """
+    com fixture class "11111111-2222-3333-4444-555555555555" in mta {
+        interface Calculator "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee" {
+            add left: Int32 -> Result<Int32, Int32> at 3
+        }
+    }
+
+    main {
+    }
+    """ => source
+    [source,; ~] => sources!
+    sources! -> analysis.analyze => package
+    package -> typeIds.resolveAnalyzed => resolved
+    typeIds.TypeClassificationRequest {
+        types: resolved.types
+        fields: resolved.fields
+    } -> typeIds.classify => traits!
+    0 => typeIndex!
+    typeIndex! < (resolved.types -> len) -> while {
+        resolved.types[typeIndex!] => semanticType
+        (semanticType.kind == 9 and semanticType.origin == 0) -> if {
+            "COM type = $(semanticType.module),$(semanticType.symbol),$(traits![typeIndex!])" -> println
+        }
+        typeIndex! + 1 => typeIndex!
+    }
+}

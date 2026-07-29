@@ -1,0 +1,28 @@
+import sollang.compiler.ir.typed as typedIr
+
+main {
+    [
+        """
+        native fixture from "native_fixture" {
+            add left: Int32, right: Int32 -> Int32 as "native_add"
+            scale value: Float64, factor: Float64 -> Float64 as "native_scale"
+        }
+        """,
+        """
+        main {
+            fixture.add(20, 22) => answer
+            fixture.scale(1.5, 4) => scaled
+            "$answer,$scaled" -> println
+        }
+        """; ~
+    ] => sources!
+    sources! -> typedIr.lower => ir!
+    0 => nodeIndex!
+    nodeIndex! < (ir! -> len) -> while {
+        ir![nodeIndex!] => node
+        (node.kind == 0 or node.kind == 3 or node.kind == 6 or node.kind == 7 or node.kind == 17) -> if {
+            "native fragment IR = $(nodeIndex!),$(node.kind),$(node.sourceModule),$(node.symbol),$(node.targetModule),$(node.typeKind),$(node.typeId),$(node.typeOrigin),$(node.typeSymbol),$(node.operand0),$(node.operand1),$(node.nextOperand)" -> println
+        }
+        nodeIndex! + 1 => nodeIndex!
+    }
+}

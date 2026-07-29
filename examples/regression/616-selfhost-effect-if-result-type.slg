@@ -1,0 +1,25 @@
+import sollang.compiler.ir.typed as typedIr
+
+main {
+    [
+        """
+        main {
+            true -> if {
+                "value = $(1)" -> println
+            } else {
+                "fallback = $(2)" -> println
+            }
+        }
+        """; ~
+    ] => sources!
+    sources! -> typedIr.lower => ir!
+    ir! -> each node {
+        (node.sourceModule == 0 and node.kind == 18) -> if {
+            ir![node.operand1] => thenRegion
+            ir![node.nextOperand] => elseRegion
+            ir![thenRegion.operand0] => thenExpression
+            ir![elseRegion.operand0] => elseExpression
+            "effect if = $(node.typeOrigin),$(node.typeSymbol),$(thenExpression.typeOrigin),$(thenExpression.typeSymbol),$(elseExpression.typeOrigin),$(elseExpression.typeSymbol)" -> println
+        }
+    }
+}

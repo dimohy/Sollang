@@ -4,7 +4,7 @@ param()
 $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $compiler = Join-Path $repoRoot "src/Sollang.Compiler/bin/Release/net11.0/Sollang.Compiler.dll"
-$manifest = Join-Path $repoRoot "examples/expected/613-selfhost-com-runtime.sources.txt"
+$manifest = Join-Path $repoRoot "examples/regression/expected/613-selfhost-com-runtime.sources.txt"
 $outputRoot = Join-Path $repoRoot "artifacts/llvm-emitter-split-abi"
 $output = Join-Path $outputRoot "generator.exe"
 $temporary = [IO.Path]::ChangeExtension($output, ".slg-tmp")

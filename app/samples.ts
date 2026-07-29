@@ -43,7 +43,7 @@ square number: Int -> Int {
 }
 
 main {
-    getName => name
+    getName() => name
     7 -> square => result
     "$name says square = $result" -> println
 }`
@@ -201,7 +201,7 @@ main {
     category: "containers",
     input: "",
     code: `main {
-    [1, 2, 3, ~] => numbers!
+    [1, 2, 3; ~] => numbers!
     numbers! -> len => count
     numbers! -> fold 0 total, value {
         total + value
@@ -217,8 +217,8 @@ main {
     category: "containers",
     input: "",
     code: `main {
-    [1, 2, ~] => initial
-    [9, 2, 3, ~] => values
+    [1, 2; ~] => initial
+    [9, 2, 3; ~] => values
     values -> len => count
     values -> fold 0 sum, item {
         sum + item
@@ -252,16 +252,6 @@ main {
     input: "",
     code: `struct Counter {
     value: Int
-}
-
-impl Counter {
-    increment: mut self -> Unit {
-        self.value + 1 => self.value
-    }
-
-    take: move self -> Int {
-        self.value
-    }
 }
 
 main {
@@ -314,7 +304,7 @@ main {
   },
   {
     id: "traits-generics",
-    title: "Traits and checked generics",
+    title: "Trait declaration and implementation",
     category: "types",
     input: "",
     code: `struct Point {
@@ -330,12 +320,6 @@ impl Measure for Point {
     measure: self -> Int {
         self.x + self.y
     }
-}
-
-identity<T> value: T -> T => value
-
-measureOf<T: Measure> value: T -> Int {
-    value -> Measure.measure
 }
 
 main {
@@ -366,10 +350,6 @@ impl Source for NumberSource {
     }
 }
 
-sourceInt<T: Source<Item = Int>> value: T -> Int {
-    value -> Source.read
-}
-
 main {
     NumberSource { value: 42 } => source
     source.value => answer
@@ -381,7 +361,7 @@ main {
     title: "Compile-time value generics",
     category: "advanced",
     input: "",
-    code: `keep<N: Int> value: Int -> Int => value
+    code: `keep<N> value: Int -> Int where N: Int => value
 
 main {
     7 => kept
@@ -414,13 +394,13 @@ main {
     value * value
 }
 
-answer: -> async Int {
-    42
+answer value: Int -> async Int {
+    value
 }
 
 main {
     6 -> square -> await => squared
-    answer -> await => value
+    42 -> answer -> await => value
     "Async values = $squared, $value" -> println
 }`
   },
@@ -480,7 +460,7 @@ main {
     category: "containers",
     input: "",
     code: `main {
-    [1, 2, 3, 4, 5, ~] => numbers
+    [1, 2, 3, 4, 5; ~] => numbers
     numbers -> fold 0 sum, item {
         sum + item
     } => total
@@ -733,8 +713,8 @@ const descriptions: Record<Locale, Record<string, string>> = {
     struct: "Nominal structs, Self returns, member access, and impl methods.",
     "mutable-method": "Update a mutable struct field and print the value produced by two updates.",
     enum: "Declare payload and payload-free enum variants.",
-    "traits-generics": "Declare an implementation, an unconstrained generic, and a trait-bounded generic.",
-    "associated-types": "Constrain a trait associated type and infer the concrete result.",
+    "traits-generics": "Declare a trait implementation and use the same concrete data in main.",
+    "associated-types": "Declare a trait associated type and use its concrete source value in main.",
     "value-generics": "Declare an Int-valued compile-time generic parameter.",
     "result-propagation": "Match a Result payload and print the value selected by the matching arm.",
     "async-await": "Suspend and resume checked async functions with structured await.",
@@ -766,8 +746,8 @@ const descriptions: Record<Locale, Record<string, string>> = {
     struct: "명목 구조체, Self 반환, 멤버 접근, impl 메서드를 보여줍니다.",
     "mutable-method": "가변 구조체 필드를 두 번 갱신하고 실제 결과를 출력합니다.",
     enum: "페이로드가 있는 variant와 없는 variant를 선언합니다.",
-    "traits-generics": "구현, 일반 제네릭, trait 제약 제네릭을 선언합니다.",
-    "associated-types": "trait 연관 타입을 제한하고 구체 결과 타입을 추론합니다.",
+    "traits-generics": "trait 구현을 선언하고 main에서 같은 구체 데이터를 사용합니다.",
+    "associated-types": "trait 연관 타입을 선언하고 main에서 구체 소스 값을 사용합니다.",
     "value-generics": "Int 값을 받는 컴파일타임 제네릭 매개변수를 선언합니다.",
     "result-propagation": "Result 페이로드를 패턴 매칭하고 선택된 실제 값을 출력합니다.",
     "async-await": "구조화된 await로 검사된 비동기 함수를 중단하고 재개합니다.",
@@ -799,8 +779,8 @@ const descriptions: Record<Locale, Record<string, string>> = {
     struct: "構造体、Self、メンバーアクセス、impl メソッドの例です。",
     "mutable-method": "可変構造体フィールドを2回更新し、実際の値を出力します。",
     enum: "ペイロード有無の enum バリアントを宣言します。",
-    "traits-generics": "実装、通常ジェネリック、trait 制約ジェネリックを宣言します。",
-    "associated-types": "関連型を制約し、具体的な結果を推論します。",
+    "traits-generics": "trait 実装を宣言し、main で同じ具体データを使用します。",
+    "associated-types": "trait の関連型を宣言し、main で具体的なソース値を使用します。",
     "value-generics": "Int 値のコンパイル時ジェネリック引数を宣言します。",
     "result-propagation": "Result のペイロードを照合し、選択された値を出力します。",
     "async-await": "構造化 await で検査済み async 関数を中断・再開します。",
@@ -832,8 +812,8 @@ const descriptions: Record<Locale, Record<string, string>> = {
     struct: "名义结构体、Self 返回、成员访问与 impl 方法。",
     "mutable-method": "两次更新可变结构体字段并输出实际值。",
     enum: "声明带载荷和不带载荷的 enum 变体。",
-    "traits-generics": "声明实现、普通泛型和带 trait 约束的泛型。",
-    "associated-types": "约束 trait 关联类型并推断具体结果。",
+    "traits-generics": "声明 trait 实现，并在 main 中使用同一具体数据。",
+    "associated-types": "声明 trait 关联类型，并在 main 中使用具体源值。",
     "value-generics": "声明接收 Int 值的编译期泛型参数。",
     "result-propagation": "匹配 Result 载荷并输出所选分支的实际值。",
     "async-await": "通过结构化 await 暂停并恢复经过检查的异步函数。",
@@ -869,7 +849,7 @@ const localizedTitles: Record<Exclude<Locale, "en">, Record<string, string>> = {
     struct: "구조체 투영",
     "mutable-method": "가변 구조체 필드",
     enum: "페이로드 enum",
-    "traits-generics": "trait와 제네릭",
+    "traits-generics": "trait 구현",
     "numeric-widths": "고정 폭 숫자 타입",
     "associated-types": "연관 타입",
     "value-generics": "컴파일타임 값 제네릭",
@@ -902,7 +882,7 @@ const localizedTitles: Record<Exclude<Locale, "en">, Record<string, string>> = {
     struct: "構造体の投影",
     "mutable-method": "可変構造体フィールド",
     enum: "ペイロード enum",
-    "traits-generics": "trait とジェネリック",
+    "traits-generics": "trait 実装",
     "numeric-widths": "固定幅数値型",
     "associated-types": "関連型",
     "value-generics": "コンパイル時値ジェネリック",
@@ -935,7 +915,7 @@ const localizedTitles: Record<Exclude<Locale, "en">, Record<string, string>> = {
     struct: "结构体投影",
     "mutable-method": "可变结构体字段",
     enum: "带载荷的 enum",
-    "traits-generics": "trait 与泛型",
+    "traits-generics": "trait 实现",
     "numeric-widths": "定宽数值类型",
     "associated-types": "关联类型",
     "value-generics": "编译期值泛型",

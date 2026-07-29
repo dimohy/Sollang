@@ -11,6 +11,8 @@ $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $project = Join-Path $repoRoot "src\Sollang.Compiler\Sollang.Compiler.csproj"
 $packageVersion = $Version
+$versionParts = $Version.Split('.')
+$nativeOnly = [int]$versionParts[0] -gt 0 -or [int]$versionParts[1] -ge 4
 if ([string]::IsNullOrWhiteSpace($OutputRoot)) {
     $OutputRoot = Join-Path $repoRoot "artifacts\release\$Version"
 }
@@ -33,47 +35,92 @@ function New-ReleasePackage {
 
     $packageName = "sollang-$Version-$PlatformName"
     $packageRoot = Join-Path $stagingRoot $packageName
-    Write-Host "[release $PlatformName 1/3] Publish self-contained compiler."
-    dotnet publish $project -c Release -r $Runtime --self-contained true `
-        -p:PublishSingleFile=true `
-        -p:DebugType=None `
-        -p:DebugSymbols=false `
-        -p:AssemblyName=sollang `
-        -p:PackageVersion=$packageVersion `
-        -p:InformationalVersion=$packageVersion `
-        -o $packageRoot | Out-Host
-    if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed for $Runtime" }
+    $executableName = if ($Runtime -eq "win-x64") { "sollang.exe" } else { "sollang" }
+    $stage3Source = if ($Runtime -eq "win-x64") { $WindowsStage3Path } else { $LinuxStage3Path }
+
+    if ($nativeOnly) {
+        Write-Host "[release $PlatformName 1/4] Stage fixed-point native compiler."
+        if (-not (Test-Path -LiteralPath $stage3Source -PathType Leaf)) {
+            throw "verified native compiler is missing: $stage3Source"
+        }
+        New-Item -ItemType Directory -Path $packageRoot -Force | Out-Null
+        Copy-Item -LiteralPath $stage3Source -Destination (Join-Path $packageRoot $executableName)
+    } else {
+        Write-Host "[release $PlatformName 1/3] Publish self-contained compiler."
+        dotnet publish $project -c Release -r $Runtime --self-contained true `
+            -p:PublishSingleFile=true `
+            -p:DebugType=None `
+            -p:DebugSymbols=false `
+            -p:AssemblyName=sollang `
+            -p:PackageVersion=$packageVersion `
+            -p:InformationalVersion=$packageVersion `
+            -o $packageRoot | Out-Host
+        if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed for $Runtime" }
+    }
 
     Copy-Item (Join-Path $repoRoot "stdlib") (Join-Path $packageRoot "stdlib") -Recurse
     Copy-Item (Join-Path $repoRoot "README.md") $packageRoot
     Copy-Item (Join-Path $repoRoot "LICENSE") $packageRoot
-    Copy-Item (Join-Path $repoRoot "Sollang.slnx") $packageRoot
-    $packageDocs = Join-Path $packageRoot "docs"
-    New-Item -ItemType Directory -Path $packageDocs -Force | Out-Null
-    Copy-Item (Join-Path $repoRoot "docs\STAGE3_COMPILER.md") $packageDocs
-    $stage3Source = if ($Runtime -eq "win-x64") { $WindowsStage3Path } else { $LinuxStage3Path }
-    $stage3Name = if ($Runtime -eq "win-x64") { "sollangc-stage3.exe" } else { "sollangc-stage3" }
-    if (-not (Test-Path -LiteralPath $stage3Source -PathType Leaf)) {
-        throw "verified Stage 3 compiler is missing: $stage3Source"
+    if (-not $nativeOnly) {
+        Copy-Item (Join-Path $repoRoot "Sollang.slnx") $packageRoot
+        $packageDocs = Join-Path $packageRoot "docs"
+        New-Item -ItemType Directory -Path $packageDocs -Force | Out-Null
+        Copy-Item (Join-Path $repoRoot "docs\STAGE3_COMPILER.md") $packageDocs
+        $stage3Name = if ($Runtime -eq "win-x64") { "sollangc-stage3.exe" } else { "sollangc-stage3" }
+        if (-not (Test-Path -LiteralPath $stage3Source -PathType Leaf)) {
+            throw "verified Stage 3 compiler is missing: $stage3Source"
+        }
+        Copy-Item -LiteralPath $stage3Source -Destination (Join-Path $packageRoot $stage3Name)
     }
-    Copy-Item -LiteralPath $stage3Source -Destination (Join-Path $packageRoot $stage3Name)
 
-    Write-Host "[release $PlatformName 2/3] Verify package contents."
-    $executableName = if ($Runtime -eq "win-x64") { "sollang.exe" } else { "sollang" }
+    $verifyStep = if ($nativeOnly) { "2/4" } else { "2/3" }
+    Write-Host "[release $PlatformName $verifyStep] Verify package contents."
     $required = @(
         (Join-Path $packageRoot $executableName),
         (Join-Path $packageRoot "stdlib\sys\io.slg"),
         (Join-Path $packageRoot "README.md"),
-        (Join-Path $packageRoot "LICENSE"),
-        (Join-Path $packageRoot "Sollang.slnx"),
-        (Join-Path $packageRoot "docs\STAGE3_COMPILER.md"),
-        (Join-Path $packageRoot $stage3Name)
+        (Join-Path $packageRoot "LICENSE")
     )
+    if (-not $nativeOnly) {
+        $required += @(
+            (Join-Path $packageRoot "Sollang.slnx"),
+            (Join-Path $packageRoot "docs\STAGE3_COMPILER.md"),
+            (Join-Path $packageRoot $stage3Name)
+        )
+    }
     foreach ($path in $required) {
         if (-not (Test-Path -LiteralPath $path)) { throw "release package is missing $path" }
     }
 
-    Write-Host "[release $PlatformName 3/3] Archive package."
+    if ($nativeOnly) {
+        $forbidden = Get-ChildItem -LiteralPath $packageRoot -Recurse -File | Where-Object {
+            $_.Name -match '\.(dll|deps\.json|runtimeconfig\.json|pdb)$' -or
+            $_.Name -like 'sollangc-stage*'
+        }
+        if ($forbidden) {
+            throw "0.4 native-only package contains forbidden bootstrap artifacts: $($forbidden.FullName -join ', ')"
+        }
+        $sourceHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $stage3Source).Hash
+        $packageHash = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $packageRoot $executableName)).Hash
+        if ($sourceHash -ne $packageHash) {
+            throw "packaged compiler hash differs from the verified native compiler"
+        }
+
+        Write-Host "[release $PlatformName 3/4] Verify native CLI version contract."
+        if ($Runtime -eq "win-x64") {
+            $versionOutput = & (Join-Path $packageRoot $executableName) --version
+        } else {
+            $wslExecutable = (& wsl.exe wslpath -a (Join-Path $packageRoot $executableName)).Trim()
+            if ($LASTEXITCODE -ne 0) { throw "could not map the Linux compiler path through WSL" }
+            $versionOutput = & wsl.exe -- $wslExecutable --version
+        }
+        if ($LASTEXITCODE -ne 0 -or ($versionOutput -join "`n").Trim() -ne "Sollang $Version") {
+            throw "native compiler does not preserve `sollang --version`: expected 'Sollang $Version'"
+        }
+    }
+
+    $archiveStep = if ($nativeOnly) { "4/4" } else { "3/3" }
+    Write-Host "[release $PlatformName $archiveStep] Archive package."
     if ($Runtime -eq "win-x64") {
         $archive = Join-Path $OutputRoot "$packageName.zip"
         Compress-Archive -Path $packageRoot -DestinationPath $archive -CompressionLevel Optimal

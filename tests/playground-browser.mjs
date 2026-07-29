@@ -79,6 +79,65 @@ try {
       `syntax catalog mismatch\nexpected ${JSON.stringify(expectedSampleIds)}\nactual   ${JSON.stringify(sampleIds)}`
     );
   }
+
+  const longEditorSource = [
+    "main {",
+    ...Array.from({ length: 120 }, (_, index) =>
+      `    # scroll verification line ${index + 1}`),
+    '    "scroll verification" -> println',
+    "}"
+  ].join("\n");
+  await page.locator(".monaco-editor").evaluate((node, source) => {
+    window.monaco.editor.getModels()[0]?.setValue(source);
+    window.monaco.editor.getEditors()[0]?.setScrollTop(0);
+    node.scrollIntoView({ block: "center" });
+  }, longEditorSource);
+  await page.locator(".monaco-editor").hover();
+  await page.mouse.wheel(0, 480);
+  await page.waitForFunction(() =>
+    (window.monaco.editor.getEditors()[0]?.getScrollTop() ?? 0) > 0
+  );
+  const wheelScrollTop = await page.locator(".monaco-editor").evaluate(() =>
+    window.monaco.editor.getEditors()[0]?.getScrollTop() ?? 0
+  );
+  await page.locator(".monaco-editor").evaluate(node => {
+    const editor = window.monaco.editor.getEditors()[0];
+    editor?.setScrollTop(0);
+    const touch = clientY => new Touch({
+      identifier: 1,
+      target: node,
+      clientX: 120,
+      clientY,
+      pageX: 120,
+      pageY: clientY,
+      screenX: 120,
+      screenY: clientY
+    });
+    node.dispatchEvent(new TouchEvent("touchstart", {
+      bubbles: true,
+      cancelable: true,
+      touches: [touch(420)],
+      targetTouches: [touch(420)],
+      changedTouches: [touch(420)]
+    }));
+    node.dispatchEvent(new TouchEvent("touchmove", {
+      bubbles: true,
+      cancelable: true,
+      touches: [touch(180)],
+      targetTouches: [touch(180)],
+      changedTouches: [touch(180)]
+    }));
+  });
+  const touchScrollTop = await page.locator(".monaco-editor").evaluate(() =>
+    window.monaco.editor.getEditors()[0]?.getScrollTop() ?? 0
+  );
+  if (wheelScrollTop <= 0 || touchScrollTop <= 0) {
+    throw new Error(
+      `editor scrolling failed: wheel=${wheelScrollTop}, touch=${touchScrollTop}`
+    );
+  }
+  await page.locator("#sample").selectOption("hello");
+
   const whileTokens = await page.locator(".monaco-editor").evaluate(() =>
     window.monaco.editor.tokenize("count! < 8 -> while {", "sollang")[0]
   );
@@ -231,7 +290,10 @@ try {
     await context.close();
   }
 
-  console.log(`PASS browser playground (${sampleIds.length} samples, 4 locales, ${tokenColors} syntax colors)`);
+  console.log(
+    `PASS browser playground (${sampleIds.length} samples, 4 locales, `
+    + `${tokenColors} syntax colors, wheel=${wheelScrollTop}, touch=${touchScrollTop})`
+  );
 } finally {
   await browser.close();
 }
