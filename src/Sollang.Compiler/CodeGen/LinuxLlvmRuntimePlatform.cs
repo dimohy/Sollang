@@ -69,6 +69,7 @@ internal sealed class LinuxLlvmRuntimePlatform : LlvmRuntimePlatform
         functions.AppendLine("declare i32 @waitpid(i32, ptr, i32)");
         if (UsesDirectoryTraversal)
         {
+            functions.AppendLine("declare i32 @mkdir(ptr, i32)");
             functions.AppendLine("declare ptr @opendir(ptr)");
             functions.AppendLine("declare ptr @readdir(ptr)");
             functions.AppendLine("declare i32 @closedir(ptr)");
@@ -1972,6 +1973,48 @@ internal sealed class LinuxLlvmRuntimePlatform : LlvmRuntimePlatform
     {
         EmitDirectoryNodePrimitives(functions);
         functions.AppendLine("""
+            define internal i32 @sollang_platform_create_directory(ptr %path, i64 %len, i32 %style) #0 {
+            entry:
+              %style_ok = icmp eq i32 %style, 0
+              br i1 %style_ok, label %prepare, label %fail
+
+            prepare:
+              %buffer_size = add i64 %len, 1
+              %buffer = call ptr @sollang_alloc(i64 %buffer_size)
+              %buffer_ok = icmp ne ptr %buffer, null
+              br i1 %buffer_ok, label %copy, label %fail
+
+            copy:
+              call void @llvm.memcpy.p0.p0.i64(ptr %buffer, ptr %path, i64 %len, i1 false)
+              %zero = getelementptr i8, ptr %buffer, i64 %len
+              store i8 0, ptr %zero, align 1
+              %created = call i32 @mkdir(ptr %buffer, i32 493)
+              %created_ok = icmp eq i32 %created, 0
+              br i1 %created_ok, label %success_free, label %inspect_existing
+
+            inspect_existing:
+              %stat_buffer = alloca [144 x i8], align 8
+              %stat_result = call i32 @stat(ptr %buffer, ptr %stat_buffer)
+              %stat_ok = icmp eq i32 %stat_result, 0
+              %mode_ptr = getelementptr i8, ptr %stat_buffer, i64 24
+              %mode = load i32, ptr %mode_ptr, align 4
+              %type = and i32 %mode, 61440
+              %is_directory = icmp eq i32 %type, 16384
+              %exists_as_directory = and i1 %stat_ok, %is_directory
+              br i1 %exists_as_directory, label %success_free, label %fail_free
+
+            success_free:
+              call void @sollang_free(ptr %buffer)
+              ret i32 1
+
+            fail_free:
+              call void @sollang_free(ptr %buffer)
+              br label %fail
+
+            fail:
+              ret i32 0
+            }
+
             define internal %sollang.directory_result @sollang_platform_read_directory(ptr %path, i64 %len, i32 %style) #0 {
             entry:
               %style_ok = icmp eq i32 %style, 0

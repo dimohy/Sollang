@@ -252,6 +252,9 @@ internal sealed partial class LlvmEmitter
                     case BoundFunctionKind.RuntimeReadDirectory:
                         current = EmitRuntimeReadDirectory(function, current);
                         continue;
+                    case BoundFunctionKind.RuntimeCreateDirectory:
+                        current = EmitRuntimeCreateDirectory(function, current);
+                        continue;
                     case BoundFunctionKind.RuntimePathQuery:
                         current = EmitRuntimePathQuery(function, current);
                         continue;

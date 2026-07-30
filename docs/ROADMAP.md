@@ -119,6 +119,8 @@ the compiler.
 
 Current verified implementation slices:
 
+- [x] Cross-platform `sys.directory.create` intrinsic for compiler-owned output
+  directories, including native self-host lowering and Stage 2 execution.
 - [x] Native `--version`, help, explicit-source, project-directory with
   `--product`, and workspace-package `build`, plus `run`.
 - [x] Transitive local path-dependency source closure for selected products.
@@ -132,11 +134,11 @@ Current verified implementation slices:
 The current Windows and Linux native compilers pass their 7/7 and 6/6 Stage 2
 gates and reproduce at Stage 3. The source/project/local-dependency/workspace
 CLI matrix passes 10/10 and the formatter matrix passes 11/11 on both
-fixed-point compilers. The full platform suites now pass 905/905 Windows cases
-and 904/904 Linux-applicable cases. The fixed-point LLVM hashes are
-`2593D82C61F36E056710262BAB80D35065BF01836FB662D288D62FA7E7A24491`
+fixed-point compilers. The full platform suites now pass 906/906 Windows cases
+and 905/905 Linux-applicable cases. The fixed-point LLVM hashes are
+`9DC3E4DC3D3F78A3B2A9401916EBBF1B871C0A04E84DCE63F616B1044A599884`
 for Windows and
-`9A8461F01035385F4A1554241CA9EC7418D0122786151811EF9970B2AA11BEAB`
+`7D42508B04E6DA0EA3FDEED819ED974E5D1FD61A00CEADEB146C96DC0B4D3B05`
 for Linux. These partial CLI results deliberately do not create the
 `native-cli-full-parity` proof required by `publish-release.ps1`, so a 0.4
 archive cannot be produced prematurely.

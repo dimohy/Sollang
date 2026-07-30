@@ -2592,6 +2592,10 @@ internal sealed partial class SemanticCompiler
                 function,
                 inputType,
                 returnType),
+            "sys.directory.create" => RequireCreateDirectorySignature(
+                function,
+                inputType,
+                returnType),
             "sys.file.write" => RequireGenericScalarWriteSignature(
                 function,
                 inputType,
@@ -2745,6 +2749,23 @@ internal sealed partial class SemanticCompiler
         }
 
         return BoundFunctionKind.RuntimeReadDirectory;
+    }
+
+    private BoundFunctionKind RequireCreateDirectorySignature(
+        FunctionDeclaration function,
+        BoundType? inputType,
+        BoundType returnType)
+    {
+        if (inputType is not { } pathType
+            || !_types.IsStruct(pathType)
+            || _types.GetStruct(pathType).Name != "sys.path.Path"
+            || returnType != BoundType.Bool)
+        {
+            throw Error(function.Line, function.Column,
+                $"intrinsic '{function.Name}' must have signature Path -> Bool");
+        }
+
+        return BoundFunctionKind.RuntimeCreateDirectory;
     }
 
     private BoundFunctionKind RequirePathQuerySignature(
@@ -7183,6 +7204,7 @@ internal sealed partial class SemanticCompiler
                     case BoundFunctionKind.RuntimeRunProcess:
                     case BoundFunctionKind.RuntimeRunProcessToFile:
                     case BoundFunctionKind.RuntimeReadDirectory:
+                    case BoundFunctionKind.RuntimeCreateDirectory:
                     case BoundFunctionKind.RuntimePathQuery:
                     case BoundFunctionKind.RuntimeSyncFile:
                     case BoundFunctionKind.RuntimeAtomicReplaceFile:
@@ -8354,6 +8376,7 @@ internal sealed partial class SemanticCompiler
                 EnsureRuntimeInput(argvType, function, expression.Arguments[0].Line, expression.Arguments[0].Column, path);
                 return function.ReturnType;
             case BoundFunctionKind.RuntimeReadDirectory:
+            case BoundFunctionKind.RuntimeCreateDirectory:
             case BoundFunctionKind.RuntimePathQuery:
             case BoundFunctionKind.RuntimeRangeStream:
                 if (expression.Arguments.Count != 1)

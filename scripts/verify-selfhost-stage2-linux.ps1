@@ -27,6 +27,7 @@ $compilerRuntimeSources = Get-Content $runtimeManifestPath |
 $singleSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-single-smoke.slg"
 $multiLibrarySource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-library-smoke.slg"
 $multiMainSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-main-smoke.slg"
+$directoryCreateSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-directory-create.slg"
 $borrowConflictSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-borrow-conflict.slg"
 $borrowUnionConflictSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-borrow-union-conflict.slg"
 $borrowAliasConflictSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-borrow-alias-conflict.slg"
@@ -47,7 +48,7 @@ $referenceStoredArraySource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fi
 $referenceEnumEscapeSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-reference-enum-escape.slg"
 $referenceArrayEscapeSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-reference-array-escape.slg"
 $borrowSourceRuntime = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-borrow-source.slg"
-$expectedStage2Bytes = 18895039L
+$expectedStage2Bytes = 19994874L
 
 New-Item -ItemType Directory -Force -Path $artifactsDir | Out-Null
 
@@ -132,7 +133,7 @@ function Build-And-ExecuteLinuxLlvm {
     if ($LASTEXITCODE -ne 0) { throw "Linux object generation failed for $Name" }
     & wsl.exe -d $Distribution -- gcc (Convert-ToWslPath $objectPath) -o (Convert-ToWslPath $executablePath)
     if ($LASTEXITCODE -ne 0) { throw "Linux link failed for $Name" }
-    $actual = (& wsl.exe -d $Distribution -- (Convert-ToWslPath $executablePath) | Out-String).TrimEnd("`r", "`n")
+    $actual = (& wsl.exe -d $Distribution -- (Convert-ToWslPath $executablePath) | Out-String).Replace("`r`n", "`n").TrimEnd("`n")
     if ($LASTEXITCODE -ne 0 -or $actual -ne $Expected) {
         throw "Linux execution failed for $Name`: expected '$Expected', actual '$actual'"
     }
@@ -146,6 +147,24 @@ Write-Host "[linux-stage2 1/6] Bootstrap or reuse the native stage-1 compiler."
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 if (-not (Test-Path $stage1Path)) { throw "stage-1 compiler was not produced: $stage1Path" }
 Write-Host "[linux-stage2 1/6] PASS native stage 1."
+
+$directoryCreateTarget = Join-Path $artifactsDir "stage2-directory-create"
+if (Test-Path -LiteralPath $directoryCreateTarget) {
+    Remove-Item -LiteralPath $directoryCreateTarget -Recurse -Force
+}
+$directoryCreateLlvm = Join-Path $artifactsDir "linux-stage2-check-directory-create.ll"
+$directoryCreateError = Join-Path $artifactsDir "linux-stage2-check-directory-create.err"
+$directoryCreateProcess = Invoke-ProcessToFile `
+    $stage1Path `
+    (@("linux", $directoryCreateSource) + $compilerRuntimeSources) `
+    $directoryCreateLlvm `
+    $directoryCreateError
+Assert-ProcessSucceeded $directoryCreateProcess $directoryCreateError "Linux stage-1 directory creation emission"
+Build-And-ExecuteLinuxLlvm $directoryCreateLlvm "linux-stage2-check-directory-create" "created`nexists"
+if (-not (Test-Path -LiteralPath $directoryCreateTarget -PathType Container)) {
+    throw "Linux directory creation did not create $directoryCreateTarget"
+}
+Write-Host "[linux-stage2 1/6] PASS directory creation and existing-directory idempotence."
 
 Write-Host "[linux-stage2 2/6] Build or reuse the complete Linux stage-2 compiler."
 if (Test-Stage2IsCurrent) {

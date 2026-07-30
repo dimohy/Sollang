@@ -781,6 +781,38 @@ internal sealed partial class LlvmEmitter
             [(success, successExit), (failure, errorExit)]);
     }
 
+    private RuntimeBool EmitRuntimeCreateDirectory(BoundFunction function, RuntimeValue argument)
+    {
+        if (argument is not RuntimeStruct path
+            || !_program.Types.IsStruct(path.Type)
+            || _program.Types.GetStruct(path.Type) is not { Name: "sys.path.Path" } pathDefinition)
+        {
+            throw new SollangException($"{function.Name} expects sys.path.Path");
+        }
+
+        var bytesField = pathDefinition.Fields.First(field => field.Name == "bytes");
+        var styleField = pathDefinition.Fields.First(field => field.Name == "style");
+        var bytesAggregate = NextTemp("create_directory_input_bytes");
+        EmitAssign(bytesAggregate,
+            $"extractvalue {LlvmStructType(path.Type)} {path.ValueName}, {bytesField.Index.ToString(CultureInfo.InvariantCulture)}");
+        if (DematerializeAggregateValue(bytesField.Type, bytesAggregate) is not RuntimeDynamicInlineArray bytes
+            || bytes.ElementType != BoundType.UInt8)
+        {
+            throw new SollangException("sys.path.Path.bytes must be [UInt8; ~]");
+        }
+        var styleAggregate = NextTemp("create_directory_input_style");
+        EmitAssign(styleAggregate,
+            $"extractvalue {LlvmStructType(path.Type)} {path.ValueName}, {styleField.Index.ToString(CultureInfo.InvariantCulture)}");
+        var styleTag = NextTemp("create_directory_input_style_tag");
+        EmitAssign(styleTag, $"extractvalue {LlvmEnumType(styleField.Type)} {styleAggregate}, 0");
+        var status = NextTemp("create_directory_status");
+        EmitCall(status, "i32", "sollang_platform_create_directory",
+            $"ptr {bytes.PointerName}, i64 {bytes.LengthName}, i32 {styleTag}");
+        var succeeded = NextTemp("create_directory_succeeded");
+        EmitCompare(succeeded, "sgt", "i32", status, "0");
+        return new RuntimeBool(succeeded);
+    }
+
     private RuntimeTask EmitRuntimeOpenFileAsync(BoundFunction function, RuntimeValue argument)
     {
         var path = argument as RuntimeText

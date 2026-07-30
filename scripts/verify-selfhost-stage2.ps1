@@ -23,6 +23,7 @@ $multiLibrarySource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\s
 $multiMainSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-main-smoke.slg"
 $groupedNotSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-grouped-not-smoke.slg"
 $fileIntrinsicsControlSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-file-intrinsics-control.slg"
+$directoryCreateSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-directory-create.slg"
 $runtimeEprintlnSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\runtime-eprintln.slg"
 $runtimeEprintlnInterpolationSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\runtime-eprintln-interpolation.slg"
 $runtimeEprintlnSourceTextSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\runtime-eprintln-source-text.slg"
@@ -68,7 +69,7 @@ $semanticContextSource = Join-Path $repoRoot "selfhost\semantic\context.slg"
 $compilerRuntimeSources = Get-Content $runtimeManifestPath |
     Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
     ForEach-Object { Join-Path $repoRoot $_.Trim() }
-$expectedStage2Bytes = 18911249L
+$expectedStage2Bytes = 20011835L
 
 New-Item -ItemType Directory -Force -Path $artifactsDir | Out-Null
 
@@ -259,6 +260,38 @@ if ($runtimeEprintlnSourceTextActual -ne "stderr") {
     throw "readonly reference observed stale mutable container state: '$runtimeEprintlnSourceTextActual'"
 }
 Write-Host "[stage2 1/7] PASS current mutable container readonly reference lowering."
+
+$directoryCreateLlvm = Join-Path $artifactsDir "stage2-check-directory-create.ll"
+$directoryCreateBitcode = Join-Path $artifactsDir "stage2-check-directory-create.bc"
+$directoryCreateExecutable = Join-Path $artifactsDir "stage2-check-directory-create.exe"
+$directoryCreateStdout = Join-Path $artifactsDir "stage2-check-directory-create.stdout.txt"
+$directoryCreateStderr = Join-Path $artifactsDir "stage2-check-directory-create.stderr.txt"
+$directoryCreateError = Join-Path $artifactsDir "stage2-check-directory-create.err"
+$directoryCreateTarget = Join-Path $artifactsDir "stage2-directory-create"
+if (Test-Path -LiteralPath $directoryCreateTarget) {
+    Remove-Item -LiteralPath $directoryCreateTarget -Recurse -Force
+}
+$directoryCreateProcess = Invoke-ProcessToFile `
+    $stage1Path `
+    (@("windows", $directoryCreateSource) + $compilerRuntimeSources) `
+    $directoryCreateLlvm `
+    $directoryCreateError
+Assert-ProcessSucceeded $directoryCreateProcess $directoryCreateError "stage-1 directory creation emission"
+& $llvmAsPath $directoryCreateLlvm -o $directoryCreateBitcode
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+& $clangPath -Wno-override-module $directoryCreateLlvm -o $directoryCreateExecutable -lshell32
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+$directoryCreateRun = Invoke-ProcessToFile `
+    $directoryCreateExecutable `
+    @() `
+    $directoryCreateStdout `
+    $directoryCreateStderr
+Assert-ProcessSucceeded $directoryCreateRun $directoryCreateStderr "stage-1 directory creation execution"
+$directoryCreateActual = [System.IO.File]::ReadAllText($directoryCreateStdout).Replace("`r`n", "`n").TrimEnd("`n")
+if ($directoryCreateActual -ne "created`nexists" -or -not (Test-Path -LiteralPath $directoryCreateTarget -PathType Container)) {
+    throw "directory creation contract mismatch: '$directoryCreateActual'"
+}
+Write-Host "[stage2 1/7] PASS directory creation and existing-directory idempotence."
 
 Write-Host "[stage2 2/7] Build or reuse the complete stage-2 compiler."
 if (Test-Stage2IsCurrent) {

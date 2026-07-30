@@ -669,6 +669,48 @@ emitPathQueryCall request: DirectoryCallRequest, context: ref emitterContext.Emi
     call -> writeIrType(context, state)
     ", ptr %v$(request.callIndex)_path_query_result_slot, align 8" -> println
 }
+emitCreateDirectoryCall request: DirectoryCallRequest, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
+    context.ir[request.callIndex] => call
+    request.callIndex -> callArgumentIndex(context, state) => argumentIndex!
+    argumentIndex! -> aggregateValueIndex(context, state) => argumentIndex!
+    context.ir[argumentIndex!] => directoryPath
+    -1 => pathBytesType!
+    -1 => pathStyleType!
+    0 => pathFieldIndex!
+    pathFieldIndex! < (context.fields -> len) -> while {
+        context.fields[pathFieldIndex!] => pathField
+        (pathField.status == 0 and pathField.ownerType == directoryPath.typeId and pathField.ordinal == 0) -> if { pathField.fieldType => pathBytesType! }
+        (pathField.status == 0 and pathField.ownerType == directoryPath.typeId and pathField.ordinal == 1) -> if { pathField.fieldType => pathStyleType! }
+        pathFieldIndex! + 1 => pathFieldIndex!
+    }
+    "  %v$(request.callIndex)_create_directory_path_bytes = extractvalue " -> print
+    directoryPath -> writeIrType(context, state)
+    " " -> print
+    (directoryPath.kind == 5 and request.ownerIndex >= 0 and context.ir[request.ownerIndex].operand1 >= 0 and directoryPath.symbol == context.ir[context.ir[request.ownerIndex].operand1].symbol) -> if { "%arg" -> print } else {
+        "%v" -> print
+        argumentIndex! -> writeDecimal
+    }
+    ", 0" -> println
+    "  %v$(request.callIndex)_create_directory_path_data = extractvalue " -> print
+    pathBytesType! -> writeSemanticTypeId(context, state)
+    " %v$(request.callIndex)_create_directory_path_bytes, 0" -> println
+    "  %v$(request.callIndex)_create_directory_path_length = extractvalue " -> print
+    pathBytesType! -> writeSemanticTypeId(context, state)
+    " %v$(request.callIndex)_create_directory_path_bytes, 1" -> println
+    "  %v$(request.callIndex)_create_directory_path_style_value = extractvalue " -> print
+    directoryPath -> writeIrType(context, state)
+    " " -> print
+    (directoryPath.kind == 5 and request.ownerIndex >= 0 and context.ir[request.ownerIndex].operand1 >= 0 and directoryPath.symbol == context.ir[context.ir[request.ownerIndex].operand1].symbol) -> if { "%arg" -> print } else {
+        "%v" -> print
+        argumentIndex! -> writeDecimal
+    }
+    ", 1" -> println
+    "  %v$(request.callIndex)_create_directory_path_style = extractvalue " -> print
+    pathStyleType! -> writeSemanticTypeId(context, state)
+    " %v$(request.callIndex)_create_directory_path_style_value, 0" -> println
+    "  %v$(request.callIndex)_create_directory_status = call i32 @sollang_platform_create_directory(ptr %v$(request.callIndex)_create_directory_path_data, i64 %v$(request.callIndex)_create_directory_path_length, i32 %v$(request.callIndex)_create_directory_path_style)" -> println
+    "  %v$(request.callIndex) = icmp sgt i32 %v$(request.callIndex)_create_directory_status, 0" -> println
+}
 emitDirectoryCall request: DirectoryCallRequest, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
     context.ir[request.callIndex] => call
     context.types[call.typeId] => dispatchResultType

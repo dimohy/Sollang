@@ -268,6 +268,15 @@ internal sealed partial class LlvmEmitter
             return EmitRuntimeReadDirectory(function, EmitExpression(expression.Arguments[0]));
         }
 
+        if (function.Kind == BoundFunctionKind.RuntimeCreateDirectory)
+        {
+            if (expression.Arguments.Count != 1)
+            {
+                throw new SollangException($"{path} expects exactly one Path argument");
+            }
+            return EmitRuntimeCreateDirectory(function, EmitExpression(expression.Arguments[0]));
+        }
+
         if (function.Kind == BoundFunctionKind.RuntimePathQuery)
         {
             if (expression.Arguments.Count != 1)
@@ -1089,6 +1098,15 @@ internal sealed partial class LlvmEmitter
                 throw new SollangException($"{function.Name} expects exactly one Path value");
             }
             return EmitRuntimeReadDirectory(function, argument);
+        }
+
+        if (function.Kind == BoundFunctionKind.RuntimeCreateDirectory)
+        {
+            if (argument is null)
+            {
+                throw new SollangException($"{function.Name} expects exactly one Path value");
+            }
+            return EmitRuntimeCreateDirectory(function, argument);
         }
 
         if (function.Kind == BoundFunctionKind.RuntimePathQuery)
@@ -2103,7 +2121,9 @@ internal sealed partial class LlvmEmitter
                 return;
             }
 
-            if (target.Kind is BoundFunctionKind.RuntimeReadDirectory or BoundFunctionKind.RuntimePathQuery)
+            if (target.Kind is BoundFunctionKind.RuntimeReadDirectory
+                or BoundFunctionKind.RuntimeCreateDirectory
+                or BoundFunctionKind.RuntimePathQuery)
             {
                 _usesDirectoryTraversal = true;
             }

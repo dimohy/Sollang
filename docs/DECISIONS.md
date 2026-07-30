@@ -11167,3 +11167,29 @@ The final Linux Stage 2 compiler passes 6/6 and Stage 3 reproduces 19,950,197
 LLVM bytes with SHA-256
 `9A8461F01035385F4A1554241CA9EC7418D0122786151811EF9970B2AA11BEAB`.
 Both Stage 3 modules assemble, link, and execute.
+
+## D291 — Directory Creation Is a Typed Runtime Primitive
+
+Status: implemented and retained cross-platform
+Date: 2026-07-31
+
+Compiler-owned output directories are created through
+`sys.directory.create(Path) -> Bool uses File`; the native CLI never invokes a
+shell or assumes that a parent operation happened to create them. The function
+creates one directory, requires its parent to exist, and succeeds when the path
+is a directory after the operation. An existing ordinary file is failure.
+
+The C# bootstrap and `.slg` self-host compilers lower the same intrinsic through
+their semantic, typed-IR, LLVM, and Windows/Linux platform-runtime layers.
+Windows verifies `FILE_ATTRIBUTE_DIRECTORY` after `CreateDirectoryA`; Linux
+verifies `S_IFDIR` with `stat` after `mkdir`. Regression 692 covers creation,
+idempotent reuse, and file rejection on both targets. Both Stage 2 verifiers
+also delete a confined artifact directory, compile the fixture with the native
+compiler, execute it, and verify the resulting directory.
+
+The complete suites pass 906/906 on Windows and 905/905 on Linux. The resulting
+Stage 3 fixed points are 20,011,835 LLVM bytes with SHA-256
+`9DC3E4DC3D3F78A3B2A9401916EBBF1B871C0A04E84DCE63F616B1044A599884`
+on Windows and 19,994,874 bytes with SHA-256
+`7D42508B04E6DA0EA3FDEED819ED974E5D1FD61A00CEADEB146C96DC0B4D3B05`
+on Linux.

@@ -192,6 +192,8 @@ internal sealed class WindowsLinker(LlvmToolchain toolchain)
             LoadLibraryA
             GetProcAddress
             FreeLibrary
+            CreateDirectoryA
+            GetFileAttributesA
             FindFirstFileA
             FindNextFileA
             FindClose
