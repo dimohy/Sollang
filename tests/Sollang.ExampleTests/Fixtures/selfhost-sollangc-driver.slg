@@ -550,6 +550,45 @@ runNativePathCli sources: [path.Path; ~], defaultSource: Text, outputOption: Tex
     }
 }
 
+runNativeSelectedProduct projectOption: Text, projectInput: cliProject.ProjectInput, includeDependencies: Bool, outputOption: Text, llvmHome: Text, stdlibRoot: Text, optimization: Text, target: Int, hostTarget: Int, jobs: Text, keepTemps: Bool, runAfterBuild: Bool, programArguments: [Text; ~] -> Int uses Console, File, Process {
+    [path.Path; ~] => productSources!
+    productSources! -> push(projectInput.source -> path.fromText(path.nativeStyle()))
+    0 => dependencyStatus!
+    (includeDependencies and projectInput.dependencyCount > 0) -> if {
+        projectOption -> cliProject.appendDependencySources(productSources!) => dependencyStatus!
+    }
+    dependencyStatus! != 0 -> if {
+        dependencyStatus! => dependencyCode
+        "sollang: native project dependency graph failed (status $dependencyCode)" -> println
+        1
+    } else {
+        productSources! -> runNativePathCli(projectInput.source, outputOption, llvmHome, stdlibRoot, optimization, target, hostTarget, jobs, keepTemps, runAfterBuild, programArguments)
+    }
+}
+
+runNativeProjectDirectory projectOption: Text, projectInput: cliProject.ProjectInput, sourceDirectory: Text, includeDependencies: Bool, outputOption: Text, llvmHome: Text, stdlibRoot: Text, optimization: Text, target: Int, hostTarget: Int, jobs: Text, keepTemps: Bool, runAfterBuild: Bool, programArguments: [Text; ~] -> Int uses Console, File, Process {
+    sourceDirectory -> path.fromText(path.nativeStyle()) => projectSourceRoot!
+    projectSourceRoot! -> sourceRoot.discoverDirect => projectSources!
+    0 => dependencyStatus!
+    (projectSources! -> len) > 0 -> if {
+        (includeDependencies and projectInput.dependencyCount > 0) -> if {
+            projectOption -> cliProject.appendDependencySources(projectSources!) => dependencyStatus!
+        }
+    }
+    (projectSources! -> len) == 0 -> if {
+        "sollang: project source root contains no .slg files" -> println
+        1
+    } else {
+        dependencyStatus! != 0 -> if {
+            dependencyStatus! => dependencyCode
+            "sollang: native project dependency graph failed (status $dependencyCode)" -> println
+            1
+        } else {
+            projectSources! -> runNativePathCli(projectInput.source, outputOption, llvmHome, stdlibRoot, optimization, target, hostTarget, jobs, keepTemps, runAfterBuild, programArguments)
+        }
+    }
+}
+
 runNativeCli runAfterBuild: Bool, hostTarget: Int -> Int uses Console, File, Process {
     process.arguments() => arguments
     arguments -> len => argumentCount
@@ -729,21 +768,18 @@ runNativeCli runAfterBuild: Bool, hostTarget: Int -> Int uses Console, File, Pro
             1 -> return
         }
         projectInput!.multiProduct -> if {
-            sources! -> push(projectInput!.source)
+            (workspaceSourceDirectory! -> len) == UIntSize(0) => includeDependencies
+            projectOption! -> runNativeSelectedProduct(projectInput!, includeDependencies, outputOption!, llvmHome!, stdlibRoot!, optimization!, target!, hostTarget, jobs!, keepTemps!, runAfterBuild, programArguments!)
         } else {
-        (workspaceSourceDirectory! -> len) > UIntSize(0) -> if {
-            workspaceSourceDirectory! -> path.fromText(path.nativeStyle())
-        } else {
-            projectInput!.sourceDirectory -> path.fromText(path.nativeStyle())
-        } => projectSourceRoot!
-        projectSourceRoot! -> sourceRoot.discoverDirect => projectSourcePaths!
-        (projectSourcePaths! -> len) == 0 -> if {
-            "sollang: project source root contains no .slg files" -> println
-            1 -> return
-        }
-        projectSourcePaths! -> runNativePathCli(projectInput!.source, outputOption!, llvmHome!, stdlibRoot!, optimization!, target!, hostTarget, jobs!, keepTemps!, runAfterBuild, programArguments!) => projectCode
+            (workspaceSourceDirectory! -> len) > UIntSize(0) -> if {
+                workspaceSourceDirectory!
+            } else {
+                projectInput!.sourceDirectory
+            } => sourceDirectory
+            (workspaceSourceDirectory! -> len) == UIntSize(0) => includeDependencies
+            projectOption! -> runNativeProjectDirectory(projectInput!, sourceDirectory, includeDependencies, outputOption!, llvmHome!, stdlibRoot!, optimization!, target!, hostTarget, jobs!, keepTemps!, runAfterBuild, programArguments!)
+        } => projectCode
         projectCode -> return
-        }
     }
     (sources! -> len) == 0 -> if {
         "sollang: no source file, sollang.project, or sollang.workspace was found" -> println

@@ -376,15 +376,21 @@ emitArrayPush request: WhileValueRequest, context: ref emitterContext.EmitContex
     context.ir[pushValueIndex] => pushValue
     pushNode.operand0 -> mutableBindingRoot(context, state) => pushRoot
     pushNode.operand0 -> mutableBorrowParameterOrdinal(request.ownerIndex, context, state) => pushBorrowOrdinal
-    "  %push$(pushIndex)_data = extractvalue %sollang.array.i32 " -> print
-    (request.ownerIndex >= 0 and context.ir[request.ownerIndex].kind == 0 and context.ir[request.ownerIndex].operand1 >= 0 and pushSource.kind == 5 and pushSource.symbol == context.ir[context.ir[request.ownerIndex].operand1].symbol) -> if { "%arg" -> print } else { "%v$(pushNode.operand0)" -> print }
-    ", 0" -> println
-    "  %push$(pushIndex)_length = extractvalue %sollang.array.i32 " -> print
-    (request.ownerIndex >= 0 and context.ir[request.ownerIndex].kind == 0 and context.ir[request.ownerIndex].operand1 >= 0 and pushSource.kind == 5 and pushSource.symbol == context.ir[context.ir[request.ownerIndex].operand1].symbol) -> if { "%arg" -> print } else { "%v$(pushNode.operand0)" -> print }
-    ", 1" -> println
-    "  %push$(pushIndex)_capacity = extractvalue %sollang.array.i32 " -> print
-    (request.ownerIndex >= 0 and context.ir[request.ownerIndex].kind == 0 and context.ir[request.ownerIndex].operand1 >= 0 and pushSource.kind == 5 and pushSource.symbol == context.ir[context.ir[request.ownerIndex].operand1].symbol) -> if { "%arg" -> print } else { "%v$(pushNode.operand0)" -> print }
-    ", 2" -> println
+    pushBorrowOrdinal >= 0 -> if {
+        "  %push$(pushIndex)_data = load ptr, ptr " -> print
+        pushBorrowOrdinal == 0 -> if { "%arg_mut_ptr_addr" -> print } else { "%arg$(pushBorrowOrdinal)_mut_ptr_addr" -> print }
+        ", align 8" -> println
+        "  %push$(pushIndex)_length = load i64, ptr " -> print
+        pushBorrowOrdinal == 0 -> if { "%arg_mut_len_addr" -> print } else { "%arg$(pushBorrowOrdinal)_mut_len_addr" -> print }
+        ", align 8" -> println
+        "  %push$(pushIndex)_capacity = load i64, ptr " -> print
+        pushBorrowOrdinal == 0 -> if { "%arg_mut_capacity_addr" -> print } else { "%arg$(pushBorrowOrdinal)_mut_capacity_addr" -> print }
+        ", align 8" -> println
+    } else {
+        "  %push$(pushIndex)_data = extractvalue %sollang.array.i32 %v$(pushNode.operand0), 0" -> println
+        "  %push$(pushIndex)_length = extractvalue %sollang.array.i32 %v$(pushNode.operand0), 1" -> println
+        "  %push$(pushIndex)_capacity = extractvalue %sollang.array.i32 %v$(pushNode.operand0), 2" -> println
+    }
     "  %push$(pushIndex)_full = icmp eq i64 %push$(pushIndex)_length, %push$(pushIndex)_capacity" -> println
     "  %push$(pushIndex)_empty = icmp eq i64 %push$(pushIndex)_capacity, 0" -> println
     "  %push$(pushIndex)_doubled = mul i64 %push$(pushIndex)_capacity, 2" -> println

@@ -28,12 +28,12 @@ The native driver now implements `--version`, help, explicit-source,
 project-directory (including explicit `--product` selection), and
 workspace-package `build`, plus `run` and literal program-argument forwarding.
 Project and workspace inputs retain the public `--project`, `--product`,
-`--workspace`, and `--package` spellings. These are
-verified implementation slices, not the complete replacement contract:
-multi-product dependency import closure, dependency locking and remote package
-resolution, library and Wasm output, default project output placement, `test`,
-`format`, `language-server`, `resolve`, `bind-cpp`, and exact
-diagnostic-stream compatibility remain gated.
+`--workspace`, and `--package` spellings. Selected products now include the
+transitive source closure of local path dependencies. These are verified
+implementation slices, not the complete replacement contract: dependency
+cycle diagnostics, locking and remote package resolution, library and Wasm
+output, default project output placement, `test`, `format`, `language-server`,
+`resolve`, `bind-cpp`, and exact diagnostic-stream compatibility remain gated.
 Those commands remain on `sollang` in 0.3. The C# executable can be removed
 only after the complete cross-platform compatibility matrix passes.
 

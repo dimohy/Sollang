@@ -56,12 +56,12 @@ $compilerWsl = Convert-ToWslPath $Compiler
 $stdlibWsl = Convert-ToWslPath $StdlibRoot
 $llvmHomeWsl = Convert-ToWslPath $LlvmHome
 
-Write-Host "[linux native CLI 1/8] Version."
+Write-Host "[linux native CLI 1/9] Version."
 $version = (& wsl.exe -d $Distribution -- $compilerWsl --version | Out-String)
 Assert-ExitCode 0 "version"
 Assert-Output $version "Sollang 0.4.0" "version"
 
-Write-Host "[linux native CLI 2/8] Help and empty invocation status."
+Write-Host "[linux native CLI 2/9] Help and empty invocation status."
 $help = (& wsl.exe -d $Distribution -- $compilerWsl --help | Out-String)
 Assert-ExitCode 0 "help"
 if ($help -notmatch "usage: sollang <command> \[options\]") {
@@ -70,7 +70,7 @@ if ($help -notmatch "usage: sollang <command> \[options\]") {
 & wsl.exe -d $Distribution -- $compilerWsl *> $null
 Assert-ExitCode 1 "empty invocation"
 
-Write-Host "[linux native CLI 3/8] Named-input source build."
+Write-Host "[linux native CLI 3/9] Named-input source build."
 $namedSource = Convert-ToWslPath (Join-Path $repoRoot "examples\regression\02-function-named-input.slg")
 $namedOutput = Join-Path $artifacts "named"
 $namedOutputWsl = Convert-ToWslPath $namedOutput
@@ -81,7 +81,7 @@ $namedRun = (& wsl.exe -d $Distribution -- $namedOutputWsl | Out-String)
 Assert-ExitCode 0 "named executable"
 Assert-Output $namedRun "Hello, dimohy. square = 49" "named executable"
 
-Write-Host "[linux native CLI 4/8] Contextual-it source build."
+Write-Host "[linux native CLI 4/9] Contextual-it source build."
 $implicitSource = Convert-ToWslPath (Join-Path $repoRoot "examples\regression\03-flow-call-parens.slg")
 $implicitOutput = Join-Path $artifacts "implicit"
 $implicitOutputWsl = Convert-ToWslPath $implicitOutput
@@ -92,7 +92,7 @@ $implicitRun = (& wsl.exe -d $Distribution -- $implicitOutputWsl | Out-String)
 Assert-ExitCode 0 "contextual-it executable"
 Assert-Output $implicitRun "Hello, dimohy. square = 49" "contextual-it executable"
 
-Write-Host "[linux native CLI 5/8] Project-directory build."
+Write-Host "[linux native CLI 5/9] Project-directory and explicit alternate-product builds."
 $projectRootWsl = Convert-ToWslPath (Join-Path $repoRoot "examples\regression\projects\272-project-manifest")
 $projectOutput = Join-Path $artifacts "project"
 $projectOutputWsl = Convert-ToWslPath $projectOutput
@@ -111,7 +111,16 @@ $productRun = (& wsl.exe -d $Distribution -- $productOutputWsl | Out-String)
 Assert-ExitCode 0 "multi-product executable"
 Assert-Output $productRun "alternate" "multi-product executable"
 
-Write-Host "[linux native CLI 6/8] Workspace package build."
+Write-Host "[linux native CLI 6/9] Transitive path-dependency product build."
+$dependencyOutputWsl = Convert-ToWslPath (Join-Path $artifacts "package-demo")
+& wsl.exe -d $Distribution -- $compilerWsl build --project $multiProductProjectWsl --product package_demo `
+    -o $dependencyOutputWsl --target linux-x64 --stdlib $stdlibWsl --llvm $llvmHomeWsl -O1
+Assert-ExitCode 0 "path-dependency product build"
+$dependencyRun = (& wsl.exe -d $Distribution -- $dependencyOutputWsl | Out-String)
+Assert-ExitCode 0 "path-dependency product executable"
+Assert-Output $dependencyRun "42" "path-dependency product executable"
+
+Write-Host "[linux native CLI 7/9] Workspace package build."
 $workspaceRootWsl = Convert-ToWslPath (Join-Path $repoRoot "examples\regression\projects\437-workspace")
 $workspaceOutput = Join-Path $artifacts "workspace"
 $workspaceOutputWsl = Convert-ToWslPath $workspaceOutput
@@ -122,7 +131,7 @@ $workspaceRun = (& wsl.exe -d $Distribution -- $workspaceOutputWsl | Out-String)
 Assert-ExitCode 0 "workspace executable"
 Assert-Output $workspaceRun "42" "workspace executable"
 
-Write-Host "[linux native CLI 7/8] Run and literal argv forwarding."
+Write-Host "[linux native CLI 8/9] Run and literal argv forwarding."
 $argumentSource = Convert-ToWslPath (Join-Path $repoRoot "examples\regression\83-process-arguments.slg")
 $argvVerifier = Convert-ToWslPath (Join-Path $PSScriptRoot "verify-native-cli-argv-linux.sh")
 $runProgramWsl = Convert-ToWslPath (Join-Path $artifacts "run-arguments")
@@ -130,7 +139,7 @@ $runProgramWsl = Convert-ToWslPath (Join-Path $artifacts "run-arguments")
     $compilerWsl $argumentSource $stdlibWsl $llvmHomeWsl $runProgramWsl
 Assert-ExitCode 0 "run and argv forwarding"
 
-Write-Host "[linux native CLI 8/8] Complete standard-library linkage."
+Write-Host "[linux native CLI 9/9] Complete standard-library linkage."
 $llvmPath = "$implicitOutput.ll"
 if (-not (Test-Path -LiteralPath $llvmPath -PathType Leaf)) {
     throw "native build did not retain its LLVM input for audit: $llvmPath"
@@ -144,4 +153,4 @@ New-Item -ItemType Directory -Path $proofRoot -Force | Out-Null
 $compilerHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $Compiler).Hash
 $proofPath = Join-Path $proofRoot "linux-x64-$compilerHash.verified"
 [IO.File]::WriteAllText($proofPath, $version.Trim())
-Write-Host "Linux native source/project/workspace build/run CLI verification passed (8/8)."
+Write-Host "Linux native source/project/dependency/workspace build/run CLI verification passed (9/9)."

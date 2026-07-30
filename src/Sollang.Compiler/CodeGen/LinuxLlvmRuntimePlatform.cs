@@ -610,7 +610,8 @@ internal sealed class LinuxLlvmRuntimePlatform : LlvmRuntimePlatform
 
             completion:
               store i32 %request_fd, ptr @sollang_file_request_event_fd, align 4
-              %completion_fd = call i32 @eventfd(i32 0, i32 0)
+              ; EFD_NONBLOCK keeps a raced signal clear from blocking the completion drain.
+              %completion_fd = call i32 @eventfd(i32 0, i32 2048)
               %completion_ok = icmp sge i32 %completion_fd, 0
               br i1 %completion_ok, label %thread, label %fail
 

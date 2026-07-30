@@ -1,6 +1,7 @@
 namespace sollang.compiler.cli_project
 
 import sollang.compiler.project
+import sollang.compiler.source_root as sourceRoot
 import sys.file as file
 import sys.path as path
 
@@ -9,6 +10,7 @@ public struct ProjectInput {
     source: Text
     sourceDirectory: Text
     multiProduct: Bool
+    dependencyCount: Int
 }
 
 textEndsWith value: Text, suffix: Text -> Bool {
@@ -64,14 +66,151 @@ spanText source: file.SourceText, span: project.TextSpan -> Text {
     source -> slice(span.start, span.length)
 }
 
+joinedPath base: Text, child: Text -> path.Path {
+    [UInt8; ~] => bytes!
+    UIntSize(0) => baseIndex!
+    baseIndex! < (base -> len) -> while {
+        bytes! -> push(base -> byte(baseIndex!))
+        baseIndex! + UIntSize(1) => baseIndex!
+    }
+    (bytes! -> len) > 0 -> if {
+        bytes![(bytes! -> len) - 1] => last
+        (last == UInt8(47) or last == UInt8(92)) => separated!
+        not separated! -> if {
+            path.nativeStyle() -> when {
+                Windows { bytes! -> push(UInt8(92)) }
+                Posix { bytes! -> push(UInt8(47)) }
+            }
+        }
+    }
+    UIntSize(0) => childIndex!
+    childIndex! < (child -> len) -> while {
+        bytes! -> push(child -> byte(childIndex!))
+        childIndex! + UIntSize(1) => childIndex!
+    }
+    path.Path { bytes: bytes!, style: path.nativeStyle() } => result!
+    result!
+}
+
+manifestOwnedPath option: Text -> path.Path {
+    [UInt8; ~] => bytes!
+    UIntSize(0) => index!
+    index! < (option -> len) -> while {
+        bytes! -> push(option -> byte(index!))
+        index! + UIntSize(1) => index!
+    }
+    not (option -> textEndsWith(".project")) -> if {
+        (bytes! -> len) > 0 -> if {
+            bytes![(bytes! -> len) - 1] => last
+            (last == UInt8(47) or last == UInt8(92)) => separated!
+            not separated! -> if {
+                path.nativeStyle() -> when {
+                    Windows { bytes! -> push(UInt8(92)) }
+                    Posix { bytes! -> push(UInt8(47)) }
+                }
+            }
+        }
+        "sollang.project" => name
+        UIntSize(0) => nameIndex!
+        nameIndex! < (name -> len) -> while {
+            bytes! -> push(name -> byte(nameIndex!))
+            nameIndex! + UIntSize(1) => nameIndex!
+        }
+    }
+    path.Path { bytes: bytes!, style: path.nativeStyle() } => result!
+    result!
+}
+
+sameSpanText source: file.SourceText, left: project.TextSpan, right: project.TextSpan -> Bool {
+    left.length == right.length => same!
+    UIntSize(0) => index!
+    (same! and index! < left.length) -> while {
+        (source -> byte(left.start + index!)) != (source -> byte(right.start + index!)) -> if {
+            false => same!
+        }
+        index! + UIntSize(1) => index!
+    }
+    same!
+}
+
 emptyInput status: Int -> ProjectInput {
     ProjectInput {
         status: status
         source: ""
         sourceDirectory: ""
         multiProduct: false
+        dependencyCount: 0
     } => result!
     result!
+}
+
+# Appends every transitive path-dependency source closure.
+# Status: 0 valid, 20 non-path dependency, 21 invalid dependency manifest,
+# 22 dependency does not expose its same-named product, 23 graph limit.
+public appendDependencySources option: Text, sources: mut [path.Path; ~] -> Int uses File {
+    [path.Path; ~] => manifests!
+    manifests! -> push(option -> manifestOwnedPath)
+    0 => processed!
+    0 => status!
+    (status! == 0 and processed! < (manifests! -> len)) -> while {
+        processed! >= 64 -> if { 23 => status! }
+        status! == 0 -> if {
+            path.pathText(manifests![processed!]) => queuedManifestText
+            queuedManifestText -> path.fromText(path.nativeStyle()) => manifestPath!
+            path.pathText(manifestPath!) => manifestText
+            manifestText -> directoryOf => manifestDirectoryText
+            manifestDirectoryText -> path.fromText(path.nativeStyle()) => manifestDirectory!
+            manifestPath! -> file.mapPath => source!
+            source! -> len => sourceLength
+            source! -> slice(UIntSize(0), sourceLength) => sourceView
+            sourceView -> project.parse => parsed!
+            parsed!.status != 0 -> if { 21 => status! }
+
+            (status! == 0 and processed! > 0) -> if {
+                -1 => productIndex!
+                0 => candidateIndex!
+                candidateIndex! < (parsed!.products -> len) -> while {
+                    source! -> sameSpanText(parsed!.products[candidateIndex!].name, parsed!.name) -> if {
+                        candidateIndex! => productIndex!
+                    }
+                    candidateIndex! + 1 => candidateIndex!
+                }
+                productIndex! < 0 -> if {
+                    22 => status!
+                } else {
+                    source! -> spanText(parsed!.products[productIndex!].root) => rootRelative
+                    path.pathText(manifestDirectory!) => directoryText
+                    directoryText -> joinedPath(rootRelative) => rootPath!
+                    path.pathText(rootPath!) => rootText
+                    rootText -> directoryOf => sourceDirectoryText
+                    sourceDirectoryText -> path.fromText(path.nativeStyle()) => sourceDirectory!
+                    sourceDirectory! -> sourceRoot.discoverDirect => discovered!
+                    0 => discoveredIndex!
+                    discoveredIndex! < (discovered! -> len) -> while {
+                        path.pathText(discovered![discoveredIndex!]) => discoveredText
+                        sources -> push(discoveredText -> path.fromText(path.nativeStyle()))
+                        discoveredIndex! + 1 => discoveredIndex!
+                    }
+                }
+            }
+
+            0 => dependencyIndex!
+            (status! == 0 and dependencyIndex! < (parsed!.dependencies -> len)) -> while {
+                parsed!.dependencies[dependencyIndex!].path.length == UIntSize(0) -> if {
+                    20 => status!
+                } else {
+                    source! -> spanText(parsed!.dependencies[dependencyIndex!].path) => dependencyRelative
+                    path.pathText(manifestDirectory!) => directoryText
+                    directoryText -> joinedPath(dependencyRelative) => dependencyDirectory!
+                    path.pathText(dependencyDirectory!) => dependencyDirectoryText
+                    manifests! -> push(dependencyDirectoryText -> joinedPath("sollang.project"))
+                }
+                dependencyIndex! + 1 => dependencyIndex!
+            }
+            processed! + 1 => processed!
+        }
+    }
+    status!
 }
 
 # Status: 0 valid, 1 invalid manifest, 2 requested product missing,
@@ -119,6 +258,7 @@ public load option: Text, requestedProduct: Text, manifestStorage: mut Arena, ro
         source: rootSource
         sourceDirectory: sourceDirectory
         multiProduct: (parsed!.products -> len) > 1
+        dependencyCount: parsed!.dependencies -> len
     } => result!
     result!
 }
