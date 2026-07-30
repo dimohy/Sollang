@@ -3,6 +3,22 @@ namespace sollang.compiler.llvm.runtime
 # Target runtime definitions used by LLVM emitted from the self-host compiler.
 # The module index is discovered from the analyzed package, so file ordering
 # never becomes part of the runtime ABI.
+public struct RuntimeFunctionSymbols {
+    printSymbol: Int
+    printlnSymbol: Int
+    readIntSymbol: Int
+    seedRandomSymbol: Int
+    randomBelowSymbol: Int
+    openIntWriterSymbol: Int
+    writeIntSymbol: Int
+    closeIntWriterSymbol: Int
+    openIntReaderSymbol: Int
+    closestIntSymbol: Int
+    closeIntReaderSymbol: Int
+    nowMillisSymbol: Int
+    eprintlnSymbol: Int
+}
+
 public emitDictionaryTextHelpers: -> Unit uses Console {
     """
     define internal i64 @sollang_dictionary_hash_text(%sollang.text %value) {
@@ -235,7 +251,7 @@ emitDirectoryNodes target: Int -> Unit uses Console {
     """ -> println
 }
 
-public emitWindows runtimeModule: Int -> Unit uses Console {
+public emitWindows runtimeModule: Int, functions: RuntimeFunctionSymbols -> Unit uses Console {
     """
     declare i32 @getchar()
     declare dllimport i32 @GetFileSizeEx(ptr, ptr)
@@ -245,7 +261,7 @@ public emitWindows runtimeModule: Int -> Unit uses Console {
     declare dllimport i64 @GetTickCount64()
     @sollang_stage2_random_state = internal global i64 88172645463325252
     """ -> println
-    "define void @sollang_m$(runtimeModule)_s0(%sollang.text %arg) {" -> println
+    "define void @sollang_m$(runtimeModule)_s$(functions.printSymbol)(%sollang.text %arg) {" -> println
     """
     entry:
       %data = extractvalue %sollang.text %arg, 0
@@ -254,7 +270,7 @@ public emitWindows runtimeModule: Int -> Unit uses Console {
       ret void
     }
     """ -> println
-    "define void @sollang_m$(runtimeModule)_s1(%sollang.text %arg) {" -> println
+    "define void @sollang_m$(runtimeModule)_s$(functions.printlnSymbol)(%sollang.text %arg) {" -> println
     """
     entry:
       %data = extractvalue %sollang.text %arg, 0
@@ -263,7 +279,7 @@ public emitWindows runtimeModule: Int -> Unit uses Console {
       ret void
     }
     """ -> println
-    "define i32 @sollang_m$(runtimeModule)_s2(%sollang.text %arg) {" -> println
+    "define i32 @sollang_m$(runtimeModule)_s$(functions.readIntSymbol)(%sollang.text %arg) {" -> println
     """
     entry:
       %data = extractvalue %sollang.text %arg, 0
@@ -310,7 +326,7 @@ public emitWindows runtimeModule: Int -> Unit uses Console {
       ret i32 %result
     }
     """ -> println
-    "define void @sollang_m$(runtimeModule)_s3(i32 %arg) {" -> println
+    "define void @sollang_m$(runtimeModule)_s$(functions.seedRandomSymbol)(i32 %arg) {" -> println
     """
     entry:
       %seed = sext i32 %arg to i64
@@ -318,7 +334,7 @@ public emitWindows runtimeModule: Int -> Unit uses Console {
       ret void
     }
     """ -> println
-    "define i32 @sollang_m$(runtimeModule)_s4(i32 %arg) {" -> println
+    "define i32 @sollang_m$(runtimeModule)_s$(functions.randomBelowSymbol)(i32 %arg) {" -> println
     """
     entry:
       %valid = icmp sgt i32 %arg, 0
@@ -340,28 +356,37 @@ public emitWindows runtimeModule: Int -> Unit uses Console {
     ; They are not used by the compiler pipeline; the typed File API supersedes
     ; them and will receive its target runtime in the following runtime slice.
     """ -> println
-    "define void @sollang_m$(runtimeModule)_s5(%sollang.text %arg) { ret void }" -> println
-    "define void @sollang_m$(runtimeModule)_s6(i32 %arg) { ret void }" -> println
-    "define void @sollang_m$(runtimeModule)_s7() { ret void }" -> println
-    "define void @sollang_m$(runtimeModule)_s8(%sollang.text %arg) { ret void }" -> println
-    "define i32 @sollang_m$(runtimeModule)_s9(i32 %arg) { ret i32 %arg }" -> println
-    "define void @sollang_m$(runtimeModule)_s10() { ret void }" -> println
-    "define i64 @sollang_m$(runtimeModule)_s11() {" -> println
+    "define void @sollang_m$(runtimeModule)_s$(functions.openIntWriterSymbol)(%sollang.text %arg) { ret void }" -> println
+    "define void @sollang_m$(runtimeModule)_s$(functions.writeIntSymbol)(i32 %arg) { ret void }" -> println
+    "define void @sollang_m$(runtimeModule)_s$(functions.closeIntWriterSymbol)() { ret void }" -> println
+    "define void @sollang_m$(runtimeModule)_s$(functions.openIntReaderSymbol)(%sollang.text %arg) { ret void }" -> println
+    "define i32 @sollang_m$(runtimeModule)_s$(functions.closestIntSymbol)(i32 %arg) { ret i32 %arg }" -> println
+    "define void @sollang_m$(runtimeModule)_s$(functions.closeIntReaderSymbol)() { ret void }" -> println
+    "define i64 @sollang_m$(runtimeModule)_s$(functions.nowMillisSymbol)() {" -> println
     """
     entry:
       %value = call i64 @GetTickCount64()
       ret i64 %value
     }
     """ -> println
+    "define void @sollang_m$(runtimeModule)_s$(functions.eprintlnSymbol)(%sollang.text %arg) {" -> println
+    """
+    entry:
+      %data = extractvalue %sollang.text %arg, 0
+      %length = extractvalue %sollang.text %arg, 1
+      call void @sollang_runtime_eprintln(ptr %data, i64 %length)
+      ret void
+    }
+    """ -> println
 }
 
-public emitLinux runtimeModule: Int -> Unit uses Console {
+public emitLinux runtimeModule: Int, functions: RuntimeFunctionSymbols -> Unit uses Console {
     """
     declare i32 @getchar()
     declare i32 @clock_gettime(i32, ptr)
     @sollang_stage2_random_state = internal global i64 88172645463325252
     """ -> println
-    "define void @sollang_m$(runtimeModule)_s0(%sollang.text %arg) {" -> println
+    "define void @sollang_m$(runtimeModule)_s$(functions.printSymbol)(%sollang.text %arg) {" -> println
     """
     entry:
       %data = extractvalue %sollang.text %arg, 0
@@ -370,7 +395,7 @@ public emitLinux runtimeModule: Int -> Unit uses Console {
       ret void
     }
     """ -> println
-    "define void @sollang_m$(runtimeModule)_s1(%sollang.text %arg) {" -> println
+    "define void @sollang_m$(runtimeModule)_s$(functions.printlnSymbol)(%sollang.text %arg) {" -> println
     """
     entry:
       %data = extractvalue %sollang.text %arg, 0
@@ -379,7 +404,7 @@ public emitLinux runtimeModule: Int -> Unit uses Console {
       ret void
     }
     """ -> println
-    "define i32 @sollang_m$(runtimeModule)_s2(%sollang.text %arg) {" -> println
+    "define i32 @sollang_m$(runtimeModule)_s$(functions.readIntSymbol)(%sollang.text %arg) {" -> println
     """
     entry:
       %data = extractvalue %sollang.text %arg, 0
@@ -426,7 +451,7 @@ public emitLinux runtimeModule: Int -> Unit uses Console {
       ret i32 %result
     }
     """ -> println
-    "define void @sollang_m$(runtimeModule)_s3(i32 %arg) {" -> println
+    "define void @sollang_m$(runtimeModule)_s$(functions.seedRandomSymbol)(i32 %arg) {" -> println
     """
     entry:
       %seed = sext i32 %arg to i64
@@ -434,7 +459,7 @@ public emitLinux runtimeModule: Int -> Unit uses Console {
       ret void
     }
     """ -> println
-    "define i32 @sollang_m$(runtimeModule)_s4(i32 %arg) {" -> println
+    "define i32 @sollang_m$(runtimeModule)_s$(functions.randomBelowSymbol)(i32 %arg) {" -> println
     """
     entry:
       %valid = icmp sgt i32 %arg, 0
@@ -452,13 +477,13 @@ public emitLinux runtimeModule: Int -> Unit uses Console {
       ret i32 0
     }
     """ -> println
-    "define void @sollang_m$(runtimeModule)_s5(%sollang.text %arg) { ret void }" -> println
-    "define void @sollang_m$(runtimeModule)_s6(i32 %arg) { ret void }" -> println
-    "define void @sollang_m$(runtimeModule)_s7() { ret void }" -> println
-    "define void @sollang_m$(runtimeModule)_s8(%sollang.text %arg) { ret void }" -> println
-    "define i32 @sollang_m$(runtimeModule)_s9(i32 %arg) { ret i32 %arg }" -> println
-    "define void @sollang_m$(runtimeModule)_s10() { ret void }" -> println
-    "define i64 @sollang_m$(runtimeModule)_s11() {" -> println
+    "define void @sollang_m$(runtimeModule)_s$(functions.openIntWriterSymbol)(%sollang.text %arg) { ret void }" -> println
+    "define void @sollang_m$(runtimeModule)_s$(functions.writeIntSymbol)(i32 %arg) { ret void }" -> println
+    "define void @sollang_m$(runtimeModule)_s$(functions.closeIntWriterSymbol)() { ret void }" -> println
+    "define void @sollang_m$(runtimeModule)_s$(functions.openIntReaderSymbol)(%sollang.text %arg) { ret void }" -> println
+    "define i32 @sollang_m$(runtimeModule)_s$(functions.closestIntSymbol)(i32 %arg) { ret i32 %arg }" -> println
+    "define void @sollang_m$(runtimeModule)_s$(functions.closeIntReaderSymbol)() { ret void }" -> println
+    "define i64 @sollang_m$(runtimeModule)_s$(functions.nowMillisSymbol)() {" -> println
     """
     entry:
       %time = alloca [2 x i64], align 8
@@ -471,6 +496,15 @@ public emitLinux runtimeModule: Int -> Unit uses Console {
       %nanoseconds_millis = udiv i64 %nanoseconds, 1000000
       %value = add i64 %seconds_millis, %nanoseconds_millis
       ret i64 %value
+    }
+    """ -> println
+    "define void @sollang_m$(runtimeModule)_s$(functions.eprintlnSymbol)(%sollang.text %arg) {" -> println
+    """
+    entry:
+      %data = extractvalue %sollang.text %arg, 0
+      %length = extractvalue %sollang.text %arg, 1
+      call void @sollang_runtime_eprintln(ptr %data, i64 %length)
+      ret void
     }
     """ -> println
 }
@@ -742,6 +776,66 @@ public emitWindowsDirectory: -> Unit uses Console {
     """ -> println
 }
 
+emitStandardInputSourceTextBody: -> Unit uses Console {
+    """
+    define %sollang.source_text @sollang_runtime_read_standard_input() {
+    entry:
+      %buffer_slot = alloca ptr, align 8
+      %length_slot = alloca i64, align 8
+      %capacity_slot = alloca i64, align 8
+      %initial = call ptr @malloc(i64 4096)
+      %initial_ok = icmp ne ptr %initial, null
+      br i1 %initial_ok, label %initialize, label %failure
+    initialize:
+      store ptr %initial, ptr %buffer_slot, align 8
+      store i64 0, ptr %length_slot, align 8
+      store i64 4096, ptr %capacity_slot, align 8
+      br label %read
+    read:
+      %buffer = load ptr, ptr %buffer_slot, align 8
+      %length = load i64, ptr %length_slot, align 8
+      %capacity = load i64, ptr %capacity_slot, align 8
+      %available = sub i64 %capacity, %length
+      %destination = getelementptr i8, ptr %buffer, i64 %length
+      %count = call i64 @sollang_runtime_read_standard_input_chunk(ptr %destination, i64 %available)
+      %read_failed = icmp slt i64 %count, 0
+      br i1 %read_failed, label %release_failure, label %advance
+    advance:
+      %eof = icmp eq i64 %count, 0
+      %next_length = add i64 %length, %count
+      store i64 %next_length, ptr %length_slot, align 8
+      br i1 %eof, label %success, label %inspect_capacity
+    inspect_capacity:
+      %full = icmp eq i64 %next_length, %capacity
+      br i1 %full, label %grow, label %read
+    grow:
+      %next_capacity = mul i64 %capacity, 2
+      %resized = call ptr @realloc(ptr %buffer, i64 %next_capacity)
+      %resize_ok = icmp ne ptr %resized, null
+      br i1 %resize_ok, label %store_resize, label %release_failure
+    store_resize:
+      store ptr %resized, ptr %buffer_slot, align 8
+      store i64 %next_capacity, ptr %capacity_slot, align 8
+      br label %read
+    success:
+      %final_buffer = load ptr, ptr %buffer_slot, align 8
+      %final_length = load i64, ptr %length_slot, align 8
+      %result0 = insertvalue %sollang.source_text poison, ptr %final_buffer, 0
+      %result1 = insertvalue %sollang.source_text %result0, i64 %final_length, 1
+      %result2 = insertvalue %sollang.source_text %result1, ptr %final_buffer, 2
+      %result3 = insertvalue %sollang.source_text %result2, i64 -1, 3
+      ret %sollang.source_text %result3
+    release_failure:
+      %failed_buffer = load ptr, ptr %buffer_slot, align 8
+      call void @free(ptr %failed_buffer)
+      br label %failure
+    failure:
+      call void @llvm.trap()
+      unreachable
+    }
+    """ -> println
+}
+
 public emitWindowsSourceTextDeclarations: -> Unit uses Console {
     """
     declare dllimport i32 @GetFileSizeEx(ptr, ptr)
@@ -823,7 +917,14 @@ public emitWindowsSourceText: -> Unit uses Console {
     entry:
       %base = extractvalue %sollang.source_text %source, 2
       %owned = icmp ne ptr %base, null
-      br i1 %owned, label %unmap, label %done
+      br i1 %owned, label %release, label %done
+    release:
+      %length = extractvalue %sollang.source_text %source, 3
+      %heap_owned = icmp eq i64 %length, -1
+      br i1 %heap_owned, label %free_owned, label %unmap
+    free_owned:
+      call void @free(ptr %base)
+      br label %done
     unmap:
       %ignored = call i32 @UnmapViewOfFile(ptr %base)
       br label %done
@@ -831,6 +932,33 @@ public emitWindowsSourceText: -> Unit uses Console {
       ret void
     }
     """ -> println
+}
+
+public emitWindowsStandardInputSourceText: -> Unit uses Console {
+    """
+    define internal i64 @sollang_runtime_read_standard_input_chunk(ptr %data, i64 %capacity) {
+    entry:
+      %handle = call ptr @GetStdHandle(i32 -10)
+      %capacity32 = trunc i64 %capacity to i32
+      %read_slot = alloca i32, align 4
+      %ok = call i32 @ReadFile(ptr %handle, ptr %data, i32 %capacity32, ptr %read_slot, ptr null)
+      %succeeded = icmp ne i32 %ok, 0
+      br i1 %succeeded, label %success, label %inspect_error
+    inspect_error:
+      %error = call i32 @GetLastError()
+      %broken_pipe = icmp eq i32 %error, 109
+      br i1 %broken_pipe, label %eof, label %failure
+    eof:
+      ret i64 0
+    success:
+      %read32 = load i32, ptr %read_slot, align 4
+      %read64 = zext i32 %read32 to i64
+      ret i64 %read64
+    failure:
+      ret i64 -1
+    }
+    """ -> println
+    emitStandardInputSourceTextBody()
 }
 
 public emitLinuxSourceTextDeclarations: -> Unit uses Console {
@@ -1090,9 +1218,15 @@ public emitLinuxSourceText: -> Unit uses Console {
     define void @sollang_runtime_unmap_text(%sollang.source_text %source) {
     entry:
       %base = extractvalue %sollang.source_text %source, 2
-      %length = extractvalue %sollang.source_text %source, 3
       %owned = icmp ne ptr %base, null
-      br i1 %owned, label %unmap, label %done
+      br i1 %owned, label %release, label %done
+    release:
+      %length = extractvalue %sollang.source_text %source, 3
+      %heap_owned = icmp eq i64 %length, -1
+      br i1 %heap_owned, label %free_owned, label %unmap
+    free_owned:
+      call void @free(ptr %base)
+      br label %done
     unmap:
       %ignored = call i32 @munmap(ptr %base, i64 %length)
       br label %done
@@ -1100,6 +1234,17 @@ public emitLinuxSourceText: -> Unit uses Console {
       ret void
     }
     """ -> println
+}
+
+public emitLinuxStandardInputSourceText: -> Unit uses Console {
+    """
+    define internal i64 @sollang_runtime_read_standard_input_chunk(ptr %data, i64 %capacity) {
+    entry:
+      %count = call i64 @read(i32 0, ptr %data, i64 %capacity)
+      ret i64 %count
+    }
+    """ -> println
+    emitStandardInputSourceTextBody()
 }
 
 emitOwnedFilePathCopy capacity: Int -> Unit uses Console {

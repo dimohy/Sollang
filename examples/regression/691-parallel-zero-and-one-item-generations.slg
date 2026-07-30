@@ -1,0 +1,32 @@
+# Zero- and one-item groups bypass the two-participant start handshake without
+# blocking, while preserving ordered parallel and tryParallel results.
+main {
+    [Int; ~] -> parallel value {
+        value * 2
+    } => emptyParallel!
+    [7; ~] -> parallel value {
+        value * 3
+    } => singleParallel!
+    [Int; ~] -> tryParallel value {
+        Result<Int, Text>.Ok(value * 4)
+    } => emptyTry
+    [11; ~] -> tryParallel value {
+        Result<Int, Text>.Ok(value + 5)
+    } => singleTry
+
+    emptyTry -> when {
+        Ok(emptyValues) {
+            singleTry -> when {
+                Ok(values) {
+                    "parallel=$(emptyParallel! -> len)/$(singleParallel![0]), try=$(emptyValues -> len)/$(values[0])" -> println
+                }
+                Err(error) {
+                    "unexpected-single=$error" -> println
+                }
+            }
+        }
+        Err(error) {
+            "unexpected-empty=$error" -> println
+        }
+    }
+}

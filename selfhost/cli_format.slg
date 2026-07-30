@@ -1,0 +1,485 @@
+namespace sollang.compiler.cli_format
+
+import sollang.compiler.diagnostics as diagnostics
+import sys.file as file
+import sys.process as process
+import sys.runtime as runtime
+import syntax.generated.slg as grammar
+
+struct LineSpan {
+    start: UIntSize
+    length: UIntSize
+}
+
+struct ScanResult {
+    tripleString: Bool
+    opens: Int
+    closes: Int
+}
+
+struct SourceLocation {
+    line: Int
+    column: Int
+}
+
+public struct FormatResult {
+    status: Int
+    bytes: [UInt8; ~]
+}
+
+invalidFormat: -> FormatResult {
+    [UInt8; ~] => bytes!
+    FormatResult { status: 1, bytes: bytes! } => result!
+    result!
+}
+
+appendSource bytes: mut [UInt8; ~], source: file.SourceText, start: UIntSize, length: UIntSize -> Unit {
+    UIntSize(0) => index!
+    index! < length -> while {
+        bytes -> push(source -> byte(start + index!))
+        index! + UIntSize(1) => index!
+    }
+}
+
+appendSpaces bytes: mut [UInt8; ~], count: Int -> Unit {
+    0 => index!
+    index! < count -> while {
+        bytes -> push(UInt8(32))
+        index! + 1 => index!
+    }
+}
+
+appendText bytes: mut [UInt8; ~], value: Text -> Unit {
+    UIntSize(0) => index!
+    index! < (value -> len) -> while {
+        bytes -> push(value -> byte(index!))
+        index! + UIntSize(1) => index!
+    }
+}
+
+appendPositiveInt bytes: mut [UInt8; ~], value: Int -> Unit {
+    [UInt8; ~] => reversed!
+    value => remaining!
+    remaining! == 0 -> if {
+        bytes -> push(UInt8(48))
+    } else {
+        remaining! > 0 -> while {
+            reversed! -> push(UInt8(remaining! % 10 + 48))
+            remaining! / 10 => remaining!
+        }
+        (reversed! -> len) - 1 => index!
+        index! >= 0 -> while {
+            bytes -> push(reversed![index!])
+            index! - 1 => index!
+        }
+    }
+}
+
+writeDiagnostic bytes: ref [UInt8; ~] -> Unit uses Console {
+    bytes -> file.borrowBytes => source!
+    source! -> len => length
+    source! -> slice(UIntSize(0), length) => message
+    message -> runtime.eprintln
+}
+
+isHorizontalWhitespace value: UInt8 -> Bool {
+    value == UInt8(32) or value == UInt8(9)
+}
+
+isWhitespace value: UInt8 -> Bool {
+    value == UInt8(32) or value == UInt8(9) or value == UInt8(10) or value == UInt8(11) or value == UInt8(12) or value == UInt8(13)
+}
+
+isAsciiLetterOrDigit value: UInt8 -> Bool {
+    (value >= UInt8(48) and value <= UInt8(57))
+        or (value >= UInt8(65) and value <= UInt8(90))
+        or (value >= UInt8(97) and value <= UInt8(122))
+}
+
+textEquals left: Text, right: Text -> Bool {
+    (left -> len) == (right -> len) => matches!
+    UIntSize(0) => index!
+    (matches! and index! < (left -> len)) -> while {
+        (left -> byte(index!)) != (right -> byte(index!)) -> if { false => matches! }
+        index! + UIntSize(1) => index!
+    }
+    matches!
+}
+
+lineWhitespace source: file.SourceText, line: LineSpan -> Bool {
+    true => whitespace!
+    UIntSize(0) => index!
+    (whitespace! and index! < line.length) -> while {
+        not ((source -> byte(line.start + index!)) -> isWhitespace) -> if { false => whitespace! }
+        index! + UIntSize(1) => index!
+    }
+    whitespace!
+}
+
+trimLine source: file.SourceText, line: LineSpan -> LineSpan {
+    line.start => start!
+    line.start + line.length => end!
+    (start! < end! and ((source -> byte(start!)) -> isWhitespace)) -> while {
+        start! + UIntSize(1) => start!
+    }
+    (end! > start! and ((source -> byte(end! - UIntSize(1))) -> isWhitespace)) -> while {
+        end! - UIntSize(1) => end!
+    }
+    LineSpan { start: start!, length: end! - start! }
+}
+
+startsWith source: file.SourceText, line: LineSpan, value: Text -> Bool {
+    line.length >= (value -> len) => matches!
+    UIntSize(0) => index!
+    (matches! and index! < (value -> len)) -> while {
+        (source -> byte(line.start + index!)) != (value -> byte(index!)) -> if { false => matches! }
+        index! + UIntSize(1) => index!
+    }
+    matches!
+}
+
+startsWithWord source: file.SourceText, line: LineSpan, word: Text -> Bool {
+    source -> startsWith(line, word) => matches!
+    (matches! and line.length > (word -> len)) -> if {
+        source -> byte(line.start + (word -> len)) => next
+        ((next -> isAsciiLetterOrDigit) or next == UInt8(95)) -> if { false => matches! }
+    }
+    matches!
+}
+
+continuation source: file.SourceText, line: LineSpan -> Bool {
+    (source -> startsWith(line, "->"))
+        or (source -> startsWith(line, "=>"))
+        or (source -> startsWithWord(line, "and"))
+        or (source -> startsWithWord(line, "or"))
+}
+
+leadingClosingBraces source: file.SourceText, line: LineSpan -> Int {
+    0 => count!
+    UIntSize(0) => index!
+    true => scanning!
+    (scanning! and index! < line.length) -> while {
+        source -> byte(line.start + index!) => current
+        current == UInt8(125) -> if {
+            count! + 1 => count!
+        } else {
+            not (current -> isWhitespace) -> if { false => scanning! }
+        }
+        index! + UIntSize(1) => index!
+    }
+    count!
+}
+
+scanLine source: file.SourceText, line: LineSpan, tripleString: Bool -> ScanResult {
+    tripleString => inTriple!
+    false => inString!
+    false => escaped!
+    0 => opens!
+    0 => closes!
+    UIntSize(0) => index!
+    index! < line.length -> while {
+        source -> byte(line.start + index!) => current
+        (index! + UIntSize(2) < line.length
+            and current == UInt8(34)
+            and (source -> byte(line.start + index! + UIntSize(1))) == UInt8(34)
+            and (source -> byte(line.start + index! + UIntSize(2))) == UInt8(34)) -> if {
+            not inTriple! => inTriple!
+            index! + UIntSize(3) => index!
+        } else {
+            not inTriple! -> if {
+                (not inString! and current == UInt8(35)) -> if {
+                    line.length => index!
+                } else {
+                    inString! -> if {
+                        escaped! -> if {
+                            false => escaped!
+                        } else {
+                            current == UInt8(92) -> if {
+                                true => escaped!
+                            } else {
+                                current == UInt8(34) -> if { false => inString! }
+                            }
+                        }
+                    } else {
+                        current == UInt8(34) -> if {
+                            true => inString!
+                        } else {
+                            current == UInt8(123) -> if { opens! + 1 => opens! }
+                            current == UInt8(125) -> if { closes! + 1 => closes! }
+                        }
+                    }
+                    index! + UIntSize(1) => index!
+                }
+            } else {
+                index! + UIntSize(1) => index!
+            }
+        }
+    }
+    ScanResult { tripleString: inTriple!, opens: opens!, closes: closes! }
+}
+
+sourceLines source: file.SourceText -> [LineSpan; ~] {
+    [LineSpan; ~] => lines!
+    UIntSize(0) => start!
+    UIntSize(0) => index!
+    index! < (source -> len) -> while {
+        source -> byte(index!) => current
+        (current == UInt8(10) or current == UInt8(13)) -> if {
+            LineSpan { start: start!, length: index! - start! } => line
+            lines! -> push(line)
+            (current == UInt8(13)
+                and index! + UIntSize(1) < (source -> len)
+                and (source -> byte(index! + UIntSize(1))) == UInt8(10)) -> if {
+                index! + UIntSize(1) => index!
+            }
+            index! + UIntSize(1) => start!
+        }
+        index! + UIntSize(1) => index!
+    }
+    LineSpan { start: start!, length: (source -> len) - start! } => finalLine
+    lines! -> push(finalLine)
+    lines!
+}
+
+public format source: file.SourceText -> FormatResult {
+    source -> len => sourceLength
+    source -> slice(UIntSize(0), sourceLength) => sourceView
+    sourceView -> diagnostics.analyze => syntaxDiagnostics!
+    (syntaxDiagnostics! -> len) > 0 -> if {
+        invalidFormat() -> return
+    }
+
+    source -> sourceLines => lines!
+    lines! -> len => logicalLineCount!
+    (logicalLineCount! > 0 and (source -> lineWhitespace(lines![logicalLineCount! - 1]))) -> while {
+        logicalLineCount! - 1 => logicalLineCount!
+    }
+
+    [UInt8; ~] => output!
+    [Int; ~] => continuationBlockDepths!
+    0 => continuationCount!
+    0 => depth!
+    false => inTripleString!
+    0 => lineIndex!
+    lineIndex! < logicalLineCount! -> while {
+        lines![lineIndex!] => original
+        inTripleString! -> if {
+            output! -> appendSource(source, original.start, original.length)
+            output! -> push(UInt8(10))
+            source -> scanLine(original, inTripleString!) => scan
+            scan.tripleString => inTripleString!
+        } else {
+            source -> trimLine(original) => trimmed
+            trimmed.length == UIntSize(0) -> if {
+                output! -> push(UInt8(10))
+            } else {
+                source -> scanLine(trimmed, inTripleString!) => scan
+                source -> leadingClosingBraces(trimmed) => leadingCloses
+                depth! - leadingCloses => baseDepth!
+                baseDepth! < 0 -> if { 0 => baseDepth! }
+                source -> continuation(trimmed) => isContinuation
+                baseDepth! + continuationCount! => lineDepth!
+                isContinuation -> if { lineDepth! + 1 => lineDepth! }
+                output! -> appendSpaces(lineDepth! * 4)
+                output! -> appendSource(source, trimmed.start, trimmed.length)
+                output! -> push(UInt8(10))
+                depth! + scan.opens - scan.closes => depth!
+                depth! < 0 -> if { 0 => depth! }
+                (continuationCount! > 0 and continuationBlockDepths![continuationCount! - 1] > depth!) -> while {
+                    continuationCount! - 1 => continuationCount!
+                }
+                (isContinuation and scan.opens > scan.closes) -> if {
+                    continuationCount! < (continuationBlockDepths! -> len) -> if {
+                        depth! => continuationBlockDepths![continuationCount!]
+                    } else {
+                        continuationBlockDepths! -> push(depth!)
+                    }
+                    continuationCount! + 1 => continuationCount!
+                }
+                scan.tripleString => inTripleString!
+            }
+        }
+        lineIndex! + 1 => lineIndex!
+    }
+    FormatResult { status: 0, bytes: output! } => result!
+    result!
+}
+
+sameBytes source: file.SourceText, formatted: ref FormatResult -> Bool {
+    (source -> len) == UIntSize(formatted.bytes -> len) => same!
+    UIntSize(0) => index!
+    (same! and index! < (source -> len)) -> while {
+        (source -> byte(index!)) != formatted.bytes[Int(index!)] -> if { false => same! }
+        index! + UIntSize(1) => index!
+    }
+    same!
+}
+
+writeSucceeded result: Result<Unit, Text> -> Bool {
+    result -> when {
+        Ok(_) { true }
+        Err(_) { false }
+    }
+}
+
+sourceLocation source: file.SourceText, offset: UIntSize -> SourceLocation {
+    1 => line!
+    1 => column!
+    UIntSize(0) => index!
+    index! < offset -> while {
+        source -> byte(index!) => value
+        value == UInt8(10) -> if {
+            line! + 1 => line!
+            1 => column!
+        } else {
+            value != UInt8(13) -> if { column! + 1 => column! }
+        }
+        index! + UIntSize(1) => index!
+    }
+    SourceLocation { line: line!, column: column! }
+}
+
+writeSyntaxDiagnostic source: file.SourceText -> Unit uses Console {
+    source -> len => sourceLength
+    source -> slice(UIntSize(0), sourceLength) => sourceView
+    sourceView -> diagnostics.analyze => syntaxDiagnostics!
+    syntaxDiagnostics![0] => diagnostic
+    source -> sourceLocation(diagnostic.span.start) => position
+    [UInt8; ~] => message!
+    diagnostic.code == 1 -> if {
+        source -> slice(diagnostic.span.start, diagnostic.span.length) => unexpected
+        message! -> appendText("sollang: lex error at ")
+        message! -> appendPositiveInt(position.line)
+        message! -> appendText(":")
+        message! -> appendPositiveInt(position.column)
+        message! -> appendText(": unexpected character '")
+        message! -> appendText(unexpected)
+        message! -> appendText("'")
+    } else {
+        diagnostic.code == 3 -> if {
+            message! -> appendText("sollang: lex error at ")
+            message! -> appendPositiveInt(position.line)
+            message! -> appendText(":")
+            message! -> appendPositiveInt(position.column)
+            message! -> appendText(": unterminated string literal")
+        } else {
+            sourceView -> diagnostics.expectedCodes => expected!
+            expected![(expected! -> len) - 1] => expectedCode
+            message! -> appendText("sollang: parse error at ")
+            message! -> appendPositiveInt(position.line)
+            message! -> appendText(":")
+            message! -> appendPositiveInt(position.column)
+            message! -> appendText(": expected ")
+            expectedCode >= 0 -> if {
+                grammar.tokenNames() => tokenNames!
+                message! -> appendText(tokenNames![expectedCode])
+            } else {
+                grammar.keywordTexts() => keywordTexts!
+                0 - expectedCode - 1 => keywordIndex
+                message! -> appendText("'")
+                message! -> appendText(keywordTexts![keywordIndex])
+                message! -> appendText("'")
+            }
+        }
+    }
+    message! -> writeDiagnostic
+}
+
+writeFormatted destination: Text, formatted: ref FormatResult -> Bool uses File {
+    Arena(0) => temporaryStorage!
+    "$destination.sollang-format.tmp" -> materialize(temporaryStorage!) => temporary
+    false => written!
+    temporary -> file.openWrite -> when {
+        Ok(writer) {
+            true => valid!
+            0 => index!
+            (valid! and index! < (formatted.bytes -> len)) -> while {
+                writer -> writeAt<UInt8>(formatted.bytes[index!], UInt64(index!)) -> writeSucceeded => valid!
+                index! + 1 => index!
+            }
+            valid! -> if { writer -> file.sync => valid! }
+            valid! => written!
+        }
+        Err(_) {}
+    }
+    written! -> if {
+        file.AtomicReplaceRequest {
+            temporary: temporary
+            destination: destination
+        } -> file.atomicReplace
+    } else { false }
+}
+
+public run: -> Int uses Console, File, Process {
+    process.arguments() => arguments
+    false => check!
+    false => stdin!
+    [Text; ~] => paths!
+    0 => status!
+    UIntSize(2) => index!
+    index! < (arguments -> len) -> while {
+        arguments[index!] => argument
+        argument -> textEquals("--check") -> if {
+            true => check!
+        } else {
+            argument -> textEquals("--stdin") -> if {
+                true => stdin!
+            } else {
+                ((argument -> len) > UIntSize(0) and (argument -> byte(UIntSize(0))) == UInt8(45)) -> if {
+                    "sollang: unknown format option '$argument'" -> runtime.eprintln
+                    1 => status!
+                } else {
+                    paths! -> push(argument)
+                }
+            }
+        }
+        index! + UIntSize(1) => index!
+    }
+    status! != 0 -> if { status! -> return }
+    stdin! -> if {
+        ((paths! -> len) != 0 or check!) -> if {
+            "sollang: format --stdin cannot be combined with paths or --check" -> runtime.eprintln
+            1 -> return
+        }
+        file.readStandardInput() => source!
+        source! -> format => formatted!
+        formatted!.status != 0 -> if {
+            source! -> writeSyntaxDiagnostic
+            1 -> return
+        }
+        formatted!.bytes -> file.borrowBytes => formattedSource!
+        formattedSource! -> len => formattedLength
+        formattedSource! -> slice(UIntSize(0), formattedLength) => formattedText
+        formattedText -> print
+        0 -> return
+    }
+    (paths! -> len) == 0 -> if {
+        "sollang: usage: sollang format [--check] <source.slg> ... | --stdin" -> runtime.eprintln
+        1 -> return
+    }
+
+    false => changed!
+    0 => pathIndex!
+    pathIndex! < (paths! -> len) -> while {
+        paths![pathIndex!] => sourcePath
+        sourcePath -> file.mapText => source!
+        source! -> format => formatted!
+        formatted!.status != 0 -> if {
+            source! -> writeSyntaxDiagnostic
+            1 -> return
+        }
+        source! -> sameBytes(formatted!) -> if {
+        } else {
+            true => changed!
+            not check! -> if {
+                sourcePath -> writeFormatted(formatted!) -> if {
+                } else {
+                    "sollang: failed to replace formatted source '$sourcePath'" -> runtime.eprintln
+                    1 -> return
+                }
+            }
+        }
+        pathIndex! + 1 => pathIndex!
+    }
+    (check! and changed!) -> if { 1 } else { 0 }
+}

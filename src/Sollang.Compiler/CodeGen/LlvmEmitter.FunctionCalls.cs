@@ -49,7 +49,9 @@ internal sealed partial class LlvmEmitter
             return EmitRuntimeWrapperCall(expression, wrapperKind, path);
         }
 
-        if (function.Kind is BoundFunctionKind.RuntimePrint or BoundFunctionKind.RuntimePrintLine)
+        if (function.Kind is BoundFunctionKind.RuntimePrint
+            or BoundFunctionKind.RuntimePrintLine
+            or BoundFunctionKind.RuntimePrintErrorLine)
         {
             if (function.Kind == BoundFunctionKind.RuntimePrintLine
                 && expression.Arguments.Count == 0)
@@ -63,10 +65,14 @@ internal sealed partial class LlvmEmitter
                 throw new SollangException($"{path} expects exactly one argument");
             }
 
-            _mainOk = EmitPrintArgument(expression.Arguments[0], _mainOk);
-            if (function.Kind == BoundFunctionKind.RuntimePrintLine)
+            var standardError = function.Kind == BoundFunctionKind.RuntimePrintErrorLine;
+            _mainOk = EmitPrintArgument(expression.Arguments[0], _mainOk, standardError);
+            if (function.Kind is BoundFunctionKind.RuntimePrintLine
+                or BoundFunctionKind.RuntimePrintErrorLine)
             {
-                _mainOk = EmitWriteText("\n", _mainOk);
+                _mainOk = standardError
+                    ? EmitStandardErrorNewLine(_mainOk)
+                    : EmitWriteText("\n", _mainOk);
             }
 
             return RuntimeUnit.Instance;
@@ -201,6 +207,25 @@ internal sealed partial class LlvmEmitter
             return function.Kind == BoundFunctionKind.RuntimeBorrowSourceText
                 ? EmitBorrowSourceText(sourceArgument)
                 : EmitMapSourceText(sourceArgument);
+        }
+
+        if (function.Kind == BoundFunctionKind.RuntimeBorrowSourceBytes)
+        {
+            if (expression.Arguments.Count != 1)
+            {
+                throw new SollangException($"{path} expects exactly one ref [UInt8; ~] value");
+            }
+            return EmitBorrowSourceBytes(
+                EmitReferencePlace(expression.Arguments[0], function.InputType!.Value));
+        }
+
+        if (function.Kind == BoundFunctionKind.RuntimeReadStandardInputSourceText)
+        {
+            if (expression.Arguments.Count != 0)
+            {
+                throw new SollangException($"{path} does not accept arguments");
+            }
+            return EmitReadStandardInputSourceText();
         }
 
         if (function.Kind == BoundFunctionKind.RuntimeMapSourcePath)
@@ -417,6 +442,7 @@ internal sealed partial class LlvmEmitter
         {
             BoundFunctionKind.RuntimePrint => EmitRuntimePrintCall(expression.Arguments[0], appendNewLine: false),
             BoundFunctionKind.RuntimePrintLine => EmitRuntimePrintCall(expression.Arguments[0], appendNewLine: true),
+            BoundFunctionKind.RuntimePrintErrorLine => EmitRuntimePrintErrorLineCall(expression.Arguments[0]),
             BoundFunctionKind.RuntimeReadInt => EmitReadIntPromptExpression(expression.Arguments[0]),
             BoundFunctionKind.RuntimeSeedRandom
                 or BoundFunctionKind.RuntimeOpenIntWriter
@@ -858,7 +884,9 @@ internal sealed partial class LlvmEmitter
             return EmitNativeFunctionCall(function, argument, additionalArguments);
         }
 
-        if (function.Kind is BoundFunctionKind.RuntimePrint or BoundFunctionKind.RuntimePrintLine)
+        if (function.Kind is BoundFunctionKind.RuntimePrint
+            or BoundFunctionKind.RuntimePrintLine
+            or BoundFunctionKind.RuntimePrintErrorLine)
         {
             if (argument is null)
             {
@@ -866,10 +894,14 @@ internal sealed partial class LlvmEmitter
             }
 
             EnsureRuntimeType(argument, BoundType.Text, function.Name);
-            _mainOk = EmitWriteValue(argument, _mainOk);
-            if (function.Kind == BoundFunctionKind.RuntimePrintLine)
+            var standardError = function.Kind == BoundFunctionKind.RuntimePrintErrorLine;
+            _mainOk = EmitWriteValue(argument, _mainOk, standardError);
+            if (function.Kind is BoundFunctionKind.RuntimePrintLine
+                or BoundFunctionKind.RuntimePrintErrorLine)
             {
-                _mainOk = EmitWriteText("\n", _mainOk);
+                _mainOk = standardError
+                    ? EmitStandardErrorNewLine(_mainOk)
+                    : EmitWriteText("\n", _mainOk);
             }
 
             return RuntimeUnit.Instance;
@@ -1209,6 +1241,13 @@ internal sealed partial class LlvmEmitter
     {
         var arguments = FunctionCallArgumentList(function, argument, additionalArguments);
         EmitCall(target: null, "void", SymbolForFunction(function)[1..], arguments);
+        return RuntimeUnit.Instance;
+    }
+
+    private RuntimeUnit EmitRuntimePrintErrorLineCall(Expression argument)
+    {
+        _mainOk = EmitPrintArgument(argument, _mainOk, standardError: true);
+        _mainOk = EmitStandardErrorNewLine(_mainOk);
         return RuntimeUnit.Instance;
     }
 
@@ -1610,6 +1649,12 @@ internal sealed partial class LlvmEmitter
         {
             return new RuntimeReference(referenceType, elementType, mutablePointer);
         }
+        if (_mutableContainerSlots.ContainsKey(name.Name))
+        {
+            var current = LoadMutableContainer(name.Name, stored);
+            var currentPointer = GetOrCreateReadonlyValuePointer(current, "ref_arg");
+            return new RuntimeReference(referenceType, elementType, currentPointer);
+        }
         if (_readonlyCaptureBorrowPointers.TryGetValue(name.Name, out var capturePointer))
         {
             return new RuntimeReference(referenceType, elementType, capturePointer);
@@ -1888,14 +1933,18 @@ internal sealed partial class LlvmEmitter
 
     private bool TryGetRuntimePrinterKind(BoundFunction function, out BoundFunctionKind kind)
     {
-        if (function.Kind is BoundFunctionKind.RuntimePrint or BoundFunctionKind.RuntimePrintLine)
+        if (function.Kind is BoundFunctionKind.RuntimePrint
+            or BoundFunctionKind.RuntimePrintLine
+            or BoundFunctionKind.RuntimePrintErrorLine)
         {
             kind = function.Kind;
             return true;
         }
 
         if (TryGetRuntimeWrapperKind(function, out kind)
-            && kind is BoundFunctionKind.RuntimePrint or BoundFunctionKind.RuntimePrintLine)
+            && kind is BoundFunctionKind.RuntimePrint
+                or BoundFunctionKind.RuntimePrintLine
+                or BoundFunctionKind.RuntimePrintErrorLine)
         {
             return true;
         }
@@ -1919,6 +1968,7 @@ internal sealed partial class LlvmEmitter
 
         if (target.Kind is BoundFunctionKind.RuntimePrint
             or BoundFunctionKind.RuntimePrintLine
+            or BoundFunctionKind.RuntimePrintErrorLine
             or BoundFunctionKind.RuntimeReadInt
             or BoundFunctionKind.RuntimeSeedRandom
             or BoundFunctionKind.RuntimeRandomBelow

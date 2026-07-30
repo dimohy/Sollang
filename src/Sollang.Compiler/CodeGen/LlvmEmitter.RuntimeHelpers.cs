@@ -579,6 +579,29 @@ internal sealed partial class LlvmEmitter
             }
 
             """);
+        if (_usesStandardError)
+        {
+            EmitFunctionBlock("""
+            define internal i32 @sollang_write_u64_stderr(i64 %value, ptr %written) #0 {
+            entry:
+              %buffer = alloca [20 x i8], align 1
+              %data = getelementptr inbounds [20 x i8], ptr %buffer, i64 0, i64 0
+              %length = call i64 @sollang_format_u64(ptr %data, i64 %value)
+              %ok = call i32 @sollang_write_stderr(ptr %data, i64 %length, ptr %written)
+              ret i32 %ok
+            }
+
+            define internal i32 @sollang_write_i64_stderr(i64 %value, ptr %written) #0 {
+            entry:
+              %buffer = alloca [21 x i8], align 1
+              %data = getelementptr inbounds [21 x i8], ptr %buffer, i64 0, i64 0
+              %length = call i64 @sollang_format_i64(ptr %data, i64 %value)
+              %ok = call i32 @sollang_write_stderr(ptr %data, i64 %length, ptr %written)
+              ret i32 %ok
+            }
+
+            """);
+        }
         EmitFunctionBlock("""
             define internal i64 @sollang_utf8_decode(ptr %data, i64 %len, i64 %index) #0 {
             entry:

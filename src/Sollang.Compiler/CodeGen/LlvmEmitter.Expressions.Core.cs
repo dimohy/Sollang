@@ -74,14 +74,19 @@ internal sealed partial class LlvmEmitter
 
     private string EmitPrintArgument(Expression expression, string ok)
     {
+        return EmitPrintArgument(expression, ok, standardError: false);
+    }
+
+    private string EmitPrintArgument(Expression expression, string ok, bool standardError)
+    {
         if (expression is StringExpression str)
         {
             foreach (var segment in str.Segments)
             {
                 ok = segment switch
                 {
-                    TextSegment text => EmitWriteText(text.Text, ok),
-                    InterpolationSegment interpolation => EmitWriteInterpolation(interpolation, ok),
+                    TextSegment text => EmitWriteText(text.Text, ok, standardError),
+                    InterpolationSegment interpolation => EmitWriteInterpolation(interpolation, ok, standardError),
                     _ => throw new SollangException($"unsupported string segment {segment.GetType().Name}")
                 };
             }
@@ -90,33 +95,54 @@ internal sealed partial class LlvmEmitter
         }
 
         var value = EmitExpression(expression);
-        return EmitWriteValue(value, ok);
+        return EmitWriteValue(value, ok, standardError);
     }
 
     private string EmitWriteInterpolation(InterpolationSegment interpolation, string ok)
     {
-        return EmitWriteValue(EmitExpression(interpolation.Expression), ok);
+        return EmitWriteInterpolation(interpolation, ok, standardError: false);
+    }
+
+    private string EmitWriteInterpolation(
+        InterpolationSegment interpolation,
+        string ok,
+        bool standardError)
+    {
+        return EmitWriteValue(EmitExpression(interpolation.Expression), ok, standardError);
     }
 
     private string EmitWriteValue(RuntimeValue value, string ok)
     {
+        return EmitWriteValue(value, ok, standardError: false);
+    }
+
+    private string EmitWriteValue(RuntimeValue value, string ok, bool standardError)
+    {
         return value switch
         {
-            RuntimeFormattedText formatted => EmitWriteFormattedText(formatted, ok),
-            RuntimeText text => EmitWriteTextValue(text, ok),
-            RuntimeInt integer => EmitWriteIntegerValue(integer, ok),
+            RuntimeFormattedText formatted => EmitWriteFormattedText(formatted, ok, standardError),
+            RuntimeText text => EmitWriteTextValue(text, ok, standardError),
+            RuntimeInt integer => EmitWriteIntegerValue(integer, ok, standardError),
             _ => throw new SollangException($"unsupported runtime value {value.GetType().Name}")
         };
     }
 
     private string EmitWriteFormattedText(RuntimeFormattedText formatted, string ok)
     {
+        return EmitWriteFormattedText(formatted, ok, standardError: false);
+    }
+
+    private string EmitWriteFormattedText(
+        RuntimeFormattedText formatted,
+        string ok,
+        bool standardError)
+    {
         foreach (var segment in formatted.Segments)
         {
             ok = segment switch
             {
-                RuntimeFormattedTextLiteral literal => EmitWriteTextValue(literal.Text, ok),
-                RuntimeFormattedTextValue value => EmitWriteValue(value.Value, ok),
+                RuntimeFormattedTextLiteral literal => EmitWriteTextValue(literal.Text, ok, standardError),
+                RuntimeFormattedTextValue value => EmitWriteValue(value.Value, ok, standardError),
                 _ => throw new SollangException("unsupported deferred text segment")
             };
         }
@@ -125,23 +151,57 @@ internal sealed partial class LlvmEmitter
 
     private string EmitWriteText(string text, string ok)
     {
+        return EmitWriteText(text, ok, standardError: false);
+    }
+
+    private string EmitWriteText(string text, string ok, bool standardError)
+    {
         if (text.Length == 0)
         {
             return ok;
         }
 
         var global = AddGlobalString(text);
-        return EmitWriteTextValue(new RuntimeText(global.Name, global.Length.ToString(CultureInfo.InvariantCulture)), ok);
+        return EmitWriteTextValue(
+            new RuntimeText(global.Name, global.Length.ToString(CultureInfo.InvariantCulture)),
+            ok,
+            standardError);
     }
 
     private string EmitWriteTextValue(RuntimeText text, string ok)
     {
+        return EmitWriteTextValue(text, ok, standardError: false);
+    }
+
+    private string EmitWriteTextValue(RuntimeText text, string ok, bool standardError)
+    {
+        if (standardError && _platform is WasmBrowserLlvmRuntimePlatform)
+        {
+            throw new SollangException("sys.runtime.eprintln is unavailable on wasm32-browser");
+        }
         var write = NextTemp("write");
-        EmitCall(write, "i32", "sollang_write", $"ptr %stdout, ptr {text.PointerName}, i64 {text.LengthName}, ptr %written");
+        var writer = standardError ? "sollang_write_stderr" : "sollang_write";
+        var arguments = standardError
+            ? $"ptr {text.PointerName}, i64 {text.LengthName}, ptr %written"
+            : $"ptr %stdout, ptr {text.PointerName}, i64 {text.LengthName}, ptr %written";
+        EmitCall(write, "i32", writer, arguments);
         return CombineWriteOk(write, ok);
     }
 
+    private string EmitStandardErrorNewLine(string ok)
+    {
+        return EmitWriteText(
+            _platform is WindowsLlvmRuntimePlatform ? "\r\n" : "\n",
+            ok,
+            standardError: true);
+    }
+
     private string EmitWriteIntegerValue(RuntimeInt value, string ok)
+    {
+        return EmitWriteIntegerValue(value, ok, standardError: false);
+    }
+
+    private string EmitWriteIntegerValue(RuntimeInt value, string ok, bool standardError)
     {
         var printable = value.ValueName;
         if (NumericBitWidth(value.Type) < 64)
@@ -151,8 +211,14 @@ internal sealed partial class LlvmEmitter
             EmitAssign(printable, $"{extension} {LlvmType(value.Type)} {value.ValueName} to i64");
         }
         var write = NextTemp("write");
-        var writer = IsSignedIntegerType(value.Type) ? "sollang_write_i64" : "sollang_write_u64";
-        EmitCall(write, "i32", writer, $"ptr %stdout, i64 {printable}, ptr %written");
+        var signed = IsSignedIntegerType(value.Type);
+        var writer = standardError
+            ? signed ? "sollang_write_i64_stderr" : "sollang_write_u64_stderr"
+            : signed ? "sollang_write_i64" : "sollang_write_u64";
+        var arguments = standardError
+            ? $"i64 {printable}, ptr %written"
+            : $"ptr %stdout, i64 {printable}, ptr %written";
+        EmitCall(write, "i32", writer, arguments);
         return CombineWriteOk(write, ok);
     }
 

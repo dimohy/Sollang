@@ -634,6 +634,16 @@ internal sealed class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
               %running_before = atomicrmw add ptr @sollang_compute_running, i32 1 acq_rel
               %running_now = add i32 %running_before, 1
               %peak_before = atomicrmw max ptr @sollang_compute_peak, i32 %running_now acq_rel
+              %gate_pair = cmpxchg ptr @sollang_compute_parent_gate, i32 0, i32 1 acq_rel acquire
+              %gate_owner = extractvalue { i32, i1 } %gate_pair, 1
+              br i1 %gate_owner, label %wait_parent, label %worker_callback
+
+            wait_parent:
+              %parent_gate = load atomic i32, ptr @sollang_compute_parent_gate acquire, align 4
+              %parent_ready = icmp eq i32 %parent_gate, 2
+              br i1 %parent_ready, label %worker_callback, label %wait_parent
+
+            worker_callback:
               call void %callback(ptr %group, i64 %index)
               %running_after = atomicrmw sub ptr @sollang_compute_running, i32 1 acq_rel
               br label %claim
@@ -736,6 +746,7 @@ internal sealed class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
             publish:
               store atomic i64 0, ptr @sollang_compute_next release, align 8
               store atomic i32 0, ptr @sollang_compute_peak release, align 4
+              store atomic i32 0, ptr @sollang_compute_parent_gate release, align 4
               %workers = load i32, ptr @sollang_compute_worker_count, align 4
               store atomic i32 %workers, ptr @sollang_compute_active release, align 4
               store atomic ptr %group, ptr @sollang_compute_group_current release, align 8
@@ -744,6 +755,15 @@ internal sealed class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
               %help_first_index = atomicrmw add ptr @sollang_compute_next, i64 1 acq_rel
               %semaphore = load ptr, ptr @sollang_compute_semaphore, align 8
               %released = call i32 @ReleaseSemaphore(ptr %semaphore, i32 %workers, ptr null)
+              %help_has_peer_work = icmp ugt i64 %count, 1
+              br i1 %help_has_peer_work, label %help_wait_worker, label %help_begin
+
+            help_wait_worker:
+              %help_worker_gate = load atomic i32, ptr @sollang_compute_parent_gate acquire, align 4
+              %help_worker_ready = icmp eq i32 %help_worker_gate, 1
+              br i1 %help_worker_ready, label %help_begin, label %help_wait_worker
+
+            help_begin:
               br label %help_work
 
             help_claim:
@@ -756,12 +776,13 @@ internal sealed class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
               br i1 %help_has_work, label %help_work, label %help_wait
 
             help_work:
-              %help_index = phi i64 [ %help_first_index, %publish ], [ %help_claimed_index, %help_claim ]
+              %help_index = phi i64 [ %help_first_index, %help_begin ], [ %help_claimed_index, %help_claim ]
               %help_callback_slot = getelementptr %sollang.compute_group, ptr %group, i32 0, i32 0
               %help_callback = load ptr, ptr %help_callback_slot, align 8
               %help_running_before = atomicrmw add ptr @sollang_compute_running, i32 1 acq_rel
               %help_running_now = add i32 %help_running_before, 1
               %help_peak_before = atomicrmw max ptr @sollang_compute_peak, i32 %help_running_now acq_rel
+              store atomic i32 2, ptr @sollang_compute_parent_gate release, align 4
               call void %help_callback(ptr %group, i64 %help_index)
               %help_running_after = atomicrmw sub ptr @sollang_compute_running, i32 1 acq_rel
               br label %help_claim
@@ -1767,6 +1788,85 @@ internal sealed class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
               ret i32 0
             }
 
+            """);
+
+        if (UsesStandardError)
+        {
+            functions.AppendLine("""
+            define internal i32 @sollang_write_stderr(ptr %data, i64 %len64, ptr %written) #0 {
+            entry:
+              %empty = icmp eq i64 %len64, 0
+              br i1 %empty, label %success_empty, label %check_length
+
+            success_empty:
+              store i32 0, ptr %written, align 4
+              ret i32 1
+
+            check_length:
+              %fits = icmp ule i64 %len64, 2147483647
+              br i1 %fits, label %prepare, label %failure
+
+            prepare:
+              %len = trunc i64 %len64 to i32
+              %stderr = call ptr @GetStdHandle(i32 -12)
+              %mode = alloca i32, align 4
+              %console_status = call i32 @GetConsoleMode(ptr %stderr, ptr %mode)
+              %is_console = icmp ne i32 %console_status, 0
+              br i1 %is_console, label %console_prepare, label %redirected
+
+            redirected:
+              %redirected_ok = call i32 @WriteFile(ptr %stderr, ptr %data, i32 %len, ptr %written, ptr null)
+              %redirected_succeeded = icmp ne i32 %redirected_ok, 0
+              %redirected_written = load i32, ptr %written, align 4
+              %redirected_complete = icmp eq i32 %redirected_written, %len
+              %redirected_result = and i1 %redirected_succeeded, %redirected_complete
+              %redirected_result32 = zext i1 %redirected_result to i32
+              ret i32 %redirected_result32
+
+            console_prepare:
+              %wide_chars = call i32 @MultiByteToWideChar(i32 65001, i32 8, ptr %data, i32 %len, ptr null, i32 0)
+              %valid_utf8 = icmp sgt i32 %wide_chars, 0
+              br i1 %valid_utf8, label %allocate, label %failure
+
+            allocate:
+              %wide_bytes32 = shl i32 %wide_chars, 1
+              %wide_bytes = zext i32 %wide_bytes32 to i64
+              %heap = call ptr @GetProcessHeap()
+              %wide = call ptr @HeapAlloc(ptr %heap, i32 0, i64 %wide_bytes)
+              %allocated = icmp ne ptr %wide, null
+              br i1 %allocated, label %convert, label %failure
+
+            convert:
+              %converted = call i32 @MultiByteToWideChar(i32 65001, i32 8, ptr %data, i32 %len, ptr %wide, i32 %wide_chars)
+              %converted_all = icmp eq i32 %converted, %wide_chars
+              br i1 %converted_all, label %console_write, label %conversion_free
+
+            console_write:
+              %wide_written = alloca i32, align 4
+              %console_ok = call i32 @WriteConsoleW(ptr %stderr, ptr %wide, i32 %wide_chars, ptr %wide_written, ptr null)
+              %wide_count = load i32, ptr %wide_written, align 4
+              %console_succeeded = icmp ne i32 %console_ok, 0
+              %console_complete = icmp eq i32 %wide_count, %wide_chars
+              %console_result = and i1 %console_succeeded, %console_complete
+              %console_result32 = zext i1 %console_result to i32
+              %reported_written = select i1 %console_result, i32 %len, i32 0
+              store i32 %reported_written, ptr %written, align 4
+              %freed = call i32 @HeapFree(ptr %heap, i32 0, ptr %wide)
+              ret i32 %console_result32
+
+            conversion_free:
+              %freed_after_failure = call i32 @HeapFree(ptr %heap, i32 0, ptr %wide)
+              br label %failure
+
+            failure:
+              store i32 0, ptr %written, align 4
+              ret i32 0
+            }
+
+            """);
+        }
+
+        functions.AppendLine("""
             define internal i32 @sollang_flush_stdout(ptr %stdout, ptr %written) #0 {
             entry:
               %count64 = load i64, ptr @sollang_stdout_buffer_count, align 8
@@ -1869,7 +1969,23 @@ internal sealed class WindowsLlvmRuntimePlatform : LlvmRuntimePlatform
             entry:
               %len = trunc i64 %len64 to i32
               %ok = call i32 @ReadFile(ptr %stdin, ptr %data, i32 %len, ptr %read, ptr null)
-              ret i32 %ok
+              %succeeded = icmp ne i32 %ok, 0
+              br i1 %succeeded, label %success, label %inspect_error
+
+            inspect_error:
+              %error = call i32 @GetLastError()
+              %broken_pipe = icmp eq i32 %error, 109
+              br i1 %broken_pipe, label %eof, label %failure
+
+            eof:
+              store i32 0, ptr %read, align 4
+              ret i32 1
+
+            success:
+              ret i32 1
+
+            failure:
+              ret i32 0
             }
 
             """);

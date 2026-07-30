@@ -69,6 +69,7 @@ internal abstract class LlvmRuntimePlatform
     public bool UsesComputePool { get; set; }
     public bool UsesDirectoryTraversal { get; set; }
     public bool UsesMouseEvents { get; set; }
+    public bool UsesStandardError { get; set; }
 
     public virtual void EmitComputePrimitives(StringBuilder functions)
     {

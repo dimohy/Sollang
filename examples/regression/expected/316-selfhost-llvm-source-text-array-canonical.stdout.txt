@@ -44,12 +44,14 @@ entry:
   %v9_ptr = getelementptr %sollang.source_text, ptr %v9_data, i64 0
   %v9 = load %sollang.source_text, ptr %v9_ptr, align 8
   %v12 = add i64 0, 0
-  %v4 = extractvalue %sollang.source_text %v5, 1
-  %v14 = freeze i64 %v4
+  %v4_raw = extractvalue %sollang.source_text %v5, 1
+  %v4 = trunc i64 %v4_raw to i32
+  %v14 = freeze i32 %v4
   %v8_base = extractvalue %sollang.source_text %v9, 0
   %v8_start = getelementptr i8, ptr %v8_base, i64 %v12
   %v8_ptr = insertvalue %sollang.text poison, ptr %v8_start, 0
-  %v8 = insertvalue %sollang.text %v8_ptr, i64 %v14, 1
+  %v8_length = sext i32 %v14 to i64
+  %v8 = insertvalue %sollang.text %v8_ptr, i64 %v8_length, 1
   ret %sollang.text %v8
 }
 define i32 @main() {
@@ -130,7 +132,14 @@ define void @sollang_runtime_unmap_text(%sollang.source_text %source) {
 entry:
   %base = extractvalue %sollang.source_text %source, 2
   %owned = icmp ne ptr %base, null
-  br i1 %owned, label %unmap, label %done
+  br i1 %owned, label %release, label %done
+release:
+  %length = extractvalue %sollang.source_text %source, 3
+  %heap_owned = icmp eq i64 %length, -1
+  br i1 %heap_owned, label %free_owned, label %unmap
+free_owned:
+  call void @free(ptr %base)
+  br label %done
 unmap:
   %ignored = call i32 @UnmapViewOfFile(ptr %base)
   br label %done

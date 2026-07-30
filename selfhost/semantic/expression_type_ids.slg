@@ -2297,6 +2297,58 @@ public resolveContext prepared: semanticContext.SemanticSnapshot -> ExpressionTy
                 prepared.package.nodes[pathGlobalAst] => pathNode
                 pathBaseExpression![pathGlobalAst] >= 0 -> if {
                     expressions![pathBaseExpression![pathGlobalAst]] => baseExpression
+                    # `len` is representation-sensitive at the semantic
+                    # boundary: containers expose Int even though their LLVM
+                    # handles retain an i64 physical length, while Text,
+                    # SourceText, Arguments, and mapped bytes expose UIntSize.
+                    # Resolve that distinction in the canonical recursive arena
+                    # so it cannot be overwritten by the conservative seed.
+                    pathNode.kind == 10 -> if {
+                        false => canonicalLengthFlow!
+                        0 => canonicalLengthChildSearch!
+                        canonicalLengthChildSearch! < pathRange.astCount -> while {
+                            prepared.package.nodes[pathRange.astStart + canonicalLengthChildSearch!] => canonicalLengthChild
+                            (canonicalLengthChild.parent == pathAstIndex! and canonicalLengthChild.kind == 16) -> if {
+                                prepared.package.tokens[pathRange.tokenStart + canonicalLengthChild.payloadToken] => canonicalLengthName
+                                TextMatchRequest {
+                                    source: pathSource
+                                    start: canonicalLengthName.span.start
+                                    length: canonicalLengthName.span.length
+                                    expected: "len"
+                                } -> textMatches -> if { true => canonicalLengthFlow! }
+                            }
+                            canonicalLengthChildSearch! + 1 => canonicalLengthChildSearch!
+                        }
+                        canonicalLengthFlow! -> if {
+                            baseExpression.typeId => canonicalLengthBaseTypeId!
+                            (types![canonicalLengthBaseTypeId!].kind == 8 and types![canonicalLengthBaseTypeId!].first >= 0) -> if {
+                                types![canonicalLengthBaseTypeId!].first => canonicalLengthBaseTypeId!
+                            }
+                            types![canonicalLengthBaseTypeId!] => canonicalLengthBaseType
+                            (canonicalLengthBaseType.kind >= 2 and canonicalLengthBaseType.kind <= 5) -> if {
+                                expressionIndexByAst![pathGlobalAst] => canonicalLengthExpression!
+                                canonicalLengthExpression! < 0 -> if {
+                                    expressions! -> len => canonicalLengthExpression!
+                                    expressions! -> push(ExpressionTypeId {
+                                        sourceModule: pathSourceIndex!
+                                        astNode: pathAstIndex!
+                                        typeId: 2
+                                        status: 0
+                                    })
+                                    canonicalLengthExpression! => expressionIndexByAst![pathGlobalAst]
+                                    true => pathChanged!
+                                } else {
+                                    expressions![canonicalLengthExpression!] => existingCanonicalLength!
+                                    (existingCanonicalLength!.typeId != 2 or existingCanonicalLength!.status != 0) -> if {
+                                        2 => existingCanonicalLength!.typeId
+                                        0 => existingCanonicalLength!.status
+                                        existingCanonicalLength! => expressions![canonicalLengthExpression!]
+                                        true => pathChanged!
+                                    }
+                                }
+                            }
+                        }
+                    }
                     pathNode.kind == 36 -> if {
                         baseExpression.typeId => memberCurrentType!
                         false => memberReadonlyProjection!

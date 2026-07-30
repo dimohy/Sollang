@@ -1,0 +1,69 @@
+import sollang.compiler.semantic.context as semanticContext
+import sollang.compiler.ir.typed as typedIr
+
+textEquals left: Text, right: Text -> Bool {
+    (left -> len) == (right -> len) => equal!
+    UIntSize(0) => index!
+    (equal! and index! < (left -> len)) -> while {
+        (left -> byte(index!)) != (right -> byte(index!)) -> if { false => equal! }
+        index! + UIntSize(1) => index!
+    }
+    equal!
+}
+
+# A qualified sys.runtime.eprintln call uses the stable stderr intrinsic symbol
+# even when generic declarations occur before it in the source symbol table.
+main {
+    """"
+        import sys.runtime as runtime
+
+        main {
+            "stderr contract" -> runtime.eprintln
+        }
+        """" => mainSource
+    """"
+        namespace sys.runtime
+
+        public print value: Text -> Unit = intrinsic
+        public println value: Text -> Unit = intrinsic
+        public readInt prompt: Text -> Int = intrinsic
+        public seedRandom value: Int -> Unit = intrinsic
+        public randomBelow maxExclusive: Int -> Int = intrinsic
+        public openIntWriter path: Text -> Unit = intrinsic
+        public writeInt value: Int -> Unit = intrinsic
+        public closeIntWriter: -> Unit = intrinsic
+        public openIntReader path: Text -> Unit = intrinsic
+        public closestInt target: Int -> Int = intrinsic
+        public closeIntReader: -> Unit = intrinsic
+        public nowMillis: -> Long = intrinsic
+        public parallel<T, R> values: [T; ~] -> [R; ~] block item: T -> R = intrinsic
+        public tryParallel<T, R, E> values: [T; ~] -> Result<[R; ~], E> block item: T -> Result<R, E> = intrinsic
+        public limitParallelWorkers maxWorkers: Int -> Int = intrinsic
+        public parallelWorkers: -> Int = intrinsic
+        public parallelPeakWorkers: -> Int = intrinsic
+        public eprintln value: Text -> Unit = intrinsic
+        """" => runtimeSource
+    [mainSource, runtimeSource; ~] -> semanticContext.prepare => prepared!
+    prepared! -> typedIr.lowerContext => ir!
+    -1 => declarationSymbol!
+    -1 => callSymbol!
+    prepared!.package.ranges[1] => runtimeRange
+    0 => runtimeSymbolIndex!
+    runtimeSymbolIndex! < runtimeRange.symbolCount -> while {
+        prepared!.package.symbols[runtimeRange.symbolStart + runtimeSymbolIndex!] => symbol
+        (symbol.parent < 0 and symbol.nameToken >= 0) -> if {
+            prepared!.package.tokens[runtimeRange.tokenStart + symbol.nameToken] => nameToken
+            runtimeSource -> slice(nameToken.span.start, nameToken.span.length) => name
+            name -> textEquals("eprintln") -> if { runtimeSymbolIndex! => declarationSymbol! }
+        }
+        runtimeSymbolIndex! + 1 => runtimeSymbolIndex!
+    }
+    ir! -> each node {
+        (node.kind == 6 and node.sourceModule == 0 and node.symbol == -116) -> if {
+            node.symbol => callSymbol!
+        }
+    }
+    "declaration=$(declarationSymbol!)" -> println
+    "call=$(callSymbol!)" -> println
+    callSymbol! == -116 -> if { "identity=ok" -> println } else { "identity=bad" -> println }
+}

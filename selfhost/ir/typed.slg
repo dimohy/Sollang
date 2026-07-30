@@ -212,6 +212,10 @@ intrinsicOpcode request: IntrinsicNameRequest -> Int {
     request.token.span.length == UIntSize(11) -> if {
         ((request.source -> byte(request.token.span.start)) == UInt8(116) and (request.source -> byte(request.token.span.start + UIntSize(1))) == UInt8(114) and (request.source -> byte(request.token.span.start + UIntSize(2))) == UInt8(121) and (request.source -> byte(request.token.span.start + UIntSize(3))) == UInt8(80) and (request.source -> byte(request.token.span.start + UIntSize(4))) == UInt8(97) and (request.source -> byte(request.token.span.start + UIntSize(5))) == UInt8(114) and (request.source -> byte(request.token.span.start + UIntSize(6))) == UInt8(97) and (request.source -> byte(request.token.span.start + UIntSize(7))) == UInt8(108) and (request.source -> byte(request.token.span.start + UIntSize(8))) == UInt8(108) and (request.source -> byte(request.token.span.start + UIntSize(9))) == UInt8(101) and (request.source -> byte(request.token.span.start + UIntSize(10))) == UInt8(108)) -> if { -209 => opcode! }
         ((request.source -> byte(request.token.span.start)) == UInt8(109) and (request.source -> byte(request.token.span.start + UIntSize(1))) == UInt8(97) and (request.source -> byte(request.token.span.start + UIntSize(2))) == UInt8(116) and (request.source -> byte(request.token.span.start + UIntSize(3))) == UInt8(101) and (request.source -> byte(request.token.span.start + UIntSize(4))) == UInt8(114) and (request.source -> byte(request.token.span.start + UIntSize(5))) == UInt8(105) and (request.source -> byte(request.token.span.start + UIntSize(6))) == UInt8(97) and (request.source -> byte(request.token.span.start + UIntSize(7))) == UInt8(108) and (request.source -> byte(request.token.span.start + UIntSize(8))) == UInt8(105) and (request.source -> byte(request.token.span.start + UIntSize(9))) == UInt8(122) and (request.source -> byte(request.token.span.start + UIntSize(10))) == UInt8(101)) -> if { -229 => opcode! }
+        request.source -> sourceMatches(request.token.span.start, request.token.span.length, "borrowBytes") -> if { -232 => opcode! }
+    }
+    request.token.span.length == UIntSize(17) -> if {
+        request.source -> sourceMatches(request.token.span.start, request.token.span.length, "readStandardInput") -> if { -231 => opcode! }
     }
     opcode!
 }
@@ -1659,14 +1663,14 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                                     patternSearch! + 1 => patternSearch!
                                 }
                             }
-                            1 => controlTypeOrigin!
-                            -1 => controlTypeModule!
-                            0 => controlTypeSymbol!
-                            expressionTypeIndex! >= 0 -> if {
-                                inferred[expressionTypeIndex!] => inferredControlType
-                                inferredControlType.origin => controlTypeOrigin!
-                                inferredControlType.targetModule => controlTypeModule!
-                                inferredControlType.targetSymbol => controlTypeSymbol!
+                            expressionTypeOrigin! => controlTypeOrigin!
+                            expressionTypeModule! => controlTypeModule!
+                            expressionTypeSymbol! => controlTypeSymbol!
+                            -1 => controlTypeKind!
+                            0 => controlTypeFlags!
+                            recursiveExpressionTypeId! >= 0 -> if {
+                                frozenRecursiveSemanticTypes[recursiveExpressionTypeId!].kind => controlTypeKind!
+                                recursiveTypeFlags[recursiveExpressionTypeId!] => controlTypeFlags!
                             }
                             results! -> push(TypedIrNode {
                                 kind: controlKind!
@@ -1678,9 +1682,9 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                                 typeOrigin: controlTypeOrigin!
                                 typeModule: controlTypeModule!
                                 typeSymbol: controlTypeSymbol!
-                                typeId: -1
-                                typeKind: -1
-                                typeFlags: 0
+                                typeId: recursiveExpressionTypeId!
+                                typeKind: controlTypeKind!
+                                typeFlags: controlTypeFlags!
                                 payloadToken: expression.payloadToken
                                 opcode: controlOpcode!
                                 operand0: -1
@@ -2820,7 +2824,12 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                     expressionIrStart => returnControlSearch!
                     returnControlSearch! < expressionIrEnd -> while {
                         results![returnControlSearch!] => returnWrapperCandidate
-                        (returnWrapperCandidate.parent == returnWrapperIr and returnWrapperCandidate.typeOrigin == functionResultOrigin! and returnWrapperCandidate.typeModule == functionResultModule! and returnWrapperCandidate.typeSymbol == functionResultSymbol!) -> if { returnControlSearch! => returnWrapperResult! }
+                        (returnWrapperCandidate.parent == returnWrapperIr
+                            and ((functionResultTypeId! >= 0 and returnWrapperCandidate.typeId == functionResultTypeId!)
+                                or (functionResultTypeId! < 0
+                                    and returnWrapperCandidate.typeOrigin == functionResultOrigin!
+                                    and returnWrapperCandidate.typeModule == functionResultModule!
+                                    and returnWrapperCandidate.typeSymbol == functionResultSymbol!))) -> if { returnControlSearch! => returnWrapperResult! }
                         returnControlSearch! + 1 => returnControlSearch!
                     }
                     returnWrapperResult! >= 0 -> if { returnWrapperResult! => returnOperandIr! }
@@ -2828,16 +2837,28 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                 false => returnOperandMatches!
                 returnOperandIr! >= 0 -> if {
                     results![returnOperandIr!] => selectedReturnOperand
-                    (selectedReturnOperand.typeOrigin == functionResultOrigin! and selectedReturnOperand.typeModule == functionResultModule! and selectedReturnOperand.typeSymbol == functionResultSymbol!) -> if { true => returnOperandMatches! }
+                    (not (selectedReturnOperand.kind == 9 and selectedReturnOperand.opcode == -1 and selectedReturnOperand.operand0 < 0)
+                        and ((functionResultTypeId! >= 0 and selectedReturnOperand.typeId == functionResultTypeId!)
+                            or (functionResultTypeId! < 0
+                                and selectedReturnOperand.typeOrigin == functionResultOrigin!
+                                and selectedReturnOperand.typeModule == functionResultModule!
+                                and selectedReturnOperand.typeSymbol == functionResultSymbol!))) -> if { true => returnOperandMatches! }
                 }
-                true -> if {
+                not returnOperandMatches! -> if {
                     -1 => matchingReturnOperand!
                     UIntSize(0) => matchingReturnStart!
                     UIntSize(0) => matchingReturnLength!
                     expressionIrStart => matchingReturnSearch!
                     matchingReturnSearch! < expressionIrEnd -> while {
                         results![matchingReturnSearch!] => matchingReturnCandidate
-                        (matchingReturnCandidate.parent == returnIr and matchingReturnCandidate.kind != 17 and matchingReturnCandidate.typeOrigin == functionResultOrigin! and matchingReturnCandidate.typeModule == functionResultModule! and matchingReturnCandidate.typeSymbol == functionResultSymbol!) -> if {
+                        (matchingReturnCandidate.parent == returnIr
+                            and matchingReturnCandidate.kind != 17
+                            and not (matchingReturnCandidate.kind == 9 and matchingReturnCandidate.opcode == -1 and matchingReturnCandidate.operand0 < 0)
+                            and ((functionResultTypeId! >= 0 and matchingReturnCandidate.typeId == functionResultTypeId!)
+                                or (functionResultTypeId! < 0
+                                    and matchingReturnCandidate.typeOrigin == functionResultOrigin!
+                                    and matchingReturnCandidate.typeModule == functionResultModule!
+                                    and matchingReturnCandidate.typeSymbol == functionResultSymbol!))) -> if {
                             prepared.package.nodes[sourceRange.astStart + matchingReturnCandidate.astNode] => matchingReturnAst
                             (matchingReturnOperand! < 0 or matchingReturnAst.start > matchingReturnStart! or (matchingReturnAst.start == matchingReturnStart! and matchingReturnAst.length > matchingReturnLength!)) -> if {
                                 matchingReturnSearch! => matchingReturnOperand!
@@ -2851,7 +2872,9 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
                         expressionIrStart => rootReturnSearch!
                         rootReturnSearch! < expressionIrEnd -> while {
                             results![rootReturnSearch!] => rootReturnCandidate
-                            (rootReturnCandidate.parent == returnIr and rootReturnCandidate.kind != 17) -> if {
+                            (rootReturnCandidate.parent == returnIr
+                                and rootReturnCandidate.kind != 17
+                                and not (rootReturnCandidate.kind == 9 and rootReturnCandidate.opcode == -1 and rootReturnCandidate.operand0 < 0)) -> if {
                                 prepared.package.nodes[sourceRange.astStart + rootReturnCandidate.astNode] => rootReturnAst
                                 (matchingReturnOperand! < 0 or rootReturnAst.start > matchingReturnStart! or (rootReturnAst.start == matchingReturnStart! and rootReturnAst.length > matchingReturnLength!)) -> if {
                                     rootReturnSearch! => matchingReturnOperand!
@@ -5048,6 +5071,44 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
         }
         functionFillSource! + 1 => functionFillSource!
     }
+    # Canonical expression typing can cover a final control expression that
+    # has no legacy inference record. Once function ownership is known, fold
+    # every canonical expression to its top-level child under that function
+    # and let the latest such child own the structural result root.
+    0 => canonicalFunctionResultIndex!
+    canonicalFunctionResultIndex! < (recursiveExpressions! -> len) -> while {
+        recursiveExpressions![canonicalFunctionResultIndex!] => canonicalFunctionResult
+        (canonicalFunctionResult.status == 0
+            and canonicalFunctionResult.sourceModule >= 0
+            and canonicalFunctionResult.sourceModule < (prepared.package.ranges -> len)) -> if {
+            prepared.package.ranges[canonicalFunctionResult.sourceModule] => canonicalFunctionResultRange
+            canonicalFunctionResultRange.astStart + canonicalFunctionResult.astNode => canonicalFunctionResultGlobalAst
+            functionOwnerByAst![canonicalFunctionResultGlobalAst] => canonicalFunctionOwnerGlobalAst
+            canonicalFunctionOwnerGlobalAst >= 0 -> if {
+                canonicalFunctionResult.astNode => canonicalFunctionRootAst!
+                prepared.package.nodes[canonicalFunctionResultGlobalAst].parent => canonicalFunctionParentAst!
+                1 => canonicalFunctionDistance!
+                (canonicalFunctionParentAst! >= 0
+                    and canonicalFunctionResultRange.astStart + canonicalFunctionParentAst! != canonicalFunctionOwnerGlobalAst) -> while {
+                    canonicalFunctionParentAst! => canonicalFunctionRootAst!
+                    prepared.package.nodes[canonicalFunctionResultRange.astStart + canonicalFunctionParentAst!].parent => canonicalFunctionParentAst!
+                    canonicalFunctionDistance! + 1 => canonicalFunctionDistance!
+                }
+                canonicalFunctionResultRange.astStart + canonicalFunctionParentAst! == canonicalFunctionOwnerGlobalAst -> if {
+                    Int(prepared.package.nodes[canonicalFunctionResultRange.astStart + canonicalFunctionRootAst!].start) => canonicalFunctionTopStart
+                    (functionResultRootAstByAst![canonicalFunctionOwnerGlobalAst] < 0
+                        or canonicalFunctionTopStart > functionResultTopStartByAst![canonicalFunctionOwnerGlobalAst]
+                        or (canonicalFunctionTopStart == functionResultTopStartByAst![canonicalFunctionOwnerGlobalAst]
+                            and canonicalFunctionDistance! < functionResultDistanceByAst![canonicalFunctionOwnerGlobalAst])) -> if {
+                        canonicalFunctionRootAst! => functionResultRootAstByAst![canonicalFunctionOwnerGlobalAst]
+                        canonicalFunctionDistance! => functionResultDistanceByAst![canonicalFunctionOwnerGlobalAst]
+                        canonicalFunctionTopStart => functionResultTopStartByAst![canonicalFunctionOwnerGlobalAst]
+                    }
+                }
+            }
+        }
+        canonicalFunctionResultIndex! + 1 => canonicalFunctionResultIndex!
+    }
     inferred! -> freezeLegacyExpressionTypes => inferred
     # Transfer construction-time tables into immutable owners before the
     # per-function parallel region. This is a zero-copy ownership transition;
@@ -6533,6 +6594,42 @@ public lowerContext prepared: semanticContext.SemanticSnapshot -> [TypedIrNode; 
             }
         }
         finalCallTypeIndex! + 1 => finalCallTypeIndex!
+    }
+    # A logical sys.file module may span several source fragments. Canonicalize
+    # compiler-provided file intrinsics from each call's resolved fragment and
+    # symbol name after target identity is final.
+    0 => finalFileIntrinsicIndex!
+    finalFileIntrinsicIndex! < (results! -> len) -> while {
+        results![finalFileIntrinsicIndex!] => finalFileIntrinsic!
+        (finalFileIntrinsic!.kind == 6
+            and finalFileIntrinsic!.targetModule >= 0
+            and finalFileIntrinsic!.symbol >= 0) -> if {
+            false => finalFileIntrinsicModule!
+            0 => finalFileIntrinsicModuleSearch!
+            finalFileIntrinsicModuleSearch! < (prepared.modules -> len) -> while {
+                prepared.modules[finalFileIntrinsicModuleSearch!] => finalFileIntrinsicIdentity
+                (finalFileIntrinsicIdentity.sourceIndex == finalFileIntrinsic!.targetModule
+                    and finalFileIntrinsicIdentity.pathHash == UInt64(1560534979202565016)) -> if {
+                    true => finalFileIntrinsicModule!
+                }
+                finalFileIntrinsicModuleSearch! + 1 => finalFileIntrinsicModuleSearch!
+            }
+            finalFileIntrinsicModule! -> if {
+                prepared.package.ranges[finalFileIntrinsic!.targetModule] => finalFileIntrinsicRange
+                prepared.package.symbols[finalFileIntrinsicRange.symbolStart + finalFileIntrinsic!.symbol] => finalFileIntrinsicSymbol
+                prepared.package.sources[finalFileIntrinsic!.targetModule] -> len => finalFileIntrinsicSourceLength
+                prepared.package.sources[finalFileIntrinsic!.targetModule] -> slice(UIntSize(0), finalFileIntrinsicSourceLength) => finalFileIntrinsicSource
+                IntrinsicNameRequest {
+                    source: finalFileIntrinsicSource
+                    token: prepared.package.tokens[finalFileIntrinsicRange.tokenStart + finalFileIntrinsicSymbol.nameToken]
+                } -> intrinsicOpcode => finalFileIntrinsicOpcode
+                (finalFileIntrinsicOpcode == -231 or finalFileIntrinsicOpcode == -232) -> if {
+                    finalFileIntrinsicOpcode => finalFileIntrinsic!.opcode
+                    finalFileIntrinsic! => results![finalFileIntrinsicIndex!]
+                }
+            }
+        }
+        finalFileIntrinsicIndex! + 1 => finalFileIntrinsicIndex!
     }
     0 => finalControlBindingIndex!
     finalControlBindingIndex! < (results! -> len) -> while {

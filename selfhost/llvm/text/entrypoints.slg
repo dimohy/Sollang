@@ -33,6 +33,48 @@ import syntax.generated.slg as grammar
 import sys.file as file
 import sys.path as path
 
+runtimeFunctionSymbol runtimeModule: Int, expectedName: Text, context: ref emitterContext.EmitContext -> Int {
+    -1 => matchedSymbol!
+    context.ranges[runtimeModule] => runtimeRange
+    0 => symbolIndex!
+    symbolIndex! < runtimeRange.symbolCount -> while {
+        context.symbols[runtimeRange.symbolStart + symbolIndex!] => candidate
+        (candidate.parent < 0 and candidate.nameToken >= 0 and candidate.nameToken < runtimeRange.tokenCount) -> if {
+            context.tokens[runtimeRange.tokenStart + candidate.nameToken] => nameToken
+            expectedName -> len => expectedLength
+            nameToken.span.length == expectedLength => matches!
+            UIntSize(0) => byteIndex!
+            (matches! and byteIndex! < expectedLength) -> while {
+                (context.sources[runtimeModule] -> byte(nameToken.span.start + byteIndex!)) != (expectedName -> byte(byteIndex!)) -> if {
+                    false => matches!
+                }
+                byteIndex! + UIntSize(1) => byteIndex!
+            }
+            matches! -> if { symbolIndex! => matchedSymbol! }
+        }
+        symbolIndex! + 1 => symbolIndex!
+    }
+    matchedSymbol!
+}
+
+runtimeFunctionSymbols runtimeModule: Int, context: ref emitterContext.EmitContext -> llvmRuntime.RuntimeFunctionSymbols {
+    llvmRuntime.RuntimeFunctionSymbols {
+        printSymbol: runtimeModule -> runtimeFunctionSymbol("print", context)
+        printlnSymbol: runtimeModule -> runtimeFunctionSymbol("println", context)
+        readIntSymbol: runtimeModule -> runtimeFunctionSymbol("readInt", context)
+        seedRandomSymbol: runtimeModule -> runtimeFunctionSymbol("seedRandom", context)
+        randomBelowSymbol: runtimeModule -> runtimeFunctionSymbol("randomBelow", context)
+        openIntWriterSymbol: runtimeModule -> runtimeFunctionSymbol("openIntWriter", context)
+        writeIntSymbol: runtimeModule -> runtimeFunctionSymbol("writeInt", context)
+        closeIntWriterSymbol: runtimeModule -> runtimeFunctionSymbol("closeIntWriter", context)
+        openIntReaderSymbol: runtimeModule -> runtimeFunctionSymbol("openIntReader", context)
+        closestIntSymbol: runtimeModule -> runtimeFunctionSymbol("closestInt", context)
+        closeIntReaderSymbol: runtimeModule -> runtimeFunctionSymbol("closeIntReader", context)
+        nowMillisSymbol: runtimeModule -> runtimeFunctionSymbol("nowMillis", context)
+        eprintlnSymbol: runtimeModule -> runtimeFunctionSymbol("eprintln", context)
+    }
+}
+
 
 prepareSnapshot request: ref PrepareRequest, prepared: move semanticContext.SemanticSnapshot, libraries: move libraryImports.LibraryCatalog, libraryCalls: move [libraryImports.LibraryFunctionResolution; ~] -> emitterContext.EmitContext {
     request.pointerBitWidth => pointerBitWidth
@@ -393,10 +435,10 @@ prepare request: ref PrepareRequest -> emitterContext.EmitContext {
     request -> prepareSnapshot(prepared!, libraryImports.empty(), [libraryImports.LibraryFunctionResolution; ~])
 }
 
-
 emitWindowsContext context: emitterContext.EmitContext -> Unit uses Console {
     context -> diagnostics.usesParallelRuntime => capturesParallelOutput
     context -> diagnostics.usesTextRuntime => usesTextOutput
+    context -> diagnostics.usesStandardError => usesStandardError
     context -> diagnostics.usesProcessRuntime => needsProcessRuntime
     context -> diagnostics.usesArgumentsRuntime => needsArgumentsRuntime
     context -> diagnostics.usesDirectoryRuntime => needsDirectoryRuntime
@@ -405,11 +447,14 @@ emitWindowsContext context: emitterContext.EmitContext -> Unit uses Console {
     context -> diagnostics.comInteropFunctionCount => comInteropCount
     context -> diagnostics.nativeInteropFunctionCount => nativeInteropCount
     capturesParallelOutput -> if { computeRuntime.emitMemoryOutputSinkRuntime() }
-    (usesTextOutput or capturesParallelOutput) -> if { capturesParallelOutput -> textOutputRuntime.emitWindowsTextRuntime }
+    (usesTextOutput or capturesParallelOutput) -> if { capturesParallelOutput -> textOutputRuntime.emitWindowsTextRuntime(usesStandardError) }
     capturesParallelOutput -> if { computeRuntime.emitWindowsComputeRuntime() }
     context -> diagnostics.usesIntInterpolation -> if { numberFormat.emitIntTextRuntime() }
     context -> diagnostics.usesBoolInterpolation -> if { numberFormat.emitBoolTextRuntime() }
+    (usesStandardError and (context -> diagnostics.usesIntInterpolation)) -> if { numberFormat.emitIntStandardErrorRuntime() }
+    (usesStandardError and (context -> diagnostics.usesBoolInterpolation)) -> if { numberFormat.emitBoolStandardErrorRuntime() }
     context -> diagnostics.usesSourceTextRuntime => needsSourceTextRuntime
+    context -> diagnostics.usesStandardInputSourceTextRuntime => needsStandardInputSourceTextRuntime
     -1 => runtimeModule!
     0 => runtimeModuleSearch!
     runtimeModuleSearch! < (context.modules -> len) -> while {
@@ -458,19 +503,28 @@ emitWindowsContext context: emitterContext.EmitContext -> Unit uses Console {
     needsDirectoryRuntime -> if { llvmRuntime.emitWindowsDirectory() }
     needsOwnedFileRuntime -> if { llvmRuntime.emitWindowsOwnedFile() }
     runtimeModule! >= 0 -> if {
-        runtimeModule! -> llvmRuntime.emitWindows
+        runtimeModule! -> runtimeFunctionSymbols(context) => runtimeSymbols
+        runtimeModule! -> llvmRuntime.emitWindows(runtimeSymbols)
     }
     needsSourceTextRuntime -> if {
         runtimeModule! < 0 -> if { llvmRuntime.emitWindowsSourceTextDeclarations() }
         llvmRuntime.emitWindowsSourceText()
+        needsStandardInputSourceTextRuntime -> if {
+            (not usesTextOutput and not capturesParallelOutput) -> if { "declare dllimport ptr @GetStdHandle(i32)" -> println }
+            not needsOwnedFileRuntime -> if { "declare dllimport i32 @ReadFile(ptr, ptr, i32, ptr, ptr)" -> println }
+            not needsDirectoryRuntime -> if { "declare dllimport i32 @GetLastError()" -> println }
+            llvmRuntime.emitWindowsStandardInputSourceText()
+        }
     }
 }
 
 emitLinuxContext context: emitterContext.EmitContext -> Unit uses Console {
     context -> diagnostics.usesParallelRuntime => capturesParallelOutput
     context -> diagnostics.usesTextRuntime => usesTextOutput
+    context -> diagnostics.usesStandardError => usesStandardError
     context -> diagnostics.usesProcessRuntime => needsProcessRuntime
     context -> diagnostics.usesSourceTextRuntime => needsSourceTextRuntime
+    context -> diagnostics.usesStandardInputSourceTextRuntime => needsStandardInputSourceTextRuntime
     context -> diagnostics.usesDirectoryRuntime => needsDirectoryRuntime
     context -> diagnostics.usesOwnedFileRuntime => needsOwnedFileRuntime
     context -> diagnostics.usesMouseEventsRuntime => needsMouseEventsRuntime
@@ -482,10 +536,12 @@ emitLinuxContext context: emitterContext.EmitContext -> Unit uses Console {
         runtimeModuleSearch! + 1 => runtimeModuleSearch!
     }
     capturesParallelOutput -> if { computeRuntime.emitMemoryOutputSinkRuntime() }
-    (usesTextOutput or capturesParallelOutput) -> if { capturesParallelOutput -> textOutputRuntime.emitLinuxTextRuntime }
+    (usesTextOutput or capturesParallelOutput) -> if { capturesParallelOutput -> textOutputRuntime.emitLinuxTextRuntime(usesStandardError) }
     capturesParallelOutput -> if { computeRuntime.emitLinuxComputeRuntime() }
     context -> diagnostics.usesIntInterpolation -> if { numberFormat.emitIntTextRuntime() }
     context -> diagnostics.usesBoolInterpolation -> if { numberFormat.emitBoolTextRuntime() }
+    (usesStandardError and (context -> diagnostics.usesIntInterpolation)) -> if { numberFormat.emitIntStandardErrorRuntime() }
+    (usesStandardError and (context -> diagnostics.usesBoolInterpolation)) -> if { numberFormat.emitBoolStandardErrorRuntime() }
     needsProcessRuntime -> if { processRuntime.emitProcessTypeRuntime() }
     context -> emitCore
     needsMouseEventsRuntime -> if { usesTextOutput -> mouseEventRuntime.emitLinuxMouseEventRuntime }
@@ -493,13 +549,18 @@ emitLinuxContext context: emitterContext.EmitContext -> Unit uses Console {
     needsDirectoryRuntime -> if { llvmRuntime.emitLinuxDirectory() }
     needsOwnedFileRuntime -> if { not needsProcessRuntime -> llvmRuntime.emitLinuxOwnedFile }
     runtimeModule! >= 0 -> if {
-        runtimeModule! -> llvmRuntime.emitLinux
+        runtimeModule! -> runtimeFunctionSymbols(context) => runtimeSymbols
+        runtimeModule! -> llvmRuntime.emitLinux(runtimeSymbols)
     }
     needsSourceTextRuntime -> if {
         (not needsProcessRuntime and not needsOwnedFileRuntime) -> if { "declare i32 @open(ptr, i32, i32)" -> println }
         (not capturesParallelOutput and not needsProcessRuntime and not needsOwnedFileRuntime) -> if { "declare i32 @close(i32)" -> println }
         llvmRuntime.emitLinuxSourceTextDeclarations()
         llvmRuntime.emitLinuxSourceText()
+        needsStandardInputSourceTextRuntime -> if {
+            (not capturesParallelOutput and not needsMouseEventsRuntime) -> if { "declare i64 @read(i32, ptr, i64)" -> println }
+            llvmRuntime.emitLinuxStandardInputSourceText()
+        }
     }
 }
 

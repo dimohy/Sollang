@@ -54,9 +54,29 @@ and exit-code compatibility is verified on Windows x64 and Linux x64. The C#
 compiler may still build and differentially verify the native compiler inside
 the development pipeline, but it is never copied into a 0.4 archive.
 
-This boundary has a permanent no-fallback rule. Temporary fallback paths,
-defensive success defaults, diagnostic suppression, command-specific hard-coded
-bypasses, and silent feature reduction are release failures, not compatibility
-solutions. Every discovered parity gap must be corrected at its root and pass
-focused reproduction, the complete regression suite, and the cross-platform
-fixed-point gates before 0.4 can be published.
+This boundary has an absolute root-cause-only rule, regardless of how frequently
+the compiler changes or how many failures are uncovered in sequence. Temporary
+fallback paths, symptom patches, defensive success defaults, swallowed errors,
+diagnostic suppression, command- or test-specific hard-coded branches, and
+silent feature reduction are release failures, not compatibility solutions.
+Every defect must follow the same mandatory sequence:
+
+1. reduce it to a permanent focused reproduction;
+2. identify the owning compiler layer and the violated shared invariant;
+3. correct that invariant in the owning layer;
+4. retain the reproduction as a regression;
+5. pass focused, complete, cross-platform, and fixed-point verification.
+
+A change that cannot yet satisfy this sequence remains an unresolved defect. It
+must never be described as a fix or used to unblock 0.4 packaging.
+
+The current verified fixed points include the canonical control-result and
+deterministic parent-assisted parallel-start corrections. Windows Stage 3
+reproduces 19,967,212 LLVM bytes with SHA-256
+`2593D82C61F36E056710262BAB80D35065BF01836FB662D288D62FA7E7A24491`;
+Linux Stage 3 reproduces 19,950,197 LLVM bytes with SHA-256
+`9A8461F01035385F4A1554241CA9EC7418D0122786151811EF9970B2AA11BEAB`.
+The complete source suites pass 905/905 on Windows and 904/904 on Linux. The
+currently implemented native CLI slices pass build/run 10/10 and format 11/11
+on each fixed-point executable; these results do not waive the remaining
+public-command parity gates.

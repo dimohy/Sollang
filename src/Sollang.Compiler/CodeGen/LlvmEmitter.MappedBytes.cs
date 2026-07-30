@@ -15,6 +15,19 @@ internal sealed partial class LlvmEmitter
         return new RuntimeSourceText(text.PointerName, text.LengthName, "null", "0");
     }
 
+    private RuntimeSourceText EmitBorrowSourceBytes(RuntimeValue value)
+    {
+        if (value is RuntimeReference reference)
+        {
+            value = LoadReference(reference);
+        }
+        if (value is not RuntimeDynamicInlineArray bytes || bytes.ElementType != BoundType.UInt8)
+        {
+            throw new SollangException("borrowBytes expects ref [UInt8; ~]");
+        }
+        return new RuntimeSourceText(bytes.PointerName, bytes.LengthName, "null", "0");
+    }
+
     private RuntimeSourceText EmitMapSourceText(RuntimeValue value)
     {
         if (!_platform.SupportsMemoryMapping)
@@ -38,6 +51,123 @@ internal sealed partial class LlvmEmitter
         var mappedLength = NextTemp("source_text_mapped_length");
         EmitAssign(mappedLength, $"extractvalue %sollang.mapped_bytes {aggregate}, 3");
         return new RuntimeSourceText(data, length, basePointer, mappedLength);
+    }
+
+    private RuntimeSourceText EmitReadStandardInputSourceText()
+    {
+        var bufferSlot = NextTemp("stdin_source_buffer_slot");
+        EmitAlloca(bufferSlot, "ptr", 8);
+        var lengthSlot = NextTemp("stdin_source_length_slot");
+        EmitAlloca(lengthSlot, "i64", 8);
+        var capacitySlot = NextTemp("stdin_source_capacity_slot");
+        EmitAlloca(capacitySlot, "i64", 8);
+        var initialBuffer = NextTemp("stdin_source_initial_buffer");
+        EmitCall(initialBuffer, "ptr", "sollang_alloc", "i64 4096");
+        var allocated = NextTemp("stdin_source_allocated");
+        EmitCompare(allocated, "ne", "ptr", initialBuffer, "null");
+        EmitTrapUnless(allocated, "stdin_source_allocate");
+        EmitStore("ptr", initialBuffer, bufferSlot, 8);
+        EmitStore("i64", "0", lengthSlot, 8);
+        EmitStore("i64", "4096", capacitySlot, 8);
+
+        var readLabel = NextLabel("stdin_source_read");
+        var growLabel = NextLabel("stdin_source_grow");
+        var doneLabel = NextLabel("stdin_source_done");
+        EmitBranch(readLabel);
+        EmitFunctionLine();
+
+        EmitLabel(readLabel);
+        _currentBlockLabel = readLabel;
+        var buffer = NextTemp("stdin_source_buffer");
+        EmitLoad(buffer, "ptr", bufferSlot, 8);
+        var length = NextTemp("stdin_source_length");
+        EmitLoad(length, "i64", lengthSlot, 8);
+        var capacity = NextTemp("stdin_source_capacity");
+        EmitLoad(capacity, "i64", capacitySlot, 8);
+        var available = NextTemp("stdin_source_available");
+        EmitAssign(available, $"sub i64 {capacity}, {length}");
+        var destination = NextTemp("stdin_source_destination");
+        EmitAssign(destination, $"getelementptr i8, ptr {buffer}, i64 {length}");
+        var readOk = NextTemp("stdin_source_read_ok");
+        EmitCall(readOk, "i32", "sollang_read_stdin",
+            $"ptr %stdin, ptr {destination}, i64 {available}, ptr %read");
+        var succeeded = NextTemp("stdin_source_read_succeeded");
+        EmitCompare(succeeded, "ne", "i32", readOk, "0");
+        EmitTrapUnless(succeeded, "stdin_source_read");
+        var read32 = NextTemp("stdin_source_read32");
+        EmitLoad(read32, "i32", "%read", 4);
+        var read64 = NextTemp("stdin_source_read64");
+        EmitAssign(read64, $"zext i32 {read32} to i64");
+        var eof = NextTemp("stdin_source_eof");
+        EmitCompare(eof, "eq", "i64", read64, "0");
+        var nextLength = NextTemp("stdin_source_next_length");
+        EmitAssign(nextLength, $"add i64 {length}, {read64}");
+        EmitStore("i64", nextLength, lengthSlot, 8);
+        EmitConditionalBranch(eof, doneLabel, growLabel);
+        EmitFunctionLine();
+
+        EmitLabel(growLabel);
+        _currentBlockLabel = growLabel;
+        var needsGrowth = NextTemp("stdin_source_needs_growth");
+        EmitCompare(needsGrowth, "eq", "i64", nextLength, capacity);
+        var resizeLabel = NextLabel("stdin_source_resize");
+        EmitConditionalBranch(needsGrowth, resizeLabel, readLabel);
+        EmitFunctionLine();
+
+        EmitLabel(resizeLabel);
+        _currentBlockLabel = resizeLabel;
+        var nextCapacity = NextTemp("stdin_source_next_capacity");
+        EmitAssign(nextCapacity, $"mul i64 {capacity}, 2");
+        var resized = NextTemp("stdin_source_resized");
+        EmitCall(resized, "ptr", "sollang_alloc", $"i64 {nextCapacity}");
+        var resizeOk = NextTemp("stdin_source_resize_ok");
+        EmitCompare(resizeOk, "ne", "ptr", resized, "null");
+        EmitTrapUnless(resizeOk, "stdin_source_resize");
+        var copyEntryLabel = _currentBlockLabel;
+        var copyLabel = NextLabel("stdin_source_copy");
+        var copyBodyLabel = NextLabel("stdin_source_copy_body");
+        var copyDoneLabel = NextLabel("stdin_source_copy_done");
+        EmitBranch(copyLabel);
+        EmitFunctionLine();
+
+        EmitLabel(copyLabel);
+        _currentBlockLabel = copyLabel;
+        var copyIndex = NextTemp("stdin_source_copy_index");
+        var copyNext = NextTemp("stdin_source_copy_next");
+        EmitInstruction($"{copyIndex} = phi i64 [ 0, %{copyEntryLabel} ], [ {copyNext}, %{copyBodyLabel} ]");
+        var copyComplete = NextTemp("stdin_source_copy_complete");
+        EmitCompare(copyComplete, "eq", "i64", copyIndex, nextLength);
+        EmitConditionalBranch(copyComplete, copyDoneLabel, copyBodyLabel);
+        EmitFunctionLine();
+
+        EmitLabel(copyBodyLabel);
+        _currentBlockLabel = copyBodyLabel;
+        var oldByteAddress = NextTemp("stdin_source_old_byte_address");
+        EmitAssign(oldByteAddress, $"getelementptr i8, ptr {buffer}, i64 {copyIndex}");
+        var copiedByte = NextTemp("stdin_source_copied_byte");
+        EmitLoad(copiedByte, "i8", oldByteAddress, 1);
+        var newByteAddress = NextTemp("stdin_source_new_byte_address");
+        EmitAssign(newByteAddress, $"getelementptr i8, ptr {resized}, i64 {copyIndex}");
+        EmitStore("i8", copiedByte, newByteAddress, 1);
+        EmitInstruction($"{copyNext} = add i64 {copyIndex}, 1");
+        EmitBranch(copyLabel);
+        EmitFunctionLine();
+
+        EmitLabel(copyDoneLabel);
+        _currentBlockLabel = copyDoneLabel;
+        EmitCall(target: null, "void", "sollang_free", $"ptr {buffer}");
+        EmitStore("ptr", resized, bufferSlot, 8);
+        EmitStore("i64", nextCapacity, capacitySlot, 8);
+        EmitBranch(readLabel);
+        EmitFunctionLine();
+
+        EmitLabel(doneLabel);
+        _currentBlockLabel = doneLabel;
+        var finalBuffer = NextTemp("stdin_source_final_buffer");
+        EmitLoad(finalBuffer, "ptr", bufferSlot, 8);
+        var finalLength = NextTemp("stdin_source_final_length");
+        EmitLoad(finalLength, "i64", lengthSlot, 8);
+        return new RuntimeSourceText(finalBuffer, finalLength, finalBuffer, "-1");
     }
 
     private RuntimeSourceText EmitMapSourcePath(RuntimeValue value)

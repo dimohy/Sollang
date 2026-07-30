@@ -9,10 +9,75 @@ public usesTextRuntime context: ref emitterContext.EmitContext -> Bool {
     false => usesRuntime!
     0 => nodeIndex!
     nodeIndex! < (context.ir -> len) -> while {
-        (context.ir[nodeIndex!].symbol == -101 or context.ir[nodeIndex!].symbol == -102 or context.ir[nodeIndex!].symbol == -103) -> if { true => usesRuntime! }
+        (context.ir[nodeIndex!].symbol == -101 or context.ir[nodeIndex!].symbol == -102 or context.ir[nodeIndex!].symbol == -103 or context.ir[nodeIndex!].symbol == -116) -> if { true => usesRuntime! }
         nodeIndex! + 1 => nodeIndex!
     }
+    context -> usesStandardError -> if { true => usesRuntime! }
     usesRuntime!
+}
+
+runtimeFunctionNamed sourceModule: Int, symbolIndex: Int, expectedName: Text, context: ref emitterContext.EmitContext -> Bool {
+    false => runtimeModule!
+    0 => moduleIndex!
+    moduleIndex! < (context.modules -> len) -> while {
+        context.modules[moduleIndex!] => moduleIdentity
+        (moduleIdentity.sourceIndex == sourceModule and moduleIdentity.pathHash == UInt64(12254170256457402476)) -> if {
+            true => runtimeModule!
+        }
+        moduleIndex! + 1 => moduleIndex!
+    }
+    false => matches!
+    (runtimeModule! and sourceModule >= 0 and sourceModule < (context.ranges -> len)) -> if {
+        context.ranges[sourceModule] => sourceRange
+        (symbolIndex >= 0 and symbolIndex < sourceRange.symbolCount) -> if {
+            context.symbols[sourceRange.symbolStart + symbolIndex] => symbol
+            (symbol.nameToken >= 0 and symbol.nameToken < sourceRange.tokenCount) -> if {
+                context.tokens[sourceRange.tokenStart + symbol.nameToken] => nameToken
+                expectedName -> len => expectedLength
+                nameToken.span.length == expectedLength => matches!
+                UIntSize(0) => byteIndex!
+                (matches! and byteIndex! < expectedLength) -> while {
+                    (context.sources[sourceModule] -> byte(nameToken.span.start + byteIndex!)) != (expectedName -> byte(byteIndex!)) -> if {
+                        false => matches!
+                    }
+                    byteIndex! + UIntSize(1) => byteIndex!
+                }
+            }
+        }
+    }
+    matches!
+}
+
+public usesStandardError context: ref emitterContext.EmitContext -> Bool {
+    false => usesError!
+    0 => moduleIndex!
+    moduleIndex! < (context.modules -> len) -> while {
+        context.modules[moduleIndex!] => moduleIdentity
+        (moduleIdentity.pathHash == UInt64(12254170256457402476)
+            and moduleIdentity.sourceIndex >= 0
+            and moduleIdentity.sourceIndex < (context.ranges -> len)) -> if {
+            context.ranges[moduleIdentity.sourceIndex] => runtimeRange
+            0 => runtimeSymbolIndex!
+            runtimeSymbolIndex! < runtimeRange.symbolCount -> while {
+                moduleIdentity.sourceIndex -> runtimeFunctionNamed(runtimeSymbolIndex!, "eprintln", context) -> if {
+                    true => usesError!
+                }
+                runtimeSymbolIndex! + 1 => runtimeSymbolIndex!
+            }
+        }
+        moduleIndex! + 1 => moduleIndex!
+    }
+    0 => nodeIndex!
+    nodeIndex! < (context.ir -> len) -> while {
+        context.ir[nodeIndex!] => node
+        (node.symbol == -116
+            or (node.kind == 0 and (node.sourceModule -> runtimeFunctionNamed(node.symbol, "eprintln", context)))
+            or (node.kind == 6 and (node.targetModule -> runtimeFunctionNamed(node.symbol, "eprintln", context)))) -> if {
+            true => usesError!
+        }
+        nodeIndex! + 1 => nodeIndex!
+    }
+    usesError!
 }
 
 public usesParallelRuntime context: ref emitterContext.EmitContext -> Bool {
@@ -65,6 +130,16 @@ public usesSourceTextRuntime context: ref emitterContext.EmitContext -> Bool {
     usesRuntime!
 }
 
+public usesStandardInputSourceTextRuntime context: ref emitterContext.EmitContext -> Bool {
+    false => usesRuntime!
+    0 => nodeIndex!
+    nodeIndex! < (context.ir -> len) -> while {
+        context.ir[nodeIndex!].opcode == -231 -> if { true => usesRuntime! }
+        nodeIndex! + 1 => nodeIndex!
+    }
+    usesRuntime!
+}
+
 public usesDirectoryRuntime context: ref emitterContext.EmitContext -> Bool {
     false => usesRuntime!
     0 => nodeIndex!
@@ -91,7 +166,7 @@ public usesIntInterpolation context: ref emitterContext.EmitContext -> Bool {
     0 => nodeIndex!
     nodeIndex! < (context.ir -> len) -> while {
         context.ir[nodeIndex!] => node
-        (node.kind == 6 and (node.symbol == -101 or node.symbol == -102) and node.operand0 >= 0) -> if {
+        (node.kind == 6 and (node.symbol == -101 or node.symbol == -102 or node.symbol == -116) and node.operand0 >= 0) -> if {
             context.ir[node.operand0] => outputArgument
             (outputArgument.typeOrigin == 1 and outputArgument.typeSymbol >= 2 and outputArgument.typeSymbol <= 14) => outputArgumentIsInt!
             (not outputArgumentIsInt! and outputArgument.typeId >= 0 and outputArgument.typeId < (context.types -> len)) -> if {
@@ -108,7 +183,7 @@ public usesIntInterpolation context: ref emitterContext.EmitContext -> Bool {
             }
             outputArgumentIsInt! -> if { true => usesInterpolation! }
         }
-        (node.kind == 6 and (node.symbol == -101 or node.symbol == -102) and node.operand0 >= 0 and context.ir[node.operand0].kind == 2) -> if {
+        (node.kind == 6 and (node.symbol == -101 or node.symbol == -102 or node.symbol == -116) and node.operand0 >= 0 and context.ir[node.operand0].kind == 2) -> if {
             context.ir[node.operand0] => argument
             context.tokens[context.ranges[argument.sourceModule].tokenStart + argument.payloadToken] => token
             token.span.start + UIntSize(1) => byteIndex!
@@ -152,7 +227,7 @@ public usesBoolInterpolation context: ref emitterContext.EmitContext -> Bool {
     0 => nodeIndex!
     nodeIndex! < (context.ir -> len) -> while {
         context.ir[nodeIndex!] => node
-        (node.kind == 6 and (node.symbol == -101 or node.symbol == -102) and node.operand0 >= 0) -> if {
+        (node.kind == 6 and (node.symbol == -101 or node.symbol == -102 or node.symbol == -116) and node.operand0 >= 0) -> if {
             context.ir[node.operand0] => outputArgument
             (outputArgument.typeOrigin == 1 and outputArgument.typeSymbol == 23) => outputArgumentIsBool!
             (not outputArgumentIsBool! and outputArgument.typeId >= 0 and outputArgument.typeId < (context.types -> len)) -> if {
@@ -169,7 +244,7 @@ public usesBoolInterpolation context: ref emitterContext.EmitContext -> Bool {
             }
             outputArgumentIsBool! -> if { true => usesInterpolation! }
         }
-        (node.kind == 6 and (node.symbol == -101 or node.symbol == -102) and node.operand0 >= 0 and context.ir[node.operand0].kind == 2) -> if {
+        (node.kind == 6 and (node.symbol == -101 or node.symbol == -102 or node.symbol == -116) and node.operand0 >= 0 and context.ir[node.operand0].kind == 2) -> if {
             context.ir[node.operand0] => argument
             context.interpolationRanges[argument.sourceModule] => interpolationRange
             0 => interpolationIndex!

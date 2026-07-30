@@ -98,6 +98,12 @@ follow-on product work rather than incomplete self-hosting gates. See
 Sollang 0.4 completes the bootstrap transition without changing how users invoke
 the compiler.
 
+- [ ] Enforce the root-cause-only completion gate for every change: permanent
+  minimal reproduction, owning-layer diagnosis, shared-invariant correction,
+  retained regression, focused verification, complete cross-platform suite, and
+  Stage 2/Stage 3 fixed point. Any temporary workaround, symptom patch,
+  defensive success path, swallowed error, hard-coded command/test branch, or
+  feature reduction blocks release.
 - [ ] Implement the complete supported `sollang` CLI contract in `.slg`.
 - [ ] Verify `--version`, help, `build`, `run`, `test`, `format`, `resolve`,
   `language-server`, and `bind-cpp` argument, diagnostic, output, and exit-code
@@ -125,14 +131,47 @@ Current verified implementation slices:
 
 The current Windows and Linux native compilers pass their 7/7 and 6/6 Stage 2
 gates and reproduce at Stage 3. The source/project/local-dependency/workspace
-CLI matrix passes 10/10 on both fixed-point compilers. The full platform suites now contain 898
-Windows cases and 897 Linux-applicable cases. These partial results deliberately
-do not create the `native-cli-full-parity` proof required by
-`publish-release.ps1`, so a 0.4 archive cannot be produced prematurely.
+CLI matrix passes 10/10 and the formatter matrix passes 11/11 on both
+fixed-point compilers. The full platform suites now pass 905/905 Windows cases
+and 904/904 Linux-applicable cases. The fixed-point LLVM hashes are
+`2593D82C61F36E056710262BAB80D35065BF01836FB662D288D62FA7E7A24491`
+for Windows and
+`9A8461F01035385F4A1554241CA9EC7418D0122786151811EF9970B2AA11BEAB`
+for Linux. These partial CLI results deliberately do not create the
+`native-cli-full-parity` proof required by `publish-release.ps1`, so a 0.4
+archive cannot be produced prematurely.
 
 The C# compiler remains a development bootstrap and reference oracle. It is not
 a 0.4 release asset. An internal Stage driver cannot satisfy this milestone by
 being renamed: the native executable must preserve the existing public CLI.
+
+The first checklist item is an invariant over every later item, not a task that
+can be checked once and forgotten. Frequent source changes and sequentially
+exposed failures do not relax it. A reported issue is fixed only after the
+owning layer's invariant and its permanent regression both pass the complete
+verification ladder.
+
+## Next Goal: Flow Junctions
+
+After every 0.4 native-distribution requirement above is complete, the next
+implementation goal is the accepted branching and joining design in
+[`FLOW_JUNCTIONS.md`](FLOW_JUNCTIONS.md).
+
+- [ ] Add ordinary and labeled product values without implicit argument
+  expansion.
+- [ ] Add sequential named `branch`, exclusive `partition`, and value-preserving
+  `tap`.
+- [ ] Add policy-specific lazy stream joins: `zip`, `merge`, `concat`, and
+  `latest`.
+- [ ] Add explicit `parallel branch` through the existing structured parallel
+  ownership and cancellation model.
+- [ ] Keep ownership, effects, evaluation order, buffering, backpressure, and
+  nondeterminism visible and statically checked.
+- [ ] Add 10 separate user examples and at least 114 logical regression cases,
+  then run the complete Windows/Linux, browser-applicable, Stage 2, and Stage 3
+  verification gates.
+- [ ] Reject provisional aliases, temporary fallback parsing, implicit cloning,
+  implicit materialization, and implicit parallelism.
 
 ## Design Direction
 

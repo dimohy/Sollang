@@ -137,6 +137,7 @@ lexText source: Text -> [syntax.SyntaxToken; ~] {
                             current == UInt8(34) -> if {
                                 position! => stringStart
                                 false => rawString!
+                                false => stringClosed!
                                 position! + UIntSize(2) < sourceLength -> if {
                                     ((source -> byte(position! + UIntSize(1))) == UInt8(34) and (source -> byte(position! + UIntSize(2))) == UInt8(34)) -> if { true => rawString! }
                                 }
@@ -155,7 +156,10 @@ lexText source: Text -> [syntax.SyntaxToken; ~] {
                                         quoteRun! >= delimiterWidth! -> if { true => rawClosed! }
                                         not rawClosed! -> if { position! + UIntSize(1) => position! }
                                     }
-                                    rawClosed! -> if { position! + delimiterWidth! => position! }
+                                    rawClosed! -> if {
+                                        position! + delimiterWidth! => position!
+                                        true => stringClosed!
+                                    }
                                 } else {
                                     position! + UIntSize(1) => position!
                                     (position! < sourceLength and (source -> byte(position!)) != UInt8(34)) -> while {
@@ -163,10 +167,11 @@ lexText source: Text -> [syntax.SyntaxToken; ~] {
                                     }
                                     position! < sourceLength -> if {
                                         position! + UIntSize(1) => position!
+                                        true => stringClosed!
                                     }
                                 }
                                 syntax.SyntaxToken {
-                                    kind: grammar.tokenIdString()
+                                    kind: stringClosed! -> if { grammar.tokenIdString() } else { grammar.tokenIdInvalid() }
                                     span: syntax.SourceSpan { fileId: 0, start: stringStart, length: position! - stringStart }
                                 } => stringToken
                                 tokens! -> push(stringToken)

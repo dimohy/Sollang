@@ -122,9 +122,15 @@ failure:
 define void @sollang_runtime_unmap_text(%sollang.source_text %source) {
 entry:
   %base = extractvalue %sollang.source_text %source, 2
-  %length = extractvalue %sollang.source_text %source, 3
   %owned = icmp ne ptr %base, null
-  br i1 %owned, label %unmap, label %done
+  br i1 %owned, label %release, label %done
+release:
+  %length = extractvalue %sollang.source_text %source, 3
+  %heap_owned = icmp eq i64 %length, -1
+  br i1 %heap_owned, label %free_owned, label %unmap
+free_owned:
+  call void @free(ptr %base)
+  br label %done
 unmap:
   %ignored = call i32 @munmap(ptr %base, i64 %length)
   br label %done

@@ -742,6 +742,16 @@ internal sealed class LinuxLlvmRuntimePlatform : LlvmRuntimePlatform
               %running_before = atomicrmw add ptr @sollang_compute_running, i32 1 acq_rel
               %running_now = add i32 %running_before, 1
               %peak_before = atomicrmw max ptr @sollang_compute_peak, i32 %running_now acq_rel
+              %gate_pair = cmpxchg ptr @sollang_compute_parent_gate, i32 0, i32 1 acq_rel acquire
+              %gate_owner = extractvalue { i32, i1 } %gate_pair, 1
+              br i1 %gate_owner, label %wait_parent, label %worker_callback
+
+            wait_parent:
+              %parent_gate = load atomic i32, ptr @sollang_compute_parent_gate acquire, align 4
+              %parent_ready = icmp eq i32 %parent_gate, 2
+              br i1 %parent_ready, label %worker_callback, label %wait_parent
+
+            worker_callback:
               call void %callback(ptr %group, i64 %index)
               %running_after = atomicrmw sub ptr @sollang_compute_running, i32 1 acq_rel
               br label %claim
@@ -863,6 +873,7 @@ internal sealed class LinuxLlvmRuntimePlatform : LlvmRuntimePlatform
             publish:
               store atomic i64 0, ptr @sollang_compute_next release, align 8
               store atomic i32 0, ptr @sollang_compute_peak release, align 4
+              store atomic i32 0, ptr @sollang_compute_parent_gate release, align 4
               %workers = load i32, ptr @sollang_compute_worker_count, align 4
               store atomic i32 %workers, ptr @sollang_compute_active release, align 4
               store atomic ptr %group, ptr @sollang_compute_group_current release, align 8
@@ -872,6 +883,15 @@ internal sealed class LinuxLlvmRuntimePlatform : LlvmRuntimePlatform
               %help_first_index = atomicrmw add ptr @sollang_compute_next, i64 1 acq_rel
               %work_fd = load i32, ptr @sollang_compute_work_event_fd, align 4
               %released = call i64 @write(i32 %work_fd, ptr %event_value, i64 8)
+              %help_has_peer_work = icmp ugt i64 %count, 1
+              br i1 %help_has_peer_work, label %help_wait_worker, label %help_begin
+
+            help_wait_worker:
+              %help_worker_gate = load atomic i32, ptr @sollang_compute_parent_gate acquire, align 4
+              %help_worker_ready = icmp eq i32 %help_worker_gate, 1
+              br i1 %help_worker_ready, label %help_begin, label %help_wait_worker
+
+            help_begin:
               br label %help_work
 
             help_claim:
@@ -884,12 +904,13 @@ internal sealed class LinuxLlvmRuntimePlatform : LlvmRuntimePlatform
               br i1 %help_has_work, label %help_work, label %help_wait
 
             help_work:
-              %help_index = phi i64 [ %help_first_index, %publish ], [ %help_claimed_index, %help_claim ]
+              %help_index = phi i64 [ %help_first_index, %help_begin ], [ %help_claimed_index, %help_claim ]
               %help_callback_slot = getelementptr %sollang.compute_group, ptr %group, i32 0, i32 0
               %help_callback = load ptr, ptr %help_callback_slot, align 8
               %help_running_before = atomicrmw add ptr @sollang_compute_running, i32 1 acq_rel
               %help_running_now = add i32 %help_running_before, 1
               %help_peak_before = atomicrmw max ptr @sollang_compute_peak, i32 %help_running_now acq_rel
+              store atomic i32 2, ptr @sollang_compute_parent_gate release, align 4
               call void %help_callback(ptr %group, i64 %help_index)
               %help_running_after = atomicrmw sub ptr @sollang_compute_running, i32 1 acq_rel
               br label %help_claim
@@ -1335,6 +1356,40 @@ internal sealed class LinuxLlvmRuntimePlatform : LlvmRuntimePlatform
 
     public override void EmitIoPrimitives(StringBuilder functions)
     {
+        if (UsesStandardError)
+        {
+            functions.AppendLine("""
+            define internal i32 @sollang_write_stderr(ptr %data, i64 %len, ptr %written) #0 {
+            entry:
+              %empty = icmp eq i64 %len, 0
+              br i1 %empty, label %success, label %write
+
+            write:
+              %offset = phi i64 [ 0, %entry ], [ %next, %advance ]
+              %remaining = sub i64 %len, %offset
+              %current = getelementptr i8, ptr %data, i64 %offset
+              %count = call i64 @write(i32 2, ptr %current, i64 %remaining)
+              %positive = icmp sgt i64 %count, 0
+              br i1 %positive, label %advance, label %failure
+
+            advance:
+              %next = add i64 %offset, %count
+              %complete = icmp eq i64 %next, %len
+              br i1 %complete, label %success, label %write
+
+            success:
+              %written32 = trunc i64 %len to i32
+              store i32 %written32, ptr %written, align 4
+              ret i32 1
+
+            failure:
+              store i32 0, ptr %written, align 4
+              ret i32 0
+            }
+
+            """);
+        }
+
         functions.AppendLine("""
             define internal i32 @sollang_flush_stdout(ptr %stdout, ptr %written) #0 {
             entry:

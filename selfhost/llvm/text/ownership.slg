@@ -881,6 +881,12 @@ writeIrType node: typedIr.TypedIrNode, context: ref emitterContext.EmitContext, 
     # can still carry a stale imported nominal module on region nodes, so
     # consulting it first reintroduces sys.file.SourceText as an unrelated
     # user struct even when typeId already names the canonical builtin.
+    # Byte indexing is lowered directly to an i8 load in every expression
+    # region. Its producer ABI is therefore UInt8 even when an inferred use
+    # retained the surrounding integer context in legacy node metadata.
+    ((node.kind == 9 or node.kind == 6) and node.opcode == -202) -> if {
+        "i8" -> print
+    } else {
     node.typeOrigin == 16 -> if {
         "%sollang.dyn" -> print
     } else {
@@ -890,6 +896,7 @@ writeIrType node: typedIr.TypedIrNode, context: ref emitterContext.EmitContext, 
     } else {
         node -> effectiveTypeId(context, state) => typeId
         typeId >= 0 -> if { typeId -> writeSemanticTypeId(context, state) } else { node -> writeType }
+    }
     }
     }
 }
@@ -943,7 +950,9 @@ integerNodeSigned node: typedIr.TypedIrNode, context: ref emitterContext.EmitCon
         }
     }
     symbol! => canonicalSymbol
-    canonicalSymbol -> integerSigned(context, state)
+    ((node.kind == 9 or node.kind == 6) and node.opcode == -202) -> if { false } else {
+        canonicalSymbol -> integerSigned(context, state)
+    }
 }
 memberNodeIntegerWidth node: typedIr.TypedIrNode, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Int {
     0 => width!
@@ -1039,6 +1048,7 @@ integerNodeWidth node: typedIr.TypedIrNode, context: ref emitterContext.EmitCont
     symbol! -> integerWidth(context, state) => width!
     symbol! == 23 -> if { 1 => width! }
     (symbol! == 12 or symbol! == 13) -> if { context.pointerBitWidth => width! }
+    ((node.kind == 9 or node.kind == 6) and node.opcode == -202) -> if { 8 => width! }
     (width! == 0 and node.kind == 13 and not canonicalReference!) -> if { node -> memberNodeIntegerWidth(context, state) => width! }
     (node.kind == 5 and node.operand0 >= 0 and node.operand0 < (context.ir -> len) and context.ir[node.operand0].kind == 17 and context.ir[node.operand0].flags != 1 and context.ir[node.operand0].operand0 >= 0 and context.ir[node.operand0].operand0 < (context.ir -> len)) -> if {
         context.ir[context.ir[node.operand0].operand0] -> integerNodeWidth(context, state) => width!

@@ -11019,3 +11019,151 @@ parser, the Sollang self-host parser, user examples, and regression fixtures.
 Rust applies the same punctuation principle by requiring a comma for a
 [one-element tuple expression](https://doc.rust-lang.org/stable/reference/expressions/tuple-expr.html)
 so it cannot be confused with grouping.
+
+## D286 — Flow Topology Uses Named Operations, Not New Arrows
+
+Status: accepted; implementation queued after 0.4 native distribution
+Date: 2026-07-30
+
+Sollang keeps `->` as its only value-flow arrow and `=>` as its
+definition/binding destination. A one-to-many broadcast uses named `branch`
+arms, exclusive stream routing uses `partition`, and a side operation that
+returns the original value uses `tap`. Multiple ordinary values first form an
+explicit tuple or labeled product. Stream fan-in names its observable policy:
+`zip`, `merge`, `concat`, or `latest`.
+
+`branch` is source-ordered and sequential by default. It does not clone affine
+owners or imply concurrency. Readonly, mutable, and moving uses remain explicit,
+while overlap requires `parallel branch` and the existing structured parallel
+ownership/effect rules. Stream operators remain lazy, use bounded buffering,
+and expose ordering, completion, backpressure, and nondeterminism rather than
+hiding them behind a generic `join`.
+
+The complete proposed grammar, type and ownership rules, diagnostics, examples,
+114-case minimum verification matrix, research basis, and delivery order are
+recorded in [`FLOW_JUNCTIONS.md`](FLOW_JUNCTIONS.md). This decision is accepted
+for implementation after 0.4, but it does not make the syntax part of the
+implemented language specification before the compiler and full regression
+evidence exist.
+
+## D287 — Every Fix Must Repair the Owning Invariant
+
+Status: accepted and mandatory for all 0.4 work
+Date: 2026-07-30
+
+Sollang does not permit temporary or defensive workarounds, even during periods
+of frequent change or when full verification exposes several defects in
+sequence. Symptom patches, fallback execution paths, swallowed errors,
+success-by-default behavior, command- or test-specific hard-coding, and silent
+feature reduction are unresolved defects rather than fixes.
+
+Every correction must begin with a permanent minimal reproduction, identify the
+compiler layer that owns the violated invariant, and repair that shared
+invariant. The reproduction remains in the regression catalog. The focused
+case, complete Windows/Linux suites, and applicable Stage 2/Stage 3 fixed-point
+gates must then pass. If the root cause is not yet known, work stops at
+diagnosis; no bypass may be merged or used to satisfy a release gate.
+
+This decision is a standing start and completion gate for every remaining 0.4
+item and for the queued Flow Junctions work. The frequency of edits never
+weakens it.
+
+## D288 — Mutable Owners Expose Their Current State to Readonly Borrows
+
+Status: implemented and retained as a 0.4 release gate
+Date: 2026-07-30
+
+Passing a mutable dynamic container to a `ref` parameter must expose the
+container's current pointer, length, and capacity. The C# bootstrap emitter
+previously materialized the immutable value captured when the binding was
+created, so a container mutated by `push` could appear empty to a later
+readonly borrow. The emitter now loads the current mutable slot and materializes
+that exact aggregate for the duration of the readonly call. Regression 689 and
+the Stage 2 stderr SourceText gate retain the distinction.
+
+The same investigation exposed a self-host output-intrinsic mismatch. C# lowers
+`sys.runtime.eprintln` interpolation as ordered stderr segments, while the
+self-host emitter treated the source literal as an already materialized
+`Text`. Windows and Linux now share an `eprint(data, length, newline)` runtime
+contract, including signed integer, unsigned integer, and Boolean formatting.
+Entry, ordinary-function, and nested control-region emitters use the same
+contract. The retained runtime fixture covers Text, Int, Bool, arithmetic, and
+logical interpolation in all three regions.
+
+Formatter verification is separate from these compiler internals: its 11-case
+matrix covers stdin formatting, idempotence, check mode, non-mutation, atomic
+replacement, lexical and parse diagnostics, missing input, unknown options,
+and option conflicts. These checks prevent a correct-looking formatter result
+from masking stale-reference or stderr-lowering defects.
+
+## D289 — Function Returns Use Canonical Identity and Explicit ABI Conversion
+
+Status: implemented and retained as a self-host LLVM gate
+Date: 2026-07-31
+
+The self-host Typed IR links an implicit function return to the actual terminal
+expression. A type-only placeholder with no operand is not a return value, and
+the structural fallback runs only when no valid return has already been found.
+Return matching uses canonical recursive `typeId` identity whenever it exists;
+the legacy origin/module/symbol projection is consulted only for nodes that do
+not have canonical identity. This prevents a valid nested `if` merge value from
+being replaced by an unrelated earlier expression.
+
+Structured control nodes now receive that canonical identity when their local
+Typed IR node is created. Previously `if` and `while` nodes were emitted with
+`typeId = -1`, implicit return linking ran, and only then a global pass restored
+their canonical type. A final value-producing `if` after multiple `while`
+expressions could therefore be present in the IR but lose the return edge to an
+earlier loop. The result-root pass now selects the latest canonically typed
+top-level expression, and the selected control node already carries its type
+before return linking.
+
+The LLVM function boundary separately owns physical integer-width conversion.
+When semantic analysis accepts an integer result whose physical width differs
+from the declared function ABI, the emitter writes an explicit `trunc`, `sext`,
+or `zext` before `ret`. It never emits an `i32` SSA value through an `i64`
+return instruction.
+
+Regressions 341, 363, 395, 403, 404, 424, 528, 622, 623, and 690 retain the
+combined invariants: imported empty-container lengths select their real
+terminal value, nested conditional results preserve their control-flow merge,
+a final `if` remains the result after multiple preceding loops, and
+container-length `Int` values cross a `UIntSize` return ABI through an explicit
+conversion. Expected LLVM is refreshed only after `llvm-as` accepts the
+generated module.
+
+## D290 — Parent-Assisted Parallel Start Is a Deterministic Protocol
+
+Status: implemented and cross-platform fixed-point verified
+Date: 2026-07-31
+
+D178 requires a submitting parent to execute work while native pool workers are
+active. Reserving source index zero for the parent proved only that the parent
+would eventually execute a callback; it did not prove overlap. Under a loaded
+Windows scheduler, the worker and parent could run their callbacks in separate
+time slices, leaving `parallelPeakWorkers()` at one even with one pool worker
+and multiple queued items.
+
+Windows and Linux now use the same per-generation start gate. After the parent
+reserves the first item and releases worker tokens, the first worker with a
+valid item increments the active-callback count and waits at the gate. The
+parent observes that ready state, increments the same count, records the peak,
+and releases both callbacks. Groups with zero or one item bypass the two-party
+gate, so they cannot wait for a nonexistent peer. This is the runtime's start
+protocol, not a timing delay or test-specific branch.
+
+Regression 381 retains one-worker parent participation. Regression 691 covers
+zero- and one-item `parallel` and `tryParallel` generations on Windows and
+Linux. The Windows executable additionally passed 320 concurrent stress
+executions with no false parent-participation result. The compute-runtime
+affected set passes 138/138, the complete suites pass 905/905 on Windows and
+904/904 on Linux, and the Release solution build reports zero warnings and zero
+errors.
+
+The final Windows Stage 2 compiler passes 7/7 and Stage 3 reproduces 19,967,212
+LLVM bytes with SHA-256
+`2593D82C61F36E056710262BAB80D35065BF01836FB662D288D62FA7E7A24491`.
+The final Linux Stage 2 compiler passes 6/6 and Stage 3 reproduces 19,950,197
+LLVM bytes with SHA-256
+`9A8461F01035385F4A1554241CA9EC7418D0122786151811EF9970B2AA11BEAB`.
+Both Stage 3 modules assemble, link, and execute.

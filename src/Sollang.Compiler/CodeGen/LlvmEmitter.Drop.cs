@@ -376,9 +376,20 @@ internal sealed partial class LlvmEmitter
     {
         var owned = NextTemp("source_text_owned");
         EmitCompare(owned, "ne", "ptr", basePointer, "null");
+        var releaseLabel = NextLabel("source_text_release");
+        var freeLabel = NextLabel("source_text_free");
         var unmapLabel = NextLabel("source_text_unmap");
         var doneLabel = NextLabel("source_text_drop_done");
-        EmitConditionalBranch(owned, unmapLabel, doneLabel);
+        EmitConditionalBranch(owned, releaseLabel, doneLabel);
+        EmitFunctionLine();
+        EmitLabel(releaseLabel);
+        var heapOwned = NextTemp("source_text_heap_owned");
+        EmitCompare(heapOwned, "eq", "i64", mappedLength, "-1");
+        EmitConditionalBranch(heapOwned, freeLabel, unmapLabel);
+        EmitFunctionLine();
+        EmitLabel(freeLabel);
+        EmitCall(target: null, "void", "sollang_free", $"ptr {basePointer}");
+        EmitBranch(doneLabel);
         EmitFunctionLine();
         EmitLabel(unmapLabel);
         EmitCall(target: null, "void", "sollang_mapped_unmap",

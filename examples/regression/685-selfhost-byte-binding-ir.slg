@@ -1,0 +1,33 @@
+import sollang.compiler.ir.typed as typedIr
+
+# A byte value wrapped by a binding must keep its UInt8 ABI when it becomes a
+# later call argument; the wrapper itself is not a separate i32 value.
+main {
+    [
+        """"
+        isAsciiLetterOrDigit value: UInt8 -> Bool {
+            value >= UInt8(48)
+        }
+
+        struct LineSpan {
+            start: UIntSize
+            length: UIntSize
+        }
+
+        startsWithWord source: Text, line: LineSpan, word: Text -> Bool {
+            source -> byte(line.start + (word -> len)) => next
+            ((next -> isAsciiLetterOrDigit) or next == UInt8(95)) -> if {
+                false
+            } else {
+                true
+            }
+        }
+        """"; ~
+    ] => sources!
+    sources! -> typedIr.lower => ir!
+    0 => index!
+    ir! -> each node {
+        "ir = $(index!),$(node.kind),$(node.parent),$(node.symbol),$(node.typeOrigin),$(node.typeSymbol),$(node.opcode),$(node.operand0),$(node.operand1),$(node.nextOperand)" -> println
+        index! + 1 => index!
+    }
+}

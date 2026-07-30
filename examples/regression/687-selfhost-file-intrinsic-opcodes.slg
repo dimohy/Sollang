@@ -1,0 +1,54 @@
+import sollang.compiler.ir.typed as typedIr
+
+# Imported sys.file compiler intrinsics retain backend opcodes by module identity.
+main {
+    """"
+        namespace sample
+
+        import sys.file as file
+
+        main {
+            file.readStandardInput() => standardInput!
+            [UInt8; ~] => bytes!
+            bytes! -> file.borrowBytes => borrowed!
+        }
+    """" => sampleSource
+    """"
+        namespace sys.file
+
+        public struct SourceText {
+            token: UInt64
+        }
+
+        public readStandardInput: -> SourceText uses File = intrinsic
+
+        public borrowBytes bytes: ref [UInt8; ~] -> SourceText = intrinsic
+    """" => fileSource
+    [Text; ~] => sources!
+    0 => fillerIndex!
+    fillerIndex! < 72 -> while {
+        sources! -> push("namespace filler")
+        fillerIndex! + 1 => fillerIndex!
+    }
+    sources! -> push(fileSource)
+    sources! -> push(sampleSource)
+    (sources! -> len) == 74 -> if { "sources=ok" -> println } else { "sources=bad" -> println }
+    sources! -> typedIr.lower => ir!
+    (ir! -> len) > 0 -> if { "ir=present" -> println } else { "ir=empty" -> println }
+    ir! -> each node {
+        node.kind == 6 -> if {
+            node.targetModule == 72 -> if { "target=ok" -> println } else { "target=bad" -> println }
+            node.symbol == 2 -> if {
+                "read=seen" -> println
+                node.opcode == -231 -> if { "read=ok" -> println } else { "read=bad" -> println }
+            } else {
+                node.symbol == 3 -> if {
+                    "borrow=seen" -> println
+                    node.opcode == -232 -> if { "borrow=ok" -> println } else { "borrow=bad" -> println }
+                } else {
+                    "symbol=bad" -> println
+                }
+            }
+        }
+    }
+}

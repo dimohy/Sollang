@@ -225,6 +225,7 @@ done:
 @sollang_compute_barrier_departed = internal global i32 0
 @sollang_compute_running = internal global i32 0
 @sollang_compute_peak = internal global i32 0
+@sollang_compute_parent_gate = internal global i32 0
 @sollang_compute_stopping = internal global i32 0
 declare dllimport i32 @WaitForSingleObject(ptr, i32)
 declare dllimport ptr @CreateThread(ptr, i64, ptr, ptr, i32, ptr)
@@ -267,6 +268,14 @@ work:
   %running_before = atomicrmw add ptr @sollang_compute_running, i32 1 acq_rel
   %running_now = add i32 %running_before, 1
   %peak_before = atomicrmw max ptr @sollang_compute_peak, i32 %running_now acq_rel
+  %gate_pair = cmpxchg ptr @sollang_compute_parent_gate, i32 0, i32 1 acq_rel acquire
+  %gate_owner = extractvalue { i32, i1 } %gate_pair, 1
+  br i1 %gate_owner, label %wait_parent, label %worker_callback
+wait_parent:
+  %parent_gate = load atomic i32, ptr @sollang_compute_parent_gate acquire, align 4
+  %parent_ready = icmp eq i32 %parent_gate, 2
+  br i1 %parent_ready, label %worker_callback, label %wait_parent
+worker_callback:
   call void %callback(ptr %group, i64 %index)
   %tls_clear = call i32 @TlsSetValue(i32 %tls_index, ptr null)
   %running_after = atomicrmw sub ptr @sollang_compute_running, i32 1 acq_rel
@@ -378,6 +387,7 @@ cleanup_empty:
 publish:
   store atomic i64 0, ptr @sollang_compute_next release, align 8
   store atomic i32 0, ptr @sollang_compute_peak release, align 4
+  store atomic i32 0, ptr @sollang_compute_parent_gate release, align 4
   %workers = load i32, ptr @sollang_compute_worker_count, align 4
   store atomic i32 %workers, ptr @sollang_compute_active release, align 4
   store atomic ptr %group, ptr @sollang_compute_group_current release, align 8
@@ -386,6 +396,13 @@ publish:
   %help_first_index = atomicrmw add ptr @sollang_compute_next, i64 1 acq_rel
   %semaphore = load ptr, ptr @sollang_compute_semaphore, align 8
   %released = call i32 @ReleaseSemaphore(ptr %semaphore, i32 %workers, ptr null)
+  %help_has_peer_work = icmp ugt i64 %count, 1
+  br i1 %help_has_peer_work, label %help_wait_worker, label %help_begin
+help_wait_worker:
+  %help_worker_gate = load atomic i32, ptr @sollang_compute_parent_gate acquire, align 4
+  %help_worker_ready = icmp eq i32 %help_worker_gate, 1
+  br i1 %help_worker_ready, label %help_begin, label %help_wait_worker
+help_begin:
   br label %help_work
 help_claim:
   %help_claimed_index = atomicrmw add ptr @sollang_compute_next, i64 1 acq_rel
@@ -396,7 +413,7 @@ help_claim:
   %help_has_work = and i1 %help_within_count, %help_before_failure
   br i1 %help_has_work, label %help_work, label %help_wait
 help_work:
-  %help_index = phi i64 [ %help_first_index, %publish ], [ %help_claimed_index, %help_claim ]
+  %help_index = phi i64 [ %help_first_index, %help_begin ], [ %help_claimed_index, %help_claim ]
   %help_callback_slot = getelementptr %sollang.compute_group, ptr %group, i32 0, i32 0
   %help_callback = load ptr, ptr %help_callback_slot, align 8
   %help_sinks_slot = getelementptr %sollang.compute_group, ptr %group, i32 0, i32 5
@@ -407,6 +424,7 @@ help_work:
   %help_running_before = atomicrmw add ptr @sollang_compute_running, i32 1 acq_rel
   %help_running_now = add i32 %help_running_before, 1
   %help_peak_before = atomicrmw max ptr @sollang_compute_peak, i32 %help_running_now acq_rel
+  store atomic i32 2, ptr @sollang_compute_parent_gate release, align 4
   call void %help_callback(ptr %group, i64 %help_index)
   %help_tls_clear = call i32 @TlsSetValue(i32 %help_tls_index, ptr null)
   %help_running_after = atomicrmw sub ptr @sollang_compute_running, i32 1 acq_rel
@@ -838,7 +856,14 @@ define void @sollang_runtime_unmap_text(%sollang.source_text %source) {
 entry:
   %base = extractvalue %sollang.source_text %source, 2
   %owned = icmp ne ptr %base, null
-  br i1 %owned, label %unmap, label %done
+  br i1 %owned, label %release, label %done
+release:
+  %length = extractvalue %sollang.source_text %source, 3
+  %heap_owned = icmp eq i64 %length, -1
+  br i1 %heap_owned, label %free_owned, label %unmap
+free_owned:
+  call void @free(ptr %base)
+  br label %done
 unmap:
   %ignored = call i32 @UnmapViewOfFile(ptr %base)
   br label %done

@@ -54,9 +54,9 @@ entry:
   br label %while20_header
 while20_header:
   %while20_v17 = load i32, ptr %slot4, align 4
-  %while20_v18 = extractvalue %sollang.array.i32 %arg, 1
-  %while20_v16_left_wide = sext i32 %while20_v17 to i64
-  %while20_v16 = icmp slt i64 %while20_v16_left_wide, %while20_v18
+  %while20_v18_raw = extractvalue %sollang.array.i32 %arg, 1
+  %while20_v18 = trunc i64 %while20_v18_raw to i32
+  %while20_v16 = icmp slt i32 %while20_v17, %while20_v18
   br i1 %while20_v16, label %while20_body, label %while20_exit
 while20_body:
   %v24 = load i32, ptr %slot4, align 4
@@ -95,9 +95,9 @@ while20_exit:
 while39_header:
   %while39_v36 = load i32, ptr %slot8, align 4
   %while39_v38 = load %sollang.array.i32, ptr %slot3, align 8
-  %while39_v37 = extractvalue %sollang.array.i32 %while39_v38, 1
-  %while39_v35_left_wide = sext i32 %while39_v36 to i64
-  %while39_v35 = icmp slt i64 %while39_v35_left_wide, %while39_v37
+  %while39_v37_raw = extractvalue %sollang.array.i32 %while39_v38, 1
+  %while39_v37 = trunc i64 %while39_v37_raw to i32
+  %while39_v35 = icmp slt i32 %while39_v36, %while39_v37
   br i1 %while39_v35, label %while39_body, label %while39_exit
 while39_body:
   %v42 = load %sollang.array.i32, ptr %slot3, align 8
@@ -201,7 +201,14 @@ define void @sollang_runtime_unmap_text(%sollang.source_text %source) {
 entry:
   %base = extractvalue %sollang.source_text %source, 2
   %owned = icmp ne ptr %base, null
-  br i1 %owned, label %unmap, label %done
+  br i1 %owned, label %release, label %done
+release:
+  %length = extractvalue %sollang.source_text %source, 3
+  %heap_owned = icmp eq i64 %length, -1
+  br i1 %heap_owned, label %free_owned, label %unmap
+free_owned:
+  call void @free(ptr %base)
+  br label %done
 unmap:
   %ignored = call i32 @UnmapViewOfFile(ptr %base)
   br label %done

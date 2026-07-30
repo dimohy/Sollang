@@ -15,13 +15,18 @@ internal sealed partial class LlvmEmitter
 
     private string EmitPrintFlowSource(Expression expression, string ok)
     {
+        return EmitPrintFlowSource(expression, ok, standardError: false);
+    }
+
+    private string EmitPrintFlowSource(Expression expression, string ok, bool standardError)
+    {
         if (expression is StringExpression str)
         {
-            return EmitPrintArgument(str, ok);
+            return EmitPrintArgument(str, ok, standardError);
         }
 
         var value = EmitFlowSource(expression);
-        return EmitWriteValue(value, ok);
+        return EmitWriteValue(value, ok, standardError);
     }
 
     private RuntimeInt EmitReadIntPrompt(RuntimeValue prompt)

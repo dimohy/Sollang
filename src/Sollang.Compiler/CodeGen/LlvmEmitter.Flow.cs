@@ -29,10 +29,14 @@ internal sealed partial class LlvmEmitter
             && TryResolveFunction(expression.Targets[0].Path, out var directFunction)
             && TryGetRuntimePrinterKind(directFunction, out var directPrinterKind))
         {
-            ok = EmitPrintFlowSource(expression.Source, ok);
-            if (directPrinterKind == BoundFunctionKind.RuntimePrintLine)
+            var standardError = directPrinterKind == BoundFunctionKind.RuntimePrintErrorLine;
+            ok = EmitPrintFlowSource(expression.Source, ok, standardError);
+            if (directPrinterKind is BoundFunctionKind.RuntimePrintLine
+                or BoundFunctionKind.RuntimePrintErrorLine)
             {
-                ok = EmitWriteText("\n", ok);
+                ok = standardError
+                    ? EmitStandardErrorNewLine(ok)
+                    : EmitWriteText("\n", ok);
             }
 
             return new RuntimeFlowResult(
@@ -136,15 +140,20 @@ internal sealed partial class LlvmEmitter
                 {
                     case BoundFunctionKind.RuntimePrint:
                     case BoundFunctionKind.RuntimePrintLine:
+                    case BoundFunctionKind.RuntimePrintErrorLine:
                         if (!isLast)
                         {
                             throw new SollangException($"{path} must be the final value-flow target");
                         }
 
-                        ok = EmitWriteValue(current, ok);
-                        if (function.Kind == BoundFunctionKind.RuntimePrintLine)
+                        var standardError = function.Kind == BoundFunctionKind.RuntimePrintErrorLine;
+                        ok = EmitWriteValue(current, ok, standardError);
+                        if (function.Kind is BoundFunctionKind.RuntimePrintLine
+                            or BoundFunctionKind.RuntimePrintErrorLine)
                         {
-                            ok = EmitWriteText("\n", ok);
+                            ok = standardError
+                                ? EmitStandardErrorNewLine(ok)
+                                : EmitWriteText("\n", ok);
                         }
 
                         return new RuntimeFlowResult(
@@ -223,6 +232,9 @@ internal sealed partial class LlvmEmitter
                         continue;
                     case BoundFunctionKind.RuntimeBorrowSourceText:
                         current = EmitBorrowSourceText(current);
+                        continue;
+                    case BoundFunctionKind.RuntimeBorrowSourceBytes:
+                        current = EmitBorrowSourceBytes(current);
                         continue;
                     case BoundFunctionKind.RuntimeMapSourceText:
                         current = EmitMapSourceText(current);

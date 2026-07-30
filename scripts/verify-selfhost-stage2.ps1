@@ -22,6 +22,11 @@ $singleSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhos
 $multiLibrarySource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-library-smoke.slg"
 $multiMainSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-main-smoke.slg"
 $groupedNotSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-grouped-not-smoke.slg"
+$fileIntrinsicsControlSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-file-intrinsics-control.slg"
+$runtimeEprintlnSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\runtime-eprintln.slg"
+$runtimeEprintlnInterpolationSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\runtime-eprintln-interpolation.slg"
+$runtimeEprintlnSourceTextSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\runtime-eprintln-source-text.slg"
+$runtimeSource = Join-Path $repoRoot "stdlib\sys\runtime.slg"
 $interpolationLengthSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-interpolation-len.slg"
 $nestedUInt8IfSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-if-uint8-value.slg"
 $unusedIfAssignmentSource = Join-Path $repoRoot "tests\Sollang.ExampleTests\Fixtures\selfhost-stage2-unused-if-assignment.slg"
@@ -141,6 +146,119 @@ if ($LASTEXITCODE -ne 0) {
 if (-not (Test-Path $stage1Path)) {
     throw "stage-1 compiler was not produced: $stage1Path"
 }
+
+$fileIntrinsicsControlLlvm = Join-Path $artifactsDir "stage2-check-file-intrinsics-control.ll"
+$fileIntrinsicsControlBitcode = Join-Path $artifactsDir "stage2-check-file-intrinsics-control.bc"
+$fileIntrinsicsControlError = Join-Path $artifactsDir "stage2-check-file-intrinsics-control.err"
+$fileIntrinsicsControlArguments = @("windows", $fileIntrinsicsControlSource) + $compilerRuntimeSources
+$fileIntrinsicsControlProcess = Invoke-ProcessToFile `
+    $stage1Path `
+    $fileIntrinsicsControlArguments `
+    $fileIntrinsicsControlLlvm `
+    $fileIntrinsicsControlError
+Assert-ProcessSucceeded $fileIntrinsicsControlProcess $fileIntrinsicsControlError "stage-1 control-region file intrinsic emission"
+$fileIntrinsicsControlText = [System.IO.File]::ReadAllText($fileIntrinsicsControlLlvm)
+if (-not $fileIntrinsicsControlText.Contains("@sollang_runtime_read_standard_input()") -or
+    -not $fileIntrinsicsControlText.Contains("insertvalue %sollang.source_text")) {
+    throw "control-region SourceText intrinsics did not lower to their runtime ABI"
+}
+& $llvmAsPath $fileIntrinsicsControlLlvm -o $fileIntrinsicsControlBitcode
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+Write-Host "[stage2 1/7] PASS control-region SourceText intrinsic lowering."
+
+$runtimeEprintlnLlvm = Join-Path $artifactsDir "stage2-check-runtime-eprintln.ll"
+$runtimeEprintlnBitcode = Join-Path $artifactsDir "stage2-check-runtime-eprintln.bc"
+$runtimeEprintlnExecutable = Join-Path $artifactsDir "stage2-check-runtime-eprintln.exe"
+$runtimeEprintlnStdout = Join-Path $artifactsDir "stage2-check-runtime-eprintln.stdout.txt"
+$runtimeEprintlnStderr = Join-Path $artifactsDir "stage2-check-runtime-eprintln.stderr.txt"
+$runtimeEprintlnError = Join-Path $artifactsDir "stage2-check-runtime-eprintln.err"
+$runtimeEprintlnProcess = Invoke-ProcessToFile `
+    $stage1Path `
+    @("windows", $runtimeEprintlnSource, $runtimeSource) `
+    $runtimeEprintlnLlvm `
+    $runtimeEprintlnError
+Assert-ProcessSucceeded $runtimeEprintlnProcess $runtimeEprintlnError "stage-1 stderr runtime dependency emission"
+$runtimeEprintlnText = [System.IO.File]::ReadAllText($runtimeEprintlnLlvm)
+if (-not $runtimeEprintlnText.Contains("define internal void @sollang_runtime_eprintln(")) {
+    throw "sys.runtime.eprintln did not retain its stderr runtime definition"
+}
+& $llvmAsPath $runtimeEprintlnLlvm -o $runtimeEprintlnBitcode
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+& $clangPath -Wno-override-module $runtimeEprintlnLlvm -o $runtimeEprintlnExecutable
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+$runtimeEprintlnRun = Invoke-ProcessToFile `
+    $runtimeEprintlnExecutable `
+    @() `
+    $runtimeEprintlnStdout `
+    $runtimeEprintlnStderr
+Assert-ProcessSucceeded $runtimeEprintlnRun $runtimeEprintlnStderr "stage-1 stderr runtime execution"
+$runtimeEprintlnActual = [System.IO.File]::ReadAllText($runtimeEprintlnStderr).Replace("`r`n", "`n").TrimEnd("`n")
+if ($runtimeEprintlnActual -ne "stderr contract") {
+    throw "sys.runtime.eprintln did not preserve its Text argument: '$runtimeEprintlnActual'"
+}
+Write-Host "[stage2 1/7] PASS stderr runtime dependency lowering."
+
+$runtimeEprintlnInterpolationLlvm = Join-Path $artifactsDir "stage2-check-runtime-eprintln-interpolation.ll"
+$runtimeEprintlnInterpolationBitcode = Join-Path $artifactsDir "stage2-check-runtime-eprintln-interpolation.bc"
+$runtimeEprintlnInterpolationExecutable = Join-Path $artifactsDir "stage2-check-runtime-eprintln-interpolation.exe"
+$runtimeEprintlnInterpolationStdout = Join-Path $artifactsDir "stage2-check-runtime-eprintln-interpolation.stdout.txt"
+$runtimeEprintlnInterpolationStderr = Join-Path $artifactsDir "stage2-check-runtime-eprintln-interpolation.stderr.txt"
+$runtimeEprintlnInterpolationError = Join-Path $artifactsDir "stage2-check-runtime-eprintln-interpolation.err"
+$runtimeEprintlnInterpolationProcess = Invoke-ProcessToFile `
+    $stage1Path `
+    @("windows", $runtimeEprintlnInterpolationSource, $runtimeSource) `
+    $runtimeEprintlnInterpolationLlvm `
+    $runtimeEprintlnInterpolationError
+Assert-ProcessSucceeded $runtimeEprintlnInterpolationProcess $runtimeEprintlnInterpolationError "stage-1 stderr interpolation emission"
+& $llvmAsPath $runtimeEprintlnInterpolationLlvm -o $runtimeEprintlnInterpolationBitcode
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+& $clangPath -Wno-override-module $runtimeEprintlnInterpolationLlvm -o $runtimeEprintlnInterpolationExecutable
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+$runtimeEprintlnInterpolationRun = Invoke-ProcessToFile `
+    $runtimeEprintlnInterpolationExecutable `
+    @() `
+    $runtimeEprintlnInterpolationStdout `
+    $runtimeEprintlnInterpolationStderr
+Assert-ProcessSucceeded $runtimeEprintlnInterpolationRun $runtimeEprintlnInterpolationStderr "stage-1 stderr interpolation execution"
+$runtimeEprintlnInterpolationActual = [System.IO.File]::ReadAllText($runtimeEprintlnInterpolationStderr).Replace("`r`n", "`n").TrimEnd("`n")
+$runtimeEprintlnInterpolationExpected = @(
+    "entry int=42 bool=true text=entry",
+    "function int=7 bool=true text=sample",
+    "control int=8 bool=false text=sample"
+) -join "`n"
+if ($runtimeEprintlnInterpolationActual -ne $runtimeEprintlnInterpolationExpected) {
+    throw "sys.runtime.eprintln interpolation mismatch:`n$runtimeEprintlnInterpolationActual"
+}
+Write-Host "[stage2 1/7] PASS stderr interpolation lowering in entry, function, and control regions."
+
+$runtimeEprintlnSourceTextLlvm = Join-Path $artifactsDir "stage2-check-runtime-eprintln-source-text.ll"
+$runtimeEprintlnSourceTextBitcode = Join-Path $artifactsDir "stage2-check-runtime-eprintln-source-text.bc"
+$runtimeEprintlnSourceTextExecutable = Join-Path $artifactsDir "stage2-check-runtime-eprintln-source-text.exe"
+$runtimeEprintlnSourceTextStdout = Join-Path $artifactsDir "stage2-check-runtime-eprintln-source-text.stdout.txt"
+$runtimeEprintlnSourceTextStderr = Join-Path $artifactsDir "stage2-check-runtime-eprintln-source-text.stderr.txt"
+$runtimeEprintlnSourceTextError = Join-Path $artifactsDir "stage2-check-runtime-eprintln-source-text.err"
+$runtimeEprintlnSourceTextArguments = @("windows", $runtimeEprintlnSourceTextSource, $runtimeSource) + $compilerRuntimeSources
+$runtimeEprintlnSourceTextProcess = Invoke-ProcessToFile `
+    $stage1Path `
+    $runtimeEprintlnSourceTextArguments `
+    $runtimeEprintlnSourceTextLlvm `
+    $runtimeEprintlnSourceTextError
+Assert-ProcessSucceeded $runtimeEprintlnSourceTextProcess $runtimeEprintlnSourceTextError "stage-1 current mutable container readonly reference emission"
+& $llvmAsPath $runtimeEprintlnSourceTextLlvm -o $runtimeEprintlnSourceTextBitcode
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+& $clangPath -Wno-override-module $runtimeEprintlnSourceTextLlvm -o $runtimeEprintlnSourceTextExecutable -lshell32
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+$runtimeEprintlnSourceTextRun = Invoke-ProcessToFile `
+    $runtimeEprintlnSourceTextExecutable `
+    @() `
+    $runtimeEprintlnSourceTextStdout `
+    $runtimeEprintlnSourceTextStderr
+Assert-ProcessSucceeded $runtimeEprintlnSourceTextRun $runtimeEprintlnSourceTextStderr "stage-1 current mutable container readonly reference execution"
+$runtimeEprintlnSourceTextActual = [System.IO.File]::ReadAllText($runtimeEprintlnSourceTextStderr).Replace("`r`n", "`n").TrimEnd("`n")
+if ($runtimeEprintlnSourceTextActual -ne "stderr") {
+    throw "readonly reference observed stale mutable container state: '$runtimeEprintlnSourceTextActual'"
+}
+Write-Host "[stage2 1/7] PASS current mutable container readonly reference lowering."
 
 Write-Host "[stage2 2/7] Build or reuse the complete stage-2 compiler."
 if (Test-Stage2IsCurrent) {

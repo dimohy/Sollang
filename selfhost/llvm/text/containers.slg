@@ -1633,7 +1633,8 @@ emitWhileMember request: WhileValueRequest, context: ref emitterContext.EmitCont
 emitWhileCallArgumentChain argumentIndex: Int, callIndex: Int, whileIndex: Int, ownerIndex: Int, ordinal: Int, separator: Bool, context: ref emitterContext.EmitContext, state: ref CoreEmitterState -> Unit uses Console {
     (argumentIndex >= 0 and context.ir[argumentIndex].parent == callIndex) -> if {
         separator -> if { ", " -> print }
-        context.ir[argumentIndex] => argument
+        argumentIndex -> aggregateValueIndex(context, state) => argumentValueIndex
+        context.ir[argumentValueIndex] => argument
         callIndex -> callTargetParameter(ordinal, context, state) => argumentParameterIndex
         false => argumentNeedsReferenceSlot!
         argumentParameterIndex >= 0 -> if {
@@ -1641,7 +1642,7 @@ emitWhileCallArgumentChain argumentIndex: Int, callIndex: Int, whileIndex: Int, 
             (argumentParameter.typeId >= 0 and context.types[argumentParameter.typeId].kind == 8 and not (argument.typeId >= 0 and context.types[argument.typeId].kind == 8)) -> if { true => argumentNeedsReferenceSlot! }
         }
         argumentNeedsReferenceSlot! -> if {
-            argumentIndex -> aggregateValueIndex(context, state) => referenceValueIndex
+            argumentValueIndex -> aggregateValueIndex(context, state) => referenceValueIndex
             referenceValueIndex -> referencePlaceRootBinding(context, state) => referenceValueRoot
             false => referenceValueUsesMutableSlot!
             referenceValueRoot >= 0 -> if {
@@ -1661,9 +1662,13 @@ emitWhileCallArgumentChain argumentIndex: Int, callIndex: Int, whileIndex: Int, 
                 "ptr %callref$(callIndex)_arg$(ordinal)" -> print
             }
         } else {
-            argument -> writeIrType(context, state)
+            argumentParameterIndex >= 0 -> if {
+                context.ir[argumentParameterIndex] -> writeIrType(context, state)
+            } else {
+                argument -> writeIrType(context, state)
+            }
             " " -> print
-            WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: argumentIndex } -> writeWhileValue(context, state)
+            WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: argumentValueIndex } -> writeWhileValue(context, state)
         }
         argument.nextOperand -> emitWhileCallArgumentChain(callIndex, whileIndex, ownerIndex, ordinal + 1, true, context, state)
     }
@@ -1775,8 +1780,12 @@ emitWhileBranch request: WhileBranchRequest, context: ref emitterContext.EmitCon
                         valueTaskSize! == (valueTasks! -> len) -> if { valueTasks! -> push(emitValueTask) } else { emitValueTask => valueTasks![valueTaskSize!] }
                         valueTaskSize! + 1 => valueTaskSize!
                         (valueNode.kind == 6 or valueNode.kind == 7 or valueNode.kind == 8 or valueNode.kind == 9 or valueNode.kind == 13 or valueNode.kind == 15 or valueNode.kind == 18) -> if {
-                            ((valueNode.kind == 8 or valueNode.kind == 15 or (valueNode.kind == 9 and (valueNode.opcode == -202 or valueNode.opcode == -203))) and valueNode.operand1 >= 0) -> if {
-                                valueNode.operand1 + 1 => secondValueTask
+                            ((valueNode.kind == 8 or valueNode.kind == 15 or ((valueNode.kind == 9 or valueNode.kind == 6) and (valueNode.opcode == -202 or valueNode.opcode == -203))) and valueNode.operand1 >= 0) -> if {
+                                valueNode.operand1 => secondValueIndex!
+                                ((valueNode.kind == 9 or valueNode.kind == 6) and valueNode.opcode == -202) -> if {
+                                    valueNode.operand1 -> aggregateValueIndex(context, state) => secondValueIndex!
+                                }
+                                secondValueIndex! + 1 => secondValueTask
                                 valueTaskSize! == (valueTasks! -> len) -> if { valueTasks! -> push(secondValueTask) } else { secondValueTask => valueTasks![valueTaskSize!] }
                                 valueTaskSize! + 1 => valueTaskSize!
                                 (valueNode.kind == 9 and valueNode.opcode == -203 and context.ir[valueNode.operand1].nextOperand >= 0) -> if {
@@ -1822,7 +1831,7 @@ emitWhileBranch request: WhileBranchRequest, context: ref emitterContext.EmitCon
                                         context.ir[valueBinding.operand0] => bindingOperand
                                         not (bindingOperand -> isArgumentsType) -> if {
                                             "  %while$(whileIndex)_v$(valueNodeIndex) = freeze " -> print
-                                            valueNode -> writeIrType(context, state)
+                                            bindingOperand -> writeIrType(context, state)
                                             " " -> print
                                             (bindingOperand.kind == 3 or bindingOperand.kind == 4) -> if {
                                                 bindingOperand -> sourceToken(context, state) => bindingToken
@@ -1892,7 +1901,8 @@ emitWhileBranch request: WhileBranchRequest, context: ref emitterContext.EmitCon
                         }
                         ((valueNode.kind == 9 or valueNode.kind == 6) and valueNode.opcode == -202 and valueNode.operand0 >= 0 and valueNode.operand1 >= 0) -> if {
                             context.ir[valueNode.operand0] => whileByteBase
-                            context.ir[valueNode.operand1] => whileByteIndex
+                            valueNode.operand1 -> aggregateValueIndex(context, state) => whileByteIndexValue
+                            context.ir[whileByteIndexValue] => whileByteIndex
                             whileByteIndex -> integerNodeWidth(context, state) => whileByteIndexWidth
                             "  %while$(whileIndex)_v$(valueNodeIndex)_base = extractvalue " -> print
                             whileByteBase -> writeTextLikeType
@@ -1903,12 +1913,12 @@ emitWhileBranch request: WhileBranchRequest, context: ref emitterContext.EmitCon
                                 "  %while$(whileIndex)_v$(valueNodeIndex)_index = " -> print
                                 whileByteIndex -> integerNodeSigned(context, state) -> if { "sext" -> print } else { "zext" -> print }
                                 " i$(whileByteIndexWidth) " -> print
-                                WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: valueNode.operand1 } -> writeWhileValue(context, state)
+                                WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: whileByteIndexValue } -> writeWhileValue(context, state)
                                 " to i64" -> println
                             }
                             "  %while$(whileIndex)_v$(valueNodeIndex)_address = getelementptr i8, ptr %while$(whileIndex)_v$(valueNodeIndex)_base, i64 " -> print
                             (whileByteIndexWidth > 0 and whileByteIndexWidth < 64) -> if { "%while$(whileIndex)_v$(valueNodeIndex)_index" -> print } else {
-                                WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: valueNode.operand1 } -> writeWhileValue(context, state)
+                                WhileValueRequest { whileIndex: whileIndex, ownerIndex: ownerIndex, nodeIndex: whileByteIndexValue } -> writeWhileValue(context, state)
                             }
                             "" -> println
                             "  %while$(whileIndex)_v$(valueNodeIndex) = load i8, ptr %while$(whileIndex)_v$(valueNodeIndex)_address, align 1" -> println

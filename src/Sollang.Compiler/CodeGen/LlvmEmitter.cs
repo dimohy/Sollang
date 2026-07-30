@@ -21,6 +21,7 @@ internal sealed partial class LlvmEmitter
     private readonly bool _usesParallel;
     private readonly bool _usesMouseEvents;
     private readonly bool _usesRangeStreams;
+    private readonly bool _usesStandardError;
     private sealed record ParallelCallbackInfo(
         string Name,
         BoundFunction Target,
@@ -114,6 +115,8 @@ internal sealed partial class LlvmEmitter
             || program.Functions.Values.Where(function => !function.IsStandardLibrary).Any(function =>
                 (function.Body is not null && UsesRangeStream(function.Body))
                 || function.BlockBody.Any(UsesRangeStream));
+        _usesStandardError = program.ResolvedGenericCalls.Values.Any(
+            static function => function.Kind == BoundFunctionKind.RuntimePrintErrorLine);
         _usesAsync = program.Functions.Values.Any(function => function.IsAsync && !function.IsStandardLibrary)
             || _usesAsyncFile
             || program.MainStatements.Any(UsesRuntimeSleep)
@@ -126,6 +129,7 @@ internal sealed partial class LlvmEmitter
         _platform.UsesComputePool = _usesParallel;
         _platform.UsesDirectoryTraversal = _usesDirectoryTraversal;
         _platform.UsesMouseEvents = _usesMouseEvents;
+        _platform.UsesStandardError = _usesStandardError;
     }
 
     private void RecordFunctionScopes(
@@ -664,6 +668,7 @@ internal sealed partial class LlvmEmitter
             EmitGlobalLine("@sollang_compute_barrier_departed = internal global i32 0");
             EmitGlobalLine("@sollang_compute_running = internal global i32 0");
             EmitGlobalLine("@sollang_compute_peak = internal global i32 0");
+            EmitGlobalLine("@sollang_compute_parent_gate = internal global i32 0");
             EmitGlobalLine("@sollang_compute_stopping = internal global i32 0");
         }
         EmitGlobalLine();
